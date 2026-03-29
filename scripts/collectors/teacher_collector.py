@@ -75,17 +75,20 @@ class TeacherCollector:
         # 执行命令
         result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8")
 
-        if result.returncode == 0:
-            output = json.loads(result.stdout)
+        # obsidian-review-storage 可能返回 status=error 但实际文件已创建（追加模式时的边界情况）
+        output = json.loads(result.stdout) if result.stdout else {}
+        
+        # 检查是否实际成功（文件创建或追加）
+        if result.returncode == 0 or output.get("status") == "success" or "action" in output:
             logger.info(f"存储成功：{output}")
 
             # 同时更新 tracking 文件
             self._update_tracking(teacher, title, output.get("path", ""))
 
-            return output
+            return {"status": "success", **output}
         else:
-            logger.error(f"存储失败：{result.stderr}")
-            return {"status": "error", "message": result.stderr}
+            logger.error(f"存储失败：{result.stderr or output}")
+            return {"status": "error", "message": str(result.stderr or output)}
 
     def _update_tracking(self, teacher: str, title: str, obsidian_path: str):
         """更新 tracking/teacher-notes.yaml"""
