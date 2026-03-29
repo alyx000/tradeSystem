@@ -1,0 +1,31 @@
+calendar_events: []
+date: '2026-03-29'
+generated_at: '2026-03-29T22:16:56.042877'
+holdings_announcements: {}
+market_data:
+  commodities:
+    copper:
+      error: '所有数据源均失败: akshare: Expected object or value'
+    crude_oil:
+      error: '所有数据源均失败: akshare: Expected object or value'
+    gold:
+      error: '所有数据源均失败: akshare: Expected object or value'
+  forex:
+    usd_cny:
+      change_pct: 0.0
+      close: 0.0
+      name: 美元/人民币
+    usd_index:
+      error: '所有数据源均失败: akshare: module ''akshare'' has no attribute ''index_investing_global'''
+  generated_at: '2026-03-29T22:16:54.624944'
+  generated_by: openclaw
+  global_indices:
+    a50:
+      error: '所有数据源均失败: akshare: Expected object or value'
+    dow_jones:
+      error: '所有数据源均失败: akshare: module ''akshare'' has no attribute ''index_investing_global'''
+    nasdaq:
+      error: '所有数据源均失败: akshare: module ''akshare'' has no attribute ''index_investing_global'''
+    sp500:
+      error: '所有数据源均失败: akshare: module ''akshare'' has no attribute ''index_investing_global'''
+news: []
