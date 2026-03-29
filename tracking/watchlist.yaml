@@ -1,54 +1,37 @@
-# ============================================
-# 关注票池
-# 分层管理，每日更新
-# ============================================
-
-last_updated: ""
-
-# 第一层：核心关注（明确有交易计划的票）
-tier1_core:
-  - stock_code: ""
-    stock_name: ""
-    market: "A股"
-    sector: ""  # 所属板块
-    role: ""  # 最票/前排/中军/套利
-    add_date: ""
-    add_reason: ""
-
-    # 交易计划
-    entry_condition: ""  # 什么条件下买入
-    entry_mode: ""  # 半路/打板/低吸/尾盘等
-    target_price: 0  # 目标价（如有）
-    stop_loss: 0  # 止损位
-    position_plan: ""  # 计划仓位
-
-    # 跟踪状态
-    current_price: 0
-    current_status: ""  # 走强/震荡/走弱
-    volume_status: ""  # 放量/缩量/正常
-    note: ""
-
-# 第二层：观察池（有潜力但需要进一步确认的票）
-tier2_watch:
-  - stock_code: ""
-    stock_name: ""
-    sector: ""
-    watch_reason: ""  # 为什么关注
-    trigger_condition: ""  # 什么条件下升级到核心关注
-    add_date: ""
-    note: ""
-
-# 第三层：板块龙头池（各板块的最票/龙头记录）
-tier3_sector_leaders:
-  - sector: ""
-    leader_stock: ""
-    leader_type: ""  # 什么属性的最
-    since_date: ""
-    status: ""  # 活跃 / 分歧 / 退位
-    successor: ""  # 如果退位，继任者是谁
-
-# 黑名单（暂时不碰的票）
 blacklist:
-  - stock_name: ""
-    reason: ""  # 为什么不碰
-    until: ""  # 到什么时候解除
+- reason: ''
+  stock_name: ''
+  until: ''
+last_updated: '2026-03-29T23:33:21.560342'
+tier1_core:
+- add_date: ''
+  add_reason: ''
+  current_price: 0
+  current_status: ''
+  entry_condition: ''
+  entry_mode: ''
+  market: A股
+  note: ''
+  position_plan: ''
+  role: ''
+  sector: ''
+  stock_code: ''
+  stock_name: ''
+  stop_loss: 0
+  target_price: 0
+  volume_status: ''
+tier2_watch:
+- add_date: ''
+  note: ''
+  sector: ''
+  stock_code: ''
+  stock_name: ''
+  trigger_condition: ''
+  watch_reason: ''
+tier3_sector_leaders:
+- leader_stock: ''
+  leader_type: ''
+  sector: ''
+  since_date: ''
+  status: ''
+  successor: ''

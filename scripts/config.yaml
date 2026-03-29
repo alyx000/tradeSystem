@@ -35,7 +35,7 @@ schedule:
       - "generate_pre_report"    # 生成盘前简报
 
   post_market:
-    time: "15:30"
+    time: "20:00"
     timezone: "Asia/Shanghai"
     tasks:
       - "market_data"       # 行情数据
@@ -52,8 +52,9 @@ schedule:
     time: "18:00"
     timezone: "Asia/Shanghai"
     tasks:
-      - "margin_data"       # 融资融券（T+1延迟）
-      - "premium_backfill"  # 回填昨日溢价率
+      - "premium_backfill"  # 回填昨日溢价率（T-1涨停→T日开盘溢价）
+      - "watchlist_check"   # 关注池行情更新 + 到价提醒
+      - "obsidian_export"   # 导出当日数据到 Obsidian
 
 # 推送配置
 push:

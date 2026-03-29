@@ -20,14 +20,20 @@ YAML → Obsidian Markdown 导出器
 """
 import argparse
 import logging
+import os
 from datetime import datetime
 from pathlib import Path
 
 import yaml
+from dotenv import load_dotenv
 
 # 项目根目录
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
-DEFAULT_OBSIDIAN_DIR = Path("/root/.openclaw/workspace/obsidian-vault")
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+
+# 优先读环境变量 OBSIDIAN_DIR，fallback 到 VPS 路径
+_env_obsidian = os.getenv("OBSIDIAN_DIR", "")
+DEFAULT_OBSIDIAN_DIR = Path(_env_obsidian) if _env_obsidian else Path("/root/.openclaw/workspace/obsidian-vault")
 
 logging.basicConfig(
     level=logging.INFO,

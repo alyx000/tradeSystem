@@ -29,7 +29,7 @@ import argparse
 import logging
 import os
 import sys
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from pathlib import Path
 
 import yaml
@@ -217,6 +217,16 @@ def cmd_post(config: dict, target_date: str):
     if multi._pushers:
         multi.send_report("post_market", f"盘后数据报告 {target_date}", md_text)
 
+    # 盘后数据写入完成后，同步导出到 Obsidian（post-market.yaml 此时已存在）
+    try:
+        from generators.obsidian_export import ObsidianExporter
+        exporter = ObsidianExporter()
+        post_path = exporter.export_post_market(target_date)
+        if post_path:
+            logger.info(f"Obsidian 导出完成（盘后数据）：{post_path}")
+    except Exception as e:
+        logger.warning(f"Obsidian 盘后数据导出失败：{e}")
+
 
 def cmd_holdings(config: dict, args):
     """持仓管理"""
@@ -257,6 +267,119 @@ def cmd_holdings(config: dict, args):
         print(f"已移除: {code}")
 
 
+def _get_prev_trade_date(registry, today: str) -> str:
+    """
+    向前最多查找 7 天，找到最近一个交易日（不含 today）。
+    若 provider 不可用则简单回退到昨天。
+    """
+    for delta in range(1, 8):
+        candidate = (datetime.strptime(today, "%Y-%m-%d") - timedelta(days=delta)).strftime("%Y-%m-%d")
+        r = registry.call("is_trade_day", candidate)
+        if r.success and r.data:
+            return candidate
+    # fallback
+    return (datetime.strptime(today, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
+
+
+def cmd_evening(config: dict, target_date: str):
+    """
+    执行晚间任务（18:00 触发）：
+    1. 溢价率回填（T-1 涨停→T 开盘溢价）
+    2. 关注池行情更新 + 到价提醒
+    3. Obsidian 导出当日数据
+    """
+    logger.info(f"=== 晚间任务 {target_date} ===")
+
+    registry = setup_providers(config)
+    registry.initialize_all()
+
+    multi = setup_pushers(config)
+    prev_date = _get_prev_trade_date(registry, target_date)
+
+    # 1. 溢价率回填
+    try:
+        from collectors import PremiumCollector
+        premium_collector = PremiumCollector(registry)
+        premium_result = premium_collector.collect(target_date, prev_date)
+        if premium_result:
+            report_text = premium_collector.format_report(premium_result)
+            logger.info(f"溢价率回填完成，首板高开率：{premium_result['first_board'].get('open_up_rate', '-')}")
+            if multi._pushers and report_text:
+                multi.send_report("post_market", f"溢价率回填 {prev_date}", report_text)
+    except Exception as e:
+        logger.error(f"溢价率回填失败：{e}")
+
+    # 2. 关注池采集 + 到价提醒
+    try:
+        from collectors import WatchlistCollector
+        wl_collector = WatchlistCollector(registry)
+        wl_result = wl_collector.collect(target_date)
+        if wl_result:
+            report_text = wl_collector.format_report(wl_result)
+            logger.info(
+                f"关注池更新完成，tier1={len(wl_result.get('tier1', []))}只，"
+                f"提醒={len(wl_result.get('alerts', []))}条"
+            )
+            if multi._pushers and report_text:
+                multi.send_report("post_market", f"关注池日报 {target_date}", report_text)
+    except Exception as e:
+        logger.error(f"关注池采集失败：{e}")
+
+    # 3. Obsidian 导出（仅导出 review.yaml，post-market 在 20:00 盘后任务完成后才有数据）
+    try:
+        from generators.obsidian_export import ObsidianExporter
+        exporter = ObsidianExporter()
+        review_path = exporter.export_daily_review(target_date)
+        if review_path:
+            logger.info(f"Obsidian 导出完成（复盘）：{review_path}")
+        else:
+            logger.info(f"Obsidian 复盘导出跳过：{target_date}/review.yaml 不存在或尚未填写")
+    except Exception as e:
+        logger.error(f"Obsidian 导出失败：{e}")
+
+
+def cmd_watchlist(config: dict, target_date: str):
+    """手动触发关注池采集 + 到价提醒"""
+    logger.info(f"=== 关注池采集 {target_date} ===")
+
+    registry = setup_providers(config)
+    registry.initialize_all()
+
+    from collectors import WatchlistCollector
+    wl_collector = WatchlistCollector(registry)
+    result = wl_collector.collect(target_date)
+    report = wl_collector.format_report(result)
+    print(report)
+
+    multi = setup_pushers(config)
+    if multi._pushers and report:
+        multi.send_report("post_market", f"关注池日报 {target_date}", report)
+
+
+def cmd_obsidian(config: dict, target_date: str, sync_all: bool = False):
+    """手动触发 Obsidian 导出"""
+    from generators.obsidian_export import ObsidianExporter
+    exporter = ObsidianExporter()
+
+    if sync_all:
+        daily_dir = exporter.ts_dir / "daily"
+        if not daily_dir.exists():
+            logger.error(f"daily 目录不存在：{daily_dir}")
+            return
+        dates = sorted([d.name for d in daily_dir.iterdir() if d.is_dir() and d.name != "example"])
+        logger.info(f"全量同步 {len(dates)} 个日期...")
+        for d in dates:
+            exporter.export_all(d)
+        logger.info("全量同步完成")
+    else:
+        results = exporter.export_all(target_date)
+        exported = {k: v for k, v in results.items() if v and k != "date"}
+        if exported:
+            logger.info(f"导出完成：{exported}")
+        else:
+            logger.warning(f"未找到可导出的文件（{target_date}）")
+
+
 def cmd_schedule(config: dict):
     """启动定时调度器"""
     try:
@@ -284,8 +407,17 @@ def cmd_schedule(config: dict):
         name="盘后报告",
     )
 
+    # 晚间: 每个工作日 18:00（溢价率回填 + 关注池 + Obsidian 导出）
+    scheduler.add_job(
+        lambda: cmd_evening(config, date.today().isoformat()),
+        CronTrigger(day_of_week="mon-fri", hour=18, minute=0),
+        id="evening",
+        name="晚间任务",
+    )
+
     logger.info("定时调度器已启动")
     logger.info("  盘前简报: 周一~周五 07:00")
+    logger.info("  晚间任务: 周一~周五 18:00（溢价率回填/关注池/Obsidian）")
     logger.info("  盘后报告: 周一~周五 20:00")
     logger.info("按 Ctrl+C 停止")
 
@@ -317,6 +449,19 @@ def main():
     holdings_parser.add_argument("--list", dest="holdings_action", action="store_const", const="list")
     holdings_parser.add_argument("holdings_args", nargs="*", default=[])
 
+    # evening
+    evening_parser = subparsers.add_parser("evening", help="晚间任务（溢价率回填+关注池+Obsidian导出）")
+    evening_parser.add_argument("--date", default=date.today().isoformat(), help="日期 YYYY-MM-DD")
+
+    # watchlist
+    watchlist_parser = subparsers.add_parser("watchlist", help="关注池行情更新 + 到价提醒")
+    watchlist_parser.add_argument("--date", default=date.today().isoformat(), help="日期 YYYY-MM-DD")
+
+    # obsidian
+    obsidian_parser = subparsers.add_parser("obsidian", help="导出数据到 Obsidian Vault")
+    obsidian_parser.add_argument("--date", default=date.today().isoformat(), help="日期 YYYY-MM-DD")
+    obsidian_parser.add_argument("--sync-all", action="store_true", help="全量同步所有日期")
+
     # schedule
     subparsers.add_parser("schedule", help="启动定时调度器")
 
@@ -337,6 +482,12 @@ def main():
         if not args.holdings_action:
             args.holdings_action = "list"
         cmd_holdings(config, args)
+    elif args.command == "evening":
+        cmd_evening(config, args.date)
+    elif args.command == "watchlist":
+        cmd_watchlist(config, args.date)
+    elif args.command == "obsidian":
+        cmd_obsidian(config, args.date, sync_all=args.sync_all)
     elif args.command == "schedule":
         cmd_schedule(config)
 
