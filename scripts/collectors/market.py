@@ -6,9 +6,15 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta
+from pathlib import Path
+
+from analyzers.sector_rhythm import SectorRhythmAnalyzer
 from providers.registry import ProviderRegistry
 
 logger = logging.getLogger(__name__)
+
+
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
 
 class MarketCollector:
@@ -16,6 +22,7 @@ class MarketCollector:
 
     def __init__(self, registry: ProviderRegistry):
         self.registry = registry
+        self._rhythm_analyzer = SectorRhythmAnalyzer(BASE_DIR, history_days=20)
 
     def collect_post_market(self, date: str) -> dict:
         """
@@ -106,6 +113,21 @@ class MarketCollector:
             result["dragon_tiger"] = {"data": dt.data, "_source": dt.source}
         else:
             result["dragon_tiger"] = {"error": dt.error}
+
+        # 8. 板块节奏分析
+        try:
+            extra_names = self._rhythm_analyzer.load_main_theme_names()
+            for stype in ["industry", "concept"]:
+                rhythm = self._rhythm_analyzer.analyze(
+                    today_raw_data=result,
+                    sector_type=stype,
+                    extra_names=extra_names,
+                    today_date=date,
+                )
+                result[f"sector_rhythm_{stype}"] = rhythm
+            logger.info("板块节奏分析完成")
+        except Exception as e:
+            logger.warning(f"板块节奏分析失败，已跳过: {e}")
 
         logger.info(f"盘后数据采集完成: {date}")
         return result

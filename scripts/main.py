@@ -35,9 +35,15 @@ from pathlib import Path
 import yaml
 from dotenv import load_dotenv
 
-# 项目根目录
+# 项目根目录与脚本目录（数据采集、分析等包均位于 scripts/ 下）
 BASE_DIR = Path(__file__).resolve().parent.parent
 SCRIPT_DIR = Path(__file__).resolve().parent
+
+# 确保无论从何处启动（如项目根目录执行 python -m scripts.main），均能解析
+# providers、collectors、analyzers、generators 等包
+_scripts = str(SCRIPT_DIR)
+if _scripts not in sys.path:
+    sys.path.insert(0, _scripts)
 
 # 加载 .env
 load_dotenv(SCRIPT_DIR / ".env")

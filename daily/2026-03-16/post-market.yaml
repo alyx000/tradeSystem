@@ -1,0 +1,128 @@
+date: '2026-03-16'
+generated_at: '2026-03-29T20:35:27.760223'
+holdings_data: []
+raw_data:
+  date: '2026-03-16'
+  sector_industry:
+    _source: akshare:backfill
+    data:
+    - change_pct: 2.62
+      name: 洗护用品
+      top_stock: ''
+      volume_billion: 3.76254983
+    - change_pct: 1.74
+      name: 电商服务
+      top_stock: ''
+      volume_billion: 12.01672529
+    - change_pct: 1.29
+      name: 水产饲料
+      top_stock: ''
+      volume_billion: 9.95560136
+    - change_pct: 0.79
+      name: 体外诊断
+      top_stock: ''
+      volume_billion: 42.36321137
+    - change_pct: 0.76
+      name: 医疗研发外包
+      top_stock: ''
+      volume_billion: 75.97455112
+    - change_pct: 0.73
+      name: 电池化学品
+      top_stock: ''
+      volume_billion: 434.34384867
+    - change_pct: 0.72
+      name: 其他生物制品
+      top_stock: ''
+      volume_billion: 63.68724485
+    - change_pct: 0.7
+      name: 化学制剂
+      top_stock: ''
+      volume_billion: 178.84072292
+    - change_pct: 0.63
+      name: 化学制药
+      top_stock: ''
+      volume_billion: 247.50233374
+    - change_pct: 0.45
+      name: 原料药
+      top_stock: ''
+      volume_billion: 68.66161082
+    - change_pct: 0.41
+      name: 生物制品
+      top_stock: ''
+      volume_billion: 89.70952091
+    - change_pct: 0.36
+      name: 医药生物
+      top_stock: ''
+      volume_billion: 834.3467667
+    - change_pct: 0.31
+      name: 医美服务
+      top_stock: ''
+      volume_billion: 0.13055775
+    - change_pct: 0.21
+      name: 医疗服务
+      top_stock: ''
+      volume_billion: 184.75869042
+    - change_pct: -0.29
+      name: 氮肥
+      top_stock: ''
+      volume_billion: 103.04937692
+    - change_pct: -0.5
+      name: 钛白粉
+      top_stock: ''
+      volume_billion: 35.0381133
+    - change_pct: -1.18
+      name: 炭黑
+      top_stock: ''
+      volume_billion: 15.39839719
+    - change_pct: -1.37
+      name: 锂
+      top_stock: ''
+      volume_billion: 113.32636696
+    - change_pct: -1.57
+      name: 农药
+      top_stock: ''
+      volume_billion: 85.47040782
+    - change_pct: -1.63
+      name: 小金属
+      top_stock: ''
+      volume_billion: 353.19770666
+    - change_pct: -1.88
+      name: 钨
+      top_stock: ''
+      volume_billion: 137.10589177
+    - change_pct: -2.16
+      name: 能源金属
+      top_stock: ''
+      volume_billion: 175.91089483
+    - change_pct: -2.17
+      name: 农化制品
+      top_stock: ''
+      volume_billion: 562.05499532
+    - change_pct: -2.43
+      name: 复合肥
+      top_stock: ''
+      volume_billion: 77.55536877
+    - change_pct: -2.57
+      name: 纯碱
+      top_stock: ''
+      volume_billion: 22.52038012
+    - change_pct: -2.63
+      name: 稀土
+      top_stock: ''
+      volume_billion: 85.09395915
+    - change_pct: -2.77
+      name: 铅锌
+      top_stock: ''
+      volume_billion: 86.01599589
+    - change_pct: -3.74
+      name: 磷肥及磷化工
+      top_stock: ''
+      volume_billion: 197.81673384
+    - change_pct: -3.87
+      name: 钴
+      top_stock: ''
+      volume_billion: 12.28867396
+    - change_pct: -5.89
+      name: 钾肥
+      top_stock: ''
+      volume_billion: 98.16310796
