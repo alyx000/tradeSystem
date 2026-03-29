@@ -1,7 +1,7 @@
 """
 溢价率回填采集器
 
-晚间 18:00 执行（T 日），计算 T-1 日涨停板 → T 日开盘溢价率，
+由 main.py post 在 20:00 流程前半段执行（T 日），计算 T-1 日涨停板 → T 日开盘溢价率，
 回填写入 daily/T-1/post-market.yaml 的 premium_backfill 字段。
 
 溢价率定义：

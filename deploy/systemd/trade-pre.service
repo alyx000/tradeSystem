@@ -1,0 +1,7 @@
+[Unit]
+Description=交易系统盘前简报
+
+[Service]
+Type=oneshot
+WorkingDirectory=PATH_TO_TRADESYSTEM/scripts
+ExecStart=/usr/bin/python3 main.py pre

@@ -99,6 +99,21 @@ cp templates/trade-log.yaml daily/$(date +%Y-%m-%d)/trades.yaml
 
 或者直接告诉 OpenClaw："开始今天的复盘"，它会自动创建文件并引导你填写。
 
+## VPS / 定时任务（生产）
+
+仓库根目录下，推荐 **两个定时点**（上海时区，工作日）：
+
+| 时间 | 命令 | 说明 |
+|------|------|------|
+| 07:00 | `python3 scripts/main.py pre` | 盘前简报 |
+| 20:00 | `bash scripts/sync_data.sh` | `git pull` → `main.py post`（含晚间任务）→ 提交并推送 `daily/`、`tracking/` |
+
+也可在 `scripts/` 下长期运行 `python3 main.py schedule`，由 APScheduler 执行上述两个时刻（`post` 已内含原 `evening` 流程，无需再配 18:00）。
+
+**环境**：复制 `scripts/.env.example` 为 `scripts/.env`，填入 `TUSHARE_TOKEN`、Discord Webhook 等；Obsidian 导出目录可用环境变量 **`OBSIDIAN_DIR`**（未设置时见 `scripts/generators/obsidian_export.py` 默认路径）。Vault 一般在仓库外，不由 `sync_data.sh` 提交。
+
+**一次性**：若需板块节奏分析有足够历史，可在 VPS 上按需执行 `python3 scripts/backfill_sectors.py`（参数见脚本说明）。
+
 ## 核心概念速查
 
 | 概念 | 说明 |

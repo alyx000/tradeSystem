@@ -1,0 +1,7 @@
+[Unit]
+Description=交易系统盘后同步（pull + post + git push）
+
+[Service]
+Type=oneshot
+WorkingDirectory=PATH_TO_TRADESYSTEM
+ExecStart=/bin/bash scripts/sync_data.sh

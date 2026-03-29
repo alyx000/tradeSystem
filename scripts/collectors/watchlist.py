@@ -1,7 +1,7 @@
 """
 关注池采集器
 
-晚间任务（18:00）读取 tracking/watchlist.yaml，
+晚间任务（由 main.py post 在 20:00 流程前半段执行）读取 tracking/watchlist.yaml，
 为 tier1_core 和 tier2_watch 中的有效股票更新当日行情，
 并在价格触及目标价/止损位时生成到价提醒。
 """

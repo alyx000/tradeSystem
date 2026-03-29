@@ -7,13 +7,20 @@
     # 运行盘前简报
     python main.py pre
 
-    # 运行盘后报告
+    # 运行盘后报告（会先执行晚间任务：溢价回填、关注池、复盘 Obsidian，再生成全日盘后数据）
     python main.py post
 
-    # 运行盘后报告（指定日期）
+    # 指定日期
     python main.py post --date 2026-03-28
 
-    # 启动定时调度器
+    # 仅重跑晚间任务（定时任务请用 post，无需单独跑 evening）
+    python main.py evening
+
+    # 关注池 / Obsidian 导出（也可通过 post、evening 间接执行）
+    python main.py watchlist
+    python main.py obsidian [--sync-all]
+
+    # 启动定时调度器（工作日 07:00 pre，20:00 post；post 已含 evening）
     python main.py schedule
 
     # 检查数据源连通性
@@ -183,7 +190,9 @@ def cmd_pre(config: dict, target_date: str):
 
 
 def cmd_post(config: dict, target_date: str):
-    """执行盘后报告"""
+    """执行盘后报告：先晚间任务（溢价/关注池/复盘 Obsidian），再全日盘后采集与推送。"""
+    cmd_evening(config, target_date)
+
     logger.info(f"=== 盘后报告 {target_date} ===")
 
     registry = setup_providers(config)
@@ -283,10 +292,10 @@ def _get_prev_trade_date(registry, today: str) -> str:
 
 def cmd_evening(config: dict, target_date: str):
     """
-    执行晚间任务（18:00 触发）：
+    晚间任务（由 post 在定时流程中自动先执行，也可手动单独运行）：
     1. 溢价率回填（T-1 涨停→T 开盘溢价）
     2. 关注池行情更新 + 到价提醒
-    3. Obsidian 导出当日数据
+    3. Obsidian 导出 review.yaml（post-market 在随后 post 阶段导出）
     """
     logger.info(f"=== 晚间任务 {target_date} ===")
 
@@ -325,7 +334,7 @@ def cmd_evening(config: dict, target_date: str):
     except Exception as e:
         logger.error(f"关注池采集失败：{e}")
 
-    # 3. Obsidian 导出（仅导出 review.yaml，post-market 在 20:00 盘后任务完成后才有数据）
+    # 3. Obsidian 导出 review.yaml（post-market 在同次 post 流程后半段导出）
     try:
         from generators.obsidian_export import ObsidianExporter
         exporter = ObsidianExporter()
@@ -399,7 +408,7 @@ def cmd_schedule(config: dict):
         name="盘前简报",
     )
 
-    # 盘后: 每个工作日 20:00
+    # 盘后: 每个工作日 20:00（内含晚间任务：溢价回填/关注池/复盘 Obsidian）
     scheduler.add_job(
         lambda: cmd_post(config, date.today().isoformat()),
         CronTrigger(day_of_week="mon-fri", hour=20, minute=0),
@@ -407,18 +416,9 @@ def cmd_schedule(config: dict):
         name="盘后报告",
     )
 
-    # 晚间: 每个工作日 18:00（溢价率回填 + 关注池 + Obsidian 导出）
-    scheduler.add_job(
-        lambda: cmd_evening(config, date.today().isoformat()),
-        CronTrigger(day_of_week="mon-fri", hour=18, minute=0),
-        id="evening",
-        name="晚间任务",
-    )
-
     logger.info("定时调度器已启动")
     logger.info("  盘前简报: 周一~周五 07:00")
-    logger.info("  晚间任务: 周一~周五 18:00（溢价率回填/关注池/Obsidian）")
-    logger.info("  盘后报告: 周一~周五 20:00")
+    logger.info("  盘后报告: 周一~周五 20:00（含溢价回填/关注池/复盘与全日盘后）")
     logger.info("按 Ctrl+C 停止")
 
     try:
@@ -439,7 +439,7 @@ def main():
     pre_parser.add_argument("--date", default=date.today().isoformat(), help="日期 YYYY-MM-DD")
 
     # post
-    post_parser = subparsers.add_parser("post", help="生成盘后报告")
+    post_parser = subparsers.add_parser("post", help="生成盘后报告（含晚间任务）")
     post_parser.add_argument("--date", default=date.today().isoformat(), help="日期 YYYY-MM-DD")
 
     # holdings
@@ -450,7 +450,7 @@ def main():
     holdings_parser.add_argument("holdings_args", nargs="*", default=[])
 
     # evening
-    evening_parser = subparsers.add_parser("evening", help="晚间任务（溢价率回填+关注池+Obsidian导出）")
+    evening_parser = subparsers.add_parser("evening", help="仅晚间任务（定时请用 post；post 会自动先执行本流程）")
     evening_parser.add_argument("--date", default=date.today().isoformat(), help="日期 YYYY-MM-DD")
 
     # watchlist

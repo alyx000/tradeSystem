@@ -49,7 +49,8 @@ schedule:
       - "generate_post_report"   # 生成盘后报告
 
   evening:
-    time: "18:00"
+    # 与 post 同在 20:00 窗口内，由 main.py post 先执行本段再跑全日盘后
+    time: "20:00"
     timezone: "Asia/Shanghai"
     tasks:
       - "premium_backfill"  # 回填昨日溢价率（T-1涨停→T日开盘溢价）

@@ -1,0 +1,9 @@
+[Unit]
+Description=盘前简报（工作日 07:00 上海）
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 07:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,5 +1,5 @@
 #!/bin/bash
-# VPS 专用：拉取最新代码 → 运行盘后采集 → 提交数据文件 → 推送
+# VPS 专用：拉取 main → python main.py post（post 会先跑晚间任务：溢价回填、关注池、复盘 Obsidian，再生成全日盘后）→ 提交 daily/、tracking/ → push
 set -e
 cd "$(dirname "$0")/.."
 
