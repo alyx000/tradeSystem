@@ -1,14 +1,41 @@
 """
 AkShare 数据提供者（免费，作为 tushare 的补充和降级）
 文档: https://akshare.akfamily.xyz/
+
+盘前外盘/大宗/汇率：优先使用东方财富全球指数现货 index_global_spot_em、
+全球期货现货 futures_global_spot_em；已移除失效的 index_investing_global。
 """
 from __future__ import annotations
 
 import logging
-from datetime import datetime
-from .base import DataProvider, DataResult, DataType, Confidence, Timeliness
+from typing import Any, Optional
+
+import pandas as pd
+
+from .base import DataProvider, DataResult
 
 logger = logging.getLogger(__name__)
+
+
+def _to_float_pct(val: Any) -> float:
+    if val is None or (isinstance(val, float) and pd.isna(val)):
+        return 0.0
+    if isinstance(val, (int, float)):
+        return float(val)
+    s = str(val).strip().replace("%", "")
+    try:
+        return float(s)
+    except ValueError:
+        return 0.0
+
+
+def _to_float_price(val: Any) -> float:
+    if val is None or (isinstance(val, float) and pd.isna(val)):
+        return 0.0
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 class AkshareProvider(DataProvider):
@@ -18,13 +45,16 @@ class AkshareProvider(DataProvider):
     def __init__(self, config: dict | None = None):
         super().__init__(config)
         self.ak = None
+        self._df_global_spot_em: Optional[pd.DataFrame] = None
+        self._df_futures_global_spot_em: Optional[pd.DataFrame] = None
 
     def initialize(self) -> bool:
         try:
             import akshare as ak
             self.ak = ak
-            # 简单测试
             ak.tool_trade_date_hist_sina()
+            self._df_global_spot_em = None
+            self._df_futures_global_spot_em = None
             self._initialized = True
             return True
         except Exception as e:
@@ -45,104 +75,185 @@ class AkshareProvider(DataProvider):
             "is_trade_day",
         ]
 
-    # ---- 外盘数据（tushare 不擅长，akshare 作为主力） ----
+    # ------------------------------------------------------------------
+    # 缓存：单次盘前采集会多次调用，避免重复拉全表
+    # ------------------------------------------------------------------
+
+    def _global_spot_em(self) -> pd.DataFrame:
+        if self._df_global_spot_em is None:
+            self._df_global_spot_em = self.ak.index_global_spot_em()
+        return self._df_global_spot_em
+
+    def _futures_global_spot_em(self) -> pd.DataFrame:
+        if self._df_futures_global_spot_em is None:
+            self._df_futures_global_spot_em = self.ak.futures_global_spot_em()
+        return self._df_futures_global_spot_em
+
+    def _row_global_spot_by_name(self, zh_name: str) -> Optional[pd.Series]:
+        df = self._global_spot_em()
+        exact = df[df["名称"] == zh_name]
+        if not exact.empty:
+            return exact.iloc[0]
+        sub = df[df["名称"].str.contains(zh_name, na=False)]
+        if not sub.empty:
+            return sub.iloc[0]
+        return None
+
+    def _global_index_from_hist_em(self, symbol: str) -> Optional[dict]:
+        """index_global_hist_em：无涨跌幅列时用最近两日收盘推算涨跌幅。"""
+        try:
+            df = self.ak.index_global_hist_em(symbol=symbol)
+        except Exception:
+            return None
+        if df is None or df.empty or "最新价" not in df.columns:
+            return None
+        df = df.sort_values("日期" if "日期" in df.columns else df.columns[0])
+        if len(df) < 1:
+            return None
+        last = df.iloc[-1]
+        close = _to_float_price(last.get("最新价", 0))
+        pct = 0.0
+        if len(df) >= 2:
+            prev_close = _to_float_price(df.iloc[-2].get("最新价", 0))
+            if prev_close:
+                pct = round((close - prev_close) / prev_close * 100, 4)
+        nm = str(last.get("名称", symbol))
+        return {"name": nm, "close": close, "change_pct": pct}
+
+    # ---- 外盘数据 ----
 
     def get_global_index(self, index_name: str) -> DataResult:
-        """获取全球指数数据"""
-        try:
-            name_map = {
-                "dow_jones": "道琼斯",
-                "nasdaq": "纳斯达克",
-                "sp500": "标普500",
-                "hsi": "恒生指数",
-                "hstech": "恒生科技指数",
-                "nikkei": "日经225",
-                "ftse": "富时100",
-                "dax": "德国DAX30",
-                "a50": "富时中国A50指数期货",
-            }
-            zh_name = name_map.get(index_name, index_name)
+        """
+        全球指数：index_global_spot_em 按中文名称匹配；
+        A50：futures_global_spot_em 中「A50期指当月连续」等；
+        部分指数可回退 index_global_hist_em（推算涨跌幅）。
+        """
+        name_map = {
+            "dow_jones": "道琼斯",
+            "nasdaq": "纳斯达克",
+            "sp500": "标普500",
+            "hsi": "恒生指数",
+            "hstech": "恒生科技",
+            "nikkei": "日经225",
+            "ftse": "英国富时100",
+            "dax": "德国DAX30",
+            "a50": "__A50_FUTURES__",
+        }
+        zh_name = name_map.get(index_name, index_name)
 
+        try:
             if index_name == "a50":
-                df = self.ak.futures_foreign_hist(symbol="A50")
-                if df.empty:
-                    return DataResult(data=None, source=self.name, error="无A50数据")
-                row = df.iloc[-1]
+                fut = self._futures_global_spot_em()
+                # 优先连续合约，否则取有成交价的 A50 期指合约
+                for prefer in ("A50期指当月连续",):
+                    m = fut[fut["名称"] == prefer]
+                    if not m.empty and pd.notna(m.iloc[0].get("最新价")):
+                        row = m.iloc[0]
+                        break
+                else:
+                    m = fut[
+                        (fut["名称"].str.contains("A50期指", na=False))
+                        & (fut["最新价"].notna())
+                    ]
+                    if m.empty:
+                        return DataResult(
+                            data=None,
+                            source=self.name,
+                            error="AkShare: 未找到 A50 期货现货数据",
+                        )
+                    row = m.sort_values("最新价", ascending=False).iloc[0]
                 data = {
-                    "name": zh_name,
-                    "close": float(row["收盘"]),
-                    "change_pct": float(row["涨跌幅"]),
+                    "name": str(row.get("名称", "A50")),
+                    "close": _to_float_price(row.get("最新价")),
+                    "change_pct": _to_float_pct(row.get("涨跌幅")),
                 }
-            else:
-                df = self.ak.index_investing_global(area="美国" if "nasdaq" in index_name or "dow" in index_name or "sp" in index_name else "中国香港")
-                # 简化处理：返回最新一行
-                target = df[df["名称"].str.contains(zh_name)]
-                if target.empty:
-                    return DataResult(data=None, source=self.name, error=f"未找到: {zh_name}")
-                row = target.iloc[0]
-                data = {
-                    "name": zh_name,
-                    "close": float(row.get("最新价", 0)),
-                    "change_pct": float(row.get("涨跌幅", "0").replace("%", "")),
-                }
-            return DataResult(data=data, source="akshare:global_index")
+                return DataResult(data=data, source="akshare:futures_global_spot_em")
+
+            if zh_name not in ("__A50_FUTURES__",):
+                row = self._row_global_spot_by_name(zh_name)
+                if row is not None and pd.notna(row.get("最新价")):
+                    data = {
+                        "name": str(row.get("名称", zh_name)),
+                        "close": _to_float_price(row.get("最新价")),
+                        "change_pct": _to_float_pct(row.get("涨跌幅")),
+                    }
+                    return DataResult(data=data, source="akshare:index_global_spot_em")
+
+            return DataResult(
+                data=None,
+                source=self.name,
+                error=f"AkShare: 未匹配全球指数: {index_name}",
+            )
         except Exception as e:
             return DataResult(data=None, source=self.name, error=str(e))
 
     def get_commodity(self, name: str) -> DataResult:
-        """获取大宗商品数据"""
+        """大宗商品：futures_global_spot_em 按名称关键词取第一条有效报价。"""
+        plans: dict[str, list[str]] = {
+            "gold": ["迷你黄金当月连续", "迷你黄金", "COMEX黄金", "微型黄金"],
+            "crude_oil": ["迷你原油当月连续", "迷你原油", "布伦特原油"],
+            "copper": ["COMEX铜"],
+        }
+        keywords = plans.get(name, [name])
         try:
-            name_map = {
-                "gold": "黄金",
-                "crude_oil": "WTI原油",
-                "copper": "铜",
-            }
-            zh_name = name_map.get(name, name)
-            df = self.ak.futures_foreign_hist(symbol=zh_name)
-            if df.empty:
-                return DataResult(data=None, source=self.name, error=f"无商品数据: {name}")
-            row = df.iloc[-1]
-            data = {
-                "name": zh_name,
-                "close": float(row["收盘"]),
-                "change_pct": float(row["涨跌幅"]),
-            }
-            return DataResult(data=data, source="akshare:commodity")
+            fut = self._futures_global_spot_em()
+            for kw in keywords:
+                if kw.endswith("当月连续"):
+                    sub = fut[fut["名称"] == kw]
+                else:
+                    sub = fut[fut["名称"] == kw]
+                    if sub.empty:
+                        sub = fut[fut["名称"].str.contains(kw, na=False)]
+                sub = sub[sub["最新价"].notna()]
+                if sub.empty:
+                    continue
+                row = sub.iloc[0]
+                data = {
+                    "name": str(row.get("名称", kw)),
+                    "close": _to_float_price(row.get("最新价")),
+                    "change_pct": _to_float_pct(row.get("涨跌幅")),
+                }
+                return DataResult(data=data, source="akshare:futures_global_spot_em")
+            return DataResult(
+                data=None,
+                source=self.name,
+                error=f"AkShare: 无商品数据: {name}",
+            )
         except Exception as e:
             return DataResult(data=None, source=self.name, error=str(e))
 
     def get_forex(self, pair: str) -> DataResult:
-        """获取汇率数据"""
+        """汇率：美元指数来自 index_global_spot_em；USD/CNY 优先 美元人民币中间价（forex_spot_em）。"""
         try:
-            pair_map = {
-                "usd_cny": "美元/人民币",
-                "usd_index": "美元指数",
-            }
-            zh_name = pair_map.get(pair, pair)
-
             if pair == "usd_index":
-                df = self.ak.index_investing_global(area="美国")
-                target = df[df["名称"].str.contains("美元指数")]
-                if target.empty:
+                row = self._row_global_spot_by_name("美元指数")
+                if row is None or pd.isna(row.get("最新价")):
+                    got = self._global_index_from_hist_em("美元指数")
+                    if got:
+                        return DataResult(data=got, source="akshare:index_global_hist_em")
                     return DataResult(data=None, source=self.name, error="未找到美元指数")
-                row = target.iloc[0]
                 data = {
                     "name": "美元指数",
-                    "close": float(row.get("最新价", 0)),
-                    "change_pct": float(str(row.get("涨跌幅", "0")).replace("%", "")),
+                    "close": _to_float_price(row.get("最新价")),
+                    "change_pct": _to_float_pct(row.get("涨跌幅")),
                 }
-            else:
-                df = self.ak.fx_spot_quote()
-                target = df[df["货币对"].str.contains("USD/CNY")]
-                if target.empty:
-                    return DataResult(data=None, source=self.name, error="未找到USD/CNY")
-                row = target.iloc[0]
-                data = {
-                    "name": zh_name,
-                    "close": float(row.get("最新价", 0)),
-                    "change_pct": float(str(row.get("涨跌幅", "0")).replace("%", "")),
-                }
-            return DataResult(data=data, source="akshare:forex")
+                return DataResult(data=data, source="akshare:index_global_spot_em")
+
+            if pair == "usd_cny":
+                df = self.ak.forex_spot_em()
+                for label in ("美元人民币中间价", "美元兑离岸人民币"):
+                    m = df[df["名称"] == label]
+                    if not m.empty:
+                        row = m.iloc[0]
+                        data = {
+                            "name": label,
+                            "close": _to_float_price(row.get("最新价")),
+                            "change_pct": _to_float_pct(row.get("涨跌幅")),
+                        }
+                        return DataResult(data=data, source="akshare:forex_spot_em")
+                return DataResult(data=None, source=self.name, error="未找到 USD/CNY 汇率")
+
+            return DataResult(data=None, source=self.name, error=f"不支持: {pair}")
         except Exception as e:
             return DataResult(data=None, source=self.name, error=str(e))
 

@@ -1,31 +1,47 @@
 calendar_events: []
 date: '2026-03-29'
-generated_at: '2026-03-29T22:16:56.042877'
+generated_at: '2026-03-29T22:47:52.369497'
 holdings_announcements: {}
 market_data:
   commodities:
     copper:
-      error: '所有数据源均失败: akshare: Expected object or value'
+      change_pct: -0.28
+      close: 5.4615
+      name: COMEX铜
     crude_oil:
-      error: '所有数据源均失败: akshare: Expected object or value'
+      change_pct: 7.04
+      close: 101.125
+      name: 迷你原油
     gold:
-      error: '所有数据源均失败: akshare: Expected object or value'
+      change_pct: 2.72
+      close: 4495.5
+      name: 迷你黄金
   forex:
     usd_cny:
-      change_pct: 0.0
-      close: 0.0
-      name: 美元/人民币
+      change_pct: 0.12
+      close: 6.9141
+      name: 美元人民币中间价
     usd_index:
-      error: '所有数据源均失败: akshare: module ''akshare'' has no attribute ''index_investing_global'''
-  generated_at: '2026-03-29T22:16:54.624944'
+      change_pct: 0.24
+      close: 100.19
+      name: 美元指数
+  generated_at: '2026-03-29T22:47:42.919998'
   generated_by: openclaw
   global_indices:
     a50:
-      error: '所有数据源均失败: akshare: Expected object or value'
+      change_pct: 0.62
+      close: 14653.97
+      name: 富时中国A50
     dow_jones:
-      error: '所有数据源均失败: akshare: module ''akshare'' has no attribute ''index_investing_global'''
+      change_pct: -1.73
+      close: 45166.64
+      name: 道琼斯
     nasdaq:
-      error: '所有数据源均失败: akshare: module ''akshare'' has no attribute ''index_investing_global'''
+      change_pct: -2.15
+      close: 20948.36
+      name: 纳斯达克
     sp500:
-      error: '所有数据源均失败: akshare: module ''akshare'' has no attribute ''index_investing_global'''
+      change_pct: -1.67
+      close: 6368.85
+      name: 标普500
 news: []

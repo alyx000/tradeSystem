@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import os
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from .base import DataProvider, DataResult, DataType, Confidence, Timeliness
 
 logger = logging.getLogger(__name__)
@@ -52,12 +52,54 @@ class TushareProvider(DataProvider):
             "get_margin_data",
             "get_dragon_tiger",
             "get_stock_announcements",
+            "get_global_index",
             "is_trade_day",
         ]
 
     def _date_fmt(self, date: str) -> str:
         """统一日期格式为 YYYYMMDD"""
         return date.replace("-", "")
+
+    # ---- 国际指数（index_global，需约 6000 积分）----
+
+    def get_global_index(self, index_name: str) -> DataResult:
+        """
+        国际主要指数日线最新一行。ts_code 见 Tushare index_global 文档。
+        """
+        code_map = {
+            "dow_jones": ("DJI", "道琼斯"),
+            "nasdaq": ("IXIC", "纳斯达克"),
+            "sp500": ("SPX", "标普500"),
+            "a50": ("XIN9", "富时中国A50"),
+        }
+        pair = code_map.get(index_name)
+        if not pair:
+            return DataResult(
+                data=None,
+                source=self.name,
+                error=f"tushare 未支持的国际指数键: {index_name}",
+            )
+        ts_code, display_name = pair
+        try:
+            end = datetime.now().strftime("%Y%m%d")
+            start = (datetime.now() - timedelta(days=45)).strftime("%Y%m%d")
+            df = self.pro.index_global(ts_code=ts_code, start_date=start, end_date=end)
+            if df is None or df.empty:
+                return DataResult(
+                    data=None,
+                    source=self.name,
+                    error=f"无 index_global 数据: {ts_code}",
+                )
+            df = df.sort_values("trade_date")
+            row = df.iloc[-1]
+            data = {
+                "name": display_name,
+                "close": float(row["close"]),
+                "change_pct": float(row["pct_chg"]),
+            }
+            return DataResult(data=data, source="tushare:index_global")
+        except Exception as e:
+            return DataResult(data=None, source=self.name, error=str(e))
 
     # ---- 行情数据 ----
 
