@@ -276,17 +276,17 @@ def cmd_schedule(config: dict):
         name="盘前简报",
     )
 
-    # 盘后: 每个工作日 15:35
+    # 盘后: 每个工作日 20:00
     scheduler.add_job(
         lambda: cmd_post(config, date.today().isoformat()),
-        CronTrigger(day_of_week="mon-fri", hour=15, minute=35),
+        CronTrigger(day_of_week="mon-fri", hour=20, minute=0),
         id="post_market",
         name="盘后报告",
     )
 
     logger.info("定时调度器已启动")
     logger.info("  盘前简报: 周一~周五 07:00")
-    logger.info("  盘后报告: 周一~周五 15:35")
+    logger.info("  盘后报告: 周一~周五 20:00")
     logger.info("按 Ctrl+C 停止")
 
     try:
