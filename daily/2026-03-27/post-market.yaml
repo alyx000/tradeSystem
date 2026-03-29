@@ -1,5 +1,5 @@
 date: '2026-03-27'
-generated_at: '2026-03-29T17:04:14.942258'
+generated_at: '2026-03-29T21:38:54.411162'
 holdings_data: []
 raw_data:
   date: '2026-03-27'
@@ -330,7 +330,7 @@ raw_data:
       net_amount: 3705357.24
       reason: 当日换手率达到20%的前5只股票
       sell_amount: 0.0
-  generated_at: '2026-03-29T17:03:54.139647'
+  generated_at: '2026-03-29T21:38:30.159746'
   generated_by: openclaw
   indices:
     chinext:
@@ -1505,6 +1505,476 @@ raw_data:
       name: 复合肥
       top_stock: 金正大
       volume_billion: 0.0
+  sector_rhythm_concept:
+  - change_today: 5.52
+    confidence: 中
+    consecutive_in_top30: 1
+    cumulative_pct_5d: 5.52
+    evidence:
+    - 今日首次进入前30（新兴启动）
+    - '今日排名 #1，位置靠前'
+    name: 锂矿概念
+    phase: 启动
+    rank_today: 1
+    sector_type: concept
+    signals:
+      change_today: 5.52
+      consecutive_in_top30: 1
+      cumulative_pct_5d: 5.52
+      daily_accel_3d: null
+      days_in_top30_of_20: 1
+      max_consecutive_hist: 1
+      rank_change_3d: null
+      rank_today: 1
+      top_stock_stability_5d: 1.0
+      top_stock_today: 江特电机
+    top_stock_today: 江特电机
+  - change_today: 5.01
+    confidence: 中
+    consecutive_in_top30: 1
+    cumulative_pct_5d: 5.01
+    evidence:
+    - 今日首次进入前30（新兴启动）
+    - '今日排名 #2，位置靠前'
+    name: 单抗概念
+    phase: 启动
+    rank_today: 2
+    sector_type: concept
+    signals:
+      change_today: 5.01
+      consecutive_in_top30: 1
+      cumulative_pct_5d: 5.01
+      daily_accel_3d: null
+      days_in_top30_of_20: 1
+      max_consecutive_hist: 1
+      rank_change_3d: null
+      rank_today: 2
+      top_stock_stability_5d: 1.0
+      top_stock_today: 双鹭药业
+    top_stock_today: 双鹭药业
+  - change_today: 4.96
+    confidence: 中
+    consecutive_in_top30: 1
+    cumulative_pct_5d: 4.96
+    evidence:
+    - 今日首次进入前30（新兴启动）
+    - '今日排名 #3，位置靠前'
+    name: 阿兹海默
+    phase: 启动
+    rank_today: 3
+    sector_type: concept
+    signals:
+      change_today: 4.96
+      consecutive_in_top30: 1
+      cumulative_pct_5d: 4.96
+      daily_accel_3d: null
+      days_in_top30_of_20: 1
+      max_consecutive_hist: 1
+      rank_change_3d: null
+      rank_today: 3
+      top_stock_stability_5d: 1.0
+      top_stock_today: 万邦德
+    top_stock_today: 万邦德
+  - change_today: 4.81
+    confidence: 中
+    consecutive_in_top30: 1
+    cumulative_pct_5d: 4.81
+    evidence:
+    - 今日首次进入前30（新兴启动）
+    - '今日排名 #4，位置靠前'
+    name: 减肥药
+    phase: 启动
+    rank_today: 4
+    sector_type: concept
+    signals:
+      change_today: 4.81
+      consecutive_in_top30: 1
+      cumulative_pct_5d: 4.81
+      daily_accel_3d: null
+      days_in_top30_of_20: 1
+      max_consecutive_hist: 1
+      rank_change_3d: null
+      rank_today: 4
+      top_stock_stability_5d: 1.0
+      top_stock_today: 美诺华
+    top_stock_today: 美诺华
+  - change_today: 4.73
+    confidence: 中
+    consecutive_in_top30: 1
+    cumulative_pct_5d: 4.73
+    evidence:
+    - 今日首次进入前30（新兴启动）
+    - '今日排名 #5，位置靠前'
+    name: CRO
+    phase: 启动
+    rank_today: 5
+    sector_type: concept
+    signals:
+      change_today: 4.73
+      consecutive_in_top30: 1
+      cumulative_pct_5d: 4.73
+      daily_accel_3d: null
+      days_in_top30_of_20: 1
+      max_consecutive_hist: 1
+      rank_change_3d: null
+      rank_today: 5
+      top_stock_stability_5d: 1.0
+      top_stock_today: 昭衍新药
+    top_stock_today: 昭衍新药
+  - change_today: 4.63
+    confidence: 中
+    consecutive_in_top30: 1
+    cumulative_pct_5d: 4.63
+    evidence:
+    - 今日首次进入前30（新兴启动）
+    - '今日排名 #6，位置靠前'
+    name: 创新药
+    phase: 启动
+    rank_today: 6
+    sector_type: concept
+    signals:
+      change_today: 4.63
+      consecutive_in_top30: 1
+      cumulative_pct_5d: 4.63
+      daily_accel_3d: null
+      days_in_top30_of_20: 1
+      max_consecutive_hist: 1
+      rank_change_3d: null
+      rank_today: 6
+      top_stock_stability_5d: 1.0
+      top_stock_today: 联环药业
+    top_stock_today: 联环药业
+  - change_today: 4.52
+    confidence: 中
+    consecutive_in_top30: 1
+    cumulative_pct_5d: 4.52
+    evidence:
+    - 今日首次进入前30（新兴启动）
+    - '今日排名 #7，位置靠前'
+    name: 超级真菌
+    phase: 启动
+    rank_today: 7
+    sector_type: concept
+    signals:
+      change_today: 4.52
+      consecutive_in_top30: 1
+      cumulative_pct_5d: 4.52
+      daily_accel_3d: null
+      days_in_top30_of_20: 1
+      max_consecutive_hist: 1
+      rank_change_3d: null
+      rank_today: 7
+      top_stock_stability_5d: 1.0
+      top_stock_today: 联环药业
+    top_stock_today: 联环药业
+  - change_today: 4.38
+    confidence: 中
+    consecutive_in_top30: 1
+    cumulative_pct_5d: 4.38
+    evidence:
+    - 今日首次进入前30（新兴启动）
+    - '今日排名 #8，位置靠前'
+    name: 重组蛋白
+    phase: 启动
+    rank_today: 8
+    sector_type: concept
+    signals:
+      change_today: 4.38
+      consecutive_in_top30: 1
+      cumulative_pct_5d: 4.38
+      daily_accel_3d: null
+      days_in_top30_of_20: 1
+      max_consecutive_hist: 1
+      rank_change_3d: null
+      rank_today: 8
+      top_stock_stability_5d: 1.0
+      top_stock_today: 海特生物
+    top_stock_today: 海特生物
+  - change_today: 4.31
+    confidence: 中
+    consecutive_in_top30: 1
+    cumulative_pct_5d: 4.31
+    evidence:
+    - 今日首次进入前30（新兴启动）
+    - '今日排名 #9，位置靠前'
+    name: 纳米银
+    phase: 启动
+    rank_today: 9
+    sector_type: concept
+    signals:
+      change_today: 4.31
+      consecutive_in_top30: 1
+      cumulative_pct_5d: 4.31
+      daily_accel_3d: null
+      days_in_top30_of_20: 1
+      max_consecutive_hist: 1
+      rank_change_3d: null
+      rank_today: 9
+      top_stock_stability_5d: 1.0
+      top_stock_today: 万顺新材
+    top_stock_today: 万顺新材
+  - change_today: 4.25
+    confidence: 中
+    consecutive_in_top30: 1
+    cumulative_pct_5d: 4.25
+    evidence:
+    - 今日首次进入前30（新兴启动）
+    - '今日排名 #10，位置靠前'
+    name: 昨日打二板以上表现
+    phase: 启动
+    rank_today: 10
+    sector_type: concept
+    signals:
+      change_today: 4.25
+      consecutive_in_top30: 1
+      cumulative_pct_5d: 4.25
+      daily_accel_3d: null
+      days_in_top30_of_20: 1
+      max_consecutive_hist: 1
+      rank_change_3d: null
+      rank_today: 10
+      top_stock_stability_5d: 1.0
+      top_stock_today: 新能泰山
+    top_stock_today: 新能泰山
+  sector_rhythm_industry:
+  - change_today: 8.88
+    confidence: 高
+    consecutive_in_top30: 15
+    cumulative_pct_5d: 20.3
+    evidence:
+    - 连续上榜已达 15 天（演绎充分）
+    - 5日累计涨幅 +20.3%（幅度偏大）
+    - 领涨股频繁切换（板块扩散）
+    name: 锂
+    phase: 高潮
+    rank_today: 1
+    sector_type: industry
+    signals:
+      change_today: 8.88
+      consecutive_in_top30: 15
+      cumulative_pct_5d: 20.3
+      daily_accel_3d: 2.755
+      days_in_top30_of_20: 15
+      max_consecutive_hist: 15
+      rank_change_3d: -9
+      rank_today: 1
+      top_stock_stability_5d: 0.2
+      top_stock_today: 融捷股份
+    top_stock_today: 融捷股份
+  - change_today: 7.36
+    confidence: 高
+    consecutive_in_top30: 15
+    cumulative_pct_5d: 15.48
+    evidence:
+    - 连续上榜已达 15 天（演绎充分）
+    - 5日累计涨幅 +15.48%（幅度偏大）
+    - 领涨股频繁切换（板块扩散）
+    name: 能源金属
+    phase: 高潮
+    rank_today: 2
+    sector_type: industry
+    signals:
+      change_today: 7.36
+      consecutive_in_top30: 15
+      cumulative_pct_5d: 15.48
+      daily_accel_3d: 1.99
+      days_in_top30_of_20: 15
+      max_consecutive_hist: 15
+      rank_change_3d: -13
+      rank_today: 2
+      top_stock_stability_5d: 0.2
+      top_stock_today: 融捷股份
+    top_stock_today: 融捷股份
+  - change_today: 5.72
+    confidence: 中
+    consecutive_in_top30: 15
+    cumulative_pct_5d: 6.85
+    evidence:
+    - '今日排名 #3，位置稳定'
+    - 5日累计涨幅 +6.85%（持续累积）
+    - 涨速仍在加速或平稳
+    name: 医疗研发外包
+    phase: 发酵
+    rank_today: 3
+    sector_type: industry
+    signals:
+      change_today: 5.72
+      consecutive_in_top30: 15
+      cumulative_pct_5d: 6.85
+      daily_accel_3d: 1.86
+      days_in_top30_of_20: 15
+      max_consecutive_hist: 15
+      rank_change_3d: 2
+      rank_today: 3
+      top_stock_stability_5d: 0.2
+      top_stock_today: 昭衍新药
+    top_stock_today: 昭衍新药
+  - change_today: 5.35
+    confidence: 中
+    consecutive_in_top30: 15
+    cumulative_pct_5d: 1.85
+    evidence:
+    - 连续上榜已达 15 天（演绎充分）
+    - 领涨股频繁切换（板块扩散）
+    name: 钨
+    phase: 高潮
+    rank_today: 4
+    sector_type: industry
+    signals:
+      change_today: 5.35
+      consecutive_in_top30: 15
+      cumulative_pct_5d: 1.85
+      daily_accel_3d: 2.465
+      days_in_top30_of_20: 15
+      max_consecutive_hist: 15
+      rank_change_3d: -2
+      rank_today: 4
+      top_stock_stability_5d: 0.2
+      top_stock_today: 翔鹭钨业
+    top_stock_today: 翔鹭钨业
+  - change_today: 5.28
+    confidence: 中
+    consecutive_in_top30: 15
+    cumulative_pct_5d: 8.73
+    evidence:
+    - '今日排名 #5，位置稳定'
+    - 5日累计涨幅 +8.73%（持续累积）
+    - 涨速仍在加速或平稳
+    name: 钾肥
+    phase: 发酵
+    rank_today: 5
+    sector_type: industry
+    signals:
+      change_today: 5.28
+      consecutive_in_top30: 15
+      cumulative_pct_5d: 8.73
+      daily_accel_3d: 1.715
+      days_in_top30_of_20: 15
+      max_consecutive_hist: 15
+      rank_change_3d: -3
+      rank_today: 5
+      top_stock_stability_5d: 0.2
+      top_stock_today: 亚钾国际
+    top_stock_today: 亚钾国际
+  - change_today: 5.03
+    confidence: 中
+    consecutive_in_top30: 15
+    cumulative_pct_5d: 6.13
+    evidence:
+    - '今日排名 #6，位置稳定'
+    - 5日累计涨幅 +6.13%（持续累积）
+    - 涨速仍在加速或平稳
+    name: 医美服务
+    phase: 发酵
+    rank_today: 6
+    sector_type: industry
+    signals:
+      change_today: 5.03
+      consecutive_in_top30: 15
+      cumulative_pct_5d: 6.13
+      daily_accel_3d: 0.915
+      days_in_top30_of_20: 15
+      max_consecutive_hist: 15
+      rank_change_3d: -14
+      rank_today: 6
+      top_stock_stability_5d: 0.2
+      top_stock_today: '*ST美谷'
+    top_stock_today: '*ST美谷'
+  - change_today: 4.76
+    confidence: 中
+    consecutive_in_top30: 15
+    cumulative_pct_5d: 3.78
+    evidence:
+    - '今日排名 #7，位置稳定'
+    - 5日累计涨幅 +3.78%（持续累积）
+    - 涨速仍在加速或平稳
+    name: 化学制剂
+    phase: 发酵
+    rank_today: 7
+    sector_type: industry
+    signals:
+      change_today: 4.76
+      consecutive_in_top30: 15
+      cumulative_pct_5d: 3.78
+      daily_accel_3d: 1.705
+      days_in_top30_of_20: 15
+      max_consecutive_hist: 15
+      rank_change_3d: -4
+      rank_today: 7
+      top_stock_stability_5d: 0.2
+      top_stock_today: 联环药业
+    top_stock_today: 联环药业
+  - change_today: 4.66
+    confidence: 中
+    consecutive_in_top30: 15
+    cumulative_pct_5d: 3.49
+    evidence:
+    - '今日排名 #8，位置稳定'
+    - 5日累计涨幅 +3.49%（持续累积）
+    - 涨速仍在加速或平稳
+    name: 氮肥
+    phase: 发酵
+    rank_today: 8
+    sector_type: industry
+    signals:
+      change_today: 4.66
+      consecutive_in_top30: 15
+      cumulative_pct_5d: 3.49
+      daily_accel_3d: 1.955
+      days_in_top30_of_20: 15
+      max_consecutive_hist: 15
+      rank_change_3d: -22
+      rank_today: 8
+      top_stock_stability_5d: 0.2
+      top_stock_today: 赤天化
+    top_stock_today: 赤天化
+  - change_today: 4.53
+    confidence: 中
+    consecutive_in_top30: 15
+    cumulative_pct_5d: 2.8
+    evidence:
+    - 连续上榜已达 15 天（演绎充分）
+    - 领涨股频繁切换（板块扩散）
+    name: 磷肥及磷化工
+    phase: 高潮
+    rank_today: 9
+    sector_type: industry
+    signals:
+      change_today: 4.53
+      consecutive_in_top30: 15
+      cumulative_pct_5d: 2.8
+      daily_accel_3d: 1.025
+      days_in_top30_of_20: 15
+      max_consecutive_hist: 15
+      rank_change_3d: -20
+      rank_today: 9
+      top_stock_stability_5d: 0.2
+      top_stock_today: 六国化工
+    top_stock_today: 六国化工
+  - change_today: 4.52
+    confidence: 中
+    consecutive_in_top30: 15
+    cumulative_pct_5d: 3.83
+    evidence:
+    - '今日排名 #10，位置稳定'
+    - 5日累计涨幅 +3.83%（持续累积）
+    - 涨速仍在加速或平稳
+    name: 化学制药
+    phase: 发酵
+    rank_today: 10
+    sector_type: industry
+    signals:
+      change_today: 4.52
+      consecutive_in_top30: 15
+      cumulative_pct_5d: 3.83
+      daily_accel_3d: 1.605
+      days_in_top30_of_20: 15
+      max_consecutive_hist: 15
+      rank_change_3d: 1
+      rank_today: 10
+      top_stock_stability_5d: 0.2
+      top_stock_today: 美诺华
+    top_stock_today: 美诺华
   total_volume:
     _source: tushare:index_daily
     shanghai_billion: 799696.43

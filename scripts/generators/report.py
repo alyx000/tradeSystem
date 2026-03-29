@@ -220,10 +220,13 @@ class ReportGenerator:
                 direction = "净买" if net > 0 else "净卖"
                 lines.append(f"- {d.get('name', '')} | {d.get('reason', '')} | {direction} {abs(net):.0f}万")
 
+        # 板块节奏分析
+        _render_sector_rhythm(lines, raw_data)
+
         # 底部
         lines.append("\n---")
-        lines.append("*以上均为 [事实] ★★★ 自动采集数据。*")
-        lines.append("*请在 review.yaml 中完成主观判断：情绪周期、板块节奏、三位一体结论等。*")
+        lines.append("*自动采集数据标注 [事实] ★★★；板块节奏判断标注 [判断] ★★☆，仅供参考。*")
+        lines.append("*请在 review.yaml 中完成主观确认：情绪周期、三位一体结论等。*")
 
         md_text = "\n".join(lines)
 
@@ -256,3 +259,58 @@ class ReportGenerator:
                 review_path.write_text(content, encoding="utf-8")
 
         return md_text, str(yaml_path)
+
+
+# ------------------------------------------------------------------
+# 板块节奏渲染（模块级工具函数）
+# ------------------------------------------------------------------
+
+_PHASE_ICON = {
+    "启动": "[启动]",
+    "发酵": "[发酵]",
+    "高潮": "[高潮]",
+    "首次分歧": "[分歧]",
+    "震荡": "[震荡]",
+    "衰退": "[衰退]",
+    "观察中": "[观察]",
+}
+
+
+def _render_sector_rhythm(lines: list, raw_data: dict) -> None:
+    """在盘后报告中追加板块节奏分析章节。"""
+    industry_rhythm = raw_data.get("sector_rhythm_industry", [])
+    concept_rhythm = raw_data.get("sector_rhythm_concept", [])
+
+    if not industry_rhythm and not concept_rhythm:
+        return
+
+    lines.append("\n## 七、板块节奏分析 [判断] ★★☆\n")
+    lines.append("> 基于过去 20 个交易日板块涨幅排名时间序列自动推断，置信度仅供参考，请结合盘面实际判断。\n")
+
+    for label, rhythm_list in [("行业板块", industry_rhythm), ("概念板块", concept_rhythm)]:
+        if not rhythm_list:
+            continue
+        lines.append(f"### {label}\n")
+        lines.append("| 板块 | 今日排名 | 今日涨幅 | 连续上榜 | 5日累计 | 阶段 | 置信度 | 关键信号 |")
+        lines.append("|------|---------|---------|---------|---------|------|-------|---------|")
+        for item in rhythm_list:
+            rank = item.get("rank_today")
+            rank_str = f"#{rank}" if rank else "-"
+            change = item.get("change_today")
+            if change is not None:
+                change_str = f"+{change}%" if change >= 0 else f"{change}%"
+            else:
+                change_str = "-"
+            consec = item.get("consecutive_in_top30", 0)
+            cumul = item.get("cumulative_pct_5d", 0) or 0
+            cumul_str = f"+{cumul}%" if cumul >= 0 else f"{cumul}%"
+            phase = item.get("phase", "观察中")
+            phase_label = _PHASE_ICON.get(phase, phase)
+            conf = item.get("confidence", "-")
+            evidence = item.get("evidence", [])
+            signal_str = "；".join(evidence[:2]) if evidence else "-"
+            lines.append(
+                f"| {item.get('name', '')} | {rank_str} | {change_str} | "
+                f"{consec}天 | {cumul_str} | {phase_label} | {conf} | {signal_str} |"
+            )
+        lines.append("")
