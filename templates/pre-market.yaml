@@ -1,0 +1,172 @@
+# ============================================
+# 盘前简报模板
+# 每个交易日 07:00 前由 OpenClaw 生成
+# ============================================
+
+date: "YYYY-MM-DD"
+generated_at: ""  # 生成时间
+generated_by: "openclaw"  # openclaw / manual
+
+# ==========================================
+# 一、隔夜外盘概览（自动获取）
+# ==========================================
+overnight:
+  us_markets:
+    dow_jones: { close: 0, change_pct: 0 }
+    nasdaq: { close: 0, change_pct: 0 }
+    sp500: { close: 0, change_pct: 0 }
+    summary: ""  # 一句话总结美股表现
+    key_movers: []  # 重要个股异动（如英伟达、苹果等）
+
+  a50_futures:
+    close: 0
+    change_pct: 0
+    implication: ""  # 对A股开盘的暗示
+
+  hk_premarket:
+    note: ""  # 港股夜盘/ADR表现
+
+  currencies:
+    usd_index: { close: 0, change_pct: 0 }
+    usd_cny: { close: 0, change_pct: 0 }
+
+  commodities:
+    crude_oil: { close: 0, change_pct: 0 }
+    gold: { close: 0, change_pct: 0 }
+    copper: { close: 0, change_pct: 0 }
+
+  bonds:
+    us_10y_yield: { close: 0, change_bps: 0 }
+
+  vix: { close: 0, change_pct: 0 }
+
+  overnight_assessment:
+    sentiment: ""  # 偏多 / 中性 / 偏空
+    confidence: "★★★"
+    note: ""
+
+# ==========================================
+# 二、重要宏观与政策（半自动：搜索+过滤）
+# ==========================================
+macro_policy:
+  # 每条信息必须标注：类型、置信度、时效性、来源
+  items:
+    - content: ""
+      type: ""  # 事实/判断/传闻/观点
+      confidence: ""  # ★★★/★★☆/★☆☆
+      timeliness: ""  # 实时/近期/滞后
+      source: ""
+      relevance: ""  # 对今日交易的相关性（高/中/低）
+      impact_direction: ""  # 利好/利空/中性
+
+  # 今日待发布的重要数据/事件
+  upcoming_today:
+    - event: ""
+      time: ""
+      expected: ""  # 市场预期
+      impact: ""
+
+# ==========================================
+# 三、持仓股信息（自动+半自动）
+# ==========================================
+holdings_briefing:
+  # 每只持仓股的盘前信息汇总
+  stocks:
+    - code: ""
+      name: ""
+      # 公告信息（自动获取）
+      announcements:
+        - title: ""
+          date: ""
+          type: ""  # 业绩/增减持/回购/重组/其他
+          summary: ""
+          impact: ""  # 利好/利空/中性
+          confidence: "★★★"
+
+      # 互动易/投资者关系（半自动）
+      investor_qa:
+        - question: ""
+          answer: ""
+          date: ""
+          significance: ""  # 高/中/低
+          confidence: "★★☆"
+
+      # 机构调研（半自动）
+      research_visits:
+        - date: ""
+          institutions: []
+          key_topics: []
+          confidence: "★★★"
+
+      # 研报动态（半自动）
+      research_reports:
+        - institution: ""
+          rating: ""  # 买入/增持/中性/减持
+          rating_change: ""  # 上调/维持/下调/首次覆盖
+          target_price: 0
+          key_points: []
+          confidence: "★★☆"
+          note: "[观点] 券商研报为主观判断，非事实"
+
+      # 综合评估
+      overnight_impact: ""  # 对今日走势的预判
+      action_reminder: ""  # 需要关注的事项
+
+# ==========================================
+# 四、关注池信息（自动+半自动）
+# ==========================================
+watchlist_briefing:
+  stocks:
+    - code: ""
+      name: ""
+      sector: ""
+      key_info: ""  # 重要信息摘要
+      source: ""
+      type: ""
+      confidence: ""
+
+# ==========================================
+# 五、行业/板块动态（半自动）
+# ==========================================
+sector_news:
+  # 当前主线板块相关
+  main_theme_news:
+    - content: ""
+      type: ""
+      confidence: ""
+      source: ""
+      impact: ""
+
+  # 潜在新题材/催化剂
+  potential_catalysts:
+    - content: ""
+      type: ""
+      confidence: ""
+      source: ""
+
+# ==========================================
+# 六、日历提醒（自动，从calendar.yaml读取）
+# ==========================================
+calendar_reminders:
+  - event: ""
+    time: ""
+    impact: ""
+
+# ==========================================
+# 七、盘前综合评估
+# ==========================================
+pre_market_assessment:
+  # 外盘影响
+  global_impact: ""  # 偏多/中性/偏空
+  # 信息面影响
+  news_impact: ""
+  # 持仓风险提示
+  position_alerts: []
+  # 今日重点关注
+  focus_today:
+    - ""
+  # 建议开盘策略
+  opening_strategy: ""
+  # 以上评估的整体置信度
+  overall_confidence: ""
+  note: "以上评估为AI辅助分析，最终判断请结合盘面实际情况"

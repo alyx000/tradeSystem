@@ -1,0 +1,56 @@
+# ============================================
+# 交易记录模板
+# 使用方式: 复制到 daily/YYYY-MM-DD/trades.yaml
+# ============================================
+
+date: "YYYY-MM-DD"
+
+trades:
+  - id: 1
+    # 基本信息
+    stock_code: ""
+    stock_name: ""
+    market: "A股"  # A股 / 港股
+    direction: ""  # 买入 / 卖出
+    time: ""  # 交易时间 HH:MM
+    price: 0
+    shares: 0
+    amount: 0  # 交易金额
+
+    # 交易逻辑（三位一体框架）
+    logic:
+      # 大势判断
+      market_context: ""  # 交易时大盘状态
+      # 板块判断
+      sector: ""  # 所属板块
+      sector_node: ""  # 板块当时节奏
+      sector_position: ""  # 顺指数/逆指数
+      # 个股判断
+      stock_role: ""  # 最票/前排/跟风/中军/套利
+      stock_attribute: ""  # 连板/趋势/情绪/基本面
+      leader_type: ""  # 如果是最票，什么属性的最
+
+    # 买入模式分类
+    entry_mode: ""  # 半路引领/尾盘强分/打板/低吸/首阴/反包/其他
+    entry_reason: ""  # 具体买入理由
+
+    # 卖出相关（卖出时填写）
+    exit_reason: ""  # 卖出理由
+    holding_days: 0  # 持有天数
+    pnl_pct: 0  # 盈亏比例（%）
+    pnl_amount: 0  # 盈亏金额
+
+    # 复盘反思
+    review:
+      was_correct: null  # true/false/null
+      lesson: ""  # 经验教训
+      trinity_alignment: ""  # 三位一体是否对齐（对齐/部分对齐/不对齐）
+
+# 当日交易汇总
+daily_summary:
+  total_buy_amount: 0
+  total_sell_amount: 0
+  realized_pnl: 0
+  current_position_pct: 0  # 当前总仓位（%）
+  trade_count: 0
+  win_rate: 0  # 当日胜率

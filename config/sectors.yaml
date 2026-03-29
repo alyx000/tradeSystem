@@ -1,0 +1,141 @@
+# ============================================
+# 板块定义与分类配置
+# 根据市场变化持续更新
+# ============================================
+
+# A类：行业逻辑板块（永久/长期有效）
+industry_sectors:
+  # --- 科技 ---
+  - name: "AI算力"
+    keywords: ["算力", "GPU", "服务器"]
+    representative_stocks: ["中科曙光", "浪潮信息"]
+    type: "permanent"
+
+  - name: "国产AI/大模型"
+    keywords: ["大模型", "国产AI", "算力国产化"]
+    representative_stocks: ["海光信息", "寒武纪"]
+    type: "permanent"
+
+  - name: "海外AI链"
+    keywords: ["英伟达产业链", "光模块", "海外AI"]
+    representative_stocks: ["中际旭创", "工业富联", "胜宏科技"]
+    type: "periodic"
+
+  - name: "半导体"
+    keywords: ["芯片", "半导体", "封测"]
+    representative_stocks: ["北方华创", "中芯国际"]
+    type: "permanent"
+
+  - name: "消费电子"
+    keywords: ["手机", "MR", "可穿戴"]
+    representative_stocks: []
+    type: "permanent"
+
+  - name: "软件/信创"
+    keywords: ["信创", "国产软件", "操作系统"]
+    representative_stocks: []
+    type: "permanent"
+
+  - name: "机器人"
+    keywords: ["人形机器人", "减速器", "伺服电机"]
+    representative_stocks: []
+    type: "periodic"
+
+  # --- 新能源 ---
+  - name: "光伏"
+    keywords: ["光伏", "组件", "硅料"]
+    representative_stocks: []
+    type: "permanent"
+
+  - name: "锂电池"
+    keywords: ["锂电", "正极", "负极", "电解液"]
+    representative_stocks: []
+    type: "permanent"
+
+  - name: "储能"
+    keywords: ["储能", "液冷"]
+    representative_stocks: []
+    type: "permanent"
+
+  - name: "固态电池"
+    keywords: ["固态电池"]
+    representative_stocks: ["先导智能"]
+    type: "periodic"
+
+  # --- 传统行业 ---
+  - name: "电力"
+    keywords: ["电力", "火电", "水电"]
+    representative_stocks: []
+    type: "permanent"
+
+  - name: "银行"
+    keywords: ["银行", "金融"]
+    representative_stocks: []
+    type: "permanent"
+
+  - name: "券商"
+    keywords: ["券商", "证券"]
+    representative_stocks: ["天风证券", "国海证券"]
+    type: "permanent"
+
+  - name: "地产"
+    keywords: ["地产", "房地产"]
+    representative_stocks: []
+    type: "permanent"
+
+  - name: "医药"
+    keywords: ["医药", "创新药", "CXO"]
+    representative_stocks: []
+    type: "permanent"
+
+  - name: "军工"
+    keywords: ["军工", "航空", "航天"]
+    representative_stocks: []
+    type: "permanent"
+
+# B类：阶段性归因板块（根据市场阶段动态更新）
+periodic_attribution_sectors:
+  - name: "低价股"
+    condition: "股价低于某阈值"
+    active: false
+    last_active: ""
+
+  - name: "高送转"
+    condition: "年报/中报季，有高送转预期"
+    active: false
+    last_active: ""
+
+  - name: "业绩超预期"
+    condition: "财报季，业绩大幅超预期"
+    active: false
+    last_active: ""
+
+  - name: "超跌反弹"
+    condition: "前期大幅下跌后的反弹"
+    active: false
+    last_active: ""
+
+  - name: "次新股"
+    condition: "上市不超过1年"
+    active: false
+    last_active: ""
+
+# C类：情绪性板块/核心龙头板块（动态生成）
+emotional_sectors:
+  - name: ""  # 如：炒高标、炒相似图形
+    description: ""
+    active: false
+    formation_date: ""
+    key_stocks: []
+
+# 板块关系映射
+sector_relations:
+  # 上下游关系
+  upstream_downstream:
+    - upstream: "AI算力"
+      downstream: "AI应用"
+
+  # 替代/竞争关系
+  competing:
+    - sectors: ["海外AI链", "国产AI/大模型"]
+      note: "海外vs国产，可能存在跷跷板效应"

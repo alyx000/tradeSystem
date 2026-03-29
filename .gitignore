@@ -1,0 +1,30 @@
+# 环境变量（含 token 等敏感信息）
+scripts/.env
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# 日志
+*.log
+
+# macOS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# 临时文件
+*.tmp
+
+# 文档/课件（本地保留，不入仓库）
+docs/

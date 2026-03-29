@@ -1,0 +1,257 @@
+# ============================================
+# 盘后数据报告模板
+# 每个交易日收盘后由 OpenClaw 自动生成
+# ============================================
+
+date: "YYYY-MM-DD"
+generated_at: ""
+generated_by: "openclaw"
+
+# ==========================================
+# 一、行情数据（全部自动获取）
+# ==========================================
+market_data:
+  indices:
+    shanghai: { open: 0, high: 0, low: 0, close: 0, change_pct: 0, volume_billion: 0 }
+    shenzhen: { open: 0, high: 0, low: 0, close: 0, change_pct: 0, volume_billion: 0 }
+    chinext: { open: 0, high: 0, low: 0, close: 0, change_pct: 0, volume_billion: 0 }
+    star50: { open: 0, high: 0, low: 0, close: 0, change_pct: 0, volume_billion: 0 }
+    # 港股（如有持仓）
+    hsi: { open: 0, high: 0, low: 0, close: 0, change_pct: 0 }
+    hstech: { open: 0, high: 0, low: 0, close: 0, change_pct: 0 }
+
+  total_volume:
+    amount_billion: 0
+    shanghai_billion: 0
+    shenzhen_billion: 0
+    vs_yesterday_pct: 0  # 较昨日变化百分比
+    ma5_billion: 0  # 5日均量
+    ma20_billion: 0  # 20日均量
+    vs_ma5: ""  # 高于/低于/持平
+    vs_ma20: ""  # 高于/低于/持平
+
+  breadth:  # 市场宽度
+    advance: 0  # 上涨家数
+    decline: 0  # 下跌家数
+    flat: 0  # 平盘家数
+    advance_ratio: 0  # 涨跌比
+
+  # 均线位置（自动计算）
+  moving_averages:
+    shanghai:
+      ma5: 0
+      ma10: 0
+      ma20: 0
+      ma60: 0
+      ma5w: 0  # 5周均线
+      above_ma5: false
+      above_ma5w: false
+
+  northbound:  # 北向资金
+    net_buy_billion: 0
+    shanghai_connect: 0
+    shenzhen_connect: 0
+    top_buy_stocks: []  # 净买入前5
+    top_sell_stocks: []  # 净卖出前5
+
+# ==========================================
+# 二、涨跌停数据（全部自动获取）
+# ==========================================
+limit_data:
+  limit_up:
+    count: 0
+    # 按类型分
+    first_board_10cm: 0
+    first_board_20cm: 0
+    first_board_30cm: 0
+    consecutive_board: 0  # 连板总数
+    # 连板梯队
+    board_ladder:
+      - boards: 0  # 连板数
+        stocks: []  # 股票列表
+    seal_rate_pct: 0  # 封板率
+    broken_count: 0  # 炸板数
+    broken_rate_pct: 0  # 炸板率
+
+  limit_down:
+    count: 0
+    stocks: []  # 跌停股列表
+
+  # 涨停股明细（用于溢价率统计）
+  limit_up_details:
+    - code: ""
+      name: ""
+      sector: ""
+      board_type: ""  # 首板/2连板/3连板...
+      limit_type: ""  # 10cm/20cm/30cm
+      seal_amount_billion: 0  # 封单额（亿）
+      turnover_rate: 0  # 换手率
+      first_limit_time: ""  # 首次涨停时间
+
+# ==========================================
+# 三、板块排名（全部自动获取）
+# ==========================================
+sector_rankings:
+  # 行业板块涨幅前10
+  top_industry:
+    - name: ""
+      change_pct: 0
+      net_inflow_billion: 0  # 资金净流入
+      volume_billion: 0
+      top_stocks: []
+
+  # 行业板块跌幅前5
+  bottom_industry:
+    - name: ""
+      change_pct: 0
+
+  # 概念板块涨幅前10
+  top_concept:
+    - name: ""
+      change_pct: 0
+      net_inflow_billion: 0
+      top_stocks: []
+
+  # 概念板块跌幅前5
+  bottom_concept:
+    - name: ""
+      change_pct: 0
+
+  # 资金净流入板块前10
+  top_inflow:
+    - name: ""
+      net_inflow_billion: 0
+
+# ==========================================
+# 四、个股数据（持仓+关注池，自动获取）
+# ==========================================
+stock_data:
+  holdings:
+    - code: ""
+      name: ""
+      open: 0
+      high: 0
+      low: 0
+      close: 0
+      change_pct: 0
+      volume: 0  # 成交量（手）
+      amount_billion: 0  # 成交额（亿）
+      turnover_rate: 0  # 换手率（%）
+      amplitude_pct: 0  # 振幅（%）
+      # 均线与均量
+      ma5: 0
+      ma10: 0
+      ma20: 0
+      volume_ma5: 0  # 5日均量
+      volume_vs_ma5: ""  # 以上/以下
+      # 所属板块表现
+      sector: ""
+      sector_change_pct: 0
+
+  watchlist:
+    - code: ""
+      name: ""
+      close: 0
+      change_pct: 0
+      volume_billion: 0
+      sector: ""
+      note: ""
+
+# ==========================================
+# 五、龙虎榜（自动获取）
+# ==========================================
+dragon_tiger:
+  - code: ""
+    name: ""
+    reason: ""  # 上榜原因
+    buy_top5:
+      - seat: ""  # 席位名称
+        amount_million: 0
+    sell_top5:
+      - seat: ""
+        amount_million: 0
+    net_amount_million: 0
+
+# ==========================================
+# 六、融资融券（自动获取，T+1）
+# ==========================================
+margin_data:
+  total_balance_billion: 0
+  net_buy_billion: 0
+  change_billion: 0
+
+# ==========================================
+# 七、盘后公告速递（自动获取）
+# ==========================================
+post_announcements:
+  # 持仓股盘后公告
+  holdings_announcements:
+    - code: ""
+      name: ""
+      title: ""
+      type: ""
+      summary: ""
+      impact: ""
+      confidence: "★★★"
+
+  # 全市场重要公告
+  market_announcements:
+    - title: ""
+      stocks: []
+      type: ""
+      summary: ""
+      significance: ""  # 高/中/低
+
+# ==========================================
+# 八、溢价率统计（自动计算，次日验证）
+# ==========================================
+premium_stats:
+  note: "以下数据在次日开盘后自动回填"
+  first_board_10cm_avg_premium: null
+  first_board_20cm_avg_premium: null
+  first_board_30cm_avg_premium: null
+  second_board_avg_premium: null
+  third_plus_board_avg_premium: null
+  first_open_premium: null  # 一字首开溢价
+
+# ==========================================
+# 九、AI 自动分析摘要
+# ==========================================
+auto_analysis:
+  # 以下为AI基于数据的客观描述，非主观判断
+  volume_assessment:
+    description: ""  # 如："两市成交额9800亿，较昨日放量12%，高于5日均量"
+    type: "[事实]"
+    confidence: "★★★"
+
+  breadth_assessment:
+    description: ""  # 如："涨跌比2.3:1，赚钱效应偏强"
+    type: "[事实]"
+    confidence: "★★★"
+
+  sector_assessment:
+    description: ""  # 如："AI板块连续第3日领涨，资金持续流入"
+    type: "[事实]"
+    confidence: "★★★"
+
+  limit_assessment:
+    description: ""  # 如："涨停65家，跌停8家，封板率72%，连板最高5板"
+    type: "[事实]"
+    confidence: "★★★"
+
+  northbound_assessment:
+    description: ""
+    type: "[事实]"
+    confidence: "★★★"
+
+  # AI 提示（需人工确认的观察）
+  observations:
+    - content: ""
+      type: ""  # [判断]
+      confidence: ""
+      evidence: ""  # 判断依据
+
+  note: |
+    以上自动分析仅基于客观数据。
+    情绪周期定性、板块节奏判断、三位一体综合结论
+    请在 review.yaml 中手动填写。

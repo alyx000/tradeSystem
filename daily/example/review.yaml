@@ -1,0 +1,218 @@
+# ============================================
+# 示例复盘 - 2025年9月11日
+# 基于三位一体教程中的案例
+# ============================================
+
+date: "2025-09-11"
+weekday: "周四"
+market: "A股"
+
+# 第一步：大盘分析
+market_overview:
+  indices:
+    shanghai:
+      close: 3260
+      change_pct: 0.5
+      volume_billion: 4200
+    shenzhen:
+      close: 10580
+      change_pct: 0.8
+    chinext:
+      close: 2150
+      change_pct: 1.2
+    star50:
+      close: 980
+      change_pct: 1.5
+
+  total_volume:
+    amount_billion: 9800
+    vs_yesterday: "放量"
+    vs_5day_avg: "高于"
+    vs_20day_avg: "高于"
+
+  direction:
+    trend: "震荡偏强"
+    ma5w_position: "5周均线上"
+    key_support: 3200
+    key_resistance: 3300
+
+  node:
+    current: "震荡区间上沿"
+    expectation: "关注能否突破3300"
+
+  position_anchor:
+    suggested_position: "5-7成"
+    reason: "成交额接近万亿，赚钱效应尚可"
+
+# 第二步：板块梳理
+sectors:
+  main_theme:
+    name: "AI（海外链+国产链）"
+    status: "持续"
+    duration_days: 15
+    key_stocks: ["胜宏科技", "工业富联", "海光信息", "中科曙光"]
+    node: "发酵/强上强"
+
+  market_type:
+    style: "趋势行情"
+    incremental_or_stock: "增量"
+    mid_cap_strength: "强"
+
+  strongest_today:
+    - name: "海外AI链"
+      reason: "开盘核心博弈方向"
+      vs_index: "顺指数"
+      node: "发酵/强上强"
+      volume_trend: "放量"
+      recognition: "高"
+      key_stocks: ["工业富联", "淳中科技"]
+
+    - name: "国产AI链"
+      reason: "海光信息主动走强引领"
+      vs_index: "顺指数"
+      node: "启动"
+      volume_trend: "放量"
+      recognition: "高"
+      key_stocks: ["海光信息", "中科曙光"]
+
+  unusual_sectors:
+    - name: "国产AI/算力国产化"
+      trigger: "海光信息低位主动拉升"
+      start_position: "低位启动"
+      volume: "放量"
+      key_stocks: ["海光信息", "中科曙光"]
+
+  volume_concentration:
+    top_sectors: ["AI算力", "海外AI链"]
+    top_stocks: ["工业富联", "海光信息"]
+    is_concentrated: false
+
+# 第三步：情绪周期定位
+emotion_cycle:
+  phase: "发酵"
+  sub_cycle: "第二周期"
+
+  indicators:
+    limit_up_count: 65
+    limit_down_count: 8
+    seal_rate: 72
+    broken_rate: 18
+    highest_board: 5
+    sentiment_stocks:
+      - name: "胜宏科技"
+        status: "高位震荡"
+
+  transition:
+    current_to_next: "加强"
+    confidence: "中"
+    reason: "国产AI线新引领出现，板块有扩散迹象"
+
+# 第四步：风格化赚钱效应
+style_analysis:
+  current_preference:
+    cap_size: "大盘股"
+    style: "基本面+趋势"
+    trend_or_board: "趋势票主导"
+
+  profit_effects:
+    new_theme_first_board:
+      effect: "正"
+      note: "AI相关首板有溢价"
+    board_20cm_premium:
+      avg_premium_pct: 3.5
+      effect: "正"
+    second_board_premium:
+      avg_premium_pct: 2.0
+      effect: "正"
+    board_30cm_premium:
+      avg_premium_pct: 5.0
+      effect: "正"
+    consecutive_board:
+      effect: "中性"
+      note: "高标连板赚钱效应一般"
+    big_cap_stocks:
+      effect: "正"
+      note: "容量票风格化偏好明显，大票受青睐"
+    first_open_from_limit:
+      effect: "中性"
+      note: ""
+
+  regulatory_feedback: "正常"
+
+# 第五步：龙头/最票识别
+leaders:
+  top_leaders:
+    - stock: "海光信息"
+      sector: "国产AI链"
+      attribute: "引领最（容量+基本面正宗+新最+低位）"
+      clarity: "一眼看出"
+      position: "启动"
+      is_new_leader: true
+
+    - stock: "工业富联"
+      sector: "海外AI链"
+      attribute: "容量最+分时最强"
+      clarity: "一眼看出"
+      position: "发酵/高位"
+      is_new_leader: false
+
+    - stock: "淳中科技"
+      sector: "海外AI链"
+      attribute: "趋势最强中的分时最强"
+      clarity: "需要辨别"
+      position: "高位"
+      is_new_leader: false
+
+  leader_transition:
+    old_leader: "胜宏科技（海外AI链老龙头）"
+    new_leader: "海光信息（国产AI链新引领）"
+    reason: "老龙头充分演绎进入大震荡，新最在预期差节点主动走强"
+
+# 第六步：节点判断
+nodes:
+  market_node: "震荡偏强，等待方向选择"
+  sector_node: "AI主线发酵中，国产链有启动迹象"
+  style_node: "容量票风格持续"
+  overall_assessment: "板块内部出现新引领（海光信息），属于板块发酵扩散阶段的分歧启动节点"
+
+# 第七步：持仓检视（示例）
+positions:
+  - stock: "海光信息"
+    cost: 220
+    current_price: 252
+    position_pct: 30
+    in_hot_sector: true
+    price_trend: "上涨"
+    volume_vs_avg: "以上"
+    amplitude_ok: true
+    action_plan: "持股，跟随国产AI链节奏"
+
+# 第八步：次日计划
+next_day_plan:
+  key_factor: "国产AI链的新最（海光信息）是否能延续引领"
+  secondary_factors:
+    - "海外AI链老龙头（胜宏科技）的节奏波动"
+    - "大盘能否继续维持震荡偏强"
+
+  watch_directions:
+    - direction: "国产AI链"
+      reason: "海光信息作为新最启动，观察次日能否延续"
+      target_stocks: ["海光信息", "中科曙光"]
+      entry_condition: "分时引领延续，板块联动确认"
+
+  risks:
+    - description: "海外AI链高位强上强，节奏上无防守"
+      impact: "中"
+    - description: "大盘接近压力位3300"
+      impact: "低"
+
+  discipline:
+    max_position: "7成"
+    stop_loss_rule: "日内分时破位减仓"
+    note: "聚焦新引领，不追老龙头高位"
+
+# 综合结论
+summary:
+  one_sentence: "AI主线持续，国产链出现新引领海光信息，属于板块发酵扩散阶段"
+  trinity_conclusion: "大势震荡偏强（利好），AI板块发酵（利好），海光信息作为新最启动日辨识度极高（利好）——三位一体对齐，是交易机会"
+  confidence: "中高"

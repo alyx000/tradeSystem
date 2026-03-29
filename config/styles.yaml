@@ -1,0 +1,109 @@
+# ============================================
+# 风格化指标定义
+# 追踪市场审美偏好与赚钱效应
+# ============================================
+
+# 市场审美偏好维度
+preference_dimensions:
+  cap_size:
+    description: "市值偏好"
+    options:
+      - label: "超大盘"
+        criteria: "1000亿以上"
+      - label: "大盘"
+        criteria: "500-1000亿"
+      - label: "中盘"
+        criteria: "100-500亿"
+      - label: "小盘"
+        criteria: "50-100亿"
+      - label: "微盘"
+        criteria: "50亿以下"
+
+  trading_style:
+    description: "交易风格偏好"
+    options:
+      - "基本面驱动"
+      - "情绪/题材驱动"
+      - "趋势驱动"
+      - "连板/打板驱动"
+
+  board_type:
+    description: "涨停板偏好"
+    options:
+      - "10cm优先"
+      - "20cm优先"
+      - "30cm优先"
+      - "无明显偏好"
+
+# 赚钱效应追踪指标
+profit_effect_metrics:
+  # 首板溢价率
+  first_board_premium:
+    - type: "10cm首板"
+      description: "10cm涨停次日平均溢价"
+      measurement: "次日开盘价 vs 涨停价 的涨跌幅"
+
+    - type: "20cm首板"
+      description: "20cm涨停次日平均溢价"
+      measurement: "次日开盘价 vs 涨停价 的涨跌幅"
+
+    - type: "30cm首板"
+      description: "30cm涨停次日平均溢价"
+      measurement: "次日开盘价 vs 涨停价 的涨跌幅"
+
+  # 连板溢价率
+  consecutive_board_premium:
+    - type: "二板溢价"
+      description: "二板涨停次日平均溢价"
+
+    - type: "三板及以上溢价"
+      description: "三板及以上次日平均溢价"
+
+  # 特殊模式赚钱效应
+  special_patterns:
+    - type: "一字首次开板"
+      description: "涨停一字板首次打开后的赚钱效应"
+
+    - type: "首阴反包"
+      description: "强势股首阴次日反包的成功率与溢价"
+
+    - type: "龙头二波"
+      description: "龙头调整后二波启动的赚钱效应"
+
+    - type: "尾盘强分"
+      description: "尾盘强势分歧票次日表现"
+
+    - type: "半路引领"
+      description: "盘中半路介入引领票的赚钱效应"
+
+  # 容量票赚钱效应
+  big_cap_effect:
+    description: "大市值/高成交额个股的短线赚钱效应"
+    measurement: "大市值活跃票的平均涨幅"
+
+# 监管反馈追踪
+regulatory:
+  dimensions:
+    - "异动问询函频率"
+    - "停牌核查"
+    - "交易所关注函"
+    - "特停"
+  current_tightness: ""  # 宽松 / 正常 / 偏紧 / 严厉
+  recent_events: []
+
+# 风格切换信号
+style_switch_signals:
+  - signal: "连板高标大幅亏钱"
+    implication: "连板风格可能退潮"
+
+  - signal: "大盘股持续跑赢小盘股"
+    implication: "审美转向容量票"
+
+  - signal: "题材首板溢价转负"
+    implication: "情绪退潮，短线赚钱效应下降"
+
+  - signal: "基本面票逆势走强"
+    implication: "可能切换到基本面驱动"
+
+  - signal: "新题材首板大面积赚钱"
+    implication: "情绪回暖，短线赚钱效应上升"

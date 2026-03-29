@@ -1,0 +1,95 @@
+# ============================================
+# 数据采集系统配置
+# ============================================
+
+# 数据源配置
+providers:
+  tushare:
+    enabled: true
+    token: ""  # 在 .env 中配置，不要直接写在这里
+    priority: 1  # 优先级，数字越小越优先
+    points_limit: 10000  # 积分上限
+    rate_limit: 200  # 每分钟最大请求数
+
+  akshare:
+    enabled: true
+    priority: 2
+    rate_limit: 60
+
+  eastmoney:
+    enabled: true
+    priority: 3
+    note: "东方财富网页数据，作为补充"
+
+# 数据采集调度
+schedule:
+  pre_market:
+    time: "07:00"
+    timezone: "Asia/Shanghai"
+    tasks:
+      - "global_markets"    # 外盘数据
+      - "macro_calendar"    # 今日宏观事件
+      - "holdings_announcements"  # 持仓股公告
+      - "watchlist_announcements" # 关注池公告
+      - "news_search"       # 新闻搜索
+      - "generate_pre_report"    # 生成盘前简报
+
+  post_market:
+    time: "15:30"
+    timezone: "Asia/Shanghai"
+    tasks:
+      - "market_data"       # 行情数据
+      - "limit_data"        # 涨跌停数据
+      - "sector_rankings"   # 板块排名
+      - "holdings_data"     # 持仓股数据
+      - "watchlist_data"    # 关注池数据
+      - "northbound"        # 北向资金
+      - "dragon_tiger"      # 龙虎榜
+      - "post_announcements"# 盘后公告
+      - "generate_post_report"   # 生成盘后报告
+
+  evening:
+    time: "18:00"
+    timezone: "Asia/Shanghai"
+    tasks:
+      - "margin_data"       # 融资融券（T+1延迟）
+      - "premium_backfill"  # 回填昨日溢价率
+
+# 推送配置
+push:
+  discord:
+    enabled: false
+    webhook_url: ""  # 在 .env 中配置
+    channels:
+      pre_market: ""
+      post_market: ""
+      alerts: ""
+
+  qq:
+    enabled: false
+    bot_api: ""
+    group_id: ""
+
+  wechat:
+    enabled: false
+    webhook_url: ""  # 企业微信机器人
+
+# 存储配置
+storage:
+  # 每日数据存到 daily/ 目录
+  daily_dir: "../daily"
+  # Web 页面数据目录
+  web_dir: "../web/data"
+  # 保留天数
+  retention_days: 365
+
+# 持仓配置
+holdings:
+  # 当前持仓（手动更新，或通过 bot 命令更新）
+  source: "manual"  # manual / broker_export
+  file: "../tracking/holdings.yaml"
+
+# 市场配置
+market:
+  focus: "A股"  # A股 / 港股 / 全部
+  trade_calendar: "SSE"  # 上交所交易日历

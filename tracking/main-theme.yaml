@@ -1,0 +1,45 @@
+# ============================================
+# 主线板块跟踪
+# 每日更新，记录主线演变
+# ============================================
+
+# 当前主线
+current_main_theme:
+  name: ""
+  start_date: ""
+  current_phase: ""  # 启动/加速/主升/首次分歧/震荡/轮动/衰退
+  days_running: 0
+  key_stocks:
+    - name: ""
+      role: ""  # 龙头/中军/前排
+      current_status: ""
+
+  # 板块是否持续的判断依据
+  continuation_signals:
+    - ""
+  risk_signals:
+    - ""
+
+# 潜在新主线
+potential_themes:
+  - name: ""
+    reason: ""
+    catalyst: ""  # 催化剂
+    start_signal: ""  # 启动信号
+    key_stocks: []
+    confidence: ""  # 高/中/低
+
+# 主线历史记录（最近30天）
+history:
+  - date: ""
+    main_theme: ""
+    phase: ""
+    note: ""
+
+# 板块轮动观察
+rotation:
+  current_pattern: ""  # 当前轮动模式描述
+  active_sectors:
+    - name: ""
+      phase: ""
+      strength: ""  # 强/中/弱

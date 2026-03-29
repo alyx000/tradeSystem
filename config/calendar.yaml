@@ -1,0 +1,137 @@
+# ============================================
+# 投资日历配置
+# 包含节假日、财报季、重要事件等
+# ============================================
+
+# 2026年 A股休市安排（每年更新）
+holidays_2026:
+  - name: "元旦"
+    dates: ["2026-01-01"]
+    trading_impact: "节前最后一天通常缩量"
+
+  - name: "春节"
+    dates: ["2026-02-17", "2026-02-18", "2026-02-19", "2026-02-20", "2026-02-23", "2026-02-24"]  # 预估，以官方公布为准
+    trading_impact: "节前一周资金趋于谨慎，节后关注外盘变化"
+
+  - name: "清明节"
+    dates: ["2026-04-06"]
+    trading_impact: "短假，影响较小"
+
+  - name: "劳动节"
+    dates: ["2026-05-01", "2026-05-04", "2026-05-05"]  # 预估
+    trading_impact: "关注外盘和政策"
+
+  - name: "端午节"
+    dates: ["2026-06-01"]
+    trading_impact: "短假"
+
+  - name: "中秋节"
+    dates: ["2026-09-28"]
+    trading_impact: "短假"
+
+  - name: "国庆节"
+    dates: ["2026-10-01", "2026-10-02", "2026-10-05", "2026-10-06", "2026-10-07"]  # 预估
+    trading_impact: "长假，节前通常减仓，节后关注外盘和政策"
+
+# 财报季时间节点
+earnings_seasons:
+  - name: "年报披露季"
+    period: "1月~4月30日"
+    peak: "3月~4月"
+    note: "关注业绩超预期/不及预期、高送转预期"
+
+  - name: "一季报披露季"
+    period: "4月1日~4月30日"
+    note: "与年报重叠，关注业绩拐点"
+
+  - name: "中报披露季"
+    period: "7月1日~8月31日"
+    peak: "7月中~8月中"
+    note: "关注半年业绩、中报高送转"
+
+  - name: "三季报披露季"
+    period: "10月1日~10月31日"
+    note: "关注全年业绩预期修正"
+
+  - name: "业绩预告/快报"
+    note: "关注提前披露的业绩预告，尤其是大幅预增/预减"
+
+# 定期重要事件
+recurring_events:
+  monthly:
+    - name: "PMI数据"
+      timing: "每月1日前后"
+      impact: "影响宏观预期"
+
+    - name: "社融/M2数据"
+      timing: "每月中旬"
+      impact: "影响流动性预期"
+
+    - name: "CPI/PPI数据"
+      timing: "每月中旬"
+      impact: "影响通胀预期"
+
+    - name: "LPR公布"
+      timing: "每月20日"
+      impact: "影响利率预期"
+
+    - name: "北向资金月度统计"
+      timing: "月末"
+      impact: "外资动向"
+
+  quarterly:
+    - name: "美联储议息会议"
+      note: "关注加息/降息预期，影响全球资产"
+
+    - name: "政治局会议"
+      note: "关注政策定调变化"
+
+  annual:
+    - name: "中央经济工作会议"
+      timing: "12月"
+      note: "定调次年经济政策"
+
+    - name: "两会"
+      timing: "3月"
+      note: "关注政策主题、产业方向"
+
+    - name: "MSCI调仓"
+      timing: "2月/5月/8月/11月"
+      note: "影响成分股资金流向"
+
+# 港股特有日历
+hk_calendar:
+  - name: "港股通额度"
+    note: "关注南向资金流向"
+
+  - name: "恒指成分股调整"
+    timing: "每季度"
+
+  - name: "港股财报季"
+    timing: "与A股类似但略有差异"
+
+# 日历效应经验总结
+calendar_effects:
+  - pattern: "长假前缩量"
+    description: "长假（春节、国庆）前1-2天通常缩量观望"
+    action: "减仓或观望"
+
+  - pattern: "节后首日效应"
+    description: "长假后首日受外盘影响大，容易出现大幅波动"
+    action: "关注外盘走势，谨慎操作"
+
+  - pattern: "月末效应"
+    description: "月末资金面可能偏紧"
+    action: "注意流动性变化"
+
+  - pattern: "两会行情"
+    description: "两会前后关注政策主题炒作"
+    action: "提前布局政策受益方向"
+
+  - pattern: "财报密集期"
+    description: "财报季个股分化加大"
+    action: "关注业绩超预期标的，回避业绩雷"
+
+  - pattern: "周五效应"
+    description: "周五下午资金趋于谨慎，尤其大长假前"
+    action: "周五追涨需谨慎"
