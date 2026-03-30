@@ -1,6 +1,7 @@
 # 环境变量（含 token 等敏感信息）
 scripts/.env
 .env
+*.env
 
 # Python
 __pycache__/
