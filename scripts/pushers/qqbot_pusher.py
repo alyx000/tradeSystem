@@ -9,10 +9,34 @@ from __future__ import annotations
 
 import os
 import logging
+import re
 import subprocess
 from .base import MessagePusher
 
 logger = logging.getLogger(__name__)
+
+
+def _sanitize_log(text: str) -> str:
+    """
+    脱敏日志中的敏感信息
+    
+    - 隐藏 openid（user: 后面的内容）
+    - 隐藏群号（group: 后面的内容）
+    - 隐藏完整的 qqbot 目标地址
+    """
+    if not text:
+        return text
+    
+    # 脱敏 user:openid 格式
+    sanitized = re.sub(r'user:[A-Za-z0-9]+', 'user:***', text)
+    # 脱敏 group:group_id 格式
+    sanitized = re.sub(r'group:[A-Za-z0-9]+', 'group:***', sanitized)
+    # 脱敏 qqbot:c2c:openid 格式
+    sanitized = re.sub(r'qqbot:c2c:[A-Za-z0-9]+', 'qqbot:c2c:***', sanitized)
+    # 脱敏 qqbot:group:groupid 格式
+    sanitized = re.sub(r'qqbot:group:[A-Za-z0-9]+', 'qqbot:group:***', sanitized)
+    
+    return sanitized
 
 
 class QQBotPusher(MessagePusher):
@@ -117,10 +141,14 @@ class QQBotPusher(MessagePusher):
             )
             
             if result.returncode != 0:
-                logger.error(f"QQ Bot 发送失败：{result.stderr}")
+                # 脱敏错误日志中的敏感信息
+                sanitized_stderr = _sanitize_log(result.stderr.strip())
+                logger.error(f"QQ Bot 发送失败：错误码 {result.returncode}, {sanitized_stderr}")
                 return False
             
-            logger.info(f"QQ Bot 发送成功到 {target}")
+            # 脱敏目标地址后记录
+            sanitized_target = _sanitize_log(target)
+            logger.info(f"QQ Bot 发送成功到 {sanitized_target}")
             return True
             
         except subprocess.TimeoutExpired:
