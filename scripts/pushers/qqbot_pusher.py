@@ -1,6 +1,9 @@
 """
 QQ Bot 推送
 通过 OpenClaw message 工具实现 QQ 消息推送
+
+注意：此推送器依赖 OpenClaw 的 message 命令行工具或 API。
+如果 message 命令不可用，推送将失败但不影响其他渠道。
 """
 from __future__ import annotations
 
@@ -18,7 +21,7 @@ class QQBotPusher(MessagePusher):
     def __init__(self, config: dict | None = None):
         super().__init__(config)
         self.channels = {}
-        self._openclaw_cmd = "message"
+        self._openclaw_cmd = os.getenv("OPENCLAW_CMD", "message")
 
     def initialize(self) -> bool:
         """
@@ -32,12 +35,14 @@ class QQBotPusher(MessagePusher):
                 "alerts": "user:openid_xxx"
             }
         }
+        
+        注意：QQ Bot 推送是可选的，如果 message 命令不可用，会记录警告但不阻止系统运行
         """
         self.channels = self.config.get("channels", {})
         
         # 检查是否配置了至少一个频道
         if not self.channels:
-            logger.warning("QQ Bot: 未配置任何推送频道")
+            logger.info("QQ Bot: 未配置推送频道，跳过初始化")
             return False
         
         # 检查 message 命令是否可用
@@ -49,13 +54,14 @@ class QQBotPusher(MessagePusher):
                 timeout=5
             )
             if result.returncode != 0:
-                logger.warning(f"QQ Bot: 未找到 {self._openclaw_cmd} 命令")
+                logger.info(f"QQ Bot: 未找到 '{self._openclaw_cmd}' 命令，跳过 QQ Bot 推送")
+                logger.info("提示：如需启用 QQ Bot 推送，请确保 OpenClaw message 工具已安装")
                 return False
             self.enabled = True
             logger.info(f"QQ Bot: 已初始化，频道：{list(self.channels.keys())}")
             return True
         except Exception as e:
-            logger.error(f"QQ Bot: 初始化失败 - {e}")
+            logger.info(f"QQ Bot: 初始化检查失败 - {e}，跳过 QQ Bot 推送")
             return False
 
     def _send_message(self, target: str, content: str) -> bool:
@@ -71,6 +77,10 @@ class QQBotPusher(MessagePusher):
         """
         if not target:
             logger.error("QQ Bot: 未指定推送目标")
+            return False
+        
+        if not self.enabled:
+            logger.warning("QQ Bot: 未启用，跳过发送")
             return False
         
         try:
