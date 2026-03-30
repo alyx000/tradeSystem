@@ -165,5 +165,12 @@ class QQBotPusher(MessagePusher):
         Returns:
             bool: 发送是否成功
         """
-        channel = self.config.get("channels", {}).get(report_type, "default")
-        return self.send_markdown(title, content, channel)
+        # 从 channels 配置中获取目标（pre_market/post_market/alerts）
+        target = self.channels.get(report_type, self.channels.get("default"))
+        if not target:
+            logger.warning(f"QQ Bot: 报告类型 '{report_type}' 未配置目标")
+            return False
+        
+        # 格式化消息并发送
+        formatted = f"**📌 {title}**\n\n{content}"
+        return self._send_message(target, formatted)
