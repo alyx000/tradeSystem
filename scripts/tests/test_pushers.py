@@ -10,14 +10,31 @@
     - 测试 QQ Bot 推送
     - 测试企业微信推送
     - 测试多渠道并行推送
+
+配置加载:
+    - 优先从 ../.env 加载 Discord/企业微信 Webhook URL
+    - 从 ../config.yaml 加载 QQ Bot 频道配置
 """
 
+import os
 import sys
 from pathlib import Path
 
 # 添加脚本目录到路径
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
+
+# 加载 .env 文件
+from dotenv import load_dotenv
+load_dotenv(SCRIPT_DIR / ".env")
+
+# 加载 config.yaml
+import yaml
+config_path = SCRIPT_DIR / "config.yaml"
+test_config = {}
+if config_path.exists():
+    with open(config_path, "r", encoding="utf-8") as f:
+        test_config = yaml.safe_load(f)
 
 from pushers import DiscordPusher, QQBotPusher, WechatPusher, MultiPusher
 
@@ -26,10 +43,19 @@ def test_discord():
     """测试 Discord 推送"""
     print("\n=== 测试 Discord 推送 ===")
     
+    # 从 .env 加载配置
+    webhook_pre = os.getenv("DISCORD_WEBHOOK_PRE", "")
+    webhook_post = os.getenv("DISCORD_WEBHOOK_POST", "")
+    webhook_alert = os.getenv("DISCORD_WEBHOOK_ALERT", "")
+    
+    # 检查是否配置了占位符
+    if "your_discord_webhook" in webhook_pre or not webhook_pre:
+        print("⚠️  未配置 DISCORD_WEBHOOK_PRE，使用占位符或空值")
+    
     pusher = DiscordPusher({
-        "webhook_pre": "",  # 填入真实 Webhook URL
-        "webhook_post": "",
-        "webhook_alert": "",
+        "webhook_pre": webhook_pre,
+        "webhook_post": webhook_post,
+        "webhook_alert": webhook_alert,
     })
     
     if not pusher.initialize():
@@ -61,10 +87,17 @@ def test_qqbot():
     """测试 QQ Bot 推送"""
     print("\n=== 测试 QQ Bot 推送 ===")
     
+    # 从 config.yaml 加载 QQ Bot 配置
+    qq_config = test_config.get("push", {}).get("qq", {})
+    qq_channels = qq_config.get("channels", {})
+    
+    # 如果没有配置，使用默认测试值
+    if not qq_channels:
+        print("⚠️  config.yaml 中未配置 QQ Bot 频道，使用默认测试值")
+        qq_channels = {"default": "user:openid_xxx"}
+    
     pusher = QQBotPusher({
-        "channels": {
-            "default": "user:openid_xxx",  # 填入真实用户 openid
-        }
+        "channels": qq_channels,
     })
     
     if not pusher.initialize():
@@ -91,8 +124,15 @@ def test_wechat():
     """测试企业微信推送"""
     print("\n=== 测试企业微信推送 ===")
     
+    # 从 .env 加载配置
+    webhook_url = os.getenv("WECHAT_WEBHOOK", "")
+    
+    # 检查是否配置了占位符
+    if "YOUR_KEY" in webhook_url or not webhook_url:
+        print("⚠️  未配置 WECHAT_WEBHOOK，使用占位符或空值")
+    
     pusher = WechatPusher({
-        "webhook_url": "",  # 填入真实 Webhook URL
+        "webhook_url": webhook_url,
     })
     
     if not pusher.initialize():
@@ -116,25 +156,39 @@ def test_multi():
     
     multi = MultiPusher()
     
+    # 从 .env 加载 Discord 配置
+    webhook_pre = os.getenv("DISCORD_WEBHOOK_PRE", "")
+    webhook_post = os.getenv("DISCORD_WEBHOOK_POST", "")
+    webhook_alert = os.getenv("DISCORD_WEBHOOK_ALERT", "")
+    
+    # 从 config.yaml 加载 QQ Bot 配置
+    qq_config = test_config.get("push", {}).get("qq", {})
+    qq_channels = qq_config.get("channels", {})
+    if not qq_channels:
+        qq_channels = {"default": "user:openid_xxx"}
+    
+    # 从 .env 加载企业微信配置
+    wechat_webhook = os.getenv("WECHAT_WEBHOOK", "")
+    
     # 注册所有可用的推送渠道
     discord = DiscordPusher({
-        "webhook_pre": "",
-        "webhook_post": "",
-        "webhook_alert": "",
+        "webhook_pre": webhook_pre,
+        "webhook_post": webhook_post,
+        "webhook_alert": webhook_alert,
     })
     if discord.initialize():
         multi.register(discord)
         print("✓ 已注册 Discord")
     
     qqbot = QQBotPusher({
-        "channels": {"default": "user:openid_xxx"}
+        "channels": qq_channels,
     })
     if qqbot.initialize():
         multi.register(qqbot)
         print("✓ 已注册 QQ Bot")
     
     wechat = WechatPusher({
-        "webhook_url": "",
+        "webhook_url": wechat_webhook,
     })
     if wechat.initialize():
         multi.register(wechat)
