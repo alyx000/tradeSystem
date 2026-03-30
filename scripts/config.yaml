@@ -72,9 +72,9 @@ push:
   qq:
     enabled: true  # ✅ 已启用
     channels:
-      pre_market: "qqbot:c2c:A542A4E92165E4B6A608072538B5CF04"    # 私聊
-      post_market: "qqbot:c2c:A542A4E92165E4B6A608072538B5CF04"   # 私聊
-      alerts: "qqbot:c2c:A542A4E92165E4B6A608072538B5CF04"        # 私聊
+      pre_market: "user:A542A4E92165E4B6A608072538B5CF04"    # 私聊 (代码中自动转换为 qqbot:c2c:)
+      post_market: "user:A542A4E92165E4B6A608072538B5CF04"   # 私聊
+      alerts: "user:A542A4E92165E4B6A608072538B5CF04"        # 私聊
 
   # 企业微信机器人推送
   wechat:
