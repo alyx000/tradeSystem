@@ -96,25 +96,63 @@ class DiscordPusher(MessagePusher):
         lines = content.split("\n")
         in_table = False
         table_lines = []
+        consecutive_table_rows = 0  # 连续表格行计数器
+        
+        def is_table_separator(line: str) -> bool:
+            """检测是否为表格分隔行（如 |---|---|）"""
+            stripped = line.strip()
+            return stripped.startswith("|") and "---" in stripped and stripped.endswith("|")
+        
+        def is_table_row(line: str) -> bool:
+            """检测是否为表格行（包含 | 符号且行首为 |）"""
+            return "|" in line and line.strip().startswith("|")
+        
+        def flush_table():
+            """将收集的表格行用代码块包裹并添加到 formatted"""
+            nonlocal in_table, table_lines, consecutive_table_rows
+            if table_lines:
+                formatted_lines = ["```\n" + "\n".join(table_lines) + "\n```\n\n"]
+                # 使用 nonlocal 修改外部变量需要在返回时处理
+                return "".join(formatted_lines)
+            return ""
         
         for line in lines:
-            # 检测表格行（包含 | 符号）
-            if "|" in line and line.strip().startswith("|"):
+            # 检测表格分隔行（如 |---|---|）
+            if is_table_separator(line):
                 if not in_table:
                     in_table = True
                     table_lines = []
+                    consecutive_table_rows = 0
+                table_lines.append(line)
+                consecutive_table_rows = max(consecutive_table_rows, 1)
+            # 检测表格行（包含 | 符号且行首为 |）
+            elif is_table_row(line):
+                if not in_table:
+                    # 首次遇到表格行，先暂存，等待确认是否为连续表格
+                    in_table = True
+                    table_lines = []
+                    consecutive_table_rows = 1
+                else:
+                    consecutive_table_rows += 1
                 table_lines.append(line)
             else:
                 if in_table:
-                    # 表格结束，用代码块包裹
-                    if table_lines:
+                    # 表格结束，只有连续多行（>=2）才用代码块包裹
+                    if len(table_lines) >= 2 or any(is_table_separator(l) for l in table_lines):
                         formatted += "```\n" + "\n".join(table_lines) + "\n```\n\n"
+                    else:
+                        # 单行 | 不视为表格，直接添加
+                        formatted += "\n".join(table_lines) + "\n"
                     in_table = False
                     table_lines = []
+                    consecutive_table_rows = 0
                 formatted += line + "\n"
         
         # 处理剩余的表格
         if in_table and table_lines:
-            formatted += "```\n" + "\n".join(table_lines) + "\n```\n\n"
+            if len(table_lines) >= 2 or any(is_table_separator(l) for l in table_lines):
+                formatted += "```\n" + "\n".join(table_lines) + "\n```\n\n"
+            else:
+                formatted += "\n".join(table_lines) + "\n"
         
         return self._send(url, formatted)
