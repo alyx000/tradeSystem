@@ -197,20 +197,28 @@ def cmd_pre(config: dict, target_date: str):
     registry = setup_providers(config)
     registry.initialize_all()
 
-    from collectors import MarketCollector, HoldingsCollector
+    from collectors import MarketCollector, HoldingsCollector, WatchlistCollector
     from generators import ReportGenerator
+    from utils.trade_date import get_prev_trade_date
+
+    prev_date = get_prev_trade_date(registry, target_date)
 
     # 采集
     market_collector = MarketCollector(registry)
-    market_data = market_collector.collect_pre_market()
+    market_data = market_collector.collect_pre_market(
+        target_date=target_date,
+        prev_trade_date=prev_date,
+    )
 
     holdings_collector = HoldingsCollector(registry)
     holdings_collector.load()
     # 查最近3天公告
-    from datetime import timedelta
     d = datetime.strptime(target_date, "%Y-%m-%d")
     start = (d - timedelta(days=3)).strftime("%Y-%m-%d")
     holdings_anns = holdings_collector.collect_holdings_announcements(start, target_date)
+
+    watchlist_collector = WatchlistCollector(registry)
+    watchlist_anns = watchlist_collector.collect_watchlist_announcements(start, target_date)
 
     # 生成报告
     generator = ReportGenerator()
@@ -218,6 +226,7 @@ def cmd_pre(config: dict, target_date: str):
         date=target_date,
         market_data=market_data,
         holdings_announcements=holdings_anns,
+        watchlist_announcements=watchlist_anns,
         news=market_data.get("news", []),
         calendar_events=market_data.get("calendar_events", []),
     )
@@ -318,20 +327,6 @@ def cmd_holdings(config: dict, args):
         print(f"已移除: {code}")
 
 
-def _get_prev_trade_date(registry, today: str) -> str:
-    """
-    向前最多查找 7 天，找到最近一个交易日（不含 today）。
-    若 provider 不可用则简单回退到昨天。
-    """
-    for delta in range(1, 8):
-        candidate = (datetime.strptime(today, "%Y-%m-%d") - timedelta(days=delta)).strftime("%Y-%m-%d")
-        r = registry.call("is_trade_day", candidate)
-        if r.success and r.data:
-            return candidate
-    # fallback
-    return (datetime.strptime(today, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
-
-
 def cmd_evening(config: dict, target_date: str):
     """
     晚间任务（由 post 在定时流程中自动先执行，也可手动单独运行）：
@@ -344,8 +339,10 @@ def cmd_evening(config: dict, target_date: str):
     registry = setup_providers(config)
     registry.initialize_all()
 
+    from utils.trade_date import get_prev_trade_date
+
     multi = setup_pushers(config)
-    prev_date = _get_prev_trade_date(registry, target_date)
+    prev_date = get_prev_trade_date(registry, target_date)
 
     # 1. 溢价率回填
     try:

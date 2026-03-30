@@ -138,6 +138,9 @@ class DataProvider(ABC):
     def get_global_index(self, index_name: str) -> DataResult:
         return DataResult(data=None, source=self.name, error="not implemented")
 
+    def get_us_tickers_overnight(self, tickers: list[str]) -> DataResult:
+        return DataResult(data=None, source=self.name, error="not implemented")
+
     def get_commodity(self, name: str) -> DataResult:
         return DataResult(data=None, source=self.name, error="not implemented")
 

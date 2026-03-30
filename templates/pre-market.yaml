@@ -40,6 +40,24 @@ overnight:
 
   vix: { close: 0, change_pct: 0 }
 
+  # 亚太股指（自动：global_indices_apac）
+  apac_indices:
+    hsi: { close: 0, change_pct: 0 }
+    hstech: { close: 0, change_pct: 0 }
+    nikkei: { close: 0, change_pct: 0 }
+
+  # 美股中国资产 ETF 隔夜（自动：us_china_assets，yfinance）
+  us_china_etfs:
+    KWEB: { close: 0, change_pct: 0 }
+    FXI: { close: 0, change_pct: 0 }
+
+  # 融资融券汇总，统计日为上一交易日（自动：margin_data）
+  margin_prev_day:
+    trade_date: ""
+    total_rzye_yi: 0
+    total_rqye_yi: 0
+    total_rzrqye_yi: 0
+
   overnight_assessment:
     sentiment: ""  # 偏多 / 中性 / 偏空
     confidence: "★★★"
@@ -115,6 +133,7 @@ holdings_briefing:
 # ==========================================
 # 四、关注池信息（自动+半自动）
 # ==========================================
+# 盘前自动生成的公告列表见顶层字段 watchlist_announcements（tier1+tier2，近3日）
 watchlist_briefing:
   stocks:
     - code: ""

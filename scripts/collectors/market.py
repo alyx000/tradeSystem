@@ -300,19 +300,27 @@ class MarketCollector:
         logger.info(f"盘后数据采集完成: {date}")
         return result
 
-    def collect_pre_market(self) -> dict:
+    def collect_pre_market(
+        self,
+        target_date: str | None = None,
+        prev_trade_date: str | None = None,
+    ) -> dict:
         """
         盘前数据采集（07:00 执行）
-        采集外盘、大宗商品、汇率、风险指标（VIX/美债）、财经新闻、宏观日历
+        采集外盘、亚太股指、美股中国资产 ETF、大宗商品、汇率、风险指标（VIX/美债）、
+        财经新闻、宏观日历、上一交易日融资融券汇总。
+
+        :param target_date: 简报日期（与 main.py --date 一致）；默认当天
+        :param prev_trade_date: 上一交易日，用于融资融券；由 cmd_pre 传入 get_prev_trade_date
         """
         logger.info("开始盘前数据采集")
-        today = datetime.now().strftime("%Y-%m-%d")
+        date_str = target_date or datetime.now().strftime("%Y-%m-%d")
         result = {
             "generated_at": datetime.now().isoformat(),
             "generated_by": "openclaw",
         }
 
-        # 外盘数据
+        # 外盘数据（美股 + A50）
         global_indices = {}
         for name in ["dow_jones", "nasdaq", "sp500", "a50"]:
             r = self.registry.call("get_global_index", name)
@@ -321,6 +329,26 @@ class MarketCollector:
             else:
                 global_indices[name] = {"error": r.error}
         result["global_indices"] = global_indices
+
+        # 亚太股指
+        global_indices_apac = {}
+        for name in ["hsi", "hstech", "nikkei"]:
+            r = self.registry.call("get_global_index", name)
+            if r.success:
+                global_indices_apac[name] = r.data
+            else:
+                global_indices_apac[name] = {"error": r.error}
+        result["global_indices_apac"] = global_indices_apac
+
+        # 美股中国资产 ETF（隔夜）
+        us_china = {}
+        tickers_r = self.registry.call("get_us_tickers_overnight", ["KWEB", "FXI"])
+        if tickers_r.success and tickers_r.data:
+            us_china = tickers_r.data
+        else:
+            err = tickers_r.error if not tickers_r.success else "无数据"
+            us_china = {"_error": err}
+        result["us_china_assets"] = us_china
 
         # 大宗商品
         commodities = {}
@@ -354,15 +382,27 @@ class MarketCollector:
         result["risk_indicators"] = risk_indicators
 
         # 财经新闻
-        news_r = self.registry.call("get_market_news", today)
+        news_r = self.registry.call("get_market_news", date_str)
         result["news"] = news_r.data if news_r.success and news_r.data else []
         if not news_r.success:
             logger.warning(f"财经新闻获取失败: {news_r.error}")
 
+        # 融资融券（上一完整交易日汇总）
+        if prev_trade_date:
+            margin_r = self.registry.call("get_margin_data", prev_trade_date)
+            if margin_r.success and margin_r.data:
+                result["margin_data"] = margin_r.data
+            else:
+                err = margin_r.error if not margin_r.success else "无数据"
+                result["margin_data"] = {"error": err}
+                logger.warning(f"融资融券汇总获取失败: {err}")
+        else:
+            result["margin_data"] = {}
+
         # 宏观日历（手动 YAML + 预拉取 calendar_auto.yaml + AkShare 当天实时）
-        cal_r = self.registry.call("get_macro_calendar", today)
+        cal_r = self.registry.call("get_macro_calendar", date_str)
         ak_events = cal_r.data if (cal_r.success and cal_r.data) else []
-        result["calendar_events"] = _merge_calendar(ak_events, today, BASE_DIR)
+        result["calendar_events"] = _merge_calendar(ak_events, date_str, BASE_DIR)
 
         logger.info("盘前数据采集完成")
         return result

@@ -70,6 +70,7 @@ class AkshareProvider(DataProvider):
             "get_sector_fund_flow",
             "get_northbound",
             "get_global_index",
+            "get_us_tickers_overnight",
             "get_commodity",
             "get_forex",
             "get_market_news",
@@ -123,14 +124,41 @@ class AkshareProvider(DataProvider):
         nm = str(last.get("名称", symbol))
         return {"name": nm, "close": close, "change_pct": pct}
 
+    def _index_from_yfinance(self, yahoo_symbol: str, display_name: str) -> DataResult | None:
+        """用 yfinance 取指数最近收盘与涨跌幅；东财不可用时（如本机 ProxyError）作亚太股指主源。"""
+        try:
+            import yfinance as yf
+        except ImportError:
+            return None
+        try:
+            hist = yf.Ticker(yahoo_symbol).history(period="10d")
+            if hist is None or hist.empty or "Close" not in hist.columns:
+                return None
+            hist = hist.sort_index()
+            close_val = round(float(hist["Close"].iloc[-1]), 2)
+            prev_val = round(float(hist["Close"].iloc[-2]), 2) if len(hist) >= 2 else close_val
+            change_pct = round((close_val - prev_val) / prev_val * 100, 2) if prev_val else 0.0
+            return DataResult(
+                data={
+                    "name": display_name,
+                    "close": close_val,
+                    "change_pct": change_pct,
+                },
+                source=f"yfinance:{yahoo_symbol}",
+            )
+        except Exception as e:
+            logger.warning(f"yfinance 指数 {yahoo_symbol} 获取失败: {e}")
+            return None
+
     # ---- 外盘数据 ----
 
     def get_global_index(self, index_name: str) -> DataResult:
         """
         全球指数：index_global_spot_em 按中文名称匹配；
         A50：futures_global_spot_em 中「A50期指当月连续」等；
-        VIX：index_global_spot_em 中「VIX恐慌指数」；
-        US10Y：index_global_spot_em 中含「美国10年期」，失败则 bond_zh_us_rate()；
+        VIX：yfinance ^VIX；
+        US10Y：index_global_spot_em，失败则 bond_zh_us_rate()；
+        恒生/恒生科技/日经：优先 yfinance（^HSI、HSTECH.HK、^N225 等），失败再试东财，减轻本机 ProxyError。
         部分指数可回退 index_global_hist_em（推算涨跌幅）。
         """
         name_map = {
@@ -248,6 +276,35 @@ class AkshareProvider(DataProvider):
                     data=None, source=self.name, error="AkShare: 未找到美债10年期数据"
                 )
 
+            # 亚太股指：优先 yfinance，避免本机访问东财 push2.eastmoney.com 触发 ProxyError
+            apac_yf: dict[str, list[tuple[str, str]]] = {
+                "hsi": [("^HSI", "恒生指数")],
+                # ^HSTECH 在 Yahoo 常 404；HSTECH.HK 为恒生科技指数现货报价
+                "hstech": [("HSTECH.HK", "恒生科技"), ("3033.HK", "恒生科技(ETF)")],
+                "nikkei": [("^N225", "日经225")],
+            }
+            if index_name in apac_yf:
+                for ysym, label in apac_yf[index_name]:
+                    yf_r = self._index_from_yfinance(ysym, label)
+                    if yf_r is not None:
+                        return yf_r
+                try:
+                    row = self._row_global_spot_by_name(zh_name)
+                    if row is not None and pd.notna(row.get("最新价")):
+                        data = {
+                            "name": str(row.get("名称", zh_name)),
+                            "close": _to_float_price(row.get("最新价")),
+                            "change_pct": _to_float_pct(row.get("涨跌幅")),
+                        }
+                        return DataResult(data=data, source="akshare:index_global_spot_em")
+                except Exception as em_err:
+                    logger.warning(f"东财全球指数 {index_name} 回退失败: {em_err}")
+                return DataResult(
+                    data=None,
+                    source=self.name,
+                    error=f"AkShare/yfinance 均未获取到亚太指数: {index_name}",
+                )
+
             if zh_name not in ("__A50_FUTURES__", "__VIX__", "__US10Y__"):
                 row = self._row_global_spot_by_name(zh_name)
                 if row is not None and pd.notna(row.get("最新价")):
@@ -263,6 +320,40 @@ class AkshareProvider(DataProvider):
                 source=self.name,
                 error=f"AkShare: 未匹配全球指数: {index_name}",
             )
+        except Exception as e:
+            return DataResult(data=None, source=self.name, error=str(e))
+
+    def get_us_tickers_overnight(self, tickers: list[str]) -> DataResult:
+        """美股 ETF 隔夜涨跌：yfinance 最近两个交易日收盘推算涨跌幅（与 VIX 一致）。"""
+        labels = {
+            "KWEB": "KWEB（中概互联网ETF）",
+            "FXI": "FXI（中国大盘ETF）",
+        }
+        try:
+            import yfinance as yf
+        except ImportError as e:
+            return DataResult(data=None, source=self.name, error=f"yfinance 不可用: {e}")
+
+        out: dict[str, dict] = {}
+        try:
+            for t in tickers:
+                sym = str(t).strip().upper()
+                hist = yf.Ticker(sym).history(period="5d")
+                if hist is None or hist.empty or "Close" not in hist.columns:
+                    out[sym] = {"error": "无K线数据", "name": labels.get(sym, sym)}
+                    continue
+                hist = hist.sort_index()
+                close_val = float(hist["Close"].iloc[-1])
+                prev_close = float(hist["Close"].iloc[-2]) if len(hist) >= 2 else close_val
+                change_pct = (
+                    round((close_val - prev_close) / prev_close * 100, 2) if prev_close else 0.0
+                )
+                out[sym] = {
+                    "name": labels.get(sym, sym),
+                    "close": round(close_val, 2),
+                    "change_pct": change_pct,
+                }
+            return DataResult(data=out, source="yfinance")
         except Exception as e:
             return DataResult(data=None, source=self.name, error=str(e))
 

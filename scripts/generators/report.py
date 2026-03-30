@@ -35,6 +35,7 @@ class ReportGenerator:
         date: str,
         market_data: dict,
         holdings_announcements: dict,
+        watchlist_announcements: dict | None = None,
         news: list[dict] | None = None,
         calendar_events: list[dict] | None = None,
     ) -> tuple[str, str]:
@@ -42,10 +43,12 @@ class ReportGenerator:
         生成盘前简报。
         返回: (markdown报告文本, yaml存档路径)
         """
+        watchlist_announcements = watchlist_announcements or {}
         lines = [f"# 盘前简报 {date}\n", f"生成时间: {datetime.now().strftime('%H:%M')}\n"]
 
-        # 外盘
+        # 一、隔夜外盘：美股/A50 + 亚太 + 风险指标
         lines.append("## 一、隔夜外盘\n")
+        lines.append("### 美股与A50期货\n")
         gi = market_data.get("global_indices", {})
         for name, label in [("dow_jones", "道琼斯"), ("nasdaq", "纳斯达克"), ("sp500", "标普500"), ("a50", "A50期货")]:
             info = gi.get(name, {})
@@ -58,7 +61,20 @@ class ReportGenerator:
                     f"- [事实] {label}: {info.get('close', 'N/A')} ({sign}{pct}%) [★★★]"
                 )
 
-        # VIX + 美债10年期（风险指标，附在外盘节末尾）
+        lines.append("\n### 亚太股指\n")
+        apac = market_data.get("global_indices_apac", {})
+        for name, label in [("hsi", "恒生指数"), ("hstech", "恒生科技"), ("nikkei", "日经225")]:
+            info = apac.get(name, {})
+            if "error" in info:
+                lines.append(f"- {label}: 数据获取失败")
+            else:
+                pct = info.get("change_pct", 0)
+                sign = "+" if pct >= 0 else ""
+                lines.append(
+                    f"- [事实] {label}: {info.get('close', 'N/A')} ({sign}{pct}%) [★★★]"
+                )
+
+        lines.append("\n### 风险指标\n")
         ri = market_data.get("risk_indicators", {})
         vix_info = ri.get("vix", {})
         if vix_info and "error" not in vix_info:
@@ -83,8 +99,26 @@ class ReportGenerator:
                     f"- [事实] 美债10年期收益率: {close_val}% ({sign}{pct}%) [★★★]"
                 )
 
-        # 商品 & 汇率
-        lines.append("\n## 二、大宗商品 & 汇率\n")
+        # 二、美股中国资产 ETF
+        lines.append("\n## 二、美股中国资产相关\n")
+        us_cn = market_data.get("us_china_assets", {})
+        if "_error" in us_cn:
+            lines.append(f"- 数据获取失败: {us_cn['_error']}")
+        else:
+            for sym in ("KWEB", "FXI"):
+                info = us_cn.get(sym, {})
+                if "error" in info:
+                    lines.append(f"- {sym}: {info.get('error', '数据获取失败')}")
+                    continue
+                pct = info.get("change_pct", 0)
+                sign = "+" if pct >= 0 else ""
+                nm = info.get("name", sym)
+                lines.append(
+                    f"- [事实] {nm}: {info.get('close', 'N/A')} ({sign}{pct}%) [★★★]"
+                )
+
+        # 三、商品 & 汇率
+        lines.append("\n## 三、大宗商品 & 汇率\n")
         for section in ["commodities", "forex"]:
             for key, info in market_data.get(section, {}).items():
                 if "error" in info:
@@ -94,6 +128,30 @@ class ReportGenerator:
                 lines.append(
                     f"- [事实] {info.get('name', key)}: {info.get('close', 'N/A')} ({sign}{pct}%) [★★★]"
                 )
+
+        # 四、融资融券（上一交易日）
+        lines.append("\n## 四、融资融券（上一交易日）\n")
+        md = market_data.get("margin_data") or {}
+        if md.get("error"):
+            lines.append(f"- 融资融券汇总: {md['error']}")
+        elif md.get("trade_date"):
+            lines.append(f"> 统计日期: {md.get('trade_date')}\n")
+            lines.append(
+                f"- [事实] 两市融资余额合计: {md.get('total_rzye_yi', 'N/A')} 亿元 [★★★]"
+            )
+            lines.append(
+                f"- [事实] 两市融券余额合计: {md.get('total_rqye_yi', 'N/A')} 亿元 [★★★]"
+            )
+            lines.append(
+                f"- [事实] 融资融券余额合计: {md.get('total_rzrqye_yi', 'N/A')} 亿元 [★★★]"
+            )
+            for ex in md.get("exchanges", []):
+                eid = ex.get("exchange_id", "")
+                lines.append(
+                    f"  - {eid}: 融资 {ex.get('rzye_yi')} 亿 / 融券 {ex.get('rqye_yi')} 亿 / 合计 {ex.get('rzrqye_yi')} 亿"
+                )
+        else:
+            lines.append("- （无融资融券汇总数据）")
 
         # 今日日历：先算展示列表，再与持仓/新闻一起按顺序编号（三、四、五…）
         cal_shown: list[dict] = []
@@ -106,12 +164,25 @@ class ReportGenerator:
                 shown += low[: 30 - len(shown)]
             cal_shown = shown[:30]
 
-        # 动态章节：每出现一个「##」小节，序号 +1（与持仓是否为空无关）
-        idx = 3
+        # 动态章节：从「五」起（持仓 / 关注池 / 新闻 / 日历）
+        idx = 5
         if holdings_announcements:
             lines.append(f"\n## {_roman(idx)}、持仓股公告\n")
             idx += 1
             for code, info in holdings_announcements.items():
+                stock_name = info.get("name", code)
+                anns = info.get("announcements", [])
+                if anns:
+                    lines.append(f"### {stock_name} ({code})")
+                    for a in anns[:5]:
+                        lines.append(f"- [事实] ★★★ {a.get('title', '')} ({a.get('ann_date', '')})")
+                else:
+                    lines.append(f"- {stock_name}: 无新公告")
+
+        if watchlist_announcements:
+            lines.append(f"\n## {_roman(idx)}、关注池公告\n")
+            idx += 1
+            for code, info in watchlist_announcements.items():
                 stock_name = info.get("name", code)
                 anns = info.get("announcements", [])
                 if anns:
@@ -165,6 +236,7 @@ class ReportGenerator:
             "generated_at": datetime.now().isoformat(),
             "market_data": market_data,
             "holdings_announcements": holdings_announcements,
+            "watchlist_announcements": watchlist_announcements,
             "news": news or [],
             "calendar_events": calendar_events or [],
         }

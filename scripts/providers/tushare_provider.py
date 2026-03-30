@@ -251,6 +251,47 @@ class TushareProvider(DataProvider):
         except Exception as e:
             return DataResult(data=None, source=self.name, error=str(e))
 
+    # ---- 融资融券汇总 ----
+
+    def get_margin_data(self, date: str) -> DataResult:
+        """
+        沪深两市融资融券每日汇总（pro.margin）。
+        余额单位为元，输出中附带亿元字段便于阅读。
+        """
+        try:
+            d = self._date_fmt(date)
+            df = self.pro.margin(trade_date=d)
+            if df is None or df.empty:
+                return DataResult(data=None, source=self.name, error=f"无融资融券汇总数据: {date}")
+            exchanges: list[dict] = []
+            total_rzye = 0.0
+            total_rqye = 0.0
+            total_rzrqye = 0.0
+            for _, row in df.iterrows():
+                ex = str(row.get("exchange_id", "") or "")
+                rzye = float(row.get("rzye", 0) or 0)
+                rqye = float(row.get("rqye", 0) or 0)
+                rzrqye = float(row.get("rzrqye", 0) or 0)
+                total_rzye += rzye
+                total_rqye += rqye
+                total_rzrqye += rzrqye
+                exchanges.append({
+                    "exchange_id": ex,
+                    "rzye_yi": round(rzye / 1e8, 2),
+                    "rqye_yi": round(rqye / 1e8, 2),
+                    "rzrqye_yi": round(rzrqye / 1e8, 2),
+                })
+            data = {
+                "trade_date": date,
+                "exchanges": exchanges,
+                "total_rzye_yi": round(total_rzye / 1e8, 2),
+                "total_rqye_yi": round(total_rqye / 1e8, 2),
+                "total_rzrqye_yi": round(total_rzrqye / 1e8, 2),
+            }
+            return DataResult(data=data, source="tushare:margin")
+        except Exception as e:
+            return DataResult(data=None, source=self.name, error=str(e))
+
     # ---- 龙虎榜 ----
 
     def get_dragon_tiger(self, date: str) -> DataResult:

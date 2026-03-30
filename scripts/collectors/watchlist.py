@@ -136,6 +136,28 @@ class WatchlistCollector:
 
         return results
 
+    def collect_watchlist_announcements(self, start_date: str, end_date: str) -> dict:
+        """采集 tier1_core + tier2_watch 公告（与持仓公告逻辑一致，代码去重）"""
+        if not self.registry:
+            return {}
+        self.load()
+        seen: set[str] = set()
+        results: dict = {}
+        for tier in ("tier1_core", "tier2_watch"):
+            for stock in self._data.get(tier, []) or []:
+                code = (stock.get("stock_code") or "").strip()
+                if not code or code in seen:
+                    continue
+                seen.add(code)
+                r = self.registry.call("get_stock_announcements", code, start_date, end_date)
+                if r.success:
+                    results[code] = {
+                        "name": stock.get("stock_name", code),
+                        "announcements": r.data,
+                        "_source": r.source,
+                    }
+        return results
+
     def _collect_tier2(self, trade_date: str) -> list[dict]:
         """采集观察池（tier2_watch）行情，异动时记录"""
         results = []

@@ -1,5 +1,5 @@
 ---
-description: 开发工作流规范：每次开发必须包含验证测试，通过后才算完成
+description: 开发工作流规范：每次开发须含单元测试与验证，通过后才算完成
 alwaysApply: true
 ---
 
@@ -7,20 +7,30 @@ alwaysApply: true
 
 每次开发任务必须遵循以下流程，**验证测试通过后才算开发完成**。
 
+## 单元测试覆盖（强制）
+
+除纯配置/文案类改动外，**每次开发任务须配套完善的单元测试**：
+
+- **范围**：本次改动涉及的纯函数、采集/生成逻辑、工具函数（如 `utils/`）、Registry 降级行为等，用 **mock 隔离外网与密钥**，避免依赖真实 Tushare/AkShare/推送。
+- **位置**：优先放在 [`scripts/tests/`](scripts/tests/)（与现有 `test_sector_rhythm.py` 一致）；与仓库根集成的可放在 [`tests/`](tests/)。[`scripts/tests/conftest.py`](scripts/tests/conftest.py) 已排除 `test_pushers.py`（手动联调脚本，请直接 `python scripts/tests/test_pushers.py`）。
+- **交付**：新增或修改的测试须与业务代码在同一 PR/提交周期内完成；**不得**只用手跑 `main.py` 代替单测。
+- **执行**：开发完成后运行 `python3 -m pytest scripts/tests/ -v`（**可从仓库根目录执行**；`scripts/tests/conftest.py` 已注入 `scripts/` 到 `sys.path`），并视改动运行根目录 [`tests/`](tests/) 下用例；**全部通过**才算完成。
+
 ## 必须执行的三阶段
 
 ### 1. 开发前：设计验证方案
 在开始写代码之前，明确说明将用什么方式验证本次改动：
-- 运行哪个命令
+- 运行哪个命令（**含**将新增/更新的 pytest 用例路径）
 - 期望看到什么输出
 - 哪些 Warning/Error 是不可接受的
 
 ### 2. 开发中：按计划实现
 - 完成所有代码改动
+- **同步编写或更新单元测试**（见上文「单元测试覆盖」）
 - 运行 `ReadLints` 检查 lint 错误，有则修复
 
 ### 3. 开发后：执行验证并报告结果
-- 运行之前设计的验证命令
+- 运行之前设计的验证命令（**含 pytest**）
 - 逐项对照期望输出汇报：✅ 通过 / ❌ 失败
 - 失败项必须修复后重新验证，直到全部通过
 - 最终向用户呈现验证报告
@@ -29,15 +39,17 @@ alwaysApply: true
 
 | 改动范围 | 验证命令 |
 |----------|----------|
-| 盘前流程 | `cd scripts && python3 main.py pre --date <近期交易日>` |
-| 盘后流程 | `cd scripts && python3 main.py post --date <近期交易日>` |
-| provider 新方法 | 在 `scripts/` 下写临时 Python 脚本直接调用并打印结果 |
-| 仅报告生成器 | 传入 mock dict 调用 `ReportGenerator().generate_pre_market(...)` |
+| 任意逻辑改动（默认） | 仓库根目录：`python3 -m pytest scripts/tests/ -v`（必要时加 `tests/test_integration.py` 等） |
+| 盘前流程 | 上述 pytest **+** `cd scripts && python3 main.py pre --date <近期交易日>` |
+| 盘后流程 | 上述 pytest **+** `cd scripts && python3 main.py post --date <近期交易日>` |
+| provider 新方法 | pytest（mock 数据源）**+** 可选：临时脚本真机抽检 |
+| 报告生成器 | pytest 断言 Markdown/YAML 片段 **+** 可选：`ReportGenerator().generate_pre_market(...)` mock 调用 |
 
 ## 验证报告格式（每次必须输出）
 
 ```
 验证结果：
+- [✅/❌] 单元测试：pytest …（通过用例数 / 失败说明）
 - [✅/❌] 功能A：<实际输出摘要>
 - [✅/❌] 功能B：<实际输出摘要>
 - 遗留问题：<已知限制，如数据源不支持某字段>
