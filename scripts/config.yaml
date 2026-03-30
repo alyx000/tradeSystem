@@ -70,11 +70,11 @@ push:
 
   # QQ Bot 推送（通过 OpenClaw message 工具）
   qq:
-    enabled: false  # 如需启用，改为 true 并在 channels 中配置目标
+    enabled: true  # ✅ 已启用
     channels:
-      pre_market: "user:openid_xxx"    # 私聊：user:openid，群聊：group:group_id
-      post_market: "group:group_xxx"   # 盘后报告推送到群聊
-      alerts: "user:openid_xxx"        # 告警推送到私聊
+      pre_market: "qqbot:c2c:A542A4E92165E4B6A608072538B5CF04"    # 私聊
+      post_market: "qqbot:c2c:A542A4E92165E4B6A608072538B5CF04"   # 私聊
+      alerts: "qqbot:c2c:A542A4E92165E4B6A608072538B5CF04"        # 私聊
 
   # 企业微信机器人推送
   wechat:

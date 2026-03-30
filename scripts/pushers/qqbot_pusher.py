@@ -21,7 +21,8 @@ class QQBotPusher(MessagePusher):
     def __init__(self, config: dict | None = None):
         super().__init__(config)
         self.channels = {}
-        self._openclaw_cmd = os.getenv("OPENCLAW_CMD", "message")
+        # 优先使用 openclaw 命令，其次 message 命令
+        self._openclaw_cmd = os.getenv("OPENCLAW_CMD", "openclaw")
 
     def initialize(self) -> bool:
         """
@@ -66,10 +67,14 @@ class QQBotPusher(MessagePusher):
 
     def _send_message(self, target: str, content: str) -> bool:
         """
-        通过 OpenClaw message 工具发送消息
+        通过 OpenClaw 发送消息到 QQ Bot
+        
+        使用 openclaw message send 命令：
+        openclaw message send --channel=qqbot --target=<target> -m "<content>"
         
         Args:
             target: 目标用户或群聊，格式 "user:openid" 或 "group:group_id"
+                   内部会自动转换为 qqbot:c2c:openid 或 qqbot:group:groupid
             content: 消息内容
         
         Returns:
@@ -83,16 +88,26 @@ class QQBotPusher(MessagePusher):
             logger.warning("QQ Bot: 未启用，跳过发送")
             return False
         
+        # 转换目标格式：user:openid → qqbot:c2c:openid, group:id → qqbot:group:id
+        qq_target = target
+        if target.startswith("user:"):
+            qq_target = "qqbot:c2c:" + target[5:]
+        elif target.startswith("group:"):
+            qq_target = "qqbot:group:" + target[6:]
+        
         try:
-            # 构建 message 命令
-            # 格式：message send --channel=qqbot --target=<target> "<content>"
+            # 构建 openclaw message send 命令
             cmd = [
                 self._openclaw_cmd,
+                "message",
                 "send",
                 "--channel=qqbot",
-                "--target=" + target,
+                "--target=" + qq_target,
+                "-m",
                 content
             ]
+            
+            logger.debug(f"执行命令：{' '.join(cmd)}")
             
             result = subprocess.run(
                 cmd,

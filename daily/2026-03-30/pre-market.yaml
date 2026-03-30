@@ -1,20 +1,20 @@
 calendar_events: []
 date: '2026-03-30'
-generated_at: '2026-03-30T09:44:45.608787'
+generated_at: '2026-03-30T19:43:58.636164'
 holdings_announcements: {}
 market_data:
   commodities:
     copper:
-      change_pct: -0.56
-      close: 5.4635
+      change_pct: 0.37
+      close: 5.515
       name: COMEX铜
     crude_oil:
-      change_pct: 3.16
-      close: 102.8
+      change_pct: 1.71
+      close: 101.35
       name: 迷你原油
     gold:
-      change_pct: -0.81
-      close: 4487.75
+      change_pct: 1.06
+      close: 4572.25
       name: 迷你黄金
   forex:
     usd_cny:
@@ -22,15 +22,15 @@ market_data:
       close: 6.9223
       name: 美元人民币中间价
     usd_index:
-      change_pct: -0.01
-      close: 100.19
+      change_pct: 0.07
+      close: 100.27
       name: 美元指数
-  generated_at: '2026-03-30T09:43:49.304346'
+  generated_at: '2026-03-30T19:42:48.393167'
   generated_by: openclaw
   global_indices:
     a50:
-      change_pct: -0.16
-      close: 14592.0
+      change_pct: 0.0
+      close: 14571.0
       name: A50期指当月连续
     dow_jones:
       change_pct: -1.73
