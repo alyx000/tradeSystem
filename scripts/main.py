@@ -104,14 +104,21 @@ def setup_providers(config: dict):
 
 
 def setup_pushers(config: dict):
-    """初始化推送渠道"""
-    from pushers import DiscordPusher, WechatPusher, MultiPusher
+    """
+    初始化推送渠道
+    
+    配置职责边界:
+    - .env 文件：仅用于存储敏感 token 和 Webhook URL（DISCORD_WEBHOOK_*, WECHAT_WEBHOOK）
+    - config.yaml：用于存储非敏感配置（频道映射、开关状态等）
+    """
+    from pushers import DiscordPusher, WechatPusher, QQBotPusher, MultiPusher
 
     multi = MultiPusher()
 
     push_config = config.get("push", {})
 
     # Discord
+    # Webhook URL 从 .env 加载，频道映射从 config.yaml 加载
     dc_config = push_config.get("discord", {})
     if dc_config.get("enabled"):
         dc = DiscordPusher({
@@ -123,7 +130,18 @@ def setup_pushers(config: dict):
         dc.initialize()
         multi.register(dc)
 
+    # QQ Bot
+    # 配置全部来自 config.yaml（无敏感信息）
+    qq_config = push_config.get("qq", {})
+    if qq_config.get("enabled"):
+        qq = QQBotPusher({
+            "channels": qq_config.get("channels", {}),
+        })
+        qq.initialize()
+        multi.register(qq)
+
     # 企业微信
+    # Webhook URL 从 .env 加载
     wx_config = push_config.get("wechat", {})
     if wx_config.get("enabled"):
         wx = WechatPusher({

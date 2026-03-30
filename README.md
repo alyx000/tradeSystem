@@ -116,6 +116,86 @@ cp templates/trade-log.yaml daily/$(date +%Y-%m-%d)/trades.yaml
 
 **一次性**：若需板块节奏分析有足够历史，可在 VPS 上按需执行 `python3 scripts/backfill_sectors.py`（参数见脚本说明）。
 
+---
+
+## 📢 推送渠道配置
+
+系统支持多渠道并行推送：Discord、QQ Bot、企业微信。
+
+### 1. Discord Webhook
+
+**获取 Webhook URL**：
+1. Discord 频道设置 → 集成 → Webhooks → 新建 Webhook
+2. 复制 Webhook URL
+
+**配置**：
+```bash
+# scripts/.env
+DISCORD_WEBHOOK_PRE=https://discord.com/api/webhooks/xxx
+DISCORD_WEBHOOK_POST=https://discord.com/api/webhooks/xxx
+DISCORD_WEBHOOK_ALERT=https://discord.com/api/webhooks/xxx
+```
+
+```yaml
+# scripts/config.yaml
+push:
+  discord:
+    enabled: true
+    channels:
+      pre_market: "盘前简报"
+      post_market: "盘后报告"
+      alerts: "交易告警"
+```
+
+### 2. QQ Bot（通过 OpenClaw）
+
+**配置**：
+```yaml
+# scripts/config.yaml
+push:
+  qq:
+    enabled: true
+    channels:
+      pre_market: "user:openid_xxx"    # 私聊
+      post_market: "group:group_xxx"   # 群聊
+      alerts: "user:openid_xxx"
+```
+
+> **注意**：QQ Bot 通过 OpenClaw `message` 工具推送，无需配置 API Key。目标格式：`user:openid`（私聊）或 `group:group_id`（群聊）。
+
+### 3. 企业微信机器人
+
+**获取 Webhook URL**：
+1. 企业微信 → 工作台 → 机器人 → 添加
+2. 复制 Webhook 地址
+
+**配置**：
+```bash
+# scripts/.env
+WECHAT_WEBHOOK=https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxx
+```
+
+```yaml
+# scripts/config.yaml
+push:
+  wechat:
+    enabled: true
+```
+
+### 多渠道并行
+
+可同时启用多个渠道，系统会自动向所有启用的渠道推送：
+
+```yaml
+push:
+  discord:
+    enabled: true
+  qq:
+    enabled: true
+  wechat:
+    enabled: false
+```
+
 ## 核心概念速查
 
 | 概念 | 说明 |
