@@ -206,43 +206,77 @@ class MarketCollector:
 
         # 1. 指数数据
         indices = {}
-        for name in ["shanghai", "shenzhen", "chinext", "star50"]:
-            r = self.registry.call("get_index_daily", name, date)
+        index_list = [
+            ("shanghai", "shanghai"),
+            ("shenzhen", "shenzhen"),
+            ("chinext", "chinext"),
+            ("star50", "star50"),
+            ("csi300", "000300.SH"),
+            ("csi1000", "000852.SH"),
+        ]
+        for key, code in index_list:
+            r = self.registry.call("get_index_daily", code, date)
             if r.success:
-                indices[name] = r.data
-                indices[name]["_source"] = r.source
+                indices[key] = r.data
+                indices[key]["_source"] = r.source
             else:
-                logger.warning(f"指数 {name} 获取失败: {r.error}")
-                indices[name] = {"error": r.error}
+                logger.warning(f"指数 {key} 获取失败: {r.error}")
+                indices[key] = {"error": r.error}
         result["indices"] = indices
 
-        # 2. 成交额
+        # 2. 成交额 + 历史对比
         vol = self.registry.call("get_market_volume", date)
         if vol.success:
-            result["total_volume"] = vol.data
-            result["total_volume"]["_source"] = vol.source
+            vol_data = vol.data
+            vol_data["_source"] = vol.source
+            self._enrich_volume_comparison(vol_data, date)
+            result["total_volume"] = vol_data
         else:
             result["total_volume"] = {"error": vol.error}
 
-        # 3. 涨停数据
+        # 3. 涨停数据 + 封板率/炸板率 + 按涨幅分类
         limit_up = self.registry.call("get_limit_up_list", date)
         if limit_up.success:
             data = limit_up.data
             stocks = data.get("stocks", [])
-            # 计算连板梯队
             board_ladder = {}
             first_board_count = 0
+            first_board_10cm = 0
+            first_board_20cm = 0
+            first_board_30cm = 0
             for s in stocks:
                 lt = s.get("limit_times", 1)
                 board_ladder.setdefault(lt, []).append(s)
                 if lt == 1:
                     first_board_count += 1
+                    pct = abs(s.get("pct_chg", s.get("change_pct", 0)))
+                    if pct > 25:
+                        first_board_30cm += 1
+                    elif pct > 15:
+                        first_board_20cm += 1
+                    else:
+                        first_board_10cm += 1
             data["first_board_count"] = first_board_count
+            data["first_board_10cm"] = first_board_10cm
+            data["first_board_20cm"] = first_board_20cm
+            data["first_board_30cm"] = first_board_30cm
             data["consecutive_board_count"] = len(stocks) - first_board_count
             data["highest_board"] = max((s.get("limit_times", 1) for s in stocks), default=0)
             data["board_ladder"] = {
                 k: [s["name"] for s in v] for k, v in sorted(board_ladder.items(), reverse=True)
             }
+
+            # 封板率/炸板率：涨停数 vs（涨停数 + 炸板数）
+            broken_count = self._get_broken_board_count(date)
+            total_touched = len(stocks) + broken_count
+            data["broken_count"] = broken_count
+            if total_touched > 0:
+                data["seal_rate_pct"] = round(len(stocks) / total_touched * 100, 1)
+                data["broken_rate_pct"] = round(broken_count / total_touched * 100, 1)
+            else:
+                data["seal_rate_pct"] = 0
+                data["broken_rate_pct"] = 0
+
             data["_source"] = limit_up.source
             result["limit_up"] = data
         else:
@@ -259,15 +293,30 @@ class MarketCollector:
         else:
             result["limit_down"] = {"error": limit_down.error}
 
-        # 5. 板块排名
+        # 5. 板块排名（涨幅前30 + 跌幅前5）
         for stype in ["industry", "concept"]:
             r = self.registry.call("get_sector_rankings", date, stype)
             if r.success:
-                result[f"sector_{stype}"] = {"data": r.data, "_source": r.source}
+                raw = r.data
+                if isinstance(raw, dict) and "top" in raw:
+                    result[f"sector_{stype}"] = {
+                        "data": raw["top"],
+                        "bottom": raw.get("bottom", []),
+                        "_source": r.source,
+                    }
+                else:
+                    result[f"sector_{stype}"] = {"data": raw, "_source": r.source}
             else:
                 result[f"sector_{stype}"] = {"error": r.error}
 
-        # 6. 北向资金
+        # 6. 板块资金净流入
+        fund_flow = self.registry.call("get_sector_fund_flow", date)
+        if fund_flow.success and fund_flow.data:
+            result["sector_fund_flow"] = {"data": fund_flow.data, "_source": fund_flow.source}
+        else:
+            logger.warning(f"板块资金流向获取失败: {fund_flow.error}")
+
+        # 7. 北向资金
         nb = self.registry.call("get_northbound", date)
         if nb.success:
             result["northbound"] = nb.data
@@ -275,14 +324,40 @@ class MarketCollector:
         else:
             result["northbound"] = {"error": nb.error}
 
-        # 7. 龙虎榜
+        # 7b. 北向十大活跃股
+        nb_top = self.registry.call("get_northbound_top_stocks", date)
+        if nb_top.success and nb_top.data:
+            nb_block = result.get("northbound", {})
+            if "error" not in nb_block:
+                nb_block["top_active_stocks"] = nb_top.data.get("top_active", [])
+
+        # 8. 龙虎榜
         dt = self.registry.call("get_dragon_tiger", date)
         if dt.success:
             result["dragon_tiger"] = {"data": dt.data, "_source": dt.source}
         else:
             result["dragon_tiger"] = {"error": dt.error}
 
-        # 8. 板块节奏分析
+        # 9. 市场宽度（涨跌家数）
+        breadth = self.registry.call("get_market_breadth", date)
+        if breadth.success and breadth.data:
+            result["breadth"] = breadth.data
+            result["breadth"]["_source"] = breadth.source
+        else:
+            logger.warning(f"市场宽度获取失败: {breadth.error}")
+
+        # 10. 融资融券
+        margin = self.registry.call("get_margin_data", date)
+        if margin.success and margin.data:
+            result["margin_data"] = margin.data
+            result["margin_data"]["_source"] = margin.source
+        else:
+            logger.debug(f"融资融券数据获取失败（T+1 延迟正常）: {margin.error}")
+
+        # 11. 指数均线
+        self._compute_index_ma(result, date)
+
+        # 12. 板块节奏分析
         try:
             extra_names = self._rhythm_analyzer.load_main_theme_names()
             for stype in ["industry", "concept"]:
@@ -297,8 +372,141 @@ class MarketCollector:
         except Exception as e:
             logger.warning(f"板块节奏分析失败，已跳过: {e}")
 
+        # 13. 风格化因子分析
+        try:
+            from analyzers import StyleAnalyzer
+            style_analyzer = StyleAnalyzer()
+            result["style_factors"] = style_analyzer.analyze(result, date)
+            logger.info("风格化因子分析完成")
+        except Exception as e:
+            logger.warning(f"风格化因子分析失败: {e}")
+
         logger.info(f"盘后数据采集完成: {date}")
         return result
+
+    # ------------------------------------------------------------------
+    # 辅助方法
+    # ------------------------------------------------------------------
+
+    def _get_broken_board_count(self, date: str) -> int:
+        """获取炸板数量（曾触及涨停但收盘未封住的股票数）"""
+        try:
+            import akshare as ak
+            df = ak.stock_zt_pool_zbgc_em(date=date.replace("-", ""))
+            return len(df) if df is not None and not df.empty else 0
+        except Exception as e:
+            logger.debug(f"炸板数据获取失败: {e}")
+            return 0
+
+    def _enrich_volume_comparison(self, vol_data: dict, date: str) -> None:
+        """从历史 post-market.yaml 读取近20日成交额，计算对比指标"""
+        daily_dir = BASE_DIR / "daily"
+        history_volumes: list[float] = []
+
+        try:
+            dirs = sorted(
+                [d for d in daily_dir.iterdir()
+                 if d.is_dir() and d.name != "example" and d.name < date],
+                key=lambda d: d.name,
+                reverse=True,
+            )
+        except FileNotFoundError:
+            return
+
+        for d in dirs[:20]:
+            pm_file = d / "post-market.yaml"
+            if not pm_file.exists():
+                continue
+            try:
+                with open(pm_file, encoding="utf-8") as f:
+                    data = yaml.safe_load(f) or {}
+                raw = data.get("raw_data", data)
+                tv = raw.get("total_volume", {})
+                tb = tv.get("total_billion", 0)
+                if tb and tb > 0:
+                    history_volumes.append(float(tb))
+            except Exception:
+                continue
+
+        today_vol = vol_data.get("total_billion", 0)
+        if not today_vol or not history_volumes:
+            return
+
+        if history_volumes:
+            yesterday_vol = history_volumes[0]
+            if yesterday_vol > 0:
+                vol_data["vs_yesterday_pct"] = round(
+                    (today_vol - yesterday_vol) / yesterday_vol * 100, 1
+                )
+
+        if len(history_volumes) >= 5:
+            ma5 = sum(history_volumes[:5]) / 5
+            vol_data["ma5_billion"] = round(ma5, 2)
+            vol_data["vs_ma5"] = "高于" if today_vol > ma5 else ("低于" if today_vol < ma5 else "持平")
+
+        if len(history_volumes) >= 20:
+            ma20 = sum(history_volumes[:20]) / 20
+            vol_data["ma20_billion"] = round(ma20, 2)
+            vol_data["vs_ma20"] = "高于" if today_vol > ma20 else ("低于" if today_vol < ma20 else "持平")
+
+    def _compute_index_ma(self, result: dict, date: str) -> None:
+        """计算上证指数均线（MA5/10/20/60）和5周均线"""
+        daily_dir = BASE_DIR / "daily"
+        closes: list[float] = []
+
+        # 今日收盘价
+        sh_data = result.get("indices", {}).get("shanghai", {})
+        today_close = sh_data.get("close", 0)
+        if not today_close:
+            return
+        today_close = float(today_close)
+        closes.append(today_close)
+
+        try:
+            dirs = sorted(
+                [d for d in daily_dir.iterdir()
+                 if d.is_dir() and d.name != "example" and d.name < date],
+                key=lambda d: d.name,
+                reverse=True,
+            )
+        except FileNotFoundError:
+            return
+
+        for d in dirs[:70]:
+            pm_file = d / "post-market.yaml"
+            if not pm_file.exists():
+                continue
+            try:
+                with open(pm_file, encoding="utf-8") as f:
+                    data = yaml.safe_load(f) or {}
+                raw = data.get("raw_data", data)
+                sh = raw.get("indices", {}).get("shanghai", {})
+                c = sh.get("close", 0)
+                if c and c > 0:
+                    closes.append(float(c))
+            except Exception:
+                continue
+
+        if len(closes) < 5:
+            return
+
+        ma_data = {}
+        for period in [5, 10, 20, 60]:
+            if len(closes) >= period:
+                ma_val = round(sum(closes[:period]) / period, 2)
+                ma_data[f"ma{period}"] = ma_val
+                ma_data[f"above_ma{period}"] = today_close > ma_val
+
+        # 5周均线近似：取最近25个交易日，每5天取一个周收盘
+        if len(closes) >= 25:
+            weekly_closes = [closes[i] for i in [4, 9, 14, 19, 24] if i < len(closes)]
+            if len(weekly_closes) == 5:
+                ma5w = round(sum(weekly_closes) / 5, 2)
+                ma_data["ma5w"] = ma5w
+                ma_data["above_ma5w"] = today_close > ma5w
+
+        if ma_data:
+            result["moving_averages"] = {"shanghai": ma_data}
 
     def collect_pre_market(
         self,

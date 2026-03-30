@@ -1,0 +1,2049 @@
+date: '2026-03-30'
+generated_at: '2026-03-31T02:35:58.991782'
+holdings_data: []
+raw_data:
+  breadth:
+    _source: tushare:daily
+    advance: 2868
+    advance_ratio: 1.16
+    decline: 2464
+    flat: 144
+    total: 5476
+  date: '2026-03-30'
+  dragon_tiger:
+    _source: tushare:top_list
+    data:
+    - buy_amount: 1054403255.96
+      code: 000592.SZ
+      name: 平潭发展
+      net_amount: 736679111.97
+      reason: 日涨幅偏离值达到7%的前5只证券
+      sell_amount: 317724143.99
+    - buy_amount: 112480726.62
+      code: 000692.SZ
+      name: 惠天热电
+      net_amount: 39153580.62
+      reason: 日振幅值达到15%的前5只证券
+      sell_amount: 73327146.0
+    - buy_amount: 149124695.46
+      code: 000720.SZ
+      name: 新能泰山
+      net_amount: -177077533.09
+      reason: 日振幅值达到15%的前5只证券
+      sell_amount: 326202228.55
+    - buy_amount: 122013130.3
+      code: 000767.SZ
+      name: 晋控电力
+      net_amount: -50874780.3
+      reason: 日跌幅偏离值达到7%的前5只证券
+      sell_amount: 172887910.6
+    - buy_amount: 49075505.0
+      code: 000862.SZ
+      name: 银星能源
+      net_amount: -45725227.54
+      reason: 日跌幅偏离值达到7%的前5只证券
+      sell_amount: 94800732.54
+    - buy_amount: 67177937.0
+      code: 000908.SZ
+      name: ST景峰
+      net_amount: 15451311.52
+      reason: 连续三个交易日内，涨幅偏离值累计达到12%的ST证券、*ST证券和未完成股改证券
+      sell_amount: 51726625.48
+    - buy_amount: 58479225.0
+      code: 000966.SZ
+      name: 长源电力
+      net_amount: -111694411.7
+      reason: 日跌幅偏离值达到7%的前5只证券
+      sell_amount: 170173636.7
+    - buy_amount: 32732712.87
+      code: 001367.SZ
+      name: 海森药业
+      net_amount: -32683125.07
+      reason: 日换手率达到20%的前5只证券
+      sell_amount: 65415837.94
+    - buy_amount: 143776956.18
+      code: 001896.SZ
+      name: 豫能控股
+      net_amount: -3573882.01
+      reason: 日跌幅偏离值达到7%的前5只证券
+      sell_amount: 147350838.19
+    - buy_amount: 1809223665.24
+      code: 002149.SZ
+      name: 西部材料
+      net_amount: 356445605.24
+      reason: 连续三个交易日内，涨幅偏离值累计达到20%的证券
+      sell_amount: 1452778060.0
+    - buy_amount: 558791044.86
+      code: 002222.SZ
+      name: 福晶科技
+      net_amount: 96188405.94
+      reason: 日涨幅偏离值达到7%的前5只证券
+      sell_amount: 462602638.92
+    - buy_amount: 165296150.76
+      code: 002263.SZ
+      name: 大东南
+      net_amount: -35909465.3
+      reason: 日换手率达到20%的前5只证券
+      sell_amount: 201205616.06
+    - buy_amount: 570649352.15
+      code: 002309.SZ
+      name: 中利集团
+      net_amount: 217362829.15
+      reason: 日涨幅偏离值达到7%的前5只证券
+      sell_amount: 353286523.0
+    - buy_amount: 503238691.4
+      code: 002361.SZ
+      name: 神剑股份
+      net_amount: 218220912.27
+      reason: 日涨幅偏离值达到7%的前5只证券
+      sell_amount: 285017779.13
+    - buy_amount: 741899260.52
+      code: 002432.SZ
+      name: 九安医疗
+      net_amount: 80065287.93
+      reason: 日涨幅偏离值达到7%的前5只证券
+      sell_amount: 661833972.59
+    - buy_amount: 497449570.9
+      code: 002455.SZ
+      name: 百川股份
+      net_amount: 8817277.47
+      reason: 日换手率达到20%的前5只证券
+      sell_amount: 488632293.43
+    - buy_amount: 33145832.0
+      code: 002569.SZ
+      name: '*ST步森'
+      net_amount: 6604485.0
+      reason: 连续三个交易日内，涨幅偏离值累计达到12%的ST证券、*ST证券和未完成股改证券
+      sell_amount: 26541347.0
+    - buy_amount: 20952378.68
+      code: 002808.SZ
+      name: '*ST恒久'
+      net_amount: -967871.54
+      reason: 连续三个交易日内，涨幅偏离值累计达到12%的ST证券、*ST证券和未完成股改证券
+      sell_amount: 21920250.22
+    - buy_amount: 172787399.83
+      code: 002902.SZ
+      name: 铭普光磁
+      net_amount: -116981907.83
+      reason: 日换手率达到20%的前5只证券
+      sell_amount: 289769307.66
+    - buy_amount: 127597456.0
+      code: 003042.SZ
+      name: 中农联合
+      net_amount: 33424676.0
+      reason: 连续三个交易日内，涨幅偏离值累计达到20%的证券
+      sell_amount: 94172780.0
+    - buy_amount: 811606650.0
+      code: 113601.SH
+      name: 塞力转债
+      net_amount: 1177140.0
+      reason: 非上市首日,当日收盘价涨幅达15%的前五只可转债
+      sell_amount: 810429510.0
+    - buy_amount: 93923810.0
+      code: 127113.SZ
+      name: 长高转债
+      net_amount: 45742750.0
+      reason: 上市首日可转债
+      sell_amount: 48181060.0
+    - buy_amount: 339133138.46
+      code: 300385.SZ
+      name: 雪浪环境
+      net_amount: 198801602.77
+      reason: 日涨幅达到15%的前5只证券
+      sell_amount: 140331535.69
+    - buy_amount: 3785272.0
+      code: 300391.SZ
+      name: 长药退
+      net_amount: 1292374.0
+      reason: 退市整理期
+      sell_amount: 2492898.0
+    - buy_amount: 347703401.62
+      code: 300751.SZ
+      name: 迈为股份
+      net_amount: -25029978.79
+      reason: 日跌幅达到15%的前5只证券
+      sell_amount: 372733380.41
+    - buy_amount: 312719385.75
+      code: 300900.SZ
+      name: 广联航空
+      net_amount: 112314495.25
+      reason: 日涨幅达到15%的前5只证券
+      sell_amount: 200404890.5
+    - buy_amount: 122807229.88
+      code: 301008.SZ
+      name: 宏昌科技
+      net_amount: 96275265.88
+      reason: 日涨幅达到15%的前5只证券
+      sell_amount: 26531964.0
+    - buy_amount: 364949914.06
+      code: 301292.SZ
+      name: 海科新源
+      net_amount: -71087848.29
+      reason: 日换手率达到30%的前5只证券
+      sell_amount: 436037762.35
+    - buy_amount: 73600605.3
+      code: 301667.SZ
+      name: 纳百川
+      net_amount: -61507748.05
+      reason: 日换手率达到30%的前5只证券
+      sell_amount: 135108353.35
+    - buy_amount: 152421657.5
+      code: 600135.SH
+      name: 乐凯胶片
+      net_amount: 90439117.12
+      reason: 有价格涨跌幅限制的日收盘价格涨幅偏离值达到7%的前五只证券
+      sell_amount: 61982540.38
+    - buy_amount: 153793733.97
+      code: 600310.SH
+      name: 广西能源
+      net_amount: -237923700.39
+      reason: 有价格涨跌幅限制的日换手率达到20%的前五只证券
+      sell_amount: 391717434.36
+    - buy_amount: 41636693.87
+      code: 600359.SH
+      name: 新农开发
+      net_amount: 17937700.39
+      reason: 有价格涨跌幅限制的日收盘价格涨幅偏离值达到7%的前五只证券
+      sell_amount: 23698993.48
+    - buy_amount: 48538942.49
+      code: 600396.SH
+      name: 华电辽能
+      net_amount: -2042061.51
+      reason: 有价格涨跌幅限制的日收盘价格跌幅偏离值达到7%的前五只证券
+      sell_amount: 50581004.0
+    - buy_amount: 83311033.5
+      code: 600488.SH
+      name: 津药药业
+      net_amount: 13493057.84
+      reason: 非ST、*ST和S证券连续三个交易日内收盘价格涨幅偏离值累计达到20%的证券
+      sell_amount: 69817975.66
+    - buy_amount: 115360614.02
+      code: 600502.SH
+      name: 安徽建工
+      net_amount: 90266536.82
+      reason: 有价格涨跌幅限制的日收盘价格涨幅偏离值达到7%的前五只证券
+      sell_amount: 25094077.2
+    - buy_amount: 160343300.88
+      code: 600513.SH
+      name: 联环药业
+      net_amount: -21356330.72
+      reason: 非ST、*ST和S证券连续三个交易日内收盘价格涨幅偏离值累计达到20%的证券
+      sell_amount: 181699631.6
+    - buy_amount: 463997317.75
+      code: 600666.SH
+      name: 奥瑞德
+      net_amount: -17048811.49
+      reason: 有价格涨跌幅限制的日价格振幅达到15%的前五只证券
+      sell_amount: 481046129.24
+    - buy_amount: 73904070.0
+      code: 600726.SH
+      name: 华电能源
+      net_amount: -36091210.89
+      reason: 有价格涨跌幅限制的日收盘价格跌幅偏离值达到7%的前五只证券
+      sell_amount: 109995280.89
+    - buy_amount: 44764657.96
+      code: 600758.SH
+      name: 辽宁能源
+      net_amount: 4020667.54
+      reason: 有价格涨跌幅限制的日收盘价格跌幅偏离值达到7%的前五只证券
+      sell_amount: 40743990.42
+    - buy_amount: 81700731.88
+      code: 600844.SH
+      name: 金煤科技
+      net_amount: -25924845.12
+      reason: 有价格涨跌幅限制的日换手率达到20%的前五只证券
+      sell_amount: 107625577.0
+    - buy_amount: 98883591.0
+      code: 600955.SH
+      name: 维远股份
+      net_amount: -29016345.84
+      reason: 有价格涨跌幅限制的日收盘价格涨幅偏离值达到7%的前五只证券
+      sell_amount: 127899936.84
+    - buy_amount: 126403912.2
+      code: 600955.SH
+      name: 维远股份
+      net_amount: -18714301.64
+      reason: 非ST、*ST和S证券连续三个交易日内收盘价格涨幅偏离值累计达到20%的证券
+      sell_amount: 145118213.84
+    - buy_amount: 53583000.0
+      code: 600982.SH
+      name: 宁波能源
+      net_amount: -142382162.46
+      reason: 有价格涨跌幅限制的日收盘价格跌幅偏离值达到7%的前五只证券
+      sell_amount: 195965162.46
+    - buy_amount: 112666190.07
+      code: 600996.SH
+      name: 贵广网络
+      net_amount: 59728897.14
+      reason: 非ST、*ST和S证券连续三个交易日内收盘价格涨幅偏离值累计达到20%的证券
+      sell_amount: 52937292.93
+    - buy_amount: 54166281.11
+      code: 601330.SH
+      name: 绿色动力
+      net_amount: -15666415.89
+      reason: 有价格涨跌幅限制的日收盘价格跌幅偏离值达到7%的前五只证券
+      sell_amount: 69832697.0
+    - buy_amount: 181505858.0
+      code: 601388.SH
+      name: 怡球资源
+      net_amount: 103315268.0
+      reason: 有价格涨跌幅限制的日收盘价格涨幅偏离值达到7%的前五只证券
+      sell_amount: 78190590.0
+    - buy_amount: 46249640.0
+      code: 603248.SH
+      name: 锡华科技
+      net_amount: -53491159.81
+      reason: 有价格涨跌幅限制的日换手率达到20%的前五只证券
+      sell_amount: 99740799.81
+    - buy_amount: 97149227.21
+      code: 603538.SH
+      name: 美诺华
+      net_amount: -245953.77
+      reason: 非ST、*ST和S证券连续三个交易日内收盘价格涨幅偏离值累计达到20%的证券
+      sell_amount: 97395180.98
+    - buy_amount: 58507687.44
+      code: 603585.SH
+      name: 苏利股份
+      net_amount: 24507161.84
+      reason: 非ST、*ST和S证券连续三个交易日内收盘价格涨幅偏离值累计达到20%的证券
+      sell_amount: 34000525.6
+    - buy_amount: 475748828.02
+      code: 603601.SH
+      name: 再升科技
+      net_amount: 21598692.36
+      reason: 有价格涨跌幅限制的日换手率达到20%的前五只证券
+      sell_amount: 454150135.66
+    - buy_amount: 575020388.84
+      code: 603618.SH
+      name: 杭电股份
+      net_amount: 66936558.14
+      reason: 非ST、*ST和S证券连续三个交易日内收盘价格涨幅偏离值累计达到20%的证券
+      sell_amount: 508083830.7
+    - buy_amount: 179501203.48
+      code: 603687.SH
+      name: 大胜达
+      net_amount: 55918997.28
+      reason: 有价格涨跌幅限制的日价格振幅达到15%的前五只证券
+      sell_amount: 123582206.2
+    - buy_amount: 93068654.07
+      code: 605299.SH
+      name: 舒华体育
+      net_amount: -17538822.25
+      reason: 有价格涨跌幅限制的日价格振幅达到15%的前五只证券
+      sell_amount: 110607476.32
+    - buy_amount: 42008196.83
+      code: 688156.SH
+      name: 路德科技
+      net_amount: -12642854.52
+      reason: 有价格涨跌幅限制的日收盘价格涨幅达到15%的前五只证券
+      sell_amount: 54651051.35
+    - buy_amount: 369636568.54
+      code: 688308.SH
+      name: 欧科亿
+      net_amount: -201284661.97
+      reason: 有价格涨跌幅限制的日收盘价格涨幅达到15%的前五只证券
+      sell_amount: 570921230.51
+    - buy_amount: 73609202.73
+      code: 688485.SH
+      name: 九州一轨
+      net_amount: -13279208.24
+      reason: 有价格涨跌幅限制的日价格振幅达到30%的前五只证券
+      sell_amount: 86888410.97
+    - buy_amount: 64168341.88
+      code: 688677.SH
+      name: 海泰新光
+      net_amount: 12457651.72
+      reason: 有价格涨跌幅限制的日收盘价格涨幅达到15%的前五只证券
+      sell_amount: 51710690.16
+    - buy_amount: 81195453.0
+      code: 688693.SH
+      name: 锴威特
+      net_amount: 44272461.98
+      reason: 有价格涨跌幅限制的日收盘价格涨幅达到15%的前五只证券
+      sell_amount: 36922991.02
+    - buy_amount: 227370.8
+      code: 900921.SH
+      name: 金煤B股
+      net_amount: 93.06
+      reason: 有价格涨跌幅限制的日收盘价格跌幅偏离值达到7%的前五只证券
+      sell_amount: 227277.74
+    - buy_amount: 19580348.79
+      code: 920069.BJ
+      name: 普昂医疗
+      net_amount: -10067886.35
+      reason: 当日换手率达到20%的前5只股票
+      sell_amount: 29648235.14
+    - buy_amount: 40228999.55
+      code: 920078.BJ
+      name: 族兴新材
+      net_amount: -6198708.76
+      reason: 当日换手率达到20%的前5只股票
+      sell_amount: 46427708.31
+    - buy_amount: 47675856.77
+      code: 920088.BJ
+      name: 科力股份
+      net_amount: 6041494.36
+      reason: 当日换手率达到20%的前5只股票
+      sell_amount: 41634362.41
+  generated_at: '2026-03-31T02:35:50.385233'
+  generated_by: openclaw
+  indices:
+    chinext:
+      _source: tushare:index_daily
+      amount_billion: 4539.82
+      change_pct: -0.6834
+      close: 3273.3551
+      code: 399006.SZ
+      high: 3281.3926
+      low: 3224.599
+      open: 3254.4306
+      volume: 172193857.0
+    csi1000:
+      _source: tushare:index_daily
+      amount_billion: 4119.74
+      change_pct: 0.2791
+      close: 7767.9301
+      code: 000852.SH
+      high: 7774.8508
+      low: 7618.9605
+      open: 7664.6359
+      volume: 261174129.0
+    csi300:
+      _source: tushare:index_daily
+      amount_billion: 4446.3
+      change_pct: -0.2359
+      close: 4491.95
+      code: 000300.SH
+      high: 4496.4109
+      low: 4447.1373
+      open: 4461.7367
+      volume: 209293092.0
+    shanghai:
+      _source: tushare:index_daily
+      amount_billion: 8398.22
+      change_pct: 0.2443
+      close: 3923.2869
+      code: 000001.SH
+      high: 3924.2893
+      low: 3872.7756
+      open: 3884.2769
+      volume: 595589479.0
+    shenzhen:
+      _source: tushare:index_daily
+      amount_billion: 10760.59
+      change_pct: -0.2484
+      close: 13726.1905
+      code: 399001.SZ
+      high: 13748.2073
+      low: 13536.5611
+      open: 13618.7935
+      volume: 653068732.0
+    star50:
+      _source: tushare:index_daily
+      amount_billion: 534.33
+      change_pct: -0.8438
+      close: 1289.7801
+      code: 000688.SH
+      high: 1294.5425
+      low: 1269.319
+      open: 1278.9926
+      volume: 9357204.0
+  limit_down:
+    _source: tushare:limit_list_d
+    count: 10
+    stocks:
+    - close: 2.88
+      code: 000639.SZ
+      name: 西王食品
+      pct_chg: -10.0
+    - close: 4.96
+      code: 000720.SZ
+      name: 新能泰山
+      pct_chg: -9.98
+    - close: 4.58
+      code: 000767.SZ
+      name: 晋控电力
+      pct_chg: -10.02
+    - close: 7.14
+      code: 000862.SZ
+      name: 银星能源
+      pct_chg: -9.96
+    - close: 4.96
+      code: 000966.SZ
+      name: 长源电力
+      pct_chg: -9.98
+    - close: 14.89
+      code: 001896.SZ
+      name: 豫能控股
+      pct_chg: -9.98
+    - close: 8.09
+      code: 600396.SH
+      name: 华电辽能
+      pct_chg: -10.01
+    - close: 6.01
+      code: 600726.SH
+      name: 华电能源
+      pct_chg: -10.03
+    - close: 4.98
+      code: 600758.SH
+      name: 辽宁能源
+      pct_chg: -9.95
+    - close: 6.62
+      code: 600982.SH
+      name: 宁波能源
+      pct_chg: -9.93
+  limit_up:
+    _source: tushare:limit_list_d
+    board_ladder:
+      1:
+      - 神州高铁
+      - 京基智农
+      - 平潭发展
+      - 漳州发展
+      - 江顺科技
+      - 常铝股份
+      - 福晶科技
+      - 中利集团
+      - 亚太药业
+      - 利源股份
+      - 天山铝业
+      - 闽发铝业
+      - 棒杰股份
+      - 东诚药业
+      - 亿利达
+      - 山东赫达
+      - 科达利
+      - 华盛昌
+      - 泰坦股份
+      - 雪浪环境
+      - 广联航空
+      - 宏昌科技
+      - 金健米业
+      - 乐凯胶片
+      - 南山铝业
+      - 航天动力
+      - 长江通信
+      - 新农开发
+      - 亨通光电
+      - 安徽建工
+      - 云赛智联
+      - 宁波富达
+      - 中铝国际
+      - 怡球资源
+      - 长飞光纤
+      - 新宏泰
+      - 中衡设计
+      - 金海通
+      - 合富中国
+      - 浙江仙通
+      - 宏和科技
+      - 联翔股份
+      - 华达科技
+      - 再升科技
+      - 塞力医疗
+      - 国晟科技
+      - 长城科技
+      - 起帆电缆
+      - 海泰新光
+      - 锴威特
+      2:
+      - 法尔胜
+      - 双鹭药业
+      - 九安医疗
+      - 中农联合
+      - 津药药业
+      - 联环药业
+      - 狮头股份
+      - 贵广网络
+      - 苏利股份
+      - 杭电股份
+      3:
+      - 神剑股份
+      5:
+      - 美诺华
+    broken_count: 17
+    broken_rate_pct: 21.5
+    consecutive_board_count: 12
+    count: 62
+    first_board_10cm: 45
+    first_board_20cm: 5
+    first_board_30cm: 0
+    first_board_count: 50
+    highest_board: 5
+    seal_rate_pct: 78.5
+    stocks:
+    - amount_billion: 3933.6544
+      close: 2.97
+      code: 000008.SZ
+      fd_amount: 31340034.0
+      first_time: '130012'
+      last_time: '132045'
+      limit_times: 1
+      name: 神州高铁
+      pct_chg: 10.0
+      turnover_rate: 0.0
+    - amount_billion: 8728.39472
+      close: 22.61
+      code: 000048.SZ
+      fd_amount: 17224750.0
+      first_time: '94036'
+      last_time: '141909'
+      limit_times: 1
+      name: 京基智农
+      pct_chg: 10.02
+      turnover_rate: 0.0
+    - amount_billion: 49001.84064
+      close: 11.62
+      code: 000592.SZ
+      fd_amount: 150207219.0
+      first_time: '100533'
+      last_time: '104957'
+      limit_times: 1
+      name: 平潭发展
+      pct_chg: 10.04
+      turnover_rate: 0.0
+    - amount_billion: 5751.05024
+      close: 7.21
+      code: 000753.SZ
+      fd_amount: 97163142.0
+      first_time: '134227'
+      last_time: '134227'
+      limit_times: 1
+      name: 漳州发展
+      pct_chg: 10.08
+      turnover_rate: 0.0
+    - amount_billion: 5703.19696
+      close: 14.83
+      code: 000890.SZ
+      fd_amount: 149746785.0
+      first_time: '93427'
+      last_time: '93445'
+      limit_times: 2
+      name: 法尔胜
+      pct_chg: 10.01
+      turnover_rate: 0.0
+    - amount_billion: 4015.78352
+      close: 164.1
+      code: 001400.SZ
+      fd_amount: 74778729.0
+      first_time: '105306'
+      last_time: '105306'
+      limit_times: 1
+      name: 江顺科技
+      pct_chg: 10.0
+      turnover_rate: 0.0
+    - amount_billion: 11678.37344
+      close: 7.27
+      code: 002038.SZ
+      fd_amount: 15530901.0
+      first_time: '93024'
+      last_time: '145542'
+      limit_times: 2
+      name: 双鹭药业
+      pct_chg: 9.98
+      turnover_rate: 0.0
+    - amount_billion: 1096.52319
+      close: 5.49
+      code: 002160.SZ
+      fd_amount: 154079046.0
+      first_time: '92500'
+      last_time: '92500'
+      limit_times: 1
+      name: 常铝股份
+      pct_chg: 10.02
+      turnover_rate: 0.0
+    - amount_billion: 28734.65136
+      close: 71.94
+      code: 002222.SZ
+      fd_amount: 161772413.0
+      first_time: '110624'
+      last_time: '110624'
+      limit_times: 1
+      name: 福晶科技
+      pct_chg: 10.0
+      turnover_rate: 0.0
+    - amount_billion: 39390.74624
+      close: 4.76
+      code: 002309.SZ
+      fd_amount: 93198896.0
+      first_time: '112821'
+      last_time: '134842'
+      limit_times: 1
+      name: 中利集团
+      pct_chg: 9.93
+      turnover_rate: 0.0
+    - amount_billion: 33133.54672
+      close: 15.0
+      code: 002361.SZ
+      fd_amount: 285894210.0
+      first_time: '102927'
+      last_time: '102927'
+      limit_times: 3
+      name: 神剑股份
+      pct_chg: 9.97
+      turnover_rate: 0.0
+    - amount_billion: 5492.2472
+      close: 7.18
+      code: 002370.SZ
+      fd_amount: 80168290.0
+      first_time: '95630'
+      last_time: '102030'
+      limit_times: 1
+      name: 亚太药业
+      pct_chg: 9.95
+      turnover_rate: 0.0
+    - amount_billion: 41057.2416
+      close: 75.5
+      code: 002432.SZ
+      fd_amount: 24476873.0
+      first_time: '132324'
+      last_time: '142215'
+      limit_times: 2
+      name: 九安医疗
+      pct_chg: 9.99
+      turnover_rate: 0.0
+    - amount_billion: 2705.23008
+      close: 2.04
+      code: 002501.SZ
+      fd_amount: 52547803.0
+      first_time: '93106'
+      last_time: '94533'
+      limit_times: 1
+      name: 利源股份
+      pct_chg: 10.27
+      turnover_rate: 0.0
+    - amount_billion: 4466.80944
+      close: 17.73
+      code: 002532.SZ
+      fd_amount: 562884752.0
+      first_time: '92500'
+      last_time: '92500'
+      limit_times: 1
+      name: 天山铝业
+      pct_chg: 9.99
+      turnover_rate: 0.0
+    - amount_billion: 817.13616
+      close: 4.26
+      code: 002578.SZ
+      fd_amount: 89080860.0
+      first_time: '92500'
+      last_time: '92500'
+      limit_times: 1
+      name: 闽发铝业
+      pct_chg: 10.08
+      turnover_rate: 0.0
+    - amount_billion: 2578.16348
+      close: 8.13
+      code: 002634.SZ
+      fd_amount: 51502737.0
+      first_time: '131512'
+      last_time: '131512'
+      limit_times: 1
+      name: 棒杰股份
+      pct_chg: 10.01
+      turnover_rate: 0.0
+    - amount_billion: 2076.01208
+      close: 14.48
+      code: 002675.SZ
+      fd_amount: 84629808.0
+      first_time: '92500'
+      last_time: '92500'
+      limit_times: 1
+      name: 东诚药业
+      pct_chg: 10.03
+      turnover_rate: 0.0
+    - amount_billion: 2700.1264
+      close: 7.89
+      code: 002686.SZ
+      fd_amount: 175715034.0
+      first_time: '93712'
+      last_time: '93712'
+      limit_times: 1
+      name: 亿利达
+      pct_chg: 10.04
+      turnover_rate: 0.0
+    - amount_billion: 6057.54944
+      close: 22.9
+      code: 002810.SZ
+      fd_amount: 64493453.0
+      first_time: '92500'
+      last_time: '95424'
+      limit_times: 1
+      name: 山东赫达
+      pct_chg: 9.99
+      turnover_rate: 0.0
+    - amount_billion: 14390.25792
+      close: 177.32
+      code: 002850.SZ
+      fd_amount: 129168222.0
+      first_time: '93245'
+      last_time: '93245'
+      limit_times: 1
+      name: 科达利
+      pct_chg: 10.0
+      turnover_rate: 0.0
+    - amount_billion: 3341.46576
+      close: 43.78
+      code: 002980.SZ
+      fd_amount: 170601904.0
+      first_time: '95930'
+      last_time: '95930'
+      limit_times: 1
+      name: 华盛昌
+      pct_chg: 10.0
+      turnover_rate: 0.0
+    - amount_billion: 4787.77056
+      close: 27.1
+      code: 003036.SZ
+      fd_amount: 32289108.0
+      first_time: '102451'
+      last_time: '111112'
+      limit_times: 1
+      name: 泰坦股份
+      pct_chg: 9.98
+      turnover_rate: 0.0
+    - amount_billion: 2778.00272
+      close: 19.77
+      code: 003042.SZ
+      fd_amount: 120323185.0
+      first_time: '93727'
+      last_time: '93727'
+      limit_times: 2
+      name: 中农联合
+      pct_chg: 10.02
+      turnover_rate: 0.0
+    - amount_billion: 11649.75536
+      close: 19.82
+      code: 300385.SZ
+      fd_amount: 108278721.0
+      first_time: '111157'
+      last_time: '111157'
+      limit_times: 1
+      name: 雪浪环境
+      pct_chg: 19.98
+      turnover_rate: 0.0
+    - amount_billion: 20565.36752
+      close: 38.16
+      code: 300900.SZ
+      fd_amount: 38843292.0
+      first_time: '135336'
+      last_time: '143115'
+      limit_times: 1
+      name: 广联航空
+      pct_chg: 20.0
+      turnover_rate: 0.0
+    - amount_billion: 2558.41592
+      close: 35.24
+      code: 301008.SZ
+      fd_amount: 129762948.0
+      first_time: '92500'
+      last_time: '93124'
+      limit_times: 1
+      name: 宏昌科技
+      pct_chg: 19.99
+      turnover_rate: 0.0
+    - amount_billion: 2853.32544
+      close: 7.51
+      code: 600127.SH
+      fd_amount: 107259577.0
+      first_time: '93432'
+      last_time: '93432'
+      limit_times: 1
+      name: 金健米业
+      pct_chg: 9.96
+      turnover_rate: 0.0
+    - amount_billion: 5648.73296
+      close: 11.06
+      code: 600135.SH
+      fd_amount: 166974047.0
+      first_time: '131928'
+      last_time: '131928'
+      limit_times: 1
+      name: 乐凯胶片
+      pct_chg: 10.05
+      turnover_rate: 0.0
+    - amount_billion: 35751.71536
+      close: 6.49
+      code: 600219.SH
+      fd_amount: 94924330.0
+      first_time: '145434'
+      last_time: '145434'
+      limit_times: 1
+      name: 南山铝业
+      pct_chg: 10.0
+      turnover_rate: 0.0
+    - amount_billion: 20144.4704
+      close: 32.58
+      code: 600343.SH
+      fd_amount: 154815370.0
+      first_time: '94114'
+      last_time: '95926'
+      limit_times: 1
+      name: 航天动力
+      pct_chg: 9.99
+      turnover_rate: 0.0
+    - amount_billion: 7975.096
+      close: 43.23
+      code: 600345.SH
+      fd_amount: 107239018.0
+      first_time: '130003'
+      last_time: '130003'
+      limit_times: 1
+      name: 长江通信
+      pct_chg: 10.0
+      turnover_rate: 0.0
+    - amount_billion: 1501.7965
+      close: 7.65
+      code: 600359.SH
+      fd_amount: 65114505.0
+      first_time: '100657'
+      last_time: '100657'
+      limit_times: 1
+      name: 新农开发
+      pct_chg: 10.07
+      turnover_rate: 0.0
+    - amount_billion: 69449.60512
+      close: 53.85
+      code: 600487.SH
+      fd_amount: 404739292.0
+      first_time: '112427'
+      last_time: '112427'
+      limit_times: 1
+      name: 亨通光电
+      pct_chg: 10.01
+      turnover_rate: 0.0
+    - amount_billion: 3269.2072
+      close: 4.76
+      code: 600488.SH
+      fd_amount: 52994741.0
+      first_time: '93103'
+      last_time: '93954'
+      limit_times: 2
+      name: 津药药业
+      pct_chg: 9.93
+      turnover_rate: 0.0
+    - amount_billion: 3172.18656
+      close: 5.12
+      code: 600502.SH
+      fd_amount: 38176742.0
+      first_time: '93021'
+      last_time: '93021'
+      limit_times: 1
+      name: 安徽建工
+      pct_chg: 10.11
+      turnover_rate: 0.0
+    - amount_billion: 8942.01456
+      close: 28.17
+      code: 600513.SH
+      fd_amount: 58042735.0
+      first_time: '93345'
+      last_time: '95803'
+      limit_times: 2
+      name: 联环药业
+      pct_chg: 10.0
+      turnover_rate: 0.0
+    - amount_billion: 8173.712
+      close: 15.63
+      code: 600539.SH
+      fd_amount: 4343264.0
+      first_time: '101313'
+      last_time: '142701'
+      limit_times: 2
+      name: 狮头股份
+      pct_chg: 9.99
+      turnover_rate: 0.0
+    - amount_billion: 24961.2664
+      close: 23.33
+      code: 600602.SH
+      fd_amount: 111538397.0
+      first_time: '102637'
+      last_time: '103531'
+      limit_times: 1
+      name: 云赛智联
+      pct_chg: 10.0
+      turnover_rate: 0.0
+    - amount_billion: 1571.00408
+      close: 6.39
+      code: 600724.SH
+      fd_amount: 30907937.0
+      first_time: '133027'
+      last_time: '133027'
+      limit_times: 1
+      name: 宁波富达
+      pct_chg: 9.98
+      turnover_rate: 0.0
+    - amount_billion: 10746.47552
+      close: 11.02
+      code: 600996.SH
+      fd_amount: 63269390.0
+      first_time: '101014'
+      last_time: '101650'
+      limit_times: 2
+      name: 贵广网络
+      pct_chg: 9.98
+      turnover_rate: 0.0
+    - amount_billion: 1325.28819
+      close: 6.28
+      code: 601068.SH
+      fd_amount: 36197794.0
+      first_time: '93001'
+      last_time: '93146'
+      limit_times: 1
+      name: 中铝国际
+      pct_chg: 9.98
+      turnover_rate: 0.0
+    - amount_billion: 5779.16192
+      close: 3.94
+      code: 601388.SH
+      fd_amount: 44444382.0
+      first_time: '93004'
+      last_time: '111704'
+      limit_times: 1
+      name: 怡球资源
+      pct_chg: 10.06
+      turnover_rate: 0.0
+    - amount_billion: 43462.70208
+      close: 301.69
+      code: 601869.SH
+      fd_amount: 323847923.0
+      first_time: '130010'
+      last_time: '130010'
+      limit_times: 1
+      name: 长飞光纤
+      pct_chg: 10.0
+      turnover_rate: 0.0
+    - amount_billion: 3074.49424
+      close: 45.02
+      code: 603016.SH
+      fd_amount: 15498089.0
+      first_time: '105823'
+      last_time: '105823'
+      limit_times: 1
+      name: 新宏泰
+      pct_chg: 9.99
+      turnover_rate: 0.0
+    - amount_billion: 4730.88352
+      close: 15.76
+      code: 603017.SH
+      fd_amount: 89286625.0
+      first_time: '103101'
+      last_time: '103101'
+      limit_times: 1
+      name: 中衡设计
+      pct_chg: 9.98
+      turnover_rate: 0.0
+    - amount_billion: 6633.06272
+      close: 284.67
+      code: 603061.SH
+      fd_amount: 47482956.0
+      first_time: '112118'
+      last_time: '112118'
+      limit_times: 1
+      name: 金海通
+      pct_chg: 10.0
+      turnover_rate: 0.0
+    - amount_billion: 8393.33776
+      close: 16.92
+      code: 603122.SH
+      fd_amount: 44946288.0
+      first_time: '134400'
+      last_time: '134442'
+      limit_times: 1
+      name: 合富中国
+      pct_chg: 10.01
+      turnover_rate: 0.0
+    - amount_billion: 2430.64613
+      close: 23.46
+      code: 603239.SH
+      fd_amount: 3265632.0
+      first_time: '130418'
+      last_time: '145412'
+      limit_times: 1
+      name: 浙江仙通
+      pct_chg: 9.99
+      turnover_rate: 0.0
+    - amount_billion: 20298.58784
+      close: 72.14
+      code: 603256.SH
+      fd_amount: 68745813.0
+      first_time: '94729'
+      last_time: '111241'
+      limit_times: 1
+      name: 宏和科技
+      pct_chg: 10.0
+      turnover_rate: 0.0
+    - amount_billion: 4395.3296
+      close: 35.55
+      code: 603272.SH
+      fd_amount: 1784610.0
+      first_time: '133420'
+      last_time: '144620'
+      limit_times: 1
+      name: 联翔股份
+      pct_chg: 9.99
+      turnover_rate: 0.0
+    - amount_billion: 14058.59072
+      close: 33.33
+      code: 603358.SH
+      fd_amount: 114953703.0
+      first_time: '135215'
+      last_time: '135215'
+      limit_times: 1
+      name: 华达科技
+      pct_chg: 10.0
+      turnover_rate: 0.0
+    - amount_billion: 3836.76544
+      close: 43.1
+      code: 603538.SH
+      fd_amount: 146882860.0
+      first_time: '93027'
+      last_time: '93027'
+      limit_times: 5
+      name: 美诺华
+      pct_chg: 10.01
+      turnover_rate: 0.0
+    - amount_billion: 2241.21012
+      close: 22.81
+      code: 603585.SH
+      fd_amount: 51667410.0
+      first_time: '94003'
+      last_time: '94003'
+      limit_times: 2
+      name: 苏利股份
+      pct_chg: 9.98
+      turnover_rate: 0.0
+    - amount_billion: 50635.43552
+      close: 14.5
+      code: 603601.SH
+      fd_amount: 65371901.0
+      first_time: '104428'
+      last_time: '135243'
+      limit_times: 1
+      name: 再升科技
+      pct_chg: 10.02
+      turnover_rate: 0.0
+    - amount_billion: 15752.2176
+      close: 26.71
+      code: 603618.SH
+      fd_amount: 148533882.0
+      first_time: '93432'
+      last_time: '94947'
+      limit_times: 2
+      name: 杭电股份
+      pct_chg: 10.01
+      turnover_rate: 0.0
+    - amount_billion: 7067.82384
+      close: 22.75
+      code: 603716.SH
+      fd_amount: 114328919.0
+      first_time: '131010'
+      last_time: '131010'
+      limit_times: 1
+      name: 塞力医疗
+      pct_chg: 10.01
+      turnover_rate: 0.0
+    - amount_billion: 26538.83616
+      close: 25.3
+      code: 603778.SH
+      fd_amount: 135172840.0
+      first_time: '131245'
+      last_time: '132054'
+      limit_times: 1
+      name: 国晟科技
+      pct_chg: 10.0
+      turnover_rate: 0.0
+    - amount_billion: 4209.95632
+      close: 32.89
+      code: 603897.SH
+      fd_amount: 85352839.0
+      first_time: '140534'
+      last_time: '140534'
+      limit_times: 1
+      name: 长城科技
+      pct_chg: 10.0
+      turnover_rate: 0.0
+    - amount_billion: 4728.80032
+      close: 22.36
+      code: 605222.SH
+      fd_amount: 11059256.0
+      first_time: '133330'
+      last_time: '142306'
+      limit_times: 1
+      name: 起帆电缆
+      pct_chg: 9.99
+      turnover_rate: 0.0
+    - amount_billion: 3401.80112
+      close: 47.83
+      code: 688677.SH
+      fd_amount: 12315698.0
+      first_time: '111008'
+      last_time: '111644'
+      limit_times: 1
+      name: 海泰新光
+      pct_chg: 19.99
+      turnover_rate: 0.0
+    - amount_billion: 3899.35776
+      close: 54.9
+      code: 688693.SH
+      fd_amount: 39578068.0
+      first_time: '92503'
+      last_time: '94354'
+      limit_times: 1
+      name: 锴威特
+      pct_chg: 20.0
+      turnover_rate: 0.0
+  northbound:
+    _source: tushare:moneyflow_hsgt
+    net_buy_billion: 24.63
+    north_money: 246266.21
+    south_money: 53228.76
+    top_active_stocks:
+    - amount_yi: 32.2
+      code: 300750.SZ
+      name: 宁德时代
+      net_amount_yi: 0.0
+    - amount_yi: 25.48
+      code: 300502.SZ
+      name: 新易盛
+      net_amount_yi: 0.0
+    - amount_yi: 20.45
+      code: 300308.SZ
+      name: 中际旭创
+      net_amount_yi: 0.0
+    - amount_yi: 19.69
+      code: 300274.SZ
+      name: 阳光电源
+      net_amount_yi: 0.0
+    - amount_yi: 19.26
+      code: 601899.SH
+      name: 紫金矿业
+      net_amount_yi: 0.0
+    - amount_yi: 17.7
+      code: 300394.SZ
+      name: 天孚通信
+      net_amount_yi: 0.0
+    - amount_yi: 16.76
+      code: 601600.SH
+      name: 中国铝业
+      net_amount_yi: 0.0
+    - amount_yi: 16.23
+      code: 603986.SH
+      name: 兆易创新
+      net_amount_yi: 0.0
+    - amount_yi: 13.91
+      code: 000338.SZ
+      name: 潍柴动力
+      net_amount_yi: 0.0
+    - amount_yi: 13.82
+      code: 688008.SH
+      name: 澜起科技
+      net_amount_yi: 0.0
+  sector_concept:
+    _source: tushare:ths_daily
+    bottom:
+    - change_pct: -2.46
+      name: 超超临界发电
+      top_stock: ''
+      volume_billion: 0
+    - change_pct: -2.19
+      name: 生物质能发电
+      top_stock: ''
+      volume_billion: 0
+    - change_pct: -1.81
+      name: BC电池
+      top_stock: ''
+      volume_billion: 0
+    - change_pct: -1.73
+      name: 虚拟电厂
+      top_stock: ''
+      volume_billion: 0
+    - change_pct: -1.61
+      name: 抽水蓄能
+      top_stock: ''
+      volume_billion: 0
+    data:
+    - change_pct: 3.27
+      name: 大豆
+      top_stock: ''
+      volume_billion: 0
+    - change_pct: 2.54
+      name: 粮食概念
+      top_stock: ''
+      volume_billion: 0
+    - change_pct: 2.53
+      name: 太赫兹
+      top_stock: ''
+      volume_billion: 0
+    - change_pct: 2.31
+      name: 转基因
+      top_stock: ''
+      volume_billion: 0
+    - change_pct: 2.22
+      name: 玉米
+      top_stock: ''
+      volume_billion: 0
+    - change_pct: 2.13
+      name: 草甘膦
+      top_stock: ''
+      volume_billion: 0
+    - change_pct: 1.69
+      name: 土地流转
+      top_stock: ''
+      volume_billion: 0
+    - change_pct: 1.67
+      name: 青蒿素
+      top_stock: ''
+      volume_billion: 0
+    - change_pct: 1.64
+      name: 阿尔茨海默概念
+      top_stock: ''
+      volume_billion: 0
+    - change_pct: 1.62
+      name: 农业种植
+      top_stock: ''
+      volume_billion: 0
+    - change_pct: 1.56
+      name: 成飞概念
+      top_stock: ''
+      volume_billion: 0
+    - change_pct: 1.49
+      name: 乳业
+      top_stock: ''
+      volume_billion: 0
+    - change_pct: 1.47
+      name: 光纤概念
+      top_stock: ''
+      volume_billion: 0
+    - change_pct: 1.45
+      name: 仿制药一致性评价
+      top_stock: ''
+      volume_billion: 0
+    - change_pct: 1.41
+      name: 血氧仪
+      top_stock: ''
+      volume_billion: 0
+    - change_pct: 1.37
+      name: 养鸡
+      top_stock: ''
+      volume_billion: 0
+    - change_pct: 1.34
+      name: 家庭医生
+      top_stock: ''
+      volume_billion: 0
+    - change_pct: 1.33
+      name: 航空发动机
+      top_stock: ''
+      volume_billion: 0
+    - change_pct: 1.3
+      name: 减肥药
+      top_stock: ''
+      volume_billion: 0
+    - change_pct: 1.29
+      name: 大飞机
+      top_stock: ''
+      volume_billion: 0
+    - change_pct: 1.27
+      name: 民营医院
+      top_stock: ''
+      volume_billion: 0
+    - change_pct: 1.25
+      name: EDR概念
+      top_stock: ''
+      volume_billion: 0
+    - change_pct: 1.25
+      name: CRO概念
+      top_stock: ''
+      volume_billion: 0
+    - change_pct: 1.23
+      name: 生态农业
+      top_stock: ''
+      volume_billion: 0
+    - change_pct: 1.21
+      name: 创新药
+      top_stock: ''
+      volume_billion: 0
+    - change_pct: 1.21
+      name: 流感
+      top_stock: ''
+      volume_billion: 0
+    - change_pct: 1.18
+      name: 细胞免疫治疗
+      top_stock: ''
+      volume_billion: 0
+    - change_pct: 1.17
+      name: 赛马概念
+      top_stock: ''
+      volume_billion: 0
+    - change_pct: 1.17
+      name: 共享单车
+      top_stock: ''
+      volume_billion: 0
+    - change_pct: 1.15
+      name: PEEK材料
+      top_stock: ''
+      volume_billion: 0
+  sector_industry:
+    _source: tushare:sw_daily
+    bottom:
+    - change_pct: -3.73
+      name: 光伏设备
+      top_stock: ''
+      volume_billion: 646.43
+    - change_pct: -3.21
+      name: 电力
+      top_stock: ''
+      volume_billion: 885.98
+    - change_pct: -2.64
+      name: 白色家电
+      top_stock: ''
+      volume_billion: 63.97
+    - change_pct: -1.79
+      name: 游戏Ⅱ
+      top_stock: ''
+      volume_billion: 109.8
+    - change_pct: -1.54
+      name: 酒店餐饮
+      top_stock: ''
+      volume_billion: 10.84
+    data:
+    - change_pct: 5.04
+      name: 贵金属
+      top_stock: ''
+      volume_billion: 188.19
+    - change_pct: 3.37
+      name: 航天装备Ⅱ
+      top_stock: ''
+      volume_billion: 103.71
+    - change_pct: 2.96
+      name: 种植业
+      top_stock: ''
+      volume_billion: 92.69
+    - change_pct: 2.32
+      name: 工业金属
+      top_stock: ''
+      volume_billion: 614.81
+    - change_pct: 1.98
+      name: 医药商业
+      top_stock: ''
+      volume_billion: 55.77
+    - change_pct: 1.78
+      name: 军工电子Ⅱ
+      top_stock: ''
+      volume_billion: 303.57
+    - change_pct: 1.77
+      name: 玻璃玻纤
+      top_stock: ''
+      volume_billion: 142.78
+    - change_pct: 1.71
+      name: 服装家纺
+      top_stock: ''
+      volume_billion: 59.68
+    - change_pct: 1.67
+      name: 装修建材
+      top_stock: ''
+      volume_billion: 43.96
+    - change_pct: 1.62
+      name: 农产品加工
+      top_stock: ''
+      volume_billion: 35.23
+    - change_pct: 1.56
+      name: 水泥
+      top_stock: ''
+      volume_billion: 31.91
+    - change_pct: 1.54
+      name: 出版
+      top_stock: ''
+      volume_billion: 53.72
+    - change_pct: 1.54
+      name: 通信设备
+      top_stock: ''
+      volume_billion: 1067.09
+    - change_pct: 1.35
+      name: 调味发酵品Ⅱ
+      top_stock: ''
+      volume_billion: 50.27
+    - change_pct: 1.27
+      name: 炼化及贸易
+      top_stock: ''
+      volume_billion: 132.27
+    - change_pct: 1.23
+      name: 国有大型银行Ⅱ
+      top_stock: ''
+      volume_billion: 87.8
+    - change_pct: 1.16
+      name: 食品加工
+      top_stock: ''
+      volume_billion: 31.09
+    - change_pct: 1.11
+      name: 影视院线
+      top_stock: ''
+      volume_billion: 34.93
+    - change_pct: 1.1
+      name: 中药Ⅱ
+      top_stock: ''
+      volume_billion: 108.72
+    - change_pct: 1.04
+      name: 房屋建设Ⅱ
+      top_stock: ''
+      volume_billion: 30.1
+    - change_pct: 0.99
+      name: 航空装备Ⅱ
+      top_stock: ''
+      volume_billion: 160.26
+    - change_pct: 0.98
+      name: 房地产服务
+      top_stock: ''
+      volume_billion: 12.51
+    - change_pct: 0.98
+      name: 生物制品
+      top_stock: ''
+      volume_billion: 123.99
+    - change_pct: 0.97
+      name: 通用设备
+      top_stock: ''
+      volume_billion: 516.09
+    - change_pct: 0.96
+      name: 综合Ⅱ
+      top_stock: ''
+      volume_billion: 42.26
+    - change_pct: 0.96
+      name: 农化制品
+      top_stock: ''
+      volume_billion: 277.69
+    - change_pct: 0.92
+      name: 普钢
+      top_stock: ''
+      volume_billion: 57.14
+    - change_pct: 0.91
+      name: 饮料乳品
+      top_stock: ''
+      volume_billion: 31.02
+    - change_pct: 0.91
+      name: 互联网电商
+      top_stock: ''
+      volume_billion: 28.0
+    - change_pct: 0.91
+      name: 医疗器械
+      top_stock: ''
+      volume_billion: 208.24
+  sector_rhythm_concept:
+  - change_today: 3.27
+    confidence: 低
+    consecutive_in_top30: 1
+    cumulative_pct_5d: 3.27
+    evidence:
+    - 历史数据不足（<3天），无法判断
+    name: 大豆
+    phase: 观察中
+    rank_today: 1
+    sector_type: concept
+    signals:
+      change_today: 3.27
+      consecutive_in_top30: 1
+      cumulative_pct_5d: 3.27
+      daily_accel_3d: null
+      days_in_top30_of_20: 1
+      max_consecutive_hist: 1
+      rank_change_3d: null
+      rank_today: 1
+      top_stock_stability_5d: null
+      top_stock_today: ''
+    top_stock_today: ''
+  - change_today: 2.54
+    confidence: 低
+    consecutive_in_top30: 1
+    cumulative_pct_5d: 2.54
+    evidence:
+    - 历史数据不足（<3天），无法判断
+    name: 粮食概念
+    phase: 观察中
+    rank_today: 2
+    sector_type: concept
+    signals:
+      change_today: 2.54
+      consecutive_in_top30: 1
+      cumulative_pct_5d: 2.54
+      daily_accel_3d: null
+      days_in_top30_of_20: 1
+      max_consecutive_hist: 1
+      rank_change_3d: null
+      rank_today: 2
+      top_stock_stability_5d: null
+      top_stock_today: ''
+    top_stock_today: ''
+  - change_today: 2.53
+    confidence: 低
+    consecutive_in_top30: 1
+    cumulative_pct_5d: 2.53
+    evidence:
+    - 历史数据不足（<3天），无法判断
+    name: 太赫兹
+    phase: 观察中
+    rank_today: 3
+    sector_type: concept
+    signals:
+      change_today: 2.53
+      consecutive_in_top30: 1
+      cumulative_pct_5d: 2.53
+      daily_accel_3d: null
+      days_in_top30_of_20: 1
+      max_consecutive_hist: 1
+      rank_change_3d: null
+      rank_today: 3
+      top_stock_stability_5d: null
+      top_stock_today: ''
+    top_stock_today: ''
+  - change_today: 2.31
+    confidence: 低
+    consecutive_in_top30: 1
+    cumulative_pct_5d: 2.31
+    evidence:
+    - 历史数据不足（<3天），无法判断
+    name: 转基因
+    phase: 观察中
+    rank_today: 4
+    sector_type: concept
+    signals:
+      change_today: 2.31
+      consecutive_in_top30: 1
+      cumulative_pct_5d: 2.31
+      daily_accel_3d: null
+      days_in_top30_of_20: 1
+      max_consecutive_hist: 1
+      rank_change_3d: null
+      rank_today: 4
+      top_stock_stability_5d: null
+      top_stock_today: ''
+    top_stock_today: ''
+  - change_today: 2.22
+    confidence: 低
+    consecutive_in_top30: 1
+    cumulative_pct_5d: 2.22
+    evidence:
+    - 历史数据不足（<3天），无法判断
+    name: 玉米
+    phase: 观察中
+    rank_today: 5
+    sector_type: concept
+    signals:
+      change_today: 2.22
+      consecutive_in_top30: 1
+      cumulative_pct_5d: 2.22
+      daily_accel_3d: null
+      days_in_top30_of_20: 1
+      max_consecutive_hist: 1
+      rank_change_3d: null
+      rank_today: 5
+      top_stock_stability_5d: null
+      top_stock_today: ''
+    top_stock_today: ''
+  - change_today: 2.13
+    confidence: 低
+    consecutive_in_top30: 2
+    cumulative_pct_5d: 5.44
+    evidence:
+    - 历史数据不足（<3天），无法判断
+    name: 草甘膦
+    phase: 观察中
+    rank_today: 6
+    sector_type: concept
+    signals:
+      change_today: 2.13
+      consecutive_in_top30: 2
+      cumulative_pct_5d: 5.44
+      daily_accel_3d: -1.18
+      days_in_top30_of_20: 2
+      max_consecutive_hist: 2
+      rank_change_3d: null
+      rank_today: 6
+      top_stock_stability_5d: null
+      top_stock_today: ''
+    top_stock_today: ''
+  - change_today: 1.69
+    confidence: 低
+    consecutive_in_top30: 1
+    cumulative_pct_5d: 1.69
+    evidence:
+    - 历史数据不足（<3天），无法判断
+    name: 土地流转
+    phase: 观察中
+    rank_today: 7
+    sector_type: concept
+    signals:
+      change_today: 1.69
+      consecutive_in_top30: 1
+      cumulative_pct_5d: 1.69
+      daily_accel_3d: null
+      days_in_top30_of_20: 1
+      max_consecutive_hist: 1
+      rank_change_3d: null
+      rank_today: 7
+      top_stock_stability_5d: null
+      top_stock_today: ''
+    top_stock_today: ''
+  - change_today: 1.67
+    confidence: 低
+    consecutive_in_top30: 1
+    cumulative_pct_5d: 1.67
+    evidence:
+    - 历史数据不足（<3天），无法判断
+    name: 青蒿素
+    phase: 观察中
+    rank_today: 8
+    sector_type: concept
+    signals:
+      change_today: 1.67
+      consecutive_in_top30: 1
+      cumulative_pct_5d: 1.67
+      daily_accel_3d: null
+      days_in_top30_of_20: 1
+      max_consecutive_hist: 1
+      rank_change_3d: null
+      rank_today: 8
+      top_stock_stability_5d: null
+      top_stock_today: ''
+    top_stock_today: ''
+  - change_today: 1.64
+    confidence: 低
+    consecutive_in_top30: 2
+    cumulative_pct_5d: 5.75
+    evidence:
+    - 历史数据不足（<3天），无法判断
+    name: 阿尔茨海默概念
+    phase: 观察中
+    rank_today: 9
+    sector_type: concept
+    signals:
+      change_today: 1.64
+      consecutive_in_top30: 2
+      cumulative_pct_5d: 5.75
+      daily_accel_3d: -2.47
+      days_in_top30_of_20: 2
+      max_consecutive_hist: 2
+      rank_change_3d: null
+      rank_today: 9
+      top_stock_stability_5d: null
+      top_stock_today: ''
+    top_stock_today: ''
+  - change_today: 1.62
+    confidence: 低
+    consecutive_in_top30: 1
+    cumulative_pct_5d: 1.62
+    evidence:
+    - 历史数据不足（<3天），无法判断
+    name: 农业种植
+    phase: 观察中
+    rank_today: 10
+    sector_type: concept
+    signals:
+      change_today: 1.62
+      consecutive_in_top30: 1
+      cumulative_pct_5d: 1.62
+      daily_accel_3d: null
+      days_in_top30_of_20: 1
+      max_consecutive_hist: 1
+      rank_change_3d: null
+      rank_today: 10
+      top_stock_stability_5d: null
+      top_stock_today: ''
+    top_stock_today: ''
+  sector_rhythm_industry:
+  - change_today: 5.04
+    confidence: 中
+    consecutive_in_top30: 2
+    cumulative_pct_5d: 8.37
+    evidence:
+    - '今日排名 #1，位置稳定'
+    - 5日累计涨幅 +8.37%（持续累积）
+    - 涨速仍在加速或平稳
+    name: 贵金属
+    phase: 发酵
+    rank_today: 1
+    sector_type: industry
+    signals:
+      change_today: 5.04
+      consecutive_in_top30: 2
+      cumulative_pct_5d: 8.37
+      daily_accel_3d: 1.71
+      days_in_top30_of_20: 2
+      max_consecutive_hist: 2
+      rank_change_3d: null
+      rank_today: 1
+      top_stock_stability_5d: null
+      top_stock_today: ''
+    top_stock_today: ''
+  - change_today: 3.37
+    confidence: 中
+    consecutive_in_top30: 1
+    cumulative_pct_5d: 3.37
+    evidence:
+    - 今日首次进入前30（新兴启动）
+    - '今日排名 #2，位置靠前'
+    name: 航天装备Ⅱ
+    phase: 启动
+    rank_today: 2
+    sector_type: industry
+    signals:
+      change_today: 3.37
+      consecutive_in_top30: 1
+      cumulative_pct_5d: 3.37
+      daily_accel_3d: null
+      days_in_top30_of_20: 1
+      max_consecutive_hist: 1
+      rank_change_3d: null
+      rank_today: 2
+      top_stock_stability_5d: null
+      top_stock_today: ''
+    top_stock_today: ''
+  - change_today: 2.96
+    confidence: 中
+    consecutive_in_top30: 1
+    cumulative_pct_5d: 2.96
+    evidence:
+    - 今日首次进入前30（新兴启动）
+    - '今日排名 #3，位置靠前'
+    name: 种植业
+    phase: 启动
+    rank_today: 3
+    sector_type: industry
+    signals:
+      change_today: 2.96
+      consecutive_in_top30: 1
+      cumulative_pct_5d: 2.96
+      daily_accel_3d: null
+      days_in_top30_of_20: 1
+      max_consecutive_hist: 1
+      rank_change_3d: null
+      rank_today: 3
+      top_stock_stability_5d: null
+      top_stock_today: ''
+    top_stock_today: ''
+  - change_today: 2.32
+    confidence: 中
+    consecutive_in_top30: 1
+    cumulative_pct_5d: 2.32
+    evidence:
+    - 今日首次进入前30（新兴启动）
+    - '今日排名 #4，位置靠前'
+    name: 工业金属
+    phase: 启动
+    rank_today: 4
+    sector_type: industry
+    signals:
+      change_today: 2.32
+      consecutive_in_top30: 1
+      cumulative_pct_5d: 2.32
+      daily_accel_3d: null
+      days_in_top30_of_20: 1
+      max_consecutive_hist: 1
+      rank_change_3d: null
+      rank_today: 4
+      top_stock_stability_5d: null
+      top_stock_today: ''
+    top_stock_today: ''
+  - change_today: 1.98
+    confidence: 中
+    consecutive_in_top30: 1
+    cumulative_pct_5d: 1.98
+    evidence:
+    - 今日首次进入前30（新兴启动）
+    - '今日排名 #5，位置靠前'
+    name: 医药商业
+    phase: 启动
+    rank_today: 5
+    sector_type: industry
+    signals:
+      change_today: 1.98
+      consecutive_in_top30: 1
+      cumulative_pct_5d: 1.98
+      daily_accel_3d: null
+      days_in_top30_of_20: 1
+      max_consecutive_hist: 1
+      rank_change_3d: null
+      rank_today: 5
+      top_stock_stability_5d: null
+      top_stock_today: ''
+    top_stock_today: ''
+  - change_today: 1.78
+    confidence: 中
+    consecutive_in_top30: 1
+    cumulative_pct_5d: 1.78
+    evidence:
+    - 今日首次进入前30（新兴启动）
+    - '今日排名 #6，位置靠前'
+    name: 军工电子Ⅱ
+    phase: 启动
+    rank_today: 6
+    sector_type: industry
+    signals:
+      change_today: 1.78
+      consecutive_in_top30: 1
+      cumulative_pct_5d: 1.78
+      daily_accel_3d: null
+      days_in_top30_of_20: 1
+      max_consecutive_hist: 1
+      rank_change_3d: null
+      rank_today: 6
+      top_stock_stability_5d: null
+      top_stock_today: ''
+    top_stock_today: ''
+  - change_today: 1.77
+    confidence: 中
+    consecutive_in_top30: 1
+    cumulative_pct_5d: 1.77
+    evidence:
+    - 今日首次进入前30（新兴启动）
+    - '今日排名 #7，位置靠前'
+    name: 玻璃玻纤
+    phase: 启动
+    rank_today: 7
+    sector_type: industry
+    signals:
+      change_today: 1.77
+      consecutive_in_top30: 1
+      cumulative_pct_5d: 1.77
+      daily_accel_3d: null
+      days_in_top30_of_20: 1
+      max_consecutive_hist: 1
+      rank_change_3d: null
+      rank_today: 7
+      top_stock_stability_5d: null
+      top_stock_today: ''
+    top_stock_today: ''
+  - change_today: 1.71
+    confidence: 中
+    consecutive_in_top30: 1
+    cumulative_pct_5d: 1.71
+    evidence:
+    - 今日首次进入前30（新兴启动）
+    - '今日排名 #8，位置靠前'
+    name: 服装家纺
+    phase: 启动
+    rank_today: 8
+    sector_type: industry
+    signals:
+      change_today: 1.71
+      consecutive_in_top30: 1
+      cumulative_pct_5d: 1.71
+      daily_accel_3d: null
+      days_in_top30_of_20: 1
+      max_consecutive_hist: 1
+      rank_change_3d: null
+      rank_today: 8
+      top_stock_stability_5d: null
+      top_stock_today: ''
+    top_stock_today: ''
+  - change_today: 1.67
+    confidence: 中
+    consecutive_in_top30: 1
+    cumulative_pct_5d: 1.67
+    evidence:
+    - 今日首次进入前30（新兴启动）
+    - '今日排名 #9，位置靠前'
+    name: 装修建材
+    phase: 启动
+    rank_today: 9
+    sector_type: industry
+    signals:
+      change_today: 1.67
+      consecutive_in_top30: 1
+      cumulative_pct_5d: 1.67
+      daily_accel_3d: null
+      days_in_top30_of_20: 1
+      max_consecutive_hist: 1
+      rank_change_3d: null
+      rank_today: 9
+      top_stock_stability_5d: null
+      top_stock_today: ''
+    top_stock_today: ''
+  - change_today: 1.62
+    confidence: 中
+    consecutive_in_top30: 1
+    cumulative_pct_5d: 1.62
+    evidence:
+    - 今日首次进入前30（新兴启动）
+    - '今日排名 #10，位置靠前'
+    name: 农产品加工
+    phase: 启动
+    rank_today: 10
+    sector_type: industry
+    signals:
+      change_today: 1.62
+      consecutive_in_top30: 1
+      cumulative_pct_5d: 1.62
+      daily_accel_3d: null
+      days_in_top30_of_20: 1
+      max_consecutive_hist: 1
+      rank_change_3d: null
+      rank_today: 10
+      top_stock_stability_5d: null
+      top_stock_today: ''
+    top_stock_today: ''
+  style_factors:
+    board_preference:
+      dominant_type: 10cm
+      pct_10cm: 90.0
+      pct_20cm: 10.0
+      pct_30cm: 0.0
+    cap_preference:
+      csi1000_chg: 0.28
+      csi300_chg: -0.24
+      relative: 偏小盘
+      spread: 0.52
+    premium_snapshot:
+      capacity_top10:
+        count: 10
+        open_up_rate: 0.4
+        premium_mean: -0.48
+        premium_median: -0.51
+      first_board:
+        count: 68
+        open_up_rate: 0.529
+        premium_mean: 0.57
+        premium_median: 0.14
+      first_board_10cm:
+        count: 63
+        open_up_rate: 0.524
+        premium_mean: 0.56
+        premium_median: 0.11
+      first_board_20cm:
+        count: 5
+        open_up_rate: 0.6
+        premium_mean: 0.8
+        premium_median: 1.89
+      first_board_yizi:
+        count: 43
+        open_up_rate: 0.512
+        premium_mean: 0.58
+        premium_median: 0.03
+      fourth_board:
+        count: 3
+        open_up_rate: 0.667
+        premium_mean: 5.56
+        premium_median: 6.86
+      second_board:
+        count: 7
+        open_up_rate: 0.714
+        premium_mean: 2.58
+        premium_median: 2.46
+      third_board_plus:
+        count: 3
+        open_up_rate: 0.667
+        premium_mean: 5.56
+        premium_median: 6.86
+      yizi_first_open:
+        count: 7
+        open_up_rate: 0.857
+        premium_mean: 4.15
+        premium_median: 3.0
+    premium_trend:
+      direction: 数据不足
+      first_board_median_5d:
+      - 0.14
+    switch_signals: []
+  total_volume:
+    _source: tushare:index_daily
+    shanghai_billion: 8398.22
+    shenzhen_billion: 10760.59
+    total_billion: 19158.81
+    vs_yesterday_pct: 3.4

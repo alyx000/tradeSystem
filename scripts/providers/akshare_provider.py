@@ -68,6 +68,7 @@ class AkshareProvider(DataProvider):
             "get_limit_down_list",
             "get_sector_rankings",
             "get_sector_fund_flow",
+            "get_market_breadth",
             "get_northbound",
             "get_global_index",
             "get_us_tickers_overnight",
@@ -430,7 +431,7 @@ class AkshareProvider(DataProvider):
     # ---- 板块数据（akshare 更方便） ----
 
     def get_sector_rankings(self, date: str, sector_type: str = "industry") -> DataResult:
-        """获取板块涨幅排名"""
+        """获取板块涨跌幅排名（涨幅前30 + 跌幅前5）"""
         try:
             if sector_type == "industry":
                 df = self.ak.stock_board_industry_name_em()
@@ -440,15 +441,28 @@ class AkshareProvider(DataProvider):
             if df.empty:
                 return DataResult(data=None, source=self.name, error="无板块数据")
 
-            records = []
-            for _, row in df.head(30).iterrows():
-                records.append({
+            def _parse_row(row):
+                vol_raw = row.get("总成交额", 0)
+                if vol_raw is None or (isinstance(vol_raw, float) and pd.isna(vol_raw)):
+                    vol_raw = 0
+                vol_billion = float(vol_raw) / 1e8 if float(vol_raw) > 100 else float(vol_raw)
+                return {
                     "name": row.get("板块名称", ""),
-                    "change_pct": float(row.get("涨跌幅", 0)),
-                    "volume_billion": float(row.get("总成交额", 0)) / 1e8,
+                    "change_pct": float(row.get("涨跌幅", 0) or 0),
+                    "volume_billion": round(vol_billion, 2),
                     "top_stock": row.get("领涨股票", ""),
-                })
-            return DataResult(data=records, source=f"akshare:board_{sector_type}")
+                }
+
+            top_records = [_parse_row(row) for _, row in df.head(30).iterrows()]
+
+            bottom_records = []
+            if len(df) > 5:
+                for _, row in df.tail(5).iterrows():
+                    bottom_records.append(_parse_row(row))
+                bottom_records.sort(key=lambda x: x["change_pct"])
+
+            result = {"top": top_records, "bottom": bottom_records}
+            return DataResult(data=result, source=f"akshare:board_{sector_type}")
         except Exception as e:
             return DataResult(data=None, source=self.name, error=str(e))
 
@@ -664,6 +678,41 @@ class AkshareProvider(DataProvider):
             d += timedelta(days=1)
 
         return DataResult(data=all_events, source="akshare:news_economic_baidu_range")
+
+    # ---- 市场宽度 ----
+
+    def get_market_breadth(self, date: str) -> DataResult:
+        """涨跌家数统计（东方财富全市场快照）"""
+        try:
+            df = self.ak.stock_zh_a_spot_em()
+            if df is None or df.empty:
+                return DataResult(data=None, source=self.name, error="无全市场快照数据")
+
+            pct_col = None
+            for col in df.columns:
+                if "涨跌幅" in str(col):
+                    pct_col = col
+                    break
+            if pct_col is None:
+                return DataResult(data=None, source=self.name, error="未找到涨跌幅列")
+
+            pcts = pd.to_numeric(df[pct_col], errors="coerce").dropna()
+            advance = int((pcts > 0).sum())
+            decline = int((pcts < 0).sum())
+            flat = int((pcts == 0).sum())
+            total = advance + decline + flat
+            ratio = round(advance / decline, 2) if decline > 0 else float("inf")
+
+            data = {
+                "advance": advance,
+                "decline": decline,
+                "flat": flat,
+                "total": total,
+                "advance_ratio": ratio,
+            }
+            return DataResult(data=data, source="akshare:stock_zh_a_spot_em")
+        except Exception as e:
+            return DataResult(data=None, source=self.name, error=str(e))
 
     # ---- 交易日历 ----
 

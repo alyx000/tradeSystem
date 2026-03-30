@@ -64,8 +64,15 @@ class PremiumCollector:
 
         logger.info(f"T-1 涨停股数量：{len(stocks)}")
 
-        # 2. 按 limit_times 分组，拉取 T 日开盘价
-        groups: dict[str, list[dict]] = {"first": [], "second": [], "third_plus": []}
+        # 2. 按 limit_times + 涨幅类型分组，拉取 T 日开盘价
+        groups: dict[str, list[dict]] = {
+            "first_10cm": [], "first_20cm": [], "first_30cm": [],
+            "second": [], "third_plus": [],
+            "third_board": [], "fourth_board": [], "fifth_board_plus": [],
+            "first_board_yizi": [],
+            "yizi_first_open": [],
+        }
+        all_entries: list[dict] = []
 
         for stock in stocks:
             code = stock.get("code")
@@ -84,6 +91,11 @@ class PremiumCollector:
                 continue
 
             premium_pct = round((t_open - prev_close) / prev_close * 100, 2)
+            pct_chg = abs(stock.get("pct_chg", stock.get("change_pct", 0)))
+            first_time = str(stock.get("first_time", ""))
+            last_time = str(stock.get("last_time", ""))
+            is_yizi = first_time == last_time and first_time != ""
+
             entry = {
                 "code": code,
                 "name": stock.get("name", ""),
@@ -91,14 +103,41 @@ class PremiumCollector:
                 "prev_close": prev_close,
                 "t_open": t_open,
                 "premium_pct": premium_pct,
+                "pct_chg": pct_chg,
+                "is_yizi": is_yizi,
+                "amount_billion": stock.get("amount_billion", 0),
             }
+            all_entries.append(entry)
 
             if limit_times == 1:
-                groups["first"].append(entry)
+                if pct_chg > 25:
+                    groups["first_30cm"].append(entry)
+                elif pct_chg > 15:
+                    groups["first_20cm"].append(entry)
+                else:
+                    groups["first_10cm"].append(entry)
+                if is_yizi:
+                    groups["first_board_yizi"].append(entry)
             elif limit_times == 2:
                 groups["second"].append(entry)
             else:
                 groups["third_plus"].append(entry)
+                if limit_times == 3:
+                    groups["third_board"].append(entry)
+                elif limit_times == 4:
+                    groups["fourth_board"].append(entry)
+                else:
+                    groups["fifth_board_plus"].append(entry)
+
+            if is_yizi and limit_times >= 2:
+                groups["yizi_first_open"].append(entry)
+
+        # 容量票：按 T-1 成交额降序取前 10
+        capacity_top10 = sorted(
+            all_entries,
+            key=lambda x: x.get("amount_billion", 0),
+            reverse=True,
+        )[:10]
 
         # 3. 聚合统计
         def _agg(items: list[dict]) -> dict:
@@ -116,13 +155,23 @@ class PremiumCollector:
                 "detail": sorted(items, key=lambda x: x["premium_pct"], reverse=True)[:10],
             }
 
+        all_first = groups["first_10cm"] + groups["first_20cm"] + groups["first_30cm"]
         result = {
             "computed_at": datetime.now().isoformat(),
             "trade_date": trade_date,
             "prev_date": prev_date,
-            "first_board": _agg(groups["first"]),
+            "first_board": _agg(all_first),
+            "first_board_10cm": _agg(groups["first_10cm"]),
+            "first_board_20cm": _agg(groups["first_20cm"]),
+            "first_board_30cm": _agg(groups["first_30cm"]),
+            "first_board_yizi": _agg(groups["first_board_yizi"]),
             "second_board": _agg(groups["second"]),
             "third_board_plus": _agg(groups["third_plus"]),
+            "third_board": _agg(groups["third_board"]),
+            "fourth_board": _agg(groups["fourth_board"]),
+            "fifth_board_plus": _agg(groups["fifth_board_plus"]),
+            "yizi_first_open": _agg(groups["yizi_first_open"]),
+            "capacity_top10": _agg(capacity_top10),
         }
 
         # 4. 写回 T-1 的 post-market.yaml
@@ -143,9 +192,6 @@ class PremiumCollector:
             return ""
 
         prev = result.get("prev_date", "")
-        fb = result.get("first_board", {})
-        sb = result.get("second_board", {})
-        tb = result.get("third_board_plus", {})
 
         lines = [
             f"**{prev} 涨停板次日溢价率回填**",
@@ -162,8 +208,17 @@ class PremiumCollector:
                 f"溢价均值：{data.get('premium_mean', 0):+.2f}%",
             ]
 
-        lines += _fmt_group("首板", fb)
-        lines += _fmt_group("二板", sb)
-        lines += _fmt_group("三板+", tb)
+        lines += _fmt_group("首板（合计）", result.get("first_board", {}))
+        lines += _fmt_group("  ├ 10cm首板", result.get("first_board_10cm", {}))
+        lines += _fmt_group("  ├ 20cm首板", result.get("first_board_20cm", {}))
+        lines += _fmt_group("  └ 30cm首板", result.get("first_board_30cm", {}))
+        lines += _fmt_group("首板一字", result.get("first_board_yizi", {}))
+        lines += _fmt_group("二板", result.get("second_board", {}))
+        lines += _fmt_group("三板+（合计）", result.get("third_board_plus", {}))
+        lines += _fmt_group("  ├ 三板", result.get("third_board", {}))
+        lines += _fmt_group("  ├ 四板", result.get("fourth_board", {}))
+        lines += _fmt_group("  └ 五板+", result.get("fifth_board_plus", {}))
+        lines += _fmt_group("一字首开（连板）", result.get("yizi_first_open", {}))
+        lines += _fmt_group("容量票 Top10", result.get("capacity_top10", {}))
 
         return "\n".join(lines)

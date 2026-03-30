@@ -256,10 +256,16 @@ def cmd_post(config: dict, target_date: str):
     market_collector = MarketCollector(registry)
     raw_data = market_collector.collect_post_market(target_date)
 
-    # 采集持仓数据
+    # 采集持仓数据 + 盘后公告
     holdings_collector = HoldingsCollector(registry)
     holdings_collector.load()
     holdings_data = holdings_collector.collect_holdings_data(target_date)
+
+    holdings_anns = {}
+    try:
+        holdings_anns = holdings_collector.collect_holdings_announcements(target_date, target_date)
+    except Exception as e:
+        logger.warning(f"持仓盘后公告采集失败: {e}")
 
     # 生成报告
     generator = ReportGenerator()
@@ -267,6 +273,7 @@ def cmd_post(config: dict, target_date: str):
         date=target_date,
         raw_data=raw_data,
         holdings_data=holdings_data,
+        holdings_announcements=holdings_anns,
     )
 
     print(md_text)

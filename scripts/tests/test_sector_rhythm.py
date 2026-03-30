@@ -477,3 +477,204 @@ class TestLaunchNotLongStreak:
         }
         r = analyzer._classify_phase(sig)
         assert r["phase"] != PHASE_LAUNCH
+
+
+class TestTodayDataInjection:
+    """analyze() 应将 today_raw_data 注入历史序列（今日 YAML 尚未保存时）"""
+
+    def test_rank_today_from_raw_data(self, tmp_path):
+        """今日 YAML 不存在时，rank_today 应从 today_raw_data 获取"""
+        daily = tmp_path / "daily"
+        sec = [_make_sector_entry("AI", 1, 3.0)]
+        for d in ["2026-03-25", "2026-03-26", "2026-03-27"]:
+            _write_post_market(daily / d, d, sec)
+
+        analyzer = _build_analyzer(tmp_path)
+        today_raw = {
+            "sector_industry": {
+                "data": [
+                    {"name": "AI", "change_pct": 4.0, "top_stock": "X", "volume_billion": 1.0},
+                    {"name": "新题材", "change_pct": 5.0, "top_stock": "Y", "volume_billion": 2.0},
+                ]
+            },
+        }
+        results = analyzer.analyze(today_raw, "industry", today_date="2026-03-28")
+
+        ai = next(r for r in results if r["name"] == "AI")
+        assert ai["rank_today"] == 1
+        assert ai["change_today"] == 4.0
+        assert ai["consecutive_in_top30"] == 4  # 25,26,27,28
+
+        new = next(r for r in results if r["name"] == "新题材")
+        assert new["rank_today"] == 2
+        assert new["consecutive_in_top30"] == 1
+
+    def test_no_double_injection(self, tmp_path):
+        """如果今日 YAML 已存在，不应重复注入"""
+        daily = tmp_path / "daily"
+        sec = [_make_sector_entry("AI", 1, 3.0)]
+        for d in ["2026-03-27", "2026-03-28"]:
+            _write_post_market(daily / d, d, sec)
+
+        analyzer = _build_analyzer(tmp_path)
+        today_raw = {
+            "sector_industry": {"data": [
+                {"name": "AI", "change_pct": 3.0, "top_stock": "A", "volume_billion": 1.0},
+            ]},
+        }
+        results = analyzer.analyze(today_raw, "industry", today_date="2026-03-28")
+        ai = next(r for r in results if r["name"] == "AI")
+        assert ai["consecutive_in_top30"] == 2  # 不应变成 3
+
+
+class TestSortedDateInjection:
+    """Bug fix: bisect.insort 保持 all_dates 升序，避免未来日期污染信号计算。"""
+
+    def test_historical_date_maintains_sorted_order(self, tmp_path):
+        """分析一个介于已有历史日期之间的日期时，all_dates 仍保持升序。"""
+        daily = tmp_path / "daily"
+        sec = [_make_sector_entry("AI", 1, 3.0)]
+
+        for d in ["2026-03-25", "2026-03-26", "2026-03-27", "2026-03-31"]:
+            _write_post_market(daily / d, d, sec)
+
+        analyzer = _build_analyzer(tmp_path)
+        today_raw = {
+            "sector_industry": {
+                "data": [
+                    {"name": "AI", "change_pct": 4.0, "top_stock": "X", "volume_billion": 1.0},
+                ]
+            },
+        }
+        # 分析 03-28：介于 03-27 和 03-31 之间
+        # 修复前 append → [..., "2026-03-31", "2026-03-28"]（乱序）
+        #   → dates_up_to_today 会包含 03-31（未来日期），consecutive 和 cumulative 出错
+        # 修复后 bisect.insort → [..., "2026-03-27", "2026-03-28", "2026-03-31"]
+        results = analyzer.analyze(today_raw, "industry", today_date="2026-03-28")
+
+        ai = next(r for r in results if r["name"] == "AI")
+        # 25, 26, 27, 28 连续 → consecutive=4（03-31 不应被计入）
+        assert ai["consecutive_in_top30"] == 4
+        # cumulative_pct_5d 只含 25~28 的数据，不含 31
+        assert ai["cumulative_pct_5d"] == pytest.approx(3.0 * 3 + 4.0)
+
+    def test_future_data_excluded_from_signals(self, tmp_path):
+        """注入日期在中间时，晚于该日期的历史数据不应影响 rank_change_3d 等。"""
+        daily = tmp_path / "daily"
+
+        for d in ["2026-03-24", "2026-03-25", "2026-03-26", "2026-03-27"]:
+            _write_post_market(daily / d, d, [
+                _make_sector_entry("板块X", 1, 2.0),
+            ])
+        # 03-30 有数据（板块X 排名变为 20）
+        _write_post_market(daily / "2026-03-30", "2026-03-30", [
+            _make_sector_entry("板块X", 20, -1.0),
+        ])
+
+        analyzer = _build_analyzer(tmp_path)
+        today_raw = {
+            "sector_industry": {
+                "data": [
+                    {"name": "板块X", "change_pct": 3.0, "top_stock": "Z", "volume_billion": 1.0},
+                ]
+            },
+        }
+        # 分析 03-28：位于 03-27 和 03-30 之间
+        results = analyzer.analyze(today_raw, "industry", today_date="2026-03-28")
+
+        x = next(r for r in results if r["name"] == "板块X")
+        # rank_change_3d = rank_today(1) - rank_3d_ago(1) = 0
+        # 修复前若乱序，03-30 可能被纳入 dates_up_to_today 导致 3d 前取到错误日期
+        assert x["signals"]["rank_change_3d"] == pytest.approx(0)
+        # consecutive = 24, 25, 26, 27, 28 全部上榜 → 5
+        assert x["consecutive_in_top30"] == 5
+
+
+class TestInjectionScope:
+    """Bug fix: 只注入 target_names 范围内的板块到 history，避免多余数据。"""
+
+    def test_extra_name_beyond_top10_gets_correct_rank(self, tmp_path):
+        """extra_names 中排名在前 10 之外的板块，注入时仍保持原始排名。"""
+        daily = tmp_path / "daily"
+        sec_hist = [_make_sector_entry("目标板块", 1, 2.0)]
+        for d in ["2026-03-25", "2026-03-26", "2026-03-27"]:
+            _write_post_market(daily / d, d, sec_hist)
+
+        sectors_data = [
+            {"name": f"板块{i}", "change_pct": 5.0 - i * 0.1,
+             "top_stock": "X", "volume_billion": 1.0}
+            for i in range(15)
+        ]
+        sectors_data[11] = {
+            "name": "目标板块", "change_pct": 2.0,
+            "top_stock": "Z", "volume_billion": 1.0,
+        }
+        today_raw = {"sector_industry": {"data": sectors_data}}
+
+        analyzer = _build_analyzer(tmp_path)
+        results = analyzer.analyze(
+            today_raw, "industry",
+            today_date="2026-03-28",
+            extra_names=["目标板块"],
+        )
+
+        target = next(r for r in results if r["name"] == "目标板块")
+        # 排名来自 enumerate 位置：index 11 → rank 12
+        assert target["rank_today"] == 12
+        # 连续性：25, 26, 27 历史 + 28 注入 → 4
+        assert target["consecutive_in_top30"] == 4
+
+    def test_non_target_sectors_excluded_from_injection(self, tmp_path):
+        """不在 target_names 中的板块不应被注入，不影响分析结果。"""
+        analyzer = _build_analyzer(tmp_path)
+        sectors_data = [
+            {"name": f"板块{i}", "change_pct": 5.0 - i * 0.1,
+             "top_stock": "X", "volume_billion": 1.0}
+            for i in range(15)
+        ]
+        today_raw = {"sector_industry": {"data": sectors_data}}
+
+        results = analyzer.analyze(today_raw, "industry", today_date="2026-03-28")
+        result_names = {r["name"] for r in results}
+        # 只分析前 10 个板块
+        assert len(results) == 10
+        assert "板块10" not in result_names
+        assert "板块14" not in result_names
+
+
+class TestEmptyDaysSkipped:
+    """空板块数据的日期（如周末测试残留）不应计入 all_dates，避免截断连续性。"""
+
+    def test_empty_day_not_in_all_dates(self, tmp_path):
+        daily = tmp_path / "daily"
+        sec = [_make_sector_entry("锂", 1, 5.0)]
+
+        _write_post_market(daily / "2026-03-26", "2026-03-26", sec)
+        _write_post_market(daily / "2026-03-27", "2026-03-27", sec)
+        # 周末空文件
+        _write_post_market(daily / "2026-03-28", "2026-03-28", [])
+
+        analyzer = _build_analyzer(tmp_path)
+        history, all_dates = analyzer._load_history("industry")
+
+        assert "2026-03-28" not in all_dates
+        assert "2026-03-26" in all_dates
+        assert "2026-03-27" in all_dates
+        assert history["锂"][-1]["date"] == "2026-03-27"
+
+    def test_consecutive_not_broken_by_empty_day(self, tmp_path):
+        daily = tmp_path / "daily"
+        sec = [_make_sector_entry("AI", 1, 3.0)]
+
+        for d in ["2026-03-25", "2026-03-26", "2026-03-27"]:
+            _write_post_market(daily / d, d, sec)
+        _write_post_market(daily / "2026-03-28", "2026-03-28", [])  # 空日
+        _write_post_market(daily / "2026-03-31", "2026-03-31", sec)
+
+        analyzer = _build_analyzer(tmp_path)
+        today_raw = {
+            "sector_industry": {"data": [{"name": "AI", "change_pct": 3.0,
+                                          "top_stock": "A", "volume_billion": 1.0}]},
+        }
+        results = analyzer.analyze(today_raw, "industry", today_date="2026-03-31")
+        assert results[0]["consecutive_in_top30"] == 4  # 25,26,27,31 连续（28被跳过）

@@ -119,8 +119,15 @@ class DataProvider(ABC):
     def get_sector_fund_flow(self, date: str) -> DataResult:
         return DataResult(data=None, source=self.name, error="not implemented")
 
+    # ---- 市场宽度 ----
+    def get_market_breadth(self, date: str) -> DataResult:
+        return DataResult(data=None, source=self.name, error="not implemented")
+
     # ---- 资金流向 ----
     def get_northbound(self, date: str) -> DataResult:
+        return DataResult(data=None, source=self.name, error="not implemented")
+
+    def get_northbound_top_stocks(self, date: str) -> DataResult:
         return DataResult(data=None, source=self.name, error="not implemented")
 
     def get_margin_data(self, date: str) -> DataResult:

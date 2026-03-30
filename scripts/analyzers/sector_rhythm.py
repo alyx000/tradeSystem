@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import bisect
 import logging
 from pathlib import Path
 from typing import Optional
@@ -98,8 +99,10 @@ class SectorRhythmAnalyzer:
         all_dates: list[str] = []
         for day_dir in self._sorted_daily_dirs():
             date = day_dir.name
-            all_dates.append(date)
             sectors = self._load_day_sectors(day_dir, sector_type)
+            if not sectors:
+                continue
+            all_dates.append(date)
             for idx, s in enumerate(sectors):
                 name = s.get("name", "")
                 if not name:
@@ -394,6 +397,21 @@ class SectorRhythmAnalyzer:
 
         # 加载所有历史数据（一次性，避免重复 IO）
         history, all_dates = self._load_history(sector_type)
+
+        # 将今日数据注入历史序列（今日 YAML 在 analyze 调用时尚未保存）
+        if date and date not in set(all_dates):
+            bisect.insort(all_dates, date)
+            for idx, s in enumerate(today_sectors):
+                name_s = s.get("name", "")
+                if not name_s or name_s not in seen:
+                    continue
+                history.setdefault(name_s, []).append({
+                    "date": date,
+                    "rank": idx + 1,
+                    "change_pct": float(s.get("change_pct", 0) or 0),
+                    "volume_billion": float(s.get("volume_billion", 0) or 0),
+                    "top_stock": s.get("top_stock", ""),
+                })
 
         results = []
         for name in target_names:
