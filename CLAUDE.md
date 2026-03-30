@@ -183,8 +183,25 @@ AI 自身的分析结论标注为 `[判断]`，并注明依据。
 | 纯手动 | 用户判断 | 情绪定性、最票识别、三位一体结论、买卖决策 |
 
 ### 推送渠道
-- Discord / QQ Bot / 企业微信（多渠道并行推送）
-- 报告同时存储到 `daily/` 目录和 Web 数据目录
+
+**支持渠道**：Discord、QQ Bot、企业微信（多渠道并行推送）
+
+**配置方式**：
+1. 复制 `scripts/.env.example` 为 `scripts/.env`
+2. 填入各渠道的 Webhook URL / 目标 ID
+3. 在 `scripts/config.yaml` 中启用对应渠道
+
+**渠道特性**：
+- **Discord**：支持 Markdown 格式、表格、代码块，适合长报告
+- **QQ Bot**：通过 OpenClaw `message` 工具推送，支持私聊/群聊
+- **企业微信**：支持 Markdown，适合办公场景
+
+**推送类型**：
+- `pre_market`（盘前简报）：07:00 自动推送
+- `post_market`（盘后报告）：20:00 自动推送
+- `alerts`（实时告警）：触发条件时推送
+
+报告同时存储到 `daily/` 目录和 Web 数据目录。
 
 ### AI 不应做的事
 - 不做具体的买卖建议

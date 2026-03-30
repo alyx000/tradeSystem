@@ -101,7 +101,7 @@ def setup_providers(config: dict):
 
 def setup_pushers(config: dict):
     """初始化推送渠道"""
-    from pushers import DiscordPusher, WechatPusher, MultiPusher
+    from pushers import DiscordPusher, WechatPusher, QQBotPusher, MultiPusher
 
     multi = MultiPusher()
 
@@ -118,6 +118,15 @@ def setup_pushers(config: dict):
         })
         dc.initialize()
         multi.register(dc)
+
+    # QQ Bot
+    qq_config = push_config.get("qq", {})
+    if qq_config.get("enabled"):
+        qq = QQBotPusher({
+            "channels": qq_config.get("channels", {}),
+        })
+        qq.initialize()
+        multi.register(qq)
 
     # 企业微信
     wx_config = push_config.get("wechat", {})

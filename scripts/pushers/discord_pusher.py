@@ -75,8 +75,46 @@ class DiscordPusher(MessagePusher):
         return self._send(url, text)
 
     def send_markdown(self, title: str, content: str, channel: str = "default") -> bool:
-        # Discord 不原生支持完整 Markdown，但支持代码块
-        # 对于表格等用代码块包裹
+        """
+        发送 Markdown 格式消息到 Discord
+        
+        Discord 支持的 Markdown 格式：
+        - **粗体**、*斜体*、***粗斜体***
+        - __下划线__、~~删除线~~
+        - > 引用
+        - ```代码块```（支持语法高亮）
+        - [链接](url)
+        - 无序列表 - / * 、有序列表 1. 2.
+        - 表格需用代码块包裹（Discord 不原生支持表格）
+        """
         url = self.webhooks.get(channel, self.webhooks.get("default", ""))
-        formatted = f"**{title}**\n\n{content}"
+        
+        # 格式化标题
+        formatted = f"**📌 {title}**\n\n"
+        
+        # 处理内容中的表格（用代码块包裹）
+        lines = content.split("\n")
+        in_table = False
+        table_lines = []
+        
+        for line in lines:
+            # 检测表格行（包含 | 符号）
+            if "|" in line and line.strip().startswith("|"):
+                if not in_table:
+                    in_table = True
+                    table_lines = []
+                table_lines.append(line)
+            else:
+                if in_table:
+                    # 表格结束，用代码块包裹
+                    if table_lines:
+                        formatted += "```\n" + "\n".join(table_lines) + "\n```\n\n"
+                    in_table = False
+                    table_lines = []
+                formatted += line + "\n"
+        
+        # 处理剩余的表格
+        if in_table and table_lines:
+            formatted += "```\n" + "\n".join(table_lines) + "\n```\n\n"
+        
         return self._send(url, formatted)

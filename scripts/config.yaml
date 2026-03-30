@@ -59,22 +59,27 @@ schedule:
 
 # 推送配置
 push:
+  # Discord Webhook 推送
   discord:
-    enabled: false
-    webhook_url: ""  # 在 .env 中配置
+    enabled: false  # 改为 true 启用
+    # Webhook URL 在 .env 中配置：DISCORD_WEBHOOK_PRE, DISCORD_WEBHOOK_POST, DISCORD_WEBHOOK_ALERT
     channels:
-      pre_market: ""
-      post_market: ""
-      alerts: ""
+      pre_market: "盘前简报"      # 盘前简报频道
+      post_market: "盘后报告"     # 盘后报告频道
+      alerts: "交易告警"          # 实时告警频道
 
+  # QQ Bot 推送（通过 OpenClaw message 工具）
   qq:
-    enabled: false
-    bot_api: ""
-    group_id: ""
+    enabled: false  # 改为 true 启用
+    channels:
+      pre_market: "user:openid_xxx"    # 私聊：user:openid，群聊：group:group_id
+      post_market: "group:group_xxx"   # 盘后报告推送到群聊
+      alerts: "user:openid_xxx"        # 告警推送到私聊
 
+  # 企业微信机器人推送
   wechat:
-    enabled: false
-    webhook_url: ""  # 企业微信机器人
+    enabled: false  # 改为 true 启用
+    # Webhook URL 在 .env 中配置：WECHAT_WEBHOOK
 
 # 存储配置
 storage:
