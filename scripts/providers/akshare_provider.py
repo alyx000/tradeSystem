@@ -72,6 +72,9 @@ class AkshareProvider(DataProvider):
             "get_global_index",
             "get_commodity",
             "get_forex",
+            "get_market_news",
+            "get_macro_calendar",
+            "get_macro_calendar_range",
             "is_trade_day",
         ]
 
@@ -126,6 +129,8 @@ class AkshareProvider(DataProvider):
         """
         全球指数：index_global_spot_em 按中文名称匹配；
         A50：futures_global_spot_em 中「A50期指当月连续」等；
+        VIX：index_global_spot_em 中「VIX恐慌指数」；
+        US10Y：index_global_spot_em 中含「美国10年期」，失败则 bond_zh_us_rate()；
         部分指数可回退 index_global_hist_em（推算涨跌幅）。
         """
         name_map = {
@@ -138,6 +143,8 @@ class AkshareProvider(DataProvider):
             "ftse": "英国富时100",
             "dax": "德国DAX30",
             "a50": "__A50_FUTURES__",
+            "vix": "__VIX__",
+            "us10y": "__US10Y__",
         }
         zh_name = name_map.get(index_name, index_name)
 
@@ -169,7 +176,79 @@ class AkshareProvider(DataProvider):
                 }
                 return DataResult(data=data, source="akshare:futures_global_spot_em")
 
-            if zh_name not in ("__A50_FUTURES__",):
+            if index_name == "vix":
+                # AkShare 无 US VIX 接口，使用 yfinance
+                try:
+                    import yfinance as yf
+                    hist = yf.Ticker("^VIX").history(period="3d")
+                    if hist is not None and not hist.empty:
+                        hist = hist.sort_index()
+                        close_val = round(float(hist["Close"].iloc[-1]), 2)
+                        prev_val = round(float(hist["Close"].iloc[-2]), 2) if len(hist) >= 2 else close_val
+                        change_pct = round((close_val - prev_val) / prev_val * 100, 2) if prev_val else 0.0
+                        return DataResult(
+                            data={
+                                "name": "VIX恐慌指数",
+                                "close": close_val,
+                                "change_pct": change_pct,
+                            },
+                            source="yfinance:^VIX",
+                        )
+                except Exception as e:
+                    logger.warning(f"yfinance VIX 获取失败: {e}")
+                return DataResult(
+                    data=None, source=self.name, error="未找到 VIX 数据（yfinance 不可用）"
+                )
+
+            if index_name == "us10y":
+                # 先尝试 index_global_spot_em
+                df = self._global_spot_em()
+                for kw in ("美国10年期国债", "美10年期国债", "美债10年"):
+                    sub = df[df["名称"].str.contains(kw, na=False)]
+                    if not sub.empty and pd.notna(sub.iloc[0].get("最新价")):
+                        row = sub.iloc[0]
+                        close_val = _to_float_price(row.get("最新价"))
+                        change_pct = _to_float_pct(row.get("涨跌幅"))
+                        return DataResult(
+                            data={
+                                "name": "美债10年期收益率",
+                                "close": close_val,
+                                "change_pct": change_pct,
+                                # 将涨跌幅近似转为基点（收益率×涨跌幅%×100）
+                                "change_bps": round(close_val * change_pct, 2),
+                            },
+                            source="akshare:index_global_spot_em",
+                        )
+                # 回退：bond_zh_us_rate
+                try:
+                    df_bond = self.ak.bond_zh_us_rate(start_date="20200101")
+                    if df_bond is not None and not df_bond.empty:
+                        df_bond = df_bond.sort_values(df_bond.columns[0])
+                        # 找 10 年期列
+                        col_10y = next(
+                            (c for c in df_bond.columns if "10" in str(c)), None
+                        )
+                        if col_10y:
+                            row = df_bond.iloc[-1]
+                            prev_row = df_bond.iloc[-2] if len(df_bond) >= 2 else row
+                            close_val = _to_float_price(row[col_10y])
+                            prev_val = _to_float_price(prev_row[col_10y])
+                            change_bps = round((close_val - prev_val) * 100, 2)
+                            return DataResult(
+                                data={
+                                    "name": "美债10年期收益率",
+                                    "close": close_val,
+                                    "change_bps": change_bps,
+                                },
+                                source="akshare:bond_zh_us_rate",
+                            )
+                except Exception:
+                    pass
+                return DataResult(
+                    data=None, source=self.name, error="AkShare: 未找到美债10年期数据"
+                )
+
+            if zh_name not in ("__A50_FUTURES__", "__VIX__", "__US10Y__"):
                 row = self._row_global_spot_by_name(zh_name)
                 if row is not None and pd.notna(row.get("最新价")):
                     data = {
@@ -364,6 +443,136 @@ class AkshareProvider(DataProvider):
             return DataResult(data=data, source="akshare:northbound")
         except Exception as e:
             return DataResult(data=None, source=self.name, error=str(e))
+
+    # ---- 财经新闻 ----
+
+    def get_market_news(self, date: str, limit: int = 15) -> DataResult:
+        """
+        采集财经快讯。
+        使用 stock_news_em(symbol="快讯")，过滤 date 及前一自然日的内容。
+        返回 list[dict]，每条含 title / summary / time / source。
+        """
+        from datetime import datetime, timedelta
+
+        try:
+            df = self.ak.stock_news_em(symbol="快讯")
+            if df is None or df.empty:
+                return DataResult(data=[], source="akshare:stock_news_em")
+
+            # 统一列名（akshare 不同版本列名略有差异）
+            col_map: dict[str, str] = {}
+            for col in df.columns:
+                lc = str(col)
+                if "标题" in lc or "title" in lc.lower():
+                    col_map["title"] = col
+                elif "内容" in lc or "摘要" in lc or "content" in lc.lower():
+                    col_map["summary"] = col
+                elif "时间" in lc or "日期" in lc or "date" in lc.lower():
+                    col_map["time"] = col
+                elif "来源" in lc or "source" in lc.lower():
+                    col_map["source"] = col
+
+            target_date = datetime.strptime(date, "%Y-%m-%d").date()
+            prev_date = target_date - timedelta(days=1)
+
+            results: list[dict] = []
+            for _, row in df.iterrows():
+                raw_time = str(row.get(col_map.get("time", ""), ""))
+                # 解析时间字符串，格式可能为 "2026-03-29 07:30:00" 或 "03-29 07:30"
+                item_date = None
+                for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%m-%d %H:%M"):
+                    try:
+                        parsed = datetime.strptime(raw_time[:len(fmt) + 2].strip(), fmt)
+                        if fmt.startswith("%m-"):
+                            parsed = parsed.replace(year=target_date.year)
+                        item_date = parsed.date()
+                        break
+                    except ValueError:
+                        continue
+
+                if item_date is None or not (prev_date <= item_date <= target_date):
+                    continue  # 只取昨天和今天的新闻；时间戳无法解析或超出范围时丢弃
+
+                title = str(row.get(col_map.get("title", ""), "")).strip()
+                if not title:
+                    continue
+                results.append({
+                    "title": title,
+                    "summary": str(row.get(col_map.get("summary", ""), ""))[:200].strip(),
+                    "time": raw_time,
+                    "source": str(row.get(col_map.get("source", ""), "东方财富")).strip(),
+                })
+                if len(results) >= limit:
+                    break
+
+            return DataResult(data=results, source="akshare:stock_news_em")
+        except Exception as e:
+            return DataResult(data=None, source=self.name, error=str(e))
+
+    # ---- 宏观日历 ----
+
+    def get_macro_calendar(self, date: str) -> DataResult:
+        """
+        采集当日宏观经济日历事件，使用百度股市通经济日历。
+        news_economic_baidu(date=YYYYMMDD) 列：日期/时间/地区/事件/公布/预期/前值/重要性
+        重要性：1=低 / 2=中 / 3=高
+        """
+        try:
+            date_compact = date.replace("-", "")
+            df = self.ak.news_economic_baidu(date=date_compact)
+            if df is None or df.empty:
+                return DataResult(data=[], source="akshare:news_economic_baidu")
+
+            importance_map = {"1": "低", "2": "中", "3": "高"}
+            results: list[dict] = []
+            for _, row in df.iterrows():
+                imp_raw = str(row.get("重要性", "")).strip()
+                importance = importance_map.get(imp_raw, imp_raw)
+                actual_raw = row.get("公布", "")
+                actual = "" if (actual_raw is None or (hasattr(actual_raw, '__class__') and str(type(actual_raw)) == "<class 'float'>")) else str(actual_raw).strip()
+                expected_raw = row.get("预期", "")
+                expected = "" if (expected_raw is None or str(expected_raw) == "nan") else str(expected_raw).strip()
+                prior_raw = row.get("前值", "")
+                prior = "" if (prior_raw is None or str(prior_raw) == "nan") else str(prior_raw).strip()
+                results.append({
+                    "event": str(row.get("事件", "")).strip(),
+                    "time": str(row.get("时间", "")).strip(),
+                    "region": str(row.get("地区", "")).strip(),
+                    "importance": importance,
+                    "actual": actual,
+                    "expected": expected,
+                    "prior": prior,
+                })
+
+            return DataResult(data=results, source="akshare:news_economic_baidu")
+        except Exception as e:
+            logger.warning(f"news_economic_baidu 失败: {e}，返回空列表")
+            return DataResult(data=[], source=self.name)
+
+    def get_macro_calendar_range(self, from_date: str, to_date: str) -> DataResult:
+        """
+        批量拉取 from_date ~ to_date 范围内的经济日历事件。
+        每天调用一次 news_economic_baidu，结果合并后返回。
+        每条记录附加 date 字段（YYYY-MM-DD）。
+        """
+        from datetime import date as _date, timedelta
+        try:
+            start = _date.fromisoformat(from_date)
+            end = _date.fromisoformat(to_date)
+        except ValueError as e:
+            return DataResult(data=None, source=self.name, error=f"日期格式错误: {e}")
+
+        all_events: list[dict] = []
+        d = start
+        while d <= end:
+            date_str = d.isoformat()
+            r = self.get_macro_calendar(date_str)
+            if r.success and r.data:
+                for ev in r.data:
+                    all_events.append({"date": date_str, **ev})
+            d += timedelta(days=1)
+
+        return DataResult(data=all_events, source="akshare:news_economic_baidu_range")
 
     # ---- 交易日历 ----
 

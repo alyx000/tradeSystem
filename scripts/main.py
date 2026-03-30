@@ -26,6 +26,9 @@
     # 检查数据源连通性
     python main.py check
 
+    # 预拉取未来 N 天宏观日历到 tracking/calendar_auto.yaml（供盘前合并）
+    python main.py prefetch-calendar [--days 14] [--from YYYY-MM-DD]
+
     # 更新持仓
     python main.py holdings --add 688041.SH 海光信息 200 225.0 国产AI链
     python main.py holdings --remove 688041.SH
@@ -38,6 +41,7 @@ import os
 import sys
 from datetime import datetime, date, timedelta
 from pathlib import Path
+from typing import Optional
 
 import yaml
 from dotenv import load_dotenv
@@ -150,6 +154,24 @@ def cmd_check(config: dict):
             print(f"  {p.name}: {'OK' if p.enabled else 'FAIL'}")
 
 
+def cmd_prefetch_calendar(config: dict, days: int, from_date: Optional[str]):
+    """预拉取宏观日历并写入 tracking/calendar_auto.yaml"""
+    logger.info(f"=== 预拉取宏观日历 days={days} from={from_date or 'today'} ===")
+    registry = setup_providers(config)
+    registry.initialize_all()
+
+    from collectors.market import prefetch_calendar
+
+    n_fetch, n_total = prefetch_calendar(
+        registry,
+        days=days,
+        from_date=from_date,
+        base_dir=BASE_DIR,
+    )
+    print(f"预拉取完成：API 返回 {n_fetch} 条，calendar_auto.yaml 共 {n_total} 条事件")
+    logger.info(f"calendar_auto 已更新：拉取 {n_fetch} 条，文件合计 {n_total} 条")
+
+
 def cmd_pre(config: dict, target_date: str):
     """执行盘前简报"""
     logger.info(f"=== 盘前简报 {target_date} ===")
@@ -178,6 +200,8 @@ def cmd_pre(config: dict, target_date: str):
         date=target_date,
         market_data=market_data,
         holdings_announcements=holdings_anns,
+        news=market_data.get("news", []),
+        calendar_events=market_data.get("calendar_events", []),
     )
 
     print(md_text)
@@ -434,6 +458,14 @@ def main():
     # check
     subparsers.add_parser("check", help="检查数据源连通性")
 
+    # prefetch-calendar
+    prefetch_parser = subparsers.add_parser(
+        "prefetch-calendar",
+        help="预拉取未来多日宏观日历到 tracking/calendar_auto.yaml",
+    )
+    prefetch_parser.add_argument("--days", type=int, default=14, help="从起始日起连续拉取的天数（默认 14）")
+    prefetch_parser.add_argument("--from", dest="from_date", default=None, help="起始日 YYYY-MM-DD（默认今天）")
+
     # pre
     pre_parser = subparsers.add_parser("pre", help="生成盘前简报")
     pre_parser.add_argument("--date", default=date.today().isoformat(), help="日期 YYYY-MM-DD")
@@ -474,6 +506,8 @@ def main():
 
     if args.command == "check":
         cmd_check(config)
+    elif args.command == "prefetch-calendar":
+        cmd_prefetch_calendar(config, args.days, args.from_date)
     elif args.command == "pre":
         cmd_pre(config, args.date)
     elif args.command == "post":

@@ -144,6 +144,17 @@ class DataProvider(ABC):
     def get_forex(self, pair: str) -> DataResult:
         return DataResult(data=None, source=self.name, error="not implemented")
 
+    # ---- 新闻 ----
+    def get_market_news(self, date: str, limit: int = 10) -> DataResult:
+        return DataResult(data=None, source=self.name, error="not implemented")
+
+    # ---- 宏观日历 ----
+    def get_macro_calendar(self, date: str) -> DataResult:
+        return DataResult(data=None, source=self.name, error="not implemented")
+
+    def get_macro_calendar_range(self, from_date: str, to_date: str) -> DataResult:
+        return DataResult(data=None, source=self.name, error="not implemented")
+
     # ---- 交易日历 ----
     def is_trade_day(self, date: str) -> DataResult:
         return DataResult(data=None, source=self.name, error="not implemented")

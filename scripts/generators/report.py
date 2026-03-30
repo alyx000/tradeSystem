@@ -53,14 +53,39 @@ class ReportGenerator:
                 lines.append(f"- {label}: 数据获取失败")
             else:
                 pct = info.get("change_pct", 0)
-                emoji_dir = "+" if pct >= 0 else ""
+                sign = "+" if pct >= 0 else ""
                 lines.append(
-                    f"- [事实] {label}: {info.get('close', 'N/A')} ({emoji_dir}{pct}%) [★★★]"
+                    f"- [事实] {label}: {info.get('close', 'N/A')} ({sign}{pct}%) [★★★]"
+                )
+
+        # VIX + 美债10年期（风险指标，附在外盘节末尾）
+        ri = market_data.get("risk_indicators", {})
+        vix_info = ri.get("vix", {})
+        if vix_info and "error" not in vix_info:
+            pct = vix_info.get("change_pct", 0)
+            sign = "+" if pct >= 0 else ""
+            lines.append(
+                f"- [事实] VIX恐慌指数: {vix_info.get('close', 'N/A')} ({sign}{pct}%) [★★★]"
+            )
+        us10y_info = ri.get("us10y", {})
+        if us10y_info and "error" not in us10y_info:
+            close_val = us10y_info.get("close", "N/A")
+            if "change_bps" in us10y_info:
+                bps = us10y_info["change_bps"]
+                bps_str = f"+{bps}bp" if bps >= 0 else f"{bps}bp"
+                lines.append(
+                    f"- [事实] 美债10年期收益率: {close_val}% ({bps_str}) [★★★]"
+                )
+            else:
+                pct = us10y_info.get("change_pct", 0)
+                sign = "+" if pct >= 0 else ""
+                lines.append(
+                    f"- [事实] 美债10年期收益率: {close_val}% ({sign}{pct}%) [★★★]"
                 )
 
         # 商品 & 汇率
         lines.append("\n## 二、大宗商品 & 汇率\n")
-        for section, label in [("commodities", "商品"), ("forex", "汇率")]:
+        for section in ["commodities", "forex"]:
             for key, info in market_data.get(section, {}).items():
                 if "error" in info:
                     continue
@@ -70,40 +95,65 @@ class ReportGenerator:
                     f"- [事实] {info.get('name', key)}: {info.get('close', 'N/A')} ({sign}{pct}%) [★★★]"
                 )
 
-        # 持仓公告
+        # 今日日历：先算展示列表，再与持仓/新闻一起按顺序编号（三、四、五…）
+        cal_shown: list[dict] = []
+        if calendar_events:
+            high = [e for e in calendar_events if e.get("importance") in ("高", "3")]
+            mid = [e for e in calendar_events if e.get("importance") in ("中", "2")]
+            low = [e for e in calendar_events if e.get("importance") not in ("高", "3", "中", "2")]
+            shown = high + mid
+            if len(shown) < 30:
+                shown += low[: 30 - len(shown)]
+            cal_shown = shown[:30]
+
+        # 动态章节：每出现一个「##」小节，序号 +1（与持仓是否为空无关）
+        idx = 3
         if holdings_announcements:
-            lines.append("\n## 三、持仓股公告\n")
+            lines.append(f"\n## {_roman(idx)}、持仓股公告\n")
+            idx += 1
             for code, info in holdings_announcements.items():
-                name = info.get("name", code)
+                stock_name = info.get("name", code)
                 anns = info.get("announcements", [])
                 if anns:
-                    lines.append(f"### {name} ({code})")
-                    for a in anns[:5]:  # 最多5条
+                    lines.append(f"### {stock_name} ({code})")
+                    for a in anns[:5]:
                         lines.append(f"- [事实] ★★★ {a.get('title', '')} ({a.get('ann_date', '')})")
                 else:
-                    lines.append(f"- {name}: 无新公告")
+                    lines.append(f"- {stock_name}: 无新公告")
 
-        # 新闻
         if news:
-            lines.append("\n## 四、重要新闻\n")
-            for n in news[:10]:
-                lines.append(
-                    f"- [{n.get('type', '事实')}] {n.get('confidence', '★★☆')} "
-                    f"{n.get('timeliness', '[近期]')} {n.get('content', '')}"
-                )
-                if n.get("source"):
-                    lines.append(f"  来源: {n['source']}")
+            lines.append(f"\n## {_roman(idx)}、财经新闻\n")
+            idx += 1
+            for n in news[:15]:
+                time_str = n.get("time", "")
+                src = n.get("source", "")
+                title = n.get("title", n.get("content", ""))
+                meta = " | ".join(filter(None, [time_str, src]))
+                lines.append(f"- [事实] ★★☆ {title}")
+                if meta:
+                    lines.append(f"  `{meta}`")
 
-        # 日历
-        if calendar_events:
-            lines.append("\n## 五、日历提醒\n")
-            for e in calendar_events:
-                lines.append(f"- {e.get('event', '')} | {e.get('time', '')} | {e.get('impact', '')}")
+        if cal_shown:
+            lines.append(f"\n## {_roman(idx)}、今日日历\n")
+            idx += 1
+            if len(cal_shown) < len(calendar_events or []):
+                lines.append(
+                    f"> 共 {len(calendar_events)} 条，优先展示高/中重要性事件（最多30条）\n"
+                )
+            lines.append("| 事件 | 地区 | 时间 | 重要性 | 预期 | 前值 |")
+            lines.append("|------|------|------|--------|------|------|")
+            for e in cal_shown:
+                importance = e.get("importance", e.get("impact", ""))
+                region = e.get("region", e.get("category", ""))
+                lines.append(
+                    f"| {e.get('event', '')} | {region} | {e.get('time', '')} | "
+                    f"{importance} | {e.get('expected', '')} | {e.get('prior', '')} |"
+                )
 
         # 底部提示
         lines.append("\n---")
-        lines.append("*以上数据自动采集，事实类信息已标注来源。")
-        lines.append("情绪判断、节点分析等主观定性请在复盘时手动补充。*")
+        lines.append("*以上数据自动采集，[事实] 类信息已标注来源。*")
+        lines.append("*情绪判断、节点分析等主观定性请在复盘时手动补充。*")
 
         md_text = "\n".join(lines)
 
@@ -264,6 +314,14 @@ class ReportGenerator:
 # ------------------------------------------------------------------
 # 板块节奏渲染（模块级工具函数）
 # ------------------------------------------------------------------
+
+def _roman(n: int) -> str:
+    """将整数转为中文序号（三、四、五…）"""
+    numerals = ["一", "二", "三", "四", "五", "六", "七", "八", "九", "十"]
+    if 1 <= n <= len(numerals):
+        return numerals[n - 1]
+    return str(n)
+
 
 _PHASE_ICON = {
     "启动": "[启动]",
