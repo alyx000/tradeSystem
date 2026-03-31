@@ -38,6 +38,8 @@ class ReportGenerator:
         watchlist_announcements: dict | None = None,
         news: list[dict] | None = None,
         calendar_events: list[dict] | None = None,
+        holdings_info: dict | None = None,
+        watchlist_info: dict | None = None,
     ) -> tuple[str, str]:
         """
         生成盘前简报。
@@ -179,6 +181,11 @@ class ReportGenerator:
                 else:
                     lines.append(f"- {stock_name}: 无新公告")
 
+        if holdings_info:
+            lines.append(f"\n## {_roman(idx)}、持仓信息面\n")
+            idx += 1
+            _render_stock_info_section(lines, holdings_info)
+
         if watchlist_announcements:
             lines.append(f"\n## {_roman(idx)}、关注池公告\n")
             idx += 1
@@ -191,6 +198,11 @@ class ReportGenerator:
                         lines.append(f"- [事实] ★★★ {a.get('title', '')} ({a.get('ann_date', '')})")
                 else:
                     lines.append(f"- {stock_name}: 无新公告")
+
+        if watchlist_info:
+            lines.append(f"\n## {_roman(idx)}、关注池信息面\n")
+            idx += 1
+            _render_stock_info_section(lines, watchlist_info)
 
         if news:
             lines.append(f"\n## {_roman(idx)}、财经新闻\n")
@@ -237,6 +249,8 @@ class ReportGenerator:
             "market_data": market_data,
             "holdings_announcements": holdings_announcements,
             "watchlist_announcements": watchlist_announcements,
+            "holdings_info": holdings_info or {},
+            "watchlist_info": watchlist_info or {},
             "news": news or [],
             "calendar_events": calendar_events or [],
         }
@@ -255,6 +269,8 @@ class ReportGenerator:
         raw_data: dict,
         holdings_data: list[dict] | None = None,
         holdings_announcements: dict | None = None,
+        watchlist_data: dict | None = None,
+        holdings_summary: dict | None = None,
     ) -> tuple[str, str]:
         """
         生成盘后数据报告。
@@ -415,6 +431,11 @@ class ReportGenerator:
         if holdings_data:
             lines.append(f"\n## {_roman(section_idx)}、持仓表现\n")
             section_idx += 1
+            if holdings_summary:
+                tv = holdings_summary.get("total_market_value", 0)
+                tp = holdings_summary.get("total_pnl_pct", 0)
+                sign_s = "+" if tp >= 0 else ""
+                lines.append(f"> 总市值 {tv:,.0f} 元，总盈亏 {sign_s}{tp}%\n")
             lines.append("| 股票 | 收盘 | 涨跌幅 | 成本 | 盈亏 | 成交额(亿) |")
             lines.append("|------|------|--------|------|------|-----------|")
             for s in holdings_data:
@@ -484,6 +505,9 @@ class ReportGenerator:
             "generated_at": datetime.now().isoformat(),
             "raw_data": raw_data,
             "holdings_data": holdings_data or [],
+            "holdings_announcements": holdings_announcements or {},
+            "holdings_summary": holdings_summary or {},
+            "watchlist_data": watchlist_data or {},
         }
         with open(yaml_path, "w", encoding="utf-8") as f:
             yaml.dump(yaml_data, f, allow_unicode=True, default_flow_style=False)
@@ -509,6 +533,38 @@ class ReportGenerator:
 # ------------------------------------------------------------------
 # 板块节奏渲染（模块级工具函数）
 # ------------------------------------------------------------------
+
+def _render_stock_info_section(lines: list[str], info_dict: dict) -> None:
+    """渲染个股信息面（互动易/研报/新闻），持仓和关注池共用。"""
+    for code, info in info_dict.items():
+        stock_name = info.get("name", code)
+        qa_list = info.get("investor_qa", [])
+        rr_list = info.get("research_reports", [])
+        news_list = info.get("news", [])
+        lines.append(f"### {stock_name} ({code})\n")
+        if qa_list:
+            lines.append("**互动易问答**")
+            for qa in qa_list[:3]:
+                lines.append(f"- Q: {qa.get('question', '')}")
+                ans = qa.get("answer", "")
+                if ans:
+                    lines.append(f"  A: {ans[:150]}")
+            lines.append("")
+        if rr_list:
+            lines.append("**研报动态**")
+            for rr in rr_list[:3]:
+                inst = rr.get("institution", "")
+                rating = rr.get("rating", "")
+                tp = rr.get("target_price", 0)
+                tp_str = f"，目标价 {tp}" if tp else ""
+                lines.append(f"- [观点] ★★☆ {inst}：{rating}{tp_str} ({rr.get('date', '')})")
+            lines.append("")
+        if news_list:
+            lines.append("**个股新闻**")
+            for n in news_list[:3]:
+                lines.append(f"- [事实] ★★☆ {n.get('title', '')} ({n.get('time', '')})")
+            lines.append("")
+
 
 def _roman(n: int) -> str:
     """将整数转为中文序号（三、四、五…）"""

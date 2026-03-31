@@ -220,6 +220,18 @@ def cmd_pre(config: dict, target_date: str):
     watchlist_collector = WatchlistCollector(registry)
     watchlist_anns = watchlist_collector.collect_watchlist_announcements(start, target_date)
 
+    # 采集信息面（互动易/研报/个股新闻）
+    holdings_info = {}
+    watchlist_info = {}
+    try:
+        holdings_info = holdings_collector.collect_stock_info(target_date)
+    except Exception as e:
+        logger.warning(f"持仓信息面采集失败: {e}")
+    try:
+        watchlist_info = watchlist_collector.collect_watchlist_info(target_date)
+    except Exception as e:
+        logger.warning(f"关注池信息面采集失败: {e}")
+
     # 生成报告
     generator = ReportGenerator()
     md_text, yaml_path = generator.generate_pre_market(
@@ -229,6 +241,8 @@ def cmd_pre(config: dict, target_date: str):
         watchlist_announcements=watchlist_anns,
         news=market_data.get("news", []),
         calendar_events=market_data.get("calendar_events", []),
+        holdings_info=holdings_info,
+        watchlist_info=watchlist_info,
     )
 
     print(md_text)
@@ -249,7 +263,7 @@ def cmd_post(config: dict, target_date: str):
     registry = setup_providers(config)
     registry.initialize_all()
 
-    from collectors import MarketCollector, HoldingsCollector
+    from collectors import MarketCollector, HoldingsCollector, WatchlistCollector
     from generators import ReportGenerator
 
     # 采集市场数据
@@ -260,12 +274,31 @@ def cmd_post(config: dict, target_date: str):
     holdings_collector = HoldingsCollector(registry)
     holdings_collector.load()
     holdings_data = holdings_collector.collect_holdings_data(target_date)
+    try:
+        holdings_data = holdings_collector.enrich_with_ma(holdings_data, target_date)
+    except Exception as e:
+        logger.warning(f"持仓均线/板块数据补充失败: {e}")
+    holdings_summary = HoldingsCollector.compute_summary(holdings_data)
 
     holdings_anns = {}
     try:
         holdings_anns = holdings_collector.collect_holdings_announcements(target_date, target_date)
     except Exception as e:
         logger.warning(f"持仓盘后公告采集失败: {e}")
+
+    watchlist_data = {}
+    try:
+        wl_collector = WatchlistCollector(registry)
+        watchlist_data = wl_collector.get_watchlist_summary()
+    except Exception as e:
+        logger.warning(f"关注池盘后数据加载失败: {e}")
+
+    # 交叉检查：持仓与关注池重复
+    holdings_codes = set(h.get("code", "") for h in holdings_data if "error" not in h)
+    wl_codes = set(s.get("code", "") for s in watchlist_data.get("tier1", []))
+    overlap = holdings_codes & wl_codes
+    if overlap:
+        logger.info(f"持仓与关注池 tier1 重叠: {overlap}")
 
     # 生成报告
     generator = ReportGenerator()
@@ -274,6 +307,8 @@ def cmd_post(config: dict, target_date: str):
         raw_data=raw_data,
         holdings_data=holdings_data,
         holdings_announcements=holdings_anns,
+        watchlist_data=watchlist_data,
+        holdings_summary=holdings_summary,
     )
 
     print(md_text)
@@ -377,6 +412,12 @@ def cmd_evening(config: dict, target_date: str):
             )
             if multi._pushers and report_text:
                 multi.send_report("post_market", f"关注池日报 {target_date}", report_text)
+            alerts = wl_result.get("alerts", [])
+            if multi._pushers and alerts:
+                alert_lines = [f"⚠ 关注池到价提醒 {target_date}"]
+                for a in alerts:
+                    alert_lines.append(f"• {a.get('message', '(无消息)')}")
+                multi.send_alert("\n".join(alert_lines))
     except Exception as e:
         logger.error(f"关注池采集失败：{e}")
 

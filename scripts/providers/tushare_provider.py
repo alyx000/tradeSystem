@@ -183,6 +183,27 @@ class TushareProvider(DataProvider):
         except Exception as e:
             return DataResult(data=None, source=self.name, error=str(e))
 
+    def get_stock_ma(self, stock_code: str, date: str, periods: list[int] | None = None) -> DataResult:
+        """计算个股均线（基于 tushare daily 历史数据）"""
+        periods = periods or [5, 10, 20]
+        max_p = max(periods)
+        try:
+            ed = self._date_fmt(date)
+            sd = (datetime.strptime(date, "%Y-%m-%d") - timedelta(days=max_p * 2 + 10)).strftime("%Y%m%d")
+            df = self.pro.daily(ts_code=stock_code, start_date=sd, end_date=ed)
+            if df is None or df.empty:
+                return DataResult(data=None, source=self.name, error=f"无历史数据: {stock_code}")
+            df = df.sort_values("trade_date")
+            data: dict = {}
+            for p in periods:
+                if len(df) >= p:
+                    data[f"ma{p}"] = round(float(df["close"].tail(p).mean()), 2)
+            if len(df) >= 5:
+                data["volume_ma5"] = round(float(df["vol"].tail(5).mean()), 2)
+            return DataResult(data=data, source="tushare:daily")
+        except Exception as e:
+            return DataResult(data=None, source=self.name, error=str(e))
+
     # ---- 涨跌停数据 ----
 
     def get_limit_up_list(self, date: str) -> DataResult:
@@ -471,13 +492,13 @@ class TushareProvider(DataProvider):
     # ---- 公告 ----
 
     def get_stock_announcements(self, stock_code: str, start_date: str, end_date: str) -> DataResult:
-        """获取个股公告"""
+        """获取个股公告（anns_d 接口，tushare.xyz 镜像可能不支持）"""
         try:
             sd = self._date_fmt(start_date)
             ed = self._date_fmt(end_date)
-            df = self.pro.anns(ts_code=stock_code, start_date=sd, end_date=ed)
+            df = self.pro.query("anns_d", ts_code=stock_code, start_date=sd, end_date=ed)
             if df is None or df.empty:
-                return DataResult(data=[], source="tushare:anns")
+                return DataResult(data=[], source="tushare:anns_d")
             records = []
             for _, row in df.iterrows():
                 records.append({
@@ -485,9 +506,12 @@ class TushareProvider(DataProvider):
                     "ann_date": row.get("ann_date", ""),
                     "url": row.get("url", ""),
                 })
-            return DataResult(data=records, source="tushare:anns")
+            return DataResult(data=records, source="tushare:anns_d")
         except Exception as e:
-            return DataResult(data=None, source=self.name, error=str(e))
+            err = str(e)
+            if "权限" in err:
+                logger.warning("tushare anns_d 权限不足（镜像 tushare.xyz 不支持该接口），将降级到 akshare")
+            return DataResult(data=None, source=self.name, error=err)
 
     # ---- 交易日历 ----
 

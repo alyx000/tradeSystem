@@ -6,12 +6,50 @@ from __future__ import annotations
 
 import os
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import yaml
 
 logger = logging.getLogger(__name__)
+
+
+def collect_info_for_stocks(registry, stocks: list[tuple[str, str]], date: str) -> dict:
+    """
+    采集一组股票的信息面数据（新闻/互动易/研报），持仓和关注池共用。
+
+    Args:
+        registry: ProviderRegistry 实例
+        stocks: [(code, name), ...] 列表
+        date: YYYY-MM-DD 格式日期
+
+    Returns:
+        {code: {"name", "news", "investor_qa", "research_reports"}}
+    """
+    if not registry:
+        return {}
+    d = datetime.strptime(date, "%Y-%m-%d")
+    start = (d - timedelta(days=7)).strftime("%Y-%m-%d")
+
+    results: dict = {}
+    for code, name in stocks:
+        if not code or not code.strip():
+            continue
+        info: dict = {"name": name}
+
+        news_r = registry.call("get_stock_news", code, date, 5)
+        info["news"] = news_r.data if news_r.success and news_r.data else []
+
+        qa_r = registry.call("get_investor_qa", code, start, date)
+        info["investor_qa"] = qa_r.data if qa_r.success and qa_r.data else []
+
+        rr_r = registry.call("get_research_reports", code)
+        info["research_reports"] = rr_r.data if rr_r.success and rr_r.data else []
+
+        if info["news"] or info["investor_qa"] or info["research_reports"]:
+            results[code] = info
+
+    return results
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
@@ -120,3 +158,65 @@ class HoldingsCollector:
                     "_source": r.source,
                 }
         return results
+
+    def collect_stock_info(self, date: str) -> dict:
+        """
+        采集持仓个股的信息面数据（互动易、研报、新闻），用于盘前简报。
+        返回 {code: {"name", "news", "investor_qa", "research_reports"}}
+        """
+        stocks = [(h["code"], h["name"]) for h in self._holdings]
+        return collect_info_for_stocks(self.registry, stocks, date)
+
+    def enrich_with_ma(self, holdings_data: list[dict], date: str) -> list[dict]:
+        """为持仓行情数据补充均线和板块相对表现（原地修改）。"""
+        if not self.registry:
+            return holdings_data
+
+        sector_map: dict[str, float] | None = None
+
+        for item in holdings_data:
+            code = item.get("code", "")
+            if not code or "error" in item:
+                continue
+            r = self.registry.call("get_stock_ma", code, date)
+            if r.success and r.data:
+                for k in ("ma5", "ma10", "ma20", "volume_ma5"):
+                    if k in r.data:
+                        item[k] = r.data[k]
+                if "volume_ma5" in r.data and item.get("volume"):
+                    item["volume_vs_ma5"] = "以上" if item["volume"] > r.data["volume_ma5"] else "以下"
+            sector = item.get("sector", "")
+            if sector:
+                if sector_map is None:
+                    sr = self.registry.call("get_sector_rankings", date, "industry")
+                    sector_map = {}
+                    if sr.success and sr.data:
+                        for s in sr.data.get("top", []) + sr.data.get("bottom", []):
+                            sector_map[s.get("name", "")] = s.get("change_pct", 0)
+                if sector in sector_map:
+                    item["sector_change_pct"] = sector_map[sector]
+        return holdings_data
+
+    @staticmethod
+    def compute_summary(holdings_data: list[dict]) -> dict:
+        """计算持仓汇总统计。"""
+        valid = [h for h in holdings_data if "error" not in h]
+        total_cost = 0.0
+        total_market_value = 0.0
+        for h in valid:
+            shares = h.get("shares", 0)
+            cost = h.get("cost", 0)
+            close = h.get("close", 0)
+            total_cost += shares * cost
+            total_market_value += shares * close
+
+        total_pnl = total_market_value - total_cost
+        total_pnl_pct = round(total_pnl / total_cost * 100, 2) if total_cost else 0.0
+
+        return {
+            "total_stocks": len(valid),
+            "total_cost": round(total_cost, 2),
+            "total_market_value": round(total_market_value, 2),
+            "total_pnl": round(total_pnl, 2),
+            "total_pnl_pct": total_pnl_pct,
+        }

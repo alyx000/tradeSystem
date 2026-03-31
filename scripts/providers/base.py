@@ -158,6 +158,17 @@ class DataProvider(ABC):
     def get_market_news(self, date: str, limit: int = 10) -> DataResult:
         return DataResult(data=None, source=self.name, error="not implemented")
 
+    def get_stock_news(self, stock_code: str, date: str, limit: int = 10) -> DataResult:
+        return DataResult(data=None, source=self.name, error="not implemented")
+
+    # ---- 互动易 ----
+    def get_investor_qa(self, stock_code: str, start_date: str, end_date: str) -> DataResult:
+        return DataResult(data=None, source=self.name, error="not implemented")
+
+    # ---- 研报 ----
+    def get_research_reports(self, stock_code: str) -> DataResult:
+        return DataResult(data=None, source=self.name, error="not implemented")
+
     # ---- 宏观日历 ----
     def get_macro_calendar(self, date: str) -> DataResult:
         return DataResult(data=None, source=self.name, error="not implemented")

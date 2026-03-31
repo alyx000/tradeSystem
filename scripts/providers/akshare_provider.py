@@ -12,6 +12,8 @@ from typing import Any, Optional
 
 import pandas as pd
 
+import requests
+
 from .base import DataProvider, DataResult
 
 logger = logging.getLogger(__name__)
@@ -75,6 +77,10 @@ class AkshareProvider(DataProvider):
             "get_commodity",
             "get_forex",
             "get_market_news",
+            "get_stock_news",
+            "get_stock_announcements",
+            "get_investor_qa",
+            "get_research_reports",
             "get_macro_calendar",
             "get_macro_calendar_range",
             "is_trade_day",
@@ -611,6 +617,199 @@ class AkshareProvider(DataProvider):
                     break
 
             return DataResult(data=results, source="akshare:stock_news_em")
+        except Exception as e:
+            return DataResult(data=None, source=self.name, error=str(e))
+
+    # ---- 个股新闻 ----
+
+    def get_stock_news(self, stock_code: str, date: str, limit: int = 10) -> DataResult:
+        """按个股代码拉取东财新闻，复用 stock_news_em(symbol=代码)。"""
+        from datetime import datetime, timedelta
+
+        try:
+            code_num = stock_code.split(".")[0]
+            df = self.ak.stock_news_em(symbol=code_num)
+            if df is None or df.empty:
+                return DataResult(data=[], source="akshare:stock_news_em")
+
+            col_map: dict[str, str] = {}
+            for col in df.columns:
+                lc = str(col)
+                if "标题" in lc or "title" in lc.lower():
+                    col_map["title"] = col
+                elif "内容" in lc or "摘要" in lc or "content" in lc.lower():
+                    col_map["summary"] = col
+                elif "时间" in lc or "日期" in lc or "date" in lc.lower():
+                    col_map["time"] = col
+                elif "来源" in lc or "source" in lc.lower():
+                    col_map["source"] = col
+
+            target_date = datetime.strptime(date, "%Y-%m-%d").date()
+            cutoff = target_date - timedelta(days=3)
+
+            results: list[dict] = []
+            for _, row in df.iterrows():
+                raw_time = str(row.get(col_map.get("time", ""), ""))
+                item_date = None
+                for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%m-%d %H:%M"):
+                    try:
+                        parsed = datetime.strptime(raw_time[:len(fmt) + 2].strip(), fmt)
+                        if fmt.startswith("%m-"):
+                            parsed = parsed.replace(year=target_date.year)
+                        item_date = parsed.date()
+                        break
+                    except ValueError:
+                        continue
+
+                if item_date is None or not (cutoff <= item_date <= target_date):
+                    continue
+
+                title = str(row.get(col_map.get("title", ""), "")).strip()
+                if not title:
+                    continue
+                results.append({
+                    "title": title,
+                    "summary": str(row.get(col_map.get("summary", ""), ""))[:200].strip(),
+                    "time": raw_time,
+                    "source": str(row.get(col_map.get("source", ""), "东方财富")).strip(),
+                })
+                if len(results) >= limit:
+                    break
+
+            return DataResult(data=results, source="akshare:stock_news_em")
+        except Exception as e:
+            return DataResult(data=None, source=self.name, error=str(e))
+
+    # ---- 公告 ----
+
+    def get_stock_announcements(self, stock_code: str, start_date: str, end_date: str) -> DataResult:
+        """个股公告：东方财富公告 API（np-anotice-stock）。"""
+        try:
+            code_num = stock_code.split(".")[0]
+            url = "https://np-anotice-stock.eastmoney.com/api/security/ann"
+            params = {
+                "sr": "-1",
+                "page_size": "20",
+                "page_index": "1",
+                "ann_type": "A",
+                "client_source": "web",
+                "stock_list": code_num,
+                "f_node": "0",
+                "s_node": "0",
+            }
+            if start_date and end_date:
+                sd = start_date.replace("-", "")
+                ed = end_date.replace("-", "")
+                params["begin_time"] = f"{sd[:4]}-{sd[4:6]}-{sd[6:]}"
+                params["end_time"] = f"{ed[:4]}-{ed[4:6]}-{ed[6:]}"
+
+            resp = requests.get(url, params=params, timeout=10,
+                                headers={"User-Agent": "Mozilla/5.0"})
+            resp.raise_for_status()
+            data = resp.json().get("data", {}) or {}
+            items = data.get("list") or []
+
+            results: list[dict] = []
+            for item in items:
+                ann_date = str(item.get("notice_date", ""))[:10]
+                title = item.get("title", "")
+                info_code = item.get("art_code", "")
+                ann_url = (
+                    f"https://data.eastmoney.com/notices/detail/{code_num}/{info_code}.html"
+                    if info_code else ""
+                )
+                results.append({
+                    "title": title,
+                    "ann_date": ann_date,
+                    "url": ann_url,
+                })
+                if len(results) >= 10:
+                    break
+
+            return DataResult(data=results, source="akshare:eastmoney_ann")
+        except Exception as e:
+            return DataResult(data=None, source=self.name, error=str(e))
+
+    # ---- 互动易 ----
+
+    def get_investor_qa(self, stock_code: str, start_date: str, end_date: str) -> DataResult:
+        """巨潮互动易问答：stock_irm_cninfo(symbol=代码)。"""
+        try:
+            code_num = stock_code.split(".")[0]
+            df = self.ak.stock_irm_cninfo(symbol=code_num)
+            if df is None or df.empty:
+                return DataResult(data=[], source="akshare:stock_irm_cninfo")
+
+            cols = set(df.columns)
+            # 优先使用已知精确列名，退而采用模糊匹配（避免"提问者""问题编号"等覆盖正确映射）
+            q_col = "问题" if "问题" in cols else next(
+                (c for c in df.columns if "问题" in str(c) and "编号" not in str(c) and "者" not in str(c)), None
+            )
+            a_col = "回答内容" if "回答内容" in cols else next(
+                (c for c in df.columns if "回答内容" in str(c)), None
+            )
+            date_col = "提问时间" if "提问时间" in cols else next(
+                (c for c in df.columns if "提问时间" in str(c) or "发布时间" in str(c)), None
+            )
+
+            if not q_col:
+                return DataResult(data=[], source="akshare:stock_irm_cninfo")
+
+            start_compact = start_date.replace("-", "")
+            end_compact = end_date.replace("-", "")
+
+            results: list[dict] = []
+            for _, row in df.iterrows():
+                raw_date = str(row[date_col]).strip() if date_col else ""
+                date_compact = raw_date.replace("-", "").replace(" ", "")[:8]
+                if date_compact and not (start_compact <= date_compact <= end_compact):
+                    continue
+
+                question = str(row[q_col]).strip() if q_col else ""
+                answer = str(row[a_col]).strip() if a_col else ""
+                if not question or question in ("nan", "None"):
+                    continue
+                results.append({
+                    "question": question[:300],
+                    "answer": answer[:500] if answer not in ("nan", "None") else "",
+                    "date": raw_date[:19],
+                })
+                if len(results) >= 10:
+                    break
+
+            return DataResult(data=results, source="akshare:stock_irm_cninfo")
+        except Exception as e:
+            return DataResult(data=None, source=self.name, error=str(e))
+
+    # ---- 研报评级 ----
+
+    def get_research_reports(self, stock_code: str) -> DataResult:
+        """个股研报：stock_research_report_em(symbol=代码)，来源东方财富。"""
+        try:
+            code_num = stock_code.split(".")[0]
+            try:
+                df = self.ak.stock_research_report_em(symbol=code_num)
+            except (AttributeError, TypeError, ValueError):
+                df = None
+
+            if df is None or df.empty:
+                return DataResult(data=[], source="akshare:stock_research_report_em")
+
+            results: list[dict] = []
+            for _, row in df.iterrows():
+                date_val = row.get("日期", "")
+                date_str = str(date_val)[:10] if date_val else ""
+                results.append({
+                    "institution": str(row.get("机构", "")).strip(),
+                    "rating": str(row.get("东财评级", "")).strip(),
+                    "title": str(row.get("报告名称", "")).strip()[:120],
+                    "target_price": 0,
+                    "date": date_str,
+                })
+                if len(results) >= 5:
+                    break
+
+            return DataResult(data=results, source="akshare:stock_research_report_em")
         except Exception as e:
             return DataResult(data=None, source=self.name, error=str(e))
 

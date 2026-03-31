@@ -1,0 +1,85 @@
+date: '2026-03-28'
+generated_at: '2026-03-31T04:12:56.863349'
+holdings_announcements: {}
+holdings_data:
+- code: 688041.SH
+  error: '所有数据源均失败: tushare: 无数据: 688041.SH 2026-03-28'
+  name: 海光信息
+- code: 300750.SZ
+  error: '所有数据源均失败: tushare: 无数据: 300750.SZ 2026-03-28'
+  name: 宁德时代
+- code: 600519.SH
+  error: '所有数据源均失败: tushare: 无数据: 600519.SH 2026-03-28'
+  name: 贵州茅台
+holdings_summary:
+  total_cost: 0.0
+  total_market_value: 0.0
+  total_pnl: 0.0
+  total_pnl_pct: 0.0
+  total_stocks: 0
+raw_data:
+  date: '2026-03-28'
+  dragon_tiger:
+    _source: tushare:top_list
+    data: []
+  generated_at: '2026-03-31T04:12:33.257506'
+  generated_by: openclaw
+  indices:
+    chinext:
+      error: '所有数据源均失败: tushare: 无数据: 399006.SZ 2026-03-28; akshare: not implemented'
+    csi1000:
+      error: '所有数据源均失败: tushare: 无数据: 000852.SH 2026-03-28; akshare: not implemented'
+    csi300:
+      error: '所有数据源均失败: tushare: 无数据: 000300.SH 2026-03-28; akshare: not implemented'
+    shanghai:
+      error: '所有数据源均失败: tushare: 无数据: 000001.SH 2026-03-28; akshare: not implemented'
+    shenzhen:
+      error: '所有数据源均失败: tushare: 无数据: 399001.SZ 2026-03-28; akshare: not implemented'
+    star50:
+      error: '所有数据源均失败: tushare: 无数据: 000688.SH 2026-03-28; akshare: not implemented'
+  limit_down:
+    _source: tushare:limit_list_d
+    count: 0
+    stocks: []
+  limit_up:
+    error: '所有数据源均失败: tushare: 无涨停数据: 2026-03-28; akshare: 无涨停数据: 2026-03-28'
+  northbound:
+    error: '所有数据源均失败: tushare: 无北向资金数据: 2026-03-28; akshare: module ''akshare'' has
+      no attribute ''stock_hsgt_north_net_flow_in_em'''
+  sector_concept:
+    error: '所有数据源均失败: tushare: 无同花顺指数日线数据; akshare: HTTPSConnectionPool(host=''79.push2.eastmoney.com'',
+      port=443): Max retries exceeded with url: /api/qt/clist/get?pn=1&pz=100&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f12&fs=m%3A90+t%3A3+f%3A%2150&fields=f2%2Cf3%2Cf4%2Cf8%2Cf12%2Cf14%2Cf15%2Cf16%2Cf17%2Cf18%2Cf20%2Cf21%2Cf24%2Cf25%2Cf22%2Cf33%2Cf11%2Cf62%2Cf128%2Cf124%2Cf107%2Cf104%2Cf105%2Cf136
+      (Caused by ProxyError(''Unable to connect to proxy'', RemoteDisconnected(''Remote
+      end closed connection without response'')))'
+  sector_industry:
+    error: '所有数据源均失败: tushare: 无申万行业日线数据; akshare: HTTPSConnectionPool(host=''17.push2.eastmoney.com'',
+      port=443): Max retries exceeded with url: /api/qt/clist/get?pn=1&pz=100&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f3&fs=m%3A90+t%3A2+f%3A%2150&fields=f1%2Cf2%2Cf3%2Cf4%2Cf5%2Cf6%2Cf7%2Cf8%2Cf9%2Cf10%2Cf12%2Cf13%2Cf14%2Cf15%2Cf16%2Cf17%2Cf18%2Cf20%2Cf21%2Cf23%2Cf24%2Cf25%2Cf26%2Cf22%2Cf33%2Cf11%2Cf62%2Cf128%2Cf136%2Cf115%2Cf152%2Cf124%2Cf107%2Cf104%2Cf105%2Cf140%2Cf141%2Cf207%2Cf208%2Cf209%2Cf222
+      (Caused by ProxyError(''Unable to connect to proxy'', RemoteDisconnected(''Remote
+      end closed connection without response'')))'
+  sector_rhythm_concept: []
+  sector_rhythm_industry: []
+  style_factors:
+    board_preference: {}
+    cap_preference: {}
+    premium_snapshot: {}
+    premium_trend: {}
+    switch_signals: []
+  total_volume:
+    error: '所有数据源均失败: tushare: 无成交额数据: 2026-03-28'
+watchlist_data:
+  tier1:
+  - code: 002475.SZ
+    current_price: 0
+    current_status: ''
+    name: 立讯精密
+  - code: 603259.SH
+    current_price: 0
+    current_status: ''
+    name: 药明康德
+  tier2:
+  - code: 300059.SZ
+    current_price: 0
+    name: 东方财富
+  - code: 601012.SH
+    current_price: 0
+    name: 隆基绿能

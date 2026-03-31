@@ -1,8 +1,9 @@
 blacklist:
-- reason: ''
+- stock_code: ''
   stock_name: ''
+  reason: ''
   until: ''
-last_updated: '2026-03-31T02:35:50.247163'
+last_updated: ''
 tier1_core:
 - add_date: ''
   add_reason: ''
