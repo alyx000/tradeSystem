@@ -226,11 +226,13 @@ class TestDailyMarket:
         Q.upsert_daily_market(conn, {"date": "2026-04-01"})
         row = Q.get_daily_market(conn, "2026-04-01")
         assert row["premium_10cm"] is None
+        assert row["premium_30cm"] is None
 
-        Q.update_premium(conn, "2026-04-01", premium_10cm=2.5, premium_20cm=5.0)
+        Q.update_premium(conn, "2026-04-01", premium_10cm=2.5, premium_20cm=5.0, premium_30cm=0.8)
         row = Q.get_daily_market(conn, "2026-04-01")
         assert row["premium_10cm"] == 2.5
         assert row["premium_20cm"] == 5.0
+        assert row["premium_30cm"] == 0.8
 
     def test_range_query(self, conn):
         for d in ["2026-03-29", "2026-03-30", "2026-03-31", "2026-04-01"]:
@@ -248,6 +250,45 @@ class TestDailyMarket:
     def test_style_factors_rejects_bad_columns(self, conn):
         series = Q.get_style_factors_series(conn, ["drop_table", "bad_col"], "2026-04-01", "2026-04-02")
         assert series == []
+
+    def test_get_prev_daily_market(self, conn):
+        Q.upsert_daily_market(conn, {"date": "2026-03-28", "total_amount": 10000.0})
+        Q.upsert_daily_market(conn, {"date": "2026-03-31", "total_amount": 11000.0})
+        Q.upsert_daily_market(conn, {"date": "2026-04-01", "total_amount": 12000.0})
+        prev = Q.get_prev_daily_market(conn, "2026-04-01")
+        assert prev is not None
+        assert prev["date"] == "2026-03-31"
+        assert prev["total_amount"] == 11000.0
+
+    def test_get_prev_daily_market_none(self, conn):
+        Q.upsert_daily_market(conn, {"date": "2026-04-01", "total_amount": 12000.0})
+        prev = Q.get_prev_daily_market(conn, "2026-04-01")
+        assert prev is None
+
+    def test_get_avg_amount(self, conn):
+        for i, d in enumerate(["2026-03-27", "2026-03-28", "2026-03-31", "2026-04-01", "2026-04-02"]):
+            Q.upsert_daily_market(conn, {"date": d, "total_amount": 10000.0 + i * 1000})
+        avg5 = Q.get_avg_amount(conn, "2026-04-02", days=5)
+        assert avg5 is not None
+        assert 10000 <= avg5 <= 14000
+
+    def test_get_avg_amount_fewer_days(self, conn):
+        Q.upsert_daily_market(conn, {"date": "2026-04-01", "total_amount": 12000.0})
+        avg = Q.get_avg_amount(conn, "2026-04-02", days=5)
+        assert avg == 12000.0
+
+    def test_get_avg_amount_no_data(self, conn):
+        avg = Q.get_avg_amount(conn, "2026-04-01", days=5)
+        assert avg is None
+
+    def test_get_daily_market_history(self, conn):
+        for d in ["2026-03-28", "2026-03-31", "2026-04-01"]:
+            Q.upsert_daily_market(conn, {"date": d, "total_amount": 10000.0, "raw_data": {"big": "data"}})
+        history = Q.get_daily_market_history(conn, days=2)
+        assert len(history) == 2
+        assert history[0]["date"] == "2026-04-01"
+        assert "raw_data" not in history[0]
+        assert "premium_30cm" in history[0]
 
 
 # ──────────────────────────────────────────────────────────────
@@ -419,6 +460,25 @@ class TestTrades:
 
 
 # ──────────────────────────────────────────────────────────────
+# Review conclusion snippet（盘前简报）
+# ──────────────────────────────────────────────────────────────
+
+class TestReviewConclusionSnippet:
+    def test_extract_from_step8_json(self):
+        row = {
+            "step8_plan": json.dumps({
+                "summary": {"one_sentence": "一句话", "trinity": "三位一体长文"},
+            }),
+        }
+        lines = Q.extract_review_conclusion_lines(row)
+        assert lines == ["一句话", "三位一体长文"]
+
+    def test_extract_plain_summary_string(self):
+        row = {"summary": "纯文本结论"}
+        assert Q.extract_review_conclusion_lines(row) == ["纯文本结论"]
+
+
+# ──────────────────────────────────────────────────────────────
 # Unified Search / Stock Mentions
 # ──────────────────────────────────────────────────────────────
 
@@ -470,7 +530,7 @@ class TestSchemaVersion:
         c = get_connection(tmp_path / "test.db")
         assert get_schema_version(c) == 0
         migrate(c)
-        assert get_schema_version(c) == 1
+        assert get_schema_version(c) == 2
         migrate(c)
-        assert get_schema_version(c) == 1
+        assert get_schema_version(c) == 2
         c.close()

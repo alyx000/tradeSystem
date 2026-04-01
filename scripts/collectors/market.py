@@ -98,6 +98,53 @@ def _merge_calendar(ak_events: list[dict] | None, date: str, base_dir: Path) -> 
     return merged
 
 
+def _calendar_importance_rank(ev: dict) -> int:
+    imp = str(ev.get("importance", ev.get("impact", ""))).strip().lower()
+    if imp in ("高", "3", "high"):
+        return 0
+    if imp in ("中", "2", "medium", "med"):
+        return 1
+    return 2
+
+
+def filter_calendar_for_pre_market(merged: list[dict], max_items: int = 15) -> list[dict]:
+    """仅保留高/中重要性，至多 max_items；不用低重要性凑满额度。"""
+    rated = [e for e in merged if _calendar_importance_rank(e) <= 1]
+    rated.sort(key=_calendar_importance_rank)
+    return rated[:max_items]
+
+
+def _attach_margin_day_over_day(curr: dict, prev: dict | None) -> None:
+    """在 curr 上就地附加相对上一交易日的融资余额变动；prev 无效时静默跳过。"""
+    if not prev or prev.get("error") or curr.get("error"):
+        return
+    try:
+        pdate = prev.get("trade_date")
+        if not pdate or not curr.get("trade_date"):
+            return
+        curr["margin_compare_date"] = pdate
+        for key in ("total_rzye_yi", "total_rqye_yi", "total_rzrqye_yi"):
+            if key in curr and key in prev:
+                a, b = float(curr[key]), float(prev[key])
+                delta_key = "delta_" + key
+                curr[delta_key] = round(a - b, 2)
+        prev_by_ex = {
+            str(e.get("exchange_id", "")): e
+            for e in (prev.get("exchanges") or [])
+            if e.get("exchange_id") is not None
+        }
+        for ex in curr.get("exchanges") or []:
+            eid = str(ex.get("exchange_id", ""))
+            p = prev_by_ex.get(eid)
+            if not p:
+                continue
+            for fld in ("rzye_yi", "rqye_yi", "rzrqye_yi"):
+                if fld in ex and fld in p:
+                    ex["delta_" + fld] = round(float(ex[fld]) - float(p[fld]), 2)
+    except (TypeError, ValueError, KeyError):
+        logger.debug("融资融券日环比计算跳过（数据不完整）")
+
+
 def _normalize_auto_event(ev: dict) -> dict:
     """写入 calendar_auto.yaml 前的字段整理（可序列化）。"""
     def _s(v) -> str:
@@ -512,14 +559,16 @@ class MarketCollector:
         self,
         target_date: str | None = None,
         prev_trade_date: str | None = None,
+        prev_prev_trade_date: str | None = None,
     ) -> dict:
         """
         盘前数据采集（07:00 执行）
-        采集外盘、亚太股指、美股中国资产 ETF、大宗商品、汇率、风险指标（VIX/美债）、
-        财经新闻、宏观日历、上一交易日融资融券汇总。
+        采集外盘、亚太股指、美股中国金龙、大宗商品、汇率（含离岸人民币）、风险指标（VIX/美债）、
+        宏观日历（高/中为主）、上一交易日融资融券汇总（可选相对上上日环比）。
 
         :param target_date: 简报日期（与 main.py --date 一致）；默认当天
         :param prev_trade_date: 上一交易日，用于融资融券；由 cmd_pre 传入 get_prev_trade_date
+        :param prev_prev_trade_date: 上上一交易日，用于融资余额日环比；无则仅展示绝对值
         """
         logger.info("开始盘前数据采集")
         date_str = target_date or datetime.now().strftime("%Y-%m-%d")
@@ -538,9 +587,9 @@ class MarketCollector:
                 global_indices[name] = {"error": r.error}
         result["global_indices"] = global_indices
 
-        # 亚太股指
+        # 亚太股指（日经 + 韩国综指）
         global_indices_apac = {}
-        for name in ["hsi", "hstech", "nikkei"]:
+        for name in ["nikkei", "kospi"]:
             r = self.registry.call("get_global_index", name)
             if r.success:
                 global_indices_apac[name] = r.data
@@ -548,9 +597,9 @@ class MarketCollector:
                 global_indices_apac[name] = {"error": r.error}
         result["global_indices_apac"] = global_indices_apac
 
-        # 美股中国资产 ETF（隔夜）
+        # 美股侧中国资产叙事：纳斯达克中国金龙 ETF（与 A50 期货并列由报告展示）
         us_china = {}
-        tickers_r = self.registry.call("get_us_tickers_overnight", ["KWEB", "FXI"])
+        tickers_r = self.registry.call("get_us_tickers_overnight", ["HXC"])
         if tickers_r.success and tickers_r.data:
             us_china = tickers_r.data
         else:
@@ -568,9 +617,9 @@ class MarketCollector:
                 commodities[name] = {"error": r.error}
         result["commodities"] = commodities
 
-        # 汇率
+        # 汇率（在岸中间价 + 离岸人民币 + 美元指数）
         forex = {}
-        for pair in ["usd_cny", "usd_index"]:
+        for pair in ["usd_cny", "usd_cnh", "usd_index"]:
             r = self.registry.call("get_forex", pair)
             if r.success:
                 forex[pair] = r.data
@@ -589,17 +638,23 @@ class MarketCollector:
                 risk_indicators[name] = {"error": r.error}
         result["risk_indicators"] = risk_indicators
 
-        # 财经新闻
-        news_r = self.registry.call("get_market_news", date_str)
-        result["news"] = news_r.data if news_r.success and news_r.data else []
-        if not news_r.success:
-            logger.warning(f"财经新闻获取失败: {news_r.error}")
+        # 全市场快讯已取消；YAML 仍保留 news: [] 以兼容旧模板
+        result["news"] = []
 
-        # 融资融券（上一完整交易日汇总）
+        # 融资融券（上一完整交易日汇总 + 可选日环比）
         if prev_trade_date:
             margin_r = self.registry.call("get_margin_data", prev_trade_date)
             if margin_r.success and margin_r.data:
-                result["margin_data"] = margin_r.data
+                result["margin_data"] = dict(margin_r.data)
+                if prev_prev_trade_date:
+                    prev_m = self.registry.call("get_margin_data", prev_prev_trade_date)
+                    if prev_m.success and prev_m.data:
+                        _attach_margin_day_over_day(result["margin_data"], prev_m.data)
+                    else:
+                        logger.info(
+                            "融资融券上一日数据不可用，跳过日环比: %s",
+                            prev_m.error if not prev_m.success else "无数据",
+                        )
             else:
                 err = margin_r.error if not margin_r.success else "无数据"
                 result["margin_data"] = {"error": err}
@@ -610,7 +665,8 @@ class MarketCollector:
         # 宏观日历（手动 YAML + 预拉取 calendar_auto.yaml + AkShare 当天实时）
         cal_r = self.registry.call("get_macro_calendar", date_str)
         ak_events = cal_r.data if (cal_r.success and cal_r.data) else []
-        result["calendar_events"] = _merge_calendar(ak_events, date_str, BASE_DIR)
+        merged_cal = _merge_calendar(ak_events, date_str, BASE_DIR)
+        result["calendar_events"] = filter_calendar_for_pre_market(merged_cal)
 
         logger.info("盘前数据采集完成")
         return result

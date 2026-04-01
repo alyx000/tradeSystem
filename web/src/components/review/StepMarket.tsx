@@ -1,3 +1,4 @@
+import { Link } from 'react-router-dom'
 import { type StepProps, get, set, Section, Row, PrefillBanner, Metric, SelectField, TextField, NumberField, TextareaField } from './widgets'
 
 const TREND = [
@@ -29,23 +30,75 @@ const POSITION = [
   { value: '满仓', label: '满仓' },
 ]
 
+const AMOUNT_THRESHOLD = 0.05
+
+function deriveVolChange(cur: number | null, prev: number | null): string {
+  if (cur == null || prev == null || prev === 0) return ''
+  const ratio = (cur - prev) / prev
+  if (ratio > AMOUNT_THRESHOLD) return '放量'
+  if (ratio < -AMOUNT_THRESHOLD) return '缩量'
+  return '持平'
+}
+
+function deriveVolVs(cur: number | null, avg: number | null): string {
+  if (cur == null || avg == null || avg === 0) return ''
+  const ratio = (cur - avg) / avg
+  if (ratio > AMOUNT_THRESHOLD) return '高于'
+  if (ratio < -AMOUNT_THRESHOLD) return '低于'
+  return '持平'
+}
+
 export default function StepMarket({ data, onChange, prefill }: StepProps) {
   const d = data || {}
-  const g = (p: string, fb: any = '') => get(d, p, fb)
-  const s = (p: string, v: any) => onChange(set(d, p, v))
   const m = prefill?.market
+  const pm = prefill?.prev_market
+
+  const g = (p: string, fb: any = '') => {
+    const val = get(d, p, undefined)
+    if (val !== undefined && val !== '') return val
+
+    if (m) {
+      if (p === 'volume.vs_yesterday') return deriveVolChange(m.total_amount, pm?.total_amount)
+      if (p === 'volume.vs_5day_avg') return deriveVolVs(m.total_amount, prefill?.avg_5d_amount)
+      if (p === 'volume.vs_20day_avg') return deriveVolVs(m.total_amount, prefill?.avg_20d_amount)
+      if (p === 'direction.ma5w') return m.sh_above_ma5w ? '线上' : m.sh_above_ma5w === false ? '线下' : ''
+    }
+    return fb
+  }
+  const s = (p: string, v: any) => onChange(set(d, p, v))
+
+  const fmtAmount = (v: number | null | undefined) =>
+    v != null ? (v >= 10000 ? `${(v / 10000).toFixed(2)}万亿` : `${v.toFixed(0)}亿`) : '-'
 
   return (
     <div className="space-y-6">
       {m && (
         <PrefillBanner>
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             <Metric label="上证" value={m.sh_index_close} change={m.sh_index_change_pct} />
             <Metric label="深证" value={m.sz_index_close} change={m.sz_index_change_pct} />
-            <Metric label="成交额" value={m.total_amount} suffix="亿" />
+            <Metric label="成交额" value={fmtAmount(m.total_amount)} />
+            <Metric label="北向净额" value={m.northbound_net} suffix="亿" />
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-2">
+            <Metric label="涨" value={m.advance_count} />
+            <Metric label="跌" value={m.decline_count} />
             <Metric label="涨停" value={m.limit_up_count} />
             <Metric label="跌停" value={m.limit_down_count} />
           </div>
+          {(prefill?.avg_5d_amount || prefill?.avg_20d_amount) && (
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-2">
+              <Metric label="5日均额" value={fmtAmount(prefill.avg_5d_amount)} />
+              <Metric label="20日均额" value={fmtAmount(prefill.avg_20d_amount)} />
+            </div>
+          )}
+          {prefill?.date && (
+            <div className="mt-2 text-right">
+              <Link to={`/market/${prefill.date}`} className="text-xs text-blue-500 hover:text-blue-700">
+                查看完整市场数据 &rarr;
+              </Link>
+            </div>
+          )}
         </PrefillBanner>
       )}
 

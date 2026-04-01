@@ -1,4 +1,4 @@
-import { type StepProps, get, set, Section, Row, SelectField, TextField, NumberField, TagsField, TextareaField, DynamicList } from './widgets'
+import { type StepProps, get, set, Section, Row, PrefillBanner, SelectField, TextField, NumberField, TagsField, TextareaField, DynamicList } from './widgets'
 
 const STATUS = [
   { value: '持续', label: '持续' },
@@ -42,13 +42,48 @@ const RECOGNITION = [
   { value: '低', label: '低' },
 ]
 
-export default function StepSectors({ data, onChange }: StepProps) {
+export default function StepSectors({ data, onChange, prefill }: StepProps) {
   const d = data || {}
-  const g = (p: string, fb: any = '') => get(d, p, fb)
+  const themes = prefill?.main_themes || []
+  const firstTheme = themes[0]
+
+  const g = (p: string, fb: any = '') => {
+    const val = get(d, p, undefined)
+    if (val !== undefined && val !== '') return val
+
+    if (firstTheme) {
+      if (p === 'main_theme.name') return firstTheme.theme_name || ''
+      if (p === 'main_theme.status') return firstTheme.status === 'active' ? '持续' : ''
+      if (p === 'main_theme.duration_days') return firstTheme.duration_days ?? null
+      if (p === 'main_theme.key_stocks') {
+        if (typeof firstTheme.key_stocks === 'string') {
+          try { return JSON.parse(firstTheme.key_stocks) } catch { return [] }
+        }
+        return firstTheme.key_stocks || []
+      }
+      if (p === 'main_theme.node') return firstTheme.phase || ''
+    }
+    return fb
+  }
   const s = (p: string, v: any) => onChange(set(d, p, v))
 
   return (
     <div className="space-y-6">
+      {themes.length > 0 && (
+        <PrefillBanner>
+          <div className="text-xs text-gray-500 mb-1">当前活跃主线（{themes.length} 条）</div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+            {themes.slice(0, 4).map((t: any) => (
+              <div key={`${t.date}-${t.theme_name}`} className="flex items-center gap-2">
+                <span className="font-medium text-gray-700">{t.theme_name}</span>
+                {t.duration_days && <span className="text-xs text-gray-400">{t.duration_days}天</span>}
+                {t.phase && <span className="text-xs px-1.5 py-0.5 bg-blue-50 text-blue-600 rounded">{t.phase}</span>}
+              </div>
+            ))}
+          </div>
+        </PrefillBanner>
+      )}
+
       <Section title="主线板块">
         <div className="space-y-4">
           <Row cols={3}>

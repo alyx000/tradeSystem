@@ -1,13 +1,18 @@
-"""数据管理 CRUD 路由：老师观点、持仓、关注池、黑名单、行业/宏观、日历、交易记录。"""
+"""数据管理 CRUD 路由：老师观点、持仓、关注池、黑名单、行业/宏观、日历、交易记录、市场行情。"""
 from __future__ import annotations
 
+import json
 import sqlite3
-from typing import Optional
+from pathlib import Path
+from typing import Any, Optional
 
+import yaml
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from api.deps import get_db_conn
 from db import queries as Q
+
+_REPO_ROOT = Path(__file__).resolve().parents[3]
 
 router = APIRouter(prefix="/api", tags=["crud"])
 
@@ -358,9 +363,62 @@ def delete_trade(tid: int, conn: sqlite3.Connection = Depends(get_db_conn)):
 
 # ── Market ────────────────────────────────────────────────────
 
+@router.get("/market/history")
+def get_market_history(days: int = 20,
+                       conn: sqlite3.Connection = Depends(get_db_conn)):
+    return Q.get_daily_market_history(conn, days=min(days, 120))
+
+
+@router.get("/post-market/{date}")
+def get_post_market_envelope(date: str, conn: sqlite3.Connection = Depends(get_db_conn)):
+    """返回与 post-market.yaml 一致的整包信封（优先 DB raw_data，否则读 daily 文件）。"""
+    row = Q.get_daily_market(conn, date)
+    envelope: dict[str, Any] | None = None
+    raw = row.get("raw_data") if row else None
+    if raw:
+        if isinstance(raw, str):
+            try:
+                envelope = json.loads(raw)
+            except (json.JSONDecodeError, TypeError):
+                envelope = None
+        elif isinstance(raw, dict):
+            envelope = dict(raw)
+    if envelope is None:
+        ypath = _REPO_ROOT / "daily" / date / "post-market.yaml"
+        if ypath.is_file():
+            try:
+                with open(ypath, encoding="utf-8") as f:
+                    loaded = yaml.safe_load(f)
+                if isinstance(loaded, dict):
+                    envelope = loaded
+            except (OSError, yaml.YAMLError):
+                pass
+    if not envelope:
+        return {"date": date, "available": False}
+    out = dict(envelope)
+    out["available"] = True
+    out.setdefault("date", date)
+    return out
+
+
 @router.get("/market/{date}")
 def get_market(date: str, conn: sqlite3.Connection = Depends(get_db_conn)):
     row = Q.get_daily_market(conn, date)
     if not row:
-        raise HTTPException(404, f"No market data for {date}")
+        return {"date": date, "available": False}
+    raw = row.pop("raw_data", None)
+    if raw and isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+            inner = parsed.get("raw_data")
+            if not isinstance(inner, dict):
+                inner = {}
+            for key in ("sector_industry", "sector_concept", "sector_fund_flow", "indices"):
+                if key in parsed:
+                    row[key] = parsed[key]
+                elif key in inner:
+                    row[key] = inner[key]
+        except (json.JSONDecodeError, TypeError):
+            pass
+    row["available"] = True
     return row

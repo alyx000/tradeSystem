@@ -296,6 +296,7 @@ CREATE TABLE IF NOT EXISTS daily_market (
     continuous_board_counts TEXT,
     premium_10cm REAL,
     premium_20cm REAL,
+    premium_30cm REAL,
     premium_second_board REAL,
     northbound_net REAL,
     margin_balance REAL,

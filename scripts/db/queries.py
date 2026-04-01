@@ -378,7 +378,7 @@ def upsert_daily_market(conn: sqlite3.Connection, data: dict) -> None:
         "star50_above_ma5w", "avg_price_above_ma5w",
         "limit_up_count", "limit_down_count", "seal_rate", "broken_rate",
         "highest_board", "continuous_board_counts",
-        "premium_10cm", "premium_20cm", "premium_second_board",
+        "premium_10cm", "premium_20cm", "premium_30cm", "premium_second_board",
         "northbound_net", "margin_balance",
         "market_breadth", "raw_data",
     ]
@@ -414,6 +414,7 @@ def get_daily_market_range(conn: sqlite3.Connection, date_from: str,
 def update_premium(conn: sqlite3.Connection, target_date: str,
                    premium_10cm: float | None = None,
                    premium_20cm: float | None = None,
+                   premium_30cm: float | None = None,
                    premium_second_board: float | None = None) -> None:
     """T+1 回填溢价率。"""
     sets, vals = [], []
@@ -423,6 +424,9 @@ def update_premium(conn: sqlite3.Connection, target_date: str,
     if premium_20cm is not None:
         sets.append("premium_20cm = ?")
         vals.append(premium_20cm)
+    if premium_30cm is not None:
+        sets.append("premium_30cm = ?")
+        vals.append(premium_30cm)
     if premium_second_board is not None:
         sets.append("premium_second_board = ?")
         vals.append(premium_second_board)
@@ -432,10 +436,46 @@ def update_premium(conn: sqlite3.Connection, target_date: str,
     conn.execute(f"UPDATE daily_market SET {', '.join(sets)} WHERE date = ?", vals)
 
 
+def get_prev_daily_market(conn: sqlite3.Connection, target_date: str) -> dict | None:
+    """获取前一交易日的行情（DB 中 date < target_date 的最近一条）。"""
+    return _row_to_dict(
+        conn.execute(
+            "SELECT * FROM daily_market WHERE date < ? ORDER BY date DESC LIMIT 1",
+            (target_date,),
+        ).fetchone()
+    )
+
+
+def get_avg_amount(conn: sqlite3.Connection, target_date: str, days: int = 5) -> float | None:
+    """获取 target_date 之前 N 个交易日的平均成交额。"""
+    row = conn.execute(
+        "SELECT AVG(total_amount) FROM "
+        "(SELECT total_amount FROM daily_market WHERE date < ? "
+        "ORDER BY date DESC LIMIT ?)",
+        (target_date, days),
+    ).fetchone()
+    return row[0] if row else None
+
+
+def get_daily_market_history(conn: sqlite3.Connection, days: int = 20) -> list[dict]:
+    """获取近 N 日 daily_market（不含 raw_data），供趋势图使用。"""
+    rows = conn.execute(
+        "SELECT date, sh_index_close, sh_index_change_pct, "
+        "sz_index_close, sz_index_change_pct, total_amount, "
+        "advance_count, decline_count, limit_up_count, limit_down_count, "
+        "seal_rate, broken_rate, highest_board, "
+        "premium_10cm, premium_20cm, premium_30cm, premium_second_board, "
+        "northbound_net "
+        "FROM daily_market ORDER BY date DESC LIMIT ?",
+        (days,),
+    ).fetchall()
+    return _rows_to_list(rows)
+
+
 def get_style_factors_series(conn: sqlite3.Connection, metrics: list[str],
                              date_from: str, date_to: str) -> list[dict]:
     """获取风格化因子时间序列。"""
-    allowed = {"premium_10cm", "premium_20cm", "premium_second_board",
+    allowed = {"premium_10cm", "premium_20cm", "premium_30cm", "premium_second_board",
                "seal_rate", "broken_rate", "limit_up_count", "limit_down_count",
                "highest_board", "total_amount", "northbound_net"}
     safe_cols = [m for m in metrics if m in allowed]
@@ -474,6 +514,53 @@ def get_daily_review(conn: sqlite3.Connection, target_date: str) -> dict | None:
     return _row_to_dict(
         conn.execute("SELECT * FROM daily_reviews WHERE date = ?", (target_date,)).fetchone()
     )
+
+
+def extract_review_conclusion_lines(review_row: dict | None, max_lines: int = 2) -> list[str]:
+    """从 daily_reviews 行提取 1～2 行结论文案，供盘前简报「昨日复盘要点」。"""
+    if not review_row:
+        return []
+    out: list[str] = []
+
+    def _from_summary_dict(summ: Any) -> None:
+        if not isinstance(summ, dict) or len(out) >= max_lines:
+            return
+        one = str(summ.get("one_sentence") or "").strip()
+        tri = str(summ.get("trinity") or "").strip()
+        if one:
+            out.append(one[:240])
+        if tri and len(out) < max_lines:
+            out.append(tri[:240])
+
+    def _from_obj(obj: Any) -> None:
+        if not isinstance(obj, dict) or len(out) >= max_lines:
+            return
+        summ = obj.get("summary")
+        if isinstance(summ, dict):
+            _from_summary_dict(summ)
+        elif isinstance(summ, str) and summ.strip() and len(out) < max_lines:
+            out.append(summ.strip()[:240])
+
+    for key in ("step8_plan", "summary"):
+        if len(out) >= max_lines:
+            break
+        raw = review_row.get(key)
+        if raw is None:
+            continue
+        if isinstance(raw, str):
+            s = raw.strip()
+            if not s:
+                continue
+            try:
+                obj = json.loads(s)
+            except json.JSONDecodeError:
+                out.append(s[:240])
+                continue
+            _from_obj(obj)
+        elif isinstance(raw, dict):
+            _from_obj(raw)
+
+    return out[:max_lines]
 
 
 # ──────────────────────────────────────────────────────────────

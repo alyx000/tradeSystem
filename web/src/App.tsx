@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route, Link, Navigate } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import Dashboard from './pages/Dashboard'
 import ReviewWorkbench from './pages/ReviewWorkbench'
+import MarketOverview from './pages/MarketOverview'
 import SearchCenter from './pages/SearchCenter'
 import TeacherNotes from './pages/TeacherNotes'
 import Holdings from './pages/Holdings'
@@ -14,6 +15,7 @@ const queryClient = new QueryClient({
 
 const NAV = [
   { to: '/', label: '仪表盘' },
+  { to: `/market/${new Date().toISOString().slice(0, 10)}`, label: '市场' },
   { to: `/review/${new Date().toISOString().slice(0, 10)}`, label: '复盘' },
   { to: '/search', label: '查询' },
   { to: '/teachers', label: '老师观点' },
@@ -39,6 +41,7 @@ export default function App() {
           <main className="max-w-7xl mx-auto px-6 py-6">
             <Routes>
               <Route path="/" element={<Dashboard />} />
+              <Route path="/market/:date" element={<MarketOverview />} />
               <Route path="/review/:date" element={<ReviewWorkbench />} />
               <Route path="/search" element={<SearchCenter />} />
               <Route path="/teachers" element={<TeacherNotes />} />

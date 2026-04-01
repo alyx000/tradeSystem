@@ -115,7 +115,7 @@ cd web && npm run dev
 
 | 地址 | 说明 |
 |------|------|
-| http://localhost:5173 | Web 前端（仪表盘、复盘工作台、查询中心等） |
+| http://localhost:5173 | Web 前端（仪表盘、市场看板、复盘工作台、查询中心等） |
 | http://localhost:8000/docs | FastAPI 自动生成的 API 文档 |
 | http://localhost:8000/api/health | 健康检查 |
 
@@ -130,7 +130,7 @@ cd scripts
 # 盘前简报
 python3 main.py pre --date 2026-04-01
 
-# 盘后报告（含晚间任务）
+# 盘后报告（含晚间任务）；成功后会把当日 post-market 同步进 SQLite daily_market
 python3 main.py post --date 2026-04-01
 
 # 数据库操作
@@ -176,7 +176,7 @@ cp templates/trade-log.yaml daily/$(date +%Y-%m-%d)/trades.yaml
 
 **由 OpenClaw 调度时**：不必部署 systemd；在 OpenClaw 里按上表配置 **工作日 07:00 / 20:00** 执行相同命令即可，**工作目录设为仓库根目录**（与 `sync_data.sh` 的路径约定一致）。请勿与 `main.py schedule` 或本机 `deploy/systemd/` 定时器同时启用，以免重复推送、重复写文件。`sync_data.sh` 会 `git push`，运行环境需已配置 SSH deploy key 或等价凭据。
 
-**环境**：复制 `scripts/.env.example` 为 `scripts/.env`，填入 `TUSHARE_TOKEN`、Discord Webhook 等；Obsidian 导出目录可用环境变量 **`OBSIDIAN_DIR`**（未设置时见 `scripts/generators/obsidian_export.py` 默认路径）。Vault 一般在仓库外，不由 `sync_data.sh` 提交。
+**环境**：复制 `scripts/.env.example` 为 `scripts/.env`，填入 `TUSHARE_TOKEN`、Discord Webhook 等；Obsidian 导出目录可用环境变量 **`OBSIDIAN_DIR`**（未设置时见 `scripts/generators/obsidian_export.py` 默认路径）。**采集**（`pre`/`post`/`evening`/`watchlist`/`check` 等）会临时清除 `HTTP_PROXY`/`HTTPS_PROXY`，避免 Tushare 误走本机代理；推送阶段恢复环境，Discord 等仍可走代理。若采集也必须走代理，设置 **`TRADESYSTEM_USE_HTTP_PROXY=1`**。Vault 一般在仓库外，不由 `sync_data.sh` 提交。
 
 **一次性**：若需板块节奏分析有足够历史，可在 VPS 上按需执行 `python3 scripts/backfill_sectors.py`（参数见脚本说明）。
 

@@ -1,4 +1,4 @@
-import { type StepProps, get, set, Section, Row, SelectField, TextField, TagsField, TextareaField, DynamicList } from './widgets'
+import { type StepProps, get, set, Section, Row, PrefillBanner, SelectField, TextField, TagsField, TextareaField, DynamicList } from './widgets'
 
 const IMPACT = [
   { value: '高', label: '高' },
@@ -12,10 +12,11 @@ const CONFIDENCE = [
   { value: '看不懂', label: '看不懂' },
 ]
 
-export default function StepPlan({ data, onChange }: StepProps) {
+export default function StepPlan({ data, onChange, prefill }: StepProps) {
   const d = data || {}
   const g = (p: string, fb: any = '') => get(d, p, fb)
   const s = (p: string, v: any) => onChange(set(d, p, v))
+  const calEvents = prefill?.calendar_events || []
 
   return (
     <div className="space-y-6">
@@ -73,6 +74,26 @@ export default function StepPlan({ data, onChange }: StepProps) {
           <SelectField label="次日判断信心" value={g('summary.confidence')} onChange={v => s('summary.confidence', v)} options={CONFIDENCE} />
         </div>
       </Section>
+
+      {calEvents.length > 0 && (
+        <PrefillBanner>
+          <div className="text-xs text-gray-500 mb-1">当日投资日历事件</div>
+          <ul className="space-y-1">
+            {calEvents.map((e: any) => (
+              <li key={e.id} className="flex items-center gap-2 text-sm">
+                <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${
+                  e.impact === 'high' ? 'bg-red-100 text-red-700' :
+                  e.impact === 'medium' ? 'bg-amber-100 text-amber-700' :
+                  'bg-gray-100 text-gray-600'
+                }`}>
+                  {e.impact || '一般'}
+                </span>
+                <span className="text-gray-700">{e.event}</span>
+              </li>
+            ))}
+          </ul>
+        </PrefillBanner>
+      )}
     </div>
   )
 }

@@ -18,31 +18,40 @@ def _minimal_market_data() -> dict:
             "a50": {"close": 400.0, "change_pct": 0.1},
         },
         "global_indices_apac": {
-            "hsi": {"close": 25000.0, "change_pct": 0.2},
-            "hstech": {"close": 5000.0, "change_pct": -0.3},
             "nikkei": {"close": 38000.0, "change_pct": 0.4},
+            "kospi": {"close": 2600.0, "change_pct": -0.1},
         },
         "risk_indicators": {
             "vix": {"close": 15.0, "change_pct": -2.0},
             "us10y": {"close": 4.2, "change_bps": -3.0},
         },
         "us_china_assets": {
-            "KWEB": {"name": "KWEB", "close": 28.0, "change_pct": 1.1},
-            "FXI": {"name": "FXI", "close": 35.0, "change_pct": -0.2},
+            "HXC": {"name": "HXC（金龙）", "close": 28.0, "change_pct": 1.1},
         },
         "commodities": {
             "gold": {"name": "黄金", "close": 2000.0, "change_pct": 0.5},
         },
         "forex": {
             "usd_cny": {"name": "USD/CNY", "close": 7.2, "change_pct": 0.0},
+            "usd_cnh": {"name": "USD/CNH", "close": 7.22, "change_pct": 0.1},
         },
         "margin_data": {
             "trade_date": "2026-03-27",
+            "margin_compare_date": "2026-03-26",
             "total_rzye_yi": 25000.0,
             "total_rqye_yi": 100.0,
             "total_rzrqye_yi": 25100.0,
+            "delta_total_rzye_yi": 10.0,
+            "delta_total_rqye_yi": -1.0,
+            "delta_total_rzrqye_yi": 9.0,
             "exchanges": [
-                {"exchange_id": "SSE", "rzye_yi": 12000.0, "rqye_yi": 50.0, "rzrqye_yi": 12050.0},
+                {
+                    "exchange_id": "SSE",
+                    "rzye_yi": 12000.0,
+                    "rqye_yi": 50.0,
+                    "rzrqye_yi": 12050.0,
+                    "delta_rzrqye_yi": 5.0,
+                },
             ],
         },
     }
@@ -54,7 +63,18 @@ def test_generate_pre_market_sections_and_yaml(tmp_path: Path):
     date = "2026-03-30"
     md, yaml_path = gen.generate_pre_market(
         date=date,
-        market_data=_minimal_market_data(),
+        market_data={
+            **_minimal_market_data(),
+            "prev_session_snapshot": {
+                "date": "2026-03-29",
+                "sh_index_close": 3200.0,
+                "sh_index_change_pct": 0.5,
+                "total_amount": 11000.0,
+                "limit_up_count": 60,
+                "limit_down_count": 5,
+            },
+            "prev_review_conclusion": ["昨日一句话结论", "三位一体补充"],
+        },
         holdings_announcements={
             "000001.SZ": {
                 "name": "测试银行",
@@ -64,7 +84,7 @@ def test_generate_pre_market_sections_and_yaml(tmp_path: Path):
         watchlist_announcements={
             "688000.SH": {"name": "测试科创", "announcements": []},
         },
-        news=[{"title": "头条", "time": "09:00", "source": "测试源"}],
+        news=[],
         calendar_events=[
             {
                 "event": "CPI",
@@ -78,15 +98,19 @@ def test_generate_pre_market_sections_and_yaml(tmp_path: Path):
     )
 
     assert "# 盘前简报 2026-03-30" in md
+    assert "昨日（上一交易日）盘面摘要" in md
+    assert "昨日复盘要点" in md
     assert "### 亚太股指" in md
-    assert "恒生指数" in md
-    assert "## 二、美股中国资产相关" in md
-    assert "KWEB" in md
+    assert "日经225" in md
+    assert "韩国综指" in md
+    assert "## 二、美股中国金龙（隔夜）" in md
+    assert "HXC" in md
     assert "## 四、融资融券（上一交易日）" in md
+    assert "较 2026-03-26" in md
     assert "五、持仓股公告" in md
     assert "六、关注池公告" in md
-    assert "七、财经新闻" in md
-    assert "八、今日日历" in md
+    assert "七、今日日历" in md
+    assert "财经新闻" not in md
 
     p = Path(yaml_path)
     assert p.exists()
@@ -103,7 +127,7 @@ def test_generate_pre_market_us_china_error_and_empty_margin(tmp_path: Path):
         date="2026-03-30",
         market_data={
             "global_indices": {k: {"close": 1, "change_pct": 0} for k in ["dow_jones", "nasdaq", "sp500", "a50"]},
-            "global_indices_apac": {k: {"error": "fail"} for k in ["hsi", "hstech", "nikkei"]},
+            "global_indices_apac": {k: {"error": "fail"} for k in ["nikkei", "kospi"]},
             "risk_indicators": {},
             "us_china_assets": {"_error": "yfinance down"},
             "commodities": {},
@@ -113,5 +137,5 @@ def test_generate_pre_market_us_china_error_and_empty_margin(tmp_path: Path):
         holdings_announcements={},
     )
     assert "数据获取失败: yfinance down" in md
-    assert "恒生指数: 数据获取失败" in md
+    assert "日经225: 数据获取失败" in md
     assert "（无融资融券汇总数据）" in md

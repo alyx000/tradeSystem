@@ -33,6 +33,9 @@ def get_review(date: str, conn: sqlite3.Connection = Depends(get_db_conn)):
 def get_prefill(date: str, conn: sqlite3.Connection = Depends(get_db_conn)):
     date = _validate_date(date)
     market = Q.get_daily_market(conn, date)
+    prev_market = Q.get_prev_daily_market(conn, date)
+    avg_5d = Q.get_avg_amount(conn, date, 5)
+    avg_20d = Q.get_avg_amount(conn, date, 20)
     emotion = Q.get_latest_emotion(conn)
     themes = Q.get_active_themes(conn)
     holdings = Q.get_holdings(conn)
@@ -47,6 +50,9 @@ def get_prefill(date: str, conn: sqlite3.Connection = Depends(get_db_conn)):
     return {
         "date": date,
         "market": market,
+        "prev_market": prev_market,
+        "avg_5d_amount": avg_5d,
+        "avg_20d_amount": avg_20d,
         "teacher_notes": [dict(n) for n in notes],
         "emotion_cycle": emotion,
         "main_themes": themes,

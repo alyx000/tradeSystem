@@ -32,9 +32,20 @@ const SENTIMENT_STATUS = [
 
 export default function StepEmotion({ data, onChange, prefill }: StepProps) {
   const d = data || {}
-  const g = (p: string, fb: any = '') => get(d, p, fb)
-  const s = (p: string, v: any) => onChange(set(d, p, v))
+  const ec = prefill?.emotion_cycle
   const m = prefill?.market
+
+  const g = (p: string, fb: any = '') => {
+    const val = get(d, p, undefined)
+    if (val !== undefined && val !== '') return val
+
+    if (ec) {
+      if (p === 'phase') return ec.phase || ''
+      if (p === 'sub_cycle') return ec.sub_cycle != null ? String(ec.sub_cycle) : ''
+    }
+    return fb
+  }
+  const s = (p: string, v: any) => onChange(set(d, p, v))
 
   return (
     <div className="space-y-6">
@@ -54,6 +65,12 @@ export default function StepEmotion({ data, onChange, prefill }: StepProps) {
             <Metric label="炸板率" value={m.broken_rate} suffix="%" />
             <Metric label="最高板" value={m.highest_board} suffix="板" />
           </div>
+          {ec?.strength_trend && (
+            <div className="mt-2 text-xs text-gray-500">
+              趋势方向: <span className="font-medium text-gray-700">{ec.strength_trend}</span>
+              {ec.confidence && <span className="ml-2">置信度: {ec.confidence}</span>}
+            </div>
+          )}
         </PrefillBanner>
       )}
 

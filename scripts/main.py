@@ -26,6 +26,9 @@
     # 检查数据源连通性
     python main.py check
 
+    # 采集阶段默认会临时清除 HTTP_PROXY/HTTPS_PROXY，避免误走本机代理导致 Tushare 超时。
+    # 若你必须让采集也走代理：export TRADESYSTEM_USE_HTTP_PROXY=1
+
     # 预拉取未来 N 天宏观日历到 tracking/calendar_auto.yaml（供盘前合并）
     python main.py prefetch-calendar [--days 14] [--from YYYY-MM-DD]
 
@@ -58,6 +61,8 @@ if _scripts not in sys.path:
 
 # 加载 .env
 load_dotenv(SCRIPT_DIR / ".env")
+
+from utils.network_env import without_standard_http_proxy
 
 # 日志配置
 logging.basicConfig(
@@ -156,8 +161,9 @@ def setup_pushers(config: dict):
 def cmd_check(config: dict):
     """检查数据源连通性"""
     logger.info("=== 数据源连通性检查 ===")
-    registry = setup_providers(config)
-    results = registry.initialize_all()
+    with without_standard_http_proxy():
+        registry = setup_providers(config)
+        results = registry.initialize_all()
     for name, ok in results.items():
         status = "OK" if ok else "FAIL"
         print(f"  {name}: {status}")
@@ -175,17 +181,18 @@ def cmd_check(config: dict):
 def cmd_prefetch_calendar(config: dict, days: int, from_date: Optional[str]):
     """预拉取宏观日历并写入 tracking/calendar_auto.yaml"""
     logger.info(f"=== 预拉取宏观日历 days={days} from={from_date or 'today'} ===")
-    registry = setup_providers(config)
-    registry.initialize_all()
+    with without_standard_http_proxy():
+        registry = setup_providers(config)
+        registry.initialize_all()
 
-    from collectors.market import prefetch_calendar
+        from collectors.market import prefetch_calendar
 
-    n_fetch, n_total = prefetch_calendar(
-        registry,
-        days=days,
-        from_date=from_date,
-        base_dir=BASE_DIR,
-    )
+        n_fetch, n_total = prefetch_calendar(
+            registry,
+            days=days,
+            from_date=from_date,
+            base_dir=BASE_DIR,
+        )
     print(f"预拉取完成：API 返回 {n_fetch} 条，calendar_auto.yaml 共 {n_total} 条事件")
     logger.info(f"calendar_auto 已更新：拉取 {n_fetch} 条，文件合计 {n_total} 条")
 
@@ -194,56 +201,89 @@ def cmd_pre(config: dict, target_date: str):
     """执行盘前简报"""
     logger.info(f"=== 盘前简报 {target_date} ===")
 
-    registry = setup_providers(config)
-    registry.initialize_all()
+    with without_standard_http_proxy():
+        registry = setup_providers(config)
+        registry.initialize_all()
 
-    from collectors import MarketCollector, HoldingsCollector, WatchlistCollector
-    from generators import ReportGenerator
-    from utils.trade_date import get_prev_trade_date
+        from collectors import MarketCollector, HoldingsCollector, WatchlistCollector
+        from generators import ReportGenerator
+        from utils.trade_date import get_prev_trade_date
 
-    prev_date = get_prev_trade_date(registry, target_date)
+        prev_date = get_prev_trade_date(registry, target_date)
+        prev_prev_date = get_prev_trade_date(registry, prev_date) if prev_date else None
 
-    # 采集
-    market_collector = MarketCollector(registry)
-    market_data = market_collector.collect_pre_market(
-        target_date=target_date,
-        prev_trade_date=prev_date,
-    )
+        # 采集
+        market_collector = MarketCollector(registry)
+        market_data = market_collector.collect_pre_market(
+            target_date=target_date,
+            prev_trade_date=prev_date,
+            prev_prev_trade_date=prev_prev_date,
+        )
 
-    holdings_collector = HoldingsCollector(registry)
-    holdings_collector.load()
-    # 查最近3天公告
-    d = datetime.strptime(target_date, "%Y-%m-%d")
-    start = (d - timedelta(days=3)).strftime("%Y-%m-%d")
-    holdings_anns = holdings_collector.collect_holdings_announcements(start, target_date)
+        # SQLite：上一交易日盘面摘要 + 昨日复盘结论（无则跳过）
+        try:
+            from db.connection import get_connection
+            from db import queries as DbQ
 
-    watchlist_collector = WatchlistCollector(registry)
-    watchlist_anns = watchlist_collector.collect_watchlist_announcements(start, target_date)
+            conn = get_connection()
+            try:
+                snap_row = DbQ.get_prev_daily_market(conn, target_date)
+                if snap_row:
+                    market_data["prev_session_snapshot"] = {
+                        "date": snap_row.get("date"),
+                        "sh_index_close": snap_row.get("sh_index_close"),
+                        "sh_index_change_pct": snap_row.get("sh_index_change_pct"),
+                        "total_amount": snap_row.get("total_amount"),
+                        "limit_up_count": snap_row.get("limit_up_count"),
+                        "limit_down_count": snap_row.get("limit_down_count"),
+                        "seal_rate": snap_row.get("seal_rate"),
+                        "broken_rate": snap_row.get("broken_rate"),
+                        "northbound_net": snap_row.get("northbound_net"),
+                    }
+                if prev_date:
+                    rev = DbQ.get_daily_review(conn, prev_date)
+                    blurbs = DbQ.extract_review_conclusion_lines(rev)
+                    if blurbs:
+                        market_data["prev_review_conclusion"] = blurbs
+            finally:
+                conn.close()
+        except Exception as e:
+            logger.warning("盘前简报 DB 补充（T-1 盘面/复盘摘要）失败: %s", e)
 
-    # 采集信息面（互动易/研报/个股新闻）
-    holdings_info = {}
-    watchlist_info = {}
-    try:
-        holdings_info = holdings_collector.collect_stock_info(target_date)
-    except Exception as e:
-        logger.warning(f"持仓信息面采集失败: {e}")
-    try:
-        watchlist_info = watchlist_collector.collect_watchlist_info(target_date)
-    except Exception as e:
-        logger.warning(f"关注池信息面采集失败: {e}")
+        holdings_collector = HoldingsCollector(registry)
+        holdings_collector.load()
+        # 查最近3天公告
+        d = datetime.strptime(target_date, "%Y-%m-%d")
+        start = (d - timedelta(days=3)).strftime("%Y-%m-%d")
+        holdings_anns = holdings_collector.collect_holdings_announcements(start, target_date)
 
-    # 生成报告
-    generator = ReportGenerator()
-    md_text, yaml_path = generator.generate_pre_market(
-        date=target_date,
-        market_data=market_data,
-        holdings_announcements=holdings_anns,
-        watchlist_announcements=watchlist_anns,
-        news=market_data.get("news", []),
-        calendar_events=market_data.get("calendar_events", []),
-        holdings_info=holdings_info,
-        watchlist_info=watchlist_info,
-    )
+        watchlist_collector = WatchlistCollector(registry)
+        watchlist_anns = watchlist_collector.collect_watchlist_announcements(start, target_date)
+
+        # 采集信息面（互动易/研报/个股新闻）
+        holdings_info = {}
+        watchlist_info = {}
+        try:
+            holdings_info = holdings_collector.collect_stock_info(target_date)
+        except Exception as e:
+            logger.warning(f"持仓信息面采集失败: {e}")
+        try:
+            watchlist_info = watchlist_collector.collect_watchlist_info(target_date)
+        except Exception as e:
+            logger.warning(f"关注池信息面采集失败: {e}")
+
+        # 生成报告
+        generator = ReportGenerator()
+        md_text, yaml_path = generator.generate_pre_market(
+            date=target_date,
+            market_data=market_data,
+            holdings_announcements=holdings_anns,
+            watchlist_announcements=watchlist_anns,
+            news=market_data.get("news", []),
+            calendar_events=market_data.get("calendar_events", []),
+            holdings_info=holdings_info,
+            watchlist_info=watchlist_info,
+        )
 
     print(md_text)
     logger.info(f"数据已保存: {yaml_path}")
@@ -260,59 +300,76 @@ def cmd_post(config: dict, target_date: str):
 
     logger.info(f"=== 盘后报告 {target_date} ===")
 
-    registry = setup_providers(config)
-    registry.initialize_all()
+    with without_standard_http_proxy():
+        registry = setup_providers(config)
+        registry.initialize_all()
 
-    from collectors import MarketCollector, HoldingsCollector, WatchlistCollector
-    from generators import ReportGenerator
+        from collectors import MarketCollector, HoldingsCollector, WatchlistCollector
+        from generators import ReportGenerator
 
-    # 采集市场数据
-    market_collector = MarketCollector(registry)
-    raw_data = market_collector.collect_post_market(target_date)
+        # 采集市场数据
+        market_collector = MarketCollector(registry)
+        raw_data = market_collector.collect_post_market(target_date)
 
-    # 采集持仓数据 + 盘后公告
-    holdings_collector = HoldingsCollector(registry)
-    holdings_collector.load()
-    holdings_data = holdings_collector.collect_holdings_data(target_date)
-    try:
-        holdings_data = holdings_collector.enrich_with_ma(holdings_data, target_date)
-    except Exception as e:
-        logger.warning(f"持仓均线/板块数据补充失败: {e}")
-    holdings_summary = HoldingsCollector.compute_summary(holdings_data)
+        # 采集持仓数据 + 盘后公告
+        holdings_collector = HoldingsCollector(registry)
+        holdings_collector.load()
+        holdings_data = holdings_collector.collect_holdings_data(target_date)
+        try:
+            holdings_data = holdings_collector.enrich_with_ma(holdings_data, target_date)
+        except Exception as e:
+            logger.warning(f"持仓均线/板块数据补充失败: {e}")
+        holdings_summary = HoldingsCollector.compute_summary(holdings_data)
 
-    holdings_anns = {}
-    try:
-        holdings_anns = holdings_collector.collect_holdings_announcements(target_date, target_date)
-    except Exception as e:
-        logger.warning(f"持仓盘后公告采集失败: {e}")
+        holdings_anns = {}
+        try:
+            holdings_anns = holdings_collector.collect_holdings_announcements(target_date, target_date)
+        except Exception as e:
+            logger.warning(f"持仓盘后公告采集失败: {e}")
 
-    watchlist_data = {}
-    try:
-        wl_collector = WatchlistCollector(registry)
-        watchlist_data = wl_collector.get_watchlist_summary()
-    except Exception as e:
-        logger.warning(f"关注池盘后数据加载失败: {e}")
+        watchlist_data = {}
+        try:
+            wl_collector = WatchlistCollector(registry)
+            watchlist_data = wl_collector.get_watchlist_summary()
+        except Exception as e:
+            logger.warning(f"关注池盘后数据加载失败: {e}")
 
-    # 交叉检查：持仓与关注池重复
-    holdings_codes = set(h.get("code", "") for h in holdings_data if "error" not in h)
-    wl_codes = set(s.get("code", "") for s in watchlist_data.get("tier1", []))
-    overlap = holdings_codes & wl_codes
-    if overlap:
-        logger.info(f"持仓与关注池 tier1 重叠: {overlap}")
+        # 交叉检查：持仓与关注池重复
+        holdings_codes = set(h.get("code", "") for h in holdings_data if "error" not in h)
+        wl_codes = set(s.get("code", "") for s in watchlist_data.get("tier1", []))
+        overlap = holdings_codes & wl_codes
+        if overlap:
+            logger.info(f"持仓与关注池 tier1 重叠: {overlap}")
 
-    # 生成报告
-    generator = ReportGenerator()
-    md_text, yaml_path = generator.generate_post_market(
-        date=target_date,
-        raw_data=raw_data,
-        holdings_data=holdings_data,
-        holdings_announcements=holdings_anns,
-        watchlist_data=watchlist_data,
-        holdings_summary=holdings_summary,
-    )
+        # 生成报告
+        generator = ReportGenerator()
+        md_text, yaml_path = generator.generate_post_market(
+            date=target_date,
+            raw_data=raw_data,
+            holdings_data=holdings_data,
+            holdings_announcements=holdings_anns,
+            watchlist_data=watchlist_data,
+            holdings_summary=holdings_summary,
+        )
 
     print(md_text)
     logger.info(f"数据已保存: {yaml_path}")
+
+    try:
+        from pathlib import Path
+
+        from db.dual_write import sync_daily_market_to_db
+
+        pm = Path(yaml_path)
+        if pm.is_file():
+            with pm.open(encoding="utf-8") as f:
+                envelope = yaml.safe_load(f) or {}
+            if sync_daily_market_to_db(target_date, envelope):
+                logger.info("daily_market 已同步到 SQLite: %s", target_date)
+            else:
+                logger.warning("daily_market 同步失败（已记入 pending_writes）: %s", target_date)
+    except Exception as e:
+        logger.warning("daily_market 同步跳过: %s", e)
 
     # 推送
     multi = setup_pushers(config)
@@ -378,48 +435,59 @@ def cmd_evening(config: dict, target_date: str):
     """
     logger.info(f"=== 晚间任务 {target_date} ===")
 
-    registry = setup_providers(config)
-    registry.initialize_all()
+    premium_report_text: Optional[str] = None
+    premium_prev_date: Optional[str] = None
+    wl_report_text: Optional[str] = None
+    wl_alerts: list = []
 
-    from utils.trade_date import get_prev_trade_date
+    with without_standard_http_proxy():
+        registry = setup_providers(config)
+        registry.initialize_all()
+
+        from utils.trade_date import get_prev_trade_date
+
+        prev_date = get_prev_trade_date(registry, target_date)
+
+        # 1. 溢价率回填
+        try:
+            from collectors import PremiumCollector
+            premium_collector = PremiumCollector(registry)
+            premium_result = premium_collector.collect(target_date, prev_date)
+            if premium_result:
+                premium_report_text = premium_collector.format_report(premium_result)
+                premium_prev_date = prev_date
+                logger.info(
+                    f"溢价率回填完成，首板高开率："
+                    f"{premium_result['first_board'].get('open_up_rate', '-')}"
+                )
+        except Exception as e:
+            logger.error(f"溢价率回填失败：{e}")
+
+        # 2. 关注池采集 + 到价提醒
+        try:
+            from collectors import WatchlistCollector
+            wl_collector = WatchlistCollector(registry)
+            wl_result = wl_collector.collect(target_date)
+            if wl_result:
+                wl_report_text = wl_collector.format_report(wl_result)
+                logger.info(
+                    f"关注池更新完成，tier1={len(wl_result.get('tier1', []))}只，"
+                    f"提醒={len(wl_result.get('alerts', []))}条"
+                )
+                wl_alerts = wl_result.get("alerts", []) or []
+        except Exception as e:
+            logger.error(f"关注池采集失败：{e}")
 
     multi = setup_pushers(config)
-    prev_date = get_prev_trade_date(registry, target_date)
-
-    # 1. 溢价率回填
-    try:
-        from collectors import PremiumCollector
-        premium_collector = PremiumCollector(registry)
-        premium_result = premium_collector.collect(target_date, prev_date)
-        if premium_result:
-            report_text = premium_collector.format_report(premium_result)
-            logger.info(f"溢价率回填完成，首板高开率：{premium_result['first_board'].get('open_up_rate', '-')}")
-            if multi._pushers and report_text:
-                multi.send_report("post_market", f"溢价率回填 {prev_date}", report_text)
-    except Exception as e:
-        logger.error(f"溢价率回填失败：{e}")
-
-    # 2. 关注池采集 + 到价提醒
-    try:
-        from collectors import WatchlistCollector
-        wl_collector = WatchlistCollector(registry)
-        wl_result = wl_collector.collect(target_date)
-        if wl_result:
-            report_text = wl_collector.format_report(wl_result)
-            logger.info(
-                f"关注池更新完成，tier1={len(wl_result.get('tier1', []))}只，"
-                f"提醒={len(wl_result.get('alerts', []))}条"
-            )
-            if multi._pushers and report_text:
-                multi.send_report("post_market", f"关注池日报 {target_date}", report_text)
-            alerts = wl_result.get("alerts", [])
-            if multi._pushers and alerts:
-                alert_lines = [f"⚠ 关注池到价提醒 {target_date}"]
-                for a in alerts:
-                    alert_lines.append(f"• {a.get('message', '(无消息)')}")
-                multi.send_alert("\n".join(alert_lines))
-    except Exception as e:
-        logger.error(f"关注池采集失败：{e}")
+    if multi._pushers and premium_report_text and premium_prev_date:
+        multi.send_report("post_market", f"溢价率回填 {premium_prev_date}", premium_report_text)
+    if multi._pushers and wl_report_text:
+        multi.send_report("post_market", f"关注池日报 {target_date}", wl_report_text)
+    if multi._pushers and wl_alerts:
+        alert_lines = [f"⚠ 关注池到价提醒 {target_date}"]
+        for a in wl_alerts:
+            alert_lines.append(f"• {a.get('message', '(无消息)')}")
+        multi.send_alert("\n".join(alert_lines))
 
     # 3. Obsidian 导出 review.yaml（post-market 在同次 post 流程后半段导出）
     try:
@@ -438,13 +506,14 @@ def cmd_watchlist(config: dict, target_date: str):
     """手动触发关注池采集 + 到价提醒"""
     logger.info(f"=== 关注池采集 {target_date} ===")
 
-    registry = setup_providers(config)
-    registry.initialize_all()
+    with without_standard_http_proxy():
+        registry = setup_providers(config)
+        registry.initialize_all()
 
-    from collectors import WatchlistCollector
-    wl_collector = WatchlistCollector(registry)
-    result = wl_collector.collect(target_date)
-    report = wl_collector.format_report(result)
+        from collectors import WatchlistCollector
+        wl_collector = WatchlistCollector(registry)
+        result = wl_collector.collect(target_date)
+        report = wl_collector.format_report(result)
     print(report)
 
     multi = setup_pushers(config)

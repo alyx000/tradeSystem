@@ -48,8 +48,40 @@ class ReportGenerator:
         watchlist_announcements = watchlist_announcements or {}
         lines = [f"# 盘前简报 {date}\n", f"生成时间: {datetime.now().strftime('%H:%M')}\n"]
 
+        snap = market_data.get("prev_session_snapshot") or {}
+        if snap.get("date"):
+            lines.append("## 昨日（上一交易日）盘面摘要\n")
+            lines.append(f"> 数据日期: {snap.get('date')}\n")
+            shc = snap.get("sh_index_close")
+            shp = snap.get("sh_index_change_pct")
+            if shc is not None:
+                sp = shp if shp is None else (f"+{shp}" if shp >= 0 else str(shp))
+                lines.append(f"- [事实] 上证收盘: {shc}（{sp}%）" if shp is not None else f"- [事实] 上证收盘: {shc}")
+            ta = snap.get("total_amount")
+            if ta is not None:
+                lines.append(f"- [事实] 两市成交额: {ta} 亿元 [★★★]")
+            lu, ld = snap.get("limit_up_count"), snap.get("limit_down_count")
+            if lu is not None or ld is not None:
+                lines.append(f"- [事实] 涨停 {lu or '-'} / 跌停 {ld or '-'} [★★★]")
+            sr, br = snap.get("seal_rate"), snap.get("broken_rate")
+            if sr is not None or br is not None:
+                lines.append(
+                    f"- [事实] 封板率 {sr if sr is not None else '-'}% / "
+                    f"炸板率 {br if br is not None else '-'}% [★★★]"
+                )
+            nb = snap.get("northbound_net")
+            if nb is not None:
+                lines.append(f"- [事实] 北向净额: {nb} 亿 [★★★]")
+
+        prev_rev = market_data.get("prev_review_conclusion")
+        if prev_rev:
+            lines.append("\n## 昨日复盘要点（主观）\n")
+            for t in prev_rev[:2]:
+                if str(t).strip():
+                    lines.append(f"- [判断] ★★☆ {str(t).strip()}")
+
         # 一、隔夜外盘：美股/A50 + 亚太 + 风险指标
-        lines.append("## 一、隔夜外盘\n")
+        lines.append("\n## 一、隔夜外盘\n")
         lines.append("### 美股与A50期货\n")
         gi = market_data.get("global_indices", {})
         for name, label in [("dow_jones", "道琼斯"), ("nasdaq", "纳斯达克"), ("sp500", "标普500"), ("a50", "A50期货")]:
@@ -65,7 +97,7 @@ class ReportGenerator:
 
         lines.append("\n### 亚太股指\n")
         apac = market_data.get("global_indices_apac", {})
-        for name, label in [("hsi", "恒生指数"), ("hstech", "恒生科技"), ("nikkei", "日经225")]:
+        for name, label in [("nikkei", "日经225"), ("kospi", "韩国综指")]:
             info = apac.get(name, {})
             if "error" in info:
                 lines.append(f"- {label}: 数据获取失败")
@@ -101,17 +133,19 @@ class ReportGenerator:
                     f"- [事实] 美债10年期收益率: {close_val}% ({sign}{pct}%) [★★★]"
                 )
 
-        # 二、美股中国资产 ETF
-        lines.append("\n## 二、美股中国资产相关\n")
+        # 二、美股中国金龙（隔夜）
+        lines.append("\n## 二、美股中国金龙（隔夜）\n")
         us_cn = market_data.get("us_china_assets", {})
         if "_error" in us_cn:
             lines.append(f"- 数据获取失败: {us_cn['_error']}")
         else:
-            for sym in ("KWEB", "FXI"):
-                info = us_cn.get(sym, {})
-                if "error" in info:
-                    lines.append(f"- {sym}: {info.get('error', '数据获取失败')}")
-                    continue
+            sym = "HXC"
+            info = us_cn.get(sym, {})
+            if "error" in info:
+                lines.append(f"- {sym}: {info.get('error', '数据获取失败')}")
+            elif not info:
+                lines.append("- HXC: 无数据")
+            else:
                 pct = info.get("change_pct", 0)
                 sign = "+" if pct >= 0 else ""
                 nm = info.get("name", sym)
@@ -138,35 +172,53 @@ class ReportGenerator:
             lines.append(f"- 融资融券汇总: {md['error']}")
         elif md.get("trade_date"):
             lines.append(f"> 统计日期: {md.get('trade_date')}\n")
-            lines.append(
-                f"- [事实] 两市融资余额合计: {md.get('total_rzye_yi', 'N/A')} 亿元 [★★★]"
-            )
-            lines.append(
-                f"- [事实] 两市融券余额合计: {md.get('total_rqye_yi', 'N/A')} 亿元 [★★★]"
-            )
-            lines.append(
-                f"- [事实] 融资融券余额合计: {md.get('total_rzrqye_yi', 'N/A')} 亿元 [★★★]"
-            )
+            cmp_d = md.get("margin_compare_date")
+            drz = md.get("delta_total_rzye_yi")
+            drq = md.get("delta_total_rqye_yi")
+            drzrq = md.get("delta_total_rzrqye_yi")
+            if cmp_d and drz is not None:
+                lines.append(
+                    f"- [事实] 两市融资余额合计: {md.get('total_rzye_yi', 'N/A')} 亿元 "
+                    f"（较 {cmp_d} {drz:+.2f} 亿） [★★★]"
+                )
+            else:
+                lines.append(
+                    f"- [事实] 两市融资余额合计: {md.get('total_rzye_yi', 'N/A')} 亿元 [★★★]"
+                )
+            if cmp_d and drq is not None:
+                lines.append(
+                    f"- [事实] 两市融券余额合计: {md.get('total_rqye_yi', 'N/A')} 亿元 "
+                    f"（较 {cmp_d} {drq:+.2f} 亿） [★★★]"
+                )
+            else:
+                lines.append(
+                    f"- [事实] 两市融券余额合计: {md.get('total_rqye_yi', 'N/A')} 亿元 [★★★]"
+                )
+            if cmp_d and drzrq is not None:
+                lines.append(
+                    f"- [事实] 融资融券余额合计: {md.get('total_rzrqye_yi', 'N/A')} 亿元 "
+                    f"（较 {cmp_d} {drzrq:+.2f} 亿） [★★★]"
+                )
+            else:
+                lines.append(
+                    f"- [事实] 融资融券余额合计: {md.get('total_rzrqye_yi', 'N/A')} 亿元 [★★★]"
+                )
             for ex in md.get("exchanges", []):
                 eid = ex.get("exchange_id", "")
+                dline = ""
+                if ex.get("delta_rzrqye_yi") is not None and cmp_d:
+                    dline = f" （合计较 {cmp_d} {ex['delta_rzrqye_yi']:+.2f} 亿）"
                 lines.append(
-                    f"  - {eid}: 融资 {ex.get('rzye_yi')} 亿 / 融券 {ex.get('rqye_yi')} 亿 / 合计 {ex.get('rzrqye_yi')} 亿"
+                    f"  - {eid}: 融资 {ex.get('rzye_yi')} 亿 / 融券 {ex.get('rqye_yi')} 亿 / "
+                    f"合计 {ex.get('rzrqye_yi')} 亿{dline}"
                 )
         else:
             lines.append("- （无融资融券汇总数据）")
 
-        # 今日日历：先算展示列表，再与持仓/新闻一起按顺序编号（三、四、五…）
-        cal_shown: list[dict] = []
-        if calendar_events:
-            high = [e for e in calendar_events if e.get("importance") in ("高", "3")]
-            mid = [e for e in calendar_events if e.get("importance") in ("中", "2")]
-            low = [e for e in calendar_events if e.get("importance") not in ("高", "3", "中", "2")]
-            shown = high + mid
-            if len(shown) < 30:
-                shown += low[: 30 - len(shown)]
-            cal_shown = shown[:30]
+        # 今日日历（采集侧已过滤为高/中、至多约 15 条）
+        cal_shown: list[dict] = list(calendar_events or [])
 
-        # 动态章节：从「五」起（持仓 / 关注池 / 新闻 / 日历）
+        # 动态章节：从「五」起（持仓 / 关注池 / 日历；全市场快讯已取消）
         idx = 5
         if holdings_announcements:
             lines.append(f"\n## {_roman(idx)}、持仓股公告\n")
@@ -204,24 +256,12 @@ class ReportGenerator:
             idx += 1
             _render_stock_info_section(lines, watchlist_info)
 
-        if news:
-            lines.append(f"\n## {_roman(idx)}、财经新闻\n")
-            idx += 1
-            for n in news[:15]:
-                time_str = n.get("time", "")
-                src = n.get("source", "")
-                title = n.get("title", n.get("content", ""))
-                meta = " | ".join(filter(None, [time_str, src]))
-                lines.append(f"- [事实] ★★☆ {title}")
-                if meta:
-                    lines.append(f"  `{meta}`")
-
         if cal_shown:
             lines.append(f"\n## {_roman(idx)}、今日日历\n")
             idx += 1
-            if len(cal_shown) < len(calendar_events or []):
+            if calendar_events and len(cal_shown) <= 15:
                 lines.append(
-                    f"> 共 {len(calendar_events)} 条，优先展示高/中重要性事件（最多30条）\n"
+                    f"> 展示高/中重要性事件 {len(cal_shown)} 条（至多 15 条，不含低重要性凑数）\n"
                 )
             lines.append("| 事件 | 地区 | 时间 | 重要性 | 预期 | 前值 |")
             lines.append("|------|------|------|--------|------|------|")

@@ -16,6 +16,7 @@ describe('App', () => {
     render(<App />)
     expect(screen.getByText('交易复盘系统')).toBeInTheDocument()
     expect(screen.getByText('仪表盘')).toBeInTheDocument()
+    expect(screen.getByText('市场')).toBeInTheDocument()
     expect(screen.getByText('复盘')).toBeInTheDocument()
     expect(screen.getByText('查询')).toBeInTheDocument()
     expect(screen.getByText('老师观点')).toBeInTheDocument()
@@ -24,9 +25,9 @@ describe('App', () => {
     expect(screen.getByText('日历')).toBeInTheDocument()
   })
 
-  it('renders 8 nav links', () => {
+  it('renders 9 nav links', () => {
     render(<App />)
     const links = screen.getAllByRole('link')
-    expect(links.length).toBeGreaterThanOrEqual(7)
+    expect(links.length).toBeGreaterThanOrEqual(8)
   })
 })

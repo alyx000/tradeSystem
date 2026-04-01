@@ -49,6 +49,16 @@ def test_get_global_index_hstech_second_ticker_if_first_empty(mock_ticker, ak: A
 
 
 @patch("yfinance.Ticker")
+def test_get_global_index_kospi_uses_yfinance(mock_ticker, ak: AkshareProvider):
+    mock_ticker.return_value.history.return_value = _hist_df([2550.0, 2600.0])
+    r = ak.get_global_index("kospi")
+    assert r.success
+    assert r.data["close"] == 2600.0
+    mock_ticker.assert_called()
+    assert "^KS11" in str(mock_ticker.call_args)
+
+
+@patch("yfinance.Ticker")
 def test_get_us_tickers_overnight(mock_ticker, ak: AkshareProvider):
     def make_ticker(closes):
         m = MagicMock()

@@ -175,6 +175,7 @@ class AkshareProvider(DataProvider):
             "hsi": "恒生指数",
             "hstech": "恒生科技",
             "nikkei": "日经225",
+            "kospi": "韩国综指",
             "ftse": "英国富时100",
             "dax": "德国DAX30",
             "a50": "__A50_FUTURES__",
@@ -289,6 +290,7 @@ class AkshareProvider(DataProvider):
                 # ^HSTECH 在 Yahoo 常 404；HSTECH.HK 为恒生科技指数现货报价
                 "hstech": [("HSTECH.HK", "恒生科技"), ("3033.HK", "恒生科技(ETF)")],
                 "nikkei": [("^N225", "日经225")],
+                "kospi": [("^KS11", "韩国综指")],
             }
             if index_name in apac_yf:
                 for ysym, label in apac_yf[index_name]:
@@ -335,6 +337,7 @@ class AkshareProvider(DataProvider):
         labels = {
             "KWEB": "KWEB（中概互联网ETF）",
             "FXI": "FXI（中国大盘ETF）",
+            "HXC": "HXC（纳斯达克中国金龙ETF）",
         }
         try:
             import yfinance as yf
@@ -429,6 +432,22 @@ class AkshareProvider(DataProvider):
                         }
                         return DataResult(data=data, source="akshare:forex_spot_em")
                 return DataResult(data=None, source=self.name, error="未找到 USD/CNY 汇率")
+
+            if pair == "usd_cnh":
+                df = self.ak.forex_spot_em()
+                m = df[df["名称"] == "美元兑离岸人民币"]
+                if not m.empty:
+                    row = m.iloc[0]
+                    data = {
+                        "name": "USD/CNH（离岸人民币）",
+                        "close": _to_float_price(row.get("最新价")),
+                        "change_pct": _to_float_pct(row.get("涨跌幅")),
+                    }
+                    return DataResult(data=data, source="akshare:forex_spot_em")
+                got = self._index_from_yfinance("CNH=X", "USD/CNH（离岸）")
+                if got is not None:
+                    return got
+                return DataResult(data=None, source=self.name, error="未找到离岸人民币汇率")
 
             return DataResult(data=None, source=self.name, error=f"不支持: {pair}")
         except Exception as e:

@@ -1,4 +1,4 @@
-import { type StepProps, get, set, Section, Row, SelectField, NumberField, TextField, TextareaField } from './widgets'
+import { type StepProps, get, set, Section, Row, PrefillBanner, Metric, SelectField, NumberField, TextField, TextareaField } from './widgets'
 
 const CAP_SIZE = [
   { value: '大盘股', label: '大盘股' },
@@ -32,13 +32,36 @@ const PROFIT_ITEMS = [
   { key: 'first_open', label: '涨停一字首次开板', premium: false },
 ]
 
-export default function StepStyle({ data, onChange }: StepProps) {
+export default function StepStyle({ data, onChange, prefill }: StepProps) {
   const d = data || {}
-  const g = (p: string, fb: any = '') => get(d, p, fb)
+  const m = prefill?.market
+
+  const g = (p: string, fb: any = '') => {
+    const val = get(d, p, undefined)
+    if (val !== undefined && val !== '') return val
+
+    if (m) {
+      if (p === 'effects.board_20cm.premium') return m.premium_20cm ?? null
+      if (p === 'effects.second_board.premium') return m.premium_second_board ?? null
+      if (p === 'effects.board_30cm.premium') return m.premium_30cm ?? null
+    }
+    return fb
+  }
   const s = (p: string, v: any) => onChange(set(d, p, v))
 
   return (
     <div className="space-y-6">
+      {m && (m.premium_10cm != null || m.premium_20cm != null || m.premium_30cm != null || m.premium_second_board != null) && (
+        <PrefillBanner>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <Metric label="10cm首板溢价" value={m.premium_10cm} suffix="%" />
+            <Metric label="20cm首板溢价" value={m.premium_20cm} suffix="%" />
+            <Metric label="30cm首板溢价" value={m.premium_30cm} suffix="%" />
+            <Metric label="二板溢价" value={m.premium_second_board} suffix="%" />
+          </div>
+        </PrefillBanner>
+      )}
+
       <Section title="当前市场审美偏好">
         <Row cols={3}>
           <SelectField label="市值偏好" value={g('preference.cap_size')} onChange={v => s('preference.cap_size', v)} options={CAP_SIZE} />

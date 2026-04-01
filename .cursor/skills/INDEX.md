@@ -132,7 +132,9 @@
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET | `/api/market/{date}` | 读取指定日期全市场行情摘要 |
+| GET | `/api/market/history` | 近 N 日行情摘要（`?days=`，不含 raw_data） |
+| GET | `/api/market/{date}` | 读取指定日期全市场行情摘要（扁平列 + 部分从 raw_data 展开） |
+| GET | `/api/post-market/{date}` | 整包盘后信封（与 post-market.yaml / DB raw_data 一致） |
 
 ### 搜索与分析（`routes/search.py`）
 

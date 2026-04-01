@@ -235,6 +235,38 @@ class TestDailyMarketMigration:
         raw = json.loads(row["raw_data"])
         assert raw["indices"]["sh_close"] == 3285.89
 
+    def test_import_nested_envelope(self, conn, tmp_path):
+        """真实 post-market.yaml：列从内层 raw_data 抽取，raw_data 列存完整信封。"""
+        daily_dir = tmp_path / "daily"
+        day_dir = daily_dir / "2026-06-01"
+        day_dir.mkdir(parents=True)
+        envelope = {
+            "date": "2026-06-01",
+            "generated_at": "2026-06-01T20:00:00",
+            "raw_data": {
+                "indices": {"shanghai": {"close": 3200.0, "change_pct": 0.6}},
+                "total_volume": {"total_billion": 7777.0},
+                "breadth": {"advance": 2000, "decline": 1000},
+                "limit_up": {"count": 60},
+                "limit_down": {"count": 4},
+                "northbound": {"net_buy_billion": 9.9},
+            },
+            "holdings_data": [],
+        }
+        with open(day_dir / "post-market.yaml", "w", encoding="utf-8") as f:
+            yaml.dump(envelope, f, allow_unicode=True)
+
+        count = import_daily_market(conn, daily_dir=daily_dir)
+        assert count == 1
+        row = Q.get_daily_market(conn, "2026-06-01")
+        assert row["sh_index_close"] == 3200.0
+        assert row["total_amount"] == 7777.0
+        assert row["advance_count"] == 2000
+        assert row["limit_up_count"] == 60
+        assert row["northbound_net"] == 9.9
+        raw = json.loads(row["raw_data"])
+        assert raw["raw_data"]["indices"]["shanghai"]["close"] == 3200.0
+
     def test_import_multiple_days(self, conn, tmp_path):
         daily_dir = tmp_path / "daily"
         _make_daily_yaml(daily_dir, "2026-03-29")

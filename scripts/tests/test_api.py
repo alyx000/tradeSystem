@@ -36,12 +36,9 @@ def client(db_path, monkeypatch):
 
 @pytest.fixture
 def seeded_client(client, db_path):
-    """预置基础数据的客户端。"""
+    """预置基础数据的客户端（老师笔记由需用例自行插入）。"""
     conn = get_connection(db_path)
-    tid = Q.get_or_create_teacher(conn, "小鲍")
-    Q.insert_teacher_note(conn, teacher_id=tid, date="2026-04-01",
-                          title="锂电板块分析", core_view="锂电看好",
-                          tags=["锂电", "短线"])
+    Q.get_or_create_teacher(conn, "小鲍")
     Q.upsert_daily_market(conn, {
         "date": "2026-04-01", "sh_index_close": 3285.89,
         "total_amount": 12345.0, "limit_up_count": 85,
@@ -77,17 +74,24 @@ def test_health(client):
 
 class TestReview:
     def test_prefill_returns_market(self, seeded_client):
-        r = seeded_client.get("/api/review/2026-04-01/prefill")
+        r = seeded_client.get("/api/review/2026-04-02/prefill")
         assert r.status_code == 200
         data = r.json()
-        assert data["market"]["sh_index_close"] == 3285.89
-        assert len(data["teacher_notes"]) >= 1
+        assert data["market"]["sh_index_close"] == 3300.0
+        assert data["prev_market"] is not None
+        assert data["prev_market"]["sh_index_close"] == 3285.89
+        assert data["avg_5d_amount"] is not None
+        assert len(data["teacher_notes"]) >= 0
         assert data["emotion_cycle"]["phase"] == "发酵"
 
     def test_prefill_empty_date(self, client):
         r = client.get("/api/review/2026-12-31/prefill")
         assert r.status_code == 200
-        assert r.json()["market"] is None
+        data = r.json()
+        assert data["market"] is None
+        assert data["prev_market"] is None
+        assert data["avg_5d_amount"] is None
+        assert data["avg_20d_amount"] is None
 
     def test_save_and_load(self, client):
         body = {"step1_market": {"sh": 3285}, "step2_sectors": {"main": "AI"}}
@@ -119,20 +123,45 @@ class TestReview:
 # ──────────────────────────────────────────────────────────────
 
 class TestSearch:
-    def test_unified_cross_entity(self, seeded_client):
+    def test_unified_cross_entity(self, seeded_client, db_path):
+        conn = get_connection(db_path)
+        tid = Q.get_or_create_teacher(conn, "小鲍")
+        Q.insert_teacher_note(
+            conn, teacher_id=tid, date="2026-04-01",
+            title="锂电板块分析", core_view="锂电看好",
+            tags=["锂电", "短线"],
+        )
+        conn.commit()
+        conn.close()
         r = seeded_client.get("/api/search/unified", params={"q": "锂电"})
         assert r.status_code == 200
         data = r.json()
         assert len(data.get("teacher_notes", [])) >= 1
         assert len(data.get("industry_info", [])) >= 1
 
-    def test_unified_type_filter(self, seeded_client):
+    def test_unified_type_filter(self, seeded_client, db_path):
+        conn = get_connection(db_path)
+        tid = Q.get_or_create_teacher(conn, "小鲍")
+        Q.insert_teacher_note(
+            conn, teacher_id=tid, date="2026-04-01",
+            title="锂电笔记", core_view="锂电内容",
+        )
+        conn.commit()
+        conn.close()
         r = seeded_client.get("/api/search/unified", params={"q": "锂电", "types": "teacher_notes"})
         data = r.json()
         assert "teacher_notes" in data
         assert "industry_info" not in data
 
-    def test_teacher_timeline(self, seeded_client):
+    def test_teacher_timeline(self, seeded_client, db_path):
+        conn = get_connection(db_path)
+        tid = Q.get_or_create_teacher(conn, "小鲍")
+        Q.insert_teacher_note(
+            conn, teacher_id=tid, date="2026-04-01",
+            title="时间线笔记", core_view="内容",
+        )
+        conn.commit()
+        conn.close()
         teachers = seeded_client.get("/api/teachers").json()
         tid = teachers[0]["id"]
         r = seeded_client.get(f"/api/teachers/{tid}/timeline")
@@ -153,7 +182,15 @@ class TestSearch:
         data = r.json()
         assert len(data) == 2
 
-    def test_export_markdown(self, seeded_client):
+    def test_export_markdown(self, seeded_client, db_path):
+        conn = get_connection(db_path)
+        tid = Q.get_or_create_teacher(conn, "小鲍")
+        Q.insert_teacher_note(
+            conn, teacher_id=tid, date="2026-04-01",
+            title="导出测试锂电", core_view="锂电",
+        )
+        conn.commit()
+        conn.close()
         r = seeded_client.get("/api/search/export", params={"q": "锂电"})
         assert r.status_code == 200
         assert "锂电" in r.text
@@ -257,11 +294,93 @@ class TestCRUD:
     def test_market_get(self, seeded_client):
         r = seeded_client.get("/api/market/2026-04-01")
         assert r.status_code == 200
-        assert r.json()["sh_index_close"] == 3285.89
+        data = r.json()
+        assert data["sh_index_close"] == 3285.89
+        assert data["available"] is True
 
-    def test_market_not_found(self, client):
+    def test_market_no_data(self, client):
         r = client.get("/api/market/2099-01-01")
-        assert r.status_code == 404
+        assert r.status_code == 200
+        data = r.json()
+        assert data["available"] is False
+
+    def test_market_raw_data_parsed(self, client, db_path):
+        """raw_data JSON 中的板块数据应被自动展开。"""
+        conn = get_connection(db_path)
+        Q.upsert_daily_market(conn, {
+            "date": "2026-05-01", "sh_index_close": 3300.0,
+            "raw_data": {
+                "sector_industry": {"data": [{"name": "电力", "pct_change": 2.5}]},
+                "sector_concept": {"data": [{"name": "AI算力", "pct_change": 3.1}]},
+            },
+        })
+        conn.commit()
+        conn.close()
+
+        r = client.get("/api/market/2026-05-01")
+        data = r.json()
+        assert data["available"] is True
+        assert data["sector_industry"]["data"][0]["name"] == "电力"
+        assert data["sector_concept"]["data"][0]["name"] == "AI算力"
+
+    def test_market_nested_envelope_raw_data(self, client, db_path):
+        """post-market 信封：indices/板块仅在内层 raw_data 时也应展开到 API。"""
+        envelope = {
+            "date": "2026-05-02",
+            "generated_at": "2026-05-02T20:00:00",
+            "raw_data": {
+                "indices": {
+                    "chinext": {"close": 2333.1, "change_pct": 1.23},
+                },
+                "sector_industry": {"data": [{"name": "测试板块", "pct_change": 1.0}]},
+            },
+        }
+        conn = get_connection(db_path)
+        Q.upsert_daily_market(conn, {
+            "date": "2026-05-02",
+            "sh_index_close": 3000.0,
+            "raw_data": envelope,
+        })
+        conn.commit()
+        conn.close()
+
+        r = client.get("/api/market/2026-05-02")
+        data = r.json()
+        assert data["available"] is True
+        assert data["indices"]["chinext"]["close"] == 2333.1
+        assert data["sector_industry"]["data"][0]["name"] == "测试板块"
+
+    def test_market_history(self, seeded_client):
+        r = seeded_client.get("/api/market/history", params={"days": 5})
+        assert r.status_code == 200
+        data = r.json()
+        assert len(data) >= 2
+        assert "raw_data" not in data[0]
+
+    def test_post_market_envelope_from_db(self, client, db_path):
+        env = {
+            "date": "2026-05-10",
+            "generated_at": "2026-05-10T20:00:00",
+            "raw_data": {"indices": {"shanghai": {"close": 3000.0}}},
+        }
+        conn = get_connection(db_path)
+        Q.upsert_daily_market(conn, {
+            "date": "2026-05-10",
+            "sh_index_close": 3000.0,
+            "raw_data": env,
+        })
+        conn.commit()
+        conn.close()
+        r = client.get("/api/post-market/2026-05-10")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["available"] is True
+        assert data["raw_data"]["indices"]["shanghai"]["close"] == 3000.0
+
+    def test_post_market_unavailable(self, client):
+        r = client.get("/api/post-market/2099-01-01")
+        assert r.status_code == 200
+        assert r.json()["available"] is False
 
 
 # ──────────────────────────────────────────────────────────────

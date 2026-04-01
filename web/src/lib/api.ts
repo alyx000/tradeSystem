@@ -69,6 +69,8 @@ export const api = {
 
   // Market
   getMarket: (date: string) => request<any>(`/market/${date}`),
+  getMarketHistory: (days: number = 20) => request<any[]>(`/market/history?days=${days}`),
+  getPostMarket: (date: string) => request<any>(`/post-market/${date}`),
 
   // Trades
   getTrades: (params?: Record<string, string>) => {

@@ -95,36 +95,186 @@ def sync_daily_market_to_db(date_str: str, yaml_data: dict,
         return False
 
 
-def _extract_market_row(date_str: str, data: dict) -> dict:
-    """从 post-market YAML 数据提取 daily_market 行。"""
-    indices = data.get("indices", {})
-    emotion = data.get("emotion", {})
-    style = data.get("style_analysis", data.get("style", {}))
-    capital = data.get("capital_flow", data.get("capital", {}))
-    breadth = data.get("market_breadth", {})
+def _post_market_collector_source(envelope: dict) -> dict:
+    """盘后 YAML 信封：采集结果在 raw_data 内；旧版扁平结构则整包即 source。"""
+    inner = envelope.get("raw_data")
+    if isinstance(inner, dict) and inner:
+        return inner
+    return envelope
+
+
+def _safe_sub(d: dict | None, key: str) -> dict:
+    x = (d or {}).get(key)
+    return x if isinstance(x, dict) else {}
+
+
+def _first_non_none(*values):
+    """依次取第一个非 None 的值（保留 0 / False 等合法值）。"""
+    for x in values:
+        if x is not None:
+            return x
+    return None
+
+
+def _extract_market_row(date_str: str, envelope: dict) -> dict:
+    """从 post-market YAML（信封或扁平）提取 daily_market 行；raw_data 列存完整信封。"""
+    source = _post_market_collector_source(envelope)
+    indices = _safe_sub(source, "indices")
+    vol = _safe_sub(source, "total_volume")
+    breadth = _safe_sub(source, "breadth")
+    mb = _safe_sub(source, "market_breadth")
+    if not mb:
+        mb = _safe_sub(envelope, "market_breadth")
+    limit_up = _safe_sub(source, "limit_up")
+    limit_down = _safe_sub(source, "limit_down")
+    emotion = _safe_sub(source, "emotion")
+    if not emotion:
+        emotion = _safe_sub(envelope, "emotion")
+    style = source.get("style_analysis") or source.get("style") or {}
+    if not isinstance(style, dict):
+        style = {}
+    if not style:
+        style = envelope.get("style_analysis") or envelope.get("style") or {}
+        if not isinstance(style, dict):
+            style = {}
+    northbound = _safe_sub(source, "northbound")
+    capital = _safe_sub(source, "capital_flow")
+    if not capital:
+        capital = _safe_sub(source, "capital")
+    if not capital:
+        capital = _safe_sub(envelope, "capital_flow") or _safe_sub(envelope, "capital")
+    margin = _safe_sub(source, "margin_data")
+    ma_sh = _safe_sub(_safe_sub(source, "moving_averages"), "shanghai")
+    ma_all = source.get("moving_averages") if isinstance(source.get("moving_averages"), dict) else {}
+
+    def _idx_close_pct(nest: str, legacy_close: str, legacy_pct: str):
+        block = indices.get(nest)
+        if isinstance(block, dict) and "error" not in block:
+            return block.get("close"), block.get("change_pct")
+        return indices.get(legacy_close), indices.get(legacy_pct)
+
+    sh_c, sh_p = _idx_close_pct("shanghai", "sh_close", "sh_change_pct")
+    sz_c, sz_p = _idx_close_pct("shenzhen", "sz_close", "sz_change_pct")
+
+    total_amount = source.get("total_amount")
+    if total_amount is None and isinstance(source.get("total_volume"), (int, float)):
+        total_amount = source.get("total_volume")
+    if total_amount is None:
+        total_amount = vol.get("total_billion")
+    if total_amount is None:
+        total_amount = envelope.get("total_amount")
+
+    advance = _first_non_none(
+        breadth.get("advance"),
+        mb.get("advance_count"),
+        mb.get("up_count"),
+    )
+    decline = _first_non_none(
+        breadth.get("decline"),
+        mb.get("decline_count"),
+        mb.get("down_count"),
+    )
+
+    lu_bad = "error" in limit_up
+    ld_bad = "error" in limit_down
+
+    limit_up_count = None if lu_bad else limit_up.get("count")
+    if limit_up_count is None:
+        limit_up_count = emotion.get("limit_up_count")
+
+    limit_down_count = None if ld_bad else limit_down.get("count")
+    if limit_down_count is None:
+        limit_down_count = emotion.get("limit_down_count")
+
+    seal_rate = None if lu_bad else limit_up.get("seal_rate_pct")
+    if seal_rate is None:
+        seal_rate = emotion.get("seal_rate")
+
+    broken_rate = None if lu_bad else limit_up.get("broken_rate_pct")
+    if broken_rate is None:
+        broken_rate = emotion.get("broken_rate")
+
+    highest_board = None if lu_bad else limit_up.get("highest_board")
+    if highest_board is None:
+        highest_board = emotion.get("highest_board")
+
+    ladder = None if lu_bad else limit_up.get("board_ladder")
+    if isinstance(ladder, dict) and ladder:
+        continuous_board_counts = json.dumps(ladder, ensure_ascii=False)
+    else:
+        continuous_board_counts = emotion.get("continuous_board_counts")
+
+    sf = source.get("style_factors") if isinstance(source.get("style_factors"), dict) else {}
+    snap = sf.get("premium_snapshot") if isinstance(sf.get("premium_snapshot"), dict) else {}
+
+    def _snap_premium_med(*keys: str):
+        for k in keys:
+            g = snap.get(k)
+            if isinstance(g, dict) and g.get("premium_median") is not None:
+                return g.get("premium_median")
+        return None
+
+    # 各列只对应同口径快照键，避免 10/20/30cm 混用；缺省时再读 YAML style 显式字段
+    premium_10cm = _snap_premium_med("first_board_10cm")
+    premium_20cm = _snap_premium_med("first_board_20cm")
+    premium_30cm = _snap_premium_med("first_board_30cm")
+    premium_second_board = _snap_premium_med("second_board")
+    if premium_10cm is None:
+        premium_10cm = style.get("premium_10cm")
+    if premium_20cm is None:
+        premium_20cm = style.get("premium_20cm")
+    if premium_30cm is None:
+        premium_30cm = style.get("premium_30cm")
+    if premium_second_board is None:
+        premium_second_board = style.get("premium_second_board")
+
+    northbound_net = northbound.get("net_buy_billion")
+    if northbound_net is None:
+        northbound_net = capital.get("northbound_net")
+
+    margin_balance = margin.get("total_rzrqye_yi")
+    if margin_balance is None:
+        margin_balance = margin.get("total_rzye_yi")
+    if margin_balance is None:
+        margin_balance = capital.get("margin_balance")
+
+    market_breadth_out = breadth if breadth else (mb if mb else None)
+
+    def _above_ma5w(key: str):
+        sub = ma_all.get(key)
+        return sub.get("above_ma5w") if isinstance(sub, dict) else None
 
     return {
         "date": date_str,
-        "sh_index_close": indices.get("sh_close"),
-        "sh_index_change_pct": indices.get("sh_change_pct"),
-        "sz_index_close": indices.get("sz_close"),
-        "sz_index_change_pct": indices.get("sz_change_pct"),
-        "total_amount": data.get("total_amount") or data.get("total_volume"),
-        "advance_count": breadth.get("advance_count") or breadth.get("up_count"),
-        "decline_count": breadth.get("decline_count") or breadth.get("down_count"),
-        "limit_up_count": emotion.get("limit_up_count"),
-        "limit_down_count": emotion.get("limit_down_count"),
-        "seal_rate": emotion.get("seal_rate"),
-        "broken_rate": emotion.get("broken_rate"),
-        "highest_board": emotion.get("highest_board"),
-        "continuous_board_counts": emotion.get("continuous_board_counts"),
-        "premium_10cm": style.get("premium_10cm"),
-        "premium_20cm": style.get("premium_20cm"),
-        "premium_second_board": style.get("premium_second_board"),
-        "northbound_net": capital.get("northbound_net"),
-        "margin_balance": capital.get("margin_balance"),
-        "market_breadth": breadth if breadth else None,
-        "raw_data": data,
+        "sh_index_close": sh_c,
+        "sh_index_change_pct": sh_p,
+        "sz_index_close": sz_c,
+        "sz_index_change_pct": sz_p,
+        "total_amount": total_amount,
+        "advance_count": advance,
+        "decline_count": decline,
+        "sh_above_ma5w": ma_sh.get("above_ma5w"),
+        "sz_above_ma5w": _above_ma5w("shenzhen"),
+        "chinext_above_ma5w": _above_ma5w("chinext"),
+        "star50_above_ma5w": _above_ma5w("star50"),
+        "avg_price_above_ma5w": _first_non_none(
+            _above_ma5w("avg_price"),
+            _above_ma5w("equally_weighted"),
+        ),
+        "limit_up_count": limit_up_count,
+        "limit_down_count": limit_down_count,
+        "seal_rate": seal_rate,
+        "broken_rate": broken_rate,
+        "highest_board": highest_board,
+        "continuous_board_counts": continuous_board_counts,
+        "premium_10cm": premium_10cm,
+        "premium_20cm": premium_20cm,
+        "premium_30cm": premium_30cm,
+        "premium_second_board": premium_second_board,
+        "northbound_net": northbound_net,
+        "margin_balance": margin_balance,
+        "market_breadth": market_breadth_out,
+        "raw_data": envelope,
     }
 
 

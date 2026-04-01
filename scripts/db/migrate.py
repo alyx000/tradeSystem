@@ -9,6 +9,7 @@ from typing import Any
 
 import yaml
 
+from .dual_write import _extract_market_row
 from .schema import init_schema
 
 logger = logging.getLogger(__name__)
@@ -34,12 +35,15 @@ def migrate(conn: sqlite3.Connection) -> None:
         init_schema(conn)
         set_schema_version(conn, 1)
         conn.commit()
+        version = get_schema_version(conn)
 
-    # 未来新版本在此追加
-    # if version < 2:
-    #     _apply_v2(conn)
-    #     set_schema_version(conn, 2)
-    #     conn.commit()
+    if version < 2:
+        logger.info("Applying schema v2: daily_market.premium_30cm")
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(daily_market)").fetchall()}
+        if "premium_30cm" not in cols:
+            conn.execute("ALTER TABLE daily_market ADD COLUMN premium_30cm REAL")
+        set_schema_version(conn, 2)
+        conn.commit()
 
 
 # ──────────────────────────────────────────────────────────────
@@ -187,35 +191,7 @@ def import_daily_market(conn: sqlite3.Connection,
             continue
 
         trade_date = day_dir.name
-        indices = data.get("indices", {})
-        emotion = data.get("emotion", {})
-        style = data.get("style_analysis", data.get("style", {}))
-        capital = data.get("capital_flow", data.get("capital", {}))
-        breadth = data.get("market_breadth", {})
-
-        row = {
-            "date": trade_date,
-            "sh_index_close": _nested_get(indices, "sh_close", "shanghai", "close"),
-            "sh_index_change_pct": _nested_get(indices, "sh_change_pct", "shanghai", "change_pct"),
-            "sz_index_close": _nested_get(indices, "sz_close", "shenzhen", "close"),
-            "sz_index_change_pct": _nested_get(indices, "sz_change_pct", "shenzhen", "change_pct"),
-            "total_amount": data.get("total_amount") or data.get("total_volume"),
-            "advance_count": breadth.get("advance_count") or breadth.get("up_count"),
-            "decline_count": breadth.get("decline_count") or breadth.get("down_count"),
-            "limit_up_count": emotion.get("limit_up_count"),
-            "limit_down_count": emotion.get("limit_down_count"),
-            "seal_rate": emotion.get("seal_rate"),
-            "broken_rate": emotion.get("broken_rate"),
-            "highest_board": emotion.get("highest_board"),
-            "continuous_board_counts": emotion.get("continuous_board_counts"),
-            "premium_10cm": _nested_get(style, "premium_10cm"),
-            "premium_20cm": _nested_get(style, "premium_20cm"),
-            "premium_second_board": _nested_get(style, "premium_second_board"),
-            "northbound_net": _nested_get(capital, "northbound_net"),
-            "margin_balance": _nested_get(capital, "margin_balance"),
-            "market_breadth": breadth if breadth else None,
-            "raw_data": data,
-        }
+        row = _extract_market_row(trade_date, data)
 
         existing = conn.execute(
             "SELECT date FROM daily_market WHERE date = ?", (trade_date,)
@@ -230,24 +206,6 @@ def import_daily_market(conn: sqlite3.Connection,
     conn.commit()
     logger.info("Imported %d daily market records", count)
     return count
-
-
-def _nested_get(d: dict, *keys: str) -> Any:
-    """从嵌套字典中尝试多种 key 路径获取值。"""
-    for key in keys:
-        if key in d:
-            return d[key]
-        parts = key.split(".")
-        current = d
-        for part in parts:
-            if isinstance(current, dict) and part in current:
-                current = current[part]
-            else:
-                current = None
-                break
-        if current is not None:
-            return current
-    return None
 
 
 def import_all(conn: sqlite3.Connection) -> dict[str, int]:
