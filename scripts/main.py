@@ -560,6 +560,10 @@ def main():
     # schedule
     subparsers.add_parser("schedule", help="启动定时调度器")
 
+    # db
+    from db.cli import register_db_subparser
+    register_db_subparser(subparsers)
+
     args = parser.parse_args()
     if not args.command:
         parser.print_help()
@@ -587,6 +591,9 @@ def main():
         cmd_obsidian(config, args.date, sync_all=args.sync_all)
     elif args.command == "schedule":
         cmd_schedule(config)
+    elif args.command == "db":
+        from db.cli import handle_db_command
+        handle_db_command(args)
 
 
 if __name__ == "__main__":

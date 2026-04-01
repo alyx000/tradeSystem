@@ -35,3 +35,10 @@ daily/
 
 # 跟踪数据（本地维护，不入仓库）
 tracking/
+
+# 数据目录（SQLite + 附件，不入仓库）
+data/
+
+# 前端构建产物
+web/node_modules/
+web/dist/

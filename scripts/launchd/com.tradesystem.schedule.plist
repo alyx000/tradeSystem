@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  安装方式（将 SCRIPTS_DIR 替换为实际 scripts/ 路径后再 load）：
+
+    SCRIPTS_DIR="$HOME/tradeSystem/scripts"
+    sed "s|__SCRIPTS_DIR__|$SCRIPTS_DIR|g" \
+        "$SCRIPTS_DIR/launchd/com.tradesystem.schedule.plist" \
+        > "$HOME/Library/LaunchAgents/com.tradesystem.schedule.plist"
+    launchctl load "$HOME/Library/LaunchAgents/com.tradesystem.schedule.plist"
+
+  卸载：
+    launchctl unload "$HOME/Library/LaunchAgents/com.tradesystem.schedule.plist"
+    rm "$HOME/Library/LaunchAgents/com.tradesystem.schedule.plist"
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.tradesystem.schedule</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <!-- python3 路径由安装脚本替换为 $(which python3) 的输出 -->
+        <string>__PYTHON3_PATH__</string>
+        <string>main.py</string>
+        <string>schedule</string>
+    </array>
+
+    <!-- WorkingDirectory 由安装脚本替换，不硬编码用户名或安装路径 -->
+    <key>WorkingDirectory</key>
+    <string>__SCRIPTS_DIR__</string>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/tradesystem-schedule.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/tmp/tradesystem-schedule-error.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/Library/Developer/CommandLineTools/usr/bin</string>
+        <key>PYTHONUNBUFFERED</key>
+        <string>1</string>
+    </dict>
+
+    <!-- 崩溃后至少等 10 秒再重启，防止循环崩溃 -->
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+</dict>
+</plist>

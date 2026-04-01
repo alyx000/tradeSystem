@@ -17,16 +17,30 @@ tradeSystem/
 │   ├── sectors.yaml          # 板块定义与分类
 │   ├── styles.yaml           # 风格化指标定义
 │   └── calendar.yaml         # 投资日历/财报季
-├── daily/                    # 每日复盘数据
-│   ├── example/              # 示例数据
-│   └── YYYY-MM-DD/           # 按日期存放
-│       ├── review.yaml       # 当日复盘
-│       └── trades.yaml       # 当日交易记录
+├── daily/                    # 每日复盘数据（YAML 归档）
+│   └── YYYY-MM-DD/
 ├── tracking/                 # 持续跟踪数据
 │   ├── main-theme.yaml       # 主线板块跟踪
 │   ├── emotion-cycle.yaml    # 情绪周期跟踪
 │   └── watchlist.yaml        # 关注票池
-└── scripts/                  # 辅助脚本（数据采集等）
+├── data/                     # 运行时数据（.gitignore）
+│   ├── trade.db              # SQLite 数据库（主存储）
+│   └── attachments/          # 附件（图片等）
+├── scripts/                  # Python 业务脚本
+│   ├── main.py               # CLI 入口（pre / post / db）
+│   ├── db/                   # 数据库模块（schema / queries / 迁移 / 双写）
+│   ├── api/                  # FastAPI 后端
+│   │   ├── main.py           # 应用入口
+│   │   ├── deps.py           # 依赖注入
+│   │   └── routes/           # review / search / crud
+│   ├── collectors/           # 数据采集器
+│   ├── providers/            # 数据源提供者
+│   └── tests/                # 单元测试
+└── web/                      # React 前端（Vite + Tailwind CSS）
+    └── src/
+        ├── pages/            # 页面组件
+        ├── lib/              # API 客户端 + 类型定义
+        └── __tests__/        # 前端测试
 ```
 
 ## 与 OpenClaw 协作流程
@@ -67,37 +81,87 @@ git commit -m "配置: [变更说明]"
 
 ## 快速开始
 
-### 1. 初始化 Git 仓库
+### 1. 安装依赖
 
 ```bash
-cd tradeSystem
-git init
-git add .
-git commit -m "初始化交易系统"
+# Python 后端
+pip install -r scripts/requirements.txt
+
+# React 前端
+cd web && npm install && cd ..
 ```
 
-### 2. 连接远程仓库（与 OpenClaw 共享）
+### 2. 初始化数据库
+
+首次使用需初始化 SQLite 数据库并导入历史 YAML 数据：
 
 ```bash
-# GitHub
-git remote add origin git@github.com:你的用户名/tradeSystem.git
-git push -u origin main
-
-# 或 Gitee（国内更快）
-git remote add origin git@gitee.com:你的用户名/tradeSystem.git
-git push -u origin main
+cd scripts && python3 main.py db init && cd ..
 ```
 
-### 3. 每日复盘
+### 3. 本地开发启动
+
+需要同时运行后端和前端两个服务：
 
 ```bash
-# 创建当日目录
+# 终端 1 — FastAPI 后端（端口 8000）
+cd scripts && uvicorn api.main:app --reload --port 8000
+
+# 终端 2 — React 前端（端口 5173）
+cd web && npm run dev
+```
+
+打开浏览器访问 **http://localhost:5173** 即可使用。
+
+| 地址 | 说明 |
+|------|------|
+| http://localhost:5173 | Web 前端（仪表盘、复盘工作台、查询中心等） |
+| http://localhost:8000/docs | FastAPI 自动生成的 API 文档 |
+| http://localhost:8000/api/health | 健康检查 |
+
+> 前端已配置代理，`/api/*` 请求自动转发到后端，无需手动处理跨域。
+> 两个服务都支持热重载——修改代码后自动生效，无需重启。
+
+### 4. 常用 CLI 命令
+
+```bash
+cd scripts
+
+# 盘前简报
+python3 main.py pre --date 2026-04-01
+
+# 盘后报告（含晚间任务）
+python3 main.py post --date 2026-04-01
+
+# 数据库操作
+python3 main.py db init              # 初始化 + 导入历史
+python3 main.py db sync              # 重试失败的写入
+python3 main.py db reconcile         # YAML ↔ DB 对账
+python3 main.py db add-note ...      # 添加老师观点
+python3 main.py db query-notes ...   # 查询老师观点
+python3 main.py db watchlist-add ... # 添加关注票
+```
+
+### 5. 运行测试
+
+```bash
+# Python 后端测试（从仓库根目录执行）
+python3 -m pytest scripts/tests/ -v
+
+# React 前端测试
+cd web && npx vitest run
+```
+
+### 6. 每日复盘（手动方式）
+
+```bash
 mkdir -p daily/$(date +%Y-%m-%d)
 cp templates/daily-review.yaml daily/$(date +%Y-%m-%d)/review.yaml
 cp templates/trade-log.yaml daily/$(date +%Y-%m-%d)/trades.yaml
 ```
 
 或者直接告诉 OpenClaw："开始今天的复盘"，它会自动创建文件并引导你填写。
+也可以通过 Web 前端的「八步复盘工作台」页面直接填写。
 
 ## VPS / 定时任务（生产）
 

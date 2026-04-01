@@ -1,0 +1,69 @@
+---
+description: 当修改 CLI 或 API 文件时，提醒同步更新 skills 文档
+globs:
+  - scripts/db/cli.py
+  - scripts/main.py
+  - scripts/api/routes/*.py
+  - .cursor/skills/**/*.md
+---
+
+# Skills 同步检查规则
+
+## 触发条件
+
+当你修改以下任何文件时，此规则自动触发：
+
+- `scripts/db/cli.py` — CLI 子命令定义
+- `scripts/main.py` — 顶层命令注册（pre/post/schedule 等）
+- `scripts/api/routes/*.py` — API 路由定义
+- `.cursor/skills/**/*.md` — skill 文档本身
+
+## 必须执行的检查清单
+
+### 1. 检查 INDEX.md 是否需要更新
+
+打开 `.cursor/skills/INDEX.md`，逐行核对：
+
+- [ ] 所有新增 CLI 子命令都已添加到依赖表
+- [ ] 所有重命名的命令已在表中更新
+- [ ] 所有删除的命令已从表中移除
+- [ ] 新增 API 端点已添加到 API 依赖表
+
+### 2. 运行 Smoke 测试
+
+```bash
+python3 -m pytest scripts/tests/test_cli_smoke.py -v
+```
+
+- 所有测试必须通过才算完成
+- 若有失败，说明 skill 引用的命令签名已过期，必须同时修复：
+  - `cli.py` 中的命令定义，或
+  - `test_cli_smoke.py` 中的 `ALL_SKILL_COMMANDS`，以及
+  - 对应 `SKILL.md` 中的使用示例
+
+### 3. 检查受影响的 SKILL.md
+
+根据改动内容，检查对应 skill 文档：
+
+| 改动文件 | 需检查的 SKILL.md |
+|---------|-----------------|
+| `cli.py` 的 `add-note/add-industry/add-macro` | `record-notes/SKILL.md` |
+| `cli.py` 的 `holdings-*/watchlist-*/add-trade/blacklist-*` | `portfolio-manager/SKILL.md` |
+| `cli.py` 的 `query-notes/db-search` | `daily-review/SKILL.md` |
+| `main.py` 的 `pre/post/schedule` | `market-tasks/SKILL.md` |
+| `api/routes/review.py` | `daily-review/SKILL.md` |
+
+### 4. 验证报告（每次修改后输出）
+
+```
+Skills 同步检查结果：
+- [✅/❌] INDEX.md 已更新
+- [✅/❌] test_cli_smoke.py 全部通过
+- [✅/❌] 受影响的 SKILL.md 已检查并更新（如需）
+```
+
+## 背景说明
+
+AI Agent（OpenClaw/Copaw/Cursor）通过 `.cursor/skills/` 中的文档了解如何调用 CLI 和 API。
+如果 CLI 签名或 API 接口变更而 skill 文档未更新，Agent 将生成错误的命令，导致数据写入失败。
+此规则确保每次底层变更时，skill 文档始终与实际接口保持同步。
