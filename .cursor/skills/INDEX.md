@@ -148,9 +148,10 @@
 
 ## 自动化检查
 
-`scripts/tests/test_cli_smoke.py` 会自动验证上表所有 CLI 子命令的 argparse 签名。
+`scripts/tests/test_cli_smoke.py` 会验证上表中所有 **`db` 子命令**的 argparse 签名（不启动子进程、不连库）。**不包含** 顶层 `main.py pre` / `post`（二者由 `market-tasks` 文档与人工/定时流程保证；修改 `main.py` 参数时请同步更新对应 SKILL 并自行回归）。
+
 每次 `pytest scripts/tests/test_cli_smoke.py` 都会同步检查：
-- 命令名未被重命名
+- 依赖表所列 `db` 子命令名未被重命名
 - 必需参数未被删除或改名
 - choices 集合未缩减
 

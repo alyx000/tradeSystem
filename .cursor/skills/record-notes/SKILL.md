@@ -43,9 +43,14 @@ img_path.write_bytes(resp.content)
 
 下载完成后，将本地路径传给 `--attachment` 参数。
 
+### CLI 执行位置
+
+所有 `python3 main.py db …` 命令必须在仓库的 `scripts/` 目录下执行（与 `market-tasks` skill 一致）。下面示例首行的路径请换成本机 `tradeSystem/scripts`。
+
 ### 3. 录入老师观点
 
 ```bash
+cd /path/to/tradeSystem/scripts
 # 纯文字
 python3 main.py db add-note \
   --teacher "小鲍" \
@@ -90,6 +95,7 @@ python3 main.py db add-note \
 ### 4. 录入行业信息
 
 ```bash
+cd /path/to/tradeSystem/scripts
 python3 main.py db add-industry \
   --sector "AI算力" \
   --date "2026-04-01" \
@@ -108,6 +114,7 @@ python3 main.py db add-industry \
 ### 5. 录入宏观信息
 
 ```bash
+cd /path/to/tradeSystem/scripts
 python3 main.py db add-macro \
   --category "货币政策" \
   --date "2026-04-01" \

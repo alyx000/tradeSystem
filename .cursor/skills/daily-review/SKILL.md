@@ -50,15 +50,17 @@ GET /api/review/{date}/prefill
 
 如果 API 未返回数据（行情未采集），提示：
 ```
-⚠️ 今日行情数据尚未采集，请先运行：
-   python3 main.py post --date 2026-04-01
+⚠️ 今日行情数据尚未采集，请先运行（在 tradeSystem/scripts/ 目录下）：
+   cd /path/to/tradeSystem/scripts && python3 main.py post --date 2026-04-01
    或直接使用 market-tasks skill 触发采集
 ```
 
-也可以搜索历史笔记作为参考：
+也可以搜索历史笔记作为参考（同样在 `scripts/` 目录下执行）。下面命令里的 `{date}` 是占位符，执行前须替换为实际 `YYYY-MM-DD`（可与当日复盘日期相同，或自行设定起止区间）：
+
 ```bash
-python3 main.py db query-notes --keyword "主线" --from {date} --to {date}
-python3 main.py db db-search --keyword "情绪" --from {date} --to {date}
+cd /path/to/tradeSystem/scripts
+python3 main.py db query-notes --keyword "主线" --from 2026-04-01 --to 2026-04-01
+python3 main.py db db-search --keyword "情绪" --from 2026-04-01 --to 2026-04-01
 ```
 
 ### Step 3：逐步引导用户填写（自底向上）
@@ -242,7 +244,9 @@ Content-Type: application/json
 
 ## 依赖的 CLI 命令
 
-- `db query-notes --keyword ... --from ... --to ...`：搜索当日老师观点
+均在仓库 `scripts/` 目录下通过 `python3 main.py db …` 调用（见 Step 2 示例）。
+
+- `db query-notes --keyword ... --from ... --to ...`：搜索当日老师观点（`--from`/`--to` 为 `YYYY-MM-DD`）
 - `db db-search --keyword ... --from ... --to ...`：跨表搜索相关信息
 - `db holdings-list`：获取当前持仓（第七步用）
 

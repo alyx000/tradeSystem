@@ -50,9 +50,12 @@ version: "1.0"
 
 ### Step 3：执行命令
 
+以下命令均在仓库的 `scripts/` 目录下执行（请先 `cd` 到本机 `tradeSystem/scripts`，与 `market-tasks` skill 一致）。
+
 #### 持仓管理
 
 ```bash
+cd /path/to/tradeSystem/scripts
 # 新增持仓
 python3 main.py db holdings-add \
   --code 300750 \
@@ -73,6 +76,7 @@ python3 main.py db holdings-list
 #### 关注池管理
 
 ```bash
+cd /path/to/tradeSystem/scripts
 # 添加到关注池
 python3 main.py db watchlist-add \
   --code 300750 \
@@ -107,6 +111,7 @@ python3 main.py db watchlist-list --status watching
 #### 交易记录
 
 ```bash
+cd /path/to/tradeSystem/scripts
 # 买入记录
 python3 main.py db add-trade \
   --code 300750 \
@@ -133,6 +138,7 @@ python3 main.py db add-trade \
 #### 黑名单
 
 ```bash
+cd /path/to/tradeSystem/scripts
 # 永久黑名单
 python3 main.py db blacklist-add \
   --code 000001 \
@@ -168,6 +174,7 @@ python3 main.py db blacklist-add \
 2. 提取信息：code=300750, name=宁德时代, shares=300, price=86, sector=锂电
 3. 执行：
    ```bash
+   cd /path/to/tradeSystem/scripts
    python3 main.py db holdings-add --code 300750 --name "宁德时代" --shares 300 --price 86 --sector 锂电
    python3 main.py db add-trade --code 300750 --name "宁德时代" --direction buy --price 86 --date 2026-04-01 --shares 300 --sector 锂电
    ```
@@ -181,6 +188,7 @@ python3 main.py db blacklist-add \
 1. 识别动作：watchlist-add，tier1_core
 2. 执行：
    ```bash
+   cd /path/to/tradeSystem/scripts
    python3 main.py db watchlist-add --code 688041 --name "海光信息" --tier tier1_core --reason "半导体龙头" --sector 国产算力
    ```
 
