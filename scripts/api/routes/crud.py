@@ -24,6 +24,30 @@ def list_teachers(conn: sqlite3.Connection = Depends(get_db_conn)):
     return Q.list_teachers(conn)
 
 
+def _attach_note_attachments(conn: sqlite3.Connection, notes: list[dict]) -> list[dict]:
+    """为笔记列表批量附加 attachments 字段。"""
+    if not notes:
+        return notes
+    ids = [n["id"] for n in notes]
+    placeholders = ",".join("?" * len(ids))
+    rows = conn.execute(
+        f"SELECT note_id, file_path, file_type, description FROM note_attachments "
+        f"WHERE note_id IN ({placeholders}) ORDER BY id",
+        ids,
+    ).fetchall()
+    att_map: dict[int, list[dict]] = {}
+    for r in rows:
+        att_map.setdefault(r["note_id"], []).append({
+            "file_path": r["file_path"],
+            "file_type": r["file_type"],
+            "description": r["description"],
+            "url": f"/attachments/{r['file_path'].removeprefix('data/attachments/').lstrip('/')}",
+        })
+    for note in notes:
+        note["attachments"] = att_map.get(note["id"], [])
+    return notes
+
+
 @router.get("/teacher-notes")
 def list_notes(
     teacher: Optional[str] = None,
@@ -33,8 +57,9 @@ def list_notes(
     conn: sqlite3.Connection = Depends(get_db_conn),
 ):
     if keyword:
-        return Q.search_teacher_notes(conn, keyword, teacher_name=teacher,
-                                      date_from=date_from, date_to=date_to)
+        notes = Q.search_teacher_notes(conn, keyword, teacher_name=teacher,
+                                       date_from=date_from, date_to=date_to)
+        return _attach_note_attachments(conn, notes)
     sql = "SELECT n.*, t.name as teacher_name FROM teacher_notes n JOIN teachers t ON n.teacher_id = t.id WHERE 1=1"
     params = []
     if teacher:
@@ -47,7 +72,8 @@ def list_notes(
         sql += " AND n.date <= ?"
         params.append(date_to)
     sql += " ORDER BY n.date DESC LIMIT 100"
-    return [dict(r) for r in conn.execute(sql, params).fetchall()]
+    notes = [dict(r) for r in conn.execute(sql, params).fetchall()]
+    return _attach_note_attachments(conn, notes)
 
 
 @router.get("/teacher-notes/{note_id}")
@@ -58,7 +84,8 @@ def get_note(note_id: int, conn: sqlite3.Connection = Depends(get_db_conn)):
     ).fetchone()
     if not row:
         raise HTTPException(404, "Note not found")
-    return dict(row)
+    note = dict(row)
+    return _attach_note_attachments(conn, [note])[0]
 
 
 @router.post("/teacher-notes")
@@ -399,6 +426,11 @@ def get_post_market_envelope(date: str, conn: sqlite3.Connection = Depends(get_d
     out["available"] = True
     out.setdefault("date", date)
     return out
+
+
+@router.get("/main-themes")
+def list_main_themes(conn: sqlite3.Connection = Depends(get_db_conn)):
+    return Q.get_active_themes(conn)
 
 
 @router.get("/market/{date}")

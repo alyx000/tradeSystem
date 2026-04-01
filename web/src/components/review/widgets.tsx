@@ -1,4 +1,4 @@
-import { type ReactNode } from 'react'
+import { type ReactNode, useState } from 'react'
 
 export interface StepProps {
   data: Record<string, any>
@@ -148,6 +148,59 @@ export function TagsField({ label, value, onChange, placeholder }: {
         placeholder={placeholder || '中文逗号分隔'}
         className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none" />
     </label>
+  )
+}
+
+/* ── Teacher Notes Panel ──────────────────────────── */
+
+const FIELD_LABELS: Record<string, string> = {
+  core_view: '核心观点',
+  sectors: '关注板块',
+  key_points: '要点',
+  position_advice: '仓位建议',
+  avoid: '回避',
+}
+
+export function TeacherNotesPanel({
+  notes,
+  fields = ['core_view', 'sectors', 'key_points', 'position_advice', 'avoid'],
+}: {
+  notes: any[]
+  fields?: string[]
+}) {
+  const [collapsed, setCollapsed] = useState(false)
+  if (!notes?.length) return null
+
+  return (
+    <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm">
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-xs font-medium text-amber-700">老师观点参考</span>
+        <button
+          type="button"
+          onClick={() => setCollapsed(c => !c)}
+          className="text-xs text-amber-500 hover:text-amber-700"
+        >
+          {collapsed ? '展开' : '收起'}
+        </button>
+      </div>
+      {!collapsed && (
+        <div className="space-y-3">
+          {notes.map((n: any) => (
+            <div key={n.id} className="border-l-2 border-amber-300 pl-3">
+              <div className="font-medium text-gray-800 text-xs mb-1">
+                {n.teacher_name} · {n.title}
+              </div>
+              {fields.map(f => n[f] ? (
+                <div key={f} className="text-gray-600 text-xs mt-0.5">
+                  <span className="text-amber-600 font-medium">{FIELD_LABELS[f] ?? f}：</span>
+                  {n[f]}
+                </div>
+              ) : null)}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   )
 }
 

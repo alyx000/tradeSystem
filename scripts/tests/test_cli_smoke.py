@@ -38,6 +38,10 @@ RECORD_NOTES_COMMANDS = [
     # add-note 带核心观点和标签
     ["db", "add-note", "--teacher", "小鲍", "--date", "2026-04-01", "--title", "T",
      "--core-view", "主升结束", "--tags", '["AI","连板"]', "--input-by", "openclaw"],
+    # add-note 带结构化要点、板块、仓位建议
+    ["db", "add-note", "--teacher", "小鲍", "--date", "2026-04-01", "--title", "T",
+     "--key-points", '["要点A","要点B"]', "--sectors", '["AI","锂电"]',
+     "--position-advice", "控制仓位至3成"],
     # add-note 单附件
     ["db", "add-note", "--teacher", "X", "--date", "2026-04-01", "--title", "T",
      "--source-type", "image", "--attachment", "/tmp/a.jpg"],

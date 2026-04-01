@@ -1,7 +1,7 @@
 ---
 name: portfolio-manager
 description: 管理持仓池、关注池、黑名单、交易记录，提供标准化的增删改查接口供 AI Agent 调用
-version: "1.0"
+version: "1.1"
 ---
 
 # Skill: 投资组合管理
@@ -48,7 +48,63 @@ version: "1.0"
 
 若信息不完整，向用户询问。
 
-### Step 3：执行命令
+### Step 3：执行前先做结构化确认
+
+凡是会写入或更新数据库的操作（`holdings-add` / `holdings-remove` / `watchlist-add` / `watchlist-remove` / `watchlist-update` / `add-trade` / `blacklist-add`），**都先展示结构化解析结果，再等待用户确认**。不要从自然语言里直接猜测字段后立刻写库。
+
+**强制顺序：**
+1. 识别动作类型
+2. 提取结构化字段
+3. 展示即将执行的操作摘要
+4. 用户确认后，再执行命令
+
+**禁止猜测的字段：**
+- 股票代码
+- 股票名称
+- 价格、股数
+- `tier`、`status`
+- 交易方向（`buy` / `sell`）
+- 黑名单到期日
+
+如果用户一句话里包含多个动作，要先拆分再确认。例如“今天买了宁德时代，顺便放进核心关注”应拆为：
+- `holdings-add`
+- `add-trade`
+- `watchlist-add` 或 `watchlist-update`
+
+可参考以下确认模板。建议统一按“类型/动作 + 关键字段 + 影响/待确认项 + 确认语句”的结构展示：
+
+```text
+即将执行：
+  类型: 投资组合写操作
+  动作: holdings-add + add-trade
+  股票: 300750 宁德时代
+  股数: 300
+  价格: 86.0
+  板块: 锂电
+  备注/理由: 锂电龙头
+  影响: 将新增持仓并写入一笔买入交易
+
+确认执行？(是/否)
+```
+
+关注池场景可展示：
+
+```text
+即将执行：
+  类型: 关注池写操作
+  动作: watchlist-add
+  股票: 688041 海光信息
+  层级: tier1_core
+  原因: 半导体龙头
+  板块: 国产算力
+  影响: 将新增一条关注池记录
+
+确认执行？(是/否)
+```
+
+只有查询类操作（如 `holdings-list`、`watchlist-list`）可直接执行，无需确认。
+
+### Step 4：执行命令
 
 以下命令均在仓库的 `scripts/` 目录下执行（请先 `cd` 到本机 `tradeSystem/scripts`，与 `market-tasks` skill 一致）。
 
@@ -153,7 +209,7 @@ python3 main.py db blacklist-add \
   --until 2026-06-30
 ```
 
-### Step 4：汇报结果
+### Step 5：汇报结果
 
 执行成功后，用中文告知用户：
 
@@ -172,13 +228,24 @@ python3 main.py db blacklist-add \
 **Agent**：
 1. 识别动作：holdings-add + add-trade（买入）
 2. 提取信息：code=300750, name=宁德时代, shares=300, price=86, sector=锂电
-3. 执行：
+3. 先确认：
+   ```text
+   即将执行：
+     动作: holdings-add + add-trade
+     股票: 300750 宁德时代
+     股数: 300
+     价格: 86
+     板块: 锂电
+
+   确认执行？(是/否)
+   ```
+4. 执行：
    ```bash
    cd /path/to/tradeSystem/scripts
    python3 main.py db holdings-add --code 300750 --name "宁德时代" --shares 300 --price 86 --sector 锂电
    python3 main.py db add-trade --code 300750 --name "宁德时代" --direction buy --price 86 --date 2026-04-01 --shares 300 --sector 锂电
    ```
-4. 回复：「已录入持仓和买入记录：宁德时代(300750) 300股 @86.0」
+5. 回复：「已录入持仓和买入记录：宁德时代(300750) 300股 @86.0」
 
 ---
 
@@ -186,7 +253,18 @@ python3 main.py db blacklist-add \
 
 **Agent**：
 1. 识别动作：watchlist-add，tier1_core
-2. 执行：
+2. 先确认：
+   ```text
+   即将执行：
+     动作: watchlist-add
+     股票: 688041 海光信息
+     层级: tier1_core
+     原因: 半导体龙头
+     板块: 国产算力
+
+   确认执行？(是/否)
+   ```
+3. 执行：
    ```bash
    cd /path/to/tradeSystem/scripts
    python3 main.py db watchlist-add --code 688041 --name "海光信息" --tier tier1_core --reason "半导体龙头" --sector 国产算力
@@ -198,3 +276,4 @@ python3 main.py db blacklist-add \
 - 若不确定股票代码，可查询「股票名称 + 代码」后再录入，不要猜
 - `holdings-remove` 不会物理删除，只标记 `closed`，历史保留
 - 关注池和持仓是独立的，建仓后可将状态更新为 `tracking`
+- 写操作先确认，再执行；查询类操作可直接执行

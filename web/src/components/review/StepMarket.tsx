@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom'
-import { type StepProps, get, set, Section, Row, PrefillBanner, Metric, SelectField, TextField, NumberField, TextareaField } from './widgets'
+import { type StepProps, get, set, Section, Row, PrefillBanner, Metric, SelectField, TextField, NumberField, TextareaField, TeacherNotesPanel } from './widgets'
 
 const TREND = [
   { value: '主升', label: '主升' },
@@ -53,6 +53,8 @@ export default function StepMarket({ data, onChange, prefill }: StepProps) {
   const m = prefill?.market
   const pm = prefill?.prev_market
 
+  const teacherNotes = prefill?.teacher_notes || []
+
   const g = (p: string, fb: any = '') => {
     const val = get(d, p, undefined)
     if (val !== undefined && val !== '') return val
@@ -63,6 +65,10 @@ export default function StepMarket({ data, onChange, prefill }: StepProps) {
       if (p === 'volume.vs_20day_avg') return deriveVolVs(m.total_amount, prefill?.avg_20d_amount)
       if (p === 'direction.ma5w') return m.sh_above_ma5w ? '线上' : m.sh_above_ma5w === false ? '线下' : ''
     }
+    if (p === 'notes' && teacherNotes.length) {
+      const views = teacherNotes.map((n: any) => n.core_view).filter(Boolean)
+      if (views.length) return views.map((v: string, i: number) => `【${teacherNotes[i].teacher_name}】${v}`).join('\n')
+    }
     return fb
   }
   const s = (p: string, v: any) => onChange(set(d, p, v))
@@ -72,6 +78,7 @@ export default function StepMarket({ data, onChange, prefill }: StepProps) {
 
   return (
     <div className="space-y-6">
+      <TeacherNotesPanel notes={teacherNotes} fields={['core_view']} />
       {m && (
         <PrefillBanner>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -103,6 +110,11 @@ export default function StepMarket({ data, onChange, prefill }: StepProps) {
       )}
 
       <Section title="成交量对比">
+        {m && (
+          <p className="text-xs text-amber-600 mb-2">
+            已根据行情数据自动推算，可直接修改
+          </p>
+        )}
         <Row cols={3}>
           <SelectField label="较昨日" value={g('volume.vs_yesterday')} onChange={v => s('volume.vs_yesterday', v)} options={VOL_CHANGE} />
           <SelectField label="较5日均量" value={g('volume.vs_5day_avg')} onChange={v => s('volume.vs_5day_avg', v)} options={VOL_VS} />

@@ -7,8 +7,6 @@ import {
 } from 'recharts'
 import { api } from '../lib/api'
 
-const today = new Date().toISOString().slice(0, 10)
-
 function fmtAmount(v: number | null | undefined) {
   if (v == null) return '-'
   return v >= 10000 ? `${(v / 10000).toFixed(2)}万亿` : `${v.toFixed(0)}亿`
@@ -59,12 +57,32 @@ function StatCard({ label, value, suffix }: { label: string; value: any; suffix?
 
 type SectorTab = 'industry' | 'concept' | 'fund_flow'
 type MarketViewTab = 'summary' | 'envelope'
+type SortOrder = 'gain' | 'loss'
+
+const PHASE_STYLE: Record<string, string> = {
+  '超跌': 'bg-gray-100 text-gray-600',
+  '启动': 'bg-blue-100 text-blue-700',
+  '信不信加速': 'bg-blue-200 text-blue-800',
+  '主升': 'bg-red-100 text-red-700',
+  '首次分歧': 'bg-orange-100 text-orange-700',
+  '震荡': 'bg-orange-100 text-orange-700',
+  '轮动': 'bg-purple-100 text-purple-700',
+}
+
+function boardColor(board: number) {
+  if (board >= 7) return { bar: '#ef4444', text: 'text-red-700 font-bold' }
+  if (board >= 5) return { bar: '#f97316', text: 'text-orange-700 font-semibold' }
+  if (board >= 3) return { bar: '#3b82f6', text: 'text-blue-700' }
+  return { bar: '#9ca3af', text: 'text-gray-600' }
+}
 
 export default function MarketOverview() {
   const { date } = useParams<{ date: string }>()
   const navigate = useNavigate()
   const [sectorTab, setSectorTab] = useState<SectorTab>('industry')
   const [viewTab, setViewTab] = useState<MarketViewTab>('summary')
+  const [sortOrder, setSortOrder] = useState<SortOrder>('gain')
+  const [showAllSectors, setShowAllSectors] = useState(false)
 
   const { data: market, isLoading } = useQuery({
     queryKey: ['market-full', date],
@@ -83,6 +101,11 @@ export default function MarketOverview() {
     enabled: !!date && viewTab === 'envelope',
   })
 
+  const { data: mainThemes } = useQuery({
+    queryKey: ['main-themes'],
+    queryFn: api.getMainThemes,
+  })
+
   const chartData = (history || [])
     .slice()
     .sort((a: any, b: any) => a.date.localeCompare(b.date))
@@ -98,7 +121,11 @@ export default function MarketOverview() {
   const hasSummary = market?.available === true
   const m = hasSummary ? market : null
   const boards = m ? parseBoardCounts(m.continuous_board_counts) : []
-  const sectorData = m ? getSectorData(m, sectorTab) : []
+  const maxBoardCount = boards.length > 0 ? Math.max(...boards.map(b => b.count)) : 1
+  const rawSectorData = m ? getSectorData(m, sectorTab) : []
+  const sectorData = sortOrder === 'loss' ? rawSectorData.slice().reverse() : rawSectorData
+  const visibleSectors = showAllSectors ? sectorData : sectorData.slice(0, 10)
+  const activeThemes = (mainThemes || []).filter((t: any) => t.status === 'active')
 
   return (
     <div className="space-y-6">
@@ -203,13 +230,16 @@ export default function MarketOverview() {
           </div>
           {boards.length > 0 && (
             <div>
-              <span className="text-xs text-gray-400">连板梯队：</span>
-              <div className="flex flex-wrap gap-1.5 mt-1">
-                {boards.map(b => (
-                  <span key={b.board} className="text-xs px-2 py-0.5 bg-gray-100 rounded">
-                    {b.board}板: {b.count}只
-                  </span>
-                ))}
+              <span className="text-xs text-gray-400 mb-2 block">连板梯队</span>
+              <div className="space-y-2">
+                {boards.map(b => {
+                  const { bar, text } = boardColor(b.board)
+                  const barWidth = Math.max(4, Math.round((b.count / maxBoardCount) * 100))
+                  return (
+                    <BoardRow key={b.board} board={b.board} count={b.count} stocks={b.stocks}
+                      bar={bar} textCls={text} barWidth={barWidth} />
+                  )
+                })}
               </div>
             </div>
           )}
@@ -225,13 +255,51 @@ export default function MarketOverview() {
         </div>
       </div>
 
+      {/* 主线板块节奏面板 */}
+      {activeThemes.length > 0 && (
+        <div className="bg-white rounded-lg shadow p-4">
+          <h2 className="text-sm font-semibold text-gray-700 mb-3">主线板块节奏</h2>
+          <div className="space-y-2">
+            {activeThemes.map((t: any, i: number) => {
+              let keyStocks: string[] = []
+              try {
+                const ks = typeof t.key_stocks === 'string' ? JSON.parse(t.key_stocks) : t.key_stocks
+                if (Array.isArray(ks)) keyStocks = ks
+              } catch { /* ignore */ }
+              const phaseStyle = PHASE_STYLE[t.phase] || 'bg-gray-100 text-gray-600'
+              return (
+                <div key={i} className="flex flex-wrap items-center gap-2 py-1.5 border-b border-gray-50 last:border-0">
+                  <span className="font-medium text-gray-800 text-sm min-w-[6rem]">{t.theme_name}</span>
+                  {t.phase && (
+                    <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${phaseStyle}`}>
+                      {t.phase}
+                    </span>
+                  )}
+                  {t.duration_days != null && (
+                    <span className="text-xs text-gray-400">{t.duration_days}天</span>
+                  )}
+                  {keyStocks.length > 0 && (
+                    <div className="flex gap-1 flex-wrap">
+                      {keyStocks.slice(0, 4).map((s: string) => (
+                        <span key={s} className="bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded text-xs">{s}</span>
+                      ))}
+                    </div>
+                  )}
+                  {t.note && <span className="text-xs text-gray-400 flex-1">{t.note}</span>}
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
       {/* 板块排行 */}
       <div className="bg-white rounded-lg shadow p-4">
-        <div className="flex items-center gap-4 mb-3">
+        <div className="flex flex-wrap items-center gap-2 mb-3">
           <h2 className="text-sm font-semibold text-gray-700">板块排行</h2>
           <div className="flex gap-1">
             {([['industry', '行业'], ['concept', '概念'], ['fund_flow', '资金流向']] as const).map(([key, label]) => (
-              <button key={key} onClick={() => setSectorTab(key)}
+              <button key={key} onClick={() => { setSectorTab(key); setShowAllSectors(false) }}
                 className={`px-3 py-1 text-xs rounded-full transition-colors ${
                   sectorTab === key ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
                 }`}>
@@ -239,8 +307,23 @@ export default function MarketOverview() {
               </button>
             ))}
           </div>
+          <div className="flex gap-1 ml-auto">
+            <button onClick={() => setSortOrder('gain')}
+              className={`px-3 py-1 text-xs rounded-full transition-colors ${
+                sortOrder === 'gain' ? 'bg-red-500 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+              }`}>
+              涨幅↑
+            </button>
+            <button onClick={() => setSortOrder('loss')}
+              className={`px-3 py-1 text-xs rounded-full transition-colors ${
+                sortOrder === 'loss' ? 'bg-green-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+              }`}>
+              跌幅↓
+            </button>
+          </div>
         </div>
         {sectorData.length > 0 ? (
+          <>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
@@ -252,7 +335,7 @@ export default function MarketOverview() {
                 </tr>
               </thead>
               <tbody>
-                {sectorData.slice(0, 30).map((s: any, i: number) => (
+                {visibleSectors.map((s: any, i: number) => (
                   <tr key={i} className="border-b border-gray-50 hover:bg-gray-50">
                     <td className="py-1.5 pr-4 text-gray-400">{i + 1}</td>
                     <td className="py-1.5 pr-4 font-medium text-gray-800">{s.name || s.sector_name || '-'}</td>
@@ -269,6 +352,15 @@ export default function MarketOverview() {
               </tbody>
             </table>
           </div>
+          {sectorData.length > 10 && (
+            <button
+              onClick={() => setShowAllSectors(v => !v)}
+              className="mt-2 w-full text-xs text-blue-500 hover:text-blue-700 py-1.5 border-t border-gray-100"
+            >
+              {showAllSectors ? '收起' : `展开全部 ${sectorData.length} 条`}
+            </button>
+          )}
+          </>
         ) : (
           <div className="text-sm text-gray-400 text-center py-6">暂无板块数据</div>
         )}
@@ -295,6 +387,24 @@ export default function MarketOverview() {
               <Bar yAxisId="count" dataKey="limit_up_count" name="涨停数" fill="#ef4444" opacity={0.6} />
               <Line yAxisId="amount" dataKey="total_amount" name="成交额"
                 stroke="#3b82f6" strokeWidth={2} dot={{ r: 2 }} />
+            </ComposedChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+
+      {/* 涨跌家数折线图 */}
+      {chartData.length > 0 && (
+        <div className="bg-white rounded-lg shadow p-4">
+          <h2 className="text-sm font-semibold text-gray-700 mb-3">涨跌家数</h2>
+          <ResponsiveContainer width="100%" height={220}>
+            <ComposedChart data={chartData}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey="date_short" tick={{ fontSize: 11 }} />
+              <YAxis tick={{ fontSize: 11 }} />
+              <Tooltip />
+              <Legend />
+              <Line dataKey="advance_count" name="上涨家数" stroke="#ef4444" strokeWidth={2} dot={{ r: 2 }} />
+              <Line dataKey="decline_count" name="下跌家数" stroke="#22c55e" strokeWidth={2} dot={{ r: 2 }} />
             </ComposedChart>
           </ResponsiveContainer>
         </div>
@@ -356,16 +466,57 @@ function PostMarketEnvelopePanel({
   )
 }
 
-function parseBoardCounts(raw: any): { board: number; count: number }[] {
+function BoardRow({
+  board, count, stocks, bar, textCls, barWidth,
+}: {
+  board: number; count: number; stocks: string[]; bar: string; textCls: string; barWidth: number
+}) {
+  const [expanded, setExpanded] = useState(false)
+  return (
+    <div>
+      <div className="flex items-center gap-2">
+        <span className={`w-10 text-xs font-medium shrink-0 ${textCls}`}>{board}板</span>
+        <div className="flex-1 bg-gray-100 rounded-full h-3 overflow-hidden">
+          <div className="h-full rounded-full" style={{ width: `${barWidth}%`, backgroundColor: bar, opacity: 0.8 }} />
+        </div>
+        <span className={`text-xs font-semibold shrink-0 w-10 text-right ${textCls}`}>{count}只</span>
+        {stocks.length > 0 && (
+          <button
+            onClick={() => setExpanded(v => !v)}
+            className="text-xs text-gray-400 hover:text-gray-600 shrink-0"
+          >
+            {expanded ? '▲' : '▼'}
+          </button>
+        )}
+      </div>
+      {expanded && stocks.length > 0 && (
+        <div className="flex flex-wrap gap-1 mt-1.5 pl-12">
+          {stocks.map((s: string) => (
+            <span key={s} className="text-xs bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded">{s}</span>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function parseBoardCounts(raw: any): { board: number; count: number; stocks: string[] }[] {
   if (!raw) return []
   try {
     const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw
-    if (Array.isArray(parsed)) return parsed
-    if (typeof parsed === 'object') {
+    if (typeof parsed === 'object' && !Array.isArray(parsed)) {
       return Object.entries(parsed)
-        .map(([k, v]) => ({ board: parseInt(k), count: v as number }))
-        .filter(b => !isNaN(b.board))
-        .sort((a, b) => b.board - a.board)
+        .map(([k, v]) => {
+          const board = parseInt(k)
+          if (isNaN(board)) return null
+          if (Array.isArray(v)) return { board, count: v.length, stocks: v as string[] }
+          return { board, count: Number(v), stocks: [] }
+        })
+        .filter(Boolean)
+        .sort((a: any, b: any) => b.board - a.board) as { board: number; count: number; stocks: string[] }[]
+    }
+    if (Array.isArray(parsed)) {
+      return parsed.map((b: any) => ({ ...b, stocks: b.stocks ?? [] }))
     }
   } catch { /* ignore */ }
   return []

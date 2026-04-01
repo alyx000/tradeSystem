@@ -1,4 +1,4 @@
-import { type StepProps, get, set, Section, Row, PrefillBanner, SelectField, TextField, NumberField, TagsField, TextareaField, DynamicList } from './widgets'
+import { type StepProps, get, set, Section, Row, PrefillBanner, SelectField, TextField, NumberField, TagsField, TextareaField, DynamicList, TeacherNotesPanel } from './widgets'
 
 const STATUS = [
   { value: '持续', label: '持续' },
@@ -46,6 +46,7 @@ export default function StepSectors({ data, onChange, prefill }: StepProps) {
   const d = data || {}
   const themes = prefill?.main_themes || []
   const firstTheme = themes[0]
+  const teacherNotes = prefill?.teacher_notes || []
 
   const g = (p: string, fb: any = '') => {
     const val = get(d, p, undefined)
@@ -63,12 +64,20 @@ export default function StepSectors({ data, onChange, prefill }: StepProps) {
       }
       if (p === 'main_theme.node') return firstTheme.phase || ''
     }
+    if (p === 'notes' && teacherNotes.length) {
+      const parts = teacherNotes.flatMap((n: any) => [
+        n.sectors ? `【${n.teacher_name} 板块】${n.sectors}` : null,
+        n.key_points ? `【${n.teacher_name} 要点】${n.key_points}` : null,
+      ]).filter(Boolean)
+      if (parts.length) return parts.join('\n')
+    }
     return fb
   }
   const s = (p: string, v: any) => onChange(set(d, p, v))
 
   return (
     <div className="space-y-6">
+      <TeacherNotesPanel notes={teacherNotes} fields={['sectors', 'key_points']} />
       {themes.length > 0 && (
         <PrefillBanner>
           <div className="text-xs text-gray-500 mb-1">当前活跃主线（{themes.length} 条）</div>

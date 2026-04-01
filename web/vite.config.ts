@@ -7,6 +7,7 @@ export default defineConfig({
   server: {
     proxy: {
       '/api': 'http://localhost:8000',
+      '/attachments': 'http://localhost:8000',
     },
   },
   test: {

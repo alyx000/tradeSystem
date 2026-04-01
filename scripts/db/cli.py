@@ -35,6 +35,9 @@ def register_db_subparser(subparsers: argparse._SubParsersAction) -> None:
     add_note.add_argument("--source-type", default="text", help="来源类型: text/image/mixed")
     add_note.add_argument("--input-by", default="manual", help="录入方: manual/openclaw/copaw/cursor")
     add_note.add_argument("--tags", default=None, help="标签 JSON array")
+    add_note.add_argument("--key-points", default=None, help="结构化要点 JSON array，如 '[\"要点1\",\"要点2\"]'")
+    add_note.add_argument("--sectors", default=None, help="涉及板块 JSON array，如 '[\"AI\",\"锂电\"]'")
+    add_note.add_argument("--position-advice", default=None, help="仓位建议")
     add_note.add_argument("--raw-content", default=None, help="原始全文")
     add_note.add_argument("--attachment", nargs="*", default=None, help="附件文件路径（可多个）")
 
@@ -226,6 +229,12 @@ def _cmd_add_note(args: argparse.Namespace) -> None:
             kwargs["raw_content"] = args.raw_content
         if args.tags:
             kwargs["tags"] = json.loads(args.tags)
+        if args.key_points:
+            kwargs["key_points"] = json.loads(args.key_points)
+        if args.sectors:
+            kwargs["sectors"] = json.loads(args.sectors)
+        if args.position_advice:
+            kwargs["position_advice"] = args.position_advice
 
         note_id = Q.insert_teacher_note(conn, teacher_id=teacher_id, **kwargs)
 

@@ -1,4 +1,4 @@
-import { type StepProps, get, set, Section, Row, PrefillBanner, SelectField, TextField, TagsField, TextareaField, DynamicList } from './widgets'
+import { type StepProps, get, set, Section, Row, PrefillBanner, SelectField, TextField, TagsField, TextareaField, DynamicList, TeacherNotesPanel } from './widgets'
 
 const IMPACT = [
   { value: '高', label: '高' },
@@ -14,12 +14,25 @@ const CONFIDENCE = [
 
 export default function StepPlan({ data, onChange, prefill }: StepProps) {
   const d = data || {}
-  const g = (p: string, fb: any = '') => get(d, p, fb)
+  const teacherNotes = prefill?.teacher_notes || []
+
+  const g = (p: string, fb: any = '') => {
+    const val = get(d, p, undefined)
+    if (val !== undefined && val !== '') return val
+    if (p === 'key_factor' && teacherNotes.length)
+      return teacherNotes[0]?.core_view || fb
+    if (p === 'discipline.note' && teacherNotes.length) {
+      const avoids = teacherNotes.map((n: any) => n.avoid).filter(Boolean)
+      return avoids.length ? avoids.map((a: string, i: number) => `【${teacherNotes[i].teacher_name}】${a}`).join('；') : fb
+    }
+    return fb
+  }
   const s = (p: string, v: any) => onChange(set(d, p, v))
   const calEvents = prefill?.calendar_events || []
 
   return (
     <div className="space-y-6">
+      <TeacherNotesPanel notes={teacherNotes} fields={['core_view', 'position_advice', 'avoid']} />
       <Section title="三位一体重点因子">
         <div className="space-y-4">
           <TextField label="当前最重要的因子" value={g('key_factor')} onChange={v => s('key_factor', v)} placeholder="大盘节点 / 板块轮动 / 风格切换..." />

@@ -215,7 +215,10 @@ class TestCRUD:
         nid = r.json()["id"]
 
         r = client.get(f"/api/teacher-notes/{nid}")
-        assert r.json()["title"] == "CRUD测试"
+        data = r.json()
+        assert data["title"] == "CRUD测试"
+        assert "attachments" in data
+        assert isinstance(data["attachments"], list)
 
         r = client.put(f"/api/teacher-notes/{nid}", json={"core_view": "更新后"})
         assert r.status_code == 200
@@ -225,6 +228,25 @@ class TestCRUD:
 
         r = client.get(f"/api/teacher-notes/{nid}")
         assert r.status_code == 404
+
+    def test_note_list_has_attachments_field(self, client, db_path):
+        conn = get_connection(db_path)
+        tid = Q.get_or_create_teacher(conn, "附件测试老师")
+        nid = Q.insert_teacher_note(conn, teacher_id=tid, date="2026-05-01",
+                                    title="附件笔记", key_points=["要点A", "要点B"])
+        Q.insert_attachment(conn, nid, "data/attachments/2026-05-01/test.jpg", "image/jpeg", "测试图")
+        conn.commit()
+        conn.close()
+
+        r = client.get("/api/teacher-notes")
+        assert r.status_code == 200
+        notes = r.json()
+        target = next((n for n in notes if n["id"] == nid), None)
+        assert target is not None
+        assert len(target["attachments"]) == 1
+        att = target["attachments"][0]
+        assert att["file_path"] == "data/attachments/2026-05-01/test.jpg"
+        assert "/attachments/" in att["url"]
 
     def test_holdings_crud(self, client):
         r = client.post("/api/holdings", json={
@@ -381,6 +403,56 @@ class TestCRUD:
         r = client.get("/api/post-market/2099-01-01")
         assert r.status_code == 200
         assert r.json()["available"] is False
+
+
+# ──────────────────────────────────────────────────────────────
+# Review Prefill — prev_review 字段
+# ──────────────────────────────────────────────────────────────
+
+class TestPrefillPrevReview:
+    def test_prev_review_included_in_prefill(self, client, db_path):
+        conn = get_connection(db_path)
+        Q.upsert_daily_market(conn, {"date": "2026-04-01", "sh_index_close": 3285.89, "total_amount": 10000.0})
+        Q.upsert_daily_market(conn, {"date": "2026-04-02", "sh_index_close": 3300.0, "total_amount": 12000.0})
+        Q.upsert_daily_review(conn, "2026-04-01", {
+            "step4_style": json.dumps({"preference": {"cap_size": "小盘股"}, "effects": {}})
+        })
+        conn.commit()
+        conn.close()
+
+        r = client.get("/api/review/2026-04-02/prefill")
+        assert r.status_code == 200
+        data = r.json()
+        assert "prev_review" in data
+        pr = data["prev_review"]
+        assert pr is not None
+        assert pr["date"] == "2026-04-01"
+        parsed = json.loads(pr["step4_style"])
+        assert parsed["preference"]["cap_size"] == "小盘股"
+
+    def test_prev_review_none_when_no_history(self, client):
+        r = client.get("/api/review/2020-01-01/prefill")
+        assert r.status_code == 200
+        data = r.json()
+        assert "prev_review" in data
+        assert data["prev_review"] is None
+
+
+# ──────────────────────────────────────────────────────────────
+# Main Themes 端点
+# ──────────────────────────────────────────────────────────────
+
+class TestMainThemes:
+    def test_list_main_themes_empty(self, client):
+        r = client.get("/api/main-themes")
+        assert r.status_code == 200
+        assert isinstance(r.json(), list)
+
+    def test_list_main_themes_active(self, seeded_client):
+        r = seeded_client.get("/api/main-themes")
+        assert r.status_code == 200
+        data = r.json()
+        assert any(t["theme_name"] == "AI" for t in data)
 
 
 # ──────────────────────────────────────────────────────────────

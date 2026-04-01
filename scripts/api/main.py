@@ -10,10 +10,14 @@ if str(_SCRIPTS_DIR) not in sys.path:
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from api.routes.review import router as review_router
 from api.routes.search import router as search_router
 from api.routes.crud import router as crud_router
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_ATTACHMENTS_DIR = _REPO_ROOT / "data" / "attachments"
 
 app = FastAPI(title="交易复盘系统", version="0.1.0")
 
@@ -27,6 +31,10 @@ app.add_middleware(
 app.include_router(review_router)
 app.include_router(search_router)
 app.include_router(crud_router)
+
+# 附件图片静态路由：data/attachments/ → /attachments/
+_ATTACHMENTS_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/attachments", StaticFiles(directory=str(_ATTACHMENTS_DIR)), name="attachments")
 
 
 @app.get("/api/health")

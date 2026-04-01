@@ -46,6 +46,7 @@ def get_prefill(date: str, conn: sqlite3.Connection = Depends(get_db_conn)):
         "JOIN teachers t ON n.teacher_id = t.id WHERE n.date = ? ORDER BY n.created_at DESC",
         (date,),
     ).fetchall()
+    prev_review = Q.get_prev_daily_review(conn, date)
 
     return {
         "date": date,
@@ -58,6 +59,7 @@ def get_prefill(date: str, conn: sqlite3.Connection = Depends(get_db_conn)):
         "main_themes": themes,
         "holdings": holdings,
         "calendar_events": calendar,
+        "prev_review": prev_review,
     }
 
 

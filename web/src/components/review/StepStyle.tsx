@@ -23,7 +23,7 @@ const EFFECT = [
 ]
 
 const PROFIT_ITEMS = [
-  { key: 'new_theme', label: '新题材首板', premium: false },
+  { key: 'new_theme', label: '新题材首板(10cm)', premium: true },
   { key: 'board_20cm', label: '20cm首板溢价', premium: true },
   { key: 'second_board', label: '二板涨停溢价', premium: true },
   { key: 'board_30cm', label: '30cm首板溢价', premium: true },
@@ -36,15 +36,47 @@ export default function StepStyle({ data, onChange, prefill }: StepProps) {
   const d = data || {}
   const m = prefill?.market
 
+  const prevStyle = (() => {
+    try {
+      return JSON.parse(prefill?.prev_review?.step4_style || '{}')
+    } catch {
+      return {}
+    }
+  })()
+
+  // 溢价率 market 字段映射
+  const PREMIUM_MARKET: Record<string, number | null | undefined> = m ? {
+    new_theme: m.premium_10cm,
+    board_20cm: m.premium_20cm,
+    second_board: m.premium_second_board,
+    board_30cm: m.premium_30cm,
+  } : {}
+
   const g = (p: string, fb: any = '') => {
     const val = get(d, p, undefined)
     if (val !== undefined && val !== '') return val
 
     if (m) {
+      // 溢价数值：直接取 market 字段
+      if (p === 'effects.new_theme.premium') return m.premium_10cm ?? null
       if (p === 'effects.board_20cm.premium') return m.premium_20cm ?? null
       if (p === 'effects.second_board.premium') return m.premium_second_board ?? null
       if (p === 'effects.board_30cm.premium') return m.premium_30cm ?? null
+
+      // 效应方向：由溢价率正负自动推导（正溢价=正效应，负=负，0=中性）
+      if (p.endsWith('.effect')) {
+        const itemKey = p.slice('effects.'.length, -'.effect'.length)
+        const prem = PREMIUM_MARKET[itemKey]
+        if (prem != null) return prem > 0 ? '正' : prem < 0 ? '负' : '中性'
+      }
     }
+
+    // 审美偏好 + 无溢价的风格效应：从前日复盘 fallback
+    if (p.startsWith('preference.') || p.startsWith('effects.')) {
+      const prevVal = get(prevStyle, p, undefined)
+      if (prevVal !== undefined && prevVal !== '') return prevVal
+    }
+
     return fb
   }
   const s = (p: string, v: any) => onChange(set(d, p, v))
@@ -59,6 +91,11 @@ export default function StepStyle({ data, onChange, prefill }: StepProps) {
             <Metric label="30cm首板溢价" value={m.premium_30cm} suffix="%" />
             <Metric label="二板溢价" value={m.premium_second_board} suffix="%" />
           </div>
+          {prefill?.prev_review && (
+            <div className="mt-1.5 text-xs text-amber-600">
+              审美偏好与各风格效应已参考前日复盘（{prefill.prev_review.date}）预填，可直接修改
+            </div>
+          )}
         </PrefillBanner>
       )}
 
@@ -74,7 +111,7 @@ export default function StepStyle({ data, onChange, prefill }: StepProps) {
         <div className="space-y-2">
           {PROFIT_ITEMS.map(item => (
             <div key={item.key} className="flex flex-wrap items-end gap-3 border-b border-gray-100 pb-2">
-              <div className="w-32 shrink-0 text-sm text-gray-600 py-1.5">{item.label}</div>
+              <div className="w-36 shrink-0 text-sm text-gray-600 py-1.5">{item.label}</div>
               <div className="w-24">
                 <SelectField label="" value={g(`effects.${item.key}.effect`)} onChange={v => s(`effects.${item.key}.effect`, v)} options={EFFECT} placeholder="效应" />
               </div>

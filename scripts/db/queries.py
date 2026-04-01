@@ -516,6 +516,16 @@ def get_daily_review(conn: sqlite3.Connection, target_date: str) -> dict | None:
     )
 
 
+def get_prev_daily_review(conn: sqlite3.Connection, target_date: str) -> dict | None:
+    """获取前一交易日的复盘（DB 中 date < target_date 的最近一条）。"""
+    return _row_to_dict(
+        conn.execute(
+            "SELECT * FROM daily_reviews WHERE date < ? ORDER BY date DESC LIMIT 1",
+            (target_date,),
+        ).fetchone()
+    )
+
+
 def extract_review_conclusion_lines(review_row: dict | None, max_lines: int = 2) -> list[str]:
     """从 daily_reviews 行提取 1～2 行结论文案，供盘前简报「昨日复盘要点」。"""
     if not review_row:

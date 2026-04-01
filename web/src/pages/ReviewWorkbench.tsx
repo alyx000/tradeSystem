@@ -162,17 +162,6 @@ export default function ReviewWorkbench() {
         </button>
       </div>
 
-      {prefill?.teacher_notes?.length > 0 && (
-        <div className="bg-white rounded-lg shadow p-4">
-          <h3 className="text-sm font-medium text-gray-500 mb-2">当日老师观点参考</h3>
-          {prefill.teacher_notes.map((n: any) => (
-            <div key={n.id} className="border-l-2 border-blue-200 pl-3 py-1 mb-2 text-sm">
-              <div className="font-medium text-gray-800">{n.teacher_name} - {n.title}</div>
-              {n.core_view && <div className="text-gray-600 mt-1">{n.core_view}</div>}
-            </div>
-          ))}
-        </div>
-      )}
     </div>
   )
 }

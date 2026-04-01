@@ -60,6 +60,8 @@ export const api = {
   },
   createWatchlistItem: (data: any) =>
     request<any>('/watchlist', { method: 'POST', body: JSON.stringify(data) }),
+  deleteWatchlistItem: (id: number) =>
+    request<any>(`/watchlist/${id}`, { method: 'DELETE' }),
 
   // Calendar
   getCalendarRange: (from: string, to: string) =>
@@ -71,6 +73,7 @@ export const api = {
   getMarket: (date: string) => request<any>(`/market/${date}`),
   getMarketHistory: (days: number = 20) => request<any[]>(`/market/history?days=${days}`),
   getPostMarket: (date: string) => request<any>(`/post-market/${date}`),
+  getMainThemes: () => request<any[]>('/main-themes'),
 
   // Trades
   getTrades: (params?: Record<string, string>) => {
