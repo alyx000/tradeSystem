@@ -1,4 +1,38 @@
+import { useState } from 'react'
+import { Link } from 'react-router-dom'
 import { type StepProps, get, set, Section, Row, PrefillBanner, SelectField, TextField, NumberField, TagsField, TextareaField, DynamicList, TeacherNotesPanel } from './widgets'
+
+// 行业信息首屏展示条数
+const INDUSTRY_INFO_INITIAL_COUNT = 3
+
+// 节奏阶段颜色映射
+const PHASE_COLOR: Record<string, string> = {
+  '启动': 'bg-green-50 text-green-700',
+  '信不信加速': 'bg-blue-50 text-blue-700',
+  '主升': 'bg-blue-100 text-blue-800',
+  '首次分歧': 'bg-yellow-50 text-yellow-700',
+  '高潮': 'bg-orange-50 text-orange-700',
+  '震荡': 'bg-gray-50 text-gray-600',
+  '轮动': 'bg-purple-50 text-purple-700',
+  '衰退': 'bg-red-50 text-red-600',
+}
+
+const CONFIDENCE_COLOR: Record<string, string> = {
+  '高': 'text-green-600',
+  '中': 'text-yellow-600',
+  '低': 'text-gray-400',
+}
+
+function phaseClass(phase: string) {
+  return PHASE_COLOR[phase] ?? 'bg-gray-50 text-gray-600'
+}
+
+function InfoTypeBadge({ type }: { type: string }) {
+  const color = type === 'news' ? 'bg-blue-50 text-blue-600'
+    : type === 'analysis' ? 'bg-purple-50 text-purple-600'
+    : 'bg-gray-50 text-gray-500'
+  return <span className={`inline-block text-xs px-1.5 py-0.5 rounded ${color}`}>{type}</span>
+}
 
 const STATUS = [
   { value: '持续', label: '持续' },
@@ -47,6 +81,12 @@ export default function StepSectors({ data, onChange, prefill }: StepProps) {
   const themes = prefill?.main_themes || []
   const firstTheme = themes[0]
   const teacherNotes = prefill?.teacher_notes || []
+  const [industryInfoExpanded, setIndustryInfoExpanded] = useState(false)
+
+  const date = prefill?.date as string | undefined
+  const sectorIndustry = prefill?.market?.sector_industry as { data?: any[]; bottom?: any[] } | undefined
+  const sectorRhythm = prefill?.market?.sector_rhythm_industry as any[] | undefined
+  const industryInfoList = (prefill?.industry_info || []) as any[]
 
   const g = (p: string, fb: any = '') => {
     const val = get(d, p, undefined)
@@ -156,6 +196,101 @@ export default function StepSectors({ data, onChange, prefill }: StepProps) {
           </div>
         )}
       />
+
+      {/* ── 行业排行（来自盘后数据） ── */}
+      {sectorIndustry && ((sectorIndustry.data?.length ?? 0) > 0 || (sectorIndustry.bottom?.length ?? 0) > 0) && (
+        <PrefillBanner>
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs font-medium text-gray-600">行业板块排行（申万）</span>
+            {date && (
+              <Link to={`/market/${date}`} className="text-xs text-blue-500 hover:text-blue-700">
+                完整市场数据 →
+              </Link>
+            )}
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {(sectorIndustry.data?.length ?? 0) > 0 && (
+              <div>
+                <div className="text-xs text-green-600 font-medium mb-1">涨幅前列</div>
+                <div className="space-y-0.5">
+                  {sectorIndustry.data!.slice(0, 8).map((row: any, i: number) => (
+                    <div key={i} className="flex justify-between text-xs text-gray-700">
+                      <span>{row.name}</span>
+                      <span className="text-green-600 font-medium">+{Number(row.change_pct ?? 0).toFixed(2)}%</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {(sectorIndustry.bottom?.length ?? 0) > 0 && (
+              <div>
+                <div className="text-xs text-red-500 font-medium mb-1">跌幅前列</div>
+                <div className="space-y-0.5">
+                  {sectorIndustry.bottom!.slice(0, 5).map((row: any, i: number) => (
+                    <div key={i} className="flex justify-between text-xs text-gray-700">
+                      <span>{row.name}</span>
+                      <span className="text-red-500 font-medium">{Number(row.change_pct ?? 0).toFixed(2)}%</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </PrefillBanner>
+      )}
+
+      {/* ── 行业节奏分析（sector_rhythm_industry） ── */}
+      {sectorRhythm && sectorRhythm.length > 0 && (
+        <PrefillBanner>
+          <div className="text-xs font-medium text-gray-600 mb-2">行业节奏信号（当日前列）</div>
+          <div className="space-y-1.5">
+            {sectorRhythm.slice(0, 10).map((item: any, i: number) => (
+              <div key={i} className="flex flex-wrap items-center gap-2 text-xs">
+                <span className="font-medium text-gray-800 min-w-[5rem]">{item.name}</span>
+                <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${phaseClass(item.phase)}`}>{item.phase}</span>
+                <span className={`font-medium ${Number(item.change_today) >= 0 ? 'text-green-600' : 'text-red-500'}`}>
+                  {Number(item.change_today) >= 0 ? '+' : ''}{Number(item.change_today ?? 0).toFixed(2)}%
+                </span>
+                <span className="text-gray-400">#{item.rank_today}</span>
+                {item.confidence && (
+                  <span className={`${CONFIDENCE_COLOR[item.confidence] ?? 'text-gray-400'}`}>置信:{item.confidence}</span>
+                )}
+              </div>
+            ))}
+          </div>
+        </PrefillBanner>
+      )}
+
+      {/* ── 行业信息/行业笔记（industry_info 表） ── */}
+      {industryInfoList.length > 0 && (
+        <PrefillBanner>
+          <div className="text-xs font-medium text-gray-600 mb-2">近期行业信息（{industryInfoList.length} 条）</div>
+          <div className="space-y-2">
+            {(industryInfoExpanded ? industryInfoList : industryInfoList.slice(0, INDUSTRY_INFO_INITIAL_COUNT)).map((info: any, i: number) => (
+              <div key={i} className="border-b border-amber-100 pb-2 last:border-0">
+                <div className="flex flex-wrap items-center gap-2 mb-0.5">
+                  <span className="text-xs font-medium text-gray-700">{info.sector_name}</span>
+                  {info.info_type && <InfoTypeBadge type={info.info_type} />}
+                  {info.date && <span className="text-xs text-gray-400">{info.date}</span>}
+                  {info.confidence && <span className="text-xs text-gray-400">置信:{info.confidence}</span>}
+                  {info.timeliness && <span className="text-xs text-gray-400">[{info.timeliness}]</span>}
+                </div>
+                <p className="text-xs text-gray-600 leading-relaxed">{info.content}</p>
+                {info.source && <p className="text-xs text-gray-400 mt-0.5">来源：{info.source}</p>}
+              </div>
+            ))}
+          </div>
+          {industryInfoList.length > INDUSTRY_INFO_INITIAL_COUNT && (
+            <button
+              type="button"
+              onClick={() => setIndustryInfoExpanded(v => !v)}
+              className="mt-2 text-xs text-blue-500 hover:text-blue-700"
+            >
+              {industryInfoExpanded ? '收起' : `展开全部（共 ${industryInfoList.length} 条）`}
+            </button>
+          )}
+        </PrefillBanner>
+      )}
 
       <TextareaField label="补充备注" value={g('notes')} onChange={v => s('notes', v)} placeholder="板块相关补充观察..." rows={2} />
     </div>

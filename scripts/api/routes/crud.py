@@ -10,6 +10,7 @@ import yaml
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from api.deps import get_db_conn
+from api.market_enrich import enrich_daily_market_row
 from db import queries as Q
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -438,19 +439,6 @@ def get_market(date: str, conn: sqlite3.Connection = Depends(get_db_conn)):
     row = Q.get_daily_market(conn, date)
     if not row:
         return {"date": date, "available": False}
-    raw = row.pop("raw_data", None)
-    if raw and isinstance(raw, str):
-        try:
-            parsed = json.loads(raw)
-            inner = parsed.get("raw_data")
-            if not isinstance(inner, dict):
-                inner = {}
-            for key in ("sector_industry", "sector_concept", "sector_fund_flow", "indices"):
-                if key in parsed:
-                    row[key] = parsed[key]
-                elif key in inner:
-                    row[key] = inner[key]
-        except (json.JSONDecodeError, TypeError):
-            pass
+    enrich_daily_market_row(row)
     row["available"] = True
     return row

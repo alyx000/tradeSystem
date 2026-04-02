@@ -477,3 +477,148 @@ class TestErrors:
             "date": "2026-04-01", "title": "test",
         })
         assert r.status_code == 422
+
+
+# ──────────────────────────────────────────────────────────────
+# enrich_daily_market_row：/market 与 /prefill 扩展字段回归
+# ──────────────────────────────────────────────────────────────
+
+_RICH_RAW_DATA = {
+    "date": "2026-05-20",
+    "generated_at": "2026-05-20T20:00:00",
+    "raw_data": {
+        "sector_industry": {
+            "data": [{"name": "油服工程", "change_pct": 4.68, "volume_billion": 110.0}],
+            "bottom": [{"name": "IT服务", "change_pct": -3.59, "volume_billion": 454.19}],
+        },
+        "sector_concept": {
+            "data": [{"name": "低空经济", "change_pct": 2.3}],
+        },
+        "style_factors": {
+            "cap_preference": {"relative": "偏大盘", "spread": -0.77, "csi300_chg": -1.04, "csi1000_chg": -1.81},
+            "board_preference": {"dominant_type": "10cm", "pct_10cm": 90.9},
+            "premium_snapshot": {
+                "first_board_10cm": {"count": 45, "premium_median": 0.95},
+                "second_board": {"count": 4, "premium_median": 7.18},
+            },
+            "premium_trend": {"direction": "震荡", "first_board_median_5d": [0.95, 0.92]},
+            "switch_signals": ["大盘股跑赢小盘股，审美偏向容量票"],
+        },
+        "sector_rhythm_industry": [
+            {
+                "name": "油服工程", "phase": "启动", "rank_today": 1,
+                "change_today": 4.68, "confidence": "中",
+            }
+        ],
+        "sector_rhythm_concept": [
+            {"name": "低空经济", "phase": "发酵", "rank_today": 2, "change_today": 2.3, "confidence": "高"},
+        ],
+        "indices": {"shanghai": {"close": 3200.0, "change_pct": -1.5}},
+    },
+}
+
+
+class TestEnrichMarketRow:
+    """验证 enrich_daily_market_row 在 /market 与 /prefill 两个入口的一致性。"""
+
+    @staticmethod
+    def _seed(db_path, raw_data=None):
+        conn = get_connection(db_path)
+        Q.upsert_daily_market(conn, {
+            "date": "2026-05-20",
+            "sh_index_close": 3200.0,
+            "total_amount": 18000.0,
+            "premium_10cm": 0.95,
+            "premium_second_board": 7.18,
+            "raw_data": raw_data or _RICH_RAW_DATA,
+        })
+        conn.commit()
+        conn.close()
+
+    def test_market_returns_style_factors(self, client, db_path):
+        """/api/market/{date} 应展开 style_factors。"""
+        self._seed(db_path)
+        r = client.get("/api/market/2026-05-20")
+        data = r.json()
+        assert data["available"] is True
+        assert "style_factors" in data, "style_factors 未展开到顶层"
+        assert data["style_factors"]["cap_preference"]["relative"] == "偏大盘"
+        assert "raw_data" not in data, "raw_data 应已从响应中移除"
+
+    def test_market_returns_rhythm(self, client, db_path):
+        """/api/market/{date} 应展开 sector_rhythm_industry 和 sector_rhythm_concept。"""
+        self._seed(db_path)
+        r = client.get("/api/market/2026-05-20")
+        data = r.json()
+        assert "sector_rhythm_industry" in data, "sector_rhythm_industry 未展开"
+        assert data["sector_rhythm_industry"][0]["name"] == "油服工程"
+        assert "sector_rhythm_concept" in data, "sector_rhythm_concept 未展开"
+
+    def test_market_existing_keys_not_regressed(self, client, db_path):
+        """/api/market 原有 sector_industry / indices 展开行为不应回退。"""
+        self._seed(db_path)
+        r = client.get("/api/market/2026-05-20")
+        data = r.json()
+        assert "sector_industry" in data
+        assert data["sector_industry"]["data"][0]["name"] == "油服工程"
+        assert "indices" in data
+        assert data["indices"]["shanghai"]["close"] == 3200.0
+
+    def test_prefill_market_contains_style_factors(self, client, db_path):
+        """/api/review/{date}/prefill 中 market 字段应含 style_factors。"""
+        self._seed(db_path)
+        r = client.get("/api/review/2026-05-20/prefill")
+        assert r.status_code == 200
+        data = r.json()
+        m = data.get("market")
+        assert m is not None, "prefill.market 不应为 None"
+        assert "style_factors" in m, "prefill.market 未展开 style_factors"
+        assert m["style_factors"]["board_preference"]["dominant_type"] == "10cm"
+        assert "raw_data" not in m, "prefill.market 中 raw_data 应已移除"
+
+    def test_prefill_market_contains_sector_rhythm(self, client, db_path):
+        """/api/review/{date}/prefill 中 market 应含 sector_rhythm_industry。"""
+        self._seed(db_path)
+        r = client.get("/api/review/2026-05-20/prefill")
+        data = r.json()
+        m = data["market"]
+        assert "sector_rhythm_industry" in m
+        assert m["sector_rhythm_industry"][0]["phase"] == "启动"
+        assert "sector_industry" in m
+        assert m["sector_industry"]["data"][0]["name"] == "油服工程"
+
+    def test_prefill_contains_industry_info(self, client, db_path):
+        """/api/review/{date}/prefill 应返回 industry_info 顶层列表。"""
+        self._seed(db_path)
+        conn = get_connection(db_path)
+        Q.insert_industry_info(conn, date="2026-05-20", sector_name="油服",
+                               content="油服板块资金流入", info_type="news")
+        Q.insert_industry_info(conn, date="2026-05-18", sector_name="储能",
+                               content="储能政策利好", info_type="analysis")
+        conn.commit()
+        conn.close()
+
+        r = client.get("/api/review/2026-05-20/prefill")
+        data = r.json()
+        assert "industry_info" in data, "prefill 应含 industry_info"
+        assert isinstance(data["industry_info"], list)
+        names = [i["sector_name"] for i in data["industry_info"]]
+        assert "油服" in names
+        assert "储能" in names
+
+    def test_prefill_industry_info_empty_when_none(self, client):
+        """/api/review/{date}/prefill 无行业信息时 industry_info 应为空列表。"""
+        r = client.get("/api/review/2099-01-01/prefill")
+        data = r.json()
+        assert data["industry_info"] == []
+
+    def test_market_no_raw_data_still_available(self, client, db_path):
+        """raw_data 为空时 /api/market/{date} 应仍返回 available=True。"""
+        conn = get_connection(db_path)
+        Q.upsert_daily_market(conn, {"date": "2026-05-21", "sh_index_close": 3100.0})
+        conn.commit()
+        conn.close()
+        r = client.get("/api/market/2026-05-21")
+        data = r.json()
+        assert data["available"] is True
+        assert "style_factors" not in data

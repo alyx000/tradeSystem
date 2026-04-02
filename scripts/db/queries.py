@@ -326,6 +326,24 @@ def insert_macro_info(conn: sqlite3.Connection, **kwargs: Any) -> int:
     return cur.lastrowid  # type: ignore[return-value]
 
 
+def get_recent_industry_info(conn: sqlite3.Connection,
+                             date_from: str | None = None,
+                             date_to: str | None = None,
+                             limit: int = 50) -> list[dict]:
+    """按日期范围获取行业信息，供复盘预填使用（不需要关键词筛选）。"""
+    sql = "SELECT * FROM industry_info WHERE 1=1"
+    params: list[Any] = []
+    if date_from:
+        sql += " AND date >= ?"
+        params.append(date_from)
+    if date_to:
+        sql += " AND date <= ?"
+        params.append(date_to)
+    sql += " ORDER BY date DESC LIMIT ?"
+    params.append(limit)
+    return _rows_to_list(conn.execute(sql, params).fetchall())
+
+
 def search_industry_info(conn: sqlite3.Connection, keyword: str,
                          date_from: str | None = None,
                          date_to: str | None = None) -> list[dict]:
