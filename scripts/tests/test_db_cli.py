@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 
+from db.connection import get_connection
+
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent
 MAIN_PY = SCRIPTS_DIR / "main.py"
 
@@ -234,6 +236,45 @@ class TestHoldings:
         result = _run_cli("holdings-list", tmp_db=tmp_db)
         assert result.returncode == 0
         assert "无持仓" in result.stdout
+
+    def test_add_same_normalized_code_updates_existing_active(self, tmp_db):
+        r1 = _run_cli(
+            "holdings-add", "--code", "300750",
+            "--name", "宁德时代旧", "--shares", "100", "--price", "80.0",
+            tmp_db=tmp_db,
+        )
+        r2 = _run_cli(
+            "holdings-add", "--code", "300750.SZ",
+            "--name", "宁德时代新", "--shares", "200", "--price", "85.0",
+            tmp_db=tmp_db,
+        )
+        assert r1.returncode == 0
+        assert r2.returncode == 0
+
+        with get_connection(tmp_db) as conn:
+            rows = conn.execute(
+                "SELECT stock_code, stock_name, shares, entry_price, status FROM holdings ORDER BY id"
+            ).fetchall()
+        assert len(rows) == 1
+        assert rows[0]["stock_code"] == "300750.SZ"
+        assert rows[0]["stock_name"] == "宁德时代新"
+        assert rows[0]["shares"] == 200
+        assert rows[0]["entry_price"] == 85.0
+        assert rows[0]["status"] == "active"
+
+    def test_remove_closes_suffix_variant(self, tmp_db):
+        _run_cli(
+            "holdings-add", "--code", "688041.SH",
+            "--name", "海光信息", "--shares", "100", "--price", "220.0",
+            tmp_db=tmp_db,
+        )
+        result = _run_cli("holdings-remove", "--code", "688041", tmp_db=tmp_db)
+        assert result.returncode == 0
+        assert "共 1 条置为 closed" in result.stdout
+
+        with get_connection(tmp_db) as conn:
+            row = conn.execute("SELECT status FROM holdings WHERE stock_code = '688041.SH'").fetchone()
+        assert row["status"] == "closed"
 
 
 # ── 关注池 ────────────────────────────────────────────────────────

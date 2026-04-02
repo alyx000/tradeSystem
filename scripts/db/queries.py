@@ -6,6 +6,9 @@ import sqlite3
 from datetime import date, datetime
 from typing import Any
 
+from .dual_write import _normalize_stock_code_for_match
+from .schema import holding_code_norm_sql
+
 
 # ──────────────────────────────────────────────────────────────
 # 通用辅助
@@ -162,11 +165,49 @@ def get_calendar_range(conn: sqlite3.Connection, date_from: str, date_to: str,
 # Holdings
 # ──────────────────────────────────────────────────────────────
 
+_HOLDING_INSERTABLE = (
+    "stock_code", "stock_name", "market", "sector", "shares",
+    "entry_date", "entry_price", "current_price", "stop_loss",
+    "target_price", "position_ratio", "status", "note",
+)
+
+_HOLDINGS_UPDATABLE = frozenset({
+    "stock_code", "stock_name", "market", "sector", "shares",
+    "entry_date", "entry_price", "current_price", "stop_loss",
+    "target_price", "position_ratio", "status", "note",
+})
+
+
+def _active_holdings_by_code(conn: sqlite3.Connection, stock_code: str) -> list[dict]:
+    norm = _normalize_stock_code_for_match(stock_code)
+    if not norm:
+        return []
+    rows = conn.execute(
+        f"""
+        SELECT *
+        FROM holdings
+        WHERE status = 'active' AND {holding_code_norm_sql('stock_code')} = ?
+        ORDER BY (updated_at IS NOT NULL) DESC, updated_at DESC, id DESC
+        """,
+        (norm,),
+    ).fetchall()
+    return _rows_to_list(rows)
+
+
 def upsert_holding(conn: sqlite3.Connection, **kwargs: Any) -> int:
+    code = kwargs.get("stock_code")
+    target_status = kwargs.get("status")
+    if code and target_status in (None, "active"):
+        active_rows = _active_holdings_by_code(conn, str(code))
+        if active_rows:
+            holding_id = int(active_rows[0]["id"])
+            payload = {k: v for k, v in kwargs.items() if k in _HOLDINGS_UPDATABLE and v is not None}
+            if payload:
+                update_holding(conn, holding_id, **payload)
+            return holding_id
+
     cols, vals = [], []
-    for k in ("stock_code", "stock_name", "market", "sector", "shares",
-              "entry_date", "entry_price", "current_price", "stop_loss",
-              "target_price", "position_ratio", "status", "note"):
+    for k in _HOLDING_INSERTABLE:
         if k in kwargs and kwargs[k] is not None:
             cols.append(k)
             vals.append(kwargs[k])
@@ -185,11 +226,12 @@ def get_holdings(conn: sqlite3.Connection, status: str | None = "active") -> lis
     return _rows_to_list(conn.execute("SELECT * FROM holdings").fetchall())
 
 
-_HOLDINGS_UPDATABLE = frozenset({
-    "stock_code", "stock_name", "market", "sector", "shares",
-    "entry_date", "entry_price", "current_price", "stop_loss",
-    "target_price", "position_ratio", "status", "note",
-})
+def close_active_holdings_by_code(conn: sqlite3.Connection, stock_code: str) -> int:
+    """按归一化代码关闭全部 active 持仓。"""
+    rows = _active_holdings_by_code(conn, stock_code)
+    for row in rows:
+        update_holding(conn, int(row["id"]), status="closed")
+    return len(rows)
 
 
 def update_holding(conn: sqlite3.Connection, holding_id: int, **kwargs: Any) -> None:
@@ -346,7 +388,8 @@ def get_recent_industry_info(conn: sqlite3.Connection,
 
 def search_industry_info(conn: sqlite3.Connection, keyword: str,
                          date_from: str | None = None,
-                         date_to: str | None = None) -> list[dict]:
+                         date_to: str | None = None,
+                         limit: int | None = None) -> list[dict]:
     like_pat = f"%{keyword}%"
     sql = """
         SELECT i.* FROM industry_info i
@@ -360,6 +403,9 @@ def search_industry_info(conn: sqlite3.Connection, keyword: str,
         sql += " AND i.date <= ?"
         params.append(date_to)
     sql += " ORDER BY i.date DESC"
+    if limit is not None:
+        sql += " LIMIT ?"
+        params.append(limit)
     return _rows_to_list(conn.execute(sql, params).fetchall())
 
 

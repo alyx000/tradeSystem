@@ -93,6 +93,39 @@ class TestReview:
         assert data["avg_5d_amount"] is None
         assert data["avg_20d_amount"] is None
 
+    def test_prefill_holdings_from_post_envelope_raw_data(self, client, db_path):
+        """当日 daily_market.raw_data 信封含 holdings_data 时，补全预填现价与盈亏（不依赖 DB current_price）。"""
+        conn = get_connection(db_path)
+        envelope = {
+            "date": "2026-06-15",
+            "holdings_data": [
+                {"code": "300750.SZ", "close": 180.5, "pnl_pct": 3.25, "name": "宁德时代"},
+            ],
+            "raw_data": {"indices": {"shanghai": {"close": 3000.0}}},
+        }
+        Q.upsert_daily_market(conn, {
+            "date": "2026-06-15",
+            "sh_index_close": 3000.0,
+            "total_amount": 8000.0,
+            "raw_data": json.dumps(envelope, ensure_ascii=False),
+        })
+        Q.upsert_holding(
+            conn,
+            stock_code="300750",
+            stock_name="宁德时代",
+            entry_price=170.0,
+            status="active",
+        )
+        conn.commit()
+        conn.close()
+
+        r = client.get("/api/review/2026-06-15/prefill")
+        assert r.status_code == 200
+        h = r.json()["holdings"]
+        assert len(h) == 1
+        assert h[0]["current_price"] == 180.5
+        assert h[0]["prefill_pnl_pct"] == 3.25
+
     def test_save_and_load(self, client):
         body = {"step1_market": {"sh": 3285}, "step2_sectors": {"main": "AI"}}
         r = client.put("/api/review/2026-04-01", json=body)
@@ -305,6 +338,22 @@ class TestCRUD:
             "content": "算力需求增长", "info_type": "news",
         })
         assert r.status_code == 200
+
+    def test_industry_list_keyword_respects_limit(self, client, db_path):
+        conn = get_connection(db_path)
+        for i in range(4):
+            Q.insert_industry_info(
+                conn,
+                date=f"2026-06-{10 + i:02d}",
+                sector_name="关键词限流",
+                content=f"note{i}",
+                info_type="news",
+            )
+        conn.commit()
+        conn.close()
+        r = client.get("/api/industry", params={"keyword": "关键词限流", "limit": 2})
+        assert r.status_code == 200
+        assert len(r.json()) == 2
 
     def test_macro_crud(self, client):
         r = client.post("/api/macro", json={

@@ -226,13 +226,22 @@ def delete_blacklist_item(bid: int, conn: sqlite3.Connection = Depends(get_db_co
 # ── Industry / Macro ──────────────────────────────────────────
 
 @router.get("/industry")
-def list_industry(keyword: Optional[str] = None,
-                  conn: sqlite3.Connection = Depends(get_db_conn)):
+def list_industry(
+    keyword: Optional[str] = None,
+    date_from: Optional[str] = Query(None, alias="from"),
+    date_to: Optional[str] = Query(None, alias="to"),
+    sector: Optional[str] = None,
+    limit: int = Query(100, le=500),
+    conn: sqlite3.Connection = Depends(get_db_conn),
+):
     if keyword:
-        return Q.search_industry_info(conn, keyword)
-    return [dict(r) for r in conn.execute(
-        "SELECT * FROM industry_info ORDER BY date DESC LIMIT 100"
-    ).fetchall()]
+        return Q.search_industry_info(
+            conn, keyword, date_from=date_from, date_to=date_to, limit=limit,
+        )
+    rows = Q.get_recent_industry_info(conn, date_from=date_from, date_to=date_to, limit=limit)
+    if sector:
+        rows = [r for r in rows if sector in (r.get("sector_name") or "")]
+    return rows
 
 
 @router.post("/industry")

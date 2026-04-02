@@ -28,8 +28,8 @@ const PROFIT_ITEMS = [
   { key: 'second_board', label: '二板涨停溢价', premium: true },
   { key: 'board_30cm', label: '30cm首板溢价', premium: true },
   { key: 'consecutive', label: '连板赚钱效应', premium: false },
-  { key: 'big_cap', label: '容量票赚钱效应', premium: false },
-  { key: 'first_open', label: '涨停一字首次开板', premium: false },
+  { key: 'big_cap', label: '容量票赚钱效应', premium: true },
+  { key: 'first_open', label: '涨停一字首次开板', premium: true },
 ]
 
 /** cap_preference.relative -> preference.cap_size 映射 */
@@ -77,6 +77,8 @@ export default function StepStyle({ data, onChange, prefill }: StepProps) {
     board_20cm: m.premium_20cm ?? snapMedian('first_board_20cm'),
     second_board: m.premium_second_board ?? snapMedian('second_board'),
     board_30cm: m.premium_30cm ?? snapMedian('first_board_30cm'),
+    big_cap: snapMedian('capacity_top10'),
+    first_open: snapMedian('yizi_first_open'),
   } : {}
 
   const g = (p: string, fb: any = '') => {
@@ -89,6 +91,8 @@ export default function StepStyle({ data, onChange, prefill }: StepProps) {
       if (p === 'effects.board_20cm.premium') return premMap.board_20cm ?? null
       if (p === 'effects.second_board.premium') return premMap.second_board ?? null
       if (p === 'effects.board_30cm.premium') return premMap.board_30cm ?? null
+      if (p === 'effects.big_cap.premium') return premMap.big_cap ?? null
+      if (p === 'effects.first_open.premium') return premMap.first_open ?? null
 
       // 效应方向：由溢价正负推导
       if (p.endsWith('.effect')) {
@@ -128,6 +132,8 @@ export default function StepStyle({ data, onChange, prefill }: StepProps) {
               <Metric label="20cm首板溢价" value={premMap.board_20cm} suffix="%" />
               <Metric label="30cm首板溢价" value={premMap.board_30cm} suffix="%" />
               <Metric label="二板溢价" value={premMap.second_board} suffix="%" />
+              {premMap.big_cap != null && <Metric label="容量票溢价" value={premMap.big_cap} suffix="%" />}
+              {premMap.first_open != null && <Metric label="一字首次开板溢价" value={premMap.first_open} suffix="%" />}
             </div>
           )}
 

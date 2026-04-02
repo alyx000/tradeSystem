@@ -70,6 +70,90 @@ class HoldingsCollector:
                 self._holdings = data.get("holdings", [])
         return self._holdings
 
+    def merge_sqlite_active_holdings(self, db_path: os.PathLike | str | None = None) -> None:
+        """将 SQLite 中 active 持仓并入列表：与 Web/API 持仓池对齐。
+
+        - 若 DB 无 active 记录，不改变当前列表（仍仅用 tracking/holdings.yaml）。
+        - 若有 DB 记录：先按 DB 生成采集用条目，再把「仅存在于 YAML、不在 DB」的标的追加在后，
+          避免 CLI 只维护 YAML 时被覆盖丢失。
+        """
+        from db.connection import get_db
+        from db import queries as Q
+        from db.dual_write import _normalize_stock_code_for_match
+
+        try:
+            with get_db(db_path) as conn:
+                db_rows = Q.get_holdings(conn, status="active")
+        except Exception as e:
+            logger.warning("无法读取 SQLite 持仓以合并盘后采集: %s", e)
+            return
+
+        if not db_rows:
+            return
+
+        merged: list[dict] = []
+        seen_norm: set[str] = set()
+        for row in db_rows:
+            code = (row.get("stock_code") or "").strip()
+            if not code:
+                continue
+            n = _normalize_stock_code_for_match(code)
+            seen_norm.add(n)
+            merged.append({
+                "code": code,
+                "name": row.get("stock_name") or "",
+                "shares": int(row["shares"] or 0),
+                "cost": float(row["entry_price"] or 0),
+                "sector": row.get("sector") or "",
+            })
+
+        for h in self._holdings:
+            y_code = (h.get("code") or "").strip()
+            n = _normalize_stock_code_for_match(y_code)
+            if n and n not in seen_norm:
+                seen_norm.add(n)
+                merged.append(h)
+
+        self._holdings = merged
+        logger.info("盘后持仓列表已与 SQLite 合并: %d 只（含 YAML 独有标的）", len(merged))
+
+    def sync_yaml_stock_to_sqlite(self, stock: dict, db_path: os.PathLike | str | None = None) -> None:
+        """`holdings --add` 写入 YAML 后同步到 SQLite，与 Web / `db holdings-add` 对齐。"""
+        from db.connection import get_db
+        from db.migrate import migrate
+        from db import queries as Q
+
+        code = (stock.get("code") or "").strip()
+        if not code:
+            return
+        try:
+            with get_db(db_path) as conn:
+                migrate(conn)
+                Q.upsert_holding(
+                    conn,
+                    stock_code=code,
+                    stock_name=stock.get("name") or "",
+                    shares=int(stock.get("shares") or 0),
+                    entry_price=float(stock.get("cost") or 0),
+                    sector=(stock.get("sector") or "") or None,
+                    status="active",
+                )
+        except Exception as e:
+            logger.warning("同步持仓到 SQLite 失败（YAML 已保存）: %s", e)
+
+    def sync_yaml_remove_from_sqlite(self, code: str, db_path: os.PathLike | str | None = None) -> None:
+        """`holdings --remove` 更新 YAML 后将对应 active 行置为 closed。"""
+        from db.connection import get_db
+        from db.migrate import migrate
+        from db import queries as Q
+
+        try:
+            with get_db(db_path) as conn:
+                migrate(conn)
+                Q.close_active_holdings_by_code(conn, code)
+        except Exception as e:
+            logger.warning("从 SQLite 移除持仓失败（YAML 已更新）: %s", e)
+
     def save(self) -> None:
         """保存持仓"""
         data = {

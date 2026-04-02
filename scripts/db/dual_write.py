@@ -95,6 +95,101 @@ def sync_daily_market_to_db(date_str: str, yaml_data: dict,
         return False
 
 
+def _normalize_stock_code_for_match(code: str | None) -> str:
+    """用于匹配持仓代码：忽略交易所后缀与大小写。"""
+    if not code:
+        return ""
+    s = str(code).strip().upper()
+    for suf in (".SZ", ".SH", ".BJ"):
+        if s.endswith(suf):
+            return s[: -len(suf)]
+    return s
+
+
+def parse_post_market_envelope(raw_data: str | dict | None) -> dict | None:
+    """解析 daily_market.raw_data（dict 或 JSON 字符串）为盘后信封 dict。"""
+    if raw_data is None:
+        return None
+    if isinstance(raw_data, dict):
+        return raw_data
+    if isinstance(raw_data, str):
+        try:
+            d = json.loads(raw_data)
+            return d if isinstance(d, dict) else None
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return None
+    return None
+
+
+def holdings_quote_details_from_envelope(envelope: dict | None) -> dict[str, dict[str, float | None]]:
+    """从信封顶层 holdings_data 提取：归一化代码 -> {close, pnl_pct}。"""
+    if not envelope or not isinstance(envelope, dict):
+        return {}
+    holdings_data = envelope.get("holdings_data")
+    if not isinstance(holdings_data, list):
+        return {}
+    out: dict[str, dict[str, float | None]] = {}
+    for item in holdings_data:
+        if not isinstance(item, dict) or "error" in item:
+            continue
+        raw_code = item.get("code")
+        close = item.get("close")
+        if raw_code is None or close is None:
+            continue
+        try:
+            key = _normalize_stock_code_for_match(str(raw_code))
+            if not key:
+                continue
+            rec: dict[str, float | None] = {"close": float(close), "pnl_pct": None}
+            if item.get("pnl_pct") is not None:
+                try:
+                    rec["pnl_pct"] = float(item["pnl_pct"])
+                except (TypeError, ValueError):
+                    pass
+            out[key] = rec
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def sync_holdings_quotes_from_post_market(
+    date_str: str,
+    envelope: dict,
+    db_path: str | Path | None = None,
+) -> int:
+    """从 post-market.yaml 的 holdings_data 将收盘价写入 holdings.current_price。
+
+    按归一化代码匹配（忽略 .SZ/.SH/.BJ）。返回成功更新的持仓条数。
+    """
+    details = holdings_quote_details_from_envelope(envelope)
+    quotes = {k: v["close"] for k, v in details.items() if v.get("close") is not None}
+
+    if not quotes:
+        return 0
+
+    from . import queries as Q
+
+    try:
+        with get_db(db_path) as conn:
+            updated = 0
+            rows = Q.get_holdings(conn, status="active")
+            for row in rows:
+                nid = _normalize_stock_code_for_match(row.get("stock_code"))
+                if nid in quotes:
+                    Q.update_holding(conn, int(row["id"]), current_price=quotes[nid])
+                    updated += 1
+    except Exception as e:
+        logger.error("sync_holdings_quotes_from_post_market(%s): %s", date_str, e)
+        return 0
+
+    if updated:
+        logger.info(
+            "持仓现价已同步: date=%s updated=%d (YAML 中有效行情 %d 只)",
+            date_str, updated, len(quotes),
+        )
+    return updated
+
+
 def _post_market_collector_source(envelope: dict) -> dict:
     """盘后 YAML 信封：采集结果在 raw_data 内；旧版扁平结构则整包即 source。"""
     inner = envelope.get("raw_data")

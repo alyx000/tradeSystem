@@ -252,6 +252,7 @@ def cmd_pre(config: dict, target_date: str):
 
         holdings_collector = HoldingsCollector(registry)
         holdings_collector.load()
+        holdings_collector.merge_sqlite_active_holdings()
         # 查最近3天公告
         d = datetime.strptime(target_date, "%Y-%m-%d")
         start = (d - timedelta(days=3)).strftime("%Y-%m-%d")
@@ -311,9 +312,10 @@ def cmd_post(config: dict, target_date: str):
         market_collector = MarketCollector(registry)
         raw_data = market_collector.collect_post_market(target_date)
 
-        # 采集持仓数据 + 盘后公告
+        # 采集持仓数据 + 盘后公告（与 SQLite 持仓池合并，避免仅 Web 录入时 tracking/holdings.yaml 为空）
         holdings_collector = HoldingsCollector(registry)
         holdings_collector.load()
+        holdings_collector.merge_sqlite_active_holdings()
         holdings_data = holdings_collector.collect_holdings_data(target_date)
         try:
             holdings_data = holdings_collector.enrich_with_ma(holdings_data, target_date)
@@ -358,7 +360,7 @@ def cmd_post(config: dict, target_date: str):
     try:
         from pathlib import Path
 
-        from db.dual_write import sync_daily_market_to_db
+        from db.dual_write import sync_daily_market_to_db, sync_holdings_quotes_from_post_market
 
         pm = Path(yaml_path)
         if pm.is_file():
@@ -368,8 +370,11 @@ def cmd_post(config: dict, target_date: str):
                 logger.info("daily_market 已同步到 SQLite: %s", target_date)
             else:
                 logger.warning("daily_market 同步失败（已记入 pending_writes）: %s", target_date)
+            nh = sync_holdings_quotes_from_post_market(target_date, envelope)
+            if nh > 0:
+                logger.info("持仓现价已从盘后 YAML 同步 %d 条到 SQLite", nh)
     except Exception as e:
-        logger.warning("daily_market 同步跳过: %s", e)
+        logger.warning("daily_market / 持仓现价 同步跳过: %s", e)
 
     # 推送
     multi = setup_pushers(config)
@@ -415,6 +420,7 @@ def cmd_holdings(config: dict, args):
             "sector": args.holdings_args[4] if len(args.holdings_args) > 4 else "",
         }
         hc.add_stock(stock)
+        hc.sync_yaml_stock_to_sqlite(stock)
         print(f"已添加: {stock['name']} ({stock['code']})")
 
     elif args.holdings_action == "remove":
@@ -423,6 +429,7 @@ def cmd_holdings(config: dict, args):
             return
         code = args.holdings_args[0]
         hc.remove_stock(code)
+        hc.sync_yaml_remove_from_sqlite(code)
         print(f"已移除: {code}")
 
 

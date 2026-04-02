@@ -251,3 +251,155 @@ class TestCollectInfoForStocks:
         reg = _mock_registry(info_map={})
         result = collect_info_for_stocks(reg, [("600519.SH", "茅台")], "2026-03-27")
         assert result == {}
+
+
+@pytest.fixture
+def sqlite_db_for_merge(tmp_path):
+    from db.connection import get_db
+    from db.migrate import migrate
+
+    path = tmp_path / "merge.db"
+    with get_db(path) as conn:
+        migrate(conn)
+    return path
+
+
+class TestMergeSqliteActiveHoldings:
+    def test_fills_from_db_when_yaml_empty(self, sqlite_db_for_merge, tmp_path):
+        from db import queries as Q
+        from db.connection import get_db
+
+        with get_db(sqlite_db_for_merge) as conn:
+            Q.upsert_holding(
+                conn,
+                stock_code="300750.SZ",
+                stock_name="宁德时代",
+                entry_price=100.0,
+                shares=100,
+                status="active",
+            )
+        hc = HoldingsCollector(registry=None)
+        hc.holdings_file = tmp_path / "h.yaml"
+        hc.holdings_file.write_text("holdings: []\n", encoding="utf-8")
+        hc.load()
+        hc.merge_sqlite_active_holdings(db_path=sqlite_db_for_merge)
+        assert len(hc._holdings) == 1
+        assert hc._holdings[0]["code"] == "300750.SZ"
+        assert hc._holdings[0]["name"] == "宁德时代"
+        assert hc._holdings[0]["cost"] == 100.0
+        assert hc._holdings[0]["shares"] == 100
+
+    def test_noop_when_db_has_no_active(self, sqlite_db_for_merge, tmp_path):
+        hc = HoldingsCollector(registry=None)
+        hc.holdings_file = tmp_path / "h.yaml"
+        yaml_h = [{"code": "600000.SH", "name": "浦发", "shares": 1, "cost": 10.0, "sector": ""}]
+        hc.holdings_file.write_text(yaml.dump({"holdings": yaml_h}, allow_unicode=True), encoding="utf-8")
+        hc.load()
+        hc.merge_sqlite_active_holdings(db_path=sqlite_db_for_merge)
+        assert hc._holdings == yaml_h
+
+    def test_db_plus_yaml_only_in_yaml(self, sqlite_db_for_merge, tmp_path):
+        from db import queries as Q
+        from db.connection import get_db
+
+        with get_db(sqlite_db_for_merge) as conn:
+            Q.upsert_holding(conn, stock_code="300750.SZ", stock_name="宁德", entry_price=200.0, status="active")
+        hc = HoldingsCollector(registry=None)
+        hc.holdings_file = tmp_path / "h.yaml"
+        yaml_h = [{"code": "600000.SH", "name": "浦发", "shares": 1, "cost": 10.0, "sector": ""}]
+        hc.holdings_file.write_text(yaml.dump({"holdings": yaml_h}, allow_unicode=True), encoding="utf-8")
+        hc.load()
+        hc.merge_sqlite_active_holdings(db_path=sqlite_db_for_merge)
+        assert len(hc._holdings) == 2
+        assert {h["code"] for h in hc._holdings} == {"300750.SZ", "600000.SH"}
+
+    def test_db_wins_when_same_code_as_yaml(self, sqlite_db_for_merge, tmp_path):
+        from db import queries as Q
+        from db.connection import get_db
+
+        with get_db(sqlite_db_for_merge) as conn:
+            Q.upsert_holding(
+                conn,
+                stock_code="300750.SZ",
+                stock_name="宁德时代",
+                entry_price=100.0,
+                shares=50,
+                status="active",
+            )
+        hc = HoldingsCollector(registry=None)
+        hc.holdings_file = tmp_path / "h.yaml"
+        yaml_h = [{"code": "300750", "name": "旧名", "shares": 999, "cost": 50.0, "sector": ""}]
+        hc.holdings_file.write_text(yaml.dump({"holdings": yaml_h}, allow_unicode=True), encoding="utf-8")
+        hc.load()
+        hc.merge_sqlite_active_holdings(db_path=sqlite_db_for_merge)
+        assert len(hc._holdings) == 1
+        assert hc._holdings[0]["code"] == "300750.SZ"
+        assert hc._holdings[0]["cost"] == 100.0
+        assert hc._holdings[0]["shares"] == 50
+
+
+class TestYamlSqliteSync:
+    """CLI holdings --add/--remove 与 SQLite 双写。"""
+
+    def test_sync_add_inserts_row(self, sqlite_db_for_merge):
+        from db.connection import get_db
+
+        hc = HoldingsCollector(registry=None)
+        hc.sync_yaml_stock_to_sqlite(
+            {"code": "300750.SZ", "name": "宁德时代", "shares": 100, "cost": 180.5, "sector": "锂电"},
+            db_path=sqlite_db_for_merge,
+        )
+        with get_db(sqlite_db_for_merge) as conn:
+            rows = conn.execute(
+                "SELECT stock_code, stock_name, shares, entry_price, sector, status FROM holdings WHERE status='active'",
+            ).fetchall()
+        assert len(rows) == 1
+        assert rows[0]["stock_code"] == "300750.SZ"
+        assert rows[0]["shares"] == 100
+        assert rows[0]["entry_price"] == 180.5
+        assert rows[0]["sector"] == "锂电"
+
+    def test_sync_add_updates_same_norm(self, sqlite_db_for_merge):
+        from db import queries as Q
+        from db.connection import get_db
+
+        with get_db(sqlite_db_for_merge) as conn:
+            hid = Q.upsert_holding(
+                conn,
+                stock_code="300750",
+                stock_name="旧",
+                entry_price=100.0,
+                shares=10,
+                status="active",
+            )
+        hc = HoldingsCollector(registry=None)
+        hc.sync_yaml_stock_to_sqlite(
+            {"code": "300750.SZ", "name": "宁德时代", "shares": 200, "cost": 190.0, "sector": ""},
+            db_path=sqlite_db_for_merge,
+        )
+        with get_db(sqlite_db_for_merge) as conn:
+            row = conn.execute("SELECT * FROM holdings WHERE id = ?", (hid,)).fetchone()
+        assert row["stock_name"] == "宁德时代"
+        assert row["shares"] == 200
+        assert row["entry_price"] == 190.0
+        assert row["status"] == "active"
+
+    def test_sync_remove_closes_active(self, sqlite_db_for_merge):
+        from db import queries as Q
+        from db.connection import get_db
+
+        with get_db(sqlite_db_for_merge) as conn:
+            Q.upsert_holding(
+                conn,
+                stock_code="688041.SH",
+                stock_name="海光",
+                entry_price=200.0,
+                status="active",
+            )
+        hc = HoldingsCollector(registry=None)
+        hc.sync_yaml_remove_from_sqlite("688041", db_path=sqlite_db_for_merge)
+        with get_db(sqlite_db_for_merge) as conn:
+            n = conn.execute(
+                "SELECT COUNT(*) AS c FROM holdings WHERE status='active'",
+            ).fetchone()["c"]
+        assert n == 0

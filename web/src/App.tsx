@@ -8,6 +8,7 @@ import TeacherNotes from './pages/TeacherNotes'
 import Holdings from './pages/Holdings'
 import Watchlist from './pages/Watchlist'
 import Calendar from './pages/Calendar'
+import IndustryInfo from './pages/IndustryInfo'
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 30_000, retry: 1 } },
@@ -22,6 +23,7 @@ const NAV = [
   { to: '/holdings', label: '持仓' },
   { to: '/watchlist', label: '关注池' },
   { to: '/calendar', label: '日历' },
+  { to: '/industry', label: '行业信息' },
 ]
 
 export default function App() {
@@ -48,6 +50,7 @@ export default function App() {
               <Route path="/holdings" element={<Holdings />} />
               <Route path="/watchlist" element={<Watchlist />} />
               <Route path="/calendar" element={<Calendar />} />
+              <Route path="/industry" element={<IndustryInfo />} />
               <Route path="*" element={<Navigate to="/" />} />
             </Routes>
           </main>

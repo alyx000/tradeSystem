@@ -8,10 +8,12 @@ import yaml
 
 from db.connection import get_connection, get_db
 from db.dual_write import (
+    holdings_quote_details_from_envelope,
     reconcile_daily_market,
     record_pending,
     retry_pending,
     sync_daily_market_to_db,
+    sync_holdings_quotes_from_post_market,
 )
 from db.migrate import migrate
 from db import queries as Q
@@ -222,6 +224,62 @@ class TestReconcile:
         diffs = reconcile_daily_market(db_path=db_path, daily_dir=daily_dir)
         assert len(diffs) == 1
         assert diffs[0]["issue"] == "missing_in_db"
+
+
+class TestHoldingsQuoteDetailsFromEnvelope:
+    def test_close_and_pnl(self):
+        env = {"holdings_data": [{"code": "688041", "close": 100.0, "pnl_pct": 5.5}]}
+        m = holdings_quote_details_from_envelope(env)
+        assert m["688041"]["close"] == 100.0
+        assert m["688041"]["pnl_pct"] == 5.5
+
+    def test_skips_error_rows(self):
+        env = {"holdings_data": [{"code": "300750", "error": "timeout"}]}
+        assert holdings_quote_details_from_envelope(env) == {}
+
+
+class TestSyncHoldingsQuotes:
+    def test_writes_close_to_current_price(self, db_path):
+        with get_db(db_path) as conn:
+            hid = Q.upsert_holding(
+                conn,
+                stock_code="300750.SZ",
+                stock_name="宁德时代",
+                entry_price=100.0,
+                status="active",
+            )
+        envelope = {"holdings_data": [{"code": "300750", "close": 105.5}]}
+        n = sync_holdings_quotes_from_post_market("2026-04-02", envelope, db_path=db_path)
+        assert n == 1
+        with get_connection(db_path) as conn:
+            row = conn.execute(
+                "SELECT current_price FROM holdings WHERE id = ?",
+                (hid,),
+            ).fetchone()
+        assert row["current_price"] == 105.5
+
+    def test_matches_suffix_variants(self, db_path):
+        with get_db(db_path) as conn:
+            hid = Q.upsert_holding(
+                conn,
+                stock_code="688041",
+                stock_name="海光",
+                entry_price=200.0,
+                status="active",
+            )
+        envelope = {"holdings_data": [{"code": "688041.SH", "close": 195.0}]}
+        assert sync_holdings_quotes_from_post_market("2026-04-02", envelope, db_path=db_path) == 1
+        with get_connection(db_path) as conn:
+            row = conn.execute(
+                "SELECT current_price FROM holdings WHERE id = ?",
+                (hid,),
+            ).fetchone()
+        assert row["current_price"] == 195.0
+
+    def test_skips_error_rows_and_empty_envelope(self, db_path):
+        assert sync_holdings_quotes_from_post_market("2026-04-02", {}, db_path=db_path) == 0
+        envelope = {"holdings_data": [{"code": "300750", "error": "timeout"}]}
+        assert sync_holdings_quotes_from_post_market("2026-04-02", envelope, db_path=db_path) == 0
 
 
 class TestPremiumBackfill:

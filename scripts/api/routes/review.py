@@ -10,6 +10,11 @@ from fastapi import APIRouter, Depends, HTTPException
 from api.deps import get_db_conn
 from api.market_enrich import enrich_daily_market_row
 from db import queries as Q
+from db.dual_write import (
+    _normalize_stock_code_for_match,
+    holdings_quote_details_from_envelope,
+    parse_post_market_envelope,
+)
 
 router = APIRouter(prefix="/api/review", tags=["review"])
 
@@ -31,6 +36,29 @@ def _industry_info_date_from(date_str: str) -> str:
     return d.isoformat()
 
 
+def _enrich_holdings_prefill_from_post_envelope(
+    holdings: list[dict],
+    quote_map: dict[str, dict[str, float | None]],
+) -> list[dict]:
+    """当日 DB 尚无 current_price 时，用 daily_market.raw_data 信封内 holdings_data 补收盘价与盈亏%。
+    enrich_daily_market_row 会移除 raw_data，须在 enrich 之前解析 quote_map。
+    """
+    out: list[dict] = []
+    for h in holdings:
+        d = dict(h)
+        k = _normalize_stock_code_for_match(d.get("stock_code"))
+        q = quote_map.get(k) if k else None
+        if q:
+            close = q.get("close")
+            if close is not None and d.get("current_price") is None:
+                d["current_price"] = close
+            pnl = q.get("pnl_pct")
+            if pnl is not None:
+                d["prefill_pnl_pct"] = pnl
+        out.append(d)
+    return out
+
+
 @router.get("/{date}")
 def get_review(date: str, conn: sqlite3.Connection = Depends(get_db_conn)):
     date = _validate_date(date)
@@ -44,13 +72,18 @@ def get_review(date: str, conn: sqlite3.Connection = Depends(get_db_conn)):
 def get_prefill(date: str, conn: sqlite3.Connection = Depends(get_db_conn)):
     date = _validate_date(date)
     market = Q.get_daily_market(conn, date)
+    env = parse_post_market_envelope(market.get("raw_data") if market else None)
+    holdings_quote_map = holdings_quote_details_from_envelope(env)
     enrich_daily_market_row(market)  # 展开 raw_data 中的扩展字段（style_factors/sector_*/rhythm_* 等）
     prev_market = Q.get_prev_daily_market(conn, date)
     avg_5d = Q.get_avg_amount(conn, date, 5)
     avg_20d = Q.get_avg_amount(conn, date, 20)
     emotion = Q.get_latest_emotion(conn)
     themes = Q.get_active_themes(conn)
-    holdings = Q.get_holdings(conn)
+    holdings = _enrich_holdings_prefill_from_post_envelope(
+        Q.get_holdings(conn, status="active"),
+        holdings_quote_map,
+    )
     calendar = Q.get_calendar_range(conn, date, date)
 
     notes = conn.execute(

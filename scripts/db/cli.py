@@ -364,17 +364,12 @@ def _cmd_holdings_remove(args: argparse.Namespace) -> None:
 
     with get_db() as conn:
         migrate(conn)
-        rows = conn.execute(
-            "SELECT id FROM holdings WHERE stock_code = ? AND status = 'active'",
-            (args.code,),
-        ).fetchall()
-        if not rows:
+        closed = Q.close_active_holdings_by_code(conn, args.code)
+        if not closed:
             print(f"⚠️ 未找到持仓: {args.code}")
             return
-        for row in rows:
-            Q.update_holding(conn, row["id"], status="closed")
 
-    print(f"✅ 已移除持仓: {args.code}（共 {len(rows)} 条置为 closed）")
+    print(f"✅ 已移除持仓: {args.code}（共 {closed} 条置为 closed）")
 
 
 def _cmd_holdings_list(args: argparse.Namespace) -> None:

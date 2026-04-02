@@ -147,6 +147,21 @@ class TestFTS:
         assert len(results) >= 1
         assert results[0]["sector_name"] == "锂电"
 
+    def test_industry_info_search_respects_limit(self, conn):
+        for i in range(5):
+            Q.insert_industry_info(
+                conn,
+                date=f"2026-04-{i + 1:02d}",
+                sector_name="宽词",
+                content=f"宽词内容{i}",
+                info_type="news",
+            )
+        all_rows = Q.search_industry_info(conn, "宽词")
+        assert len(all_rows) == 5
+        capped = Q.search_industry_info(conn, "宽词", limit=2)
+        assert len(capped) == 2
+        assert capped[0]["date"] >= capped[1]["date"]
+
     def test_macro_info_fts_independent(self, conn):
         Q.insert_macro_info(
             conn, date="2026-04-01", title="美联储利率决议",
@@ -345,6 +360,42 @@ class TestHoldings:
         row = conn.execute("SELECT updated_at FROM holdings WHERE id = ?", (hid,)).fetchone()
         assert row["updated_at"] is not None
 
+    def test_upsert_updates_existing_active_by_normalized_code(self, conn):
+        hid = Q.upsert_holding(conn, stock_code="300750", stock_name="旧宁德", shares=10, status="active")
+        hid2 = Q.upsert_holding(
+            conn,
+            stock_code="300750.SZ",
+            stock_name="宁德时代",
+            shares=200,
+            entry_price=190.0,
+            status="active",
+        )
+        rows = Q.get_holdings(conn, status="active")
+        assert hid2 == hid
+        assert len(rows) == 1
+        assert rows[0]["stock_code"] == "300750.SZ"
+        assert rows[0]["stock_name"] == "宁德时代"
+        assert rows[0]["shares"] == 200
+        assert rows[0]["entry_price"] == 190.0
+
+    def test_upsert_inserts_new_row_when_only_closed_history_exists(self, conn):
+        old_id = Q.upsert_holding(conn, stock_code="300750", stock_name="宁德历史", status="closed")
+        new_id = Q.upsert_holding(conn, stock_code="300750.SZ", stock_name="宁德当前", status="active")
+        rows = Q.get_holdings(conn, None)
+        assert new_id != old_id
+        assert len(rows) == 2
+        assert len([r for r in rows if r["status"] == "active"]) == 1
+
+    def test_close_active_holdings_by_code_matches_suffix_variants(self, conn):
+        Q.upsert_holding(conn, stock_code="688041", stock_name="海光A", status="active")
+        Q.upsert_holding(conn, stock_code="688041.SH", stock_name="海光B", status="closed")
+        closed = Q.close_active_holdings_by_code(conn, "688041.SH")
+        active = Q.get_holdings(conn, status="active")
+        all_rows = Q.get_holdings(conn, None)
+        assert closed == 1
+        assert active == []
+        assert len([r for r in all_rows if r["status"] == "closed"]) == 2
+
 
 class TestWatchlist:
     def test_crud(self, conn):
@@ -530,7 +581,7 @@ class TestSchemaVersion:
         c = get_connection(tmp_path / "test.db")
         assert get_schema_version(c) == 0
         migrate(c)
-        assert get_schema_version(c) == 3
+        assert get_schema_version(c) == 4
         migrate(c)
-        assert get_schema_version(c) == 3
+        assert get_schema_version(c) == 4
         c.close()

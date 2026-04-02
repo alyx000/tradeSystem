@@ -75,6 +75,16 @@ export const api = {
   getPostMarket: (date: string) => request<any>(`/post-market/${date}`),
   getMainThemes: () => request<any[]>('/main-themes'),
 
+  // Industry info
+  getIndustryInfo: (params?: Record<string, string>) => {
+    const sp = new URLSearchParams(params || {})
+    return request<any[]>(`/industry?${sp}`)
+  },
+  createIndustryInfo: (data: any) =>
+    request<any>('/industry', { method: 'POST', body: JSON.stringify(data) }),
+  deleteIndustryInfo: (id: number) =>
+    request<any>(`/industry/${id}`, { method: 'DELETE' }),
+
   // Trades
   getTrades: (params?: Record<string, string>) => {
     const sp = new URLSearchParams(params || {})

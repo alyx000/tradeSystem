@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 
 import pytest
 import yaml
 
 from db.connection import get_connection
 from db.migrate import (
+    get_schema_version,
     import_calendar,
     import_daily_market,
     import_teacher_notes,
@@ -282,3 +284,63 @@ class TestDailyMarketMigration:
         count2 = import_daily_market(conn, daily_dir=daily_dir)
         assert count1 == 1
         assert count2 == 0
+
+
+class TestHoldingsMigration:
+    def test_v4_dedupes_duplicate_active_holdings(self, tmp_path):
+        db_path = tmp_path / "holdings_v3.db"
+        conn = get_connection(db_path)
+        conn.executescript(
+            """
+            CREATE TABLE holdings (
+                id INTEGER PRIMARY KEY,
+                stock_code TEXT NOT NULL,
+                stock_name TEXT NOT NULL,
+                market TEXT DEFAULT 'A股',
+                sector TEXT,
+                shares INTEGER,
+                entry_date TEXT,
+                entry_price REAL,
+                current_price REAL,
+                stop_loss REAL,
+                target_price REAL,
+                position_ratio REAL,
+                status TEXT DEFAULT 'active',
+                note TEXT,
+                updated_at TEXT
+            );
+            CREATE TRIGGER IF NOT EXISTS holdings_updated
+            AFTER UPDATE ON holdings BEGIN
+                UPDATE holdings SET updated_at = datetime('now') WHERE id = new.id;
+            END;
+            """
+        )
+        conn.execute("PRAGMA user_version = 3")
+        conn.execute(
+            "INSERT INTO holdings (stock_code, stock_name, status) VALUES (?, ?, 'active')",
+            ("300750", "宁德时代-旧"),
+        )
+        conn.execute(
+            "INSERT INTO holdings (stock_code, stock_name, status) VALUES (?, ?, 'active')",
+            ("300750.SZ", "宁德时代-新"),
+        )
+        conn.commit()
+
+        migrate(conn)
+
+        active = conn.execute(
+            "SELECT stock_code FROM holdings WHERE status = 'active' ORDER BY id"
+        ).fetchall()
+        closed = conn.execute(
+            "SELECT stock_code FROM holdings WHERE status = 'closed' ORDER BY id"
+        ).fetchall()
+        assert get_schema_version(conn) == 4
+        assert [row["stock_code"] for row in active] == ["300750.SZ"]
+        assert [row["stock_code"] for row in closed] == ["300750"]
+
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "INSERT INTO holdings (stock_code, stock_name, status) VALUES (?, ?, 'active')",
+                ("300750.SH", "重复持仓"),
+            )
+        conn.close()

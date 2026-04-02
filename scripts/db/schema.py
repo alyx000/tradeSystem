@@ -3,6 +3,19 @@ from __future__ import annotations
 
 import sqlite3
 
+
+def holding_code_norm_sql(column: str = "stock_code") -> str:
+    """返回股票代码归一化 SQL：忽略交易所后缀并转大写。"""
+    upper_col = f"UPPER({column})"
+    return (
+        "CASE "
+        f"WHEN {upper_col} LIKE '%.SZ' THEN SUBSTR({upper_col}, 1, LENGTH({upper_col}) - 3) "
+        f"WHEN {upper_col} LIKE '%.SH' THEN SUBSTR({upper_col}, 1, LENGTH({upper_col}) - 3) "
+        f"WHEN {upper_col} LIKE '%.BJ' THEN SUBSTR({upper_col}, 1, LENGTH({upper_col}) - 3) "
+        f"ELSE {upper_col} END"
+    )
+
+
 # ──────────────────────────────────────────────────────────────
 # 1. 老师复盘观点
 # ──────────────────────────────────────────────────────────────
@@ -420,6 +433,8 @@ _SQL_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_teacher_notes_teacher_date ON teacher_notes(teacher_id, date);",
     "CREATE INDEX IF NOT EXISTS idx_calendar_date ON calendar_events(date);",
     "CREATE INDEX IF NOT EXISTS idx_calendar_impact ON calendar_events(impact);",
+    f"CREATE UNIQUE INDEX IF NOT EXISTS idx_holdings_active_norm_unique "
+    f"ON holdings ({holding_code_norm_sql()}) WHERE status = 'active';",
     "CREATE INDEX IF NOT EXISTS idx_emotion_cycle_date ON emotion_cycle(date);",
     "CREATE INDEX IF NOT EXISTS idx_main_themes_date ON main_themes(date);",
     "CREATE INDEX IF NOT EXISTS idx_main_themes_status ON main_themes(status);",

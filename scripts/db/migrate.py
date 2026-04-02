@@ -10,7 +10,7 @@ from typing import Any
 import yaml
 
 from .dual_write import _extract_market_row
-from .schema import init_schema
+from .schema import holding_code_norm_sql, init_schema
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +24,40 @@ def get_schema_version(conn: sqlite3.Connection) -> int:
 
 def set_schema_version(conn: sqlite3.Connection, version: int) -> None:
     conn.execute(f"PRAGMA user_version = {version}")
+
+
+def _close_duplicate_active_holdings(conn: sqlite3.Connection) -> int:
+    """清理历史重复 active 持仓：同归一化代码只保留最新一条。"""
+    norm_expr = holding_code_norm_sql("stock_code")
+    dup_norms = conn.execute(
+        f"""
+        SELECT {norm_expr} AS norm_code, COUNT(*) AS cnt
+        FROM holdings
+        WHERE status = 'active'
+        GROUP BY {norm_expr}
+        HAVING COUNT(*) > 1
+        """
+    ).fetchall()
+    closed = 0
+    for row in dup_norms:
+        rows = conn.execute(
+            f"""
+            SELECT id
+            FROM holdings
+            WHERE status = 'active' AND {norm_expr} = ?
+            ORDER BY (updated_at IS NOT NULL) DESC, updated_at DESC, id DESC
+            """,
+            (row["norm_code"],),
+        ).fetchall()
+        keep_id = rows[0]["id"]
+        for dup in rows[1:]:
+            conn.execute("UPDATE holdings SET status = 'closed' WHERE id = ?", (dup["id"],))
+            closed += 1
+        logger.info(
+            "Closed duplicate active holdings for %s: kept id=%s, closed=%d",
+            row["norm_code"], keep_id, max(len(rows) - 1, 0),
+        )
+    return closed
 
 
 def migrate(conn: sqlite3.Connection) -> None:
@@ -58,6 +92,18 @@ def migrate(conn: sqlite3.Connection) -> None:
                 conn.execute(f"ALTER TABLE daily_market ADD COLUMN {col} {coltype}")
         set_schema_version(conn, 3)
         conn.commit()
+        version = get_schema_version(conn)
+
+    if version < 4:
+        logger.info("Applying schema v4: dedupe active holdings + unique normalized index")
+        closed = _close_duplicate_active_holdings(conn)
+        conn.execute(
+            f"CREATE UNIQUE INDEX IF NOT EXISTS idx_holdings_active_norm_unique "
+            f"ON holdings ({holding_code_norm_sql()}) WHERE status = 'active'"
+        )
+        set_schema_version(conn, 4)
+        conn.commit()
+        logger.info("Schema v4 complete: closed duplicate active holdings=%d", closed)
 
 
 # ──────────────────────────────────────────────────────────────
