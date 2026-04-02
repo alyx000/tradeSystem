@@ -530,7 +530,7 @@ class TestSchemaVersion:
         c = get_connection(tmp_path / "test.db")
         assert get_schema_version(c) == 0
         migrate(c)
-        assert get_schema_version(c) == 2
+        assert get_schema_version(c) == 3
         migrate(c)
-        assert get_schema_version(c) == 2
+        assert get_schema_version(c) == 3
         c.close()

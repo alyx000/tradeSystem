@@ -244,6 +244,14 @@ def _extract_market_row(date_str: str, envelope: dict) -> dict:
         sub = ma_all.get(key)
         return sub.get("above_ma5w") if isinstance(sub, dict) else None
 
+    def _json_col(key: str):
+        v = source.get(key)
+        if v is None:
+            return None
+        if isinstance(v, (list, dict)):
+            return json.dumps(v, ensure_ascii=False)
+        return v
+
     return {
         "date": date_str,
         "sh_index_close": sh_c,
@@ -275,6 +283,10 @@ def _extract_market_row(date_str: str, envelope: dict) -> dict:
         "margin_balance": margin_balance,
         "market_breadth": market_breadth_out,
         "raw_data": envelope,
+        "node_signals": _json_col("node_signals"),
+        "top_volume_stocks": _json_col("top_volume_stocks"),
+        "etf_flow": _json_col("etf_flow"),
+        "hk_indices": _json_col("hk_indices"),
     }
 
 

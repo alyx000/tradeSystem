@@ -428,6 +428,48 @@ class MarketCollector:
         except Exception as e:
             logger.warning(f"风格化因子分析失败: {e}")
 
+        # 14. 客观节点信号
+        try:
+            from analyzers import NodeSignalAnalyzer
+            node_analyzer = NodeSignalAnalyzer(BASE_DIR)
+            result["node_signals"] = node_analyzer.analyze(result, date)
+            logger.info(f"节点信号分析完成，共 {len(result['node_signals'])} 条")
+        except Exception as e:
+            logger.warning(f"节点信号分析失败: {e}")
+
+        # 15. 成交额前20个股
+        try:
+            r = self.registry.call("get_top_volume_stocks", date, 20)
+            if r.success and r.data:
+                result["top_volume_stocks"] = r.data
+                logger.info(f"成交额排名采集完成，共 {len(r.data)} 只")
+            else:
+                logger.warning(f"成交额排名获取失败: {r.error}")
+        except Exception as e:
+            logger.warning(f"成交额排名采集异常: {e}")
+
+        # 16. ETF 净申购流量
+        try:
+            r = self.registry.call("get_etf_flow", date)
+            if r.success and r.data:
+                result["etf_flow"] = r.data
+                logger.info(f"ETF 净申购采集完成，共 {len(r.data)} 只")
+            else:
+                logger.warning(f"ETF 净申购获取失败: {r.error}")
+        except Exception as e:
+            logger.warning(f"ETF 净申购采集异常: {e}")
+
+        # 17. 港股指数（HSI + HSTECH）
+        try:
+            r = self.registry.call("get_hk_indices", date)
+            if r.success and r.data:
+                result["hk_indices"] = r.data
+                logger.info("港股指数采集完成")
+            else:
+                logger.warning(f"港股指数获取失败: {r.error}")
+        except Exception as e:
+            logger.warning(f"港股指数采集异常: {e}")
+
         logger.info(f"盘后数据采集完成: {date}")
         return result
 

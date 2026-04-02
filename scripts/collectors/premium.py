@@ -174,7 +174,12 @@ class PremiumCollector:
             "capacity_top10": _agg(capacity_top10),
         }
 
-        # 4. 写回 T-1 的 post-market.yaml
+        # 4. 人气股次日表现回填（A龙虎榜净买 + B连板股 + C成交额前10）
+        popularity = self._collect_popularity_backfill(prev_data, trade_date, prev_date)
+        if popularity:
+            prev_data["popularity_backfill"] = popularity
+
+        # 5. 写回 T-1 的 post-market.yaml
         prev_data["premium_backfill"] = result
         with open(prev_yaml, "w", encoding="utf-8") as f:
             yaml.dump(prev_data, f, allow_unicode=True, default_flow_style=False)
@@ -184,7 +189,167 @@ class PremiumCollector:
             f"首板 {result['first_board'].get('count', 0)} 只，"
             f"高开率 {result['first_board'].get('open_up_rate', '-')}"
         )
+        if popularity:
+            logger.info(f"人气股回填完成，共 {len(popularity)} 只")
         return result
+
+    def _collect_popularity_backfill(
+        self, prev_data: dict, trade_date: str, prev_date: str | None = None
+    ) -> list[dict]:
+        """
+        收集 T-1 人气股并追踪其 T 日表现。
+
+        人气股来源（去重合并，source 字段多标签）：
+            A. T-1 龙虎榜净买股（net_amount > 0）
+            B. T-1 连板股（limit_times >= 2）
+            C. T-1 成交额前10（top_volume_stocks[:10]）
+
+        每条 entry 含字段：
+            code, name, source[], prev_close,
+            t_open, t_open_premium_pct,
+            t_close, t_close_change_pct,
+            t_is_limit_up, t_is_limit_down
+        """
+        raw = prev_data.get("raw_data", {})
+
+        def _to_float(value, *, zero_is_none: bool = False) -> float | None:
+            if value in (None, ""):
+                return None
+            try:
+                parsed = float(value)
+            except (TypeError, ValueError):
+                return None
+            if zero_is_none and parsed == 0:
+                return None
+            return parsed
+
+        def _load_prev_top_volume_stocks() -> list[dict]:
+            cached = raw.get("top_volume_stocks")
+            if isinstance(cached, list) and cached:
+                return cached
+
+            # 兼容历史 T-1 YAML：旧数据里没有 top_volume_stocks，需要临时回拉一次
+            if prev_date:
+                r = self.registry.call("get_top_volume_stocks", prev_date, 10)
+                if r.success and r.data:
+                    logger.info(f"T-1 成交额前10缺失，已回拉 {prev_date} 的成交额排名")
+                    return list(r.data)
+                logger.debug(
+                    "T-1 成交额前10回拉失败：%s",
+                    getattr(r, "error", "unknown"),
+                )
+            return []
+
+        # ── 收集三类来源，code → {name, prev_close, sources}
+        candidates: dict[str, dict] = {}
+
+        def _add(code: str, name: str, prev_close: float, source: str) -> None:
+            prev_close_val = _to_float(prev_close, zero_is_none=True)
+            if not code or prev_close_val is None:
+                return
+            if code in candidates:
+                if source not in candidates[code]["sources"]:
+                    candidates[code]["sources"].append(source)
+            else:
+                candidates[code] = {
+                    "name": name,
+                    "prev_close": prev_close_val,
+                    "sources": [source],
+                }
+
+        # A. 龙虎榜净买
+        for item in (raw.get("dragon_tiger", {}).get("data") or []):
+            net = item.get("net_amount")
+            try:
+                net_val = float(net) if net is not None else 0.0
+            except (TypeError, ValueError):
+                net_val = 0.0
+            if net_val > 0:
+                _add(
+                    str(item.get("code", "")),
+                    str(item.get("name", "")),
+                    item.get("prev_close") or item.get("close", 0),
+                    "dragon_tiger",
+                )
+
+        # B. 连板股（limit_times >= 2），prev_close 取当时涨停收盘价
+        for stock in (raw.get("limit_up", {}).get("stocks") or []):
+            if (stock.get("limit_times") or 1) >= 2:
+                _add(
+                    str(stock.get("code", "")),
+                    str(stock.get("name", "")),
+                    stock.get("close", 0),
+                    "consecutive",
+                )
+
+        # C. 成交额前10（从 T-1 的 top_volume_stocks 字段读取）
+        for item in _load_prev_top_volume_stocks()[:10]:
+            _add(
+                str(item.get("code", "")),
+                str(item.get("name", "")),
+                item.get("close", 0),
+                "volume_top10",
+            )
+
+        if not candidates:
+            logger.info("人气股来源均为空，跳过 popularity_backfill")
+            return []
+
+        logger.info(f"人气股候选数量：{len(candidates)}（A/B/C 合并去重后）")
+
+        # ── 拉取 T 日数据，计算次日表现
+        results: list[dict] = []
+        for code, info in candidates.items():
+            r = self.registry.call("get_stock_daily", code, trade_date)
+            if not r.success or not r.data:
+                logger.debug(f"  {code} T日行情获取失败：{getattr(r, 'error', '')}")
+                continue
+
+            d = r.data
+            t_open_raw = d.get("open")
+            t_close_raw = d.get("close")
+            t_open = _to_float(t_open_raw, zero_is_none=True)
+            t_close = _to_float(t_close_raw, zero_is_none=True)
+            prev_close = info["prev_close"]
+
+            # prev_close=0 意味着来源数据本身缺失，无法计算相对变化
+            if not prev_close or prev_close == 0:
+                continue
+
+            # t_close=0 表示当日数据获取失败（停牌/未上市等），跳过脏数据
+            if t_close is None:
+                logger.debug(f"  {code} T日收盘价为0或缺失，跳过")
+                continue
+
+            t_open_premium = (
+                round((t_open - prev_close) / prev_close * 100, 2)
+                if t_open is not None else None
+            )
+            t_close_change = round((t_close - prev_close) / prev_close * 100, 2)
+
+            pct_chg_raw = d.get("pct_chg")
+            if pct_chg_raw in (None, ""):
+                pct_chg_raw = d.get("change_pct")
+            pct_chg = _to_float(pct_chg_raw)
+            limit_threshold = 9.8
+            # 仅在有有效 pct_chg 时判断涨跌停；价格为0时已在上方跳过
+            t_is_limit_up = pct_chg is not None and pct_chg >= limit_threshold
+            t_is_limit_down = pct_chg is not None and pct_chg <= -limit_threshold
+
+            results.append({
+                "code": code,
+                "name": info["name"],
+                "source": info["sources"],
+                "prev_close": prev_close,
+                "t_open": t_open,
+                "t_open_premium_pct": t_open_premium,
+                "t_close": t_close,
+                "t_close_change_pct": t_close_change,
+                "t_is_limit_up": t_is_limit_up,
+                "t_is_limit_down": t_is_limit_down,
+            })
+
+        return results
 
     def format_report(self, result: dict) -> str:
         """生成可推送的溢价率摘要文本"""

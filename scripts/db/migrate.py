@@ -45,6 +45,20 @@ def migrate(conn: sqlite3.Connection) -> None:
         set_schema_version(conn, 2)
         conn.commit()
 
+    if version < 3:
+        logger.info("Applying schema v3: daily_market node_signals/top_volume_stocks/etf_flow/hk_indices")
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(daily_market)").fetchall()}
+        for col, coltype in [
+            ("node_signals", "TEXT"),
+            ("top_volume_stocks", "TEXT"),
+            ("etf_flow", "TEXT"),
+            ("hk_indices", "TEXT"),
+        ]:
+            if col not in cols:
+                conn.execute(f"ALTER TABLE daily_market ADD COLUMN {col} {coltype}")
+        set_schema_version(conn, 3)
+        conn.commit()
+
 
 # ──────────────────────────────────────────────────────────────
 # YAML 数据导入

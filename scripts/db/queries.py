@@ -381,6 +381,7 @@ def upsert_daily_market(conn: sqlite3.Connection, data: dict) -> None:
         "premium_10cm", "premium_20cm", "premium_30cm", "premium_second_board",
         "northbound_net", "margin_balance",
         "market_breadth", "raw_data",
+        "node_signals", "top_volume_stocks", "etf_flow", "hk_indices",
     ]
     vals = []
     for c in cols:

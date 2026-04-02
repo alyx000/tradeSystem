@@ -179,3 +179,15 @@ class DataProvider(ABC):
     # ---- 交易日历 ----
     def is_trade_day(self, date: str) -> DataResult:
         return DataResult(data=None, source=self.name, error="not implemented")
+
+    # ---- 成交额排名 ----
+    def get_top_volume_stocks(self, date: str, top_n: int = 20) -> DataResult:
+        return DataResult(data=None, source=self.name, error="not implemented")
+
+    # ---- ETF 净申购 ----
+    def get_etf_flow(self, date: str) -> DataResult:
+        return DataResult(data=None, source=self.name, error="not implemented")
+
+    # ---- 港股指数 ----
+    def get_hk_indices(self, date: str) -> DataResult:
+        return DataResult(data=None, source=self.name, error="not implemented")

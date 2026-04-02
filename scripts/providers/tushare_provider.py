@@ -58,6 +58,7 @@ class TushareProvider(DataProvider):
             "get_stock_announcements",
             "get_global_index",
             "is_trade_day",
+            "get_top_volume_stocks",
         ]
 
     def _date_fmt(self, date: str) -> str:
@@ -280,6 +281,33 @@ class TushareProvider(DataProvider):
                 "advance_ratio": ratio,
             }
             return DataResult(data=data, source="tushare:daily")
+        except Exception as e:
+            return DataResult(data=None, source=self.name, error=str(e))
+
+    def get_top_volume_stocks(self, date: str, top_n: int = 20) -> DataResult:
+        """全市场按成交额降序取 Top N 个股（用于成交量集中度分析与次日人气股追踪）"""
+        try:
+            d = self._date_fmt(date)
+            df = self.pro.daily(
+                trade_date=d,
+                fields="ts_code,name,close,amount,pct_chg",
+            )
+            if df is None or df.empty:
+                return DataResult(data=None, source=self.name,
+                                  error=f"无全市场行情数据: {date}")
+            df = df.dropna(subset=["amount"])
+            df = df.sort_values("amount", ascending=False).head(top_n).reset_index(drop=True)
+            stocks = []
+            for rank, (_, row) in enumerate(df.iterrows(), start=1):
+                stocks.append({
+                    "rank": rank,
+                    "code": str(row["ts_code"]),
+                    "name": str(row.get("name", "")),
+                    "close": round(float(row.get("close", 0) or 0), 2),
+                    "amount_billion": round(float(row["amount"]) / 1e4, 2),
+                    "change_pct": round(float(row.get("pct_chg", 0) or 0), 2),
+                })
+            return DataResult(data=stocks, source="tushare:daily")
         except Exception as e:
             return DataResult(data=None, source=self.name, error=str(e))
 

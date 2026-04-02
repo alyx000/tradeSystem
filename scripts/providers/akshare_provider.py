@@ -84,6 +84,8 @@ class AkshareProvider(DataProvider):
             "get_macro_calendar",
             "get_macro_calendar_range",
             "is_trade_day",
+            "get_etf_flow",
+            "get_hk_indices",
         ]
 
     # ------------------------------------------------------------------
@@ -943,3 +945,196 @@ class AkshareProvider(DataProvider):
             return DataResult(data=is_open, source="akshare:trade_cal")
         except Exception as e:
             return DataResult(data=None, source=self.name, error=str(e))
+
+    # ---- ETF 净申购 ----
+
+    # 跟踪的重点 ETF 列表（code → 名称）
+    _ETF_WATCHLIST: dict[str, str] = {
+        "510300": "沪深300ETF(华泰)",
+        "159919": "沪深300ETF(嘉实)",
+        "588000": "科创50ETF",
+        "512880": "证券ETF",
+    }
+
+    def get_etf_flow(self, date: str) -> DataResult:
+        """
+        获取重点 ETF 的日度净申购数据。
+
+        通过比较最近两个交易日的份额变化计算净申购量，
+        正值表示净申购（机构买入），负值表示净赎回。
+        """
+        results: list[dict] = []
+        errors: list[str] = []
+
+        for code, name in self._ETF_WATCHLIST.items():
+            try:
+                df = self.ak.fund_etf_fund_info_em(fund=code)
+                if df is None or df.empty:
+                    errors.append(f"{code} 无数据")
+                    continue
+
+                date_col = None
+                for col in ["净值日期", "日期", "date"]:
+                    if col in df.columns:
+                        date_col = col
+                        break
+                if date_col is None:
+                    errors.append(f"{code} 无日期列")
+                    continue
+
+                df = df.sort_values(date_col)
+                if len(df) < 2:
+                    errors.append(f"{code} 历史数据不足两行")
+                    continue
+
+                share_col = None
+                for col in ["累计净值", "份额", "基金份额(万份)"]:
+                    if col in df.columns:
+                        share_col = col
+                        break
+
+                size_col = None
+                for col in ["资产净值", "基金规模(亿元)"]:
+                    if col in df.columns:
+                        size_col = col
+                        break
+
+                last_row = df.iloc[-1]
+                prev_row = df.iloc[-2]
+
+                entry: dict = {"code": code, "name": name}
+
+                if share_col:
+                    try:
+                        last_shares = float(str(last_row[share_col]).replace(",", ""))
+                        prev_shares = float(str(prev_row[share_col]).replace(",", ""))
+                        entry["total_shares_billion"] = round(last_shares / 1e4, 4)
+                        entry["shares_change_billion"] = round(
+                            (last_shares - prev_shares) / 1e4, 4
+                        )
+                    except (ValueError, TypeError):
+                        pass
+
+                if size_col:
+                    try:
+                        size_val = str(last_row[size_col]).replace(",", "")
+                        entry["fund_size_billion"] = round(float(size_val), 2)
+                    except (ValueError, TypeError):
+                        pass
+
+                results.append(entry)
+            except Exception as e:
+                errors.append(f"{code} 异常: {e}")
+                logger.debug(f"ETF {code} 数据获取失败: {e}")
+
+        if not results and errors:
+            return DataResult(
+                data=None, source=self.name,
+                error="; ".join(errors),
+            )
+
+        return DataResult(
+            data=results,
+            source="akshare:fund_etf_fund_info_em",
+            note="; ".join(errors) if errors else "",
+        )
+
+    # ---- 港股指数 ----
+
+    _HK_INDEX_MAP: dict[str, tuple[str, str]] = {
+        "HSI": ("恒生指数", "hsi"),
+        "HSTECH": ("恒生科技指数", "hstech"),
+    }
+
+    def get_hk_indices(self, date: str) -> DataResult:
+        """
+        获取港股恒生指数和恒生科技指数的日线数据。
+
+        使用 akshare stock_hk_index_daily_em，按日期过滤取当日数据。
+        """
+        result: dict[str, dict] = {}
+        errors: list[str] = []
+
+        for symbol, (zh_name, key) in self._HK_INDEX_MAP.items():
+            try:
+                df = self.ak.stock_hk_index_daily_em(symbol=zh_name)
+                if df is None or df.empty:
+                    errors.append(f"{symbol} 无数据")
+                    continue
+
+                date_col = None
+                for col in ["日期", "date", "Date"]:
+                    if col in df.columns:
+                        date_col = col
+                        break
+                if date_col is None:
+                    errors.append(f"{symbol} 无日期列")
+                    continue
+
+                df[date_col] = pd.to_datetime(df[date_col]).dt.strftime("%Y-%m-%d")
+                row = df[df[date_col] == date]
+
+                if row.empty:
+                    df_sorted = df.sort_values(date_col)
+                    if df_sorted.empty:
+                        errors.append(f"{symbol} 无历史数据")
+                        continue
+                    row = df_sorted.tail(1)
+
+                r = row.iloc[0]
+
+                def _col(*names: str) -> float | None:
+                    """命中列且可解析则返回数值；列不存在或解析失败返回 None（与真实 0.0 区分）。"""
+                    for n in names:
+                        if n in r.index:
+                            try:
+                                return round(float(r[n]), 2)
+                            except (TypeError, ValueError):
+                                pass
+                    return None
+
+                close = _col("收盘", "close", "Close", "最新价")
+                open_ = _col("开盘", "open", "Open")
+                high = _col("最高", "high", "High")
+                low = _col("最低", "low", "Low")
+
+                if close is None:
+                    errors.append(f"{symbol} 无有效收盘价")
+                    continue
+
+                change_pct: float | None = None
+                for pct_col in ["涨跌幅", "change_pct", "涨跌额"]:
+                    if pct_col in r.index:
+                        try:
+                            v = float(r[pct_col])
+                            if abs(v) < 100:
+                                change_pct = round(v, 2)
+                                break
+                        except (TypeError, ValueError):
+                            pass
+
+                result[key] = {
+                    "code": symbol,
+                    "name": zh_name,
+                    "close": close,
+                    "open": open_,
+                    "high": high,
+                    "low": low,
+                    "change_pct": change_pct,
+                    "_source": "akshare:stock_hk_index_daily_em",
+                }
+            except Exception as e:
+                errors.append(f"{symbol} 异常: {e}")
+                logger.debug(f"港股指数 {symbol} 获取失败: {e}")
+
+        if not result and errors:
+            return DataResult(
+                data=None, source=self.name,
+                error="; ".join(errors),
+            )
+
+        return DataResult(
+            data=result,
+            source="akshare:stock_hk_index_daily_em",
+            note="; ".join(errors) if errors else "",
+        )

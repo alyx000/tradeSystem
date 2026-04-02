@@ -302,6 +302,10 @@ CREATE TABLE IF NOT EXISTS daily_market (
     margin_balance REAL,
     market_breadth TEXT,
     raw_data TEXT,
+    node_signals TEXT,
+    top_volume_stocks TEXT,
+    etf_flow TEXT,
+    hk_indices TEXT,
     created_at TEXT DEFAULT (datetime('now'))
 );
 """
