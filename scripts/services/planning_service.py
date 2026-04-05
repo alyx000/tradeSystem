@@ -299,11 +299,7 @@ class PlanningService:
 
         market_view = json.loads(draft["market_view_json"])
         sector_view = json.loads(draft["sector_view_json"])
-        stock_focus = json.loads(draft["stock_focus_json"])
-        fact_candidates = json.loads(draft["fact_check_candidates_json"])
-        judgement_candidates = json.loads(draft["judgement_check_candidates_json"])
-
-        watch_items = self._build_watch_items(stock_focus, fact_candidates, judgement_candidates)
+        watch_items = json.loads(draft["watch_items_json"] or "[]")
         plan_id = f"plan_{uuid4().hex[:12]}"
 
         with get_db(self.db_path) as conn:
@@ -416,7 +412,7 @@ class PlanningService:
         if execution_notes is not None:
             updates["execution_notes_json"] = _json_text(execution_notes, [])
         if status is not None:
-            updates["status"] = status
+            raise ValueError("status must be changed through confirm/review flow")
         if input_by is not None:
             updates["input_by"] = input_by
         self._update_row("trade_plans", "plan_id", plan_id, updates)
@@ -430,6 +426,7 @@ class PlanningService:
         outcome_summary: str,
         input_by: str | None = None,
     ) -> dict[str, Any]:
+        self.get_plan(plan_id=plan_id) or (_ for _ in ()).throw(KeyError(f"plan not found: {plan_id}"))
         review_id = f"plan_review_{uuid4().hex[:12]}"
         with get_db(self.db_path) as conn:
             migrate(conn)
@@ -492,14 +489,16 @@ class PlanningService:
                 fact_results.append(result)
                 if result["result"] == "missing_data":
                     missing_dependencies.append(result["label"])
-                    missing_data_count += 1
                 elif result["result"] == "unsupported":
                     unsupported_checks.append(result["label"])
-                    unsupported_check_count += 1
 
             data_ready = not missing_dependencies and not unsupported_checks
             if data_ready:
                 data_ready_count += 1
+            if missing_dependencies:
+                missing_data_count += 1
+            if unsupported_checks:
+                unsupported_check_count += 1
 
             diagnostics_items.append(
                 {

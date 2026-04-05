@@ -182,6 +182,8 @@ def update_plan(plan_id: str, body: Optional[dict] = None):
         )
     except KeyError:
         raise HTTPException(404, "plan not found")
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
 
 
 @router.get("/plans")

@@ -112,6 +112,65 @@ def test_confirm_plan_and_review(tmp_path):
     assert updated_plan["status"] == "reviewed"
 
 
+def test_confirm_plan_preserves_edited_draft_watch_items(tmp_path):
+    db_path = tmp_path / "planning.db"
+    conn = get_connection(db_path)
+    migrate(conn)
+    conn.close()
+
+    service = PlanningService(str(db_path))
+    obs = service.create_observation(
+        trade_date="2026-04-08",
+        source_type="manual",
+        title="盘后观察",
+        market_facts={"bias": "震荡"},
+        sector_facts={"main_themes": ["AI"]},
+        stock_facts=[{"subject_code": "300750.SZ", "subject_name": "宁德时代", "reason": "观察回流"}],
+        judgements=[],
+    )
+    draft = service.create_draft(
+        trade_date="2026-04-08",
+        source_observation_ids=[obs["observation_id"]],
+    )
+    service.update_draft(
+        draft["draft_id"],
+        watch_items=[
+            {
+                "subject_type": "stock",
+                "subject_code": "002594.SZ",
+                "subject_name": "比亚迪",
+                "reason": "手工改成趋势观察",
+                "fact_checks": [],
+                "judgement_checks": [],
+                "trigger_conditions": ["站稳20日线"],
+                "invalidations": ["跌破昨日低点"],
+                "priority": 7,
+            }
+        ],
+        input_by="cursor",
+    )
+
+    plan = service.confirm_plan(
+        draft_id=draft["draft_id"],
+        trade_date="2026-04-08",
+        input_by="cursor",
+    )
+    watch_items = json.loads(plan["watch_items_json"])
+    assert watch_items == [
+        {
+            "subject_type": "stock",
+            "subject_code": "002594.SZ",
+            "subject_name": "比亚迪",
+            "reason": "手工改成趋势观察",
+            "fact_checks": [],
+            "judgement_checks": [],
+            "trigger_conditions": ["站稳20日线"],
+            "invalidations": ["跌破昨日低点"],
+            "priority": 7,
+        }
+    ]
+
+
 def test_update_observation_draft_and_plan(tmp_path):
     db_path = tmp_path / "planning.db"
     conn = get_connection(db_path)
@@ -165,6 +224,39 @@ def test_update_observation_draft_and_plan(tmp_path):
     assert updated_plan["title"] == "更新后的正式计划"
     assert updated_plan["market_bias"] == "分歧"
     assert json.loads(updated_plan["main_themes_json"]) == ["机器人"]
+
+
+def test_update_plan_rejects_direct_status_change(tmp_path):
+    db_path = tmp_path / "planning.db"
+    conn = get_connection(db_path)
+    migrate(conn)
+    conn.close()
+
+    service = PlanningService(str(db_path))
+    obs = service.create_observation(
+        trade_date="2026-04-08",
+        source_type="manual",
+        title="初始观察",
+        market_facts={"bias": "震荡"},
+        sector_facts={"main_themes": ["AI"]},
+        stock_facts=[{"subject_code": "300750.SZ", "subject_name": "宁德时代", "reason": "观察回流"}],
+        judgements=[],
+    )
+    draft = service.create_draft(
+        trade_date="2026-04-08",
+        source_observation_ids=[obs["observation_id"]],
+    )
+    plan = service.confirm_plan(
+        draft_id=draft["draft_id"],
+        trade_date="2026-04-08",
+        input_by="cursor",
+    )
+
+    try:
+        service.update_plan(plan["plan_id"], status="reviewed", input_by="cursor")
+        assert False, "expected ValueError"
+    except ValueError as exc:
+        assert "status" in str(exc)
 
 
 def test_diagnose_plan_uses_fact_snapshots(tmp_path):
@@ -232,7 +324,7 @@ def test_diagnose_plan_uses_fact_snapshots(tmp_path):
 
     diagnostics = service.diagnose_plan(plan_id=plan["plan_id"])
     assert diagnostics is not None
-    assert diagnostics["fact_check_count"] >= 2
+    assert diagnostics["fact_check_count"] == 1
     margin_result = diagnostics["items_json"][0]["fact_check_results"][-1]
     assert margin_result["check_type"] == "margin_balance_change_positive"
     assert margin_result["result"] == "pass"
@@ -377,6 +469,56 @@ def test_diagnose_plan_uses_daily_market_for_amount_and_sector_checks(tmp_path):
     assert results[0]["evidence_json"]["current_total_amount"] == 12000.0
     assert results[1]["evidence_json"]["sector_name"] == "机器人"
     assert results[2]["evidence_json"]["limit_up_count"] == 4.0
+
+
+def test_diagnose_plan_counts_missing_and_unsupported_by_watch_item(tmp_path):
+    db_path = tmp_path / "planning.db"
+    conn = get_connection(db_path)
+    migrate(conn)
+    conn.close()
+
+    service = PlanningService(str(db_path))
+    obs = service.create_observation(
+        trade_date="2026-04-11",
+        source_type="manual",
+        title="盘后观察",
+        market_facts={"bias": "震荡"},
+        sector_facts={"main_themes": ["机器人"]},
+        stock_facts=[{"subject_code": "002594.SZ", "subject_name": "比亚迪", "reason": "观察板块回流"}],
+        judgements=[],
+    )
+    draft = service.create_draft(
+        trade_date="2026-04-11",
+        source_observation_ids=[obs["observation_id"]],
+    )
+    plan = service.confirm_plan(
+        draft_id=draft["draft_id"],
+        trade_date="2026-04-11",
+        input_by="cursor",
+    )
+
+    conn = get_connection(db_path)
+    watch_items = json.loads(
+        conn.execute("SELECT watch_items_json FROM trade_plans WHERE plan_id = ?", (plan["plan_id"],)).fetchone()[0]
+    )
+    watch_items[0]["fact_checks"] = [
+        {"check_type": "price_above_ma20", "label": "站稳20日线", "params": {"ts_code": "002594.SZ"}},
+        {"check_type": "unknown_check", "label": "未知检查", "params": {}},
+    ]
+    conn.execute(
+        "UPDATE trade_plans SET watch_items_json = ? WHERE plan_id = ?",
+        (json.dumps(watch_items, ensure_ascii=False), plan["plan_id"]),
+    )
+    conn.commit()
+    conn.close()
+
+    diagnostics = service.diagnose_plan(plan_id=plan["plan_id"])
+    assert diagnostics is not None
+    assert diagnostics["watch_item_count"] == 1
+    assert diagnostics["missing_data_count"] == 1
+    assert diagnostics["unsupported_check_count"] == 1
+    assert diagnostics["summary_json"]["missing_data_items"] == 1
+    assert diagnostics["summary_json"]["unsupported_checks"] == 1
 
 
 def test_diagnose_plan_uses_recent_trade_dates_for_ret_5d(tmp_path):

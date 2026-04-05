@@ -333,7 +333,7 @@ class TestPlanningAndKnowledgeAPI:
         r = client.get(f"/api/plans/{plan['plan_id']}/diagnostics")
         assert r.status_code == 200
         diagnostics = r.json()
-        assert diagnostics["fact_check_count"] >= 2
+        assert diagnostics["fact_check_count"] == 1
 
         r = client.post(
             f"/api/plans/{plan['plan_id']}/review",
@@ -468,7 +468,39 @@ class TestPlanningAndKnowledgeAPI:
         assert r.status_code == 200
         updated_plan = r.json()
         assert updated_plan["title"] == "更新后的正式计划"
-        assert updated_plan["market_bias"] == "分歧"
+
+    def test_update_plan_endpoint_rejects_direct_status_change(self, client):
+        r = client.post(
+            "/api/plans/drafts",
+            json={
+                "trade_date": "2026-04-14",
+                "title": "次日草稿",
+                "market_facts": {"bias": "震荡"},
+                "sector_facts": {"main_themes": ["AI"]},
+                "stock_facts": [{"subject_code": "300750.SZ", "subject_name": "宁德时代", "reason": "观察回流"}],
+                "judgements": [],
+                "input_by": "cursor",
+            },
+        )
+        draft = r.json()
+        r = client.post(
+            f"/api/plans/{draft['draft_id']}/confirm",
+            json={"trade_date": "2026-04-14", "input_by": "cursor"},
+        )
+        plan = r.json()
+
+        r = client.put(
+            f"/api/plans/{plan['plan_id']}",
+            json={"status": "reviewed", "input_by": "cursor"},
+        )
+        assert r.status_code == 422
+
+    def test_review_plan_endpoint_returns_404_for_missing_plan(self, client):
+        r = client.post(
+            "/api/plans/plan_missing/review",
+            json={"trade_date": "2026-04-14", "outcome_summary": "不存在", "input_by": "cursor"},
+        )
+        assert r.status_code == 404
 
     def test_ingest_api_flow(self, client):
         r = client.get("/api/ingest/interfaces")
