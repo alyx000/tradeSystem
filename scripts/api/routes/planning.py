@@ -63,14 +63,17 @@ def create_plan_draft(body: dict):
             input_by=body.get("input_by"),
         )
         observation_ids = [observation["observation_id"]]
-    draft = service.create_draft(
-        trade_date=body["trade_date"],
-        source_observation_ids=observation_ids,
-        title=body.get("title"),
-        summary=body.get("summary"),
-        input_by=body.get("input_by"),
-    )
-    return draft
+    try:
+        draft = service.create_draft(
+            trade_date=body["trade_date"],
+            source_observation_ids=observation_ids,
+            title=body.get("title"),
+            summary=body.get("summary"),
+            input_by=body.get("input_by"),
+        )
+        return draft
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
 
 
 @router.get("/plans/observations")
@@ -214,3 +217,5 @@ def review_plan(plan_id: str, body: Optional[dict] = None):
         )
     except KeyError:
         raise HTTPException(404, "plan not found")
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))

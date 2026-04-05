@@ -140,6 +140,13 @@ class PlanningService:
         input_by: str | None = None,
     ) -> dict[str, Any]:
         observations = self._load_observations(source_observation_ids)
+        missing_observation_ids = [
+            observation_id
+            for observation_id in self._normalize_observation_ids(source_observation_ids)
+            if observation_id not in {observation["observation_id"] for observation in observations}
+        ]
+        if missing_observation_ids:
+            raise KeyError(f"observation not found: {', '.join(missing_observation_ids)}")
         if not observations:
             raise ValueError("至少需要一个 observation 来生成 draft")
 
@@ -299,7 +306,7 @@ class PlanningService:
 
         market_view = json.loads(draft["market_view_json"])
         sector_view = json.loads(draft["sector_view_json"])
-        watch_items = json.loads(draft["watch_items_json"] or "[]")
+        watch_items = self._merge_draft_candidates_into_watch_items(draft)
         plan_id = f"plan_{uuid4().hex[:12]}"
 
         with get_db(self.db_path) as conn:
@@ -426,7 +433,9 @@ class PlanningService:
         outcome_summary: str,
         input_by: str | None = None,
     ) -> dict[str, Any]:
-        self.get_plan(plan_id=plan_id) or (_ for _ in ()).throw(KeyError(f"plan not found: {plan_id}"))
+        plan = self.get_plan(plan_id=plan_id) or (_ for _ in ()).throw(KeyError(f"plan not found: {plan_id}"))
+        if plan["trade_date"] != trade_date:
+            raise ValueError("trade_date must match plan trade_date")
         review_id = f"plan_review_{uuid4().hex[:12]}"
         with get_db(self.db_path) as conn:
             migrate(conn)
@@ -541,16 +550,25 @@ class PlanningService:
         return dict(row)
 
     def _load_observations(self, observation_ids: list[str]) -> list[dict[str, Any]]:
-        if not observation_ids:
+        normalized_ids = self._normalize_observation_ids(observation_ids)
+        if not normalized_ids:
             return []
-        placeholders = ", ".join("?" for _ in observation_ids)
+        placeholders = ", ".join("?" for _ in normalized_ids)
         with get_db(self.db_path) as conn:
             migrate(conn)
             rows = conn.execute(
                 f"SELECT * FROM market_observations WHERE observation_id IN ({placeholders})",
-                observation_ids,
+                normalized_ids,
             ).fetchall()
-        return [dict(row) for row in rows]
+        row_map = {row["observation_id"]: dict(row) for row in rows}
+        return [row_map[observation_id] for observation_id in normalized_ids if observation_id in row_map]
+
+    def _normalize_observation_ids(self, observation_ids: list[str]) -> list[str]:
+        normalized: list[str] = []
+        for observation_id in observation_ids:
+            if observation_id and observation_id not in normalized:
+                normalized.append(observation_id)
+        return normalized
 
     def _update_row(self, table: str, id_column: str, id_value: str, updates: dict[str, Any]) -> None:
         if not updates:
@@ -980,3 +998,57 @@ class PlanningService:
                 }
             )
         return watch_items
+
+    def _merge_draft_candidates_into_watch_items(self, draft: dict[str, Any]) -> list[dict[str, Any]]:
+        watch_items = json.loads(draft["watch_items_json"] or "[]")
+        fact_candidates = json.loads(draft["fact_check_candidates_json"] or "[]")
+        judgement_candidates = json.loads(draft["judgement_check_candidates_json"] or "[]")
+        if not watch_items:
+            return watch_items
+
+        by_code: dict[str, list[dict[str, Any]]] = {}
+        for candidate in fact_candidates:
+            subject_code = candidate.get("subject_code", "")
+            if not subject_code:
+                continue
+            by_code.setdefault(subject_code, []).append(
+                {
+                    "check_type": candidate["check_type"],
+                    "label": candidate["label"],
+                    "params": candidate.get("params", {}),
+                }
+            )
+
+        merged_watch_items: list[dict[str, Any]] = []
+        for index, item in enumerate(watch_items):
+            merged_item = dict(item)
+            existing_fact_checks = merged_item.get("fact_checks") or []
+            subject_code = merged_item.get("subject_code", "")
+            for candidate in by_code.get(subject_code, []):
+                duplicate = any(
+                    existing.get("check_type") == candidate["check_type"]
+                    and existing.get("params", {}) == candidate.get("params", {})
+                    for existing in existing_fact_checks
+                )
+                if not duplicate:
+                    existing_fact_checks.append(candidate)
+            merged_item["fact_checks"] = existing_fact_checks
+
+            existing_judgement_checks = merged_item.get("judgement_checks") or []
+            if index == 0:
+                for candidate in judgement_candidates:
+                    duplicate = any(
+                        existing.get("label") == candidate.get("label")
+                        and existing.get("notes", "") == candidate.get("notes", "")
+                        for existing in existing_judgement_checks
+                    )
+                    if not duplicate:
+                        existing_judgement_checks.append(
+                            {
+                                "label": candidate.get("label", ""),
+                                "notes": candidate.get("notes", ""),
+                            }
+                        )
+            merged_item["judgement_checks"] = existing_judgement_checks
+            merged_watch_items.append(merged_item)
+        return merged_watch_items

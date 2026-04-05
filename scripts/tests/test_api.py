@@ -320,9 +320,9 @@ class TestPlanningAndKnowledgeAPI:
         watch_items = json.loads(
             conn.execute("SELECT watch_items_json FROM trade_plans WHERE plan_id = ?", (plan["plan_id"],)).fetchone()[0]
         )
-        watch_items[0]["fact_checks"].append(
+        watch_items[0]["fact_checks"] = [
             {"check_type": "margin_balance_change_positive", "label": "融资余额变化为正", "params": {}}
-        )
+        ]
         conn.execute(
             "UPDATE trade_plans SET watch_items_json = ? WHERE plan_id = ?",
             (json.dumps(watch_items, ensure_ascii=False), plan["plan_id"]),
@@ -495,12 +495,49 @@ class TestPlanningAndKnowledgeAPI:
         )
         assert r.status_code == 422
 
+    def test_create_plan_draft_endpoint_rejects_missing_observations(self, client):
+        r = client.post(
+            "/api/plans/drafts",
+            json={
+                "trade_date": "2026-04-14",
+                "source_observation_ids": ["obs_missing_1", "obs_missing_2"],
+                "input_by": "cursor",
+            },
+        )
+        assert r.status_code == 404
+
     def test_review_plan_endpoint_returns_404_for_missing_plan(self, client):
         r = client.post(
             "/api/plans/plan_missing/review",
             json={"trade_date": "2026-04-14", "outcome_summary": "不存在", "input_by": "cursor"},
         )
         assert r.status_code == 404
+
+    def test_review_plan_endpoint_rejects_mismatched_trade_date(self, client):
+        r = client.post(
+            "/api/plans/drafts",
+            json={
+                "trade_date": "2026-04-14",
+                "title": "次日草稿",
+                "market_facts": {"bias": "震荡"},
+                "sector_facts": {"main_themes": ["AI"]},
+                "stock_facts": [{"subject_code": "300750.SZ", "subject_name": "宁德时代", "reason": "观察回流"}],
+                "judgements": [],
+                "input_by": "cursor",
+            },
+        )
+        draft = r.json()
+        r = client.post(
+            f"/api/plans/{draft['draft_id']}/confirm",
+            json={"trade_date": "2026-04-14", "input_by": "cursor"},
+        )
+        plan = r.json()
+
+        r = client.post(
+            f"/api/plans/{plan['plan_id']}/review",
+            json={"trade_date": "2026-04-15", "outcome_summary": "日期不一致", "input_by": "cursor"},
+        )
+        assert r.status_code == 422
 
     def test_ingest_api_flow(self, client):
         r = client.get("/api/ingest/interfaces")
