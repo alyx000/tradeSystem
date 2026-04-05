@@ -104,6 +104,27 @@ def migrate(conn: sqlite3.Connection) -> None:
         set_schema_version(conn, 4)
         conn.commit()
         logger.info("Schema v4 complete: closed duplicate active holdings=%d", closed)
+        version = get_schema_version(conn)
+
+    if version < 5:
+        logger.info("Applying schema v5: raw fact layer + ingest audit tables")
+        init_schema(conn)
+        set_schema_version(conn, 5)
+        conn.commit()
+        version = get_schema_version(conn)
+
+    if version < 6:
+        logger.info("Applying schema v6: planning layer tables")
+        init_schema(conn)
+        set_schema_version(conn, 6)
+        conn.commit()
+        version = get_schema_version(conn)
+
+    if version < 7:
+        logger.info("Applying schema v7: knowledge assets table")
+        init_schema(conn)
+        set_schema_version(conn, 7)
+        conn.commit()
 
 
 # ──────────────────────────────────────────────────────────────

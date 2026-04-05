@@ -426,6 +426,202 @@ CREATE TABLE IF NOT EXISTS trades (
 """
 
 # ──────────────────────────────────────────────────────────────
+# 9. 原始事实层 / 采集审计
+# ──────────────────────────────────────────────────────────────
+_SQL_RAW_INTERFACE_PAYLOADS = """
+CREATE TABLE IF NOT EXISTS raw_interface_payloads (
+    id INTEGER PRIMARY KEY,
+    interface_name TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    stage TEXT NOT NULL,
+    biz_date TEXT NOT NULL CHECK(biz_date GLOB '????-??-??'),
+    target_date TEXT CHECK(target_date IS NULL OR target_date GLOB '????-??-??'),
+    raw_table TEXT NOT NULL,
+    dedupe_key TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    payload_hash TEXT NOT NULL,
+    row_count INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL CHECK(status IN ('success', 'empty', 'partial')),
+    params_json TEXT NOT NULL,
+    source_meta_json TEXT,
+    inserted_at TEXT DEFAULT (datetime('now'))
+);
+"""
+
+_SQL_MARKET_FACT_SNAPSHOTS = """
+CREATE TABLE IF NOT EXISTS market_fact_snapshots (
+    snapshot_id TEXT PRIMARY KEY,
+    biz_date TEXT NOT NULL CHECK(biz_date GLOB '????-??-??'),
+    fact_type TEXT NOT NULL,
+    subject_type TEXT NOT NULL CHECK(subject_type IN ('market', 'sector', 'stock', 'index')),
+    subject_code TEXT,
+    subject_name TEXT,
+    facts_json TEXT NOT NULL,
+    source_interfaces_json TEXT NOT NULL,
+    confidence TEXT NOT NULL DEFAULT 'high' CHECK(confidence IN ('high', 'medium', 'low')),
+    inserted_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now')),
+    UNIQUE(biz_date, fact_type, subject_type, subject_code)
+);
+"""
+
+_SQL_FACT_ENTITIES = """
+CREATE TABLE IF NOT EXISTS fact_entities (
+    id INTEGER PRIMARY KEY,
+    biz_date TEXT NOT NULL CHECK(biz_date GLOB '????-??-??'),
+    interface_name TEXT NOT NULL,
+    entity_type TEXT NOT NULL CHECK(entity_type IN ('stock', 'sector', 'index', 'theme')),
+    entity_code TEXT,
+    entity_name TEXT NOT NULL,
+    role TEXT NOT NULL,
+    attributes_json TEXT,
+    inserted_at TEXT DEFAULT (datetime('now'))
+);
+"""
+
+_SQL_INGEST_RUNS = """
+CREATE TABLE IF NOT EXISTS ingest_runs (
+    run_id TEXT PRIMARY KEY,
+    interface_name TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    stage TEXT NOT NULL,
+    biz_date TEXT NOT NULL CHECK(biz_date GLOB '????-??-??'),
+    target_date TEXT CHECK(target_date IS NULL OR target_date GLOB '????-??-??'),
+    params_json TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('running', 'success', 'empty', 'partial', 'failed')),
+    row_count INTEGER NOT NULL DEFAULT 0,
+    started_at TEXT NOT NULL,
+    finished_at TEXT,
+    duration_ms INTEGER,
+    triggered_by TEXT NOT NULL CHECK(triggered_by IN ('cli', 'api', 'system')),
+    input_by TEXT,
+    notes TEXT
+);
+"""
+
+_SQL_INGEST_ERRORS = """
+CREATE TABLE IF NOT EXISTS ingest_errors (
+    id INTEGER PRIMARY KEY,
+    run_id TEXT NOT NULL,
+    interface_name TEXT NOT NULL,
+    biz_date TEXT NOT NULL CHECK(biz_date GLOB '????-??-??'),
+    stage TEXT NOT NULL,
+    error_type TEXT NOT NULL CHECK(error_type IN ('network', 'provider', 'validation', 'storage')),
+    error_message TEXT NOT NULL,
+    retryable INTEGER NOT NULL DEFAULT 1,
+    context_json TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    resolved_at TEXT,
+    FOREIGN KEY(run_id) REFERENCES ingest_runs(run_id)
+);
+"""
+
+# ──────────────────────────────────────────────────────────────
+# 10. 交易计划层
+# ──────────────────────────────────────────────────────────────
+_SQL_MARKET_OBSERVATIONS = """
+CREATE TABLE IF NOT EXISTS market_observations (
+    observation_id TEXT PRIMARY KEY,
+    trade_date TEXT NOT NULL CHECK(trade_date GLOB '????-??-??'),
+    source_type TEXT NOT NULL CHECK(source_type IN ('review', 'knowledge_asset', 'manual', 'system_prefill', 'agent_assisted')),
+    title TEXT,
+    market_facts_json TEXT,
+    sector_facts_json TEXT,
+    stock_facts_json TEXT,
+    judgements_json TEXT,
+    source_refs_json TEXT,
+    source_agent TEXT,
+    created_by TEXT,
+    input_by TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+);
+"""
+
+_SQL_TRADE_DRAFTS = """
+CREATE TABLE IF NOT EXISTS trade_drafts (
+    draft_id TEXT PRIMARY KEY,
+    trade_date TEXT NOT NULL CHECK(trade_date GLOB '????-??-??'),
+    title TEXT,
+    summary TEXT NOT NULL,
+    market_view_json TEXT NOT NULL,
+    sector_view_json TEXT NOT NULL,
+    stock_focus_json TEXT NOT NULL,
+    style_view_json TEXT NOT NULL,
+    assumptions_json TEXT NOT NULL,
+    ambiguities_json TEXT NOT NULL,
+    missing_fields_json TEXT NOT NULL,
+    watch_items_json TEXT NOT NULL,
+    fact_check_candidates_json TEXT NOT NULL,
+    judgement_check_candidates_json TEXT NOT NULL,
+    source_observation_ids_json TEXT NOT NULL,
+    source_asset_ids_json TEXT,
+    created_from_review_date TEXT,
+    status TEXT NOT NULL DEFAULT 'draft' CHECK(status IN ('draft', 'ready_for_confirm', 'archived')),
+    created_by TEXT,
+    input_by TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+);
+"""
+
+_SQL_TRADE_PLANS = """
+CREATE TABLE IF NOT EXISTS trade_plans (
+    plan_id TEXT PRIMARY KEY,
+    trade_date TEXT NOT NULL CHECK(trade_date GLOB '????-??-??'),
+    title TEXT NOT NULL,
+    market_bias TEXT NOT NULL CHECK(market_bias IN ('主升', '震荡', '分歧', '退潮', '混沌')),
+    main_themes_json TEXT NOT NULL,
+    focus_style TEXT NOT NULL CHECK(focus_style IN ('趋势', '连板', '容量', '反包', '轮动')),
+    watch_items_json TEXT NOT NULL,
+    risk_notes_json TEXT NOT NULL,
+    invalidations_json TEXT NOT NULL,
+    execution_notes_json TEXT NOT NULL,
+    source_draft_id TEXT,
+    status TEXT NOT NULL CHECK(status IN ('draft', 'confirmed', 'reviewed')),
+    confirmed_by TEXT,
+    input_by TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+);
+"""
+
+_SQL_PLAN_REVIEWS = """
+CREATE TABLE IF NOT EXISTS plan_reviews (
+    review_id TEXT PRIMARY KEY,
+    plan_id TEXT NOT NULL,
+    trade_date TEXT NOT NULL CHECK(trade_date GLOB '????-??-??'),
+    outcome_summary TEXT NOT NULL,
+    market_result_json TEXT NOT NULL,
+    theme_result_json TEXT NOT NULL,
+    watch_item_reviews_json TEXT NOT NULL,
+    missed_points_json TEXT NOT NULL,
+    lessons_json TEXT NOT NULL,
+    input_by TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY(plan_id) REFERENCES trade_plans(plan_id)
+);
+"""
+
+# ──────────────────────────────────────────────────────────────
+# 11. 资料层
+# ──────────────────────────────────────────────────────────────
+_SQL_KNOWLEDGE_ASSETS = """
+CREATE TABLE IF NOT EXISTS knowledge_assets (
+    asset_id TEXT PRIMARY KEY,
+    asset_type TEXT NOT NULL CHECK(asset_type IN ('teacher_note', 'news_note', 'course_note', 'manual_note')),
+    title TEXT NOT NULL,
+    content TEXT NOT NULL,
+    source TEXT,
+    tags TEXT,
+    summary TEXT,
+    trade_clues TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+);
+"""
+
+# ──────────────────────────────────────────────────────────────
 # 索引
 # ──────────────────────────────────────────────────────────────
 _SQL_INDEXES = [
@@ -442,6 +638,25 @@ _SQL_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_trades_stock ON trades(stock_code);",
     "CREATE INDEX IF NOT EXISTS idx_industry_info_date ON industry_info(date);",
     "CREATE INDEX IF NOT EXISTS idx_macro_info_date ON macro_info(date);",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_raw_payloads_iface_dedupe ON raw_interface_payloads(interface_name, dedupe_key);",
+    "CREATE INDEX IF NOT EXISTS idx_raw_payloads_biz_iface ON raw_interface_payloads(biz_date, interface_name);",
+    "CREATE INDEX IF NOT EXISTS idx_raw_payloads_stage_biz ON raw_interface_payloads(stage, biz_date);",
+    "CREATE INDEX IF NOT EXISTS idx_raw_payloads_table_biz ON raw_interface_payloads(raw_table, biz_date);",
+    "CREATE INDEX IF NOT EXISTS idx_fact_entities_biz_type_code ON fact_entities(biz_date, entity_type, entity_code);",
+    "CREATE INDEX IF NOT EXISTS idx_fact_entities_name_biz ON fact_entities(entity_name, biz_date);",
+    "CREATE INDEX IF NOT EXISTS idx_fact_entities_iface_biz ON fact_entities(interface_name, biz_date);",
+    "CREATE INDEX IF NOT EXISTS idx_ingest_runs_biz_stage ON ingest_runs(biz_date, stage);",
+    "CREATE INDEX IF NOT EXISTS idx_ingest_runs_iface_biz ON ingest_runs(interface_name, biz_date);",
+    "CREATE INDEX IF NOT EXISTS idx_ingest_runs_status_started ON ingest_runs(status, started_at);",
+    "CREATE INDEX IF NOT EXISTS idx_ingest_errors_run_id ON ingest_errors(run_id);",
+    "CREATE INDEX IF NOT EXISTS idx_market_observations_trade_date ON market_observations(trade_date);",
+    "CREATE INDEX IF NOT EXISTS idx_market_observations_source_type ON market_observations(source_type);",
+    "CREATE INDEX IF NOT EXISTS idx_trade_drafts_trade_date ON trade_drafts(trade_date);",
+    "CREATE INDEX IF NOT EXISTS idx_trade_drafts_status ON trade_drafts(status);",
+    "CREATE INDEX IF NOT EXISTS idx_trade_plans_trade_date ON trade_plans(trade_date);",
+    "CREATE INDEX IF NOT EXISTS idx_trade_plans_status ON trade_plans(status);",
+    "CREATE INDEX IF NOT EXISTS idx_plan_reviews_plan_id ON plan_reviews(plan_id);",
+    "CREATE INDEX IF NOT EXISTS idx_knowledge_assets_type_created ON knowledge_assets(asset_type, created_at DESC);",
 ]
 
 # ──────────────────────────────────────────────────────────────
@@ -462,6 +677,16 @@ _ALL_TABLE_SQL = [
     _SQL_EMOTION_CYCLE,
     _SQL_MAIN_THEMES,
     _SQL_TRADES,
+    _SQL_RAW_INTERFACE_PAYLOADS,
+    _SQL_MARKET_FACT_SNAPSHOTS,
+    _SQL_FACT_ENTITIES,
+    _SQL_INGEST_RUNS,
+    _SQL_INGEST_ERRORS,
+    _SQL_MARKET_OBSERVATIONS,
+    _SQL_TRADE_DRAFTS,
+    _SQL_TRADE_PLANS,
+    _SQL_PLAN_REVIEWS,
+    _SQL_KNOWLEDGE_ASSETS,
 ]
 
 _ALL_FTS_SQL = [
@@ -485,6 +710,10 @@ EXPECTED_TABLES = [
     "daily_market", "daily_reviews",
     "emotion_cycle", "main_themes",
     "trades",
+    "raw_interface_payloads", "market_fact_snapshots", "fact_entities",
+    "ingest_runs", "ingest_errors",
+    "market_observations", "trade_drafts", "trade_plans", "plan_reviews",
+    "knowledge_assets",
     "teacher_notes_fts", "industry_info_fts", "macro_info_fts",
 ]
 

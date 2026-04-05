@@ -9,6 +9,9 @@ import Holdings from './pages/Holdings'
 import Watchlist from './pages/Watchlist'
 import Calendar from './pages/Calendar'
 import IndustryInfo from './pages/IndustryInfo'
+import PlanWorkbench from './pages/PlanWorkbench'
+import KnowledgeWorkbench from './pages/KnowledgeWorkbench'
+import IngestWorkbench from './pages/IngestWorkbench'
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 30_000, retry: 1 } },
@@ -18,6 +21,9 @@ const NAV = [
   { to: '/', label: '仪表盘' },
   { to: `/market/${new Date().toISOString().slice(0, 10)}`, label: '市场' },
   { to: `/review/${new Date().toISOString().slice(0, 10)}`, label: '复盘' },
+  { to: `/plans/${new Date().toISOString().slice(0, 10)}`, label: '计划' },
+  { to: '/knowledge', label: '资料' },
+  { to: '/ingest', label: '采集' },
   { to: '/search', label: '查询' },
   { to: '/teachers', label: '老师观点' },
   { to: '/holdings', label: '持仓' },
@@ -51,6 +57,9 @@ export default function App() {
               <Route path="/watchlist" element={<Watchlist />} />
               <Route path="/calendar" element={<Calendar />} />
               <Route path="/industry" element={<IndustryInfo />} />
+              <Route path="/plans/:date" element={<PlanWorkbench />} />
+              <Route path="/knowledge" element={<KnowledgeWorkbench />} />
+              <Route path="/ingest" element={<IngestWorkbench />} />
               <Route path="*" element={<Navigate to="/" />} />
             </Routes>
           </main>

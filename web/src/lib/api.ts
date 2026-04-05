@@ -92,4 +92,54 @@ export const api = {
   },
   createTrade: (data: any) =>
     request<any>('/trades', { method: 'POST', body: JSON.stringify(data) }),
+
+  // Planning
+  listPlanObservations: (date?: string, limit = 20) =>
+    request<any[]>(`/plans/observations?${new URLSearchParams(date ? { date, limit: String(limit) } : { limit: String(limit) })}`),
+  updatePlanObservation: (observationId: string, data: any) =>
+    request<any>(`/plans/observations/${observationId}`, { method: 'PUT', body: JSON.stringify(data) }),
+  listPlanDrafts: (date?: string, limit = 20) =>
+    request<any[]>(`/plans/drafts?${new URLSearchParams(date ? { date, limit: String(limit) } : { limit: String(limit) })}`),
+  createPlanDraft: (data: any) =>
+    request<any>('/plans/drafts', { method: 'POST', body: JSON.stringify(data) }),
+  getPlanDraft: (draftId: string) =>
+    request<any>(`/plans/drafts/${draftId}`),
+  updatePlanDraft: (draftId: string, data: any) =>
+    request<any>(`/plans/drafts/${draftId}`, { method: 'PUT', body: JSON.stringify(data) }),
+  confirmPlan: (draftId: string, data: any) =>
+    request<any>(`/plans/${draftId}/confirm`, { method: 'POST', body: JSON.stringify(data) }),
+  listPlans: (date?: string, limit = 20) =>
+    request<any[]>(`/plans?${new URLSearchParams(date ? { date, limit: String(limit) } : { limit: String(limit) })}`),
+  getPlan: (planId: string) =>
+    request<any>(`/plans/${planId}`),
+  updatePlan: (planId: string, data: any) =>
+    request<any>(`/plans/${planId}`, { method: 'PUT', body: JSON.stringify(data) }),
+  getPlanDiagnostics: (planId: string) =>
+    request<any>(`/plans/${planId}/diagnostics`),
+  reviewPlan: (planId: string, data: any) =>
+    request<any>(`/plans/${planId}/review`, { method: 'POST', body: JSON.stringify(data) }),
+
+  // Ingest
+  listIngestInterfaces: () =>
+    request<any[]>('/ingest/interfaces'),
+  inspectIngest: (date: string) =>
+    request<any>(`/ingest/inspect?date=${encodeURIComponent(date)}`),
+  listIngestRuns: (date: string) =>
+    request<any[]>(`/ingest/runs?date=${encodeURIComponent(date)}`),
+  listIngestErrors: (date: string) =>
+    request<any[]>(`/ingest/errors?date=${encodeURIComponent(date)}`),
+  runIngestStage: (data: any) =>
+    request<any>('/ingest/run', { method: 'POST', body: JSON.stringify(data) }),
+  runIngestInterface: (data: any) =>
+    request<any>('/ingest/run-interface', { method: 'POST', body: JSON.stringify(data) }),
+  getIngestRetrySummary: () =>
+    request<any>('/ingest/retry'),
+
+  // Knowledge
+  createKnowledgeAsset: (data: any) =>
+    request<any>('/knowledge/assets', { method: 'POST', body: JSON.stringify(data) }),
+  listKnowledgeAssets: (limit = 20) =>
+    request<any[]>(`/knowledge/assets?limit=${limit}`),
+  draftFromAsset: (assetId: string, data: any) =>
+    request<any>(`/knowledge/assets/${assetId}/draft`, { method: 'POST', body: JSON.stringify(data) }),
 }

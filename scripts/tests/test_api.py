@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 from db.connection import get_connection
 from db.migrate import migrate
 from db import queries as Q
+from providers.base import DataResult
 
 
 @pytest.fixture
@@ -238,6 +239,363 @@ class TestCRUD:
         r = seeded_client.get("/api/teachers")
         assert r.status_code == 200
         assert len(r.json()) >= 1
+
+
+class TestPlanningAndKnowledgeAPI:
+    def test_knowledge_asset_flow(self, client):
+        r = client.post(
+            "/api/knowledge/assets",
+            json={
+                "asset_type": "manual_note",
+                "title": "机器人资料",
+                "content": "机器人回流，002594.SZ 关注趋势延续，主线仍有分歧。",
+                "source": "manual",
+                "tags": ["机器人"],
+            },
+        )
+        assert r.status_code == 200
+        asset = r.json()
+        assert asset["title"] == "机器人资料"
+
+        r = client.get("/api/knowledge/assets")
+        assert r.status_code == 200
+        assets = r.json()
+        assert len(assets) == 1
+
+        r = client.post(
+            f"/api/knowledge/assets/{asset['asset_id']}/draft",
+            json={"trade_date": "2026-04-10", "input_by": "cursor"},
+        )
+        assert r.status_code == 200
+        payload = r.json()
+        assert payload["observation"]["source_type"] == "knowledge_asset"
+        assert payload["draft"]["trade_date"] == "2026-04-10"
+
+    def test_knowledge_asset_draft_requires_trade_date(self, client):
+        r = client.post(
+            "/api/knowledge/assets",
+            json={
+                "asset_type": "manual_note",
+                "title": "机器人资料",
+                "content": "机器人回流，002594.SZ 关注趋势延续。",
+                "source": "manual",
+                "tags": ["机器人"],
+            },
+        )
+        asset = r.json()
+
+        r = client.post(
+            f"/api/knowledge/assets/{asset['asset_id']}/draft",
+            json={"input_by": "cursor"},
+        )
+        assert r.status_code == 422
+
+    def test_plan_flow_and_diagnostics(self, client, db_path):
+        conn = get_connection(db_path)
+        conn.execute(
+            """
+            INSERT INTO market_fact_snapshots
+            (snapshot_id, biz_date, fact_type, subject_type, subject_code, subject_name, facts_json, source_interfaces_json, confidence)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "2026-04-11:margin_stats:market:CN",
+                "2026-04-11",
+                "margin_stats",
+                "market",
+                "CN",
+                "A股市场",
+                json.dumps({"total_rzrqye_yi": 12345.6}, ensure_ascii=False),
+                json.dumps(["margin"], ensure_ascii=False),
+                "high",
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+        r = client.post(
+            "/api/plans/drafts",
+            json={
+                "trade_date": "2026-04-11",
+                "title": "次日草稿",
+                "market_facts": {"bias": "震荡"},
+                "sector_facts": {"main_themes": ["AI"]},
+                "stock_facts": [{"subject_code": "300750.SZ", "subject_name": "宁德时代", "reason": "观察回流"}],
+                "judgements": [],
+                "input_by": "cursor",
+            },
+        )
+        assert r.status_code == 200
+        draft = r.json()
+
+        r = client.post(
+            f"/api/plans/{draft['draft_id']}/confirm",
+            json={"trade_date": "2026-04-11", "input_by": "cursor"},
+        )
+        assert r.status_code == 200
+        plan = r.json()
+
+        conn = get_connection(db_path)
+        watch_items = json.loads(
+            conn.execute("SELECT watch_items_json FROM trade_plans WHERE plan_id = ?", (plan["plan_id"],)).fetchone()[0]
+        )
+        watch_items[0]["fact_checks"] = [
+            {"check_type": "margin_balance_change_positive", "label": "融资余额变化为正", "params": {}}
+        ]
+        conn.execute(
+            "UPDATE trade_plans SET watch_items_json = ? WHERE plan_id = ?",
+            (json.dumps(watch_items, ensure_ascii=False), plan["plan_id"]),
+        )
+        conn.commit()
+        conn.close()
+
+        r = client.get(f"/api/plans/{plan['plan_id']}/diagnostics")
+        assert r.status_code == 200
+        diagnostics = r.json()
+        assert diagnostics["fact_check_count"] == 1
+
+        r = client.post(
+            f"/api/plans/{plan['plan_id']}/review",
+            json={"trade_date": "2026-04-11", "outcome_summary": "计划完成度一般", "input_by": "cursor"},
+        )
+        assert r.status_code == 200
+        review = r.json()
+        assert review["plan_id"] == plan["plan_id"]
+
+        r = client.get("/api/plans/drafts", params={"date": "2026-04-11"})
+        assert r.status_code == 200
+        assert len(r.json()) >= 1
+
+        r = client.get("/api/plans", params={"date": "2026-04-11"})
+        assert r.status_code == 200
+        assert len(r.json()) >= 1
+
+        r = client.get("/api/plans/observations", params={"date": "2026-04-11"})
+        assert r.status_code == 200
+        assert len(r.json()) >= 1
+
+    def test_plan_diagnostics_uses_provider_fallback(self, client, db_path):
+        class _FakeProvider:
+            def supports(self, method_name: str) -> bool:
+                return method_name in {"get_stock_daily", "get_stock_ma", "get_stock_announcements"}
+
+        class _FakeRegistry:
+            providers = [_FakeProvider()]
+
+            def call(self, method_name: str, *args, **kwargs):
+                if method_name == "get_stock_daily":
+                    return DataResult(data={"close": 102.0, "change_pct": 3.5}, source="fake:daily")
+                if method_name == "get_stock_ma":
+                    return DataResult(data={"ma20": 100.0}, source="fake:ma")
+                if method_name == "get_stock_announcements":
+                    return DataResult(data=[{"title": "测试公告"}], source="fake:ann")
+                return DataResult(data=None, source="fake", error="unsupported")
+
+        from api.main import app
+        from api.deps import get_provider_registry
+
+        app.dependency_overrides[get_provider_registry] = lambda: _FakeRegistry()
+
+        try:
+            r = client.post(
+                "/api/plans/drafts",
+                json={
+                    "trade_date": "2026-04-12",
+                    "title": "次日草稿",
+                    "market_facts": {"bias": "震荡"},
+                    "sector_facts": {"main_themes": ["AI"]},
+                    "stock_facts": [{"subject_code": "300750.SZ", "subject_name": "宁德时代", "reason": "观察回流"}],
+                    "judgements": [],
+                    "input_by": "cursor",
+                },
+            )
+            draft = r.json()
+            r = client.post(
+                f"/api/plans/{draft['draft_id']}/confirm",
+                json={"trade_date": "2026-04-12", "input_by": "cursor"},
+            )
+            plan = r.json()
+
+            conn = get_connection(db_path)
+            watch_items = json.loads(
+                conn.execute("SELECT watch_items_json FROM trade_plans WHERE plan_id = ?", (plan["plan_id"],)).fetchone()[0]
+            )
+            watch_items[0]["fact_checks"] = [
+                {"check_type": "price_above_ma20", "label": "站稳20日线", "params": {"ts_code": "300750.SZ"}},
+                {"check_type": "ret_1d_gte", "label": "单日涨幅不低于2%", "params": {"ts_code": "300750.SZ", "value": 2}},
+                {"check_type": "announcement_exists", "label": "存在公告", "params": {"ts_code": "300750.SZ"}},
+            ]
+            conn.execute(
+                "UPDATE trade_plans SET watch_items_json = ? WHERE plan_id = ?",
+                (json.dumps(watch_items, ensure_ascii=False), plan["plan_id"]),
+            )
+            conn.commit()
+            conn.close()
+
+            r = client.get(f"/api/plans/{plan['plan_id']}/diagnostics")
+            assert r.status_code == 200
+            results = r.json()["items_json"][0]["fact_check_results"]
+            assert [item["result"] for item in results] == ["pass", "pass", "pass"]
+        finally:
+            app.dependency_overrides.pop(get_provider_registry, None)
+
+    def test_update_observation_draft_and_plan_endpoints(self, client):
+        r = client.post(
+            "/api/plans/drafts",
+            json={
+                "trade_date": "2026-04-13",
+                "title": "次日草稿",
+                "market_facts": {"bias": "震荡"},
+                "sector_facts": {"main_themes": ["AI"]},
+                "stock_facts": [{"subject_code": "300750.SZ", "subject_name": "宁德时代", "reason": "观察回流"}],
+                "judgements": [],
+                "input_by": "cursor",
+            },
+        )
+        assert r.status_code == 200
+        draft = r.json()
+
+        observations = client.get("/api/plans/observations", params={"date": "2026-04-13"}).json()
+        assert len(observations) == 1
+        observation_id = observations[0]["observation_id"]
+
+        r = client.put(
+            f"/api/plans/observations/{observation_id}",
+            json={"title": "已修改观察", "judgements": ["情绪偏分歧"], "input_by": "cursor"},
+        )
+        assert r.status_code == 200
+        assert r.json()["title"] == "已修改观察"
+
+        r = client.put(
+            f"/api/plans/drafts/{draft['draft_id']}",
+            json={"summary": "更新后的草稿摘要", "input_by": "cursor"},
+        )
+        assert r.status_code == 200
+        assert r.json()["summary"] == "更新后的草稿摘要"
+
+        r = client.post(
+            f"/api/plans/{draft['draft_id']}/confirm",
+            json={"trade_date": "2026-04-13", "input_by": "cursor"},
+        )
+        assert r.status_code == 200
+        plan = r.json()
+
+        r = client.put(
+            f"/api/plans/{plan['plan_id']}",
+            json={"title": "更新后的正式计划", "market_bias": "分歧", "main_themes": ["机器人"], "input_by": "cursor"},
+        )
+        assert r.status_code == 200
+        updated_plan = r.json()
+        assert updated_plan["title"] == "更新后的正式计划"
+
+    def test_update_plan_endpoint_rejects_direct_status_change(self, client):
+        r = client.post(
+            "/api/plans/drafts",
+            json={
+                "trade_date": "2026-04-14",
+                "title": "次日草稿",
+                "market_facts": {"bias": "震荡"},
+                "sector_facts": {"main_themes": ["AI"]},
+                "stock_facts": [{"subject_code": "300750.SZ", "subject_name": "宁德时代", "reason": "观察回流"}],
+                "judgements": [],
+                "input_by": "cursor",
+            },
+        )
+        draft = r.json()
+        r = client.post(
+            f"/api/plans/{draft['draft_id']}/confirm",
+            json={"trade_date": "2026-04-14", "input_by": "cursor"},
+        )
+        plan = r.json()
+
+        r = client.put(
+            f"/api/plans/{plan['plan_id']}",
+            json={"status": "reviewed", "input_by": "cursor"},
+        )
+        assert r.status_code == 422
+
+    def test_create_plan_draft_endpoint_rejects_missing_observations(self, client):
+        r = client.post(
+            "/api/plans/drafts",
+            json={
+                "trade_date": "2026-04-14",
+                "source_observation_ids": ["obs_missing_1", "obs_missing_2"],
+                "input_by": "cursor",
+            },
+        )
+        assert r.status_code == 404
+
+    def test_review_plan_endpoint_returns_404_for_missing_plan(self, client):
+        r = client.post(
+            "/api/plans/plan_missing/review",
+            json={"trade_date": "2026-04-14", "outcome_summary": "不存在", "input_by": "cursor"},
+        )
+        assert r.status_code == 404
+
+    def test_review_plan_endpoint_rejects_mismatched_trade_date(self, client):
+        r = client.post(
+            "/api/plans/drafts",
+            json={
+                "trade_date": "2026-04-14",
+                "title": "次日草稿",
+                "market_facts": {"bias": "震荡"},
+                "sector_facts": {"main_themes": ["AI"]},
+                "stock_facts": [{"subject_code": "300750.SZ", "subject_name": "宁德时代", "reason": "观察回流"}],
+                "judgements": [],
+                "input_by": "cursor",
+            },
+        )
+        draft = r.json()
+        r = client.post(
+            f"/api/plans/{draft['draft_id']}/confirm",
+            json={"trade_date": "2026-04-14", "input_by": "cursor"},
+        )
+        plan = r.json()
+
+        r = client.post(
+            f"/api/plans/{plan['plan_id']}/review",
+            json={"trade_date": "2026-04-15", "outcome_summary": "日期不一致", "input_by": "cursor"},
+        )
+        assert r.status_code == 422
+
+    def test_ingest_api_flow(self, client):
+        r = client.get("/api/ingest/interfaces")
+        assert r.status_code == 200
+        interfaces = r.json()
+        assert any(item["interface_name"] == "margin" for item in interfaces)
+
+        r = client.post(
+            "/api/ingest/run-interface",
+            json={"name": "margin", "date": "2026-04-03", "input_by": "cursor"},
+        )
+        assert r.status_code == 200
+        payload = r.json()
+        assert payload["run"]["interface_name"] == "margin"
+
+        r = client.get("/api/ingest/inspect", params={"date": "2026-04-03"})
+        assert r.status_code == 200
+        inspect_payload = r.json()
+        assert inspect_payload["run_count"] >= 1
+
+        r = client.get("/api/ingest/runs", params={"date": "2026-04-03"})
+        assert r.status_code == 200
+        runs = r.json()
+        assert len(runs) >= 1
+
+        r = client.get("/api/ingest/errors", params={"date": "2026-04-03"})
+        assert r.status_code == 200
+        assert isinstance(r.json(), list)
+
+        r = client.get("/api/ingest/retry")
+        assert r.status_code == 200
+        assert "retryable_count" in r.json()
+
+    def test_ingest_api_not_found(self, client):
+        r = client.post(
+            "/api/ingest/run-interface",
+            json={"name": "not_registered", "date": "2026-04-03", "input_by": "cursor"},
+        )
+        assert r.status_code == 404
 
     def test_note_crud(self, client):
         r = client.post("/api/teacher-notes", json={

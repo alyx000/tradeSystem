@@ -28,6 +28,8 @@ globs:
 - [ ] 所有重命名的命令已在表中更新
 - [ ] 所有删除的命令已从表中移除
 - [ ] 新增 API 端点已添加到 API 依赖表
+- [ ] `main.py` 新增的 `ingest/plan/knowledge` 命令已同步到相关 skill
+- [ ] 若命令已从“骨架”变为真实可执行，移除 `SKILL.md` / `INDEX.md` 中的“规划中/骨架”描述
 
 ### 2. 运行 Smoke 测试
 
@@ -51,7 +53,12 @@ python3 -m pytest scripts/tests/test_cli_smoke.py -v
 | `cli.py` 的 `holdings-*/watchlist-*/add-trade/blacklist-*` | `portfolio-manager/SKILL.md` |
 | `cli.py` 的 `query-notes/db-search` | `daily-review/SKILL.md` |
 | `main.py` 的 `pre/post/schedule` | `market-tasks/SKILL.md` |
+| `main.py` 的 `ingest *` | `ingest-inspector/SKILL.md` |
+| `main.py` 的 `plan *` | `plan-workbench/SKILL.md` |
+| `main.py` 的 `knowledge *` | `knowledge-to-plan/SKILL.md` |
 | `api/routes/review.py` | `daily-review/SKILL.md` |
+| `api/routes/planning.py` 中 `/api/plans/*` | `plan-workbench/SKILL.md` |
+| `api/routes/planning.py` 中 `/api/knowledge/*` | `knowledge-to-plan/SKILL.md` |
 
 ### 4. 验证报告（每次修改后输出）
 
@@ -66,4 +73,5 @@ Skills 同步检查结果：
 
 AI Agent（OpenClaw/Copaw/Cursor）通过 `.cursor/skills/` 中的文档了解如何调用 CLI 和 API。
 如果 CLI 签名或 API 接口变更而 skill 文档未更新，Agent 将生成错误的命令，导致数据写入失败。
+尤其是 `scripts/main.py` 中新增的 `ingest`、`plan`、`knowledge` 命令组，以及 `api/routes/planning.py` 中的计划/资料接口，会直接影响 observation / draft / plan / 采集诊断 的协作流。
 此规则确保每次底层变更时，skill 文档始终与实际接口保持同步。

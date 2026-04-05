@@ -260,6 +260,21 @@ Content-Type: application/json
    DB: daily_reviews 表 id=xxx
 ```
 
+## 与新计划工作台的关系
+
+第一阶段后，`daily-review` 仍然负责八步复盘本身；但第八步“次日计划”会逐步迁移到独立的计划工作台。
+
+新的推荐衔接流程：
+
+```bash
+python3 main.py plan draft --date 2026-04-01
+python3 main.py plan show-draft --date 2026-04-01
+python3 main.py plan confirm --date 2026-04-01
+python3 main.py plan diagnose --date 2026-04-01
+```
+
+若用户要从复盘直接进入次日计划，请切换或联动 `plan-workbench` skill。
+
 ### Step 6：可选 — 生成复盘摘要
 
 如用户需要，生成 Markdown 格式的复盘摘要用于推送：
