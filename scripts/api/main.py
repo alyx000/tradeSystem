@@ -15,6 +15,8 @@ from fastapi.staticfiles import StaticFiles
 from api.routes.review import router as review_router
 from api.routes.search import router as search_router
 from api.routes.crud import router as crud_router
+from api.routes.planning import router as planning_router
+from api.routes.ingest import router as ingest_router
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _ATTACHMENTS_DIR = _REPO_ROOT / "data" / "attachments"
@@ -31,6 +33,8 @@ app.add_middleware(
 app.include_router(review_router)
 app.include_router(search_router)
 app.include_router(crud_router)
+app.include_router(planning_router)
+app.include_router(ingest_router)
 
 # 附件图片静态路由：data/attachments/ → /attachments/
 _ATTACHMENTS_DIR.mkdir(parents=True, exist_ok=True)

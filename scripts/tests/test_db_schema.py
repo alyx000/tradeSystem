@@ -83,6 +83,39 @@ class TestSchema:
         with pytest.raises(sqlite3.IntegrityError):
             conn.execute("INSERT INTO daily_reviews (date) VALUES ('bad')")
 
+    def test_date_check_constraint_raw_payloads(self, conn):
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                """
+                INSERT INTO raw_interface_payloads
+                (interface_name, provider, stage, biz_date, raw_table, dedupe_key,
+                 payload_json, payload_hash, params_json, status)
+                VALUES ('block_trade', 'tushare', 'post_extended', 'bad-date',
+                        'raw_block_trade', 'k1', '{}', 'hash', '{}', 'success')
+                """
+            )
+
+    def test_fact_layer_unique_indexes(self, conn):
+        conn.execute(
+            """
+            INSERT INTO raw_interface_payloads
+            (interface_name, provider, stage, biz_date, raw_table, dedupe_key,
+             payload_json, payload_hash, params_json, status)
+            VALUES ('block_trade', 'tushare', 'post_extended', '2026-04-04',
+                    'raw_block_trade', 'k1', '{}', 'hash1', '{}', 'success')
+            """
+        )
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                """
+                INSERT INTO raw_interface_payloads
+                (interface_name, provider, stage, biz_date, raw_table, dedupe_key,
+                 payload_json, payload_hash, params_json, status)
+                VALUES ('block_trade', 'tushare', 'post_extended', '2026-04-04',
+                        'raw_block_trade', 'k1', '{}', 'hash2', '{}', 'success')
+                """
+            )
+
 
 class TestContextManager:
     def test_get_db_commits(self, db_path):

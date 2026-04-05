@@ -27,12 +27,14 @@ tradeSystem/
 │   ├── trade.db              # SQLite 数据库（主存储）
 │   └── attachments/          # 附件（图片等）
 ├── scripts/                  # Python 业务脚本
-│   ├── main.py               # CLI 入口（pre / post / db）
+│   ├── main.py               # CLI 入口（pre / post / db / ingest / plan / knowledge）
 │   ├── db/                   # 数据库模块（schema / queries / 迁移 / 双写）
+│   ├── ingest/               # 接口注册表与采集元数据
+│   ├── services/             # ingest / planning / knowledge 服务层
 │   ├── api/                  # FastAPI 后端
 │   │   ├── main.py           # 应用入口
 │   │   ├── deps.py           # 依赖注入
-│   │   └── routes/           # review / search / crud
+│   │   └── routes/           # review / search / crud / planning
 │   ├── collectors/           # 数据采集器
 │   ├── providers/            # 数据源提供者
 │   └── tests/                # 单元测试
@@ -115,12 +117,20 @@ cd web && npm run dev
 
 | 地址 | 说明 |
 |------|------|
-| http://localhost:5173 | Web 前端（仪表盘、市场看板、复盘工作台、查询中心等） |
+| http://localhost:5173 | Web 前端（仪表盘、市场看板、复盘工作台、计划工作台、资料工作台、查询中心等） |
 | http://localhost:8000/docs | FastAPI 自动生成的 API 文档 |
 | http://localhost:8000/api/health | 健康检查 |
 
 > 前端已配置代理，`/api/*` 请求自动转发到后端，无需手动处理跨域。
 > 两个服务都支持热重载——修改代码后自动生效，无需重启。
+
+当前新增的工作台页面：
+
+- `计划工作台`：围绕 `TradeDraft / TradePlan / PlanReview`
+- `资料工作台`：围绕 `knowledge_assets -> observation -> draft`
+- `计划工作台` 现已支持直接编辑 `observation`、`draft`、`plan`，并可结构化维护 `watch_items`、`fact_checks`、`judgement_checks`、`trigger_conditions`、`invalidations`
+- `计划工作台` 现已支持对 `watch_items` 和 `fact_checks` 做显式排序与优先级维护：可上移/下移，并可直接编辑 `priority`
+- JSON 兜底仍保留，但已折叠为“高级 JSON 编辑”；默认应优先使用结构化表单维护计划内容
 
 ### 4. 常用 CLI 命令
 
@@ -132,6 +142,26 @@ python3 main.py pre --date 2026-04-01
 
 # 盘后报告（含晚间任务）；成功后会把当日 post-market 同步进 SQLite daily_market
 python3 main.py post --date 2026-04-01
+
+# 采集底座
+python3 main.py ingest list-interfaces
+python3 main.py ingest run --stage post_core --date 2026-04-01
+python3 main.py ingest inspect --date 2026-04-01 --json
+
+# 交易计划
+python3 main.py plan draft --date 2026-04-01
+python3 main.py plan show-draft --date 2026-04-01
+python3 main.py plan confirm --date 2026-04-02 --draft-id draft_xxx
+python3 main.py plan diagnose --date 2026-04-02 --plan-id plan_xxx --json
+python3 main.py plan review --date 2026-04-02 --plan-id plan_xxx
+
+`plan diagnose` 当前优先读取 `market_fact_snapshots`，并已支持从 `daily_market` 补充判断市场成交额环比、板块涨跌幅与板块涨停家数。
+API 侧 `/api/plans/{plan_id}/diagnostics` 已复用同一诊断逻辑；可用时会自动启用 provider fallback，不可用时退回快照/DB 诊断。
+
+# 资料提炼
+python3 main.py knowledge add-note --title "老师观点" --content "机器人回流，关注 002594.SZ"
+python3 main.py knowledge list
+python3 main.py knowledge draft-from-asset --asset-id asset_xxx --date 2026-04-02
 
 # 数据库操作
 python3 main.py db init              # 初始化 + 导入历史
@@ -152,7 +182,28 @@ python3 -m pytest scripts/tests/ -v
 cd web && npx vitest run
 ```
 
-### 6. 每日复盘（手动方式）
+### 6. 计划 / 资料 API
+
+当前最小可用接口：
+
+- `GET /api/ingest/interfaces`
+- `GET /api/ingest/inspect?date=YYYY-MM-DD`
+- `GET /api/ingest/runs?date=YYYY-MM-DD`
+- `GET /api/ingest/errors?date=YYYY-MM-DD`
+- `POST /api/ingest/run`
+- `POST /api/ingest/run-interface`
+- `GET /api/ingest/retry`
+- `POST /api/knowledge/assets`
+- `GET /api/knowledge/assets`
+- `POST /api/knowledge/assets/{asset_id}/draft`
+- `POST /api/plans/drafts`
+- `GET /api/plans/drafts/{draft_id}`
+- `POST /api/plans/{draft_id}/confirm`
+- `GET /api/plans/{plan_id}`
+- `GET /api/plans/{plan_id}/diagnostics`
+- `POST /api/plans/{plan_id}/review`
+
+### 7. 每日复盘（手动方式）
 
 ```bash
 mkdir -p daily/$(date +%Y-%m-%d)

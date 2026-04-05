@@ -30,6 +30,12 @@ def _build_db_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _build_main_parser() -> argparse.ArgumentParser:
+    """构建 main.py 顶层解析器，校验 ingest/plan/knowledge 命令签名。"""
+    from main import build_parser
+    return build_parser()
+
+
 # ── skill: record-notes ───────────────────────────────────────────
 
 RECORD_NOTES_COMMANDS = [
@@ -127,6 +133,24 @@ ALL_SKILL_COMMANDS = (
     + MANAGEMENT_COMMANDS
 )
 
+ARCHITECTURE_COMMANDS = [
+    ["ingest", "run", "--stage", "post_core", "--date", "2026-04-04"],
+    ["ingest", "run", "--stage", "post_core", "--date", "2026-04-04", "--input-by", "openclaw"],
+    ["ingest", "run-interface", "--name", "block_trade", "--date", "2026-04-04"],
+    ["ingest", "run-interface", "--name", "block_trade", "--date", "2026-04-04", "--input-by", "cursor"],
+    ["ingest", "list-interfaces"],
+    ["ingest", "inspect", "--date", "2026-04-04"],
+    ["ingest", "retry"],
+    ["plan", "draft", "--date", "2026-04-04"],
+    ["plan", "show-draft", "--draft-id", "draft_1"],
+    ["plan", "confirm", "--draft-id", "draft_1", "--date", "2026-04-07"],
+    ["plan", "diagnose", "--plan-id", "plan_1", "--date", "2026-04-07"],
+    ["plan", "review", "--plan-id", "plan_1", "--date", "2026-04-07"],
+    ["knowledge", "add-note", "--title", "资料标题", "--content", "AI算力回流，关注300750.SZ"],
+    ["knowledge", "list"],
+    ["knowledge", "draft-from-asset", "--asset-id", "asset_1", "--date", "2026-04-10"],
+]
+
 
 @pytest.mark.parametrize("cmd", ALL_SKILL_COMMANDS,
                          ids=[" ".join(c[:4]) for c in ALL_SKILL_COMMANDS])
@@ -176,3 +200,16 @@ def test_all_skill_subcommands_registered() -> None:
         f"以下子命令在 INDEX.md 中登记但 cli.py 未实现: {missing}\n"
         "请在 cli.py 中添加，或从 INDEX.md 中移除"
     )
+
+
+@pytest.mark.parametrize("cmd", ARCHITECTURE_COMMANDS,
+                         ids=[" ".join(c[:3]) for c in ARCHITECTURE_COMMANDS])
+def test_architecture_command_parseable(cmd: list[str]) -> None:
+    parser = _build_main_parser()
+    try:
+        parser.parse_args(cmd)
+    except SystemExit as e:
+        pytest.fail(
+            f"顶层命令解析失败（argparse 退出码 {e.code}）: {' '.join(cmd)}\n"
+            "请检查 main.py 中 ingest/plan/knowledge 子命令定义，并同步更新 skills 文档"
+        )

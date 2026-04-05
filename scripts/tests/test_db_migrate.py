@@ -286,6 +286,31 @@ class TestDailyMarketMigration:
         assert count2 == 0
 
 
+class TestSchemaVersion:
+    def test_migrate_to_v5(self, conn):
+        assert get_schema_version(conn) == 7
+
+        tables = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            ).fetchall()
+        }
+        for expected in {
+            "raw_interface_payloads",
+            "market_fact_snapshots",
+            "fact_entities",
+            "ingest_runs",
+            "ingest_errors",
+            "market_observations",
+            "trade_drafts",
+            "trade_plans",
+            "plan_reviews",
+            "knowledge_assets",
+        }:
+            assert expected in tables
+
+
 class TestHoldingsMigration:
     def test_v4_dedupes_duplicate_active_holdings(self, tmp_path):
         db_path = tmp_path / "holdings_v3.db"
@@ -334,7 +359,7 @@ class TestHoldingsMigration:
         closed = conn.execute(
             "SELECT stock_code FROM holdings WHERE status = 'closed' ORDER BY id"
         ).fetchall()
-        assert get_schema_version(conn) == 4
+        assert get_schema_version(conn) == 7
         assert [row["stock_code"] for row in active] == ["300750.SZ"]
         assert [row["stock_code"] for row in closed] == ["300750"]
 

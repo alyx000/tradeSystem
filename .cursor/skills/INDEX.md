@@ -10,6 +10,9 @@
 | `record-notes` | `db add-note` | 录入老师观点（文字/图片/多附件） |
 | `record-notes` | `db add-industry` | 录入行业板块信息 |
 | `record-notes` | `db add-macro` | 录入宏观经济信息 |
+| `knowledge-to-plan` | `knowledge add-note` | 写入 `knowledge_assets`，支持资料录入 |
+| `knowledge-to-plan` | `knowledge list` | 列出资料资产 |
+| `knowledge-to-plan` | `knowledge draft-from-asset` | 从资料生成 `knowledge_asset` observation 和 `TradeDraft` |
 | `portfolio-manager` | `db holdings-add` | 新增持仓 |
 | `portfolio-manager` | `db holdings-remove` | 移除持仓（置 closed） |
 | `portfolio-manager` | `db holdings-list` | 列出当前持仓 |
@@ -23,6 +26,16 @@
 | `daily-review` | `db db-search` | 跨表关键词搜索 |
 | `market-tasks` | `python main.py pre --date` | 盘前任务采集 |
 | `market-tasks` | `python main.py post --date` | 盘后任务采集 |
+| `ingest-inspector` | `python main.py ingest run --stage --date` | 运行采集阶段任务，写 `ingest_runs` / `raw_interface_payloads` |
+| `ingest-inspector` | `python main.py ingest run-interface --name --date` | 运行单接口采集，真实执行 provider 并记录失败 |
+| `ingest-inspector` | `python main.py ingest list-interfaces` | 查看接口注册表 |
+| `ingest-inspector` | `python main.py ingest inspect --date` | 查看采集状态、失败项与审计信息 |
+| `ingest-inspector` | `python main.py ingest retry` | 查看待重试分组摘要 |
+| `plan-workbench` | `python main.py plan draft --date` | 生成 `MarketObservation` + `TradeDraft` |
+| `plan-workbench` | `python main.py plan show-draft --date/--draft-id` | 查看交易草稿 |
+| `plan-workbench` | `python main.py plan confirm --date/--draft-id` | 确认交易计划并写入 `trade_plans` |
+| `plan-workbench` | `python main.py plan diagnose --date/--plan-id` | 诊断交易计划并读取事实快照 |
+| `plan-workbench` | `python main.py plan review --date/--plan-id` | 回写 `PlanReview` |
 | `daily-review` | `db add-calendar` | 手动录入投资日历事件（节假日/财经/财报等） |
 | *(管理)* | `db init` | 初始化数据库 + 导入历史 YAML |
 | *(管理)* | `db sync` | 重试 pending_writes 中的失败记录 |
@@ -37,6 +50,22 @@
 | `daily-review` | `/api/review/{date}/prefill` | GET | 拉取八步复盘预填充数据 |
 | `daily-review` | `/api/review/{date}` | GET | 读取已保存的复盘内容 |
 | `daily-review` | `/api/review/{date}` | PUT | 提交复盘主观判断 |
+| `plan-workbench` | `/api/plans/drafts` | POST | 创建 `TradeDraft` |
+| `plan-workbench` | `/api/plans/drafts/{draft_id}` | GET | 查看 `TradeDraft` |
+| `plan-workbench` | `/api/plans/{draft_id}/confirm` | POST | 从草稿确认正式计划 |
+| `plan-workbench` | `/api/plans/{plan_id}` | GET | 查看 `TradePlan` |
+| `plan-workbench` | `/api/plans/{plan_id}/diagnostics` | GET | 查看计划诊断 |
+| `plan-workbench` | `/api/plans/{plan_id}/review` | POST | 回写 `PlanReview` |
+| `ingest-inspector` | `/api/ingest/interfaces` | GET | 查看接口注册表 |
+| `ingest-inspector` | `/api/ingest/inspect` | GET | 查看某日采集状态摘要 |
+| `ingest-inspector` | `/api/ingest/runs` | GET | 查看某日采集运行记录 |
+| `ingest-inspector` | `/api/ingest/errors` | GET | 查看某日采集错误记录 |
+| `ingest-inspector` | `/api/ingest/run` | POST | 运行指定 stage 采集 |
+| `ingest-inspector` | `/api/ingest/run-interface` | POST | 运行单接口采集 |
+| `ingest-inspector` | `/api/ingest/retry` | GET | 查看待重试分组摘要 |
+| `knowledge-to-plan` | `/api/knowledge/assets` | POST | 新增资料资产 |
+| `knowledge-to-plan` | `/api/knowledge/assets` | GET | 列出资料资产 |
+| `knowledge-to-plan` | `/api/knowledge/assets/{asset_id}/draft` | POST | 从资料生成 observation/draft |
 
 ## 可用 API 总览（供开发新 Skill 参考）
 
@@ -136,6 +165,32 @@
 | GET | `/api/market/{date}` | 读取指定日期全市场行情摘要（扁平列 + 部分从 raw_data 展开） |
 | GET | `/api/post-market/{date}` | 整包盘后信封（与 post-market.yaml / DB raw_data 一致） |
 
+### 计划与资料（`routes/planning.py`）
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/api/knowledge/assets` ★ | 新建资料资产 |
+| GET | `/api/knowledge/assets` ★ | 列出资料资产 |
+| POST | `/api/knowledge/assets/{asset_id}/draft` ★ | 从资料资产生成 observation / draft |
+| POST | `/api/plans/drafts` ★ | 创建 `TradeDraft` |
+| GET | `/api/plans/drafts/{draft_id}` ★ | 查看 `TradeDraft` |
+| POST | `/api/plans/{draft_id}/confirm` ★ | 从 draft 确认正式计划 |
+| GET | `/api/plans/{plan_id}` ★ | 查看 `TradePlan` |
+| GET | `/api/plans/{plan_id}/diagnostics` ★ | 查看计划诊断 |
+| POST | `/api/plans/{plan_id}/review` ★ | 回写 `PlanReview` |
+
+### 采集底座（`routes/ingest.py`）
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/ingest/interfaces` ★ | 查看接口注册表 |
+| GET | `/api/ingest/inspect` ★ | 查看某日采集状态摘要 |
+| GET | `/api/ingest/runs` ★ | 查看某日采集运行记录 |
+| GET | `/api/ingest/errors` ★ | 查看某日采集错误记录 |
+| POST | `/api/ingest/run` ★ | 运行指定 stage 采集 |
+| POST | `/api/ingest/run-interface` ★ | 运行单接口采集 |
+| GET | `/api/ingest/retry` ★ | 查看待重试分组摘要 |
+
 ### 搜索与分析（`routes/search.py`）
 
 | 方法 | 路径 | 说明 |
@@ -148,7 +203,7 @@
 
 ## 自动化检查
 
-`scripts/tests/test_cli_smoke.py` 会验证上表中所有 **`db` 子命令**的 argparse 签名（不启动子进程、不连库）。**不包含** 顶层 `main.py pre` / `post`（二者由 `market-tasks` 文档与人工/定时流程保证；修改 `main.py` 参数时请同步更新对应 SKILL 并自行回归）。
+`scripts/tests/test_cli_smoke.py` 会验证上表中所有 **`db` 子命令**与架构命令 `ingest` / `plan` / `knowledge` 的 argparse 签名（不启动子进程、不连库）。`main.py pre` / `post` 仍由 `market-tasks` 文档与人工/定时流程保证。
 
 每次 `pytest scripts/tests/test_cli_smoke.py` 都会同步检查：
 - 依赖表所列 `db` 子命令名未被重命名
@@ -160,3 +215,4 @@
 1. 修改 `cli.py` 或 API routes 时，同步更新此 INDEX.md
 2. 运行 `python3 -m pytest scripts/tests/test_cli_smoke.py -v` 验证签名无破坏
 3. 若命令参数有不向后兼容的变更，更新对应 SKILL.md 中的示例
+4. 修改 `scripts/main.py` 新增/调整 `ingest`、`plan`、`knowledge` 命令时，同步更新相关 SKILL.md 与 AGENTS.md

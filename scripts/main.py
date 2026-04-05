@@ -39,6 +39,7 @@
 """
 
 import argparse
+import json
 import logging
 import os
 import sys
@@ -74,6 +75,199 @@ logging.basicConfig(
     ],
 )
 logger = logging.getLogger("main")
+
+
+def _emit_cli_result(payload: dict, as_json: bool = False) -> None:
+    if as_json:
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return
+    status = payload.get("status", "ok")
+    message = payload.get("message", "")
+    print(f"[{status}] {message}".strip())
+    for key, value in payload.items():
+        if key in {"status", "message"}:
+            continue
+        print(f"  {key}: {value}")
+
+
+def cmd_ingest(config: dict, args) -> None:
+    """采集底座命令。第二阶段先接通注册表与审计读取。"""
+    from services.ingest_service import IngestService
+
+    registry = None
+    if args.ingest_command in {"run", "run-interface"}:
+        with without_standard_http_proxy():
+            registry = setup_providers(config)
+            registry.initialize_all()
+
+    service = IngestService(registry=registry)
+    command = args.ingest_command
+    if command == "list-interfaces":
+        payload = {
+            "status": "ok",
+            "message": "接口注册表",
+            "interfaces": service.list_interfaces(),
+        }
+    elif command == "inspect":
+        inspect = service.inspect(args.date)
+        payload = {
+            "status": "ok",
+            "message": f"{args.date} 的采集审计",
+            **inspect,
+        }
+    elif command == "retry":
+        retry = service.retry_summary()
+        payload = {
+            "status": "ok",
+            "message": "可重试错误摘要",
+            **retry,
+        }
+    elif command == "run":
+        payload = service.execute_stage(args.stage, args.date, triggered_by="cli", input_by=args.input_by)
+    elif command == "run-interface":
+        payload = service.execute_interface(args.name, args.date, triggered_by="cli", input_by=args.input_by)
+    else:
+        payload = {
+            "status": "validation_error",
+            "message": f"未知 ingest 子命令: {command}",
+        }
+
+    payload.setdefault("subcommand", command)
+    payload.setdefault("blueprint", str(BASE_DIR / "docs" / "architecture" / "tradesystem-blueprint.md"))
+    _emit_cli_result(payload, as_json=getattr(args, "json", False))
+
+
+def cmd_plan(config: dict, args) -> None:
+    """交易计划命令。第三阶段先接通最小 PlanningService。"""
+    from services.planning_service import PlanningService
+
+    registry = None
+    if args.plan_command == "diagnose":
+        with without_standard_http_proxy():
+            registry = setup_providers(config)
+            registry.initialize_all()
+
+    service = PlanningService(registry=registry)
+    command = args.plan_command
+    if command == "draft":
+        observation = service.create_observation(
+            trade_date=args.date,
+            source_type="manual",
+            title=f"{args.date} 计划输入",
+            market_facts={"bias": "混沌"},
+            sector_facts={"main_themes": []},
+            stock_facts=[],
+            judgements=[],
+            input_by="manual",
+        )
+        payload = {
+            "status": "ok",
+            "message": "已创建 observation，并生成最小 draft",
+            "observation": observation,
+            "draft": service.create_draft(
+                trade_date=args.date,
+                source_observation_ids=[observation["observation_id"]],
+                input_by="manual",
+            ),
+        }
+    elif command == "show-draft":
+        draft = service.get_draft(draft_id=args.draft_id, trade_date=args.date)
+        payload = {
+            "status": "ok" if draft else "not_found",
+            "message": "交易草稿" if draft else "未找到交易草稿",
+            "draft": draft,
+        }
+    elif command == "confirm":
+        draft = service.get_draft(draft_id=args.draft_id, trade_date=args.date)
+        if not draft:
+            payload = {"status": "not_found", "message": "未找到可确认的草稿"}
+        else:
+            payload = {
+                "status": "ok",
+                "message": "正式计划已创建",
+                "plan": service.confirm_plan(
+                    draft_id=draft["draft_id"],
+                    trade_date=args.date,
+                    input_by="manual",
+                ),
+            }
+    elif command == "diagnose":
+        plan = service.get_plan(plan_id=args.plan_id, trade_date=args.date)
+        payload = {
+            "status": "ok" if plan else "not_found",
+            "message": "计划诊断" if plan else "未找到交易计划",
+            "plan": plan,
+            "diagnostics": service.diagnose_plan(plan_id=args.plan_id, trade_date=args.date) if plan else None,
+        }
+    elif command == "review":
+        plan = service.get_plan(plan_id=args.plan_id, trade_date=args.date)
+        if not plan:
+            payload = {"status": "not_found", "message": "未找到可回写的交易计划"}
+        else:
+            payload = {
+                "status": "ok",
+                "message": "计划复盘已写入",
+                "review": service.review_plan(
+                    plan_id=plan["plan_id"],
+                    trade_date=args.date,
+                    outcome_summary="待补充",
+                    input_by="manual",
+                ),
+            }
+    else:
+        payload = {
+            "status": "validation_error",
+            "message": f"未知 plan 子命令: {command}",
+        }
+
+    payload.setdefault("subcommand", command)
+    payload.setdefault("blueprint", str(BASE_DIR / "docs" / "architecture" / "tradesystem-blueprint.md"))
+    _emit_cli_result(payload, as_json=getattr(args, "json", False))
+
+
+def cmd_knowledge(args) -> None:
+    """资料命令。第四阶段先接通最小 KnowledgeService。"""
+    from services.knowledge_service import KnowledgeService
+
+    service = KnowledgeService()
+    command = args.knowledge_command
+    if command == "add-note":
+        payload = {
+            "status": "ok",
+            "message": "资料已录入",
+            "asset": service.add_asset(
+                asset_type=args.asset_type,
+                title=args.title,
+                content=args.content,
+                source=args.source,
+                tags=json.loads(args.tags) if args.tags else [],
+            ),
+        }
+    elif command == "list":
+        payload = {
+            "status": "ok",
+            "message": "资料列表",
+            "assets": service.list_assets(limit=args.limit),
+        }
+    elif command == "draft-from-asset":
+        payload = {
+            "status": "ok",
+            "message": "已从资料生成 observation 和 draft",
+            **service.draft_from_asset(
+                asset_id=args.asset_id,
+                trade_date=args.date,
+                input_by="manual",
+            ),
+        }
+    else:
+        payload = {
+            "status": "validation_error",
+            "message": f"未知 knowledge 子命令: {command}",
+        }
+
+    payload.setdefault("subcommand", command)
+    payload.setdefault("blueprint", str(BASE_DIR / "docs" / "architecture" / "tradesystem-blueprint.md"))
+    _emit_cli_result(payload, as_json=getattr(args, "json", False))
 
 
 def load_config() -> dict:
@@ -590,7 +784,7 @@ def cmd_schedule(config: dict):
         logger.info("调度器已停止")
 
 
-def main():
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="交易系统数据采集与报告")
     subparsers = parser.add_subparsers(dest="command")
 
@@ -636,10 +830,90 @@ def main():
     # schedule
     subparsers.add_parser("schedule", help="启动定时调度器")
 
+    # ingest
+    ingest_parser = subparsers.add_parser("ingest", help="采集底座命令（架构骨架）")
+    ingest_subparsers = ingest_parser.add_subparsers(dest="ingest_command")
+
+    ingest_run = ingest_subparsers.add_parser("run", help="按 stage 运行采集任务")
+    ingest_run.add_argument("--stage", required=True, choices=["pre_core", "post_core", "post_extended", "watchlist", "backfill"])
+    ingest_run.add_argument("--date", default=date.today().isoformat(), help="日期 YYYY-MM-DD")
+    ingest_run.add_argument("--input-by", default="manual", help="触发来源：manual/openclaw/copaw/cursor")
+    ingest_run.add_argument("--json", action="store_true", help="输出 JSON")
+
+    ingest_run_interface = ingest_subparsers.add_parser("run-interface", help="运行单个已注册接口")
+    ingest_run_interface.add_argument("--name", required=True, help="接口注册名")
+    ingest_run_interface.add_argument("--date", default=date.today().isoformat(), help="日期 YYYY-MM-DD")
+    ingest_run_interface.add_argument("--input-by", default="manual", help="触发来源：manual/openclaw/copaw/cursor")
+    ingest_run_interface.add_argument("--json", action="store_true", help="输出 JSON")
+
+    ingest_list = ingest_subparsers.add_parser("list-interfaces", help="列出接口注册表")
+    ingest_list.add_argument("--json", action="store_true", help="输出 JSON")
+
+    ingest_inspect = ingest_subparsers.add_parser("inspect", help="查看某日采集运行状态")
+    ingest_inspect.add_argument("--date", default=date.today().isoformat(), help="日期 YYYY-MM-DD")
+    ingest_inspect.add_argument("--json", action="store_true", help="输出 JSON")
+
+    ingest_retry = ingest_subparsers.add_parser("retry", help="重试失败采集项")
+    ingest_retry.add_argument("--json", action="store_true", help="输出 JSON")
+
+    # plan
+    plan_parser = subparsers.add_parser("plan", help="交易计划命令（架构骨架）")
+    plan_subparsers = plan_parser.add_subparsers(dest="plan_command")
+
+    plan_draft = plan_subparsers.add_parser("draft", help="生成交易草稿")
+    plan_draft.add_argument("--date", default=date.today().isoformat(), help="日期 YYYY-MM-DD")
+    plan_draft.add_argument("--json", action="store_true", help="输出 JSON")
+
+    plan_show = plan_subparsers.add_parser("show-draft", help="查看交易草稿")
+    plan_show.add_argument("--date", default=date.today().isoformat(), help="日期 YYYY-MM-DD")
+    plan_show.add_argument("--draft-id", default=None, help="草稿 ID")
+    plan_show.add_argument("--json", action="store_true", help="输出 JSON")
+
+    plan_confirm = plan_subparsers.add_parser("confirm", help="确认正式交易计划")
+    plan_confirm.add_argument("--date", default=date.today().isoformat(), help="日期 YYYY-MM-DD")
+    plan_confirm.add_argument("--draft-id", default=None, help="草稿 ID")
+    plan_confirm.add_argument("--json", action="store_true", help="输出 JSON")
+
+    plan_diagnose = plan_subparsers.add_parser("diagnose", help="诊断交易计划")
+    plan_diagnose.add_argument("--date", default=date.today().isoformat(), help="日期 YYYY-MM-DD")
+    plan_diagnose.add_argument("--plan-id", default=None, help="计划 ID")
+    plan_diagnose.add_argument("--json", action="store_true", help="输出 JSON")
+
+    plan_review = plan_subparsers.add_parser("review", help="回写计划复盘")
+    plan_review.add_argument("--date", default=date.today().isoformat(), help="日期 YYYY-MM-DD")
+    plan_review.add_argument("--plan-id", default=None, help="计划 ID")
+    plan_review.add_argument("--json", action="store_true", help="输出 JSON")
+
+    # knowledge
+    knowledge_parser = subparsers.add_parser("knowledge", help="资料与提炼命令（架构骨架）")
+    knowledge_subparsers = knowledge_parser.add_subparsers(dest="knowledge_command")
+
+    knowledge_add = knowledge_subparsers.add_parser("add-note", help="录入资料/笔记")
+    knowledge_add.add_argument("--asset-type", default="manual_note", choices=["teacher_note", "news_note", "course_note", "manual_note"], help="资料类型")
+    knowledge_add.add_argument("--title", required=True, help="标题")
+    knowledge_add.add_argument("--content", required=True, help="正文")
+    knowledge_add.add_argument("--source", default=None, help="来源")
+    knowledge_add.add_argument("--tags", default=None, help="标签 JSON array")
+    knowledge_add.add_argument("--json", action="store_true", help="输出 JSON")
+
+    knowledge_list = knowledge_subparsers.add_parser("list", help="列出资料")
+    knowledge_list.add_argument("--limit", type=int, default=20, help="返回条数")
+    knowledge_list.add_argument("--json", action="store_true", help="输出 JSON")
+
+    knowledge_draft = knowledge_subparsers.add_parser("draft-from-asset", help="从资料生成草稿")
+    knowledge_draft.add_argument("--asset-id", required=True, help="资料 ID")
+    knowledge_draft.add_argument("--date", default=date.today().isoformat(), help="日期 YYYY-MM-DD")
+    knowledge_draft.add_argument("--json", action="store_true", help="输出 JSON")
+
     # db
     from db.cli import register_db_subparser
     register_db_subparser(subparsers)
 
+    return parser
+
+
+def main():
+    parser = build_parser()
     args = parser.parse_args()
     if not args.command:
         parser.print_help()
@@ -667,6 +941,12 @@ def main():
         cmd_obsidian(config, args.date, sync_all=args.sync_all)
     elif args.command == "schedule":
         cmd_schedule(config)
+    elif args.command == "ingest":
+        cmd_ingest(config, args)
+    elif args.command == "plan":
+        cmd_plan(config, args)
+    elif args.command == "knowledge":
+        cmd_knowledge(args)
     elif args.command == "db":
         from db.cli import handle_db_command
         handle_db_command(args)

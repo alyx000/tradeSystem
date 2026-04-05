@@ -195,3 +195,22 @@ python3 main.py post --date 2026-03-31
 - 非交易日执行时，命令会自动跳过行情采集，仅执行其他任务
 - 采集失败不影响 YAML 历史记录，但会在 `pending_writes` 中标记，等待下次 `db sync` 重试
 - 手动触发和补跑场景，应先确认任务类型、日期及覆盖影响，再执行命令
+
+## 与新架构的关系
+
+第一阶段后，市场任务 skill 仍负责：
+
+- `pre`
+- `post`
+- `evening`
+- `watchlist`
+
+但采集底座的标准入口会逐步沉淀到：
+
+```bash
+python3 main.py ingest run --stage pre_core --date 2026-04-01
+python3 main.py ingest run --stage post_core --date 2026-04-01
+python3 main.py ingest inspect --date 2026-04-01
+```
+
+若用户在问“哪些接口失败了”“某个接口单独补跑”，应优先切换到 `ingest-inspector` skill。
