@@ -37,10 +37,13 @@ def list_knowledge_assets(limit: int = 20):
 def draft_from_asset(asset_id: str, body: Optional[dict] = None):
     service = KnowledgeService()
     payload = body or {}
+    trade_date = payload.get("trade_date")
+    if not trade_date:
+        raise HTTPException(422, "missing field: trade_date")
     try:
         return service.draft_from_asset(
             asset_id=asset_id,
-            trade_date=payload.get("trade_date"),
+            trade_date=trade_date,
             input_by=payload.get("input_by"),
         )
     except KeyError:

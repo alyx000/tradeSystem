@@ -271,6 +271,25 @@ class TestPlanningAndKnowledgeAPI:
         assert payload["observation"]["source_type"] == "knowledge_asset"
         assert payload["draft"]["trade_date"] == "2026-04-10"
 
+    def test_knowledge_asset_draft_requires_trade_date(self, client):
+        r = client.post(
+            "/api/knowledge/assets",
+            json={
+                "asset_type": "manual_note",
+                "title": "机器人资料",
+                "content": "机器人回流，002594.SZ 关注趋势延续。",
+                "source": "manual",
+                "tags": ["机器人"],
+            },
+        )
+        asset = r.json()
+
+        r = client.post(
+            f"/api/knowledge/assets/{asset['asset_id']}/draft",
+            json={"input_by": "cursor"},
+        )
+        assert r.status_code == 422
+
     def test_plan_flow_and_diagnostics(self, client, db_path):
         conn = get_connection(db_path)
         conn.execute(
