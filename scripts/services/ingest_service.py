@@ -222,7 +222,7 @@ class IngestService:
         }
         payload_json = json.dumps(payload, ensure_ascii=False, sort_keys=True)
         payload_hash = hashlib.sha256(payload_json.encode("utf-8")).hexdigest()
-        dedupe_key = f"{interface['interface_name']}:{target_date}"
+        dedupe_key = self._build_payload_dedupe_key(interface, target_date, params)
         with get_db(self.db_path) as conn:
             migrate(conn)
             conn.execute(
@@ -261,6 +261,26 @@ class IngestService:
                 ),
             )
         return dedupe_key, len(rows)
+
+    def _build_payload_dedupe_key(
+        self,
+        interface: dict[str, Any],
+        target_date: str,
+        params: dict[str, Any],
+    ) -> str:
+        dedupe_fields = interface.get("dedupe_keys") or []
+        dedupe_payload = {
+            key: params[key]
+            for key in dedupe_fields
+            if key in params
+        }
+        if not dedupe_payload:
+            dedupe_payload = dict(params)
+        if "trade_date" not in dedupe_payload:
+            dedupe_payload["trade_date"] = target_date.replace("-", "")
+        dedupe_payload_json = json.dumps(dedupe_payload, ensure_ascii=False, sort_keys=True)
+        params_hash = hashlib.sha256(dedupe_payload_json.encode("utf-8")).hexdigest()[:16]
+        return f"{interface['interface_name']}:{target_date}:{params_hash}"
 
     def _upsert_market_fact_snapshot(
         self,

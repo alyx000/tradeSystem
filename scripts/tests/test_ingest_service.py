@@ -294,3 +294,52 @@ def test_top_inst_run_creates_snapshot_and_fact_entities(tmp_path):
     assert entities[0]["role"] == "top_ranked"
     attrs = json.loads(entities[0]["attributes_json"])
     assert "net_amount" in attrs
+
+
+def test_store_payload_uses_params_in_dedupe_key(tmp_path):
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    migrate(conn)
+    conn.close()
+
+    service = IngestService(str(db_path))
+    interface = {
+        "interface_name": "share_float",
+        "provider_method": "get_share_float",
+        "stage": "backfill",
+        "params_policy": "explicit_only",
+        "dedupe_keys": ["ts_code", "ann_date", "float_date"],
+        "raw_table": "raw_share_float",
+        "enabled_by_default": False,
+    }
+
+    first_key, _ = service._store_payload(
+        interface,
+        "2026-04-03",
+        provider="fake:share_float",
+        params={"ts_code": "300750.SZ", "ann_date": "20260401", "float_date": "20260410"},
+        result=DataResult(data=[{"ts_code": "300750.SZ", "float_date": "20260410"}], source="fake"),
+    )
+    second_key, _ = service._store_payload(
+        interface,
+        "2026-04-03",
+        provider="fake:share_float",
+        params={"ts_code": "300750.SZ", "ann_date": "20260402", "float_date": "20260411"},
+        result=DataResult(data=[{"ts_code": "300750.SZ", "float_date": "20260411"}], source="fake"),
+    )
+
+    conn = get_connection(db_path)
+    rows = conn.execute(
+        """
+        SELECT dedupe_key, payload_json
+        FROM raw_interface_payloads
+        WHERE interface_name = 'share_float'
+        ORDER BY dedupe_key
+        """
+    ).fetchall()
+    conn.close()
+
+    assert first_key != second_key
+    assert len(rows) == 2
+    payloads = [json.loads(row["payload_json"]) for row in rows]
+    assert {payload["params"]["ann_date"] for payload in payloads} == {"20260401", "20260402"}
