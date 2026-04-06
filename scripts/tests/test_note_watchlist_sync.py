@@ -3,6 +3,8 @@
 覆盖：
   - add-note --stocks 写入 mentioned_stocks 字段
   - add-note 候选关注池输出（新股 vs 已存在跳过）
+  - add-note --sync-watchlist-from-stocks 与 watchlist-sync-from-note
+  - queries.sync_watchlist_from_mentioned_stocks / get_teacher_note_by_id
   - watchlist-add --source-note-id 写入 source_note_id
   - migrate v14 新列添加
   - check_watchlist_exists 辅助函数
@@ -143,6 +145,112 @@ class TestInsertTeacherNoteWithStocks:
             "SELECT mentioned_stocks FROM teacher_notes WHERE id = ?", (note_id,)
         ).fetchone()
         assert row["mentioned_stocks"] is None
+
+
+# ──────────────────────────────────────────────────────────────
+# sync_watchlist_from_mentioned_stocks
+# ──────────────────────────────────────────────────────────────
+
+class TestValidateMentionedStocksAndTier:
+    def test_validate_rejects_non_dict_element(self):
+        with pytest.raises(ValueError, match="mentioned_stocks\\[1\\]"):
+            Q.validate_mentioned_stocks_entries(
+                [{"code": "300750", "name": "宁德"}, "not-a-dict"],
+            )
+
+    def test_normalize_tier_invalid_becomes_tier3(self, conn):
+        teacher_id = Q.get_or_create_teacher(conn, "Tier老师")
+        note_id = Q.insert_teacher_note(
+            conn,
+            teacher_id=teacher_id,
+            date="2026-04-01",
+            title="tier测试",
+            mentioned_stocks=[{"code": "300750", "name": "宁德", "tier": "bogus"}],
+        )
+        conn.commit()
+        r = Q.sync_watchlist_from_mentioned_stocks(
+            conn,
+            note_id=note_id,
+            note_date="2026-04-01",
+            title="tier测试",
+            teacher_name="Tier老师",
+            stocks=[{"code": "300750", "name": "宁德", "tier": "bogus"}],
+        )
+        conn.commit()
+        assert len(r["added"]) == 1
+        assert r["added"][0]["tier"] == "tier3_sector"
+        row = conn.execute(
+            "SELECT tier FROM watchlist WHERE stock_code='300750'"
+        ).fetchone()
+        assert row["tier"] == "tier3_sector"
+
+
+class TestSyncWatchlistFromMentionedStocks:
+    def test_inserts_new_and_skips_existing(self, conn):
+        teacher_id = Q.get_or_create_teacher(conn, "同步老师")
+        note_id = Q.insert_teacher_note(
+            conn,
+            teacher_id=teacher_id,
+            date="2026-04-01",
+            title="笔记A",
+            mentioned_stocks=[{"code": "300750", "name": "宁德时代"}],
+        )
+        Q.insert_watchlist(conn, stock_code="688041", stock_name="海光信息", tier="tier3_sector")
+        conn.commit()
+        r = Q.sync_watchlist_from_mentioned_stocks(
+            conn,
+            note_id=note_id,
+            note_date="2026-04-01",
+            title="笔记A",
+            teacher_name="同步老师",
+            stocks=[
+                {"code": "300750", "name": "宁德时代", "tier": "tier3_sector"},
+                {"code": "688041", "name": "海光信息", "tier": "tier2_watch"},
+            ],
+        )
+        conn.commit()
+        assert len(r["added"]) == 1
+        assert r["added"][0]["code"] == "300750"
+        assert len(r["skipped"]) == 1
+        assert r["skipped"][0]["code"] == "688041"
+        row = dict(conn.execute(
+            "SELECT add_reason, source_note_id, add_date FROM watchlist WHERE stock_code = '300750'"
+        ).fetchone())
+        assert row["source_note_id"] == note_id
+        assert row["add_date"] == "2026-04-01"
+        assert "同步老师" in row["add_reason"] and "笔记A" in row["add_reason"]
+
+    def test_optional_sector_on_stock(self, conn):
+        teacher_id = Q.get_or_create_teacher(conn, "T")
+        note_id = Q.insert_teacher_note(
+            conn, teacher_id=teacher_id, date="2026-04-02", title="B",
+            mentioned_stocks=[{"code": "000001", "name": "平安", "sector": "银行"}],
+        )
+        conn.commit()
+        Q.sync_watchlist_from_mentioned_stocks(
+            conn,
+            note_id=note_id,
+            note_date="2026-04-02",
+            title="B",
+            teacher_name="T",
+            stocks=[{"code": "000001", "name": "平安", "sector": "银行"}],
+        )
+        conn.commit()
+        sec = conn.execute(
+            "SELECT sector FROM watchlist WHERE stock_code='000001'"
+        ).fetchone()["sector"]
+        assert sec == "银行"
+
+    def test_get_teacher_note_by_id(self, conn):
+        teacher_id = Q.get_or_create_teacher(conn, "查笔记老师")
+        note_id = Q.insert_teacher_note(
+            conn, teacher_id=teacher_id, date="2026-04-03", title="C",
+        )
+        conn.commit()
+        row = Q.get_teacher_note_by_id(conn, note_id)
+        assert row is not None
+        assert row["teacher_name"] == "查笔记老师"
+        assert Q.get_teacher_note_by_id(conn, 999999) is None
 
 
 # ──────────────────────────────────────────────────────────────
@@ -307,6 +415,109 @@ class TestAddNoteWithStocksCLI:
         assert result.returncode == 0
         assert "无有效股票代码" in result.stdout
         assert "候选关注池 (0/" not in result.stdout
+
+
+class TestAddNoteInvalidStocksCLI:
+    def test_non_object_stocks_exit_error(self, tmp_db):
+        stocks = json.dumps(["300750"])
+        result = _run_cli(
+            "add-note", "--teacher", "小鲍",
+            "--date", "2026-04-01", "--title", "坏stocks",
+            "--stocks", stocks,
+            tmp_db=tmp_db,
+        )
+        assert result.returncode != 0
+        assert "mentioned_stocks[0]" in (result.stderr or "") + result.stdout
+
+
+class TestAddNoteSyncWatchlistFlagCLI:
+    def test_sync_flag_writes_watchlist(self, tmp_db):
+        stocks = json.dumps([
+            {"code": "300750", "name": "宁德时代", "tier": "tier3_sector"},
+        ])
+        result = _run_cli(
+            "add-note", "--teacher", "小鲍",
+            "--date", "2026-04-01", "--title", "同步入池",
+            "--stocks", stocks,
+            "--sync-watchlist-from-stocks",
+            tmp_db=tmp_db,
+        )
+        assert result.returncode == 0
+        assert "关注池同步 (1 新增 / 1 统计)" in result.stdout
+        assert "已加入" in result.stdout
+        assert "WATCHLIST_CANDIDATES:" in result.stdout
+
+        conn = get_connection(tmp_db)
+        migrate(conn)
+        row = conn.execute(
+            "SELECT source_note_id, add_date FROM watchlist WHERE stock_code = '300750'"
+        ).fetchone()
+        assert row is not None
+        nid = conn.execute(
+            "SELECT id FROM teacher_notes WHERE title = '同步入池'"
+        ).fetchone()[0]
+        assert row["source_note_id"] == nid
+        assert row["add_date"] == "2026-04-01"
+        conn.close()
+
+    def test_without_sync_flag_no_watchlist_row(self, tmp_db):
+        stocks = json.dumps([{"code": "688999", "name": "测试", "tier": "tier3_sector"}])
+        result = _run_cli(
+            "add-note", "--teacher", "小鲍",
+            "--date", "2026-04-01", "--title", "仅笔记",
+            "--stocks", stocks,
+            tmp_db=tmp_db,
+        )
+        assert result.returncode == 0
+        assert "候选关注池" in result.stdout
+        conn = get_connection(tmp_db)
+        migrate(conn)
+        n = conn.execute(
+            "SELECT COUNT(*) FROM watchlist WHERE stock_code='688999'"
+        ).fetchone()[0]
+        assert n == 0
+        conn.close()
+
+
+class TestWatchlistSyncFromNoteCLI:
+    def test_sync_from_note_after_add_note_without_flag(self, tmp_db):
+        stocks = json.dumps([{"code": "300750", "name": "宁德时代", "tier": "tier2_watch"}])
+        r1 = _run_cli(
+            "add-note", "--teacher", "小鲍",
+            "--date", "2026-04-02", "--title", "两步笔记",
+            "--stocks", stocks,
+            tmp_db=tmp_db,
+        )
+        assert r1.returncode == 0
+        conn = get_connection(tmp_db)
+        migrate(conn)
+        nid = conn.execute(
+            "SELECT id FROM teacher_notes WHERE title = '两步笔记'"
+        ).fetchone()[0]
+        conn.close()
+
+        r2 = _run_cli(
+            "watchlist-sync-from-note", "--note-id", str(nid),
+            tmp_db=tmp_db,
+        )
+        assert r2.returncode == 0
+        assert "关注池同步（来自笔记 #" in r2.stdout
+        conn = get_connection(tmp_db)
+        migrate(conn)
+        row = conn.execute(
+            "SELECT source_note_id, tier FROM watchlist WHERE stock_code='300750'"
+        ).fetchone()
+        assert row["source_note_id"] == nid
+        assert row["tier"] == "tier2_watch"
+        conn.close()
+
+    def test_sync_from_note_missing(self, tmp_db):
+        r = _run_cli(
+            "watchlist-sync-from-note", "--note-id", "99999",
+            tmp_db=tmp_db,
+        )
+        assert r.returncode == 0
+        assert "笔记不存在" in r.stdout
 
 
 # ──────────────────────────────────────────────────────────────

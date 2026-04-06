@@ -18,7 +18,8 @@
 
 | Skill | CLI 子命令 | 说明 |
 |-------|-----------|------|
-| `record-notes` | `db add-note` | 录入老师观点（文字/图片/多附件） |
+| `record-notes` | `db add-note` | 录入老师观点（文字/图片/多附件）；可选 `--sync-watchlist-from-stocks`（用户确认入池后） |
+| `record-notes` / `portfolio-manager` | `db watchlist-sync-from-note` | 按笔记 `mentioned_stocks` 写入关注池（两步确认后的第二步） |
 | `record-notes` | `db add-industry` | 录入行业板块信息 |
 | `record-notes` | `db add-macro` | 录入宏观经济信息 |
 | `knowledge-to-plan` | `knowledge add-note` | 写入 `knowledge_assets`（新闻/课程/手动；不含老师观点） |
@@ -118,7 +119,7 @@
 | GET | `/api/teachers` | 列出所有老师 |
 | GET | `/api/teacher-notes` | 查询笔记列表（keyword/teacher/from/to；limit 默认 200、最大 500；offset 分页） |
 | GET | `/api/teacher-notes/{note_id}` | 读取单条笔记 |
-| POST | `/api/teacher-notes` | 新建笔记（含 teacher_name 自动创建老师） |
+| POST | `/api/teacher-notes` | 新建笔记（含 teacher_name 自动创建老师）；可选 `sync_watchlist_from_mentions: true` 同步关注池（默认不同步） |
 | PUT | `/api/teacher-notes/{note_id}` | 更新笔记 |
 | DELETE | `/api/teacher-notes/{note_id}` | 删除笔记 |
 

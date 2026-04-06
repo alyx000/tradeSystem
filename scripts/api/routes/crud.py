@@ -120,13 +120,47 @@ def get_note(note_id: int, conn: sqlite3.Connection = Depends(get_db_conn)):
 
 @router.post("/teacher-notes")
 def create_note(body: dict, conn: sqlite3.Connection = Depends(get_db_conn)):
-    teacher_name = body.pop("teacher_name", None) or body.pop("teacher", None)
+    payload = dict(body)
+    sync_wl = bool(payload.pop("sync_watchlist_from_mentions", False))
+    teacher_name = payload.pop("teacher_name", None) or payload.pop("teacher", None)
     if not teacher_name:
         raise HTTPException(422, "teacher_name required")
+    mentioned = payload.get("mentioned_stocks")
+    if isinstance(mentioned, list) and mentioned:
+        try:
+            Q.validate_mentioned_stocks_entries(mentioned)
+        except ValueError as e:
+            raise HTTPException(422, str(e)) from e
     tid = Q.get_or_create_teacher(conn, teacher_name)
-    note_id = Q.insert_teacher_note(conn, teacher_id=tid, **body)
+    note_id = Q.insert_teacher_note(conn, teacher_id=tid, **payload)
+    wl_result: dict[str, list] | None = None
+    if sync_wl and mentioned:
+        stocks_list = mentioned
+        if isinstance(stocks_list, str):
+            try:
+                stocks_list = json.loads(stocks_list)
+            except json.JSONDecodeError as e:
+                raise HTTPException(422, f"mentioned_stocks invalid JSON: {e}") from e
+        if isinstance(stocks_list, list) and stocks_list:
+            try:
+                wl_result = Q.sync_watchlist_from_mentioned_stocks(
+                    conn,
+                    note_id=note_id,
+                    note_date=str(payload.get("date") or ""),
+                    title=str(payload.get("title") or ""),
+                    teacher_name=teacher_name,
+                    stocks=stocks_list,
+                )
+            except ValueError as e:
+                conn.rollback()
+                raise HTTPException(422, str(e)) from e
+        else:
+            wl_result = {"added": [], "skipped": []}
     conn.commit()
-    return {"id": note_id}
+    out: dict[str, Any] = {"id": note_id}
+    if sync_wl:
+        out["watchlist_sync"] = wl_result or {"added": [], "skipped": []}
+    return out
 
 
 @router.put("/teacher-notes/{note_id}")

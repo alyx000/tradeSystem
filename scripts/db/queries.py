@@ -86,6 +86,80 @@ def check_watchlist_exists(conn: sqlite3.Connection, stock_code: str) -> bool:
     return row is not None
 
 
+def get_teacher_note_by_id(conn: sqlite3.Connection, note_id: int) -> dict[str, Any] | None:
+    """按 id 读取老师笔记（含 teacher_name）。"""
+    row = conn.execute(
+        "SELECT n.*, t.name AS teacher_name FROM teacher_notes n "
+        "JOIN teachers t ON t.id = n.teacher_id WHERE n.id = ?",
+        (note_id,),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+# 与 db watchlist-add 的 argparse choices 一致
+WATCHLIST_TIERS = frozenset({"tier1_core", "tier2_watch", "tier3_sector"})
+
+
+def validate_mentioned_stocks_entries(stocks: list[Any]) -> None:
+    """校验 mentioned_stocks 数组每项为 JSON 对象；否则抛出 ValueError。"""
+    for i, stock in enumerate(stocks):
+        if not isinstance(stock, dict):
+            raise ValueError(
+                f"mentioned_stocks[{i}] must be a JSON object, got {type(stock).__name__}"
+            )
+
+
+def normalize_watchlist_tier(raw: Any) -> str:
+    """非法或缺省 tier 降级为 tier3_sector（与 CLI watchlist-add 合法值对齐）。"""
+    if raw is None or raw == "":
+        return "tier3_sector"
+    t = str(raw).strip()
+    if t in WATCHLIST_TIERS:
+        return t
+    return "tier3_sector"
+
+
+def sync_watchlist_from_mentioned_stocks(
+    conn: sqlite3.Connection,
+    *,
+    note_id: int,
+    note_date: str,
+    title: str,
+    teacher_name: str | None,
+    stocks: list[Any],
+) -> dict[str, list[dict]]:
+    """根据笔记中的 mentioned_stocks 写入关注池（已存在则跳过）。返回 added / skipped。"""
+    if not isinstance(stocks, list):
+        raise ValueError("mentioned_stocks must be a JSON array")
+    validate_mentioned_stocks_entries(stocks)
+    reason = f"{teacher_name} · {title}" if teacher_name else f"老师观点: {title}"
+    added: list[dict] = []
+    skipped: list[dict] = []
+    for stock in stocks:
+        code = (stock.get("code") or "").strip()
+        if not code:
+            continue
+        name = (stock.get("name") or "").strip() or code
+        tier = normalize_watchlist_tier(stock.get("tier"))
+        sector = stock.get("sector")
+        if check_watchlist_exists(conn, code):
+            skipped.append({"code": code, "name": name})
+            continue
+        wl_kwargs: dict[str, Any] = {
+            "stock_code": code,
+            "stock_name": name,
+            "tier": tier,
+            "add_date": note_date,
+            "add_reason": reason,
+            "source_note_id": note_id,
+        }
+        if sector:
+            wl_kwargs["sector"] = sector
+        wid = insert_watchlist(conn, **wl_kwargs)
+        added.append({"watchlist_id": wid, "code": code, "name": name, "tier": tier})
+    return {"added": added, "skipped": skipped}
+
+
 def _teacher_note_like_pattern(keyword: str) -> str:
     """LIKE 字面量：转义 % _ !，配合 ESCAPE '!'。"""
     k = keyword.replace("!", "!!").replace("%", "!%").replace("_", "!_")

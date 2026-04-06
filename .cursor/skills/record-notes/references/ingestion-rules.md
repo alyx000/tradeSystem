@@ -17,7 +17,7 @@
 - `--sectors`：只要涉及板块就应填 JSON 数组
 - `--tags`：建议填，便于检索
 - `--position-advice`：只要谈到仓位/节奏就应填
-- `--stocks`：仅填材料中**明确出现**的代码/名称，勿推断
+- `--stocks`：**每次**提炼老师**在跟踪 / 建议持续观察**的标的；仅填材料中**明确出现、可绑定真实证券代码**的项，**勿推断、勿编造代码**。仅名称无代码时列入确认模板「待补代码」，不得猜代码写入。
 
 ### 原文与结构化字段的关系
 
@@ -67,6 +67,8 @@ cat /tmp/ocr.txt | python3 main.py db add-note \
 
 ## 用户确认模板
 
+每次展示须包含 **「笔记摘要」** 与 **「关注池」** 两段；用户对两段均明确表态前，Agent 不得执行带 `--sync-watchlist-from-stocks` 的落库。
+
 ```text
 即将录入：
   类型: 老师观点
@@ -82,16 +84,22 @@ cat /tmp/ocr.txt | python3 main.py db add-note \
   - 仓位不宜激进，等分歧确认后再加
   涉及板块: AI算力, CPO
   标签: 主线, 首阴, 仓位管理
+  跟踪个股（写入 --stocks）:
+  - 300750 宁德时代 [tier3_sector]  （若无合格代码则写：无，原因：材料未给出代码 / 仅泛泛举例 等）
   原文: 已保留
   附件: 1 张图片
 
-确认录入？(是/否)
+  --- 关注池 ---
+  是否将上述「跟踪个股」中已含代码的标的写入关注池？(是 / 否 / 调整子集或 tier 后说明)
+  （若无任何可编码标的：是否确认仅落笔记、不入池？(是/否)）
+
+确认以上内容后录入？(是/否)
 ```
 
-## 关注池候选说明
+## 关注池与 CLI 行为
 
-若 `--stocks` 存在，CLI 会输出候选关注池列表。
-
-- 候选是建议，不是自动加入
-- 已在关注池里的标的会进入 `skipped`
-- 需要实际加池时，再交给 `portfolio-manager`
+- **默认**：`db add-note` 带 `--stocks` 时只写入 `mentioned_stocks`，终端打印候选与 `WATCHLIST_CANDIDATES`；**不会**自动 `insert` 关注池。
+- **用户确认入池后**：在同一条命令追加 **`--sync-watchlist-from-stocks`**，或在已落笔记后执行 **`db watchlist-sync-from-note --note-id <id>`**。
+- 已在关注池（非 `removed`）的代码会被跳过，不覆盖原 tier/原因。
+- API `POST /api/teacher-notes`：默认不同步关注池；仅当 body 含 **`"sync_watchlist_from_mentions": true`**（且用户已在前端/协作流程中确认）时，在创建笔记后按 `mentioned_stocks` 写入关注池；响应中可能含 `watchlist_sync` 字段。
+- 仍可用 [`portfolio-manager`](../../portfolio-manager/SKILL.md) 的 `watchlist-add`（可带 `--source-note-id`）单条补录。

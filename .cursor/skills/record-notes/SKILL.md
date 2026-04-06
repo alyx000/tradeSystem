@@ -1,7 +1,7 @@
 ---
 name: record-notes
 description: 录入老师观点、行业板块信息、宏观经济信息到 SQLite 数据库；Agent 录入老师观点前必须先做结构化总结并经用户确认，再执行 CLI（支持文字/图片/混合内容，适配 Discord/QQ/微信 channel 场景）
-version: "1.3"
+version: "1.4"
 ---
 
 # Skill: 记录信息（老师观点 / 行业 / 宏观）
@@ -33,11 +33,14 @@ version: "1.3"
 | 涉及板块 | `--sectors` | 有则填 JSON 数组 |
 | 检索标签 | `--tags` | 建议填 JSON 数组 |
 | 仓位/节奏态度 | `--position-advice` | 有则填 |
-| 点名个股 | `--stocks` | 仅填有把握的 code/name，勿猜 |
+| 跟踪个股（写入 `--stocks`） | `--stocks` | **每次**从材料提炼老师**在跟踪 / 建议持续观察**的标的；仅填已出现的**真实代码**，勿猜；无合格标的时总结里仍写明「跟踪个股：无（原因）」 |
+| 同步到关注池（用户已确认入池后） | `--sync-watchlist-from-stocks` | **可选 flag**：默认只记 `mentioned_stocks` 并打印候选；**仅当**用户对「是否写入关注池」单独确认同意后再加此 flag |
 
 完整原文（含 OCR/PDF 长文）须进 **`--raw-content-file` 或 stdin（`-`）**；若用户提供了长原文，**不得**只写 `core-view` 而不保留原文。
 
-确认流程：先向用户展示与 [ingestion-rules 中的确认模板](references/ingestion-rules.md#用户确认模板) 等价的摘要，**得到用户明示同意后再执行** `db add-note`。
+确认流程：先向用户展示与 [ingestion-rules 中的确认模板](references/ingestion-rules.md#用户确认模板) 等价的摘要（**须含「关注池」区块**），**得到用户明示同意后再执行** `db add-note`。禁止在用户未答复「是否入池」前使用 `--sync-watchlist-from-stocks`。
+
+**两步入池（可选）**：若第一次执行 `add-note` 时未带 `--sync-watchlist-from-stocks`，在用户二次确认入池后可执行 `python3 main.py db watchlist-sync-from-note --note-id <笔记id>`（从该笔记的 `mentioned_stocks` 写入关注池）。
 
 行业 / 宏观录入仍须先提炼要点再写入，但字段以各子命令为准（见 ingestion-rules 与同目录说明）。
 
@@ -55,6 +58,10 @@ make db-search KEYWORD=锂电 FROM=YYYY-MM-DD TO=YYYY-MM-DD
 
 ```bash
 python3 main.py db add-note ...
+# 用户确认入池后（与 add-note 同次或稍后）：
+python3 main.py db add-note ... --stocks '[...]' --sync-watchlist-from-stocks
+# 或先落笔记再同步：
+python3 main.py db watchlist-sync-from-note --note-id <id>
 python3 main.py db add-industry ...
 python3 main.py db add-macro ...
 ```
@@ -69,6 +76,7 @@ python3 main.py db add-macro ...
 ## 禁止事项
 
 - **禁止**在未展示结构化总结、未获用户确认的情况下执行 `db add-note`（Agent 场景）。
+- **禁止**在用户未对「关注池」区块明确同意前使用 `--sync-watchlist-from-stocks`。
 - 不要把老师原话未经提炼直接原样当「唯一正文」落库（原文可进 `raw-content`，但必须有 `core-view` + `key-points` 等结构化字段）。
 - 不要把截图 / OCR 长文本直接塞进 `--raw-content` 导致命令行溢出。
 - 不要猜测标题、要点、标签或个股代码。

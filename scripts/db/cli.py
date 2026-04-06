@@ -63,6 +63,11 @@ def register_db_subparser(subparsers: argparse._SubParsersAction) -> None:
         "--stocks", default=None,
         help='提到的个股 JSON array，如 \'[{"code":"300750","name":"宁德时代","tier":"tier3_sector"}]\''
     )
+    add_note.add_argument(
+        "--sync-watchlist-from-stocks",
+        action="store_true",
+        help="将 --stocks 中尚未在关注池的标的写入 watchlist（须已由用户确认）；默认仅记笔记并输出候选",
+    )
 
     query_notes = db_sub.add_parser("query-notes", help="搜索老师笔记")
     query_notes.add_argument("--keyword", required=True, help="搜索关键词")
@@ -134,6 +139,12 @@ def register_db_subparser(subparsers: argparse._SubParsersAction) -> None:
     wl_list.add_argument("--tier", default=None, help="按层级过滤")
     wl_list.add_argument("--status", default="watching", help="按状态过滤（默认 watching）")
 
+    wl_sync_note = db_sub.add_parser(
+        "watchlist-sync-from-note",
+        help="按 teacher_notes.mentioned_stocks 将未在池标的写入关注池（第二步确认后使用）",
+    )
+    wl_sync_note.add_argument("--note-id", type=int, required=True, help="老师笔记 ID（teacher_notes.id）")
+
     # ── 交易记录 ──────────────────────────────────────────────────
     add_trade = db_sub.add_parser("add-trade", help="录入交易记录")
     add_trade.add_argument("--code", required=True, help="股票代码")
@@ -178,6 +189,7 @@ def handle_db_command(args: argparse.Namespace) -> None:
         print("用法: main.py db {init|sync|reconcile|add-note|query-notes|"
               "add-industry|add-macro|holdings-add|holdings-remove|holdings-list|"
               "watchlist-add|watchlist-remove|watchlist-update|watchlist-list|"
+              "watchlist-sync-from-note|"
               "add-trade|add-calendar|blacklist-add|db-search}")
         return
 
@@ -196,6 +208,7 @@ def handle_db_command(args: argparse.Namespace) -> None:
         "watchlist-remove": _cmd_watchlist_remove,
         "watchlist-update": _cmd_watchlist_update,
         "watchlist-list": _cmd_watchlist_list,
+        "watchlist-sync-from-note": _cmd_watchlist_sync_from_note,
         "add-trade": _cmd_add_trade,
         "add-calendar": _cmd_add_calendar,
         "blacklist-add": _cmd_blacklist_add,
@@ -240,7 +253,13 @@ def _cmd_add_note(args: argparse.Namespace) -> None:
     stocks_list: list[dict] = []
     if args.stocks:
         stocks_list = json.loads(args.stocks)
+        try:
+            Q.validate_mentioned_stocks_entries(stocks_list)
+        except ValueError as err:
+            print(f"❌ {err}", file=sys.stderr)
+            sys.exit(1)
     raw_content = _read_raw_content(args)
+    sync_from_stocks = getattr(args, "sync_watchlist_from_stocks", False)
 
     with get_db() as conn:
         migrate(conn)
@@ -284,41 +303,75 @@ def _cmd_add_note(args: argparse.Namespace) -> None:
                 else:
                     logger.warning("附件不存在，跳过: %s", att_path)
 
-        # 输出候选关注池条目
-        candidates = []
-        skipped = []
+        candidates: list[dict] = []
+        skipped: list[dict] = []
         if stocks_list:
-            for stock in stocks_list:
-                code = stock.get("code", "")
-                name = stock.get("name", "")
-                tier = stock.get("tier", "tier3_sector")
-                if not code:
-                    continue
-                if Q.check_watchlist_exists(conn, code):
-                    skipped.append({"code": code, "name": name})
-                else:
-                    candidates.append({"code": code, "name": name, "tier": tier, "note_id": note_id})
+            if sync_from_stocks:
+                sync_result = Q.sync_watchlist_from_mentioned_stocks(
+                    conn,
+                    note_id=note_id,
+                    note_date=args.date,
+                    title=args.title,
+                    teacher_name=args.teacher,
+                    stocks=stocks_list,
+                )
+                for a in sync_result["added"]:
+                    candidates.append({
+                        "code": a["code"],
+                        "name": a["name"],
+                        "tier": a["tier"],
+                        "note_id": note_id,
+                        "watchlist_id": a["watchlist_id"],
+                    })
+                for s in sync_result["skipped"]:
+                    skipped.append({"code": s["code"], "name": s["name"]})
+            else:
+                for stock in stocks_list:
+                    code = stock.get("code", "")
+                    name = stock.get("name", "")
+                    tier = Q.normalize_watchlist_tier(stock.get("tier"))
+                    if not code:
+                        continue
+                    if Q.check_watchlist_exists(conn, code):
+                        skipped.append({"code": code, "name": name})
+                    else:
+                        candidates.append({"code": code, "name": name, "tier": tier, "note_id": note_id})
 
     att_info = f", 附件 {att_count} 个" if att_count else ""
     print(f"✅ 已录入笔记 (id={note_id}): {args.teacher} - {args.title}{att_info}")
 
     if stocks_list:
-        # 分母仅统计含非空 code 的条目，与 candidates/skipped 一致，避免缺 code 项稀释比例
         considered = len(candidates) + len(skipped)
         new_count = len(candidates)
         if considered > 0:
-            print(f"📋 候选关注池 ({new_count}/{considered}):")
-            for c in candidates:
-                print(f"  - {c['code']} {c['name']} [{c['tier']}] (建议加入)")
-            for s in skipped:
-                print(f"  - {s['code']} {s['name']} (已在关注池，跳过)")
+            if sync_from_stocks:
+                print(f"📋 关注池同步 ({new_count} 新增 / {considered} 统计):")
+                for c in candidates:
+                    wid = c.get("watchlist_id")
+                    extra = f", watchlist id={wid}" if wid is not None else ""
+                    print(f"  - {c['code']} {c['name']} [{c['tier']}] (已加入{extra})")
+                for s in skipped:
+                    print(f"  - {s['code']} {s['name']} (已在关注池，跳过)")
+            else:
+                print(f"📋 候选关注池 ({new_count}/{considered}):")
+                for c in candidates:
+                    print(f"  - {c['code']} {c['name']} [{c['tier']}] (建议加入)")
+                for s in skipped:
+                    print(f"  - {s['code']} {s['name']} (已在关注池，跳过)")
             if candidates:
-                print(
-                    f"WATCHLIST_CANDIDATES: {json.dumps(candidates, ensure_ascii=False)}"
-                )
+                cand_out = [
+                    {k: v for k, v in c.items() if k != "watchlist_id"}
+                    for c in candidates
+                ]
+                print(f"WATCHLIST_CANDIDATES: {json.dumps(cand_out, ensure_ascii=False)}")
         else:
+            hint = (
+                "关注池同步"
+                if sync_from_stocks
+                else "候选关注池"
+            )
             print(
-                "📋 候选关注池: --stocks 中无有效股票代码（每项需含非空 code），已跳过候选统计"
+                f"📋 {hint}: --stocks 中无有效股票代码（每项需含非空 code），已跳过"
             )
 
 
@@ -458,6 +511,75 @@ def _cmd_holdings_list(args: argparse.Namespace) -> None:
 
 
 # ── 关注池实现 ────────────────────────────────────────────────────
+
+def _cmd_watchlist_sync_from_note(args: argparse.Namespace) -> None:
+    from . import queries as Q
+
+    with get_db() as conn:
+        migrate(conn)
+        row = Q.get_teacher_note_by_id(conn, args.note_id)
+        if not row:
+            print(f"❌ 笔记不存在: id={args.note_id}")
+            return
+        raw_ms = row.get("mentioned_stocks")
+        if not raw_ms:
+            print("⚠️ 该笔记无 mentioned_stocks，跳过关注池同步")
+            return
+        if isinstance(raw_ms, str):
+            stocks_list = json.loads(raw_ms)
+        elif isinstance(raw_ms, (list, dict)):
+            stocks_list = raw_ms if isinstance(raw_ms, list) else [raw_ms]
+        else:
+            print("⚠️ mentioned_stocks 格式无效")
+            return
+        if not isinstance(stocks_list, list):
+            print("⚠️ mentioned_stocks 须为 JSON 数组")
+            return
+        try:
+            Q.validate_mentioned_stocks_entries(stocks_list)
+        except ValueError as err:
+            print(f"❌ {err}", file=sys.stderr)
+            return
+        sync_result = Q.sync_watchlist_from_mentioned_stocks(
+            conn,
+            note_id=args.note_id,
+            note_date=row["date"],
+            title=row["title"],
+            teacher_name=row.get("teacher_name"),
+            stocks=stocks_list,
+        )
+
+    candidates = []
+    skipped = []
+    for a in sync_result["added"]:
+        candidates.append({
+            "code": a["code"],
+            "name": a["name"],
+            "tier": a["tier"],
+            "note_id": args.note_id,
+            "watchlist_id": a["watchlist_id"],
+        })
+    for s in sync_result["skipped"]:
+        skipped.append({"code": s["code"], "name": s["name"]})
+
+    considered = len(candidates) + len(skipped)
+    if considered > 0:
+        print(f"📋 关注池同步（来自笔记 #{args.note_id}）({len(candidates)} 新增 / {considered} 统计):")
+        for c in candidates:
+            print(
+                f"  - {c['code']} {c['name']} [{c['tier']}] "
+                f"(已加入, watchlist id={c['watchlist_id']})"
+            )
+        for s in skipped:
+            print(f"  - {s['code']} {s['name']} (已在关注池，跳过)")
+        if candidates:
+            cand_out = [{k: v for k, v in c.items() if k != "watchlist_id"} for c in candidates]
+            print(f"WATCHLIST_CANDIDATES: {json.dumps(cand_out, ensure_ascii=False)}")
+    else:
+        print(
+            "📋 关注池同步: mentioned_stocks 中无有效股票代码（每项需含非空 code），已跳过"
+        )
+
 
 def _cmd_watchlist_add(args: argparse.Namespace) -> None:
     from . import queries as Q

@@ -58,6 +58,9 @@ RECORD_NOTES_COMMANDS = [
     # add-note 从文件读取长原文
     ["db", "add-note", "--teacher", "X", "--date", "2026-04-01", "--title", "T",
      "--raw-content-file", "/tmp/raw.txt"],
+    # add-note 用户确认入池后：同步 mentioned_stocks 到关注池
+    ["db", "add-note", "--teacher", "小鲍", "--date", "2026-04-01", "--title", "T",
+     "--stocks", '[{"code":"300750","name":"宁德时代"}]', "--sync-watchlist-from-stocks"],
     # add-industry 最简
     ["db", "add-industry", "--sector", "AI算力", "--date", "2026-04-01", "--content", "C"],
     # add-industry 完整
@@ -94,6 +97,7 @@ PORTFOLIO_COMMANDS = [
     ["db", "watchlist-list"],
     ["db", "watchlist-list", "--tier", "tier1_core"],
     ["db", "watchlist-list", "--status", "watching"],
+    ["db", "watchlist-sync-from-note", "--note-id", "1"],
     # add-trade
     ["db", "add-trade", "--code", "300750", "--name", "宁德时代",
      "--direction", "buy", "--price", "85.0", "--date", "2026-04-01"],
@@ -188,6 +192,7 @@ def test_all_skill_subcommands_registered() -> None:
         # portfolio-manager
         "holdings-add", "holdings-remove", "holdings-list",
         "watchlist-add", "watchlist-remove", "watchlist-update", "watchlist-list",
+        "watchlist-sync-from-note",
         "add-trade", "blacklist-add",
         # daily-review
         "query-notes", "db-search",

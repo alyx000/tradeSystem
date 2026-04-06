@@ -1294,6 +1294,81 @@ class TestPlanningAndKnowledgeAPI:
         r = client.get(f"/api/teacher-notes/{nid}")
         assert r.status_code == 404
 
+    def test_create_note_mentioned_stocks_default_no_watchlist_sync(self, client, db_path):
+        r = client.post(
+            "/api/teacher-notes",
+            json={
+                "teacher_name": "API池老师",
+                "date": "2026-04-10",
+                "title": "仅记笔记",
+                "mentioned_stocks": [
+                    {"code": "300750", "name": "宁德时代", "tier": "tier3_sector"},
+                ],
+            },
+        )
+        assert r.status_code == 200
+        payload = r.json()
+        assert "watchlist_sync" not in payload
+        conn = get_connection(db_path)
+        n = conn.execute(
+            "SELECT COUNT(*) FROM watchlist WHERE stock_code='300750'"
+        ).fetchone()[0]
+        assert n == 0
+        conn.close()
+
+    def test_create_note_watchlist_sync_opt_in(self, client, db_path):
+        r = client.post(
+            "/api/teacher-notes",
+            json={
+                "teacher_name": "API池老师2",
+                "date": "2026-04-11",
+                "title": "同步标题",
+                "mentioned_stocks": [
+                    {"code": "688999", "name": "测同步", "tier": "tier2_watch"},
+                ],
+                "sync_watchlist_from_mentions": True,
+            },
+        )
+        assert r.status_code == 200
+        payload = r.json()
+        nid = payload["id"]
+        assert "watchlist_sync" in payload
+        assert len(payload["watchlist_sync"]["added"]) == 1
+        assert payload["watchlist_sync"]["added"][0]["code"] == "688999"
+        conn = get_connection(db_path)
+        row = conn.execute(
+            "SELECT source_note_id FROM watchlist WHERE stock_code='688999'"
+        ).fetchone()
+        assert row["source_note_id"] == nid
+        conn.close()
+
+    def test_create_note_mentioned_stocks_non_object_rejected(self, client):
+        r = client.post(
+            "/api/teacher-notes",
+            json={
+                "teacher_name": "坏格式老师",
+                "date": "2026-04-12",
+                "title": "T",
+                "mentioned_stocks": ["300750", {"code": "688041", "name": "B"}],
+            },
+        )
+        assert r.status_code == 422
+        detail = r.json().get("detail", "")
+        assert "mentioned_stocks[0]" in (detail if isinstance(detail, str) else str(detail))
+
+    def test_create_note_sync_invalid_mentioned_element_422(self, client):
+        r = client.post(
+            "/api/teacher-notes",
+            json={
+                "teacher_name": "同步坏格式",
+                "date": "2026-04-12",
+                "title": "T",
+                "mentioned_stocks": ["300750"],
+                "sync_watchlist_from_mentions": True,
+            },
+        )
+        assert r.status_code == 422
+
     def test_note_list_has_attachments_field(self, client, db_path):
         conn = get_connection(db_path)
         tid = Q.get_or_create_teacher(conn, "附件测试老师")
