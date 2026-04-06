@@ -14,12 +14,12 @@ SCRIPTS_DIR = Path(__file__).resolve().parent.parent
 MAIN_PY = SCRIPTS_DIR / "main.py"
 
 
-def _run_cli(*args: str, tmp_db: str) -> subprocess.CompletedProcess:
+def _run_cli(*args: str, tmp_db: str, input_text: str | None = None) -> subprocess.CompletedProcess:
     import os
     env = {**os.environ, "TRADE_DB_PATH": tmp_db}
     return subprocess.run(
         [sys.executable, str(MAIN_PY), "db", *args],
-        capture_output=True, text=True, cwd=str(SCRIPTS_DIR), env=env,
+        capture_output=True, text=True, cwd=str(SCRIPTS_DIR), env=env, input=input_text,
     )
 
 
@@ -109,6 +109,57 @@ class TestAddNote:
         )
         assert result.returncode == 0
         assert "附件" not in result.stdout or "附件 0 个" not in result.stdout
+
+    def test_raw_content_file(self, tmp_db, tmp_path):
+        content_file = tmp_path / "ocr.txt"
+        content_file.write_text("这是一段很长的 OCR/PDF 提取内容", encoding="utf-8")
+        result = _run_cli(
+            "add-note", "--teacher", "文件老师",
+            "--date", "2026-04-01", "--title", "文件原文",
+            "--raw-content-file", str(content_file),
+            tmp_db=tmp_db,
+        )
+        assert result.returncode == 0
+        conn = get_connection(tmp_db)
+        row = conn.execute(
+            "SELECT raw_content FROM teacher_notes WHERE title = ?",
+            ("文件原文",),
+        ).fetchone()
+        conn.close()
+        assert row is not None
+        assert row[0] == "这是一段很长的 OCR/PDF 提取内容"
+
+    def test_raw_content_stdin(self, tmp_db):
+        result = _run_cli(
+            "add-note", "--teacher", "标准输入老师",
+            "--date", "2026-04-01", "--title", "标准输入原文",
+            "--raw-content-file", "-",
+            tmp_db=tmp_db,
+            input_text="通过 stdin 写入的长文本",
+        )
+        assert result.returncode == 0
+        conn = get_connection(tmp_db)
+        row = conn.execute(
+            "SELECT raw_content FROM teacher_notes WHERE title = ?",
+            ("标准输入原文",),
+        ).fetchone()
+        conn.close()
+        assert row is not None
+        assert row[0] == "通过 stdin 写入的长文本"
+
+    def test_raw_content_and_file_are_mutually_exclusive(self, tmp_db, tmp_path):
+        content_file = tmp_path / "ocr.txt"
+        content_file.write_text("内容", encoding="utf-8")
+        result = _run_cli(
+            "add-note", "--teacher", "老师",
+            "--date", "2026-04-01", "--title", "冲突参数",
+            "--raw-content", "直接参数",
+            "--raw-content-file", str(content_file),
+            tmp_db=tmp_db,
+        )
+        assert result.returncode != 0
+        assert "--raw-content-file" in result.stderr
+        assert "not allowed with argument --raw-content" in result.stderr
 
 
 class TestQueryNotes:

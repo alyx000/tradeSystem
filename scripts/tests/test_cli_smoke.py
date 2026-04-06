@@ -55,6 +55,9 @@ RECORD_NOTES_COMMANDS = [
     # add-note 多附件
     ["db", "add-note", "--teacher", "X", "--date", "2026-04-01", "--title", "T",
      "--source-type", "mixed", "--attachment", "/tmp/a.jpg", "/tmp/b.jpg", "/tmp/c.jpg"],
+    # add-note 从文件读取长原文
+    ["db", "add-note", "--teacher", "X", "--date", "2026-04-01", "--title", "T",
+     "--raw-content-file", "/tmp/raw.txt"],
     # add-industry 最简
     ["db", "add-industry", "--sector", "AI算力", "--date", "2026-04-01", "--content", "C"],
     # add-industry 完整

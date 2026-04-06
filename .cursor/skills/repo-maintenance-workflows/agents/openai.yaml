@@ -1,0 +1,4 @@
+interface:
+  display_name: "仓库维护"
+  short_description: "调试、review 与对齐 tradeSystem 仓库实现和文档"
+  default_prompt: "Use $repo-maintenance-workflows to debug a repo issue, review changes, or align CLI, API, Web, and service behavior."

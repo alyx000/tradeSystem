@@ -1,7 +1,7 @@
 ---
 name: knowledge-to-plan
 description: 从课程笔记、新闻资料等知识资产触发 MarketObservation 和 TradeDraft；老师观点走 teacher_notes 唯一事实源
-version: "0.2"
+version: "0.3"
 ---
 
 # Skill: 资料提炼到计划
@@ -10,61 +10,73 @@ version: "0.2"
 
 当用户说：
 
-- 「把这条**新闻/课程/手动笔记**转成计划草稿」
+- 「把这条新闻转成计划草稿」
 - 「从资料里提炼一下交易线索」
 - 「从这篇笔记生成 observation」
+- 「把老师观点生成草稿」
 
 时激活此 skill。
 
-若用户明确是**某位老师的结构化观点**（复盘、直播要点），应走 **record-notes** / `db add-note` 写入 `teacher_notes`，再用本 skill 的 **从老师笔记生成草稿** 路径，**不要**用 `knowledge add-note` 冒充老师观点。
+详细分流规则见 [references/source-routing.md](references/source-routing.md)。
 
-## 当前标准 CLI
+## 优先入口
+
+优先使用仓库根目录：
 
 ```bash
 make knowledge-open
 make knowledge-list
 make knowledge-add-note
 make knowledge-draft-from-asset ASSET_ID=asset_xxx
-make knowledge-draft-from-teacher-note NOTE_ID=42 DATE=2026-04-10
+make knowledge-draft-from-teacher-note NOTE_ID=42 DATE=YYYY-MM-DD
+```
+
+需要细粒度参数时再退回：
+
+```bash
 python3 main.py knowledge add-note
 python3 main.py knowledge list
-python3 main.py knowledge draft-from-asset --asset-id asset_xxx
-python3 main.py knowledge draft-from-teacher-note --note-id 42 --date 2026-04-10
+python3 main.py knowledge draft-from-asset --asset-id asset_xxx --date YYYY-MM-DD
+python3 main.py knowledge draft-from-teacher-note --note-id 42 --date YYYY-MM-DD
 ```
 
-老师观点录入（唯一事实源）：
+老师观点的唯一事实源仍是：
 
 ```bash
-cd scripts && python3 main.py db add-note --teacher "小鲍" --date 2026-04-01 --title "..." --input-by openclaw
+python3 main.py db add-note --teacher "小鲍" --date YYYY-MM-DD --title "..." --input-by openclaw
 ```
 
-若需要结构化输出，附加：
+## 核心流程
 
-```bash
---json
-```
+1. 先判断来源是老师观点还是普通资料。
+2. 选择正确入口：
+   - 老师观点：`teacher_notes`
+   - 普通资料：`knowledge_assets`
+3. 写入后再触发 observation / draft 生成。
+4. 返回草稿结果，并提醒正式计划仍需人工确认。
 
-说明：
+## 禁止事项
 
-- 若用户是要进入 Web 资料工作台本身，优先使用 `make knowledge-open`
-- **老师观点**：Web 资料工作台选「老师观点」或 CLI `db add-note`，数据在 `teacher_notes`
-- **其它资料**：`knowledge add-note`（`news_note` / `manual_note`；不再新建 `course_note`），数据在 `knowledge_assets`
-- `knowledge add-note` **不再接受** `teacher_note` / `course_note`（CLI choices 已移除）；`POST /api/knowledge/assets` 若带上述 `asset_type` 返回 **422**
-- 若需要补充底层参数，再退回 `python3 main.py knowledge ...`
+- 不要用 `knowledge add-note` 冒充老师观点。
+- 不要把 `teacher_note` / `course_note` 写回 `knowledge_assets`。
+- 不要绕过人工确认直接生成正式 `TradePlan`。
+- 不要在未确认来源的情况下自行猜测分流目标。
 
-## 协作规则
+## 最小验证
 
-- **非老师类**资料先进入 `knowledge_assets`，再由 `draft-from-asset` 触发 `MarketObservation(source_type=knowledge_asset)` 与 `TradeDraft`
-- **老师观点**只存 `teacher_notes`，由 `draft-from-teacher-note`（CLI 或 `POST /api/knowledge/teacher-notes/{note_id}/draft`）触发 `MarketObservation(source_type=teacher_note)` 与 `TradeDraft`，`source_refs` 含 `teacher_note_id`
-- Agent 可触发 observation，但不得跳过人工确认直接生成正式计划
+- `make knowledge-list` 或对应 API 能看到新增资产 / 笔记来源。
+- `draft-from-asset` 或 `draft-from-teacher-note` 能成功返回 `TradeDraft`。
+- 若分流失败，先回查 [references/source-routing.md](references/source-routing.md) 再决定是否切换 skill。
 
-## 当前能力
+## 切换条件
 
-- `knowledge_assets`：`add-note` / `list` / `draft-from-asset`；**禁止**新建 `teacher_note` / `course_note`（API 422）；列表 **不传 asset_type** 时含遗留 `course_note`；**禁止** `asset_type=course_note`（或 `teacher_note`）筛选（422）；遗留 `teacher_note` 行**不可** `draft-from-asset`；遗留 `course_note` 仍可 `draft-from-asset`
-- `teacher_notes`：`db add-note`；`draft-from-teacher-note` / 上述 API
-- Web 资料工作台：合并展示老师笔记与其它资料；老师观点录入走 `teacher-notes` API；列表支持删除（笔记与资产分别调用对应 DELETE）
+- 若输入本质上是老师原始观点录入，先切到 [`record-notes/SKILL.md`](../record-notes/SKILL.md)。
+- 若用户要确认正式次日计划，切到 [`plan-workbench/SKILL.md`](../plan-workbench/SKILL.md)。
+- 若发现 CLI / API / Web 语义漂移，切到 [`repo-maintenance-workflows/SKILL.md`](../repo-maintenance-workflows/SKILL.md)。
 
-当前限制：
+## 结果汇报格式
 
-- 资料提炼先走规则抽取，不依赖 LLM
-- 生成的检查项仍停留在 draft 候选层，正式计划需人工确认
+1. 采用的分流路径与写入对象
+2. 生成的 observation / draft 摘要
+3. 验证结果
+4. 剩余风险或待人工确认项

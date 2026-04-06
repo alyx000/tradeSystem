@@ -1,0 +1,4 @@
+interface:
+  display_name: "资料转计划"
+  short_description: "把资料或老师观点分流后生成 observation 和 draft"
+  default_prompt: "Use $knowledge-to-plan to route the source correctly and generate a TradeDraft from a knowledge asset or teacher note."

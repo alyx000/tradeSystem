@@ -439,6 +439,7 @@ tradeSystem/
 - 查看盘后信封：`make market-envelope DATE=YYYY-MM-DD`
 - 打开复盘工作台：`make review-open DATE=YYYY-MM-DD`
 - 查看复盘预填充：`make review-prefill DATE=YYYY-MM-DD`
+- 八步复盘分步提问话术附录（Skill，供 AI 逐步引导）：[eight-step-prompt-templates.md](/Users/alyx/tradeSystem/.cursor/skills/daily-review/references/eight-step-prompt-templates.md)
 - 单接口采集：`make ingest-run-interface NAME=block_trade`
 - 查看采集审计：`make ingest-inspect DATE=YYYY-MM-DD`
 - 查看采集健康：`make ingest-health DATE=YYYY-MM-DD DAYS=7`

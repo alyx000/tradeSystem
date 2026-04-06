@@ -78,6 +78,15 @@ python3 -m pytest scripts/tests/test_cli_smoke.py -v
 | `api/routes/planning.py` 中 `/api/plans/*` | `plan-workbench/SKILL.md` |
 | `api/routes/planning.py` 中 `/api/knowledge/*` | `knowledge-to-plan/SKILL.md` |
 
+### 3.1 检查 `agents/openai.yaml` 是否仍匹配
+
+若受影响的 skill 目录中存在 `agents/openai.yaml`：
+
+- [ ] `display_name` 仍与 skill 目标一致
+- [ ] `short_description` 仍能准确概括当前 SKILL.md
+- [ ] `default_prompt` 仍显式引用 `$skill-name`
+- [ ] 若 SKILL.md 已明显改义，重新生成或更新 `agents/openai.yaml`
+
 ### 4. 验证报告（每次修改后输出）
 
 ```
@@ -85,6 +94,7 @@ Skills 同步检查结果：
 - [✅/❌] INDEX.md 已更新
 - [✅/❌] test_cli_smoke.py 全部通过
 - [✅/❌] 受影响的 SKILL.md 已检查并更新（如需）
+- [✅/❌] 受影响的 agents/openai.yaml 已检查并更新（如需）
 ```
 
 ## 背景说明

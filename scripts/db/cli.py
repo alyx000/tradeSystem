@@ -5,6 +5,7 @@ import argparse
 import json
 import logging
 import shutil
+import sys
 from pathlib import Path
 
 from .connection import get_db
@@ -14,6 +15,18 @@ from .migrate import import_all, migrate
 logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+
+
+def _read_raw_content(args: argparse.Namespace) -> str | None:
+    """读取 add-note 的原文内容，支持直接传参、文件和 stdin。"""
+    raw_content = getattr(args, "raw_content", None)
+    raw_content_file = getattr(args, "raw_content_file", None)
+    if raw_content_file is None:
+        return raw_content
+    if raw_content_file == "-":
+        return sys.stdin.read()
+    path = Path(raw_content_file)
+    return path.read_text(encoding="utf-8")
 
 
 def register_db_subparser(subparsers: argparse._SubParsersAction) -> None:
@@ -38,7 +51,13 @@ def register_db_subparser(subparsers: argparse._SubParsersAction) -> None:
     add_note.add_argument("--key-points", default=None, help="结构化要点 JSON array，如 '[\"要点1\",\"要点2\"]'")
     add_note.add_argument("--sectors", default=None, help="涉及板块 JSON array，如 '[\"AI\",\"锂电\"]'")
     add_note.add_argument("--position-advice", default=None, help="仓位建议")
-    add_note.add_argument("--raw-content", default=None, help="原始全文")
+    raw_content_group = add_note.add_mutually_exclusive_group()
+    raw_content_group.add_argument("--raw-content", default=None, help="原始全文")
+    raw_content_group.add_argument(
+        "--raw-content-file",
+        default=None,
+        help="从文件读取原始全文；传 '-' 时从 stdin 读取，适合长文本/OCR/PDF 提取结果",
+    )
     add_note.add_argument("--attachment", nargs="*", default=None, help="附件文件路径（可多个）")
     add_note.add_argument(
         "--stocks", default=None,
@@ -221,6 +240,7 @@ def _cmd_add_note(args: argparse.Namespace) -> None:
     stocks_list: list[dict] = []
     if args.stocks:
         stocks_list = json.loads(args.stocks)
+    raw_content = _read_raw_content(args)
 
     with get_db() as conn:
         migrate(conn)
@@ -234,8 +254,8 @@ def _cmd_add_note(args: argparse.Namespace) -> None:
         }
         if args.core_view:
             kwargs["core_view"] = args.core_view
-        if args.raw_content:
-            kwargs["raw_content"] = args.raw_content
+        if raw_content:
+            kwargs["raw_content"] = raw_content
         if args.tags:
             kwargs["tags"] = json.loads(args.tags)
         if args.key_points:

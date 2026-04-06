@@ -90,6 +90,12 @@
 | `knowledge-to-plan` | `/api/knowledge/teacher-notes/{note_id}/draft` | POST | 从老师笔记生成 observation/draft |
 | `knowledge-to-plan` | `/api/teacher-notes` | GET/POST | 资料工作台老师观点列表与录入 |
 
+## Skill 参考附录（非 CLI/API）
+
+| Skill | 路径 | 说明 |
+|-------|------|------|
+| `daily-review` | [daily-review/references/eight-step-prompt-templates.md](daily-review/references/eight-step-prompt-templates.md) | 八步复盘分步提问话术模板（配合 SKILL 速查） |
+
 `repo-maintenance-workflows` 不绑定固定业务 API；它会按受影响的 CLI / API / skill / 文档入口就近检查，并在修改 `scripts/main.py`、`scripts/api/routes/*.py`、`.cursor/skills/**/*.md` 后强制同步 `INDEX.md` 与 `skills-sync.mdc`。
 
 ## 可用 API 总览（供开发新 Skill 参考）

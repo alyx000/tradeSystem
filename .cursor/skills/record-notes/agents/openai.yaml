@@ -1,0 +1,4 @@
+interface:
+  display_name: "记录信息"
+  short_description: "Structure teacher notes, sector updates, and macro items"
+  default_prompt: "Use $record-notes to structure and record a teacher note, industry update, or macro item into the correct DB entry."
