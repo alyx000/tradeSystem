@@ -77,6 +77,7 @@ make db-search KEYWORD=锂电 FROM=2026-04-01 TO=2026-04-01
 - `--sectors`：能识别时写涉及板块
 - `--tags`：提取题材、方法论、情绪周期等标签
 - `--position-advice`：涉及仓位、节奏、风控时补充
+- `--stocks`：识别老师重点提及、值得跟踪的个股，格式为 JSON 数组 `[{"code":"300750","name":"宁德时代","tier":"tier3_sector"}]`，tier 可选 `tier1_core`/`tier2_watch`/`tier3_sector`（默认 `tier3_sector`）；泛泛提及、举例对比的个股**不应**纳入
 
 **原文与提炼并存：**
 - `--raw-content`：保存完整文字原文，图片场景可写 OCR 结果
@@ -100,6 +101,7 @@ make db-search KEYWORD=锂电 FROM=2026-04-01 TO=2026-04-01
   - 龙头首阴优先看承接，不追杂毛
   - 仓位不宜激进，等分歧确认后再加
   涉及板块: AI算力, CPO
+  涉及个股: 688041 海光信息 [tier2_watch], 300750 宁德时代 [tier3_sector]
   标签: 主线, 首阴, 仓位管理
   仓位建议: 先控仓，分歧转强再逐步加仓
   原文: 已保留到 raw-content
@@ -114,7 +116,7 @@ make db-search KEYWORD=锂电 FROM=2026-04-01 TO=2026-04-01
 
 ```bash
 cd /path/to/tradeSystem/scripts
-# 纯文字
+# 纯文字（含个股）
 python3 main.py db add-note \
   --teacher "小鲍" \
   --date "2026-04-01" \
@@ -123,6 +125,7 @@ python3 main.py db add-note \
   --key-points '["AI算力主线未结束","龙头首阴有观察价值","分歧日先看承接"]' \
   --sectors '["AI算力","CPO"]' \
   --tags '["主线","首阴","分歧"]' \
+  --stocks '[{"code":"688041","name":"海光信息","tier":"tier2_watch"},{"code":"300750","name":"宁德时代","tier":"tier3_sector"}]' \
   --source-type text \
   --input-by openclaw
 
@@ -227,15 +230,68 @@ python3 main.py db add-macro \
 
 ## 验证结果
 
-成功输出示例：
+成功输出示例（含个股）：
 ```
 ✅ 已录入笔记 (id=42): 小鲍 - AI算力主线判断, 附件 2 个
+📋 候选关注池 (2/3):
+  - 688041 海光信息 [tier2_watch] (建议加入)
+  - 300750 宁德时代 [tier3_sector] (建议加入)
+  - 600519 贵州茅台 (已在关注池，跳过)
+WATCHLIST_CANDIDATES: [{"code":"688041","name":"海光信息","tier":"tier2_watch","note_id":42},...]
 ```
+
+**`📋 候选关注池 (M/N)` 含义：**
+
+- `M`：建议加入关注池的只数（尚不在关注池、且 `code` 非空）。
+- `N`：参与统计的只数 = `M` + 「已在关注池，跳过」的只数；**仅统计 JSON 里含非空 `code` 的项**。缺 `code` 或 `code` 为空的条目仍会写入 `mentioned_stocks`，但不计入 `N`，也不会出现在下方的候选/跳过列表里。
+- 若 `--stocks` 传了数组但**没有任何非空 `code`**，CLI 会输出一行提示（无 `M/N` 分数、无 `WATCHLIST_CANDIDATES`），例如：`📋 候选关注池: --stocks 中无有效股票代码（每项需含非空 code），已跳过候选统计`。此时无需执行下方「关注池同步」步骤，应检查提炼结果并补全 `code`。
 
 失败时：
 - 检查 `--date` 格式是否为 `YYYY-MM-DD`
 - 检查 `--tags` 是否为合法 JSON 数组
 - 检查 `--attachment` 文件路径是否存在
+- 检查 `--stocks` 是否为合法 JSON 数组，且每项含 `code`、`name` 字段
+
+## 关注池同步步骤（录入成功后）
+
+若 CLI 输出了带 `M/N` 的 `📋 候选关注池 (...)` 且存在「建议加入」的条目，Agent 应执行以下步骤（仅提示「无有效股票代码」时跳过）：
+
+**1. 向用户展示候选条目，询问是否加入：**
+
+```text
+已识别 N 只个股，其中 M 只建议加入关注池：
+
+  1. 688041 海光信息 [tier2_watch] — 来自笔记 #42
+  2. 300750 宁德时代 [tier3_sector] — 来自笔记 #42
+
+是否全部加入？或输入要跳过的编号（如「跳过2」）：
+```
+
+**2. 用户确认后，逐一执行 `watchlist-add`：**
+
+```bash
+cd /path/to/tradeSystem/scripts
+python3 main.py db watchlist-add \
+  --code 688041 \
+  --name "海光信息" \
+  --tier tier2_watch \
+  --reason "来自小鲍观点：AI算力主线判断（笔记#42）" \
+  --source-note-id 42 \
+  --input-by openclaw
+```
+
+**3. 汇报结果：**
+
+```
+✅ 关注池已同步：
+  - 688041 海光信息 [tier2_watch] 已加入（来源笔记#42）
+  - 300750 宁德时代 [tier3_sector] 已加入（来源笔记#42）
+```
+
+**注意事项：**
+- 仅「建议加入」的条目需要询问，「已在关注池，跳过」的直接忽略
+- 用户可对每只股票单独调整 tier 后再加入
+- `--source-note-id` 用于追溯该条目因何进入关注池，必须填写
 
 ## 注意事项
 
@@ -244,3 +300,4 @@ python3 main.py db add-macro \
 - 一次消息可能包含多条信息，循环调用命令分别录入
 - 图片识别内容建议用 OCR 或 vision API 提取后写入 `--raw-content`
 - `openclaw` / `copaw` 在执行 `db add-note` 前，应先完成结构化提炼，再进入用户确认流程
+- `--stocks` 只录入老师重点提及、值得跟踪的个股；泛泛举例或对比用的个股不纳入

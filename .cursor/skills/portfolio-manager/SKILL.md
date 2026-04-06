@@ -164,6 +164,15 @@ python3 main.py db watchlist-add \
   --reason "锂电龙头，板块主升期关注" \
   --sector "锂电"
 
+# 从老师观点触发加入（带来源追溯）
+python3 main.py db watchlist-add \
+  --code 688041 \
+  --name "海光信息" \
+  --tier tier2_watch \
+  --reason "来自小鲍观点：AI算力主线判断（笔记#42）" \
+  --sector "国产算力" \
+  --source-note-id 42
+
 # 从关注池移除
 python3 main.py db watchlist-remove --code 300750
 
@@ -181,6 +190,11 @@ python3 main.py db watchlist-list --status watching
 - `tier1_core`：核心关注，重仓候选，板块龙头
 - `tier2_watch`：二线关注，观察位，备选
 - `tier3_sector`：板块跟踪，行情时关注
+
+**`--source-note-id` 说明：**
+- 可选，填入 `teacher_notes.id`，记录该条目是由哪条老师笔记触发加入关注池的
+- 由 `record-notes` skill 的关注池同步步骤自动填写
+- 便于日后回溯"这只票为什么在关注池里"
 
 **`--status` 说明：**
 - `watching`：正在关注（默认）

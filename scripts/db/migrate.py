@@ -245,6 +245,21 @@ def migrate(conn: sqlite3.Connection) -> None:
         set_schema_version(conn, 13)
         conn.commit()
 
+    if version < 14:
+        logger.info("Applying schema v14: teacher_notes.mentioned_stocks + watchlist.source_note_id")
+        tn_cols = {row[1] for row in conn.execute("PRAGMA table_info(teacher_notes)").fetchall()}
+        if "mentioned_stocks" not in tn_cols:
+            conn.execute("ALTER TABLE teacher_notes ADD COLUMN mentioned_stocks TEXT")
+        wl_cols = {row[1] for row in conn.execute("PRAGMA table_info(watchlist)").fetchall()}
+        if "source_note_id" not in wl_cols:
+            conn.execute("ALTER TABLE watchlist ADD COLUMN source_note_id INTEGER")
+        conn.execute("DROP TRIGGER IF EXISTS teacher_notes_fts_insert")
+        conn.execute("DROP TRIGGER IF EXISTS teacher_notes_fts_delete")
+        conn.execute("DROP TRIGGER IF EXISTS teacher_notes_fts_update")
+        init_schema(conn)
+        set_schema_version(conn, 14)
+        conn.commit()
+
 
 # ──────────────────────────────────────────────────────────────
 # YAML 数据导入

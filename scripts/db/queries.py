@@ -65,7 +65,8 @@ def insert_teacher_note(conn: sqlite3.Connection, *, teacher_id: int, date: str,
     cols = ["teacher_id", "date", "title"]
     vals: list[Any] = [teacher_id, date, title]
     for k in ("source_type", "input_by", "core_view", "position_advice",
-              "obsidian_path", "tags", "key_points", "sectors", "avoid", "raw_content"):
+              "obsidian_path", "tags", "key_points", "sectors", "avoid", "raw_content",
+              "mentioned_stocks"):
         if k in kwargs and kwargs[k] is not None:
             cols.append(k)
             v = kwargs[k]
@@ -74,6 +75,15 @@ def insert_teacher_note(conn: sqlite3.Connection, *, teacher_id: int, date: str,
     sql = f"INSERT INTO teacher_notes ({', '.join(cols)}) VALUES ({placeholders})"
     cur = conn.execute(sql, vals)
     return cur.lastrowid  # type: ignore[return-value]
+
+
+def check_watchlist_exists(conn: sqlite3.Connection, stock_code: str) -> bool:
+    """判断股票代码是否已在关注池中（status != 'removed'）。"""
+    row = conn.execute(
+        "SELECT id FROM watchlist WHERE stock_code = ? AND status != 'removed'",
+        (stock_code,),
+    ).fetchone()
+    return row is not None
 
 
 def search_teacher_notes(conn: sqlite3.Connection, keyword: str,
@@ -486,7 +496,7 @@ def insert_watchlist(conn: sqlite3.Connection, **kwargs: Any) -> int:
     for k in ("stock_code", "stock_name", "tier", "sector", "add_date",
               "add_reason", "trigger_condition", "entry_condition",
               "entry_mode", "position_plan", "volume_status", "current_status",
-              "leader_type", "successor", "role", "status", "note"):
+              "leader_type", "successor", "role", "status", "note", "source_note_id"):
         if k in kwargs and kwargs[k] is not None:
             cols.append(k)
             vals.append(kwargs[k])
@@ -512,7 +522,7 @@ _WATCHLIST_UPDATABLE = frozenset({
     "stock_code", "stock_name", "tier", "sector", "add_date",
     "add_reason", "trigger_condition", "entry_condition", "entry_mode",
     "position_plan", "volume_status", "current_status", "leader_type",
-    "successor", "role", "status", "note",
+    "successor", "role", "status", "note", "source_note_id",
 })
 
 

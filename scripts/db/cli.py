@@ -40,6 +40,10 @@ def register_db_subparser(subparsers: argparse._SubParsersAction) -> None:
     add_note.add_argument("--position-advice", default=None, help="仓位建议")
     add_note.add_argument("--raw-content", default=None, help="原始全文")
     add_note.add_argument("--attachment", nargs="*", default=None, help="附件文件路径（可多个）")
+    add_note.add_argument(
+        "--stocks", default=None,
+        help='提到的个股 JSON array，如 \'[{"code":"300750","name":"宁德时代","tier":"tier3_sector"}]\''
+    )
 
     query_notes = db_sub.add_parser("query-notes", help="搜索老师笔记")
     query_notes.add_argument("--keyword", required=True, help="搜索关键词")
@@ -92,6 +96,7 @@ def register_db_subparser(subparsers: argparse._SubParsersAction) -> None:
     wl_add.add_argument("--reason", default=None, help="关注原因")
     wl_add.add_argument("--sector", default=None, help="所属板块")
     wl_add.add_argument("--note", default=None, help="备注")
+    wl_add.add_argument("--source-note-id", type=int, default=None, help="来源老师笔记 ID（teacher_notes.id）")
 
     wl_remove = db_sub.add_parser("watchlist-remove", help="移除关注池标的（置 removed）")
     wl_remove.add_argument("--code", required=True, help="股票代码")
@@ -213,6 +218,10 @@ def _cmd_reconcile() -> None:
 def _cmd_add_note(args: argparse.Namespace) -> None:
     from . import queries as Q
 
+    stocks_list: list[dict] = []
+    if args.stocks:
+        stocks_list = json.loads(args.stocks)
+
     with get_db() as conn:
         migrate(conn)
         teacher_id = Q.get_or_create_teacher(conn, args.teacher)
@@ -235,6 +244,8 @@ def _cmd_add_note(args: argparse.Namespace) -> None:
             kwargs["sectors"] = json.loads(args.sectors)
         if args.position_advice:
             kwargs["position_advice"] = args.position_advice
+        if stocks_list:
+            kwargs["mentioned_stocks"] = stocks_list
 
         note_id = Q.insert_teacher_note(conn, teacher_id=teacher_id, **kwargs)
 
@@ -253,8 +264,42 @@ def _cmd_add_note(args: argparse.Namespace) -> None:
                 else:
                     logger.warning("附件不存在，跳过: %s", att_path)
 
+        # 输出候选关注池条目
+        candidates = []
+        skipped = []
+        if stocks_list:
+            for stock in stocks_list:
+                code = stock.get("code", "")
+                name = stock.get("name", "")
+                tier = stock.get("tier", "tier3_sector")
+                if not code:
+                    continue
+                if Q.check_watchlist_exists(conn, code):
+                    skipped.append({"code": code, "name": name})
+                else:
+                    candidates.append({"code": code, "name": name, "tier": tier, "note_id": note_id})
+
     att_info = f", 附件 {att_count} 个" if att_count else ""
     print(f"✅ 已录入笔记 (id={note_id}): {args.teacher} - {args.title}{att_info}")
+
+    if stocks_list:
+        # 分母仅统计含非空 code 的条目，与 candidates/skipped 一致，避免缺 code 项稀释比例
+        considered = len(candidates) + len(skipped)
+        new_count = len(candidates)
+        if considered > 0:
+            print(f"📋 候选关注池 ({new_count}/{considered}):")
+            for c in candidates:
+                print(f"  - {c['code']} {c['name']} [{c['tier']}] (建议加入)")
+            for s in skipped:
+                print(f"  - {s['code']} {s['name']} (已在关注池，跳过)")
+            if candidates:
+                print(
+                    f"WATCHLIST_CANDIDATES: {json.dumps(candidates, ensure_ascii=False)}"
+                )
+        else:
+            print(
+                "📋 候选关注池: --stocks 中无有效股票代码（每项需含非空 code），已跳过候选统计"
+            )
 
 
 def _cmd_query_notes(args: argparse.Namespace) -> None:
@@ -410,12 +455,15 @@ def _cmd_watchlist_add(args: argparse.Namespace) -> None:
         kwargs["sector"] = args.sector
     if args.note:
         kwargs["note"] = args.note
+    if args.source_note_id:
+        kwargs["source_note_id"] = args.source_note_id
 
     with get_db() as conn:
         migrate(conn)
         wid = Q.insert_watchlist(conn, **kwargs)
 
-    print(f"✅ 已添加到关注池 (id={wid}): {args.name} ({args.code}) [{args.tier}]")
+    src_info = f", 来源笔记 #{args.source_note_id}" if args.source_note_id else ""
+    print(f"✅ 已添加到关注池 (id={wid}): {args.name} ({args.code}) [{args.tier}]{src_info}")
 
 
 def _cmd_watchlist_remove(args: argparse.Namespace) -> None:

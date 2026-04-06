@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS teacher_notes (
     sectors TEXT,
     avoid TEXT,
     raw_content TEXT,
+    mentioned_stocks TEXT,
     created_at TEXT DEFAULT (datetime('now'))
 );
 """
@@ -61,7 +62,7 @@ CREATE TABLE IF NOT EXISTS note_attachments (
 
 _SQL_TEACHER_NOTES_FTS = """
 CREATE VIRTUAL TABLE IF NOT EXISTS teacher_notes_fts USING fts5(
-    title, core_view, key_points, sectors, avoid, raw_content,
+    title, core_view, key_points, sectors, avoid, raw_content, mentioned_stocks,
     content=teacher_notes, content_rowid=id,
     tokenize='unicode61'
 );
@@ -71,24 +72,24 @@ _SQL_TEACHER_NOTES_FTS_TRIGGERS = [
     """
     CREATE TRIGGER IF NOT EXISTS teacher_notes_fts_insert
     AFTER INSERT ON teacher_notes BEGIN
-        INSERT INTO teacher_notes_fts(rowid, title, core_view, key_points, sectors, avoid, raw_content)
-        VALUES (new.id, new.title, new.core_view, new.key_points, new.sectors, new.avoid, new.raw_content);
+        INSERT INTO teacher_notes_fts(rowid, title, core_view, key_points, sectors, avoid, raw_content, mentioned_stocks)
+        VALUES (new.id, new.title, new.core_view, new.key_points, new.sectors, new.avoid, new.raw_content, new.mentioned_stocks);
     END;
     """,
     """
     CREATE TRIGGER IF NOT EXISTS teacher_notes_fts_delete
     AFTER DELETE ON teacher_notes BEGIN
-        INSERT INTO teacher_notes_fts(teacher_notes_fts, rowid, title, core_view, key_points, sectors, avoid, raw_content)
-        VALUES ('delete', old.id, old.title, old.core_view, old.key_points, old.sectors, old.avoid, old.raw_content);
+        INSERT INTO teacher_notes_fts(teacher_notes_fts, rowid, title, core_view, key_points, sectors, avoid, raw_content, mentioned_stocks)
+        VALUES ('delete', old.id, old.title, old.core_view, old.key_points, old.sectors, old.avoid, old.raw_content, old.mentioned_stocks);
     END;
     """,
     """
     CREATE TRIGGER IF NOT EXISTS teacher_notes_fts_update
     AFTER UPDATE ON teacher_notes BEGIN
-        INSERT INTO teacher_notes_fts(teacher_notes_fts, rowid, title, core_view, key_points, sectors, avoid, raw_content)
-        VALUES ('delete', old.id, old.title, old.core_view, old.key_points, old.sectors, old.avoid, old.raw_content);
-        INSERT INTO teacher_notes_fts(rowid, title, core_view, key_points, sectors, avoid, raw_content)
-        VALUES (new.id, new.title, new.core_view, new.key_points, new.sectors, new.avoid, new.raw_content);
+        INSERT INTO teacher_notes_fts(teacher_notes_fts, rowid, title, core_view, key_points, sectors, avoid, raw_content, mentioned_stocks)
+        VALUES ('delete', old.id, old.title, old.core_view, old.key_points, old.sectors, old.avoid, old.raw_content, old.mentioned_stocks);
+        INSERT INTO teacher_notes_fts(rowid, title, core_view, key_points, sectors, avoid, raw_content, mentioned_stocks)
+        VALUES (new.id, new.title, new.core_view, new.key_points, new.sectors, new.avoid, new.raw_content, new.mentioned_stocks);
     END;
     """,
 ]
@@ -189,6 +190,7 @@ CREATE TABLE IF NOT EXISTS watchlist (
     role TEXT,
     status TEXT DEFAULT 'watching',
     note TEXT,
+    source_note_id INTEGER,
     updated_at TEXT
 );
 """
