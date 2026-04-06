@@ -201,11 +201,8 @@ export default function IngestWorkbench() {
     },
   })
 
-  const runs = inspectData?.runs || []
-  const errors = inspectData?.errors || []
-  const topFailedInterfaces = healthSummary?.top_failed_interfaces || []
   const sortedFailedInterfaces = useMemo(() => {
-    const items = [...topFailedInterfaces]
+    const items = [...(healthSummary?.top_failed_interfaces ?? [])]
     if (failedRankingSort === 'streak') {
       items.sort((a, b) => {
         const streakDiff = (b.consecutive_failure_days ?? 0) - (a.consecutive_failure_days ?? 0)
@@ -228,7 +225,7 @@ export default function IngestWorkbench() {
       return String(a.interface_name ?? '').localeCompare(String(b.interface_name ?? ''))
     })
     return items
-  }, [failedRankingSort, topFailedInterfaces])
+  }, [failedRankingSort, healthSummary?.top_failed_interfaces])
   const dailyFailures = healthSummary?.daily_failures || []
   const healthStageText = stageLabel(healthSummary?.stage || stage)
   const failureRatePct = `${((healthSummary?.failure_rate ?? 0) * 100).toFixed(1)}%`
@@ -243,14 +240,14 @@ export default function IngestWorkbench() {
       ),
     [retrySummary?.groups, focusedInterface]
   )
-  const visibleRuns = useMemo(
-    () => runs.filter((item) => (focusedInterface ? item.interface_name === focusedInterface : true)),
-    [runs, focusedInterface]
-  )
-  const visibleErrors = useMemo(
-    () => errors.filter((item) => (focusedInterface ? item.interface_name === focusedInterface : true)),
-    [errors, focusedInterface]
-  )
+  const visibleRuns = useMemo(() => {
+    const list = inspectData?.runs ?? []
+    return list.filter((item) => (focusedInterface ? item.interface_name === focusedInterface : true))
+  }, [inspectData?.runs, focusedInterface])
+  const visibleErrors = useMemo(() => {
+    const list = inspectData?.errors ?? []
+    return list.filter((item) => (focusedInterface ? item.interface_name === focusedInterface : true))
+  }, [inspectData?.errors, focusedInterface])
   const currentViewHref = useMemo(() => {
     const params = new URLSearchParams()
     if (date) params.set('date', date)
