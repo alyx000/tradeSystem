@@ -74,14 +74,23 @@ def list_notes(
     date_from: Optional[str] = Query(None, alias="from"),
     date_to: Optional[str] = Query(None, alias="to"),
     keyword: Optional[str] = None,
+    limit: int = Query(200, ge=1, le=500),
+    offset: int = Query(0, ge=0),
     conn: sqlite3.Connection = Depends(get_db_conn),
 ):
     if keyword:
-        notes = Q.search_teacher_notes(conn, keyword, teacher_name=teacher,
-                                       date_from=date_from, date_to=date_to)
+        notes = Q.search_teacher_notes(
+            conn,
+            keyword,
+            teacher_name=teacher,
+            date_from=date_from,
+            date_to=date_to,
+            limit=limit,
+            offset=offset,
+        )
         return _attach_note_attachments(conn, notes)
     sql = "SELECT n.*, t.name as teacher_name FROM teacher_notes n JOIN teachers t ON n.teacher_id = t.id WHERE 1=1"
-    params = []
+    params: list[Any] = []
     if teacher:
         sql += " AND t.name = ?"
         params.append(teacher)
@@ -91,7 +100,8 @@ def list_notes(
     if date_to:
         sql += " AND n.date <= ?"
         params.append(date_to)
-    sql += " ORDER BY n.date DESC LIMIT 100"
+    sql += " ORDER BY n.date DESC LIMIT ? OFFSET ?"
+    params.extend([limit, offset])
     notes = [dict(r) for r in conn.execute(sql, params).fetchall()]
     return _attach_note_attachments(conn, notes)
 

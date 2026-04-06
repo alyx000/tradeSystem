@@ -107,7 +107,10 @@ export const api = {
     return request<TeacherNote[]>(`/teacher-notes?${sp}`)
   },
   createNote: (data: TeacherNoteCreateInput) =>
-    request<TeacherNote>('/teacher-notes', { method: 'POST', body: JSON.stringify(data) }),
+    request<{ id: number }>('/teacher-notes', { method: 'POST', body: JSON.stringify(data) }),
+  /** 老师观点与 createNote 相同，写入 teacher_notes（唯一事实源） */
+  createTeacherNote: (data: TeacherNoteCreateInput) =>
+    request<{ id: number }>('/teacher-notes', { method: 'POST', body: JSON.stringify(data) }),
   deleteNote: (id: number) =>
     request<{ ok?: boolean }>(`/teacher-notes/${id}`, { method: 'DELETE' }),
 
@@ -250,8 +253,33 @@ export const api = {
   // Knowledge
   createKnowledgeAsset: (data: KnowledgeAssetCreateInput) =>
     request<KnowledgeAssetRecord>('/knowledge/assets', { method: 'POST', body: JSON.stringify(data) }),
-  listKnowledgeAssets: (limit = 20) =>
-    request<KnowledgeAssetRecord[]>(`/knowledge/assets?limit=${limit}`),
+  listKnowledgeAssets: (
+    params: {
+      limit?: number
+      offset?: number
+      asset_type?: string
+      keyword?: string
+      created_from?: string
+      created_to?: string
+    } = {},
+  ) => {
+    const sp = new URLSearchParams()
+    if (params.limit != null) sp.set('limit', String(params.limit))
+    if (params.offset != null) sp.set('offset', String(params.offset))
+    if (params.asset_type) sp.set('asset_type', params.asset_type)
+    if (params.keyword) sp.set('keyword', params.keyword)
+    if (params.created_from) sp.set('created_from', params.created_from)
+    if (params.created_to) sp.set('created_to', params.created_to)
+    const q = sp.toString()
+    return request<KnowledgeAssetRecord[]>(q ? `/knowledge/assets?${q}` : '/knowledge/assets')
+  },
   draftFromAsset: (assetId: string, data: KnowledgeDraftInput) =>
     request<KnowledgeDraftResult>(`/knowledge/assets/${assetId}/draft`, { method: 'POST', body: JSON.stringify(data) }),
+  draftFromTeacherNote: (noteId: number, data: KnowledgeDraftInput) =>
+    request<KnowledgeDraftResult>(`/knowledge/teacher-notes/${noteId}/draft`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  deleteKnowledgeAsset: (assetId: string) =>
+    request<{ ok?: boolean }>(`/knowledge/assets/${assetId}`, { method: 'DELETE' }),
 }

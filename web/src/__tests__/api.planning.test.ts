@@ -111,19 +111,21 @@ describe('Knowledge API methods', () => {
     expect(result.asset_id).toBe('asset_abc')
   })
 
-  it('listKnowledgeAssets sends GET /api/knowledge/assets?limit=20', async () => {
+  it('listKnowledgeAssets sends query string from params', async () => {
     globalThis.fetch = mockJson([{ asset_id: 'a1' }])
-    const result = await api.listKnowledgeAssets()
+    const result = await api.listKnowledgeAssets({ limit: 50, offset: 0, keyword: '锂电' })
     const [url] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0]
-    expect(url).toBe('/api/knowledge/assets?limit=20')
+    expect(url).toContain('/api/knowledge/assets?')
+    expect(url).toContain('limit=50')
+    expect(url).toContain('keyword=')
     expect(Array.isArray(result)).toBe(true)
   })
 
-  it('listKnowledgeAssets accepts custom limit', async () => {
+  it('listKnowledgeAssets omits empty query when no params', async () => {
     globalThis.fetch = mockJson([])
-    await api.listKnowledgeAssets(50)
+    await api.listKnowledgeAssets({})
     const [url] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0]
-    expect(url).toBe('/api/knowledge/assets?limit=50')
+    expect(url).toBe('/api/knowledge/assets')
   })
 
   it('draftFromAsset sends POST /api/knowledge/assets/{assetId}/draft', async () => {

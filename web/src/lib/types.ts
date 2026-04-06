@@ -519,11 +519,14 @@ export interface TeacherNoteCreateInput {
   title: string
   date: string
   core_view?: string
+  raw_content?: string
   tags?: string[] | string
   sectors?: string[] | string
   key_points?: string[] | string
   position_advice?: string
   avoid?: string
+  source_type?: string
+  input_by?: string
 }
 
 export interface CalendarEventCreateInput {
@@ -719,6 +722,8 @@ export interface KnowledgeDraftResult {
     draft_id?: string
     trade_date?: string
   }
+  /** 从老师笔记生成草稿时返回，替代 asset */
+  teacher_note?: Record<string, unknown>
 }
 
 export interface SectorIndustryPrefill {

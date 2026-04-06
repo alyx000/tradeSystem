@@ -73,6 +73,7 @@ python3 -m pytest scripts/tests/test_cli_smoke.py -v
 | `main.py` 的 `ingest *` | `ingest-inspector/SKILL.md` |
 | `main.py` 的 `plan *` | `plan-workbench/SKILL.md` |
 | `main.py` 的 `knowledge *` | `knowledge-to-plan/SKILL.md` |
+| 仓库维护工作流、CLI/API 对齐、巡检、文档/索引同步 | `repo-maintenance-workflows/SKILL.md` |
 | `api/routes/review.py` | `daily-review/SKILL.md` |
 | `api/routes/planning.py` 中 `/api/plans/*` | `plan-workbench/SKILL.md` |
 | `api/routes/planning.py` 中 `/api/knowledge/*` | `knowledge-to-plan/SKILL.md` |

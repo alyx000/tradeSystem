@@ -25,12 +25,28 @@ def create_knowledge_asset(body: dict):
         )
     except KeyError as exc:
         raise HTTPException(422, f"missing field: {exc}") from exc
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
 
 
 @router.get("/knowledge/assets")
-def list_knowledge_assets(limit: int = 20):
+def list_knowledge_assets(
+    limit: int = 50,
+    offset: int = 0,
+    asset_type: Optional[str] = None,
+    keyword: Optional[str] = None,
+    created_from: Optional[str] = None,
+    created_to: Optional[str] = None,
+):
     service = KnowledgeService()
-    return service.list_assets(limit=limit)
+    return service.list_assets(
+        limit=limit,
+        offset=offset,
+        asset_type=asset_type,
+        keyword=keyword,
+        created_from=created_from,
+        created_to=created_to,
+    )
 
 
 @router.post("/knowledge/assets/{asset_id}/draft")
@@ -48,6 +64,34 @@ def draft_from_asset(asset_id: str, body: Optional[dict] = None):
         )
     except KeyError:
         raise HTTPException(404, "asset not found")
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@router.delete("/knowledge/assets/{asset_id}")
+def delete_knowledge_asset(asset_id: str):
+    service = KnowledgeService()
+    n = service.delete_asset(asset_id)
+    if n == 0:
+        raise HTTPException(404, "asset not found")
+    return {"ok": True}
+
+
+@router.post("/knowledge/teacher-notes/{note_id}/draft")
+def draft_from_teacher_note(note_id: int, body: Optional[dict] = None):
+    service = KnowledgeService()
+    payload = body or {}
+    trade_date = payload.get("trade_date")
+    if not trade_date:
+        raise HTTPException(422, "missing field: trade_date")
+    try:
+        return service.draft_from_teacher_note(
+            note_id=note_id,
+            trade_date=trade_date,
+            input_by=payload.get("input_by"),
+        )
+    except KeyError:
+        raise HTTPException(404, "teacher note not found")
 
 
 @router.post("/plans/drafts")

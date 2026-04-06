@@ -260,6 +260,59 @@ def migrate(conn: sqlite3.Connection) -> None:
         set_schema_version(conn, 14)
         conn.commit()
 
+    if version < 15:
+        logger.info(
+            "Applying schema v15: market_observations.source_type allows teacher_note"
+        )
+        row = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='market_observations'"
+        ).fetchone()
+        ddl = (row["sql"] if row else "") or ""
+        if ddl and "'teacher_note'" not in ddl:
+            conn.execute("DROP INDEX IF EXISTS idx_market_observations_trade_date")
+            conn.execute("DROP INDEX IF EXISTS idx_market_observations_source_type")
+            conn.execute(
+                """
+                CREATE TABLE market_observations__v15 (
+                    observation_id TEXT PRIMARY KEY,
+                    trade_date TEXT NOT NULL CHECK(trade_date GLOB '????-??-??'),
+                    source_type TEXT NOT NULL CHECK(source_type IN (
+                        'review', 'knowledge_asset', 'manual', 'system_prefill',
+                        'agent_assisted', 'teacher_note'
+                    )),
+                    title TEXT,
+                    market_facts_json TEXT,
+                    sector_facts_json TEXT,
+                    stock_facts_json TEXT,
+                    judgements_json TEXT,
+                    source_refs_json TEXT,
+                    source_agent TEXT,
+                    created_by TEXT,
+                    input_by TEXT,
+                    created_at TEXT DEFAULT (datetime('now')),
+                    updated_at TEXT DEFAULT (datetime('now'))
+                )
+                """
+            )
+            conn.execute(
+                "INSERT INTO market_observations__v15 SELECT * FROM market_observations"
+            )
+            conn.execute("DROP TABLE market_observations")
+            conn.execute(
+                "ALTER TABLE market_observations__v15 RENAME TO market_observations"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_market_observations_trade_date "
+                "ON market_observations(trade_date)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_market_observations_source_type "
+                "ON market_observations(source_type)"
+            )
+        init_schema(conn)
+        set_schema_version(conn, 15)
+        conn.commit()
+
 
 # ──────────────────────────────────────────────────────────────
 # YAML 数据导入

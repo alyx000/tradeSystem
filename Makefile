@@ -1,4 +1,4 @@
-.PHONY: help bootstrap doctor check check-web check-scripts hooks-install dev dev-api dev-web commands-doc commands-check dashboard-open search-open commands-open plan-open knowledge-open ingest-open teachers-open holdings-open watchlist-open calendar-open industry-open db-init db-sync db-reconcile holdings holdings-refresh watchlist notes-search db-search market-open market-json market-envelope review-open review-prefill pre post regulatory ingest-list ingest-run-post ingest-run-interface ingest-inspect ingest-health ingest-reconcile plan-draft plan-show-draft plan-confirm plan-diagnose plan-review knowledge-list knowledge-add-note knowledge-draft-from-asset today-open today-close today-pre today-post today-regulatory today-evening today-watchlist today-obsidian today-ingest-inspect today-ingest-health
+.PHONY: help bootstrap doctor check check-web check-scripts hooks-install dev dev-api dev-web commands-doc commands-check dashboard-open search-open commands-open plan-open knowledge-open ingest-open teachers-open holdings-open watchlist-open calendar-open industry-open db-init db-sync db-reconcile holdings holdings-refresh watchlist notes-search db-search market-open market-json market-envelope review-open review-prefill pre post regulatory ingest-list ingest-run-post ingest-run-interface ingest-inspect ingest-health ingest-reconcile plan-draft plan-show-draft plan-confirm plan-diagnose plan-review knowledge-list knowledge-add-note knowledge-draft-from-asset knowledge-draft-from-teacher-note today-open today-close today-pre today-post today-regulatory today-evening today-watchlist today-obsidian today-ingest-inspect today-ingest-health
 
 help:
 	@echo "Available targets:"
@@ -52,6 +52,7 @@ help:
 	@echo "  make knowledge-list - list knowledge assets"
 	@echo "  make knowledge-add-note - example add-note command"
 	@echo "  make knowledge-draft-from-asset - example draft-from-asset command"
+	@echo "  make knowledge-draft-from-teacher-note - draft from teacher_notes (NOTE_ID=)"
 	@echo "  make today-open    - alias for today's pre-market flow"
 	@echo "  make today-close   - alias for today's post-market flow"
 	@echo "  make today-pre     - run today's pre-market flow"
@@ -224,11 +225,15 @@ knowledge-list:
 	cd scripts && python3 main.py knowledge list
 
 knowledge-add-note:
-	cd scripts && python3 main.py knowledge add-note --title "老师观点" --content "机器人回流，关注 002594.SZ"
+	cd scripts && python3 main.py knowledge add-note --title "资讯摘录" --content "机器人回流，关注 002594.SZ"
 
 knowledge-draft-from-asset:
 	@test -n "$$ASSET_ID" || (echo "Usage: make knowledge-draft-from-asset ASSET_ID=asset_xxx" && exit 2)
 	cd scripts && python3 main.py knowledge draft-from-asset --asset-id "$$ASSET_ID" --date "$$(date +%F)"
+
+knowledge-draft-from-teacher-note:
+	@test -n "$$NOTE_ID" || (echo "Usage: make knowledge-draft-from-teacher-note NOTE_ID=42" && exit 2)
+	cd scripts && python3 main.py knowledge draft-from-teacher-note --note-id "$$NOTE_ID" --date "$${DATE:-$$(date +%F)}"
 
 today-open: today-pre
 

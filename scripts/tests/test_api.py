@@ -623,6 +623,214 @@ class TestPlanningAndKnowledgeAPI:
         )
         assert r.status_code == 422
 
+    def test_post_knowledge_asset_rejects_teacher_note(self, client):
+        r = client.post(
+            "/api/knowledge/assets",
+            json={
+                "asset_type": "teacher_note",
+                "title": "不应写入",
+                "content": "正文",
+                "tags": [],
+            },
+        )
+        assert r.status_code == 422
+
+    def test_list_knowledge_assets_excludes_legacy_teacher_note_rows(self, client, db_path):
+        conn = get_connection(db_path)
+        conn.execute(
+            """
+            INSERT INTO knowledge_assets
+            (asset_id, asset_type, title, content, source, tags, summary, trade_clues)
+            VALUES (?, 'teacher_note', ?, ?, NULL, '[]', '', '{}')
+            """,
+            ("asset_legacy_tn", "库内遗留 teacher_note", "仅列表过滤用"),
+        )
+        conn.commit()
+        conn.close()
+
+        r = client.post(
+            "/api/knowledge/assets",
+            json={
+                "asset_type": "manual_note",
+                "title": "手动一条",
+                "content": "正文",
+                "tags": [],
+            },
+        )
+        assert r.status_code == 200
+        r = client.get("/api/knowledge/assets?limit=20")
+        assert r.status_code == 200
+        assets = r.json()
+        types = {a.get("asset_type") for a in assets}
+        assert "teacher_note" not in types
+        assert any(a.get("title") == "手动一条" for a in assets)
+        assert not any(a.get("asset_id") == "asset_legacy_tn" for a in assets)
+
+    def test_list_knowledge_assets_keyword_and_asset_type(self, client):
+        client.post(
+            "/api/knowledge/assets",
+            json={
+                "asset_type": "manual_note",
+                "title": "锂电主题",
+                "content": "正文A",
+                "tags": [],
+            },
+        )
+        client.post(
+            "/api/knowledge/assets",
+            json={
+                "asset_type": "news_note",
+                "title": "宏观周报",
+                "content": "锂电在正文里",
+                "tags": [],
+            },
+        )
+        r = client.get("/api/knowledge/assets?keyword=锂电&asset_type=news_note&limit=50")
+        assert r.status_code == 200
+        assets = r.json()
+        assert all(a.get("asset_type") == "news_note" for a in assets)
+        assert any(a.get("title") == "宏观周报" for a in assets)
+        assert not any(a.get("title") == "锂电主题" for a in assets)
+
+    def test_list_teacher_notes_limit_offset_and_filters(self, client, db_path):
+        conn = get_connection(db_path)
+        tid = Q.get_or_create_teacher(conn, "分页测试老师")
+        Q.insert_teacher_note(
+            conn, teacher_id=tid, date="2026-01-01", title="最早", raw_content="x"
+        )
+        Q.insert_teacher_note(
+            conn, teacher_id=tid, date="2026-01-03", title="最新", raw_content="x"
+        )
+        Q.insert_teacher_note(
+            conn, teacher_id=tid, date="2026-01-02", title="中间", raw_content="unique_kw_xyz"
+        )
+        conn.commit()
+        conn.close()
+
+        r = client.get("/api/teacher-notes?limit=1&offset=0")
+        assert r.status_code == 200
+        assert len(r.json()) == 1
+        assert r.json()[0]["title"] == "最新"
+
+        r2 = client.get("/api/teacher-notes?limit=1&offset=1")
+        assert r2.status_code == 200
+        assert r2.json()[0]["title"] == "中间"
+
+        r3 = client.get("/api/teacher-notes?keyword=unique_kw_xyz&from=2026-01-01&to=2026-01-31")
+        assert r3.status_code == 200
+        titles = {n["title"] for n in r3.json()}
+        assert titles == {"中间"}
+
+    def test_draft_from_asset_rejects_legacy_teacher_note_row(self, client, db_path):
+        conn = get_connection(db_path)
+        conn.execute(
+            """
+            INSERT INTO knowledge_assets
+            (asset_id, asset_type, title, content, source, tags, summary, trade_clues)
+            VALUES (?, 'teacher_note', ?, ?, NULL, '[]', '', '{}')
+            """,
+            ("asset_legacy_tn2", "遗留", "x"),
+        )
+        conn.commit()
+        conn.close()
+
+        r = client.post(
+            f"/api/knowledge/assets/asset_legacy_tn2/draft",
+            json={"trade_date": "2026-04-11"},
+        )
+        assert r.status_code == 422
+
+    def test_draft_from_asset_rejects_invalid_trade_clues_json(self, client, db_path):
+        conn = get_connection(db_path)
+        conn.execute(
+            """
+            INSERT INTO knowledge_assets
+            (asset_id, asset_type, title, content, source, tags, summary, trade_clues)
+            VALUES (?, 'manual_note', ?, ?, NULL, '[]', '', ?)
+            """,
+            ("asset_bad_tc", "trade_clues 损坏", "x", "{not-json"),
+        )
+        conn.commit()
+        conn.close()
+
+        r = client.post(
+            "/api/knowledge/assets/asset_bad_tc/draft",
+            json={"trade_date": "2026-04-11"},
+        )
+        assert r.status_code == 422
+        detail = str(r.json().get("detail", ""))
+        assert "asset_bad_tc" in detail or "JSON" in detail or "json" in detail.lower()
+
+    def test_delete_knowledge_asset(self, client):
+        r = client.post(
+            "/api/knowledge/assets",
+            json={
+                "asset_type": "manual_note",
+                "title": "待删",
+                "content": "x",
+                "tags": [],
+            },
+        )
+        aid = r.json()["asset_id"]
+        r = client.delete(f"/api/knowledge/assets/{aid}")
+        assert r.status_code == 200
+        assert r.json().get("ok") is True
+        r = client.delete(f"/api/knowledge/assets/{aid}")
+        assert r.status_code == 404
+
+    def test_draft_from_teacher_note(self, client):
+        r = client.post(
+            "/api/teacher-notes",
+            json={
+                "teacher_name": "规划测试老师",
+                "date": "2026-04-05",
+                "title": "笔记生成草稿",
+                "raw_content": "AI算力 688041.SH 仍有分歧",
+                "tags": ["AI算力"],
+                "input_by": "pytest",
+            },
+        )
+        assert r.status_code == 200
+        nid = r.json()["id"]
+        r = client.post(
+            f"/api/knowledge/teacher-notes/{nid}/draft",
+            json={"trade_date": "2026-04-11", "input_by": "pytest"},
+        )
+        assert r.status_code == 200
+        payload = r.json()
+        assert payload["observation"]["source_type"] == "teacher_note"
+        assert payload["draft"]["trade_date"] == "2026-04-11"
+        assert "teacher_note" in payload
+        refs = __import__("json").loads(payload["observation"]["source_refs_json"])
+        assert any(r.get("teacher_note_id") == nid for r in refs)
+
+    def test_draft_from_teacher_note_404(self, client):
+        r = client.post(
+            "/api/knowledge/teacher-notes/999999/draft",
+            json={"trade_date": "2026-04-11"},
+        )
+        assert r.status_code == 404
+
+    def test_draft_from_teacher_note_requires_trade_date(self, client):
+        r = client.post(
+            "/api/teacher-notes",
+            json={
+                "teacher_name": "规划测试老师B",
+                "date": "2026-04-05",
+                "title": "缺 trade_date 草稿测试",
+                "raw_content": "内容",
+                "tags": [],
+                "input_by": "pytest",
+            },
+        )
+        assert r.status_code == 200
+        nid = r.json()["id"]
+        r = client.post(
+            f"/api/knowledge/teacher-notes/{nid}/draft",
+            json={"input_by": "pytest"},
+        )
+        assert r.status_code == 422
+
     def test_plan_flow_and_diagnostics(self, client, db_path):
         conn = get_connection(db_path)
         conn.execute(

@@ -21,9 +21,11 @@
 | `record-notes` | `db add-note` | 录入老师观点（文字/图片/多附件） |
 | `record-notes` | `db add-industry` | 录入行业板块信息 |
 | `record-notes` | `db add-macro` | 录入宏观经济信息 |
-| `knowledge-to-plan` | `knowledge add-note` | 写入 `knowledge_assets`，支持资料录入 |
-| `knowledge-to-plan` | `knowledge list` | 列出资料资产 |
+| `knowledge-to-plan` | `knowledge add-note` | 写入 `knowledge_assets`（新闻/课程/手动；不含老师观点） |
+| `knowledge-to-plan` | `knowledge list` | 列出资料资产（不含 `teacher_note` 类型） |
 | `knowledge-to-plan` | `knowledge draft-from-asset` | 从资料生成 `knowledge_asset` observation 和 `TradeDraft` |
+| `knowledge-to-plan` | `knowledge draft-from-teacher-note` | 从 `teacher_notes` 生成 observation 和 `TradeDraft` |
+| `knowledge-to-plan` | `db add-note` | 老师观点唯一事实源（与 record-notes 共用） |
 | `portfolio-manager` | `db holdings-add` | 新增持仓 |
 | `portfolio-manager` | `db holdings-remove` | 移除持仓（置 closed） |
 | `portfolio-manager` | `db holdings-list` | 列出当前持仓 |
@@ -49,6 +51,10 @@
 | `plan-workbench` | `python main.py plan confirm --date/--draft-id` | 确认交易计划并写入 `trade_plans` |
 | `plan-workbench` | `python main.py plan diagnose --date/--plan-id` | 诊断交易计划并读取事实快照 |
 | `plan-workbench` | `python main.py plan review --date/--plan-id` | 回写 `PlanReview` |
+| `repo-maintenance-workflows` | `make check-scripts` | 运行脚本层检查，覆盖 skill 同步后的最小回归 |
+| `repo-maintenance-workflows` | `python3 -m pytest scripts/tests/test_cli_smoke.py -v` | 快速验证 skills 依赖的 CLI 签名未漂移 |
+| `repo-maintenance-workflows` | `make commands-doc` | 重新生成命令索引 |
+| `repo-maintenance-workflows` | `make commands-check` | 校验命令索引与 Makefile 一致 |
 | `daily-review` | `db add-calendar` | 手动录入投资日历事件（节假日/财经/财报等） |
 | *(管理)* | `db init` | 初始化数据库 + 导入历史 YAML |
 | *(管理)* | `db sync` | 重试 pending_writes 中的失败记录 |
@@ -77,9 +83,14 @@
 | `ingest-inspector` | `/api/ingest/run` | POST | 运行指定 stage 采集 |
 | `ingest-inspector` | `/api/ingest/run-interface` | POST | 运行单接口采集 |
 | `ingest-inspector` | `/api/ingest/retry` | GET | 查看待重试分组摘要 |
-| `knowledge-to-plan` | `/api/knowledge/assets` | POST | 新增资料资产 |
-| `knowledge-to-plan` | `/api/knowledge/assets` | GET | 列出资料资产 |
-| `knowledge-to-plan` | `/api/knowledge/assets/{asset_id}/draft` | POST | 从资料生成 observation/draft |
+| `knowledge-to-plan` | `/api/knowledge/assets` | POST | 新增资料资产（禁止 `asset_type=teacher_note`，422） |
+| `knowledge-to-plan` | `/api/knowledge/assets` | GET | 列出资料资产（limit/offset；asset_type/keyword/created_from/created_to） |
+| `knowledge-to-plan` | `/api/knowledge/assets/{asset_id}` | DELETE | 删除资料资产 |
+| `knowledge-to-plan` | `/api/knowledge/assets/{asset_id}/draft` | POST | 从资料生成 observation/draft（遗留 `teacher_note` 行 422，走 teacher-notes draft） |
+| `knowledge-to-plan` | `/api/knowledge/teacher-notes/{note_id}/draft` | POST | 从老师笔记生成 observation/draft |
+| `knowledge-to-plan` | `/api/teacher-notes` | GET/POST | 资料工作台老师观点列表与录入 |
+
+`repo-maintenance-workflows` 不绑定固定业务 API；它会按受影响的 CLI / API / skill / 文档入口就近检查，并在修改 `scripts/main.py`、`scripts/api/routes/*.py`、`.cursor/skills/**/*.md` 后强制同步 `INDEX.md` 与 `skills-sync.mdc`。
 
 ## 可用 API 总览（供开发新 Skill 参考）
 
@@ -99,7 +110,7 @@
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET | `/api/teachers` | 列出所有老师 |
-| GET | `/api/teacher-notes` | 查询笔记列表（支持 keyword/teacher/from/to 过滤） |
+| GET | `/api/teacher-notes` | 查询笔记列表（keyword/teacher/from/to；limit 默认 200、最大 500；offset 分页） |
 | GET | `/api/teacher-notes/{note_id}` | 读取单条笔记 |
 | POST | `/api/teacher-notes` | 新建笔记（含 teacher_name 自动创建老师） |
 | PUT | `/api/teacher-notes/{note_id}` | 更新笔记 |
@@ -183,9 +194,11 @@
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| POST | `/api/knowledge/assets` ★ | 新建资料资产 |
+| POST | `/api/knowledge/assets` ★ | 新建资料资产（禁止 `teacher_note`） |
 | GET | `/api/knowledge/assets` ★ | 列出资料资产 |
-| POST | `/api/knowledge/assets/{asset_id}/draft` ★ | 从资料资产生成 observation / draft |
+| DELETE | `/api/knowledge/assets/{asset_id}` ★ | 删除资料资产 |
+| POST | `/api/knowledge/assets/{asset_id}/draft` ★ | 从资料资产生成 observation / draft（遗留 `teacher_note` 不可用） |
+| POST | `/api/knowledge/teacher-notes/{note_id}/draft` ★ | 从老师笔记生成 observation / draft |
 | POST | `/api/plans/drafts` ★ | 创建 `TradeDraft` |
 | GET | `/api/plans/drafts/{draft_id}` ★ | 查看 `TradeDraft` |
 | POST | `/api/plans/{draft_id}/confirm` ★ | 从 draft 确认正式计划 |

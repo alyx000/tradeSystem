@@ -288,7 +288,7 @@ class TestDailyMarketMigration:
 
 class TestSchemaVersion:
     def test_migrate_to_v5(self, conn):
-        assert get_schema_version(conn) == 14
+        assert get_schema_version(conn) == 15
 
         tables = {
             row[0]
@@ -359,7 +359,7 @@ class TestHoldingsMigration:
         closed = conn.execute(
             "SELECT stock_code FROM holdings WHERE status = 'closed' ORDER BY id"
         ).fetchall()
-        assert get_schema_version(conn) == 14
+        assert get_schema_version(conn) == 15
         assert [row["stock_code"] for row in active] == ["300750.SZ"]
         assert [row["stock_code"] for row in closed] == ["300750"]
 
@@ -396,6 +396,6 @@ def test_migrate_v8_marks_permission_ingest_errors_non_retryable(tmp_path):
     row = conn.execute(
         "SELECT retryable FROM ingest_errors WHERE run_id = 'run_perm'"
     ).fetchone()
-    assert get_schema_version(conn) == 14
+    assert get_schema_version(conn) == 15
     assert row["retryable"] == 0
     conn.close()

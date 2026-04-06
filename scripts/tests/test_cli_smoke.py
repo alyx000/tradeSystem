@@ -158,7 +158,8 @@ ARCHITECTURE_COMMANDS = [
     ["plan", "review", "--plan-id", "plan_1", "--date", "2026-04-07"],
     ["knowledge", "add-note", "--title", "资料标题", "--content", "AI算力回流，关注300750.SZ"],
     ["knowledge", "list"],
-    ["knowledge", "draft-from-asset", "--asset-id", "asset_1", "--date", "2026-04-10"],
+    ["knowledge", "draft-from-asset", "--asset-id", "asset_1", "--date", "2026-04-10", "--input-by", "pytest"],
+    ["knowledge", "draft-from-teacher-note", "--note-id", "1", "--date", "2026-04-10"],
 ]
 
 

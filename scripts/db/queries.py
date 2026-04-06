@@ -90,7 +90,8 @@ def search_teacher_notes(conn: sqlite3.Connection, keyword: str,
                          teacher_name: str | None = None,
                          date_from: str | None = None,
                          date_to: str | None = None,
-                         limit: int = 50) -> list[dict]:
+                         limit: int = 50,
+                         offset: int = 0) -> list[dict]:
     """搜索老师笔记（LIKE 模式，对中文可靠；数据量 <5000 行/年，性能无忧）。"""
     like_pat = f"%{keyword}%"
     sql = """
@@ -110,8 +111,8 @@ def search_teacher_notes(conn: sqlite3.Connection, keyword: str,
     if date_to:
         sql += " AND n.date <= ?"
         params.append(date_to)
-    sql += " ORDER BY n.date DESC LIMIT ?"
-    params.append(limit)
+    sql += " ORDER BY n.date DESC LIMIT ? OFFSET ?"
+    params.extend([limit, max(0, offset)])
     return _rows_to_list(conn.execute(sql, params).fetchall())
 
 

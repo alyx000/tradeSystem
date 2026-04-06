@@ -282,17 +282,22 @@ def cmd_knowledge(args) -> None:
     service = KnowledgeService()
     command = args.knowledge_command
     if command == "add-note":
-        payload = {
-            "status": "ok",
-            "message": "资料已录入",
-            "asset": service.add_asset(
+        try:
+            asset = service.add_asset(
                 asset_type=args.asset_type,
                 title=args.title,
                 content=args.content,
                 source=args.source,
                 tags=json.loads(args.tags) if args.tags else [],
-            ),
-        }
+            )
+        except ValueError as exc:
+            payload = {"status": "validation_error", "message": str(exc)}
+        else:
+            payload = {
+                "status": "ok",
+                "message": "资料已录入",
+                "asset": asset,
+            }
     elif command == "list":
         payload = {
             "status": "ok",
@@ -300,15 +305,39 @@ def cmd_knowledge(args) -> None:
             "assets": service.list_assets(limit=args.limit),
         }
     elif command == "draft-from-asset":
-        payload = {
-            "status": "ok",
-            "message": "已从资料生成 observation 和 draft",
-            **service.draft_from_asset(
+        try:
+            draft_payload = service.draft_from_asset(
                 asset_id=args.asset_id,
                 trade_date=args.date,
-                input_by="manual",
-            ),
-        }
+                input_by=getattr(args, "input_by", None) or "manual",
+            )
+        except KeyError as exc:
+            payload = {"status": "validation_error", "message": f"资料不存在: {exc}"}
+        except ValueError as exc:
+            payload = {"status": "validation_error", "message": str(exc)}
+        else:
+            payload = {
+                "status": "ok",
+                "message": "已从资料生成 observation 和 draft",
+                **draft_payload,
+            }
+    elif command == "draft-from-teacher-note":
+        try:
+            draft_payload = service.draft_from_teacher_note(
+                note_id=args.note_id,
+                trade_date=args.date,
+                input_by=getattr(args, "input_by", None) or "manual",
+            )
+        except KeyError as exc:
+            payload = {"status": "validation_error", "message": f"老师笔记不存在: {exc}"}
+        except ValueError as exc:
+            payload = {"status": "validation_error", "message": str(exc)}
+        else:
+            payload = {
+                "status": "ok",
+                "message": "已从老师笔记生成 observation 和 draft",
+                **draft_payload,
+            }
     else:
         payload = {
             "status": "validation_error",
@@ -1104,8 +1133,13 @@ def build_parser() -> argparse.ArgumentParser:
     knowledge_parser = subparsers.add_parser("knowledge", help="资料与提炼命令（架构骨架）")
     knowledge_subparsers = knowledge_parser.add_subparsers(dest="knowledge_command")
 
-    knowledge_add = knowledge_subparsers.add_parser("add-note", help="录入资料/笔记")
-    knowledge_add.add_argument("--asset-type", default="manual_note", choices=["teacher_note", "news_note", "course_note", "manual_note"], help="资料类型")
+    knowledge_add = knowledge_subparsers.add_parser("add-note", help="录入资料/笔记（老师观点请用 db add-note）")
+    knowledge_add.add_argument(
+        "--asset-type",
+        default="manual_note",
+        choices=["news_note", "course_note", "manual_note"],
+        help="资料类型（不含 teacher_note，老师观点走 db add-note）",
+    )
     knowledge_add.add_argument("--title", required=True, help="标题")
     knowledge_add.add_argument("--content", required=True, help="正文")
     knowledge_add.add_argument("--source", default=None, help="来源")
@@ -1119,7 +1153,16 @@ def build_parser() -> argparse.ArgumentParser:
     knowledge_draft = knowledge_subparsers.add_parser("draft-from-asset", help="从资料生成草稿")
     knowledge_draft.add_argument("--asset-id", required=True, help="资料 ID")
     knowledge_draft.add_argument("--date", default=date.today().isoformat(), help="日期 YYYY-MM-DD")
+    knowledge_draft.add_argument("--input-by", default=None, help="录入方（默认 manual）")
     knowledge_draft.add_argument("--json", action="store_true", help="输出 JSON")
+
+    knowledge_draft_tn = knowledge_subparsers.add_parser(
+        "draft-from-teacher-note", help="从老师笔记（teacher_notes）生成草稿"
+    )
+    knowledge_draft_tn.add_argument("--note-id", type=int, required=True, help="teacher_notes.id")
+    knowledge_draft_tn.add_argument("--date", default=date.today().isoformat(), help="交易日 YYYY-MM-DD")
+    knowledge_draft_tn.add_argument("--input-by", default=None, help="录入方")
+    knowledge_draft_tn.add_argument("--json", action="store_true", help="输出 JSON")
 
     # db
     from db.cli import register_db_subparser

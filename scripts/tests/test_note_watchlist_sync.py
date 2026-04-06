@@ -51,8 +51,8 @@ def conn(tmp_path):
 # ──────────────────────────────────────────────────────────────
 
 class TestMigrationV14:
-    def test_schema_version_reaches_14(self, conn):
-        assert get_schema_version(conn) == 14
+    def test_schema_version_current(self, conn):
+        assert get_schema_version(conn) == 15
 
     def test_teacher_notes_has_mentioned_stocks_column(self, conn):
         cols = {row[1] for row in conn.execute("PRAGMA table_info(teacher_notes)").fetchall()}
@@ -73,7 +73,7 @@ class TestMigrationV14:
 
         # 重新 migrate 触发 v14
         migrate(c)
-        assert get_schema_version(c) >= 14
+        assert get_schema_version(c) >= 15
         tn_cols = {row[1] for row in c.execute("PRAGMA table_info(teacher_notes)").fetchall()}
         wl_cols = {row[1] for row in c.execute("PRAGMA table_info(watchlist)").fetchall()}
         assert "mentioned_stocks" in tn_cols

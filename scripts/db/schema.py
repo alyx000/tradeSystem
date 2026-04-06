@@ -612,7 +612,7 @@ _SQL_MARKET_OBSERVATIONS = """
 CREATE TABLE IF NOT EXISTS market_observations (
     observation_id TEXT PRIMARY KEY,
     trade_date TEXT NOT NULL CHECK(trade_date GLOB '????-??-??'),
-    source_type TEXT NOT NULL CHECK(source_type IN ('review', 'knowledge_asset', 'manual', 'system_prefill', 'agent_assisted')),
+    source_type TEXT NOT NULL CHECK(source_type IN ('review', 'knowledge_asset', 'manual', 'system_prefill', 'agent_assisted', 'teacher_note')),
     title TEXT,
     market_facts_json TEXT,
     sector_facts_json TEXT,
