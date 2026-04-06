@@ -83,8 +83,8 @@
 | `ingest-inspector` | `/api/ingest/run` | POST | 运行指定 stage 采集 |
 | `ingest-inspector` | `/api/ingest/run-interface` | POST | 运行单接口采集 |
 | `ingest-inspector` | `/api/ingest/retry` | GET | 查看待重试分组摘要 |
-| `knowledge-to-plan` | `/api/knowledge/assets` | POST | 新增资料资产（禁止 `asset_type=teacher_note`，422） |
-| `knowledge-to-plan` | `/api/knowledge/assets` | GET | 列出资料资产（limit/offset；asset_type/keyword/created_from/created_to） |
+| `knowledge-to-plan` | `/api/knowledge/assets` | POST | 新增资料资产（禁止 `teacher_note` / `course_note`，422） |
+| `knowledge-to-plan` | `/api/knowledge/assets` | GET | 列出资料资产（limit/offset；asset_type 仅 news_note/manual_note；keyword/created_*） |
 | `knowledge-to-plan` | `/api/knowledge/assets/{asset_id}` | DELETE | 删除资料资产 |
 | `knowledge-to-plan` | `/api/knowledge/assets/{asset_id}/draft` | POST | 从资料生成 observation/draft（遗留 `teacher_note` 行 422，走 teacher-notes draft） |
 | `knowledge-to-plan` | `/api/knowledge/teacher-notes/{note_id}/draft` | POST | 从老师笔记生成 observation/draft |
@@ -194,8 +194,8 @@
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| POST | `/api/knowledge/assets` ★ | 新建资料资产（禁止 `teacher_note`） |
-| GET | `/api/knowledge/assets` ★ | 列出资料资产 |
+| POST | `/api/knowledge/assets` ★ | 新建资料资产（禁止 `teacher_note` / `course_note`） |
+| GET | `/api/knowledge/assets` ★ | 列出资料资产（asset_type 仅 news_note/manual_note） |
 | DELETE | `/api/knowledge/assets/{asset_id}` ★ | 删除资料资产 |
 | POST | `/api/knowledge/assets/{asset_id}/draft` ★ | 从资料资产生成 observation / draft（遗留 `teacher_note` 不可用） |
 | POST | `/api/knowledge/teacher-notes/{note_id}/draft` ★ | 从老师笔记生成 observation / draft |

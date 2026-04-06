@@ -86,6 +86,12 @@ def check_watchlist_exists(conn: sqlite3.Connection, stock_code: str) -> bool:
     return row is not None
 
 
+def _teacher_note_like_pattern(keyword: str) -> str:
+    """LIKE 字面量：转义 % _ !，配合 ESCAPE '!'。"""
+    k = keyword.replace("!", "!!").replace("%", "!%").replace("_", "!_")
+    return f"%{k}%"
+
+
 def search_teacher_notes(conn: sqlite3.Connection, keyword: str,
                          teacher_name: str | None = None,
                          date_from: str | None = None,
@@ -93,13 +99,13 @@ def search_teacher_notes(conn: sqlite3.Connection, keyword: str,
                          limit: int = 50,
                          offset: int = 0) -> list[dict]:
     """搜索老师笔记（LIKE 模式，对中文可靠；数据量 <5000 行/年，性能无忧）。"""
-    like_pat = f"%{keyword}%"
+    like_pat = _teacher_note_like_pattern(keyword)
     sql = """
         SELECT n.*, t.name as teacher_name
         FROM teacher_notes n
         JOIN teachers t ON n.teacher_id = t.id
-        WHERE (n.title LIKE ? OR n.core_view LIKE ? OR n.key_points LIKE ?
-               OR n.sectors LIKE ? OR n.avoid LIKE ? OR n.raw_content LIKE ?)
+        WHERE (n.title LIKE ? ESCAPE '!' OR n.core_view LIKE ? ESCAPE '!' OR n.key_points LIKE ? ESCAPE '!'
+               OR n.sectors LIKE ? ESCAPE '!' OR n.avoid LIKE ? ESCAPE '!' OR n.raw_content LIKE ? ESCAPE '!')
     """
     params: list[Any] = [like_pat] * 6
     if teacher_name:

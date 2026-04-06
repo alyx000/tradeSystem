@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from api.deps import get_provider_registry
 from services.knowledge_service import KnowledgeService
@@ -31,22 +31,40 @@ def create_knowledge_asset(body: dict):
 
 @router.get("/knowledge/assets")
 def list_knowledge_assets(
-    limit: int = 50,
-    offset: int = 0,
-    asset_type: Optional[str] = None,
-    keyword: Optional[str] = None,
-    created_from: Optional[str] = None,
-    created_to: Optional[str] = None,
+    limit: int = Query(50, ge=1, le=500, description="每页条数"),
+    offset: int = Query(0, ge=0, description="偏移"),
+    asset_type: Optional[str] = Query(
+        None,
+        description=(
+            "可选。仅允许 news_note、manual_note；其它值返回 422。"
+            "不传则返回除 teacher_note 外的全部行（含历史 course_note）。"
+        ),
+    ),
+    keyword: Optional[str] = Query(
+        None,
+        description="标题/正文/来源子串；% 与 _ 按字面量匹配（已转义）。",
+    ),
+    created_from: Optional[str] = Query(
+        None,
+        description="创建日期下限 YYYY-MM-DD；非法格式 422。",
+    ),
+    created_to: Optional[str] = Query(
+        None,
+        description="创建日期上限 YYYY-MM-DD；非法格式 422。",
+    ),
 ):
     service = KnowledgeService()
-    return service.list_assets(
-        limit=limit,
-        offset=offset,
-        asset_type=asset_type,
-        keyword=keyword,
-        created_from=created_from,
-        created_to=created_to,
-    )
+    try:
+        return service.list_assets(
+            limit=limit,
+            offset=offset,
+            asset_type=asset_type,
+            keyword=keyword,
+            created_from=created_from,
+            created_to=created_to,
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
 
 
 @router.post("/knowledge/assets/{asset_id}/draft")

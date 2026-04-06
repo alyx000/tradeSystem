@@ -48,8 +48,8 @@ cd scripts && python3 main.py db add-note --teacher "小鲍" --date 2026-04-01 -
 
 - 若用户是要进入 Web 资料工作台本身，优先使用 `make knowledge-open`
 - **老师观点**：Web 资料工作台选「老师观点」或 CLI `db add-note`，数据在 `teacher_notes`
-- **其它资料**：`knowledge add-note`（`news_note` / `course_note` / `manual_note`），数据在 `knowledge_assets`
-- `knowledge add-note` **不再接受** `--asset-type teacher_note`（已移除）；`POST /api/knowledge/assets` 若带 `asset_type=teacher_note` 返回 **422**；误用 CLI/API 会提示改用 `db add-note` / `teacher-notes`
+- **其它资料**：`knowledge add-note`（`news_note` / `manual_note`；不再新建 `course_note`），数据在 `knowledge_assets`
+- `knowledge add-note` **不再接受** `teacher_note` / `course_note`（CLI choices 已移除）；`POST /api/knowledge/assets` 若带上述 `asset_type` 返回 **422**
 - 若需要补充底层参数，再退回 `python3 main.py knowledge ...`
 
 ## 协作规则
@@ -60,7 +60,7 @@ cd scripts && python3 main.py db add-note --teacher "小鲍" --date 2026-04-01 -
 
 ## 当前能力
 
-- `knowledge_assets`：`add-note` / `list` / `draft-from-asset`；**禁止**新建 `asset_type=teacher_note`（服务层与 API 422）；列表 API **不返回** `asset_type=teacher_note`；库内遗留 `teacher_note` 行**不可**用 `draft-from-asset`，应迁移到 `teacher_notes` 后用 `teacher-notes/.../draft`
+- `knowledge_assets`：`add-note` / `list` / `draft-from-asset`；**禁止**新建 `teacher_note` / `course_note`（API 422）；列表 **不传 asset_type** 时含遗留 `course_note`；**禁止** `asset_type=course_note`（或 `teacher_note`）筛选（422）；遗留 `teacher_note` 行**不可** `draft-from-asset`；遗留 `course_note` 仍可 `draft-from-asset`
 - `teacher_notes`：`db add-note`；`draft-from-teacher-note` / 上述 API
 - Web 资料工作台：合并展示老师笔记与其它资料；老师观点录入走 `teacher-notes` API；列表支持删除（笔记与资产分别调用对应 DELETE）
 

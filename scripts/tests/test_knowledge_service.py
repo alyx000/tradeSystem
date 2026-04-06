@@ -76,6 +76,16 @@ def test_knowledge_cli_draft_asset_missing_id(tmp_path):
     assert "资料" in out.get("message", "") or "asset" in out.get("message", "").lower()
 
 
+def test_list_assets_rejects_course_note_filter(tmp_path):
+    db_path = tmp_path / "knowledge.db"
+    conn = get_connection(db_path)
+    migrate(conn)
+    conn.close()
+    service = KnowledgeService(str(db_path))
+    with pytest.raises(ValueError, match="course_note"):
+        service.list_assets(limit=10, asset_type="course_note")
+
+
 def test_list_assets_filters_keyword_and_date(tmp_path):
     db_path = tmp_path / "knowledge.db"
     conn = get_connection(db_path)
@@ -123,6 +133,16 @@ def test_add_and_list_assets(tmp_path):
     assert clues["stocks"][0]["subject_code"] == "300750.SZ"
 
 
+def test_add_asset_rejects_unknown_type(tmp_path):
+    db_path = tmp_path / "knowledge.db"
+    conn = get_connection(db_path)
+    migrate(conn)
+    conn.close()
+    service = KnowledgeService(str(db_path))
+    with pytest.raises(ValueError, match="仅支持"):
+        service.add_asset(asset_type="MANUAL_NOTE", title="x", content="y")
+
+
 def test_add_asset_rejects_teacher_note(tmp_path):
     db_path = tmp_path / "knowledge.db"
     conn = get_connection(db_path)
@@ -133,6 +153,34 @@ def test_add_asset_rejects_teacher_note(tmp_path):
     with pytest.raises(ValueError, match="teacher_notes"):
         service.add_asset(
             asset_type="teacher_note",
+            title="x",
+            content="y",
+        )
+
+
+def test_list_assets_keyword_percent_is_literal(tmp_path):
+    db_path = tmp_path / "knowledge.db"
+    conn = get_connection(db_path)
+    migrate(conn)
+    conn.close()
+    service = KnowledgeService(str(db_path))
+    service.add_asset(asset_type="manual_note", title="pct", content="100%纯锂", tags=[])
+    service.add_asset(asset_type="manual_note", title="many", content="aaaabbbb", tags=[])
+    rows_all = service.list_assets(limit=20, keyword="%")
+    assert len(rows_all) == 1
+    assert rows_all[0]["title"] == "pct"
+
+
+def test_add_asset_rejects_course_note(tmp_path):
+    db_path = tmp_path / "knowledge.db"
+    conn = get_connection(db_path)
+    migrate(conn)
+    conn.close()
+
+    service = KnowledgeService(str(db_path))
+    with pytest.raises(ValueError, match="课程笔记"):
+        service.add_asset(
+            asset_type="course_note",
             title="x",
             content="y",
         )

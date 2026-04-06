@@ -299,11 +299,23 @@ def cmd_knowledge(args) -> None:
                 "asset": asset,
             }
     elif command == "list":
-        payload = {
-            "status": "ok",
-            "message": "资料列表",
-            "assets": service.list_assets(limit=args.limit),
-        }
+        try:
+            assets = service.list_assets(
+                limit=args.limit,
+                offset=getattr(args, "offset", 0) or 0,
+                asset_type=getattr(args, "asset_type", None),
+                keyword=getattr(args, "keyword", None),
+                created_from=getattr(args, "created_from", None),
+                created_to=getattr(args, "created_to", None),
+            )
+        except ValueError as exc:
+            payload = {"status": "validation_error", "message": str(exc)}
+        else:
+            payload = {
+                "status": "ok",
+                "message": "资料列表",
+                "assets": assets,
+            }
     elif command == "draft-from-asset":
         try:
             draft_payload = service.draft_from_asset(
@@ -1137,8 +1149,8 @@ def build_parser() -> argparse.ArgumentParser:
     knowledge_add.add_argument(
         "--asset-type",
         default="manual_note",
-        choices=["news_note", "course_note", "manual_note"],
-        help="资料类型（不含 teacher_note，老师观点走 db add-note）",
+        choices=["news_note", "manual_note"],
+        help="资料类型（不含 teacher_note / course_note；老师观点走 db add-note）",
     )
     knowledge_add.add_argument("--title", required=True, help="标题")
     knowledge_add.add_argument("--content", required=True, help="正文")
@@ -1148,6 +1160,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     knowledge_list = knowledge_subparsers.add_parser("list", help="列出资料")
     knowledge_list.add_argument("--limit", type=int, default=20, help="返回条数")
+    knowledge_list.add_argument("--offset", type=int, default=0, help="偏移")
+    knowledge_list.add_argument(
+        "--asset-type",
+        default=None,
+        choices=["news_note", "manual_note"],
+        help="按类型筛选（与 GET /api/knowledge/assets 一致）",
+    )
+    knowledge_list.add_argument("--keyword", default=None, help="标题/正文/来源关键词")
+    knowledge_list.add_argument("--created-from", default=None, dest="created_from", help="创建日起 YYYY-MM-DD")
+    knowledge_list.add_argument("--created-to", default=None, dest="created_to", help="创建日止 YYYY-MM-DD")
     knowledge_list.add_argument("--json", action="store_true", help="输出 JSON")
 
     knowledge_draft = knowledge_subparsers.add_parser("draft-from-asset", help="从资料生成草稿")

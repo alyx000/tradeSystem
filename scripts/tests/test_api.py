@@ -635,6 +635,43 @@ class TestPlanningAndKnowledgeAPI:
         )
         assert r.status_code == 422
 
+    def test_post_knowledge_asset_rejects_course_note(self, client):
+        r = client.post(
+            "/api/knowledge/assets",
+            json={
+                "asset_type": "course_note",
+                "title": "不应新建课程类型",
+                "content": "正文",
+                "tags": [],
+            },
+        )
+        assert r.status_code == 422
+
+    def test_post_knowledge_asset_rejects_unknown_asset_type(self, client):
+        r = client.post(
+            "/api/knowledge/assets",
+            json={
+                "asset_type": "not_a_type",
+                "title": "x",
+                "content": "y",
+                "tags": [],
+            },
+        )
+        assert r.status_code == 422
+
+    def test_post_knowledge_asset_strips_asset_type_whitespace(self, client):
+        r = client.post(
+            "/api/knowledge/assets",
+            json={
+                "asset_type": " manual_note ",
+                "title": "空白规范化",
+                "content": "z",
+                "tags": [],
+            },
+        )
+        assert r.status_code == 200
+        assert r.json().get("asset_type") == "manual_note"
+
     def test_list_knowledge_assets_excludes_legacy_teacher_note_rows(self, client, db_path):
         conn = get_connection(db_path)
         conn.execute(
@@ -691,6 +728,18 @@ class TestPlanningAndKnowledgeAPI:
         assert all(a.get("asset_type") == "news_note" for a in assets)
         assert any(a.get("title") == "宏观周报" for a in assets)
         assert not any(a.get("title") == "锂电主题" for a in assets)
+
+    def test_list_knowledge_assets_rejects_course_note_filter(self, client):
+        r = client.get("/api/knowledge/assets?asset_type=course_note&limit=10")
+        assert r.status_code == 422
+
+    def test_list_knowledge_assets_rejects_typo_asset_type(self, client):
+        r = client.get("/api/knowledge/assets?asset_type=manual_not&limit=10")
+        assert r.status_code == 422
+
+    def test_list_knowledge_assets_rejects_invalid_created_from(self, client):
+        r = client.get("/api/knowledge/assets?created_from=2026-13-40&limit=10")
+        assert r.status_code == 422
 
     def test_list_teacher_notes_limit_offset_and_filters(self, client, db_path):
         conn = get_connection(db_path)

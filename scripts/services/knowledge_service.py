@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date as date_type
 import json
 import re
 from typing import Any
@@ -13,6 +14,27 @@ from services.planning_service import PlanningService
 
 
 THEME_KEYWORDS = ["AI", "AI算力", "机器人", "锂电", "储能", "金融", "半导体"]
+
+# 与 SQLite CHECK 一致的可新建/可筛选类型（不含 teacher_note / course_note）
+_ALLOWED_KNOWLEDGE_ASSET_TYPES = frozenset({"news_note", "manual_note"})
+
+_ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _validate_iso_date_param(label: str, value: str) -> str:
+    s = value.strip()
+    if not _ISO_DATE_RE.match(s):
+        raise ValueError(f"{label} 须为 YYYY-MM-DD，收到: {value!r}")
+    try:
+        date_type.fromisoformat(s)
+    except ValueError as exc:
+        raise ValueError(f"{label} 不是合法日历日期: {value!r}") from exc
+    return s
+
+
+def _sql_like_pattern_literal(keyword: str) -> str:
+    """将用户关键词作字面量匹配：对 LIKE 中的 % _ ! 转义，配合 ESCAPE '!'。"""
+    return keyword.replace("!", "!!").replace("%", "!%").replace("_", "!_")
 
 
 def infer_ts_code(code: str) -> str:
@@ -103,10 +125,21 @@ class KnowledgeService:
         source: str | None = None,
         tags: list[str] | None = None,
     ) -> dict[str, Any]:
-        if (asset_type or "").strip() == "teacher_note":
+        at = (asset_type or "").strip()
+        if at == "teacher_note":
             raise ValueError(
                 "老师观点须写入 teacher_notes，请使用 db add-note 或 POST /api/teacher-notes；"
                 "勿向 knowledge_assets 写入 asset_type=teacher_note"
+            )
+        if at == "course_note":
+            raise ValueError(
+                "已不再通过 knowledge_assets 新建课程笔记类型，请使用 news_note / manual_note，"
+                "或写入 teacher_notes（老师观点）"
+            )
+        if at not in _ALLOWED_KNOWLEDGE_ASSET_TYPES:
+            raise ValueError(
+                "asset_type 仅支持 news_note、manual_note"
+                + (f"；收到: {asset_type!r}" if (asset_type or "").strip() != "" else "（当前为空）")
             )
         asset_id = f"asset_{uuid4().hex[:12]}"
         summary = self._build_summary(content)
@@ -121,7 +154,7 @@ class KnowledgeService:
                 """,
                 (
                     asset_id,
-                    asset_type,
+                    at,
                     title,
                     content,
                     source,
@@ -132,8 +165,6 @@ class KnowledgeService:
             )
         return self.get_asset(asset_id)
 
-    _LISTABLE_ASSET_TYPES = frozenset({"news_note", "course_note", "manual_note"})
-
     def list_assets(
         self,
         limit: int = 20,
@@ -143,25 +174,37 @@ class KnowledgeService:
         created_from: str | None = None,
         created_to: str | None = None,
     ) -> list[dict[str, Any]]:
-        """列出资料资产；排除 teacher_note。支持类型、关键词、创建日期窗与分页。"""
+        """列出资料资产；排除 teacher_note。asset_type 筛选仅允许 news_note / manual_note。"""
         limit = max(1, min(int(limit), 500))
         offset = max(0, int(offset))
         where = ["(asset_type IS NULL OR asset_type != 'teacher_note')"]
         params: list[Any] = []
-        if asset_type and asset_type in self._LISTABLE_ASSET_TYPES:
+        at = (asset_type or "").strip()
+        if at:
+            if at not in _ALLOWED_KNOWLEDGE_ASSET_TYPES:
+                raise ValueError(
+                    "asset_type 筛选仅支持 news_note、manual_note；"
+                    "不支持 course_note、teacher_note（历史 course_note 仍会在未指定类型时出现在列表中）"
+                )
             where.append("asset_type = ?")
-            params.append(asset_type)
+            params.append(at)
         kw = (keyword or "").strip()
         if kw:
-            like = f"%{kw}%"
-            where.append("(title LIKE ? OR content LIKE ? OR IFNULL(source,'') LIKE ?)")
-            params.extend([like, like, like])
-        if (created_from or "").strip():
+            lit = _sql_like_pattern_literal(kw)
+            like_pat = f"%{lit}%"
+            where.append(
+                "(title LIKE ? ESCAPE '!' OR content LIKE ? ESCAPE '!' "
+                "OR IFNULL(source,'') LIKE ? ESCAPE '!')"
+            )
+            params.extend([like_pat, like_pat, like_pat])
+        cf = (created_from or "").strip()
+        if cf:
             where.append("date(created_at) >= date(?)")
-            params.append(created_from.strip())
-        if (created_to or "").strip():
+            params.append(_validate_iso_date_param("created_from", cf))
+        ct = (created_to or "").strip()
+        if ct:
             where.append("date(created_at) <= date(?)")
-            params.append(created_to.strip())
+            params.append(_validate_iso_date_param("created_to", ct))
         sql = f"""
             SELECT * FROM knowledge_assets
             WHERE {' AND '.join(where)}

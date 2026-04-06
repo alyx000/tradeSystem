@@ -8,13 +8,14 @@ import type { KnowledgeAssetRecord, TeacherNote } from '../lib/types'
 const ASSET_TYPES = [
   { value: 'teacher_note', label: '老师观点' },
   { value: 'news_note', label: '新闻资讯' },
-  { value: 'course_note', label: '课程笔记' },
   { value: 'manual_note', label: '手动笔记' },
 ]
 
-const ASSET_TYPE_LABELS: Record<string, string> = Object.fromEntries(
-  ASSET_TYPES.map(t => [t.value, t.label])
-)
+/** 工作台不提供课程笔记新建；保留标签供列表展示历史 course_note 资产 */
+const ASSET_TYPE_LABELS: Record<string, string> = {
+  ...Object.fromEntries(ASSET_TYPES.map(t => [t.value, t.label])),
+  course_note: '课程笔记',
+}
 
 type WorkbenchRow =
   | { kind: 'teacher_note'; note: TeacherNote }
@@ -570,7 +571,6 @@ function AssetList() {
           >
             <option value="">全部资料</option>
             <option value="news_note">新闻资讯</option>
-            <option value="course_note">课程笔记</option>
             <option value="manual_note">手动笔记</option>
           </select>
         </div>
