@@ -4,6 +4,7 @@ import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import HoldingTasks from '../pages/HoldingTasks'
 import { api } from '../lib/api'
+import { localDateString } from '../lib/date'
 import type { HoldingTaskItem } from '../lib/types'
 
 vi.mock('../lib/api', () => ({
@@ -124,8 +125,7 @@ describe('HoldingTasks', () => {
     fireEvent.click(screen.getByRole('button', { name: '回到今天' }))
 
     await waitFor(() => {
-      const today = new Date().toISOString().slice(0, 10)
-      expect(api.listHoldingTasks).toHaveBeenCalledWith(today, 'open')
+      expect(api.listHoldingTasks).toHaveBeenCalledWith(localDateString(), 'open')
     })
   })
 })

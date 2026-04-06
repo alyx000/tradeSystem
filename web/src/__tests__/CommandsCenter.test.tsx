@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter } from 'react-router-dom'
 import CommandsCenter from '../pages/CommandsCenter'
 import { api } from '../lib/api'
+import { localDateString } from '../lib/date'
 import type { CommandIndexPayload } from '../lib/types'
 
 vi.mock('../lib/api', () => ({
@@ -64,7 +65,8 @@ describe('CommandsCenter', () => {
     expect(screen.getByText('make today-ingest-health')).toBeInTheDocument()
     expect(screen.getByText('开发与页面')).toBeInTheDocument()
     expect(screen.getByText('make dev')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: /盘后核心诊断/ })).toHaveAttribute('href', '/ingest?date=2026-04-06')
+    const today = localDateString()
+    expect(screen.getByRole('link', { name: /盘后核心诊断/ })).toHaveAttribute('href', `/ingest?date=${today}`)
   })
 
   it('filters commands by keyword and copies a command', async () => {

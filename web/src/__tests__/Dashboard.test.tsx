@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter } from 'react-router-dom'
 import Dashboard from '../pages/Dashboard'
 import { api } from '../lib/api'
+import { localDateString } from '../lib/date'
 import type {
   CalendarEvent,
   Holding,
@@ -140,6 +141,7 @@ beforeEach(() => {
 
 describe('Dashboard', () => {
   it('renders command quickstart cards from meta commands api', async () => {
+    const today = localDateString()
     renderPage()
 
     await waitFor(() => {
@@ -149,10 +151,11 @@ describe('Dashboard', () => {
     expect(screen.getByText('make bootstrap')).toBeInTheDocument()
     expect(screen.getByText('执行今日盘后流程')).toBeInTheDocument()
     expect(screen.getByText('make today-ingest-health')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: /打开健康视图/ })).toHaveAttribute('href', '/ingest?date=2026-04-06')
+    expect(screen.getByRole('link', { name: /打开健康视图/ })).toHaveAttribute('href', `/ingest?date=${today}`)
   })
 
   it('renders ingest health summary cards for core and extended', async () => {
+    const today = localDateString()
     renderPage()
 
     await waitFor(() => {
@@ -166,11 +169,18 @@ describe('Dashboard', () => {
     expect(screen.getByText('存在连续失败 3 天的接口，阶段稳定性已明显承压。')).toBeInTheDocument()
     expect(screen.getByText('全市场公告 · 连续失败 2 天')).toBeInTheDocument()
     expect(screen.getByText('大宗交易 · 连续失败 3 天')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: /采集健康 · 盘后核心/ })).toHaveAttribute('href', '/ingest?date=2026-04-06&health_sort=streak')
-    expect(screen.getByRole('link', { name: /采集健康 · 盘后扩展/ })).toHaveAttribute('href', '/ingest?date=2026-04-06&stage=post_extended&health_sort=streak')
+    expect(screen.getByRole('link', { name: /采集健康 · 盘后核心/ })).toHaveAttribute(
+      'href',
+      `/ingest?date=${today}&health_sort=streak`,
+    )
+    expect(screen.getByRole('link', { name: /采集健康 · 盘后扩展/ })).toHaveAttribute(
+      'href',
+      `/ingest?date=${today}&stage=post_extended&health_sort=streak`,
+    )
   })
 
   it('renders pending holding tasks card', async () => {
+    const today = localDateString()
     renderPage()
 
     await waitFor(() => {
@@ -179,6 +189,9 @@ describe('Dashboard', () => {
 
     expect(screen.getByText('宁德时代')).toBeInTheDocument()
     expect(screen.getByText('2026-04-03 · 若冲高回落则减仓')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: /打开任务页/ })).toHaveAttribute('href', '/holding-tasks?date=2026-04-06&status=open')
+    expect(screen.getByRole('link', { name: /打开任务页/ })).toHaveAttribute(
+      'href',
+      `/holding-tasks?date=${today}&status=open`,
+    )
   })
 })
