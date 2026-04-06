@@ -1,4 +1,4 @@
 interface:
   display_name: "记录信息"
   short_description: "Structure teacher notes, sector updates, and macro items"
-  default_prompt: "Use $record-notes to structure and record a teacher note, industry update, or macro item into the correct DB entry."
+  default_prompt: "Use $record-notes to record teacher notes, industry, or macro into the DB. For teacher notes via Agent: first produce a structured summary (title, core-view, 2–8 key-points JSON, plus sectors/tags/stocks when applicable), show it to the user, get explicit confirmation, then run db add-note with --raw-content-file or stdin for long text; never skip the summary step."
