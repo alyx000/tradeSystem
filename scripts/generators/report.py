@@ -624,6 +624,20 @@ def _render_holding_risk_summary(holdings_signals: dict) -> list[str]:
     if not isinstance(items, list):
         return []
 
+    label_priority = {
+        "触及止损": 0,
+        "临近止损": 1,
+        "临近跌停价": 2,
+        "ST": 3,
+        "财报临近": 4,
+        "跌破 MA5": 5,
+        "非主线承压": 6,
+        "量弱": 7,
+        "换手偏低": 8,
+        "触及止盈": 9,
+        "临近止盈": 10,
+    }
+
     def severity(item: dict) -> tuple[int, int]:
         flags = item.get("risk_flags") or []
         levels = [f.get("level") for f in flags if isinstance(f, dict)]
@@ -644,7 +658,14 @@ def _render_holding_risk_summary(holdings_signals: dict) -> list[str]:
     lines: list[str] = []
     for item in filtered[:5]:
         flags = [flag for flag in (item.get("risk_flags") or []) if isinstance(flag, dict)]
-        focus = [flag.get("label") for flag in flags if flag.get("level") in {"high", "medium"}][:2]
+        prioritized_flags = sorted(
+            [flag for flag in flags if flag.get("level") in {"high", "medium"}],
+            key=lambda flag: (
+                0 if flag.get("level") == "high" else 1,
+                label_priority.get(str(flag.get("label") or ""), 999),
+            ),
+        )
+        focus = [flag.get("label") for flag in prioritized_flags][:2]
         stock_name = item.get("stock_name") or item.get("stock_code")
         stock_code = item.get("stock_code") or ""
         latest_task = item.get("latest_task") or {}

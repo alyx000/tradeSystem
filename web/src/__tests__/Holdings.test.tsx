@@ -13,6 +13,7 @@ vi.mock('../lib/api', () => ({
     listHoldingTasks: vi.fn(),
     updateHoldingTask: vi.fn(),
     createHolding: vi.fn(),
+    updateHolding: vi.fn(),
     deleteHolding: vi.fn(),
   },
 }))
@@ -37,6 +38,9 @@ beforeEach(() => {
       stock_name: '宁德时代',
       entry_price: 180,
       current_price: 192,
+      stop_loss: 175,
+      target_price: 210,
+      position_ratio: 30,
       shares: 100,
       status: 'active',
     },
@@ -133,6 +137,7 @@ beforeEach(() => {
     return [baseTask]
   })
   vi.mocked(api.updateHoldingTask).mockResolvedValue({ ok: true })
+  vi.mocked(api.updateHolding).mockResolvedValue({ ok: true })
 })
 
 describe('Holdings', () => {
@@ -155,10 +160,108 @@ describe('Holdings', () => {
     expect(screen.getByText('站上 MA10')).toBeInTheDocument()
     expect(screen.getByText('量在均量以上')).toBeInTheDocument()
     expect(screen.getByText('换手 6.20%（活跃）')).toBeInTheDocument()
+    expect(screen.getByText('止损 / 止盈')).toBeInTheDocument()
+    expect(screen.getByText('仓位')).toBeInTheDocument()
+    expect(screen.getByText('止损 175')).toBeInTheDocument()
+    expect(screen.getByText('止盈 210')).toBeInTheDocument()
+    expect(screen.getByText('30%')).toBeInTheDocument()
+    expect(screen.getByText('公告 / 披露')).toBeInTheDocument()
+    expect(screen.getByText('公告：回购公告（20260405）')).toBeInTheDocument()
+    expect(screen.getByText('披露：20260420 · 20260331')).toBeInTheDocument()
     expect(screen.getByText('昨日计划')).toBeInTheDocument()
     expect(screen.getAllByText('若冲高回落则减仓')).toHaveLength(2)
     expect(screen.getByText('计划任务')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '未完成' })).toBeInTheDocument()
+  })
+
+  it('submits stop loss, target price and position ratio when creating holding', async () => {
+    vi.mocked(api.createHolding).mockResolvedValue({ id: 2 } as unknown as Holding)
+    renderPage()
+
+    fireEvent.click(screen.getByRole('button', { name: '添加持仓' }))
+    fireEvent.change(screen.getByPlaceholderText('代码'), { target: { value: '600000' } })
+    fireEvent.change(screen.getByPlaceholderText('名称'), { target: { value: '浦发银行' } })
+    fireEvent.change(screen.getByPlaceholderText('成本价'), { target: { value: '10.5' } })
+    fireEvent.change(screen.getByPlaceholderText('数量'), { target: { value: '1000' } })
+    fireEvent.change(screen.getByPlaceholderText('止损价'), { target: { value: '9.8' } })
+    fireEvent.change(screen.getByPlaceholderText('止盈价'), { target: { value: '12.0' } })
+    fireEvent.change(screen.getByPlaceholderText('仓位占比%'), { target: { value: '25' } })
+
+    fireEvent.click(screen.getByRole('button', { name: '确认' }))
+
+    await waitFor(() => {
+      expect(api.createHolding).toHaveBeenCalledWith({
+        stock_code: '600000',
+        stock_name: '浦发银行',
+        entry_price: 10.5,
+        shares: 1000,
+        sector: undefined,
+        stop_loss: 9.8,
+        target_price: 12,
+        position_ratio: 25,
+      })
+    })
+  })
+
+  it('supports inline editing for stop loss, target price and position ratio', async () => {
+    renderPage()
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: '编辑' })).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: '编辑' }))
+
+    fireEvent.change(screen.getByLabelText('止损价-300750'), { target: { value: '178.5' } })
+    fireEvent.change(screen.getByLabelText('止盈价-300750'), { target: { value: '220' } })
+    fireEvent.change(screen.getByLabelText('仓位占比-300750'), { target: { value: '35' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+
+    await waitFor(() => {
+      expect(api.updateHolding).toHaveBeenCalledWith(1, {
+        stop_loss: 178.5,
+        target_price: 220,
+        position_ratio: 35,
+      })
+    })
+  })
+
+  it('cancels inline editing without saving', async () => {
+    renderPage()
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: '编辑' })).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: '编辑' }))
+    fireEvent.change(screen.getByLabelText('止损价-300750'), { target: { value: '170' } })
+    fireEvent.click(screen.getByRole('button', { name: '取消' }))
+
+    expect(api.updateHolding).not.toHaveBeenCalled()
+    expect(screen.queryByLabelText('止损价-300750')).not.toBeInTheDocument()
+    expect(screen.getByText('止损 175')).toBeInTheDocument()
+  })
+
+  it('submits null when clearing inline edit fields', async () => {
+    renderPage()
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: '编辑' })).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: '编辑' }))
+    fireEvent.change(screen.getByLabelText('止损价-300750'), { target: { value: '' } })
+    fireEvent.change(screen.getByLabelText('止盈价-300750'), { target: { value: '' } })
+    fireEvent.change(screen.getByLabelText('仓位占比-300750'), { target: { value: '' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+
+    await waitFor(() => {
+      expect(api.updateHolding).toHaveBeenCalledWith(1, {
+        stop_loss: null,
+        target_price: null,
+        position_ratio: null,
+      })
+    })
   })
 
   it('marks holding task as done', async () => {

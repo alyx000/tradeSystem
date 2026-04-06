@@ -761,6 +761,46 @@ def get_daily_market_history(conn: sqlite3.Connection, days: int = 20) -> list[d
     return _rows_to_list(rows)
 
 
+def compute_ma5w_flags_from_history(
+    conn: sqlite3.Connection,
+    *,
+    target_date: str,
+    sh_close: float | None,
+    sz_close: float | None,
+) -> dict[str, bool | None]:
+    rows = conn.execute(
+        """
+        SELECT sh_index_close, sz_index_close
+        FROM daily_market
+        WHERE date < ?
+        ORDER BY date DESC
+        LIMIT 24
+        """,
+        (target_date,),
+    ).fetchall()
+
+    def _flag(current_close: float | None, key: str) -> bool | None:
+        if current_close is None:
+            return None
+        closes: list[float] = [float(current_close)]
+        for row in rows:
+            value = row[key]
+            if value is not None:
+                closes.append(float(value))
+            if len(closes) >= 25:
+                break
+        if len(closes) < 25:
+            return None
+        weekly_closes = [closes[i] for i in [4, 9, 14, 19, 24]]
+        ma5w = sum(weekly_closes) / 5
+        return float(current_close) > ma5w
+
+    return {
+        "sh_above_ma5w": _flag(sh_close, "sh_index_close"),
+        "sz_above_ma5w": _flag(sz_close, "sz_index_close"),
+    }
+
+
 def get_style_factors_series(conn: sqlite3.Connection, metrics: list[str],
                              date_from: str, date_to: str) -> list[dict]:
     """获取风格化因子时间序列。"""

@@ -183,6 +183,8 @@ class TestReview:
             entry_price=180.0,
             current_price=None,
             sector="电池",
+            stop_loss=175.0,
+            target_price=193.0,
             status="active",
         )
         Q.replace_holding_tasks(
@@ -253,6 +255,7 @@ class TestReview:
         labels = {flag["label"] for flag in item["risk_flags"]}
         assert "财报临近" in labels
         assert "ST" in labels
+        assert "临近止盈" in labels
 
     def test_prefill_holding_signals_gracefully_degrades_when_sources_missing(self, client, db_path):
         conn = get_connection(db_path)
@@ -279,6 +282,28 @@ class TestReview:
         assert item["event_signals"]["share_float_upcoming"] == []
         assert item["theme_signals"]["is_main_theme"] is False
         assert item["risk_flags"] == []
+
+    def test_prefill_holding_signals_include_stop_loss_and_target_alerts(self, client, db_path):
+        conn = get_connection(db_path)
+        Q.upsert_holding(
+            conn,
+            stock_code="300750",
+            stock_name="宁德时代",
+            entry_price=180.0,
+            current_price=100.0,
+            stop_loss=101.0,
+            target_price=100.0,
+            status="active",
+        )
+        conn.commit()
+        conn.close()
+
+        r = client.get("/api/review/2026-04-03/prefill")
+        assert r.status_code == 200
+        item = r.json()["holding_signals"]["items"][0]
+        labels = {flag["label"] for flag in item["risk_flags"]}
+        assert "触及止损" in labels
+        assert "触及止盈" in labels
 
     def test_holding_signals_falls_back_to_snapshot_when_envelope_missing_holdings_data(self, client, db_path):
         conn = get_connection(db_path)
@@ -1222,6 +1247,32 @@ class TestPlanningAndKnowledgeAPI:
         assert data["available"] is True
         assert data["indices"]["chinext"]["close"] == 2333.1
         assert data["sector_industry"]["data"][0]["name"] == "测试板块"
+
+    def test_market_ma5w_flags_fallback_from_db_history(self, client, db_path):
+        conn = get_connection(db_path)
+        for idx in range(24):
+            day = f"2026-04-{idx + 1:02d}"
+            Q.upsert_daily_market(conn, {
+                "date": day,
+                "sh_index_close": float(124 - idx),
+                "sz_index_close": float(224 - idx),
+            })
+        Q.upsert_daily_market(conn, {
+            "date": "2026-04-25",
+            "sh_index_close": 125.0,
+            "sz_index_close": 225.0,
+            "sh_above_ma5w": None,
+            "sz_above_ma5w": None,
+        })
+        conn.commit()
+        conn.close()
+
+        r = client.get("/api/market/2026-04-25")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["available"] is True
+        assert data["sh_above_ma5w"] is True
+        assert data["sz_above_ma5w"] is True
 
     def test_market_history(self, seeded_client):
         r = seeded_client.get("/api/market/history", params={"days": 5})

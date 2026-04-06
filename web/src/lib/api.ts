@@ -4,6 +4,7 @@ import type {
   CommandIndexPayload,
   Holding,
   HoldingCreateInput,
+  HoldingUpdateInput,
   HoldingTaskItem,
   HoldingTaskUpdateInput,
   HoldingSignalsPayload,
@@ -122,6 +123,8 @@ export const api = {
     request<{ ok?: boolean }>(`/holdings/tasks/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   createHolding: (data: HoldingCreateInput) =>
     request<Holding>('/holdings', { method: 'POST', body: JSON.stringify(data) }),
+  updateHolding: (id: number, data: HoldingUpdateInput) =>
+    request<{ ok?: boolean }>(`/holdings/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   deleteHolding: (id: number) =>
     request<{ ok?: boolean }>(`/holdings/${id}`, { method: 'DELETE' }),
 

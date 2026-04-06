@@ -2,7 +2,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../lib/api'
-import type { Holding, HoldingCreateInput, HoldingSignalItem, HoldingTaskItem } from '../lib/types'
+import type { Holding, HoldingCreateInput, HoldingSignalItem, HoldingTaskItem, HoldingUpdateInput } from '../lib/types'
 
 const today = new Date().toISOString().slice(0, 10)
 
@@ -35,7 +35,22 @@ export default function Holdings() {
   const queryClient = useQueryClient()
   const [showForm, setShowForm] = useState(false)
   const [taskFilter, setTaskFilter] = useState<HoldingTaskFilter>('open')
-  const [form, setForm] = useState({ stock_code: '', stock_name: '', entry_price: '', shares: '', sector: '' })
+  const [editingId, setEditingId] = useState<number | null>(null)
+  const [editForm, setEditForm] = useState({
+    stop_loss: '',
+    target_price: '',
+    position_ratio: '',
+  })
+  const [form, setForm] = useState({
+    stock_code: '',
+    stock_name: '',
+    entry_price: '',
+    shares: '',
+    sector: '',
+    stop_loss: '',
+    target_price: '',
+    position_ratio: '',
+  })
 
   const { data: holdings, isLoading } = useQuery({
     queryKey: ['holdings'],
@@ -59,13 +74,35 @@ export default function Holdings() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['holdings'] })
       setShowForm(false)
-      setForm({ stock_code: '', stock_name: '', entry_price: '', shares: '', sector: '' })
+      setForm({
+        stock_code: '',
+        stock_name: '',
+        entry_price: '',
+        shares: '',
+        sector: '',
+        stop_loss: '',
+        target_price: '',
+        position_ratio: '',
+      })
     },
   })
 
   const deleteMut = useMutation({
     mutationFn: (id: number) => api.deleteHolding(id),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['holdings'] }),
+  })
+
+  const updateMut = useMutation({
+    mutationFn: ({ id, data }: { id: number; data: HoldingUpdateInput }) => api.updateHolding(id, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['holdings'] })
+      setEditingId(null)
+      setEditForm({
+        stop_loss: '',
+        target_price: '',
+        position_ratio: '',
+      })
+    },
   })
 
   const taskMut = useMutation({
@@ -75,6 +112,47 @@ export default function Holdings() {
       queryClient.invalidateQueries({ queryKey: ['holding-tasks'] })
     },
   })
+
+  function startEditing(h: Holding) {
+    setEditingId(h.id)
+    setEditForm({
+      stop_loss: h.stop_loss != null ? String(h.stop_loss) : '',
+      target_price: h.target_price != null ? String(h.target_price) : '',
+      position_ratio: h.position_ratio != null ? String(h.position_ratio) : '',
+    })
+  }
+
+  function cancelEditing() {
+    setEditingId(null)
+    setEditForm({
+      stop_loss: '',
+      target_price: '',
+      position_ratio: '',
+    })
+  }
+
+  function parseNullableNumber(value: string): number | null {
+    const trimmed = String(value || '').trim()
+    if (!trimmed) return null
+    const num = Number(trimmed)
+    if (!Number.isFinite(num) || num < 0) return Number.NaN
+    return num
+  }
+
+  function saveEditing(hid: number) {
+    const stopLoss = parseNullableNumber(editForm.stop_loss)
+    const targetPrice = parseNullableNumber(editForm.target_price)
+    const positionRatio = parseNullableNumber(editForm.position_ratio)
+    if ([stopLoss, targetPrice, positionRatio].some((value) => Number.isNaN(value))) return
+    updateMut.mutate({
+      id: hid,
+      data: {
+        stop_loss: stopLoss,
+        target_price: targetPrice,
+        position_ratio: positionRatio,
+      },
+    })
+  }
 
   return (
     <div className="space-y-4">
@@ -92,7 +170,7 @@ export default function Holdings() {
       </div>
 
       {showForm && (
-        <div className="bg-white rounded-lg shadow p-4 grid grid-cols-2 md:grid-cols-5 gap-3">
+        <div className="bg-white rounded-lg shadow p-4 grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-3">
           <input placeholder="代码" value={form.stock_code}
             onChange={e => setForm(p => ({ ...p, stock_code: e.target.value }))}
             className="border rounded px-2 py-1.5 text-sm" />
@@ -105,11 +183,23 @@ export default function Holdings() {
           <input placeholder="数量" type="number" value={form.shares}
             onChange={e => setForm(p => ({ ...p, shares: e.target.value }))}
             className="border rounded px-2 py-1.5 text-sm" />
+          <input placeholder="止损价" type="number" value={form.stop_loss}
+            onChange={e => setForm(p => ({ ...p, stop_loss: e.target.value }))}
+            className="border rounded px-2 py-1.5 text-sm" />
+          <input placeholder="止盈价" type="number" value={form.target_price}
+            onChange={e => setForm(p => ({ ...p, target_price: e.target.value }))}
+            className="border rounded px-2 py-1.5 text-sm" />
+          <input placeholder="仓位占比%" type="number" value={form.position_ratio}
+            onChange={e => setForm(p => ({ ...p, position_ratio: e.target.value }))}
+            className="border rounded px-2 py-1.5 text-sm" />
           <button onClick={() => createMut.mutate({
             stock_code: form.stock_code, stock_name: form.stock_name,
             entry_price: parseFloat(form.entry_price) || undefined,
             shares: parseInt(form.shares) || undefined,
             sector: form.sector || undefined,
+            stop_loss: parseFloat(form.stop_loss) || undefined,
+            target_price: parseFloat(form.target_price) || undefined,
+            position_ratio: parseFloat(form.position_ratio) || undefined,
           })}
             className="bg-green-600 text-white rounded px-3 py-1.5 text-sm hover:bg-green-700">
             确认
@@ -204,7 +294,10 @@ export default function Holdings() {
               <th className="px-4 py-3 text-right">现价（盘后收盘）</th>
               <th className="px-4 py-3 text-right">浮动盈亏</th>
               <th className="px-4 py-3 text-right">数量</th>
+              <th className="px-4 py-3 text-right">止损 / 止盈</th>
+              <th className="px-4 py-3 text-right">仓位</th>
               <th className="px-4 py-3 text-left">风险</th>
+              <th className="px-4 py-3 text-left">公告 / 披露</th>
               <th className="px-4 py-3 text-left">主线归属</th>
               <th className="px-4 py-3 text-left">技术位</th>
               <th className="px-4 py-3 text-left">昨日计划</th>
@@ -214,9 +307,9 @@ export default function Holdings() {
           </thead>
           <tbody className="divide-y">
             {isLoading ? (
-              <tr><td colSpan={12} className="px-4 py-8 text-center text-gray-400">加载中...</td></tr>
+              <tr><td colSpan={15} className="px-4 py-8 text-center text-gray-400">加载中...</td></tr>
             ) : holdings?.length === 0 ? (
-              <tr><td colSpan={12} className="px-4 py-8 text-center text-gray-400">暂无持仓</td></tr>
+              <tr><td colSpan={15} className="px-4 py-8 text-center text-gray-400">暂无持仓</td></tr>
             ) : (
               holdings?.map((h: Holding) => (
                 <tr key={h.id} className="hover:bg-gray-50 align-top">
@@ -232,6 +325,47 @@ export default function Holdings() {
                     {formatFloatPnl(h.entry_price, h.current_price)}
                   </td>
                   <td className="px-4 py-3 text-right">{h.shares ?? '-'}</td>
+                  <td className="px-4 py-3 text-right text-xs text-gray-600">
+                    {editingId === h.id ? (
+                      <div className="space-y-2">
+                        <input
+                          aria-label={`止损价-${h.stock_code}`}
+                          type="number"
+                          min="0"
+                          value={editForm.stop_loss}
+                          onChange={(e) => setEditForm((prev) => ({ ...prev, stop_loss: e.target.value }))}
+                          className="w-24 rounded border px-2 py-1 text-right text-xs"
+                        />
+                        <input
+                          aria-label={`止盈价-${h.stock_code}`}
+                          type="number"
+                          min="0"
+                          value={editForm.target_price}
+                          onChange={(e) => setEditForm((prev) => ({ ...prev, target_price: e.target.value }))}
+                          className="w-24 rounded border px-2 py-1 text-right text-xs"
+                        />
+                      </div>
+                    ) : (
+                      <>
+                        <div>{h.stop_loss != null ? `止损 ${h.stop_loss}` : '止损 —'}</div>
+                        <div>{h.target_price != null ? `止盈 ${h.target_price}` : '止盈 —'}</div>
+                      </>
+                    )}
+                  </td>
+                  <td className="px-4 py-3 text-right text-xs text-gray-600">
+                    {editingId === h.id ? (
+                      <input
+                        aria-label={`仓位占比-${h.stock_code}`}
+                        type="number"
+                        min="0"
+                        value={editForm.position_ratio}
+                        onChange={(e) => setEditForm((prev) => ({ ...prev, position_ratio: e.target.value }))}
+                        className="w-20 rounded border px-2 py-1 text-right text-xs"
+                      />
+                    ) : (
+                      h.position_ratio != null ? `${h.position_ratio}%` : '—'
+                    )}
+                  </td>
                   <td className="px-4 py-3">
                     <div className="flex flex-wrap gap-1">
                       {(() => {
@@ -254,6 +388,31 @@ export default function Holdings() {
                         ))
                       })()}
                     </div>
+                  </td>
+                  <td className="px-4 py-3 text-xs text-gray-600">
+                    {(() => {
+                      const signal = signalMap.get(normStockCode(h.stock_code))
+                      if (!signal) return '—'
+                      const announcements = signal.event_signals.recent_announcements || []
+                      const disclosures = signal.event_signals.disclosure_dates || []
+                      if (!announcements.length && !disclosures.length) return '—'
+                      return (
+                        <div className="space-y-1">
+                          {announcements.slice(0, 2).map((item) => (
+                            <div key={`ann-${item.ann_date}-${item.title}`}>
+                              公告：{item.title || '—'}
+                              {item.ann_date ? `（${item.ann_date}）` : ''}
+                            </div>
+                          ))}
+                          {disclosures.slice(0, 2).map((item) => (
+                            <div key={`disc-${item.ann_date}-${item.report_end}`}>
+                              披露：{item.ann_date || '—'}
+                              {item.report_end ? ` · ${item.report_end}` : ''}
+                            </div>
+                          ))}
+                        </div>
+                      )
+                    })()}
                   </td>
                   <td className="px-4 py-3 text-xs text-gray-600">
                     {(() => {
@@ -317,8 +476,36 @@ export default function Holdings() {
                     }`}>{h.status}</span>
                   </td>
                   <td className="px-4 py-3 text-right">
-                    <button onClick={() => deleteMut.mutate(h.id)}
-                      className="text-red-500 hover:text-red-700 text-xs">删除</button>
+                    <div className="flex justify-end gap-2">
+                      {editingId === h.id ? (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => saveEditing(h.id)}
+                            className="text-blue-600 hover:text-blue-800 text-xs"
+                          >
+                            保存
+                          </button>
+                          <button
+                            type="button"
+                            onClick={cancelEditing}
+                            className="text-gray-500 hover:text-gray-700 text-xs"
+                          >
+                            取消
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => startEditing(h)}
+                          className="text-blue-600 hover:text-blue-800 text-xs"
+                        >
+                          编辑
+                        </button>
+                      )}
+                      <button onClick={() => deleteMut.mutate(h.id)}
+                        className="text-red-500 hover:text-red-700 text-xs">删除</button>
+                    </div>
                   </td>
                 </tr>
               ))

@@ -248,7 +248,16 @@ def _find_theme_signal(sector: str | None, themes: list[dict[str, Any]], stronge
     }
 
 
-def _build_risk_flags(date_str: str, *, price_snapshot: dict[str, Any], technical_signals: dict[str, Any], theme_signals: dict[str, Any], event_signals: dict[str, Any]) -> list[dict[str, str]]:
+def _build_risk_flags(
+    date_str: str,
+    *,
+    price_snapshot: dict[str, Any],
+    technical_signals: dict[str, Any],
+    theme_signals: dict[str, Any],
+    event_signals: dict[str, Any],
+    stop_loss: float | None = None,
+    target_price: float | None = None,
+) -> list[dict[str, str]]:
     flags: list[dict[str, str]] = []
     base_date = _date.fromisoformat(date_str)
 
@@ -281,6 +290,34 @@ def _build_risk_flags(date_str: str, *, price_snapshot: dict[str, Any], technica
             "label": "临近跌停价",
             "reason": f"现价接近跌停边界 {down_limit:.2f}",
         })
+
+    if current_price is not None and stop_loss is not None and stop_loss > 0:
+        if current_price <= stop_loss:
+            flags.append({
+                "level": "high",
+                "label": "触及止损",
+                "reason": f"现价 {current_price:.2f} 已低于止损 {stop_loss:.2f}",
+            })
+        elif current_price <= stop_loss * 1.02:
+            flags.append({
+                "level": "medium",
+                "label": "临近止损",
+                "reason": f"现价 {current_price:.2f} 接近止损 {stop_loss:.2f}",
+            })
+
+    if current_price is not None and target_price is not None and target_price > 0:
+        if current_price >= target_price:
+            flags.append({
+                "level": "medium",
+                "label": "触及止盈",
+                "reason": f"现价 {current_price:.2f} 已达到止盈 {target_price:.2f}",
+            })
+        elif current_price >= target_price * 0.98:
+            flags.append({
+                "level": "medium",
+                "label": "临近止盈",
+                "reason": f"现价 {current_price:.2f} 接近止盈 {target_price:.2f}",
+            })
 
     if not theme_signals.get("is_main_theme") and (technical_signals.get("sector_change_pct") or 0) < 0:
         flags.append({
@@ -408,6 +445,8 @@ def build_holding_signals(
             technical_signals=technical_signals,
             theme_signals=theme_signals,
             event_signals=event_signals,
+            stop_loss=_to_float(holding.get("stop_loss")),
+            target_price=_to_float(holding.get("target_price")),
         )
         items.append({
             "stock_code": code,

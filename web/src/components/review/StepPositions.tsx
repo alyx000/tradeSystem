@@ -192,6 +192,14 @@ export default function StepPositions({ data, onChange, prefill }: StepProps) {
                   ? `换手率 ${signal.technical_signals.turnover_rate.toFixed(2)}%${signal.technical_signals.turnover_status ? `（${signal.technical_signals.turnover_status}）` : ''}`
                   : null,
               ].filter(Boolean).join(' / ')
+              const holdingMeta = holdings.find((h) => normStockCode(h.stock_code) === key)
+              const stopTargetText = [
+                holdingMeta?.stop_loss != null ? `止损价 ${holdingMeta.stop_loss}` : null,
+                holdingMeta?.target_price != null ? `止盈价 ${holdingMeta.target_price}` : null,
+              ].filter(Boolean).join(' / ')
+              const riskText = signal.risk_flags?.length
+                ? signal.risk_flags.map((flag) => flag.label).join(' / ')
+                : ''
               const eventText = [
                 signal.event_signals.is_st ? 'ST' : null,
                 signal.event_signals.has_disclosure_plan && signal.event_signals.disclosure_dates[0]?.ann_date
@@ -204,6 +212,8 @@ export default function StepPositions({ data, onChange, prefill }: StepProps) {
                   <div><span className="font-medium text-gray-700">主线归属：</span>{themeText}</div>
                   <div><span className="font-medium text-gray-700">板块强弱：</span>{boardStrength}</div>
                   <div><span className="font-medium text-gray-700">技术位置：</span>{technicalText || '-'}</div>
+                  <div><span className="font-medium text-gray-700">止损止盈：</span>{stopTargetText || '-'}</div>
+                  <div><span className="font-medium text-gray-700">边界提示：</span>{riskText || '-'}</div>
                   <div><span className="font-medium text-gray-700">事件风险：</span>{eventText || '-'}</div>
                   <div><span className="font-medium text-gray-700">昨日计划：</span>{signal.latest_task?.action_plan || '-'}</div>
                 </div>

@@ -265,6 +265,9 @@ export interface Holding {
   stock_name: string
   entry_price: number | null
   current_price: number | null
+  stop_loss?: number | null
+  target_price?: number | null
+  position_ratio?: number | null
   prefill_pnl_pct?: number | null
   shares: number | null
   status: string
@@ -365,6 +368,15 @@ export interface HoldingCreateInput {
   entry_price?: number
   shares?: number
   sector?: string
+  stop_loss?: number
+  target_price?: number
+  position_ratio?: number
+}
+
+export interface HoldingUpdateInput {
+  stop_loss?: number | null
+  target_price?: number | null
+  position_ratio?: number | null
 }
 
 export interface WatchlistItem {

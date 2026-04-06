@@ -87,6 +87,15 @@ def sync_daily_market_to_db(date_str: str, yaml_data: dict,
     row = _extract_market_row(date_str, yaml_data)
     try:
         with get_db(db_path) as conn:
+            ma5w_flags = Q.compute_ma5w_flags_from_history(
+                conn,
+                target_date=date_str,
+                sh_close=row.get("sh_index_close"),
+                sz_close=row.get("sz_index_close"),
+            )
+            for key, value in ma5w_flags.items():
+                if row.get(key) is None and value is not None:
+                    row[key] = value
             Q.upsert_daily_market(conn, row)
         return True
     except Exception as e:

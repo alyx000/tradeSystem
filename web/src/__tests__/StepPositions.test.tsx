@@ -23,6 +23,8 @@ const holdingsPrefill: ReviewPrefillData = {
       stock_name: '宁德时代',
       entry_price: 180,
       current_price: 192,
+      stop_loss: 175,
+      target_price: 193,
       prefill_pnl_pct: 6.67,
       shares: 100,
       status: 'holding',
@@ -81,7 +83,10 @@ const holdingsPrefill: ReviewPrefillData = {
           source: 'review_step7',
           status: 'open',
         },
-        risk_flags: [{ level: 'high', label: '财报临近', reason: '20260420 有披露计划' }],
+        risk_flags: [
+          { level: 'high', label: '财报临近', reason: '20260420 有披露计划' },
+          { level: 'medium', label: '临近止盈', reason: '现价 192.00 接近止盈 193.00' },
+        ],
       },
     ],
   },
@@ -101,6 +106,10 @@ describe('StepPositions', () => {
     expect(screen.getByText('主线：电池')).toBeInTheDocument()
     expect(screen.getByText('技术位置：')).toBeInTheDocument()
     expect(screen.getByText(/站上MA5 \/ 站上MA10 \/ 量能以上均量 \/ 换手率 6.20%（活跃）/)).toBeInTheDocument()
+    expect(screen.getByText('止损止盈：')).toBeInTheDocument()
+    expect(screen.getByText('止损价 175 / 止盈价 193')).toBeInTheDocument()
+    expect(screen.getByText('边界提示：')).toBeInTheDocument()
+    expect(screen.getByText('财报临近 / 临近止盈')).toBeInTheDocument()
     expect(screen.getByText(/披露计划 20260420/)).toBeInTheDocument()
     expect(screen.getByText('昨日计划：')).toBeInTheDocument()
     expect(screen.getByText('若冲高回落则减仓')).toBeInTheDocument()

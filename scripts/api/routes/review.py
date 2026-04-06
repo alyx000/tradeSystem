@@ -39,6 +39,23 @@ def _industry_info_date_from(date_str: str) -> str:
     return d.isoformat()
 
 
+def _apply_market_ma5w_fallback(conn: sqlite3.Connection, row: dict | None) -> dict | None:
+    if not row:
+        return row
+    if row.get("sh_above_ma5w") is not None and row.get("sz_above_ma5w") is not None:
+        return row
+    flags = Q.compute_ma5w_flags_from_history(
+        conn,
+        target_date=str(row.get("date") or ""),
+        sh_close=row.get("sh_index_close"),
+        sz_close=row.get("sz_index_close"),
+    )
+    for key, value in flags.items():
+        if row.get(key) is None and value is not None:
+            row[key] = value
+    return row
+
+
 def _extract_holding_tasks_from_step7(step7_positions: Any) -> list[dict[str, str]]:
     if not isinstance(step7_positions, dict):
         return []
@@ -231,8 +248,10 @@ def get_prefill(date: str, conn: sqlite3.Connection = Depends(get_db_conn)):
     market_for_signals = dict(market) if market else None
     env = parse_post_market_envelope(market.get("raw_data") if market else None)
     holdings_quote_map = holdings_quote_details_from_envelope(env)
+    market = _apply_market_ma5w_fallback(conn, market)
     enrich_daily_market_row(market)  # 展开 raw_data 中的扩展字段（style_factors/sector_*/rhythm_* 等）
     prev_market = Q.get_prev_daily_market(conn, date)
+    prev_market = _apply_market_ma5w_fallback(conn, prev_market)
     avg_5d = Q.get_avg_amount(conn, date, 5)
     avg_20d = Q.get_avg_amount(conn, date, 20)
     emotion = Q.get_latest_emotion(conn)

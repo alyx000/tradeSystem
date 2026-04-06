@@ -113,6 +113,7 @@ def test_generate_pre_market_sections_and_yaml(tmp_path: Path):
                     "risk_flags": [
                         {"level": "high", "label": "财报临近", "reason": "20260420 有披露计划"},
                         {"level": "medium", "label": "跌破 MA5", "reason": "现价位于 MA5 下方"},
+                        {"level": "medium", "label": "临近止盈", "reason": "现价 192.00 接近止盈 193.00"},
                         ],
                     },
                 ],
@@ -204,6 +205,25 @@ def test_render_holding_risk_summary_task_only_without_high_medium_flags():
     assert len(lines) == 1
     assert "昨日计划待跟踪" in lines[0]
     assert "观察缺口" in lines[0]
+
+
+def test_render_holding_risk_summary_prioritizes_stop_loss_before_other_medium_flags():
+    lines = _render_holding_risk_summary({
+        "items": [
+            {
+                "stock_code": "300750.SZ",
+                "stock_name": "宁德时代",
+                "risk_flags": [
+                    {"level": "medium", "label": "跌破 MA5", "reason": "现价位于 MA5 下方"},
+                    {"level": "medium", "label": "临近止盈", "reason": "现价接近止盈 193.00"},
+                    {"level": "medium", "label": "临近止损", "reason": "现价接近止损 175.00"},
+                ],
+            },
+        ],
+    })
+    assert len(lines) == 1
+    assert "临近止损 / 跌破 MA5" in lines[0]
+    assert "临近止盈" not in lines[0]
 
 
 def test_roman_chinese_section_index():

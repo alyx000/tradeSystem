@@ -20,6 +20,23 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 router = APIRouter(prefix="/api", tags=["crud"])
 
 
+def _apply_market_ma5w_fallback(conn: sqlite3.Connection, row: dict | None) -> dict | None:
+    if not row:
+        return row
+    if row.get("sh_above_ma5w") is not None and row.get("sz_above_ma5w") is not None:
+        return row
+    flags = Q.compute_ma5w_flags_from_history(
+        conn,
+        target_date=str(row.get("date") or ""),
+        sh_close=row.get("sh_index_close"),
+        sz_close=row.get("sz_index_close"),
+    )
+    for key, value in flags.items():
+        if row.get(key) is None and value is not None:
+            row[key] = value
+    return row
+
+
 # ── Teachers / Notes ──────────────────────────────────────────
 
 @router.get("/teachers")
@@ -477,6 +494,7 @@ def get_market(date: str, conn: sqlite3.Connection = Depends(get_db_conn)):
     row = Q.get_daily_market(conn, date)
     if not row:
         return {"date": date, "available": False}
+    _apply_market_ma5w_fallback(conn, row)
     enrich_daily_market_row(row)
     row["available"] = True
     return row
