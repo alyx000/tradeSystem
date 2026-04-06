@@ -7,7 +7,7 @@ from __future__ import annotations
 import os
 import logging
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import date as _date, datetime, timedelta
 from pathlib import Path
 
 import yaml
@@ -423,6 +423,115 @@ class HoldingsCollector:
             else:
                 results.append({"code": h["code"], "name": h["name"], "error": r.error})
         return results
+
+    def refresh_sqlite_quotes(self, date: str, db_path: os.PathLike | str | None = None) -> dict:
+        """安全回填 SQLite 持仓现价，不改 YAML 归档。"""
+        from db.connection import get_db
+        from db.migrate import migrate
+        from db import queries as Q
+        from db.dual_write import _normalize_stock_code_for_match
+
+        self.merge_sqlite_active_holdings(db_path=db_path)
+        holdings_data = self.collect_holdings_data(date)
+        try:
+            holdings_data = self.enrich_with_ma(holdings_data, date)
+        except Exception as e:
+            logger.warning("持仓均线/板块数据补充失败（现价回填继续）: %s", e)
+
+        with get_db(db_path) as conn:
+            migrate(conn)
+            active_rows = Q.get_holdings(conn, status="active")
+            should_update_current_price = date == _date.today().isoformat()
+            active_by_norm: dict[str, list[dict]] = defaultdict(list)
+            for row in active_rows:
+                norm = _normalize_stock_code_for_match(row.get("stock_code"))
+                if norm:
+                    active_by_norm[norm].append(row)
+
+            updated = 0
+            current_price_updated = 0
+            failed = 0
+            skipped = 0
+            items: list[dict] = []
+
+            for item in holdings_data:
+                code = str(item.get("code") or "").strip()
+                name = str(item.get("name") or "").strip()
+                norm = _normalize_stock_code_for_match(code)
+                base = {
+                    "code": code,
+                    "name": name,
+                    "close": item.get("close"),
+                    "pnl_pct": item.get("pnl_pct"),
+                    "turnover_rate": item.get("turnover_rate"),
+                    "ma5": item.get("ma5"),
+                    "ma10": item.get("ma10"),
+                    "ma20": item.get("ma20"),
+                    "volume_vs_ma5": item.get("volume_vs_ma5"),
+                }
+
+                if "error" in item:
+                    failed += 1
+                    items.append({
+                        **base,
+                        "status": "error",
+                        "error": item.get("error"),
+                    })
+                    continue
+
+                if not norm or not active_by_norm.get(norm):
+                    skipped += 1
+                    items.append({
+                        **base,
+                        "status": "skipped",
+                        "reason": "未找到 active 持仓记录",
+                    })
+                    continue
+
+                close = item.get("close")
+                if close in (None, ""):
+                    skipped += 1
+                    items.append({
+                        **base,
+                        "status": "skipped",
+                        "reason": "缺少收盘价",
+                    })
+                    continue
+
+                matched_rows = active_by_norm[norm]
+                Q.upsert_holding_quote_snapshot(
+                    conn,
+                    trade_date=date,
+                    stock_code=code,
+                    stock_name=name or None,
+                    close=float(close),
+                    pnl_pct=float(item["pnl_pct"]) if item.get("pnl_pct") not in (None, "") else None,
+                    turnover_rate=float(item["turnover_rate"]) if item.get("turnover_rate") not in (None, "") else None,
+                    ma5=float(item["ma5"]) if item.get("ma5") not in (None, "") else None,
+                    ma10=float(item["ma10"]) if item.get("ma10") not in (None, "") else None,
+                    ma20=float(item["ma20"]) if item.get("ma20") not in (None, "") else None,
+                    volume_vs_ma5=item.get("volume_vs_ma5"),
+                )
+                if should_update_current_price:
+                    for row in matched_rows:
+                        Q.update_holding(conn, int(row["id"]), current_price=float(close))
+                    current_price_updated += len(matched_rows)
+                updated += len(matched_rows)
+                items.append({
+                    **base,
+                    "status": "updated",
+                    "matched_rows": len(matched_rows),
+                    "current_price_updated": should_update_current_price,
+                })
+
+        return {
+            "date": date,
+            "updated": updated,
+            "current_price_updated": current_price_updated,
+            "failed": failed,
+            "skipped": skipped,
+            "items": items,
+        }
 
     def collect_holdings_announcements(
         self,

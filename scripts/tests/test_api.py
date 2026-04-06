@@ -136,6 +136,253 @@ class TestReview:
         assert h[0]["current_price"] == 180.5
         assert h[0]["prefill_pnl_pct"] == 3.25
 
+    def test_prefill_includes_holding_signals(self, client, db_path):
+        conn = get_connection(db_path)
+        Q.upsert_daily_market(conn, {
+            "date": "2026-04-03",
+            "sh_index_close": 3210.0,
+            "total_amount": 12000.0,
+            "raw_data": json.dumps({
+                "date": "2026-04-03",
+                "holdings_data": [
+                    {
+                        "code": "300750.SZ",
+                        "name": "宁德时代",
+                        "close": 192.0,
+                        "pnl_pct": 6.67,
+                        "ma5": 188.0,
+                        "ma10": 185.0,
+                        "ma20": 180.0,
+                        "volume_vs_ma5": "以上",
+                        "turnover_rate": 6.2,
+                        "sector_change_pct": 3.2,
+                    },
+                ],
+                "limit_cpt_list": {
+                    "data": [
+                        {"name": "电池", "rank": 1, "up_nums": 5, "cons_nums": 2, "pct_chg": 4.2},
+                    ],
+                },
+                "sector_moneyflow_ths": {
+                    "data": [
+                        {"industry": "电池", "net_amount": 800000000, "pct_change": 3.2, "lead_stock": "宁德时代"},
+                    ],
+                },
+                "sector_moneyflow_dc": {
+                    "data": [
+                        {"name": "电池", "content_type": "行业", "net_amount": 600000000, "pct_change": 2.8, "buy_sm_amount_stock": "宁德时代"},
+                    ],
+                },
+            }, ensure_ascii=False),
+        })
+        Q.upsert_main_theme(conn, {"date": "2026-04-03", "theme_name": "电池", "status": "active"})
+        Q.upsert_holding(
+            conn,
+            stock_code="300750.SZ",
+            stock_name="宁德时代",
+            entry_price=180.0,
+            current_price=None,
+            sector="电池",
+            status="active",
+        )
+        Q.replace_holding_tasks(
+            conn,
+            trade_date="2026-04-02",
+            tasks=[{
+                "stock_code": "300750.SZ",
+                "stock_name": "宁德时代",
+                "action_plan": "若冲高回落则减仓",
+                "status": "open",
+            }],
+        )
+        for interface_name, raw_table, payload in [
+            ("anns_d", "raw_anns_d", {"rows": [{"ts_code": "300750.SZ", "title": "回购公告", "ann_date": "20260402"}]}),
+            ("disclosure_date", "raw_disclosure_date", {"rows": [{"ts_code": "300750.SZ", "ann_date": "20260404", "report_end": "20260331"}]}),
+            ("stk_limit", "raw_stk_limit", {"rows": [{"ts_code": "300750.SZ", "pre_close": 190.0, "up_limit": 209.0, "down_limit": 171.0}]}),
+            ("stock_st", "raw_stock_st", {"rows": [{"ts_code": "300750.SZ", "name": "宁德时代"}]}),
+            ("share_float", "raw_share_float", {"rows": [{"ts_code": "300750.SZ", "ann_date": "20260401", "float_date": "20260410", "float_share": 123456789}]}),
+        ]:
+            conn.execute(
+                """
+                INSERT INTO raw_interface_payloads
+                (interface_name, provider, stage, biz_date, target_date, raw_table, dedupe_key,
+                 payload_json, payload_hash, row_count, status, params_json, source_meta_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    interface_name,
+                    f"tushare:{interface_name}",
+                    "post_extended",
+                    "2026-04-03",
+                    "2026-04-03",
+                    raw_table,
+                    f"{interface_name}:2026-04-03:test",
+                    json.dumps(payload, ensure_ascii=False),
+                    f"h:{interface_name}",
+                    len(payload["rows"]),
+                    "success",
+                    "{}",
+                    "{}",
+                ),
+            )
+        conn.commit()
+        conn.close()
+
+        r = client.get("/api/review/2026-04-03/prefill")
+        assert r.status_code == 200
+        data = r.json()
+        signals = data["holding_signals"]
+        assert signals["date"] == "2026-04-03"
+        assert len(signals["items"]) == 1
+        item = signals["items"][0]
+        assert item["stock_code"] == "300750.SZ"
+        assert item["price_snapshot"]["current_price"] == 192.0
+        assert item["price_snapshot"]["up_limit"] == 209.0
+        assert item["technical_signals"]["above_ma5"] is True
+        assert item["technical_signals"]["volume_vs_ma5"] == "以上"
+        assert item["technical_signals"]["turnover_rate"] == 6.2
+        assert item["technical_signals"]["turnover_status"] == "活跃"
+        assert item["theme_signals"]["is_main_theme"] is True
+        assert item["theme_signals"]["is_strongest_sector"] is True
+        assert item["theme_signals"]["sector_flow_source"] == "ths"
+        assert item["event_signals"]["has_recent_announcement"] is True
+        assert item["event_signals"]["has_disclosure_plan"] is True
+        assert item["event_signals"]["is_st"] is True
+        assert item["event_signals"]["share_float_upcoming"][0]["float_date"] == "20260410"
+        assert item["latest_task"]["action_plan"] == "若冲高回落则减仓"
+        labels = {flag["label"] for flag in item["risk_flags"]}
+        assert "财报临近" in labels
+        assert "ST" in labels
+
+    def test_prefill_holding_signals_gracefully_degrades_when_sources_missing(self, client, db_path):
+        conn = get_connection(db_path)
+        Q.upsert_holding(
+            conn,
+            stock_code="300750",
+            stock_name="宁德时代",
+            entry_price=180.0,
+            current_price=181.0,
+            sector="电池",
+            status="active",
+        )
+        conn.commit()
+        conn.close()
+
+        r = client.get("/api/review/2026-04-03/prefill")
+        assert r.status_code == 200
+        data = r.json()
+        item = data["holding_signals"]["items"][0]
+        assert item["stock_code"] == "300750"
+        assert item["price_snapshot"]["current_price"] == 181.0
+        assert item["event_signals"]["recent_announcements"] == []
+        assert item["event_signals"]["disclosure_dates"] == []
+        assert item["event_signals"]["share_float_upcoming"] == []
+        assert item["theme_signals"]["is_main_theme"] is False
+        assert item["risk_flags"] == []
+
+    def test_holding_signals_falls_back_to_snapshot_when_envelope_missing_holdings_data(self, client, db_path):
+        conn = get_connection(db_path)
+        Q.upsert_daily_market(conn, {
+            "date": "2026-04-03",
+            "sh_index_close": 3210.0,
+            "total_amount": 12000.0,
+            "raw_data": json.dumps({"date": "2026-04-03"}, ensure_ascii=False),
+        })
+        Q.upsert_holding(
+            conn,
+            stock_code="300750",
+            stock_name="宁德时代",
+            entry_price=180.0,
+            sector="电池",
+            status="active",
+        )
+        Q.upsert_main_theme(conn, {"date": "2026-04-03", "theme_name": "电池", "status": "active"})
+        Q.upsert_holding_quote_snapshot(
+            conn,
+            trade_date="2026-04-03",
+            stock_code="300750.SZ",
+            stock_name="宁德时代",
+            close=192.0,
+            pnl_pct=6.67,
+            turnover_rate=6.2,
+            ma5=188.0,
+            ma10=185.0,
+            ma20=180.0,
+            volume_vs_ma5="以上",
+        )
+        conn.execute(
+            """
+            INSERT INTO raw_interface_payloads
+            (interface_name, provider, stage, biz_date, target_date, raw_table, dedupe_key,
+             payload_json, payload_hash, row_count, status, params_json, source_meta_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "stk_limit", "tushare:stk_limit", "post_extended", "2026-04-03", "2026-04-03", "raw_stk_limit",
+                "stk_limit:2026-04-03:test:snapshot",
+                json.dumps({"rows": [{"ts_code": "300750.SZ", "pre_close": 190.0, "up_limit": 209.0, "down_limit": 171.0}]}, ensure_ascii=False),
+                "h_snapshot", 1, "success", "{}", "{}",
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+        r = client.get("/api/holdings/signals", params={"date": "2026-04-03"})
+        assert r.status_code == 200
+        data = r.json()
+        item = data["items"][0]
+        assert item["price_snapshot"]["current_price"] == 192.0
+        assert item["technical_signals"]["above_ma5"] is True
+        assert item["technical_signals"]["turnover_rate"] == 6.2
+        assert item["technical_signals"]["turnover_status"] == "活跃"
+        assert item["technical_signals"]["volume_vs_ma5"] == "以上"
+
+    def test_holding_signals_merges_snapshot_into_sparse_envelope_rows(self, client, db_path):
+        conn = get_connection(db_path)
+        Q.upsert_daily_market(conn, {
+            "date": "2026-04-03",
+            "sh_index_close": 3210.0,
+            "total_amount": 12000.0,
+            "raw_data": json.dumps({
+                "date": "2026-04-03",
+                "holdings_data": [
+                    {"code": "300750.SZ", "name": "宁德时代", "close": 192.0},
+                ],
+            }, ensure_ascii=False),
+        })
+        Q.upsert_holding(
+            conn,
+            stock_code="300750",
+            stock_name="宁德时代",
+            entry_price=180.0,
+            sector="电池",
+            status="active",
+        )
+        Q.upsert_holding_quote_snapshot(
+            conn,
+            trade_date="2026-04-03",
+            stock_code="300750.SZ",
+            stock_name="宁德时代",
+            close=192.0,
+            pnl_pct=6.67,
+            turnover_rate=6.2,
+            ma5=188.0,
+            ma10=185.0,
+            ma20=180.0,
+            volume_vs_ma5="以上",
+        )
+        conn.commit()
+        conn.close()
+
+        r = client.get("/api/holdings/signals", params={"date": "2026-04-03"})
+        assert r.status_code == 200
+        item = r.json()["items"][0]
+        assert item["price_snapshot"]["current_price"] == 192.0
+        assert item["technical_signals"]["ma5"] == 188.0
+        assert item["technical_signals"]["turnover_rate"] == 6.2
+        assert item["technical_signals"]["volume_vs_ma5"] == "以上"
+        assert item["technical_signals"]["above_ma5"] is True
+
     def test_save_and_load(self, client):
         body = {"step1_market": {"sh": 3285}, "step2_sectors": {"main": "AI"}}
         r = client.put("/api/review/2026-04-01", json=body)
@@ -740,6 +987,118 @@ class TestPlanningAndKnowledgeAPI:
         r = client.delete(f"/api/holdings/{hid}")
         assert r.status_code == 200
 
+    def test_holdings_signals_api(self, client, db_path):
+        conn = get_connection(db_path)
+        Q.upsert_daily_market(conn, {
+            "date": "2026-04-03",
+            "raw_data": json.dumps({
+                "holdings_data": [
+                    {
+                        "code": "300750.SZ",
+                        "close": 192.0,
+                        "pnl_pct": 6.67,
+                        "ma5": 188.0,
+                        "ma10": 185.0,
+                        "ma20": 180.0,
+                        "volume_vs_ma5": "以上",
+                        "turnover_rate": 5.8,
+                        "sector_change_pct": 3.2,
+                    },
+                ],
+                "limit_cpt_list": {"data": [{"name": "电池", "rank": 1, "up_nums": 5}]},
+                "sector_moneyflow_ths": {"data": [{"industry": "电池", "net_amount": 800000000, "pct_change": 3.2, "lead_stock": "宁德时代"}]},
+            }, ensure_ascii=False),
+        })
+        Q.upsert_main_theme(conn, {"date": "2026-04-03", "theme_name": "电池", "status": "active"})
+        Q.upsert_holding(conn, stock_code="300750", stock_name="宁德时代", entry_price=180.0, sector="电池", status="active")
+        conn.execute(
+            """
+            INSERT INTO raw_interface_payloads
+            (interface_name, provider, stage, biz_date, target_date, raw_table, dedupe_key,
+             payload_json, payload_hash, row_count, status, params_json, source_meta_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "stk_limit", "tushare:stk_limit", "post_extended", "2026-04-03", "2026-04-03", "raw_stk_limit",
+                "stk_limit:2026-04-03:test",
+                json.dumps({"rows": [{"ts_code": "300750.SZ", "pre_close": 190.0, "up_limit": 209.0, "down_limit": 171.0}]}, ensure_ascii=False),
+                "h1", 1, "success", "{}", "{}",
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+        r = client.get("/api/holdings/signals", params={"date": "2026-04-03"})
+        assert r.status_code == 200
+        data = r.json()
+        assert data["date"] == "2026-04-03"
+        assert len(data["items"]) == 1
+        item = data["items"][0]
+        assert item["stock_code"] == "300750"
+        assert item["price_snapshot"]["current_price"] == 192.0
+        assert item["price_snapshot"]["down_limit"] == 171.0
+        assert item["theme_signals"]["is_main_theme"] is True
+        assert item["technical_signals"]["above_ma10"] is True
+        assert item["technical_signals"]["turnover_status"] == "活跃"
+
+    def test_holding_tasks_api(self, client, db_path):
+        conn = get_connection(db_path)
+        Q.replace_holding_tasks(
+            conn,
+            trade_date="2026-04-03",
+            tasks=[{
+                "stock_code": "300750.SZ",
+                "stock_name": "宁德时代",
+                "action_plan": "若冲高回落则减仓",
+                "status": "open",
+            }],
+        )
+        conn.commit()
+        conn.close()
+
+        r = client.get("/api/holdings/tasks", params={"date": "2026-04-03", "status": "open"})
+        assert r.status_code == 200
+        tasks = r.json()
+        assert len(tasks) == 1
+        assert tasks[0]["action_plan"] == "若冲高回落则减仓"
+
+        task_id = tasks[0]["id"]
+        r = client.put(f"/api/holdings/tasks/{task_id}", json={"status": "done"})
+        assert r.status_code == 200
+
+        conn = get_connection(db_path)
+        row = conn.execute("SELECT status FROM holding_tasks WHERE id = ?", (task_id,)).fetchone()
+        conn.close()
+        assert row["status"] == "done"
+
+    def test_save_review_step7_writes_holding_tasks(self, client, db_path):
+        conn = get_connection(db_path)
+        Q.upsert_holding(conn, stock_code="300750.SZ", stock_name="宁德时代", entry_price=180.0, sector="电池", status="active")
+        conn.commit()
+        conn.close()
+
+        r = client.put("/api/review/2026-04-03", json={
+            "step7_positions": {
+                "positions": [
+                    {"stock": "宁德时代(300750.SZ)", "action_plan": "若冲高回落则减仓"},
+                    {"stock": "浦发银行(600000.SH)", "action_plan": ""},
+                ],
+            },
+        })
+        assert r.status_code == 200
+
+        conn = get_connection(db_path)
+        task = conn.execute(
+            "SELECT trade_date, stock_code, stock_name, action_plan, source, status FROM holding_tasks"
+        ).fetchone()
+        conn.close()
+        assert task["trade_date"] == "2026-04-03"
+        assert task["stock_code"] == "300750.SZ"
+        assert task["stock_name"] == "宁德时代"
+        assert task["action_plan"] == "若冲高回落则减仓"
+        assert task["source"] == "review_step7"
+        assert task["status"] == "open"
+
     def test_watchlist_crud(self, client):
         r = client.post("/api/watchlist", json={
             "stock_code": "600519", "stock_name": "贵州茅台", "tier": "tier1_core",
@@ -986,6 +1345,59 @@ _RICH_RAW_DATA = {
         "sector_concept": {
             "data": [{"name": "低空经济", "change_pct": 2.3}],
         },
+        "sector_moneyflow_ths": {
+            "data": [
+                {"name": "油服工程", "net_amount": 188000000.0, "pct_change": 4.68, "lead_stock": "准油股份"},
+                {"name": "电力", "net_amount": 92000000.0, "pct_change": 2.11, "lead_stock": "明星电力"},
+            ],
+        },
+        "sector_moneyflow_dc": {
+            "data": [
+                {
+                    "name": "可控核聚变",
+                    "content_type": "概念",
+                    "net_amount": 256000000.0,
+                    "pct_change": 3.25,
+                    "buy_sm_amount_stock": "合锻智能",
+                },
+                {
+                    "name": "海工装备",
+                    "content_type": "概念",
+                    "net_amount": 113000000.0,
+                    "pct_change": 2.06,
+                    "buy_sm_amount_stock": "巨力索具",
+                },
+            ],
+        },
+        "market_moneyflow_dc": {
+            "data": [
+                {
+                    "net_amount": 650000000.0,
+                    "net_amount_rate": 1.32,
+                    "buy_elg_amount": 420000000.0,
+                    "buy_lg_amount": 180000000.0,
+                }
+            ],
+        },
+        "daily_info": {
+            "data": [
+                {"market": "沪市主板", "amount": 6200, "vol": 41000000},
+                {"market": "深市主板", "amount": 5100, "vol": 36000000},
+                {"market": "创业板", "amount": 2200, "vol": 18000000},
+            ],
+        },
+        "limit_step": {
+            "data": [
+                {"name": "高标A", "nums": 6},
+                {"name": "中位B", "nums": 4},
+            ],
+        },
+        "limit_cpt_list": {
+            "data": [
+                {"rank": 1, "name": "可控核聚变", "up_nums": 12, "cons_nums": 3, "pct_chg": 4.5, "up_stat": "3板2家"},
+                {"rank": 2, "name": "海工装备", "up_nums": 8, "cons_nums": 1, "pct_chg": 2.8, "up_stat": "2板1家"},
+            ],
+        },
         "style_factors": {
             "cap_preference": {"relative": "偏大盘", "spread": -0.77, "csi300_chg": -1.04, "csi1000_chg": -1.81},
             "board_preference": {"dominant_type": "10cm", "pct_10cm": 90.9},
@@ -1078,6 +1490,32 @@ class TestEnrichMarketRow:
         assert m["sector_rhythm_industry"][0]["phase"] == "启动"
         assert "sector_industry" in m
         assert m["sector_industry"]["data"][0]["name"] == "油服工程"
+
+    def test_prefill_contains_review_signals(self, client, db_path):
+        """/api/review/{date}/prefill 应返回结构化 review_signals，供前三步只读展示使用。"""
+        self._seed(db_path)
+        r = client.get("/api/review/2026-05-20/prefill")
+        data = r.json()
+        signals = data["review_signals"]
+        assert signals["market"]["moneyflow_summary"]["net_amount_yi"] == 6.5
+        assert signals["market"]["market_structure_rows"][0]["name"] == "沪市主板"
+        assert signals["sectors"]["strongest_rows"][0]["name"] == "可控核聚变"
+        assert signals["sectors"]["ths_moneyflow_rows"][0]["name"] == "油服工程"
+        assert signals["sectors"]["dc_moneyflow_rows"][0]["lead_stock"] == "合锻智能"
+        assert signals["emotion"]["ladder_rows"][0]["name"] == "高标A"
+
+    def test_prefill_review_signals_degrade_gracefully_when_sections_missing(self, client, db_path):
+        """/api/review/{date}/prefill 缺失新增接口时，review_signals 应返回空结构而不是报错。"""
+        self._seed(db_path, raw_data={"date": "2026-05-20", "raw_data": {}})
+        r = client.get("/api/review/2026-05-20/prefill")
+        data = r.json()
+        signals = data["review_signals"]
+        assert signals["market"]["moneyflow_summary"] is None
+        assert signals["market"]["market_structure_rows"] == []
+        assert signals["sectors"]["strongest_rows"] == []
+        assert signals["sectors"]["ths_moneyflow_rows"] == []
+        assert signals["sectors"]["dc_moneyflow_rows"] == []
+        assert signals["emotion"]["ladder_rows"] == []
 
     def test_prefill_contains_industry_info(self, client, db_path):
         """/api/review/{date}/prefill 应返回 industry_info 顶层列表。"""

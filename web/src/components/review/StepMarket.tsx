@@ -53,6 +53,7 @@ export default function StepMarket({ data, onChange, prefill }: StepProps) {
   const d = data || {}
   const m = prefill?.market
   const pm = prefill?.prev_market
+  const marketSignals = prefill?.review_signals?.market
 
   const teacherNotes = prefill?.teacher_notes || []
 
@@ -79,6 +80,12 @@ export default function StepMarket({ data, onChange, prefill }: StepProps) {
 
   const fmtAmount = (v: number | null | undefined) =>
     v != null ? (v >= 10000 ? `${(v / 10000).toFixed(2)}万亿` : `${v.toFixed(0)}亿`) : '-'
+  const fmtSignedYi = (v: number | null | undefined) => {
+    if (v == null) return '-'
+    const sign = v >= 0 ? '+' : ''
+    return `${sign}${v.toFixed(2)}亿`
+  }
+  const fmtPercent = (v: number | null | undefined) => (v != null ? `${v.toFixed(2)}%` : '-')
 
   return (
     <div className="space-y-6">
@@ -111,6 +118,49 @@ export default function StepMarket({ data, onChange, prefill }: StepProps) {
             </div>
           )}
         </PrefillBanner>
+      )}
+
+      {marketSignals?.moneyflow_summary && (
+        <PrefillBanner>
+          <div className="text-xs font-medium text-gray-600 mb-2">主力资金流向</div>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <Metric label="主力净额" value={fmtSignedYi(marketSignals.moneyflow_summary.net_amount_yi)} />
+            <Metric label="净占比" value={fmtPercent(marketSignals.moneyflow_summary.net_amount_rate)} />
+            <Metric label="超大单" value={fmtSignedYi(marketSignals.moneyflow_summary.super_large_yi)} />
+            <Metric label="大单" value={fmtSignedYi(marketSignals.moneyflow_summary.large_yi)} />
+          </div>
+        </PrefillBanner>
+      )}
+
+      {(marketSignals?.market_structure_rows?.length ?? 0) > 0 && (
+        (() => {
+          const structureRows = marketSignals?.market_structure_rows ?? []
+          return (
+            <PrefillBanner>
+              <div className="text-xs font-medium text-gray-600 mb-2">市场交易结构</div>
+              <div className="overflow-x-auto">
+                <table className="min-w-full text-xs text-gray-600">
+                  <thead>
+                    <tr className="text-left text-gray-400">
+                      <th className="py-1 pr-4 font-medium">市场</th>
+                      <th className="py-1 pr-4 font-medium text-right">成交额</th>
+                      <th className="py-1 font-medium text-right">成交量</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {structureRows.map((row) => (
+                      <tr key={row.name} className="border-t border-gray-200/70">
+                        <td className="py-1.5 pr-4 font-medium text-gray-700">{row.name}</td>
+                        <td className="py-1.5 pr-4 text-right">{row.amount ?? '-'}</td>
+                        <td className="py-1.5 text-right">{row.volume ?? '-'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </PrefillBanner>
+          )
+        })()
       )}
 
       <Section title="成交量对比">

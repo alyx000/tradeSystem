@@ -308,10 +308,173 @@ def update_holding(conn: sqlite3.Connection, holding_id: int, **kwargs: Any) -> 
     conn.execute(f"UPDATE holdings SET {', '.join(sets)} WHERE id = ?", vals)
 
 
+def upsert_holding_quote_snapshot(
+    conn: sqlite3.Connection,
+    *,
+    trade_date: str,
+    stock_code: str,
+    stock_name: str | None = None,
+    close: float | None = None,
+    pnl_pct: float | None = None,
+    turnover_rate: float | None = None,
+    ma5: float | None = None,
+    ma10: float | None = None,
+    ma20: float | None = None,
+    volume_vs_ma5: str | None = None,
+) -> int:
+    norm = _normalize_stock_code_for_match(stock_code)
+    if not norm:
+        raise ValueError("stock_code required")
+    row = conn.execute(
+        f"""
+        SELECT id FROM holding_quote_snapshots
+        WHERE trade_date = ? AND {holding_code_norm_sql('stock_code')} = ?
+        LIMIT 1
+        """,
+        (trade_date, norm),
+    ).fetchone()
+    payload = {
+        "trade_date": trade_date,
+        "stock_code": stock_code,
+        "stock_name": stock_name,
+        "close": close,
+        "pnl_pct": pnl_pct,
+        "turnover_rate": turnover_rate,
+        "ma5": ma5,
+        "ma10": ma10,
+        "ma20": ma20,
+        "volume_vs_ma5": volume_vs_ma5,
+    }
+    if row:
+        update_cols = {k: v for k, v in payload.items() if k not in ("trade_date",) and v is not None}
+        if update_cols:
+            sets = ", ".join(f"{k} = ?" for k in update_cols)
+            vals = list(update_cols.values()) + [int(row["id"])]
+            conn.execute(f"UPDATE holding_quote_snapshots SET {sets} WHERE id = ?", vals)
+        return int(row["id"])
+
+    cols = [k for k, v in payload.items() if v is not None]
+    vals = [payload[k] for k in cols]
+    placeholders = ", ".join("?" * len(cols))
+    cur = conn.execute(
+        f"INSERT INTO holding_quote_snapshots ({', '.join(cols)}) VALUES ({placeholders})",
+        vals,
+    )
+    return cur.lastrowid  # type: ignore[return-value]
+
+
+def get_latest_holding_quote_snapshots(
+    conn: sqlite3.Connection,
+    trade_date: str,
+) -> dict[str, dict]:
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM holding_quote_snapshots
+        WHERE trade_date <= ?
+        ORDER BY trade_date DESC, updated_at DESC, id DESC
+        """,
+        (trade_date,),
+    ).fetchall()
+    out: dict[str, dict] = {}
+    for row in rows:
+        item = dict(row)
+        norm = _normalize_stock_code_for_match(item.get("stock_code"))
+        if norm and norm not in out:
+            out[norm] = item
+    return out
+
+
 def delete_holding(conn: sqlite3.Connection, holding_id: int) -> int:
     """删除持仓，返回受影响行数。"""
     cur = conn.execute("DELETE FROM holdings WHERE id = ?", (holding_id,))
     return cur.rowcount
+
+
+def replace_holding_tasks(
+    conn: sqlite3.Connection,
+    *,
+    trade_date: str,
+    tasks: list[dict[str, Any]],
+    source: str = "review_step7",
+) -> int:
+    conn.execute(
+        "DELETE FROM holding_tasks WHERE trade_date = ? AND source = ?",
+        (trade_date, source),
+    )
+    inserted = 0
+    for task in tasks:
+        stock_code = str(task.get("stock_code") or "").strip()
+        action_plan = str(task.get("action_plan") or "").strip()
+        if not stock_code or not action_plan:
+            continue
+        conn.execute(
+            """
+            INSERT INTO holding_tasks (trade_date, stock_code, stock_name, action_plan, source, status)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                trade_date,
+                stock_code,
+                task.get("stock_name"),
+                action_plan,
+                source,
+                task.get("status") or "open",
+            ),
+        )
+        inserted += 1
+    return inserted
+
+
+def get_latest_open_holding_tasks(conn: sqlite3.Connection, as_of_date: str) -> dict[str, dict]:
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM holding_tasks
+        WHERE status = 'open' AND trade_date <= ?
+        ORDER BY trade_date DESC, updated_at DESC, id DESC
+        """,
+        (as_of_date,),
+    ).fetchall()
+    out: dict[str, dict] = {}
+    for row in rows:
+        item = dict(row)
+        norm = _normalize_stock_code_for_match(item.get("stock_code"))
+        if norm and norm not in out:
+            out[norm] = item
+    return out
+
+
+def list_holding_tasks(
+    conn: sqlite3.Connection,
+    *,
+    status: str | None = None,
+    date_to: str | None = None,
+) -> list[dict]:
+    sql = "SELECT * FROM holding_tasks WHERE 1=1"
+    params: list[Any] = []
+    if status:
+        sql += " AND status = ?"
+        params.append(status)
+    if date_to:
+        sql += " AND trade_date <= ?"
+        params.append(date_to)
+    sql += " ORDER BY trade_date DESC, updated_at DESC, id DESC"
+    return _rows_to_list(conn.execute(sql, params).fetchall())
+
+
+def update_holding_task(conn: sqlite3.Connection, task_id: int, **kwargs: Any) -> None:
+    allowed = {"action_plan", "status"}
+    sets, vals = [], []
+    for k, v in kwargs.items():
+        if k not in allowed:
+            raise ValueError(f"Invalid column for holding_tasks: {k}")
+        sets.append(f"{k} = ?")
+        vals.append(v)
+    if not sets:
+        return
+    vals.append(task_id)
+    conn.execute(f"UPDATE holding_tasks SET {', '.join(sets)} WHERE id = ?", vals)
 
 
 # ──────────────────────────────────────────────────────────────

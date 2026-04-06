@@ -52,6 +52,23 @@ const prefill: ReviewPrefillData = {
     strength_trend: '持续走强',
     confidence: '高',
   },
+  review_signals: {
+    market: {
+      moneyflow_summary: null,
+      market_structure_rows: [],
+    },
+    sectors: {
+      strongest_rows: [],
+      ths_moneyflow_rows: [],
+      dc_moneyflow_rows: [],
+    },
+    emotion: {
+      ladder_rows: [
+        { name: '高标A', nums: 6 },
+        { name: '中位B', nums: 4 },
+      ],
+    },
+  },
 }
 
 describe('StepEmotion', () => {
@@ -65,6 +82,9 @@ describe('StepEmotion', () => {
     expect(screen.getByText(/置信度: 高/)).toBeInTheDocument()
     expect(screen.getByText('88')).toBeInTheDocument()
     expect(screen.getByText('81 %')).toBeInTheDocument()
+    expect(screen.getByText('连板天梯')).toBeInTheDocument()
+    expect(screen.getByText('高标A')).toBeInTheDocument()
+    expect(screen.getByText('6板')).toBeInTheDocument()
   })
 
   it('emits nested payload when user edits transition reason', () => {

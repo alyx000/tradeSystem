@@ -40,6 +40,7 @@ export default function StepEmotion({ data, onChange, prefill }: StepProps) {
   const d = data || {}
   const ec = prefill?.emotion_cycle
   const m = prefill?.market
+  const emotionSignals = prefill?.review_signals?.emotion
   const sentimentStocks = (d.sentiment_stocks as SentimentStockItem[] | undefined) || []
 
   const g = <T = string,>(p: string, fb?: T) => {
@@ -77,6 +78,19 @@ export default function StepEmotion({ data, onChange, prefill }: StepProps) {
             <div className="mt-2 text-xs text-gray-500">
               趋势方向: <span className="font-medium text-gray-700">{ec.strength_trend}</span>
               {ec.confidence && <span className="ml-2">置信度: {ec.confidence}</span>}
+            </div>
+          )}
+          {(emotionSignals?.ladder_rows?.length ?? 0) > 0 && (
+            <div className="mt-3">
+              <div className="text-xs font-medium text-gray-600 mb-2">连板天梯</div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                {emotionSignals!.ladder_rows.map((row) => (
+                  <div key={`${row.name}-${row.nums ?? 'na'}`} className="flex items-center justify-between rounded border border-gray-200 bg-white px-3 py-2 text-xs">
+                    <span className="font-medium text-gray-700">{row.name}</span>
+                    <span className="text-gray-500">{row.nums != null ? `${row.nums}板` : '-'}</span>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
         </PrefillBanner>

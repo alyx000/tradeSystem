@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from datetime import date
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -9,6 +10,9 @@ import pytest
 import yaml
 
 from collectors.holdings import HoldingsCollector, collect_info_for_stocks
+from db.connection import get_connection
+from db.migrate import migrate
+from db import queries as Q
 from providers.base import DataResult
 
 
@@ -160,6 +164,116 @@ class TestCollectHoldingsData:
         assert summary["total_stocks"] == 2
         assert summary["total_market_value"] > 0
         assert "total_pnl_pct" in summary
+
+    def test_refresh_sqlite_quotes_updates_current_price_for_today(self, tmp_path):
+        db_path = tmp_path / "trade.db"
+        conn = get_connection(db_path)
+        migrate(conn)
+        Q.upsert_holding(
+            conn,
+            stock_code="600000",
+            stock_name="浦发银行",
+            shares=100,
+            entry_price=10.0,
+            sector="银行",
+            status="active",
+        )
+        conn.commit()
+        conn.close()
+
+        daily = {
+            "600000": {
+                "code": "600000.SH",
+                "close": 12.3,
+                "change_pct": 1.0,
+                "volume": 100000,
+                "amount_billion": 1.1,
+                "turnover_rate": 3.4,
+                "amplitude_pct": 2.5,
+            },
+        }
+        ma = {
+            "600000.SH": {"ma5": 11.5, "ma10": 11.0, "ma20": 10.8, "volume_ma5": 90000.0},
+        }
+        reg = _mock_registry(daily_map=daily, ma_map=ma)
+        hc = HoldingsCollector(registry=reg)
+        hc.holdings_file = tmp_path / "holdings.yaml"
+        hc._holdings = []
+
+        result = hc.refresh_sqlite_quotes(date.today().isoformat(), db_path=db_path)
+        assert result["updated"] == 1
+        assert result["current_price_updated"] == 1
+        assert result["failed"] == 0
+        assert result["skipped"] == 0
+        assert result["items"][0]["status"] == "updated"
+        assert result["items"][0]["current_price_updated"] is True
+        assert result["items"][0]["turnover_rate"] == 3.4
+        assert result["items"][0]["ma5"] == 11.5
+        assert result["items"][0]["volume_vs_ma5"] == "以上"
+
+        conn = get_connection(db_path)
+        row = Q.get_holdings(conn, status="active")[0]
+        snap = conn.execute(
+            "SELECT trade_date, close, turnover_rate, ma5, ma10, ma20, volume_vs_ma5 FROM holding_quote_snapshots"
+        ).fetchone()
+        conn.close()
+        assert row["current_price"] == 12.3
+        assert snap["trade_date"] == date.today().isoformat()
+        assert snap["close"] == 12.3
+        assert snap["turnover_rate"] == 3.4
+        assert snap["ma5"] == 11.5
+        assert snap["volume_vs_ma5"] == "以上"
+
+    def test_refresh_sqlite_quotes_historical_date_does_not_overwrite_current_price(self, tmp_path):
+        db_path = tmp_path / "trade.db"
+        conn = get_connection(db_path)
+        migrate(conn)
+        Q.upsert_holding(
+            conn,
+            stock_code="600000",
+            stock_name="浦发银行",
+            shares=100,
+            entry_price=10.0,
+            current_price=15.0,
+            sector="银行",
+            status="active",
+        )
+        conn.commit()
+        conn.close()
+
+        daily = {
+            "600000": {
+                "code": "600000.SH",
+                "close": 12.3,
+                "change_pct": 1.0,
+                "volume": 100000,
+                "amount_billion": 1.1,
+                "turnover_rate": 3.4,
+                "amplitude_pct": 2.5,
+            },
+        }
+        ma = {
+            "600000.SH": {"ma5": 11.5, "ma10": 11.0, "ma20": 10.8, "volume_ma5": 90000.0},
+        }
+        reg = _mock_registry(daily_map=daily, ma_map=ma)
+        hc = HoldingsCollector(registry=reg)
+        hc.holdings_file = tmp_path / "holdings.yaml"
+        hc._holdings = []
+
+        result = hc.refresh_sqlite_quotes("2026-03-30", db_path=db_path)
+        assert result["updated"] == 1
+        assert result["current_price_updated"] == 0
+        assert result["items"][0]["current_price_updated"] is False
+
+        conn = get_connection(db_path)
+        row = Q.get_holdings(conn, status="active")[0]
+        snap = conn.execute(
+            "SELECT trade_date, close, turnover_rate, ma5, ma10, ma20, volume_vs_ma5 FROM holding_quote_snapshots WHERE trade_date = '2026-03-30'"
+        ).fetchone()
+        conn.close()
+        assert row["current_price"] == 15.0
+        assert snap["close"] == 12.3
+        assert snap["ma5"] == 11.5
 
 
 class TestCollectAnnouncements:

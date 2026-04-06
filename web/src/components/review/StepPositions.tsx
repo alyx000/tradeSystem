@@ -1,6 +1,6 @@
 import { useEffect, useMemo } from 'react'
 import { type StepProps, Row, SelectField, TextField, NumberField, CheckField, PrefillBanner, DynamicList } from './widgets'
-import type { Holding } from '../../lib/types'
+import type { Holding, HoldingSignalItem } from '../../lib/types'
 
 interface PositionItem {
   stock: string
@@ -41,6 +41,15 @@ function buildPrefillHoldingsMap(holdings: Holding[]): Map<string, { cost: unkno
   return m
 }
 
+function buildHoldingSignalsMap(items: HoldingSignalItem[] | undefined): Map<string, HoldingSignalItem> {
+  const out = new Map<string, HoldingSignalItem>()
+  for (const item of items || []) {
+    const key = normStockCode(item.stock_code)
+    if (key) out.set(key, item)
+  }
+  return out
+}
+
 function pnlHint(cost: unknown, cur: unknown, prefillPnl: unknown): string | null {
   if (typeof prefillPnl === 'number' && Number.isFinite(prefillPnl)) return `${prefillPnl.toFixed(2)}%`
   const c = Number(cost)
@@ -62,6 +71,7 @@ const VOL_VS_AVG = [
 export default function StepPositions({ data, onChange, prefill }: StepProps) {
   const d = data || {}
   const holdings = useMemo(() => prefill?.holdings || [], [prefill?.holdings])
+  const holdingSignals = useMemo(() => buildHoldingSignalsMap(prefill?.holding_signals?.items), [prefill?.holding_signals?.items])
 
   const positions: PositionItem[] = (d.positions as PositionItem[] | undefined) || (holdings.length > 0
     ? holdings.map((h) => ({
@@ -70,9 +80,12 @@ export default function StepPositions({ data, onChange, prefill }: StepProps) {
         current_price: h.current_price,
         prefill_pnl_pct: h.prefill_pnl_pct ?? null,
         position_pct: null,
-        in_hot_sector: false,
+        in_hot_sector: (() => {
+          const signal = holdingSignals.get(normStockCode(h.stock_code))
+          return Boolean(signal?.theme_signals.is_main_theme || signal?.theme_signals.is_strongest_sector)
+        })(),
         price_trend: '',
-        volume_vs_avg: '',
+        volume_vs_avg: holdingSignals.get(normStockCode(h.stock_code))?.technical_signals.volume_vs_ma5 || '',
         amplitude_ok: false,
         action_plan: '',
       }))
@@ -88,24 +101,33 @@ export default function StepPositions({ data, onChange, prefill }: StepProps) {
     const next = raw.map((item) => {
       const key = normStockCode(extractCodeFromStockLabel(String(item.stock || '')))
       const p = key ? map.get(key) : undefined
-      if (!p) return item
+      const signal = key ? holdingSignals.get(key) : undefined
       const np = { ...item }
-      if (typeof p.price === 'number' && Number.isFinite(p.price) && item.current_price == null) {
+      if (!p && !signal) return item
+      if (p && typeof p.price === 'number' && Number.isFinite(p.price) && item.current_price == null) {
         np.current_price = p.price
         changed = true
       }
-      if (typeof p.cost === 'number' && Number.isFinite(p.cost) && item.cost == null) {
+      if (p && typeof p.cost === 'number' && Number.isFinite(p.cost) && item.cost == null) {
         np.cost = p.cost
         changed = true
       }
-      if (p.pnl != null && item.prefill_pnl_pct == null) {
+      if (p && p.pnl != null && item.prefill_pnl_pct == null) {
         np.prefill_pnl_pct = p.pnl
+        changed = true
+      }
+      if (signal && item.volume_vs_avg === '') {
+        np.volume_vs_avg = signal.technical_signals.volume_vs_ma5 || ''
+        changed = changed || np.volume_vs_avg !== ''
+      }
+      if (signal && item.in_hot_sector === false && (signal.theme_signals.is_main_theme || signal.theme_signals.is_strongest_sector)) {
+        np.in_hot_sector = true
         changed = true
       }
       return np
     })
     if (changed) onChange({ ...(data || {}), positions: next })
-  }, [holdings, data?.positions, onChange, data])
+  }, [holdings, data?.positions, onChange, data, holdingSignals])
 
   return (
     <div className="space-y-6">
@@ -150,6 +172,43 @@ export default function StepPositions({ data, onChange, prefill }: StepProps) {
                 <CheckField label="振幅满足" checked={item.amplitude_ok} onChange={v => upd('amplitude_ok', v)} />
               </div>
             </Row>
+            {(() => {
+              const key = normStockCode(extractCodeFromStockLabel(String(item.stock || '')))
+              const signal = key ? holdingSignals.get(key) : undefined
+              if (!signal) return null
+              const themeText = signal.theme_signals.is_main_theme
+                ? `主线：${signal.theme_signals.main_theme_name || '是'}`
+                : signal.theme_signals.is_strongest_sector
+                  ? `最强板块：${signal.theme_signals.strongest_sector_name || '是'}`
+                  : '非主线'
+              const boardStrength = signal.technical_signals.sector_change_pct != null
+                ? `板块涨跌幅 ${signal.technical_signals.sector_change_pct >= 0 ? '+' : ''}${signal.technical_signals.sector_change_pct.toFixed(2)}%`
+                : '板块强弱：-'
+              const technicalText = [
+                signal.technical_signals.above_ma5 === true ? '站上MA5' : signal.technical_signals.above_ma5 === false ? '跌破MA5' : null,
+                signal.technical_signals.above_ma10 === true ? '站上MA10' : signal.technical_signals.above_ma10 === false ? '跌破MA10' : null,
+                signal.technical_signals.volume_vs_ma5 ? `量能${signal.technical_signals.volume_vs_ma5}均量` : null,
+                signal.technical_signals.turnover_rate != null
+                  ? `换手率 ${signal.technical_signals.turnover_rate.toFixed(2)}%${signal.technical_signals.turnover_status ? `（${signal.technical_signals.turnover_status}）` : ''}`
+                  : null,
+              ].filter(Boolean).join(' / ')
+              const eventText = [
+                signal.event_signals.is_st ? 'ST' : null,
+                signal.event_signals.has_disclosure_plan && signal.event_signals.disclosure_dates[0]?.ann_date
+                  ? `披露计划 ${signal.event_signals.disclosure_dates[0].ann_date}`
+                  : null,
+                signal.event_signals.has_recent_announcement ? '近 7 日有公告' : null,
+              ].filter(Boolean).join(' / ')
+              return (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-gray-600 space-y-1">
+                  <div><span className="font-medium text-gray-700">主线归属：</span>{themeText}</div>
+                  <div><span className="font-medium text-gray-700">板块强弱：</span>{boardStrength}</div>
+                  <div><span className="font-medium text-gray-700">技术位置：</span>{technicalText || '-'}</div>
+                  <div><span className="font-medium text-gray-700">事件风险：</span>{eventText || '-'}</div>
+                  <div><span className="font-medium text-gray-700">昨日计划：</span>{signal.latest_task?.action_plan || '-'}</div>
+                </div>
+              )
+            })()}
             <TextField label="操作计划" value={item.action_plan} onChange={v => upd('action_plan', v)} placeholder="持有 / 加仓 / 减仓 / 止损..." />
           </div>
         )}

@@ -137,6 +137,38 @@ CREATE TABLE IF NOT EXISTS holdings (
 );
 """
 
+_SQL_HOLDING_TASKS = """
+CREATE TABLE IF NOT EXISTS holding_tasks (
+    id INTEGER PRIMARY KEY,
+    trade_date TEXT NOT NULL CHECK(trade_date GLOB '????-??-??'),
+    stock_code TEXT NOT NULL,
+    stock_name TEXT,
+    action_plan TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'review_step7',
+    status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open', 'done', 'ignored')),
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+);
+"""
+
+_SQL_HOLDING_QUOTE_SNAPSHOTS = """
+CREATE TABLE IF NOT EXISTS holding_quote_snapshots (
+    id INTEGER PRIMARY KEY,
+    trade_date TEXT NOT NULL CHECK(trade_date GLOB '????-??-??'),
+    stock_code TEXT NOT NULL,
+    stock_name TEXT,
+    close REAL,
+    pnl_pct REAL,
+    turnover_rate REAL,
+    ma5 REAL,
+    ma10 REAL,
+    ma20 REAL,
+    volume_vs_ma5 TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+);
+"""
+
 _SQL_WATCHLIST = """
 CREATE TABLE IF NOT EXISTS watchlist (
     id INTEGER PRIMARY KEY,
@@ -176,6 +208,13 @@ _SQL_HOLDINGS_TRIGGER = """
 CREATE TRIGGER IF NOT EXISTS holdings_updated
 AFTER UPDATE ON holdings BEGIN
     UPDATE holdings SET updated_at = datetime('now') WHERE id = new.id;
+END;
+"""
+
+_SQL_HOLDING_TASKS_TRIGGER = """
+CREATE TRIGGER IF NOT EXISTS holding_tasks_updated
+AFTER UPDATE ON holding_tasks BEGIN
+    UPDATE holding_tasks SET updated_at = datetime('now') WHERE id = new.id;
 END;
 """
 
@@ -631,6 +670,10 @@ _SQL_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_calendar_impact ON calendar_events(impact);",
     f"CREATE UNIQUE INDEX IF NOT EXISTS idx_holdings_active_norm_unique "
     f"ON holdings ({holding_code_norm_sql()}) WHERE status = 'active';",
+    f"CREATE INDEX IF NOT EXISTS idx_holding_tasks_norm_date ON holding_tasks ({holding_code_norm_sql('stock_code')}, trade_date DESC);",
+    "CREATE INDEX IF NOT EXISTS idx_holding_tasks_status_date ON holding_tasks(status, trade_date DESC);",
+    f"CREATE UNIQUE INDEX IF NOT EXISTS idx_holding_quotes_date_norm_unique ON holding_quote_snapshots(trade_date, {holding_code_norm_sql('stock_code')});",
+    f"CREATE INDEX IF NOT EXISTS idx_holding_quotes_norm_date ON holding_quote_snapshots({holding_code_norm_sql('stock_code')}, trade_date DESC);",
     "CREATE INDEX IF NOT EXISTS idx_emotion_cycle_date ON emotion_cycle(date);",
     "CREATE INDEX IF NOT EXISTS idx_main_themes_date ON main_themes(date);",
     "CREATE INDEX IF NOT EXISTS idx_main_themes_status ON main_themes(status);",
@@ -668,6 +711,8 @@ _ALL_TABLE_SQL = [
     _SQL_NOTE_ATTACHMENTS,
     _SQL_CALENDAR_EVENTS,
     _SQL_HOLDINGS,
+    _SQL_HOLDING_TASKS,
+    _SQL_HOLDING_QUOTE_SNAPSHOTS,
     _SQL_WATCHLIST,
     _SQL_BLACKLIST,
     _SQL_INDUSTRY_INFO,
@@ -697,7 +742,7 @@ _ALL_FTS_SQL = [
 
 _ALL_TRIGGER_SQL = (
     _SQL_TEACHER_NOTES_FTS_TRIGGERS
-    + [_SQL_HOLDINGS_TRIGGER, _SQL_WATCHLIST_TRIGGER, _SQL_DAILY_REVIEWS_TRIGGER]
+    + [_SQL_HOLDINGS_TRIGGER, _SQL_HOLDING_TASKS_TRIGGER, _SQL_WATCHLIST_TRIGGER, _SQL_DAILY_REVIEWS_TRIGGER]
     + _SQL_INDUSTRY_INFO_FTS_TRIGGERS
     + _SQL_MACRO_INFO_FTS_TRIGGERS
 )
@@ -705,7 +750,7 @@ _ALL_TRIGGER_SQL = (
 EXPECTED_TABLES = [
     "teachers", "teacher_notes", "note_attachments",
     "calendar_events",
-    "holdings", "watchlist", "blacklist",
+    "holdings", "holding_tasks", "holding_quote_snapshots", "watchlist", "blacklist",
     "industry_info", "macro_info",
     "daily_market", "daily_reviews",
     "emotion_cycle", "main_themes",

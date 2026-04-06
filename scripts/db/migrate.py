@@ -144,6 +144,19 @@ def migrate(conn: sqlite3.Connection) -> None:
         set_schema_version(conn, 8)
         conn.commit()
 
+    if version < 9:
+        logger.info("Applying schema v9: holding_tasks table")
+        init_schema(conn)
+        set_schema_version(conn, 9)
+        conn.commit()
+        version = get_schema_version(conn)
+
+    if version < 10:
+        logger.info("Applying schema v10: holding_quote_snapshots table")
+        init_schema(conn)
+        set_schema_version(conn, 10)
+        conn.commit()
+
 
 # ──────────────────────────────────────────────────────────────
 # YAML 数据导入

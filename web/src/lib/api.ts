@@ -4,6 +4,9 @@ import type {
   CommandIndexPayload,
   Holding,
   HoldingCreateInput,
+  HoldingTaskItem,
+  HoldingTaskUpdateInput,
+  HoldingSignalsPayload,
   IngestErrorRecord,
   IngestInspectRecord,
   IngestInterfaceRecord,
@@ -107,6 +110,16 @@ export const api = {
 
   // Holdings
   getHoldings: () => request<Holding[]>('/holdings'),
+  getHoldingSignals: (date: string) =>
+    request<HoldingSignalsPayload>(`/holdings/signals?date=${encodeURIComponent(date)}`),
+  listHoldingTasks: (date?: string, status = 'open') => {
+    const sp = new URLSearchParams()
+    if (date) sp.set('date', date)
+    if (status) sp.set('status', status)
+    return request<HoldingTaskItem[]>(`/holdings/tasks?${sp}`)
+  },
+  updateHoldingTask: (id: number, data: HoldingTaskUpdateInput) =>
+    request<{ ok?: boolean }>(`/holdings/tasks/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   createHolding: (data: HoldingCreateInput) =>
     request<Holding>('/holdings', { method: 'POST', body: JSON.stringify(data) }),
   deleteHolding: (id: number) =>

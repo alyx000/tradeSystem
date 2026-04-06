@@ -6,7 +6,7 @@ import {
   getIngestHealthStatusClasses,
   getIngestHealthStatusReason,
 } from '../lib/ingestHealthStatus'
-import type { CalendarEvent, CommandDocItem, IngestHealthSummary } from '../lib/types'
+import type { CalendarEvent, CommandDocItem, HoldingTaskItem, IngestHealthSummary } from '../lib/types'
 
 const today = new Date().toISOString().slice(0, 10)
 
@@ -30,6 +30,10 @@ export default function Dashboard() {
   const { data: commandIndex } = useQuery({
     queryKey: ['command-index'],
     queryFn: api.getCommandIndex,
+  })
+  const { data: holdingTasks } = useQuery({
+    queryKey: ['holding-tasks', today, 'open'],
+    queryFn: () => api.listHoldingTasks(today, 'open'),
   })
   const { data: ingestHealthCore } = useQuery({
     queryKey: ['ingest-health-dashboard', today, 'post_core'],
@@ -116,6 +120,28 @@ export default function Dashboard() {
           </div>
         </div>
       </div>
+
+      {holdingTasks && holdingTasks.length > 0 && (
+        <div className="bg-white rounded-lg shadow p-4">
+          <div className="flex items-center justify-between mb-3 gap-3">
+            <div>
+              <h2 className="text-sm font-medium text-gray-500">未完成持仓计划</h2>
+              <p className="text-xs text-gray-400 mt-1">来自上一交易日第 7 步复盘的持仓操作计划。</p>
+            </div>
+            <Link to={`/holding-tasks?date=${today}&status=open`} className="text-xs text-blue-500 hover:underline">
+              打开任务页 →
+            </Link>
+          </div>
+          <div className="space-y-2">
+            {holdingTasks.slice(0, 5).map((task: HoldingTaskItem) => (
+              <div key={task.id || `${task.trade_date}-${task.stock_code}`} className="rounded border border-gray-200 bg-gray-50 px-3 py-2">
+                <div className="text-sm text-gray-800">{task.stock_name || task.stock_code}</div>
+                <div className="text-xs text-gray-500 mt-1">{task.trade_date} · {task.action_plan}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {(ingestHealthCore || ingestHealthExtended) && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

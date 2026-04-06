@@ -109,6 +109,7 @@ export default function StepSectors({ data, onChange, prefill }: StepProps) {
   const sectorIndustry: SectorIndustryPrefill | undefined = prefill?.market?.sector_industry
   const sectorRhythm: SectorRhythmItem[] | undefined = prefill?.market?.sector_rhythm_industry
   const industryInfoList: IndustryInfoItem[] = prefill?.industry_info || []
+  const sectorSignals = prefill?.review_signals?.sectors
 
   const g = <T = string,>(p: string, fb?: T) => {
     const fallback = (fb ?? '') as T
@@ -137,6 +138,8 @@ export default function StepSectors({ data, onChange, prefill }: StepProps) {
     return fallback
   }
   const s = (p: string, v: unknown) => onChange(set(d, p, v))
+  const fmtYi = (v: number | null | undefined) => (v != null ? `${v >= 0 ? '+' : ''}${v.toFixed(2)}亿` : '-')
+  const fmtPct = (v: number | null | undefined) => (v != null ? `${v >= 0 ? '+' : ''}${v.toFixed(2)}%` : '-')
 
   return (
     <div className="space-y-6">
@@ -177,6 +180,96 @@ export default function StepSectors({ data, onChange, prefill }: StepProps) {
           <SelectField label="中军强度" value={g('market_type.mid_cap_strength')} onChange={v => s('market_type.mid_cap_strength', v)} options={STRENGTH} />
         </Row>
       </Section>
+
+      {(sectorSignals?.strongest_rows?.length ?? 0) > 0 && (
+        (() => {
+          const strongestRows = sectorSignals?.strongest_rows ?? []
+          return (
+            <PrefillBanner>
+              <div className="text-xs font-medium text-gray-600 mb-2">当日最强板块</div>
+              <div className="overflow-x-auto">
+                <table className="min-w-full text-xs text-gray-600">
+                  <thead>
+                    <tr className="text-left text-gray-400">
+                      <th className="py-1 pr-4 font-medium">排名</th>
+                      <th className="py-1 pr-4 font-medium">板块</th>
+                      <th className="py-1 pr-4 font-medium text-right">涨停家数</th>
+                      <th className="py-1 pr-4 font-medium text-right">连板家数</th>
+                      <th className="py-1 pr-4 font-medium text-right">涨跌幅</th>
+                      <th className="py-1 font-medium">连板结构</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {strongestRows.map((row) => (
+                      <tr key={`${row.name}-${row.rank ?? 'na'}`} className="border-t border-gray-200/70">
+                        <td className="py-1.5 pr-4">{row.rank ?? '-'}</td>
+                        <td className="py-1.5 pr-4 font-medium text-gray-700">{row.name}</td>
+                        <td className="py-1.5 pr-4 text-right">{row.up_nums ?? '-'}</td>
+                        <td className="py-1.5 pr-4 text-right">{row.cons_nums ?? '-'}</td>
+                        <td className="py-1.5 pr-4 text-right">{fmtPct(row.pct_chg)}</td>
+                        <td className="py-1.5">{row.up_stat || '-'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </PrefillBanner>
+          )
+        })()
+      )}
+
+      {((sectorSignals?.ths_moneyflow_rows?.length ?? 0) > 0 || (sectorSignals?.dc_moneyflow_rows?.length ?? 0) > 0) && (
+        <PrefillBanner>
+          <div className="text-xs font-medium text-gray-600 mb-2">板块资金确认</div>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            {(sectorSignals?.ths_moneyflow_rows?.length ?? 0) > 0 && (
+              <div>
+                <div className="text-xs text-blue-600 font-medium mb-1.5">THS 行业资金流</div>
+                <div className="space-y-1.5">
+                  {sectorSignals!.ths_moneyflow_rows.map((row) => (
+                    <div key={`${row.name}-${row.lead_stock ?? 'na'}`} className="rounded border border-gray-200 bg-white px-3 py-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs font-medium text-gray-700">{row.name}</span>
+                        <span className={`text-xs font-medium ${(row.net_amount ?? 0) >= 0 ? 'text-red-600' : 'text-green-600'}`}>
+                          {fmtYi(row.net_amount != null ? row.net_amount / 1e8 : null)}
+                        </span>
+                      </div>
+                      <div className="mt-0.5 flex items-center justify-between gap-2 text-xs text-gray-500">
+                        <span>涨跌幅 {fmtPct(row.pct_change)}</span>
+                        <span>{row.lead_stock ? `领涨股：${row.lead_stock}` : '领涨股：-'}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {(sectorSignals?.dc_moneyflow_rows?.length ?? 0) > 0 && (
+              <div>
+                <div className="text-xs text-purple-600 font-medium mb-1.5">DC 板块资金流</div>
+                <div className="space-y-1.5">
+                  {sectorSignals!.dc_moneyflow_rows.map((row) => (
+                    <div key={`${row.name}-${row.content_type ?? 'na'}`} className="rounded border border-gray-200 bg-white px-3 py-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs font-medium text-gray-700">{row.name}</span>
+                        <span className={`text-xs font-medium ${(row.net_amount_yi ?? 0) >= 0 ? 'text-red-600' : 'text-green-600'}`}>
+                          {fmtYi(row.net_amount_yi)}
+                        </span>
+                      </div>
+                      <div className="mt-0.5 flex items-center justify-between gap-2 text-xs text-gray-500">
+                        <span>{row.content_type || '板块'}</span>
+                        <span>涨跌幅 {fmtPct(row.pct_change)}</span>
+                      </div>
+                      <div className="mt-0.5 text-xs text-gray-500">
+                        {row.lead_stock ? `领涨股：${row.lead_stock}` : '领涨股：-'}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </PrefillBanner>
+      )}
 
       <DynamicList
         title="当日最强板块"

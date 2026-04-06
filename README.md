@@ -166,7 +166,7 @@ make doctor
 - 每日流程：`make today-open`、`make today-close`、`make today-ingest-inspect`、`make today-ingest-health`
 - 开发启动：`make dev`、`make dev-api`、`make dev-web`
 - 核心页面：`make market-open DATE=YYYY-MM-DD`、`make review-open DATE=YYYY-MM-DD`、`make plan-open DATE=YYYY-MM-DD`、`make commands-open`
-- 查询与运维：`make holdings`、`make watchlist`、`make notes-search KEYWORD=主线`、`make db-sync`
+- 查询与运维：`make holdings`、`make holdings-refresh DATE=YYYY-MM-DD`、`make watchlist`、`make notes-search KEYWORD=主线`、`make db-sync`
 - 采集与计划：`make ingest-run-post`、`make ingest-inspect DATE=YYYY-MM-DD`、`make ingest-health DAYS=7`、`make ingest-reconcile`、`make plan-draft`、`make plan-diagnose PLAN_ID=plan_xxx`
 
 完整命令表请直接查看 [commands.md](/Users/alyx/tradeSystem/docs/commands.md)、[commands.json](/Users/alyx/tradeSystem/docs/commands.json) 或执行 `make help`。
@@ -242,6 +242,7 @@ make today-ingest-inspect
 make today-ingest-health
 make ingest-health DATE=YYYY-MM-DD DAYS=7
 make ingest-reconcile STALE_MINUTES=5
+make holdings-refresh DATE=YYYY-MM-DD
 
 # 底层 CLI（调试/无 make 环境）
 cd scripts
@@ -257,6 +258,9 @@ python3 main.py ingest list-interfaces
 python3 main.py ingest run --stage post_core --date YYYY-MM-DD
 python3 main.py ingest inspect --date YYYY-MM-DD --json
 python3 main.py ingest reconcile --stale-minutes 5 --json
+
+# 安全回填 SQLite 持仓现价与技术快照（不改 daily 归档）
+python3 main.py holdings --refresh --date YYYY-MM-DD --json
 
 # 交易计划
 python3 main.py plan draft --date YYYY-MM-DD

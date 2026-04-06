@@ -1,4 +1,4 @@
-.PHONY: help bootstrap doctor check check-web check-scripts hooks-install dev dev-api dev-web commands-doc commands-check dashboard-open search-open commands-open plan-open knowledge-open ingest-open teachers-open holdings-open watchlist-open calendar-open industry-open db-init db-sync db-reconcile holdings watchlist notes-search db-search market-open market-json market-envelope review-open review-prefill pre post ingest-list ingest-run-post ingest-run-interface ingest-inspect ingest-health ingest-reconcile plan-draft plan-show-draft plan-confirm plan-diagnose plan-review knowledge-list knowledge-add-note knowledge-draft-from-asset today-open today-close today-pre today-post today-evening today-watchlist today-obsidian today-ingest-inspect today-ingest-health
+.PHONY: help bootstrap doctor check check-web check-scripts hooks-install dev dev-api dev-web commands-doc commands-check dashboard-open search-open commands-open plan-open knowledge-open ingest-open teachers-open holdings-open watchlist-open calendar-open industry-open db-init db-sync db-reconcile holdings holdings-refresh watchlist notes-search db-search market-open market-json market-envelope review-open review-prefill pre post ingest-list ingest-run-post ingest-run-interface ingest-inspect ingest-health ingest-reconcile plan-draft plan-show-draft plan-confirm plan-diagnose plan-review knowledge-list knowledge-add-note knowledge-draft-from-asset today-open today-close today-pre today-post today-evening today-watchlist today-obsidian today-ingest-inspect today-ingest-health
 
 help:
 	@echo "Available targets:"
@@ -27,6 +27,7 @@ help:
 	@echo "  make db-sync       - retry pending dual writes"
 	@echo "  make db-reconcile  - reconcile YAML and DB"
 	@echo "  make holdings      - list active holdings"
+	@echo "  make holdings-refresh - refresh sqlite holding quotes for a date"
 	@echo "  make watchlist     - list watchlist items"
 	@echo "  make notes-search  - search teacher notes (requires KEYWORD)"
 	@echo "  make db-search     - cross-table db search (requires KEYWORD)"
@@ -145,6 +146,9 @@ db-reconcile:
 
 holdings:
 	cd scripts && python3 main.py db holdings-list
+
+holdings-refresh:
+	cd scripts && python3 main.py holdings --refresh --date "$${DATE:-$$(date +%F)}" --json
 
 watchlist:
 	cd scripts && python3 main.py db watchlist-list

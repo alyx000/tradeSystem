@@ -9,6 +9,7 @@ const SearchCenter = lazy(() => import('./pages/SearchCenter'))
 const CommandsCenter = lazy(() => import('./pages/CommandsCenter'))
 const TeacherNotes = lazy(() => import('./pages/TeacherNotes'))
 const Holdings = lazy(() => import('./pages/Holdings'))
+const HoldingTasks = lazy(() => import('./pages/HoldingTasks'))
 const Watchlist = lazy(() => import('./pages/Watchlist'))
 const Calendar = lazy(() => import('./pages/Calendar'))
 const IndustryInfo = lazy(() => import('./pages/IndustryInfo'))
@@ -31,6 +32,7 @@ const NAV = [
   { to: '/commands', label: '命令' },
   { to: '/teachers', label: '老师观点' },
   { to: '/holdings', label: '持仓' },
+  { to: '/holding-tasks', label: '持仓任务' },
   { to: '/watchlist', label: '关注池' },
   { to: '/calendar', label: '日历' },
   { to: '/industry', label: '行业信息' },
@@ -60,6 +62,7 @@ export default function App() {
                 <Route path="/commands" element={<CommandsCenter />} />
                 <Route path="/teachers" element={<TeacherNotes />} />
                 <Route path="/holdings" element={<Holdings />} />
+                <Route path="/holding-tasks" element={<HoldingTasks />} />
                 <Route path="/watchlist" element={<Watchlist />} />
                 <Route path="/calendar" element={<Calendar />} />
                 <Route path="/industry" element={<IndustryInfo />} />

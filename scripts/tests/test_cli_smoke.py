@@ -135,6 +135,8 @@ ALL_SKILL_COMMANDS = (
 )
 
 ARCHITECTURE_COMMANDS = [
+    ["holdings", "--refresh", "--date", "2026-04-04"],
+    ["holdings", "--refresh", "--date", "2026-04-04", "--json"],
     ["ingest", "run", "--stage", "post_core", "--date", "2026-04-04"],
     ["ingest", "run", "--stage", "post_core", "--date", "2026-04-04", "--input-by", "openclaw"],
     ["ingest", "run-interface", "--name", "block_trade", "--date", "2026-04-04"],

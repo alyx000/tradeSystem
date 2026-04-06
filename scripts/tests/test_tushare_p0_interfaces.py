@@ -11,10 +11,15 @@ class _StubPro:
         self.query_calls: list[tuple[str, dict]] = []
         self.ths_index_calls: list[dict] = []
         self.ths_member_calls: list[dict] = []
+        self.daily_calls: list[dict] = []
 
     def query(self, api_name: str, **params):
         self.query_calls.append((api_name, params))
         if api_name == "daily_basic":
+            if params.get("ts_code") == "300750.SZ" and params.get("trade_date") == "20260403":
+                return pd.DataFrame([
+                    {"ts_code": "300750.SZ", "trade_date": "20260403", "turnover_rate": 3.2},
+                ])
             return pd.DataFrame([
                 {"ts_code": "300750.SZ", "trade_date": "20260403", "turnover_rate": 3.2},
             ])
@@ -50,6 +55,35 @@ class _StubPro:
         return pd.DataFrame([
             {"ts_code": ts_code, "con_code": "300750.SZ", "con_name": "宁德时代"},
         ])
+
+    def daily(self, **kwargs):
+        self.daily_calls.append(kwargs)
+        ts_code = kwargs["ts_code"]
+        if ts_code == "300750.SZ" and kwargs["start_date"] == kwargs["end_date"]:
+            return pd.DataFrame([
+                {
+                    "ts_code": ts_code,
+                    "open": 180.0,
+                    "high": 185.0,
+                    "low": 178.0,
+                    "close": 182.0,
+                    "pct_chg": 1.11,
+                    "vol": 123456.0,
+                    "amount": 987654.0,
+                    "pre_close": 180.0,
+                },
+            ])
+        if ts_code == "300750.SZ":
+            return pd.DataFrame([
+                {"trade_date": "20260328", "close": 176.0, "vol": 1000.0},
+                {"trade_date": "20260329", "close": 177.0, "vol": 1100.0},
+                {"trade_date": "20260330", "close": 178.0, "vol": 1200.0},
+                {"trade_date": "20260331", "close": 179.0, "vol": 1300.0},
+                {"trade_date": "20260401", "close": 180.0, "vol": 1400.0},
+                {"trade_date": "20260402", "close": 181.0, "vol": 1500.0},
+                {"trade_date": "20260403", "close": 182.0, "vol": 1600.0},
+            ])
+        return pd.DataFrame()
 
 
 def _provider() -> TushareProvider:
@@ -128,3 +162,25 @@ def test_get_ths_member_uses_concept_index_scope():
         {"ts_code": "885002.TI"},
     ]
     assert result.data[0]["index_type"] == "N"
+
+
+def test_get_stock_daily_normalizes_plain_code():
+    provider = _provider()
+
+    result = provider.get_stock_daily("300750", "2026-04-03")
+
+    assert result.success
+    assert result.data["code"] == "300750.SZ"
+    assert result.data["turnover_rate"] == 3.2
+    assert provider.pro.daily_calls[-1]["ts_code"] == "300750.SZ"
+
+
+def test_get_stock_ma_normalizes_plain_code():
+    provider = _provider()
+
+    result = provider.get_stock_ma("300750", "2026-04-03")
+
+    assert result.success
+    assert result.data["ma5"] == 180.0
+    assert result.data["volume_ma5"] == 1400.0
+    assert provider.pro.daily_calls[-1]["ts_code"] == "300750.SZ"

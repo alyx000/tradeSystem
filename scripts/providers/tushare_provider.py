@@ -86,6 +86,19 @@ class TushareProvider(DataProvider):
         """统一日期格式为 YYYYMMDD"""
         return date.replace("-", "")
 
+    def _normalize_stock_code(self, stock_code: str) -> str:
+        """兼容不带交易所后缀的 6 位代码。"""
+        code = str(stock_code or "").strip().upper()
+        if not code:
+            return code
+        if "." in code:
+            return code
+        if code.startswith(("43", "82", "83", "87", "88", "89", "92")):
+            return f"{code}.BJ"
+        if code.startswith(("60", "68", "90", "51", "52", "53", "56", "58")):
+            return f"{code}.SH"
+        return f"{code}.SZ"
+
     def _quarter_end_for_date(self, date: str) -> str:
         dt = datetime.strptime(date, "%Y-%m-%d")
         if dt.month <= 3:
@@ -214,12 +227,20 @@ class TushareProvider(DataProvider):
         """获取个股日线数据"""
         try:
             d = self._date_fmt(date)
-            df = self.pro.daily(ts_code=stock_code, start_date=d, end_date=d)
+            ts_code = self._normalize_stock_code(stock_code)
+            df = self.pro.daily(ts_code=ts_code, start_date=d, end_date=d)
             if df.empty:
-                return DataResult(data=None, source=self.name, error=f"无数据: {stock_code} {date}")
+                return DataResult(data=None, source=self.name, error=f"无数据: {ts_code} {date}")
+            daily_basic = self.pro.query("daily_basic", ts_code=ts_code, trade_date=d)
             row = df.iloc[0]
+            turnover_rate = None
+            if daily_basic is not None and not daily_basic.empty:
+                basic_row = daily_basic.iloc[0]
+                turnover_rate = basic_row.get("turnover_rate")
+                if turnover_rate is None or (isinstance(turnover_rate, float) and math.isnan(turnover_rate)):
+                    turnover_rate = basic_row.get("turnover_rate_f")
             data = {
-                "code": stock_code,
+                "code": ts_code,
                 "open": float(row["open"]),
                 "high": float(row["high"]),
                 "low": float(row["low"]),
@@ -227,7 +248,7 @@ class TushareProvider(DataProvider):
                 "change_pct": float(row["pct_chg"]),
                 "volume": float(row["vol"]),  # 手
                 "amount_billion": float(row["amount"]) / 100000,  # 千元 -> 亿
-                "turnover_rate": float(row.get("turnover_rate", 0)),
+                "turnover_rate": float(turnover_rate) if turnover_rate is not None else None,
                 "amplitude_pct": round(
                     (float(row["high"]) - float(row["low"])) / float(row["pre_close"]) * 100, 2
                 ),
@@ -243,9 +264,10 @@ class TushareProvider(DataProvider):
         try:
             ed = self._date_fmt(date)
             sd = (datetime.strptime(date, "%Y-%m-%d") - timedelta(days=max_p * 2 + 10)).strftime("%Y%m%d")
-            df = self.pro.daily(ts_code=stock_code, start_date=sd, end_date=ed)
+            ts_code = self._normalize_stock_code(stock_code)
+            df = self.pro.daily(ts_code=ts_code, start_date=sd, end_date=ed)
             if df is None or df.empty:
-                return DataResult(data=None, source=self.name, error=f"无历史数据: {stock_code}")
+                return DataResult(data=None, source=self.name, error=f"无历史数据: {ts_code}")
             df = df.sort_values("trade_date")
             data: dict = {}
             for p in periods:

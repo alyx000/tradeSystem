@@ -8,6 +8,7 @@ import type {
   CalendarEvent,
   CommandIndexPayload,
   Holding,
+  HoldingTaskItem,
   IngestHealthSummary,
   MarketFullData,
   ReviewRecord,
@@ -20,6 +21,7 @@ vi.mock('../lib/api', () => ({
     getCalendarRange: vi.fn(),
     getMarket: vi.fn(),
     getCommandIndex: vi.fn(),
+    listHoldingTasks: vi.fn(),
     getIngestHealthSummary: vi.fn(),
   },
 }))
@@ -82,6 +84,17 @@ beforeEach(() => {
     ],
     sections: [],
   } as CommandIndexPayload)
+  vi.mocked(api.listHoldingTasks).mockResolvedValue([
+    {
+      id: 1,
+      trade_date: '2026-04-03',
+      stock_code: '300750.SZ',
+      stock_name: '宁德时代',
+      action_plan: '若冲高回落则减仓',
+      source: 'review_step7',
+      status: 'open',
+    },
+  ] as HoldingTaskItem[])
   vi.mocked(api.getIngestHealthSummary).mockImplementation(async (_date, _days, stage) => {
     if (stage === 'post_extended') {
       return {
@@ -184,5 +197,17 @@ describe('Dashboard', () => {
     expect(screen.getByText('大宗交易 · 连续失败 3 天')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: /采集健康 · 盘后核心/ })).toHaveAttribute('href', '/ingest?date=2026-04-06&health_sort=streak')
     expect(screen.getByRole('link', { name: /采集健康 · 盘后扩展/ })).toHaveAttribute('href', '/ingest?date=2026-04-06&stage=post_extended&health_sort=streak')
+  })
+
+  it('renders pending holding tasks card', async () => {
+    renderPage()
+
+    await waitFor(() => {
+      expect(screen.getByText('未完成持仓计划')).toBeInTheDocument()
+    })
+
+    expect(screen.getByText('宁德时代')).toBeInTheDocument()
+    expect(screen.getByText('2026-04-03 · 若冲高回落则减仓')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /打开任务页/ })).toHaveAttribute('href', '/holding-tasks?date=2026-04-06&status=open')
   })
 })

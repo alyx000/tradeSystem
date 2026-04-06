@@ -428,6 +428,7 @@ tradeSystem/
 - 重试失败写入：`make db-sync`
 - YAML/DB 对账：`make db-reconcile`
 - 当前持仓：`make holdings`
+- 安全回填持仓现价与技术快照：`make holdings-refresh DATE=YYYY-MM-DD`
 - 当前关注池：`make watchlist`
 - 老师笔记搜索：`make notes-search KEYWORD=主线`
 - 跨表搜索：`make db-search KEYWORD=情绪`

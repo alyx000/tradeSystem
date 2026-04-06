@@ -25,6 +25,7 @@ describe('App', () => {
     expect(screen.getByText('命令')).toBeInTheDocument()
     expect(screen.getByText('老师观点')).toBeInTheDocument()
     expect(screen.getByText('持仓')).toBeInTheDocument()
+    expect(screen.getByText('持仓任务')).toBeInTheDocument()
     expect(screen.getByText('关注池')).toBeInTheDocument()
     expect(screen.getByText('日历')).toBeInTheDocument()
   })

@@ -40,6 +40,7 @@ class ReportGenerator:
         calendar_events: list[dict] | None = None,
         holdings_info: dict | None = None,
         watchlist_info: dict | None = None,
+        holdings_signals: dict | None = None,
     ) -> tuple[str, str]:
         """
         生成盘前简报。
@@ -220,6 +221,16 @@ class ReportGenerator:
 
         # 动态章节：从「五」起（持仓 / 关注池 / 日历；全市场快讯已取消）
         idx = 5
+        task_lines = _render_holding_task_summary(holdings_signals or {})
+        risk_lines = _render_holding_risk_summary(holdings_signals or {})
+        if task_lines:
+            lines.append(f"\n## {_roman(idx)}、昨日计划未完成持仓\n")
+            idx += 1
+            lines.extend(task_lines)
+        if risk_lines:
+            lines.append(f"\n## {_roman(idx)}、持仓风险摘要\n")
+            idx += 1
+            lines.extend(risk_lines)
         if holdings_announcements:
             lines.append(f"\n## {_roman(idx)}、持仓股公告\n")
             idx += 1
@@ -279,6 +290,7 @@ class ReportGenerator:
             "watchlist_announcements": watchlist_announcements,
             "holdings_info": holdings_info or {},
             "watchlist_info": watchlist_info or {},
+            "holdings_signals": holdings_signals or {},
             "news": news or [],
             "calendar_events": calendar_events or [],
         }
@@ -607,11 +619,101 @@ def _render_stock_info_section(lines: list[str], info_dict: dict) -> None:
             lines.append("")
 
 
+def _render_holding_risk_summary(holdings_signals: dict) -> list[str]:
+    items = holdings_signals.get("items")
+    if not isinstance(items, list):
+        return []
+
+    def severity(item: dict) -> tuple[int, int]:
+        flags = item.get("risk_flags") or []
+        levels = [f.get("level") for f in flags if isinstance(f, dict)]
+        if "high" in levels:
+            return (0, -sum(1 for lv in levels if lv == "high"))
+        if "medium" in levels:
+            return (1, -sum(1 for lv in levels if lv == "medium"))
+        return (2, 0)
+
+    filtered = [item for item in items if isinstance(item, dict) and any((item.get("risk_flags") or []))]
+    filtered.extend(
+        item for item in items
+        if isinstance(item, dict)
+        and item.get("latest_task")
+        and item not in filtered
+    )
+    filtered.sort(key=severity)
+    lines: list[str] = []
+    for item in filtered[:5]:
+        flags = [flag for flag in (item.get("risk_flags") or []) if isinstance(flag, dict)]
+        focus = [flag.get("label") for flag in flags if flag.get("level") in {"high", "medium"}][:2]
+        stock_name = item.get("stock_name") or item.get("stock_code")
+        stock_code = item.get("stock_code") or ""
+        latest_task = item.get("latest_task") or {}
+        if not focus:
+            if latest_task.get("action_plan"):
+                lines.append(
+                    f"- [事实] ★★★ {stock_name} ({stock_code})：昨日计划待跟踪。"
+                    f"{latest_task.get('trade_date', '-')} 计划：{latest_task.get('action_plan')}"
+                )
+            continue
+        reasons = [flag.get("reason") for flag in flags if flag.get("label") in focus][:2]
+        detail = "；".join(str(reason) for reason in reasons if reason)
+        label_text = " / ".join(str(flag) for flag in focus if flag)
+        if detail:
+            extra = (
+                f"；昨日计划：{latest_task.get('action_plan')}"
+                if latest_task.get("action_plan")
+                else ""
+            )
+            lines.append(f"- [事实] ★★★ {stock_name} ({stock_code})：{label_text}。{detail}{extra}")
+        else:
+            lines.append(f"- [事实] ★★★ {stock_name} ({stock_code})：{label_text}")
+    return lines
+
+
+def _render_holding_task_summary(holdings_signals: dict) -> list[str]:
+    items = holdings_signals.get("items")
+    if not isinstance(items, list):
+        return []
+
+    pending = [
+        item for item in items
+        if isinstance(item, dict)
+        and isinstance(item.get("latest_task"), dict)
+        and item["latest_task"].get("action_plan")
+    ]
+    pending.sort(
+        key=lambda item: (
+            str((item.get("latest_task") or {}).get("trade_date") or ""),
+            str(item.get("stock_code") or ""),
+        ),
+        reverse=True,
+    )
+
+    lines: list[str] = []
+    for item in pending[:5]:
+        task = item.get("latest_task") or {}
+        stock_name = item.get("stock_name") or item.get("stock_code")
+        stock_code = item.get("stock_code") or ""
+        task_date = task.get("trade_date") or "-"
+        action_plan = task.get("action_plan") or "-"
+        lines.append(f"- [事实] ★★★ {stock_name} ({stock_code})：{task_date} 计划 {action_plan}")
+    return lines
+
+
 def _roman(n: int) -> str:
-    """将整数转为中文序号（三、四、五…）"""
-    numerals = ["一", "二", "三", "四", "五", "六", "七", "八", "九", "十"]
-    if 1 <= n <= len(numerals):
-        return numerals[n - 1]
+    """将整数转为中文序号（一、二、三…十、十一…）。"""
+    # 一至九用 n-1 索引，避免依赖「零」占位导致的误读与后续重构风险
+    one_to_nine = ["一", "二", "三", "四", "五", "六", "七", "八", "九"]
+    if 1 <= n <= 9:
+        return one_to_nine[n - 1]
+    if n == 10:
+        return "十"
+    if 11 <= n <= 19:
+        return f"十{one_to_nine[n - 11]}"
+    if 20 <= n <= 99:
+        tens, ones = divmod(n, 10)
+        prefix = f"{one_to_nine[tens - 1]}十"
+        return prefix if ones == 0 else f"{prefix}{one_to_nine[ones - 1]}"
     return str(n)
 
 

@@ -89,6 +89,28 @@ const prefill: ReviewPrefillData = {
   holdings: [],
   calendar_events: [],
   main_themes: [],
+  review_signals: {
+    market: {
+      moneyflow_summary: {
+        net_amount_yi: 6.5,
+        net_amount_rate: 1.32,
+        super_large_yi: 4.2,
+        large_yi: 1.8,
+      },
+      market_structure_rows: [
+        { name: '沪市主板', amount: 6200, volume: 41000000 },
+        { name: '深市主板', amount: 5100, volume: 36000000 },
+      ],
+    },
+    sectors: {
+      strongest_rows: [],
+      ths_moneyflow_rows: [],
+      dc_moneyflow_rows: [],
+    },
+    emotion: {
+      ladder_rows: [],
+    },
+  },
 }
 
 describe('StepMarket', () => {
@@ -102,6 +124,10 @@ describe('StepMarket', () => {
     expect(screen.getByLabelText('较20日均量')).toHaveValue('高于')
     expect(screen.getByLabelText('5周均线')).toHaveValue('线上')
     expect(screen.getByDisplayValue('【小鲍】量能配合较好')).toBeInTheDocument()
+    expect(screen.getByText('主力资金流向')).toBeInTheDocument()
+    expect(screen.getByText('市场交易结构')).toBeInTheDocument()
+    expect(screen.getByText('沪市主板')).toBeInTheDocument()
+    expect(screen.getByText('+6.50亿')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: /查看完整市场数据/i })).toHaveAttribute('href', '/market/2026-04-03')
   })
 

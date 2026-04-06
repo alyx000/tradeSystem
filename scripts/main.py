@@ -36,6 +36,7 @@
     python main.py holdings --add 688041.SH 海光信息 200 225.0 国产AI链
     python main.py holdings --remove 688041.SH
     python main.py holdings --list
+    python main.py holdings --refresh --date 2026-04-03
 """
 
 import argparse
@@ -64,6 +65,7 @@ if _scripts not in sys.path:
 load_dotenv(SCRIPT_DIR / ".env")
 
 from utils.network_env import without_standard_http_proxy
+from services.holding_signals import build_holding_signals
 
 # 日志配置
 logging.basicConfig(
@@ -502,6 +504,30 @@ def cmd_pre(config: dict, target_date: str):
         except Exception as e:
             logger.warning(f"关注池信息面采集失败: {e}")
 
+        holdings_limit_overrides: dict[str, dict] = {}
+        for code, info in holdings_info.items():
+            limit_prices = info.get("limit_prices")
+            if limit_prices:
+                from db.dual_write import _normalize_stock_code_for_match
+
+                norm = _normalize_stock_code_for_match(code)
+                if norm:
+                    holdings_limit_overrides[norm] = limit_prices
+
+        try:
+            from db.connection import get_db
+
+            with get_db() as conn:
+                holdings_signals = build_holding_signals(
+                    conn,
+                    target_date,
+                    holdings=holdings_collector._holdings,
+                    limit_price_overrides=holdings_limit_overrides,
+                )
+        except Exception as e:
+            logger.warning("持仓信号摘要构建失败: %s", e)
+            holdings_signals = {"date": target_date, "items": []}
+
         # 生成报告
         generator = ReportGenerator()
         md_text, yaml_path = generator.generate_pre_market(
@@ -513,6 +539,7 @@ def cmd_pre(config: dict, target_date: str):
             calendar_events=market_data.get("calendar_events", []),
             holdings_info=holdings_info,
             watchlist_info=watchlist_info,
+            holdings_signals=holdings_signals,
         )
 
     print(md_text)
@@ -660,6 +687,39 @@ def cmd_holdings(config: dict, args):
         hc.remove_stock(code)
         hc.sync_yaml_remove_from_sqlite(code)
         print(f"已移除: {code}")
+
+    elif args.holdings_action == "refresh":
+        with without_standard_http_proxy():
+            registry = setup_providers(config)
+            registry.initialize_all()
+            hc = HoldingsCollector(registry=registry)
+            hc.load()
+            result = hc.refresh_sqlite_quotes(args.date)
+
+        if args.json:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return
+
+        print(
+            f"SQLite 持仓快照回填 {result['date']}: "
+            f"快照更新 {result['updated']} 条, 当前价更新 {result['current_price_updated']} 条, "
+            f"失败 {result['failed']} 条, 跳过 {result['skipped']} 条"
+        )
+        for item in result["items"]:
+            status = item.get("status")
+            if status == "updated":
+                print(
+                    f"  [updated] {item['code']} {item['name']} | "
+                    f"收盘 {item.get('close')} | 盈亏 {item.get('pnl_pct')}% | "
+                    f"换手 {item.get('turnover_rate')}% | "
+                    f"MA5/10/20 {item.get('ma5')}/{item.get('ma10')}/{item.get('ma20')} | "
+                    f"量能 {item.get('volume_vs_ma5')} | "
+                    f"{'已更新当前价' if item.get('current_price_updated') else '仅写快照'}"
+                )
+            elif status == "error":
+                print(f"  [error] {item['code']} {item['name']} | {item.get('error')}")
+            else:
+                print(f"  [skip] {item['code']} {item['name']} | {item.get('reason')}")
 
 
 def cmd_evening(config: dict, target_date: str):
@@ -847,6 +907,9 @@ def build_parser() -> argparse.ArgumentParser:
     holdings_parser.add_argument("--add", dest="holdings_action", action="store_const", const="add")
     holdings_parser.add_argument("--remove", dest="holdings_action", action="store_const", const="remove")
     holdings_parser.add_argument("--list", dest="holdings_action", action="store_const", const="list")
+    holdings_parser.add_argument("--refresh", dest="holdings_action", action="store_const", const="refresh", help="仅回填 SQLite 持仓现价，不改 daily 归档")
+    holdings_parser.add_argument("--date", default=date.today().isoformat(), help="日期 YYYY-MM-DD（--refresh 时使用）")
+    holdings_parser.add_argument("--json", action="store_true", help="输出 JSON（--refresh 时使用）")
     holdings_parser.add_argument("holdings_args", nargs="*", default=[])
 
     # evening

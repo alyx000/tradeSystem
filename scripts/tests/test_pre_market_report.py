@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from generators.report import ReportGenerator
+from generators.report import ReportGenerator, _render_holding_risk_summary, _roman
 
 
 def _minimal_market_data() -> dict:
@@ -103,6 +103,20 @@ def test_generate_pre_market_sections_and_yaml(tmp_path: Path):
                 "research_reports": [],
             }
         },
+        holdings_signals={
+            "date": date,
+            "items": [
+                {
+                    "stock_code": "000001.SZ",
+                    "stock_name": "测试银行",
+                    "latest_task": {"trade_date": "2026-03-29", "action_plan": "若冲高减仓"},
+                    "risk_flags": [
+                        {"level": "high", "label": "财报临近", "reason": "20260420 有披露计划"},
+                        {"level": "medium", "label": "跌破 MA5", "reason": "现价位于 MA5 下方"},
+                        ],
+                    },
+                ],
+            },
         news=[],
         calendar_events=[
             {
@@ -126,13 +140,19 @@ def test_generate_pre_market_sections_and_yaml(tmp_path: Path):
     assert "HXC" in md
     assert "## 四、融资融券（上一交易日）" in md
     assert "较 2026-03-26" in md
-    assert "五、持仓股公告" in md
-    assert "六、持仓信息面" in md
+    assert "五、昨日计划未完成持仓" in md
+    assert "六、持仓风险摘要" in md
+    assert "七、持仓股公告" in md
+    assert "持仓风险摘要" in md
+    assert "2026-03-29 计划 若冲高减仓" in md
+    assert "测试银行 (000001.SZ)：财报临近 / 跌破 MA5" in md
+    assert "昨日计划：若冲高减仓" in md
+    assert "八、持仓信息面" in md
     assert "今日涨停价 11.0 / 今日跌停价 9.0" in md
-    assert "七、关注池公告" in md
-    assert "八、关注池信息面" in md
+    assert "九、关注池公告" in md
+    assert "十、关注池信息面" in md
     assert "今日涨停价 24.0 / 今日跌停价 16.0" in md
-    assert "九、今日日历" in md
+    assert "十一、今日日历" in md
     assert "预约披露: 20260420（报告期 20260331）" in md
     assert "财经新闻" not in md
 
@@ -141,6 +161,7 @@ def test_generate_pre_market_sections_and_yaml(tmp_path: Path):
     data = yaml.safe_load(p.read_text(encoding="utf-8"))
     assert data["date"] == date
     assert "watchlist_announcements" in data
+    assert data["holdings_signals"]["items"][0]["stock_code"] == "000001.SZ"
     assert data["watchlist_announcements"]["688000.SH"]["name"] == "测试科创"
 
 
@@ -163,3 +184,36 @@ def test_generate_pre_market_us_china_error_and_empty_margin(tmp_path: Path):
     assert "数据获取失败: yfinance down" in md
     assert "日经225: 数据获取失败" in md
     assert "（无融资融券汇总数据）" in md
+
+
+def test_render_holding_risk_summary_task_only_without_high_medium_flags():
+    """无 high/medium 风险标但有昨日计划时，风险摘要仍应输出待跟踪行。"""
+    lines = _render_holding_risk_summary({
+        "items": [
+            {
+                "stock_code": "000001.SZ",
+                "stock_name": "测试银行",
+                "risk_flags": [{"level": "low", "label": "低优先级", "reason": "x"}],
+                "latest_task": {
+                    "trade_date": "2026-04-05",
+                    "action_plan": "观察缺口",
+                },
+            },
+        ],
+    })
+    assert len(lines) == 1
+    assert "昨日计划待跟踪" in lines[0]
+    assert "观察缺口" in lines[0]
+
+
+def test_roman_chinese_section_index():
+    assert _roman(1) == "一"
+    assert _roman(4) == "四"
+    assert _roman(9) == "九"
+    assert _roman(10) == "十"
+    assert _roman(11) == "十一"
+    assert _roman(19) == "十九"
+    assert _roman(20) == "二十"
+    assert _roman(21) == "二十一"
+    assert _roman(99) == "九十九"
+    assert _roman(100) == "100"

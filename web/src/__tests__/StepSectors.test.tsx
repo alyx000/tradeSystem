@@ -95,6 +95,26 @@ const prefill: ReviewPrefillData = {
       source: '盘后整理',
     },
   ],
+  review_signals: {
+    market: {
+      moneyflow_summary: null,
+      market_structure_rows: [],
+    },
+    sectors: {
+      strongest_rows: [
+        { rank: 1, name: '可控核聚变', up_nums: 12, cons_nums: 3, pct_chg: 4.5, up_stat: '3板2家' },
+      ],
+      ths_moneyflow_rows: [
+        { name: 'AI算力', net_amount: 188000000, pct_change: 5.2, lead_stock: '高标A' },
+      ],
+      dc_moneyflow_rows: [
+        { name: '可控核聚变', content_type: '概念', net_amount_yi: 2.56, pct_change: 4.3, lead_stock: '合锻智能' },
+      ],
+    },
+    emotion: {
+      ladder_rows: [],
+    },
+  },
 }
 
 describe('StepSectors', () => {
@@ -106,6 +126,11 @@ describe('StepSectors', () => {
     expect(screen.getByText('行业板块排行（申万）')).toBeInTheDocument()
     expect(screen.getByText('行业节奏信号（当日前列）')).toBeInTheDocument()
     expect(screen.getByText('近期行业信息（1 条）')).toBeInTheDocument()
+    expect(screen.getAllByText('当日最强板块').length).toBeGreaterThan(0)
+    expect(screen.getByText('板块资金确认')).toBeInTheDocument()
+    expect(screen.getAllByText('可控核聚变').length).toBeGreaterThan(0)
+    expect(screen.getByText('THS 行业资金流')).toBeInTheDocument()
+    expect(screen.getByText('DC 板块资金流')).toBeInTheDocument()
     expect(screen.getByText('服务器链订单继续强化')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: /完整市场数据/i })).toHaveAttribute('href', '/market/2026-04-03')
   })

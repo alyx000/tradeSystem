@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from datetime import date as _date
 from pathlib import Path
 from typing import Any, Optional
 
@@ -12,6 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from api.deps import get_db_conn
 from api.market_enrich import enrich_daily_market_row
 from db import queries as Q
+from services.holding_signals import build_holding_signals
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -125,6 +127,33 @@ def delete_note(note_id: int, conn: sqlite3.Connection = Depends(get_db_conn)):
 def list_holdings(status: Optional[str] = "active",
                   conn: sqlite3.Connection = Depends(get_db_conn)):
     return Q.get_holdings(conn, status=status)
+
+
+@router.get("/holdings/signals")
+def list_holding_signals(
+    date: str = Query(default_factory=lambda: _date.today().isoformat()),
+    conn: sqlite3.Connection = Depends(get_db_conn),
+):
+    return build_holding_signals(conn, date)
+
+
+@router.get("/holdings/tasks")
+def list_holding_tasks(
+    status: Optional[str] = "open",
+    date: Optional[str] = Query(None),
+    conn: sqlite3.Connection = Depends(get_db_conn),
+):
+    return Q.list_holding_tasks(conn, status=status, date_to=date)
+
+
+@router.put("/holdings/tasks/{task_id}")
+def update_holding_task(task_id: int, body: dict, conn: sqlite3.Connection = Depends(get_db_conn)):
+    try:
+        Q.update_holding_task(conn, task_id, **body)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    conn.commit()
+    return {"ok": True}
 
 
 @router.get("/holdings/{hid}")

@@ -271,6 +271,94 @@ export interface Holding {
   sector?: string | null
 }
 
+export interface HoldingSignalPriceSnapshot {
+  entry_price: number | null
+  current_price: number | null
+  pnl_pct: number | null
+  up_limit: number | null
+  down_limit: number | null
+  pre_close: number | null
+}
+
+export interface HoldingTechnicalSignals {
+  ma5: number | null
+  ma10: number | null
+  ma20: number | null
+  above_ma5: boolean | null
+  above_ma10: boolean | null
+  above_ma20: boolean | null
+  volume_vs_ma5: '以上' | '以下' | null
+  turnover_rate: number | null
+  turnover_status: '活跃' | '正常' | '偏低' | null
+  sector_change_pct: number | null
+}
+
+export interface HoldingThemeSignals {
+  is_main_theme: boolean
+  main_theme_name: string | null
+  is_strongest_sector: boolean
+  strongest_sector_name: string | null
+  sector_flow_confirmed: boolean
+  sector_flow_source: 'ths' | 'dc' | null
+}
+
+export interface HoldingEventSignals {
+  has_recent_announcement: boolean
+  recent_announcements: Array<{
+    ann_date: string | null
+    title: string | null
+  }>
+  has_disclosure_plan: boolean
+  disclosure_dates: Array<{
+    ann_date: string | null
+    report_end: string | null
+  }>
+  is_st: boolean
+  share_float_upcoming: Array<{
+    ann_date?: string | null
+    float_date?: string | null
+    shares?: number | null
+  }>
+}
+
+export interface HoldingRiskFlag {
+  level: 'high' | 'medium' | 'low'
+  label: string
+  reason: string
+}
+
+export interface HoldingTaskItem {
+  id?: number
+  trade_date: string
+  stock_code: string
+  stock_name?: string | null
+  action_plan: string
+  source?: string | null
+  status?: 'open' | 'done' | 'ignored' | null
+}
+
+export interface HoldingTaskUpdateInput {
+  status?: 'open' | 'done' | 'ignored'
+  action_plan?: string
+}
+
+export interface HoldingSignalItem {
+  stock_code: string
+  stock_name: string
+  sector?: string | null
+  price_snapshot: HoldingSignalPriceSnapshot
+  technical_signals: HoldingTechnicalSignals
+  theme_signals: HoldingThemeSignals
+  event_signals: HoldingEventSignals
+  latest_task?: HoldingTaskItem | null
+  risk_flags: HoldingRiskFlag[]
+}
+
+export interface HoldingSignalsPayload {
+  date: string
+  items: HoldingSignalItem[]
+}
+
 export interface HoldingCreateInput {
   stock_code: string
   stock_name: string
@@ -646,12 +734,65 @@ export interface ReviewPrefillMarket extends Omit<MarketFullData, 'sector_indust
   sector_rhythm_industry?: SectorRhythmItem[]
 }
 
+export interface ReviewMarketSignals {
+  moneyflow_summary: {
+    net_amount_yi: number | null
+    net_amount_rate: number | null
+    super_large_yi: number | null
+    large_yi: number | null
+  } | null
+  market_structure_rows: Array<{
+    name: string
+    amount: string | number | null
+    volume: string | number | null
+  }>
+}
+
+export interface ReviewSectorSignals {
+  strongest_rows: Array<{
+    rank: number | null
+    name: string
+    up_nums: number | null
+    cons_nums: number | null
+    pct_chg: number | null
+    up_stat: string | null
+  }>
+  ths_moneyflow_rows: Array<{
+    name: string
+    net_amount: number | null
+    pct_change: number | null
+    lead_stock: string | null
+  }>
+  dc_moneyflow_rows: Array<{
+    name: string
+    content_type: string | null
+    net_amount_yi: number | null
+    pct_change: number | null
+    lead_stock: string | null
+  }>
+}
+
+export interface ReviewEmotionSignals {
+  ladder_rows: Array<{
+    name: string
+    nums: number | string | null
+  }>
+}
+
+export interface ReviewPrefillSignals {
+  market: ReviewMarketSignals
+  sectors: ReviewSectorSignals
+  emotion: ReviewEmotionSignals
+}
+
 export interface ReviewPrefillData extends Omit<PrefillData, 'market' | 'main_themes' | 'emotion_cycle'> {
   market: ReviewPrefillMarket | null
   emotion_cycle?: ReviewEmotionCycle | null
   main_themes: MainThemeItem[]
   prev_review?: ReviewPrevReview | null
   industry_info?: IndustryInfoItem[]
+  review_signals?: ReviewPrefillSignals
+  holding_signals?: HoldingSignalsPayload
 }
 
 export interface ReviewRecord extends Partial<Record<ReviewStepKey, string | ReviewStepValue>> {
