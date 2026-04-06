@@ -125,6 +125,24 @@ def migrate(conn: sqlite3.Connection) -> None:
         init_schema(conn)
         set_schema_version(conn, 7)
         conn.commit()
+        version = get_schema_version(conn)
+
+    if version < 8:
+        logger.info("Applying schema v8: mark permission-like ingest errors as non-retryable")
+        conn.execute(
+            """
+            UPDATE ingest_errors
+            SET retryable = 0
+            WHERE retryable = 1
+              AND (
+                    error_message LIKE '%权限不足%'
+                 OR error_message LIKE '%积分不足%'
+                 OR error_message LIKE '%token不对%'
+              )
+            """
+        )
+        set_schema_version(conn, 8)
+        conn.commit()
 
 
 # ──────────────────────────────────────────────────────────────

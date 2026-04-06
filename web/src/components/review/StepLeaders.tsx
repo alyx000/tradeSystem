@@ -1,4 +1,14 @@
-import { type StepProps, get, set, Section, Row, SelectField, TextField, CheckField, TextareaField, DynamicList } from './widgets'
+import { type StepProps, Section, Row, SelectField, TextField, CheckField, TextareaField, DynamicList } from './widgets'
+import { get, set } from './formState'
+
+interface TopLeaderItem {
+  stock: string
+  sector: string
+  attribute: string
+  clarity: string
+  position: string
+  is_new: boolean
+}
 
 const CLARITY = [
   { value: '一眼看出', label: '一眼看出' },
@@ -14,14 +24,15 @@ const POSITION = [
 
 export default function StepLeaders({ data, onChange }: StepProps) {
   const d = data || {}
-  const g = (p: string, fb: any = '') => get(d, p, fb)
-  const s = (p: string, v: any) => onChange(set(d, p, v))
+  const g = <T = string,>(p: string, fb?: T) => get<T>(d, p, (fb ?? '') as T)
+  const s = (p: string, v: unknown) => onChange(set(d, p, v))
+  const topLeaders = (d.top_leaders as TopLeaderItem[] | undefined) || []
 
   return (
     <div className="space-y-6">
       <DynamicList
         title="当前辨识度最高的最票"
-        items={d.top_leaders || []}
+        items={topLeaders}
         onChange={v => onChange({ ...d, top_leaders: v })}
         defaultItem={{ stock: '', sector: '', attribute: '', clarity: '', position: '', is_new: false }}
         renderItem={(item, upd) => (

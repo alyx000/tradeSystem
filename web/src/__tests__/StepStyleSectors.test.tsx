@@ -2,26 +2,27 @@
  * StepStyle 与 StepSectors 最小渲染测试
  * 覆盖：摘要展示、可推导项自动预填、空数据时不报错
  */
-import { render, screen, within } from '@testing-library/react'
-import { describe, it, expect, vi } from 'vitest'
+import { render, screen } from '@testing-library/react'
+import { describe, it, expect } from 'vitest'
 import { MemoryRouter } from 'react-router-dom'
 import StepStyle from '../components/review/StepStyle'
 import StepSectors from '../components/review/StepSectors'
+import type { ReviewPrefillData, ReviewStepValue } from '../lib/types'
 
 // ── helpers ──────────────────────────────────────────────────
 
 const noop = () => {}
 
-function renderStyle(prefill: any, data: any = {}) {
+function renderStyle(prefill?: unknown, data: ReviewStepValue = {}) {
   return render(
-    <StepStyle data={data} onChange={noop} prefill={prefill} />
+    <StepStyle data={data} onChange={noop} prefill={prefill as ReviewPrefillData | undefined} />
   )
 }
 
-function renderSectors(prefill: any, data: any = {}) {
+function renderSectors(prefill?: unknown, data: ReviewStepValue = {}) {
   return render(
     <MemoryRouter>
-      <StepSectors data={data} onChange={noop} prefill={prefill} />
+      <StepSectors data={data} onChange={noop} prefill={prefill as ReviewPrefillData | undefined} />
     </MemoryRouter>
   )
 }

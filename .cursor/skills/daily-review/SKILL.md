@@ -25,6 +25,20 @@ version: "1.1"
 
 ## 工作流程
 
+## 优先入口
+
+若仓库根目录 `Makefile` 可用，优先使用：
+
+```bash
+make review-open DATE=YYYY-MM-DD
+make review-prefill DATE=YYYY-MM-DD
+make today-close DATE=YYYY-MM-DD
+make notes-search KEYWORD=主线 FROM=YYYY-MM-DD TO=YYYY-MM-DD
+make db-search KEYWORD=情绪 FROM=YYYY-MM-DD TO=YYYY-MM-DD
+```
+
+底层 API / `python3 main.py ...` 仍保留，供调试与精细化参数场景使用。
+
 ### Step 1：确认复盘日期
 
 ```
@@ -50,17 +64,35 @@ GET /api/review/{date}/prefill
 
 如果 API 未返回数据（行情未采集），提示：
 ```
-⚠️ 今日行情数据尚未采集，请先运行（在 tradeSystem/scripts/ 目录下）：
-   cd /path/to/tradeSystem/scripts && python3 main.py post --date 2026-04-01
+⚠️ 今日行情数据尚未采集，请先运行：
+   cd /path/to/tradeSystem && make today-close DATE=YYYY-MM-DD
    或直接使用 market-tasks skill 触发采集
 ```
 
-也可以搜索历史笔记作为参考（同样在 `scripts/` 目录下执行）。下面命令里的 `{date}` 是占位符，执行前须替换为实际 `YYYY-MM-DD`（可与当日复盘日期相同，或自行设定起止区间）：
+若用户是要进入复盘工作台本身，而不是只看 JSON，优先使用：
 
 ```bash
+cd /path/to/tradeSystem
+make review-open DATE=YYYY-MM-DD
+```
+
+也可以搜索历史笔记作为参考。下面命令里的 `{date}` 是占位符，执行前须替换为实际 `YYYY-MM-DD`（可与当日复盘日期相同，或自行设定起止区间）：
+
+```bash
+cd /path/to/tradeSystem
+make review-prefill DATE=YYYY-MM-DD
+make notes-search KEYWORD=主线 FROM=YYYY-MM-DD TO=YYYY-MM-DD
+make db-search KEYWORD=情绪 FROM=YYYY-MM-DD TO=YYYY-MM-DD
+```
+
+底层等价命令：
+
+```bash
+open http://localhost:5173/review/YYYY-MM-DD
+curl http://localhost:8000/api/review/YYYY-MM-DD/prefill
 cd /path/to/tradeSystem/scripts
-python3 main.py db query-notes --keyword "主线" --from 2026-04-01 --to 2026-04-01
-python3 main.py db db-search --keyword "情绪" --from 2026-04-01 --to 2026-04-01
+python3 main.py db query-notes --keyword "主线" --from YYYY-MM-DD --to YYYY-MM-DD
+python3 main.py db db-search --keyword "情绪" --from YYYY-MM-DD --to YYYY-MM-DD
 ```
 
 ### Step 3：逐步引导用户填写（自底向上）
@@ -267,10 +299,10 @@ Content-Type: application/json
 新的推荐衔接流程：
 
 ```bash
-python3 main.py plan draft --date 2026-04-01
-python3 main.py plan show-draft --date 2026-04-01
-python3 main.py plan confirm --date 2026-04-01
-python3 main.py plan diagnose --date 2026-04-01
+python3 main.py plan draft --date YYYY-MM-DD
+python3 main.py plan show-draft --date YYYY-MM-DD
+python3 main.py plan confirm --date YYYY-MM-DD
+python3 main.py plan diagnose --date YYYY-MM-DD
 ```
 
 若用户要从复盘直接进入次日计划，请切换或联动 `plan-workbench` skill。

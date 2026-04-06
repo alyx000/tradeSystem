@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
+import type { KnowledgeAssetRecord } from '../lib/types'
 
 const ASSET_TYPES = [
   { value: 'teacher_note', label: '老师观点' },
@@ -148,7 +149,7 @@ function DraftModal({
   asset,
   onClose,
 }: {
-  asset: any
+  asset: KnowledgeAssetRecord
   onClose: () => void
 }) {
   const today = new Date().toISOString().slice(0, 10)
@@ -165,8 +166,8 @@ function DraftModal({
     onSuccess: (payload) => {
       setError(null)
       setResult({
-        draft_id: payload.draft?.draft_id,
-        trade_date: tradeDate,
+        draft_id: payload.draft?.draft_id ?? '',
+        trade_date: payload.draft?.trade_date ?? tradeDate,
       })
     },
     onError: (e: Error) => setError(e.message),
@@ -241,7 +242,7 @@ function AssetList() {
     queryKey: ['knowledge-assets'],
     queryFn: () => api.listKnowledgeAssets(50),
   })
-  const [draftTarget, setDraftTarget] = useState<any>(null)
+  const [draftTarget, setDraftTarget] = useState<KnowledgeAssetRecord | null>(null)
 
   if (isLoading) return <p className="text-sm text-gray-500">加载中...</p>
 
@@ -252,7 +253,7 @@ function AssetList() {
   return (
     <>
       <ul className="space-y-3">
-        {assets.map((asset: any) => (
+        {assets.map((asset: KnowledgeAssetRecord) => (
           <li
             key={asset.asset_id}
             className="bg-white border border-gray-200 rounded-lg p-4 space-y-2"
@@ -261,7 +262,7 @@ function AssetList() {
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 mb-1">
                   <span className="text-xs px-2 py-0.5 bg-blue-50 text-blue-700 rounded font-medium">
-                    {ASSET_TYPE_LABELS[asset.asset_type] || asset.asset_type}
+                    {ASSET_TYPE_LABELS[asset.asset_type ?? ''] || asset.asset_type || '未分类'}
                   </span>
                   {asset.tags && (
                     <span className="text-xs text-gray-400">

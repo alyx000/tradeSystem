@@ -105,11 +105,26 @@ class DataProvider(ABC):
     def get_stock_ma(self, stock_code: str, date: str, periods: list[int] | None = None) -> DataResult:
         return DataResult(data=None, source=self.name, error="not implemented")
 
+    def get_daily_basic(self, date: str) -> DataResult:
+        return DataResult(data=None, source=self.name, error="not implemented")
+
+    def get_adj_factor(self, date: str) -> DataResult:
+        return DataResult(data=None, source=self.name, error="not implemented")
+
     # ---- 涨跌停数据 ----
     def get_limit_up_list(self, date: str) -> DataResult:
         return DataResult(data=None, source=self.name, error="not implemented")
 
     def get_limit_down_list(self, date: str) -> DataResult:
+        return DataResult(data=None, source=self.name, error="not implemented")
+
+    def get_stock_limit_prices(self, date: str) -> DataResult:
+        return DataResult(data=None, source=self.name, error="not implemented")
+
+    def get_limit_step(self, date: str) -> DataResult:
+        return DataResult(data=None, source=self.name, error="not implemented")
+
+    def get_limit_cpt_list(self, date: str) -> DataResult:
         return DataResult(data=None, source=self.name, error="not implemented")
 
     # ---- 板块数据 ----
@@ -119,8 +134,29 @@ class DataProvider(ABC):
     def get_sector_fund_flow(self, date: str) -> DataResult:
         return DataResult(data=None, source=self.name, error="not implemented")
 
+    def get_sector_moneyflow_ths(self, date: str) -> DataResult:
+        return DataResult(data=None, source=self.name, error="not implemented")
+
+    def get_sector_moneyflow_dc(self, date: str) -> DataResult:
+        return DataResult(data=None, source=self.name, error="not implemented")
+
+    def get_ths_index(self, date: str) -> DataResult:
+        return DataResult(data=None, source=self.name, error="not implemented")
+
+    def get_ths_member(self, date: str) -> DataResult:
+        return DataResult(data=None, source=self.name, error="not implemented")
+
+    def get_index_classify(self, date: str) -> DataResult:
+        return DataResult(data=None, source=self.name, error="not implemented")
+
     # ---- 市场宽度 ----
     def get_market_breadth(self, date: str) -> DataResult:
+        return DataResult(data=None, source=self.name, error="not implemented")
+
+    def get_daily_info(self, date: str) -> DataResult:
+        return DataResult(data=None, source=self.name, error="not implemented")
+
+    def get_market_moneyflow_dc(self, date: str) -> DataResult:
         return DataResult(data=None, source=self.name, error="not implemented")
 
     # ---- 资金流向 ----
@@ -133,12 +169,30 @@ class DataProvider(ABC):
     def get_margin_data(self, date: str) -> DataResult:
         return DataResult(data=None, source=self.name, error="not implemented")
 
+    def get_margin_detail(self, date: str) -> DataResult:
+        return DataResult(data=None, source=self.name, error="not implemented")
+
     # ---- 龙虎榜 ----
     def get_dragon_tiger(self, date: str) -> DataResult:
         return DataResult(data=None, source=self.name, error="not implemented")
 
+    def get_block_trade(self, date: str) -> DataResult:
+        return DataResult(data=None, source=self.name, error="not implemented")
+
     # ---- 公告 ----
     def get_stock_announcements(self, stock_code: str, start_date: str, end_date: str) -> DataResult:
+        return DataResult(data=None, source=self.name, error="not implemented")
+
+    def get_market_announcements(self, date: str) -> DataResult:
+        return DataResult(data=None, source=self.name, error="not implemented")
+
+    def get_disclosure_dates(self, date: str) -> DataResult:
+        return DataResult(data=None, source=self.name, error="not implemented")
+
+    def get_share_float(self, date: str) -> DataResult:
+        return DataResult(data=None, source=self.name, error="not implemented")
+
+    def get_stock_st(self, date: str) -> DataResult:
         return DataResult(data=None, source=self.name, error="not implemented")
 
     # ---- 外盘 ----
@@ -178,6 +232,12 @@ class DataProvider(ABC):
 
     # ---- 交易日历 ----
     def is_trade_day(self, date: str) -> DataResult:
+        return DataResult(data=None, source=self.name, error="not implemented")
+
+    def get_trade_calendar(self, date: str) -> DataResult:
+        return DataResult(data=None, source=self.name, error="not implemented")
+
+    def get_stock_basic_list(self, date: str) -> DataResult:
         return DataResult(data=None, source=self.name, error="not implemented")
 
     # ---- 成交额排名 ----

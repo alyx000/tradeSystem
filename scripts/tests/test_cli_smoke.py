@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -140,7 +141,14 @@ ARCHITECTURE_COMMANDS = [
     ["ingest", "run-interface", "--name", "block_trade", "--date", "2026-04-04", "--input-by", "cursor"],
     ["ingest", "list-interfaces"],
     ["ingest", "inspect", "--date", "2026-04-04"],
+    ["ingest", "inspect", "--date", "2026-04-04", "--stage", "post_extended"],
+    ["ingest", "inspect", "--date", "2026-04-04", "--interface", "margin"],
     ["ingest", "retry"],
+    ["ingest", "retry", "--stage", "post_extended"],
+    ["ingest", "retry", "--interface", "margin"],
+    ["ingest", "health", "--date", "2026-04-04"],
+    ["ingest", "health", "--date", "2026-04-04", "--days", "14", "--limit", "5", "--stage", "post_extended"],
+    ["ingest", "reconcile", "--stale-minutes", "5"],
     ["plan", "draft", "--date", "2026-04-04"],
     ["plan", "show-draft", "--draft-id", "draft_1"],
     ["plan", "confirm", "--draft-id", "draft_1", "--date", "2026-04-07"],
@@ -213,3 +221,138 @@ def test_architecture_command_parseable(cmd: list[str]) -> None:
             f"顶层命令解析失败（argparse 退出码 {e.code}）: {' '.join(cmd)}\n"
             "请检查 main.py 中 ingest/plan/knowledge 子命令定义，并同步更新 skills 文档"
         )
+
+
+def test_ingest_inspect_json_includes_health_status(tmp_path, monkeypatch, capsys) -> None:
+    from db.connection import get_connection
+    from db.migrate import migrate
+    from main import build_parser, cmd_ingest
+
+    db_path = tmp_path / "cli_ingest.db"
+    conn = get_connection(db_path)
+    migrate(conn)
+    conn.execute(
+        """
+        INSERT INTO ingest_runs
+        (run_id, interface_name, provider, stage, biz_date, params_json, status,
+         row_count, started_at, triggered_by)
+        VALUES ('run_margin', 'margin', 'tushare', 'post_extended', '2026-04-04', '{}',
+                'failed', 0, datetime('now'), 'cli')
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO ingest_errors
+        (run_id, interface_name, biz_date, stage, error_type, error_message, retryable)
+        VALUES ('run_margin', 'margin', '2026-04-04', 'post_extended', 'network', 'timeout', 1)
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    monkeypatch.setattr("db.connection._DEFAULT_DB_PATH", db_path)
+    parser = build_parser()
+    args = parser.parse_args(
+        ["ingest", "inspect", "--date", "2026-04-04", "--stage", "post_extended", "--interface", "margin", "--json"]
+    )
+    cmd_ingest({}, args)
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["stage"] == "post_extended"
+    assert payload["interface_name"] == "margin"
+    assert payload["status_label"] == "需处理"
+    assert "从未成功过的接口" in payload["status_reason"]
+    assert payload["health"]["status_label"] == "需处理"
+    assert payload["health"]["stage"] == "post_extended"
+    assert payload["health"]["interface_name"] == "margin"
+    assert payload["health"]["top_failed_interfaces"][0]["interface_name"] == "margin"
+
+
+def test_ingest_retry_json_includes_status_and_filters(tmp_path, monkeypatch, capsys) -> None:
+    from db.connection import get_connection
+    from db.migrate import migrate
+    from main import build_parser, cmd_ingest
+
+    db_path = tmp_path / "cli_retry.db"
+    conn = get_connection(db_path)
+    migrate(conn)
+    conn.execute(
+        """
+        INSERT INTO ingest_runs
+        (run_id, interface_name, provider, stage, biz_date, params_json, status,
+         row_count, started_at, triggered_by)
+        VALUES
+        ('run_margin', 'margin', 'tushare', 'post_extended', '2026-04-04', '{}', 'failed', 0, datetime('now'), 'cli'),
+        ('run_block', 'block_trade', 'tushare', 'post_extended', '2026-04-04', '{}', 'failed', 0, datetime('now'), 'cli')
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO ingest_errors
+        (run_id, interface_name, biz_date, stage, error_type, error_message, retryable)
+        VALUES
+        ('run_margin', 'margin', '2026-04-04', 'post_extended', 'network', 'timeout', 1),
+        ('run_block', 'block_trade', '2026-04-04', 'post_extended', 'provider', 'rate limit', 1)
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    monkeypatch.setattr("db.connection._DEFAULT_DB_PATH", db_path)
+    parser = build_parser()
+    args = parser.parse_args(
+        ["ingest", "retry", "--stage", "post_extended", "--interface", "margin", "--json"]
+    )
+    cmd_ingest({}, args)
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["stage"] == "post_extended"
+    assert payload["interface_name"] == "margin"
+    assert payload["retryable_count"] == 1
+    assert payload["failed_interface_count"] == 1
+    assert payload["status_label"] == "承压"
+    assert payload["groups"][0]["interface_name"] == "margin"
+
+
+def test_ingest_health_json_includes_summary_and_filters(tmp_path, monkeypatch, capsys) -> None:
+    from db.connection import get_connection
+    from db.migrate import migrate
+    from main import build_parser, cmd_ingest
+
+    db_path = tmp_path / "cli_health.db"
+    conn = get_connection(db_path)
+    migrate(conn)
+    conn.execute(
+        """
+        INSERT INTO ingest_runs
+        (run_id, interface_name, provider, stage, biz_date, params_json, status,
+         row_count, started_at, triggered_by)
+        VALUES
+        ('run_core_ok', 'daily_basic', 'tushare', 'post_core', '2026-04-01', '{}', 'success', 10, datetime('now'), 'cli'),
+        ('run_ext_fail', 'margin', 'tushare', 'post_extended', '2026-04-04', '{}', 'failed', 0, datetime('now'), 'cli')
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO ingest_errors
+        (run_id, interface_name, biz_date, stage, error_type, error_message, retryable)
+        VALUES ('run_ext_fail', 'margin', '2026-04-04', 'post_extended', 'network', 'timeout', 1)
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    monkeypatch.setattr("db.connection._DEFAULT_DB_PATH", db_path)
+    parser = build_parser()
+    args = parser.parse_args(
+        ["ingest", "health", "--date", "2026-04-04", "--days", "7", "--limit", "5", "--stage", "post_extended", "--json"]
+    )
+    cmd_ingest({}, args)
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["stage"] == "post_extended"
+    assert payload["days"] == 7
+    assert payload["failed_interface_count"] == 1
+    assert payload["status_label"] == "需处理"
+    assert "从未成功过的接口" in payload["status_reason"]
+    assert payload["top_failed_interfaces"][0]["interface_name"] == "margin"

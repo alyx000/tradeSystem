@@ -1,25 +1,10 @@
 import { type ReactNode, useState } from 'react'
+import type { ReviewPrefillData, ReviewStepValue, TeacherNote } from '../../lib/types'
 
 export interface StepProps {
-  data: Record<string, any>
-  onChange: (data: Record<string, any>) => void
-  prefill?: any
-}
-
-export function get(obj: any, path: string, fallback: any = ''): any {
-  return path.split('.').reduce((o, k) => o?.[k], obj) ?? fallback
-}
-
-export function set(obj: any, path: string, value: any): Record<string, any> {
-  const result = { ...(obj || {}) }
-  const keys = path.split('.')
-  let cur: any = result
-  for (let i = 0; i < keys.length - 1; i++) {
-    cur[keys[i]] = { ...(cur[keys[i]] || {}) }
-    cur = cur[keys[i]]
-  }
-  cur[keys[keys.length - 1]] = value
-  return result
+  data: ReviewStepValue
+  onChange: (data: ReviewStepValue) => void
+  prefill?: ReviewPrefillData
 }
 
 /* ── Layout ───────────────────────────────────────── */
@@ -48,7 +33,7 @@ export function PrefillBanner({ children }: { children: ReactNode }) {
 }
 
 export function Metric({ label, value, change, suffix }: {
-  label: string; value: any; change?: number | null; suffix?: string
+  label: string; value: string | number | null | undefined; change?: number | null; suffix?: string
 }) {
   return (
     <div>
@@ -165,7 +150,7 @@ export function TeacherNotesPanel({
   notes,
   fields = ['core_view', 'sectors', 'key_points', 'position_advice', 'avoid'],
 }: {
-  notes: any[]
+  notes: TeacherNote[]
   fields?: string[]
 }) {
   const [collapsed, setCollapsed] = useState(false)
@@ -185,17 +170,20 @@ export function TeacherNotesPanel({
       </div>
       {!collapsed && (
         <div className="space-y-3">
-          {notes.map((n: any) => (
+          {notes.map((n) => (
             <div key={n.id} className="border-l-2 border-amber-300 pl-3">
               <div className="font-medium text-gray-800 text-xs mb-1">
                 {n.teacher_name} · {n.title}
               </div>
-              {fields.map(f => n[f] ? (
-                <div key={f} className="text-gray-600 text-xs mt-0.5">
-                  <span className="text-amber-600 font-medium">{FIELD_LABELS[f] ?? f}：</span>
-                  {n[f]}
-                </div>
-              ) : null)}
+              {fields.map((f) => {
+                const value = n[f as keyof TeacherNote]
+                return value ? (
+                  <div key={f} className="text-gray-600 text-xs mt-0.5">
+                    <span className="text-amber-600 font-medium">{FIELD_LABELS[f] ?? f}：</span>
+                    {String(value)}
+                  </div>
+                ) : null
+              })}
             </div>
           ))}
         </div>
@@ -206,19 +194,19 @@ export function TeacherNotesPanel({
 
 /* ── Dynamic List ─────────────────────────────────── */
 
-export function DynamicList<T extends Record<string, any>>({ title, items, onChange, defaultItem, renderItem }: {
+export function DynamicList<T extends object>({ title, items, onChange, defaultItem, renderItem }: {
   title: string
   items: T[]
   onChange: (items: T[]) => void
   defaultItem: T
-  renderItem: (item: T, update: (field: string, value: any) => void) => ReactNode
+  renderItem: (item: T, update: (field: string, value: unknown) => void) => ReactNode
 }) {
   const list = items || []
   const add = () => onChange([...list, { ...defaultItem }])
   const remove = (i: number) => onChange(list.filter((_, idx) => idx !== i))
-  const update = (i: number) => (field: string, value: any) => {
+  const update = (i: number) => (field: string, value: unknown) => {
     const next = [...list]
-    next[i] = { ...next[i], [field]: value }
+    next[i] = { ...next[i], [field]: value } as T
     onChange(next)
   }
 

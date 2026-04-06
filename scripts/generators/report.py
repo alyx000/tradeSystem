@@ -225,13 +225,7 @@ class ReportGenerator:
             idx += 1
             for code, info in holdings_announcements.items():
                 stock_name = info.get("name", code)
-                anns = info.get("announcements", [])
-                if anns:
-                    lines.append(f"### {stock_name} ({code})")
-                    for a in anns[:5]:
-                        lines.append(f"- [事实] ★★★ {a.get('title', '')} ({a.get('ann_date', '')})")
-                else:
-                    lines.append(f"- {stock_name}: 无新公告")
+                _render_stock_event_lines(lines, stock_name, code, info, pre_market=True)
 
         if holdings_info:
             lines.append(f"\n## {_roman(idx)}、持仓信息面\n")
@@ -243,13 +237,7 @@ class ReportGenerator:
             idx += 1
             for code, info in watchlist_announcements.items():
                 stock_name = info.get("name", code)
-                anns = info.get("announcements", [])
-                if anns:
-                    lines.append(f"### {stock_name} ({code})")
-                    for a in anns[:5]:
-                        lines.append(f"- [事实] ★★★ {a.get('title', '')} ({a.get('ann_date', '')})")
-                else:
-                    lines.append(f"- {stock_name}: 无新公告")
+                _render_stock_event_lines(lines, stock_name, code, info, pre_market=True)
 
         if watchlist_info:
             lines.append(f"\n## {_roman(idx)}、关注池信息面\n")
@@ -467,6 +455,9 @@ class ReportGenerator:
                 f"合计: {margin.get('total_rzrqye_yi', '-')}亿"
             )
 
+        # ---- P0 情绪 / 资金增强 ----
+        section_idx = _render_p0_market_enhancements(lines, raw_data, section_idx)
+
         # ---- 持仓表现 ----
         if holdings_data:
             lines.append(f"\n## {_roman(section_idx)}、持仓表现\n")
@@ -493,17 +484,16 @@ class ReportGenerator:
 
         # ---- 盘后公告 ----
         if holdings_announcements:
-            has_anns = any(info.get("announcements") for info in holdings_announcements.values())
-            if has_anns:
+            has_events = any(
+                info.get("announcements") or info.get("disclosure_dates")
+                for info in holdings_announcements.values()
+            )
+            if has_events:
                 lines.append(f"\n## {_roman(section_idx)}、持仓盘后公告\n")
                 section_idx += 1
                 for code, info in holdings_announcements.items():
-                    anns = info.get("announcements", [])
-                    if anns:
-                        stock_name = info.get("name", code)
-                        lines.append(f"**{stock_name}** ({code})")
-                        for a in anns[:3]:
-                            lines.append(f"- {a.get('title', '')} ({a.get('ann_date', '')})")
+                    stock_name = info.get("name", code)
+                    _render_stock_event_lines(lines, stock_name, code, info, pre_market=False)
 
         # ---- 龙虎榜 ----
         dt_data = raw_data.get("dragon_tiger", {}).get("data", [])
@@ -578,10 +568,21 @@ def _render_stock_info_section(lines: list[str], info_dict: dict) -> None:
     """渲染个股信息面（互动易/研报/新闻），持仓和关注池共用。"""
     for code, info in info_dict.items():
         stock_name = info.get("name", code)
+        limit_prices = info.get("limit_prices") or {}
         qa_list = info.get("investor_qa", [])
         rr_list = info.get("research_reports", [])
         news_list = info.get("news", [])
         lines.append(f"### {stock_name} ({code})\n")
+        if limit_prices:
+            up_limit = limit_prices.get("up_limit")
+            down_limit = limit_prices.get("down_limit")
+            pre_close = limit_prices.get("pre_close")
+            up_str = f"{up_limit}" if up_limit is not None else "-"
+            down_str = f"{down_limit}" if down_limit is not None else "-"
+            pre_str = f"{pre_close}" if pre_close is not None else "-"
+            lines.append(f"**盘前边界**")
+            lines.append(f"- [事实] ★★★ 昨收 {pre_str} / 今日涨停价 {up_str} / 今日跌停价 {down_str}")
+            lines.append("")
         if qa_list:
             lines.append("**互动易问答**")
             for qa in qa_list[:3]:
@@ -723,6 +724,143 @@ def _generate_auto_analysis(raw_data: dict) -> list[str]:
         )
 
     return items
+
+
+def _render_stock_event_lines(lines: list[str], stock_name: str, code: str, info: dict, *, pre_market: bool) -> None:
+    anns = info.get("announcements", []) or []
+    disclosures = info.get("disclosure_dates", []) or []
+    if not anns and not disclosures:
+        if pre_market:
+            lines.append(f"- {stock_name}: 无新公告/披露计划")
+        return
+
+    heading = f"### {stock_name} ({code})" if pre_market else f"**{stock_name}** ({code})"
+    lines.append(heading)
+
+    ann_limit = 5 if pre_market else 3
+    for a in anns[:ann_limit]:
+        ann_date = a.get("ann_date", "")
+        prefix = "- [事实] ★★★ " if pre_market else "- "
+        lines.append(f"{prefix}{a.get('title', '')} ({ann_date})")
+
+    plan_limit = 3 if pre_market else 2
+    for item in disclosures[:plan_limit]:
+        plan_date = item.get("ann_date") or item.get("pre_date") or ""
+        report_end = item.get("report_end") or item.get("end_date") or ""
+        if report_end:
+            label = f"预约披露: {plan_date}（报告期 {report_end}）"
+        else:
+            label = f"预约披露: {plan_date}"
+        prefix = "- [事实] ★★★ " if pre_market else "- "
+        lines.append(f"{prefix}{label}")
+
+
+def _to_yi(amount) -> float | None:
+    try:
+        return round(float(amount) / 1e8, 2)
+    except (TypeError, ValueError):
+        return None
+
+
+def _render_p0_market_enhancements(lines: list[str], raw_data: dict, section_idx: int) -> int:
+    limit_step_rows = raw_data.get("limit_step", {}).get("data", []) or []
+    strongest_rows = raw_data.get("limit_cpt_list", {}).get("data", []) or []
+    ths_rows = raw_data.get("sector_moneyflow_ths", {}).get("data", []) or []
+    dc_rows = raw_data.get("sector_moneyflow_dc", {}).get("data", []) or []
+    market_flow_rows = raw_data.get("market_moneyflow_dc", {}).get("data", []) or []
+    daily_info_rows = raw_data.get("daily_info", {}).get("data", []) or []
+
+    has_any = any([limit_step_rows, strongest_rows, ths_rows, dc_rows, market_flow_rows, daily_info_rows])
+    if not has_any:
+        return section_idx
+
+    lines.append(f"\n## {_roman(section_idx)}、情绪与资金增强\n")
+    section_idx += 1
+
+    if limit_step_rows:
+        top_ladder = sorted(limit_step_rows, key=lambda x: int(x.get("nums", 0) or 0), reverse=True)[:10]
+        lines.append("### 连板天梯\n")
+        lines.append("| 股票 | 连板数 |")
+        lines.append("|------|--------|")
+        for row in top_ladder:
+            lines.append(f"| {row.get('name', row.get('ts_code', ''))} | {row.get('nums', '-')} |")
+        lines.append("")
+
+    if strongest_rows:
+        lines.append("### 最强板块\n")
+        lines.append("| 排名 | 板块 | 涨停家数 | 连板家数 | 涨跌幅 | 连板高度 |")
+        lines.append("|------|------|----------|----------|--------|----------|")
+        for row in strongest_rows[:10]:
+            lines.append(
+                f"| {row.get('rank', '-')} | {row.get('name', '')} | {row.get('up_nums', '-')} | "
+                f"{row.get('cons_nums', '-')} | {row.get('pct_chg', '-')}% | {row.get('up_stat', '-') } |"
+            )
+        lines.append("")
+
+    if market_flow_rows:
+        row = market_flow_rows[0]
+        net_main = _to_yi(row.get("net_amount"))
+        super_large = _to_yi(row.get("buy_elg_amount"))
+        large = _to_yi(row.get("buy_lg_amount"))
+        lines.append("### 大盘资金流向\n")
+        parts = []
+        if net_main is not None:
+            parts.append(f"主力净流入 {net_main:+.2f}亿")
+        if row.get("net_amount_rate") is not None:
+            parts.append(f"净占比 {row.get('net_amount_rate')}%")
+        if super_large is not None:
+            parts.append(f"超大单 {super_large:+.2f}亿")
+        if large is not None:
+            parts.append(f"大单 {large:+.2f}亿")
+        if parts:
+            lines.append(f"- {'，'.join(parts)}")
+        lines.append("")
+
+    if ths_rows:
+        top_ths = sorted(ths_rows, key=lambda x: float(x.get("net_amount", 0) or 0), reverse=True)[:8]
+        lines.append("### 同花顺行业资金流入前列\n")
+        lines.append("| 板块 | 净额(亿) | 涨跌幅 | 领涨股 |")
+        lines.append("|------|----------|--------|--------|")
+        for row in top_ths:
+            lines.append(
+                f"| {row.get('industry', row.get('name', ''))} | {row.get('net_amount', '-')} | "
+                f"{row.get('pct_change', '-')}% | {row.get('lead_stock', '-') } |"
+            )
+        lines.append("")
+
+    if dc_rows:
+        top_dc = sorted(dc_rows, key=lambda x: float(x.get("net_amount", 0) or 0), reverse=True)[:8]
+        lines.append("### 东财板块资金流入前列\n")
+        lines.append("| 板块 | 类型 | 净额(亿) | 涨跌幅 | 净流入最大股 |")
+        lines.append("|------|------|----------|--------|--------------|")
+        for row in top_dc:
+            net_amount = _to_yi(row.get("net_amount"))
+            net_str = f"{net_amount:+.2f}" if net_amount is not None else "-"
+            lines.append(
+                f"| {row.get('name', '')} | {row.get('content_type', '-') } | {net_str} | "
+                f"{row.get('pct_change', '-')}% | {row.get('buy_sm_amount_stock', '-') } |"
+            )
+        lines.append("")
+
+    if daily_info_rows:
+        lines.append("### 交易所市场统计摘录\n")
+        lines.append("| 交易所/板块 | 成交额 | 成交量 |")
+        lines.append("|------------|--------|--------|")
+        for row in daily_info_rows[:8]:
+            name = (
+                row.get("market")
+                or row.get("board")
+                or row.get("exchange")
+                or row.get("ts_code")
+                or row.get("trade_date")
+                or "-"
+            )
+            amount = row.get("amount") or row.get("turnover") or row.get("deal_amount") or "-"
+            vol = row.get("vol") or row.get("volume") or row.get("deal_vol") or "-"
+            lines.append(f"| {name} | {amount} | {vol} |")
+        lines.append("")
+
+    return section_idx
 
 
 def _render_sector_rhythm(lines: list, raw_data: dict, section_idx: int) -> int:

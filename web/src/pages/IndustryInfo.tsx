@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
+import type { IndustryInfoCreateInput, IndustryInfoItem } from '../lib/types'
 
 const INFO_TYPE_OPTIONS = [
   { value: '', label: '全部类型' },
@@ -68,7 +69,7 @@ export default function IndustryInfo() {
   })
 
   const createMutation = useMutation({
-    mutationFn: (data: any) => api.createIndustryInfo(data),
+    mutationFn: (data: IndustryInfoCreateInput) => api.createIndustryInfo(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['industry-info'] })
       setShowAdd(false)
@@ -82,7 +83,7 @@ export default function IndustryInfo() {
     setAppliedTo(dateTo)
   }
 
-  const filteredItems = (items || []).filter((item: any) => {
+  const filteredItems = (items || []).filter((item: IndustryInfoItem) => {
     if (infoType && item.info_type !== infoType) return false
     return true
   })
@@ -174,9 +175,12 @@ export default function IndustryInfo() {
             <button
               disabled={!form.sector_name.trim() || !form.content.trim() || createMutation.isPending}
               onClick={() => {
-                const payload: Record<string, string> = { ...form }
-                Object.keys(payload).forEach(k => { if (!payload[k]) delete payload[k] })
-                createMutation.mutate(payload)
+                const payload: Partial<IndustryInfoCreateInput> = { ...form }
+                Object.keys(payload).forEach((k) => {
+                  const key = k as keyof IndustryInfoCreateInput
+                  if (!payload[key]) delete payload[key]
+                })
+                createMutation.mutate(payload as IndustryInfoCreateInput)
               }}
               className="px-4 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50">
               {createMutation.isPending ? '保存中…' : '保存'}
@@ -223,12 +227,12 @@ export default function IndustryInfo() {
       {/* 列表 */}
       {filteredItems.length > 0 ? (
         <div className="space-y-2">
-          {filteredItems.map((item: any) => (
+          {filteredItems.map((item: IndustryInfoItem) => (
             <InfoCard
               key={item.id}
               item={item}
               onDelete={() => {
-                if (window.confirm(`确认删除「${item.sector_name}」这条行业信息？`)) {
+                if (item.id != null && window.confirm(`确认删除「${item.sector_name}」这条行业信息？`)) {
                   deleteMutation.mutate(item.id)
                 }
               }}
@@ -248,7 +252,7 @@ export default function IndustryInfo() {
 }
 
 function InfoCard({ item, onDelete, deleting }: {
-  item: any
+  item: IndustryInfoItem
   onDelete: () => void
   deleting?: boolean
 }) {

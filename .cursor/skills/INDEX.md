@@ -3,6 +3,17 @@
 本文件记录每个 skill 所依赖的 CLI 命令和 API 端点。
 **修改 `scripts/db/cli.py` 或 `scripts/api/routes/` 后，必须检查此索引。**
 
+## 统一入口约定
+
+从 2026-04 起，仓库优先使用根目录统一入口：
+
+- 检查优先用 `make check` / `make check-web` / `make check-scripts`
+- 开发启动优先用 `make dev` / `make dev-api` / `make dev-web`
+- 日常任务优先用 `make today-open` / `make today-close` / `make today-pre` / `make today-post`
+- 若 `Makefile` 已提供别名，SKILL.md 中应优先展示 `make` 入口，再保留底层 `python3 main.py ...` 作为兼容说明
+
+本索引中的 CLI 依赖表仍以真实底层子命令为准，因为 `test_cli_smoke.py` 校验的是实际 argparse 签名，而不是 `make` 别名。
+
 ## CLI 命令依赖表
 
 | Skill | CLI 子命令 | 说明 |
@@ -30,7 +41,9 @@
 | `ingest-inspector` | `python main.py ingest run-interface --name --date` | 运行单接口采集，真实执行 provider 并记录失败 |
 | `ingest-inspector` | `python main.py ingest list-interfaces` | 查看接口注册表 |
 | `ingest-inspector` | `python main.py ingest inspect --date` | 查看采集状态、失败项与审计信息 |
+| `ingest-inspector` | `python main.py ingest health --date --days` | 查看近 N 天采集健康摘要与稳定性状态 |
 | `ingest-inspector` | `python main.py ingest retry` | 查看待重试分组摘要 |
+| `ingest-inspector` | `python main.py ingest reconcile --stale-minutes` | 清理陈旧 running 采集记录 |
 | `plan-workbench` | `python main.py plan draft --date` | 生成 `MarketObservation` + `TradeDraft` |
 | `plan-workbench` | `python main.py plan show-draft --date/--draft-id` | 查看交易草稿 |
 | `plan-workbench` | `python main.py plan confirm --date/--draft-id` | 确认交易计划并写入 `trade_plans` |
@@ -58,6 +71,7 @@
 | `plan-workbench` | `/api/plans/{plan_id}/review` | POST | 回写 `PlanReview` |
 | `ingest-inspector` | `/api/ingest/interfaces` | GET | 查看接口注册表 |
 | `ingest-inspector` | `/api/ingest/inspect` | GET | 查看某日采集状态摘要 |
+| `ingest-inspector` | `/api/ingest/health` | GET | 查看近 N 天采集健康摘要 |
 | `ingest-inspector` | `/api/ingest/runs` | GET | 查看某日采集运行记录 |
 | `ingest-inspector` | `/api/ingest/errors` | GET | 查看某日采集错误记录 |
 | `ingest-inspector` | `/api/ingest/run` | POST | 运行指定 stage 采集 |
@@ -213,6 +227,6 @@
 ## 变更流程
 
 1. 修改 `cli.py` 或 API routes 时，同步更新此 INDEX.md
-2. 运行 `python3 -m pytest scripts/tests/test_cli_smoke.py -v` 验证签名无破坏
+2. 优先运行 `make check-scripts`；若仅需检查 CLI 签名，可运行 `python3 -m pytest scripts/tests/test_cli_smoke.py -v`
 3. 若命令参数有不向后兼容的变更，更新对应 SKILL.md 中的示例
 4. 修改 `scripts/main.py` 新增/调整 `ingest`、`plan`、`knowledge` 命令时，同步更新相关 SKILL.md 与 AGENTS.md

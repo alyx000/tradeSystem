@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
@@ -11,10 +11,11 @@ import StepNodes from '../components/review/StepNodes'
 import StepPositions from '../components/review/StepPositions'
 import StepPlan from '../components/review/StepPlan'
 import type { StepProps } from '../components/review/widgets'
+import type { ReviewFormData, ReviewRecord, ReviewStepKey, ReviewStepValue } from '../lib/types'
 
 type StepComponent = (props: StepProps) => React.ReactNode
 
-const STEPS: { key: string; label: string; Component: StepComponent }[] = [
+const STEPS: { key: ReviewStepKey; label: string; Component: StepComponent }[] = [
   { key: 'step1_market', label: '1.大盘', Component: StepMarket },
   { key: 'step2_sectors', label: '2.板块', Component: StepSectors },
   { key: 'step3_emotion', label: '3.情绪', Component: StepEmotion },
@@ -27,14 +28,34 @@ const STEPS: { key: string; label: string; Component: StepComponent }[] = [
 
 const DRAFT_KEY = (date: string) => `review_draft_${date}`
 
-function tryParseJSON(v: any): any {
-  if (typeof v !== 'string') return v || {}
+function tryParseJSON(v: unknown): ReviewStepValue {
+  if (typeof v !== 'string') {
+    return typeof v === 'object' && v !== null ? (v as ReviewStepValue) : {}
+  }
   try {
     const parsed = JSON.parse(v)
-    return typeof parsed === 'object' && parsed !== null ? parsed : { notes: v }
+    return typeof parsed === 'object' && parsed !== null ? (parsed as ReviewStepValue) : { notes: v }
   } catch {
     return { notes: v }
   }
+}
+
+function hydrateReviewFormData(date: string | undefined, existing?: ReviewRecord): ReviewFormData {
+  if (!date) return {}
+  const draft = localStorage.getItem(DRAFT_KEY(date))
+  if (draft) {
+    try {
+      return JSON.parse(draft) as ReviewFormData
+    } catch {
+      return {}
+    }
+  }
+  if (!existing?.exists) return {}
+  const data: ReviewFormData = {}
+  STEPS.forEach((s) => {
+    if (existing[s.key]) data[s.key] = tryParseJSON(existing[s.key])
+  })
+  return data
 }
 
 export default function ReviewWorkbench() {
@@ -42,7 +63,7 @@ export default function ReviewWorkbench() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [activeStep, setActiveStep] = useState(0)
-  const [formData, setFormData] = useState<Record<string, any>>({})
+  const [formDataByDate, setFormDataByDate] = useState<Record<string, ReviewFormData>>({})
 
   const { data: prefill } = useQuery({
     queryKey: ['prefill', date],
@@ -56,19 +77,14 @@ export default function ReviewWorkbench() {
     enabled: !!date,
   })
 
-  useEffect(() => {
-    if (!date) return
-    const draft = localStorage.getItem(DRAFT_KEY(date))
-    if (draft) {
-      try { setFormData(JSON.parse(draft)) } catch { /* ignore corrupt draft */ }
-    } else if (existing?.exists) {
-      const data: Record<string, any> = {}
-      STEPS.forEach(s => {
-        if (existing[s.key]) data[s.key] = tryParseJSON(existing[s.key])
-      })
-      setFormData(data)
-    }
-  }, [date, existing])
+  const hydratedFormData = useMemo(
+    () => hydrateReviewFormData(date, existing),
+    [date, existing]
+  )
+  const formData = useMemo(
+    () => (date ? (formDataByDate[date] ?? hydratedFormData) : {}),
+    [date, formDataByDate, hydratedFormData]
+  )
 
   useEffect(() => {
     if (!date || Object.keys(formData).length === 0) return
@@ -89,9 +105,16 @@ export default function ReviewWorkbench() {
   const step = STEPS[activeStep]
   const stepData = formData[step.key] || {}
 
-  const handleChange = useCallback((value: any) => {
-    setFormData(prev => ({ ...prev, [step.key]: value }))
-  }, [step.key])
+  const handleChange = useCallback((value: ReviewStepValue) => {
+    if (!date) return
+    setFormDataByDate((prev) => ({
+      ...prev,
+      [date]: {
+        ...(prev[date] ?? hydratedFormData),
+        [step.key]: value,
+      },
+    }))
+  }, [date, hydratedFormData, step.key])
 
   const filledCount = STEPS.filter(s => {
     const v = formData[s.key]
@@ -131,7 +154,8 @@ export default function ReviewWorkbench() {
 
       <div className="flex gap-1 border-b overflow-x-auto">
         {STEPS.map((s, i) => {
-          const filled = formData[s.key] && typeof formData[s.key] === 'object' && Object.keys(formData[s.key]).length > 0
+          const stepValue = formData[s.key]
+          const filled = !!(stepValue && typeof stepValue === 'object' && Object.keys(stepValue).length > 0)
           return (
             <button key={s.key} onClick={() => setActiveStep(i)}
               className={`px-3 py-2 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${

@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { api } from '../lib/api'
+import type { Holding, HoldingCreateInput } from '../lib/types'
 
 function formatFloatPnl(entry: number | null | undefined, cur: number | null | undefined): string {
   if (entry == null || cur == null || !Number.isFinite(entry) || entry === 0) return '—'
@@ -20,7 +21,7 @@ export default function Holdings() {
   })
 
   const createMut = useMutation({
-    mutationFn: (data: any) => api.createHolding(data),
+    mutationFn: (data: HoldingCreateInput) => api.createHolding(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['holdings'] })
       setShowForm(false)
@@ -94,7 +95,7 @@ export default function Holdings() {
             ) : holdings?.length === 0 ? (
               <tr><td colSpan={8} className="px-4 py-8 text-center text-gray-400">暂无持仓</td></tr>
             ) : (
-              holdings?.map((h: any) => (
+              holdings?.map((h: Holding) => (
                 <tr key={h.id} className="hover:bg-gray-50">
                   <td className="px-4 py-3 font-mono">{h.stock_code}</td>
                   <td className="px-4 py-3">{h.stock_name}</td>

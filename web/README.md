@@ -71,3 +71,27 @@ export default defineConfig([
   },
 ])
 ```
+
+## Project Gate
+
+This repo blocks unsafe frontend changes through three layers:
+
+- `npm run lint`
+- `npm test`
+- `npm run build`
+
+Use the combined gate locally:
+
+```bash
+npm run check
+```
+
+Repository-level unified checks are available at [`/check.sh`](/Users/alyx/tradeSystem/check.sh):
+
+```bash
+bash /Users/alyx/tradeSystem/check.sh --web
+```
+
+The repository also provides a versioned git hook at [`/.githooks/pre-push`](/Users/alyx/tradeSystem/.githooks/pre-push) and a CI workflow at [web-check.yml](/Users/alyx/tradeSystem/.github/workflows/web-check.yml).
+
+The same repository-level hook can also run backend checks through [`scripts/check.sh`](/Users/alyx/tradeSystem/scripts/check.sh) when Python test dependencies are installed.

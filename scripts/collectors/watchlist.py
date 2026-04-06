@@ -164,27 +164,26 @@ class WatchlistCollector:
 
         return results
 
-    def collect_watchlist_announcements(self, start_date: str, end_date: str) -> dict:
+    def collect_watchlist_announcements(
+        self,
+        start_date: str,
+        end_date: str,
+        db_path: str | None = None,
+    ) -> dict:
         """采集 tier1_core + tier2_watch 公告（与持仓公告逻辑一致，代码去重）"""
-        if not self.registry:
-            return {}
         self.load()
+        from collectors.holdings import collect_announcements_for_stocks
+
         seen: set[str] = set()
-        results: dict = {}
+        stocks: list[tuple[str, str]] = []
         for tier in ("tier1_core", "tier2_watch"):
             for stock in self._data.get(tier, []) or []:
                 code = (stock.get("stock_code") or "").strip()
                 if not code or code in seen:
                     continue
                 seen.add(code)
-                r = self.registry.call("get_stock_announcements", code, start_date, end_date)
-                if r.success:
-                    results[code] = {
-                        "name": stock.get("stock_name", code),
-                        "announcements": r.data,
-                        "_source": r.source,
-                    }
-        return results
+                stocks.append((code, stock.get("stock_name", code)))
+        return collect_announcements_for_stocks(self.registry, stocks, start_date, end_date, db_path=db_path)
 
     def collect_watchlist_info(self, date: str) -> dict:
         """

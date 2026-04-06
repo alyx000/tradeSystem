@@ -1,4 +1,6 @@
-import { type StepProps, get, set, Section, Row, PrefillBanner, Metric, SelectField, NumberField, TextField, TextareaField } from './widgets'
+import { type StepProps, Section, Row, PrefillBanner, Metric, SelectField, NumberField, TextField, TextareaField } from './widgets'
+import { get, set } from './formState'
+import type { ReviewStyleFactors, ReviewStepValue, StyleFactorBoardPreference, StyleFactorCapPreference, StyleFactorPremiumSnapshotItem, StyleFactorPremiumTrend } from '../../lib/types'
 
 const CAP_SIZE = [
   { value: '大盘股', label: '大盘股' },
@@ -33,7 +35,7 @@ const PROFIT_ITEMS = [
 ]
 
 /** cap_preference.relative -> preference.cap_size 映射 */
-function inferCapSize(relative: string | undefined): string | undefined {
+function inferCapSize(relative: string | null | undefined): string | undefined {
   if (!relative) return undefined
   if (relative.includes('大盘')) return '大盘股'
   if (relative.includes('小盘')) return '小盘股'
@@ -50,16 +52,16 @@ function inferEffect(prem: number | null | undefined): string | undefined {
 export default function StepStyle({ data, onChange, prefill }: StepProps) {
   const d = data || {}
   const m = prefill?.market
-  const sf = m?.style_factors as Record<string, any> | undefined
-  const capPref = sf?.cap_preference as Record<string, any> | undefined
-  const boardPref = sf?.board_preference as Record<string, any> | undefined
-  const premSnap = sf?.premium_snapshot as Record<string, any> | undefined
-  const premTrend = sf?.premium_trend as Record<string, any> | undefined
+  const sf: ReviewStyleFactors | undefined = m?.style_factors
+  const capPref: StyleFactorCapPreference | undefined = sf?.cap_preference
+  const boardPref: StyleFactorBoardPreference | undefined = sf?.board_preference
+  const premSnap: Record<string, StyleFactorPremiumSnapshotItem> | undefined = sf?.premium_snapshot
+  const premTrend: StyleFactorPremiumTrend | undefined = sf?.premium_trend
   const switchSigs = sf?.switch_signals as string[] | undefined
 
-  const prevStyle = (() => {
+  const prevStyle: ReviewStepValue = (() => {
     try {
-      return JSON.parse(prefill?.prev_review?.step4_style || '{}')
+      return JSON.parse(prefill?.prev_review?.step4_style || '{}') as ReviewStepValue
     } catch {
       return {}
     }
@@ -81,42 +83,43 @@ export default function StepStyle({ data, onChange, prefill }: StepProps) {
     first_open: snapMedian('yizi_first_open'),
   } : {}
 
-  const g = (p: string, fb: any = '') => {
-    const val = get(d, p, undefined)
+  const g = <T = string,>(p: string, fb?: T) => {
+    const fallback = (fb ?? '') as T
+    const val = get<T | undefined>(d, p, undefined)
     if (val !== undefined && val !== '') return val
 
     if (m) {
       // 溢价数值
-      if (p === 'effects.new_theme.premium') return premMap.new_theme ?? null
-      if (p === 'effects.board_20cm.premium') return premMap.board_20cm ?? null
-      if (p === 'effects.second_board.premium') return premMap.second_board ?? null
-      if (p === 'effects.board_30cm.premium') return premMap.board_30cm ?? null
-      if (p === 'effects.big_cap.premium') return premMap.big_cap ?? null
-      if (p === 'effects.first_open.premium') return premMap.first_open ?? null
+      if (p === 'effects.new_theme.premium') return (premMap.new_theme ?? null) as T
+      if (p === 'effects.board_20cm.premium') return (premMap.board_20cm ?? null) as T
+      if (p === 'effects.second_board.premium') return (premMap.second_board ?? null) as T
+      if (p === 'effects.board_30cm.premium') return (premMap.board_30cm ?? null) as T
+      if (p === 'effects.big_cap.premium') return (premMap.big_cap ?? null) as T
+      if (p === 'effects.first_open.premium') return (premMap.first_open ?? null) as T
 
       // 效应方向：由溢价正负推导
       if (p.endsWith('.effect')) {
         const itemKey = p.slice('effects.'.length, -'.effect'.length)
         const eff = inferEffect(premMap[itemKey])
-        if (eff) return eff
+        if (eff) return eff as T
       }
 
       // 市值偏好：从 cap_preference.relative 推导
       if (p === 'preference.cap_size') {
         const inferred = inferCapSize(capPref?.relative)
-        if (inferred) return inferred
+        if (inferred) return inferred as T
       }
     }
 
     // 审美偏好 + 无溢价的风格效应：从前日复盘 fallback
     if (p.startsWith('preference.') || p.startsWith('effects.')) {
-      const prevVal = get(prevStyle, p, undefined)
+      const prevVal = get<T | undefined>(prevStyle, p, undefined)
       if (prevVal !== undefined && prevVal !== '') return prevVal
     }
 
-    return fb
+    return fallback
   }
-  const s = (p: string, v: any) => onChange(set(d, p, v))
+  const s = (p: string, v: unknown) => onChange(set(d, p, v))
 
   const hasPremium = m && (m.premium_10cm != null || m.premium_20cm != null || m.premium_30cm != null || m.premium_second_board != null)
   const hasStyleFactors = !!(capPref || boardPref || switchSigs?.length || premTrend)

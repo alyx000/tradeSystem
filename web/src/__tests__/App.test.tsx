@@ -22,6 +22,7 @@ describe('App', () => {
     expect(screen.getByText('资料')).toBeInTheDocument()
     expect(screen.getByText('采集')).toBeInTheDocument()
     expect(screen.getByText('查询')).toBeInTheDocument()
+    expect(screen.getByText('命令')).toBeInTheDocument()
     expect(screen.getByText('老师观点')).toBeInTheDocument()
     expect(screen.getByText('持仓')).toBeInTheDocument()
     expect(screen.getByText('关注池')).toBeInTheDocument()

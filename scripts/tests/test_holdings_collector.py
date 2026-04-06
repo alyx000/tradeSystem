@@ -1,6 +1,7 @@
 """HoldingsCollector 单元测试：load / save / add / remove / collect_data / announcements / summary / enrich / info"""
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -11,11 +12,12 @@ from collectors.holdings import HoldingsCollector, collect_info_for_stocks
 from providers.base import DataResult
 
 
-def _mock_registry(daily_map=None, ann_map=None, ma_map=None, sector_data=None, info_map=None):
+def _mock_registry(daily_map=None, ann_map=None, ma_map=None, sector_data=None, info_map=None, limit_rows=None):
     daily_map = daily_map or {}
     ann_map = ann_map or {}
     ma_map = ma_map or {}
     info_map = info_map or {}
+    limit_rows = limit_rows or []
     reg = MagicMock()
 
     def _call(method, *a, **kw):
@@ -38,6 +40,10 @@ def _mock_registry(daily_map=None, ann_map=None, ma_map=None, sector_data=None, 
             if sector_data is not None:
                 return DataResult(data=sector_data, source="mock")
             return DataResult(data=None, source="mock", error="no sector")
+        if method == "get_stock_limit_prices":
+            if limit_rows:
+                return DataResult(data=limit_rows, source="mock")
+            return DataResult(data=None, source="mock", error="no limit")
         if method in ("get_stock_news", "get_investor_qa", "get_research_reports"):
             code = a[0]
             key = f"{method}:{code}"
@@ -174,6 +180,71 @@ class TestCollectAnnouncements:
         assert "600000.SH" in result
         assert result["600000.SH"]["announcements"][0]["title"] == "公告A"
 
+    def test_prefers_ingest_raw_payloads_and_merges_disclosure_dates(self, sqlite_db_for_merge, tmp_path):
+        from db.connection import get_db
+
+        anns_payload = {
+            "rows": [
+                {"ts_code": "600000.SH", "title": "董事会决议公告", "ann_date": "20260330"},
+            ],
+        }
+        disclosure_payload = {
+            "rows": [
+                {"ts_code": "600000.SH", "ann_date": "20260420", "end_date": "20260331", "report_end": "20260331"},
+            ],
+        }
+        with get_db(sqlite_db_for_merge) as conn:
+            conn.execute(
+                """
+                INSERT INTO raw_interface_payloads
+                (interface_name, provider, stage, biz_date, target_date, raw_table, dedupe_key,
+                 payload_json, payload_hash, row_count, status, params_json, source_meta_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "anns_d", "tushare:anns_d", "post_extended", "2026-03-30", "2026-03-30", "raw_anns_d",
+                    "anns_d:2026-03-30:test",
+                    json.dumps(anns_payload, ensure_ascii=False),
+                    "h1", 1, "success", "{}", "{}",
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO raw_interface_payloads
+                (interface_name, provider, stage, biz_date, target_date, raw_table, dedupe_key,
+                 payload_json, payload_hash, row_count, status, params_json, source_meta_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "disclosure_date", "tushare:disclosure_date", "post_extended", "2026-03-30", "2026-03-30",
+                    "raw_disclosure_date", "disclosure_date:2026-03-30:test",
+                    json.dumps(disclosure_payload, ensure_ascii=False),
+                    "h2", 1, "success", "{}", "{}",
+                ),
+            )
+
+        reg = _mock_registry()
+        hc = HoldingsCollector(registry=reg)
+        hc.holdings_file = tmp_path / "h.yaml"
+        hc._holdings = [{"code": "600000.SH", "name": "浦发"}]
+
+        result = hc.collect_holdings_announcements("2026-03-28", "2026-03-30", db_path=sqlite_db_for_merge)
+        assert result["600000.SH"]["announcements"][0]["title"] == "董事会决议公告"
+        assert result["600000.SH"]["disclosure_dates"][0]["ann_date"] == "20260420"
+        methods = [call.args[0] for call in reg.call.call_args_list]
+        assert "get_stock_announcements" not in methods
+
+    def test_falls_back_to_provider_when_ingest_raw_missing(self, sqlite_db_for_merge, tmp_path):
+        ann = {"600000.SH": [{"title": "公告A", "ann_date": "20260330"}]}
+        reg = _mock_registry(ann_map=ann)
+        hc = HoldingsCollector(registry=reg)
+        hc.holdings_file = tmp_path / "h.yaml"
+        hc._holdings = [{"code": "600000.SH", "name": "浦发"}]
+
+        result = hc.collect_holdings_announcements("2026-03-28", "2026-03-30", db_path=sqlite_db_for_merge)
+        assert result["600000.SH"]["announcements"][0]["title"] == "公告A"
+        assert result["600000.SH"]["_source"] == "mock"
+
 
 class TestEnrichWithMa:
     def test_adds_ma_fields(self, tmp_path):
@@ -251,6 +322,15 @@ class TestCollectInfoForStocks:
         reg = _mock_registry(info_map={})
         result = collect_info_for_stocks(reg, [("600519.SH", "茅台")], "2026-03-27")
         assert result == {}
+
+    def test_limit_prices_are_included_in_stock_info(self):
+        reg = _mock_registry(
+            info_map={},
+            limit_rows=[{"ts_code": "600519.SH", "pre_close": 1500.0, "up_limit": 1650.0, "down_limit": 1350.0}],
+        )
+        result = collect_info_for_stocks(reg, [("600519.SH", "贵州茅台")], "2026-03-27")
+        assert "600519.SH" in result
+        assert result["600519.SH"]["limit_prices"]["up_limit"] == 1650.0
 
 
 @pytest.fixture

@@ -109,18 +109,53 @@ def cmd_ingest(config: dict, args) -> None:
             "interfaces": service.list_interfaces(),
         }
     elif command == "inspect":
-        inspect = service.inspect(args.date)
+        inspect = service.inspect(
+            args.date,
+            interface_name=getattr(args, "interface", None),
+            stage=getattr(args, "stage", None),
+        )
+        health = service.health_summary(
+            end_date=args.date,
+            days=7,
+            stage=getattr(args, "stage", None),
+            interface_name=getattr(args, "interface", None),
+        )
         payload = {
             "status": "ok",
             "message": f"{args.date} 的采集审计",
+            "status_label": health.get("status_label"),
+            "status_reason": health.get("status_reason"),
+            "health": health,
             **inspect,
         }
     elif command == "retry":
-        retry = service.retry_summary()
+        retry = service.retry_summary(
+            interface_name=getattr(args, "interface", None),
+            stage=getattr(args, "stage", None),
+        )
         payload = {
             "status": "ok",
             "message": "可重试错误摘要",
             **retry,
+        }
+    elif command == "health":
+        health = service.health_summary(
+            end_date=args.date,
+            days=args.days,
+            limit=args.limit,
+            stage=getattr(args, "stage", None),
+        )
+        payload = {
+            "status": "ok",
+            "message": "采集健康摘要",
+            **health,
+        }
+    elif command == "reconcile":
+        summary = service.reconcile_stale_runs(stale_minutes=args.stale_minutes)
+        payload = {
+            "status": "ok",
+            "message": "已完成陈旧 running 采集记录清理",
+            **summary,
         }
     elif command == "run":
         payload = service.execute_stage(args.stage, args.date, triggered_by="cli", input_by=args.input_by)
@@ -851,10 +886,25 @@ def build_parser() -> argparse.ArgumentParser:
 
     ingest_inspect = ingest_subparsers.add_parser("inspect", help="查看某日采集运行状态")
     ingest_inspect.add_argument("--date", default=date.today().isoformat(), help="日期 YYYY-MM-DD")
+    ingest_inspect.add_argument("--stage", choices=["pre_core", "post_core", "post_extended", "watchlist", "backfill"], help="按阶段过滤")
+    ingest_inspect.add_argument("--interface", help="按接口注册名过滤")
     ingest_inspect.add_argument("--json", action="store_true", help="输出 JSON")
 
     ingest_retry = ingest_subparsers.add_parser("retry", help="重试失败采集项")
+    ingest_retry.add_argument("--stage", choices=["pre_core", "post_core", "post_extended", "watchlist", "backfill"], help="按阶段过滤")
+    ingest_retry.add_argument("--interface", help="按接口注册名过滤")
     ingest_retry.add_argument("--json", action="store_true", help="输出 JSON")
+
+    ingest_health = ingest_subparsers.add_parser("health", help="查看近 N 天采集健康摘要")
+    ingest_health.add_argument("--date", default=date.today().isoformat(), help="结束日期 YYYY-MM-DD")
+    ingest_health.add_argument("--days", type=int, default=7, help="统计天数")
+    ingest_health.add_argument("--limit", type=int, default=10, help="失败接口排行条数")
+    ingest_health.add_argument("--stage", choices=["pre_core", "post_core", "post_extended", "watchlist", "backfill"], help="按阶段过滤")
+    ingest_health.add_argument("--json", action="store_true", help="输出 JSON")
+
+    ingest_reconcile = ingest_subparsers.add_parser("reconcile", help="清理陈旧 running 采集记录")
+    ingest_reconcile.add_argument("--stale-minutes", type=int, default=5, help="超过多少分钟仍为 running 视为陈旧")
+    ingest_reconcile.add_argument("--json", action="store_true", help="输出 JSON")
 
     # plan
     plan_parser = subparsers.add_parser("plan", help="交易计划命令（架构骨架）")

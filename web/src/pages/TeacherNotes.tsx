@@ -1,19 +1,21 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
+import type { TeacherNote, TeacherNoteAttachment, TeacherRecord } from '../lib/types'
 
-function safeParseJson(v: any): any {
+function safeParseJson(v: unknown): unknown {
   if (v == null) return null
   if (typeof v !== 'string') return v
   try { return JSON.parse(v) } catch { return null }
 }
 
 /** 将数组元素（可能是字符串或对象）统一转为可显示字符串 */
-function toStr(item: any): string {
+function toStr(item: unknown): string {
   if (item == null) return ''
   if (typeof item === 'string') return item
   if (typeof item === 'object') {
-    return item.name ?? item.view ?? item.label ?? item.text ?? JSON.stringify(item)
+    const candidate = item as { name?: string; view?: string; label?: string; text?: string }
+    return candidate.name ?? candidate.view ?? candidate.label ?? candidate.text ?? JSON.stringify(item)
   }
   return String(item)
 }
@@ -73,7 +75,7 @@ export default function TeacherNotes() {
               className="border rounded px-3 py-1.5 text-sm text-gray-700"
             >
               <option value="">全部老师</option>
-              {(teachers as any[]).map((t: any) => (
+              {(teachers as TeacherRecord[]).map((t) => (
                 <option key={t.id} value={t.name}>{t.name}{t.platform ? ` (${t.platform})` : ''}</option>
               ))}
             </select>
@@ -89,7 +91,7 @@ export default function TeacherNotes() {
         <div className="text-gray-500 text-sm">加载中...</div>
       ) : (
         <div className="space-y-3">
-          {notes?.map((note: any) => (
+          {notes?.map((note) => (
             <NoteCard key={note.id} note={note}
               onDelete={() => {
                 if (window.confirm(`确认删除「${note.title}」？此操作不可撤销。`)) {
@@ -109,13 +111,16 @@ export default function TeacherNotes() {
 }
 
 function NoteCard({ note, onDelete, deleting }: {
-  note: any
+  note: TeacherNote
   onDelete: () => void
   deleting?: boolean
 }) {
   const tags = safeParseJson(note.tags)
   const keyPoints = safeParseJson(note.key_points)
   const sectors = safeParseJson(note.sectors)
+  const tagList = Array.isArray(tags) ? tags : null
+  const keyPointList = Array.isArray(keyPoints) ? keyPoints : null
+  const sectorList = Array.isArray(sectors) ? sectors : null
 
   return (
     <details className="bg-white rounded-lg shadow group" open={false}>
@@ -154,9 +159,9 @@ function NoteCard({ note, onDelete, deleting }: {
               </ul>
             )
           })()}
-          {tags && Array.isArray(tags) && tags.length > 0 && (
+          {tagList && tagList.length > 0 && (
             <div className="flex gap-1 mt-1.5 flex-wrap">
-              {tags.map((tag: any, i: number) => (
+              {tagList.map((tag: unknown, i: number) => (
                 <span key={i} className="bg-gray-100 text-gray-600 px-2 py-0.5 rounded text-xs">{toStr(tag)}</span>
               ))}
             </div>
@@ -187,11 +192,11 @@ function NoteCard({ note, onDelete, deleting }: {
 
       <div className="px-4 pb-4 border-t border-gray-100 pt-3">
         {/* 要点 — 最突出，放最前面 */}
-        {keyPoints && Array.isArray(keyPoints) && keyPoints.length > 0 && (
+        {keyPointList && keyPointList.length > 0 && (
           <div className="mb-3">
             <div className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">核心要点</div>
             <ol className="space-y-1.5">
-              {keyPoints.map((pt: any, i: number) => (
+              {keyPointList.map((pt: unknown, i: number) => (
                 <li key={i} className="flex gap-2.5 items-start">
                   <span className="shrink-0 mt-0.5 w-5 h-5 rounded-full bg-blue-100 text-blue-700 text-xs font-semibold flex items-center justify-center leading-none">
                     {i + 1}
@@ -215,11 +220,11 @@ function NoteCard({ note, onDelete, deleting }: {
         )}
 
         {/* 涉及板块 */}
-        {sectors && Array.isArray(sectors) && sectors.length > 0 && (
+        {sectorList && sectorList.length > 0 && (
           <div className="mb-3">
             <div className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1.5">涉及板块</div>
             <div className="flex gap-1.5 flex-wrap">
-              {sectors.map((s: any, i: number) => (
+              {sectorList.map((s: unknown, i: number) => (
                 <span key={i} className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full text-xs font-medium">{toStr(s)}</span>
               ))}
             </div>
@@ -243,21 +248,23 @@ function NoteCard({ note, onDelete, deleting }: {
           <div>
             <div className="text-xs font-semibold text-gray-500 mb-2">附件</div>
             <div className="space-y-2">
-              {note.attachments.map((att: any, i: number) => {
+              {note.attachments.map((att: TeacherNoteAttachment, i: number) => {
                 const fname = att.file_path?.split('/').pop() || '附件'
                 const ext = fname.split('.').pop()?.toLowerCase() || ''
                 const isImage = /^(jpg|jpeg|png|gif|webp|bmp)$/.test(ext) || /image/i.test(att.file_type || '')
                 const isPdf = ext === 'pdf' || /pdf/i.test(att.file_type || '')
                 const isDoc = /^(doc|docx)$/.test(ext)
+                const fileUrl = att.url || undefined
+                const altText = att.description || `附件${i + 1}`
 
-                if (isImage) {
+                if (isImage && fileUrl) {
                   return (
                     <div key={i} className="rounded overflow-hidden border border-gray-100">
                       <img
-                        src={att.url}
-                        alt={att.description || `附件${i + 1}`}
+                        src={fileUrl}
+                        alt={altText}
                         className="w-full object-contain max-h-80 bg-gray-50 cursor-pointer"
-                        onClick={() => window.open(att.url, '_blank')}
+                        onClick={() => window.open(fileUrl, '_blank')}
                         onError={e => {
                           const el = e.currentTarget
                           el.style.display = 'none'
@@ -274,7 +281,7 @@ function NoteCard({ note, onDelete, deleting }: {
                   )
                 }
 
-                if (isPdf) {
+                if (isPdf && fileUrl) {
                   return (
                     <div key={i} className="rounded border border-gray-200 overflow-hidden">
                       <div className="flex items-center justify-between px-3 py-2 bg-gray-50 border-b border-gray-100">
@@ -283,11 +290,11 @@ function NoteCard({ note, onDelete, deleting }: {
                           <span className="truncate font-medium">{fname}</span>
                           {att.description && <span className="text-gray-400 shrink-0">— {att.description}</span>}
                         </div>
-                        <a href={att.url} download={fname} target="_blank" rel="noopener noreferrer"
+                        <a href={fileUrl} download={fname} target="_blank" rel="noopener noreferrer"
                           className="text-xs text-blue-500 hover:text-blue-700 shrink-0 ml-2">下载</a>
                       </div>
                       <iframe
-                        src={att.url}
+                        src={fileUrl}
                         title={fname}
                         className="w-full border-0"
                         style={{ height: '480px' }}
@@ -296,7 +303,7 @@ function NoteCard({ note, onDelete, deleting }: {
                   )
                 }
 
-                if (isDoc) {
+                if (isDoc && fileUrl) {
                   return (
                     <div key={i} className="flex items-center gap-3 px-3 py-2.5 rounded border border-gray-200 bg-gray-50">
                       <span className="text-blue-500 text-lg shrink-0">📝</span>
@@ -305,7 +312,7 @@ function NoteCard({ note, onDelete, deleting }: {
                         {att.description && <div className="text-xs text-gray-400">{att.description}</div>}
                         <div className="text-xs text-gray-400 mt-0.5">浏览器无法直接预览 Word 文件</div>
                       </div>
-                      <a href={att.url} download={fname}
+                      <a href={fileUrl} download={fname}
                         className="shrink-0 px-3 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700">
                         下载
                       </a>
@@ -315,7 +322,7 @@ function NoteCard({ note, onDelete, deleting }: {
 
                 // 其他文件类型
                 return (
-                  <a key={i} href={att.url} target="_blank" rel="noopener noreferrer"
+                  <a key={i} href={fileUrl} target="_blank" rel="noopener noreferrer"
                     className="flex items-center gap-2 px-3 py-2 rounded border border-gray-100 text-xs text-blue-600 hover:bg-gray-50">
                     <span>📎</span>
                     <span className="truncate">{fname}</span>

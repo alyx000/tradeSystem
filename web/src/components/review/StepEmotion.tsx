@@ -1,4 +1,10 @@
-import { type StepProps, get, set, Section, Row, PrefillBanner, Metric, SelectField, TextField, TextareaField, DynamicList } from './widgets'
+import { type StepProps, Section, Row, PrefillBanner, Metric, SelectField, TextField, TextareaField, DynamicList } from './widgets'
+import { get, set } from './formState'
+
+interface SentimentStockItem {
+  name: string
+  status: string
+}
 
 const PHASE = [
   { value: '启动', label: '启动' },
@@ -34,18 +40,20 @@ export default function StepEmotion({ data, onChange, prefill }: StepProps) {
   const d = data || {}
   const ec = prefill?.emotion_cycle
   const m = prefill?.market
+  const sentimentStocks = (d.sentiment_stocks as SentimentStockItem[] | undefined) || []
 
-  const g = (p: string, fb: any = '') => {
-    const val = get(d, p, undefined)
+  const g = <T = string,>(p: string, fb?: T) => {
+    const fallback = (fb ?? '') as T
+    const val = get<T | undefined>(d, p, undefined)
     if (val !== undefined && val !== '') return val
 
     if (ec) {
-      if (p === 'phase') return ec.phase || ''
-      if (p === 'sub_cycle') return ec.sub_cycle != null ? String(ec.sub_cycle) : ''
+      if (p === 'phase') return (ec.phase || '') as T
+      if (p === 'sub_cycle') return (ec.sub_cycle != null ? String(ec.sub_cycle) : '') as T
     }
-    return fb
+    return fallback
   }
-  const s = (p: string, v: any) => onChange(set(d, p, v))
+  const s = (p: string, v: unknown) => onChange(set(d, p, v))
 
   return (
     <div className="space-y-6">
@@ -76,7 +84,7 @@ export default function StepEmotion({ data, onChange, prefill }: StepProps) {
 
       <DynamicList
         title="人气票 / 连板票表现"
-        items={d.sentiment_stocks || []}
+        items={sentimentStocks}
         onChange={v => onChange({ ...d, sentiment_stocks: v })}
         defaultItem={{ name: '', status: '' }}
         renderItem={(item, upd) => (

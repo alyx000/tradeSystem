@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import os
 import logging
+import math
 from datetime import datetime, timedelta
 from .base import DataProvider, DataResult, DataType, Confidence, Timeliness
 
@@ -47,23 +48,74 @@ class TushareProvider(DataProvider):
             "get_market_volume",
             "get_stock_daily",
             "get_stock_ma",
+            "get_daily_basic",
+            "get_adj_factor",
             "get_limit_up_list",
             "get_limit_down_list",
+            "get_stock_limit_prices",
+            "get_limit_step",
+            "get_limit_cpt_list",
             "get_sector_rankings",
+            "get_sector_moneyflow_ths",
+            "get_sector_moneyflow_dc",
+            "get_ths_index",
+            "get_ths_member",
+            "get_index_classify",
             "get_market_breadth",
+            "get_daily_info",
+            "get_market_moneyflow_dc",
             "get_northbound",
             "get_northbound_top_stocks",
             "get_margin_data",
+            "get_margin_detail",
             "get_dragon_tiger",
+            "get_block_trade",
             "get_stock_announcements",
+            "get_market_announcements",
+            "get_disclosure_dates",
+            "get_share_float",
+            "get_stock_st",
             "get_global_index",
             "is_trade_day",
+            "get_trade_calendar",
+            "get_stock_basic_list",
             "get_top_volume_stocks",
         ]
 
     def _date_fmt(self, date: str) -> str:
         """统一日期格式为 YYYYMMDD"""
         return date.replace("-", "")
+
+    def _quarter_end_for_date(self, date: str) -> str:
+        dt = datetime.strptime(date, "%Y-%m-%d")
+        if dt.month <= 3:
+            return f"{dt.year - 1}1231"
+        if dt.month <= 6:
+            return f"{dt.year}0331"
+        if dt.month <= 9:
+            return f"{dt.year}0630"
+        return f"{dt.year}0930"
+
+    def _clean_scalar(self, value):
+        if hasattr(value, "item"):
+            try:
+                value = value.item()
+            except Exception:
+                pass
+        if isinstance(value, float) and math.isnan(value):
+            return None
+        return value
+
+    def _df_to_records(self, df) -> list[dict]:
+        if df is None or df.empty:
+            return []
+        return [
+            {key: self._clean_scalar(val) for key, val in row.items()}
+            for row in df.to_dict(orient="records")
+        ]
+
+    def _query_records(self, api_name: str, **params) -> list[dict]:
+        return self._df_to_records(self.pro.query(api_name, **params))
 
     # ---- 国际指数（index_global，需约 6000 积分）----
 
@@ -205,6 +257,28 @@ class TushareProvider(DataProvider):
         except Exception as e:
             return DataResult(data=None, source=self.name, error=str(e))
 
+    def get_daily_basic(self, date: str) -> DataResult:
+        """获取全市场每日指标快照。"""
+        try:
+            d = self._date_fmt(date)
+            return DataResult(
+                data=self._query_records("daily_basic", trade_date=d),
+                source="tushare:daily_basic",
+            )
+        except Exception as e:
+            return DataResult(data=None, source=self.name, error=str(e))
+
+    def get_adj_factor(self, date: str) -> DataResult:
+        """获取全市场复权因子快照。"""
+        try:
+            d = self._date_fmt(date)
+            return DataResult(
+                data=self._query_records("adj_factor", trade_date=d),
+                source="tushare:adj_factor",
+            )
+        except Exception as e:
+            return DataResult(data=None, source=self.name, error=str(e))
+
     # ---- 涨跌停数据 ----
 
     def get_limit_up_list(self, date: str) -> DataResult:
@@ -258,6 +332,39 @@ class TushareProvider(DataProvider):
         except Exception as e:
             return DataResult(data=None, source=self.name, error=str(e))
 
+    def get_stock_limit_prices(self, date: str) -> DataResult:
+        """获取全市场涨跌停价格。"""
+        try:
+            d = self._date_fmt(date)
+            return DataResult(
+                data=self._query_records("stk_limit", trade_date=d),
+                source="tushare:stk_limit",
+            )
+        except Exception as e:
+            return DataResult(data=None, source=self.name, error=str(e))
+
+    def get_limit_step(self, date: str) -> DataResult:
+        """获取连板天梯。"""
+        try:
+            d = self._date_fmt(date)
+            return DataResult(
+                data=self._query_records("limit_step", trade_date=d),
+                source="tushare:limit_step",
+            )
+        except Exception as e:
+            return DataResult(data=None, source=self.name, error=str(e))
+
+    def get_limit_cpt_list(self, date: str) -> DataResult:
+        """获取最强板块统计。"""
+        try:
+            d = self._date_fmt(date)
+            return DataResult(
+                data=self._query_records("limit_cpt_list", trade_date=d),
+                source="tushare:limit_cpt_list",
+            )
+        except Exception as e:
+            return DataResult(data=None, source=self.name, error=str(e))
+
     # ---- 市场宽度 ----
 
     def get_market_breadth(self, date: str) -> DataResult:
@@ -281,6 +388,28 @@ class TushareProvider(DataProvider):
                 "advance_ratio": ratio,
             }
             return DataResult(data=data, source="tushare:daily")
+        except Exception as e:
+            return DataResult(data=None, source=self.name, error=str(e))
+
+    def get_daily_info(self, date: str) -> DataResult:
+        """获取交易所市场交易统计。"""
+        try:
+            d = self._date_fmt(date)
+            return DataResult(
+                data=self._query_records("daily_info", trade_date=d),
+                source="tushare:daily_info",
+            )
+        except Exception as e:
+            return DataResult(data=None, source=self.name, error=str(e))
+
+    def get_market_moneyflow_dc(self, date: str) -> DataResult:
+        """获取东财大盘资金流向。"""
+        try:
+            d = self._date_fmt(date)
+            return DataResult(
+                data=self._query_records("moneyflow_mkt_dc", trade_date=d),
+                source="tushare:moneyflow_mkt_dc",
+            )
         except Exception as e:
             return DataResult(data=None, source=self.name, error=str(e))
 
@@ -308,6 +437,69 @@ class TushareProvider(DataProvider):
                     "change_pct": round(float(row.get("pct_chg", 0) or 0), 2),
                 })
             return DataResult(data=stocks, source="tushare:daily")
+        except Exception as e:
+            return DataResult(data=None, source=self.name, error=str(e))
+
+    def get_sector_moneyflow_ths(self, date: str) -> DataResult:
+        """获取同花顺行业资金流向原始数据。"""
+        try:
+            d = self._date_fmt(date)
+            return DataResult(
+                data=self._query_records("moneyflow_ind_ths", trade_date=d),
+                source="tushare:moneyflow_ind_ths",
+            )
+        except Exception as e:
+            return DataResult(data=None, source=self.name, error=str(e))
+
+    def get_sector_moneyflow_dc(self, date: str) -> DataResult:
+        """获取东财行业/概念板块资金流向原始数据。"""
+        try:
+            d = self._date_fmt(date)
+            return DataResult(
+                data=self._query_records("moneyflow_ind_dc", trade_date=d),
+                source="tushare:moneyflow_ind_dc",
+            )
+        except Exception as e:
+            return DataResult(data=None, source=self.name, error=str(e))
+
+    def get_ths_index(self, _date: str) -> DataResult:
+        """获取同花顺板块指数主数据。"""
+        try:
+            df = self.pro.ths_index(exchange="A")
+            return DataResult(data=self._df_to_records(df), source="tushare:ths_index")
+        except Exception as e:
+            return DataResult(data=None, source=self.name, error=str(e))
+
+    def get_ths_member(self, _date: str) -> DataResult:
+        """获取同花顺概念板块成分。按概念板块(type=N)循环拉取，适合低频刷新。"""
+        try:
+            index_df = self.pro.ths_index(type="N")
+            if index_df is None or index_df.empty:
+                return DataResult(data=[], source="tushare:ths_member")
+            records: list[dict] = []
+            for _, index_row in index_df.iterrows():
+                ts_code = str(index_row.get("ts_code", "") or "")
+                if not ts_code:
+                    continue
+                try:
+                    member_df = self.pro.ths_member(ts_code=ts_code)
+                except Exception as exc:
+                    logger.debug("ths_member %s 获取失败: %s", ts_code, exc)
+                    continue
+                for item in self._df_to_records(member_df):
+                    item.setdefault("ts_code", ts_code)
+                    item["index_name"] = str(index_row.get("name", "") or "")
+                    item["index_type"] = str(index_row.get("type", "") or "")
+                    records.append(item)
+            return DataResult(data=records, source="tushare:ths_member")
+        except Exception as e:
+            return DataResult(data=None, source=self.name, error=str(e))
+
+    def get_index_classify(self, _date: str) -> DataResult:
+        """获取申万行业分类主数据。"""
+        try:
+            df = self.pro.index_classify(src="SW2021")
+            return DataResult(data=self._df_to_records(df), source="tushare:index_classify")
         except Exception as e:
             return DataResult(data=None, source=self.name, error=str(e))
 
@@ -470,6 +662,17 @@ class TushareProvider(DataProvider):
         except Exception as e:
             return DataResult(data=None, source=self.name, error=str(e))
 
+    def get_margin_detail(self, date: str) -> DataResult:
+        """获取逐股融资融券明细。"""
+        try:
+            d = self._date_fmt(date)
+            records = self._query_records("margin_detail", trade_date=d)
+            for item in records:
+                item.setdefault("code", item.get("ts_code"))
+            return DataResult(data=records, source="tushare:margin_detail")
+        except Exception as e:
+            return DataResult(data=None, source=self.name, error=str(e))
+
     def get_northbound_top_stocks(self, date: str) -> DataResult:
         """北向资金十大活跃股（按成交额排序）"""
         try:
@@ -517,6 +720,17 @@ class TushareProvider(DataProvider):
         except Exception as e:
             return DataResult(data=None, source=self.name, error=str(e))
 
+    def get_block_trade(self, date: str) -> DataResult:
+        """获取当日大宗交易。"""
+        try:
+            d = self._date_fmt(date)
+            records = self._query_records("block_trade", trade_date=d)
+            for item in records:
+                item.setdefault("code", item.get("ts_code"))
+            return DataResult(data=records, source="tushare:block_trade")
+        except Exception as e:
+            return DataResult(data=None, source=self.name, error=str(e))
+
     # ---- 公告 ----
 
     def get_stock_announcements(self, stock_code: str, start_date: str, end_date: str) -> DataResult:
@@ -541,6 +755,51 @@ class TushareProvider(DataProvider):
                 logger.warning("tushare anns_d 权限不足（镜像 tushare.xyz 不支持该接口），将降级到 akshare")
             return DataResult(data=None, source=self.name, error=err)
 
+    def get_market_announcements(self, date: str) -> DataResult:
+        """按公告日获取全市场公告。"""
+        try:
+            d = self._date_fmt(date)
+            records = self._query_records("anns_d", ann_date=d)
+            for item in records:
+                item.setdefault("code", item.get("ts_code"))
+            return DataResult(data=records, source="tushare:anns_d")
+        except Exception as e:
+            return DataResult(data=None, source=self.name, error=str(e))
+
+    def get_disclosure_dates(self, date: str) -> DataResult:
+        """获取当前财报季披露计划。"""
+        try:
+            end_date = self._quarter_end_for_date(date)
+            records = self._query_records("disclosure_date", end_date=end_date)
+            for item in records:
+                item.setdefault("code", item.get("ts_code"))
+                item["report_end"] = end_date
+            return DataResult(data=records, source="tushare:disclosure_date")
+        except Exception as e:
+            return DataResult(data=None, source=self.name, error=str(e))
+
+    def get_share_float(self, date: str) -> DataResult:
+        """按解禁日期获取限售股解禁数据。"""
+        try:
+            d = self._date_fmt(date)
+            records = self._query_records("share_float", float_date=d)
+            for item in records:
+                item.setdefault("code", item.get("ts_code"))
+            return DataResult(data=records, source="tushare:share_float")
+        except Exception as e:
+            return DataResult(data=None, source=self.name, error=str(e))
+
+    def get_stock_st(self, date: str) -> DataResult:
+        """获取当日 ST 股票列表。"""
+        try:
+            d = self._date_fmt(date)
+            records = self._query_records("stock_st", trade_date=d)
+            for item in records:
+                item.setdefault("code", item.get("ts_code"))
+            return DataResult(data=records, source="tushare:stock_st")
+        except Exception as e:
+            return DataResult(data=None, source=self.name, error=str(e))
+
     # ---- 交易日历 ----
 
     def is_trade_day(self, date: str) -> DataResult:
@@ -552,5 +811,24 @@ class TushareProvider(DataProvider):
                 return DataResult(data=False, source="tushare:trade_cal")
             is_open = df.iloc[0]["is_open"] == 1
             return DataResult(data=is_open, source="tushare:trade_cal")
+        except Exception as e:
+            return DataResult(data=None, source=self.name, error=str(e))
+
+    def get_trade_calendar(self, date: str) -> DataResult:
+        """获取目标日期所在自然年的上交所交易日历。"""
+        try:
+            dt = datetime.strptime(date, "%Y-%m-%d")
+            start = f"{dt.year}0101"
+            end = f"{dt.year}1231"
+            df = self.pro.trade_cal(exchange="SSE", start_date=start, end_date=end)
+            return DataResult(data=self._df_to_records(df), source="tushare:trade_cal")
+        except Exception as e:
+            return DataResult(data=None, source=self.name, error=str(e))
+
+    def get_stock_basic_list(self, _date: str) -> DataResult:
+        """获取当前上市 A 股基础信息。"""
+        try:
+            df = self.pro.stock_basic(list_status="L")
+            return DataResult(data=self._df_to_records(df), source="tushare:stock_basic")
         except Exception as e:
             return DataResult(data=None, source=self.name, error=str(e))

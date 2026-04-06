@@ -1,4 +1,18 @@
-import { type StepProps, get, set, Section, Row, PrefillBanner, SelectField, TextField, TagsField, TextareaField, DynamicList, TeacherNotesPanel } from './widgets'
+import { type StepProps, Section, Row, PrefillBanner, SelectField, TextField, TagsField, TextareaField, DynamicList, TeacherNotesPanel } from './widgets'
+import { get, set } from './formState'
+import type { CalendarEvent } from '../../lib/types'
+
+interface WatchDirectionItem {
+  direction: string
+  reason: string
+  target_stocks: string[]
+  entry_condition: string
+}
+
+interface RiskItem {
+  description: string
+  impact: string
+}
 
 const IMPACT = [
   { value: '高', label: '高' },
@@ -15,20 +29,25 @@ const CONFIDENCE = [
 export default function StepPlan({ data, onChange, prefill }: StepProps) {
   const d = data || {}
   const teacherNotes = prefill?.teacher_notes || []
+  const watchDirections = (d.watch_directions as WatchDirectionItem[] | undefined) || []
+  const risks = (d.risks as RiskItem[] | undefined) || []
 
-  const g = (p: string, fb: any = '') => {
-    const val = get(d, p, undefined)
+  const g = <T = string,>(p: string, fb?: T) => {
+    const fallback = (fb ?? '') as T
+    const val = get<T | undefined>(d, p, undefined)
     if (val !== undefined && val !== '') return val
     if (p === 'key_factor' && teacherNotes.length)
-      return teacherNotes[0]?.core_view || fb
+      return (teacherNotes[0]?.core_view || fallback) as T
     if (p === 'discipline.note' && teacherNotes.length) {
-      const avoids = teacherNotes.map((n: any) => n.avoid).filter(Boolean)
-      return avoids.length ? avoids.map((a: string, i: number) => `【${teacherNotes[i].teacher_name}】${a}`).join('；') : fb
+      const avoids = teacherNotes
+        .map((n) => n.avoid)
+        .filter((avoid): avoid is string => Boolean(avoid))
+      return avoids.length ? avoids.map((a, i) => `【${teacherNotes[i].teacher_name}】${a}`).join('；') as T : fallback
     }
-    return fb
+    return fallback
   }
-  const s = (p: string, v: any) => onChange(set(d, p, v))
-  const calEvents = prefill?.calendar_events || []
+  const s = (p: string, v: unknown) => onChange(set(d, p, v))
+  const calEvents: CalendarEvent[] = prefill?.calendar_events || []
 
   return (
     <div className="space-y-6">
@@ -42,7 +61,7 @@ export default function StepPlan({ data, onChange, prefill }: StepProps) {
 
       <DynamicList
         title="关注方向"
-        items={d.watch_directions || []}
+        items={watchDirections}
         onChange={v => onChange({ ...d, watch_directions: v })}
         defaultItem={{ direction: '', reason: '', target_stocks: [], entry_condition: '' }}
         renderItem={(item, upd) => (
@@ -61,7 +80,7 @@ export default function StepPlan({ data, onChange, prefill }: StepProps) {
 
       <DynamicList
         title="风险提示"
-        items={d.risks || []}
+        items={risks}
         onChange={v => onChange({ ...d, risks: v })}
         defaultItem={{ description: '', impact: '' }}
         renderItem={(item, upd) => (
@@ -92,7 +111,7 @@ export default function StepPlan({ data, onChange, prefill }: StepProps) {
         <PrefillBanner>
           <div className="text-xs text-gray-500 mb-1">当日投资日历事件</div>
           <ul className="space-y-1">
-            {calEvents.map((e: any) => (
+            {calEvents.map((e) => (
               <li key={e.id} className="flex items-center gap-2 text-sm">
                 <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${
                   e.impact === 'high' ? 'bg-red-100 text-red-700' :

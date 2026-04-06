@@ -18,6 +18,19 @@ version: "1.1"
 
 ## 工作流程
 
+## 优先入口
+
+若仓库根目录 `Makefile` 可用，查询类操作优先使用：
+
+```bash
+make holdings-open
+make watchlist-open
+make holdings
+make watchlist
+```
+
+写操作因参数较多，默认继续使用底层 `python3 main.py db ...`。
+
 ### Step 1：理解意图
 
 分析用户说话的动作类型：
@@ -106,7 +119,17 @@ version: "1.1"
 
 ### Step 4：执行命令
 
-以下命令均在仓库的 `scripts/` 目录下执行（请先 `cd` 到本机 `tradeSystem/scripts`，与 `market-tasks` skill 一致）。
+查询类操作优先在仓库根目录执行：
+
+```bash
+cd /path/to/tradeSystem
+make holdings-open
+make watchlist-open
+make holdings
+make watchlist
+```
+
+以下写操作命令在仓库的 `scripts/` 目录下执行（请先 `cd` 到本机 `tradeSystem/scripts`，与 `market-tasks` skill 一致）。
 
 #### 持仓管理
 

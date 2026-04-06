@@ -1,3 +1,59 @@
+import type {
+  CalendarEvent,
+  CalendarEventCreateInput,
+  CommandIndexPayload,
+  Holding,
+  HoldingCreateInput,
+  IngestErrorRecord,
+  IngestInspectRecord,
+  IngestInterfaceRecord,
+  IngestRetrySummary,
+  IngestReconcileInput,
+  IngestReconcileResult,
+  IngestRetryRunInput,
+  IngestRetryRunResult,
+  IngestHealthSummary,
+  IngestRunRecord,
+  IngestRunInterfaceInput,
+  IngestRunInterfaceResult,
+  IngestRunStageInput,
+  IngestRunStageResult,
+  IndustryInfoCreateInput,
+  IndustryInfoItem,
+  KnowledgeAssetCreateInput,
+  KnowledgeAssetRecord,
+  KnowledgeDraftInput,
+  KnowledgeDraftResult,
+  MarketChartItem,
+  MarketFullData,
+  MainThemeItem,
+  PlanConfirmInput,
+  PlanDiagnosticsRecord,
+  PlanDraftCreateInput,
+  PlanDraftRecord,
+  PlanObservationRecord,
+  PlanObservationUpdateInput,
+  PlanRecord,
+  PlanReviewInput,
+  PlanReviewRecord,
+  PlanUpdateInput,
+  PlanDraftUpdateInput,
+  PostMarketPayload,
+  ReviewFormData,
+  ReviewPrefillData,
+  ReviewRecord,
+  StyleFactorSeriesItem,
+  UnifiedSearchResult,
+  TeacherNote,
+  TeacherNoteCreateInput,
+  TeacherRecord,
+  TeacherTimelineItem,
+  TradeCreateInput,
+  TradeRecord,
+  WatchlistCreateInput,
+  WatchlistItem,
+} from './types'
+
 const BASE = '/api'
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
@@ -15,131 +71,159 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  // Meta
+  getCommandIndex: () => request<CommandIndexPayload>('/meta/commands'),
+
   // Review
-  getReview: (date: string) => request<any>(`/review/${date}`),
-  getPrefill: (date: string) => request<any>(`/review/${date}/prefill`),
-  saveReview: (date: string, data: any) =>
-    request<any>(`/review/${date}`, { method: 'PUT', body: JSON.stringify(data) }),
+  getReview: (date: string) => request<ReviewRecord>(`/review/${date}`),
+  getPrefill: (date: string) => request<ReviewPrefillData>(`/review/${date}/prefill`),
+  saveReview: (date: string, data: ReviewFormData) =>
+    request<ReviewRecord>(`/review/${date}`, { method: 'PUT', body: JSON.stringify(data) }),
 
   // Search
   unifiedSearch: (q: string, params?: Record<string, string>) => {
     const sp = new URLSearchParams({ q, ...params })
-    return request<any>(`/search/unified?${sp}`)
+    return request<UnifiedSearchResult>(`/search/unified?${sp}`)
   },
   exportSearch: (q: string) => request<string>(`/search/export?q=${encodeURIComponent(q)}`),
 
   // Style factors
   getStyleFactors: (metrics: string, from: string, to: string) =>
-    request<any[]>(`/style-factors/series?metrics=${metrics}&from=${from}&to=${to}`),
+    request<StyleFactorSeriesItem[]>(`/style-factors/series?metrics=${metrics}&from=${from}&to=${to}`),
 
   // Teachers
-  getTeachers: () => request<any[]>('/teachers'),
-  getTeacherTimeline: (id: number) => request<any[]>(`/teachers/${id}/timeline`),
+  getTeachers: () => request<TeacherRecord[]>('/teachers'),
+  getTeacherTimeline: (id: number) => request<TeacherTimelineItem[]>(`/teachers/${id}/timeline`),
 
   // Notes
   getNotes: (params?: Record<string, string>) => {
     const sp = new URLSearchParams(params || {})
-    return request<any[]>(`/teacher-notes?${sp}`)
+    return request<TeacherNote[]>(`/teacher-notes?${sp}`)
   },
-  createNote: (data: any) =>
-    request<any>('/teacher-notes', { method: 'POST', body: JSON.stringify(data) }),
+  createNote: (data: TeacherNoteCreateInput) =>
+    request<TeacherNote>('/teacher-notes', { method: 'POST', body: JSON.stringify(data) }),
   deleteNote: (id: number) =>
-    request<any>(`/teacher-notes/${id}`, { method: 'DELETE' }),
+    request<{ ok?: boolean }>(`/teacher-notes/${id}`, { method: 'DELETE' }),
 
   // Holdings
-  getHoldings: () => request<any[]>('/holdings'),
-  createHolding: (data: any) =>
-    request<any>('/holdings', { method: 'POST', body: JSON.stringify(data) }),
+  getHoldings: () => request<Holding[]>('/holdings'),
+  createHolding: (data: HoldingCreateInput) =>
+    request<Holding>('/holdings', { method: 'POST', body: JSON.stringify(data) }),
   deleteHolding: (id: number) =>
-    request<any>(`/holdings/${id}`, { method: 'DELETE' }),
+    request<{ ok?: boolean }>(`/holdings/${id}`, { method: 'DELETE' }),
 
   // Watchlist
   getWatchlist: (tier?: string) => {
     const sp = tier ? `?tier=${tier}` : ''
-    return request<any[]>(`/watchlist${sp}`)
+    return request<WatchlistItem[]>(`/watchlist${sp}`)
   },
-  createWatchlistItem: (data: any) =>
-    request<any>('/watchlist', { method: 'POST', body: JSON.stringify(data) }),
+  createWatchlistItem: (data: WatchlistCreateInput) =>
+    request<WatchlistItem>('/watchlist', { method: 'POST', body: JSON.stringify(data) }),
   deleteWatchlistItem: (id: number) =>
-    request<any>(`/watchlist/${id}`, { method: 'DELETE' }),
+    request<{ ok?: boolean }>(`/watchlist/${id}`, { method: 'DELETE' }),
 
   // Calendar
   getCalendarRange: (from: string, to: string) =>
-    request<any[]>(`/calendar/range?from=${from}&to=${to}`),
-  createCalendarEvent: (data: any) =>
-    request<any>('/calendar', { method: 'POST', body: JSON.stringify(data) }),
+    request<CalendarEvent[]>(`/calendar/range?from=${from}&to=${to}`),
+  createCalendarEvent: (data: CalendarEventCreateInput) =>
+    request<CalendarEvent>('/calendar', { method: 'POST', body: JSON.stringify(data) }),
 
   // Market
-  getMarket: (date: string) => request<any>(`/market/${date}`),
-  getMarketHistory: (days: number = 20) => request<any[]>(`/market/history?days=${days}`),
-  getPostMarket: (date: string) => request<any>(`/post-market/${date}`),
-  getMainThemes: () => request<any[]>('/main-themes'),
+  getMarket: (date: string) => request<MarketFullData>(`/market/${date}`),
+  getMarketHistory: (days: number = 20) => request<MarketChartItem[]>(`/market/history?days=${days}`),
+  getPostMarket: (date: string) => request<PostMarketPayload>(`/post-market/${date}`),
+  getMainThemes: () => request<MainThemeItem[]>('/main-themes'),
 
   // Industry info
   getIndustryInfo: (params?: Record<string, string>) => {
     const sp = new URLSearchParams(params || {})
-    return request<any[]>(`/industry?${sp}`)
+    return request<IndustryInfoItem[]>(`/industry?${sp}`)
   },
-  createIndustryInfo: (data: any) =>
-    request<any>('/industry', { method: 'POST', body: JSON.stringify(data) }),
+  createIndustryInfo: (data: IndustryInfoCreateInput) =>
+    request<IndustryInfoItem>('/industry', { method: 'POST', body: JSON.stringify(data) }),
   deleteIndustryInfo: (id: number) =>
-    request<any>(`/industry/${id}`, { method: 'DELETE' }),
+    request<{ ok?: boolean }>(`/industry/${id}`, { method: 'DELETE' }),
 
   // Trades
   getTrades: (params?: Record<string, string>) => {
     const sp = new URLSearchParams(params || {})
-    return request<any[]>(`/trades?${sp}`)
+    return request<TradeRecord[]>(`/trades?${sp}`)
   },
-  createTrade: (data: any) =>
-    request<any>('/trades', { method: 'POST', body: JSON.stringify(data) }),
+  createTrade: (data: TradeCreateInput) =>
+    request<TradeRecord>('/trades', { method: 'POST', body: JSON.stringify(data) }),
 
   // Planning
   listPlanObservations: (date?: string, limit = 20) =>
-    request<any[]>(`/plans/observations?${new URLSearchParams(date ? { date, limit: String(limit) } : { limit: String(limit) })}`),
-  updatePlanObservation: (observationId: string, data: any) =>
-    request<any>(`/plans/observations/${observationId}`, { method: 'PUT', body: JSON.stringify(data) }),
+    request<PlanObservationRecord[]>(`/plans/observations?${new URLSearchParams(date ? { date, limit: String(limit) } : { limit: String(limit) })}`),
+  updatePlanObservation: (observationId: string, data: PlanObservationUpdateInput) =>
+    request<PlanObservationRecord>(`/plans/observations/${observationId}`, { method: 'PUT', body: JSON.stringify(data) }),
   listPlanDrafts: (date?: string, limit = 20) =>
-    request<any[]>(`/plans/drafts?${new URLSearchParams(date ? { date, limit: String(limit) } : { limit: String(limit) })}`),
-  createPlanDraft: (data: any) =>
-    request<any>('/plans/drafts', { method: 'POST', body: JSON.stringify(data) }),
+    request<PlanDraftRecord[]>(`/plans/drafts?${new URLSearchParams(date ? { date, limit: String(limit) } : { limit: String(limit) })}`),
+  createPlanDraft: (data: PlanDraftCreateInput) =>
+    request<PlanDraftRecord>('/plans/drafts', { method: 'POST', body: JSON.stringify(data) }),
   getPlanDraft: (draftId: string) =>
-    request<any>(`/plans/drafts/${draftId}`),
-  updatePlanDraft: (draftId: string, data: any) =>
-    request<any>(`/plans/drafts/${draftId}`, { method: 'PUT', body: JSON.stringify(data) }),
-  confirmPlan: (draftId: string, data: any) =>
-    request<any>(`/plans/${draftId}/confirm`, { method: 'POST', body: JSON.stringify(data) }),
+    request<PlanDraftRecord>(`/plans/drafts/${draftId}`),
+  updatePlanDraft: (draftId: string, data: PlanDraftUpdateInput) =>
+    request<PlanDraftRecord>(`/plans/drafts/${draftId}`, { method: 'PUT', body: JSON.stringify(data) }),
+  confirmPlan: (draftId: string, data: PlanConfirmInput) =>
+    request<PlanRecord>(`/plans/${draftId}/confirm`, { method: 'POST', body: JSON.stringify(data) }),
   listPlans: (date?: string, limit = 20) =>
-    request<any[]>(`/plans?${new URLSearchParams(date ? { date, limit: String(limit) } : { limit: String(limit) })}`),
+    request<PlanRecord[]>(`/plans?${new URLSearchParams(date ? { date, limit: String(limit) } : { limit: String(limit) })}`),
   getPlan: (planId: string) =>
-    request<any>(`/plans/${planId}`),
-  updatePlan: (planId: string, data: any) =>
-    request<any>(`/plans/${planId}`, { method: 'PUT', body: JSON.stringify(data) }),
+    request<PlanRecord>(`/plans/${planId}`),
+  updatePlan: (planId: string, data: PlanUpdateInput) =>
+    request<PlanRecord>(`/plans/${planId}`, { method: 'PUT', body: JSON.stringify(data) }),
   getPlanDiagnostics: (planId: string) =>
-    request<any>(`/plans/${planId}/diagnostics`),
-  reviewPlan: (planId: string, data: any) =>
-    request<any>(`/plans/${planId}/review`, { method: 'POST', body: JSON.stringify(data) }),
+    request<PlanDiagnosticsRecord>(`/plans/${planId}/diagnostics`),
+  reviewPlan: (planId: string, data: PlanReviewInput) =>
+    request<PlanReviewRecord>(`/plans/${planId}/review`, { method: 'POST', body: JSON.stringify(data) }),
 
   // Ingest
   listIngestInterfaces: () =>
-    request<any[]>('/ingest/interfaces'),
-  inspectIngest: (date: string) =>
-    request<any>(`/ingest/inspect?date=${encodeURIComponent(date)}`),
-  listIngestRuns: (date: string) =>
-    request<any[]>(`/ingest/runs?date=${encodeURIComponent(date)}`),
-  listIngestErrors: (date: string) =>
-    request<any[]>(`/ingest/errors?date=${encodeURIComponent(date)}`),
-  runIngestStage: (data: any) =>
-    request<any>('/ingest/run', { method: 'POST', body: JSON.stringify(data) }),
-  runIngestInterface: (data: any) =>
-    request<any>('/ingest/run-interface', { method: 'POST', body: JSON.stringify(data) }),
-  getIngestRetrySummary: () =>
-    request<any>('/ingest/retry'),
+    request<IngestInterfaceRecord[]>('/ingest/interfaces'),
+  inspectIngest: (date: string, interfaceName?: string | null, stage?: string | null) => {
+    const sp = new URLSearchParams({ date })
+    if (interfaceName) sp.set('interface', interfaceName)
+    if (stage) sp.set('stage', stage)
+    return request<IngestInspectRecord>(`/ingest/inspect?${sp}`)
+  },
+  listIngestRuns: (date: string, interfaceName?: string | null, stage?: string | null) => {
+    const sp = new URLSearchParams({ date })
+    if (interfaceName) sp.set('interface', interfaceName)
+    if (stage) sp.set('stage', stage)
+    return request<IngestRunRecord[]>(`/ingest/runs?${sp}`)
+  },
+  listIngestErrors: (date: string, interfaceName?: string | null, stage?: string | null) => {
+    const sp = new URLSearchParams({ date })
+    if (interfaceName) sp.set('interface', interfaceName)
+    if (stage) sp.set('stage', stage)
+    return request<IngestErrorRecord[]>(`/ingest/errors?${sp}`)
+  },
+  runIngestStage: (data: IngestRunStageInput) =>
+    request<IngestRunStageResult>('/ingest/run', { method: 'POST', body: JSON.stringify(data) }),
+  runIngestInterface: (data: IngestRunInterfaceInput) =>
+    request<IngestRunInterfaceResult>('/ingest/run-interface', { method: 'POST', body: JSON.stringify(data) }),
+  getIngestRetrySummary: (interfaceName?: string | null, stage?: string | null) => {
+    const sp = new URLSearchParams()
+    if (interfaceName) sp.set('interface', interfaceName)
+    if (stage) sp.set('stage', stage)
+    return request<IngestRetrySummary>(`/ingest/retry${sp.toString() ? `?${sp}` : ''}`)
+  },
+  getIngestHealthSummary: (date: string, days = 7, stage?: string | null) => {
+    const sp = new URLSearchParams({ date, days: String(days) })
+    if (stage) sp.set('stage', stage)
+    return request<IngestHealthSummary>(`/ingest/health?${sp}`)
+  },
+  reconcileIngestRuns: (data: IngestReconcileInput = {}) =>
+    request<IngestReconcileResult>('/ingest/reconcile', { method: 'POST', body: JSON.stringify(data) }),
+  retryIngestGroups: (data: IngestRetryRunInput = {}) =>
+    request<IngestRetryRunResult>('/ingest/retry-run', { method: 'POST', body: JSON.stringify(data) }),
 
   // Knowledge
-  createKnowledgeAsset: (data: any) =>
-    request<any>('/knowledge/assets', { method: 'POST', body: JSON.stringify(data) }),
+  createKnowledgeAsset: (data: KnowledgeAssetCreateInput) =>
+    request<KnowledgeAssetRecord>('/knowledge/assets', { method: 'POST', body: JSON.stringify(data) }),
   listKnowledgeAssets: (limit = 20) =>
-    request<any[]>(`/knowledge/assets?limit=${limit}`),
-  draftFromAsset: (assetId: string, data: any) =>
-    request<any>(`/knowledge/assets/${assetId}/draft`, { method: 'POST', body: JSON.stringify(data) }),
+    request<KnowledgeAssetRecord[]>(`/knowledge/assets?limit=${limit}`),
+  draftFromAsset: (assetId: string, data: KnowledgeDraftInput) =>
+    request<KnowledgeDraftResult>(`/knowledge/assets/${assetId}/draft`, { method: 'POST', body: JSON.stringify(data) }),
 }

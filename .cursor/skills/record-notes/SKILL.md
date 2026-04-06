@@ -47,6 +47,17 @@ img_path.write_bytes(resp.content)
 
 所有 `python3 main.py db …` 命令必须在仓库的 `scripts/` 目录下执行（与 `market-tasks` skill 一致）。下面示例首行的路径请换成本机 `tradeSystem/scripts`。
 
+若只是搜索历史笔记或做跨表检索，优先使用仓库根目录：
+
+```bash
+cd /path/to/tradeSystem
+make teachers-open
+make notes-search KEYWORD=AI FROM=2026-04-01 TO=2026-04-01
+make db-search KEYWORD=锂电 FROM=2026-04-01 TO=2026-04-01
+```
+
+写入操作仍以底层 `python3 main.py db ...` 为准。
+
 ### 3. OpenClaw / Copaw：录入前必做——结构化提炼
 
 当录入方是 `openclaw` 或 `copaw` 时，**必须先把原始消息整理成结构化摘要，再调用 `db add-note`**。不要把截图、原文、口语化消息直接原样写库。

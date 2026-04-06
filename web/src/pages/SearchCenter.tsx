@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '../lib/api'
+import type { SearchEntityItem, UnifiedSearchResult } from '../lib/types'
 
 const ENTITY_LABELS: Record<string, string> = {
   teacher_notes: '老师观点',
@@ -35,8 +36,9 @@ export default function SearchCenter() {
     a.click()
   }
 
+  const resultEntries = results ? (Object.entries(results) as [string, SearchEntityItem[]][]) : []
   const totalCount = results
-    ? Object.values(results as Record<string, any[]>).reduce((s, arr) => s + arr.length, 0)
+    ? Object.values(results as UnifiedSearchResult).reduce((s, arr) => s + arr.length, 0)
     : 0
 
   return (
@@ -74,7 +76,7 @@ export default function SearchCenter() {
               未找到包含「{query}」的结果
             </div>
           )}
-          {Object.entries(results as Record<string, any[]>).map(([entity, items]) => {
+          {resultEntries.map(([entity, items]) => {
             if (!items?.length) return null
             return (
               <div key={entity} className="bg-white rounded-lg shadow">
@@ -85,7 +87,7 @@ export default function SearchCenter() {
                   <span className="text-gray-500 text-sm ml-2">({items.length})</span>
                 </div>
                 <div className="divide-y">
-                  {items.map((item: any, idx: number) => (
+                  {items.map((item: SearchEntityItem, idx: number) => (
                     <div key={idx} className="px-4 py-3 text-sm">
                       <div className="flex justify-between items-start">
                         <span className="font-medium text-gray-800">

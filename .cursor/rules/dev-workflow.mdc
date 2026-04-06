@@ -36,6 +36,14 @@ alwaysApply: true
 - **检查文档是否需要同步更新**（见下方「文档同步原则」）
 - 最终向用户呈现验证报告
 
+优先使用仓库统一入口：
+
+- 全量检查：`make check`
+- 前端检查：`make check-web`
+- 后端检查：`make check-scripts`
+
+只有在需要更细粒度定位时，才退回单独的 `pytest` / `npm` / `uvicorn` 原生命令。
+
 ## 文档同步原则（每次变更后必查）
 
 每次完成代码改动后，逐一确认以下三个文档是否需要更新：
@@ -54,9 +62,9 @@ alwaysApply: true
 
 | 改动范围 | 验证命令 |
 |----------|----------|
-| 任意逻辑改动（默认） | 仓库根目录：`python3 -m pytest scripts/tests/ -v`（必要时加 `tests/test_integration.py` 等） |
-| 盘前流程 | 上述 pytest **+** `cd scripts && python3 main.py pre --date <近期交易日>` |
-| 盘后流程 | 上述 pytest **+** `cd scripts && python3 main.py post --date <近期交易日>` |
+| 任意逻辑改动（默认） | 仓库根目录：`make check`；如仅后端改动可用 `make check-scripts` |
+| 盘前流程 | `make check-scripts` **+** `make pre DATE=<近期交易日>` |
+| 盘后流程 | `make check-scripts` **+** `make post DATE=<近期交易日>` |
 | provider 新方法 | pytest（mock 数据源）**+** 可选：临时脚本真机抽检 |
 | 报告生成器 | pytest 断言 Markdown/YAML 片段 **+** 可选：`ReportGenerator().generate_pre_market(...)` mock 调用 |
 

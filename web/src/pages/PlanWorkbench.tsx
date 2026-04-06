@@ -2,6 +2,19 @@ import { useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
+import type {
+  PlanDiagnosticsItem,
+  PlanDraftRecord,
+  PlanFactCheck,
+  PlanFactCheckResult,
+  PlanJudgementCheck,
+  PlanMarketView,
+  PlanObservationRecord,
+  PlanRecord,
+  PlanReviewRecord,
+  PlanSectorView,
+  PlanWatchItem,
+} from '../lib/types'
 
 type Step = 'draft' | 'confirm' | 'diagnose' | 'review'
 
@@ -96,10 +109,10 @@ const FACT_CHECK_META: Record<
   },
 }
 
-function normalizeFactCheck(check: any, nextType?: string) {
+function normalizeFactCheck(check: Partial<PlanFactCheck> | undefined, nextType?: string): PlanFactCheck {
   const type = nextType || check?.check_type || 'ret_1d_gte'
   const meta = FACT_CHECK_META[type] || { defaultLabel: '', paramFields: [] }
-  const params = { ...(check?.params || {}) }
+  const params: Record<string, string | number> = { ...(check?.params || {}) }
   for (const field of meta.paramFields) {
     if (!(field.key in params)) {
       params[field.key] = field.type === 'number' ? 0 : ''
@@ -113,14 +126,19 @@ function normalizeFactCheck(check: any, nextType?: string) {
   }
 }
 
-function normalizeWatchItems(items: any[]) {
+function normalizeWatchItems(items: PlanWatchItem[]): PlanWatchItem[] {
   return items.map((item, index) => ({
     ...item,
     priority: Number(item?.priority || index + 1),
-    fact_checks: (item?.fact_checks || []).map((check: any, checkIndex: number) => ({
+    fact_checks: (item?.fact_checks || []).map((check, checkIndex: number) => ({
       ...normalizeFactCheck(check),
       priority: Number(check?.priority || checkIndex + 1),
     })),
+    judgement_checks: (item?.judgement_checks || []).map((check) =>
+      typeof check === 'string' ? { label: check, notes: '' } : { label: check.label || '', notes: check.notes || '' }
+    ),
+    trigger_conditions: (item?.trigger_conditions || []).map((condition) => String(condition ?? '')),
+    invalidations: (item?.invalidations || []).map((condition) => String(condition ?? '')),
   }))
 }
 
@@ -137,8 +155,8 @@ function FactCheckFields({
   onChange,
 }: {
   prefix: string
-  check: any
-  onChange: (next: any) => void
+  check: PlanFactCheck
+  onChange: (next: PlanFactCheck) => void
 }) {
   const meta = FACT_CHECK_META[check.check_type] || { paramFields: [] }
   if (meta.paramFields.length === 0) return null
@@ -217,7 +235,7 @@ function DraftStep({
   onDraftCreated,
 }: {
   date: string
-  onDraftCreated: (draft: any) => void
+  onDraftCreated: (draft: PlanDraftRecord) => void
 }) {
   const [bias, setBias] = useState('混沌')
   const [themes, setThemes] = useState('')
@@ -310,29 +328,29 @@ function DraftView({
   onConfirm,
   onUpdated,
 }: {
-  draft: any
-  onConfirm: (plan: any) => void
-  onUpdated: (draft: any) => void
+  draft: PlanDraftRecord
+  onConfirm: (plan: PlanRecord) => void
+  onUpdated: (draft: PlanDraftRecord) => void
 }) {
   const [error, setError] = useState<string | null>(null)
   const [summary, setSummary] = useState(draft.summary || '')
-  const initialWatchItems: any[] = (() => {
+  const initialWatchItems: PlanWatchItem[] = (() => {
     try {
-      return JSON.parse(draft.watch_items_json || '[]')
+      return JSON.parse(draft.watch_items_json || '[]') as PlanWatchItem[]
     } catch {
       return []
     }
   })()
-  const marketView: any = (() => {
+  const marketView: PlanMarketView = (() => {
     try {
-      return JSON.parse(draft.market_view_json || '{}')
+      return JSON.parse(draft.market_view_json || '{}') as PlanMarketView
     } catch {
       return {}
     }
   })()
-  const sectorView: any = (() => {
+  const sectorView: PlanSectorView = (() => {
     try {
-      return JSON.parse(draft.sector_view_json || '{}')
+      return JSON.parse(draft.sector_view_json || '{}') as PlanSectorView
     } catch {
       return {}
     }
@@ -344,13 +362,13 @@ function DraftView({
       return draft.watch_items_json || '[]'
     }
   })
-  const initialFactCandidates: any[] = (() => {
+  const initialFactCandidates: PlanFactCheck[] = (() => {
     try {
-      return JSON.parse(draft.fact_check_candidates_json || '[]')
+      return JSON.parse(draft.fact_check_candidates_json || '[]') as PlanFactCheck[]
     } catch {
       return []
     }
-  })
+  })()
   const [factCandidatesText, setFactCandidatesText] = useState(() => {
     try {
       return JSON.stringify(initialFactCandidates, null, 2)
@@ -358,9 +376,9 @@ function DraftView({
       return draft.fact_check_candidates_json || '[]'
     }
   })
-  const initialJudgementCandidates: any[] = (() => {
+  const initialJudgementCandidates: PlanJudgementCheck[] = (() => {
     try {
-      return JSON.parse(draft.judgement_check_candidates_json || '[]')
+      return JSON.parse(draft.judgement_check_candidates_json || '[]') as PlanJudgementCheck[]
     } catch {
       return []
     }
@@ -372,21 +390,21 @@ function DraftView({
       return draft.judgement_check_candidates_json || '[]'
     }
   })
-  const [watchItems, setWatchItems] = useState<any[]>(initialWatchItems)
-  const [factCandidates, setFactCandidates] = useState<any[]>(initialFactCandidates)
-  const [judgementCandidates, setJudgementCandidates] = useState<any[]>(initialJudgementCandidates)
+  const [watchItems, setWatchItems] = useState<PlanWatchItem[]>(initialWatchItems)
+  const [factCandidates, setFactCandidates] = useState<PlanFactCheck[]>(initialFactCandidates)
+  const [judgementCandidates, setJudgementCandidates] = useState<PlanJudgementCheck[]>(initialJudgementCandidates)
 
-  function syncDraftWatchItems(nextItems: any[]) {
+  function syncDraftWatchItems(nextItems: PlanWatchItem[]) {
     setWatchItems(nextItems)
     setWatchItemsText(JSON.stringify(nextItems, null, 2))
   }
 
-  function syncFactCandidates(nextItems: any[]) {
+  function syncFactCandidates(nextItems: PlanFactCheck[]) {
     setFactCandidates(nextItems)
     setFactCandidatesText(JSON.stringify(nextItems, null, 2))
   }
 
-  function syncJudgementCandidates(nextItems: any[]) {
+  function syncJudgementCandidates(nextItems: PlanJudgementCheck[]) {
     setJudgementCandidates(nextItems)
     setJudgementCandidatesText(JSON.stringify(nextItems, null, 2))
   }
@@ -488,7 +506,7 @@ function DraftView({
         <div>
           <p className="text-sm font-medium text-gray-700 mb-2">观察清单（{watchItems.length} 项）</p>
           <ul className="space-y-1">
-            {watchItems.map((item: any, i: number) => (
+            {watchItems.map((item, i: number) => (
               <li key={i} className="text-sm text-gray-700 bg-white border rounded px-3 py-2">
                 {item.subject_name || item.subject_code || `条目 ${i + 1}`}
                 {item.reason && (
@@ -520,7 +538,7 @@ function DraftView({
             新增观察项
           </button>
         </div>
-        {watchItems.map((item: any, index: number) => (
+        {watchItems.map((item, index: number) => (
           <div key={index} className="grid grid-cols-1 md:grid-cols-[1fr_1fr_2fr_auto] gap-2 items-center">
             <input
               aria-label={`draft-watch-item-code-${index}`}
@@ -584,7 +602,7 @@ function DraftView({
             新增候选项
           </button>
         </div>
-                {factCandidates.map((check: any, index: number) => (
+                {factCandidates.map((check, index: number) => (
           <div key={index} className="grid grid-cols-1 md:grid-cols-[1fr_1fr_auto] gap-2 items-start">
             <select
               aria-label={`draft-fact-check-type-${index}`}
@@ -651,7 +669,7 @@ function DraftView({
             新增候选判断
           </button>
         </div>
-        {judgementCandidates.map((check: any, index: number) => (
+        {judgementCandidates.map((check, index: number) => (
           <div key={index} className="grid grid-cols-1 md:grid-cols-[1fr_2fr_auto] gap-2 items-center">
             <select
               aria-label={`draft-judgement-check-template-${index}`}
@@ -767,8 +785,8 @@ function PlanEditor({
   plan,
   onUpdated,
 }: {
-  plan: any
-  onUpdated: (plan: any) => void
+  plan: PlanRecord
+  onUpdated: (plan: PlanRecord) => void
 }) {
   const initialWatchItems = normalizeWatchItems((() => {
     try {
@@ -779,7 +797,7 @@ function PlanEditor({
   })())
   const [title, setTitle] = useState(plan.title || '')
   const [marketBias, setMarketBias] = useState(plan.market_bias || '混沌')
-  const [watchItems, setWatchItems] = useState<any[]>(initialWatchItems)
+  const [watchItems, setWatchItems] = useState<PlanWatchItem[]>(initialWatchItems)
   const [watchItemsText, setWatchItemsText] = useState(() => {
     try {
       return JSON.stringify(initialWatchItems, null, 2)
@@ -789,7 +807,7 @@ function PlanEditor({
   })
   const [error, setError] = useState<string | null>(null)
 
-  function syncWatchItems(nextItems: any[]) {
+  function syncWatchItems(nextItems: PlanWatchItem[]) {
     const normalized = normalizeWatchItems(nextItems)
     setWatchItems(normalized)
     setWatchItemsText(JSON.stringify(normalized, null, 2))
@@ -871,7 +889,7 @@ function PlanEditor({
           {watchItems.length === 0 && (
             <p className="text-xs text-gray-500">暂无 watch item，可新增后再细化。</p>
           )}
-          {watchItems.map((item: any, index: number) => (
+          {watchItems.map((item, index: number) => (
             <div key={index} className="border border-gray-200 rounded-lg bg-white p-3 space-y-2">
               <div className="flex items-center justify-between">
                 <p className="text-xs font-semibold text-gray-700">条目 {index + 1}</p>
@@ -981,10 +999,10 @@ function PlanEditor({
                     新增检查项
                   </button>
                 </div>
-                {((item.fact_checks || []) as any[]).length === 0 && (
+                {(item.fact_checks || []).length === 0 && (
                   <p className="text-xs text-gray-400">暂无 fact check</p>
                 )}
-                {((item.fact_checks || []) as any[]).map((check: any, checkIndex: number) => (
+                {(item.fact_checks || []).map((check, checkIndex: number) => (
                   <div key={checkIndex} className="grid grid-cols-1 md:grid-cols-[1fr_1fr_auto] gap-2 items-start">
                     <select
                       aria-label={`fact-check-type-${index}-${checkIndex}`}
@@ -1021,7 +1039,7 @@ function PlanEditor({
                       type="button"
                       onClick={() => {
                         const next = [...watchItems]
-                        const nextChecks = (item.fact_checks || []).filter((_: any, i: number) => i !== checkIndex)
+                        const nextChecks = (item.fact_checks || []).filter((_, i: number) => i !== checkIndex)
                         next[index] = { ...item, fact_checks: nextChecks }
                         syncWatchItems(next)
                       }}
@@ -1114,10 +1132,10 @@ function PlanEditor({
                     新增判断项
                   </button>
                 </div>
-                {((item.judgement_checks || []) as any[]).length === 0 && (
+                {(item.judgement_checks || []).length === 0 && (
                   <p className="text-xs text-gray-400">暂无 judgement check</p>
                 )}
-                {((item.judgement_checks || []) as any[]).map((check: any, checkIndex: number) => (
+                {(item.judgement_checks || []).map((check, checkIndex: number) => (
                   <div key={checkIndex} className="grid grid-cols-1 md:grid-cols-[1fr_2fr_auto] gap-2 items-center">
                     <select
                       aria-label={`judgement-check-template-${index}-${checkIndex}`}
@@ -1168,7 +1186,7 @@ function PlanEditor({
                       type="button"
                       onClick={() => {
                         const next = [...watchItems]
-                        const nextChecks = (item.judgement_checks || []).filter((_: any, i: number) => i !== checkIndex)
+                        const nextChecks = (item.judgement_checks || []).filter((_, i: number) => i !== checkIndex)
                         next[index] = { ...item, judgement_checks: nextChecks }
                         syncWatchItems(next)
                       }}
@@ -1197,14 +1215,14 @@ function PlanEditor({
                     新增触发条件
                   </button>
                 </div>
-                {((item.trigger_conditions || []) as any[]).length === 0 && (
+                {(item.trigger_conditions || []).length === 0 && (
                   <p className="text-xs text-gray-400">暂无 trigger condition</p>
                 )}
-                {((item.trigger_conditions || []) as any[]).map((condition: any, conditionIndex: number) => (
+                {(item.trigger_conditions || []).map((condition, conditionIndex: number) => (
                   <div key={conditionIndex} className="grid grid-cols-1 md:grid-cols-[1fr_auto] gap-2 items-center">
                     <input
                       aria-label={`trigger-condition-${index}-${conditionIndex}`}
-                      value={typeof condition === 'string' ? condition : JSON.stringify(condition)}
+                      value={condition}
                       onChange={e => {
                         const next = [...watchItems]
                         const nextConditions = [...(item.trigger_conditions || [])]
@@ -1219,7 +1237,7 @@ function PlanEditor({
                       type="button"
                       onClick={() => {
                         const next = [...watchItems]
-                        const nextConditions = (item.trigger_conditions || []).filter((_: any, i: number) => i !== conditionIndex)
+                        const nextConditions = (item.trigger_conditions || []).filter((_, i: number) => i !== conditionIndex)
                         next[index] = { ...item, trigger_conditions: nextConditions }
                         syncWatchItems(next)
                       }}
@@ -1248,14 +1266,14 @@ function PlanEditor({
                     新增失效条件
                   </button>
                 </div>
-                {((item.invalidations || []) as any[]).length === 0 && (
+                {(item.invalidations || []).length === 0 && (
                   <p className="text-xs text-gray-400">暂无 invalidation</p>
                 )}
-                {((item.invalidations || []) as any[]).map((condition: any, conditionIndex: number) => (
+                {(item.invalidations || []).map((condition, conditionIndex: number) => (
                   <div key={conditionIndex} className="grid grid-cols-1 md:grid-cols-[1fr_auto] gap-2 items-center">
                     <input
                       aria-label={`invalidation-${index}-${conditionIndex}`}
-                      value={typeof condition === 'string' ? condition : JSON.stringify(condition)}
+                      value={condition}
                       onChange={e => {
                         const next = [...watchItems]
                         const nextConditions = [...(item.invalidations || [])]
@@ -1270,7 +1288,7 @@ function PlanEditor({
                       type="button"
                       onClick={() => {
                         const next = [...watchItems]
-                        const nextConditions = (item.invalidations || []).filter((_: any, i: number) => i !== conditionIndex)
+                        const nextConditions = (item.invalidations || []).filter((_, i: number) => i !== conditionIndex)
                         next[index] = { ...item, invalidations: nextConditions }
                         syncWatchItems(next)
                       }}
@@ -1317,7 +1335,7 @@ function PlanEditor({
   )
 }
 
-function DiagnoseView({ plan }: { plan: any }) {
+function DiagnoseView({ plan }: { plan: PlanRecord }) {
   const { data: diagnostics, isLoading } = useQuery({
     queryKey: ['plan-diagnostics', plan.plan_id],
     queryFn: () => api.getPlanDiagnostics(plan.plan_id),
@@ -1326,7 +1344,7 @@ function DiagnoseView({ plan }: { plan: any }) {
   if (isLoading) return <p className="text-sm text-gray-500">诊断加载中...</p>
   if (!diagnostics) return <p className="text-sm text-gray-500">无诊断数据</p>
 
-  const items: any[] = diagnostics.items_json || []
+  const items: PlanDiagnosticsItem[] = diagnostics.items_json || []
 
   return (
     <div className="space-y-4">
@@ -1349,9 +1367,11 @@ function DiagnoseView({ plan }: { plan: any }) {
       {items.length > 0 && (
         <div className="space-y-3">
           <p className="text-sm font-medium text-gray-700">逐项诊断</p>
-          {items.map((item: any, i: number) => {
-            const factResults: any[] = item.fact_check_results || []
-            const judgementChecks: any[] = item.judgement_checks || []
+          {items.map((item, i: number) => {
+            const factResults: PlanFactCheckResult[] = item.fact_check_results || []
+            const judgementChecks: Array<PlanJudgementCheck | string> = item.judgement_checks || []
+            const missingDependencies = item.missing_dependencies || []
+            const unsupportedChecks = item.unsupported_checks || []
             return (
               <div key={i} className="border rounded-lg p-4 bg-white space-y-3">
                 <div className="flex items-center gap-2">
@@ -1371,7 +1391,7 @@ function DiagnoseView({ plan }: { plan: any }) {
                       客观核查项
                     </p>
                     <div className="space-y-1">
-                      {factResults.map((fc: any, j: number) => {
+                      {factResults.map((fc, j: number) => {
                         const cfg = RESULT_CONFIG[fc.result] ?? {
                           label: fc.result,
                           className: 'bg-gray-100 text-gray-600',
@@ -1395,26 +1415,26 @@ function DiagnoseView({ plan }: { plan: any }) {
                       主观判断项（需人工判断）
                     </p>
                     <div className="space-y-1">
-                      {judgementChecks.map((jc: any, j: number) => (
+                      {judgementChecks.map((jc, j: number) => (
                         <div key={j} className="flex items-center gap-2 text-sm">
                           <span className="px-2 py-0.5 rounded text-xs font-medium bg-purple-50 text-purple-700 border border-purple-200">
                             需人工判断
                           </span>
-                          <span className="text-gray-700">{jc.label || jc}</span>
+                          <span className="text-gray-700">{typeof jc === 'string' ? jc : jc.label}</span>
                         </div>
                       ))}
                     </div>
                   </div>
                 )}
 
-                {item.missing_dependencies?.length > 0 && (
+                {missingDependencies.length > 0 && (
                   <p className="text-xs text-orange-600">
-                    缺失数据：{item.missing_dependencies.join('、')}
+                    缺失数据：{missingDependencies.join('、')}
                   </p>
                 )}
-                {item.unsupported_checks?.length > 0 && (
+                {unsupportedChecks.length > 0 && (
                   <p className="text-xs text-gray-500">
-                    暂不支持：{item.unsupported_checks.join('、')}
+                    暂不支持：{unsupportedChecks.join('、')}
                   </p>
                 )}
               </div>
@@ -1435,8 +1455,8 @@ function ReviewStep({
   plan,
   onReviewed,
 }: {
-  plan: any
-  onReviewed: (review: any) => void
+  plan: PlanRecord
+  onReviewed: (review: PlanReviewRecord) => void
 }) {
   const [summary, setSummary] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -1513,8 +1533,8 @@ function ObservationEditor({
   observation,
   onUpdated,
 }: {
-  observation: any
-  onUpdated: (observation: any) => void
+  observation: PlanObservationRecord
+  onUpdated: (observation: PlanObservationRecord) => void
 }) {
   const initialJudgements = (() => {
     try {
@@ -1584,11 +1604,11 @@ function RecentObjectsPanel({
   onObservationUpdated,
 }: {
   date: string
-  onSelectDraft: (draft: any) => void
-  onSelectPlan: (plan: any) => void
-  onObservationUpdated: (observation: any) => void
+  onSelectDraft: (draft: PlanDraftRecord) => void
+  onSelectPlan: (plan: PlanRecord) => void
+  onObservationUpdated: (observation: PlanObservationRecord) => void
 }) {
-  const [selectedObservation, setSelectedObservation] = useState<any>(null)
+  const [selectedObservation, setSelectedObservation] = useState<PlanObservationRecord | null>(null)
   const { data: observations } = useQuery({
     queryKey: ['plan-observations', date],
     queryFn: () => api.listPlanObservations(date, 8),
@@ -1608,7 +1628,7 @@ function RecentObjectsPanel({
         <h2 className="text-sm font-semibold text-gray-800 mb-2">当日观察</h2>
         <div className="space-y-2">
           {(observations || []).length === 0 && <p className="text-xs text-gray-500">暂无 observation</p>}
-          {(observations || []).map((obs: any) => (
+          {(observations || []).map((obs) => (
             <button
               key={obs.observation_id}
               onClick={() => setSelectedObservation(obs)}
@@ -1637,7 +1657,7 @@ function RecentObjectsPanel({
         <h2 className="text-sm font-semibold text-gray-800 mb-2">最近草稿</h2>
         <div className="space-y-2">
           {(drafts || []).length === 0 && <p className="text-xs text-gray-500">暂无 draft</p>}
-          {(drafts || []).map((item: any) => (
+          {(drafts || []).map((item) => (
             <button
               key={item.draft_id}
               onClick={() => onSelectDraft(item)}
@@ -1654,7 +1674,7 @@ function RecentObjectsPanel({
         <h2 className="text-sm font-semibold text-gray-800 mb-2">最近计划</h2>
         <div className="space-y-2">
           {(plans || []).length === 0 && <p className="text-xs text-gray-500">暂无 plan</p>}
-          {(plans || []).map((item: any) => (
+          {(plans || []).map((item) => (
             <button
               key={item.plan_id}
               onClick={() => onSelectPlan(item)}
@@ -1678,23 +1698,23 @@ export default function PlanWorkbench() {
   const activeDate = date || today
 
   const [step, setStep] = useState<Step>('draft')
-  const [draft, setDraft] = useState<any>(null)
-  const [plan, setPlan] = useState<any>(null)
+  const [draft, setDraft] = useState<PlanDraftRecord | null>(null)
+  const [plan, setPlan] = useState<PlanRecord | null>(null)
 
-  function handleDraftCreated(d: any) {
+  function handleDraftCreated(d: PlanDraftRecord) {
     setDraft(d)
     queryClient.invalidateQueries({ queryKey: ['plan-draft', activeDate] })
     queryClient.invalidateQueries({ queryKey: ['plan-observations', activeDate] })
     queryClient.invalidateQueries({ queryKey: ['plan-drafts', activeDate] })
   }
 
-  function handleConfirmed(p: any) {
+  function handleConfirmed(p: PlanRecord) {
     setPlan(p)
     setStep('diagnose')
     queryClient.invalidateQueries({ queryKey: ['plans', activeDate] })
   }
 
-  function handleReviewed(_review: any) {
+  function handleReviewed() {
     // 计划已复盘，留在 review 步骤展示完成提示
   }
 

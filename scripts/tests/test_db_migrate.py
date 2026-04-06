@@ -288,7 +288,7 @@ class TestDailyMarketMigration:
 
 class TestSchemaVersion:
     def test_migrate_to_v5(self, conn):
-        assert get_schema_version(conn) == 7
+        assert get_schema_version(conn) == 8
 
         tables = {
             row[0]
@@ -359,7 +359,7 @@ class TestHoldingsMigration:
         closed = conn.execute(
             "SELECT stock_code FROM holdings WHERE status = 'closed' ORDER BY id"
         ).fetchall()
-        assert get_schema_version(conn) == 7
+        assert get_schema_version(conn) == 8
         assert [row["stock_code"] for row in active] == ["300750.SZ"]
         assert [row["stock_code"] for row in closed] == ["300750"]
 
@@ -369,3 +369,33 @@ class TestHoldingsMigration:
                 ("300750.SH", "重复持仓"),
             )
         conn.close()
+
+
+def test_migrate_v8_marks_permission_ingest_errors_non_retryable(tmp_path):
+    conn = get_connection(tmp_path / "migrate_v8.db")
+    migrate(conn)
+    conn.execute("PRAGMA user_version = 7")
+    conn.execute(
+        """
+        INSERT INTO ingest_runs
+        (run_id, interface_name, provider, stage, biz_date, params_json, status, row_count, started_at, triggered_by)
+        VALUES ('run_perm', 'anns_d', 'registry', 'post_extended', '2026-04-03', '{}', 'failed', 0, datetime('now'), 'cli')
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO ingest_errors
+        (run_id, interface_name, biz_date, stage, error_type, error_message, retryable)
+        VALUES ('run_perm', 'anns_d', '2026-04-03', 'post_extended', 'provider', '所有数据源均失败: tushare: 您的权限不足', 1)
+        """
+    )
+    conn.commit()
+
+    migrate(conn)
+
+    row = conn.execute(
+        "SELECT retryable FROM ingest_errors WHERE run_id = 'run_perm'"
+    ).fetchone()
+    assert get_schema_version(conn) == 8
+    assert row["retryable"] == 0
+    conn.close()

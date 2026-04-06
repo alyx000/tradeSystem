@@ -363,6 +363,30 @@ class MarketCollector:
         else:
             logger.warning(f"板块资金流向获取失败: {fund_flow.error}")
 
+        # 6b. 交易所市场统计 / 连板天梯 / 最强板块
+        for method_name, result_key in [
+            ("get_daily_info", "daily_info"),
+            ("get_limit_step", "limit_step"),
+            ("get_limit_cpt_list", "limit_cpt_list"),
+        ]:
+            r = self.registry.call(method_name, date)
+            if r.success and r.data:
+                result[result_key] = {"data": r.data, "_source": r.source}
+            else:
+                logger.debug("%s 获取失败: %s", method_name, r.error)
+
+        # 6c. 板块/大盘资金流向增强
+        for method_name, result_key in [
+            ("get_sector_moneyflow_ths", "sector_moneyflow_ths"),
+            ("get_sector_moneyflow_dc", "sector_moneyflow_dc"),
+            ("get_market_moneyflow_dc", "market_moneyflow_dc"),
+        ]:
+            r = self.registry.call(method_name, date)
+            if r.success and r.data:
+                result[result_key] = {"data": r.data, "_source": r.source}
+            else:
+                logger.debug("%s 获取失败: %s", method_name, r.error)
+
         # 7. 北向资金
         nb = self.registry.call("get_northbound", date)
         if nb.success:
@@ -400,6 +424,36 @@ class MarketCollector:
             result["margin_data"]["_source"] = margin.source
         else:
             logger.debug(f"融资融券数据获取失败（T+1 延迟正常）: {margin.error}")
+
+        # 10b. 融资融券明细 / ST 名单
+        for method_name, result_key in [
+            ("get_margin_detail", "margin_detail"),
+            ("get_stock_st", "stock_st"),
+        ]:
+            r = self.registry.call(method_name, date)
+            if r.success and r.data:
+                if result_key == "margin_detail" and isinstance(r.data, list):
+                    rows = r.data
+                    top_rows = sorted(
+                        rows,
+                        key=lambda item: float(item.get("rzmre", 0) or 0),
+                        reverse=True,
+                    )[:20]
+                    result[result_key] = {
+                        "count": len(rows),
+                        "top_rzmre": top_rows,
+                        "_source": r.source,
+                    }
+                elif result_key == "stock_st" and isinstance(r.data, list):
+                    result[result_key] = {
+                        "count": len(r.data),
+                        "stocks": r.data[:100],
+                        "_source": r.source,
+                    }
+                else:
+                    result[result_key] = {"data": r.data, "_source": r.source}
+            else:
+                logger.debug("%s 获取失败: %s", method_name, r.error)
 
         # 11. 指数均线
         self._compute_index_ma(result, date)

@@ -30,6 +30,17 @@ def _fts_match_expr(keyword: str) -> str:
     return f'"{safe}"'
 
 
+def _extract_raw_payload_rows(payload_json: str) -> list[dict]:
+    try:
+        payload = json.loads(payload_json)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return []
+    rows = payload.get("rows")
+    if not isinstance(rows, list):
+        return []
+    return [row for row in rows if isinstance(row, dict)]
+
+
 # ──────────────────────────────────────────────────────────────
 # Teachers / Teacher Notes
 # ──────────────────────────────────────────────────────────────
@@ -159,6 +170,56 @@ def get_calendar_range(conn: sqlite3.Connection, date_from: str, date_to: str,
         params.append(category)
     sql += " ORDER BY date, time"
     return _rows_to_list(conn.execute(sql, params).fetchall())
+
+
+def list_raw_interface_rows(
+    conn: sqlite3.Connection,
+    *,
+    interface_name: str,
+    biz_date_from: str,
+    biz_date_to: str,
+) -> list[dict]:
+    """按业务日期范围展开 raw_interface_payloads 中的 rows。"""
+    rows = conn.execute(
+        """
+        SELECT payload_json
+        FROM raw_interface_payloads
+        WHERE interface_name = ?
+          AND biz_date >= ?
+          AND biz_date <= ?
+          AND status IN ('success', 'partial')
+        ORDER BY biz_date, inserted_at
+        """,
+        (interface_name, biz_date_from, biz_date_to),
+    ).fetchall()
+    out: list[dict] = []
+    for row in rows:
+        out.extend(_extract_raw_payload_rows(row["payload_json"]))
+    return out
+
+
+def get_latest_raw_interface_rows(
+    conn: sqlite3.Connection,
+    *,
+    interface_name: str,
+    biz_date: str,
+) -> list[dict]:
+    """读取某接口在给定日期及之前最近一次成功落库的 rows。"""
+    row = conn.execute(
+        """
+        SELECT payload_json
+        FROM raw_interface_payloads
+        WHERE interface_name = ?
+          AND biz_date <= ?
+          AND status IN ('success', 'partial')
+        ORDER BY biz_date DESC, inserted_at DESC
+        LIMIT 1
+        """,
+        (interface_name, biz_date),
+    ).fetchone()
+    if not row:
+        return []
+    return _extract_raw_payload_rows(row["payload_json"])
 
 
 # ──────────────────────────────────────────────────────────────

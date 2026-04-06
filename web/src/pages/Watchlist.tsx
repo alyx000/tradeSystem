@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
+import type { WatchlistCreateInput, WatchlistItem } from '../lib/types'
 
 const TIER_LABELS: Record<string, string> = {
   tier1_core: '核心标的',
@@ -50,7 +51,7 @@ function AddModal({ onClose }: { onClose: () => void }) {
   const [showMore, setShowMore] = useState(false)
 
   const addMutation = useMutation({
-    mutationFn: (data: Record<string, string>) => api.createWatchlistItem(data),
+    mutationFn: (data: WatchlistCreateInput) => api.createWatchlistItem(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['watchlist'] })
       onClose()
@@ -63,11 +64,11 @@ function AddModal({ onClose }: { onClose: () => void }) {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
     if (!form.stock_code.trim() || !form.stock_name.trim()) return
-    const payload: Record<string, string> = {}
+    const payload: Partial<WatchlistCreateInput> = {}
     for (const [k, v] of Object.entries(form)) {
-      if (v.trim()) payload[k] = v.trim()
+      if (v.trim()) payload[k as keyof WatchlistCreateInput] = v.trim()
     }
-    addMutation.mutate(payload)
+    addMutation.mutate(payload as WatchlistCreateInput)
   }
 
   return (
@@ -205,7 +206,7 @@ export default function Watchlist() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['watchlist'] }),
   })
 
-  const grouped = (watchlist || []).reduce((acc: Record<string, any[]>, item: any) => {
+  const grouped = (watchlist || []).reduce((acc: Record<string, WatchlistItem[]>, item: WatchlistItem) => {
     const tier = item.tier || 'other'
     if (!acc[tier]) acc[tier] = []
     acc[tier].push(item)
@@ -240,7 +241,7 @@ export default function Watchlist() {
               <span className="text-gray-500 text-sm ml-2">({items.length})</span>
             </div>
             <div className="divide-y">
-              {items.map((item: any) => (
+              {items.map((item: WatchlistItem) => (
                 <div key={item.id} className="px-4 py-3 text-sm flex justify-between items-start gap-2">
                   <div className="flex-1 min-w-0">
                     <div className="flex items-baseline gap-2 flex-wrap">

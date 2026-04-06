@@ -693,12 +693,71 @@ class TestPostMarketReport:
                 "000001.SZ": {
                     "name": "平安银行",
                     "announcements": [{"title": "关于分红的公告", "ann_date": "20260328"}],
+                    "disclosure_dates": [{"ann_date": "20260420", "report_end": "20260331"}],
                 },
             }
             md, _ = gen.generate_post_market("2026-03-28", raw, holdings_announcements=anns)
 
         assert "持仓盘后公告" in md
         assert "平安银行" in md
+        assert "预约披露: 20260420（报告期 20260331）" in md
+
+    def test_report_renders_p0_enhancement_sections(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            gen = ReportGenerator()
+            gen.daily_dir = Path(tmp) / "daily"
+
+            raw = {
+                "date": "2026-03-28",
+                "indices": {},
+                "total_volume": {},
+                "limit_up": {},
+                "limit_down": {},
+                "sector_industry": {"data": []},
+                "sector_concept": {"data": []},
+                "northbound": {},
+                "dragon_tiger": {"data": []},
+                "limit_step": {
+                    "data": [
+                        {"name": "高标A", "nums": "5"},
+                        {"name": "高标B", "nums": "3"},
+                    ]
+                },
+                "limit_cpt_list": {
+                    "data": [
+                        {"rank": 1, "name": "人工智能", "up_nums": 12, "cons_nums": 4, "pct_chg": 3.2, "up_stat": "5天4板"},
+                    ]
+                },
+                "market_moneyflow_dc": {
+                    "data": [
+                        {"net_amount": 2500000000.0, "net_amount_rate": 2.8, "buy_elg_amount": 1200000000.0, "buy_lg_amount": 800000000.0},
+                    ]
+                },
+                "sector_moneyflow_ths": {
+                    "data": [
+                        {"industry": "软件开发", "net_amount": 22.5, "pct_change": 4.8, "lead_stock": "高标A"},
+                    ]
+                },
+                "sector_moneyflow_dc": {
+                    "data": [
+                        {"name": "人工智能", "content_type": "概念", "net_amount": 1800000000.0, "pct_change": 3.2, "buy_sm_amount_stock": "高标A"},
+                    ]
+                },
+                "daily_info": {
+                    "data": [
+                        {"market": "沪市主板", "amount": 5234.5, "vol": 123456789},
+                    ]
+                },
+            }
+            md, _ = gen.generate_post_market("2026-03-28", raw)
+
+        assert "情绪与资金增强" in md
+        assert "连板天梯" in md
+        assert "最强板块" in md
+        assert "大盘资金流向" in md
+        assert "同花顺行业资金流入前列" in md
+        assert "东财板块资金流入前列" in md
+        assert "交易所市场统计摘录" in md
 
 
 # =====================================================================

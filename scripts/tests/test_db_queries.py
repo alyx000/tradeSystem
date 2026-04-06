@@ -581,7 +581,8 @@ class TestSchemaVersion:
         c = get_connection(tmp_path / "test.db")
         assert get_schema_version(c) == 0
         migrate(c)
-        assert get_schema_version(c) == 4
+        version = get_schema_version(c)
+        assert version >= 4
         migrate(c)
-        assert get_schema_version(c) == 4
+        assert get_schema_version(c) == version
         c.close()

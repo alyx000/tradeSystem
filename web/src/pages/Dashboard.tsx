@@ -1,6 +1,12 @@
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { api } from '../lib/api'
+import {
+  getIngestHealthStatus,
+  getIngestHealthStatusClasses,
+  getIngestHealthStatusReason,
+} from '../lib/ingestHealthStatus'
+import type { CalendarEvent, CommandDocItem, IngestHealthSummary } from '../lib/types'
 
 const today = new Date().toISOString().slice(0, 10)
 
@@ -20,6 +26,18 @@ export default function Dashboard() {
   const { data: market } = useQuery({
     queryKey: ['market', today],
     queryFn: () => api.getMarket(today),
+  })
+  const { data: commandIndex } = useQuery({
+    queryKey: ['command-index'],
+    queryFn: api.getCommandIndex,
+  })
+  const { data: ingestHealthCore } = useQuery({
+    queryKey: ['ingest-health-dashboard', today, 'post_core'],
+    queryFn: () => api.getIngestHealthSummary(today, 7, 'post_core'),
+  })
+  const { data: ingestHealthExtended } = useQuery({
+    queryKey: ['ingest-health-dashboard', today, 'post_extended'],
+    queryFn: () => api.getIngestHealthSummary(today, 7, 'post_extended'),
   })
 
   return (
@@ -99,11 +117,32 @@ export default function Dashboard() {
         </div>
       </div>
 
+      {(ingestHealthCore || ingestHealthExtended) && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {ingestHealthCore && (
+            <IngestHealthCard
+              title="采集健康 · 盘后核心"
+              description="近 7 天 post_core 视角，优先看主链路是否稳定。"
+              health={ingestHealthCore}
+              href={`/ingest?date=${today}&health_sort=streak`}
+            />
+          )}
+          {ingestHealthExtended && (
+            <IngestHealthCard
+              title="采集健康 · 盘后扩展"
+              description="近 7 天 post_extended 视角，适合排查扩展事实层接口。"
+              health={ingestHealthExtended}
+              href={`/ingest?date=${today}&stage=post_extended&health_sort=streak`}
+            />
+          )}
+        </div>
+      )}
+
       {calendar && calendar.length > 0 && (
         <div className="bg-white rounded-lg shadow p-4">
           <h2 className="text-sm font-medium text-gray-500 mb-3">今日投资日历</h2>
           <ul className="space-y-2">
-            {calendar.map((e: any) => (
+            {calendar.map((e: CalendarEvent) => (
               <li key={e.id} className="flex items-center gap-2 text-sm">
                 <span className={`px-2 py-0.5 rounded text-xs font-medium ${
                   e.impact === 'high' ? 'bg-red-100 text-red-700' :
@@ -118,6 +157,134 @@ export default function Dashboard() {
           </ul>
         </div>
       )}
+
+      {commandIndex?.daily_quickstart && commandIndex.daily_quickstart.length > 0 && (
+        <div className="bg-white rounded-lg shadow p-4">
+          <div className="flex items-center justify-between mb-3 gap-3">
+            <div>
+              <h2 className="text-sm font-medium text-gray-500">命令速查</h2>
+              <p className="text-xs text-gray-400 mt-1">
+                基于仓库统一入口生成，完整列表见 <code className="text-gray-600">docs/commands.md</code>
+              </p>
+            </div>
+            <div className="flex items-center gap-3">
+              <span className="text-xs text-gray-400">每日高频</span>
+              <Link
+                to={`/ingest?date=${today}`}
+                className="text-xs text-blue-500 hover:underline"
+              >
+                打开健康视图 →
+              </Link>
+            </div>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {commandIndex.daily_quickstart.map((item: CommandDocItem) => (
+              <div key={item.command} className="rounded border border-gray-200 bg-gray-50 px-3 py-2">
+                <div className="font-mono text-xs text-gray-800">{item.command}</div>
+                <div className="text-xs text-gray-500 mt-1">{item.description}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="bg-white rounded-lg shadow p-4">
+        <div className="flex items-center justify-between mb-3 gap-3">
+          <div>
+            <h2 className="text-sm font-medium text-gray-500">采集诊断快捷入口</h2>
+            <p className="text-xs text-gray-400 mt-1">
+              直接打开今天的采集诊断视图，适合快速排查盘后核心、扩展接口和连续失败项。
+            </p>
+          </div>
+          <Link to="/ingest" className="text-xs text-blue-500 hover:underline">
+            打开工作台 →
+          </Link>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <Link
+            to={`/ingest?date=${today}`}
+            className="rounded border border-gray-200 bg-gray-50 px-3 py-3 hover:bg-gray-100 transition-colors"
+          >
+            <div className="text-sm font-medium text-gray-800">盘后核心诊断</div>
+            <div className="text-xs text-gray-500 mt-1">默认视角，快速看当天核心接口运行、错误和重试。</div>
+          </Link>
+          <Link
+            to={`/ingest?date=${today}&stage=post_extended`}
+            className="rounded border border-gray-200 bg-gray-50 px-3 py-3 hover:bg-gray-100 transition-colors"
+          >
+            <div className="text-sm font-medium text-gray-800">盘后扩展诊断</div>
+            <div className="text-xs text-gray-500 mt-1">直接检查扩展事实层接口，适合排查 margin、block_trade 这类数据。</div>
+          </Link>
+          <Link
+            to={`/ingest?date=${today}&health_sort=streak`}
+            className="rounded border border-gray-200 bg-gray-50 px-3 py-3 hover:bg-gray-100 transition-colors"
+          >
+            <div className="text-sm font-medium text-gray-800">连续失败视图</div>
+            <div className="text-xs text-gray-500 mt-1">优先看连续失败多天的接口，快速定位长期不稳定项。</div>
+          </Link>
+        </div>
+      </div>
     </div>
+  )
+}
+
+function topIngestRiskLabel(health: IngestHealthSummary) {
+  const top = health.top_failed_interfaces?.[0]
+  if (!top) return '暂无异常'
+  const label = top.interface_label || top.interface_name || '未知接口'
+  if ((top.consecutive_failure_days ?? 0) > 1) {
+    return `${label} · 连续失败 ${top.consecutive_failure_days} 天`
+  }
+  return `${label} · 失败 ${top.failure_count ?? 0} 次`
+}
+
+function IngestHealthCard({
+  title,
+  description,
+  health,
+  href,
+}: {
+  title: string
+  description: string
+  health: IngestHealthSummary
+  href: string
+}) {
+  const statusLabel = getIngestHealthStatus(health)
+  const statusReason = getIngestHealthStatusReason(health)
+
+  return (
+    <Link to={href} className="block">
+      <div className="bg-white rounded-lg shadow p-4 hover:shadow-md transition-shadow">
+        <div className="flex items-center justify-between mb-3 gap-3">
+          <div>
+            <div className="flex items-center gap-2">
+              <h2 className="text-sm font-medium text-gray-500">{title}</h2>
+              <span className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-medium ${getIngestHealthStatusClasses(statusLabel)}`}>
+                {statusLabel}
+              </span>
+            </div>
+            <p className="text-xs text-gray-400 mt-1">{description}</p>
+            <p className="text-xs text-gray-500 mt-1">{statusReason}</p>
+          </div>
+          <span className="text-xs text-blue-500">查看详情 &rarr;</span>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div>
+            <div className="text-xs text-gray-400">未解决失败</div>
+            <div className={`text-sm font-semibold ${(health.unresolved_failures ?? 0) > 0 ? 'text-orange-600' : 'text-green-600'}`}>
+              {health.unresolved_failures ?? 0}
+            </div>
+          </div>
+          <div>
+            <div className="text-xs text-gray-400">失败接口数</div>
+            <div className="text-sm font-semibold text-gray-800">{health.failed_interface_count ?? 0}</div>
+          </div>
+          <div>
+            <div className="text-xs text-gray-400">最需关注</div>
+            <div className="text-sm font-semibold text-gray-800">{topIngestRiskLabel(health)}</div>
+          </div>
+        </div>
+      </div>
+    </Link>
   )
 }

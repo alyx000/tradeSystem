@@ -1,5 +1,19 @@
-import { useEffect } from 'react'
+import { useEffect, useMemo } from 'react'
 import { type StepProps, Row, SelectField, TextField, NumberField, CheckField, PrefillBanner, DynamicList } from './widgets'
+import type { Holding } from '../../lib/types'
+
+interface PositionItem {
+  stock: string
+  cost: number | null
+  current_price: number | null
+  prefill_pnl_pct: number | null
+  position_pct: number | null
+  in_hot_sector: boolean
+  price_trend: string
+  volume_vs_avg: string
+  amplitude_ok: boolean
+  action_plan: string
+}
 
 function normStockCode(code: string): string {
   const s = (code || '').trim().toUpperCase()
@@ -11,7 +25,7 @@ function extractCodeFromStockLabel(stock: string): string {
   return m ? m[1].toUpperCase() : ''
 }
 
-function buildPrefillHoldingsMap(holdings: any[]): Map<string, { cost: unknown; price: unknown; pnl: number | null }> {
+function buildPrefillHoldingsMap(holdings: Holding[]): Map<string, { cost: unknown; price: unknown; pnl: number | null }> {
   const m = new Map<string, { cost: unknown; price: unknown; pnl: number | null }>()
   for (const h of holdings) {
     const raw = String(h.stock_code || '').trim()
@@ -47,10 +61,10 @@ const VOL_VS_AVG = [
 
 export default function StepPositions({ data, onChange, prefill }: StepProps) {
   const d = data || {}
-  const holdings = prefill?.holdings || []
+  const holdings = useMemo(() => prefill?.holdings || [], [prefill?.holdings])
 
-  const positions = d.positions || (holdings.length > 0
-    ? holdings.map((h: any) => ({
+  const positions: PositionItem[] = (d.positions as PositionItem[] | undefined) || (holdings.length > 0
+    ? holdings.map((h) => ({
         stock: `${h.stock_name}(${h.stock_code})`,
         cost: h.entry_price,
         current_price: h.current_price,
@@ -67,7 +81,7 @@ export default function StepPositions({ data, onChange, prefill }: StepProps) {
   // localStorage 草稿里已有 positions 时，仍应用服务端最新现价/成本/盈亏预填（避免跑 post 后草稿不更新）
   useEffect(() => {
     if (!holdings.length) return
-    const raw = (data || {}).positions as any[] | undefined
+    const raw = (data || {}).positions as PositionItem[] | undefined
     if (!raw?.length) return
     const map = buildPrefillHoldingsMap(holdings)
     let changed = false
@@ -76,22 +90,22 @@ export default function StepPositions({ data, onChange, prefill }: StepProps) {
       const p = key ? map.get(key) : undefined
       if (!p) return item
       const np = { ...item }
-      if (p.price != null && p.price !== '' && (item.current_price == null || item.current_price === '')) {
+      if (typeof p.price === 'number' && Number.isFinite(p.price) && item.current_price == null) {
         np.current_price = p.price
         changed = true
       }
-      if (p.cost != null && p.cost !== '' && (item.cost == null || item.cost === '')) {
+      if (typeof p.cost === 'number' && Number.isFinite(p.cost) && item.cost == null) {
         np.cost = p.cost
         changed = true
       }
-      if (p.pnl != null && (item.prefill_pnl_pct == null || item.prefill_pnl_pct === '')) {
+      if (p.pnl != null && item.prefill_pnl_pct == null) {
         np.prefill_pnl_pct = p.pnl
         changed = true
       }
       return np
     })
     if (changed) onChange({ ...(data || {}), positions: next })
-  }, [prefill?.holdings, data?.positions, onChange, data, holdings.length])
+  }, [holdings, data?.positions, onChange, data])
 
   return (
     <div className="space-y-6">

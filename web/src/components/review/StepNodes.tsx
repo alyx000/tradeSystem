@@ -1,9 +1,10 @@
-import { type StepProps, get, set, Section, TextField, TextareaField } from './widgets'
+import { type StepProps, Section, TextField, TextareaField } from './widgets'
+import { get, set } from './formState'
 
 export default function StepNodes({ data, onChange }: StepProps) {
   const d = data || {}
-  const g = (p: string, fb: any = '') => get(d, p, fb)
-  const s = (p: string, v: any) => onChange(set(d, p, v))
+  const g = <T = string,>(p: string, fb?: T) => get<T>(d, p, (fb ?? '') as T)
+  const s = (p: string, v: unknown) => onChange(set(d, p, v))
 
   return (
     <div className="space-y-6">

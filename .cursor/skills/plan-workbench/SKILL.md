@@ -21,11 +21,17 @@ version: "0.1"
 ## 当前标准 CLI
 
 ```bash
-python3 main.py plan draft --date 2026-04-04
-python3 main.py plan show-draft --date 2026-04-04
-python3 main.py plan confirm --date 2026-04-04
-python3 main.py plan diagnose --date 2026-04-04
-python3 main.py plan review --date 2026-04-04
+make plan-open DATE=YYYY-MM-DD
+make plan-draft DATE=YYYY-MM-DD
+make plan-show-draft DATE=YYYY-MM-DD
+make plan-confirm DRAFT_ID=draft_xxx DATE=YYYY-MM-DD
+make plan-diagnose PLAN_ID=plan_xxx
+make plan-review PLAN_ID=plan_xxx DATE=YYYY-MM-DD
+python3 main.py plan draft --date YYYY-MM-DD
+python3 main.py plan show-draft --date YYYY-MM-DD
+python3 main.py plan confirm --date YYYY-MM-DD
+python3 main.py plan diagnose --date YYYY-MM-DD
+python3 main.py plan review --date YYYY-MM-DD
 ```
 
 若需要结构化输出，附加：
@@ -33,6 +39,13 @@ python3 main.py plan review --date 2026-04-04
 ```bash
 --json
 ```
+
+说明：
+
+- 若用户是要进入 Web 工作台本身，优先使用 `make plan-open`
+- 高频查看和诊断优先使用 `make plan-*`
+- `confirm` / `review` 现已支持参数化 `make` 别名
+- 需要补充更细粒度参数时，再使用底层 `python3 main.py plan ...`
 
 ## 协作规则
 

@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { type StepProps, get, set, Section, Row, PrefillBanner, SelectField, TextField, NumberField, TagsField, TextareaField, DynamicList, TeacherNotesPanel } from './widgets'
+import { type StepProps, Section, Row, PrefillBanner, SelectField, TextField, NumberField, TagsField, TextareaField, DynamicList, TeacherNotesPanel } from './widgets'
+import { get, set } from './formState'
+import type { IndustryInfoItem, MainThemeItem, SectorIndustryPrefill, SectorRhythmItem, TeacherNote } from '../../lib/types'
 
 // 行业信息首屏展示条数
 const INDUSTRY_INFO_INITIAL_COUNT = 3
@@ -76,44 +78,65 @@ const RECOGNITION = [
   { value: '低', label: '低' },
 ]
 
+interface StrongestSectorItem {
+  name: string
+  reason: string
+  vs_index: string
+  node: string
+  volume_trend: string
+  recognition: string
+  key_stocks: string[]
+}
+
+interface UnusualSectorItem {
+  name: string
+  trigger: string
+  start_position: string
+  volume: string
+  key_stocks: string[]
+}
+
 export default function StepSectors({ data, onChange, prefill }: StepProps) {
   const d = data || {}
-  const themes = prefill?.main_themes || []
+  const themes: MainThemeItem[] = prefill?.main_themes || []
   const firstTheme = themes[0]
-  const teacherNotes = prefill?.teacher_notes || []
+  const teacherNotes: TeacherNote[] = prefill?.teacher_notes || []
   const [industryInfoExpanded, setIndustryInfoExpanded] = useState(false)
+  const strongest = (d.strongest as StrongestSectorItem[] | undefined) || []
+  const unusual = (d.unusual as UnusualSectorItem[] | undefined) || []
 
   const date = prefill?.date as string | undefined
-  const sectorIndustry = prefill?.market?.sector_industry as { data?: any[]; bottom?: any[] } | undefined
-  const sectorRhythm = prefill?.market?.sector_rhythm_industry as any[] | undefined
-  const industryInfoList = (prefill?.industry_info || []) as any[]
+  const sectorIndustry: SectorIndustryPrefill | undefined = prefill?.market?.sector_industry
+  const sectorRhythm: SectorRhythmItem[] | undefined = prefill?.market?.sector_rhythm_industry
+  const industryInfoList: IndustryInfoItem[] = prefill?.industry_info || []
 
-  const g = (p: string, fb: any = '') => {
-    const val = get(d, p, undefined)
+  const g = <T = string,>(p: string, fb?: T) => {
+    const fallback = (fb ?? '') as T
+    const val = get<T | undefined>(d, p, undefined)
     if (val !== undefined && val !== '') return val
 
     if (firstTheme) {
-      if (p === 'main_theme.name') return firstTheme.theme_name || ''
-      if (p === 'main_theme.status') return firstTheme.status === 'active' ? '持续' : ''
-      if (p === 'main_theme.duration_days') return firstTheme.duration_days ?? null
+      if (p === 'main_theme.name') return (firstTheme.theme_name || '') as T
+      if (p === 'main_theme.status') return (firstTheme.status === 'active' ? '持续' : '') as T
+      if (p === 'main_theme.duration_days') return (firstTheme.duration_days ?? null) as T
       if (p === 'main_theme.key_stocks') {
         if (typeof firstTheme.key_stocks === 'string') {
-          try { return JSON.parse(firstTheme.key_stocks) } catch { return [] }
+          try { return JSON.parse(firstTheme.key_stocks) as T } catch { return [] as T }
         }
-        return firstTheme.key_stocks || []
+        return ((firstTheme.key_stocks as string[] | null | undefined) || []) as T
       }
-      if (p === 'main_theme.node') return firstTheme.phase || ''
+      if (p === 'main_theme.node') return (firstTheme.phase || '') as T
     }
     if (p === 'notes' && teacherNotes.length) {
-      const parts = teacherNotes.flatMap((n: any) => [
+      const parts = teacherNotes.flatMap((n) => [
         n.sectors ? `【${n.teacher_name} 板块】${n.sectors}` : null,
         n.key_points ? `【${n.teacher_name} 要点】${n.key_points}` : null,
       ]).filter(Boolean)
-      if (parts.length) return parts.join('\n')
+      if (parts.length) return parts.join('\n') as T
     }
-    return fb
+    return fallback
   }
-  const s = (p: string, v: any) => onChange(set(d, p, v))
+  const s = (p: string, v: unknown) => onChange(set(d, p, v))
 
   return (
     <div className="space-y-6">
@@ -122,7 +145,7 @@ export default function StepSectors({ data, onChange, prefill }: StepProps) {
         <PrefillBanner>
           <div className="text-xs text-gray-500 mb-1">当前活跃主线（{themes.length} 条）</div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-            {themes.slice(0, 4).map((t: any) => (
+            {themes.slice(0, 4).map((t) => (
               <div key={`${t.date}-${t.theme_name}`} className="flex items-center gap-2">
                 <span className="font-medium text-gray-700">{t.theme_name}</span>
                 {t.duration_days && <span className="text-xs text-gray-400">{t.duration_days}天</span>}
@@ -157,7 +180,7 @@ export default function StepSectors({ data, onChange, prefill }: StepProps) {
 
       <DynamicList
         title="当日最强板块"
-        items={d.strongest || []}
+        items={strongest}
         onChange={v => onChange({ ...d, strongest: v })}
         defaultItem={{ name: '', reason: '', vs_index: '', node: '', volume_trend: '', recognition: '', key_stocks: [] }}
         renderItem={(item, upd) => (
@@ -179,7 +202,7 @@ export default function StepSectors({ data, onChange, prefill }: StepProps) {
 
       <DynamicList
         title="异动板块"
-        items={d.unusual || []}
+        items={unusual}
         onChange={v => onChange({ ...d, unusual: v })}
         defaultItem={{ name: '', trigger: '', start_position: '', volume: '', key_stocks: [] }}
         renderItem={(item, upd) => (
@@ -213,7 +236,7 @@ export default function StepSectors({ data, onChange, prefill }: StepProps) {
               <div>
                 <div className="text-xs text-green-600 font-medium mb-1">涨幅前列</div>
                 <div className="space-y-0.5">
-                  {sectorIndustry.data!.slice(0, 8).map((row: any, i: number) => (
+                  {sectorIndustry.data!.slice(0, 8).map((row, i) => (
                     <div key={i} className="flex justify-between text-xs text-gray-700">
                       <span>{row.name}</span>
                       <span className="text-green-600 font-medium">+{Number(row.change_pct ?? 0).toFixed(2)}%</span>
@@ -226,7 +249,7 @@ export default function StepSectors({ data, onChange, prefill }: StepProps) {
               <div>
                 <div className="text-xs text-red-500 font-medium mb-1">跌幅前列</div>
                 <div className="space-y-0.5">
-                  {sectorIndustry.bottom!.slice(0, 5).map((row: any, i: number) => (
+                  {sectorIndustry.bottom!.slice(0, 5).map((row, i) => (
                     <div key={i} className="flex justify-between text-xs text-gray-700">
                       <span>{row.name}</span>
                       <span className="text-red-500 font-medium">{Number(row.change_pct ?? 0).toFixed(2)}%</span>
@@ -244,10 +267,10 @@ export default function StepSectors({ data, onChange, prefill }: StepProps) {
         <PrefillBanner>
           <div className="text-xs font-medium text-gray-600 mb-2">行业节奏信号（当日前列）</div>
           <div className="space-y-1.5">
-            {sectorRhythm.slice(0, 10).map((item: any, i: number) => (
+            {sectorRhythm.slice(0, 10).map((item, i) => (
               <div key={i} className="flex flex-wrap items-center gap-2 text-xs">
                 <span className="font-medium text-gray-800 min-w-[5rem]">{item.name}</span>
-                <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${phaseClass(item.phase)}`}>{item.phase}</span>
+                <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${phaseClass(item.phase ?? '')}`}>{item.phase}</span>
                 <span className={`font-medium ${Number(item.change_today) >= 0 ? 'text-green-600' : 'text-red-500'}`}>
                   {Number(item.change_today) >= 0 ? '+' : ''}{Number(item.change_today ?? 0).toFixed(2)}%
                 </span>
@@ -266,7 +289,7 @@ export default function StepSectors({ data, onChange, prefill }: StepProps) {
         <PrefillBanner>
           <div className="text-xs font-medium text-gray-600 mb-2">近期行业信息（{industryInfoList.length} 条）</div>
           <div className="space-y-2">
-            {(industryInfoExpanded ? industryInfoList : industryInfoList.slice(0, INDUSTRY_INFO_INITIAL_COUNT)).map((info: any, i: number) => (
+            {(industryInfoExpanded ? industryInfoList : industryInfoList.slice(0, INDUSTRY_INFO_INITIAL_COUNT)).map((info, i) => (
               <div key={i} className="border-b border-amber-100 pb-2 last:border-0">
                 <div className="flex flex-wrap items-center gap-2 mb-0.5">
                   <span className="text-xs font-medium text-gray-700">{info.sector_name}</span>

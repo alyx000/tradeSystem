@@ -47,7 +47,7 @@ def test_collect_watchlist_announcements_tier1_tier2_dedupe(tmp_path: Path, monk
         return DataResult(data=None, source="mock", error="no")
 
     registry.call.side_effect = lambda method, *a, **kw: (
-        announcements_for(a[0], a[1], a[2]) if method == "get_stock_announcements" else DataResult(data=None, error="x")
+        announcements_for(a[0], a[1], a[2]) if method == "get_stock_announcements" else DataResult(data=[], source="mock")
     )
 
     col = WatchlistCollector(registry)

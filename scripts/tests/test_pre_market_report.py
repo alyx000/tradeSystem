@@ -79,10 +79,29 @@ def test_generate_pre_market_sections_and_yaml(tmp_path: Path):
             "000001.SZ": {
                 "name": "测试银行",
                 "announcements": [{"title": "测试公告", "ann_date": "20260328"}],
+                "disclosure_dates": [{"ann_date": "20260420", "report_end": "20260331"}],
             }
         },
         watchlist_announcements={
             "688000.SH": {"name": "测试科创", "announcements": []},
+        },
+        holdings_info={
+            "000001.SZ": {
+                "name": "测试银行",
+                "limit_prices": {"pre_close": 10.0, "up_limit": 11.0, "down_limit": 9.0},
+                "news": [],
+                "investor_qa": [],
+                "research_reports": [],
+            }
+        },
+        watchlist_info={
+            "688000.SH": {
+                "name": "测试科创",
+                "limit_prices": {"pre_close": 20.0, "up_limit": 24.0, "down_limit": 16.0},
+                "news": [],
+                "investor_qa": [],
+                "research_reports": [],
+            }
         },
         news=[],
         calendar_events=[
@@ -108,8 +127,13 @@ def test_generate_pre_market_sections_and_yaml(tmp_path: Path):
     assert "## 四、融资融券（上一交易日）" in md
     assert "较 2026-03-26" in md
     assert "五、持仓股公告" in md
-    assert "六、关注池公告" in md
-    assert "七、今日日历" in md
+    assert "六、持仓信息面" in md
+    assert "今日涨停价 11.0 / 今日跌停价 9.0" in md
+    assert "七、关注池公告" in md
+    assert "八、关注池信息面" in md
+    assert "今日涨停价 24.0 / 今日跌停价 16.0" in md
+    assert "九、今日日历" in md
+    assert "预约披露: 20260420（报告期 20260331）" in md
     assert "财经新闻" not in md
 
     p = Path(yaml_path)

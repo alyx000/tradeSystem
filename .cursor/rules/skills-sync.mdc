@@ -20,6 +20,17 @@ globs:
 
 ## 必须执行的检查清单
 
+### 0. 先判断是否存在统一入口
+
+更新 `.cursor/skills/**/*.md` 时，优先检查仓库根目录 `Makefile` 是否已经提供等价入口：
+
+- 检查优先写 `make check` / `make check-web` / `make check-scripts`
+- 开发启动优先写 `make dev` / `make dev-api` / `make dev-web`
+- 日常任务优先写 `make today-*`
+- 若 `Makefile` 已提供别名，SKILL.md 示例里应优先展示 `make` 入口，再补充底层 `python3 main.py ...`
+
+`INDEX.md` 里的依赖表仍保留真实底层 CLI/API，不要改成 `make` 目标名。
+
 ### 1. 检查 INDEX.md 是否需要更新
 
 打开 `.cursor/skills/INDEX.md`，逐行核对：
@@ -32,6 +43,12 @@ globs:
 - [ ] 若命令已从“骨架”变为真实可执行，移除 `SKILL.md` / `INDEX.md` 中的“规划中/骨架”描述
 
 ### 2. 运行 Smoke 测试
+
+```bash
+make check-scripts
+```
+
+若仅需快速验证 CLI 签名，也可单独运行：
 
 ```bash
 python3 -m pytest scripts/tests/test_cli_smoke.py -v

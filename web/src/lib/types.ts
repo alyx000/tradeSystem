@@ -26,11 +26,158 @@ export interface DailyMarket {
   margin_balance: number | null
 }
 
+export interface CommandDocItem {
+  command: string
+  description: string
+}
+
+export interface CommandDocSectionItem extends CommandDocItem {
+  target: string
+}
+
+export interface CommandDocSection {
+  title: string
+  items: CommandDocSectionItem[]
+}
+
+export interface CommandIndexPayload {
+  generated_by: string
+  summary: string
+  daily_quickstart: CommandDocItem[]
+  sections: CommandDocSection[]
+}
+
+export interface IngestHealthFailedInterface {
+  interface_name: string | null
+  interface_label?: string | null
+  interface_note?: string | null
+  failure_count: number | null
+  unresolved_count: number | null
+  consecutive_failure_days?: number | null
+  days_since_last_success?: number | null
+  last_success_biz_date?: string | null
+  last_failure_biz_date?: string | null
+}
+
+export interface IngestHealthDailyFailure {
+  biz_date: string
+  error_count: number | null
+}
+
+export interface IngestHealthSummary {
+  start_date: string
+  end_date: string
+  days: number
+  stage?: string | null
+  total_runs: number
+  total_failures: number
+  unresolved_failures: number
+  failed_interface_count: number
+  never_succeeded_count: number
+  failure_rate: number
+  status_label?: '稳定' | '有波动' | '承压' | '需处理' | null
+  status_reason?: string | null
+  top_failed_interfaces: IngestHealthFailedInterface[]
+  daily_failures: IngestHealthDailyFailure[]
+}
+
+export type SectorTab = 'industry' | 'concept' | 'fund_flow'
+export type SortOrder = 'gain' | 'loss'
+
+export interface MarketSection<T> {
+  data: T[]
+}
+
+export interface MarketIndexEntry {
+  close: number | null
+  change_pct: number | null
+}
+
+export interface SectorSnapshotRow {
+  name?: string | null
+  sector_name?: string | null
+  change_pct?: number | null
+  pct_change?: number | null
+  net_inflow?: number | null
+}
+
+export interface DailyInfoRow {
+  ts_code?: string | null
+  ts_name?: string | null
+  market?: string | null
+  amount?: number | null
+  total_mv?: number | null
+  tr?: number | null
+  vol?: number | null
+}
+
+export interface LimitStepRow {
+  ts_code?: string | null
+  name?: string | null
+  nums?: string | number | null
+}
+
+export interface StrongestSectorRow {
+  ts_code?: string | null
+  rank?: number | null
+  name?: string | null
+  up_nums?: number | null
+  cons_nums?: number | null
+  pct_chg?: number | null
+  up_stat?: string | null
+}
+
+export interface SectorMoneyflowThsRow {
+  ts_code?: string | null
+  industry?: string | null
+  name?: string | null
+  net_amount?: number | null
+  pct_change?: number | null
+  lead_stock?: string | null
+}
+
+export interface SectorMoneyflowDcRow {
+  ts_code?: string | null
+  name?: string | null
+  content_type?: string | null
+  net_amount?: number | null
+  net_amount_yi?: number | null
+  pct_change?: number | null
+  buy_sm_amount_stock?: string | null
+}
+
+export interface MarketMoneyflowDcRow {
+  net_amount?: number | null
+  net_amount_rate?: number | null
+  buy_elg_amount?: number | null
+  buy_lg_amount?: number | null
+}
+
+export interface MarketMoneyflowSummary {
+  netAmountYi: number | null
+  netAmountRate: number | null
+  superLargeYi: number | null
+  largeYi: number | null
+}
+
+export interface BoardCountItem {
+  board: number
+  count: number
+  stocks: string[]
+}
+
 export interface MarketFullData extends DailyMarket {
   available: boolean
-  sector_industry?: { data: any[] }
-  sector_concept?: { data: any[] }
-  sector_fund_flow?: { data: any[] }
+  indices?: Record<string, MarketIndexEntry>
+  sector_industry?: MarketSection<SectorSnapshotRow>
+  sector_concept?: MarketSection<SectorSnapshotRow>
+  sector_fund_flow?: MarketSection<SectorSnapshotRow>
+  sector_moneyflow_ths?: MarketSection<SectorMoneyflowThsRow>
+  sector_moneyflow_dc?: MarketSection<SectorMoneyflowDcRow>
+  market_moneyflow_dc?: MarketSection<MarketMoneyflowDcRow>
+  daily_info?: MarketSection<DailyInfoRow>
+  limit_step?: MarketSection<LimitStepRow>
+  limit_cpt_list?: MarketSection<StrongestSectorRow>
 }
 
 export interface MarketHistoryItem {
@@ -54,6 +201,27 @@ export interface MarketHistoryItem {
   northbound_net: number | null
 }
 
+export interface MarketChartItem extends MarketHistoryItem {
+  date_short: string
+}
+
+export interface MainThemeItem {
+  date?: string
+  theme_name: string
+  phase?: string | null
+  duration_days?: number | null
+  key_stocks?: string[] | string | null
+  note?: string | null
+  status?: string | null
+}
+
+export interface TeacherNoteAttachment {
+  url?: string | null
+  file_path?: string | null
+  file_type?: string | null
+  description?: string | null
+}
+
 export interface TeacherNote {
   id: number
   teacher_id: number
@@ -63,7 +231,22 @@ export interface TeacherNote {
   core_view: string | null
   tags: string | null
   sectors: string | null
+  key_points?: string | null
+  position_advice?: string | null
+  avoid?: string | null
+  raw_content?: string | null
+  attachments?: TeacherNoteAttachment[]
   created_at: string
+}
+
+export interface TeacherRecord {
+  id: number
+  name: string
+  platform?: string | null
+}
+
+export interface TeacherTimelineItem extends TeacherNote {
+  platform?: string | null
 }
 
 export interface CalendarEvent {
@@ -72,6 +255,8 @@ export interface CalendarEvent {
   event: string
   impact: string | null
   category: string | null
+  country?: string | null
+  time?: string | null
 }
 
 export interface Holding {
@@ -80,8 +265,18 @@ export interface Holding {
   stock_name: string
   entry_price: number | null
   current_price: number | null
+  prefill_pnl_pct?: number | null
   shares: number | null
   status: string
+  sector?: string | null
+}
+
+export interface HoldingCreateInput {
+  stock_code: string
+  stock_name: string
+  entry_price?: number
+  shares?: number
+  sector?: string
 }
 
 export interface WatchlistItem {
@@ -92,6 +287,24 @@ export interface WatchlistItem {
   sector: string | null
   add_reason: string | null
   status: string
+  add_date?: string | null
+  trigger_condition?: string | null
+  entry_condition?: string | null
+  role?: string | null
+  note?: string | null
+}
+
+export interface WatchlistCreateInput {
+  stock_code: string
+  stock_name: string
+  tier?: string
+  sector?: string
+  add_date?: string
+  add_reason?: string
+  trigger_condition?: string
+  entry_condition?: string
+  role?: string
+  note?: string
 }
 
 export interface PrefillData {
@@ -101,8 +314,485 @@ export interface PrefillData {
   avg_5d_amount: number | null
   avg_20d_amount: number | null
   teacher_notes: TeacherNote[]
-  emotion_cycle: any
-  main_themes: any[]
+  emotion_cycle: unknown
+  main_themes: MainThemeItem[]
   holdings: Holding[]
   calendar_events: CalendarEvent[]
+}
+
+export type ReviewStepKey =
+  | 'step1_market'
+  | 'step2_sectors'
+  | 'step3_emotion'
+  | 'step4_style'
+  | 'step5_leaders'
+  | 'step6_nodes'
+  | 'step7_positions'
+  | 'step8_plan'
+
+export type ReviewStepValue = Record<string, unknown>
+export type ReviewFormData = Partial<Record<ReviewStepKey, ReviewStepValue>>
+
+export interface ReviewEmotionCycle {
+  phase?: string | null
+  sub_cycle?: number | null
+  strength_trend?: string | null
+  confidence?: string | null
+}
+
+export interface ReviewPrevReview {
+  date?: string
+  step4_style?: string | null
+}
+
+export interface IndustryInfoItem {
+  id?: number
+  sector_name?: string | null
+  date?: string | null
+  title?: string | null
+  content?: string | null
+  info_type?: string | null
+  confidence?: string | null
+  timeliness?: string | null
+  source?: string | null
+}
+
+export interface IndustryInfoCreateInput {
+  date?: string
+  sector_name: string
+  info_type?: string
+  content: string
+  source?: string
+  confidence?: string
+  timeliness?: string
+}
+
+export interface TradeRecord {
+  id: number
+  trade_date?: string | null
+  stock_code?: string | null
+  stock_name?: string | null
+  action?: string | null
+  price?: number | null
+  shares?: number | null
+  note?: string | null
+}
+
+export interface TradeCreateInput {
+  trade_date?: string
+  stock_code?: string
+  stock_name?: string
+  action?: string
+  price?: number
+  shares?: number
+  note?: string
+}
+
+export interface TeacherNoteCreateInput {
+  teacher_id?: number
+  teacher_name?: string
+  title: string
+  date: string
+  core_view?: string
+  tags?: string[] | string
+  sectors?: string[] | string
+  key_points?: string[] | string
+  position_advice?: string
+  avoid?: string
+}
+
+export interface CalendarEventCreateInput {
+  date: string
+  event: string
+  impact?: string
+  category?: string
+  country?: string
+  time?: string
+}
+
+export interface PostMarketPayload {
+  available: boolean
+  [key: string]: unknown
+}
+
+export interface StyleFactorSeriesItem {
+  date?: string
+  metric?: string
+  value?: number | null
+  [key: string]: string | number | null | undefined
+}
+
+export interface SearchEntityItem {
+  id?: number | string
+  title?: string | null
+  date?: string | null
+  teacher_name?: string | null
+  sector_name?: string | null
+  event?: string | null
+  core_view?: string | null
+  content?: string | null
+}
+
+export type UnifiedSearchResult = Record<string, SearchEntityItem[]>
+
+export interface IngestInterfaceRecord {
+  interface_name: string
+  provider_method?: string | null
+  stage?: string | null
+  stage_label?: string | null
+  notes?: string | null
+  enabled_by_default?: boolean | null
+  enabled_by_default_label?: string | null
+  params_policy?: string | null
+  interface_label?: string | null
+}
+
+export interface IngestRunRecord {
+  run_id: string
+  interface_name?: string | null
+  interface_label?: string | null
+  interface_note?: string | null
+  provider?: string | null
+  provider_label?: string | null
+  stage?: string | null
+  stage_label?: string | null
+  status?: string | null
+  status_label?: string | null
+  row_count?: number | null
+  notes?: string | null
+  started_at?: string | null
+  finished_at?: string | null
+  duration_ms?: number | null
+}
+
+export interface IngestErrorRecord {
+  id: number | string
+  run_id?: string | null
+  interface_name?: string | null
+  interface_label?: string | null
+  interface_note?: string | null
+  stage?: string | null
+  stage_label?: string | null
+  error_type?: string | null
+  error_type_label?: string | null
+  error_message?: string | null
+  retryable?: number | null
+  retryable_label?: string | null
+  restriction_label?: string | null
+  restriction_reason?: string | null
+  action_hint?: string | null
+}
+
+export interface IngestInspectRecord {
+  date?: string
+  interface_name?: string | null
+  run_count?: number
+  error_count?: number
+  runs?: IngestRunRecord[]
+  errors?: IngestErrorRecord[]
+}
+
+export interface IngestRetryGroup {
+  interface_name?: string | null
+  interface_label?: string | null
+  interface_note?: string | null
+  biz_date?: string | null
+  stage?: string | null
+  stage_label?: string | null
+  error_count?: number | null
+}
+
+export interface IngestRetrySummary {
+  interface_name?: string | null
+  retryable_count?: number
+  groups?: IngestRetryGroup[]
+}
+
+export interface IngestReconcileInput {
+  stale_minutes?: number
+}
+
+export interface IngestReconcileRun {
+  run_id?: string | null
+  interface_name?: string | null
+  biz_date?: string | null
+  stage?: string | null
+  started_at?: string | null
+  finished_at?: string | null
+}
+
+export interface IngestReconcileResult {
+  stale_minutes: number
+  reconciled_count?: number
+  runs?: IngestReconcileRun[]
+}
+
+export interface IngestRetryRunInput {
+  limit?: number
+  input_by?: string
+}
+
+export interface IngestRetryRunResult {
+  requested_groups?: number
+  attempted_groups?: number
+  resolved_errors?: number
+  runs?: IngestRunRecord[]
+}
+
+export interface IngestRunStageInput {
+  stage: string
+  date: string
+  input_by?: string
+}
+
+export interface IngestRunStageResult {
+  stage: string
+  stage_label?: string | null
+  recorded_runs?: number
+}
+
+export interface IngestRunInterfaceInput {
+  name: string
+  date: string
+  input_by?: string
+}
+
+export interface IngestRunInterfaceResult {
+  name: string
+  run: IngestRunRecord
+}
+
+export interface KnowledgeAssetRecord {
+  asset_id: string
+  asset_type?: string | null
+  title?: string | null
+  content?: string | null
+  source?: string | null
+  tags?: string[] | string | null
+  created_at?: string | null
+}
+
+export interface KnowledgeAssetCreateInput {
+  asset_type: string
+  title: string
+  content: string
+  source?: string
+  tags?: string[]
+}
+
+export interface KnowledgeDraftInput {
+  trade_date?: string
+  input_by?: string
+}
+
+export interface KnowledgeDraftResult {
+  observation?: {
+    observation_id?: string
+    source_type?: string
+  }
+  draft: {
+    draft_id?: string
+    trade_date?: string
+  }
+}
+
+export interface SectorIndustryPrefill {
+  data?: SectorSnapshotRow[]
+  bottom?: SectorSnapshotRow[]
+}
+
+export interface SectorRhythmItem {
+  name?: string | null
+  phase?: string | null
+  change_today?: number | null
+  rank_today?: number | null
+  confidence?: string | null
+}
+
+export interface StyleFactorCapPreference {
+  relative?: string | null
+  csi300_chg?: number | null
+  csi1000_chg?: number | null
+  spread?: number | null
+}
+
+export interface StyleFactorBoardPreference {
+  dominant_type?: string | null
+  pct_10cm?: number | null
+  pct_20cm?: number | null
+  pct_30cm?: number | null
+}
+
+export interface StyleFactorPremiumSnapshotItem {
+  premium_median?: number | null
+}
+
+export interface StyleFactorPremiumTrend {
+  direction?: string | null
+  first_board_median_5d?: Array<string | number>
+}
+
+export interface ReviewStyleFactors {
+  cap_preference?: StyleFactorCapPreference
+  board_preference?: StyleFactorBoardPreference
+  premium_snapshot?: Record<string, StyleFactorPremiumSnapshotItem>
+  premium_trend?: StyleFactorPremiumTrend
+  switch_signals?: string[]
+}
+
+export interface ReviewPrefillMarket extends Omit<MarketFullData, 'sector_industry'> {
+  style_factors?: ReviewStyleFactors
+  sector_industry?: SectorIndustryPrefill
+  sector_rhythm_industry?: SectorRhythmItem[]
+}
+
+export interface ReviewPrefillData extends Omit<PrefillData, 'market' | 'main_themes' | 'emotion_cycle'> {
+  market: ReviewPrefillMarket | null
+  emotion_cycle?: ReviewEmotionCycle | null
+  main_themes: MainThemeItem[]
+  prev_review?: ReviewPrevReview | null
+  industry_info?: IndustryInfoItem[]
+}
+
+export interface ReviewRecord extends Partial<Record<ReviewStepKey, string | ReviewStepValue>> {
+  exists: boolean
+  ok?: boolean
+}
+
+export interface PlanFactCheck {
+  check_type: string
+  label?: string
+  params?: Record<string, string | number>
+  priority?: number | string
+  result?: string
+  evidence_json?: unknown
+}
+
+export interface PlanJudgementCheck {
+  label: string
+  notes?: string
+}
+
+export interface PlanWatchItem {
+  subject_type?: string
+  subject_code?: string
+  subject_name?: string
+  reason?: string
+  priority?: number | string
+  fact_checks?: PlanFactCheck[]
+  judgement_checks?: PlanJudgementCheck[]
+  trigger_conditions?: string[]
+  invalidations?: string[]
+}
+
+export interface PlanMarketView {
+  bias?: string
+}
+
+export interface PlanSectorView {
+  main_themes?: string[]
+}
+
+export interface PlanDraftRecord {
+  draft_id: string
+  trade_date: string
+  title?: string
+  summary?: string
+  market_view_json?: string
+  sector_view_json?: string
+  stock_focus_json?: string
+  watch_items_json?: string
+  fact_check_candidates_json?: string
+  judgement_check_candidates_json?: string
+  status?: string
+}
+
+export interface PlanRecord {
+  plan_id: string
+  trade_date: string
+  title?: string
+  market_bias?: string
+  status?: string
+  watch_items_json?: string
+}
+
+export interface PlanFactCheckResult extends PlanFactCheck {
+  result: string
+}
+
+export interface PlanDiagnosticsItem {
+  subject_code?: string
+  subject_name?: string
+  data_ready?: boolean
+  fact_check_results?: PlanFactCheckResult[]
+  judgement_checks?: Array<PlanJudgementCheck | string>
+  missing_dependencies?: string[]
+  unsupported_checks?: string[]
+}
+
+export interface PlanDiagnosticsRecord {
+  plan_id: string
+  trade_date: string
+  watch_item_count: number
+  fact_check_count: number
+  judgement_check_count: number
+  data_ready_count: number
+  missing_data_count: number
+  unsupported_check_count: number
+  summary_json?: unknown
+  items_json?: PlanDiagnosticsItem[]
+  generated_at?: string
+}
+
+export interface PlanReviewRecord {
+  review_id?: string
+  plan_id: string
+}
+
+export interface PlanObservationRecord {
+  observation_id: string
+  title?: string
+  source_type?: string
+  judgements_json?: string
+}
+
+export interface PlanObservationUpdateInput {
+  title?: string
+  judgements?: string[]
+  input_by?: string
+}
+
+export interface PlanDraftCreateInput {
+  trade_date: string
+  market_facts?: PlanMarketView
+  sector_facts?: PlanSectorView
+  stock_facts?: Array<Partial<PlanWatchItem>>
+  judgements?: string[]
+  input_by?: string
+}
+
+export interface PlanDraftUpdateInput {
+  summary?: string
+  watch_items?: PlanWatchItem[]
+  fact_check_candidates?: PlanFactCheck[]
+  judgement_check_candidates?: PlanJudgementCheck[]
+  input_by?: string
+}
+
+export interface PlanConfirmInput {
+  trade_date: string
+  input_by?: string
+}
+
+export interface PlanUpdateInput {
+  title?: string
+  market_bias?: string
+  watch_items?: PlanWatchItem[]
+  input_by?: string
+}
+
+export interface PlanReviewInput {
+  trade_date?: string
+  outcome_summary?: string
+  input_by?: string
 }

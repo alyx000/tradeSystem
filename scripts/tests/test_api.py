@@ -69,6 +69,15 @@ def test_health(client):
     assert r.status_code == 200
 
 
+def test_meta_commands(seeded_client):
+    r = seeded_client.get("/api/meta/commands")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["generated_by"] == "python3 scripts/generate_command_index.py"
+    assert len(data["daily_quickstart"]) >= 1
+    assert any(section["title"] == "开发与页面" for section in data["sections"])
+
+
 # ──────────────────────────────────────────────────────────────
 # Review (八步复盘)
 # ──────────────────────────────────────────────────────────────
@@ -563,6 +572,7 @@ class TestPlanningAndKnowledgeAPI:
         assert r.status_code == 200
         interfaces = r.json()
         assert any(item["interface_name"] == "margin" for item in interfaces)
+        assert any(item["interface_label"] == "融资融券数据" for item in interfaces)
 
         r = client.post(
             "/api/ingest/run-interface",
@@ -576,19 +586,94 @@ class TestPlanningAndKnowledgeAPI:
         assert r.status_code == 200
         inspect_payload = r.json()
         assert inspect_payload["run_count"] >= 1
+        assert "interface_label" in inspect_payload["runs"][0]
+        assert "status_label" in inspect_payload["runs"][0]
+
+        r = client.get("/api/ingest/inspect", params={"date": "2026-04-03", "interface": "margin"})
+        assert r.status_code == 200
+        inspect_filtered_payload = r.json()
+        assert inspect_filtered_payload["interface_name"] == "margin"
+
+        r = client.get("/api/ingest/inspect", params={"date": "2026-04-03", "stage": "post_extended"})
+        assert r.status_code == 200
+        inspect_stage_payload = r.json()
+        assert inspect_stage_payload["stage"] == "post_extended"
 
         r = client.get("/api/ingest/runs", params={"date": "2026-04-03"})
         assert r.status_code == 200
         runs = r.json()
         assert len(runs) >= 1
+        assert "provider_label" in runs[0]
 
         r = client.get("/api/ingest/errors", params={"date": "2026-04-03"})
         assert r.status_code == 200
-        assert isinstance(r.json(), list)
+        errors = r.json()
+        assert isinstance(errors, list)
+        if errors:
+            assert "error_type_label" in errors[0]
+            assert "retryable_label" in errors[0]
+            assert "action_hint" in errors[0]
+            assert "restriction_label" in errors[0]
 
         r = client.get("/api/ingest/retry")
         assert r.status_code == 200
-        assert "retryable_count" in r.json()
+        retry_payload = r.json()
+        assert "retryable_count" in retry_payload
+        assert "status_label" in retry_payload
+        assert "status_reason" in retry_payload
+        groups = retry_payload.get("groups") or []
+        if groups:
+            assert "interface_label" in groups[0]
+
+        r = client.get("/api/ingest/retry", params={"interface": "margin"})
+        assert r.status_code == 200
+        retry_filtered_payload = r.json()
+        assert retry_filtered_payload["interface_name"] == "margin"
+
+        r = client.get("/api/ingest/retry", params={"stage": "post_extended"})
+        assert r.status_code == 200
+        retry_stage_payload = r.json()
+        assert retry_stage_payload["stage"] == "post_extended"
+
+        r = client.get("/api/ingest/health", params={"date": "2026-04-03", "days": 7})
+        assert r.status_code == 200
+        health_payload = r.json()
+        assert "top_failed_interfaces" in health_payload
+        assert "daily_failures" in health_payload
+        assert "failed_interface_count" in health_payload
+        assert "never_succeeded_count" in health_payload
+        assert "failure_rate" in health_payload
+        assert "status_label" in health_payload
+        assert "status_reason" in health_payload
+        if health_payload["top_failed_interfaces"]:
+            assert "consecutive_failure_days" in health_payload["top_failed_interfaces"][0]
+            assert "days_since_last_success" in health_payload["top_failed_interfaces"][0]
+
+        r = client.get("/api/ingest/health", params={"date": "2026-04-03", "days": 7, "stage": "post_extended"})
+        assert r.status_code == 200
+        health_stage_payload = r.json()
+        assert health_stage_payload["stage"] == "post_extended"
+
+        r = client.get(
+            "/api/ingest/health",
+            params={"date": "2026-04-03", "days": 7, "stage": "post_extended", "interface": "margin"},
+        )
+        assert r.status_code == 200
+        health_interface_payload = r.json()
+        assert health_interface_payload["stage"] == "post_extended"
+        assert health_interface_payload["interface_name"] == "margin"
+
+        r = client.post("/api/ingest/reconcile", json={"stale_minutes": 5})
+        assert r.status_code == 200
+        reconcile_payload = r.json()
+        assert reconcile_payload["stale_minutes"] == 5
+        assert "reconciled_count" in reconcile_payload
+
+        r = client.post("/api/ingest/retry-run", json={"limit": 2, "input_by": "web"})
+        assert r.status_code == 200
+        retry_run_payload = r.json()
+        assert "requested_groups" in retry_run_payload
+        assert "attempted_groups" in retry_run_payload
 
     def test_ingest_api_not_found(self, client):
         r = client.post(

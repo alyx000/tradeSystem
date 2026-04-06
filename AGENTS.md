@@ -390,3 +390,61 @@ tradeSystem/
 - `scripts/.env` 含敏感 token，不提交到 Git
 - `data/trade.db` 和 `data/attachments/` 不提交到 Git（已在 `.gitignore`）
 - `web/node_modules/` 和 `web/dist/` 不提交到 Git
+
+### 仓库操作速查表
+优先使用仓库根目录的统一入口，而不是手敲零散命令。
+
+- 首次安装：`make bootstrap`
+- 环境检查：`make doctor`
+- 全量检查：`make check`
+- 只查前端：`make check-web`
+- 只查后端：`make check-scripts`
+- 生成命令索引：`make commands-doc`
+- 安装本地 hooks：`make hooks-install`
+- 启动前后端：`make dev`
+- 只起后端：`make dev-api`
+- 只起前端：`make dev-web`
+- 打开仪表盘：`make dashboard-open`
+- 打开查询中心：`make search-open`
+- 打开命令中心：`make commands-open`
+- 打开计划工作台：`make plan-open DATE=YYYY-MM-DD`
+- 打开资料工作台：`make knowledge-open`
+- 打开采集工作台：`make ingest-open`
+- 打开老师观点页：`make teachers-open`
+- 打开持仓页：`make holdings-open`
+- 打开关注池页：`make watchlist-open`
+- 打开日历页：`make calendar-open`
+- 打开行业页：`make industry-open`
+- 今日盘前：`make today-open`
+- 今日盘后：`make today-close`
+- 今日晚间任务：`make today-evening`
+- 今日关注池：`make today-watchlist`
+- 今日 Obsidian 导出：`make today-obsidian`
+- 今日采集审计：`make today-ingest-inspect`
+- 今日采集健康：`make today-ingest-health`
+- 近 7 天采集健康：`make ingest-health DAYS=7`
+- 清理陈旧采集记录：`make ingest-reconcile STALE_MINUTES=5`
+- 初始化数据库：`make db-init`
+- 重试失败写入：`make db-sync`
+- YAML/DB 对账：`make db-reconcile`
+- 当前持仓：`make holdings`
+- 当前关注池：`make watchlist`
+- 老师笔记搜索：`make notes-search KEYWORD=主线`
+- 跨表搜索：`make db-search KEYWORD=情绪`
+- 打开市场看板：`make market-open DATE=YYYY-MM-DD`
+- 查看市场摘要：`make market-json DATE=YYYY-MM-DD`
+- 查看盘后信封：`make market-envelope DATE=YYYY-MM-DD`
+- 打开复盘工作台：`make review-open DATE=YYYY-MM-DD`
+- 查看复盘预填充：`make review-prefill DATE=YYYY-MM-DD`
+- 单接口采集：`make ingest-run-interface NAME=block_trade`
+- 查看采集审计：`make ingest-inspect DATE=YYYY-MM-DD`
+- 查看采集健康：`make ingest-health DATE=YYYY-MM-DD DAYS=7`
+- 清理陈旧 running 采集记录：`make ingest-reconcile`
+- 计划草稿：`make plan-draft`
+- 查看今日草稿：`make plan-show-draft`
+- 确认正式计划：`make plan-confirm DRAFT_ID=draft_xxx`
+- 计划诊断：`make plan-diagnose PLAN_ID=plan_xxx`
+- 回写计划复盘：`make plan-review PLAN_ID=plan_xxx`
+- 查看资料：`make knowledge-list`
+
+完整命令表见 [docs/commands.md](/Users/alyx/tradeSystem/docs/commands.md)，机器可读清单见 [docs/commands.json](/Users/alyx/tradeSystem/docs/commands.json)。新增 `make` 目标后，优先运行 `make commands-doc` 更新索引；`make check` / pre-push 会自动执行 `make commands-check`。

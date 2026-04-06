@@ -19,6 +19,10 @@ version: "0.1"
 ## 当前标准 CLI
 
 ```bash
+make knowledge-open
+make knowledge-list
+make knowledge-add-note
+make knowledge-draft-from-asset ASSET_ID=asset_xxx
 python3 main.py knowledge add-note
 python3 main.py knowledge list
 python3 main.py knowledge draft-from-asset --asset-id asset_xxx
@@ -29,6 +33,12 @@ python3 main.py knowledge draft-from-asset --asset-id asset_xxx
 ```bash
 --json
 ```
+
+说明：
+
+- 若用户是要进入 Web 资料工作台本身，优先使用 `make knowledge-open`
+- 日常资料录入与草稿生成优先使用 `make knowledge-*`
+- 若需要补充底层参数，再退回 `python3 main.py knowledge ...`
 
 ## 协作规则
 

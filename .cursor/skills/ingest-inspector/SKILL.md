@@ -15,17 +15,27 @@ version: "0.1"
 - 「单独跑 block_trade」
 - 「看看接口注册表」
 - 「重试失败的采集」
+- 「把卡住的 running 记录收掉」
 
 时激活此 skill。
 
 ## 当前标准 CLI
 
 ```bash
-python3 main.py ingest run --stage post_core --date 2026-04-04
-python3 main.py ingest run-interface --name block_trade --date 2026-04-04
+make ingest-run-post DATE=YYYY-MM-DD
+make ingest-run-interface NAME=block_trade DATE=YYYY-MM-DD
+make ingest-inspect DATE=YYYY-MM-DD
+make today-ingest-health
+make ingest-health DATE=YYYY-MM-DD DAYS=7
+make ingest-reconcile STALE_MINUTES=5
+make ingest-list
+python3 main.py ingest run --stage post_core --date YYYY-MM-DD
+python3 main.py ingest run-interface --name block_trade --date YYYY-MM-DD
 python3 main.py ingest list-interfaces
-python3 main.py ingest inspect --date 2026-04-04
-python3 main.py ingest retry
+python3 main.py ingest inspect --date YYYY-MM-DD --stage post_extended --interface margin
+python3 main.py ingest health --date YYYY-MM-DD --days 7 --stage post_extended
+python3 main.py ingest retry --stage post_extended --interface margin
+python3 main.py ingest reconcile --stale-minutes 5
 ```
 
 若需要结构化输出，附加：
@@ -33,6 +43,14 @@ python3 main.py ingest retry
 ```bash
 --json
 ```
+
+说明：
+
+- 优先使用 `make ingest-*` 别名执行高频检查
+- 单接口补跑可直接用 `make ingest-run-interface NAME=...`
+- 看整体稳定性优先用 `make ingest-health`
+- 外层超时或 Ctrl-C 后残留的 `running` 审计，可用 `make ingest-reconcile`
+- 需要更细粒度参数时，再退回底层 `python3 main.py ingest ...`
 
 ## 协作规则
 
@@ -54,6 +72,7 @@ python3 main.py ingest retry
 
 - `GET /api/ingest/interfaces`
 - `GET /api/ingest/inspect?date=YYYY-MM-DD`
+- `GET /api/ingest/health?date=YYYY-MM-DD&days=7`
 - `GET /api/ingest/runs?date=YYYY-MM-DD`
 - `GET /api/ingest/errors?date=YYYY-MM-DD`
 - `POST /api/ingest/run`

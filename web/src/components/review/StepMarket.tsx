@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom'
-import { type StepProps, get, set, Section, Row, PrefillBanner, Metric, SelectField, TextField, NumberField, TextareaField, TeacherNotesPanel } from './widgets'
+import { type StepProps, Section, Row, PrefillBanner, Metric, SelectField, TextField, NumberField, TextareaField, TeacherNotesPanel } from './widgets'
+import { get, set } from './formState'
 
 const TREND = [
   { value: '主升', label: '主升' },
@@ -32,7 +33,7 @@ const POSITION = [
 
 const AMOUNT_THRESHOLD = 0.05
 
-function deriveVolChange(cur: number | null, prev: number | null): string {
+function deriveVolChange(cur: number | null | undefined, prev: number | null | undefined): string {
   if (cur == null || prev == null || prev === 0) return ''
   const ratio = (cur - prev) / prev
   if (ratio > AMOUNT_THRESHOLD) return '放量'
@@ -40,7 +41,7 @@ function deriveVolChange(cur: number | null, prev: number | null): string {
   return '持平'
 }
 
-function deriveVolVs(cur: number | null, avg: number | null): string {
+function deriveVolVs(cur: number | null | undefined, avg: number | null | undefined): string {
   if (cur == null || avg == null || avg === 0) return ''
   const ratio = (cur - avg) / avg
   if (ratio > AMOUNT_THRESHOLD) return '高于'
@@ -55,23 +56,26 @@ export default function StepMarket({ data, onChange, prefill }: StepProps) {
 
   const teacherNotes = prefill?.teacher_notes || []
 
-  const g = (p: string, fb: any = '') => {
-    const val = get(d, p, undefined)
+  const g = <T = string,>(p: string, fb?: T) => {
+    const fallback = (fb ?? '') as T
+    const val = get<T | undefined>(d, p, undefined)
     if (val !== undefined && val !== '') return val
 
     if (m) {
-      if (p === 'volume.vs_yesterday') return deriveVolChange(m.total_amount, pm?.total_amount)
-      if (p === 'volume.vs_5day_avg') return deriveVolVs(m.total_amount, prefill?.avg_5d_amount)
-      if (p === 'volume.vs_20day_avg') return deriveVolVs(m.total_amount, prefill?.avg_20d_amount)
-      if (p === 'direction.ma5w') return m.sh_above_ma5w ? '线上' : m.sh_above_ma5w === false ? '线下' : ''
+      if (p === 'volume.vs_yesterday') return deriveVolChange(m.total_amount, pm?.total_amount) as T
+      if (p === 'volume.vs_5day_avg') return deriveVolVs(m.total_amount, prefill?.avg_5d_amount) as T
+      if (p === 'volume.vs_20day_avg') return deriveVolVs(m.total_amount, prefill?.avg_20d_amount) as T
+      if (p === 'direction.ma5w') return (m.sh_above_ma5w ? '线上' : m.sh_above_ma5w === false ? '线下' : '') as T
     }
     if (p === 'notes' && teacherNotes.length) {
-      const views = teacherNotes.map((n: any) => n.core_view).filter(Boolean)
-      if (views.length) return views.map((v: string, i: number) => `【${teacherNotes[i].teacher_name}】${v}`).join('\n')
+      const views = teacherNotes
+        .map((n) => n.core_view)
+        .filter((view): view is string => Boolean(view))
+      if (views.length) return views.map((v, i) => `【${teacherNotes[i].teacher_name}】${v}`).join('\n') as T
     }
-    return fb
+    return fallback
   }
-  const s = (p: string, v: any) => onChange(set(d, p, v))
+  const s = (p: string, v: unknown) => onChange(set(d, p, v))
 
   const fmtAmount = (v: number | null | undefined) =>
     v != null ? (v >= 10000 ? `${(v / 10000).toFixed(2)}万亿` : `${v.toFixed(0)}亿`) : '-'

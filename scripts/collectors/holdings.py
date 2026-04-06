@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import os
 import logging
+from collections import defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -28,14 +29,37 @@ def collect_info_for_stocks(registry, stocks: list[tuple[str, str]], date: str) 
     """
     if not registry:
         return {}
+    from db.dual_write import _normalize_stock_code_for_match
+
     d = datetime.strptime(date, "%Y-%m-%d")
     start = (d - timedelta(days=7)).strftime("%Y-%m-%d")
+    limit_map: dict[str, dict] = {}
+
+    try:
+        limit_r = registry.call("get_stock_limit_prices", date)
+        if limit_r.success and isinstance(limit_r.data, list):
+            for row in limit_r.data:
+                if not isinstance(row, dict):
+                    continue
+                norm = _normalize_stock_code_for_match(row.get("ts_code") or row.get("code"))
+                if not norm:
+                    continue
+                limit_map[norm] = {
+                    "up_limit": row.get("up_limit"),
+                    "down_limit": row.get("down_limit"),
+                    "pre_close": row.get("pre_close"),
+                }
+    except Exception as e:
+        logger.debug("盘前涨跌停价获取失败: %s", e)
 
     results: dict = {}
     for code, name in stocks:
         if not code or not code.strip():
             continue
         info: dict = {"name": name}
+        limit_prices = limit_map.get(_normalize_stock_code_for_match(code))
+        if limit_prices:
+            info["limit_prices"] = limit_prices
 
         news_r = registry.call("get_stock_news", code, date, 5)
         info["news"] = news_r.data if news_r.success and news_r.data else []
@@ -46,12 +70,184 @@ def collect_info_for_stocks(registry, stocks: list[tuple[str, str]], date: str) 
         rr_r = registry.call("get_research_reports", code)
         info["research_reports"] = rr_r.data if rr_r.success and rr_r.data else []
 
-        if info["news"] or info["investor_qa"] or info["research_reports"]:
+        if info.get("limit_prices") or info["news"] or info["investor_qa"] or info["research_reports"]:
             results[code] = info
 
     return results
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
+
+
+def _date_digits(date_text: str) -> str:
+    return str(date_text or "").replace("-", "").strip()
+
+
+def _quarter_end_for_date(date_text: str) -> str:
+    dt = datetime.strptime(date_text, "%Y-%m-%d")
+    if dt.month <= 3:
+        return f"{dt.year - 1}1231"
+    if dt.month <= 6:
+        return f"{dt.year}0331"
+    if dt.month <= 9:
+        return f"{dt.year}0630"
+    return f"{dt.year}0930"
+
+
+def _announcement_sort_key(item: dict) -> tuple[str, str]:
+    return (
+        str(item.get("ann_date") or ""),
+        str(item.get("title") or ""),
+    )
+
+
+def _disclosure_sort_key(item: dict) -> tuple[str, str, str]:
+    return (
+        str(item.get("ann_date") or item.get("pre_date") or ""),
+        str(item.get("report_end") or item.get("end_date") or ""),
+        str(item.get("ts_code") or item.get("code") or ""),
+    )
+
+
+def _merge_source_tags(*sources: str) -> str:
+    seen: list[str] = []
+    for source in sources:
+        if source and source not in seen:
+            seen.append(source)
+    return ",".join(seen)
+
+
+def collect_announcements_for_stocks(
+    registry,
+    stocks: list[tuple[str, str]],
+    start_date: str,
+    end_date: str,
+    db_path: os.PathLike | str | None = None,
+) -> dict:
+    """
+    采集一组股票的公告与披露计划。
+
+    优先复用 ingest 原始层：
+    - `anns_d`: 按日期范围展开 raw payload 并按股票过滤
+    - `disclosure_date`: 读取截止 end_date 最近一次落库快照
+    若原始层没有对应数据，再降级到 provider 在线查询。
+    """
+    from db.connection import get_db
+    from db.migrate import migrate
+    from db import queries as Q
+    from db.dual_write import _normalize_stock_code_for_match
+
+    if not stocks:
+        return {}
+
+    start_digits = _date_digits(start_date)
+    end_digits = _date_digits(end_date)
+    code_map = {
+        _normalize_stock_code_for_match(code): (code, name)
+        for code, name in stocks
+        if _normalize_stock_code_for_match(code)
+    }
+    results: dict[str, dict] = {
+        code: {
+            "name": name,
+            "announcements": [],
+            "disclosure_dates": [],
+            "_source": "",
+        }
+        for code, name in stocks
+        if code and code.strip()
+    }
+
+    try:
+        with get_db(db_path) as conn:
+            migrate(conn)
+            ann_rows = Q.list_raw_interface_rows(
+                conn,
+                interface_name="anns_d",
+                biz_date_from=start_date,
+                biz_date_to=end_date,
+            )
+            disclosure_rows = Q.get_latest_raw_interface_rows(
+                conn,
+                interface_name="disclosure_date",
+                biz_date=end_date,
+            )
+    except Exception as e:
+        logger.debug("读取 ingest 原始层公告/披露计划失败，将降级到 provider: %s", e)
+        ann_rows = []
+        disclosure_rows = []
+
+    ann_by_code: dict[str, list[dict]] = defaultdict(list)
+    for row in ann_rows:
+        norm = _normalize_stock_code_for_match(row.get("ts_code") or row.get("code"))
+        if not norm or norm not in code_map:
+            continue
+        ann_date = str(row.get("ann_date") or "")
+        if ann_date and not (start_digits <= ann_date <= end_digits):
+            continue
+        ann_by_code[norm].append(row)
+
+    disclosure_by_code: dict[str, list[dict]] = defaultdict(list)
+    for row in disclosure_rows:
+        norm = _normalize_stock_code_for_match(row.get("ts_code") or row.get("code"))
+        if not norm or norm not in code_map:
+            continue
+        plan_date = str(row.get("ann_date") or row.get("pre_date") or "")
+        if plan_date and plan_date < start_digits:
+            continue
+        disclosure_by_code[norm].append(row)
+
+    for norm_code, (raw_code, _name) in code_map.items():
+        anns = sorted(ann_by_code.get(norm_code, []), key=_announcement_sort_key, reverse=True)
+        disclosures = sorted(disclosure_by_code.get(norm_code, []), key=_disclosure_sort_key)
+        if raw_code in results:
+            results[raw_code]["announcements"] = anns
+            results[raw_code]["disclosure_dates"] = disclosures[:5]
+            if anns:
+                results[raw_code]["_source"] = _merge_source_tags(results[raw_code]["_source"], "ingest:anns_d")
+            if disclosures:
+                results[raw_code]["_source"] = _merge_source_tags(results[raw_code]["_source"], "ingest:disclosure_date")
+
+    if registry:
+        missing_anns = [
+            (code, name)
+            for code, name in stocks
+            if code in results and not results[code]["announcements"]
+        ]
+        for code, _name in missing_anns:
+            r = registry.call("get_stock_announcements", code, start_date, end_date)
+            if r.success and r.data is not None:
+                results[code]["announcements"] = r.data
+                results[code]["_source"] = _merge_source_tags(results[code]["_source"], r.source)
+
+        missing_disclosures = [code for code, _name in stocks if code in results and not results[code]["disclosure_dates"]]
+        if missing_disclosures:
+            quarter_end = _quarter_end_for_date(end_date)
+            disclosure_result = registry.call("get_disclosure_dates", end_date)
+            if disclosure_result.success and disclosure_result.data:
+                rows = disclosure_result.data if isinstance(disclosure_result.data, list) else [disclosure_result.data]
+                grouped: dict[str, list[dict]] = defaultdict(list)
+                for row in rows:
+                    if not isinstance(row, dict):
+                        continue
+                    norm = _normalize_stock_code_for_match(row.get("ts_code") or row.get("code"))
+                    if not norm:
+                        continue
+                    grouped[norm].append(row)
+                for code in missing_disclosures:
+                    norm = _normalize_stock_code_for_match(code)
+                    plans = sorted(grouped.get(norm, []), key=_disclosure_sort_key)
+                    if plans:
+                        results[code]["disclosure_dates"] = plans[:5]
+                        results[code]["_source"] = _merge_source_tags(
+                            results[code]["_source"],
+                            disclosure_result.source or f"tushare:disclosure_date:{quarter_end}",
+                        )
+
+    return {
+        code: info
+        for code, info in results.items()
+        if info["announcements"] or info["disclosure_dates"] or info["_source"]
+    }
 
 
 class HoldingsCollector:
@@ -228,20 +424,15 @@ class HoldingsCollector:
                 results.append({"code": h["code"], "name": h["name"], "error": r.error})
         return results
 
-    def collect_holdings_announcements(self, start_date: str, end_date: str) -> dict:
+    def collect_holdings_announcements(
+        self,
+        start_date: str,
+        end_date: str,
+        db_path: os.PathLike | str | None = None,
+    ) -> dict:
         """采集持仓股的公告"""
-        if not self.registry:
-            return {}
-        results = {}
-        for h in self._holdings:
-            r = self.registry.call("get_stock_announcements", h["code"], start_date, end_date)
-            if r.success:
-                results[h["code"]] = {
-                    "name": h["name"],
-                    "announcements": r.data,
-                    "_source": r.source,
-                }
-        return results
+        stocks = [(h["code"], h["name"]) for h in self._holdings if h.get("code")]
+        return collect_announcements_for_stocks(self.registry, stocks, start_date, end_date, db_path=db_path)
 
     def collect_stock_info(self, date: str) -> dict:
         """

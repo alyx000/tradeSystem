@@ -1,10 +1,17 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '../lib/api'
+import type { CalendarEvent } from '../lib/types'
+
+function getDefaultDateRange() {
+  const now = new Date()
+  const today = now.toISOString().slice(0, 10)
+  const next30 = new Date(now.getTime() + 30 * 86400000).toISOString().slice(0, 10)
+  return { today, next30 }
+}
 
 export default function Calendar() {
-  const today = new Date().toISOString().slice(0, 10)
-  const next30 = new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10)
+  const { today, next30 } = getDefaultDateRange()
   const [dateFrom, setDateFrom] = useState(today)
   const [dateTo, setDateTo] = useState(next30)
 
@@ -13,7 +20,7 @@ export default function Calendar() {
     queryFn: () => api.getCalendarRange(dateFrom, dateTo),
   })
 
-  const grouped = (events || []).reduce((acc: Record<string, any[]>, evt: any) => {
+  const grouped = (events || []).reduce((acc: Record<string, CalendarEvent[]>, evt: CalendarEvent) => {
     if (!acc[evt.date]) acc[evt.date] = []
     acc[evt.date].push(evt)
     return acc
@@ -43,7 +50,7 @@ export default function Calendar() {
               {date} ({new Date(date).toLocaleDateString('zh-CN', { weekday: 'short' })})
             </div>
             <div className="divide-y">
-              {evts.map((e: any) => (
+              {evts.map((e: CalendarEvent) => (
                 <div key={e.id} className="px-4 py-3 text-sm flex items-center gap-3">
                   <span className={`shrink-0 w-2 h-2 rounded-full ${
                     e.impact === 'high' ? 'bg-red-500' :
