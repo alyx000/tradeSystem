@@ -81,6 +81,11 @@ export interface IngestHealthSummary {
   daily_failures: IngestHealthDailyFailure[]
 }
 
+export interface IngestDashboardHealthSummary {
+  core: IngestHealthSummary
+  extended: IngestHealthSummary
+}
+
 export type SectorTab = 'industry' | 'concept' | 'fund_flow'
 export type SortOrder = 'gain' | 'loss'
 
@@ -405,6 +410,26 @@ export interface WatchlistCreateInput {
   entry_condition?: string
   role?: string
   note?: string
+}
+
+/** 异动监管 API：Type1/2 来自 stock_regulatory_monitor；Type3 来自 stk_alert（重点监控） */
+export interface RegulatoryMonitorRecord {
+  id: number
+  ts_code: string
+  name: string
+  regulatory_type: number
+  risk_level: number
+  reason: string
+  publish_date: string
+  source: string
+  risk_score: number | null
+  detail_json: string | Record<string, unknown> | null
+  created_at?: string | null
+  updated_at?: string | null
+  /** regulatory_type=3 时有值：监控期起止（YYYY-MM-DD） */
+  monitor_start_date?: string | null
+  monitor_end_date?: string | null
+  alert_type?: string | null
 }
 
 export interface PrefillData {

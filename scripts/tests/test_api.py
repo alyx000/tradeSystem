@@ -69,6 +69,58 @@ def test_health(client):
     assert r.status_code == 200
 
 
+def test_regulatory_monitor_list(client, db_path):
+    conn = get_connection(db_path)
+    Q.upsert_regulatory_monitor(conn, {
+        "ts_code": "600000.SH",
+        "name": "浦发银行",
+        "regulatory_type": 1,
+        "risk_level": 1,
+        "reason": "停牌核查",
+        "publish_date": "2026-04-03",
+        "source": "tushare:suspend_d",
+        "risk_score": 1.0,
+        "detail_json": {"k": "v"},
+    })
+    Q.replace_stk_alert_snapshot(conn, "2026-04-03", [{
+        "ts_code": "300834.SZ",
+        "name": "星辉环材",
+        "monitor_start": "2026-04-07",
+        "monitor_end": "2026-04-20",
+        "alert_type": "交易所重点提示证券",
+        "source": "test:stk_alert",
+        "detail_json": {},
+    }])
+    conn.commit()
+    conn.close()
+
+    r = client.get("/api/regulatory-monitor", params={"date": "2026-04-03"})
+    assert r.status_code == 200
+    rows = r.json()
+    assert len(rows) == 2
+    codes = {row["ts_code"] for row in rows}
+    assert codes == {"600000.SH", "300834.SZ"}
+    by_code = {row["ts_code"]: row for row in rows}
+    assert by_code["600000.SH"]["regulatory_type"] == 1
+    assert by_code["300834.SZ"]["regulatory_type"] == 3
+    assert by_code["300834.SZ"]["monitor_start_date"] == "2026-04-07"
+    assert by_code["300834.SZ"]["monitor_end_date"] == "2026-04-20"
+
+    r2 = client.get("/api/regulatory-monitor", params={"date": "2026-04-03", "type": "2"})
+    assert r2.status_code == 200
+    assert r2.json() == []
+
+    r3 = client.get("/api/regulatory-monitor", params={"date": "2026-04-03", "type": "3"})
+    assert r3.status_code == 200
+    alert_rows = r3.json()
+    assert len(alert_rows) == 1
+    assert alert_rows[0]["ts_code"] == "300834.SZ"
+    assert alert_rows[0]["regulatory_type"] == 3
+
+    r_bad = client.get("/api/regulatory-monitor", params={"date": "not-a-date"})
+    assert r_bad.status_code == 422
+
+
 def test_meta_commands(seeded_client):
     r = seeded_client.get("/api/meta/commands")
     assert r.status_code == 200
@@ -925,6 +977,14 @@ class TestPlanningAndKnowledgeAPI:
         assert r.status_code == 200
         health_stage_payload = r.json()
         assert health_stage_payload["stage"] == "post_extended"
+
+        r = client.get("/api/ingest/health/dashboard", params={"date": "2026-04-03", "days": 7})
+        assert r.status_code == 200
+        dashboard_health_payload = r.json()
+        assert dashboard_health_payload["core"]["stage"] == "post_core"
+        assert dashboard_health_payload["extended"]["stage"] == "post_extended"
+        assert "status_label" in dashboard_health_payload["core"]
+        assert "status_label" in dashboard_health_payload["extended"]
 
         r = client.get(
             "/api/ingest/health",

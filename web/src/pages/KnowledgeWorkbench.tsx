@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
+import { localDateString } from '../lib/date'
 import type { KnowledgeAssetRecord } from '../lib/types'
 
 const ASSET_TYPES = [
@@ -152,7 +153,7 @@ function DraftModal({
   asset: KnowledgeAssetRecord
   onClose: () => void
 }) {
-  const today = new Date().toISOString().slice(0, 10)
+  const today = localDateString()
   const [tradeDate, setTradeDate] = useState(today)
   const [result, setResult] = useState<{ draft_id: string; trade_date: string } | null>(null)
   const [error, setError] = useState<string | null>(null)

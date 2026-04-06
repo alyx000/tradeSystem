@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSearchParams } from 'react-router-dom'
 import { api } from '../lib/api'
+import { localDateString } from '../lib/date'
 import {
   getIngestHealthStatus,
   getIngestHealthStatusClasses,
@@ -66,7 +67,7 @@ function DetailPopover({ id, openId, onToggle, lines }: DetailPopoverProps) {
 }
 
 function todayString() {
-  return new Date().toISOString().slice(0, 10)
+  return localDateString()
 }
 
 export default function IngestWorkbench() {

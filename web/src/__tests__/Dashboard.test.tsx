@@ -6,9 +6,9 @@ import Dashboard from '../pages/Dashboard'
 import { api } from '../lib/api'
 import type {
   CalendarEvent,
-  CommandIndexPayload,
   Holding,
   HoldingTaskItem,
+  IngestDashboardHealthSummary,
   IngestHealthSummary,
   MarketFullData,
   ReviewRecord,
@@ -20,9 +20,8 @@ vi.mock('../lib/api', () => ({
     getHoldings: vi.fn(),
     getCalendarRange: vi.fn(),
     getMarket: vi.fn(),
-    getCommandIndex: vi.fn(),
     listHoldingTasks: vi.fn(),
-    getIngestHealthSummary: vi.fn(),
+    getIngestDashboardHealthSummary: vi.fn(),
   },
 }))
 
@@ -70,20 +69,6 @@ beforeEach(() => {
     northbound_net: 10,
     margin_balance: 20,
   } as MarketFullData)
-  vi.mocked(api.getCommandIndex).mockResolvedValue({
-    generated_by: 'python3 scripts/generate_command_index.py',
-    summary: 'summary',
-    daily_quickstart: [
-      { command: 'make bootstrap', description: '首次安装依赖并启用本地 hooks' },
-      { command: 'make today-close', description: '执行今日盘后流程' },
-      { command: 'make today-open', description: '执行今日盘前流程' },
-      { command: 'make check', description: '执行完整检查' },
-      { command: 'make dev', description: '启动开发环境' },
-      { command: 'make market-open DATE=YYYY-MM-DD', description: '打开市场看板' },
-      { command: 'make today-ingest-health', description: '查看今日采集健康摘要' },
-    ],
-    sections: [],
-  } as CommandIndexPayload)
   vi.mocked(api.listHoldingTasks).mockResolvedValue([
     {
       id: 1,
@@ -95,37 +80,8 @@ beforeEach(() => {
       status: 'open',
     },
   ] as HoldingTaskItem[])
-  vi.mocked(api.getIngestHealthSummary).mockImplementation(async (_date, _days, stage) => {
-    if (stage === 'post_extended') {
-      return {
-        start_date: '2026-03-31',
-        end_date: '2026-04-06',
-        days: 7,
-        stage: 'post_extended',
-        total_runs: 12,
-        total_failures: 3,
-        unresolved_failures: 1,
-        failed_interface_count: 1,
-        never_succeeded_count: 0,
-        failure_rate: 0.25,
-        status_label: '承压',
-        status_reason: '存在连续失败 3 天的接口，阶段稳定性已明显承压。',
-        top_failed_interfaces: [
-          {
-            interface_name: 'block_trade',
-            interface_label: '大宗交易',
-            failure_count: 1,
-            unresolved_count: 1,
-            consecutive_failure_days: 3,
-            days_since_last_success: 8,
-            last_success_biz_date: '2026-03-28',
-            last_failure_biz_date: '2026-04-05',
-          },
-        ],
-        daily_failures: [{ biz_date: '2026-04-05', error_count: 2 }],
-      } as IngestHealthSummary
-    }
-    return {
+  vi.mocked(api.getIngestDashboardHealthSummary).mockResolvedValue({
+    core: {
       start_date: '2026-03-31',
       end_date: '2026-04-06',
       days: 7,
@@ -151,8 +107,35 @@ beforeEach(() => {
         },
       ],
       daily_failures: [{ biz_date: '2026-04-05', error_count: 4 }],
-    } as IngestHealthSummary
-  })
+    } as IngestHealthSummary,
+    extended: {
+      start_date: '2026-03-31',
+      end_date: '2026-04-06',
+      days: 7,
+      stage: 'post_extended',
+      total_runs: 12,
+      total_failures: 3,
+      unresolved_failures: 1,
+      failed_interface_count: 1,
+      never_succeeded_count: 0,
+      failure_rate: 0.25,
+      status_label: '承压',
+      status_reason: '存在连续失败 3 天的接口，阶段稳定性已明显承压。',
+      top_failed_interfaces: [
+        {
+          interface_name: 'block_trade',
+          interface_label: '大宗交易',
+          failure_count: 1,
+          unresolved_count: 1,
+          consecutive_failure_days: 3,
+          days_since_last_success: 8,
+          last_success_biz_date: '2026-03-28',
+          last_failure_biz_date: '2026-04-05',
+        },
+      ],
+      daily_failures: [{ biz_date: '2026-04-05', error_count: 2 }],
+    } as IngestHealthSummary,
+  } as IngestDashboardHealthSummary)
 })
 
 describe('Dashboard', () => {
@@ -167,18 +150,6 @@ describe('Dashboard', () => {
     expect(screen.getByText('执行今日盘后流程')).toBeInTheDocument()
     expect(screen.getByText('make today-ingest-health')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: /打开健康视图/ })).toHaveAttribute('href', '/ingest?date=2026-04-06')
-  })
-
-  it('renders ingest deep-link shortcuts', async () => {
-    renderPage()
-
-    await waitFor(() => {
-      expect(screen.getByText('采集诊断快捷入口')).toBeInTheDocument()
-    })
-
-    expect(screen.getByRole('link', { name: /盘后核心诊断/ })).toHaveAttribute('href', '/ingest?date=2026-04-06')
-    expect(screen.getByRole('link', { name: /盘后扩展诊断/ })).toHaveAttribute('href', '/ingest?date=2026-04-06&stage=post_extended')
-    expect(screen.getByRole('link', { name: /连续失败视图/ })).toHaveAttribute('href', '/ingest?date=2026-04-06&health_sort=streak')
   })
 
   it('renders ingest health summary cards for core and extended', async () => {

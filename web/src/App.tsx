@@ -1,6 +1,7 @@
 import { lazy, Suspense } from 'react'
 import { BrowserRouter, Routes, Route, Link, Navigate } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { localDateString } from './lib/date'
 
 const Dashboard = lazy(() => import('./pages/Dashboard'))
 const ReviewWorkbench = lazy(() => import('./pages/ReviewWorkbench'))
@@ -16,16 +17,19 @@ const IndustryInfo = lazy(() => import('./pages/IndustryInfo'))
 const PlanWorkbench = lazy(() => import('./pages/PlanWorkbench'))
 const KnowledgeWorkbench = lazy(() => import('./pages/KnowledgeWorkbench'))
 const IngestWorkbench = lazy(() => import('./pages/IngestWorkbench'))
+const RegulatoryMonitor = lazy(() => import('./pages/RegulatoryMonitor'))
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 30_000, retry: 1 } },
 })
 
+const today = localDateString()
+
 const NAV = [
   { to: '/', label: '仪表盘' },
-  { to: `/market/${new Date().toISOString().slice(0, 10)}`, label: '市场' },
-  { to: `/review/${new Date().toISOString().slice(0, 10)}`, label: '复盘' },
-  { to: `/plans/${new Date().toISOString().slice(0, 10)}`, label: '计划' },
+  { to: `/market/${today}`, label: '市场' },
+  { to: `/review/${today}`, label: '复盘' },
+  { to: `/plans/${today}`, label: '计划' },
   { to: '/knowledge', label: '资料' },
   { to: '/ingest', label: '采集' },
   { to: '/search', label: '查询' },
@@ -34,6 +38,7 @@ const NAV = [
   { to: '/holdings', label: '持仓' },
   { to: '/holding-tasks', label: '持仓任务' },
   { to: '/watchlist', label: '关注池' },
+  { to: '/regulatory-monitor', label: '异动监管' },
   { to: '/calendar', label: '日历' },
   { to: '/industry', label: '行业信息' },
 ]
@@ -64,6 +69,7 @@ export default function App() {
                 <Route path="/holdings" element={<Holdings />} />
                 <Route path="/holding-tasks" element={<HoldingTasks />} />
                 <Route path="/watchlist" element={<Watchlist />} />
+                <Route path="/regulatory-monitor" element={<RegulatoryMonitor />} />
                 <Route path="/calendar" element={<Calendar />} />
                 <Route path="/industry" element={<IndustryInfo />} />
                 <Route path="/plans/:date" element={<PlanWorkbench />} />

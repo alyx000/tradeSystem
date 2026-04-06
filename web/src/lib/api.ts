@@ -9,6 +9,7 @@ import type {
   HoldingTaskUpdateInput,
   HoldingSignalsPayload,
   IngestErrorRecord,
+  IngestDashboardHealthSummary,
   IngestInspectRecord,
   IngestInterfaceRecord,
   IngestRetrySummary,
@@ -56,6 +57,7 @@ import type {
   TradeRecord,
   WatchlistCreateInput,
   WatchlistItem,
+  RegulatoryMonitorRecord,
 } from './types'
 
 const BASE = '/api'
@@ -137,6 +139,12 @@ export const api = {
     request<WatchlistItem>('/watchlist', { method: 'POST', body: JSON.stringify(data) }),
   deleteWatchlistItem: (id: number) =>
     request<{ ok?: boolean }>(`/watchlist/${id}`, { method: 'DELETE' }),
+
+  // Regulatory monitor (read-only)
+  getRegulatoryMonitor: (date: string, type: 'all' | '1' | '2' | '3' = 'all') => {
+    const sp = new URLSearchParams({ date, type })
+    return request<RegulatoryMonitorRecord[]>(`/regulatory-monitor?${sp}`)
+  },
 
   // Calendar
   getCalendarRange: (from: string, to: string) =>
@@ -229,6 +237,10 @@ export const api = {
     const sp = new URLSearchParams({ date, days: String(days) })
     if (stage) sp.set('stage', stage)
     return request<IngestHealthSummary>(`/ingest/health?${sp}`)
+  },
+  getIngestDashboardHealthSummary: (date: string, days = 7) => {
+    const sp = new URLSearchParams({ date, days: String(days) })
+    return request<IngestDashboardHealthSummary>(`/ingest/health/dashboard?${sp}`)
   },
   reconcileIngestRuns: (data: IngestReconcileInput = {}) =>
     request<IngestReconcileResult>('/ingest/reconcile', { method: 'POST', body: JSON.stringify(data) }),

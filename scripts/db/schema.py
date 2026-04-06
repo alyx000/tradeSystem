@@ -555,6 +555,54 @@ CREATE TABLE IF NOT EXISTS ingest_errors (
 );
 """
 
+_SQL_STOCK_REGULATORY_MONITOR = """
+CREATE TABLE IF NOT EXISTS stock_regulatory_monitor (
+    id INTEGER PRIMARY KEY,
+    ts_code TEXT NOT NULL,
+    name TEXT NOT NULL,
+    regulatory_type INTEGER NOT NULL CHECK(regulatory_type IN (1, 2)),
+    risk_level INTEGER NOT NULL DEFAULT 1 CHECK(risk_level IN (1, 2, 3)),
+    reason TEXT NOT NULL,
+    publish_date TEXT NOT NULL CHECK(publish_date GLOB '????-??-??'),
+    source TEXT NOT NULL,
+    risk_score REAL,
+    detail_json TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now')),
+    UNIQUE(ts_code, regulatory_type, publish_date)
+);
+"""
+
+_SQL_STOCK_REGULATORY_MONITOR_TRIGGER = """
+CREATE TRIGGER IF NOT EXISTS stock_regulatory_monitor_updated
+AFTER UPDATE ON stock_regulatory_monitor BEGIN
+    UPDATE stock_regulatory_monitor SET updated_at = datetime('now') WHERE id = new.id;
+END;
+"""
+
+_SQL_STOCK_REGULATORY_STK_ALERT = """
+CREATE TABLE IF NOT EXISTS stock_regulatory_stk_alert (
+    id INTEGER PRIMARY KEY,
+    ts_code TEXT NOT NULL,
+    name TEXT NOT NULL,
+    monitor_start TEXT NOT NULL CHECK(monitor_start GLOB '????-??-??'),
+    monitor_end TEXT NOT NULL CHECK(monitor_end GLOB '????-??-??'),
+    alert_type TEXT NOT NULL DEFAULT '',
+    snapshot_date TEXT NOT NULL CHECK(snapshot_date GLOB '????-??-??'),
+    source TEXT NOT NULL,
+    detail_json TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+);
+"""
+
+_SQL_STOCK_REGULATORY_STK_ALERT_TRIGGER = """
+CREATE TRIGGER IF NOT EXISTS stock_regulatory_stk_alert_updated
+AFTER UPDATE ON stock_regulatory_stk_alert BEGIN
+    UPDATE stock_regulatory_stk_alert SET updated_at = datetime('now') WHERE id = new.id;
+END;
+"""
+
 # ──────────────────────────────────────────────────────────────
 # 10. 交易计划层
 # ──────────────────────────────────────────────────────────────
@@ -692,6 +740,11 @@ _SQL_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_ingest_runs_iface_biz ON ingest_runs(interface_name, biz_date);",
     "CREATE INDEX IF NOT EXISTS idx_ingest_runs_status_started ON ingest_runs(status, started_at);",
     "CREATE INDEX IF NOT EXISTS idx_ingest_errors_run_id ON ingest_errors(run_id);",
+    "CREATE INDEX IF NOT EXISTS idx_regulatory_monitor_date ON stock_regulatory_monitor(publish_date);",
+    "CREATE INDEX IF NOT EXISTS idx_regulatory_monitor_code ON stock_regulatory_monitor(ts_code);",
+    "CREATE INDEX IF NOT EXISTS idx_stk_alert_snapshot ON stock_regulatory_stk_alert(snapshot_date);",
+    "CREATE INDEX IF NOT EXISTS idx_stk_alert_code ON stock_regulatory_stk_alert(ts_code);",
+    "CREATE INDEX IF NOT EXISTS idx_stk_alert_period ON stock_regulatory_stk_alert(monitor_start, monitor_end);",
     "CREATE INDEX IF NOT EXISTS idx_market_observations_trade_date ON market_observations(trade_date);",
     "CREATE INDEX IF NOT EXISTS idx_market_observations_source_type ON market_observations(source_type);",
     "CREATE INDEX IF NOT EXISTS idx_trade_drafts_trade_date ON trade_drafts(trade_date);",
@@ -727,6 +780,8 @@ _ALL_TABLE_SQL = [
     _SQL_FACT_ENTITIES,
     _SQL_INGEST_RUNS,
     _SQL_INGEST_ERRORS,
+    _SQL_STOCK_REGULATORY_MONITOR,
+    _SQL_STOCK_REGULATORY_STK_ALERT,
     _SQL_MARKET_OBSERVATIONS,
     _SQL_TRADE_DRAFTS,
     _SQL_TRADE_PLANS,
@@ -743,6 +798,7 @@ _ALL_FTS_SQL = [
 _ALL_TRIGGER_SQL = (
     _SQL_TEACHER_NOTES_FTS_TRIGGERS
     + [_SQL_HOLDINGS_TRIGGER, _SQL_HOLDING_TASKS_TRIGGER, _SQL_WATCHLIST_TRIGGER, _SQL_DAILY_REVIEWS_TRIGGER]
+    + [_SQL_STOCK_REGULATORY_MONITOR_TRIGGER, _SQL_STOCK_REGULATORY_STK_ALERT_TRIGGER]
     + _SQL_INDUSTRY_INFO_FTS_TRIGGERS
     + _SQL_MACRO_INFO_FTS_TRIGGERS
 )
@@ -757,6 +813,8 @@ EXPECTED_TABLES = [
     "trades",
     "raw_interface_payloads", "market_fact_snapshots", "fact_entities",
     "ingest_runs", "ingest_errors",
+    "stock_regulatory_monitor",
+    "stock_regulatory_stk_alert",
     "market_observations", "trade_drafts", "trade_plans", "plan_reviews",
     "knowledge_assets",
     "teacher_notes_fts", "industry_info_fts", "macro_info_fts",

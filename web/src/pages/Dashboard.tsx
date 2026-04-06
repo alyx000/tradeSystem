@@ -1,6 +1,8 @@
 import { useQuery } from '@tanstack/react-query'
+import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../lib/api'
+import { localDateString } from '../lib/date'
 import {
   getIngestHealthStatus,
   getIngestHealthStatusClasses,
@@ -8,7 +10,16 @@ import {
 } from '../lib/ingestHealthStatus'
 import type { CalendarEvent, CommandDocItem, HoldingTaskItem, IngestHealthSummary } from '../lib/types'
 
-const today = new Date().toISOString().slice(0, 10)
+const today = localDateString()
+const DASHBOARD_QUICKSTART: CommandDocItem[] = [
+  { command: 'make bootstrap', description: '首次安装依赖并启用本地 hooks' },
+  { command: 'make today-close', description: '执行今日盘后流程' },
+  { command: 'make today-open', description: '执行今日盘前流程' },
+  { command: 'make check', description: '执行完整检查' },
+  { command: 'make dev', description: '启动开发环境' },
+  { command: 'make market-open DATE=YYYY-MM-DD', description: '打开市场看板' },
+  { command: 'make today-ingest-health', description: '查看今日采集健康摘要' },
+]
 
 function fmtPct(v: number | null | undefined) {
   if (v == null) return '-'
@@ -17,6 +28,35 @@ function fmtPct(v: number | null | undefined) {
 }
 
 export default function Dashboard() {
+  const [loadHoldingTasks, setLoadHoldingTasks] = useState(false)
+  const [loadIngestHealth, setLoadIngestHealth] = useState(false)
+  const holdingTasksRef = useRef<HTMLDivElement | null>(null)
+  const ingestHealthRef = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.IntersectionObserver === 'undefined') {
+      setLoadHoldingTasks(true)
+      setLoadIngestHealth(true)
+      return
+    }
+
+    const observer = new window.IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue
+          if (entry.target === holdingTasksRef.current) setLoadHoldingTasks(true)
+          if (entry.target === ingestHealthRef.current) setLoadIngestHealth(true)
+        }
+      },
+      { rootMargin: '240px 0px' }
+    )
+
+    if (holdingTasksRef.current) observer.observe(holdingTasksRef.current)
+    if (ingestHealthRef.current) observer.observe(ingestHealthRef.current)
+
+    return () => observer.disconnect()
+  }, [])
+
   const { data: review } = useQuery({ queryKey: ['review', today], queryFn: () => api.getReview(today) })
   const { data: holdings } = useQuery({ queryKey: ['holdings'], queryFn: api.getHoldings })
   const { data: calendar } = useQuery({
@@ -27,22 +67,18 @@ export default function Dashboard() {
     queryKey: ['market', today],
     queryFn: () => api.getMarket(today),
   })
-  const { data: commandIndex } = useQuery({
-    queryKey: ['command-index'],
-    queryFn: api.getCommandIndex,
-  })
   const { data: holdingTasks } = useQuery({
     queryKey: ['holding-tasks', today, 'open'],
     queryFn: () => api.listHoldingTasks(today, 'open'),
+    enabled: loadHoldingTasks,
   })
-  const { data: ingestHealthCore } = useQuery({
-    queryKey: ['ingest-health-dashboard', today, 'post_core'],
-    queryFn: () => api.getIngestHealthSummary(today, 7, 'post_core'),
+  const { data: ingestHealth } = useQuery({
+    queryKey: ['ingest-health-dashboard', today],
+    queryFn: () => api.getIngestDashboardHealthSummary(today, 7),
+    enabled: loadIngestHealth,
   })
-  const { data: ingestHealthExtended } = useQuery({
-    queryKey: ['ingest-health-dashboard', today, 'post_extended'],
-    queryFn: () => api.getIngestHealthSummary(today, 7, 'post_extended'),
-  })
+  const ingestHealthCore = ingestHealth?.core ?? null
+  const ingestHealthExtended = ingestHealth?.extended ?? null
 
   return (
     <div className="space-y-6">
@@ -121,48 +157,52 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {holdingTasks && holdingTasks.length > 0 && (
-        <div className="bg-white rounded-lg shadow p-4">
-          <div className="flex items-center justify-between mb-3 gap-3">
-            <div>
-              <h2 className="text-sm font-medium text-gray-500">未完成持仓计划</h2>
-              <p className="text-xs text-gray-400 mt-1">来自上一交易日第 7 步复盘的持仓操作计划。</p>
-            </div>
-            <Link to={`/holding-tasks?date=${today}&status=open`} className="text-xs text-blue-500 hover:underline">
-              打开任务页 →
-            </Link>
-          </div>
-          <div className="space-y-2">
-            {holdingTasks.slice(0, 5).map((task: HoldingTaskItem) => (
-              <div key={task.id || `${task.trade_date}-${task.stock_code}`} className="rounded border border-gray-200 bg-gray-50 px-3 py-2">
-                <div className="text-sm text-gray-800">{task.stock_name || task.stock_code}</div>
-                <div className="text-xs text-gray-500 mt-1">{task.trade_date} · {task.action_plan}</div>
+      <div ref={holdingTasksRef}>
+        {holdingTasks && holdingTasks.length > 0 && (
+          <div className="bg-white rounded-lg shadow p-4">
+            <div className="flex items-center justify-between mb-3 gap-3">
+              <div>
+                <h2 className="text-sm font-medium text-gray-500">未完成持仓计划</h2>
+                <p className="text-xs text-gray-400 mt-1">来自上一交易日第 7 步复盘的持仓操作计划。</p>
               </div>
-            ))}
+              <Link to={`/holding-tasks?date=${today}&status=open`} className="text-xs text-blue-500 hover:underline">
+                打开任务页 →
+              </Link>
+            </div>
+            <div className="space-y-2">
+              {holdingTasks.slice(0, 5).map((task: HoldingTaskItem) => (
+                <div key={task.id || `${task.trade_date}-${task.stock_code}`} className="rounded border border-gray-200 bg-gray-50 px-3 py-2">
+                  <div className="text-sm text-gray-800">{task.stock_name || task.stock_code}</div>
+                  <div className="text-xs text-gray-500 mt-1">{task.trade_date} · {task.action_plan}</div>
+                </div>
+              ))}
+            </div>
           </div>
-        </div>
-      )}
+        )}
+      </div>
 
-      {(ingestHealthCore || ingestHealthExtended) && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {ingestHealthCore && (
-            <IngestHealthCard
-              title="采集健康 · 盘后核心"
-              description="近 7 天 post_core 视角，优先看主链路是否稳定。"
-              health={ingestHealthCore}
-              href={`/ingest?date=${today}&health_sort=streak`}
-            />
-          )}
-          {ingestHealthExtended && (
-            <IngestHealthCard
-              title="采集健康 · 盘后扩展"
-              description="近 7 天 post_extended 视角，适合排查扩展事实层接口。"
-              health={ingestHealthExtended}
-              href={`/ingest?date=${today}&stage=post_extended&health_sort=streak`}
-            />
-          )}
-        </div>
-      )}
+      <div ref={ingestHealthRef}>
+        {(ingestHealthCore || ingestHealthExtended) && (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {ingestHealthCore && (
+              <IngestHealthCard
+                title="采集健康 · 盘后核心"
+                description="近 7 天 post_core 视角，优先看主链路是否稳定。"
+                health={ingestHealthCore}
+                href={`/ingest?date=${today}&health_sort=streak`}
+              />
+            )}
+            {ingestHealthExtended && (
+              <IngestHealthCard
+                title="采集健康 · 盘后扩展"
+                description="近 7 天 post_extended 视角，适合排查扩展事实层接口。"
+                health={ingestHealthExtended}
+                href={`/ingest?date=${today}&stage=post_extended&health_sort=streak`}
+              />
+            )}
+          </div>
+        )}
+      </div>
 
       {calendar && calendar.length > 0 && (
         <div className="bg-white rounded-lg shadow p-4">
@@ -184,72 +224,34 @@ export default function Dashboard() {
         </div>
       )}
 
-      {commandIndex?.daily_quickstart && commandIndex.daily_quickstart.length > 0 && (
-        <div className="bg-white rounded-lg shadow p-4">
-          <div className="flex items-center justify-between mb-3 gap-3">
-            <div>
-              <h2 className="text-sm font-medium text-gray-500">命令速查</h2>
-              <p className="text-xs text-gray-400 mt-1">
-                基于仓库统一入口生成，完整列表见 <code className="text-gray-600">docs/commands.md</code>
-              </p>
-            </div>
-            <div className="flex items-center gap-3">
-              <span className="text-xs text-gray-400">每日高频</span>
-              <Link
-                to={`/ingest?date=${today}`}
-                className="text-xs text-blue-500 hover:underline"
-              >
-                打开健康视图 →
-              </Link>
-            </div>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            {commandIndex.daily_quickstart.map((item: CommandDocItem) => (
-              <div key={item.command} className="rounded border border-gray-200 bg-gray-50 px-3 py-2">
-                <div className="font-mono text-xs text-gray-800">{item.command}</div>
-                <div className="text-xs text-gray-500 mt-1">{item.description}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
       <div className="bg-white rounded-lg shadow p-4">
         <div className="flex items-center justify-between mb-3 gap-3">
           <div>
-            <h2 className="text-sm font-medium text-gray-500">采集诊断快捷入口</h2>
+            <h2 className="text-sm font-medium text-gray-500">命令速查</h2>
             <p className="text-xs text-gray-400 mt-1">
-              直接打开今天的采集诊断视图，适合快速排查盘后核心、扩展接口和连续失败项。
+              基于仓库统一入口维护的高频摘要，完整列表见 <code className="text-gray-600">docs/commands.md</code>
             </p>
           </div>
-          <Link to="/ingest" className="text-xs text-blue-500 hover:underline">
-            打开工作台 →
-          </Link>
+          <div className="flex items-center gap-3">
+            <span className="text-xs text-gray-400">每日高频</span>
+            <Link
+              to={`/ingest?date=${today}`}
+              className="text-xs text-blue-500 hover:underline"
+            >
+              打开健康视图 →
+            </Link>
+          </div>
         </div>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <Link
-            to={`/ingest?date=${today}`}
-            className="rounded border border-gray-200 bg-gray-50 px-3 py-3 hover:bg-gray-100 transition-colors"
-          >
-            <div className="text-sm font-medium text-gray-800">盘后核心诊断</div>
-            <div className="text-xs text-gray-500 mt-1">默认视角，快速看当天核心接口运行、错误和重试。</div>
-          </Link>
-          <Link
-            to={`/ingest?date=${today}&stage=post_extended`}
-            className="rounded border border-gray-200 bg-gray-50 px-3 py-3 hover:bg-gray-100 transition-colors"
-          >
-            <div className="text-sm font-medium text-gray-800">盘后扩展诊断</div>
-            <div className="text-xs text-gray-500 mt-1">直接检查扩展事实层接口，适合排查 margin、block_trade 这类数据。</div>
-          </Link>
-          <Link
-            to={`/ingest?date=${today}&health_sort=streak`}
-            className="rounded border border-gray-200 bg-gray-50 px-3 py-3 hover:bg-gray-100 transition-colors"
-          >
-            <div className="text-sm font-medium text-gray-800">连续失败视图</div>
-            <div className="text-xs text-gray-500 mt-1">优先看连续失败多天的接口，快速定位长期不稳定项。</div>
-          </Link>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          {DASHBOARD_QUICKSTART.map((item: CommandDocItem) => (
+            <div key={item.command} className="rounded border border-gray-200 bg-gray-50 px-3 py-2">
+              <div className="font-mono text-xs text-gray-800">{item.command}</div>
+              <div className="text-xs text-gray-500 mt-1">{item.description}</div>
+            </div>
+          ))}
         </div>
       </div>
+
     </div>
   )
 }

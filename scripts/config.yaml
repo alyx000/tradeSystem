@@ -46,6 +46,7 @@ schedule:
       - "northbound"        # 北向资金
       - "dragon_tiger"      # 龙虎榜
       - "post_announcements"# 盘后公告
+      - "regulatory_monitor"   # 异动监管（停牌 + 潜在监管）
       - "generate_post_report"   # 生成盘后报告
 
   evening:

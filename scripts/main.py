@@ -20,6 +20,10 @@
     python main.py watchlist
     python main.py obsidian [--sync-all]
 
+    # 异动监管（写入 SQLite stock_regulatory_monitor；post 在 config 中启用 regulatory_monitor 时也会跑）
+    python main.py regulatory [--date YYYY-MM-DD]
+    python main.py regulatory --query [--date YYYY-MM-DD] [--type 1|2|all] [--json]  # 仅查库
+
     # 启动定时调度器（工作日 07:00 pre，20:00 post；post 已含 evening）
     python main.py schedule
 
@@ -77,6 +81,15 @@ logging.basicConfig(
     ],
 )
 logger = logging.getLogger("main")
+
+
+def _schedule_task_enabled(config: dict, section: str, task_name: str) -> bool:
+    try:
+        tasks = (config.get("schedule") or {}).get(section) or {}
+        lst = tasks.get("tasks") or []
+        return task_name in lst
+    except Exception:
+        return False
 
 
 def _emit_cli_result(payload: dict, as_json: bool = False) -> None:
@@ -585,6 +598,16 @@ def cmd_post(config: dict, target_date: str):
         except Exception as e:
             logger.warning(f"持仓盘后公告采集失败: {e}")
 
+        if _schedule_task_enabled(config, "post_market", "regulatory_monitor"):
+            try:
+                from collectors.regulatory import RegulatoryCollector
+
+                reg = RegulatoryCollector(registry)
+                reg_result = reg.collect(target_date)
+                logger.info(reg.format_report(reg_result))
+            except Exception as e:
+                logger.warning(f"异动监管采集失败: {e}")
+
         watchlist_data = {}
         try:
             wl_collector = WatchlistCollector(registry)
@@ -646,6 +669,62 @@ def cmd_post(config: dict, target_date: str):
             logger.info(f"Obsidian 导出完成（盘后数据）：{post_path}")
     except Exception as e:
         logger.warning(f"Obsidian 盘后数据导出失败：{e}")
+
+
+def _cmd_regulatory_query(target_date: str, *, as_json: bool, type_filter: str) -> None:
+    """从 SQLite 读取 stock_regulatory_monitor，不调用数据源。"""
+    import json as json_lib
+
+    from db.connection import get_db
+    from db.migrate import migrate
+    from db import queries as Q
+
+    with get_db() as conn:
+        migrate(conn)
+        rows = Q.list_regulatory_monitor_api(conn, target_date, type_filter)
+    if as_json:
+        print(json_lib.dumps(rows, ensure_ascii=False, indent=2, default=str))
+        return
+    label = f"=== stock_regulatory_monitor {target_date} ==="
+    print(label)
+    if not rows:
+        print("(无记录)")
+        return
+    for r in rows:
+        rt = int(r.get("regulatory_type") or 0)
+        if rt == 1:
+            tag = "已监管"
+        elif rt == 2:
+            tag = "潜在"
+        elif rt == 3:
+            tag = "重点监控"
+        else:
+            tag = f"T{rt}"
+        score = r.get("risk_score")
+        sc = f" score={score}" if score is not None else ""
+        print(f"{r['ts_code']} {r['name']} [{tag}] L{r['risk_level']}{sc}")
+        reason = str(r.get("reason") or "")
+        print(f"  {reason[:200]}{'…' if len(reason) > 200 else ''}")
+
+
+def cmd_regulatory(config: dict, args) -> None:
+    """异动监管：采集写入 DB；加 --query 时仅查库。"""
+    target_date = args.date
+    if getattr(args, "query", False):
+        _cmd_regulatory_query(
+            target_date,
+            as_json=bool(getattr(args, "json", False)),
+            type_filter=getattr(args, "regulatory_type_filter", "all"),
+        )
+        return
+    with without_standard_http_proxy():
+        registry = setup_providers(config)
+        registry.initialize_all()
+        from collectors.regulatory import RegulatoryCollector
+
+        col = RegulatoryCollector(registry)
+        result = col.collect(target_date)
+        print(col.format_report(result))
 
 
 def cmd_holdings(config: dict, args):
@@ -902,6 +981,30 @@ def build_parser() -> argparse.ArgumentParser:
     post_parser = subparsers.add_parser("post", help="生成盘后报告（含晚间任务）")
     post_parser.add_argument("--date", default=date.today().isoformat(), help="日期 YYYY-MM-DD")
 
+    # regulatory
+    regulatory_parser = subparsers.add_parser(
+        "regulatory",
+        help="异动监管：采集写入 stock_regulatory_monitor；--query 仅查 SQLite",
+    )
+    regulatory_parser.add_argument("--date", default=date.today().isoformat(), help="日期 YYYY-MM-DD")
+    regulatory_parser.add_argument(
+        "--query",
+        action="store_true",
+        help="不采集，只从数据库读取当日（--date）已存记录",
+    )
+    regulatory_parser.add_argument(
+        "--type",
+        dest="regulatory_type_filter",
+        choices=["1", "2", "3", "all"],
+        default="all",
+        help="与 --query 联用：1=已监管 2=潜在 3=重点监控(stk_alert) all=全部",
+    )
+    regulatory_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="与 --query 联用：输出 JSON",
+    )
+
     # holdings
     holdings_parser = subparsers.add_parser("holdings", help="持仓管理")
     holdings_parser.add_argument("--add", dest="holdings_action", action="store_const", const="add")
@@ -1042,6 +1145,8 @@ def main():
         cmd_pre(config, args.date)
     elif args.command == "post":
         cmd_post(config, args.date)
+    elif args.command == "regulatory":
+        cmd_regulatory(config, args)
     elif args.command == "holdings":
         if not args.holdings_action:
             args.holdings_action = "list"

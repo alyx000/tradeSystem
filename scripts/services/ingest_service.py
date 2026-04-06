@@ -333,6 +333,28 @@ class IngestService:
             "daily_failures": daily_rows,
         }
 
+    def dashboard_health_summary(
+        self,
+        *,
+        end_date: str,
+        days: int = 7,
+        limit: int = 10,
+    ) -> dict[str, Any]:
+        return {
+            "core": self.health_summary(
+                end_date=end_date,
+                days=days,
+                limit=limit,
+                stage="post_core",
+            ),
+            "extended": self.health_summary(
+                end_date=end_date,
+                days=days,
+                limit=limit,
+                stage="post_extended",
+            ),
+        }
+
     def retry_summary(
         self,
         interface_name: str | None = None,
@@ -977,6 +999,42 @@ class IngestService:
                         subject_code="CN",
                         subject_name="大盘资金流向",
                         facts=rows[0] if len(rows) == 1 else {"rows": rows[:10]},
+                        source_interfaces=[interface["interface_name"]],
+                    )
+                )
+
+        if interface["interface_name"] == "regulatory_suspend":
+            rows = [row for row in self._normalize_rows(data) if isinstance(row, dict)]
+            if rows:
+                created.append(
+                    self._upsert_market_fact_snapshot(
+                        biz_date=target_date,
+                        fact_type="regulatory_monitor",
+                        subject_type="market",
+                        subject_code="CN",
+                        subject_name="停牌核查",
+                        facts={
+                            "record_count": len(rows),
+                            "suspend_samples": rows[:50],
+                        },
+                        source_interfaces=[interface["interface_name"]],
+                    )
+                )
+
+        if interface["interface_name"] == "stk_shock":
+            rows = [row for row in self._normalize_rows(data) if isinstance(row, dict)]
+            if rows:
+                created.append(
+                    self._upsert_market_fact_snapshot(
+                        biz_date=target_date,
+                        fact_type="regulatory_monitor",
+                        subject_type="market",
+                        subject_code="CN",
+                        subject_name="异常波动个股",
+                        facts={
+                            "record_count": len(rows),
+                            "shock_samples": rows[:50],
+                        },
                         source_interfaces=[interface["interface_name"]],
                     )
                 )

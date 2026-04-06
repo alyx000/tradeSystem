@@ -87,7 +87,7 @@ describe('ReviewWorkbench', () => {
     expect(screen.getByText('6.节点')).toBeInTheDocument()
     expect(screen.getByText('7.持仓')).toBeInTheDocument()
     expect(screen.getByText('8.计划')).toBeInTheDocument()
-    expect(screen.getByText('StepMarket mock')).toBeInTheDocument()
+    expect(await screen.findByText('StepMarket mock')).toBeInTheDocument()
   })
 
   it('loads existing review data, updates filled count, and switches steps', async () => {
@@ -107,7 +107,7 @@ describe('ReviewWorkbench', () => {
     expect(screen.getByTestId('StepMarket-data')).toHaveTextContent('"trend":"up"')
 
     fireEvent.click(screen.getByText('3.情绪 ✓'))
-    expect(screen.getByText('StepEmotion mock')).toBeInTheDocument()
+    expect(await screen.findByText('StepEmotion mock')).toBeInTheDocument()
     expect(screen.getByTestId('StepEmotion-data')).toHaveTextContent('"cycle":"发酵"')
   })
 

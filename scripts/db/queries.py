@@ -1109,3 +1109,188 @@ def update_calendar_event(conn: sqlite3.Connection, event_id: int, **kw: Any) ->
 
 def update_trade(conn: sqlite3.Connection, trade_id: int, **kw: Any) -> None:
     _safe_update(conn, "trades", "id", trade_id, _TRADES_UPDATABLE, **kw)
+
+
+# ──────────────────────────────────────────────────────────────
+# 异动监管监控 stock_regulatory_monitor
+# ──────────────────────────────────────────────────────────────
+
+
+def upsert_regulatory_monitor(conn: sqlite3.Connection, record: dict[str, Any]) -> None:
+    """按 UNIQUE(ts_code, regulatory_type, publish_date) 幂等写入（reason 可随采集补全而更新）。"""
+    dj = record.get("detail_json")
+    if isinstance(dj, dict):
+        dj = json.dumps(dj, ensure_ascii=False)
+    conn.execute(
+        """
+        INSERT INTO stock_regulatory_monitor
+        (ts_code, name, regulatory_type, risk_level, reason, publish_date, source, risk_score, detail_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(ts_code, regulatory_type, publish_date) DO UPDATE SET
+            name = excluded.name,
+            reason = excluded.reason,
+            risk_level = excluded.risk_level,
+            source = excluded.source,
+            risk_score = excluded.risk_score,
+            detail_json = excluded.detail_json,
+            updated_at = datetime('now')
+        """,
+        (
+            record["ts_code"],
+            record["name"],
+            int(record["regulatory_type"]),
+            int(record.get("risk_level", 1)),
+            record["reason"],
+            record["publish_date"],
+            record["source"],
+            record.get("risk_score"),
+            dj,
+        ),
+    )
+
+
+def batch_upsert_regulatory_monitors(conn: sqlite3.Connection, records: list[dict[str, Any]]) -> int:
+    for rec in records:
+        upsert_regulatory_monitor(conn, rec)
+    return len(records)
+
+
+def get_regulatory_monitors(
+    conn: sqlite3.Connection,
+    publish_date: str,
+    regulatory_type: int | None = None,
+) -> list[dict]:
+    if regulatory_type is None:
+        rows = conn.execute(
+            """
+            SELECT * FROM stock_regulatory_monitor
+            WHERE publish_date = ?
+            ORDER BY regulatory_type, risk_level DESC, ts_code
+            """,
+            (publish_date,),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            """
+            SELECT * FROM stock_regulatory_monitor
+            WHERE publish_date = ? AND regulatory_type = ?
+            ORDER BY risk_level DESC, ts_code
+            """,
+            (publish_date, regulatory_type),
+        ).fetchall()
+    return _rows_to_list(rows)
+
+
+def get_regulatory_by_stock(
+    conn: sqlite3.Connection,
+    ts_code: str,
+    *,
+    limit: int = 50,
+) -> list[dict]:
+    rows = conn.execute(
+        """
+        SELECT * FROM stock_regulatory_monitor
+        WHERE ts_code = ?
+        ORDER BY publish_date DESC, id DESC
+        LIMIT ?
+        """,
+        (ts_code.upper().strip(), limit),
+    ).fetchall()
+    return _rows_to_list(rows)
+
+
+# ──────────────────────────────────────────────────────────────
+# 交易所重点提示证券 stk_alert（同花顺/券商 App「重点监控」数据源之一）
+# ──────────────────────────────────────────────────────────────
+
+
+def replace_stk_alert_snapshot(
+    conn: sqlite3.Connection,
+    snapshot_date: str,
+    records: list[dict[str, Any]],
+) -> int:
+    """按采集日替换当日快照（幂等重跑）。"""
+    conn.execute(
+        "DELETE FROM stock_regulatory_stk_alert WHERE snapshot_date = ?",
+        (snapshot_date,),
+    )
+    for rec in records:
+        dj = rec.get("detail_json")
+        if isinstance(dj, dict):
+            dj = json.dumps(dj, ensure_ascii=False)
+        conn.execute(
+            """
+            INSERT INTO stock_regulatory_stk_alert
+            (ts_code, name, monitor_start, monitor_end, alert_type, snapshot_date, source, detail_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                rec["ts_code"],
+                rec["name"],
+                rec["monitor_start"],
+                rec["monitor_end"],
+                rec.get("alert_type") or "",
+                snapshot_date,
+                rec["source"],
+                dj,
+            ),
+        )
+    return len(records)
+
+
+def get_stk_alert_rows(conn: sqlite3.Connection, snapshot_date: str) -> list[dict]:
+    rows = conn.execute(
+        """
+        SELECT * FROM stock_regulatory_stk_alert
+        WHERE snapshot_date = ?
+        ORDER BY monitor_start DESC, ts_code
+        """,
+        (snapshot_date,),
+    ).fetchall()
+    return _rows_to_list(rows)
+
+
+def format_stk_alert_api_rows(raw_rows: list[dict]) -> list[dict]:
+    """转为与异动监管 API 一致的字典（regulatory_type=3）。"""
+    out: list[dict] = []
+    for r in raw_rows:
+        ms = r.get("monitor_start")
+        me = r.get("monitor_end")
+        at = (r.get("alert_type") or "").strip()
+        reason_core = at or "交易所重点提示证券"
+        reason = f"{reason_core} | 监控期 {ms}～{me}" if ms and me else reason_core
+        out.append({
+            "id": r["id"],
+            "ts_code": r["ts_code"],
+            "name": r["name"],
+            "regulatory_type": 3,
+            "risk_level": 1,
+            "reason": reason,
+            "publish_date": r["snapshot_date"],
+            "source": r["source"],
+            "risk_score": None,
+            "detail_json": r.get("detail_json"),
+            "monitor_start_date": ms,
+            "monitor_end_date": me,
+            "alert_type": at or None,
+        })
+    return out
+
+
+def list_regulatory_monitor_api(conn: sqlite3.Connection, publish_date: str, type_filter: str) -> list[dict]:
+    """type_filter: all | 1 | 2 | 3"""
+    if type_filter == "3":
+        return format_stk_alert_api_rows(get_stk_alert_rows(conn, publish_date))
+    if type_filter in ("1", "2"):
+        return get_regulatory_monitors(conn, publish_date, int(type_filter))
+    merged = get_regulatory_monitors(conn, publish_date, None) + format_stk_alert_api_rows(
+        get_stk_alert_rows(conn, publish_date)
+    )
+    merged.sort(
+        key=lambda x: (
+            int(x.get("regulatory_type") or 9),
+            -(int(x.get("risk_level") or 0)),
+            str(x.get("ts_code") or ""),
+        )
+    )
+    return merged

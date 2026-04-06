@@ -157,6 +157,94 @@ def migrate(conn: sqlite3.Connection) -> None:
         set_schema_version(conn, 10)
         conn.commit()
 
+    if version < 11:
+        logger.info("Applying schema v11: stock_regulatory_monitor table")
+        init_schema(conn)
+        set_schema_version(conn, 11)
+        conn.commit()
+        version = get_schema_version(conn)
+
+    if version < 12:
+        logger.info(
+            "Applying schema v12: stock_regulatory_monitor UNIQUE(ts_code,type,date) + 可更新 reason"
+        )
+        tbls = {
+            r[0]
+            for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+                ("stock_regulatory_monitor",),
+            ).fetchall()
+        }
+        if tbls:
+            conn.execute("DROP TRIGGER IF EXISTS stock_regulatory_monitor_updated")
+            conn.execute(
+                """
+                CREATE TABLE stock_regulatory_monitor__v12 (
+                    id INTEGER PRIMARY KEY,
+                    ts_code TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    regulatory_type INTEGER NOT NULL CHECK(regulatory_type IN (1, 2)),
+                    risk_level INTEGER NOT NULL DEFAULT 1 CHECK(risk_level IN (1, 2, 3)),
+                    reason TEXT NOT NULL,
+                    publish_date TEXT NOT NULL CHECK(publish_date GLOB '????-??-??'),
+                    source TEXT NOT NULL,
+                    risk_score REAL,
+                    detail_json TEXT,
+                    created_at TEXT DEFAULT (datetime('now')),
+                    updated_at TEXT DEFAULT (datetime('now')),
+                    UNIQUE(ts_code, regulatory_type, publish_date)
+                )
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO stock_regulatory_monitor__v12 (
+                    ts_code, name, regulatory_type, risk_level, reason,
+                    publish_date, source, risk_score, detail_json, created_at, updated_at
+                )
+                SELECT s.ts_code, s.name, s.regulatory_type, s.risk_level, s.reason,
+                       s.publish_date, s.source, s.risk_score, s.detail_json,
+                       s.created_at, s.updated_at
+                FROM stock_regulatory_monitor s
+                INNER JOIN (
+                    SELECT ts_code, regulatory_type, publish_date, MAX(id) AS mid
+                    FROM stock_regulatory_monitor
+                    GROUP BY ts_code, regulatory_type, publish_date
+                ) k ON s.id = k.mid
+                """
+            )
+            conn.execute("DROP TABLE stock_regulatory_monitor")
+            conn.execute(
+                "ALTER TABLE stock_regulatory_monitor__v12 RENAME TO stock_regulatory_monitor"
+            )
+            conn.execute(
+                """
+                CREATE TRIGGER IF NOT EXISTS stock_regulatory_monitor_updated
+                AFTER UPDATE ON stock_regulatory_monitor BEGIN
+                    UPDATE stock_regulatory_monitor SET updated_at = datetime('now') WHERE id = new.id;
+                END
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_regulatory_monitor_date "
+                "ON stock_regulatory_monitor(publish_date)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_regulatory_monitor_code "
+                "ON stock_regulatory_monitor(ts_code)"
+            )
+        else:
+            init_schema(conn)
+        set_schema_version(conn, 12)
+        conn.commit()
+        version = get_schema_version(conn)
+
+    if version < 13:
+        logger.info("Applying schema v13: stock_regulatory_stk_alert (交易所重点提示/重点监控)")
+        init_schema(conn)
+        set_schema_version(conn, 13)
+        conn.commit()
+
 
 # ──────────────────────────────────────────────────────────────
 # YAML 数据导入

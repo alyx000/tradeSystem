@@ -79,7 +79,15 @@ class TushareProvider(DataProvider):
             "is_trade_day",
             "get_trade_calendar",
             "get_stock_basic_list",
+            "get_stock_basic_batch",
             "get_top_volume_stocks",
+            "get_suspend_list",
+            "get_suspend_change_reasons",
+            "get_stk_shock",
+            "get_stk_alert",
+            "get_market_daily_changes",
+            "get_stock_daily_range",
+            "get_index_daily_range",
         ]
 
     def _date_fmt(self, date: str) -> str:
@@ -811,6 +819,213 @@ class TushareProvider(DataProvider):
         except Exception as e:
             return DataResult(data=None, source=self.name, error=str(e))
 
+    def get_suspend_list(self, date: str) -> DataResult:
+        """按交易日获取停牌记录（suspend_d，suspend_type=S）。"""
+        try:
+            d = self._date_fmt(date)
+            records = self._query_records("suspend_d", trade_date=d, suspend_type="S")
+            for item in records:
+                item.setdefault("code", item.get("ts_code"))
+            return DataResult(data=records, source="tushare:suspend_d")
+        except Exception as e:
+            return DataResult(data=None, source=self.name, error=str(e))
+
+    def _yyyymmdd_cell(self, val) -> str | None:
+        if val is None:
+            return None
+        s = str(val).strip().replace("-", "").replace("/", "")[:8]
+        return s if len(s) == 8 and s.isdigit() else None
+
+    def _suspend_row_matches_day(self, row: dict, yyyymmdd: str) -> bool:
+        for k in ("suspend_date", "trade_date"):
+            if self._yyyymmdd_cell(row.get(k)) == yyyymmdd:
+                return True
+        return False
+
+    def get_suspend_change_reasons(
+        self,
+        trade_date: str,
+        ts_codes: list[str] | None = None,
+    ) -> DataResult:
+        """按停牌日拉取 suspend 的 change_reason。
+
+        服务端通常要求 start_date < end_date，且单传 suspend_date 无 ts_code 时易报参数校验失败。
+        策略：先按「交易日±窗口」批量拉取并过滤；对仍未命中的代码再按 ts_code+suspend_date 单查。
+        """
+        d = self._date_fmt(trade_date)
+        try:
+            dt = datetime.strptime(d, "%Y%m%d")
+        except ValueError:
+            return DataResult(data=None, source=self.name, error=f"invalid trade_date: {trade_date}")
+
+        # 严格 start < end，覆盖目标日及前后若干自然日（停牌日记 suspend_date）
+        lo = (dt - timedelta(days=10)).strftime("%Y%m%d")
+        hi = (dt + timedelta(days=3)).strftime("%Y%m%d")
+        merged: list[dict] = []
+
+        def _row_has_text_reason(row: dict) -> bool:
+            for k in ("change_reason", "suspend_reason", "reason"):
+                v = row.get(k)
+                if v is not None and str(v).strip():
+                    return True
+            return False
+
+        def _add_filtered(rows: list[dict]) -> None:
+            for item in rows:
+                if not isinstance(item, dict):
+                    continue
+                if not self._suspend_row_matches_day(item, d):
+                    continue
+                merged.append(item)
+
+        try:
+            bulk = self._query_records("suspend", start_date=lo, end_date=hi)
+            _add_filtered(bulk)
+        except Exception as e:
+            logger.debug("suspend 批量(start/end)失败: %s", e)
+
+        codes_done = {
+            str(r.get("ts_code") or r.get("code") or "").strip().upper()
+            for r in merged
+            if _row_has_text_reason(r)
+        }
+
+        codes = [str(c or "").strip().upper() for c in (ts_codes or []) if str(c or "").strip()]
+        for code in codes:
+            if code in codes_done:
+                continue
+            row_added = False
+            for kwargs in (
+                {"ts_code": code, "suspend_date": d},
+                {
+                    "ts_code": code,
+                    "start_date": (dt - timedelta(days=1)).strftime("%Y%m%d"),
+                    "end_date": (dt + timedelta(days=1)).strftime("%Y%m%d"),
+                },
+            ):
+                try:
+                    part = self._query_records("suspend", **kwargs)
+                except Exception as ex:
+                    logger.debug("suspend 单票 %s %s: %s", code, kwargs, ex)
+                    continue
+                before = len(merged)
+                _add_filtered(part)
+                new_rows = merged[before:]
+                if new_rows and any(_row_has_text_reason(r) for r in new_rows):
+                    row_added = True
+                    codes_done.add(code)
+                    break
+            if not row_added:
+                logger.debug("suspend 单票未取到与 %s 匹配的停牌原因: %s", d, code)
+
+        for item in merged:
+            item.setdefault("code", item.get("ts_code"))
+        return DataResult(data=merged, source="tushare:suspend")
+
+    def get_stk_alert(self, date: str) -> DataResult:
+        """交易所重点提示证券（stk_alert，重点监控期起止；约 6000 积分）。"""
+        try:
+            d = self._date_fmt(date)
+            try:
+                df = self.pro.stk_alert(trade_date=d)
+            except AttributeError:
+                df = self.pro.query("stk_alert", trade_date=d)
+            if df is None or df.empty:
+                return DataResult(data=[], source="tushare:stk_alert")
+            records = self._df_to_records(df)
+            for item in records:
+                item.setdefault("code", item.get("ts_code"))
+            return DataResult(data=records, source="tushare:stk_alert")
+        except Exception as e:
+            return DataResult(data=None, source=self.name, error=str(e))
+
+    def get_stk_shock(self, date: str) -> DataResult:
+        """交易所公布的个股异常波动（stk_shock，约 6000 积分）。"""
+        try:
+            d = self._date_fmt(date)
+            df = self.pro.stk_shock(trade_date=d)
+            if df is None or df.empty:
+                return DataResult(data=[], source="tushare:stk_shock")
+            records = self._df_to_records(df)
+            for item in records:
+                item.setdefault("code", item.get("ts_code"))
+                td = item.get("trade_date")
+                if td is not None:
+                    s = str(td).replace("-", "")[:8]
+                    if len(s) == 8:
+                        item["trade_date_norm"] = f"{s[:4]}-{s[4:6]}-{s[6:8]}"
+            return DataResult(data=records, source="tushare:stk_shock")
+        except Exception as e:
+            return DataResult(data=None, source=self.name, error=str(e))
+
+    def get_market_daily_changes(self, date: str) -> DataResult:
+        """全市场个股当日涨跌幅。"""
+        try:
+            d = self._date_fmt(date)
+            df = self.pro.daily(trade_date=d, fields="ts_code,name,pct_chg")
+            if df is None or df.empty:
+                return DataResult(data=[], source="tushare:daily")
+            records = self._df_to_records(df)
+            for item in records:
+                item.setdefault("code", item.get("ts_code"))
+            return DataResult(data=records, source="tushare:daily")
+        except Exception as e:
+            return DataResult(data=None, source=self.name, error=str(e))
+
+    def get_stock_daily_range(
+        self, stock_code: str, start_date: str, end_date: str
+    ) -> DataResult:
+        """个股区间日线，含 pct_chg。"""
+        try:
+            ts_code = self._normalize_stock_code(stock_code)
+            sd = self._date_fmt(start_date)
+            ed = self._date_fmt(end_date)
+            records = self._query_records("daily", ts_code=ts_code, start_date=sd, end_date=ed)
+            out = []
+            for item in records:
+                td = item.get("trade_date")
+                if td is None:
+                    continue
+                s = str(td).replace("-", "")[:8]
+                norm = f"{s[:4]}-{s[4:6]}-{s[6:8]}" if len(s) == 8 else str(td)
+                pc = item.get("pct_chg")
+                try:
+                    pct = float(pc) if pc is not None else None
+                except (TypeError, ValueError):
+                    pct = None
+                out.append({"trade_date": norm, "pct_chg": pct, "ts_code": ts_code})
+            return DataResult(data=out, source="tushare:daily")
+        except Exception as e:
+            return DataResult(data=None, source=self.name, error=str(e))
+
+    def get_index_daily_range(
+        self, index_ts_code: str, start_date: str, end_date: str
+    ) -> DataResult:
+        """指数区间日线涨跌幅。"""
+        try:
+            code = str(index_ts_code or "").strip().upper()
+            if not code:
+                return DataResult(data=None, source=self.name, error="index_ts_code 为空")
+            sd = self._date_fmt(start_date)
+            ed = self._date_fmt(end_date)
+            df = self.pro.index_daily(ts_code=code, start_date=sd, end_date=ed)
+            if df is None or df.empty:
+                return DataResult(data=[], source="tushare:index_daily")
+            out = []
+            for _, row in df.iterrows():
+                td = row.get("trade_date")
+                s = str(td).replace("-", "")[:8]
+                norm = f"{s[:4]}-{s[4:6]}-{s[6:8]}" if len(s) == 8 else str(td)
+                pc = row.get("pct_chg")
+                try:
+                    pct = float(pc) if pc is not None else None
+                except (TypeError, ValueError):
+                    pct = None
+                out.append({"trade_date": norm, "pct_chg": pct, "ts_code": code})
+            return DataResult(data=out, source="tushare:index_daily")
+        except Exception as e:
+            return DataResult(data=None, source=self.name, error=str(e))
+
     def get_stock_st(self, date: str) -> DataResult:
         """获取当日 ST 股票列表。"""
         try:
@@ -852,5 +1067,54 @@ class TushareProvider(DataProvider):
         try:
             df = self.pro.stock_basic(list_status="L")
             return DataResult(data=self._df_to_records(df), source="tushare:stock_basic")
+        except Exception as e:
+            return DataResult(data=None, source=self.name, error=str(e))
+
+    def get_stock_basic_batch(self, ts_codes: list[str]) -> DataResult:
+        """按代码批量拉取简称（逗号分隔 ts_code，拆块避免超长）。"""
+        if not ts_codes:
+            return DataResult(data=[], source="tushare:stock_basic")
+        try:
+            norm: list[str] = []
+            seen: set[str] = set()
+            for raw in ts_codes:
+                c = str(raw or "").strip().upper()
+                if not c or c in seen:
+                    continue
+                seen.add(c)
+                norm.append(self._normalize_stock_code(c))
+            if not norm:
+                return DataResult(data=[], source="tushare:stock_basic")
+            chunk_size = 50
+            all_rows: list[dict] = []
+            for i in range(0, len(norm), chunk_size):
+                chunk = norm[i : i + chunk_size]
+                df = self.pro.stock_basic(
+                    ts_code=",".join(chunk),
+                    fields="ts_code,name,symbol",
+                )
+                all_rows.extend(self._df_to_records(df))
+            got = {
+                str(r.get("ts_code") or "").strip().upper()
+                for r in all_rows
+                if isinstance(r, dict)
+            }
+            for c in norm:
+                if c.upper() in got:
+                    continue
+                try:
+                    one = self.pro.stock_basic(ts_code=c, fields="ts_code,name,symbol")
+                    recs = self._df_to_records(one)
+                    if recs:
+                        all_rows.extend(recs)
+                        got.add(c.upper())
+                        continue
+                    one_d = self.pro.stock_basic(
+                        ts_code=c, list_status="D", fields="ts_code,name,symbol"
+                    )
+                    all_rows.extend(self._df_to_records(one_d))
+                except Exception as ex:
+                    logger.debug("stock_basic 单票补查 %s: %s", c, ex)
+            return DataResult(data=all_rows, source="tushare:stock_basic")
         except Exception as e:
             return DataResult(data=None, source=self.name, error=str(e))

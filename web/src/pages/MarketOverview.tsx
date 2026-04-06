@@ -1,4 +1,4 @@
-import { lazy, Suspense, useState } from 'react'
+import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '../lib/api'
@@ -67,6 +67,8 @@ export default function MarketOverview() {
   const [viewTab, setViewTab] = useState<MarketViewTab>('summary')
   const [sortOrder, setSortOrder] = useState<SortOrder>('gain')
   const [showAllSectors, setShowAllSectors] = useState(false)
+  const [loadCharts, setLoadCharts] = useState(false)
+  const chartsRef = useRef<HTMLDivElement | null>(null)
 
   const { data: market, isLoading } = useQuery({
     queryKey: ['market-full', date],
@@ -97,6 +99,30 @@ export default function MarketOverview() {
       ...d,
       date_short: d.date.slice(5),
     }))
+
+  useEffect(() => {
+    if (loadCharts || chartData.length === 0) return
+    if (typeof window === 'undefined' || typeof window.IntersectionObserver === 'undefined') {
+      setLoadCharts(true)
+      return
+    }
+    const node = chartsRef.current
+    if (!node) return
+    const observer = new window.IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            setLoadCharts(true)
+            observer.disconnect()
+            break
+          }
+        }
+      },
+      { rootMargin: '240px 0px' }
+    )
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [chartData.length, loadCharts])
 
   if (isLoading) {
     return <div className="text-center py-12 text-gray-400">加载中...</div>
@@ -221,9 +247,15 @@ export default function MarketOverview() {
       />
 
       {chartData.length > 0 && (
-        <Suspense fallback={<ChartLoadingFallback />}>
-          <MarketChartsPanel chartData={chartData} />
-        </Suspense>
+        <div ref={chartsRef}>
+          {loadCharts ? (
+            <Suspense fallback={<ChartLoadingFallback />}>
+              <MarketChartsPanel chartData={chartData} />
+            </Suspense>
+          ) : (
+            <DeferredChartPlaceholder />
+          )}
+        </div>
       )}
       </>
       )}
@@ -286,6 +318,14 @@ function ChartLoadingFallback() {
   return (
     <div className="bg-white rounded-lg shadow p-4 text-center text-sm text-gray-400">
       图表加载中...
+    </div>
+  )
+}
+
+function DeferredChartPlaceholder() {
+  return (
+    <div className="bg-white rounded-lg shadow p-4 text-center text-sm text-gray-400">
+      图表将在滚动到此区域后加载
     </div>
   )
 }

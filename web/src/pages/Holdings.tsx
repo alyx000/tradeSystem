@@ -2,9 +2,10 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../lib/api'
+import { localDateString } from '../lib/date'
 import type { Holding, HoldingCreateInput, HoldingSignalItem, HoldingTaskItem, HoldingUpdateInput } from '../lib/types'
 
-const today = new Date().toISOString().slice(0, 10)
+const today = localDateString()
 
 function normStockCode(code: string): string {
   return String(code || '').trim().toUpperCase().replace(/\.(SZ|SH|BJ)$/i, '')

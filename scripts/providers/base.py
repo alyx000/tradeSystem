@@ -195,6 +195,36 @@ class DataProvider(ABC):
     def get_stock_st(self, date: str) -> DataResult:
         return DataResult(data=None, source=self.name, error="not implemented")
 
+    def get_suspend_list(self, date: str) -> DataResult:
+        return DataResult(data=None, source=self.name, error="not implemented")
+
+    def get_suspend_change_reasons(
+        self,
+        trade_date: str,
+        ts_codes: list[str] | None = None,
+    ) -> DataResult:
+        """Tushare suspend 表：按停牌日索引 change_reason（与 suspend_d 互补）。"""
+        return DataResult(data=None, source=self.name, error="not implemented")
+
+    def get_stk_shock(self, date: str) -> DataResult:
+        return DataResult(data=None, source=self.name, error="not implemented")
+
+    def get_stk_alert(self, trade_date: str) -> DataResult:
+        """交易所重点提示证券（stk_alert，与 App「重点监控」列表同源类数据）。"""
+        return DataResult(data=None, source=self.name, error="not implemented")
+
+    def get_market_daily_changes(self, date: str) -> DataResult:
+        """全市场个股当日涨跌幅（用于监管异动初筛降级路径）。"""
+        return DataResult(data=None, source=self.name, error="not implemented")
+
+    def get_stock_daily_range(self, stock_code: str, start_date: str, end_date: str) -> DataResult:
+        """个股区间日线涨跌幅序列。"""
+        return DataResult(data=None, source=self.name, error="not implemented")
+
+    def get_index_daily_range(self, index_ts_code: str, start_date: str, end_date: str) -> DataResult:
+        """指数区间日线涨跌幅序列。index_ts_code 如 000001.SH。"""
+        return DataResult(data=None, source=self.name, error="not implemented")
+
     # ---- 外盘 ----
     def get_global_index(self, index_name: str) -> DataResult:
         return DataResult(data=None, source=self.name, error="not implemented")
@@ -238,6 +268,10 @@ class DataProvider(ABC):
         return DataResult(data=None, source=self.name, error="not implemented")
 
     def get_stock_basic_list(self, date: str) -> DataResult:
+        return DataResult(data=None, source=self.name, error="not implemented")
+
+    def get_stock_basic_batch(self, ts_codes: list[str]) -> DataResult:
+        """按 ts_code 列表批量查询 stock_basic（名称补全）。"""
         return DataResult(data=None, source=self.name, error="not implemented")
 
     # ---- 成交额排名 ----

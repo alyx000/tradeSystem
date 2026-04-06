@@ -1,12 +1,13 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '../lib/api'
+import { addDaysLocal, localDateString } from '../lib/date'
 import type { CalendarEvent } from '../lib/types'
 
 function getDefaultDateRange() {
   const now = new Date()
-  const today = now.toISOString().slice(0, 10)
-  const next30 = new Date(now.getTime() + 30 * 86400000).toISOString().slice(0, 10)
+  const today = localDateString(now)
+  const next30 = localDateString(addDaysLocal(now, 30))
   return { today, next30 }
 }
 

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
+import { addDaysLocal, localDateString } from '../lib/date'
 import type { IndustryInfoCreateInput, IndustryInfoItem } from '../lib/types'
 
 const INFO_TYPE_OPTIONS = [
@@ -25,8 +26,8 @@ function TypeBadge({ type }: { type: string }) {
   return <span className={`inline-block text-xs px-1.5 py-0.5 rounded ${cls}`}>{label}</span>
 }
 
-const today = new Date().toISOString().slice(0, 10)
-const monthAgo = new Date(Date.now() - 30 * 86400_000).toISOString().slice(0, 10)
+const today = localDateString()
+const monthAgo = localDateString(addDaysLocal(new Date(), -30))
 
 export default function IndustryInfo() {
   const queryClient = useQueryClient()

@@ -2,12 +2,13 @@ import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { api } from '../lib/api'
+import { localDateString } from '../lib/date'
 
 export default function CommandsCenter() {
   const [query, setQuery] = useState('')
   const [copiedCommand, setCopiedCommand] = useState<string | null>(null)
   const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>({})
-  const today = new Date().toISOString().slice(0, 10)
+  const today = localDateString()
   const { data, isLoading, error } = useQuery({
     queryKey: ['command-index'],
     queryFn: api.getCommandIndex,

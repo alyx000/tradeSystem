@@ -49,6 +49,8 @@ INTERFACE_FALLBACK_LABELS: dict[str, str] = {
     "index_classify": "申万行业分类",
     "stock_basic": "A股主数据",
     "trade_cal": "交易日历",
+    "regulatory_suspend": "停牌核查数据",
+    "stk_shock": "异常波动个股",
 }
 
 

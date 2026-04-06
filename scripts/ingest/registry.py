@@ -270,6 +270,28 @@ INTERFACE_REGISTRY: dict[str, InterfaceConfig] = {
         "enabled_by_default": False,
         "notes": "解禁数据以历史回填和研究为主，默认不参与每日任务。",
     },
+    "regulatory_suspend": {
+        "interface_name": "regulatory_suspend",
+        "provider_method": "get_suspend_list",
+        "stage": "post_extended",
+        "use_cases": ["post_report", "research", "history_compare"],
+        "params_policy": "trade_date",
+        "dedupe_keys": ["trade_date"],
+        "raw_table": "raw_regulatory_suspend",
+        "enabled_by_default": True,
+        "notes": "停复牌（停牌）原始数据，监管核查与停牌标的。",
+    },
+    "stk_shock": {
+        "interface_name": "stk_shock",
+        "provider_method": "get_stk_shock",
+        "stage": "post_extended",
+        "use_cases": ["post_report", "research", "history_compare"],
+        "params_policy": "trade_date",
+        "dedupe_keys": ["trade_date"],
+        "raw_table": "raw_stk_shock",
+        "enabled_by_default": True,
+        "notes": "交易所公布的个股异常波动（stk_shock，高积分）。",
+    },
 }
 
 

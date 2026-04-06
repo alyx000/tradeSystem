@@ -2,9 +2,10 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { api } from '../lib/api'
+import { localDateString } from '../lib/date'
 import type { HoldingTaskItem } from '../lib/types'
 
-const today = new Date().toISOString().slice(0, 10)
+const today = localDateString()
 
 type HoldingTaskFilter = 'open' | 'done' | 'ignored'
 

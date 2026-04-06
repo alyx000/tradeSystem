@@ -1,6 +1,13 @@
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, it, expect, vi, beforeAll } from 'vitest'
 import App from '../App'
+
+function localDateString(date = new Date()): string {
+  const y = date.getFullYear()
+  const m = String(date.getMonth() + 1).padStart(2, '0')
+  const d = String(date.getDate()).padStart(2, '0')
+  return `${y}-${m}-${d}`
+}
 
 beforeAll(() => {
   globalThis.fetch = vi.fn().mockResolvedValue({
@@ -34,5 +41,20 @@ describe('App', () => {
     render(<App />)
     const links = screen.getAllByRole('link')
     expect(links.length).toBeGreaterThanOrEqual(10)
+    const today = localDateString()
+    expect(screen.getByRole('link', { name: '市场' })).toHaveAttribute('href', `/market/${today}`)
+    expect(screen.getByRole('link', { name: '复盘' })).toHaveAttribute('href', `/review/${today}`)
+    expect(screen.getByRole('link', { name: '计划' })).toHaveAttribute('href', `/plans/${today}`)
+  })
+
+  it('navigates when clicking top nav links', async () => {
+    window.history.pushState({}, '', '/')
+    render(<App />)
+
+    fireEvent.click(screen.getByRole('link', { name: '命令' }))
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/commands')
+    })
   })
 })

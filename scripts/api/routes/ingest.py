@@ -89,6 +89,20 @@ def ingest_health_summary(
     )
 
 
+@router.get("/health/dashboard")
+def ingest_dashboard_health_summary(
+    date: str,
+    days: int = 7,
+    limit: int = 10,
+):
+    service = IngestService()
+    return service.dashboard_health_summary(
+        end_date=date,
+        days=days,
+        limit=limit,
+    )
+
+
 @router.post("/reconcile")
 def reconcile_ingest_runs(body: Optional[dict] = None):
     service = IngestService()

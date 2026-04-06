@@ -1,7 +1,8 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
+import { localDateString } from '../lib/date'
 import type {
   PlanDiagnosticsItem,
   PlanDraftRecord,
@@ -1599,11 +1600,13 @@ function ObservationEditor({
 
 function RecentObjectsPanel({
   date,
+  enabled,
   onSelectDraft,
   onSelectPlan,
   onObservationUpdated,
 }: {
   date: string
+  enabled: boolean
   onSelectDraft: (draft: PlanDraftRecord) => void
   onSelectPlan: (plan: PlanRecord) => void
   onObservationUpdated: (observation: PlanObservationRecord) => void
@@ -1612,14 +1615,17 @@ function RecentObjectsPanel({
   const { data: observations } = useQuery({
     queryKey: ['plan-observations', date],
     queryFn: () => api.listPlanObservations(date, 8),
+    enabled,
   })
   const { data: drafts } = useQuery({
     queryKey: ['plan-drafts', date],
     queryFn: () => api.listPlanDrafts(date, 8),
+    enabled,
   })
   const { data: plans } = useQuery({
     queryKey: ['plans', date],
     queryFn: () => api.listPlans(date, 8),
+    enabled,
   })
 
   return (
@@ -1694,12 +1700,35 @@ export default function PlanWorkbench() {
   const { date } = useParams<{ date: string }>()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
-  const today = new Date().toISOString().slice(0, 10)
+  const today = localDateString()
   const activeDate = date || today
 
   const [step, setStep] = useState<Step>('draft')
   const [draft, setDraft] = useState<PlanDraftRecord | null>(null)
   const [plan, setPlan] = useState<PlanRecord | null>(null)
+  const [loadSidebar, setLoadSidebar] = useState(false)
+  const sidebarRef = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.IntersectionObserver === 'undefined') {
+      setLoadSidebar(true)
+      return
+    }
+    const observer = new window.IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            setLoadSidebar(true)
+            observer.disconnect()
+            break
+          }
+        }
+      },
+      { rootMargin: '240px 0px' }
+    )
+    if (sidebarRef.current) observer.observe(sidebarRef.current)
+    return () => observer.disconnect()
+  }, [])
 
   function handleDraftCreated(d: PlanDraftRecord) {
     setDraft(d)
@@ -1806,22 +1835,25 @@ export default function PlanWorkbench() {
           )}
         </div>
 
-        <RecentObjectsPanel
-          date={activeDate}
-          onObservationUpdated={() => {
-            queryClient.invalidateQueries({ queryKey: ['plan-observations', activeDate] })
-          }}
-          onSelectDraft={(selected) => {
-            setDraft(selected)
-            setPlan(null)
-            setStep('confirm')
-          }}
-          onSelectPlan={(selected) => {
-            setPlan(selected)
-            setDraft(null)
-            setStep(selected.status === 'reviewed' ? 'review' : 'diagnose')
-          }}
-        />
+        <div ref={sidebarRef}>
+          <RecentObjectsPanel
+            date={activeDate}
+            enabled={loadSidebar}
+            onObservationUpdated={() => {
+              queryClient.invalidateQueries({ queryKey: ['plan-observations', activeDate] })
+            }}
+            onSelectDraft={(selected) => {
+              setDraft(selected)
+              setPlan(null)
+              setStep('confirm')
+            }}
+            onSelectPlan={(selected) => {
+              setPlan(selected)
+              setDraft(null)
+              setStep(selected.status === 'reviewed' ? 'review' : 'diagnose')
+            }}
+          />
+        </div>
       </div>
 
       <div className="mt-4 flex gap-2">

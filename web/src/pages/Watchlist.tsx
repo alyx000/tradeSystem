@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
+import { localDateString } from '../lib/date'
 import type { WatchlistCreateInput, WatchlistItem } from '../lib/types'
 
 const TIER_LABELS: Record<string, string> = {
@@ -17,7 +18,7 @@ const TIER_OPTIONS = [
 
 const ROLE_OPTIONS = ['龙头', '前排', '跟风', '中军', '弹性套利']
 
-const today = new Date().toISOString().slice(0, 10)
+const today = localDateString()
 
 type FormData = {
   stock_code: string

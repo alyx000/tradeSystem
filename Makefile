@@ -1,4 +1,4 @@
-.PHONY: help bootstrap doctor check check-web check-scripts hooks-install dev dev-api dev-web commands-doc commands-check dashboard-open search-open commands-open plan-open knowledge-open ingest-open teachers-open holdings-open watchlist-open calendar-open industry-open db-init db-sync db-reconcile holdings holdings-refresh watchlist notes-search db-search market-open market-json market-envelope review-open review-prefill pre post ingest-list ingest-run-post ingest-run-interface ingest-inspect ingest-health ingest-reconcile plan-draft plan-show-draft plan-confirm plan-diagnose plan-review knowledge-list knowledge-add-note knowledge-draft-from-asset today-open today-close today-pre today-post today-evening today-watchlist today-obsidian today-ingest-inspect today-ingest-health
+.PHONY: help bootstrap doctor check check-web check-scripts hooks-install dev dev-api dev-web commands-doc commands-check dashboard-open search-open commands-open plan-open knowledge-open ingest-open teachers-open holdings-open watchlist-open calendar-open industry-open db-init db-sync db-reconcile holdings holdings-refresh watchlist notes-search db-search market-open market-json market-envelope review-open review-prefill pre post regulatory ingest-list ingest-run-post ingest-run-interface ingest-inspect ingest-health ingest-reconcile plan-draft plan-show-draft plan-confirm plan-diagnose plan-review knowledge-list knowledge-add-note knowledge-draft-from-asset today-open today-close today-pre today-post today-regulatory today-evening today-watchlist today-obsidian today-ingest-inspect today-ingest-health
 
 help:
 	@echo "Available targets:"
@@ -56,6 +56,7 @@ help:
 	@echo "  make today-close   - alias for today's post-market flow"
 	@echo "  make today-pre     - run today's pre-market flow"
 	@echo "  make today-post    - run today's post-market flow"
+	@echo "  make today-regulatory - run today's regulatory monitor ingest"
 	@echo "  make today-evening - run today's evening flow"
 	@echo "  make today-watchlist - run today's watchlist flow"
 	@echo "  make today-obsidian - export today's obsidian notes"
@@ -238,6 +239,9 @@ today-pre:
 
 today-post:
 	cd scripts && python3 main.py post --date "$$(date +%F)"
+
+today-regulatory:
+	cd scripts && python3 main.py regulatory --date "$$(date +%F)"
 
 today-evening:
 	cd scripts && python3 main.py evening --date "$$(date +%F)"

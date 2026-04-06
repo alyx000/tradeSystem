@@ -1,19 +1,20 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { lazy, Suspense, useState, useEffect, useCallback, useMemo } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
-import StepMarket from '../components/review/StepMarket'
-import StepSectors from '../components/review/StepSectors'
-import StepEmotion from '../components/review/StepEmotion'
-import StepStyle from '../components/review/StepStyle'
-import StepLeaders from '../components/review/StepLeaders'
-import StepNodes from '../components/review/StepNodes'
-import StepPositions from '../components/review/StepPositions'
-import StepPlan from '../components/review/StepPlan'
 import type { StepProps } from '../components/review/widgets'
 import type { ReviewFormData, ReviewRecord, ReviewStepKey, ReviewStepValue } from '../lib/types'
 
-type StepComponent = (props: StepProps) => React.ReactNode
+type StepComponent = React.ComponentType<StepProps>
+
+const StepMarket = lazy(() => import('../components/review/StepMarket'))
+const StepSectors = lazy(() => import('../components/review/StepSectors'))
+const StepEmotion = lazy(() => import('../components/review/StepEmotion'))
+const StepStyle = lazy(() => import('../components/review/StepStyle'))
+const StepLeaders = lazy(() => import('../components/review/StepLeaders'))
+const StepNodes = lazy(() => import('../components/review/StepNodes'))
+const StepPositions = lazy(() => import('../components/review/StepPositions'))
+const StepPlan = lazy(() => import('../components/review/StepPlan'))
 
 const STEPS: { key: ReviewStepKey; label: string; Component: StepComponent }[] = [
   { key: 'step1_market', label: '1.大盘', Component: StepMarket },
@@ -172,7 +173,9 @@ export default function ReviewWorkbench() {
       </div>
 
       <div className="bg-white rounded-lg shadow p-5">
-        <step.Component data={stepData} onChange={handleChange} prefill={prefill} />
+        <Suspense fallback={<StepLoadingFallback label={step.label} />}>
+          <step.Component data={stepData} onChange={handleChange} prefill={prefill} />
+        </Suspense>
       </div>
 
       <div className="flex justify-between">
@@ -186,6 +189,14 @@ export default function ReviewWorkbench() {
         </button>
       </div>
 
+    </div>
+  )
+}
+
+function StepLoadingFallback({ label }: { label: string }) {
+  return (
+    <div className="rounded border border-dashed border-gray-200 bg-gray-50 px-4 py-10 text-center text-sm text-gray-400">
+      {label} 加载中...
     </div>
   )
 }
