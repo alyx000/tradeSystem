@@ -17,7 +17,7 @@ from pathlib import Path
 import pytest
 
 from db.connection import get_connection
-from db.migrate import get_schema_version, migrate
+from db.migrate import CURRENT_SCHEMA_VERSION, get_schema_version, migrate
 from db import queries as Q
 
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent
@@ -52,7 +52,7 @@ def conn(tmp_path):
 
 class TestMigrationV14:
     def test_schema_version_current(self, conn):
-        assert get_schema_version(conn) == 15
+        assert get_schema_version(conn) == CURRENT_SCHEMA_VERSION
 
     def test_teacher_notes_has_mentioned_stocks_column(self, conn):
         cols = {row[1] for row in conn.execute("PRAGMA table_info(teacher_notes)").fetchall()}
@@ -73,7 +73,7 @@ class TestMigrationV14:
 
         # 重新 migrate 触发 v14
         migrate(c)
-        assert get_schema_version(c) >= 15
+        assert get_schema_version(c) >= CURRENT_SCHEMA_VERSION
         tn_cols = {row[1] for row in c.execute("PRAGMA table_info(teacher_notes)").fetchall()}
         wl_cols = {row[1] for row in c.execute("PRAGMA table_info(watchlist)").fetchall()}
         assert "mentioned_stocks" in tn_cols

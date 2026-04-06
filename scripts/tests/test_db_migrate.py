@@ -9,6 +9,7 @@ import yaml
 
 from db.connection import get_connection
 from db.migrate import (
+    CURRENT_SCHEMA_VERSION,
     get_schema_version,
     import_calendar,
     import_daily_market,
@@ -16,6 +17,7 @@ from db.migrate import (
     migrate,
 )
 from db import queries as Q
+from db.schema import _SQL_TEACHER_NOTES_FTS_TRIGGERS
 
 
 @pytest.fixture
@@ -288,7 +290,7 @@ class TestDailyMarketMigration:
 
 class TestSchemaVersion:
     def test_migrate_to_v5(self, conn):
-        assert get_schema_version(conn) == 15
+        assert get_schema_version(conn) == CURRENT_SCHEMA_VERSION
 
         tables = {
             row[0]
@@ -359,7 +361,7 @@ class TestHoldingsMigration:
         closed = conn.execute(
             "SELECT stock_code FROM holdings WHERE status = 'closed' ORDER BY id"
         ).fetchall()
-        assert get_schema_version(conn) == 15
+        assert get_schema_version(conn) == CURRENT_SCHEMA_VERSION
         assert [row["stock_code"] for row in active] == ["300750.SZ"]
         assert [row["stock_code"] for row in closed] == ["300750"]
 
@@ -396,6 +398,46 @@ def test_migrate_v8_marks_permission_ingest_errors_non_retryable(tmp_path):
     row = conn.execute(
         "SELECT retryable FROM ingest_errors WHERE run_id = 'run_perm'"
     ).fetchone()
-    assert get_schema_version(conn) == 15
+    assert get_schema_version(conn) == CURRENT_SCHEMA_VERSION
     assert row["retryable"] == 0
+    conn.close()
+
+
+def test_migrate_v16_repairs_teacher_notes_fts_missing_mentioned_stocks(tmp_path):
+    """模拟 v14 仅更新触发器、FTS 表体仍为旧列导致的 OperationalError。"""
+    conn = get_connection(tmp_path / "fts_drift.db")
+    migrate(conn)
+    conn.executescript(
+        """
+        DROP TRIGGER IF EXISTS teacher_notes_fts_insert;
+        DROP TRIGGER IF EXISTS teacher_notes_fts_delete;
+        DROP TRIGGER IF EXISTS teacher_notes_fts_update;
+        DROP TABLE IF EXISTS teacher_notes_fts;
+        CREATE VIRTUAL TABLE teacher_notes_fts USING fts5(
+            title, core_view, key_points, sectors, avoid, raw_content,
+            content=teacher_notes, content_rowid=id,
+            tokenize='unicode61'
+        );
+        INSERT INTO teacher_notes_fts(teacher_notes_fts) VALUES('rebuild');
+        """
+    )
+    for sql in _SQL_TEACHER_NOTES_FTS_TRIGGERS:
+        conn.executescript(sql)
+    conn.execute("PRAGMA user_version = 15")
+    conn.commit()
+
+    tid = Q.get_or_create_teacher(conn, "FTS修复测试")
+    conn.commit()
+    with pytest.raises(sqlite3.OperationalError, match="mentioned_stocks"):
+        Q.insert_teacher_note(
+            conn, teacher_id=tid, date="2026-04-01", title="bad", core_view="c"
+        )
+
+    migrate(conn)
+    assert get_schema_version(conn) == CURRENT_SCHEMA_VERSION
+
+    note_id = Q.insert_teacher_note(
+        conn, teacher_id=tid, date="2026-04-01", title="ok", core_view="c2"
+    )
+    assert note_id > 0
     conn.close()

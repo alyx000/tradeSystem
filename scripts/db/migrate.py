@@ -17,6 +17,10 @@ logger = logging.getLogger(__name__)
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent
 PROJECT_ROOT = SCRIPTS_DIR.parent
 
+# 与 migrate() 中「当前最新」一步一致；新增迁移时递增本常量，并把上一步的
+# set_schema_version(conn, CURRENT_SCHEMA_VERSION) 改为字面量 N（保留历史链）。
+CURRENT_SCHEMA_VERSION = 16
+
 
 def get_schema_version(conn: sqlite3.Connection) -> int:
     return conn.execute("PRAGMA user_version").fetchone()[0]
@@ -256,7 +260,10 @@ def migrate(conn: sqlite3.Connection) -> None:
         conn.execute("DROP TRIGGER IF EXISTS teacher_notes_fts_insert")
         conn.execute("DROP TRIGGER IF EXISTS teacher_notes_fts_delete")
         conn.execute("DROP TRIGGER IF EXISTS teacher_notes_fts_update")
+        # IF NOT EXISTS 不会升级已有 FTS 列；必须 DROP 后重建，否则触发器引用 mentioned_stocks 会报错
+        conn.execute("DROP TABLE IF EXISTS teacher_notes_fts")
         init_schema(conn)
+        conn.execute("INSERT INTO teacher_notes_fts(teacher_notes_fts) VALUES('rebuild')")
         set_schema_version(conn, 14)
         conn.commit()
 
@@ -311,6 +318,28 @@ def migrate(conn: sqlite3.Connection) -> None:
             )
         init_schema(conn)
         set_schema_version(conn, 15)
+        conn.commit()
+
+    if version < 16:
+        logger.info(
+            "Applying schema v16: rebuild teacher_notes_fts if missing mentioned_stocks (fix v14 FTS drift)"
+        )
+        need_fix = False
+        try:
+            info = conn.execute("PRAGMA table_info(teacher_notes_fts)").fetchall()
+            cols = {row[1] for row in info} if info else set()
+            if "mentioned_stocks" not in cols:
+                need_fix = True
+        except sqlite3.Error:
+            need_fix = True
+        if need_fix:
+            conn.execute("DROP TRIGGER IF EXISTS teacher_notes_fts_insert")
+            conn.execute("DROP TRIGGER IF EXISTS teacher_notes_fts_delete")
+            conn.execute("DROP TRIGGER IF EXISTS teacher_notes_fts_update")
+            conn.execute("DROP TABLE IF EXISTS teacher_notes_fts")
+            init_schema(conn)
+            conn.execute("INSERT INTO teacher_notes_fts(teacher_notes_fts) VALUES('rebuild')")
+        set_schema_version(conn, CURRENT_SCHEMA_VERSION)
         conn.commit()
 
 
