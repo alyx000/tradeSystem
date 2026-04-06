@@ -103,7 +103,7 @@ export default function MarketOverview() {
   useEffect(() => {
     if (loadCharts || chartData.length === 0) return
     if (typeof window === 'undefined' || typeof window.IntersectionObserver === 'undefined') {
-      setLoadCharts(true)
+      queueMicrotask(() => setLoadCharts(true))
       return
     }
     const node = chartsRef.current

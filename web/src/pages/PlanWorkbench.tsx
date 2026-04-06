@@ -1711,7 +1711,7 @@ export default function PlanWorkbench() {
 
   useEffect(() => {
     if (typeof window === 'undefined' || typeof window.IntersectionObserver === 'undefined') {
-      setLoadSidebar(true)
+      queueMicrotask(() => setLoadSidebar(true))
       return
     }
     const observer = new window.IntersectionObserver(

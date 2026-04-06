@@ -35,8 +35,10 @@ export default function Dashboard() {
 
   useEffect(() => {
     if (typeof window === 'undefined' || typeof window.IntersectionObserver === 'undefined') {
-      setLoadHoldingTasks(true)
-      setLoadIngestHealth(true)
+      queueMicrotask(() => {
+        setLoadHoldingTasks(true)
+        setLoadIngestHealth(true)
+      })
       return
     }
 
