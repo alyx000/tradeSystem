@@ -1,0 +1,3 @@
+# tradeSystem 项目 — AI 协作默认（与本仓库 .cursor/rules 一并生效）
+
+所有实施计划默认包含测试验证方案：分层、验收命令（pytest / make）、完成标准；无需用户额外触发词。详见 .cursor/rules/implementation-plan.mdc 与 test-design.mdc。

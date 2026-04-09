@@ -6,6 +6,8 @@ alwaysApply: true
 
 # 分层测试设计规则
 
+凡交付**实施计划**（含 Plan mode / CreatePlan），默认须在计划内写出测试验证方案，见 [`implementation-plan.mdc`](implementation-plan.mdc)；本文件负责触发条件与分层细节。
+
 ## 触发条件
 
 当改动涉及以下任一情形时，须在开发前先输出分层测试方案：
