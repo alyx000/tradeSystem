@@ -895,6 +895,7 @@ export interface ReviewPrefillData extends Omit<PrefillData, 'market' | 'main_th
   review_signals?: ReviewPrefillSignals
   holding_signals?: HoldingSignalsPayload
   is_trading_day?: boolean
+  prev_trade_date?: string
 }
 
 export interface ReviewRecord extends Partial<Record<ReviewStepKey, string | ReviewStepValue>> {

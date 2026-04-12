@@ -218,6 +218,8 @@ class TestPrefillIsTradingDay:
             mock_q.get_recent_industry_info.return_value = []
             mock_q.compute_ma5w_flags_from_history.return_value = {}
             mock_q.is_trade_day_from_db.return_value = None
+            mock_q.get_next_trade_date.return_value = None
+            mock_q.get_prev_trade_date_from_db.return_value = None
 
             from api.routes.review import get_prefill
             return get_prefill(date, conn=conn)
@@ -254,7 +256,150 @@ class TestPrefillIsTradingDay:
             mock_q.get_prev_daily_review.return_value = None
             mock_q.get_recent_industry_info.return_value = []
             mock_q.compute_ma5w_flags_from_history.return_value = {}
+            mock_q.get_next_trade_date.return_value = None
+            mock_q.get_prev_trade_date_from_db.return_value = "2026-04-30"
 
             from api.routes.review import get_prefill
             result = get_prefill("2026-05-01", conn=conn)  # 劳动节（周五）
             assert result["is_trading_day"] is False
+            assert result["prev_trade_date"] == "2026-04-30"
+
+
+# ──────────────────────────────────────────────────────────────
+# 交易日历导航：get_next_trade_date / get_prev_trade_date_from_db
+# ──────────────────────────────────────────────────────────────
+
+def _make_calendar_db(tmp_path, entries: list[tuple[str, int]]):
+    """创建带 trade_calendar 数据的测试 DB。entries: [(date, is_open), ...]"""
+    from db.schema import init_schema
+    conn = sqlite3.connect(str(tmp_path / "cal_test.db"))
+    conn.row_factory = sqlite3.Row
+    init_schema(conn)
+    for dt, is_open in entries:
+        conn.execute(
+            "INSERT INTO trade_calendar (date, is_open) VALUES (?, ?)", (dt, is_open)
+        )
+    conn.commit()
+    return conn
+
+
+class TestTradeCalendarNavigation:
+    """get_next_trade_date / get_prev_trade_date_from_db 数据层测试。"""
+
+    CAL = [
+        ("2026-04-08", 1),  # 周三
+        ("2026-04-09", 1),  # 周四
+        ("2026-04-10", 1),  # 周五
+        ("2026-04-11", 0),  # 周六
+        ("2026-04-12", 0),  # 周日
+        ("2026-04-13", 1),  # 周一
+        ("2026-04-14", 1),  # 周二
+    ]
+
+    def test_next_trade_date_normal(self, tmp_path):
+        from db.queries import get_next_trade_date
+        conn = _make_calendar_db(tmp_path, self.CAL)
+        assert get_next_trade_date(conn, "2026-04-10") == "2026-04-13"
+
+    def test_next_trade_date_skips_weekend(self, tmp_path):
+        from db.queries import get_next_trade_date
+        conn = _make_calendar_db(tmp_path, self.CAL)
+        assert get_next_trade_date(conn, "2026-04-11") == "2026-04-13"
+
+    def test_next_trade_date_none_at_boundary(self, tmp_path):
+        from db.queries import get_next_trade_date
+        conn = _make_calendar_db(tmp_path, self.CAL)
+        assert get_next_trade_date(conn, "2026-04-14") is None
+
+    def test_prev_trade_date_normal(self, tmp_path):
+        from db.queries import get_prev_trade_date_from_db
+        conn = _make_calendar_db(tmp_path, self.CAL)
+        assert get_prev_trade_date_from_db(conn, "2026-04-13") == "2026-04-10"
+
+    def test_prev_trade_date_skips_weekend(self, tmp_path):
+        from db.queries import get_prev_trade_date_from_db
+        conn = _make_calendar_db(tmp_path, self.CAL)
+        assert get_prev_trade_date_from_db(conn, "2026-04-12") == "2026-04-10"
+
+    def test_prev_trade_date_none_at_boundary(self, tmp_path):
+        from db.queries import get_prev_trade_date_from_db
+        conn = _make_calendar_db(tmp_path, self.CAL)
+        assert get_prev_trade_date_from_db(conn, "2026-04-08") is None
+
+    def test_consecutive_holidays(self, tmp_path):
+        """连续假日（如五一长假）跳过所有非交易日。"""
+        from db.queries import get_next_trade_date, get_prev_trade_date_from_db
+        cal = [
+            ("2026-04-30", 1),
+            ("2026-05-01", 0),
+            ("2026-05-02", 0),
+            ("2026-05-03", 0),
+            ("2026-05-04", 0),
+            ("2026-05-05", 0),
+            ("2026-05-06", 1),
+        ]
+        conn = _make_calendar_db(tmp_path, cal)
+        assert get_next_trade_date(conn, "2026-04-30") == "2026-05-06"
+        assert get_prev_trade_date_from_db(conn, "2026-05-06") == "2026-04-30"
+        assert get_prev_trade_date_from_db(conn, "2026-05-03") == "2026-04-30"
+
+
+class TestPrefillNoteDateRange:
+    """prefill 老师笔记范围查询 + prev_trade_date 返回。"""
+
+    def _setup_db(self, tmp_path):
+        """创建带 trade_calendar + teachers + teacher_notes 的测试 DB。"""
+        from db.schema import init_schema
+        conn = sqlite3.connect(str(tmp_path / "range_test.db"))
+        conn.row_factory = sqlite3.Row
+        init_schema(conn)
+        cal = [
+            ("2026-04-10", 1),  # 周五 — 交易日
+            ("2026-04-11", 0),  # 周六
+            ("2026-04-12", 0),  # 周日
+            ("2026-04-13", 1),  # 周一 — 下一个交易日
+        ]
+        for dt, is_open in cal:
+            conn.execute(
+                "INSERT INTO trade_calendar (date, is_open) VALUES (?, ?)", (dt, is_open)
+            )
+        conn.execute("INSERT INTO teachers (id, name) VALUES (1, '测试老师')")
+        conn.execute(
+            "INSERT INTO teacher_notes (teacher_id, date, title, raw_content) "
+            "VALUES (1, '2026-04-10', '周五观点', '周五内容')"
+        )
+        conn.execute(
+            "INSERT INTO teacher_notes (teacher_id, date, title, raw_content) "
+            "VALUES (1, '2026-04-12', '周日观点', '周日内容')"
+        )
+        conn.commit()
+        return conn
+
+    def _call_prefill(self, date, conn):
+        with patch("api.routes.review.build_holding_signals", return_value={"date": date, "items": []}), \
+             patch("api.routes.review.parse_post_market_envelope", return_value=None), \
+             patch("api.routes.review.holdings_quote_details_from_envelope", return_value={}), \
+             patch("api.routes.review.enrich_daily_market_row"):
+            from api.routes.review import get_prefill
+            return get_prefill(date, conn=conn)
+
+    def test_friday_prefill_includes_weekend_notes(self, tmp_path):
+        """周五复盘应包含周五和周末的老师笔记。"""
+        conn = self._setup_db(tmp_path)
+        result = self._call_prefill("2026-04-10", conn)
+        titles = [n["title"] for n in result["teacher_notes"]]
+        assert "周五观点" in titles
+        assert "周日观点" in titles
+
+    def test_trading_day_returns_no_prev_trade_date(self, tmp_path):
+        """交易日 prefill 不返回 prev_trade_date。"""
+        conn = self._setup_db(tmp_path)
+        result = self._call_prefill("2026-04-10", conn)
+        assert result["prev_trade_date"] is None
+
+    def test_non_trading_day_returns_prev_trade_date(self, tmp_path):
+        """非交易日（周日）prefill 返回 prev_trade_date = 周五。"""
+        conn = self._setup_db(tmp_path)
+        result = self._call_prefill("2026-04-12", conn)
+        assert result["is_trading_day"] is False
+        assert result["prev_trade_date"] == "2026-04-10"

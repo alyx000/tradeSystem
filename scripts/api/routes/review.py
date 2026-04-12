@@ -832,10 +832,16 @@ def get_prefill(date: str, conn: sqlite3.Connection = Depends(get_db_conn)):
     )
     calendar = Q.get_calendar_range(conn, date, date)
 
+    next_td = Q.get_next_trade_date(conn, date)
+    if next_td:
+        note_end = next_td
+    else:
+        note_end = (_date.fromisoformat(date) + timedelta(days=3)).isoformat()
     notes = conn.execute(
         "SELECT n.*, t.name as teacher_name FROM teacher_notes n "
-        "JOIN teachers t ON n.teacher_id = t.id WHERE n.date = ? ORDER BY n.created_at DESC",
-        (date,),
+        "JOIN teachers t ON n.teacher_id = t.id "
+        "WHERE n.date >= ? AND n.date < ? ORDER BY n.created_at DESC",
+        (date, note_end),
     ).fetchall()
     prev_review = Q.get_prev_daily_review(conn, date)
 
@@ -857,13 +863,17 @@ def get_prefill(date: str, conn: sqlite3.Connection = Depends(get_db_conn)):
     holding_signals = build_holding_signals(conn, date, market_row=market_for_signals)
 
     from utils.trade_date import is_trade_day as _is_trade_day
-    is_trading_day = _is_trade_day(date, conn=conn)
+    is_trading_day_calendar = _is_trade_day(date, conn=conn)
+    is_trading_day = is_trading_day_calendar
     if is_trading_day and market is None and _date.fromisoformat(date) < _date.today():
         is_trading_day = False
+
+    prev_trade_date = Q.get_prev_trade_date_from_db(conn, date) if not is_trading_day_calendar else None
 
     return {
         "date": date,
         "is_trading_day": is_trading_day,
+        "prev_trade_date": prev_trade_date,
         "market": market,
         "prev_market": prev_market,
         "avg_5d_amount": avg_5d,

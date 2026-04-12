@@ -1397,6 +1397,28 @@ def upsert_trade_calendar(conn: sqlite3.Connection, rows: list[dict]) -> int:
     return count
 
 
+def get_next_trade_date(conn: sqlite3.Connection, date: str) -> str | None:
+    """获取 date 之后最近的交易日（不含 date 本身）。"""
+    row = conn.execute(
+        "SELECT date FROM trade_calendar WHERE date > ? AND is_open = 1 ORDER BY date LIMIT 1",
+        (date,),
+    ).fetchone()
+    if row is None:
+        return None
+    return row["date"] if isinstance(row, dict) else row[0]
+
+
+def get_prev_trade_date_from_db(conn: sqlite3.Connection, date: str) -> str | None:
+    """获取 date 之前最近的交易日（不含 date 本身）。"""
+    row = conn.execute(
+        "SELECT date FROM trade_calendar WHERE date < ? AND is_open = 1 ORDER BY date DESC LIMIT 1",
+        (date,),
+    ).fetchone()
+    if row is None:
+        return None
+    return row["date"] if isinstance(row, dict) else row[0]
+
+
 def trade_calendar_year_covered(conn: sqlite3.Connection, year: int) -> bool:
     """检查某年交易日历是否已导入（以该年有 200+ 条记录为标准）。"""
     row = conn.execute(

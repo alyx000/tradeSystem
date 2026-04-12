@@ -95,6 +95,12 @@ export default function ReviewWorkbench() {
     return () => clearTimeout(timer)
   }, [formData, date])
 
+  useEffect(() => {
+    if (prefill && prefill.is_trading_day === false && prefill.prev_trade_date) {
+      navigate(`/review/${prefill.prev_trade_date}`, { replace: true })
+    }
+  }, [prefill, navigate])
+
   const saveMutation = useMutation({
     mutationFn: () => api.saveReview(date!, formData),
     onSuccess: () => {
