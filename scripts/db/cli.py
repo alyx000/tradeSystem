@@ -164,7 +164,8 @@ def register_db_subparser(subparsers: argparse._SubParsersAction) -> None:
     holdings_add.add_argument("--sector", default=None, help="所属板块")
     holdings_add.add_argument("--stop-loss", type=float, default=None, help="止损价")
     holdings_add.add_argument("--market", default="A股", help="市场（默认 A股）")
-    holdings_add.add_argument("--note", default=None, help="备注")
+    holdings_add.add_argument("--entry-reason", default=None, help="买入原因（开仓逻辑）")
+    holdings_add.add_argument("--note", default=None, help="备注（持仓期间调仓记录等）")
 
     holdings_remove = db_sub.add_parser("holdings-remove", help="移除持仓（置 closed）")
     holdings_remove.add_argument("--code", required=True, help="股票代码")
@@ -548,6 +549,8 @@ def _cmd_holdings_add(args: argparse.Namespace) -> None:
         kwargs["sector"] = args.sector
     if args.stop_loss is not None:
         kwargs["stop_loss"] = args.stop_loss
+    if args.entry_reason:
+        kwargs["entry_reason"] = args.entry_reason
     if args.note:
         kwargs["note"] = args.note
 
@@ -589,6 +592,12 @@ def _cmd_holdings_list(args: argparse.Namespace) -> None:
         sl_str = f"止损 {h['stop_loss']}" if h.get("stop_loss") else ""
         print(f"  {h['stock_code']} {h['stock_name']} | {shares_str} | "
               f"{price_str} | {h.get('sector', '-')} {sl_str}".rstrip())
+        reason = (h.get("entry_reason") or "").strip()
+        note = (h.get("note") or "").strip()
+        if reason:
+            print(f"    买入原因: {reason[:80]}{'…' if len(reason) > 80 else ''}")
+        if note:
+            print(f"    备注:     {note[:80]}{'…' if len(note) > 80 else ''}")
 
 
 def _cmd_holdings_refresh(args: argparse.Namespace) -> None:
@@ -688,6 +697,8 @@ def _cmd_holdings_import_yaml(args: argparse.Namespace) -> None:
                 key = cr or "invalid_cost"
                 skip_reasons[key] = skip_reasons.get(key, 0) + 1
                 continue
+            entry_reason = (h.get("entry_reason") or h.get("reason") or "").strip() or None
+            note_val = (h.get("note") or "").strip() or None
             Q.upsert_holding(
                 conn,
                 stock_code=code,
@@ -695,6 +706,8 @@ def _cmd_holdings_import_yaml(args: argparse.Namespace) -> None:
                 shares=shares,
                 entry_price=cost,
                 sector=(h.get("sector") or "").strip() or None,
+                entry_reason=entry_reason,
+                note=note_val,
                 status="active",
             )
             imported += 1

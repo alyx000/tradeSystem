@@ -328,6 +328,43 @@ class TestHoldings:
             row = conn.execute("SELECT status FROM holdings WHERE stock_code = '688041.SH'").fetchone()
         assert row["status"] == "closed"
 
+    def test_entry_reason_and_note_stored_and_shown(self, tmp_db):
+        result = _run_cli(
+            "holdings-add", "--code", "688041",
+            "--name", "海光信息",
+            "--shares", "100", "--price", "220.0",
+            "--entry-reason", "国产AI链龙头，主线初期",
+            "--note", "止损参考前低215",
+            tmp_db=tmp_db,
+        )
+        assert result.returncode == 0
+
+        with get_connection(tmp_db) as conn:
+            row = conn.execute(
+                "SELECT entry_reason, note FROM holdings WHERE stock_code = '688041'"
+            ).fetchone()
+        assert row["entry_reason"] == "国产AI链龙头，主线初期"
+        assert row["note"] == "止损参考前低215"
+
+        list_result = _run_cli("holdings-list", tmp_db=tmp_db)
+        assert list_result.returncode == 0
+        assert "买入原因" in list_result.stdout
+        assert "国产AI链龙头" in list_result.stdout
+        assert "备注" in list_result.stdout
+        assert "止损参考前低215" in list_result.stdout
+
+    def test_entry_reason_only_no_note(self, tmp_db):
+        _run_cli(
+            "holdings-add", "--code", "300750",
+            "--name", "宁德时代",
+            "--entry-reason", "锂电主线反弹",
+            tmp_db=tmp_db,
+        )
+        list_result = _run_cli("holdings-list", tmp_db=tmp_db)
+        assert "买入原因" in list_result.stdout
+        assert "锂电主线反弹" in list_result.stdout
+        assert "备注" not in list_result.stdout
+
 
 class TestHoldingsImportYaml:
     def test_imports_rows_and_values(self, tmp_db, tmp_path):
@@ -438,6 +475,38 @@ class TestHoldingsImportYaml:
         with get_connection(tmp_db) as conn:
             row = conn.execute("SELECT shares FROM holdings WHERE stock_code = '300750'").fetchone()
         assert row["shares"] == 100
+
+    def test_imports_entry_reason_and_note(self, tmp_db, tmp_path):
+        yml = tmp_path / "with_reason.yaml"
+        yml.write_text(
+            "holdings:\n"
+            '  - code: "300750"\n'
+            '    name: "宁德时代"\n'
+            "    shares: 100\n"
+            "    cost: 80.0\n"
+            '    entry_reason: "主线龙头，初期启动"\n'
+            '    note: "注意量能"\n'
+            '  - code: "688041"\n'
+            '    name: "海光信息"\n'
+            "    shares: 50\n"
+            "    cost: 220.0\n"
+            '    reason: "国产AI链兼容兜底"\n',
+            encoding="utf-8",
+        )
+        result = _run_cli("holdings-import-yaml", "--file", str(yml), tmp_db=tmp_db)
+        assert result.returncode == 0
+        assert "导入 2 条" in result.stdout
+
+        with get_connection(tmp_db) as conn:
+            r1 = conn.execute(
+                "SELECT entry_reason, note FROM holdings WHERE stock_code = '300750'"
+            ).fetchone()
+            r2 = conn.execute(
+                "SELECT entry_reason FROM holdings WHERE stock_code = '688041'"
+            ).fetchone()
+        assert r1["entry_reason"] == "主线龙头，初期启动"
+        assert r1["note"] == "注意量能"
+        assert r2["entry_reason"] == "国产AI链兼容兜底"
 
     def test_yaml_syntax_error_does_not_crash(self, tmp_db, tmp_path):
         yml = tmp_path / "broken.yaml"

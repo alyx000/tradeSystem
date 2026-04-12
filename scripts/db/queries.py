@@ -320,13 +320,13 @@ def get_latest_raw_interface_rows(
 _HOLDING_INSERTABLE = (
     "stock_code", "stock_name", "market", "sector", "shares",
     "entry_date", "entry_price", "current_price", "stop_loss",
-    "target_price", "position_ratio", "status", "note",
+    "target_price", "position_ratio", "status", "entry_reason", "note",
 )
 
 _HOLDINGS_UPDATABLE = frozenset({
     "stock_code", "stock_name", "market", "sector", "shares",
     "entry_date", "entry_price", "current_price", "stop_loss",
-    "target_price", "position_ratio", "status", "note",
+    "target_price", "position_ratio", "status", "entry_reason", "note",
 })
 
 

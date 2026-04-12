@@ -84,6 +84,8 @@ PORTFOLIO_COMMANDS = [
     ["db", "holdings-add", "--code", "300750", "--name", "N",
      "--shares", "200", "--price", "85.0", "--sector", "锂电",
      "--stop-loss", "80.0", "--market", "A股", "--note", "龙头"],
+    ["db", "holdings-add", "--code", "300750", "--name", "N",
+     "--entry-reason", "主线龙头启动", "--note", "观察量能"],
     ["db", "holdings-remove", "--code", "300750"],
     ["db", "holdings-list"],
     ["db", "holdings-refresh", "--date", "2026-04-04"],

@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { useState } from 'react'
+import { type SetStateAction, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../lib/api'
 import { localDateString } from '../lib/date'
@@ -32,16 +32,55 @@ function taskStatusLabel(status: HoldingTaskItem['status']): string {
   return '未完成'
 }
 
+function parseNullableText(value: string): string | null {
+  const t = String(value ?? '').trim()
+  return t === '' ? null : t
+}
+
+/** 与表单解析一致地将 API 可能返回的 number / string 规范为 number | null，避免基线 `!==` 误判。 */
+function coerceHoldingNumeric(raw: unknown): number | null {
+  if (raw == null || raw === '') return null
+  const n = typeof raw === 'number' ? raw : Number(String(raw).trim())
+  if (!Number.isFinite(n) || n < 0) return null
+  return n
+}
+
+/** 进入行内编辑时的快照，用于只提交相对基线有变化的字段，避免误覆盖未编辑的列。 */
+function holdingToEditBaseline(h: Holding): {
+  stop_loss: number | null
+  target_price: number | null
+  position_ratio: number | null
+  entry_reason: string | null
+  note: string | null
+} {
+  return {
+    stop_loss: coerceHoldingNumeric(h.stop_loss),
+    target_price: coerceHoldingNumeric(h.target_price),
+    position_ratio: coerceHoldingNumeric(h.position_ratio),
+    entry_reason: parseNullableText(h.entry_reason ?? ''),
+    note: parseNullableText(h.note ?? ''),
+  }
+}
+
+const emptyEditForm = {
+  stop_loss: '',
+  target_price: '',
+  position_ratio: '',
+  entry_reason: '',
+  note: '',
+}
+
+const EDIT_NUMERIC_VALIDATION_MSG =
+  '止损、止盈、仓位须为非负数字，无法解析时请清空或改正后再保存。'
+
 export default function Holdings() {
   const queryClient = useQueryClient()
   const [showForm, setShowForm] = useState(false)
   const [taskFilter, setTaskFilter] = useState<HoldingTaskFilter>('open')
   const [editingId, setEditingId] = useState<number | null>(null)
-  const [editForm, setEditForm] = useState({
-    stop_loss: '',
-    target_price: '',
-    position_ratio: '',
-  })
+  const editBaselineRef = useRef<ReturnType<typeof holdingToEditBaseline> | null>(null)
+  const [editForm, setEditForm] = useState({ ...emptyEditForm })
+  const [editValidationError, setEditValidationError] = useState<string | null>(null)
   const [form, setForm] = useState({
     stock_code: '',
     stock_name: '',
@@ -51,11 +90,16 @@ export default function Holdings() {
     stop_loss: '',
     target_price: '',
     position_ratio: '',
+    entry_reason: '',
+    note: '',
   })
 
   const { data: holdings, isLoading } = useQuery({
     queryKey: ['holdings'],
     queryFn: api.getHoldings,
+    // 行内编辑时避免窗口聚焦/重连触发 refetch，降低「基线快照 vs 已刷新列表」不一致概率
+    refetchOnWindowFocus: editingId === null,
+    refetchOnReconnect: editingId === null,
   })
   const { data: holdingSignals } = useQuery({
     queryKey: ['holding-signals', today],
@@ -84,6 +128,8 @@ export default function Holdings() {
         stop_loss: '',
         target_price: '',
         position_ratio: '',
+        entry_reason: '',
+        note: '',
       })
     },
   })
@@ -98,13 +144,16 @@ export default function Holdings() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['holdings'] })
       setEditingId(null)
-      setEditForm({
-        stop_loss: '',
-        target_price: '',
-        position_ratio: '',
-      })
+      setEditForm({ ...emptyEditForm })
+      editBaselineRef.current = null
+      setEditValidationError(null)
     },
   })
+
+  function patchEditForm(next: SetStateAction<typeof emptyEditForm>) {
+    setEditValidationError(null)
+    setEditForm(next)
+  }
 
   const taskMut = useMutation({
     mutationFn: ({ id, status }: { id: number; status: 'done' | 'ignored' }) => api.updateHoldingTask(id, { status }),
@@ -116,20 +165,22 @@ export default function Holdings() {
 
   function startEditing(h: Holding) {
     setEditingId(h.id)
+    setEditValidationError(null)
+    editBaselineRef.current = holdingToEditBaseline(h)
     setEditForm({
       stop_loss: h.stop_loss != null ? String(h.stop_loss) : '',
       target_price: h.target_price != null ? String(h.target_price) : '',
       position_ratio: h.position_ratio != null ? String(h.position_ratio) : '',
+      entry_reason: h.entry_reason ?? '',
+      note: h.note ?? '',
     })
   }
 
   function cancelEditing() {
     setEditingId(null)
-    setEditForm({
-      stop_loss: '',
-      target_price: '',
-      position_ratio: '',
-    })
+    editBaselineRef.current = null
+    setEditForm({ ...emptyEditForm })
+    setEditValidationError(null)
   }
 
   function parseNullableNumber(value: string): number | null {
@@ -141,18 +192,37 @@ export default function Holdings() {
   }
 
   function saveEditing(hid: number) {
+    const baseline = editBaselineRef.current
+    if (!baseline) return
+
     const stopLoss = parseNullableNumber(editForm.stop_loss)
     const targetPrice = parseNullableNumber(editForm.target_price)
     const positionRatio = parseNullableNumber(editForm.position_ratio)
-    if ([stopLoss, targetPrice, positionRatio].some((value) => Number.isNaN(value))) return
-    updateMut.mutate({
-      id: hid,
-      data: {
-        stop_loss: stopLoss,
-        target_price: targetPrice,
-        position_ratio: positionRatio,
-      },
-    })
+    if ([stopLoss, targetPrice, positionRatio].some((value) => Number.isNaN(value))) {
+      setEditValidationError(EDIT_NUMERIC_VALIDATION_MSG)
+      return
+    }
+    setEditValidationError(null)
+
+    const entryReason = parseNullableText(editForm.entry_reason)
+    const note = parseNullableText(editForm.note)
+
+    const data: HoldingUpdateInput = {}
+    if (stopLoss !== baseline.stop_loss) data.stop_loss = stopLoss
+    if (targetPrice !== baseline.target_price) data.target_price = targetPrice
+    if (positionRatio !== baseline.position_ratio) data.position_ratio = positionRatio
+    if (entryReason !== baseline.entry_reason) data.entry_reason = entryReason
+    if (note !== baseline.note) data.note = note
+
+    if (Object.keys(data).length === 0) {
+      setEditingId(null)
+      editBaselineRef.current = null
+      setEditForm({ ...emptyEditForm })
+      setEditValidationError(null)
+      return
+    }
+
+    updateMut.mutate({ id: hid, data })
   }
 
   return (
@@ -193,6 +263,12 @@ export default function Holdings() {
           <input placeholder="仓位占比%" type="number" value={form.position_ratio}
             onChange={e => setForm(p => ({ ...p, position_ratio: e.target.value }))}
             className="border rounded px-2 py-1.5 text-sm" />
+          <input placeholder="买入原因" value={form.entry_reason}
+            onChange={e => setForm(p => ({ ...p, entry_reason: e.target.value }))}
+            className="border rounded px-2 py-1.5 text-sm col-span-2 xl:col-span-4" />
+          <input placeholder="备注" value={form.note}
+            onChange={e => setForm(p => ({ ...p, note: e.target.value }))}
+            className="border rounded px-2 py-1.5 text-sm col-span-2 xl:col-span-3" />
           <button onClick={() => createMut.mutate({
             stock_code: form.stock_code, stock_name: form.stock_name,
             entry_price: parseFloat(form.entry_price) || undefined,
@@ -201,6 +277,8 @@ export default function Holdings() {
             stop_loss: parseFloat(form.stop_loss) || undefined,
             target_price: parseFloat(form.target_price) || undefined,
             position_ratio: parseFloat(form.position_ratio) || undefined,
+            entry_reason: form.entry_reason || undefined,
+            note: form.note || undefined,
           })}
             className="bg-green-600 text-white rounded px-3 py-1.5 text-sm hover:bg-green-700">
             确认
@@ -286,6 +364,14 @@ export default function Holdings() {
       </div>
 
       <div className="bg-white rounded-lg shadow overflow-hidden">
+        {editingId != null && editValidationError ? (
+          <div
+            role="alert"
+            className="px-4 py-2 text-xs text-red-700 bg-red-50 border-b border-red-100"
+          >
+            {editValidationError}
+          </div>
+        ) : null}
         <table className="w-full text-sm">
           <thead className="bg-gray-50 text-gray-500">
             <tr>
@@ -302,15 +388,16 @@ export default function Holdings() {
               <th className="px-4 py-3 text-left">主线归属</th>
               <th className="px-4 py-3 text-left">技术位</th>
               <th className="px-4 py-3 text-left">昨日计划</th>
+              <th className="px-4 py-3 text-left">买入原因 / 备注</th>
               <th className="px-4 py-3 text-left">状态</th>
               <th className="px-4 py-3 text-right">操作</th>
             </tr>
           </thead>
           <tbody className="divide-y">
             {isLoading ? (
-              <tr><td colSpan={15} className="px-4 py-8 text-center text-gray-400">加载中...</td></tr>
+              <tr><td colSpan={16} className="px-4 py-8 text-center text-gray-400">加载中...</td></tr>
             ) : holdings?.length === 0 ? (
-              <tr><td colSpan={15} className="px-4 py-8 text-center text-gray-400">暂无持仓</td></tr>
+              <tr><td colSpan={16} className="px-4 py-8 text-center text-gray-400">暂无持仓</td></tr>
             ) : (
               holdings?.map((h: Holding) => (
                 <tr key={h.id} className="hover:bg-gray-50 align-top">
@@ -334,7 +421,7 @@ export default function Holdings() {
                           type="number"
                           min="0"
                           value={editForm.stop_loss}
-                          onChange={(e) => setEditForm((prev) => ({ ...prev, stop_loss: e.target.value }))}
+                          onChange={(e) => patchEditForm((prev) => ({ ...prev, stop_loss: e.target.value }))}
                           className="w-24 rounded border px-2 py-1 text-right text-xs"
                         />
                         <input
@@ -342,7 +429,7 @@ export default function Holdings() {
                           type="number"
                           min="0"
                           value={editForm.target_price}
-                          onChange={(e) => setEditForm((prev) => ({ ...prev, target_price: e.target.value }))}
+                          onChange={(e) => patchEditForm((prev) => ({ ...prev, target_price: e.target.value }))}
                           className="w-24 rounded border px-2 py-1 text-right text-xs"
                         />
                       </div>
@@ -360,7 +447,7 @@ export default function Holdings() {
                         type="number"
                         min="0"
                         value={editForm.position_ratio}
-                        onChange={(e) => setEditForm((prev) => ({ ...prev, position_ratio: e.target.value }))}
+                        onChange={(e) => patchEditForm((prev) => ({ ...prev, position_ratio: e.target.value }))}
                         className="w-20 rounded border px-2 py-1 text-right text-xs"
                       />
                     ) : (
@@ -470,6 +557,42 @@ export default function Holdings() {
                         </div>
                       )
                     })()}
+                  </td>
+                  <td className="px-4 py-3 text-xs text-gray-600 max-w-[160px] min-w-0">
+                    {editingId === h.id ? (
+                      <div className="space-y-2 min-w-0">
+                        <input
+                          aria-label={`买入原因-${h.stock_code}`}
+                          value={editForm.entry_reason}
+                          onChange={(e) => patchEditForm((prev) => ({ ...prev, entry_reason: e.target.value }))}
+                          placeholder="买入原因"
+                          className="w-full min-w-0 rounded border px-2 py-1 text-xs"
+                        />
+                        <input
+                          aria-label={`备注-${h.stock_code}`}
+                          value={editForm.note}
+                          onChange={(e) => patchEditForm((prev) => ({ ...prev, note: e.target.value }))}
+                          placeholder="备注"
+                          className="w-full min-w-0 rounded border px-2 py-1 text-xs"
+                        />
+                      </div>
+                    ) : (
+                      <>
+                        {h.entry_reason && (
+                          <div className="mb-1" title={h.entry_reason}>
+                            <span className="text-gray-400">原因 </span>
+                            <span className="truncate block">{h.entry_reason}</span>
+                          </div>
+                        )}
+                        {h.note && (
+                          <div title={h.note}>
+                            <span className="text-gray-400">备注 </span>
+                            <span className="truncate block">{h.note}</span>
+                          </div>
+                        )}
+                        {!h.entry_reason && !h.note && <span className="text-gray-300">—</span>}
+                      </>
+                    )}
                   </td>
                   <td className="px-4 py-3">
                     <span className={`px-2 py-0.5 rounded text-xs ${

@@ -19,7 +19,7 @@ PROJECT_ROOT = SCRIPTS_DIR.parent
 
 # 与 migrate() 中「当前最新」一步一致；新增迁移时递增本常量，并把上一步的
 # set_schema_version(conn, CURRENT_SCHEMA_VERSION) 改为字面量 N（保留历史链）。
-CURRENT_SCHEMA_VERSION = 16
+CURRENT_SCHEMA_VERSION = 17
 
 
 def get_schema_version(conn: sqlite3.Connection) -> int:
@@ -339,6 +339,14 @@ def migrate(conn: sqlite3.Connection) -> None:
             conn.execute("DROP TABLE IF EXISTS teacher_notes_fts")
             init_schema(conn)
             conn.execute("INSERT INTO teacher_notes_fts(teacher_notes_fts) VALUES('rebuild')")
+        set_schema_version(conn, 16)
+        conn.commit()
+
+    if version < 17:
+        logger.info("Applying schema v17: holdings.entry_reason")
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(holdings)").fetchall()}
+        if "entry_reason" not in cols:
+            conn.execute("ALTER TABLE holdings ADD COLUMN entry_reason TEXT")
         set_schema_version(conn, CURRENT_SCHEMA_VERSION)
         conn.commit()
 

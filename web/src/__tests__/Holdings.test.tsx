@@ -226,6 +226,140 @@ describe('Holdings', () => {
     })
   })
 
+  it('does not call API when saving with no field changes', async () => {
+    renderPage()
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: '编辑' })).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: '编辑' }))
+    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+
+    expect(api.updateHolding).not.toHaveBeenCalled()
+    await waitFor(() => {
+      expect(screen.queryByLabelText('止损价-300750')).not.toBeInTheDocument()
+    })
+  })
+
+  it('shows validation error and does not call API when numeric fields are invalid', async () => {
+    renderPage()
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: '编辑' })).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: '编辑' }))
+    // number 输入在测试环境下不会保留非法字符串；用负数触发「非负」校验失败
+    fireEvent.change(screen.getByLabelText('止损价-300750'), { target: { value: '-1' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+
+    expect(api.updateHolding).not.toHaveBeenCalled()
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent(/止损、止盈、仓位/)
+    })
+    expect(screen.getByLabelText('止损价-300750')).toBeInTheDocument()
+  })
+
+  it('only sends note when entry_reason unchanged', async () => {
+    vi.mocked(api.getHoldings).mockResolvedValue([
+      {
+        id: 1,
+        stock_code: '300750',
+        stock_name: '宁德时代',
+        entry_price: 180,
+        current_price: 192,
+        stop_loss: 175,
+        target_price: 210,
+        position_ratio: 30,
+        shares: 100,
+        status: 'active',
+        entry_reason: '原原因',
+        note: '旧备注',
+      },
+    ] as Holding[])
+
+    renderPage()
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: '编辑' })).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: '编辑' }))
+    fireEvent.change(screen.getByLabelText('备注-300750'), { target: { value: '新备注内容' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+
+    await waitFor(() => {
+      expect(api.updateHolding).toHaveBeenCalledWith(1, { note: '新备注内容' })
+    })
+  })
+
+  it('only sends changed numeric fields when texts are unchanged', async () => {
+    vi.mocked(api.getHoldings).mockResolvedValue([
+      {
+        id: 1,
+        stock_code: '300750',
+        stock_name: '宁德时代',
+        entry_price: 180,
+        current_price: 192,
+        stop_loss: 175,
+        target_price: 210,
+        position_ratio: 30,
+        shares: 100,
+        status: 'active',
+        entry_reason: '主线仓',
+        note: '跟踪',
+      },
+    ] as Holding[])
+
+    renderPage()
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: '编辑' })).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: '编辑' }))
+    fireEvent.change(screen.getByLabelText('止损价-300750'), { target: { value: '170' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+
+    await waitFor(() => {
+      expect(api.updateHolding).toHaveBeenCalledWith(1, { stop_loss: 170 })
+    })
+  })
+
+  it('submits entry_reason null when clearing reason text only', async () => {
+    vi.mocked(api.getHoldings).mockResolvedValue([
+      {
+        id: 1,
+        stock_code: '300750',
+        stock_name: '宁德时代',
+        entry_price: 180,
+        current_price: 192,
+        stop_loss: 175,
+        target_price: 210,
+        position_ratio: 30,
+        shares: 100,
+        status: 'active',
+        entry_reason: '将被清空',
+        note: '保留',
+      },
+    ] as Holding[])
+
+    renderPage()
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: '编辑' })).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: '编辑' }))
+    fireEvent.change(screen.getByLabelText('买入原因-300750'), { target: { value: '' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+
+    await waitFor(() => {
+      expect(api.updateHolding).toHaveBeenCalledWith(1, { entry_reason: null })
+    })
+  })
+
   it('cancels inline editing without saving', async () => {
     renderPage()
 
@@ -240,6 +374,44 @@ describe('Holdings', () => {
     expect(api.updateHolding).not.toHaveBeenCalled()
     expect(screen.queryByLabelText('止损价-300750')).not.toBeInTheDocument()
     expect(screen.getByText('止损 175')).toBeInTheDocument()
+  })
+
+  it('supports inline editing for entry reason and note', async () => {
+    vi.mocked(api.getHoldings).mockResolvedValue([
+      {
+        id: 1,
+        stock_code: '300750',
+        stock_name: '宁德时代',
+        entry_price: 180,
+        current_price: 192,
+        stop_loss: 175,
+        target_price: 210,
+        position_ratio: 30,
+        shares: 100,
+        status: 'active',
+        entry_reason: '旧原因',
+        note: '旧备注',
+      },
+    ] as Holding[])
+
+    renderPage()
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: '编辑' })).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: '编辑' }))
+
+    fireEvent.change(screen.getByLabelText('买入原因-300750'), { target: { value: '新主线龙头' } })
+    fireEvent.change(screen.getByLabelText('备注-300750'), { target: { value: '减仓观察' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+
+    await waitFor(() => {
+      expect(api.updateHolding).toHaveBeenCalledWith(1, {
+        entry_reason: '新主线龙头',
+        note: '减仓观察',
+      })
+    })
   })
 
   it('submits null when clearing inline edit fields', async () => {

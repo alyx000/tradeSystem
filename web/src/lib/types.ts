@@ -277,6 +277,8 @@ export interface Holding {
   shares: number | null
   status: string
   sector?: string | null
+  entry_reason?: string | null
+  note?: string | null
 }
 
 export interface HoldingSignalPriceSnapshot {
@@ -376,12 +378,16 @@ export interface HoldingCreateInput {
   stop_loss?: number
   target_price?: number
   position_ratio?: number
+  entry_reason?: string
+  note?: string
 }
 
 export interface HoldingUpdateInput {
   stop_loss?: number | null
   target_price?: number | null
   position_ratio?: number | null
+  entry_reason?: string | null
+  note?: string | null
 }
 
 export interface WatchlistItem {

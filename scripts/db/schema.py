@@ -133,6 +133,7 @@ CREATE TABLE IF NOT EXISTS holdings (
     target_price REAL,
     position_ratio REAL,
     status TEXT DEFAULT 'active',
+    entry_reason TEXT,
     note TEXT,
     updated_at TEXT
 );
