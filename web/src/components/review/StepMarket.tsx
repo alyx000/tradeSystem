@@ -1,6 +1,9 @@
+import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { type StepProps, Section, Row, PrefillBanner, Metric, SelectField, TextField, NumberField, TextareaField, TeacherNotesPanel } from './widgets'
 import { get, set } from './formState'
+import { api } from '../../lib/api'
+import type { ResearchCoverageRow } from '../../lib/types'
 
 const TREND = [
   { value: '主升', label: '主升' },
@@ -47,6 +50,72 @@ function deriveVolVs(cur: number | null | undefined, avg: number | null | undefi
   if (ratio > AMOUNT_THRESHOLD) return '高于'
   if (ratio < -AMOUNT_THRESHOLD) return '低于'
   return '持平'
+}
+
+const RANGE_OPTIONS = [
+  { label: '当日', days: 0 },
+  { label: '近5日', days: 5 },
+  { label: '近10日', days: 10 },
+  { label: '近30日', days: 30 },
+] as const
+
+function ResearchCoveragePanel({ todayItems }: { todayItems?: ResearchCoverageRow[] }) {
+  const [rangeDays, setRangeDays] = useState(0)
+  const [rangeData, setRangeData] = useState<{ covered_days: number; items: ResearchCoverageRow[] } | null>(null)
+  const [loading, setLoading] = useState(false)
+
+  const handleRangeChange = (days: number) => {
+    setRangeDays(days)
+    if (days === 0) { setRangeData(null); return }
+    setLoading(true)
+    api.getResearchCoverage(days)
+      .then((res) => setRangeData({ covered_days: res.covered_days, items: res.items }))
+      .catch(() => {})
+      .finally(() => setLoading(false))
+  }
+
+  const items = rangeDays === 0 ? (todayItems || []) : (rangeData?.items || [])
+  const subtitle = rangeDays === 0
+    ? '当日'
+    : `近${rangeDays}日（${rangeData?.covered_days ?? 0}日有数据）`
+
+  if (rangeDays === 0 && !items.length) return null
+
+  return (
+    <PrefillBanner>
+      <div className="flex items-center justify-between mb-2">
+        <div className="text-xs font-medium text-gray-600">
+          研报覆盖排行
+          <span className="ml-1 text-gray-400 font-normal">{subtitle}</span>
+        </div>
+        <div className="flex gap-1">
+          {RANGE_OPTIONS.map(opt => (
+            <button
+              key={opt.days}
+              onClick={() => handleRangeChange(opt.days)}
+              className={`px-2 py-0.5 text-xs rounded ${rangeDays === opt.days ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+      </div>
+      {loading ? (
+        <div className="text-xs text-gray-400 py-2">加载中...</div>
+      ) : items.length ? (
+        <div className="flex flex-wrap gap-2">
+          {items.map((row) => (
+            <span key={row.stock_code} className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-blue-50 text-xs text-blue-700">
+              <span className="font-medium">{row.stock_name || row.stock_code}</span>
+              <span className="text-blue-400">{row.report_count}篇</span>
+            </span>
+          ))}
+        </div>
+      ) : (
+        <div className="text-xs text-gray-400 py-2">暂无数据</div>
+      )}
+    </PrefillBanner>
+  )
 }
 
 export default function StepMarket({ data, onChange, prefill }: StepProps) {
@@ -171,6 +240,8 @@ export default function StepMarket({ data, onChange, prefill }: StepProps) {
           )
         })()
       )}
+
+      <ResearchCoveragePanel todayItems={marketSignals?.research_coverage_top} />
 
       <Section title="成交量对比">
         {m && (

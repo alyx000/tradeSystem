@@ -490,6 +490,52 @@ def delete_trade(tid: int, conn: sqlite3.Connection = Depends(get_db_conn)):
 
 # ── Market ────────────────────────────────────────────────────
 
+@router.get("/market/research-coverage")
+def get_research_coverage(
+    days: int = 5,
+    limit: int = 20,
+    conn: sqlite3.Connection = Depends(get_db_conn),
+):
+    """区间研报覆盖排行：聚合最近 N 个交易日的研报覆盖 top，返回合并排行。"""
+    from collections import Counter
+    from db.dual_write import parse_post_market_envelope
+
+    days = max(1, min(days, 60))
+    limit = max(1, min(limit, 50))
+
+    rows = conn.execute(
+        "SELECT raw_data FROM daily_market ORDER BY date DESC LIMIT ?",
+        (days,),
+    ).fetchall()
+
+    stock_counts: Counter[str] = Counter()
+    stock_names: dict[str, str] = {}
+    covered_days = 0
+
+    for row in rows:
+        env = parse_post_market_envelope(row["raw_data"] if isinstance(row, sqlite3.Row) else row[0])
+        if not env:
+            continue
+        inner = env.get("raw_data", env)
+        rct = inner.get("research_coverage_top")
+        if not isinstance(rct, list) or not rct:
+            continue
+        covered_days += 1
+        for item in rct:
+            code = item.get("stock_code", "")
+            if not code:
+                continue
+            stock_counts[code] += item.get("report_count", 0)
+            if code not in stock_names:
+                stock_names[code] = item.get("stock_name", "")
+
+    result = [
+        {"stock_code": code, "stock_name": stock_names.get(code, ""), "report_count": count}
+        for code, count in stock_counts.most_common(limit)
+    ]
+    return {"days": days, "covered_days": covered_days, "items": result}
+
+
 @router.get("/market/history")
 def get_market_history(days: int = 20,
                        conn: sqlite3.Connection = Depends(get_db_conn)):

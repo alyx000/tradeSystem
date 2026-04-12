@@ -789,6 +789,12 @@ export interface ReviewPrefillMarket extends Omit<MarketFullData, 'sector_indust
   sector_rhythm_industry?: SectorRhythmItem[]
 }
 
+export interface ResearchCoverageRow {
+  stock_code: string
+  stock_name: string
+  report_count: number
+}
+
 export interface ReviewMarketSignals {
   moneyflow_summary: {
     net_amount_yi: number | null
@@ -804,6 +810,7 @@ export interface ReviewMarketSignals {
     turnover_rate: number | null
     com_count: number | null
   }>
+  research_coverage_top?: ResearchCoverageRow[]
 }
 
 export interface ReviewSectorSignals {

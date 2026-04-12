@@ -912,28 +912,28 @@ class AkshareProvider(DataProvider):
             return DataResult(data=None, source=self.name, error=str(e))
 
     def get_research_report_list(self, date: str) -> DataResult:
-        """获取全市场当日研报列表（东财 stock_research_report_em）"""
+        """全市场当日研报评级（巨潮 stock_rank_forecast_cninfo）"""
         try:
             date_compact = date.replace("-", "")
             try:
-                df = self.ak.stock_research_report_em(
-                    symbol="", start_date=date_compact, end_date=date_compact,
-                )
-            except TypeError:
-                return DataResult(data=[], source="akshare:stock_research_report_em")
+                df = self.ak.stock_rank_forecast_cninfo(date=date_compact)
+            except (TypeError, ValueError, KeyError):
+                return DataResult(data=[], source="akshare:stock_rank_forecast_cninfo")
             if df is None or df.empty:
-                return DataResult(data=[], source="akshare:stock_research_report_em")
+                return DataResult(data=[], source="akshare:stock_rank_forecast_cninfo")
             results = []
-            for _, row in df.head(200).iterrows():
+            for _, row in df.iterrows():
+                code = str(row.get("证券代码", "")).strip()
+                if not code:
+                    continue
                 results.append({
-                    "stock_code": str(row.get("股票代码", "")),
-                    "stock_name": str(row.get("股票简称", "")),
-                    "institution": str(row.get("机构", "")),
-                    "title": str(row.get("报告名称", ""))[:200],
-                    "rating": str(row.get("东财评级", row.get("评级", ""))),
-                    "date": str(row.get("日期", ""))[:10],
+                    "stock_code": code,
+                    "stock_name": str(row.get("证券简称", "")).strip(),
+                    "institution": str(row.get("研究机构简称", "")).strip(),
+                    "rating": str(row.get("投资评级", "")).strip(),
+                    "date": str(row.get("发布日期", ""))[:10],
                 })
-            return DataResult(data=results, source="akshare:stock_research_report_em")
+            return DataResult(data=results, source="akshare:stock_rank_forecast_cninfo")
         except Exception as e:
             return DataResult(data=None, source=self.name, error=str(e))
 
