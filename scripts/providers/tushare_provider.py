@@ -57,7 +57,9 @@ class TushareProvider(DataProvider):
             "get_limit_cpt_list",
             "get_sector_rankings",
             "get_sector_moneyflow_ths",
+            "get_concept_moneyflow_ths",
             "get_sector_moneyflow_dc",
+            "get_concept_moneyflow_dc",
             "get_ths_index",
             "get_ths_member",
             "get_index_classify",
@@ -471,24 +473,62 @@ class TushareProvider(DataProvider):
             return DataResult(data=None, source=self.name, error=str(e))
 
     def get_sector_moneyflow_ths(self, date: str) -> DataResult:
-        """获取同花顺行业资金流向原始数据。"""
+        """获取同花顺行业资金流向，含领涨股和涨跌幅。"""
         try:
             d = self._date_fmt(date)
-            return DataResult(
-                data=self._query_records("moneyflow_ind_ths", trade_date=d),
-                source="tushare:moneyflow_ind_ths",
+            fields = "trade_date,ts_code,industry,lead_stock,close,pct_change,company_num,pct_change_stock,close_price,net_buy_amount,net_sell_amount,net_amount"
+            records = self._df_to_records(
+                self.pro.query("moneyflow_ind_ths", trade_date=d, fields=fields)
             )
+            for row in records:
+                row["name"] = row.get("industry") or row.get("name") or ""
+                row["net_amount_yi"] = round(float(row.get("net_amount") or 0), 2)
+            return DataResult(data=records, source="tushare:moneyflow_ind_ths")
+        except Exception as e:
+            return DataResult(data=None, source=self.name, error=str(e))
+
+    def get_concept_moneyflow_ths(self, date: str) -> DataResult:
+        """获取同花顺概念板块资金流向。"""
+        try:
+            d = self._date_fmt(date)
+            fields = "trade_date,ts_code,name,lead_stock,close_price,pct_change,industry_index,company_num,pct_change_stock,net_buy_amount,net_sell_amount,net_amount"
+            records = self._df_to_records(
+                self.pro.query("moneyflow_cnt_ths", trade_date=d, fields=fields)
+            )
+            for row in records:
+                row["name"] = row.get("name") or ""
+                row["net_amount_yi"] = round(float(row.get("net_amount") or 0), 2)
+            return DataResult(data=records, source="tushare:moneyflow_cnt_ths")
         except Exception as e:
             return DataResult(data=None, source=self.name, error=str(e))
 
     def get_sector_moneyflow_dc(self, date: str) -> DataResult:
-        """获取东财行业/概念板块资金流向原始数据。"""
+        """获取东财行业板块资金流向（仅行业类型，排除概念和地域）。"""
         try:
             d = self._date_fmt(date)
-            return DataResult(
-                data=self._query_records("moneyflow_ind_dc", trade_date=d),
-                source="tushare:moneyflow_ind_dc",
+            records = self._df_to_records(
+                self.pro.query("moneyflow_ind_dc", trade_date=d, content_type="行业")
             )
+            for row in records:
+                row["name"] = row.get("name") or ""
+                raw = float(row.get("net_amount") or 0)
+                row["net_amount_yi"] = round(raw / 1e8, 2)
+            return DataResult(data=records, source="tushare:moneyflow_ind_dc")
+        except Exception as e:
+            return DataResult(data=None, source=self.name, error=str(e))
+
+    def get_concept_moneyflow_dc(self, date: str) -> DataResult:
+        """获取东财概念板块资金流向。"""
+        try:
+            d = self._date_fmt(date)
+            records = self._df_to_records(
+                self.pro.query("moneyflow_ind_dc", trade_date=d, content_type="概念")
+            )
+            for row in records:
+                row["name"] = row.get("name") or ""
+                raw = float(row.get("net_amount") or 0)
+                row["net_amount_yi"] = round(raw / 1e8, 2)
+            return DataResult(data=records, source="tushare:moneyflow_ind_dc:concept")
         except Exception as e:
             return DataResult(data=None, source=self.name, error=str(e))
 

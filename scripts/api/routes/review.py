@@ -155,8 +155,8 @@ def _build_review_signals(market: dict[str, Any] | None) -> dict[str, Any]:
         },
         "sectors": {
             "strongest_rows": [],
-            "ths_moneyflow_rows": [],
-            "dc_moneyflow_rows": [],
+            "industry_moneyflow_rows": [],
+            "concept_moneyflow_rows": [],
             "projection_candidates": [],
         },
         "emotion": {
@@ -207,27 +207,38 @@ def _build_review_signals(market: dict[str, Any] | None) -> dict[str, Any]:
     ]
 
     ths_rows = _section_rows(market.get("sector_moneyflow_ths"))
-    signals["sectors"]["ths_moneyflow_rows"] = [
+    dc_ind_rows = _section_rows(market.get("sector_moneyflow_dc"))
+    ind_rows = ths_rows or dc_ind_rows
+
+    def _sort_by_net_yi(rows):
+        def _key(item):
+            v = _to_number(item.get("net_amount_yi"))
+            if v is not None:
+                return -v
+            return -(_to_number(item.get("net_amount")) or 0)
+        return sorted(rows, key=_key)
+
+    signals["sectors"]["industry_moneyflow_rows"] = [
         {
             "name": _pick_row_name(row, "name", "industry", "ts_code"),
-            "net_amount": _to_number(row.get("net_amount")),
-            "net_amount_yi": _to_amount_yi(row.get("net_amount")),
+            "net_amount_yi": _to_number(row.get("net_amount_yi")) or _to_amount_yi(row.get("net_amount")),
             "pct_change": _to_number(row.get("pct_change")),
             "lead_stock": row.get("lead_stock"),
         }
-        for row in sorted(ths_rows, key=lambda item: -(_to_number(item.get("net_amount")) or 0))[:5]
+        for row in _sort_by_net_yi(ind_rows)[:5]
     ]
 
-    dc_rows = _section_rows(market.get("sector_moneyflow_dc"))
-    signals["sectors"]["dc_moneyflow_rows"] = [
+    concept_ths = _section_rows(market.get("concept_moneyflow_ths"))
+    concept_dc = _section_rows(market.get("concept_moneyflow_dc"))
+    concept_rows = concept_ths or concept_dc
+    signals["sectors"]["concept_moneyflow_rows"] = [
         {
             "name": _pick_row_name(row, "name", "industry", "ts_code"),
-            "content_type": row.get("content_type"),
-            "net_amount_yi": (_to_number(row.get("net_amount")) or 0) / 1e8 if _to_number(row.get("net_amount")) is not None else None,
+            "net_amount_yi": _to_number(row.get("net_amount_yi")) or _to_amount_yi(row.get("net_amount")),
             "pct_change": _to_number(row.get("pct_change")),
-            "lead_stock": row.get("buy_sm_amount_stock"),
+            "lead_stock": row.get("lead_stock"),
         }
-        for row in sorted(dc_rows, key=lambda item: -(_to_number(item.get("net_amount")) or 0))[:5]
+        for row in _sort_by_net_yi(concept_rows)[:5]
     ]
 
     ladder_rows = _section_rows(market.get("limit_step"))
@@ -405,21 +416,21 @@ def _pick_sector_leaders(
         for stock_name in _coerce_stock_names(row.get("lead_stock")):
             add_candidate(stock_name, "strongest", "strong")
 
-    for row in (sector_signals or {}).get("ths_moneyflow_rows") or []:
+    for row in (sector_signals or {}).get("industry_moneyflow_rows") or []:
         if not isinstance(row, dict):
             continue
         if _normalize_sector_name(row.get("name")) != normalized_sector_name:
             continue
         for stock_name in _coerce_stock_names(row.get("lead_stock")):
-            add_candidate(stock_name, "ths_moneyflow", "weak")
+            add_candidate(stock_name, "industry_moneyflow", "weak")
 
-    for row in (sector_signals or {}).get("dc_moneyflow_rows") or []:
+    for row in (sector_signals or {}).get("concept_moneyflow_rows") or []:
         if not isinstance(row, dict):
             continue
         if _normalize_sector_name(row.get("name")) != normalized_sector_name:
             continue
         for stock_name in _coerce_stock_names(row.get("lead_stock")):
-            add_candidate(stock_name, "dc_moneyflow", "weak")
+            add_candidate(stock_name, "concept_moneyflow", "weak")
 
     source = post_market_source or {}
     limit_up = source.get("limit_up") if isinstance(source.get("limit_up"), dict) else {}
@@ -541,9 +552,9 @@ def _build_sector_projection_candidates(
                     known_names.add(name)
 
     strongest_rows = (sector_signals or {}).get("strongest_rows") or []
-    ths_moneyflow_rows = (sector_signals or {}).get("ths_moneyflow_rows") or []
-    dc_moneyflow_rows = (sector_signals or {}).get("dc_moneyflow_rows") or []
-    for rows in (strongest_rows, ths_moneyflow_rows, dc_moneyflow_rows):
+    industry_moneyflow_rows = (sector_signals or {}).get("industry_moneyflow_rows") or []
+    concept_moneyflow_rows = (sector_signals or {}).get("concept_moneyflow_rows") or []
+    for rows in (strongest_rows, industry_moneyflow_rows, concept_moneyflow_rows):
         for row in rows:
             if isinstance(row, dict):
                 name = _normalize_sector_name(row.get("name"))
@@ -667,7 +678,7 @@ def _build_sector_projection_candidates(
             f"最强板块榜单，涨停 {row.get('up_nums') or 0} 家，涨跌幅 {row.get('pct_chg') if row.get('pct_chg') is not None else '-'}%",
         )
 
-    for row in ths_moneyflow_rows:
+    for row in industry_moneyflow_rows:
         if not isinstance(row, dict):
             continue
         sector_name = _normalize_sector_name(row.get("name"))
@@ -679,10 +690,10 @@ def _build_sector_projection_candidates(
             candidate["facts"]["net_amount_yi"] = row.get("net_amount_yi")
         add_evidence(
             candidate,
-            f"THS 资金流入 {row.get('net_amount_yi') if row.get('net_amount_yi') is not None else '-'} 亿",
+            f"行业资金流入 {row.get('net_amount_yi') if row.get('net_amount_yi') is not None else '-'} 亿",
         )
 
-    for row in dc_moneyflow_rows:
+    for row in concept_moneyflow_rows:
         if not isinstance(row, dict):
             continue
         sector_name = _normalize_sector_name(row.get("name"))
@@ -694,7 +705,7 @@ def _build_sector_projection_candidates(
             candidate["facts"]["net_amount_yi"] = row.get("net_amount_yi")
         add_evidence(
             candidate,
-            f"DC 资金流入 {row.get('net_amount_yi') if row.get('net_amount_yi') is not None else '-'} 亿",
+            f"概念资金流入 {row.get('net_amount_yi') if row.get('net_amount_yi') is not None else '-'} 亿",
         )
 
     for info in industry_info:

@@ -983,6 +983,27 @@ class IngestService:
                         facts={
                             "record_count": len(rows),
                             "top_rows": rows[:20],
+                            "unit": "yi",
+                        },
+                        source_interfaces=[interface["interface_name"]],
+                    )
+                )
+
+        if interface["interface_name"] in {"moneyflow_cnt_ths", "moneyflow_concept_dc"}:
+            rows = [row for row in self._normalize_rows(data) if isinstance(row, dict)]
+            if rows:
+                subject_code = "THS" if interface["interface_name"].endswith("_ths") else "DC"
+                created.append(
+                    self._upsert_market_fact_snapshot(
+                        biz_date=target_date,
+                        fact_type="concept_fund_flow",
+                        subject_type="market",
+                        subject_code=subject_code,
+                        subject_name="概念板块资金流向",
+                        facts={
+                            "record_count": len(rows),
+                            "top_rows": rows[:20],
+                            "unit": "yi",
                         },
                         source_interfaces=[interface["interface_name"]],
                     )
@@ -1118,7 +1139,7 @@ class IngestService:
                     }
                 )
 
-        if interface["interface_name"] in {"moneyflow_ind_ths", "moneyflow_ind_dc"}:
+        if interface["interface_name"] in {"moneyflow_ind_ths", "moneyflow_ind_dc", "moneyflow_cnt_ths", "moneyflow_concept_dc"}:
             for row in rows[:30]:
                 sector_code = str(row.get("ts_code") or row.get("code") or "").strip()
                 sector_name = str(

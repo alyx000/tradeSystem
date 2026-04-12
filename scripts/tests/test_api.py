@@ -2105,8 +2105,7 @@ class TestEnrichMarketRow:
         assert signals["market"]["moneyflow_summary"]["net_amount_yi"] == 6.5
         assert signals["market"]["market_structure_rows"][0]["name"] == "沪市主板"
         assert signals["sectors"]["strongest_rows"][0]["name"] == "可控核聚变"
-        assert signals["sectors"]["ths_moneyflow_rows"][0]["name"] == "油服工程"
-        assert signals["sectors"]["dc_moneyflow_rows"][0]["lead_stock"] == "合锻智能"
+        assert signals["sectors"]["industry_moneyflow_rows"][0]["name"] == "油服工程"
         assert signals["emotion"]["ladder_rows"][0]["name"] == "高标A"
 
     def test_prefill_contains_projection_candidates(self, client, db_path):
@@ -2236,9 +2235,9 @@ class TestEnrichMarketRow:
         r = client.get("/api/review/2026-05-20/prefill")
         assert r.status_code == 200
         data = r.json()
-        ths_row = data["review_signals"]["sectors"]["ths_moneyflow_rows"][0]
-        assert ths_row["lead_stock"] == "力佳科技"
-        assert ths_row["net_amount_yi"] == 77.0
+        ind_row = data["review_signals"]["sectors"]["industry_moneyflow_rows"][0]
+        assert ind_row["lead_stock"] == "力佳科技"
+        assert ind_row["net_amount_yi"] == 77.0
 
         battery = next(
             item
@@ -2260,9 +2259,9 @@ class TestEnrichMarketRow:
                         {"industry": "机器人", "net_amount": 12.0, "pct_change": 3.1, "lead_stock": "*ST机器"},
                     ],
                 },
-                "sector_moneyflow_dc": {
+                "concept_moneyflow_dc": {
                     "data": [
-                        {"name": "机器人", "content_type": "概念", "net_amount": 6.0e8, "pct_change": 3.0, "buy_sm_amount_stock": "北交龙头"},
+                        {"name": "机器人", "content_type": "概念", "net_amount": 6.0e8, "pct_change": 3.0},
                     ],
                 },
                 "limit_up": {
@@ -2319,8 +2318,8 @@ class TestEnrichMarketRow:
         assert signals["market"]["moneyflow_summary"] is None
         assert signals["market"]["market_structure_rows"] == []
         assert signals["sectors"]["strongest_rows"] == []
-        assert signals["sectors"]["ths_moneyflow_rows"] == []
-        assert signals["sectors"]["dc_moneyflow_rows"] == []
+        assert signals["sectors"]["industry_moneyflow_rows"] == []
+        assert signals["sectors"]["concept_moneyflow_rows"] == []
         assert signals["sectors"]["projection_candidates"] == []
         assert signals["emotion"]["ladder_rows"] == []
 

@@ -812,16 +812,14 @@ export interface ReviewSectorSignals {
     pct_chg: number | null
     up_stat: string | null
   }>
-  ths_moneyflow_rows: Array<{
+  industry_moneyflow_rows: Array<{
     name: string
-    net_amount: number | null
-    net_amount_yi?: number | null
+    net_amount_yi: number | null
     pct_change: number | null
     lead_stock: string | null
   }>
-  dc_moneyflow_rows: Array<{
+  concept_moneyflow_rows: Array<{
     name: string
-    content_type: string | null
     net_amount_yi: number | null
     pct_change: number | null
     lead_stock: string | null

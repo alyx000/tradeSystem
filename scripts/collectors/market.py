@@ -378,7 +378,9 @@ class MarketCollector:
         # 6c. 板块/大盘资金流向增强
         for method_name, result_key in [
             ("get_sector_moneyflow_ths", "sector_moneyflow_ths"),
+            ("get_concept_moneyflow_ths", "concept_moneyflow_ths"),
             ("get_sector_moneyflow_dc", "sector_moneyflow_dc"),
+            ("get_concept_moneyflow_dc", "concept_moneyflow_dc"),
             ("get_market_moneyflow_dc", "market_moneyflow_dc"),
         ]:
             r = self.registry.call(method_name, date)

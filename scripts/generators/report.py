@@ -903,10 +903,14 @@ def _render_p0_market_enhancements(lines: list[str], raw_data: dict, section_idx
     strongest_rows = raw_data.get("limit_cpt_list", {}).get("data", []) or []
     ths_rows = raw_data.get("sector_moneyflow_ths", {}).get("data", []) or []
     dc_rows = raw_data.get("sector_moneyflow_dc", {}).get("data", []) or []
+    if not ths_rows and dc_rows:
+        ths_rows = dc_rows
+    concept_ths_rows_raw = raw_data.get("concept_moneyflow_ths", {}).get("data", []) or []
+    concept_dc_rows_raw = raw_data.get("concept_moneyflow_dc", {}).get("data", []) or []
     market_flow_rows = raw_data.get("market_moneyflow_dc", {}).get("data", []) or []
     daily_info_rows = raw_data.get("daily_info", {}).get("data", []) or []
 
-    has_any = any([limit_step_rows, strongest_rows, ths_rows, dc_rows, market_flow_rows, daily_info_rows])
+    has_any = any([limit_step_rows, strongest_rows, ths_rows, dc_rows, concept_ths_rows_raw, concept_dc_rows_raw, market_flow_rows, daily_info_rows])
     if not has_any:
         return section_idx
 
@@ -953,30 +957,71 @@ def _render_p0_market_enhancements(lines: list[str], raw_data: dict, section_idx
         lines.append("")
 
     if ths_rows:
-        top_ths = sorted(ths_rows, key=lambda x: float(x.get("net_amount", 0) or 0), reverse=True)[:8]
-        lines.append("### 同花顺行业资金流入前列\n")
+        def _mf_yi(row):
+            v = row.get("net_amount_yi")
+            if v is not None:
+                return float(v)
+            return float(row.get("net_amount", 0) or 0)
+
+        top_ths = sorted(ths_rows, key=_mf_yi, reverse=True)[:8]
+        lines.append("### 行业资金流入前列\n")
         lines.append("| 板块 | 净额(亿) | 涨跌幅 | 领涨股 |")
         lines.append("|------|----------|--------|--------|")
         for row in top_ths:
+            net_v = _mf_yi(row)
             lines.append(
-                f"| {row.get('industry', row.get('name', ''))} | {row.get('net_amount', '-')} | "
-                f"{row.get('pct_change', '-')}% | {row.get('lead_stock', '-') } |"
+                f"| {row.get('name', row.get('industry', ''))} | {net_v:+.2f} | "
+                f"{row.get('pct_change', '-')}% | {row.get('lead_stock', '-')} |"
             )
         lines.append("")
 
-    if dc_rows:
-        top_dc = sorted(dc_rows, key=lambda x: float(x.get("net_amount", 0) or 0), reverse=True)[:8]
-        lines.append("### 东财板块资金流入前列\n")
-        lines.append("| 板块 | 类型 | 净额(亿) | 涨跌幅 | 净流入最大股 |")
-        lines.append("|------|------|----------|--------|--------------|")
-        for row in top_dc:
-            net_amount = _to_yi(row.get("net_amount"))
-            net_str = f"{net_amount:+.2f}" if net_amount is not None else "-"
+        bottom_ths = sorted(ths_rows, key=_mf_yi)[:5]
+        if bottom_ths:
+            lines.append("### 行业资金撤离前列\n")
+            lines.append("| 板块 | 净额(亿) | 涨跌幅 |")
+            lines.append("|------|----------|--------|")
+            for row in bottom_ths:
+                net_v = _mf_yi(row)
+                lines.append(
+                    f"| {row.get('name', row.get('industry', ''))} | {net_v:+.2f} | "
+                    f"{row.get('pct_change', '-')}% |"
+                )
+            lines.append("")
+
+    concept_ths_rows = raw_data.get("concept_moneyflow_ths", {}).get("data", []) or []
+    concept_dc_rows = raw_data.get("concept_moneyflow_dc", {}).get("data", []) or []
+    concept_rows = concept_ths_rows or concept_dc_rows
+    if concept_rows:
+        def _concept_yi(row):
+            v = row.get("net_amount_yi")
+            if v is not None:
+                return float(v)
+            return float(row.get("net_amount", 0) or 0)
+
+        top_concept = sorted(concept_rows, key=_concept_yi, reverse=True)[:8]
+        lines.append("### 概念板块资金流入前列\n")
+        lines.append("| 概念 | 净额(亿) | 涨跌幅 | 领涨股 |")
+        lines.append("|------|----------|--------|--------|")
+        for row in top_concept:
+            net_v = _concept_yi(row)
             lines.append(
-                f"| {row.get('name', '')} | {row.get('content_type', '-') } | {net_str} | "
-                f"{row.get('pct_change', '-')}% | {row.get('buy_sm_amount_stock', '-') } |"
+                f"| {row.get('name', '')} | {net_v:+.2f} | "
+                f"{row.get('pct_change', '-')}% | {row.get('lead_stock', '-')} |"
             )
         lines.append("")
+
+        bottom_concept = sorted(concept_rows, key=_concept_yi)[:5]
+        if bottom_concept:
+            lines.append("### 概念板块资金撤离前列\n")
+            lines.append("| 概念 | 净额(亿) | 涨跌幅 |")
+            lines.append("|------|----------|--------|")
+            for row in bottom_concept:
+                net_v = _concept_yi(row)
+                lines.append(
+                    f"| {row.get('name', '')} | {net_v:+.2f} | "
+                    f"{row.get('pct_change', '-')}% |"
+                )
+            lines.append("")
 
     if daily_info_rows:
         lines.append("### 交易所市场统计摘录\n")

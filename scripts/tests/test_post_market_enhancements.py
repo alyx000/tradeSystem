@@ -740,7 +740,12 @@ class TestPostMarketReport:
                 },
                 "sector_moneyflow_dc": {
                     "data": [
-                        {"name": "人工智能", "content_type": "概念", "net_amount": 1800000000.0, "pct_change": 3.2, "buy_sm_amount_stock": "高标A"},
+                        {"name": "芯片", "content_type": "行业", "net_amount": 1800000000.0, "pct_change": 3.2},
+                    ]
+                },
+                "concept_moneyflow_ths": {
+                    "data": [
+                        {"name": "人工智能", "net_amount": 18.5, "pct_change": 3.2, "lead_stock": "高标A"},
                     ]
                 },
                 "daily_info": {
@@ -755,8 +760,8 @@ class TestPostMarketReport:
         assert "连板天梯" in md
         assert "最强板块" in md
         assert "大盘资金流向" in md
-        assert "同花顺行业资金流入前列" in md
-        assert "东财板块资金流入前列" in md
+        assert "行业资金流入前列" in md
+        assert "概念板块资金流入前列" in md
         assert "交易所市场统计摘录" in md
 
 

@@ -77,6 +77,8 @@ class AkshareProvider(DataProvider):
             "get_commodity",
             "get_forex",
             "get_market_news",
+            "get_sector_moneyflow_dc",
+            "get_concept_moneyflow_dc",
             "get_stock_news",
             "get_stock_announcements",
             "get_investor_qa",
@@ -507,6 +509,48 @@ class AkshareProvider(DataProvider):
                     "change_pct": float(row.get("涨跌幅", 0)),
                 })
             return DataResult(data=records, source="akshare:sector_fund_flow")
+        except Exception as e:
+            return DataResult(data=None, source=self.name, error=str(e))
+
+    def get_sector_moneyflow_dc(self, date: str) -> DataResult:
+        """AkShare 降级：东财行业板块资金流排名。"""
+        try:
+            df = self.ak.stock_sector_fund_flow_rank(
+                indicator="今日", sector_type="行业资金流"
+            )
+            if df is None or df.empty:
+                return DataResult(data=None, source=self.name, error="无行业资金流数据")
+            records = []
+            for _, row in df.iterrows():
+                net_raw = float(row.get("主力净流入-净额", 0) or 0)
+                records.append({
+                    "name": str(row.get("板块名称", "")),
+                    "net_amount_yi": round(net_raw / 1e8, 2),
+                    "pct_change": float(row.get("涨跌幅", 0) or 0),
+                    "content_type": "行业",
+                })
+            return DataResult(data=records, source="akshare:sector_fund_flow_rank:industry")
+        except Exception as e:
+            return DataResult(data=None, source=self.name, error=str(e))
+
+    def get_concept_moneyflow_dc(self, date: str) -> DataResult:
+        """AkShare 降级：东财概念板块资金流排名。"""
+        try:
+            df = self.ak.stock_sector_fund_flow_rank(
+                indicator="今日", sector_type="概念资金流"
+            )
+            if df is None or df.empty:
+                return DataResult(data=None, source=self.name, error="无概念资金流数据")
+            records = []
+            for _, row in df.iterrows():
+                net_raw = float(row.get("主力净流入-净额", 0) or 0)
+                records.append({
+                    "name": str(row.get("板块名称", "")),
+                    "net_amount_yi": round(net_raw / 1e8, 2),
+                    "pct_change": float(row.get("涨跌幅", 0) or 0),
+                    "content_type": "概念",
+                })
+            return DataResult(data=records, source="akshare:sector_fund_flow_rank:concept")
         except Exception as e:
             return DataResult(data=None, source=self.name, error=str(e))
 

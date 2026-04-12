@@ -104,8 +104,8 @@ const prefill: ReviewPrefillData = {
     },
     sectors: {
       strongest_rows: [],
-      ths_moneyflow_rows: [],
-      dc_moneyflow_rows: [],
+      industry_moneyflow_rows: [],
+      concept_moneyflow_rows: [],
     },
     emotion: {
       ladder_rows: [],

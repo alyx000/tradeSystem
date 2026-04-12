@@ -140,6 +140,12 @@ class DataProvider(ABC):
     def get_sector_moneyflow_dc(self, date: str) -> DataResult:
         return DataResult(data=None, source=self.name, error="not implemented")
 
+    def get_concept_moneyflow_ths(self, date: str) -> DataResult:
+        return DataResult(data=None, source=self.name, error="not implemented")
+
+    def get_concept_moneyflow_dc(self, date: str) -> DataResult:
+        return DataResult(data=None, source=self.name, error="not implemented")
+
     def get_ths_index(self, date: str) -> DataResult:
         return DataResult(data=None, source=self.name, error="not implemented")
 

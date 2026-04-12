@@ -35,6 +35,8 @@ INTERFACE_FALLBACK_LABELS: dict[str, str] = {
     "limit_cpt_list": "最强板块统计",
     "moneyflow_ind_ths": "同花顺行业资金流",
     "moneyflow_ind_dc": "东财板块资金流",
+    "moneyflow_cnt_ths": "THS概念资金流",
+    "moneyflow_concept_dc": "DC概念资金流",
     "moneyflow_mkt_dc": "大盘资金流向",
     "margin": "融资融券汇总",
     "margin_detail": "融资融券明细",

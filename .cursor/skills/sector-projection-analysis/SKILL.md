@@ -41,8 +41,8 @@ make notes-search KEYWORD=主线 FROM=YYYY-MM-DD TO=YYYY-MM-DD
 2. 拉取 `review prefill`，板块分析以这些字段为主：
    - `review_signals.sectors.projection_candidates`
    - `review_signals.sectors.strongest_rows`
-   - `review_signals.sectors.ths_moneyflow_rows`
-   - `review_signals.sectors.dc_moneyflow_rows`
+   - `review_signals.sectors.industry_moneyflow_rows`
+   - `review_signals.sectors.concept_moneyflow_rows`
    - `market.sector_rhythm_industry`
    - `main_themes`
    - `teacher_notes`

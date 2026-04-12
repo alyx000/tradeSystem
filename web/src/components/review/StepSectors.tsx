@@ -426,37 +426,16 @@ export default function StepSectors({ data, onChange, prefill }: StepProps) {
         })()
       )}
 
-      {((sectorSignals?.ths_moneyflow_rows?.length ?? 0) > 0 || (sectorSignals?.dc_moneyflow_rows?.length ?? 0) > 0) && (
+      {((sectorSignals?.industry_moneyflow_rows?.length ?? 0) > 0 || (sectorSignals?.concept_moneyflow_rows?.length ?? 0) > 0) && (
         <PrefillBanner>
           <div className="text-xs font-medium text-gray-600 mb-2">板块资金确认</div>
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            {(sectorSignals?.ths_moneyflow_rows?.length ?? 0) > 0 && (
+            {(sectorSignals?.industry_moneyflow_rows?.length ?? 0) > 0 && (
               <div>
-                <div className="text-xs text-blue-600 font-medium mb-1.5">THS 行业资金流</div>
+                <div className="text-xs text-blue-600 font-medium mb-1.5">行业资金流</div>
                 <div className="space-y-1.5">
-                  {sectorSignals!.ths_moneyflow_rows.map((row) => (
+                  {sectorSignals!.industry_moneyflow_rows.map((row) => (
                     <div key={`${row.name}-${row.lead_stock ?? 'na'}`} className="rounded border border-gray-200 bg-white px-3 py-2">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-xs font-medium text-gray-700">{row.name}</span>
-                        <span className={`text-xs font-medium ${(row.net_amount_yi ?? row.net_amount ?? 0) >= 0 ? 'text-red-600' : 'text-green-600'}`}>
-                          {fmtYi(row.net_amount_yi ?? (row.net_amount != null ? row.net_amount / 1e8 : null))}
-                        </span>
-                      </div>
-                      <div className="mt-0.5 flex items-center justify-between gap-2 text-xs text-gray-500">
-                        <span>涨跌幅 {fmtPct(row.pct_change)}</span>
-                        <span>{row.lead_stock ? `资金流字段股：${row.lead_stock}` : '资金流字段股：-'}</span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-            {(sectorSignals?.dc_moneyflow_rows?.length ?? 0) > 0 && (
-              <div>
-                <div className="text-xs text-purple-600 font-medium mb-1.5">DC 板块资金流</div>
-                <div className="space-y-1.5">
-                  {sectorSignals!.dc_moneyflow_rows.map((row) => (
-                    <div key={`${row.name}-${row.content_type ?? 'na'}`} className="rounded border border-gray-200 bg-white px-3 py-2">
                       <div className="flex items-center justify-between gap-2">
                         <span className="text-xs font-medium text-gray-700">{row.name}</span>
                         <span className={`text-xs font-medium ${(row.net_amount_yi ?? 0) >= 0 ? 'text-red-600' : 'text-green-600'}`}>
@@ -464,11 +443,29 @@ export default function StepSectors({ data, onChange, prefill }: StepProps) {
                         </span>
                       </div>
                       <div className="mt-0.5 flex items-center justify-between gap-2 text-xs text-gray-500">
-                        <span>{row.content_type || '板块'}</span>
                         <span>涨跌幅 {fmtPct(row.pct_change)}</span>
+                        {row.lead_stock && <span>领涨股：{row.lead_stock}</span>}
                       </div>
-                      <div className="mt-0.5 text-xs text-gray-500">
-                        {row.lead_stock ? `资金流字段股：${row.lead_stock}` : '资金流字段股：-'}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {(sectorSignals?.concept_moneyflow_rows?.length ?? 0) > 0 && (
+              <div>
+                <div className="text-xs text-purple-600 font-medium mb-1.5">概念资金流</div>
+                <div className="space-y-1.5">
+                  {sectorSignals!.concept_moneyflow_rows.map((row) => (
+                    <div key={`${row.name}-concept`} className="rounded border border-gray-200 bg-white px-3 py-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs font-medium text-gray-700">{row.name}</span>
+                        <span className={`text-xs font-medium ${(row.net_amount_yi ?? 0) >= 0 ? 'text-red-600' : 'text-green-600'}`}>
+                          {fmtYi(row.net_amount_yi)}
+                        </span>
+                      </div>
+                      <div className="mt-0.5 flex items-center justify-between gap-2 text-xs text-gray-500">
+                        <span>涨跌幅 {fmtPct(row.pct_change)}</span>
+                        {row.lead_stock && <span>领涨股：{row.lead_stock}</span>}
                       </div>
                     </div>
                   ))}
