@@ -314,6 +314,17 @@ INTERFACE_REGISTRY: dict[str, InterfaceConfig] = {
         "enabled_by_default": True,
         "notes": "交易所公布的个股异常波动（stk_shock，高积分）。",
     },
+    "research_report_list": {
+        "interface_name": "research_report_list",
+        "provider_method": "get_research_report_list",
+        "stage": "post_extended",
+        "use_cases": ["research", "post_report"],
+        "params_policy": "trade_date",
+        "dedupe_keys": ["trade_date"],
+        "raw_table": "raw_research_report_list",
+        "enabled_by_default": False,
+        "notes": "全市场研报列表，用于覆盖统计。",
+    },
 }
 
 

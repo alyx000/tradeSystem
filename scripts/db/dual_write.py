@@ -282,29 +282,31 @@ def _extract_market_row(date_str: str, envelope: dict) -> dict:
     lu_bad = "error" in limit_up
     ld_bad = "error" in limit_down
 
-    limit_up_count = None if lu_bad else limit_up.get("count")
+    limit_up_count = None if lu_bad else _first_non_none(limit_up.get("count_ex_st"), limit_up.get("count"))
     if limit_up_count is None:
         limit_up_count = emotion.get("limit_up_count")
 
-    limit_down_count = None if ld_bad else limit_down.get("count")
+    limit_down_count = None if ld_bad else _first_non_none(limit_down.get("count_ex_st"), limit_down.get("count"))
     if limit_down_count is None:
         limit_down_count = emotion.get("limit_down_count")
 
-    seal_rate = None if lu_bad else limit_up.get("seal_rate_pct")
+    seal_rate = None if lu_bad else _first_non_none(limit_up.get("seal_rate_pct_ex_st"), limit_up.get("seal_rate_pct"))
     if seal_rate is None:
         seal_rate = emotion.get("seal_rate")
 
-    broken_rate = None if lu_bad else limit_up.get("broken_rate_pct")
+    broken_rate = None if lu_bad else _first_non_none(limit_up.get("broken_rate_pct_ex_st"), limit_up.get("broken_rate_pct"))
     if broken_rate is None:
         broken_rate = emotion.get("broken_rate")
 
-    highest_board = None if lu_bad else limit_up.get("highest_board")
+    highest_board = None if lu_bad else _first_non_none(limit_up.get("highest_board_ex_st"), limit_up.get("highest_board"))
     if highest_board is None:
         highest_board = emotion.get("highest_board")
 
-    ladder = None if lu_bad else limit_up.get("board_ladder")
+    ladder = None if lu_bad else _first_non_none(limit_up.get("board_ladder_ex_st"), limit_up.get("board_ladder"))
     if isinstance(ladder, dict) and ladder:
         continuous_board_counts = json.dumps(ladder, ensure_ascii=False)
+    elif isinstance(ladder, dict):
+        continuous_board_counts = "{}"
     else:
         continuous_board_counts = emotion.get("continuous_board_counts")
 

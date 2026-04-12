@@ -185,6 +185,43 @@ describe('StepSectors', () => {
     }))
   })
 
+  it('collapses projection candidates when more than 6', () => {
+    const manyCandidates = Array.from({ length: 8 }, (_, i) => ({
+      sector_name: `板块${i + 1}`,
+      source_tags: ['main_theme'] as string[],
+      facts: { phase_hint: '主升', pct_chg: 1.0 + i },
+      key_stocks: [],
+      evidence_text: '',
+    }))
+    const manyPrefill: ReviewPrefillData = {
+      ...prefill,
+      review_signals: {
+        ...prefill.review_signals!,
+        sectors: {
+          ...prefill.review_signals!.sectors,
+          projection_candidates: manyCandidates,
+        },
+      },
+    }
+    renderStep({}, manyPrefill)
+
+    expect(screen.getByText('板块1')).toBeInTheDocument()
+    expect(screen.getByText('板块6')).toBeInTheDocument()
+    expect(screen.queryByText('板块7')).not.toBeInTheDocument()
+    expect(screen.getByText('展开全部 (8)')).toBeInTheDocument()
+
+    const expandBtn = screen.getByText('展开全部 (8)')
+    fireEvent.click(expandBtn)
+    expect(screen.getByText('板块7')).toBeInTheDocument()
+    expect(screen.getByText('板块8')).toBeInTheDocument()
+
+    const collapseBtn = screen.getByText((content, element) =>
+      content === '收起' && element?.classList.contains('text-blue-600') === true
+    )
+    fireEvent.click(collapseBtn)
+    expect(screen.queryByText('板块7')).not.toBeInTheDocument()
+  })
+
   it('maps rhythm phase hint into valid big cycle stage options', () => {
     const startupPrefill: ReviewPrefillData = {
       ...prefill,

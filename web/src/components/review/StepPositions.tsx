@@ -218,8 +218,8 @@ export default function StepPositions({ data, onChange, prefill }: StepProps) {
                   <div><span className="font-medium text-gray-700">昨日计划：</span>{signal.latest_task?.action_plan || '-'}</div>
                   {signal.info_signals?.investor_qa?.length ? (
                     <div><span className="font-medium text-gray-700">互动易：</span>
-                      {signal.info_signals.investor_qa.slice(0, 2).map((qa, i) => (
-                        <span key={i}>{i > 0 ? '；' : ''}{qa.question ? `Q: ${qa.question.slice(0, 40)}${qa.question.length > 40 ? '…' : ''}` : ''}{qa.answer ? ` A: ${qa.answer.slice(0, 50)}${qa.answer.length > 50 ? '…' : ''}` : ''}</span>
+                      {signal.info_signals.investor_qa.slice(0, 3).map((qa, i) => (
+                        <span key={i}>{i > 0 ? '；' : ''}{qa.question ? `Q: ${qa.question.slice(0, 80)}${qa.question.length > 80 ? '…' : ''}` : ''}{qa.answer ? ` A: ${qa.answer.slice(0, 100)}${qa.answer.length > 100 ? '…' : ''}` : ''}</span>
                       ))}
                     </div>
                   ) : null}

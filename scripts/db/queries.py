@@ -1368,6 +1368,45 @@ def format_stk_alert_api_rows(raw_rows: list[dict]) -> list[dict]:
     return out
 
 
+# ──────────────────────────────────────────────────────────────
+# 交易日历
+# ──────────────────────────────────────────────────────────────
+
+def is_trade_day_from_db(conn: sqlite3.Connection, date: str) -> bool | None:
+    """查询 DB 中的交易日历，返回 True/False；无记录时返回 None。"""
+    row = conn.execute(
+        "SELECT is_open FROM trade_calendar WHERE date = ?", (date,)
+    ).fetchone()
+    if row is None:
+        return None
+    return bool(row["is_open"] if isinstance(row, dict) else row[0])
+
+
+def upsert_trade_calendar(conn: sqlite3.Connection, rows: list[dict]) -> int:
+    """批量写入交易日历。rows 格式: [{"date": "2026-01-02", "is_open": 1}, ...]"""
+    count = 0
+    for r in rows:
+        conn.execute(
+            "INSERT INTO trade_calendar (date, is_open, exchange, updated_at) "
+            "VALUES (?, ?, 'SSE', datetime('now')) "
+            "ON CONFLICT(date) DO UPDATE SET is_open=excluded.is_open, updated_at=datetime('now')",
+            (r["date"], int(r.get("is_open", 0))),
+        )
+        count += 1
+    conn.commit()
+    return count
+
+
+def trade_calendar_year_covered(conn: sqlite3.Connection, year: int) -> bool:
+    """检查某年交易日历是否已导入（以该年有 200+ 条记录为标准）。"""
+    row = conn.execute(
+        "SELECT COUNT(*) FROM trade_calendar WHERE date BETWEEN ? AND ?",
+        (f"{year}-01-01", f"{year}-12-31"),
+    ).fetchone()
+    cnt = row[0] if row else 0
+    return cnt >= 200
+
+
 def list_regulatory_monitor_api(conn: sqlite3.Connection, publish_date: str, type_filter: str) -> list[dict]:
     """type_filter: all | 1 | 2 | 3"""
     if type_filter == "3":

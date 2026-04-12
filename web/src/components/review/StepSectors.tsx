@@ -183,6 +183,7 @@ export default function StepSectors({ data, onChange, prefill }: StepProps) {
   const firstTheme = themes[0]
   const teacherNotes: TeacherNote[] = prefill?.teacher_notes || []
   const [industryInfoExpanded, setIndustryInfoExpanded] = useState(false)
+  const [showAllCandidates, setShowAllCandidates] = useState(false)
   const strongest = (d.strongest as StrongestSectorItem[] | undefined) || []
   const unusual = (d.unusual as UnusualSectorItem[] | undefined) || []
   const projections = (d.projections as ReviewSectorProjection[] | undefined) || []
@@ -260,7 +261,7 @@ export default function StepSectors({ data, onChange, prefill }: StepProps) {
               系统已根据主线、最强板块、资金流、节奏、老师观点和行业信息，预先挑出值得推演的候选板块。
             </div>
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
-              {projectionCandidates.map((candidate) => (
+              {(showAllCandidates ? projectionCandidates : projectionCandidates.slice(0, 6)).map((candidate) => (
                 <div key={candidate.sector_name} className="rounded-lg border border-amber-200 bg-white p-3">
                   <div className="flex items-start justify-between gap-3">
                     <div>
@@ -304,6 +305,15 @@ export default function StepSectors({ data, onChange, prefill }: StepProps) {
                 </div>
               ))}
             </div>
+            {projectionCandidates.length > 6 && (
+              <button
+                type="button"
+                onClick={() => setShowAllCandidates(v => !v)}
+                className="text-xs text-blue-600 hover:text-blue-800 cursor-pointer mt-2"
+              >
+                {showAllCandidates ? '收起' : `展开全部 (${projectionCandidates.length})`}
+              </button>
+            )}
           </PrefillBanner>
         </Section>
       )}

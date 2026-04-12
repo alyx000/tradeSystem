@@ -89,6 +89,11 @@ export default function StepMarket({ data, onChange, prefill }: StepProps) {
 
   return (
     <div className="space-y-6">
+      {prefill?.is_trading_day === false && (
+        <div className="rounded-lg bg-amber-50 border border-amber-200 p-3 mb-4">
+          <p className="text-sm text-amber-800 font-medium">当前日期为非交易日，市场数据可能为空或不准确</p>
+        </div>
+      )}
       <TeacherNotesPanel notes={teacherNotes} fields={['core_view']} />
       {m && (
         <PrefillBanner>
@@ -137,22 +142,26 @@ export default function StepMarket({ data, onChange, prefill }: StepProps) {
           const structureRows = marketSignals?.market_structure_rows ?? []
           return (
             <PrefillBanner>
-              <div className="text-xs font-medium text-gray-600 mb-2">市场交易结构</div>
+              <div className="text-xs font-medium text-gray-600 mb-2">A股市场结构</div>
               <div className="overflow-x-auto">
                 <table className="min-w-full text-xs text-gray-600">
                   <thead>
                     <tr className="text-left text-gray-400">
                       <th className="py-1 pr-4 font-medium">市场</th>
-                      <th className="py-1 pr-4 font-medium text-right">成交额</th>
-                      <th className="py-1 font-medium text-right">成交量</th>
+                      <th className="py-1 pr-4 font-medium text-right">成交额(亿)</th>
+                      <th className="py-1 pr-4 font-medium text-right">PE</th>
+                      <th className="py-1 pr-4 font-medium text-right">换手率</th>
+                      <th className="py-1 font-medium text-right">公司数</th>
                     </tr>
                   </thead>
                   <tbody>
                     {structureRows.map((row) => (
                       <tr key={row.name} className="border-t border-gray-200/70">
                         <td className="py-1.5 pr-4 font-medium text-gray-700">{row.name}</td>
-                        <td className="py-1.5 pr-4 text-right">{row.amount ?? '-'}</td>
-                        <td className="py-1.5 text-right">{row.volume ?? '-'}</td>
+                        <td className="py-1.5 pr-4 text-right">{row.amount != null ? Number(row.amount).toFixed(1) : '-'}</td>
+                        <td className="py-1.5 pr-4 text-right">{row.pe != null ? Number(row.pe).toFixed(1) : '-'}</td>
+                        <td className="py-1.5 pr-4 text-right">{row.turnover_rate != null ? `${Number(row.turnover_rate).toFixed(2)}%` : '-'}</td>
+                        <td className="py-1.5 text-right">{row.com_count ?? '-'}</td>
                       </tr>
                     ))}
                   </tbody>

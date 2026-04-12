@@ -26,21 +26,24 @@ const queryClient = new QueryClient({
 const today = localDateString()
 
 const NAV = [
+  // 核心工作流（每日必用）
   { to: '/', label: '仪表盘' },
   { to: `/market/${today}`, label: '市场' },
   { to: `/review/${today}`, label: '复盘' },
+  // 交易管理（高频）
+  { to: '/holdings', label: '持仓' },
+  { to: '/watchlist', label: '关注池' },
+  { to: '/teachers', label: '老师观点' },
+  // 辅助分析（中频）
+  { to: '/industry', label: '行业信息' },
+  { to: '/calendar', label: '日历' },
+  { to: '/regulatory-monitor', label: '异动监管' },
+  // 工作台 / 工具（低频）
   { to: `/plans/${today}`, label: '计划' },
   { to: '/knowledge', label: '资料' },
-  { to: '/ingest', label: '采集' },
   { to: '/search', label: '查询' },
+  { to: '/ingest', label: '采集' },
   { to: '/commands', label: '命令' },
-  { to: '/teachers', label: '老师观点' },
-  { to: '/holdings', label: '持仓' },
-  { to: '/holding-tasks', label: '持仓任务' },
-  { to: '/watchlist', label: '关注池' },
-  { to: '/regulatory-monitor', label: '异动监管' },
-  { to: '/calendar', label: '日历' },
-  { to: '/industry', label: '行业信息' },
 ]
 
 export default function App() {

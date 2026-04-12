@@ -756,7 +756,20 @@ _SQL_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_trade_plans_status ON trade_plans(status);",
     "CREATE INDEX IF NOT EXISTS idx_plan_reviews_plan_id ON plan_reviews(plan_id);",
     "CREATE INDEX IF NOT EXISTS idx_knowledge_assets_type_created ON knowledge_assets(asset_type, created_at DESC);",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_trade_calendar_date ON trade_calendar(date);",
 ]
+
+# ──────────────────────────────────────────────────────────────
+# 交易日历
+# ──────────────────────────────────────────────────────────────
+_SQL_TRADE_CALENDAR = """
+CREATE TABLE IF NOT EXISTS trade_calendar (
+    date TEXT PRIMARY KEY CHECK(date GLOB '????-??-??'),
+    is_open INTEGER NOT NULL DEFAULT 0,
+    exchange TEXT NOT NULL DEFAULT 'SSE',
+    updated_at TEXT DEFAULT (datetime('now'))
+);
+"""
 
 # ──────────────────────────────────────────────────────────────
 # 全部 DDL 的执行顺序
@@ -790,6 +803,7 @@ _ALL_TABLE_SQL = [
     _SQL_TRADE_PLANS,
     _SQL_PLAN_REVIEWS,
     _SQL_KNOWLEDGE_ASSETS,
+    _SQL_TRADE_CALENDAR,
 ]
 
 _ALL_FTS_SQL = [

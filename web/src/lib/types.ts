@@ -800,6 +800,9 @@ export interface ReviewMarketSignals {
     name: string
     amount: string | number | null
     volume: string | number | null
+    pe: number | null
+    turnover_rate: number | null
+    com_count: number | null
   }>
 }
 
@@ -891,6 +894,7 @@ export interface ReviewPrefillData extends Omit<PrefillData, 'market' | 'main_th
   industry_info?: IndustryInfoItem[]
   review_signals?: ReviewPrefillSignals
   holding_signals?: HoldingSignalsPayload
+  is_trading_day?: boolean
 }
 
 export interface ReviewRecord extends Partial<Record<ReviewStepKey, string | ReviewStepValue>> {

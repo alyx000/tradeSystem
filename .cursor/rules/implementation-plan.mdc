@@ -17,6 +17,11 @@ alwaysApply: true
    - **验收命令**：具体 `pytest` 路径（或 `scripts/tests/` 下模块）+ 是否跑 `make check-scripts` / `make check`；
    - **完成标准**：哪些命令全绿、哪些 Warning 不可接受（与 [`dev-workflow.mdc`](dev-workflow.mdc) 一致）。
 3. 若触发 [`test-design.mdc`](test-design.mdc) 中的条件（新模块、存储/协议变更、3+ 文件等），分层测试方案须**符合**该文件的金字塔与隔离原则。
+4. **多 Agent 并行执行方案（复杂任务必须）**：当计划涉及 3 个以上独立改动项时，必须在计划中输出「并行分组」章节，包含：
+   - **分组策略**：按文件接触范围将任务分为可并行的 Agent 组，同一文件的不同区域改动尽量归入同组
+   - **冲突标注**：明确标出多组共享的文件及各组修改的区域/方法，确保 StrReplace 不冲突
+   - **执行约束**：每组 Agent 的 prompt 中须声明「不要修改 X 函数/区域（另一 Agent 在改）」
+   - 执行阶段使用 `Task` 工具并行启动多个 `generalPurpose` subagent，一条消息内发出所有 Task 调用
 
 ## 与现有规则的关系
 

@@ -511,8 +511,8 @@ export default function Holdings() {
                       if (!investor_qa?.length && !research_reports?.length && !news?.length) return '—'
                       return (
                         <div className="space-y-1">
-                          {investor_qa?.slice(0, 1).map((qa, i) => (
-                            <div key={`qa-${i}`}>互动易：{qa.question ? `${qa.question.slice(0, 30)}${qa.question.length > 30 ? '…' : ''}` : '—'}</div>
+                          {investor_qa?.slice(0, 2).map((qa, i) => (
+                            <div key={`qa-${i}`}>互动易：{qa.question ? `${qa.question.slice(0, 60)}${qa.question.length > 60 ? '…' : ''}` : '—'}</div>
                           ))}
                           {research_reports?.slice(0, 1).map((rr, i) => (
                             <div key={`rr-${i}`}>研报：{rr.institution || ''}{rr.rating ? `「${rr.rating}」` : ''}{rr.target_price ? ` ${rr.target_price}` : ''}</div>

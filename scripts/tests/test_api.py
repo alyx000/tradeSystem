@@ -1952,8 +1952,9 @@ _RICH_RAW_DATA = {
         },
         "sector_moneyflow_ths": {
             "data": [
-                {"name": "油服工程", "net_amount": 188000000.0, "pct_change": 4.68, "lead_stock": "准油股份"},
-                {"name": "电力", "net_amount": 92000000.0, "pct_change": 2.11, "lead_stock": "明星电力"},
+                {"name": "油服工程", "net_amount": 188000000.0, "pct_change": 4.68, "lead_stock": "准油股份", "pct_change_stock": 9.8},
+                {"name": "电力", "net_amount": 92000000.0, "pct_change": 2.11, "lead_stock": "明星电力", "pct_change_stock": 7.5},
+                {"name": "电池", "net_amount": 77000000.0, "pct_change": 3.86, "lead_stock": "力佳科技", "pct_change_stock": 28.18},
             ],
         },
         "sector_moneyflow_dc": {
@@ -1986,9 +1987,10 @@ _RICH_RAW_DATA = {
         },
         "daily_info": {
             "data": [
-                {"market": "沪市主板", "amount": 6200, "vol": 41000000},
-                {"market": "深市主板", "amount": 5100, "vol": 36000000},
-                {"market": "创业板", "amount": 2200, "vol": 18000000},
+                {"ts_code": "SH_A", "ts_name": "上海A股", "amount": 6200, "vol": 41000000, "pe": 15.2, "tr": 1.3, "com_count": 1700},
+                {"ts_code": "SZ_A", "ts_name": "深圳A股", "amount": 5100, "vol": 36000000, "pe": 28.5, "tr": 2.1, "com_count": 2800},
+                {"ts_code": "SZ_GEM", "ts_name": "创业板", "amount": 2200, "vol": 18000000, "pe": 35.0, "tr": 3.2, "com_count": 1300},
+                {"ts_code": "SH_B", "ts_name": "上海B股", "amount": 0.5, "vol": 100},
             ],
         },
         "limit_step": {
@@ -2103,9 +2105,15 @@ class TestEnrichMarketRow:
         data = r.json()
         signals = data["review_signals"]
         assert signals["market"]["moneyflow_summary"]["net_amount_yi"] == 6.5
-        assert signals["market"]["market_structure_rows"][0]["name"] == "沪市主板"
+        assert signals["market"]["market_structure_rows"][0]["name"] == "上海A股"
         assert signals["sectors"]["strongest_rows"][0]["name"] == "可控核聚变"
         assert signals["sectors"]["industry_moneyflow_rows"][0]["name"] == "油服工程"
+        assert signals["sectors"]["industry_moneyflow_rows"][0]["lead_stock"] == "准油股份"
+        batt = [r for r in signals["sectors"]["industry_moneyflow_rows"] if r["name"] == "电池"]
+        if batt:
+            assert batt[0]["lead_stock"] is None, "涨幅>20%的领涨股应被过滤"
+        assert signals["market"]["market_structure_rows"][0].get("pe") is not None
+        assert len(signals["market"]["market_structure_rows"]) == 3, "B股应被过滤掉"
         assert signals["emotion"]["ladder_rows"][0]["name"] == "高标A"
 
     def test_prefill_contains_projection_candidates(self, client, db_path):

@@ -177,14 +177,19 @@ def _build_review_signals(market: dict[str, Any] | None) -> dict[str, Any]:
             "large_yi": _to_amount_yi(row.get("buy_lg_amount")),
         }
 
+    _A_SHARE_CODES = {"SH_A", "SZ_A", "SZ_MAIN_A", "SZ_GEM", "SZ_SME"}
     daily_info_rows = _section_rows(market.get("daily_info"))
     signals["market"]["market_structure_rows"] = [
         {
-            "name": _pick_row_name(row, "market", "board", "exchange", "ts_name", "ts_code", "trade_date"),
+            "name": _pick_row_name(row, "ts_name", "market", "board", "exchange", "ts_code"),
             "amount": row.get("amount"),
             "volume": row.get("vol"),
+            "pe": row.get("pe"),
+            "turnover_rate": row.get("tr"),
+            "com_count": row.get("com_count"),
         }
-        for row in daily_info_rows[:5]
+        for row in daily_info_rows
+        if str(row.get("ts_code", "")).upper() in _A_SHARE_CODES
     ]
 
     strongest_rows = _section_rows(market.get("limit_cpt_list"))
@@ -218,12 +223,19 @@ def _build_review_signals(market: dict[str, Any] | None) -> dict[str, Any]:
             return -(_to_number(item.get("net_amount")) or 0)
         return sorted(rows, key=_key)
 
+    def _clean_lead_stock(row: dict[str, Any]) -> str | None:
+        """领涨股涨幅 >20% 的大概率为北交所或新股，不具参考性"""
+        pct = _to_number(row.get("pct_change_stock"))
+        if pct is not None and abs(pct) > 20:
+            return None
+        return row.get("lead_stock") or None
+
     signals["sectors"]["industry_moneyflow_rows"] = [
         {
             "name": _pick_row_name(row, "name", "industry", "ts_code"),
             "net_amount_yi": _to_number(row.get("net_amount_yi")) or _to_amount_yi(row.get("net_amount")),
             "pct_change": _to_number(row.get("pct_change")),
-            "lead_stock": row.get("lead_stock"),
+            "lead_stock": _clean_lead_stock(row),
         }
         for row in _sort_by_net_yi(ind_rows)[:5]
     ]
@@ -236,18 +248,22 @@ def _build_review_signals(market: dict[str, Any] | None) -> dict[str, Any]:
             "name": _pick_row_name(row, "name", "industry", "ts_code"),
             "net_amount_yi": _to_number(row.get("net_amount_yi")) or _to_amount_yi(row.get("net_amount")),
             "pct_change": _to_number(row.get("pct_change")),
-            "lead_stock": row.get("lead_stock"),
+            "lead_stock": _clean_lead_stock(row),
         }
         for row in _sort_by_net_yi(concept_rows)[:5]
     ]
 
     ladder_rows = _section_rows(market.get("limit_step"))
+    filtered_ladder = [
+        row for row in ladder_rows
+        if not _stock_name_is_st(_pick_row_name(row, "name", "ts_name", "ts_code"))
+    ]
     signals["emotion"]["ladder_rows"] = [
         {
             "name": _pick_row_name(row, "name", "ts_name", "ts_code"),
             "nums": row.get("nums"),
         }
-        for row in sorted(ladder_rows, key=lambda item: -(_to_number(item.get("nums")) or 0))[:10]
+        for row in sorted(filtered_ladder, key=lambda item: -(_to_number(item.get("nums")) or 0))[:10]
     ]
     return signals
 
@@ -323,8 +339,8 @@ def _safe_float(value: Any) -> float | None:
 
 
 def _stock_name_is_st(name: str) -> bool:
-    normalized = _normalize_stock_key(name)
-    return normalized.startswith(("ST", "*ST", "S*ST", "SST"))
+    from utils import is_st_stock
+    return is_st_stock(name)
 
 
 def _stock_code_is_bj(code: str) -> bool:
@@ -840,8 +856,14 @@ def get_prefill(date: str, conn: sqlite3.Connection = Depends(get_db_conn)):
     )
     holding_signals = build_holding_signals(conn, date, market_row=market_for_signals)
 
+    from utils.trade_date import is_trade_day as _is_trade_day
+    is_trading_day = _is_trade_day(date, conn=conn)
+    if is_trading_day and market is None and _date.fromisoformat(date) < _date.today():
+        is_trading_day = False
+
     return {
         "date": date,
+        "is_trading_day": is_trading_day,
         "market": market,
         "prev_market": prev_market,
         "avg_5d_amount": avg_5d,

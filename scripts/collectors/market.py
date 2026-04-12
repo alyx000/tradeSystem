@@ -232,6 +232,9 @@ def prefetch_calendar(
     return len(fetched), len(merged_list)
 
 
+from utils import is_st_stock as _is_st_stock
+
+
 class MarketCollector:
     """市场数据采集器，聚合多个 provider 的数据"""
 
@@ -324,6 +327,31 @@ class MarketCollector:
                 data["seal_rate_pct"] = 0
                 data["broken_rate_pct"] = 0
 
+            # 排除 ST 后的统计
+            stocks_ex_st = [s for s in stocks if not _is_st_stock(s.get("name", ""))]
+            board_ladder_ex_st: dict[int, list] = {}
+            first_board_count_ex_st = 0
+            for s in stocks_ex_st:
+                lt = s.get("limit_times", 1)
+                board_ladder_ex_st.setdefault(lt, []).append(s)
+                if lt == 1:
+                    first_board_count_ex_st += 1
+
+            data["count_ex_st"] = len(stocks_ex_st)
+            data["consecutive_board_count_ex_st"] = len(stocks_ex_st) - first_board_count_ex_st
+            data["highest_board_ex_st"] = max((s.get("limit_times", 1) for s in stocks_ex_st), default=0)
+            data["board_ladder_ex_st"] = {
+                k: [s.get("name", "") for s in v] for k, v in sorted(board_ladder_ex_st.items(), reverse=True)
+            }
+
+            total_touched_ex_st = len(stocks_ex_st) + broken_count
+            if total_touched_ex_st > 0:
+                data["seal_rate_pct_ex_st"] = round(len(stocks_ex_st) / total_touched_ex_st * 100, 1)
+                data["broken_rate_pct_ex_st"] = round(broken_count / total_touched_ex_st * 100, 1)
+            else:
+                data["seal_rate_pct_ex_st"] = 0
+                data["broken_rate_pct_ex_st"] = 0
+
             data["_source"] = limit_up.source
             result["limit_up"] = data
         else:
@@ -335,6 +363,9 @@ class MarketCollector:
             data = limit_down.data
             if isinstance(data, list):
                 data = {"count": len(data), "stocks": data}
+            if isinstance(data.get("stocks"), list):
+                stocks_ex_st_down = [s for s in data["stocks"] if not _is_st_stock(s.get("name", ""))]
+                data["count_ex_st"] = len(stocks_ex_st_down)
             data["_source"] = limit_down.source
             result["limit_down"] = data
         else:
@@ -526,6 +557,27 @@ class MarketCollector:
         except Exception as e:
             logger.warning(f"港股指数采集异常: {e}")
 
+        # 18. 研报覆盖统计
+        try:
+            report_result = self.registry.call("get_research_report_list", date)
+            if report_result.success and report_result.data:
+                from collections import Counter
+                stock_counts: Counter[str] = Counter()
+                stock_names: dict[str, str] = {}
+                for r in report_result.data:
+                    code = r.get("stock_code", "")
+                    if code:
+                        stock_counts[code] += 1
+                        stock_names[code] = r.get("stock_name", "")
+                top_covered = [
+                    {"stock_code": code, "stock_name": stock_names.get(code, ""), "report_count": count}
+                    for code, count in stock_counts.most_common(20)
+                ]
+                result["research_coverage_top"] = top_covered
+                logger.info(f"研报覆盖统计完成，共 {len(report_result.data)} 篇，覆盖 {len(stock_counts)} 只")
+        except Exception as e:
+            logger.warning(f"研报覆盖统计失败: {e}")
+
         logger.info(f"盘后数据采集完成: {date}")
         return result
 
@@ -595,11 +647,10 @@ class MarketCollector:
             vol_data["vs_ma20"] = "高于" if today_vol > ma20 else ("低于" if today_vol < ma20 else "持平")
 
     def _compute_index_ma(self, result: dict, date: str) -> None:
-        """计算上证指数均线（MA5/10/20/60）和5周均线"""
+        """计算上证指数日线均线（MA5/10/20/60）和三大指数 5 周均线"""
         daily_dir = BASE_DIR / "daily"
         closes: list[float] = []
 
-        # 今日收盘价
         sh_data = result.get("indices", {}).get("shanghai", {})
         today_close = sh_data.get("close", 0)
         if not today_close:
@@ -615,7 +666,7 @@ class MarketCollector:
                 reverse=True,
             )
         except FileNotFoundError:
-            return
+            dirs = []
 
         for d in dirs[:70]:
             pm_file = d / "post-market.yaml"
@@ -632,26 +683,49 @@ class MarketCollector:
             except Exception:
                 continue
 
-        if len(closes) < 5:
-            return
+        ma_data: dict = {}
+        if len(closes) >= 5:
+            for period in [5, 10, 20, 60]:
+                if len(closes) >= period:
+                    ma_val = round(sum(closes[:period]) / period, 2)
+                    ma_data[f"ma{period}"] = ma_val
+                    ma_data[f"above_ma{period}"] = today_close > ma_val
 
-        ma_data = {}
-        for period in [5, 10, 20, 60]:
-            if len(closes) >= period:
-                ma_val = round(sum(closes[:period]) / period, 2)
-                ma_data[f"ma{period}"] = ma_val
-                ma_data[f"above_ma{period}"] = today_close > ma_val
+        # 5 周均线：调用 get_index_weekly 获取真实周线
+        start_date = (datetime.strptime(date, "%Y-%m-%d") - timedelta(days=60)).strftime("%Y-%m-%d")
+        ma5w_indices = [
+            ("shanghai", today_close, ma_data),
+            ("shenzhen", None, {}),
+            ("chinext", None, {}),
+        ]
+        for idx_key, day_close, target_dict in ma5w_indices:
+            if day_close is None:
+                idx_data = result.get("indices", {}).get(idx_key, {})
+                day_close = idx_data.get("close")
+                if not day_close:
+                    continue
+                day_close = float(day_close)
+            try:
+                r = self.registry.call("get_index_weekly", idx_key, start_date, date)
+                if r.success and r.data:
+                    weekly_rows = sorted(r.data, key=lambda x: x.get("trade_date", ""))
+                    weekly_closes = [row["close"] for row in weekly_rows[-5:]]
+                    if len(weekly_closes) == 5:
+                        ma5w = round(sum(weekly_closes) / 5, 2)
+                        target_dict["ma5w"] = ma5w
+                        target_dict["above_ma5w"] = day_close > ma5w
+            except Exception as e:
+                logger.debug("5周均线计算失败 %s: %s", idx_key, e)
 
-        # 5周均线近似：取最近25个交易日，每5天取一个周收盘
-        if len(closes) >= 25:
-            weekly_closes = [closes[i] for i in [4, 9, 14, 19, 24] if i < len(closes)]
-            if len(weekly_closes) == 5:
-                ma5w = round(sum(weekly_closes) / 5, 2)
-                ma_data["ma5w"] = ma5w
-                ma_data["above_ma5w"] = today_close > ma5w
-
+        all_ma: dict = {}
         if ma_data:
-            result["moving_averages"] = {"shanghai": ma_data}
+            all_ma["shanghai"] = ma_data
+        for idx_key in ("shenzhen", "chinext"):
+            entry = ma5w_indices[["shanghai", "shenzhen", "chinext"].index(idx_key)]
+            if entry[2]:
+                all_ma[idx_key] = entry[2]
+        if all_ma:
+            result["moving_averages"] = all_ma
 
     def collect_pre_market(
         self,

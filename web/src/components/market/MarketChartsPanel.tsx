@@ -63,6 +63,24 @@ export default function MarketChartsPanel({ chartData }: { chartData: MarketChar
           </ComposedChart>
         </ResponsiveContainer>
       </div>
+
+      <div className="bg-white rounded-lg shadow p-4">
+        <h2 className="text-sm font-semibold text-gray-700 mb-3">情绪指标趋势</h2>
+        <ResponsiveContainer width="100%" height={220}>
+          <ComposedChart data={chartData}>
+            <CartesianGrid strokeDasharray="3 3" />
+            <XAxis dataKey="date_short" tick={{ fontSize: 11 }} />
+            <YAxis yAxisId="pct" orientation="left" tick={{ fontSize: 11 }} unit="%" />
+            <YAxis yAxisId="count" orientation="right" tick={{ fontSize: 11 }} />
+            <Tooltip />
+            <Legend />
+            <Bar yAxisId="count" dataKey="limit_down_count" name="跌停数" fill="#22c55e" opacity={0.5} />
+            <Line yAxisId="pct" dataKey="seal_rate" name="封板率" stroke="#3b82f6" strokeWidth={2} dot={{ r: 2 }} />
+            <Line yAxisId="pct" dataKey="broken_rate" name="炸板率" stroke="#f59e0b" strokeWidth={2} dot={{ r: 2 }} />
+            <Line yAxisId="count" dataKey="highest_board" name="最高板" stroke="#8b5cf6" strokeWidth={1.5} strokeDasharray="4 2" dot={{ r: 2 }} />
+          </ComposedChart>
+        </ResponsiveContainer>
+      </div>
     </>
   )
 }

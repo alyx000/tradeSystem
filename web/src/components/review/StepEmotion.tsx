@@ -1,5 +1,9 @@
+import { useState, useEffect } from 'react'
+import { ResponsiveContainer, ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip } from 'recharts'
 import { type StepProps, Section, Row, PrefillBanner, Metric, SelectField, TextField, TextareaField, DynamicList } from './widgets'
 import { get, set } from './formState'
+import { api } from '../../lib/api'
+import type { MarketChartItem } from '../../lib/types'
 
 interface SentimentStockItem {
   name: string
@@ -42,6 +46,15 @@ export default function StepEmotion({ data, onChange, prefill }: StepProps) {
   const m = prefill?.market
   const emotionSignals = prefill?.review_signals?.emotion
   const sentimentStocks = (d.sentiment_stocks as SentimentStockItem[] | undefined) || []
+
+  const [historyData, setHistoryData] = useState<MarketChartItem[]>([])
+  useEffect(() => {
+    let cancelled = false
+    api.getMarketHistory(10).then((items) => {
+      if (!cancelled) setHistoryData(items.map(d => ({ ...d, date_short: d.date.slice(5) })))
+    }).catch(() => {})
+    return () => { cancelled = true }
+  }, [])
 
   const g = <T = string,>(p: string, fb?: T) => {
     const fallback = (fb ?? '') as T
@@ -94,6 +107,23 @@ export default function StepEmotion({ data, onChange, prefill }: StepProps) {
             </div>
           )}
         </PrefillBanner>
+      )}
+
+      {historyData.length > 0 && (
+        <div className="bg-white rounded-lg border border-gray-200 p-3">
+          <h3 className="text-xs font-medium text-gray-600 mb-2">近期情绪趋势</h3>
+          <ResponsiveContainer width="100%" height={150}>
+            <ComposedChart data={historyData}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey="date_short" tick={{ fontSize: 10 }} />
+              <YAxis yAxisId="count" orientation="left" tick={{ fontSize: 10 }} />
+              <YAxis yAxisId="pct" orientation="right" tick={{ fontSize: 10 }} unit="%" />
+              <Tooltip />
+              <Bar yAxisId="count" dataKey="limit_up_count" name="涨停数" fill="#ef4444" opacity={0.6} />
+              <Line yAxisId="pct" dataKey="seal_rate" name="封板率" stroke="#3b82f6" strokeWidth={1.5} dot={{ r: 1.5 }} />
+            </ComposedChart>
+          </ResponsiveContainer>
+        </div>
       )}
 
       <DynamicList

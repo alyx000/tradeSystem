@@ -83,11 +83,13 @@ class AkshareProvider(DataProvider):
             "get_stock_announcements",
             "get_investor_qa",
             "get_research_reports",
+            "get_research_report_list",
             "get_macro_calendar",
             "get_macro_calendar_range",
             "is_trade_day",
             "get_etf_flow",
             "get_hk_indices",
+            "get_index_weekly",
         ]
 
     # ------------------------------------------------------------------
@@ -554,6 +556,37 @@ class AkshareProvider(DataProvider):
         except Exception as e:
             return DataResult(data=None, source=self.name, error=str(e))
 
+    # ---- 指数周线 ----
+
+    def get_index_weekly(self, index_code: str, start_date: str, end_date: str) -> DataResult:
+        """获取指数周线数据（AkShare index_zh_a_hist weekly）"""
+        try:
+            import akshare as ak
+            code_map = {
+                "shanghai": "000001",
+                "shenzhen": "399001",
+                "chinext": "399006",
+                "star50": "000688",
+            }
+            symbol = code_map.get(index_code, index_code)
+            sd = start_date.replace("-", "")
+            ed = end_date.replace("-", "")
+            df = ak.index_zh_a_hist(symbol=symbol, period="weekly", start_date=sd, end_date=ed)
+            if df is None or df.empty:
+                return DataResult(data=[], source="akshare:index_zh_a_hist_weekly")
+            rows = []
+            for _, row in df.iterrows():
+                rows.append({
+                    "trade_date": str(row["日期"]).replace("-", ""),
+                    "close": float(row["收盘"]),
+                    "open": float(row["开盘"]),
+                    "high": float(row["最高"]),
+                    "low": float(row["最低"]),
+                })
+            return DataResult(data=rows, source="akshare:index_zh_a_hist_weekly")
+        except Exception as e:
+            return DataResult(data=None, source=self.name, error=str(e))
+
     # ---- 涨跌停数据 ----
 
     def get_limit_up_list(self, date: str) -> DataResult:
@@ -874,6 +907,32 @@ class AkshareProvider(DataProvider):
                 if len(results) >= 5:
                     break
 
+            return DataResult(data=results, source="akshare:stock_research_report_em")
+        except Exception as e:
+            return DataResult(data=None, source=self.name, error=str(e))
+
+    def get_research_report_list(self, date: str) -> DataResult:
+        """获取全市场当日研报列表（东财 stock_research_report_em）"""
+        try:
+            date_compact = date.replace("-", "")
+            try:
+                df = self.ak.stock_research_report_em(
+                    symbol="", start_date=date_compact, end_date=date_compact,
+                )
+            except TypeError:
+                return DataResult(data=[], source="akshare:stock_research_report_em")
+            if df is None or df.empty:
+                return DataResult(data=[], source="akshare:stock_research_report_em")
+            results = []
+            for _, row in df.head(200).iterrows():
+                results.append({
+                    "stock_code": str(row.get("股票代码", "")),
+                    "stock_name": str(row.get("股票简称", "")),
+                    "institution": str(row.get("机构", "")),
+                    "title": str(row.get("报告名称", ""))[:200],
+                    "rating": str(row.get("东财评级", row.get("评级", ""))),
+                    "date": str(row.get("日期", ""))[:10],
+                })
             return DataResult(data=results, source="akshare:stock_research_report_em")
         except Exception as e:
             return DataResult(data=None, source=self.name, error=str(e))

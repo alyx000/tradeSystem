@@ -90,6 +90,7 @@ class TushareProvider(DataProvider):
             "get_market_daily_changes",
             "get_stock_daily_range",
             "get_index_daily_range",
+            "get_index_weekly",
         ]
 
     def _date_fmt(self, date: str) -> str:
@@ -1063,6 +1064,34 @@ class TushareProvider(DataProvider):
                     pct = None
                 out.append({"trade_date": norm, "pct_chg": pct, "ts_code": code})
             return DataResult(data=out, source="tushare:index_daily")
+        except Exception as e:
+            return DataResult(data=None, source=self.name, error=str(e))
+
+    def get_index_weekly(self, index_code: str, start_date: str, end_date: str) -> DataResult:
+        """获取指数周线数据（Tushare index_weekly）"""
+        try:
+            code_map = {
+                "shanghai": "000001.SH",
+                "shenzhen": "399001.SZ",
+                "chinext": "399006.SZ",
+                "star50": "000688.SH",
+            }
+            ts_code = code_map.get(index_code, index_code)
+            sd = self._date_fmt(start_date)
+            ed = self._date_fmt(end_date)
+            df = self.pro.index_weekly(ts_code=ts_code, start_date=sd, end_date=ed)
+            if df is None or df.empty:
+                return DataResult(data=[], source="tushare:index_weekly")
+            rows = []
+            for _, row in df.iterrows():
+                rows.append({
+                    "trade_date": str(row["trade_date"]),
+                    "close": float(row["close"]),
+                    "open": float(row["open"]),
+                    "high": float(row["high"]),
+                    "low": float(row["low"]),
+                })
+            return DataResult(data=rows, source="tushare:index_weekly")
         except Exception as e:
             return DataResult(data=None, source=self.name, error=str(e))
 

@@ -98,8 +98,8 @@ const prefill: ReviewPrefillData = {
         large_yi: 1.8,
       },
       market_structure_rows: [
-        { name: '沪市主板', amount: 6200, volume: 41000000 },
-        { name: '深市主板', amount: 5100, volume: 36000000 },
+        { name: '上海A股', amount: 6200, volume: 41000000, pe: 15.2, turnover_rate: 1.3, com_count: 1700 },
+        { name: '深圳A股', amount: 5100, volume: 36000000, pe: 28.5, turnover_rate: 2.1, com_count: 2800 },
       ],
     },
     sectors: {
@@ -125,10 +125,25 @@ describe('StepMarket', () => {
     expect(screen.getByLabelText('5周均线')).toHaveValue('线上')
     expect(screen.getByDisplayValue('【小鲍】量能配合较好')).toBeInTheDocument()
     expect(screen.getByText('主力资金流向')).toBeInTheDocument()
-    expect(screen.getByText('市场交易结构')).toBeInTheDocument()
-    expect(screen.getByText('沪市主板')).toBeInTheDocument()
+    expect(screen.getByText('A股市场结构')).toBeInTheDocument()
+    expect(screen.getByText('上海A股')).toBeInTheDocument()
     expect(screen.getByText('+6.50亿')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: /查看完整市场数据/i })).toHaveAttribute('href', '/market/2026-04-03')
+  })
+
+  it('shows non-trading-day warning when is_trading_day is false', () => {
+    renderStep({}, { ...prefill, is_trading_day: false })
+    expect(screen.getByText('当前日期为非交易日，市场数据可能为空或不准确')).toBeInTheDocument()
+  })
+
+  it('hides non-trading-day warning when is_trading_day is true', () => {
+    renderStep({}, { ...prefill, is_trading_day: true })
+    expect(screen.queryByText('当前日期为非交易日，市场数据可能为空或不准确')).not.toBeInTheDocument()
+  })
+
+  it('hides non-trading-day warning when is_trading_day is undefined', () => {
+    renderStep({}, prefill)
+    expect(screen.queryByText('当前日期为非交易日，市场数据可能为空或不准确')).not.toBeInTheDocument()
   })
 
   it('emits nested payload when user edits a field', () => {

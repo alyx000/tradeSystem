@@ -231,6 +231,10 @@ class DataProvider(ABC):
         """指数区间日线涨跌幅序列。index_ts_code 如 000001.SH。"""
         return DataResult(data=None, source=self.name, error="not implemented")
 
+    def get_index_weekly(self, index_code: str, start_date: str, end_date: str) -> DataResult:
+        """获取指数周线数据"""
+        return DataResult(data=None, source=self.name, error="not implemented")
+
     # ---- 外盘 ----
     def get_global_index(self, index_name: str) -> DataResult:
         return DataResult(data=None, source=self.name, error="not implemented")
@@ -257,6 +261,10 @@ class DataProvider(ABC):
 
     # ---- 研报 ----
     def get_research_reports(self, stock_code: str) -> DataResult:
+        return DataResult(data=None, source=self.name, error="not implemented")
+
+    def get_research_report_list(self, date: str) -> DataResult:
+        """获取全市场当日研报列表"""
         return DataResult(data=None, source=self.name, error="not implemented")
 
     # ---- 宏观日历 ----

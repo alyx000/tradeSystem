@@ -502,9 +502,27 @@ def cmd_pre(config: dict, target_date: str):
     """执行盘前简报"""
     logger.info(f"=== 盘前简报 {target_date} ===")
 
+    dt = datetime.strptime(target_date, "%Y-%m-%d")
+    if dt.weekday() >= 5:
+        logger.warning(f"⚠️ {target_date} 为周末，跳过执行")
+        return
+
     with without_standard_http_proxy():
         registry = setup_providers(config)
         registry.initialize_all()
+
+        from utils.trade_date import is_trade_day, ensure_trade_calendar
+        from db.connection import get_connection
+        try:
+            _conn = get_connection()
+            ensure_trade_calendar(_conn, registry)
+            if is_trade_day(target_date, conn=_conn, registry=registry) is False:
+                logger.warning(f"⚠️ {target_date} 为非交易日（法定假日），跳过执行")
+                _conn.close()
+                return
+            _conn.close()
+        except Exception:
+            pass
 
         from collectors import MarketCollector, HoldingsCollector, WatchlistCollector
         from generators import ReportGenerator
@@ -624,11 +642,29 @@ def cmd_post(config: dict, target_date: str):
     """执行盘后报告：先晚间任务（溢价/关注池/复盘 Obsidian），再全日盘后采集与推送。"""
     cmd_evening(config, target_date)
 
+    dt = datetime.strptime(target_date, "%Y-%m-%d")
+    if dt.weekday() >= 5:
+        logger.warning(f"⚠️ {target_date} 为周末，跳过盘后采集")
+        return
+
     logger.info(f"=== 盘后报告 {target_date} ===")
 
     with without_standard_http_proxy():
         registry = setup_providers(config)
         registry.initialize_all()
+
+        from utils.trade_date import is_trade_day, ensure_trade_calendar
+        from db.connection import get_connection
+        try:
+            _conn = get_connection()
+            ensure_trade_calendar(_conn, registry)
+            if is_trade_day(target_date, conn=_conn, registry=registry) is False:
+                logger.warning(f"⚠️ {target_date} 为非交易日（法定假日），跳过盘后采集")
+                _conn.close()
+                return
+            _conn.close()
+        except Exception:
+            pass
 
         from collectors import MarketCollector, HoldingsCollector, WatchlistCollector
         from generators import ReportGenerator
@@ -798,6 +834,11 @@ def cmd_evening(config: dict, target_date: str):
     """
     logger.info(f"=== 晚间任务 {target_date} ===")
 
+    dt = datetime.strptime(target_date, "%Y-%m-%d")
+    if dt.weekday() >= 5:
+        logger.warning(f"⚠️ {target_date} 为周末，跳过执行")
+        return
+
     premium_report_text: Optional[str] = None
     premium_prev_date: Optional[str] = None
     wl_report_text: Optional[str] = None
@@ -806,6 +847,18 @@ def cmd_evening(config: dict, target_date: str):
     with without_standard_http_proxy():
         registry = setup_providers(config)
         registry.initialize_all()
+
+        from utils.trade_date import is_trade_day, ensure_trade_calendar
+        from db.connection import get_connection as _get_conn
+        try:
+            _conn = _get_conn()
+            ensure_trade_calendar(_conn, registry)
+            if is_trade_day(target_date, conn=_conn, registry=registry) is False:
+                logger.warning(f"⚠️ {target_date} 为非交易日（法定假日），跳过执行")
+                _conn.close()
+                return
+        except Exception:
+            pass
 
         from utils.trade_date import get_prev_trade_date
 

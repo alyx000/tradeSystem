@@ -3,6 +3,10 @@ import { describe, expect, it, vi } from 'vitest'
 import StepEmotion from '../components/review/StepEmotion'
 import type { ReviewPrefillData, ReviewStepValue } from '../lib/types'
 
+vi.mock('../lib/api', () => ({
+  api: { getMarketHistory: vi.fn().mockResolvedValue([]) },
+}))
+
 function renderStep(data: ReviewStepValue = {}, prefill?: ReviewPrefillData) {
   const onChange = vi.fn()
   render(<StepEmotion data={data} onChange={onChange} prefill={prefill} />)
