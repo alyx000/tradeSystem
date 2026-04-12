@@ -189,7 +189,8 @@ describe('StepSectors', () => {
     const startupPrefill: ReviewPrefillData = {
       ...prefill,
       review_signals: {
-        ...prefill.review_signals,
+        market: prefill.review_signals!.market,
+        emotion: prefill.review_signals!.emotion,
         sectors: {
           ...prefill.review_signals!.sectors,
           projection_candidates: [
