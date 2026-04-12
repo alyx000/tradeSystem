@@ -80,6 +80,23 @@ def _extract_holdings_detail_map(envelope: dict | None) -> dict[str, dict[str, A
     return out
 
 
+def _extract_holdings_info_map(envelope: dict | None) -> dict[str, dict[str, Any]]:
+    """从信封 holdings_info 提取 {norm_code: {news, investor_qa, research_reports}}。"""
+    if not envelope or not isinstance(envelope, dict):
+        return {}
+    info = envelope.get("holdings_info")
+    if not isinstance(info, dict):
+        return {}
+    out: dict[str, dict[str, Any]] = {}
+    for code, data in info.items():
+        if not isinstance(data, dict):
+            continue
+        norm = _normalize_stock_code_for_match(code)
+        if norm:
+            out[norm] = data
+    return out
+
+
 def _merge_snapshot_fallback(
     detail_map: dict[str, dict[str, Any]],
     snapshot_map: dict[str, dict[str, Any]],
@@ -377,6 +394,7 @@ def build_holding_signals(
     announcements, disclosure_dates = _load_announcement_maps(conn, date_str, normalized_holdings)
     st_set = _load_st_set(conn, date_str)
     share_float_map = _load_share_float_map(conn, date_str)
+    holdings_info_map = _extract_holdings_info_map(envelope)
     task_map = Q.get_latest_open_holding_tasks(conn, date_str)
 
     themes = Q.get_active_themes(conn)
@@ -448,6 +466,15 @@ def build_holding_signals(
             stop_loss=_to_float(holding.get("stop_loss")),
             target_price=_to_float(holding.get("target_price")),
         )
+        stock_info = holdings_info_map.get(norm, {})
+        _qa = stock_info.get("investor_qa")
+        _rr = stock_info.get("research_reports")
+        _nw = stock_info.get("news")
+        info_signals = {
+            "investor_qa": (_qa if isinstance(_qa, list) else [])[:3],
+            "research_reports": (_rr if isinstance(_rr, list) else [])[:3],
+            "news": (_nw if isinstance(_nw, list) else [])[:3],
+        }
         items.append({
             "stock_code": code,
             "stock_name": holding.get("stock_name"),
@@ -456,6 +483,7 @@ def build_holding_signals(
             "technical_signals": technical_signals,
             "theme_signals": theme_signals,
             "event_signals": event_signals,
+            "info_signals": info_signals,
             "latest_task": task_map.get(norm),
             "risk_flags": risk_flags,
         })

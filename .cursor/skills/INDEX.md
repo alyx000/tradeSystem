@@ -49,7 +49,8 @@
 | `ingest-inspector` | `python main.py ingest health --date --days` | 查看近 N 天采集健康摘要与稳定性状态 |
 | `ingest-inspector` | `python main.py ingest retry` | 查看待重试分组摘要 |
 | `ingest-inspector` | `python main.py ingest reconcile --stale-minutes` | 清理陈旧 running 采集记录 |
-| `plan-workbench` | `python main.py plan draft --date` | 生成 `MarketObservation` + `TradeDraft` |
+| `plan-workbench` | `python main.py plan draft --date` | 生成最小 `MarketObservation` + `TradeDraft` |
+| `plan-workbench` | `python main.py plan draft --date --from-review --input-by` | 从已保存复盘生成 `review` observation 和次日 `TradeDraft` |
 | `plan-workbench` | `python main.py plan show-draft --date/--draft-id` | 查看交易草稿 |
 | `plan-workbench` | `python main.py plan confirm --date/--draft-id` | 确认交易计划并写入 `trade_plans` |
 | `plan-workbench` | `python main.py plan diagnose --date/--plan-id` | 诊断交易计划并读取事实快照 |
@@ -69,9 +70,10 @@
 
 | Skill | API 端点 | 方法 | 说明 |
 |-------|---------|------|------|
-| `daily-review` | `/api/review/{date}/prefill` | GET | 拉取八步复盘预填充数据 |
+| `daily-review` | `/api/review/{date}/prefill` | GET | 拉取八步复盘预填充数据（含板块候选；返回 `emotion_leader` / `capacity_leader`，`lead_stock` 仅作兼容） |
 | `daily-review` | `/api/review/{date}` | GET | 读取已保存的复盘内容 |
 | `daily-review` | `/api/review/{date}` | PUT | 提交复盘主观判断 |
+| `daily-review` / `plan-workbench` | `/api/review/{date}/to-draft` | POST | 将复盘结果转成 `review` observation 与次日 `TradeDraft` |
 | `plan-workbench` | `/api/plans/drafts` | POST | 创建 `TradeDraft` |
 | `plan-workbench` | `/api/plans/drafts/{draft_id}` | GET | 查看 `TradeDraft` |
 | `plan-workbench` | `/api/plans/{draft_id}/confirm` | POST | 从草稿确认正式计划 |
@@ -113,6 +115,7 @@
 | GET | `/api/review/{date}` ★ | 读取指定日期复盘（含 exists 标志） |
 | GET | `/api/review/{date}/prefill` ★ | 预填充数据（行情+笔记+持仓+日历） |
 | PUT | `/api/review/{date}` ★ | 保存/更新复盘主观判断 |
+| POST | `/api/review/{date}/to-draft` ★ | 将已保存复盘转换为 `review` observation / `TradeDraft` |
 
 ### 老师观点（`routes/crud.py`）
 

@@ -47,6 +47,7 @@ import type {
   ReviewFormData,
   ReviewPrefillData,
   ReviewRecord,
+  ReviewToDraftResult,
   StyleFactorSeriesItem,
   UnifiedSearchResult,
   TeacherNote,
@@ -85,6 +86,8 @@ export const api = {
   getPrefill: (date: string) => request<ReviewPrefillData>(`/review/${date}/prefill`),
   saveReview: (date: string, data: ReviewFormData) =>
     request<ReviewRecord>(`/review/${date}`, { method: 'PUT', body: JSON.stringify(data) }),
+  reviewToDraft: (date: string, data?: { trade_date?: string; input_by?: string }) =>
+    request<ReviewToDraftResult>(`/review/${date}/to-draft`, { method: 'POST', body: JSON.stringify(data || {}) }),
 
   // Search
   unifiedSearch: (q: string, params?: Record<string, string>) => {

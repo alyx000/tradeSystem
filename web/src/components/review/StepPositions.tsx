@@ -216,6 +216,27 @@ export default function StepPositions({ data, onChange, prefill }: StepProps) {
                   <div><span className="font-medium text-gray-700">边界提示：</span>{riskText || '-'}</div>
                   <div><span className="font-medium text-gray-700">事件风险：</span>{eventText || '-'}</div>
                   <div><span className="font-medium text-gray-700">昨日计划：</span>{signal.latest_task?.action_plan || '-'}</div>
+                  {signal.info_signals?.investor_qa?.length ? (
+                    <div><span className="font-medium text-gray-700">互动易：</span>
+                      {signal.info_signals.investor_qa.slice(0, 2).map((qa, i) => (
+                        <span key={i}>{i > 0 ? '；' : ''}{qa.question ? `Q: ${qa.question.slice(0, 40)}${qa.question.length > 40 ? '…' : ''}` : ''}{qa.answer ? ` A: ${qa.answer.slice(0, 50)}${qa.answer.length > 50 ? '…' : ''}` : ''}</span>
+                      ))}
+                    </div>
+                  ) : null}
+                  {signal.info_signals?.research_reports?.length ? (
+                    <div><span className="font-medium text-gray-700">研报：</span>
+                      {signal.info_signals.research_reports.slice(0, 2).map((rr, i) => (
+                        <span key={i}>{i > 0 ? '；' : ''}{rr.institution || ''}{rr.rating ? `「${rr.rating}」` : ''}{rr.target_price ? ` 目标价${rr.target_price}` : ''}</span>
+                      ))}
+                    </div>
+                  ) : null}
+                  {signal.info_signals?.news?.length ? (
+                    <div><span className="font-medium text-gray-700">新闻：</span>
+                      {signal.info_signals.news.slice(0, 2).map((n, i) => (
+                        <span key={i}>{i > 0 ? '；' : ''}{n.title || ''}{n.time ? `（${n.time}）` : ''}</span>
+                      ))}
+                    </div>
+                  ) : null}
                 </div>
               )
             })()}

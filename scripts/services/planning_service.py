@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
 from typing import Any
 from uuid import uuid4
@@ -194,6 +194,74 @@ class PlanningService:
                 ),
             )
         return self.get_draft(draft_id)
+
+    def draft_from_review(
+        self,
+        *,
+        review_date: str,
+        trade_date: str | None = None,
+        input_by: str | None = None,
+    ) -> dict[str, Any]:
+        with get_db(self.db_path) as conn:
+            migrate(conn)
+            review = DbQ.get_daily_review(conn, review_date)
+        if review is None:
+            raise KeyError(f"review not found: {review_date}")
+
+        target_trade_date = trade_date or self._guess_next_trade_date(review_date)
+        step1_market = self._json_value(review.get("step1_market"), {})
+        step2_sectors = self._json_value(review.get("step2_sectors"), {})
+
+        market_facts = {
+            "bias": self._review_market_bias(step1_market),
+            "review_date": review_date,
+        }
+        sector_facts = {
+            "main_themes": self._review_main_themes(step2_sectors),
+        }
+        stock_facts = self._review_stock_focus(step2_sectors)
+        judgements = self._review_judgements(step1_market, step2_sectors)
+        selection_summary = str(step2_sectors.get("selection_summary") or "").strip()
+
+        observation = self.create_observation(
+            trade_date=target_trade_date,
+            source_type="review",
+            title=f"{review_date} 复盘转次日草稿",
+            market_facts=market_facts,
+            sector_facts=sector_facts,
+            stock_facts=stock_facts,
+            judgements=judgements,
+            source_refs=[
+                {
+                    "source_type": "review",
+                    "review_date": review_date,
+                    "selection_summary": selection_summary,
+                }
+            ],
+            source_agent="review_workbench",
+            created_by=input_by,
+            input_by=input_by,
+        )
+        draft = self.create_draft(
+            trade_date=target_trade_date,
+            source_observation_ids=[observation["observation_id"]],
+            title=f"{target_trade_date} 次日计划草稿",
+            summary=selection_summary or None,
+            input_by=input_by,
+        )
+        draft = self.update_draft(
+            draft["draft_id"],
+            summary=selection_summary or draft.get("summary"),
+            fact_check_candidates=self._review_fact_candidates(step2_sectors),
+            judgement_check_candidates=self._review_judgement_candidates(step2_sectors),
+            input_by=input_by,
+        )
+        return {
+            "review_date": review_date,
+            "trade_date": target_trade_date,
+            "observation": observation,
+            "draft": draft,
+        }
 
     def get_draft(self, draft_id: str | None = None, trade_date: str | None = None) -> dict[str, Any] | None:
         with get_db(self.db_path) as conn:
@@ -563,6 +631,335 @@ class PlanningService:
         row_map = {row["observation_id"]: dict(row) for row in rows}
         return [row_map[observation_id] for observation_id in normalized_ids if observation_id in row_map]
 
+    def _json_value(self, raw: Any, default: Any) -> Any:
+        if raw is None:
+            return default
+        if isinstance(raw, (dict, list)):
+            return raw
+        if isinstance(raw, str):
+            stripped = raw.strip()
+            if not stripped:
+                return default
+            try:
+                return json.loads(stripped)
+            except json.JSONDecodeError:
+                return default
+        return default
+
+    def _guess_next_trade_date(self, review_date: str) -> str:
+        start = datetime.strptime(review_date, "%Y-%m-%d") + timedelta(days=1)
+        candidate = start
+        known_trade_dates = self._load_future_trade_dates(review_date, limit=15)
+        if known_trade_dates:
+            return known_trade_dates[0]
+        closure_dates = self._load_calendar_closure_dates(start.strftime("%Y-%m-%d"), 15)
+        for _ in range(15):
+            candidate_str = candidate.strftime("%Y-%m-%d")
+            if self._is_trade_date(candidate_str, closure_dates):
+                return candidate_str
+            candidate += timedelta(days=1)
+        return start.strftime("%Y-%m-%d")
+
+    def _load_future_trade_dates(self, review_date: str, limit: int) -> list[str]:
+        with get_db(self.db_path) as conn:
+            migrate(conn)
+            rows = conn.execute(
+                """
+                SELECT date
+                FROM daily_market
+                WHERE date > ?
+                ORDER BY date ASC
+                LIMIT ?
+                """,
+                (review_date, limit),
+            ).fetchall()
+        return [str(row["date"]) for row in rows]
+
+    def _load_calendar_closure_dates(self, date_from: str, days: int) -> set[str]:
+        date_to = (datetime.strptime(date_from, "%Y-%m-%d") + timedelta(days=days)).strftime("%Y-%m-%d")
+        with get_db(self.db_path) as conn:
+            migrate(conn)
+            rows = DbQ.get_calendar_range(conn, date_from, date_to)
+        closures: set[str] = set()
+        for row in rows:
+            haystack = " ".join(
+                str(row.get(key) or "").lower()
+                for key in ("event", "category", "note")
+            )
+            if any(token in haystack for token in ("休市", "闭市", "假期", "节假日", "holiday", "closed")):
+                closures.add(str(row.get("date") or ""))
+        return closures
+
+    def _is_trade_date(self, candidate: str, closure_dates: set[str]) -> bool:
+        if candidate in closure_dates:
+            return False
+        candidate_dt = datetime.strptime(candidate, "%Y-%m-%d")
+        if candidate_dt.weekday() >= 5:
+            return False
+        if self.registry is None:
+            return True
+        result = self.registry.call("is_trade_day", candidate)
+        if result.success and result.data is not None:
+            return bool(result.data)
+        return True
+
+    def _review_market_bias(self, step1_market: dict[str, Any]) -> str:
+        direction = step1_market.get("direction")
+        if isinstance(direction, dict):
+            trend = str(direction.get("trend") or "").strip()
+            if trend:
+                return trend
+        node = step1_market.get("node")
+        if isinstance(node, dict):
+            current = str(node.get("current") or "").strip()
+            if current:
+                return current
+        return "混沌"
+
+    def _review_main_themes(self, step2_sectors: dict[str, Any]) -> list[str]:
+        themes: list[str] = []
+        main_theme = step2_sectors.get("main_theme")
+        if isinstance(main_theme, dict):
+            name = str(main_theme.get("name") or "").strip()
+            if name and name not in themes:
+                themes.append(name)
+        for item in self._review_focus_items(step2_sectors):
+            sector_name = str(item.get("sector_name") or "").strip()
+            if sector_name and sector_name not in themes:
+                themes.append(sector_name)
+        return themes
+
+    def _review_stock_focus(self, step2_sectors: dict[str, Any]) -> list[dict[str, Any]]:
+        stock_focus: list[dict[str, Any]] = [
+            {
+                "subject_type": "market",
+                "subject_code": "",
+                "subject_name": "A股市场",
+                "reason": "复盘转计划的大势锚定",
+            }
+        ]
+        seen: set[tuple[str, str]] = {("market", "A股市场")}
+        selection_summary = str(step2_sectors.get("selection_summary") or "").strip()
+        for item in self._review_focus_items(step2_sectors):
+            sector_name = str(item.get("sector_name") or "").strip()
+            if sector_name:
+                sector_key = ("sector", sector_name)
+                if sector_key not in seen:
+                    stock_focus.append(
+                        {
+                            "subject_type": "sector",
+                            "subject_code": "",
+                            "subject_name": sector_name,
+                            "reason": str(item.get("focus_reason") or selection_summary or "复盘次日聚焦").strip(),
+                        }
+                    )
+                    seen.add(sector_key)
+
+            for stock in self._coerce_string_list(item.get("key_stocks")):
+                stock_key = ("stock", stock)
+                if stock_key in seen:
+                    continue
+                stock_focus.append(
+                    {
+                        "subject_type": "stock",
+                        "subject_code": "",
+                        "subject_name": stock,
+                        "reason": f"{sector_name or '板块'} 核心票",
+                    }
+                )
+                seen.add(stock_key)
+        return stock_focus
+
+    def _review_judgements(
+        self,
+        step1_market: dict[str, Any],
+        step2_sectors: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        judgements: list[dict[str, Any]] = []
+        market_bias = self._review_market_bias(step1_market)
+        if market_bias and market_bias != "混沌":
+            judgements.append(
+                {
+                    "kind": "market_bias",
+                    "market_bias": market_bias,
+                    "text": f"大势偏向：{market_bias}",
+                }
+            )
+
+        projections = step2_sectors.get("projections")
+        if isinstance(projections, list):
+            for item in projections:
+                if not isinstance(item, dict):
+                    continue
+                sector_name = str(item.get("sector_name") or "").strip()
+                if not sector_name:
+                    continue
+                projection_judgement = {
+                    "kind": "sector_projection",
+                    "sector_name": sector_name,
+                    "sector_type": str(item.get("sector_type") or "").strip(),
+                    "big_cycle_stage": str(item.get("big_cycle_stage") or "").strip(),
+                    "connection_bias": str(item.get("connection_bias") or "").strip(),
+                    "market_fit": str(item.get("market_fit") or "").strip(),
+                    "role_expectation": str(item.get("role_expectation") or "").strip(),
+                    "return_flow_view": str(item.get("return_flow_view") or "").strip(),
+                    "fully_priced_risk": str(item.get("fully_priced_risk") or "").strip(),
+                    "logic_aesthetic": str(item.get("logic_aesthetic") or "").strip(),
+                    "judgement_notes": str(item.get("judgement_notes") or "").strip(),
+                    "key_stocks": self._coerce_string_list(item.get("key_stocks")),
+                    "supporting_facts": self._coerce_string_list(item.get("supporting_facts")),
+                }
+                parts = []
+                for key, label in (
+                    ("big_cycle_stage", "阶段"),
+                    ("connection_bias", "连接点"),
+                    ("market_fit", "与大势匹配"),
+                    ("return_flow_view", "回流预期"),
+                    ("fully_priced_risk", "充分演绎风险"),
+                ):
+                    value = str(projection_judgement.get(key) or "").strip()
+                    if value:
+                        parts.append(f"{label}={value}")
+                if projection_judgement["logic_aesthetic"]:
+                    parts.append(f"逻辑审美={projection_judgement['logic_aesthetic']}")
+                if projection_judgement["judgement_notes"]:
+                    parts.append(f"备注={projection_judgement['judgement_notes']}")
+                if parts:
+                    projection_judgement["text"] = f"{sector_name}：" + "，".join(parts)
+                else:
+                    projection_judgement["text"] = sector_name
+                judgements.append(projection_judgement)
+
+        selection_summary = str(step2_sectors.get("selection_summary") or "").strip()
+        if selection_summary:
+            judgements.append(
+                {
+                    "kind": "selection_summary",
+                    "text": f"次日聚焦：{selection_summary}",
+                    "summary": selection_summary,
+                }
+            )
+        return judgements
+
+    def _review_fact_candidates(self, step2_sectors: dict[str, Any]) -> list[dict[str, Any]]:
+        candidates: list[dict[str, Any]] = [
+            {
+                "subject_type": "market",
+                "subject_code": "",
+                "subject_name": "A股市场",
+                "check_type": "market_amount_gte_prev_day",
+                "label": "成交额不低于前一日",
+                "params": {},
+            }
+        ]
+        seen: set[tuple[str, str]] = set()
+        for item in self._review_focus_items(step2_sectors):
+            sector_name = str(item.get("sector_name") or "").strip()
+            if not sector_name or sector_name in seen:
+                continue
+            seen.add(sector_name)
+            candidates.append(
+                {
+                    "subject_type": "sector",
+                    "subject_code": "",
+                    "subject_name": sector_name,
+                    "check_type": "sector_change_positive",
+                    "label": f"{sector_name} 涨幅保持为正",
+                    "params": {"sector_name": sector_name},
+                }
+            )
+            candidates.append(
+                {
+                    "subject_type": "sector",
+                    "subject_code": "",
+                    "subject_name": sector_name,
+                    "check_type": "sector_limit_up_count_gte",
+                    "label": f"{sector_name} 至少有 1 家涨停",
+                    "params": {"sector_name": sector_name, "value": 1},
+                }
+            )
+        return candidates
+
+    def _review_judgement_candidates(self, step2_sectors: dict[str, Any]) -> list[dict[str, Any]]:
+        candidates: list[dict[str, Any]] = []
+        projections = step2_sectors.get("projections")
+        if not isinstance(projections, list):
+            return candidates
+        for item in projections:
+            if not isinstance(item, dict):
+                continue
+            sector_name = str(item.get("sector_name") or "").strip()
+            if not sector_name:
+                continue
+            for key, label in (
+                ("connection_bias", "连接点判断"),
+                ("market_fit", "与大势匹配度"),
+                ("return_flow_view", "回流预期"),
+                ("fully_priced_risk", "充分演绎风险"),
+            ):
+                value = str(item.get(key) or "").strip()
+                if value:
+                    candidates.append(
+                        {
+                            "subject_type": "sector",
+                            "subject_code": "",
+                            "subject_name": sector_name,
+                            "label": f"{sector_name}{label}：{value}",
+                            "notes": "需人工判断",
+                        }
+                    )
+            logic_aesthetic = str(item.get("logic_aesthetic") or "").strip()
+            if logic_aesthetic:
+                candidates.append(
+                    {
+                        "subject_type": "sector",
+                        "subject_code": "",
+                        "subject_name": sector_name,
+                        "label": f"{sector_name}逻辑审美是否成立",
+                        "notes": logic_aesthetic,
+                    }
+                )
+        return candidates
+
+    def _review_focus_items(self, step2_sectors: dict[str, Any]) -> list[dict[str, Any]]:
+        focus_items = step2_sectors.get("next_day_focus")
+        if isinstance(focus_items, list) and focus_items:
+            return [item for item in focus_items if isinstance(item, dict)]
+
+        fallback_items: list[dict[str, Any]] = []
+        projections = step2_sectors.get("projections")
+        if isinstance(projections, list):
+            for item in projections:
+                if not isinstance(item, dict):
+                    continue
+                sector_name = str(item.get("sector_name") or "").strip()
+                if not sector_name:
+                    continue
+                fallback_items.append(
+                    {
+                        "sector_name": sector_name,
+                        "key_stocks": item.get("key_stocks") or [],
+                        "focus_reason": item.get("judgement_notes") or item.get("logic_aesthetic") or "",
+                    }
+                )
+        return fallback_items
+
+    def _coerce_string_list(self, raw: Any) -> list[str]:
+        if isinstance(raw, list):
+            return [str(item).strip() for item in raw if str(item).strip()]
+        if isinstance(raw, str):
+            stripped = raw.strip()
+            if not stripped:
+                return []
+            try:
+                parsed = json.loads(stripped)
+            except json.JSONDecodeError:
+                parsed = None
+            if isinstance(parsed, list):
+                return [str(item).strip() for item in parsed if str(item).strip()]
+            return [part.strip() for part in stripped.replace("、", ",").replace("，", ",").split(",") if part.strip()]
+        return []
+
     def _normalize_observation_ids(self, observation_ids: list[str]) -> list[str]:
         normalized: list[str] = []
         for observation_id in observation_ids:
@@ -887,7 +1284,7 @@ class PlanningService:
         return {"main_themes": main_themes}
 
     def _merge_stock_focus(self, observations: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        seen: set[tuple[str, str]] = set()
+        seen: set[tuple[str, str, str]] = set()
         merged: list[dict[str, Any]] = []
         for obs in observations:
             stock_facts = json.loads(obs["stock_facts_json"] or "[]")
@@ -895,7 +1292,7 @@ class PlanningService:
             for item in rows:
                 if not isinstance(item, dict):
                     continue
-                key = (item.get("subject_type", "stock"), item.get("subject_code", ""))
+                key = self._subject_identity(item)
                 if key in seen:
                     continue
                 seen.add(key)
@@ -927,6 +1324,13 @@ class PlanningService:
                         ambiguities.append(text)
         return assumptions, ambiguities
 
+    def _subject_identity(self, item: dict[str, Any]) -> tuple[str, str, str]:
+        return (
+            str(item.get("subject_type", "stock") or "stock"),
+            str(item.get("subject_code", "") or ""),
+            str(item.get("subject_name", "") or ""),
+        )
+
     def _default_summary(self, market_view: dict[str, Any], sector_view: dict[str, Any]) -> str:
         themes = "、".join(sector_view.get("main_themes", [])) or "暂无明确主线"
         return f"市场偏向{market_view.get('bias', '混沌')}，重点关注 {themes}。"
@@ -954,7 +1358,9 @@ class PlanningService:
             if code:
                 candidates.append(
                     {
+                        "subject_type": item.get("subject_type", "stock"),
                         "subject_code": code,
+                        "subject_name": item.get("subject_name", ""),
                         "check_type": "price_above_ma20",
                         "label": "站稳20日线",
                         "params": {"ts_code": code},
@@ -971,9 +1377,10 @@ class PlanningService:
         fact_candidates: list[dict[str, Any]],
         judgement_candidates: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
-        by_code: dict[str, list[dict[str, Any]]] = {}
+        by_subject: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
         for candidate in fact_candidates:
-            by_code.setdefault(candidate.get("subject_code", ""), []).append(
+            identity = self._candidate_identity(candidate)
+            by_subject.setdefault(identity, []).append(
                 {
                     "check_type": candidate["check_type"],
                     "label": candidate["label"],
@@ -983,14 +1390,14 @@ class PlanningService:
 
         watch_items: list[dict[str, Any]] = []
         for index, item in enumerate(stock_focus):
-            code = item.get("subject_code", "")
+            identity = self._watch_item_identity(item)
             watch_items.append(
                 {
                     "subject_type": item.get("subject_type", "stock"),
-                    "subject_code": code,
+                    "subject_code": item.get("subject_code", ""),
                     "subject_name": item.get("subject_name", ""),
                     "reason": item.get("reason", ""),
-                    "fact_checks": by_code.get(code, []),
+                    "fact_checks": by_subject.get(identity, []),
                     "judgement_checks": judgement_candidates if index == 0 else [],
                     "trigger_conditions": [],
                     "invalidations": [],
@@ -1006,12 +1413,16 @@ class PlanningService:
         if not watch_items:
             return watch_items
 
-        by_code: dict[str, list[dict[str, Any]]] = {}
+        by_subject: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+        general_fact_candidates: list[dict[str, Any]] = []
         for candidate in fact_candidates:
-            subject_code = candidate.get("subject_code", "")
-            if not subject_code:
-                continue
-            by_code.setdefault(subject_code, []).append(
+            identity = self._candidate_identity(candidate)
+            target = (
+                by_subject.setdefault(identity, [])
+                if identity != ("stock", "", "")
+                else general_fact_candidates
+            )
+            target.append(
                 {
                     "check_type": candidate["check_type"],
                     "label": candidate["label"],
@@ -1019,24 +1430,47 @@ class PlanningService:
                 }
             )
 
+        by_judgement_subject: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+        general_judgement_candidates: list[dict[str, Any]] = []
+        for candidate in judgement_candidates:
+            identity = self._candidate_identity(candidate)
+            target = (
+                by_judgement_subject.setdefault(identity, [])
+                if identity != ("stock", "", "")
+                else general_judgement_candidates
+            )
+            target.append(candidate)
+
         merged_watch_items: list[dict[str, Any]] = []
         for index, item in enumerate(watch_items):
             merged_item = dict(item)
             existing_fact_checks = merged_item.get("fact_checks") or []
-            subject_code = merged_item.get("subject_code", "")
-            for candidate in by_code.get(subject_code, []):
-                duplicate = any(
-                    existing.get("check_type") == candidate["check_type"]
-                    and existing.get("params", {}) == candidate.get("params", {})
-                    for existing in existing_fact_checks
-                )
-                if not duplicate:
-                    existing_fact_checks.append(candidate)
+            watch_id = self._watch_item_identity(merged_item)
+            matched_fact_candidates: list[dict[str, Any]] = []
+            for cand_id, pool in by_subject.items():
+                if self._identity_matches(watch_id, cand_id):
+                    matched_fact_candidates.extend(pool)
+            if index == 0:
+                matched_fact_candidates.extend(general_fact_candidates)
+            for candidate in matched_fact_candidates:
+                    duplicate = any(
+                        existing.get("check_type") == candidate["check_type"]
+                        and existing.get("params", {}) == candidate.get("params", {})
+                        for existing in existing_fact_checks
+                    )
+                    if not duplicate:
+                        existing_fact_checks.append(candidate)
             merged_item["fact_checks"] = existing_fact_checks
 
             existing_judgement_checks = merged_item.get("judgement_checks") or []
+            matched_judgement_candidates: list[dict[str, Any]] = []
+            for cand_id, pool in by_judgement_subject.items():
+                if self._identity_matches(watch_id, cand_id):
+                    matched_judgement_candidates.extend(pool)
             if index == 0:
-                for candidate in judgement_candidates:
+                matched_judgement_candidates.extend(general_judgement_candidates)
+            for pool in [matched_judgement_candidates]:
+                for candidate in pool:
                     duplicate = any(
                         existing.get("label") == candidate.get("label")
                         and existing.get("notes", "") == candidate.get("notes", "")
@@ -1052,3 +1486,25 @@ class PlanningService:
             merged_item["judgement_checks"] = existing_judgement_checks
             merged_watch_items.append(merged_item)
         return merged_watch_items
+
+    def _watch_item_identity(self, item: dict[str, Any]) -> tuple[str, str, str]:
+        return (
+            str(item.get("subject_type") or "stock"),
+            str(item.get("subject_code") or ""),
+            str(item.get("subject_name") or ""),
+        )
+
+    def _candidate_identity(self, candidate: dict[str, Any]) -> tuple[str, str, str]:
+        return (
+            str(candidate.get("subject_type") or "stock"),
+            str(candidate.get("subject_code") or ""),
+            str(candidate.get("subject_name") or ""),
+        )
+
+    def _identity_matches(self, watch_identity: tuple[str, str, str], candidate_identity: tuple[str, str, str]) -> bool:
+        if watch_identity == candidate_identity:
+            return True
+        if watch_identity[0] == candidate_identity[0] and watch_identity[1] and watch_identity[1] == candidate_identity[1]:
+            if not candidate_identity[2] or not watch_identity[2]:
+                return True
+        return False

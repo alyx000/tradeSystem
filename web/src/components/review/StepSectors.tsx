@@ -2,7 +2,16 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { type StepProps, Section, Row, PrefillBanner, SelectField, TextField, NumberField, TagsField, TextareaField, DynamicList, TeacherNotesPanel } from './widgets'
 import { get, set } from './formState'
-import type { IndustryInfoItem, MainThemeItem, SectorIndustryPrefill, SectorRhythmItem, TeacherNote } from '../../lib/types'
+import type {
+  IndustryInfoItem,
+  MainThemeItem,
+  ReviewNextDayFocus,
+  ReviewProjectionCandidate,
+  ReviewSectorProjection,
+  SectorIndustryPrefill,
+  SectorRhythmItem,
+  TeacherNote,
+} from '../../lib/types'
 
 // 行业信息首屏展示条数
 const INDUSTRY_INFO_INITIAL_COUNT = 3
@@ -23,6 +32,24 @@ const CONFIDENCE_COLOR: Record<string, string> = {
   '高': 'text-green-600',
   '中': 'text-yellow-600',
   '低': 'text-gray-400',
+}
+
+const SOURCE_TAG_LABEL: Record<string, string> = {
+  main_theme: '活跃主线',
+  rhythm: '节奏信号',
+  strongest: '最强榜',
+  moneyflow: '资金流',
+  teacher_note: '老师观点',
+  industry_info: '行业信息',
+}
+
+const SOURCE_TAG_CLASS: Record<string, string> = {
+  main_theme: 'bg-blue-50 text-blue-700',
+  rhythm: 'bg-indigo-50 text-indigo-700',
+  strongest: 'bg-orange-50 text-orange-700',
+  moneyflow: 'bg-emerald-50 text-emerald-700',
+  teacher_note: 'bg-amber-50 text-amber-700',
+  industry_info: 'bg-slate-100 text-slate-700',
 }
 
 function phaseClass(phase: string) {
@@ -77,6 +104,44 @@ const RECOGNITION = [
   { value: '中', label: '中' },
   { value: '低', label: '低' },
 ]
+const SECTOR_TYPE = [
+  { value: 'industry_logic', label: '行业逻辑' },
+  { value: 'stage_reason', label: '阶段归因' },
+  { value: 'sentiment_core', label: '情绪核心' },
+]
+const BIG_CYCLE_STAGE = [
+  { value: '将成龙', label: '将成龙' },
+  { value: '主升', label: '主升' },
+  { value: '震荡', label: '震荡' },
+  { value: '二波', label: '二波' },
+  { value: '衰退', label: '衰退' },
+]
+const CONNECTION_BIAS = [
+  { value: '加强', label: '加强' },
+  { value: '减弱', label: '减弱' },
+  { value: '不清楚', label: '不清楚' },
+]
+const MARKET_FIT = [
+  { value: '匹配大势节奏', label: '匹配大势节奏' },
+  { value: '一般', label: '一般' },
+  { value: '不匹配', label: '不匹配' },
+]
+const ROLE_EXPECTATION = [
+  { value: '趋势主线', label: '趋势主线' },
+  { value: '当日最强', label: '当日最强' },
+  { value: '轮动', label: '轮动' },
+  { value: '活跃震荡', label: '活跃震荡' },
+]
+const RETURN_FLOW_VIEW = [
+  { value: '预期回流', label: '预期回流' },
+  { value: '仅跟踪', label: '仅跟踪' },
+  { value: '放弃', label: '放弃' },
+]
+const FULLY_PRICED_RISK = [
+  { value: '低', label: '低' },
+  { value: '中', label: '中' },
+  { value: '高', label: '高' },
+]
 
 interface StrongestSectorItem {
   name: string
@@ -104,12 +169,15 @@ export default function StepSectors({ data, onChange, prefill }: StepProps) {
   const [industryInfoExpanded, setIndustryInfoExpanded] = useState(false)
   const strongest = (d.strongest as StrongestSectorItem[] | undefined) || []
   const unusual = (d.unusual as UnusualSectorItem[] | undefined) || []
+  const projections = (d.projections as ReviewSectorProjection[] | undefined) || []
+  const nextDayFocus = (d.next_day_focus as ReviewNextDayFocus[] | undefined) || []
 
   const date = prefill?.date as string | undefined
   const sectorIndustry: SectorIndustryPrefill | undefined = prefill?.market?.sector_industry
   const sectorRhythm: SectorRhythmItem[] | undefined = prefill?.market?.sector_rhythm_industry
   const industryInfoList: IndustryInfoItem[] = prefill?.industry_info || []
   const sectorSignals = prefill?.review_signals?.sectors
+  const projectionCandidates: ReviewProjectionCandidate[] = sectorSignals?.projection_candidates || []
 
   const g = <T = string,>(p: string, fb?: T) => {
     const fallback = (fb ?? '') as T
@@ -141,9 +209,89 @@ export default function StepSectors({ data, onChange, prefill }: StepProps) {
   const fmtYi = (v: number | null | undefined) => (v != null ? `${v >= 0 ? '+' : ''}${v.toFixed(2)}亿` : '-')
   const fmtPct = (v: number | null | undefined) => (v != null ? `${v >= 0 ? '+' : ''}${v.toFixed(2)}%` : '-')
 
+  const addProjectionFromCandidate = (candidate: ReviewProjectionCandidate) => {
+    const exists = projections.some((item) => item.sector_name === candidate.sector_name)
+    if (exists) return
+    onChange({
+      ...d,
+      projections: [
+        ...projections,
+        {
+          sector_name: candidate.sector_name,
+          sector_type: '',
+          big_cycle_stage: candidate.facts?.phase_hint || '',
+          connection_bias: '',
+          market_fit: '',
+          role_expectation: '',
+          return_flow_view: '',
+          fully_priced_risk: '',
+          key_stocks: candidate.key_stocks || [],
+          supporting_facts: candidate.evidence_text ? [candidate.evidence_text] : [],
+          logic_aesthetic: '',
+          judgement_notes: '',
+        },
+      ],
+    })
+  }
+
   return (
     <div className="space-y-6">
       <TeacherNotesPanel notes={teacherNotes} fields={['sectors', 'key_points']} />
+      {projectionCandidates.length > 0 && (
+        <Section title="系统预填候选">
+          <PrefillBanner>
+            <div className="text-xs text-gray-500 mb-3">
+              系统已根据主线、最强板块、资金流、节奏、老师观点和行业信息，预先挑出值得推演的候选板块。
+            </div>
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
+              {projectionCandidates.map((candidate) => (
+                <div key={candidate.sector_name} className="rounded-lg border border-amber-200 bg-white p-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="text-sm font-semibold text-gray-800">{candidate.sector_name}</div>
+                      <div className="mt-1 flex flex-wrap gap-1">
+                        {(candidate.source_tags || []).map((tag) => (
+                          <span
+                            key={`${candidate.sector_name}-${tag}`}
+                            className={`rounded px-1.5 py-0.5 text-xs font-medium ${SOURCE_TAG_CLASS[tag] || 'bg-gray-100 text-gray-700'}`}
+                          >
+                            {SOURCE_TAG_LABEL[tag] || tag}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => addProjectionFromCandidate(candidate)}
+                      className="shrink-0 rounded border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700 hover:bg-blue-100"
+                    >
+                      加入推演卡
+                    </button>
+                  </div>
+                  <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-gray-600">
+                    <div>阶段提示：{candidate.facts?.phase_hint || '-'}</div>
+                    <div>持续天数：{candidate.facts?.duration_days ?? '-'}</div>
+                    <div>涨跌幅：{fmtPct(candidate.facts?.pct_chg ?? null)}</div>
+                    <div>涨停家数：{candidate.facts?.limit_up_count ?? '-'}</div>
+                    <div>资金流：{fmtYi(candidate.facts?.net_amount_yi ?? null)}</div>
+                    <div>情绪龙头：{candidate.facts?.emotion_leader || '-'}</div>
+                    <div>容量中军：{candidate.facts?.capacity_leader || '-'}</div>
+                  </div>
+                  {candidate.key_stocks && candidate.key_stocks.length > 0 && (
+                    <div className="mt-2 text-xs text-gray-600">
+                      核心票：{candidate.key_stocks.join('、')}
+                    </div>
+                  )}
+                  {candidate.evidence_text && (
+                    <p className="mt-2 text-xs leading-relaxed text-gray-600">{candidate.evidence_text}</p>
+                  )}
+                </div>
+              ))}
+            </div>
+          </PrefillBanner>
+        </Section>
+      )}
+
       {themes.length > 0 && (
         <PrefillBanner>
           <div className="text-xs text-gray-500 mb-1">当前活跃主线（{themes.length} 条）</div>
@@ -180,6 +328,50 @@ export default function StepSectors({ data, onChange, prefill }: StepProps) {
           <SelectField label="中军强度" value={g('market_type.mid_cap_strength')} onChange={v => s('market_type.mid_cap_strength', v)} options={STRENGTH} />
         </Row>
       </Section>
+
+      <DynamicList
+        title="板块推演卡"
+        items={projections}
+        onChange={v => onChange({ ...d, projections: v })}
+        defaultItem={{
+          sector_name: '',
+          sector_type: '',
+          big_cycle_stage: '',
+          connection_bias: '',
+          market_fit: '',
+          role_expectation: '',
+          return_flow_view: '',
+          fully_priced_risk: '',
+          key_stocks: [],
+          supporting_facts: [],
+          logic_aesthetic: '',
+          judgement_notes: '',
+        }}
+        renderItem={(item, upd) => (
+          <div className="space-y-3">
+            <Row cols={3}>
+              <TextField label="板块名称" value={item.sector_name || ''} onChange={v => upd('sector_name', v)} />
+              <SelectField label="板块类型" value={item.sector_type || ''} onChange={v => upd('sector_type', v)} options={SECTOR_TYPE} />
+              <SelectField label="所处阶段" value={item.big_cycle_stage || ''} onChange={v => upd('big_cycle_stage', v)} options={BIG_CYCLE_STAGE} />
+            </Row>
+            <Row cols={4}>
+              <SelectField label="连接点判断" value={item.connection_bias || ''} onChange={v => upd('connection_bias', v)} options={CONNECTION_BIAS} />
+              <SelectField label="与大势匹配度" value={item.market_fit || ''} onChange={v => upd('market_fit', v)} options={MARKET_FIT} />
+              <SelectField label="角色预期" value={item.role_expectation || ''} onChange={v => upd('role_expectation', v)} options={ROLE_EXPECTATION} />
+              <SelectField label="回流预期" value={item.return_flow_view || ''} onChange={v => upd('return_flow_view', v)} options={RETURN_FLOW_VIEW} />
+            </Row>
+            <Row cols={3}>
+              <SelectField label="充分演绎风险" value={item.fully_priced_risk || ''} onChange={v => upd('fully_priced_risk', v)} options={FULLY_PRICED_RISK} />
+              <TagsField label="核心票" value={item.key_stocks || []} onChange={v => upd('key_stocks', v)} />
+              <TagsField label="支撑事实" value={item.supporting_facts || []} onChange={v => upd('supporting_facts', v)} />
+            </Row>
+            <Row cols={2}>
+              <TextareaField label="逻辑审美" value={item.logic_aesthetic || ''} onChange={v => upd('logic_aesthetic', v)} placeholder="增量、落地、容量、谁主导变化" rows={2} />
+              <TextareaField label="主观判断备注" value={item.judgement_notes || ''} onChange={v => upd('judgement_notes', v)} placeholder="回流、结束风险、预期差等" rows={2} />
+            </Row>
+          </div>
+        )}
+      />
 
       {(sectorSignals?.strongest_rows?.length ?? 0) > 0 && (
         (() => {
@@ -230,13 +422,13 @@ export default function StepSectors({ data, onChange, prefill }: StepProps) {
                     <div key={`${row.name}-${row.lead_stock ?? 'na'}`} className="rounded border border-gray-200 bg-white px-3 py-2">
                       <div className="flex items-center justify-between gap-2">
                         <span className="text-xs font-medium text-gray-700">{row.name}</span>
-                        <span className={`text-xs font-medium ${(row.net_amount ?? 0) >= 0 ? 'text-red-600' : 'text-green-600'}`}>
-                          {fmtYi(row.net_amount != null ? row.net_amount / 1e8 : null)}
+                        <span className={`text-xs font-medium ${(row.net_amount_yi ?? row.net_amount ?? 0) >= 0 ? 'text-red-600' : 'text-green-600'}`}>
+                          {fmtYi(row.net_amount_yi ?? (row.net_amount != null ? row.net_amount / 1e8 : null))}
                         </span>
                       </div>
                       <div className="mt-0.5 flex items-center justify-between gap-2 text-xs text-gray-500">
                         <span>涨跌幅 {fmtPct(row.pct_change)}</span>
-                        <span>{row.lead_stock ? `领涨股：${row.lead_stock}` : '领涨股：-'}</span>
+                        <span>{row.lead_stock ? `资金流字段股：${row.lead_stock}` : '资金流字段股：-'}</span>
                       </div>
                     </div>
                   ))}
@@ -260,7 +452,7 @@ export default function StepSectors({ data, onChange, prefill }: StepProps) {
                         <span>涨跌幅 {fmtPct(row.pct_change)}</span>
                       </div>
                       <div className="mt-0.5 text-xs text-gray-500">
-                        {row.lead_stock ? `领涨股：${row.lead_stock}` : '领涨股：-'}
+                        {row.lead_stock ? `资金流字段股：${row.lead_stock}` : '资金流字段股：-'}
                       </div>
                     </div>
                   ))}
@@ -312,6 +504,33 @@ export default function StepSectors({ data, onChange, prefill }: StepProps) {
           </div>
         )}
       />
+
+      <Section title="次日聚焦结论">
+        <div className="space-y-4">
+          <TextareaField
+            label="最值得跟踪的板块"
+            value={g('selection_summary')}
+            onChange={v => s('selection_summary', v)}
+            placeholder="一句话总结次日最值得跟踪的板块及原因"
+            rows={2}
+          />
+          <DynamicList
+            title="次日关注核心票"
+            items={nextDayFocus}
+            onChange={v => onChange({ ...d, next_day_focus: v })}
+            defaultItem={{ sector_name: '', key_stocks: [], focus_reason: '' }}
+            renderItem={(item, upd) => (
+              <div className="space-y-3">
+                <Row cols={3}>
+                  <TextField label="板块" value={item.sector_name || ''} onChange={v => upd('sector_name', v)} />
+                  <TagsField label="核心票" value={item.key_stocks || []} onChange={v => upd('key_stocks', v)} />
+                  <TextField label="关注原因" value={item.focus_reason || ''} onChange={v => upd('focus_reason', v)} />
+                </Row>
+              </div>
+            )}
+          />
+        </div>
+      </Section>
 
       {/* ── 行业排行（来自盘后数据） ── */}
       {sectorIndustry && ((sectorIndustry.data?.length ?? 0) > 0 || (sectorIndustry.bottom?.length ?? 0) > 0) && (

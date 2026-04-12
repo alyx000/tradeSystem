@@ -110,6 +110,25 @@ const prefill: ReviewPrefillData = {
       dc_moneyflow_rows: [
         { name: '可控核聚变', content_type: '概念', net_amount_yi: 2.56, pct_change: 4.3, lead_stock: '合锻智能' },
       ],
+      projection_candidates: [
+        {
+          sector_name: 'AI算力',
+          source_tags: ['main_theme', 'moneyflow', 'teacher_note'],
+          facts: {
+            phase_hint: '主升',
+            duration_days: 5,
+            pct_chg: 5.2,
+            limit_up_count: 3,
+            emotion_leader: '高标A',
+            capacity_leader: '中军B',
+            lead_stock: '高标A',
+            net_amount_yi: 1.88,
+            teacher_note_refs: [{ note_id: 1, teacher_name: '小鲍', title: '板块备注' }],
+          },
+          key_stocks: ['高标A', '中军B'],
+          evidence_text: '活跃主线，资金继续流入，老师观点仍强调主线未切换。',
+        },
+      ],
     },
     emotion: {
       ladder_rows: [],
@@ -133,6 +152,11 @@ describe('StepSectors', () => {
     expect(screen.getByText('DC 板块资金流')).toBeInTheDocument()
     expect(screen.getByText('服务器链订单继续强化')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: /完整市场数据/i })).toHaveAttribute('href', '/market/2026-04-03')
+    expect(screen.getByText('系统预填候选')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '加入推演卡' })).toBeInTheDocument()
+    expect(screen.getByText('情绪龙头：高标A')).toBeInTheDocument()
+    expect(screen.getByText('容量中军：中军B')).toBeInTheDocument()
+    expect(screen.getByText('资金流字段股：高标A')).toBeInTheDocument()
   })
 
   it('emits nested payload when user edits main theme name', () => {
@@ -143,5 +167,21 @@ describe('StepSectors', () => {
     expect(onChange).toHaveBeenCalledWith({
       main_theme: { name: '电力' },
     })
+  })
+
+  it('adds a projection card from candidate', () => {
+    const { onChange } = renderStep({}, prefill)
+
+    fireEvent.click(screen.getByRole('button', { name: '加入推演卡' }))
+
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({
+      projections: [
+        expect.objectContaining({
+          sector_name: 'AI算力',
+          big_cycle_stage: '主升',
+          key_stocks: ['高标A', '中军B'],
+        }),
+      ],
+    }))
   })
 })

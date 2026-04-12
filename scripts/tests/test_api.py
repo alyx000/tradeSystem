@@ -308,6 +308,58 @@ class TestReview:
         assert "财报临近" in labels
         assert "ST" in labels
         assert "临近止盈" in labels
+        assert "info_signals" in item
+        assert item["info_signals"]["investor_qa"] == []
+        assert item["info_signals"]["research_reports"] == []
+        assert item["info_signals"]["news"] == []
+
+    def test_prefill_holding_signals_includes_info_signals_from_envelope(self, client, db_path):
+        conn = get_connection(db_path)
+        Q.upsert_daily_market(conn, {
+            "date": "2026-04-05",
+            "sh_index_close": 3210.0,
+            "total_amount": 12000.0,
+            "raw_data": json.dumps({
+                "date": "2026-04-05",
+                "holdings_data": [
+                    {"code": "300750.SZ", "name": "宁德时代", "close": 195.0, "pnl_pct": 8.33},
+                ],
+                "holdings_info": {
+                    "300750.SZ": {
+                        "name": "宁德时代",
+                        "investor_qa": [
+                            {"question": "公司产能规划如何", "answer": "已规划新增 100GWh", "date": "2026-04-04"},
+                            {"question": "海外市场进展", "answer": "欧洲工厂已投产", "date": "2026-04-03"},
+                        ],
+                        "research_reports": [
+                            {"institution": "中金", "rating": "买入", "target_price": 220, "date": "2026-04-04"},
+                        ],
+                        "news": [
+                            {"title": "宁德时代发布新一代电池", "time": "2026-04-05 10:30"},
+                            {"title": "宁德与车企签署供货协议", "time": "2026-04-04 16:00"},
+                        ],
+                    },
+                },
+            }, ensure_ascii=False),
+        })
+        Q.upsert_holding(
+            conn, stock_code="300750.SZ", stock_name="宁德时代",
+            entry_price=180.0, sector="电池", status="active",
+        )
+        conn.commit()
+        conn.close()
+
+        r = client.get("/api/review/2026-04-05/prefill")
+        assert r.status_code == 200
+        item = r.json()["holding_signals"]["items"][0]
+        info = item["info_signals"]
+        assert len(info["investor_qa"]) == 2
+        assert info["investor_qa"][0]["question"] == "公司产能规划如何"
+        assert len(info["research_reports"]) == 1
+        assert info["research_reports"][0]["institution"] == "中金"
+        assert info["research_reports"][0]["target_price"] == 220
+        assert len(info["news"]) == 2
+        assert "新一代电池" in info["news"][0]["title"]
 
     def test_prefill_holding_signals_gracefully_degrades_when_sources_missing(self, client, db_path):
         conn = get_connection(db_path)
@@ -334,6 +386,10 @@ class TestReview:
         assert item["event_signals"]["share_float_upcoming"] == []
         assert item["theme_signals"]["is_main_theme"] is False
         assert item["risk_flags"] == []
+        assert "info_signals" in item
+        assert item["info_signals"]["investor_qa"] == []
+        assert item["info_signals"]["research_reports"] == []
+        assert item["info_signals"]["news"] == []
 
     def test_prefill_holding_signals_include_stop_loss_and_target_alerts(self, client, db_path):
         conn = get_connection(db_path)
@@ -479,6 +535,110 @@ class TestReview:
         r = client.get("/api/review/2026-04-01")
         data = r.json()
         assert data["step2_sectors"] is None
+
+    def test_review_to_draft_generates_review_observation_and_trade_draft(self, client):
+        body = {
+            "step1_market": {
+                "direction": {"trend": "主升"},
+            },
+            "step2_sectors": {
+                "selection_summary": "AI算力仍是最值得跟踪的方向，明天重点看分歧后的回流确认。",
+                "projections": [
+                    {
+                        "sector_name": "AI算力",
+                        "big_cycle_stage": "主升",
+                        "connection_bias": "加强",
+                        "market_fit": "匹配大势节奏",
+                        "return_flow_view": "预期回流",
+                        "fully_priced_risk": "中",
+                        "logic_aesthetic": "增量订单明确，容量足够大。",
+                        "judgement_notes": "需要确认是否能承接分歧。",
+                        "key_stocks": ["高标A", "中军B"],
+                        "supporting_facts": ["活跃主线", "资金回流"],
+                    },
+                    {
+                        "sector_name": "机器人",
+                        "big_cycle_stage": "震荡",
+                        "connection_bias": "不清楚",
+                        "market_fit": "一般",
+                        "return_flow_view": "仅跟踪",
+                        "fully_priced_risk": "低",
+                        "logic_aesthetic": "新催化待验证。",
+                        "judgement_notes": "只跟踪支线弹性。",
+                        "key_stocks": ["弹性C"],
+                        "supporting_facts": ["板块有异动"],
+                    }
+                ],
+                "next_day_focus": [
+                    {
+                        "sector_name": "AI算力",
+                        "key_stocks": ["高标A", "中军B"],
+                        "focus_reason": "分歧后的回流确认",
+                    },
+                    {
+                        "sector_name": "机器人",
+                        "key_stocks": ["弹性C"],
+                        "focus_reason": "支线异动观察",
+                    }
+                ],
+            },
+        }
+        r = client.put("/api/review/2026-04-03", json=body)
+        assert r.status_code == 200
+
+        r = client.post("/api/review/2026-04-03/to-draft", json={"input_by": "pytest"})
+        assert r.status_code == 200
+        payload = r.json()
+        assert payload["review_date"] == "2026-04-03"
+        assert payload["trade_date"] == "2026-04-06"
+        assert payload["observation"]["source_type"] == "review"
+        assert payload["draft"]["trade_date"] == "2026-04-06"
+
+        sector_view = json.loads(payload["draft"]["sector_view_json"])
+        assert sector_view["main_themes"] == ["AI算力", "机器人"]
+        stock_focus = json.loads(payload["draft"]["stock_focus_json"])
+        assert any(item["subject_type"] == "sector" and item["subject_name"] == "AI算力" for item in stock_focus)
+        assert any(item["subject_type"] == "sector" and item["subject_name"] == "机器人" for item in stock_focus)
+        assert any(item["subject_type"] == "stock" and item["subject_name"] == "高标A" for item in stock_focus)
+        assert any(item["subject_type"] == "stock" and item["subject_name"] == "弹性C" for item in stock_focus)
+
+        fact_candidates = json.loads(payload["draft"]["fact_check_candidates_json"])
+        assert any(item["check_type"] == "market_amount_gte_prev_day" for item in fact_candidates)
+        assert any(item["check_type"] == "sector_change_positive" and item["subject_name"] == "AI算力" for item in fact_candidates)
+        assert any(item["check_type"] == "sector_change_positive" and item["subject_name"] == "机器人" for item in fact_candidates)
+
+        judgement_candidates = json.loads(payload["draft"]["judgement_check_candidates_json"])
+        labels = {item["label"] for item in judgement_candidates}
+        assert "AI算力连接点判断：加强" in labels
+        assert "AI算力逻辑审美是否成立" in labels
+        assert "机器人连接点判断：不清楚" in labels
+
+        observation_judgements = json.loads(payload["observation"]["judgements_json"])
+        ai_projection = next(
+            item for item in observation_judgements
+            if item.get("kind") == "sector_projection" and item.get("sector_name") == "AI算力"
+        )
+        assert ai_projection["big_cycle_stage"] == "主升"
+        assert ai_projection["connection_bias"] == "加强"
+        assert ai_projection["market_fit"] == "匹配大势节奏"
+        assert ai_projection["supporting_facts"] == ["活跃主线", "资金回流"]
+
+    def test_review_to_draft_skips_calendar_closure_dates(self, client, db_path):
+        body = {
+            "step1_market": {"direction": {"trend": "震荡"}},
+            "step2_sectors": {"selection_summary": "节后再看主线。"},
+        }
+        r = client.put("/api/review/2026-04-03", json=body)
+        assert r.status_code == 200
+
+        conn = get_connection(db_path)
+        Q.insert_calendar_event(conn, date="2026-04-06", event="清明休市", category="假期")
+        conn.commit()
+        conn.close()
+
+        r = client.post("/api/review/2026-04-03/to-draft", json={"input_by": "pytest"})
+        assert r.status_code == 200
+        assert r.json()["trade_date"] == "2026-04-07"
 
     def test_invalid_date(self, client):
         r = client.get("/api/review/not-a-date")
@@ -1457,6 +1617,8 @@ class TestPlanningAndKnowledgeAPI:
         assert item["theme_signals"]["is_main_theme"] is True
         assert item["technical_signals"]["above_ma10"] is True
         assert item["technical_signals"]["turnover_status"] == "活跃"
+        assert "info_signals" in item
+        assert item["info_signals"]["investor_qa"] == []
 
     def test_holding_tasks_api(self, client, db_path):
         conn = get_connection(db_path)
@@ -1947,6 +2109,183 @@ class TestEnrichMarketRow:
         assert signals["sectors"]["dc_moneyflow_rows"][0]["lead_stock"] == "合锻智能"
         assert signals["emotion"]["ladder_rows"][0]["name"] == "高标A"
 
+    def test_prefill_contains_projection_candidates(self, client, db_path):
+        self._seed(db_path)
+        conn = get_connection(db_path)
+        tid = Q.get_or_create_teacher(conn, "小鲍")
+        Q.insert_teacher_note(
+            conn,
+            teacher_id=tid,
+            date="2026-05-20",
+            title="继续看 AI 算力",
+            sectors="AI算力",
+            key_points="主线没有切换，重点看回流。",
+            raw_content="AI算力 分歧后仍有回流预期。",
+        )
+        Q.insert_industry_info(
+            conn,
+            date="2026-05-20",
+            sector_name="AI算力",
+            content="服务器链订单继续强化",
+            info_type="analysis",
+        )
+        Q.upsert_main_theme(
+            conn,
+            {
+                "date": "2026-05-20",
+                "theme_name": "AI算力",
+                "status": "active",
+                "phase": "主升",
+                "duration_days": 4,
+                "key_stocks": ["高标A", "中军B"],
+            },
+        )
+        conn.commit()
+        conn.close()
+
+        r = client.get("/api/review/2026-05-20/prefill")
+        assert r.status_code == 200
+        data = r.json()
+        candidates = data["review_signals"]["sectors"]["projection_candidates"]
+        assert any(item["sector_name"] == "AI算力" for item in candidates)
+        ai = next(item for item in candidates if item["sector_name"] == "AI算力")
+        assert "main_theme" in ai["source_tags"]
+        assert "teacher_note" in ai["source_tags"]
+        assert ai["facts"]["phase_hint"] == "主升"
+        assert ai["facts"]["emotion_leader"] == "高标A"
+        assert ai["facts"]["capacity_leader"] == "高标A"
+        assert ai["facts"]["lead_stock"] == "高标A"
+        assert "服务器链订单继续强化" in ai["evidence_text"]
+
+    def test_projection_candidates_split_emotion_and_capacity_leaders(self, client, db_path):
+        self._seed(
+            db_path,
+            raw_data={
+                "sector_moneyflow_ths": {
+                    "data": [
+                        {"industry": "AI算力", "net_amount": 15.0, "pct_change": 4.8, "lead_stock": "弱源股"},
+                    ],
+                },
+                "sector_rhythm_industry": [
+                    {"name": "AI算力", "phase": "主升", "change_today": 4.8, "top_stock_today": "高标A"},
+                ],
+                "sector_industry": {
+                    "data": [
+                        {"name": "AI算力", "change_pct": 4.8, "top_stock": "高标A"},
+                    ],
+                },
+                "top_volume_stocks": [
+                    {"rank": 3, "name": "中军B", "code": "300002.SZ", "amount_billion": 188.0},
+                ],
+                "limit_up": {
+                    "stocks": [
+                        {"name": "高标A", "code": "300001.SZ", "limit_times": 3, "amount_billion": 62.0},
+                        {"name": "弱源股", "code": "300003.SZ", "limit_times": 1, "amount_billion": 21.0},
+                    ],
+                },
+            },
+        )
+        conn = get_connection(db_path)
+        Q.upsert_main_theme(
+            conn,
+            {
+                "date": "2026-05-20",
+                "theme_name": "AI算力",
+                "status": "active",
+                "phase": "主升",
+                "duration_days": 4,
+                "key_stocks": ["高标A", "中军B"],
+            },
+        )
+        conn.commit()
+        conn.close()
+
+        r = client.get("/api/review/2026-05-20/prefill")
+        assert r.status_code == 200
+        data = r.json()
+        ai = next(
+            item
+            for item in data["review_signals"]["sectors"]["projection_candidates"]
+            if item["sector_name"] == "AI算力"
+        )
+        assert ai["facts"]["emotion_leader"] == "高标A"
+        assert ai["facts"]["capacity_leader"] == "中军B"
+        assert ai["facts"]["lead_stock"] == "中军B"
+        assert "弱源股" not in f"{ai['facts']['emotion_leader']}{ai['facts']['capacity_leader']}"
+
+    def test_projection_candidates_keep_moneyflow_source_stock_out_of_lead_stock(self, client, db_path):
+        self._seed(
+            db_path,
+            raw_data={
+                "sector_moneyflow_ths": {
+                    "data": [
+                        {"industry": "电池", "net_amount": 77.0, "pct_change": 5.55, "lead_stock": "力佳科技"},
+                    ],
+                },
+                "sector_rhythm_industry": [
+                    {"name": "电池", "phase": "发酵", "change_today": 5.55, "top_stock_today": ""},
+                ],
+                "sector_industry": {
+                    "data": [
+                        {"name": "电池", "change_pct": 5.55, "top_stock": ""},
+                    ],
+                },
+            },
+        )
+
+        r = client.get("/api/review/2026-05-20/prefill")
+        assert r.status_code == 200
+        data = r.json()
+        ths_row = data["review_signals"]["sectors"]["ths_moneyflow_rows"][0]
+        assert ths_row["lead_stock"] == "力佳科技"
+        assert ths_row["net_amount_yi"] == 77.0
+
+        battery = next(
+            item
+            for item in data["review_signals"]["sectors"]["projection_candidates"]
+            if item["sector_name"] == "电池"
+        )
+        assert battery["facts"]["emotion_leader"] is None
+        assert battery["facts"]["capacity_leader"] is None
+        assert battery["facts"]["lead_stock"] is None
+        assert battery["facts"]["net_amount_yi"] == 77.0
+        assert "力佳科技" not in battery["evidence_text"]
+
+    def test_projection_candidates_filter_out_st_and_bj_candidates(self, client, db_path):
+        self._seed(
+            db_path,
+            raw_data={
+                "sector_moneyflow_ths": {
+                    "data": [
+                        {"industry": "机器人", "net_amount": 12.0, "pct_change": 3.1, "lead_stock": "*ST机器"},
+                    ],
+                },
+                "sector_moneyflow_dc": {
+                    "data": [
+                        {"name": "机器人", "content_type": "概念", "net_amount": 6.0e8, "pct_change": 3.0, "buy_sm_amount_stock": "北交龙头"},
+                    ],
+                },
+                "limit_up": {
+                    "stocks": [
+                        {"name": "*ST机器", "code": "000004.SZ", "limit_times": 1, "amount_billion": 8.0},
+                        {"name": "北交龙头", "code": "920001.BJ", "limit_times": 2, "amount_billion": 18.0},
+                    ],
+                },
+            },
+        )
+
+        r = client.get("/api/review/2026-05-20/prefill")
+        assert r.status_code == 200
+        data = r.json()
+        robot = next(
+            item
+            for item in data["review_signals"]["sectors"]["projection_candidates"]
+            if item["sector_name"] == "机器人"
+        )
+        assert robot["facts"]["emotion_leader"] is None
+        assert robot["facts"]["capacity_leader"] is None
+        assert robot["facts"]["lead_stock"] is None
+
     def test_prefill_review_signals_degrade_gracefully_when_sections_missing(self, client, db_path):
         """/api/review/{date}/prefill 缺失新增接口时，review_signals 应返回空结构而不是报错。"""
         self._seed(db_path, raw_data={"date": "2026-05-20", "raw_data": {}})
@@ -1958,6 +2297,7 @@ class TestEnrichMarketRow:
         assert signals["sectors"]["strongest_rows"] == []
         assert signals["sectors"]["ths_moneyflow_rows"] == []
         assert signals["sectors"]["dc_moneyflow_rows"] == []
+        assert signals["sectors"]["projection_candidates"] == []
         assert signals["emotion"]["ladder_rows"] == []
 
     def test_prefill_contains_industry_info(self, client, db_path):

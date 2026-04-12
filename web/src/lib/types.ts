@@ -352,6 +352,12 @@ export interface HoldingTaskUpdateInput {
   action_plan?: string
 }
 
+export interface HoldingInfoSignals {
+  investor_qa: Array<{ question?: string; answer?: string; date?: string }>
+  research_reports: Array<{ institution?: string; rating?: string; target_price?: number; date?: string }>
+  news: Array<{ title?: string; time?: string }>
+}
+
 export interface HoldingSignalItem {
   stock_code: string
   stock_name: string
@@ -360,6 +366,7 @@ export interface HoldingSignalItem {
   technical_signals: HoldingTechnicalSignals
   theme_signals: HoldingThemeSignals
   event_signals: HoldingEventSignals
+  info_signals?: HoldingInfoSignals
   latest_task?: HoldingTaskItem | null
   risk_flags: HoldingRiskFlag[]
 }
@@ -808,6 +815,7 @@ export interface ReviewSectorSignals {
   ths_moneyflow_rows: Array<{
     name: string
     net_amount: number | null
+    net_amount_yi?: number | null
     pct_change: number | null
     lead_stock: string | null
   }>
@@ -818,6 +826,50 @@ export interface ReviewSectorSignals {
     pct_change: number | null
     lead_stock: string | null
   }>
+  projection_candidates?: ReviewProjectionCandidate[]
+}
+
+export interface ReviewProjectionCandidate {
+  sector_name: string
+  source_tags: string[]
+  facts: {
+    phase_hint?: string | null
+    duration_days?: number | null
+    pct_chg?: number | null
+    limit_up_count?: number | null
+    emotion_leader?: string | null
+    capacity_leader?: string | null
+    lead_stock?: string | null
+    net_amount_yi?: number | null
+    teacher_note_refs?: Array<{
+      note_id?: number | null
+      teacher_name?: string | null
+      title?: string | null
+    }>
+  }
+  key_stocks?: string[]
+  evidence_text?: string | null
+}
+
+export interface ReviewSectorProjection {
+  sector_name?: string
+  sector_type?: string
+  big_cycle_stage?: string
+  connection_bias?: string
+  market_fit?: string
+  role_expectation?: string
+  return_flow_view?: string
+  fully_priced_risk?: string
+  key_stocks?: string[]
+  supporting_facts?: string[]
+  logic_aesthetic?: string
+  judgement_notes?: string
+}
+
+export interface ReviewNextDayFocus {
+  sector_name?: string
+  key_stocks?: string[]
+  focus_reason?: string
 }
 
 export interface ReviewEmotionSignals {
@@ -936,6 +988,13 @@ export interface PlanDiagnosticsRecord {
 export interface PlanReviewRecord {
   review_id?: string
   plan_id: string
+}
+
+export interface ReviewToDraftResult {
+  review_date: string
+  trade_date: string
+  observation?: PlanObservationRecord
+  draft: PlanDraftRecord
 }
 
 export interface PlanObservationRecord {

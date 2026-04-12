@@ -311,6 +311,7 @@ class ReportGenerator:
         holdings_announcements: dict | None = None,
         watchlist_data: dict | None = None,
         holdings_summary: dict | None = None,
+        holdings_info: dict | None = None,
     ) -> tuple[str, str]:
         """
         生成盘后数据报告。
@@ -507,6 +508,17 @@ class ReportGenerator:
                     stock_name = info.get("name", code)
                     _render_stock_event_lines(lines, stock_name, code, info, pre_market=False)
 
+        # ---- 持仓信息面（互动易/研报/新闻） ----
+        if holdings_info:
+            has_info = any(
+                info.get("investor_qa") or info.get("research_reports") or info.get("news")
+                for info in holdings_info.values()
+            )
+            if has_info:
+                lines.append(f"\n## {_roman(section_idx)}、持仓信息面\n")
+                section_idx += 1
+                _render_stock_info_section(lines, holdings_info)
+
         # ---- 龙虎榜 ----
         dt_data = raw_data.get("dragon_tiger", {}).get("data", [])
         if dt_data:
@@ -550,6 +562,7 @@ class ReportGenerator:
             "holdings_announcements": holdings_announcements or {},
             "holdings_summary": holdings_summary or {},
             "watchlist_data": watchlist_data or {},
+            "holdings_info": holdings_info or {},
         }
         with open(yaml_path, "w", encoding="utf-8") as f:
             yaml.dump(yaml_data, f, allow_unicode=True, default_flow_style=False)

@@ -163,6 +163,7 @@ ARCHITECTURE_COMMANDS = [
     ["ingest", "health", "--date", "2026-04-04", "--days", "14", "--limit", "5", "--stage", "post_extended"],
     ["ingest", "reconcile", "--stale-minutes", "5"],
     ["plan", "draft", "--date", "2026-04-04"],
+    ["plan", "draft", "--date", "2026-04-03", "--from-review", "--input-by", "cursor"],
     ["plan", "show-draft", "--draft-id", "draft_1"],
     ["plan", "confirm", "--draft-id", "draft_1", "--date", "2026-04-07"],
     ["plan", "diagnose", "--plan-id", "plan_1", "--date", "2026-04-07"],

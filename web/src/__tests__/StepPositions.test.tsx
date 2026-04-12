@@ -83,6 +83,11 @@ const holdingsPrefill: ReviewPrefillData = {
           source: 'review_step7',
           status: 'open',
         },
+        info_signals: {
+          investor_qa: [{ question: '公司产能规划如何', answer: '已规划新增100GWh', date: '2026-04-02' }],
+          research_reports: [{ institution: '中金', rating: '买入', target_price: 220, date: '2026-04-02' }],
+          news: [{ title: '宁德时代发布新一代电池', time: '2026-04-03 10:30' }],
+        },
         risk_flags: [
           { level: 'high', label: '财报临近', reason: '20260420 有披露计划' },
           { level: 'medium', label: '临近止盈', reason: '现价 192.00 接近止盈 193.00' },
@@ -113,6 +118,12 @@ describe('StepPositions', () => {
     expect(screen.getByText(/披露计划 20260420/)).toBeInTheDocument()
     expect(screen.getByText('昨日计划：')).toBeInTheDocument()
     expect(screen.getByText('若冲高回落则减仓')).toBeInTheDocument()
+    expect(screen.getByText('互动易：')).toBeInTheDocument()
+    expect(screen.getByText(/公司产能规划如何/)).toBeInTheDocument()
+    expect(screen.getByText('研报：')).toBeInTheDocument()
+    expect(screen.getByText(/中金/)).toBeInTheDocument()
+    expect(screen.getByText('新闻：')).toBeInTheDocument()
+    expect(screen.getByText(/新一代电池/)).toBeInTheDocument()
   })
 
   it('fills latest holding values into existing draft rows', async () => {

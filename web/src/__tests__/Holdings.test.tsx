@@ -97,6 +97,11 @@ beforeEach(() => {
           source: 'review_step7',
           status: 'open',
         },
+        info_signals: {
+          investor_qa: [{ question: '公司产能规划如何', answer: '已规划新增100GWh', date: '2026-04-04' }],
+          research_reports: [{ institution: '中金', rating: '买入', target_price: 220, date: '2026-04-04' }],
+          news: [{ title: '宁德时代发布新一代电池', time: '2026-04-05 10:30' }],
+        },
         risk_flags: [
           { level: 'high', label: '财报临近', reason: '20260420 有披露计划' },
           { level: 'medium', label: '跌破 MA5', reason: '现价位于 MA5 下方' },
@@ -168,6 +173,10 @@ describe('Holdings', () => {
     expect(screen.getByText('公告 / 披露')).toBeInTheDocument()
     expect(screen.getByText('公告：回购公告（20260405）')).toBeInTheDocument()
     expect(screen.getByText('披露：20260420 · 20260331')).toBeInTheDocument()
+    expect(screen.getByText('信息面')).toBeInTheDocument()
+    expect(screen.getByText(/互动易：公司产能规划如何/)).toBeInTheDocument()
+    expect(screen.getByText(/研报：中金「买入」/)).toBeInTheDocument()
+    expect(screen.getByText(/新闻：宁德时代发布新一代电池/)).toBeInTheDocument()
     expect(screen.getByText('昨日计划')).toBeInTheDocument()
     expect(screen.getAllByText('若冲高回落则减仓')).toHaveLength(2)
     expect(screen.getByText('计划任务')).toBeInTheDocument()

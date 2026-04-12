@@ -35,11 +35,13 @@ make db-search KEYWORD=情绪 FROM=YYYY-MM-DD TO=YYYY-MM-DD
 - `GET /api/review/{date}/prefill`
 - `GET /api/review/{date}`
 - `PUT /api/review/{date}`
+- `POST /api/review/{date}/to-draft`
 
 ## 核心流程
 
 1. 先确认复盘日期。
 2. 拉取预填充数据，先展示客观事实，再引导用户填写主观判断。（逐步提问时可打开 [附录话术模板](references/eight-step-prompt-templates.md)。）
+   其中 `projection_candidates.facts` 会同时返回 `emotion_leader` / `capacity_leader`，兼容字段 `lead_stock` 默认跟随 `capacity_leader`；资金流源字段里的股票只作“资金流字段股”参考，不要直接当成板块龙头结论。
 3. 按八步复盘法汇总：
    - 大盘分析
    - 板块梳理
@@ -50,6 +52,7 @@ make db-search KEYWORD=情绪 FROM=YYYY-MM-DD TO=YYYY-MM-DD
    - 持仓检视
    - 次日计划
 4. 保存前先给用户一版结构化复盘摘要，用户确认后再写入。
+5. 若用户要把复盘直接衔接到次日计划，保存后调用 `POST /api/review/{date}/to-draft`，只生成 observation / draft，不确认正式计划。
 
 ## 禁止事项
 

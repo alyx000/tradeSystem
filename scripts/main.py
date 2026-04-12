@@ -192,7 +192,7 @@ def cmd_plan(config: dict, args) -> None:
     from services.planning_service import PlanningService
 
     registry = None
-    if args.plan_command == "diagnose":
+    if args.plan_command == "diagnose" or (args.plan_command == "draft" and getattr(args, "from_review", False)):
         with without_standard_http_proxy():
             registry = setup_providers(config)
             registry.initialize_all()
@@ -200,26 +200,42 @@ def cmd_plan(config: dict, args) -> None:
     service = PlanningService(registry=registry)
     command = args.plan_command
     if command == "draft":
-        observation = service.create_observation(
-            trade_date=args.date,
-            source_type="manual",
-            title=f"{args.date} 计划输入",
-            market_facts={"bias": "混沌"},
-            sector_facts={"main_themes": []},
-            stock_facts=[],
-            judgements=[],
-            input_by="manual",
-        )
-        payload = {
-            "status": "ok",
-            "message": "已创建 observation，并生成最小 draft",
-            "observation": observation,
-            "draft": service.create_draft(
+        if getattr(args, "from_review", False):
+            try:
+                draft_payload = service.draft_from_review(
+                    review_date=args.date,
+                    trade_date=getattr(args, "trade_date", None),
+                    input_by=getattr(args, "input_by", None) or "manual",
+                )
+            except KeyError:
+                payload = {"status": "not_found", "message": "未找到目标复盘，无法生成草稿"}
+            else:
+                payload = {
+                    "status": "ok",
+                    "message": "已从复盘生成 observation 和 draft",
+                    **draft_payload,
+                }
+        else:
+            observation = service.create_observation(
                 trade_date=args.date,
-                source_observation_ids=[observation["observation_id"]],
-                input_by="manual",
-            ),
-        }
+                source_type="manual",
+                title=f"{args.date} 计划输入",
+                market_facts={"bias": "混沌"},
+                sector_facts={"main_themes": []},
+                stock_facts=[],
+                judgements=[],
+                input_by=getattr(args, "input_by", None) or "manual",
+            )
+            payload = {
+                "status": "ok",
+                "message": "已创建 observation，并生成最小 draft",
+                "observation": observation,
+                "draft": service.create_draft(
+                    trade_date=args.date,
+                    source_observation_ids=[observation["observation_id"]],
+                    input_by=getattr(args, "input_by", None) or "manual",
+                ),
+            }
     elif command == "show-draft":
         draft = service.get_draft(draft_id=args.draft_id, trade_date=args.date)
         payload = {
@@ -238,7 +254,7 @@ def cmd_plan(config: dict, args) -> None:
                 "plan": service.confirm_plan(
                     draft_id=draft["draft_id"],
                     trade_date=args.date,
-                    input_by="manual",
+                    input_by=getattr(args, "input_by", None) or "manual",
                 ),
             }
     elif command == "diagnose":
@@ -261,7 +277,7 @@ def cmd_plan(config: dict, args) -> None:
                     plan_id=plan["plan_id"],
                     trade_date=args.date,
                     outcome_summary="待补充",
-                    input_by="manual",
+                    input_by=getattr(args, "input_by", None) or "manual",
                 ),
             }
     else:
@@ -637,6 +653,12 @@ def cmd_post(config: dict, target_date: str):
         except Exception as e:
             logger.warning(f"持仓盘后公告采集失败: {e}")
 
+        holdings_info = {}
+        try:
+            holdings_info = holdings_collector.collect_stock_info(target_date)
+        except Exception as e:
+            logger.warning(f"持仓盘后信息面采集失败: {e}")
+
         if _schedule_task_enabled(config, "post_market", "regulatory_monitor"):
             try:
                 from collectors.regulatory import RegulatoryCollector
@@ -670,6 +692,7 @@ def cmd_post(config: dict, target_date: str):
             holdings_announcements=holdings_anns,
             watchlist_data=watchlist_data,
             holdings_summary=holdings_summary,
+            holdings_info=holdings_info,
         )
 
     print(md_text)
@@ -1033,6 +1056,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     plan_draft = plan_subparsers.add_parser("draft", help="生成交易草稿")
     plan_draft.add_argument("--date", default=date.today().isoformat(), help="日期 YYYY-MM-DD")
+    plan_draft.add_argument("--from-review", action="store_true", help="从对应复盘生成次日计划草稿")
+    plan_draft.add_argument("--trade-date", default=None, help="目标计划日期 YYYY-MM-DD（默认推算次一交易日）")
+    plan_draft.add_argument("--input-by", default=None, help="输入来源，如 manual/openclaw/cursor")
     plan_draft.add_argument("--json", action="store_true", help="输出 JSON")
 
     plan_show = plan_subparsers.add_parser("show-draft", help="查看交易草稿")
@@ -1043,6 +1069,7 @@ def build_parser() -> argparse.ArgumentParser:
     plan_confirm = plan_subparsers.add_parser("confirm", help="确认正式交易计划")
     plan_confirm.add_argument("--date", default=date.today().isoformat(), help="日期 YYYY-MM-DD")
     plan_confirm.add_argument("--draft-id", default=None, help="草稿 ID")
+    plan_confirm.add_argument("--input-by", default=None, help="输入来源，如 manual/openclaw/cursor")
     plan_confirm.add_argument("--json", action="store_true", help="输出 JSON")
 
     plan_diagnose = plan_subparsers.add_parser("diagnose", help="诊断交易计划")
@@ -1053,6 +1080,7 @@ def build_parser() -> argparse.ArgumentParser:
     plan_review = plan_subparsers.add_parser("review", help="回写计划复盘")
     plan_review.add_argument("--date", default=date.today().isoformat(), help="日期 YYYY-MM-DD")
     plan_review.add_argument("--plan-id", default=None, help="计划 ID")
+    plan_review.add_argument("--input-by", default=None, help="输入来源，如 manual/openclaw/cursor")
     plan_review.add_argument("--json", action="store_true", help="输出 JSON")
 
     # knowledge

@@ -11,6 +11,7 @@ vi.mock('../lib/api', () => ({
     getPrefill: vi.fn(),
     getReview: vi.fn(),
     saveReview: vi.fn(),
+    reviewToDraft: vi.fn(),
   },
 }))
 
@@ -44,6 +45,7 @@ function renderPage(date = '2026-04-03') {
       <MemoryRouter initialEntries={[`/review/${date}`]}>
         <Routes>
           <Route path="/review/:date" element={<ReviewWorkbench />} />
+          <Route path="/plans/:date" element={<div>PlanWorkbench mock</div>} />
         </Routes>
       </MemoryRouter>
     </QueryClientProvider>
@@ -66,6 +68,12 @@ beforeEach(() => {
   } satisfies ReviewPrefillData)
   vi.mocked(api.getReview).mockResolvedValue({ exists: false } satisfies ReviewRecord)
   vi.mocked(api.saveReview).mockResolvedValue({ exists: true, ok: true } satisfies ReviewRecord)
+  vi.mocked(api.reviewToDraft).mockResolvedValue({
+    review_date: '2026-04-03',
+    trade_date: '2026-04-06',
+    draft: { draft_id: 'draft_x', trade_date: '2026-04-06' },
+    observation: { observation_id: 'obs_x', source_type: 'review' },
+  })
 })
 
 describe('ReviewWorkbench', () => {
@@ -127,5 +135,25 @@ describe('ReviewWorkbench', () => {
       })
     })
     expect(screen.getByText('保存成功')).toBeInTheDocument()
+  })
+
+  it('saves review and generates next-day draft', async () => {
+    renderPage()
+
+    await waitFor(() => {
+      expect(screen.getByText('StepMarket mock')).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'fill-StepMarket' }))
+    fireEvent.click(screen.getByRole('button', { name: '生成次日计划草稿' }))
+
+    await waitFor(() => {
+      expect(api.saveReview).toHaveBeenCalledWith('2026-04-03', {
+        step1_market: { note: 'StepMarket-filled' },
+      })
+      expect(api.reviewToDraft).toHaveBeenCalledWith('2026-04-03')
+    })
+
+    expect(await screen.findByText('PlanWorkbench mock')).toBeInTheDocument()
   })
 })

@@ -103,6 +103,19 @@ export default function ReviewWorkbench() {
     },
   })
 
+  const draftMutation = useMutation({
+    mutationFn: async () => {
+      await api.saveReview(date!, formData)
+      return api.reviewToDraft(date!)
+    },
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ['review', date] })
+      queryClient.invalidateQueries({ queryKey: ['prefill', date] })
+      localStorage.removeItem(DRAFT_KEY(date!))
+      navigate(`/plans/${result.trade_date}`)
+    },
+  })
+
   const step = STEPS[activeStep]
   const stepData = formData[step.key] || {}
 
@@ -136,6 +149,10 @@ export default function ReviewWorkbench() {
             className="bg-blue-600 text-white px-4 py-2 rounded text-sm hover:bg-blue-700 disabled:opacity-50">
             {saveMutation.isPending ? '保存中...' : '保存'}
           </button>
+          <button onClick={() => draftMutation.mutate()} disabled={draftMutation.isPending}
+            className="bg-amber-500 text-white px-4 py-2 rounded text-sm hover:bg-amber-600 disabled:opacity-50">
+            {draftMutation.isPending ? '生成中...' : '生成次日计划草稿'}
+          </button>
           <button onClick={() => {
             const blob = new Blob([JSON.stringify(formData, null, 2)], { type: 'application/json' })
             const a = document.createElement('a')
@@ -151,6 +168,9 @@ export default function ReviewWorkbench() {
 
       {saveMutation.isSuccess && (
         <div className="bg-green-50 text-green-700 px-4 py-2 rounded text-sm">保存成功</div>
+      )}
+      {draftMutation.isError && (
+        <div className="bg-red-50 text-red-700 px-4 py-2 rounded text-sm">生成草稿失败，请先检查复盘内容是否已保存。</div>
       )}
 
       <div className="flex gap-1 border-b overflow-x-auto">

@@ -35,6 +35,7 @@ make plan-review PLAN_ID=plan_xxx DATE=YYYY-MM-DD
 
 ```bash
 python3 main.py plan draft --date YYYY-MM-DD
+python3 main.py plan draft --date YYYY-MM-DD --from-review --input-by cursor
 python3 main.py plan show-draft --draft-id draft_xxx
 python3 main.py plan confirm --draft-id draft_xxx --date YYYY-MM-DD
 python3 main.py plan diagnose --plan-id plan_xxx --date YYYY-MM-DD
@@ -44,7 +45,7 @@ python3 main.py plan review --plan-id plan_xxx --date YYYY-MM-DD
 ## 核心流程
 
 1. 先确认用户是要草稿、确认、诊断还是复盘回写。
-2. 生成草稿时只停留在 observation / draft 层。
+2. 生成草稿时只停留在 observation / draft 层；若来源是复盘，优先走 `plan draft --from-review` 或 `/api/review/{date}/to-draft`。
 3. 诊断时优先读取事实快照；拿不到时接受 `missing_data`，不要伪造通过 / 失败。
 4. 正式计划只能由人工确认后写入。
 

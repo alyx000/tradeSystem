@@ -385,6 +385,7 @@ export default function Holdings() {
               <th className="px-4 py-3 text-right">仓位</th>
               <th className="px-4 py-3 text-left">风险</th>
               <th className="px-4 py-3 text-left">公告 / 披露</th>
+              <th className="px-4 py-3 text-left">信息面</th>
               <th className="px-4 py-3 text-left">主线归属</th>
               <th className="px-4 py-3 text-left">技术位</th>
               <th className="px-4 py-3 text-left">昨日计划</th>
@@ -395,9 +396,9 @@ export default function Holdings() {
           </thead>
           <tbody className="divide-y">
             {isLoading ? (
-              <tr><td colSpan={16} className="px-4 py-8 text-center text-gray-400">加载中...</td></tr>
+              <tr><td colSpan={17} className="px-4 py-8 text-center text-gray-400">加载中...</td></tr>
             ) : holdings?.length === 0 ? (
-              <tr><td colSpan={16} className="px-4 py-8 text-center text-gray-400">暂无持仓</td></tr>
+              <tr><td colSpan={17} className="px-4 py-8 text-center text-gray-400">暂无持仓</td></tr>
             ) : (
               holdings?.map((h: Holding) => (
                 <tr key={h.id} className="hover:bg-gray-50 align-top">
@@ -497,6 +498,27 @@ export default function Holdings() {
                               披露：{item.ann_date || '—'}
                               {item.report_end ? ` · ${item.report_end}` : ''}
                             </div>
+                          ))}
+                        </div>
+                      )
+                    })()}
+                  </td>
+                  <td className="px-4 py-3 text-xs text-gray-600">
+                    {(() => {
+                      const signal = signalMap.get(normStockCode(h.stock_code))
+                      if (!signal?.info_signals) return '—'
+                      const { investor_qa, research_reports, news } = signal.info_signals
+                      if (!investor_qa?.length && !research_reports?.length && !news?.length) return '—'
+                      return (
+                        <div className="space-y-1">
+                          {investor_qa?.slice(0, 1).map((qa, i) => (
+                            <div key={`qa-${i}`}>互动易：{qa.question ? `${qa.question.slice(0, 30)}${qa.question.length > 30 ? '…' : ''}` : '—'}</div>
+                          ))}
+                          {research_reports?.slice(0, 1).map((rr, i) => (
+                            <div key={`rr-${i}`}>研报：{rr.institution || ''}{rr.rating ? `「${rr.rating}」` : ''}{rr.target_price ? ` ${rr.target_price}` : ''}</div>
+                          ))}
+                          {news?.slice(0, 1).map((n, i) => (
+                            <div key={`news-${i}`}>新闻：{n.title ? `${n.title.slice(0, 30)}${n.title.length > 30 ? '…' : ''}` : '—'}</div>
                           ))}
                         </div>
                       )
