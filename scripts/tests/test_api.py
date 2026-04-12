@@ -2286,6 +2286,30 @@ class TestEnrichMarketRow:
         assert robot["facts"]["capacity_leader"] is None
         assert robot["facts"]["lead_stock"] is None
 
+    def test_teacher_note_freeform_sector_text_does_not_create_fake_candidate(self, client, db_path):
+        self._seed(db_path)
+        conn = get_connection(db_path)
+        tid = Q.get_or_create_teacher(conn, "小鲍")
+        Q.insert_teacher_note(
+            conn,
+            teacher_id=tid,
+            date="2026-05-20",
+            title="继续看 AI",
+            sectors="继续看AI算力",
+            key_points="重点观察机器人回流",
+            raw_content="继续看AI算力，不追高。",
+        )
+        conn.commit()
+        conn.close()
+
+        r = client.get("/api/review/2026-05-20/prefill")
+        assert r.status_code == 200
+        data = r.json()
+        candidates = data["review_signals"]["sectors"]["projection_candidates"]
+        sector_names = {item["sector_name"] for item in candidates}
+        assert "继续看AI算力" not in sector_names
+        assert "重点观察机器人回流" not in sector_names
+
     def test_prefill_review_signals_degrade_gracefully_when_sections_missing(self, client, db_path):
         """/api/review/{date}/prefill 缺失新增接口时，review_signals 应返回空结构而不是报错。"""
         self._seed(db_path, raw_data={"date": "2026-05-20", "raw_data": {}})

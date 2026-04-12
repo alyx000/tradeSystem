@@ -184,4 +184,40 @@ describe('StepSectors', () => {
       ],
     }))
   })
+
+  it('maps rhythm phase hint into valid big cycle stage options', () => {
+    const startupPrefill: ReviewPrefillData = {
+      ...prefill,
+      review_signals: {
+        ...prefill.review_signals,
+        sectors: {
+          ...prefill.review_signals!.sectors,
+          projection_candidates: [
+            {
+              sector_name: '机器人',
+              source_tags: ['rhythm'],
+              facts: {
+                phase_hint: '启动',
+                pct_chg: 3.1,
+              },
+              key_stocks: ['高标A'],
+              evidence_text: '节奏启动。',
+            },
+          ],
+        },
+      },
+    }
+    const { onChange } = renderStep({}, startupPrefill)
+
+    fireEvent.click(screen.getByRole('button', { name: '加入推演卡' }))
+
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({
+      projections: [
+        expect.objectContaining({
+          sector_name: '机器人',
+          big_cycle_stage: '将成龙',
+        }),
+      ],
+    }))
+  })
 })

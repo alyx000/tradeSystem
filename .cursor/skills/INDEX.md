@@ -39,6 +39,7 @@
 | `portfolio-manager` | `db add-trade` | 录入交易记录 |
 | `portfolio-manager` | `db blacklist-add` | 加入黑名单 |
 | `daily-review` | `db query-notes` | 搜索老师笔记（用于复盘预填充） |
+| `sector-projection-analysis` | `db query-notes` | 搜索老师笔记，补充板块逻辑与老师视角 |
 | `daily-review` | `db db-search` | 跨表关键词搜索 |
 | `market-tasks` | `python main.py pre --date` | 盘前任务采集 |
 | `market-tasks` | `python main.py post --date` | 盘后任务采集 |
@@ -70,7 +71,7 @@
 
 | Skill | API 端点 | 方法 | 说明 |
 |-------|---------|------|------|
-| `daily-review` | `/api/review/{date}/prefill` | GET | 拉取八步复盘预填充数据（含板块候选；返回 `emotion_leader` / `capacity_leader`，`lead_stock` 仅作兼容） |
+| `daily-review` / `sector-projection-analysis` | `/api/review/{date}/prefill` | GET | 拉取八步复盘预填充数据（含板块候选；返回 `emotion_leader` / `capacity_leader`，`lead_stock` 仅作兼容） |
 | `daily-review` | `/api/review/{date}` | GET | 读取已保存的复盘内容 |
 | `daily-review` | `/api/review/{date}` | PUT | 提交复盘主观判断 |
 | `daily-review` / `plan-workbench` | `/api/review/{date}/to-draft` | POST | 将复盘结果转成 `review` observation 与次日 `TradeDraft` |
@@ -100,6 +101,7 @@
 | Skill | 路径 | 说明 |
 |-------|------|------|
 | `daily-review` | [daily-review/references/eight-step-prompt-templates.md](daily-review/references/eight-step-prompt-templates.md) | 八步复盘分步提问话术模板（配合 SKILL 速查） |
+| `sector-projection-analysis` | [sector-projection-analysis/references/methodology.md](sector-projection-analysis/references/methodology.md) | 《0524板块推演术》提炼后的板块推演方法论 |
 
 `repo-maintenance-workflows` 不绑定固定业务 API；它会按受影响的 CLI / API / skill / 文档入口就近检查，并在修改 `scripts/main.py`、`scripts/api/routes/*.py`、`.cursor/skills/**/*.md` 后强制同步 `INDEX.md` 与 `skills-sync.mdc`。
 

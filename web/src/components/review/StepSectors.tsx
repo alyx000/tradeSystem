@@ -52,8 +52,24 @@ const SOURCE_TAG_CLASS: Record<string, string> = {
   industry_info: 'bg-slate-100 text-slate-700',
 }
 
+const PHASE_TO_BIG_CYCLE_STAGE: Record<string, string> = {
+  '启动': '将成龙',
+  '信不信加速': '将成龙',
+  '主升': '主升',
+  '首次分歧': '主升',
+  '高潮': '主升',
+  '震荡': '震荡',
+  '轮动': '震荡',
+  '衰退': '衰退',
+}
+
 function phaseClass(phase: string) {
   return PHASE_COLOR[phase] ?? 'bg-gray-50 text-gray-600'
+}
+
+function mapPhaseHintToBigCycleStage(phaseHint: string | null | undefined) {
+  const normalized = (phaseHint || '').trim()
+  return PHASE_TO_BIG_CYCLE_STAGE[normalized] || ''
 }
 
 function InfoTypeBadge({ type }: { type: string }) {
@@ -219,7 +235,7 @@ export default function StepSectors({ data, onChange, prefill }: StepProps) {
         {
           sector_name: candidate.sector_name,
           sector_type: '',
-          big_cycle_stage: candidate.facts?.phase_hint || '',
+          big_cycle_stage: mapPhaseHintToBigCycleStage(candidate.facts?.phase_hint),
           connection_bias: '',
           market_fit: '',
           role_expectation: '',

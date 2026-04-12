@@ -721,8 +721,6 @@ def _build_sector_projection_candidates(
         matched_names = [name for name in known_names if name and name in note_text]
         explicit_known_names = [name for name in explicit_names if name in known_names]
         targets = explicit_known_names or matched_names
-        if not targets and _normalize_sector_name(note.get("sectors")):
-            targets = [_normalize_sector_name(note.get("sectors"))]
         for sector_name in targets:
             candidate = ensure_candidate(sector_name)
             if not candidate:
