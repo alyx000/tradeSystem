@@ -150,7 +150,7 @@ holdings:
 	cd scripts && python3 main.py db holdings-list
 
 holdings-refresh:
-	cd scripts && python3 main.py holdings --refresh --date "$${DATE:-$$(date +%F)}" --json
+	cd scripts && python3 main.py db holdings-refresh --date "$${DATE:-$$(date +%F)}" --json
 
 watchlist:
 	cd scripts && python3 main.py db watchlist-list

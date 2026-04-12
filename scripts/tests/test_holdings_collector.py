@@ -1,4 +1,4 @@
-"""HoldingsCollector 单元测试：load / save / add / remove / collect_data / announcements / summary / enrich / info"""
+"""HoldingsCollector 单元测试：从 DB 加载 / collect_data / announcements / summary / enrich / info"""
 from __future__ import annotations
 
 import json
@@ -7,8 +7,6 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
-import yaml
-
 from collectors.holdings import HoldingsCollector, collect_info_for_stocks
 from db.connection import get_connection
 from db.migrate import migrate
@@ -60,54 +58,35 @@ def _mock_registry(daily_map=None, ann_map=None, ma_map=None, sector_data=None, 
     return reg
 
 
-class TestLoadSave:
-    def test_load_empty(self, tmp_path):
-        hc = HoldingsCollector()
-        hc.holdings_file = tmp_path / "h.yaml"
-        result = hc.load()
-        assert result == []
+class TestLoadFromDb:
+    def test_load_empty_db(self, sqlite_db_for_merge):
+        hc = HoldingsCollector(registry=None)
+        assert hc.load(db_path=sqlite_db_for_merge) == []
+        assert hc._holdings == []
 
-    def test_save_and_reload(self, tmp_path):
-        hc = HoldingsCollector()
-        hc.holdings_file = tmp_path / "h.yaml"
-        hc._holdings = [{"code": "600000.SH", "name": "浦发银行", "shares": 100, "cost": 10.0, "sector": "银行"}]
-        hc.save()
+    def test_load_active_from_db(self, sqlite_db_for_merge):
+        from db import queries as Q
+        from db.connection import get_db
 
-        hc2 = HoldingsCollector()
-        hc2.holdings_file = tmp_path / "h.yaml"
-        loaded = hc2.load()
-        assert len(loaded) == 1
-        assert loaded[0]["code"] == "600000.SH"
-
-
-class TestAddRemove:
-    def test_add_new(self, tmp_path):
-        hc = HoldingsCollector()
-        hc.holdings_file = tmp_path / "h.yaml"
-        hc._holdings = []
-        hc.add_stock({"code": "600000.SH", "name": "浦发银行", "shares": 100, "cost": 10.0})
-        assert len(hc._holdings) == 1
-
-    def test_add_existing_updates(self, tmp_path):
-        hc = HoldingsCollector()
-        hc.holdings_file = tmp_path / "h.yaml"
-        hc._holdings = [{"code": "600000.SH", "name": "浦发银行", "shares": 100, "cost": 10.0}]
-        hc.add_stock({"code": "600000.SH", "name": "浦发银行", "shares": 200, "cost": 11.0})
-        assert len(hc._holdings) == 1
-        assert hc._holdings[0]["shares"] == 200
-        assert hc._holdings[0]["cost"] == 11.0
-
-    def test_remove(self, tmp_path):
-        hc = HoldingsCollector()
-        hc.holdings_file = tmp_path / "h.yaml"
-        hc._holdings = [{"code": "600000.SH", "name": "浦发"}, {"code": "300750.SZ", "name": "宁德"}]
-        hc.remove_stock("600000.SH")
+        with get_db(sqlite_db_for_merge) as conn:
+            Q.upsert_holding(
+                conn,
+                stock_code="300750.SZ",
+                stock_name="宁德时代",
+                entry_price=100.0,
+                shares=100,
+                status="active",
+            )
+        hc = HoldingsCollector(registry=None)
+        hc.load(db_path=sqlite_db_for_merge)
         assert len(hc._holdings) == 1
         assert hc._holdings[0]["code"] == "300750.SZ"
+        assert hc._holdings[0]["name"] == "宁德时代"
+        assert hc._holdings[0]["cost"] == 100.0
+        assert hc._holdings[0]["shares"] == 100
 
-    def test_get_codes_and_names(self, tmp_path):
-        hc = HoldingsCollector()
-        hc.holdings_file = tmp_path / "h.yaml"
+    def test_get_codes_and_names(self):
+        hc = HoldingsCollector(registry=None)
         hc._holdings = [{"code": "600000.SH", "name": "浦发"}, {"code": "300750.SZ", "name": "宁德"}]
         assert hc.get_codes() == ["600000.SH", "300750.SZ"]
         assert hc.get_names() == ["浦发", "宁德"]
@@ -116,7 +95,6 @@ class TestAddRemove:
 class TestCollectHoldingsData:
     def test_no_registry(self, tmp_path):
         hc = HoldingsCollector(registry=None)
-        hc.holdings_file = tmp_path / "h.yaml"
         hc._holdings = [{"code": "600000.SH", "name": "浦发"}]
         assert hc.collect_holdings_data("2026-03-30") == []
 
@@ -126,7 +104,6 @@ class TestCollectHoldingsData:
         }
         reg = _mock_registry(daily_map=daily)
         hc = HoldingsCollector(registry=reg)
-        hc.holdings_file = tmp_path / "h.yaml"
         hc._holdings = [{"code": "600000.SH", "name": "浦发银行", "shares": 100, "cost": 10.0, "sector": "银行"}]
 
         result = hc.collect_holdings_data("2026-03-30")
@@ -139,7 +116,6 @@ class TestCollectHoldingsData:
     def test_failed_source(self, tmp_path):
         reg = _mock_registry()
         hc = HoldingsCollector(registry=reg)
-        hc.holdings_file = tmp_path / "h.yaml"
         hc._holdings = [{"code": "999999.SH", "name": "不存在"}]
 
         result = hc.collect_holdings_data("2026-03-30")
@@ -153,7 +129,6 @@ class TestCollectHoldingsData:
         }
         reg = _mock_registry(daily_map=daily)
         hc = HoldingsCollector(registry=reg)
-        hc.holdings_file = tmp_path / "h.yaml"
         hc._holdings = [
             {"code": "600000.SH", "name": "浦发", "shares": 1000, "cost": 10.0, "sector": "银行"},
             {"code": "300750.SZ", "name": "宁德", "shares": 100, "cost": 200.0, "sector": "电池"},
@@ -197,7 +172,6 @@ class TestCollectHoldingsData:
         }
         reg = _mock_registry(daily_map=daily, ma_map=ma)
         hc = HoldingsCollector(registry=reg)
-        hc.holdings_file = tmp_path / "holdings.yaml"
         hc._holdings = []
 
         result = hc.refresh_sqlite_quotes(date.today().isoformat(), db_path=db_path)
@@ -257,7 +231,6 @@ class TestCollectHoldingsData:
         }
         reg = _mock_registry(daily_map=daily, ma_map=ma)
         hc = HoldingsCollector(registry=reg)
-        hc.holdings_file = tmp_path / "holdings.yaml"
         hc._holdings = []
 
         result = hc.refresh_sqlite_quotes("2026-03-30", db_path=db_path)
@@ -279,7 +252,6 @@ class TestCollectHoldingsData:
 class TestCollectAnnouncements:
     def test_no_registry(self, tmp_path):
         hc = HoldingsCollector(registry=None)
-        hc.holdings_file = tmp_path / "h.yaml"
         hc._holdings = [{"code": "600000.SH", "name": "浦发"}]
         assert hc.collect_holdings_announcements("2026-03-28", "2026-03-30") == {}
 
@@ -287,7 +259,6 @@ class TestCollectAnnouncements:
         ann = {"600000.SH": [{"title": "公告A", "ann_date": "20260330"}]}
         reg = _mock_registry(ann_map=ann)
         hc = HoldingsCollector(registry=reg)
-        hc.holdings_file = tmp_path / "h.yaml"
         hc._holdings = [{"code": "600000.SH", "name": "浦发"}]
 
         result = hc.collect_holdings_announcements("2026-03-28", "2026-03-30")
@@ -339,7 +310,6 @@ class TestCollectAnnouncements:
 
         reg = _mock_registry()
         hc = HoldingsCollector(registry=reg)
-        hc.holdings_file = tmp_path / "h.yaml"
         hc._holdings = [{"code": "600000.SH", "name": "浦发"}]
 
         result = hc.collect_holdings_announcements("2026-03-28", "2026-03-30", db_path=sqlite_db_for_merge)
@@ -352,7 +322,6 @@ class TestCollectAnnouncements:
         ann = {"600000.SH": [{"title": "公告A", "ann_date": "20260330"}]}
         reg = _mock_registry(ann_map=ann)
         hc = HoldingsCollector(registry=reg)
-        hc.holdings_file = tmp_path / "h.yaml"
         hc._holdings = [{"code": "600000.SH", "name": "浦发"}]
 
         result = hc.collect_holdings_announcements("2026-03-28", "2026-03-30", db_path=sqlite_db_for_merge)
@@ -365,7 +334,6 @@ class TestEnrichWithMa:
         ma = {"600000.SH": {"ma5": 11.5, "ma10": 11.0, "ma20": 10.5, "volume_ma5": 90000.0}}
         reg = _mock_registry(ma_map=ma)
         hc = HoldingsCollector(registry=reg)
-        hc.holdings_file = tmp_path / "h.yaml"
         data = [{"code": "600000.SH", "name": "浦发", "close": 12.0, "volume": 100000}]
         result = hc.enrich_with_ma(data, "2026-03-30")
         assert result[0]["ma5"] == 11.5
@@ -383,7 +351,6 @@ class TestEnrichWithMa:
         }
         reg = _mock_registry(ma_map=ma, sector_data=sector_data)
         hc = HoldingsCollector(registry=reg)
-        hc.holdings_file = tmp_path / "h.yaml"
         data = [
             {"code": "600000.SH", "name": "浦发", "close": 12.0, "sector": "银行"},
             {"code": "300750.SZ", "name": "宁德", "close": 250.0, "sector": "电池"},
@@ -397,14 +364,12 @@ class TestEnrichWithMa:
     def test_skips_error_items(self, tmp_path):
         reg = _mock_registry()
         hc = HoldingsCollector(registry=reg)
-        hc.holdings_file = tmp_path / "h.yaml"
         data = [{"code": "999.SH", "name": "ERR", "error": "no data"}]
         result = hc.enrich_with_ma(data, "2026-03-30")
         assert "ma5" not in result[0]
 
     def test_no_registry(self, tmp_path):
         hc = HoldingsCollector(registry=None)
-        hc.holdings_file = tmp_path / "h.yaml"
         data = [{"code": "600000.SH", "name": "浦发"}]
         assert hc.enrich_with_ma(data, "2026-03-30") is data
 
@@ -457,143 +422,3 @@ def sqlite_db_for_merge(tmp_path):
         migrate(conn)
     return path
 
-
-class TestMergeSqliteActiveHoldings:
-    def test_fills_from_db_when_yaml_empty(self, sqlite_db_for_merge, tmp_path):
-        from db import queries as Q
-        from db.connection import get_db
-
-        with get_db(sqlite_db_for_merge) as conn:
-            Q.upsert_holding(
-                conn,
-                stock_code="300750.SZ",
-                stock_name="宁德时代",
-                entry_price=100.0,
-                shares=100,
-                status="active",
-            )
-        hc = HoldingsCollector(registry=None)
-        hc.holdings_file = tmp_path / "h.yaml"
-        hc.holdings_file.write_text("holdings: []\n", encoding="utf-8")
-        hc.load()
-        hc.merge_sqlite_active_holdings(db_path=sqlite_db_for_merge)
-        assert len(hc._holdings) == 1
-        assert hc._holdings[0]["code"] == "300750.SZ"
-        assert hc._holdings[0]["name"] == "宁德时代"
-        assert hc._holdings[0]["cost"] == 100.0
-        assert hc._holdings[0]["shares"] == 100
-
-    def test_noop_when_db_has_no_active(self, sqlite_db_for_merge, tmp_path):
-        hc = HoldingsCollector(registry=None)
-        hc.holdings_file = tmp_path / "h.yaml"
-        yaml_h = [{"code": "600000.SH", "name": "浦发", "shares": 1, "cost": 10.0, "sector": ""}]
-        hc.holdings_file.write_text(yaml.dump({"holdings": yaml_h}, allow_unicode=True), encoding="utf-8")
-        hc.load()
-        hc.merge_sqlite_active_holdings(db_path=sqlite_db_for_merge)
-        assert hc._holdings == yaml_h
-
-    def test_db_plus_yaml_only_in_yaml(self, sqlite_db_for_merge, tmp_path):
-        from db import queries as Q
-        from db.connection import get_db
-
-        with get_db(sqlite_db_for_merge) as conn:
-            Q.upsert_holding(conn, stock_code="300750.SZ", stock_name="宁德", entry_price=200.0, status="active")
-        hc = HoldingsCollector(registry=None)
-        hc.holdings_file = tmp_path / "h.yaml"
-        yaml_h = [{"code": "600000.SH", "name": "浦发", "shares": 1, "cost": 10.0, "sector": ""}]
-        hc.holdings_file.write_text(yaml.dump({"holdings": yaml_h}, allow_unicode=True), encoding="utf-8")
-        hc.load()
-        hc.merge_sqlite_active_holdings(db_path=sqlite_db_for_merge)
-        assert len(hc._holdings) == 2
-        assert {h["code"] for h in hc._holdings} == {"300750.SZ", "600000.SH"}
-
-    def test_db_wins_when_same_code_as_yaml(self, sqlite_db_for_merge, tmp_path):
-        from db import queries as Q
-        from db.connection import get_db
-
-        with get_db(sqlite_db_for_merge) as conn:
-            Q.upsert_holding(
-                conn,
-                stock_code="300750.SZ",
-                stock_name="宁德时代",
-                entry_price=100.0,
-                shares=50,
-                status="active",
-            )
-        hc = HoldingsCollector(registry=None)
-        hc.holdings_file = tmp_path / "h.yaml"
-        yaml_h = [{"code": "300750", "name": "旧名", "shares": 999, "cost": 50.0, "sector": ""}]
-        hc.holdings_file.write_text(yaml.dump({"holdings": yaml_h}, allow_unicode=True), encoding="utf-8")
-        hc.load()
-        hc.merge_sqlite_active_holdings(db_path=sqlite_db_for_merge)
-        assert len(hc._holdings) == 1
-        assert hc._holdings[0]["code"] == "300750.SZ"
-        assert hc._holdings[0]["cost"] == 100.0
-        assert hc._holdings[0]["shares"] == 50
-
-
-class TestYamlSqliteSync:
-    """CLI holdings --add/--remove 与 SQLite 双写。"""
-
-    def test_sync_add_inserts_row(self, sqlite_db_for_merge):
-        from db.connection import get_db
-
-        hc = HoldingsCollector(registry=None)
-        hc.sync_yaml_stock_to_sqlite(
-            {"code": "300750.SZ", "name": "宁德时代", "shares": 100, "cost": 180.5, "sector": "锂电"},
-            db_path=sqlite_db_for_merge,
-        )
-        with get_db(sqlite_db_for_merge) as conn:
-            rows = conn.execute(
-                "SELECT stock_code, stock_name, shares, entry_price, sector, status FROM holdings WHERE status='active'",
-            ).fetchall()
-        assert len(rows) == 1
-        assert rows[0]["stock_code"] == "300750.SZ"
-        assert rows[0]["shares"] == 100
-        assert rows[0]["entry_price"] == 180.5
-        assert rows[0]["sector"] == "锂电"
-
-    def test_sync_add_updates_same_norm(self, sqlite_db_for_merge):
-        from db import queries as Q
-        from db.connection import get_db
-
-        with get_db(sqlite_db_for_merge) as conn:
-            hid = Q.upsert_holding(
-                conn,
-                stock_code="300750",
-                stock_name="旧",
-                entry_price=100.0,
-                shares=10,
-                status="active",
-            )
-        hc = HoldingsCollector(registry=None)
-        hc.sync_yaml_stock_to_sqlite(
-            {"code": "300750.SZ", "name": "宁德时代", "shares": 200, "cost": 190.0, "sector": ""},
-            db_path=sqlite_db_for_merge,
-        )
-        with get_db(sqlite_db_for_merge) as conn:
-            row = conn.execute("SELECT * FROM holdings WHERE id = ?", (hid,)).fetchone()
-        assert row["stock_name"] == "宁德时代"
-        assert row["shares"] == 200
-        assert row["entry_price"] == 190.0
-        assert row["status"] == "active"
-
-    def test_sync_remove_closes_active(self, sqlite_db_for_merge):
-        from db import queries as Q
-        from db.connection import get_db
-
-        with get_db(sqlite_db_for_merge) as conn:
-            Q.upsert_holding(
-                conn,
-                stock_code="688041.SH",
-                stock_name="海光",
-                entry_price=200.0,
-                status="active",
-            )
-        hc = HoldingsCollector(registry=None)
-        hc.sync_yaml_remove_from_sqlite("688041", db_path=sqlite_db_for_merge)
-        with get_db(sqlite_db_for_merge) as conn:
-            n = conn.execute(
-                "SELECT COUNT(*) AS c FROM holdings WHERE status='active'",
-            ).fetchone()["c"]
-        assert n == 0

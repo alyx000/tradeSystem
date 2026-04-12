@@ -86,6 +86,10 @@ PORTFOLIO_COMMANDS = [
      "--stop-loss", "80.0", "--market", "A股", "--note", "龙头"],
     ["db", "holdings-remove", "--code", "300750"],
     ["db", "holdings-list"],
+    ["db", "holdings-refresh", "--date", "2026-04-04"],
+    ["db", "holdings-refresh", "--date", "2026-04-04", "--json"],
+    ["db", "holdings-import-yaml"],
+    ["db", "holdings-import-yaml", "--file", "/tmp/h.yaml"],
     # watchlist
     ["db", "watchlist-add", "--code", "300750", "--name", "宁德时代", "--tier", "tier1_core"],
     ["db", "watchlist-add", "--code", "000001", "--name", "平安银行",
@@ -142,8 +146,6 @@ ALL_SKILL_COMMANDS = (
 )
 
 ARCHITECTURE_COMMANDS = [
-    ["holdings", "--refresh", "--date", "2026-04-04"],
-    ["holdings", "--refresh", "--date", "2026-04-04", "--json"],
     ["ingest", "run", "--stage", "post_core", "--date", "2026-04-04"],
     ["ingest", "run", "--stage", "post_core", "--date", "2026-04-04", "--input-by", "openclaw"],
     ["ingest", "run-interface", "--name", "block_trade", "--date", "2026-04-04"],
@@ -191,6 +193,7 @@ def test_all_skill_subcommands_registered() -> None:
         "add-note", "add-industry", "add-macro",
         # portfolio-manager
         "holdings-add", "holdings-remove", "holdings-list",
+        "holdings-refresh", "holdings-import-yaml",
         "watchlist-add", "watchlist-remove", "watchlist-update", "watchlist-list",
         "watchlist-sync-from-note",
         "add-trade", "blacklist-add",

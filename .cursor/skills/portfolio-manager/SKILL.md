@@ -1,7 +1,7 @@
 ---
 name: portfolio-manager
 description: 管理持仓池、关注池、黑名单、交易记录，提供标准化的增删改查接口供 AI Agent 调用
-version: "1.2"
+version: "1.3"
 ---
 
 # Skill: 投资组合管理
@@ -34,6 +34,8 @@ make watchlist
 ```bash
 python3 main.py db holdings-add ...
 python3 main.py db holdings-remove ...
+python3 main.py db holdings-refresh --date YYYY-MM-DD   # 现价回填（原 make holdings-refresh）
+python3 main.py db holdings-import-yaml               # 遗留 YAML 一次性导入 DB
 python3 main.py db watchlist-add ...
 python3 main.py db watchlist-sync-from-note --note-id <teacher_notes.id>
 python3 main.py db watchlist-update ...
@@ -48,9 +50,22 @@ python3 main.py db blacklist-add ...
 3. 对所有写操作先展示结构化确认摘要，用户确认后再执行。
 4. 执行后立刻回查列表或目标记录，确认结果落库。
 
+## 证券代码与简称（Agent 必查）
+
+`db holdings-add` / `db watchlist-add` 的 CLI **同时要求** `--code` 与 `--name`。若用户**只给了股票代码**或**只给了证券简称**，Agent **不得**凭记忆编造另一半，必须先通过**已配置的数据源（Provider）**查询、核对后再写入。
+
+**推荐做法（在 `scripts/` 目录下用 Python 调 registry，需有效 Tushare/降级配置）：**
+
+1. **仅有代码、缺名称**：将用户代码规范为交易所后缀形式（如 `300750` → 可先试 `300750.SZ` / `688xxx.SH`），调用 `registry.call("get_stock_basic_batch", [ts_code, ...])`，从返回的 `name` / `ts_code` 取官方简称与规范代码；失败时再尝试 `get_stock_basic_list` + 本地匹配。
+2. **仅有名称、缺代码**：调用 `registry.call("get_stock_basic_list", "2000-01-01")`（日期仅为接口占位），在返回列表中按**证券简称**筛选；若**多条同名或模糊命中**，必须把候选列表展示给用户，**由用户选定唯一代码**后再执行 `db ...`。
+3. 查询结果与用户意图一致时，把**拟写入的 code + name** 写入确认摘要，**用户明示确认**后再跑 `python3 main.py db holdings-add ...` / `watchlist-add ...`。
+
+**禁止**：在未做接口核对（或用户未从多候选中选定）时，用「猜」的名称或代码凑满 CLI 参数。
+
 ## 禁止事项
 
 - 不要猜测股票代码、价格、股数、`tier` 或交易方向。
+- 用户只提供代码或只提供简称时，必须先按上文「证券代码与简称」用 Provider 查询补全并经确认，不得只补全一半却编造另一半。
 - 不要把多动作一句话直接当成一次写库，先拆分再确认。
 - 不要直接写 DB，必须通过 `python3 main.py db ...`。
 - 不要把关注池或持仓变更误写成计划确认流程。

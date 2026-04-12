@@ -8,6 +8,8 @@ import shutil
 import sys
 from pathlib import Path
 
+import yaml
+
 from .connection import get_db
 from .dual_write import reconcile_daily_market, retry_pending
 from .migrate import import_all, migrate
@@ -15,6 +17,65 @@ from .migrate import import_all, migrate
 logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+
+
+def _resolve_main_runtime():
+    """优先使用当前进程的 ``__main__``，避免 ``python main.py`` 时再 ``import main`` 产生双模块状态。"""
+    scripts_dir = Path(__file__).resolve().parent.parent
+    sd = str(scripts_dir)
+    if sd not in sys.path:
+        sys.path.insert(0, sd)
+    main_mod = sys.modules.get("__main__")
+    if main_mod is not None and hasattr(main_mod, "load_config") and hasattr(main_mod, "setup_providers"):
+        return main_mod
+    import importlib
+
+    return importlib.import_module("main")
+
+
+def _coerce_holdings_shares(raw: object) -> tuple[int | None, str]:
+    """解析 YAML 中的 shares；无法解析时返回 (None, reason)。"""
+    if raw is None or raw == "":
+        return 0, ""
+    if isinstance(raw, bool):
+        return None, "invalid_shares"
+    if isinstance(raw, int):
+        return (raw, "") if raw >= 0 else (None, "invalid_shares")
+    if isinstance(raw, float):
+        if raw < 0 or raw != int(raw):
+            return None, "invalid_shares"
+        return int(raw), ""
+    if isinstance(raw, str):
+        s = raw.strip()
+        if not s:
+            return 0, ""
+        try:
+            iv = int(s)
+            return (iv, "") if iv >= 0 else (None, "invalid_shares")
+        except ValueError:
+            try:
+                fv = float(s)
+                if fv < 0 or fv != int(fv):
+                    return None, "invalid_shares"
+                return int(fv), ""
+            except ValueError:
+                return None, "invalid_shares"
+    return None, "invalid_shares"
+
+
+def _coerce_holdings_cost(raw: object) -> tuple[float | None, str]:
+    """解析 YAML 中的 cost（入库为 entry_price）；无法解析时返回 (None, reason)。"""
+    if raw is None or raw == "":
+        return 0.0, ""
+    if isinstance(raw, bool):
+        return None, "invalid_cost"
+    try:
+        v = float(raw)
+    except (TypeError, ValueError):
+        return None, "invalid_cost"
+    if v < 0:
+        return None, "invalid_cost"
+    return v, ""
 
 
 def _read_raw_content(args: argparse.Namespace) -> str | None:
@@ -110,6 +171,23 @@ def register_db_subparser(subparsers: argparse._SubParsersAction) -> None:
 
     db_sub.add_parser("holdings-list", help="列出当前持仓")
 
+    holdings_refresh = db_sub.add_parser(
+        "holdings-refresh",
+        help="回填 SQLite 持仓现价与技术快照（需配置 Tushare 等数据源）",
+    )
+    holdings_refresh.add_argument("--date", required=True, help="交易日 YYYY-MM-DD")
+    holdings_refresh.add_argument("--json", action="store_true", help="输出 JSON")
+
+    holdings_import_yaml = db_sub.add_parser(
+        "holdings-import-yaml",
+        help="将 tracking/holdings.yaml 中的持仓导入 SQLite（upsert active）",
+    )
+    holdings_import_yaml.add_argument(
+        "--file",
+        default=None,
+        help="YAML 路径（默认：仓库 tracking/holdings.yaml）",
+    )
+
     # ── 关注池 ────────────────────────────────────────────────────
     wl_add = db_sub.add_parser("watchlist-add", help="添加到关注池")
     wl_add.add_argument("--code", required=True, help="股票代码")
@@ -188,6 +266,7 @@ def handle_db_command(args: argparse.Namespace) -> None:
     if not action:
         print("用法: main.py db {init|sync|reconcile|add-note|query-notes|"
               "add-industry|add-macro|holdings-add|holdings-remove|holdings-list|"
+              "holdings-refresh|holdings-import-yaml|"
               "watchlist-add|watchlist-remove|watchlist-update|watchlist-list|"
               "watchlist-sync-from-note|"
               "add-trade|add-calendar|blacklist-add|db-search}")
@@ -204,6 +283,8 @@ def handle_db_command(args: argparse.Namespace) -> None:
         "holdings-add": _cmd_holdings_add,
         "holdings-remove": _cmd_holdings_remove,
         "holdings-list": _cmd_holdings_list,
+        "holdings-refresh": _cmd_holdings_refresh,
+        "holdings-import-yaml": _cmd_holdings_import_yaml,
         "watchlist-add": _cmd_watchlist_add,
         "watchlist-remove": _cmd_watchlist_remove,
         "watchlist-update": _cmd_watchlist_update,
@@ -508,6 +589,121 @@ def _cmd_holdings_list(args: argparse.Namespace) -> None:
         sl_str = f"止损 {h['stop_loss']}" if h.get("stop_loss") else ""
         print(f"  {h['stock_code']} {h['stock_name']} | {shares_str} | "
               f"{price_str} | {h.get('sector', '-')} {sl_str}".rstrip())
+
+
+def _cmd_holdings_refresh(args: argparse.Namespace) -> None:
+    """回填持仓现价（与旧 `main.py holdings --refresh` 行为一致）。"""
+    main_mod = _resolve_main_runtime()
+    from collectors.holdings import HoldingsCollector
+    from utils.network_env import without_standard_http_proxy
+
+    config = main_mod.load_config()
+    date_str = args.date
+    with without_standard_http_proxy():
+        registry = main_mod.setup_providers(config)
+        registry.initialize_all()
+        hc = HoldingsCollector(registry=registry)
+        hc.load()
+        result = hc.refresh_sqlite_quotes(date_str)
+
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return
+
+    print(
+        f"SQLite 持仓快照回填 {result['date']}: "
+        f"快照更新 {result['updated']} 条, 当前价更新 {result['current_price_updated']} 条, "
+        f"失败 {result['failed']} 条, 跳过 {result['skipped']} 条"
+    )
+    for item in result["items"]:
+        status = item.get("status")
+        if status == "updated":
+            print(
+                f"  [updated] {item['code']} {item['name']} | "
+                f"收盘 {item.get('close')} | 盈亏 {item.get('pnl_pct')}% | "
+                f"换手 {item.get('turnover_rate')}% | "
+                f"MA5/10/20 {item.get('ma5')}/{item.get('ma10')}/{item.get('ma20')} | "
+                f"量能 {item.get('volume_vs_ma5')} | "
+                f"{'已更新当前价' if item.get('current_price_updated') else '仅写快照'}"
+            )
+        elif status == "error":
+            print(f"  [error] {item['code']} {item['name']} | {item.get('error')}")
+        else:
+            print(f"  [skip] {item['code']} {item['name']} | {item.get('reason')}")
+
+
+def _cmd_holdings_import_yaml(args: argparse.Namespace) -> None:
+    from . import queries as Q
+
+    path = Path(args.file).expanduser() if args.file else PROJECT_ROOT / "tracking" / "holdings.yaml"
+    if not path.is_file():
+        print(f"❌ 文件不存在: {path}")
+        return
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as e:
+        print(f"❌ 文件非 UTF-8 或编码损坏，无法读取: {path}\n{e}")
+        return
+    try:
+        parsed = yaml.safe_load(raw)
+    except yaml.YAMLError as e:
+        print(f"❌ YAML 解析失败: {e}")
+        return
+    if parsed is None:
+        parsed = {}
+    if not isinstance(parsed, dict):
+        print(f"⚠️ YAML 根须为映射（对象），当前为 {type(parsed).__name__}，跳过")
+        return
+    data = parsed
+    raw_holdings = data.get("holdings")
+    if raw_holdings is None:
+        rows: list = []
+    elif isinstance(raw_holdings, list):
+        rows = raw_holdings
+    else:
+        print(f"⚠️ holdings 须为序列，当前为 {type(raw_holdings).__name__}，跳过")
+        return
+    if not rows:
+        print("⚠️ YAML 中无 holdings 条目，跳过")
+        return
+    imported = 0
+    skip_reasons: dict[str, int] = {}
+    with get_db() as conn:
+        migrate(conn)
+        for h in rows:
+            if not isinstance(h, dict):
+                skip_reasons["not_mapping"] = skip_reasons.get("not_mapping", 0) + 1
+                continue
+            code = (h.get("code") or "").strip()
+            if not code:
+                skip_reasons["empty_code"] = skip_reasons.get("empty_code", 0) + 1
+                continue
+            shares, sr = _coerce_holdings_shares(h.get("shares"))
+            if shares is None:
+                key = sr or "invalid_shares"
+                skip_reasons[key] = skip_reasons.get(key, 0) + 1
+                continue
+            cost, cr = _coerce_holdings_cost(h.get("cost"))
+            if cost is None:
+                key = cr or "invalid_cost"
+                skip_reasons[key] = skip_reasons.get(key, 0) + 1
+                continue
+            Q.upsert_holding(
+                conn,
+                stock_code=code,
+                stock_name=(h.get("name") or "").strip() or code,
+                shares=shares,
+                entry_price=cost,
+                sector=(h.get("sector") or "").strip() or None,
+                status="active",
+            )
+            imported += 1
+    skipped = sum(skip_reasons.values())
+    msg = f"✅ 已从 {path} 导入 {imported} 条持仓到 SQLite（upsert active）"
+    if skipped:
+        detail = ", ".join(f"{k}={v}" for k, v in sorted(skip_reasons.items()))
+        msg += f"，跳过 {skipped} 条（{detail}）"
+    print(msg)
 
 
 # ── 关注池实现 ────────────────────────────────────────────────────

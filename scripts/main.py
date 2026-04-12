@@ -36,11 +36,11 @@
     # 预拉取未来 N 天宏观日历到 tracking/calendar_auto.yaml（供盘前合并）
     python main.py prefetch-calendar [--days 14] [--from YYYY-MM-DD]
 
-    # 更新持仓
-    python main.py holdings --add 688041.SH 海光信息 200 225.0 国产AI链
-    python main.py holdings --remove 688041.SH
-    python main.py holdings --list
-    python main.py holdings --refresh --date 2026-04-03
+    # 持仓（SQLite；CODE / NAME 等为占位符，请替换为实际证券代码、简称等）
+    python main.py db holdings-add --code CODE --name NAME --shares N --price P --sector SECTOR
+    python main.py db holdings-remove --code CODE
+    python main.py db holdings-list
+    python main.py db holdings-refresh --date YYYY-MM-DD
 """
 
 import argparse
@@ -537,7 +537,6 @@ def cmd_pre(config: dict, target_date: str):
 
         holdings_collector = HoldingsCollector(registry)
         holdings_collector.load()
-        holdings_collector.merge_sqlite_active_holdings()
         # 查最近3天公告
         d = datetime.strptime(target_date, "%Y-%m-%d")
         start = (d - timedelta(days=3)).strftime("%Y-%m-%d")
@@ -622,10 +621,9 @@ def cmd_post(config: dict, target_date: str):
         market_collector = MarketCollector(registry)
         raw_data = market_collector.collect_post_market(target_date)
 
-        # 采集持仓数据 + 盘后公告（与 SQLite 持仓池合并，避免仅 Web 录入时 tracking/holdings.yaml 为空）
+        # 采集持仓数据 + 盘后公告（持仓来自 SQLite active）
         holdings_collector = HoldingsCollector(registry)
         holdings_collector.load()
-        holdings_collector.merge_sqlite_active_holdings()
         holdings_data = holdings_collector.collect_holdings_data(target_date)
         try:
             holdings_data = holdings_collector.enrich_with_ma(holdings_data, target_date)
@@ -766,80 +764,6 @@ def cmd_regulatory(config: dict, args) -> None:
         col = RegulatoryCollector(registry)
         result = col.collect(target_date)
         print(col.format_report(result))
-
-
-def cmd_holdings(config: dict, args):
-    """持仓管理"""
-    from collectors import HoldingsCollector
-    hc = HoldingsCollector()
-    hc.load()
-
-    if args.holdings_action == "list":
-        holdings = hc.load()
-        if not holdings:
-            print("当前无持仓")
-        else:
-            print(f"当前持仓 ({len(holdings)} 只):")
-            for h in holdings:
-                print(f"  {h['code']} {h['name']} | {h.get('shares', 0)}股 | "
-                      f"成本: {h.get('cost', '-')} | 板块: {h.get('sector', '-')}")
-
-    elif args.holdings_action == "add":
-        if len(args.holdings_args) < 2:
-            print("用法: python main.py holdings --add <代码> <名称> [股数] [成本] [板块]")
-            return
-        stock = {
-            "code": args.holdings_args[0],
-            "name": args.holdings_args[1],
-            "shares": int(args.holdings_args[2]) if len(args.holdings_args) > 2 else 0,
-            "cost": float(args.holdings_args[3]) if len(args.holdings_args) > 3 else 0,
-            "sector": args.holdings_args[4] if len(args.holdings_args) > 4 else "",
-        }
-        hc.add_stock(stock)
-        hc.sync_yaml_stock_to_sqlite(stock)
-        print(f"已添加: {stock['name']} ({stock['code']})")
-
-    elif args.holdings_action == "remove":
-        if not args.holdings_args:
-            print("用法: python main.py holdings --remove <代码>")
-            return
-        code = args.holdings_args[0]
-        hc.remove_stock(code)
-        hc.sync_yaml_remove_from_sqlite(code)
-        print(f"已移除: {code}")
-
-    elif args.holdings_action == "refresh":
-        with without_standard_http_proxy():
-            registry = setup_providers(config)
-            registry.initialize_all()
-            hc = HoldingsCollector(registry=registry)
-            hc.load()
-            result = hc.refresh_sqlite_quotes(args.date)
-
-        if args.json:
-            print(json.dumps(result, ensure_ascii=False, indent=2))
-            return
-
-        print(
-            f"SQLite 持仓快照回填 {result['date']}: "
-            f"快照更新 {result['updated']} 条, 当前价更新 {result['current_price_updated']} 条, "
-            f"失败 {result['failed']} 条, 跳过 {result['skipped']} 条"
-        )
-        for item in result["items"]:
-            status = item.get("status")
-            if status == "updated":
-                print(
-                    f"  [updated] {item['code']} {item['name']} | "
-                    f"收盘 {item.get('close')} | 盈亏 {item.get('pnl_pct')}% | "
-                    f"换手 {item.get('turnover_rate')}% | "
-                    f"MA5/10/20 {item.get('ma5')}/{item.get('ma10')}/{item.get('ma20')} | "
-                    f"量能 {item.get('volume_vs_ma5')} | "
-                    f"{'已更新当前价' if item.get('current_price_updated') else '仅写快照'}"
-                )
-            elif status == "error":
-                print(f"  [error] {item['code']} {item['name']} | {item.get('error')}")
-            else:
-                print(f"  [skip] {item['code']} {item['name']} | {item.get('reason')}")
 
 
 def cmd_evening(config: dict, target_date: str):
@@ -1046,16 +970,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="与 --query 联用：输出 JSON",
     )
 
-    # holdings
-    holdings_parser = subparsers.add_parser("holdings", help="持仓管理")
-    holdings_parser.add_argument("--add", dest="holdings_action", action="store_const", const="add")
-    holdings_parser.add_argument("--remove", dest="holdings_action", action="store_const", const="remove")
-    holdings_parser.add_argument("--list", dest="holdings_action", action="store_const", const="list")
-    holdings_parser.add_argument("--refresh", dest="holdings_action", action="store_const", const="refresh", help="仅回填 SQLite 持仓现价，不改 daily 归档")
-    holdings_parser.add_argument("--date", default=date.today().isoformat(), help="日期 YYYY-MM-DD（--refresh 时使用）")
-    holdings_parser.add_argument("--json", action="store_true", help="输出 JSON（--refresh 时使用）")
-    holdings_parser.add_argument("holdings_args", nargs="*", default=[])
-
     # evening
     evening_parser = subparsers.add_parser("evening", help="仅晚间任务（定时请用 post；post 会自动先执行本流程）")
     evening_parser.add_argument("--date", default=date.today().isoformat(), help="日期 YYYY-MM-DD")
@@ -1212,10 +1126,6 @@ def main():
         cmd_post(config, args.date)
     elif args.command == "regulatory":
         cmd_regulatory(config, args)
-    elif args.command == "holdings":
-        if not args.holdings_action:
-            args.holdings_action = "list"
-        cmd_holdings(config, args)
     elif args.command == "evening":
         cmd_evening(config, args.date)
     elif args.command == "watchlist":

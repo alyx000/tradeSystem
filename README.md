@@ -259,8 +259,10 @@ python3 main.py ingest run --stage post_core --date YYYY-MM-DD
 python3 main.py ingest inspect --date YYYY-MM-DD --json
 python3 main.py ingest reconcile --stale-minutes 5 --json
 
+# 持仓以 SQLite 为唯一来源：若曾只用 tracking/holdings.yaml、DB 尚无 active 行，
+# 请先执行一次导入再跑盘前/盘后：python3 main.py db holdings-import-yaml [--file path]
 # 安全回填 SQLite 持仓现价与技术快照（不改 daily 归档）
-python3 main.py holdings --refresh --date YYYY-MM-DD --json
+python3 main.py db holdings-refresh --date YYYY-MM-DD --json
 
 # 交易计划
 python3 main.py plan draft --date YYYY-MM-DD

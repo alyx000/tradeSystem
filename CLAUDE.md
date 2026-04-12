@@ -197,6 +197,8 @@ python3 main.py db sync          # 重试失败的写入
 python3 main.py db reconcile     # YAML 与 DB 对账
 ```
 
+- **`db holdings-add` / `db watchlist-add`（Agent）**：CLI 同时需要 `--code` 与 `--name`。若用户**只提供代码**或**只提供证券简称**，须先用 Provider（如 `get_stock_basic_batch` / `get_stock_basic_list`）查询补全并经用户确认，**禁止**编造；多候选时由用户选定唯一代码。细则见 [`.cursor/skills/portfolio-manager/SKILL.md`](.cursor/skills/portfolio-manager/SKILL.md) 中「证券代码与简称」。
+
 ### 数据质量规范
 每条信息必须标注：
 - **类型**：`[事实]` / `[判断]` / `[传闻]` / `[观点]`

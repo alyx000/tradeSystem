@@ -30,6 +30,8 @@
 | `portfolio-manager` | `db holdings-add` | 新增持仓 |
 | `portfolio-manager` | `db holdings-remove` | 移除持仓（置 closed） |
 | `portfolio-manager` | `db holdings-list` | 列出当前持仓 |
+| `portfolio-manager` | `db holdings-refresh` | 回填持仓现价与技术快照（需数据源） |
+| `portfolio-manager` | `db holdings-import-yaml` | 将 `tracking/holdings.yaml` 导入 SQLite |
 | `portfolio-manager` | `db watchlist-add` | 添加到关注池 |
 | `portfolio-manager` | `db watchlist-remove` | 从关注池移除 |
 | `portfolio-manager` | `db watchlist-update` | 更新关注池标的 |

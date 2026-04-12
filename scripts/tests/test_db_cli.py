@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from db.cli import _coerce_holdings_cost, _coerce_holdings_shares
 from db.connection import get_connection
 
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent
@@ -326,6 +327,143 @@ class TestHoldings:
         with get_connection(tmp_db) as conn:
             row = conn.execute("SELECT status FROM holdings WHERE stock_code = '688041.SH'").fetchone()
         assert row["status"] == "closed"
+
+
+class TestHoldingsImportYaml:
+    def test_imports_rows_and_values(self, tmp_db, tmp_path):
+        yml = tmp_path / "h.yaml"
+        yml.write_text(
+            "holdings:\n"
+            '  - code: "300750"\n'
+            '    name: "宁德时代"\n'
+            "    shares: 100\n"
+            "    cost: 80.5\n"
+            '    sector: "锂电"\n',
+            encoding="utf-8",
+        )
+        result = _run_cli("holdings-import-yaml", "--file", str(yml), tmp_db=tmp_db)
+        assert result.returncode == 0
+        assert "导入 1 条" in result.stdout
+        assert "跳过" not in result.stdout
+
+        with get_connection(tmp_db) as conn:
+            row = conn.execute(
+                "SELECT stock_code, stock_name, shares, entry_price, sector, status FROM holdings WHERE status = 'active'"
+            ).fetchone()
+        assert row is not None
+        assert row["stock_code"] == "300750"
+        assert row["stock_name"] == "宁德时代"
+        assert row["shares"] == 100
+        assert row["entry_price"] == 80.5
+        assert row["sector"] == "锂电"
+
+    def test_skips_invalid_rows_with_counts(self, tmp_db, tmp_path):
+        yml = tmp_path / "bad.yaml"
+        yml.write_text(
+            "holdings:\n"
+            '  - code: "300750"\n'
+            '    name: "好"\n'
+            "    shares: 10\n"
+            "    cost: 1.0\n"
+            '  - code: "688001"\n'
+            '    name: "坏股数"\n'
+            '    shares: "not_int"\n'
+            "    cost: 1.0\n"
+            "  - code: \"\"\n"
+            '    name: "空代码"\n'
+            "    shares: 1\n"
+            "    cost: 1.0\n"
+            '  - code: "000001"\n'
+            '    name: "坏成本"\n'
+            "    shares: 100\n"
+            '    cost: "x"\n',
+            encoding="utf-8",
+        )
+        result = _run_cli("holdings-import-yaml", "--file", str(yml), tmp_db=tmp_db)
+        assert result.returncode == 0
+        assert "导入 1 条" in result.stdout
+        assert "跳过 3 条" in result.stdout
+        assert "empty_code" in result.stdout
+        assert "invalid_shares" in result.stdout
+        assert "invalid_cost" in result.stdout
+
+        with get_connection(tmp_db) as conn:
+            n = conn.execute("SELECT COUNT(*) FROM holdings WHERE status = 'active'").fetchone()[0]
+        assert n == 1
+
+    def test_root_not_dict_skips_without_crash(self, tmp_db, tmp_path):
+        yml = tmp_path / "root_list.yaml"
+        yml.write_text("- a\n- b\n", encoding="utf-8")
+        result = _run_cli("holdings-import-yaml", "--file", str(yml), tmp_db=tmp_db)
+        assert result.returncode == 0
+        assert "根须为映射" in result.stdout
+
+    def test_holdings_not_list_skips(self, tmp_db, tmp_path):
+        yml = tmp_path / "holdings_scalar.yaml"
+        yml.write_text('holdings: "oops"\n', encoding="utf-8")
+        result = _run_cli("holdings-import-yaml", "--file", str(yml), tmp_db=tmp_db)
+        assert result.returncode == 0
+        assert "holdings 须为序列" in result.stdout
+
+    def test_non_mapping_list_item_skipped(self, tmp_db, tmp_path):
+        yml = tmp_path / "mixed.yaml"
+        yml.write_text(
+            "holdings:\n"
+            '  - code: "300750"\n'
+            '    name: "宁德"\n'
+            "    shares: 10\n"
+            "    cost: 1.0\n"
+            "  - plain_string\n",
+            encoding="utf-8",
+        )
+        result = _run_cli("holdings-import-yaml", "--file", str(yml), tmp_db=tmp_db)
+        assert result.returncode == 0
+        assert "导入 1 条" in result.stdout
+        assert "not_mapping" in result.stdout
+        assert "跳过 1 条" in result.stdout
+
+    def test_scientific_notation_string_shares(self, tmp_db, tmp_path):
+        yml = tmp_path / "sci.yaml"
+        yml.write_text(
+            "holdings:\n"
+            '  - code: "300750"\n'
+            '    name: "宁德"\n'
+            '    shares: "1e2"\n'
+            "    cost: 80.0\n",
+            encoding="utf-8",
+        )
+        result = _run_cli("holdings-import-yaml", "--file", str(yml), tmp_db=tmp_db)
+        assert result.returncode == 0
+        assert "导入 1 条" in result.stdout
+        with get_connection(tmp_db) as conn:
+            row = conn.execute("SELECT shares FROM holdings WHERE stock_code = '300750'").fetchone()
+        assert row["shares"] == 100
+
+    def test_yaml_syntax_error_does_not_crash(self, tmp_db, tmp_path):
+        yml = tmp_path / "broken.yaml"
+        yml.write_text("holdings: [\n", encoding="utf-8")
+        result = _run_cli("holdings-import-yaml", "--file", str(yml), tmp_db=tmp_db)
+        assert result.returncode == 0
+        assert "YAML 解析失败" in result.stdout
+
+    def test_invalid_utf8_file_does_not_crash(self, tmp_db, tmp_path):
+        yml = tmp_path / "bad_enc.yaml"
+        yml.write_bytes(b"\xff\xfe\xff\x28")
+        result = _run_cli("holdings-import-yaml", "--file", str(yml), tmp_db=tmp_db)
+        assert result.returncode == 0
+        assert "编码损坏" in result.stdout or "非 UTF-8" in result.stdout
+
+
+class TestCoerceHoldingsYaml:
+    def test_shares_scientific_string(self):
+        v, err = _coerce_holdings_shares("1e2")
+        assert err == ""
+        assert v == 100
+
+    def test_cost_accepts_int_like(self):
+        v, err = _coerce_holdings_cost(80)
+        assert err == ""
+        assert v == 80.0
 
 
 # ── 关注池 ────────────────────────────────────────────────────────
