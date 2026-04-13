@@ -67,6 +67,78 @@ function phaseClass(phase: string) {
   return PHASE_COLOR[phase] ?? 'bg-gray-50 text-gray-600'
 }
 
+type RhythmSortKey = 'change_today' | 'cumulative_pct_5d' | 'cumulative_pct_10d'
+
+const RHYTHM_SORT_OPTIONS: { key: RhythmSortKey; label: string }[] = [
+  { key: 'change_today', label: '当日' },
+  { key: 'cumulative_pct_5d', label: '5日' },
+  { key: 'cumulative_pct_10d', label: '10日' },
+]
+
+function sortRhythm(items: SectorRhythmItem[], key: RhythmSortKey): SectorRhythmItem[] {
+  return [...items].sort((a, b) => {
+    const av = a[key] ?? -Infinity
+    const bv = b[key] ?? -Infinity
+    return (bv as number) - (av as number)
+  })
+}
+
+function RhythmSortedBlock({ sectorRhythm }: { sectorRhythm: SectorRhythmItem[] }) {
+  const [sortKey, setSortKey] = useState<RhythmSortKey>('change_today')
+  const sorted = sortRhythm(sectorRhythm, sortKey).slice(0, 10)
+
+  return (
+    <>
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-xs font-medium text-gray-600">行业节奏信号（当日前列）</span>
+        <div className="flex gap-1">
+          {RHYTHM_SORT_OPTIONS.map(opt => (
+            <button
+              key={opt.key}
+              onClick={() => setSortKey(opt.key)}
+              className={`px-2 py-0.5 rounded text-xs transition-colors ${
+                sortKey === opt.key
+                  ? 'bg-blue-100 text-blue-700 font-medium'
+                  : 'text-gray-400 hover:text-gray-600'
+              }`}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="space-y-1.5">
+        {sorted.map((item, i) => (
+          <div key={i} className="flex flex-wrap items-center gap-2 text-xs">
+            <span className="font-medium text-gray-800 min-w-[5rem]">{item.name}</span>
+            <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${phaseClass(item.phase ?? '')}`}>{item.phase}</span>
+            <span className={`font-medium ${Number(item.change_today) >= 0 ? 'text-green-600' : 'text-red-500'}`}>
+              {Number(item.change_today) >= 0 ? '+' : ''}{Number(item.change_today ?? 0).toFixed(2)}%
+            </span>
+            <span className="text-gray-400">#{item.rank_today}</span>
+            {item.confidence && (
+              <span className={`${CONFIDENCE_COLOR[item.confidence] ?? 'text-gray-400'}`}>置信:{item.confidence}</span>
+            )}
+            {item.cumulative_pct_5d != null && (
+              <span className={`font-medium ${item.cumulative_pct_5d >= 0 ? 'text-green-600' : 'text-red-500'}`}>
+                5日{item.cumulative_pct_5d >= 0 ? '+' : ''}{item.cumulative_pct_5d.toFixed(2)}%
+              </span>
+            )}
+            {item.cumulative_pct_10d != null && (
+              <span className={`font-medium ${item.cumulative_pct_10d >= 0 ? 'text-green-600' : 'text-red-500'}`}>
+                10日{item.cumulative_pct_10d >= 0 ? '+' : ''}{item.cumulative_pct_10d.toFixed(2)}%
+              </span>
+            )}
+            {item.consecutive_in_top30 != null && item.consecutive_in_top30 > 0 && (
+              <span className="text-gray-500">连榜{item.consecutive_in_top30}日</span>
+            )}
+          </div>
+        ))}
+      </div>
+    </>
+  )
+}
+
 function mapPhaseHintToBigCycleStage(phaseHint: string | null | undefined) {
   const normalized = (phaseHint || '').trim()
   return PHASE_TO_BIG_CYCLE_STAGE[normalized] || ''
@@ -254,70 +326,6 @@ export default function StepSectors({ data, onChange, prefill }: StepProps) {
   return (
     <div className="space-y-6">
       <TeacherNotesPanel notes={teacherNotes} fields={['sectors', 'key_points']} />
-      {projectionCandidates.length > 0 && (
-        <Section title="系统预填候选">
-          <PrefillBanner>
-            <div className="text-xs text-gray-500 mb-3">
-              系统已根据主线、最强板块、资金流、节奏、老师观点和行业信息，预先挑出值得推演的候选板块。
-            </div>
-            <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
-              {(showAllCandidates ? projectionCandidates : projectionCandidates.slice(0, 6)).map((candidate) => (
-                <div key={candidate.sector_name} className="rounded-lg border border-amber-200 bg-white p-3">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <div className="text-sm font-semibold text-gray-800">{candidate.sector_name}</div>
-                      <div className="mt-1 flex flex-wrap gap-1">
-                        {(candidate.source_tags || []).map((tag) => (
-                          <span
-                            key={`${candidate.sector_name}-${tag}`}
-                            className={`rounded px-1.5 py-0.5 text-xs font-medium ${SOURCE_TAG_CLASS[tag] || 'bg-gray-100 text-gray-700'}`}
-                          >
-                            {SOURCE_TAG_LABEL[tag] || tag}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => addProjectionFromCandidate(candidate)}
-                      className="shrink-0 rounded border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700 hover:bg-blue-100"
-                    >
-                      加入推演卡
-                    </button>
-                  </div>
-                  <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-gray-600">
-                    <div>阶段提示：{candidate.facts?.phase_hint || '-'}</div>
-                    <div>持续天数：{candidate.facts?.duration_days ?? '-'}</div>
-                    <div>涨跌幅：{fmtPct(candidate.facts?.pct_chg ?? null)}</div>
-                    <div>涨停家数：{candidate.facts?.limit_up_count ?? '-'}</div>
-                    <div>资金流：{fmtYi(candidate.facts?.net_amount_yi ?? null)}</div>
-                    <div>情绪龙头：{candidate.facts?.emotion_leader || '-'}</div>
-                    <div>容量中军：{candidate.facts?.capacity_leader || '-'}</div>
-                  </div>
-                  {candidate.key_stocks && candidate.key_stocks.length > 0 && (
-                    <div className="mt-2 text-xs text-gray-600">
-                      核心票：{candidate.key_stocks.join('、')}
-                    </div>
-                  )}
-                  {candidate.evidence_text && (
-                    <p className="mt-2 text-xs leading-relaxed text-gray-600">{candidate.evidence_text}</p>
-                  )}
-                </div>
-              ))}
-            </div>
-            {projectionCandidates.length > 6 && (
-              <button
-                type="button"
-                onClick={() => setShowAllCandidates(v => !v)}
-                className="text-xs text-blue-600 hover:text-blue-800 cursor-pointer mt-2"
-              >
-                {showAllCandidates ? '收起' : `展开全部 (${projectionCandidates.length})`}
-              </button>
-            )}
-          </PrefillBanner>
-        </Section>
-      )}
-
       {themes.length > 0 && (
         <PrefillBanner>
           <div className="text-xs text-gray-500 mb-1">当前活跃主线（{themes.length} 条）</div>
@@ -404,7 +412,7 @@ export default function StepSectors({ data, onChange, prefill }: StepProps) {
           const strongestRows = sectorSignals?.strongest_rows ?? []
           return (
             <PrefillBanner>
-              <div className="text-xs font-medium text-gray-600 mb-2">当日最强板块</div>
+              <div className="text-xs font-medium text-gray-600 mb-2">最强板块参考数据</div>
               <div className="overflow-x-auto">
                 <table className="min-w-full text-xs text-gray-600">
                   <thead>
@@ -434,6 +442,13 @@ export default function StepSectors({ data, onChange, prefill }: StepProps) {
             </PrefillBanner>
           )
         })()
+      )}
+
+      {/* ── 行业节奏分析（sector_rhythm_industry） ── */}
+      {sectorRhythm && sectorRhythm.length > 0 && (
+        <PrefillBanner>
+          <RhythmSortedBlock sectorRhythm={sectorRhythm} />
+        </PrefillBanner>
       )}
 
       {((sectorSignals?.industry_moneyflow_rows?.length ?? 0) > 0 || (sectorSignals?.concept_moneyflow_rows?.length ?? 0) > 0) && (
@@ -484,6 +499,76 @@ export default function StepSectors({ data, onChange, prefill }: StepProps) {
             )}
           </div>
         </PrefillBanner>
+      )}
+
+      {projectionCandidates.length > 0 && (
+        <Section title="系统预填候选">
+          <PrefillBanner>
+            <div className="text-xs text-gray-500 mb-3">
+              系统已根据主线、最强板块、资金流、节奏、老师观点和行业信息，预先挑出值得推演的候选板块。
+            </div>
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
+              {(showAllCandidates ? projectionCandidates : projectionCandidates.slice(0, 6)).map((candidate) => (
+                <div key={candidate.sector_name} className="rounded-lg border border-amber-200 bg-white p-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="text-sm font-semibold text-gray-800">{candidate.sector_name}</div>
+                      <div className="mt-1 flex flex-wrap gap-1">
+                        {(candidate.source_tags || []).map((tag) => (
+                          <span
+                            key={`${candidate.sector_name}-${tag}`}
+                            className={`rounded px-1.5 py-0.5 text-xs font-medium ${SOURCE_TAG_CLASS[tag] || 'bg-gray-100 text-gray-700'}`}
+                          >
+                            {SOURCE_TAG_LABEL[tag] || tag}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => addProjectionFromCandidate(candidate)}
+                      className="shrink-0 rounded border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700 hover:bg-blue-100"
+                    >
+                      加入推演卡
+                    </button>
+                  </div>
+                  <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-gray-600">
+                    <div>阶段提示：{candidate.facts?.phase_hint || '-'}</div>
+                    <div>持续天数：{candidate.facts?.duration_days ?? '-'}</div>
+                    <div>涨跌幅：{fmtPct(candidate.facts?.pct_chg ?? null)}</div>
+                    {candidate.facts?.cumulative_pct_5d != null && (
+                      <div>5日累计：{candidate.facts.cumulative_pct_5d >= 0 ? '+' : ''}{candidate.facts.cumulative_pct_5d.toFixed(2)}%</div>
+                    )}
+                    {candidate.facts?.cumulative_pct_10d != null && (
+                      <div>10日累计：{candidate.facts.cumulative_pct_10d >= 0 ? '+' : ''}{candidate.facts.cumulative_pct_10d.toFixed(2)}%</div>
+                    )}
+                    <div>涨停家数：{candidate.facts?.limit_up_count ?? '-'}</div>
+                    <div>资金流：{fmtYi(candidate.facts?.net_amount_yi ?? null)}</div>
+                    <div>情绪龙头：{candidate.facts?.emotion_leader || '-'}</div>
+                    <div>容量中军：{candidate.facts?.capacity_leader || '-'}</div>
+                  </div>
+                  {candidate.key_stocks && candidate.key_stocks.length > 0 && (
+                    <div className="mt-2 text-xs text-gray-600">
+                      核心票：{candidate.key_stocks.join('、')}
+                    </div>
+                  )}
+                  {candidate.evidence_text && (
+                    <p className="mt-2 text-xs leading-relaxed text-gray-600">{candidate.evidence_text}</p>
+                  )}
+                </div>
+              ))}
+            </div>
+            {projectionCandidates.length > 6 && (
+              <button
+                type="button"
+                onClick={() => setShowAllCandidates(v => !v)}
+                className="text-xs text-blue-600 hover:text-blue-800 cursor-pointer mt-2"
+              >
+                {showAllCandidates ? '收起' : `展开全部 (${projectionCandidates.length})`}
+              </button>
+            )}
+          </PrefillBanner>
+        </Section>
       )}
 
       <DynamicList
@@ -593,28 +678,6 @@ export default function StepSectors({ data, onChange, prefill }: StepProps) {
                 </div>
               </div>
             )}
-          </div>
-        </PrefillBanner>
-      )}
-
-      {/* ── 行业节奏分析（sector_rhythm_industry） ── */}
-      {sectorRhythm && sectorRhythm.length > 0 && (
-        <PrefillBanner>
-          <div className="text-xs font-medium text-gray-600 mb-2">行业节奏信号（当日前列）</div>
-          <div className="space-y-1.5">
-            {sectorRhythm.slice(0, 10).map((item, i) => (
-              <div key={i} className="flex flex-wrap items-center gap-2 text-xs">
-                <span className="font-medium text-gray-800 min-w-[5rem]">{item.name}</span>
-                <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${phaseClass(item.phase ?? '')}`}>{item.phase}</span>
-                <span className={`font-medium ${Number(item.change_today) >= 0 ? 'text-green-600' : 'text-red-500'}`}>
-                  {Number(item.change_today) >= 0 ? '+' : ''}{Number(item.change_today ?? 0).toFixed(2)}%
-                </span>
-                <span className="text-gray-400">#{item.rank_today}</span>
-                {item.confidence && (
-                  <span className={`${CONFIDENCE_COLOR[item.confidence] ?? 'text-gray-400'}`}>置信:{item.confidence}</span>
-                )}
-              </div>
-            ))}
           </div>
         </PrefillBanner>
       )}

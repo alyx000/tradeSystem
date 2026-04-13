@@ -672,6 +672,10 @@ def _build_sector_projection_candidates(
                 candidate["facts"]["phase_hint"] = phase
             if item.get("change_today") is not None:
                 candidate["facts"]["pct_chg"] = item.get("change_today")
+            if item.get("cumulative_pct_5d") is not None:
+                candidate["facts"]["cumulative_pct_5d"] = item.get("cumulative_pct_5d")
+            if item.get("cumulative_pct_10d") is not None:
+                candidate["facts"]["cumulative_pct_10d"] = item.get("cumulative_pct_10d")
             add_evidence(
                 candidate,
                 f"节奏信号 {phase or '待判断'}，当日涨跌幅 {item.get('change_today') if item.get('change_today') is not None else '-'}%",

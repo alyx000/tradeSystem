@@ -750,6 +750,10 @@ export interface SectorRhythmItem {
   change_today?: number | null
   rank_today?: number | null
   confidence?: string | null
+  cumulative_pct_5d?: number | null
+  cumulative_pct_10d?: number | null
+  consecutive_in_top30?: number | null
+  top_stock_today?: string | null
 }
 
 export interface StyleFactorCapPreference {
@@ -849,6 +853,8 @@ export interface ReviewProjectionCandidate {
     capacity_leader?: string | null
     lead_stock?: string | null
     net_amount_yi?: number | null
+    cumulative_pct_5d?: number | null
+    cumulative_pct_10d?: number | null
     teacher_note_refs?: Array<{
       note_id?: number | null
       teacher_name?: string | null

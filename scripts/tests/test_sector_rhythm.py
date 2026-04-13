@@ -642,6 +642,62 @@ class TestInjectionScope:
         assert "板块14" not in result_names
 
 
+# =====================================================================
+# T11. cumulative_pct_10d — 10日累计涨幅
+# =====================================================================
+
+class TestCumulativePct10d:
+    def test_cumulative_pct_10d_full(self, tmp_path):
+        """构造 12 天数据（每天 change_pct=1.0），cumulative_pct_10d 应只取最近 10 天 = 10.0。"""
+        analyzer = _build_analyzer(tmp_path)
+        dates = [f"2026-03-{d:02d}" for d in range(16, 28)]  # 16~27，12天
+        all_dates = dates
+        series = _make_series(
+            dates=dates,
+            ranks=[5] * 12,
+            changes=[1.0] * 12,
+        )
+        sig = analyzer._compute_signals(series, "2026-03-27", all_dates)
+        assert sig["cumulative_pct_10d"] == pytest.approx(10.0)
+        assert sig["cumulative_pct_5d"] == pytest.approx(5.0)
+
+    def test_cumulative_pct_10d_insufficient(self, tmp_path):
+        """构造只有 4 天数据（每天 change_pct=2.0），数据不足时只累加实有天数。
+        cumulative_pct_10d == 8.0，cumulative_pct_5d 同样 == 8.0。
+        """
+        analyzer = _build_analyzer(tmp_path)
+        dates = ["2026-03-24", "2026-03-25", "2026-03-26", "2026-03-27"]
+        all_dates = dates
+        series = _make_series(
+            dates=dates,
+            ranks=[5] * 4,
+            changes=[2.0] * 4,
+        )
+        sig = analyzer._compute_signals(series, "2026-03-27", all_dates)
+        assert sig["cumulative_pct_10d"] == pytest.approx(8.0)
+        assert sig["cumulative_pct_5d"] == pytest.approx(8.0)
+
+    def test_cumulative_pct_10d_partial_in_top30(self, tmp_path):
+        """10 个交易日内板块只上榜其中 6 天（另 4 天未出现在 series），
+        cumulative_pct_10d 只累加上榜的 6 天（= 6 * 1.5 = 9.0），
+        cumulative_pct_5d 只累加最近 5 天中上榜的 3 天（= 3 * 1.5 = 4.5）。
+        """
+        analyzer = _build_analyzer(tmp_path)
+        # 12 个全市场交易日；板块只在其中 6 天上榜（跳过序号奇数日）
+        all_dates = [f"2026-03-{d:02d}" for d in range(16, 28)]  # 16~27，12天
+        listed_dates = [d for d in all_dates if int(d[-2:]) % 2 == 0]  # 偶数日：16,18,20,22,24,26 共6天
+        series = _make_series(
+            dates=listed_dates,
+            ranks=[5] * len(listed_dates),
+            changes=[1.5] * len(listed_dates),
+        )
+        sig = analyzer._compute_signals(series, "2026-03-27", all_dates)
+        # 最近 10 天 = 03-18~03-27，其中上榜日为 18,20,22,24,26 共 5 天
+        assert sig["cumulative_pct_10d"] == pytest.approx(5 * 1.5)
+        # 最近 5 天 = 03-23~03-27，其中上榜日为 24,26 共 2 天
+        assert sig["cumulative_pct_5d"] == pytest.approx(2 * 1.5)
+
+
 class TestEmptyDaysSkipped:
     """空板块数据的日期（如周末测试残留）不应计入 all_dates，避免截断连续性。"""
 

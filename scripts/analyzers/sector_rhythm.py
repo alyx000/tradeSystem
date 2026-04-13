@@ -171,10 +171,17 @@ class SectorRhythmAnalyzer:
             if date_3d_ago in by_date:
                 rank_change_3d = rank_today - by_date[date_3d_ago]["rank"]
 
-        # 4. 近5日累计涨幅（含今日）
+        # 4. 近5/10日累计涨幅（含今日）
+        # 口径：取全市场最近 N 个有归档的交易日窗口内，该板块**实际出现在前30**的日期
+        # 的 change_pct 之和。未上榜日不计入（不补 0），因此与「任意 N 日区间真实涨跌幅」
+        # 有差异——适合衡量「上榜期间」累计强度，而非完整区间收益。
         recent_5_dates = dates_up_to_today[-5:]
         recent_5 = [by_date[d] for d in recent_5_dates if d in by_date]
         cumulative_pct_5d = sum(e["change_pct"] for e in recent_5)
+
+        recent_10_dates = dates_up_to_today[-10:]
+        recent_10 = [by_date[d] for d in recent_10_dates if d in by_date]
+        cumulative_pct_10d = sum(e["change_pct"] for e in recent_10)
 
         # 5. 近3日涨速加速度（一阶差分均值，正=加速，负=减速）
         recent_3_dates = dates_up_to_today[-3:]
@@ -208,6 +215,7 @@ class SectorRhythmAnalyzer:
             "days_in_top30_of_20": days_in_top,
             "rank_change_3d": rank_change_3d,
             "cumulative_pct_5d": round(cumulative_pct_5d, 2),
+            "cumulative_pct_10d": round(cumulative_pct_10d, 2),
             "daily_accel_3d": round(daily_accel_3d, 3) if daily_accel_3d is not None else None,
             "top_stock_stability_5d": round(stability, 2) if stability is not None else None,
             "max_consecutive_hist": max_consecutive_hist,
@@ -427,6 +435,7 @@ class SectorRhythmAnalyzer:
                 "top_stock_today": sig.get("top_stock_today", ""),
                 "consecutive_in_top30": sig.get("consecutive_in_top30", 0),
                 "cumulative_pct_5d": sig.get("cumulative_pct_5d", 0),
+                "cumulative_pct_10d": sig.get("cumulative_pct_10d", 0),
                 "phase": classification["phase"],
                 "confidence": classification["confidence"],
                 "evidence": classification["evidence"],
