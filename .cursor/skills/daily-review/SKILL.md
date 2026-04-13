@@ -47,7 +47,7 @@ make db-search KEYWORD=情绪 FROM=YYYY-MM-DD TO=YYYY-MM-DD
    - 板块梳理
    - 情绪周期
    - 风格化赚钱效应
-   - 龙头 / 最票识别
+   - 龙头 / 最票识别（**Agent 主动推荐**：进入此步时，Agent 先读取预填候选 `step5_leaders` + 历史最票 `leader_tracking` + 前 4 步上下文 + [最票方法论](../sector-projection-analysis/references/leader-identification.md)，综合分析后输出结构化最票推荐，标注 `[判断]`，等用户确认/修改后再录入）
    - 节点判断
    - 持仓检视
    - 次日计划
@@ -60,6 +60,7 @@ make db-search KEYWORD=情绪 FROM=YYYY-MM-DD TO=YYYY-MM-DD
 - 不要把 `[判断]` 写成 `[事实]`。
 - 不要在用户未确认前直接提交 `PUT /api/review/{date}`。
 - 不要把复盘工作台任务误当成 `TradePlan` 确认流程。
+- 不要在用户否定最票推荐后反复质疑——用户拍板即以用户结论为准。
 
 ## 最小验证
 

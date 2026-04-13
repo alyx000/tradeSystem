@@ -757,7 +757,37 @@ _SQL_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_plan_reviews_plan_id ON plan_reviews(plan_id);",
     "CREATE INDEX IF NOT EXISTS idx_knowledge_assets_type_created ON knowledge_assets(asset_type, created_at DESC);",
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_trade_calendar_date ON trade_calendar(date);",
+    "CREATE INDEX IF NOT EXISTS idx_leader_tracking_active ON leader_tracking(is_active, last_seen_date DESC);",
 ]
+
+# ──────────────────────────────────────────────────────────────
+# 12. 最票跟踪
+# ──────────────────────────────────────────────────────────────
+_SQL_LEADER_TRACKING = """
+CREATE TABLE IF NOT EXISTS leader_tracking (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    stock_code TEXT NOT NULL,
+    stock_name TEXT NOT NULL,
+    sector TEXT NOT NULL,
+    attribute_type TEXT NOT NULL,
+    first_seen_date TEXT NOT NULL CHECK(first_seen_date GLOB '????-??-??'),
+    last_seen_date TEXT NOT NULL CHECK(last_seen_date GLOB '????-??-??'),
+    consecutive_days INTEGER DEFAULT 1,
+    current_phase TEXT,
+    is_active BOOLEAN DEFAULT 1,
+    notes TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(stock_code, sector, attribute_type)
+);
+"""
+
+_SQL_LEADER_TRACKING_TRIGGER = """
+CREATE TRIGGER IF NOT EXISTS leader_tracking_updated
+AFTER UPDATE ON leader_tracking BEGIN
+    UPDATE leader_tracking SET updated_at = datetime('now') WHERE id = new.id;
+END;
+"""
 
 # ──────────────────────────────────────────────────────────────
 # 交易日历
@@ -803,6 +833,7 @@ _ALL_TABLE_SQL = [
     _SQL_TRADE_PLANS,
     _SQL_PLAN_REVIEWS,
     _SQL_KNOWLEDGE_ASSETS,
+    _SQL_LEADER_TRACKING,
     _SQL_TRADE_CALENDAR,
 ]
 
@@ -815,7 +846,7 @@ _ALL_FTS_SQL = [
 _ALL_TRIGGER_SQL = (
     _SQL_TEACHER_NOTES_FTS_TRIGGERS
     + [_SQL_HOLDINGS_TRIGGER, _SQL_HOLDING_TASKS_TRIGGER, _SQL_WATCHLIST_TRIGGER, _SQL_DAILY_REVIEWS_TRIGGER]
-    + [_SQL_STOCK_REGULATORY_MONITOR_TRIGGER, _SQL_STOCK_REGULATORY_STK_ALERT_TRIGGER]
+    + [_SQL_STOCK_REGULATORY_MONITOR_TRIGGER, _SQL_STOCK_REGULATORY_STK_ALERT_TRIGGER, _SQL_LEADER_TRACKING_TRIGGER]
     + _SQL_INDUSTRY_INFO_FTS_TRIGGERS
     + _SQL_MACRO_INFO_FTS_TRIGGERS
 )
@@ -834,6 +865,7 @@ EXPECTED_TABLES = [
     "stock_regulatory_stk_alert",
     "market_observations", "trade_drafts", "trade_plans", "plan_reviews",
     "knowledge_assets",
+    "leader_tracking",
     "teacher_notes_fts", "industry_info_fts", "macro_info_fts",
 ]
 

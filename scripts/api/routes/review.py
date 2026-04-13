@@ -879,6 +879,34 @@ def get_prefill(date: str, conn: sqlite3.Connection = Depends(get_db_conn)):
 
     prev_trade_date = Q.get_prev_trade_date_from_db(conn, date) if not is_trading_day_calendar else None
 
+    # ── step5_leaders 预填：从候选板块汇总最票 ──
+    step5_prefill_leaders: list[dict[str, Any]] = []
+    seen_pairs: set[tuple[str, str]] = set()
+    for cand in review_signals["sectors"]["projection_candidates"]:
+        sector_name = cand.get("sector_name", "")
+        facts = cand.get("facts") or {}
+        for role, attr_type in [
+            ("emotion_leader", "走势引领"),
+            ("capacity_leader", "容量最大"),
+        ]:
+            stock = facts.get(role)
+            if not stock:
+                continue
+            pair = (stock, sector_name)
+            if pair in seen_pairs:
+                continue
+            seen_pairs.add(pair)
+            step5_prefill_leaders.append({
+                "stock": stock,
+                "sector": sector_name,
+                "attribute_type": attr_type,
+                "attribute": "",
+                "clarity": "",
+                "position": "",
+                "is_new": False,
+                "is_prefilled": True,
+            })
+
     return {
         "date": date,
         "is_trading_day": is_trading_day,
@@ -896,6 +924,7 @@ def get_prefill(date: str, conn: sqlite3.Connection = Depends(get_db_conn)):
         "industry_info": industry_info,
         "review_signals": review_signals,
         "holding_signals": holding_signals,
+        "step5_leaders": {"top_leaders": step5_prefill_leaders} if step5_prefill_leaders else None,
     }
 
 
@@ -926,5 +955,42 @@ def save_review(date: str, body: dict, conn: sqlite3.Connection = Depends(get_db
     if "step7_positions" in body:
         tasks = _extract_holding_tasks_from_step7(body.get("step7_positions"))
         Q.replace_holding_tasks(conn, trade_date=date, tasks=tasks, source="review_step7")
+    _sync_leader_tracking(conn, date, body.get("step5_leaders"))
     conn.commit()
     return {"ok": True, "date": date}
+
+
+def _sync_leader_tracking(
+    conn: sqlite3.Connection,
+    review_date: str,
+    step5: Any,
+) -> None:
+    """将复盘第 5 步最票写入 leader_tracking 表。"""
+    if not step5:
+        return
+    if isinstance(step5, str):
+        try:
+            step5 = json.loads(step5)
+        except (json.JSONDecodeError, TypeError):
+            return
+    if not isinstance(step5, dict):
+        return
+    leaders = step5.get("top_leaders")
+    if not isinstance(leaders, list):
+        return
+    for item in leaders:
+        if not isinstance(item, dict):
+            continue
+        stock = (item.get("stock") or "").strip()
+        sector = (item.get("sector") or "").strip()
+        if not stock or not sector:
+            continue
+        Q.upsert_leader_tracking(
+            conn,
+            stock_code=stock,
+            stock_name=stock,
+            sector=sector,
+            attribute_type=item.get("attribute_type") or item.get("attribute") or "",
+            seen_date=review_date,
+            current_phase=item.get("position") or None,
+        )

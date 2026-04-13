@@ -909,6 +909,18 @@ export interface ReviewPrefillData extends Omit<PrefillData, 'market' | 'main_th
   holding_signals?: HoldingSignalsPayload
   is_trading_day?: boolean
   prev_trade_date?: string
+  step5_leaders?: {
+    top_leaders: Array<{
+      stock: string
+      sector: string
+      attribute_type: string
+      attribute: string
+      clarity: string
+      position: string
+      is_new: boolean
+      is_prefilled: boolean
+    }>
+  } | null
 }
 
 export interface ReviewRecord extends Partial<Record<ReviewStepKey, string | ReviewStepValue>> {

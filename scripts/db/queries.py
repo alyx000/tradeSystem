@@ -1429,6 +1429,98 @@ def trade_calendar_year_covered(conn: sqlite3.Connection, year: int) -> bool:
     return cnt >= 200
 
 
+# ──────────────────────────────────────────────────────────────
+# Leader Tracking (最票跟踪)
+# ──────────────────────────────────────────────────────────────
+
+def upsert_leader_tracking(
+    conn: sqlite3.Connection,
+    *,
+    stock_code: str,
+    stock_name: str,
+    sector: str,
+    attribute_type: str,
+    seen_date: str,
+    current_phase: str | None = None,
+    notes: str | None = None,
+) -> int:
+    """根据复盘第5步的最票记录，upsert leader_tracking。
+
+    如果 (stock_code, sector, attribute_type) 已存在：
+    - 更新 last_seen_date, consecutive_days, current_phase
+    - consecutive_days 仅在连续日期时递增（简化处理：直接+1，不校验日期连续性）
+    如果不存在：
+    - 插入新记录，first_seen_date = last_seen_date = seen_date
+    返回记录 id。
+    """
+    row = conn.execute(
+        "SELECT id, last_seen_date, consecutive_days FROM leader_tracking "
+        "WHERE stock_code = ? AND sector = ? AND attribute_type = ?",
+        (stock_code, sector, attribute_type),
+    ).fetchone()
+    if row:
+        record_id = row["id"]
+        old_last = row["last_seen_date"]
+        old_days = row["consecutive_days"] or 1
+        new_days = old_days + 1 if old_last != seen_date else old_days
+        sets = ["last_seen_date = ?", "consecutive_days = ?", "is_active = 1", "stock_name = ?"]
+        vals: list[Any] = [seen_date, new_days, stock_name]
+        if current_phase is not None:
+            sets.append("current_phase = ?")
+            vals.append(current_phase)
+        if notes is not None:
+            sets.append("notes = ?")
+            vals.append(notes)
+        vals.append(record_id)
+        conn.execute(
+            f"UPDATE leader_tracking SET {', '.join(sets)} WHERE id = ?",
+            vals,
+        )
+        return record_id
+    else:
+        cur = conn.execute(
+            """
+            INSERT INTO leader_tracking
+            (stock_code, stock_name, sector, attribute_type,
+             first_seen_date, last_seen_date, consecutive_days,
+             current_phase, is_active, notes)
+            VALUES (?, ?, ?, ?, ?, ?, 1, ?, 1, ?)
+            """,
+            (stock_code, stock_name, sector, attribute_type,
+             seen_date, seen_date, current_phase, notes),
+        )
+        return cur.lastrowid  # type: ignore[return-value]
+
+
+def get_active_leaders(
+    conn: sqlite3.Connection,
+    *,
+    limit: int = 50,
+) -> list[dict]:
+    """获取所有活跃的最票跟踪记录。"""
+    return _rows_to_list(
+        conn.execute(
+            "SELECT * FROM leader_tracking WHERE is_active = 1 "
+            "ORDER BY last_seen_date DESC, consecutive_days DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    )
+
+
+def deactivate_stale_leaders(
+    conn: sqlite3.Connection,
+    *,
+    before_date: str,
+) -> int:
+    """将 last_seen_date 早于 before_date 的活跃最票标记为失活。"""
+    cur = conn.execute(
+        "UPDATE leader_tracking SET is_active = 0 "
+        "WHERE is_active = 1 AND last_seen_date < ?",
+        (before_date,),
+    )
+    return cur.rowcount
+
+
 def list_regulatory_monitor_api(conn: sqlite3.Connection, publish_date: str, type_filter: str) -> list[dict]:
     """type_filter: all | 1 | 2 | 3"""
     if type_filter == "3":
