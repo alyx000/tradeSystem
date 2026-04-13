@@ -236,3 +236,72 @@ export function DynamicList<T extends object>({ title, items, onChange, defaultI
     </div>
   )
 }
+
+/* ── 互动易 Q&A 展示 ────────────────────────────────── */
+
+interface InvestorQaItem {
+  question?: string
+  answer?: string
+  date?: string
+}
+
+function QaEntry({ qa }: { qa: InvestorQaItem }) {
+  const [expanded, setExpanded] = useState(false)
+  const QUESTION_LIMIT = 80
+  const ANSWER_LIMIT = 120
+  const qTruncated = !expanded && (qa.question?.length ?? 0) > QUESTION_LIMIT
+  const aTruncated = !expanded && (qa.answer?.length ?? 0) > ANSWER_LIMIT
+  const needsToggle = (qa.question?.length ?? 0) > QUESTION_LIMIT || (qa.answer?.length ?? 0) > ANSWER_LIMIT
+  return (
+    <div>
+      {qa.date && <span className="text-gray-400">[{qa.date}]&nbsp;</span>}
+      {qa.question && (
+        <div>
+          <span className="text-gray-500">Q：</span>
+          {qTruncated ? qa.question.slice(0, QUESTION_LIMIT) + '…' : qa.question}
+        </div>
+      )}
+      {qa.answer && (
+        <div className="pl-3 text-gray-500">
+          <span>A：</span>
+          {aTruncated ? qa.answer.slice(0, ANSWER_LIMIT) + '…' : qa.answer}
+        </div>
+      )}
+      {needsToggle && (
+        <button
+          onClick={() => setExpanded(e => !e)}
+          className="pl-3 text-amber-600 hover:text-amber-800 text-xs mt-0.5"
+        >
+          {expanded ? '收起' : '展开全文'}
+        </button>
+      )}
+    </div>
+  )
+}
+
+export function InvestorQaList({ items, maxShow = 3, compact = false }: {
+  items: InvestorQaItem[]
+  maxShow?: number
+  compact?: boolean
+}) {
+  const [showAll, setShowAll] = useState(false)
+  const visible = showAll ? items : items.slice(0, maxShow)
+  return (
+    <div>
+      <span className={compact ? 'font-medium text-gray-600' : 'font-medium text-gray-700'}>
+        互动易（{items.length} 条）{compact ? '' : '：'}
+      </span>
+      <div className="mt-1 space-y-1.5 pl-2 border-l-2 border-amber-300">
+        {visible.map((qa, i) => <QaEntry key={i} qa={qa} />)}
+      </div>
+      {items.length > maxShow && (
+        <button
+          onClick={() => setShowAll(s => !s)}
+          className="pl-2 text-amber-600 hover:text-amber-800 text-xs mt-1"
+        >
+          {showAll ? '收起' : `查看全部 ${items.length} 条`}
+        </button>
+      )}
+    </div>
+  )
+}

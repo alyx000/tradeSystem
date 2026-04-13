@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom'
 import { api } from '../lib/api'
 import { localDateString } from '../lib/date'
 import type { Holding, HoldingCreateInput, HoldingSignalItem, HoldingTaskItem, HoldingUpdateInput } from '../lib/types'
+import { InvestorQaList } from '../components/review/widgets'
 
 const today = localDateString()
 
@@ -511,9 +512,9 @@ export default function Holdings() {
                       if (!investor_qa?.length && !research_reports?.length && !news?.length) return '—'
                       return (
                         <div className="space-y-1">
-                          {investor_qa?.slice(0, 2).map((qa, i) => (
-                            <div key={`qa-${i}`}>互动易：{qa.question ? `${qa.question.slice(0, 60)}${qa.question.length > 60 ? '…' : ''}` : '—'}</div>
-                          ))}
+                          {investor_qa?.length ? (
+                            <InvestorQaList items={investor_qa} maxShow={2} compact />
+                          ) : null}
                           {research_reports?.slice(0, 1).map((rr, i) => (
                             <div key={`rr-${i}`}>研报：{rr.institution || ''}{rr.rating ? `「${rr.rating}」` : ''}{rr.target_price ? ` ${rr.target_price}` : ''}</div>
                           ))}

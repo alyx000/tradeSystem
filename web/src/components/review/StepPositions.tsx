@@ -1,5 +1,5 @@
 import { useEffect, useMemo } from 'react'
-import { type StepProps, Row, SelectField, TextField, NumberField, CheckField, PrefillBanner, DynamicList } from './widgets'
+import { type StepProps, Row, SelectField, TextField, NumberField, CheckField, PrefillBanner, DynamicList, InvestorQaList } from './widgets'
 import type { Holding, HoldingSignalItem } from '../../lib/types'
 
 interface PositionItem {
@@ -217,11 +217,7 @@ export default function StepPositions({ data, onChange, prefill }: StepProps) {
                   <div><span className="font-medium text-gray-700">事件风险：</span>{eventText || '-'}</div>
                   <div><span className="font-medium text-gray-700">昨日计划：</span>{signal.latest_task?.action_plan || '-'}</div>
                   {signal.info_signals?.investor_qa?.length ? (
-                    <div><span className="font-medium text-gray-700">互动易：</span>
-                      {signal.info_signals.investor_qa.slice(0, 3).map((qa, i) => (
-                        <span key={i}>{i > 0 ? '；' : ''}{qa.question ? `Q: ${qa.question.slice(0, 80)}${qa.question.length > 80 ? '…' : ''}` : ''}{qa.answer ? ` A: ${qa.answer.slice(0, 100)}${qa.answer.length > 100 ? '…' : ''}` : ''}</span>
-                      ))}
-                    </div>
+                    <InvestorQaList items={signal.info_signals.investor_qa} />
                   ) : null}
                   {signal.info_signals?.research_reports?.length ? (
                     <div><span className="font-medium text-gray-700">研报：</span>

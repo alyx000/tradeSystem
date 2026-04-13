@@ -118,7 +118,7 @@ describe('StepPositions', () => {
     expect(screen.getByText(/披露计划 20260420/)).toBeInTheDocument()
     expect(screen.getByText('昨日计划：')).toBeInTheDocument()
     expect(screen.getByText('若冲高回落则减仓')).toBeInTheDocument()
-    expect(screen.getByText('互动易：')).toBeInTheDocument()
+    expect(screen.getByText(/互动易（\d+ 条）/)).toBeInTheDocument()
     expect(screen.getByText(/公司产能规划如何/)).toBeInTheDocument()
     expect(screen.getByText('研报：')).toBeInTheDocument()
     expect(screen.getByText(/中金/)).toBeInTheDocument()
