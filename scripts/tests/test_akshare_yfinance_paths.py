@@ -1,7 +1,7 @@
 """AkShareProvider：亚太 yfinance 与 get_us_tickers_overnight，mock yfinance，无东财。"""
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 import pandas as pd
 import pytest
@@ -192,28 +192,64 @@ class TestGetStockNews:
 
 class TestGetInvestorQa:
     def test_returns_qa(self, ak: AkshareProvider):
-        df = pd.DataFrame({
-            "问题": ["Q1内容", "Q2内容"],
-            "回答内容": ["A1内容", "A2内容"],
-            "提问时间": ["2026-03-25 10:00:00", "2026-03-26 11:00:00"],
-        })
-        ak.ak.stock_irm_cninfo.return_value = df
+        ak._fetch_irm_cninfo_raw = Mock(return_value=[
+            {"mainContent": "Q1内容", "attachedContent": "A1内容", "pubDate": 1774252800000},
+            {"mainContent": "Q2内容", "attachedContent": "A2内容", "pubDate": 1774339200000},
+        ])
         r = ak.get_investor_qa("600519.SH", "2026-03-20", "2026-03-27")
         assert r.success
-        assert len(r.data) >= 1
+        assert len(r.data) == 2
         assert r.data[0]["question"] == "Q1内容"
         assert r.data[0]["answer"] == "A1内容"
+        assert "2026-03-2" in r.data[0]["date"]
 
-    def test_empty_df(self, ak: AkshareProvider):
-        ak.ak.stock_irm_cninfo.return_value = pd.DataFrame()
+    def test_empty_result(self, ak: AkshareProvider):
+        ak._fetch_irm_cninfo_raw = Mock(return_value=[])
         r = ak.get_investor_qa("600519.SH", "2026-03-20", "2026-03-27")
         assert r.success
         assert r.data == []
 
     def test_exception(self, ak: AkshareProvider):
-        ak.ak.stock_irm_cninfo.side_effect = Exception("fail")
+        ak._fetch_irm_cninfo_raw = Mock(side_effect=Exception("fail"))
         r = ak.get_investor_qa("600519.SH", "2026-03-20", "2026-03-27")
         assert not r.success
+
+    def test_unanswered_question(self, ak: AkshareProvider):
+        ak._fetch_irm_cninfo_raw = Mock(return_value=[
+            {"mainContent": "Q未答", "attachedContent": None, "pubDate": 1774252800000},
+        ])
+        r = ak.get_investor_qa("300750.SZ", "2026-03-20", "2026-03-27")
+        assert r.success
+        assert len(r.data) == 1
+        assert r.data[0]["answer"] == ""
+
+    def test_no_pubdate_still_included(self, ak: AkshareProvider):
+        ak._fetch_irm_cninfo_raw = Mock(return_value=[
+            {"mainContent": "Q无日期", "attachedContent": "A无日期", "pubDate": None},
+        ])
+        r = ak.get_investor_qa("002594.SZ", "2026-03-20", "2026-03-27")
+        assert r.success
+        assert len(r.data) == 1
+        assert r.data[0]["date"] == ""
+
+    def test_out_of_range_filtered(self, ak: AkshareProvider):
+        ak._fetch_irm_cninfo_raw = Mock(return_value=[
+            {"mainContent": "Q旧", "attachedContent": "A旧", "pubDate": 1711339200000},
+        ])
+        r = ak.get_investor_qa("002594.SZ", "2026-03-20", "2026-03-27")
+        assert r.success
+        assert r.data == []
+
+    def test_truncation(self, ak: AkshareProvider):
+        long_q = "Q" * 500
+        long_a = "A" * 800
+        ak._fetch_irm_cninfo_raw = Mock(return_value=[
+            {"mainContent": long_q, "attachedContent": long_a, "pubDate": 1774252800000},
+        ])
+        r = ak.get_investor_qa("002594.SZ", "2026-03-20", "2026-03-27")
+        assert r.success
+        assert len(r.data[0]["question"]) == 300
+        assert len(r.data[0]["answer"]) == 500
 
 
 # ---------------------------------------------------------------------------

@@ -830,54 +830,93 @@ class AkshareProvider(DataProvider):
 
     # ---- 互动易 ----
 
+    _CNINFO_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
+
+    def _fetch_irm_cninfo_raw(self, code_num: str) -> list[dict]:
+        """直接调用巨潮 IRM API 获取原始问答行，绕过 akshare 空结果崩溃。"""
+        import requests as _req
+
+        headers = {"User-Agent": self._CNINFO_UA}
+
+        org_url = "https://irm.cninfo.com.cn/newircs/index/queryKeyboardInfo"
+        r = _req.post(
+            org_url,
+            params={"_t": "1691144074"},
+            data={"keyWord": code_num},
+            headers=headers,
+            timeout=8,
+        )
+        r.raise_for_status()
+        org_data = r.json()
+        data_list = org_data.get("data")
+        if not data_list or not isinstance(data_list, list) or len(data_list) == 0:
+            return []
+        org_id = data_list[0].get("secid")
+        if not org_id:
+            return []
+
+        q_url = "https://irm.cninfo.com.cn/newircs/company/question"
+        r2 = _req.post(
+            q_url,
+            params={
+                "_t": "1691142650",
+                "stockcode": code_num,
+                "orgId": org_id,
+                "pageSize": "30",
+                "pageNum": "1",
+                "keyWord": "",
+                "startDay": "",
+                "endDay": "",
+            },
+            headers=headers,
+            timeout=8,
+        )
+        r2.raise_for_status()
+        rows = r2.json().get("rows") or []
+        return rows if isinstance(rows, list) else []
+
     def get_investor_qa(self, stock_code: str, start_date: str, end_date: str) -> DataResult:
-        """巨潮互动易问答：stock_irm_cninfo(symbol=代码)。"""
+        """巨潮互动易问答：直接调用 cninfo API（绕过 akshare 空结果崩溃）。"""
+        _SOURCE = "cninfo:irm_direct"
         try:
             code_num = stock_code.split(".")[0]
-            df = self.ak.stock_irm_cninfo(symbol=code_num)
-            if df is None or df.empty:
-                return DataResult(data=[], source="akshare:stock_irm_cninfo")
+            rows = self._fetch_irm_cninfo_raw(code_num)
+            if not rows:
+                return DataResult(data=[], source=_SOURCE)
 
-            cols = set(df.columns)
-            # 优先使用已知精确列名，退而采用模糊匹配（避免"提问者""问题编号"等覆盖正确映射）
-            q_col = "问题" if "问题" in cols else next(
-                (c for c in df.columns if "问题" in str(c) and "编号" not in str(c) and "者" not in str(c)), None
-            )
-            a_col = "回答内容" if "回答内容" in cols else next(
-                (c for c in df.columns if "回答内容" in str(c)), None
-            )
-            date_col = "提问时间" if "提问时间" in cols else next(
-                (c for c in df.columns if "提问时间" in str(c) or "发布时间" in str(c)), None
-            )
+            from datetime import datetime, timezone, timedelta
 
-            if not q_col:
-                return DataResult(data=[], source="akshare:stock_irm_cninfo")
-
+            tz_cst = timezone(timedelta(hours=8))
             start_compact = start_date.replace("-", "")
             end_compact = end_date.replace("-", "")
 
             results: list[dict] = []
-            for _, row in df.iterrows():
-                raw_date = str(row[date_col]).strip() if date_col else ""
-                date_compact = raw_date.replace("-", "").replace(" ", "")[:8]
-                if date_compact and not (start_compact <= date_compact <= end_compact):
+            for row in rows:
+                question = (row.get("mainContent") or "").strip()
+                if not question:
                     continue
-
-                question = str(row[q_col]).strip() if q_col else ""
-                answer = str(row[a_col]).strip() if a_col else ""
-                if not question or question in ("nan", "None"):
-                    continue
+                answer = (row.get("attachedContent") or "").strip()
+                pub_ms = row.get("pubDate")
+                date_str = ""
+                if pub_ms:
+                    try:
+                        dt = datetime.fromtimestamp(int(pub_ms) / 1000, tz=tz_cst)
+                    except (ValueError, TypeError, OSError):
+                        pass
+                    else:
+                        date_str = dt.strftime("%Y-%m-%d %H:%M:%S")
+                        if not (start_compact <= dt.strftime("%Y%m%d") <= end_compact):
+                            continue
                 results.append({
                     "question": question[:300],
-                    "answer": answer[:500] if answer not in ("nan", "None") else "",
-                    "date": raw_date[:19],
+                    "answer": answer[:500] if answer else "",
+                    "date": date_str,
                 })
                 if len(results) >= 10:
                     break
-
-            return DataResult(data=results, source="akshare:stock_irm_cninfo")
+            return DataResult(data=results, source=_SOURCE)
         except Exception as e:
-            return DataResult(data=None, source=self.name, error=str(e))
+            return DataResult(data=None, source=_SOURCE, error=str(e))
 
     # ---- 研报评级 ----
 
