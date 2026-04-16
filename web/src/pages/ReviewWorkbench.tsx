@@ -41,22 +41,31 @@ function tryParseJSON(v: unknown): ReviewStepValue {
   }
 }
 
-function hydrateReviewFormData(date: string | undefined, existing?: ReviewRecord): ReviewFormData {
-  if (!date) return {}
-  const draft = localStorage.getItem(DRAFT_KEY(date))
-  if (draft) {
-    try {
-      return JSON.parse(draft) as ReviewFormData
-    } catch {
-      return {}
-    }
-  }
+function reviewRecordToFormData(existing?: ReviewRecord): ReviewFormData {
   if (!existing?.exists) return {}
   const data: ReviewFormData = {}
   STEPS.forEach((s) => {
     if (existing[s.key]) data[s.key] = tryParseJSON(existing[s.key])
   })
   return data
+}
+
+function hydrateReviewFormData(date: string | undefined, existing?: ReviewRecord): ReviewFormData {
+  if (!date) return {}
+  const base = reviewRecordToFormData(existing)
+  const draft = localStorage.getItem(DRAFT_KEY(date))
+  if (draft) {
+    try {
+      const parsed = JSON.parse(draft) as ReviewFormData
+      return {
+        ...base,
+        ...parsed,
+      }
+    } catch {
+      return base
+    }
+  }
+  return base
 }
 
 export default function ReviewWorkbench() {

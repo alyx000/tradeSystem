@@ -119,6 +119,32 @@ describe('ReviewWorkbench', () => {
     expect(screen.getByTestId('StepEmotion-data')).toHaveTextContent('"cycle":"发酵"')
   })
 
+  it('merges local draft with existing saved review instead of fully overriding it', async () => {
+    vi.mocked(api.getReview).mockResolvedValue({
+      exists: true,
+      step1_market: JSON.stringify({ trend: 'up' }),
+      step2_sectors: JSON.stringify({ main: 'AI' }),
+      step3_emotion: JSON.stringify({ cycle: '发酵' }),
+      step4_style: JSON.stringify({ style: '趋势' }),
+      step5_leaders: JSON.stringify({ leader: '协创数据' }),
+      step6_nodes: JSON.stringify({ node: '分歧点' }),
+      step7_positions: JSON.stringify({ stock: '西部材料' }),
+      step8_plan: JSON.stringify({ tomorrow: '低吸主线' }),
+    })
+    localStorage.setItem('review_draft_2026-04-03', JSON.stringify({
+      step1_market: { trend: 'draft-only' },
+    }))
+
+    renderPage()
+
+    await waitFor(() => {
+      expect(screen.getByText('8/8 已填写')).toBeInTheDocument()
+    })
+    expect(screen.getByTestId('StepMarket-data')).toHaveTextContent('"trend":"draft-only"')
+    expect(screen.getByText('2.板块 ✓')).toBeInTheDocument()
+    expect(screen.getByText('8.计划 ✓')).toBeInTheDocument()
+  })
+
   it('updates current step data and saves review payload', async () => {
     renderPage()
 
