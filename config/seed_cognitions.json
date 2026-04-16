@@ -1,0 +1,371 @@
+[
+  {
+    "seq": 1,
+    "category": "signal",
+    "sub_category": "gap",
+    "title": "缺口必补",
+    "pattern": "当{指数留下跳空缺口}时，{短期必然回补}→{今日不补则次日压力加大}",
+    "evidence_level": "principle",
+    "validation_strategy": "semi_quantitative"
+  },
+  {
+    "seq": 2,
+    "category": "signal",
+    "sub_category": "pattern",
+    "title": "尾盘加速→次日冲高",
+    "pattern": "当{盘中跌后自然回升并持续加速至收盘}时，{判定为尾盘加速}→{次日惯性冲高}",
+    "evidence_level": "hypothesis",
+    "validation_strategy": "semi_quantitative"
+  },
+  {
+    "seq": 3,
+    "category": "signal",
+    "sub_category": "momentum",
+    "title": "率先企稳选股",
+    "pattern": "当{板块整体调整}时，{率先企稳不再创新低的个股}→{板块反弹时涨幅最大}",
+    "evidence_level": "hypothesis",
+    "validation_strategy": "semi_quantitative"
+  },
+  {
+    "seq": 4,
+    "category": "sentiment",
+    "sub_category": "desensitization",
+    "title": "市场脱敏",
+    "pattern": "当{外部事件反复冲击但市场反应逐次减弱}时，{判断进入脱敏阶段}→{同类事件影响递减}",
+    "evidence_level": "hypothesis",
+    "validation_strategy": "qualitative"
+  },
+  {
+    "seq": 5,
+    "category": "sentiment",
+    "sub_category": "crowd_behavior",
+    "title": "空头回补行情",
+    "pattern": "当{此前看空持币的资金大幅放量进场}时，{判断为空头回补}→{反弹有力但不代表趋势反转}",
+    "evidence_level": "observation",
+    "validation_strategy": "qualitative"
+  },
+  {
+    "seq": 6,
+    "category": "structure",
+    "sub_category": "late_stage",
+    "title": "补涨末段信号",
+    "pattern": "当{板块从龙头扩散到边缘小票补涨}时，{判断主升进入末段}→{核心票应开始减仓}",
+    "evidence_level": "hypothesis",
+    "validation_strategy": "quantitative"
+  },
+  {
+    "seq": 7,
+    "category": "structure",
+    "sub_category": "profit_chain",
+    "title": "利润链转移",
+    "pattern": "当{产业链上游涨价}时，{利润从下游向上游转移}→{应配置利润正在流入的环节}",
+    "evidence_level": "hypothesis",
+    "validation_strategy": "quantitative"
+  },
+  {
+    "seq": 8,
+    "category": "structure",
+    "sub_category": "volume",
+    "title": "成交量分化阈值",
+    "pattern": "当{成交量不足以支撑当前涨幅}时，{市场分化加剧}→{涨跌比恶化}",
+    "evidence_level": "hypothesis",
+    "validation_strategy": "quantitative"
+  },
+  {
+    "seq": 9,
+    "category": "structure",
+    "sub_category": "rotation",
+    "title": "最弱板块修复=正轨",
+    "pattern": "当{最弱势板块开始修复反弹}时，{判定市场重回正常运行}→{可按正常交易逻辑执行}",
+    "evidence_level": "observation",
+    "validation_strategy": "quantitative"
+  },
+  {
+    "seq": 10,
+    "category": "cycle",
+    "sub_category": "calendar",
+    "title": "月末假期效应",
+    "pattern": "当{月末叠加长假}时，{反弹月份大概率出现回踩}→{越往月末压力越大}",
+    "evidence_level": "hypothesis",
+    "validation_strategy": "quantitative"
+  },
+  {
+    "seq": 11,
+    "category": "cycle",
+    "sub_category": "earnings_season",
+    "title": "财报季敏感度",
+    "pattern": "当{财报季}时，{个股对业绩敏感度极高}→{应规避有暴雷风险的个股}",
+    "evidence_level": "principle",
+    "validation_strategy": "quantitative"
+  },
+  {
+    "seq": 12,
+    "category": "position",
+    "sub_category": "trend_phase",
+    "title": "右侧买跌框架",
+    "pattern": "当{指数从下降趋势转入上升趋势确认}时，{进入右侧阶段}→{每次回踩按买跌处理}",
+    "evidence_level": "principle",
+    "validation_strategy": "semi_quantitative"
+  },
+  {
+    "seq": 13,
+    "category": "position",
+    "sub_category": "ma_support",
+    "title": "远离均线不追",
+    "pattern": "当{股价远离五日均线}时，{不应追买}→{等回踩均线再介入}",
+    "evidence_level": "principle",
+    "validation_strategy": "semi_quantitative"
+  },
+  {
+    "seq": 14,
+    "category": "position",
+    "sub_category": "chip_structure",
+    "title": "筹码结构决定弹性",
+    "pattern": "当{同板块同概念个股比较}时，{上方无套牢盘的标的弹性>有套牢盘的标的}",
+    "evidence_level": "hypothesis",
+    "validation_strategy": "semi_quantitative"
+  },
+  {
+    "seq": 15,
+    "category": "sizing",
+    "sub_category": "batch_building",
+    "title": "超跌满仓vs反弹分批",
+    "pattern": "当{完全超跌}时，{可一次性重仓}；当{反弹中途}时，{必须分批}",
+    "evidence_level": "principle",
+    "validation_strategy": "not_applicable"
+  },
+  {
+    "seq": 16,
+    "category": "fundamental",
+    "sub_category": "cash_flow",
+    "title": "增利不增现金流=危险",
+    "pattern": "当{利润增长但经营活动现金流下降}时，{盈利质量存疑}→{警惕应收膨胀和坏账风险}",
+    "evidence_level": "principle",
+    "validation_strategy": "quantitative"
+  },
+  {
+    "seq": 17,
+    "category": "fundamental",
+    "sub_category": "earnings_quality",
+    "title": "造血比率",
+    "pattern": "当{经营现金流/净利润>1}时，{盈利质量优异}→{可支撑投资+分红}",
+    "evidence_level": "hypothesis",
+    "validation_strategy": "quantitative"
+  },
+  {
+    "seq": 18,
+    "category": "fundamental",
+    "sub_category": "balance_sheet",
+    "title": "合同负债前瞻",
+    "pattern": "当{合同负债大幅下降}时，{未来收入可见性下降}→{警惕增速放缓}",
+    "evidence_level": "hypothesis",
+    "validation_strategy": "quantitative"
+  },
+  {
+    "seq": 19,
+    "category": "fundamental",
+    "sub_category": "capex_quality",
+    "title": "资本开支质量",
+    "pattern": "当{同样大额资本开支}时，{投资矿产资源的长期价值>投资厂房设备}→{前者积累资产，后者消耗折旧}",
+    "evidence_level": "observation",
+    "validation_strategy": "quantitative"
+  },
+  {
+    "seq": 20,
+    "category": "fundamental",
+    "sub_category": "business_model",
+    "title": "量价齐升",
+    "pattern": "当{产量增长+价格上涨+成本低于行业}时，{利润弹性成倍放大}→{最优财报评分}",
+    "evidence_level": "principle",
+    "validation_strategy": "quantitative"
+  },
+  {
+    "seq": 21,
+    "category": "macro",
+    "sub_category": "money_supply",
+    "title": "M1/M2与消费",
+    "pattern": "当{存款增速>贷款增速}时，{消费端复苏仍弱}→{配置偏向出口型和大型企业}",
+    "evidence_level": "hypothesis",
+    "validation_strategy": "semi_quantitative"
+  },
+  {
+    "seq": 22,
+    "category": "macro",
+    "sub_category": "transmission",
+    "title": "房地产消费传导",
+    "pattern": "当{一线城市房地产持续复苏超3月}时，{消费拉动开始显现}→{可关注消费板块}",
+    "evidence_level": "observation",
+    "validation_strategy": "semi_quantitative"
+  },
+  {
+    "seq": 23,
+    "category": "macro",
+    "sub_category": "economic_cycle",
+    "title": "K型复苏配置",
+    "pattern": "当{大企业强、小企业弱、出口强、内需弱}时，{K型复苏}→{配置大市值出口型企业}",
+    "evidence_level": "hypothesis",
+    "validation_strategy": "semi_quantitative"
+  },
+  {
+    "seq": 24,
+    "category": "valuation",
+    "sub_category": "pe_anchor",
+    "title": "周期股低PE",
+    "pattern": "当{公司盈利高度依赖商品价格}时，{应给予较低PE}→{不应按成长股估值}",
+    "evidence_level": "principle",
+    "validation_strategy": "quantitative"
+  },
+  {
+    "seq": 25,
+    "category": "valuation",
+    "sub_category": "sensitivity",
+    "title": "价格敏感度",
+    "pattern": "当{金属价格每波动10%}时，{净利润波动约17-18%}→{估值须考虑价格弹性风险}",
+    "evidence_level": "hypothesis",
+    "validation_strategy": "quantitative"
+  },
+  {
+    "seq": 26,
+    "category": "valuation",
+    "sub_category": "roe_driven",
+    "title": "ROE决定长期回报",
+    "pattern": "当{公司ROE长期<5%}时，{即使短期增速亮眼}→{长期投资回报受限}",
+    "evidence_level": "principle",
+    "validation_strategy": "quantitative"
+  },
+  {
+    "seq": 27,
+    "category": "sizing",
+    "sub_category": "position_limit",
+    "title": "波动率匹配仓位",
+    "pattern": "当{市场波动率显著升高（阳包阴后阴包阳/外部事件不确定）}时，{仓位上限应下调至5-7成}→{高仓位+高波动=不合理}",
+    "evidence_level": "principle",
+    "validation_strategy": "not_applicable"
+  },
+  {
+    "seq": 28,
+    "category": "macro",
+    "sub_category": "economic_cycle",
+    "title": "美林时钟通胀象限",
+    "pattern": "当{PPI↑CPI↓通胀上升}时，{配重资产/资源/能源/高股息}→{减轻资产/高估值科技}",
+    "evidence_level": "hypothesis",
+    "validation_strategy": "semi_quantitative"
+  },
+  {
+    "seq": 29,
+    "category": "fundamental",
+    "sub_category": "earnings_quality",
+    "title": "困境反转+增速扩大",
+    "pattern": "当{一季报由负转正且同环比增速扩大}时，{机构中线配置首选}→{持续性优于纯主题炒作}",
+    "evidence_level": "hypothesis",
+    "validation_strategy": "quantitative"
+  },
+  {
+    "seq": 30,
+    "category": "signal",
+    "sub_category": "indicator",
+    "title": "平均股价指数零轴信号",
+    "pattern": "当{平均股价指数MACD首次上零轴→回调→再确认上零轴}时，{主升行情展开}→{买点}",
+    "evidence_level": "hypothesis",
+    "validation_strategy": "semi_quantitative"
+  },
+  {
+    "seq": 31,
+    "category": "cycle",
+    "sub_category": "calendar",
+    "title": "衍生品到期效应",
+    "pattern": "当{股指期货交割日临近}时，{高位主动回踩概率大}→{高位推期货偏利空、低位推期权偏利好}",
+    "evidence_level": "hypothesis",
+    "validation_strategy": "quantitative"
+  },
+  {
+    "seq": 32,
+    "category": "signal",
+    "sub_category": "indicator",
+    "title": "创新高家数=市场强度",
+    "pattern": "当{创新高家数持续增多}时，{做多资金未退场}→{反弹未结束}；骤降=反弹可能终结",
+    "evidence_level": "hypothesis",
+    "validation_strategy": "semi_quantitative"
+  },
+  {
+    "seq": 33,
+    "category": "synthesis",
+    "sub_category": "multi_factor",
+    "title": "反弹结束三信号",
+    "pattern": "当{原油上破阈值+指数跌破5日线+核心龙头见顶}三中二时，{反弹结束}→{转为防守}",
+    "evidence_level": "hypothesis",
+    "validation_strategy": "qualitative"
+  },
+  {
+    "seq": 34,
+    "category": "signal",
+    "sub_category": "pattern",
+    "title": "独立走势品种识别",
+    "pattern": "当{大跌中某品种能走独立趋势}时，{该品种=下一轮行情先行信号}→{春江水暖鸭先知}",
+    "evidence_level": "observation",
+    "validation_strategy": "semi_quantitative"
+  },
+  {
+    "seq": 35,
+    "category": "valuation",
+    "sub_category": "pe_anchor",
+    "title": "PE分层估值法",
+    "pattern": "当{高成长}→{50-80xPE}；{稳健制造}→{20-30xPE}；{周期}→{10-15xPE}；{公用事业}→{看PB}",
+    "evidence_level": "principle",
+    "validation_strategy": "quantitative"
+  },
+  {
+    "seq": 36,
+    "category": "fundamental",
+    "sub_category": "business_model",
+    "title": "排产数据→景气前瞻",
+    "pattern": "当{头部厂商月度排产环比持续正增长}时，{行业景气度拐点确认}→{可配置}",
+    "evidence_level": "hypothesis",
+    "validation_strategy": "quantitative"
+  },
+  {
+    "seq": 37,
+    "category": "sentiment",
+    "sub_category": "market_feedback",
+    "title": "利好出尽=负反馈",
+    "pattern": "当{板块涨一段后利好政策/数据落地}时，{高开低走=负反馈}→{情绪盘涌入是坑人信号}",
+    "evidence_level": "principle",
+    "validation_strategy": "qualitative"
+  },
+  {
+    "seq": 38,
+    "category": "cycle",
+    "sub_category": "symmetry",
+    "title": "跌N天涨N天",
+    "pattern": "当{指数连跌N天后反弹}时，{反弹天数≈下跌天数±1-2天}→{到时间窗口附近需警惕}",
+    "evidence_level": "hypothesis",
+    "validation_strategy": "quantitative"
+  },
+  {
+    "seq": 39,
+    "category": "execution",
+    "sub_category": "position_layering",
+    "title": "底仓+差价仓分离",
+    "pattern": "当{中期看多方向确认}时，{底仓≥50%绝不动}+{短差仓做高抛低吸}→{不因做差价而空仓}",
+    "evidence_level": "principle",
+    "validation_strategy": "semi_quantitative"
+  },
+  {
+    "seq": 40,
+    "category": "execution",
+    "sub_category": "leader_follower",
+    "title": "龙头封板联动规则",
+    "pattern": "当{龙头即将封板}时，{介入龙二龙三}；{龙头封板后}→{冲高做T}；{龙头开板}→{后排立即卖出}",
+    "evidence_level": "hypothesis",
+    "validation_strategy": "semi_quantitative"
+  },
+  {
+    "seq": 41,
+    "category": "signal",
+    "sub_category": "cross_market",
+    "title": "离岸汇率先行指标",
+    "pattern": "当{离岸人民币汇率大幅走弱}时，{外资流出+A股承压}→{最可靠的市场情绪先行指标}",
+    "evidence_level": "hypothesis",
+    "validation_strategy": "semi_quantitative"
+  }
+]

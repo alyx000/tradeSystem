@@ -89,9 +89,9 @@ tradeSystem/
 1. **盘前**：OpenClaw 提醒日历事件、昨日遗留关注点
 2. **盘中**：你输入实时观察，OpenClaw 辅助记录和结构化
 3. **盘后复盘**：
-   - 你提供原始数据（指数、涨跌停、板块表现等）
-   - OpenClaw 按模板生成结构化复盘
-   - 你审核并补充主观判断（情绪定性、节点判断等）
+  - 你提供原始数据（指数、涨跌停、板块表现等）
+  - OpenClaw 按模板生成结构化复盘
+  - 你审核并补充主观判断（情绪定性、节点判断等）
 4. **交易记录**：每笔交易后记录逻辑，OpenClaw 辅助归类
 5. **周末回顾**：汇总本周数据，更新 tracking 文件
 
@@ -207,15 +207,17 @@ make dev-api
 make dev-web
 ```
 
-打开浏览器访问 **http://localhost:5173** 即可使用。
+打开浏览器访问 **[http://localhost:5173](http://localhost:5173)** 即可使用。
 
-| 地址 | 说明 |
-|------|------|
-| http://localhost:5173 | Web 前端（仪表盘、市场看板、复盘工作台、计划工作台、资料工作台、查询中心等） |
-| http://localhost:8000/docs | FastAPI 自动生成的 API 文档 |
-| http://localhost:8000/api/health | 健康检查 |
 
-> 前端已配置代理，`/api/*` 请求自动转发到后端，无需手动处理跨域。
+| 地址                                                                   | 说明                                       |
+| -------------------------------------------------------------------- | ---------------------------------------- |
+| [http://localhost:5173](http://localhost:5173)                       | Web 前端（仪表盘、市场看板、复盘工作台、计划工作台、资料工作台、查询中心等） |
+| [http://localhost:8000/docs](http://localhost:8000/docs)             | FastAPI 自动生成的 API 文档                     |
+| [http://localhost:8000/api/health](http://localhost:8000/api/health) | 健康检查                                     |
+
+
+> 前端已配置代理，`/api/`* 请求自动转发到后端，无需手动处理跨域。
 > 两个服务都支持热重载——修改代码后自动生效，无需重启。
 
 当前新增的工作台页面：
@@ -366,16 +368,18 @@ cp templates/trade-log.yaml daily/$(date +%Y-%m-%d)/trades.yaml
 
 仓库根目录下，推荐 **两个定时点**（上海时区，工作日）：
 
-| 时间 | 命令 | 说明 |
-|------|------|------|
-| 07:00 | `python3 scripts/main.py pre` | 盘前简报 |
-| 20:00 | `bash scripts/sync_data.sh` | `git pull` → `main.py post`（含晚间任务）→ 提交并推送 `daily/`、`tracking/` |
+
+| 时间    | 命令                            | 说明                                                             |
+| ----- | ----------------------------- | -------------------------------------------------------------- |
+| 07:00 | `python3 scripts/main.py pre` | 盘前简报                                                           |
+| 20:00 | `bash scripts/sync_data.sh`   | `git pull` → `main.py post`（含晚间任务）→ 提交并推送 `daily/`、`tracking/` |
+
 
 也可在 `scripts/` 下长期运行 `python3 main.py schedule`，由 APScheduler 执行上述两个时刻（`post` 已内含原 `evening` 流程，无需再配 18:00）。
 
 **由 OpenClaw 调度时**：不必部署 systemd；在 OpenClaw 里按上表配置 **工作日 07:00 / 20:00** 执行相同命令即可，**工作目录设为仓库根目录**（与 `sync_data.sh` 的路径约定一致）。请勿与 `main.py schedule` 或本机 `deploy/systemd/` 定时器同时启用，以免重复推送、重复写文件。`sync_data.sh` 会 `git push`，运行环境需已配置 SSH deploy key 或等价凭据。
 
-**环境**：复制 `scripts/.env.example` 为 `scripts/.env`，填入 `TUSHARE_TOKEN`、Discord Webhook 等；Obsidian 导出目录可用环境变量 **`OBSIDIAN_DIR`**（未设置时见 `scripts/generators/obsidian_export.py` 默认路径）。**采集**（`pre`/`post`/`evening`/`watchlist`/`check` 等）会临时清除 `HTTP_PROXY`/`HTTPS_PROXY`，避免 Tushare 误走本机代理；推送阶段恢复环境，Discord 等仍可走代理。若采集也必须走代理，设置 **`TRADESYSTEM_USE_HTTP_PROXY=1`**。Vault 一般在仓库外，不由 `sync_data.sh` 提交。
+**环境**：复制 `scripts/.env.example` 为 `scripts/.env`，填入 `TUSHARE_TOKEN`、Discord Webhook 等；Obsidian 导出目录可用环境变量 `**OBSIDIAN_DIR`**（未设置时见 `scripts/generators/obsidian_export.py` 默认路径）。采集（`pre`/`post`/`evening`/`watchlist`/`check` 等）会临时清除 `HTTP_PROXY`/`HTTPS_PROXY`，避免 Tushare 误走本机代理；推送阶段恢复环境，Discord 等仍可走代理。若采集也必须走代理，设置 `**TRADESYSTEM_USE_HTTP_PROXY=1`**。Vault 一般在仓库外，不由 `sync_data.sh` 提交。
 
 **一次性**：若需板块节奏分析有足够历史，可在 VPS 上按需执行 `python3 scripts/backfill_sectors.py`（参数见脚本说明）。
 
@@ -388,10 +392,12 @@ cp templates/trade-log.yaml daily/$(date +%Y-%m-%d)/trades.yaml
 ### 1. Discord Webhook
 
 **获取 Webhook URL**：
+
 1. Discord 频道设置 → 集成 → Webhooks → 新建 Webhook
 2. 复制 Webhook URL
 
 **配置**：
+
 ```bash
 # scripts/.env
 DISCORD_WEBHOOK_PRE=https://discord.com/api/webhooks/xxx
@@ -413,6 +419,7 @@ push:
 ### 2. QQ Bot（通过 OpenClaw）
 
 **配置**：
+
 ```yaml
 # scripts/config.yaml
 push:
@@ -429,10 +436,12 @@ push:
 ### 3. 企业微信机器人
 
 **获取 Webhook URL**：
+
 1. 企业微信 → 工作台 → 机器人 → 添加
 2. 复制 Webhook 地址
 
 **配置**：
+
 ```bash
 # scripts/.env
 WECHAT_WEBHOOK=https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxx
@@ -461,21 +470,24 @@ push:
 
 ## 核心概念速查
 
-| 概念 | 说明 |
-|------|------|
-| 三位一体 | 大势 + 板块 + 个股，综合判断 |
-| 最票 | 个股在板块中某属性下的第一名 |
-| 情绪周期 | 启动→发酵→高潮→分歧→衰退→启动 |
-| 重点因子 | 当下最影响走势的因子（动态变化） |
-| 风格化 | 当前市场审美偏好（大/小盘、趋势/连板等） |
-| 诚意反包 | 在人们不相信中走出的反包才有价值 |
-| 首阴价值 | 大势+板块初期→有价值；充分演绎→没价值 |
-| 节点 | 情绪/板块/大盘的关键转折点 |
+
+| 概念   | 说明                    |
+| ---- | --------------------- |
+| 三位一体 | 大势 + 板块 + 个股，综合判断     |
+| 最票   | 个股在板块中某属性下的第一名        |
+| 情绪周期 | 启动→发酵→高潮→分歧→衰退→启动     |
+| 重点因子 | 当下最影响走势的因子（动态变化）      |
+| 风格化  | 当前市场审美偏好（大/小盘、趋势/连板等） |
+| 诚意反包 | 在人们不相信中走出的反包才有价值      |
+| 首阴价值 | 大势+板块初期→有价值；充分演绎→没价值  |
+| 节点   | 情绪/板块/大盘的关键转折点        |
+
 
 ## 体系来源
 
 - 三位一体教程
 - 四维度短线交易法体系课（第1-26节）
+
 ## Web Quality Gate
 
 Frontend changes are blocked locally and in CI.
@@ -490,3 +502,4 @@ To enable the local hook on a fresh clone:
 git config core.hooksPath .githooks
 chmod +x .githooks/pre-push
 ```
+

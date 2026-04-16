@@ -18,6 +18,7 @@
 
 | Skill | CLI 子命令 | 说明 |
 |-------|-----------|------|
+| `cognition-evolution` | `knowledge cognition-* / instance-* / review-* (含 review-list)` | 认知提炼 / 实例验证 / 周期复盘（手动闭环）；`scripts/services/cognition_service.py`（已落地 Phase 1b，部分降级项见 SKILL.md） |
 | `record-notes` | `db add-note` | 录入老师观点（文字/图片/多附件）；可选 `--sync-watchlist-from-stocks`（用户确认入池后） |
 | `record-notes` / `portfolio-manager` | `db watchlist-sync-from-note` | 按笔记 `mentioned_stocks` 写入关注池（两步确认后的第二步） |
 | `record-notes` | `db add-industry` | 录入行业板块信息 |
@@ -95,6 +96,11 @@
 | `knowledge-to-plan` | `/api/knowledge/assets/{asset_id}/draft` | POST | 从资料生成 observation/draft（遗留 `teacher_note` 行 422，走 teacher-notes draft） |
 | `knowledge-to-plan` | `/api/knowledge/teacher-notes/{note_id}/draft` | POST | 从老师笔记生成 observation/draft |
 | `knowledge-to-plan` | `/api/teacher-notes` | GET/POST | 资料工作台老师观点列表与录入 |
+| `cognition-evolution` | `/api/cognition/cognitions` | GET | 只读列出交易认知（`category` / `status` / `conflict_group` / `keyword` 过滤） |
+| `cognition-evolution` | `/api/cognition/cognitions/{id}` | GET | 只读单条认知详情（JSON 字段已 parse） |
+| `cognition-evolution` | `/api/cognition/instances` | GET | 只读列出认知实例（`cognition_id` / `outcome` / `teacher_id` / `date_from/to` 过滤） |
+| `cognition-evolution` | `/api/cognition/reviews` | GET | 只读列出周期复盘 |
+| `cognition-evolution` | `/api/cognition/reviews/{id}` | GET | 只读复盘详情（聚合 JSON 已 parse） |
 
 ## Skill 参考附录（非 CLI/API）
 
@@ -231,6 +237,16 @@
 | POST | `/api/ingest/run` ★ | 运行指定 stage 采集 |
 | POST | `/api/ingest/run-interface` ★ | 运行单接口采集 |
 | GET | `/api/ingest/retry` ★ | 查看待重试分组摘要 |
+
+### 交易认知（`routes/cognition.py`，前缀 `/api/cognition`）
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/cognition/cognitions` ★ | 列出 `trading_cognitions`（过滤：category/sub_category/status/evidence_level/conflict_group/keyword；limit 默认 100、offset 分页） |
+| GET | `/api/cognition/cognitions/{id}` ★ | 单条认知（JSON 字段已 parse 成数组/对象） |
+| GET | `/api/cognition/instances` ★ | 列出 `cognition_instances`（过滤：cognition_id/outcome/teacher_id/source_type/date_from/date_to；分页） |
+| GET | `/api/cognition/reviews` ★ | 列出 `periodic_reviews`（过滤：period_type/review_scope/status/date_from/date_to；分页） |
+| GET | `/api/cognition/reviews/{id}` ★ | 单条周期复盘（聚合 JSON 已 parse） |
 
 ### 搜索与分析（`routes/search.py`）
 

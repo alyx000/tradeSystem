@@ -1,302 +1,79 @@
-# 交易系统 - AI 协作规则
+# 交易系统 - Claude 协作入口
 
-## 项目概述
-这是一个 A股/港股 短线交易分析系统，基于「三位一体」+「四维度短线交易法」体系。
-AI 的角色是协助完成每日复盘、盘中分析、数据整理，而非替代交易决策。
+本文件仅保留总则与索引，具体规则请按任务加载对应主题文档。
+权威入口与最新拆分结构以 [AGENTS.md](/Users/alyx/tradeSystem/AGENTS.md) 和 `.cursor/agent-context/` 为准；本文件作为 Claude / 兼容 Agent 的等价入口。
 
-## 核心交易体系
+## 先读结论
 
-### 一、三位一体框架
-**三位**：大势、板块、个股
-**一体**：综合三个维度得出最终买卖决策
+1. 这是一个 A股/港股短线交易分析系统，AI 负责复盘、分析、整理与执行辅助，**不替代交易决策**。
+2. Agent 写入统一走 CLI 标准入口，**禁止直接写 SQLite、YAML 或手工拼 JSON**。
+3. 所有写入命令必须显式带 `--input-by`；Agent **不得绕过确认直接写 `confirmed` 的 `TradePlan`**。
+4. 所有 AI 输出使用简体中文；涉及技术方案、执行计划、业务逻辑解析时，默认遵循 `.cursor/rules/solution-format.mdc`。
+5. 修改 `scripts/main.py`、`scripts/api/routes/*.py`、`.cursor/skills/**/*.md` 后，必须同步更新 `.cursor/skills/INDEX.md` 与 `.cursor/rules/skills-sync.mdc`。
 
-#### 1. 大势
-- 大盘指数方向（主升/震荡/下降）
-- 盘面总体赚钱效应
-- 盘面赚钱效应的风格化特征
-- 5周均线上/下作为中期方向锚定
-- 成交金额作为仓位锚定
+## 渐进式加载顺序
 
-#### 2. 板块
-**板块定义**：市场一段时间内形成共识，可以被一个共性把一批股票归类在一起，在一段时间内有联动性。
 
-**板块分类**：
-- **A. 行业逻辑板块**：永久有效（电力、新能源、AI算力等），或阶段性行业板块（海外AI链等）
-- **B. 阶段性归因板块**：低价股、业绩超预期、高送转等
-- **C. 情绪性板块/核心龙头板块**：炒高标、炒相似图形等，赚钱效应猛烈
+| 任务类型                             | 必读文件                                                                                                       | 按需补读                                                                                                     |
+| -------------------------------- | ---------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| 任意任务                             | `CLAUDE.md` 或 `AGENTS.md`                                                                                  | 无                                                                                                        |
+| 盘前/盘后/复盘/主线/情绪判断                 | [00-core-trading-framework.md](/Users/alyx/tradeSystem/.cursor/agent-context/00-core-trading-framework.md) | [20-architecture-and-data.md](/Users/alyx/tradeSystem/.cursor/agent-context/20-architecture-and-data.md) |
+| CLI / API / DB / 计划流转 / Agent 写入 | [10-agent-collaboration.md](/Users/alyx/tradeSystem/.cursor/agent-context/10-agent-collaboration.md)       | [20-architecture-and-data.md](/Users/alyx/tradeSystem/.cursor/agent-context/20-architecture-and-data.md) |
+| 架构、数据模型、事实层 / 草稿 / 计划状态流         | [20-architecture-and-data.md](/Users/alyx/tradeSystem/.cursor/agent-context/20-architecture-and-data.md)   | [10-agent-collaboration.md](/Users/alyx/tradeSystem/.cursor/agent-context/10-agent-collaboration.md)     |
+| 命令执行、环境、推送、目录结构、文件修改规范           | [30-runtime-and-ops.md](/Users/alyx/tradeSystem/.cursor/agent-context/30-runtime-and-ops.md)               | [10-agent-collaboration.md](/Users/alyx/tradeSystem/.cursor/agent-context/10-agent-collaboration.md)     |
+| 需要拆分对照或回滚老版本                     | [99-full-reference.md](/Users/alyx/tradeSystem/.cursor/agent-context/99-full-reference.md)                 | `00` 到 `30` 号主题文档                                                                                        |
 
-**板块地位**：趋势主线板块 > 当日最强板块 > 轮动板块 > 活跃震荡板块
 
-**板块节奏**：超跌 → 启动 → 信不信加速 → 主升 → 首次分歧 → 震荡 → 轮动
+## 红线
 
-**板块关键判断**：
-- 是否存在主线，主线是否持续/切换
-- 当下异动板块（启动位置、成交量、辨识度）
-- 板块是逆指数还是顺指数
-- 行情是趋势行情还是连板行情
-- 趋势行情看增量还是存量（中军走弱则从增量变存量）
+- 不做具体买卖建议
+- 不预测具体价格目标
+- 不在没有数据支撑时做主观判断
+- 不将 `[判断]` 伪装成 `[事实]`
+- 不替代用户的“看得懂”判断
 
-#### 3. 个股
-**属性**：连板、趋势、偏情绪投机、偏基本面
-**走势**：主升、超跌、震荡
-**在板块中的地位**：
-- 龙头（最票）：个股在板块中某一属性下的第一名
-- 前排（前排活跃）
-- 跟风
-- 中军（容量）
-- 套利 / 弹性套利
+## 标准写入语义
 
-**最票的核心定义**：个股在板块中某一个属性下的第一名。第一名越清楚越好，越模糊越不好。
-- 有价值的「最」：走势最引领、最先板、最高标、当时市场风格化最强属性的最
-- 选择原则：一定要简单，不要勉强。有引领属性的最，往往一眼就能看出来
+系统区分 **人工入口** 与 **Agent 标准入口**：
 
-### 二、四维度分析
+- **人工入口**：Web / API / CLI 都可用
+- **Agent 标准入口**：统一通过 CLI 写入
+- **统一语义层**：CLI / API / Web 必须共享同一 service、同一默认值、同一校验与状态流转
 
-#### 维度1：情绪周期
-**基本规律**：启动 → 发酵 → 高潮 → 分歧 → 衰退 → 启动
+当前及后续标准命令组：
 
-**关键判断**：不需要精准判断处于哪个阶段，只需大致知道：这个阶段连接点与下一个阶段连接点是加强还是减弱。
+- `python3 main.py db ...`
+- `python3 main.py ingest ...`
+- `python3 main.py plan ...`
+- `python3 main.py knowledge ...`
 
-**情绪周期四个子周期**：
-- 第一周期：混沌识别与跟踪（新周期启动的初始阶段）
-- 第二周期：核心发酵与主升阶段
-- 第三周期：高潮与分化
-- 第四周期：衰退与生态演变
-
-**情绪观察指标**：
-- 连板/人气股二波表现（持续/跌停）
-- 涨停板数量与封板率
-- 跌停板数量
-- 炸板率
-- 市场亏钱效应强度
-
-#### 维度2：风格化（赚钱效应追踪）
-- 新题材启动是否有赚钱效应
-- 20cm首板溢价率
-- 二板涨停溢价率
-- 30cm首板溢价率
-- 连板的赚钱效应
-- 容量票的赚钱效应
-- 涨停一字首次开板的赚钱效应
-- 异动监管的反馈
-- 阶段审美偏好（大盘/小盘、基本面/情绪面、趋势/连板等）
-
-#### 维度3：成交量维度
-- 大盘成交金额（放量/缩量，相对均值）
-- 成交量票集中在哪些股票/板块
-- 以成交金额作为仓位的锚定
-- 板块内个股的成交量变化
-
-#### 维度4：节点与日历
-- 大盘的节点（止跌反弹点、突破点、压力点）
-- 板块的节点（启动日、首次分歧、高潮日）
-- 风格化的节点（风格切换点）
-- 日历效应（长假前后、月末月初、财报季等）
-- 投资日历事件
-
-### 三、三位一体综合应用规则
-
-**核心**：找出三位一体里面的重点因子 + 主力因子
-
-分析因子包括：所处走势阶段、走势预期、所处节奏、风格化、逻辑等。
-从中找出重点因子 + 当下主要会影响走势的次要因子。当总体因子利好多过利空的，就是交易机会。
-
-**重点因子优先级（视情况动态调整）**：
-- 大盘异常时 → 大盘节点是第一重点因子
-- 主线分歧但赚钱效应仍在 → 板块轮动节奏是重点因子
-- 大势主升+主线主升 → 个股分歧反而不重要，首阴有价值
-- 没有绝对重要因子时 → 市场流行什么，什么就是重点因子
-
-**强弱预期判断**：
-- 衰退→启动、启动→发酵、发酵→高潮：可判断加强
-- 高潮之后：可以再高潮也可以分歧，无法区分则没有防守
-- 强上强次日：节奏上无法区分加强/减弱，无防守
-
-**首阴价值判断**：
-- 大势与板块都处于上升趋势初期 → 首阴越有价值
-- 大势与板块充分演绎程度越高 → 首阴越没有价值
-
-**诚意反包**：反包需要人们不相信，从怀疑中走出来才有价值。人们都觉得应该反包 → 反包本身就是高潮。
-
-### 四、八步复盘法
-1. 大盘分析（指数走势、成交量、均线位置）
-2. 板块梳理（主线、轮动、异动）
-3. 情绪周期定位
-4. 风格化赚钱效应统计
-5. 龙头/最票识别
-6. 节点判断
-7. 持仓检视
-8. 次日计划
-
-### 五、持仓管理规则
-- 自己手里的票，区分热点/非热点
-- 热点票：跟随板块节奏操作
-- 非热点票：关注价格走势（上涨/下跌）、成交量是否在均量线以上、振幅是否满足
-- 仓位以大盘成交金额为锚定
-
-## 版面运用
-- 使用多版面同步观察大盘、板块、个股
-- 关注涨停板、跌停板、炸板、连板等数据面板
-- 大类资产观察跟踪大趋势（美股、商品、债券等）
-
----
-
-## AI 协作规范
+## 规则与模板入口
 
 ### AI 协作规则（`.cursor/rules/`）
 
-以下规则文件均为 `alwaysApply: true`，Cursor 环境每次对话自动注入；非 Cursor 环境的 Agent 应主动阅读。
 
-| 规则文件 | 作用 |
-|---------|------|
-| `language.mdc` | 所有 AI 输出使用简体中文，代码标识符保持英文 |
-| `dev-workflow.mdc` | 开发三阶段流程：设计验证方案 → 实现（含单测）→ 执行验证并报告；验证命令参考表 |
-| `implementation-plan.mdc` | 实施计划必须含测试验证方案 + 复杂任务多 Agent 并行分组 |
-| `test-design.mdc` | 分层测试设计：金字塔原则、隔离原则、自底向上执行 |
-| `subagent-code-review.mdc` | 每轮实质性代码改动后启动 subagent 审查，按高/中/低分类处理 |
-| `skills-sync.mdc` | CLI / API / Skills 变更后同步 `INDEX.md`、跑 `test_cli_smoke`、检查受影响 SKILL.md |
+| 规则文件                       | 作用                                                                    |
+| -------------------------- | --------------------------------------------------------------------- |
+| `language.mdc`             | 所有 AI 输出使用简体中文，代码标识符保持英文                                              |
+| `dev-workflow.mdc`         | 开发三阶段流程：设计验证方案 → 实现（含单测）→ 执行验证并报告                                     |
+| `implementation-plan.mdc`  | 实施计划必须含测试验证方案 + 复杂任务多 Agent 并行分组                                      |
+| `solution-format.mdc`      | 技术方案 / 执行计划 / 业务逻辑解析默认使用结构化章节、表格与纯 Mermaid 图表输出                       |
+| `test-design.mdc`          | 分层测试设计：金字塔原则、隔离原则、自底向上执行                                              |
+| `subagent-code-review.mdc` | 每轮实质性代码改动后启动 subagent 审查                                              |
+| `skills-sync.mdc`          | CLI / API / Skills 变更后同步 `INDEX.md`、跑 `test_cli_smoke`、检查受影响 SKILL.md |
 
-### Cursor Skills（项目级工作流）
 
-面向 AI 的可执行工作流（何时调用哪条 CLI/API）位于 **`.cursor/skills/`**：各子目录下的 **`SKILL.md`** 描述具体流程；**`.cursor/skills/INDEX.md`** 汇总各 Skill 依赖的 `db` 子命令与 API。修改 **`scripts/db/cli.py`** 或 **`scripts/api/routes/`** 后，需按 **`.cursor/rules/skills-sync.mdc`** 更新索引并跑 `test_cli_smoke`。
+### 模板入口
 
-### 数据存储
+- [technical-design.md](/Users/alyx/tradeSystem/docs/templates/technical-design.md)
+- [execution-plan.md](/Users/alyx/tradeSystem/docs/templates/execution-plan.md)
+- [api-contract.md](/Users/alyx/tradeSystem/docs/templates/api-contract.md)
 
-系统采用 **SQLite + YAML 混合架构**：
+## 主题索引
 
-- **SQLite**（`data/trade.db`）：所有结构化业务数据的主存储，支持跨日查询、全文搜索、多 Agent 并发读写（WAL 模式）
-- **YAML**（`daily/`）：每日行情/复盘快照归档，双写期间同步写入 SQLite
-- **YAML**（`config/` + `templates/`）：静态配置与报告模板，保持 Git 版本控制
-
-| 存储位置 | 内容 |
-|---------|------|
-| `data/trade.db` | 每日行情、八步复盘、交易记录、老师观点、投资日历、持仓池、关注池、行业/宏观信息、情绪周期、主线跟踪 |
-| `data/attachments/` | 老师观点相关图片等二进制附件 |
-| `daily/YYYY-MM-DD/` | 盘前/盘后/复盘 YAML 快照归档 |
-| `config/` + `templates/` | 静态配置与报告模板 |
-
-### AI 辅助职责
-1. **盘前简报**（每日 07:00 自动）：采集外盘、持仓公告、宏观新闻，生成简报并推送
-2. **盘后数据报告**（每日 20:00 自动，命令 `main.py post`）：先执行晚间任务（溢价率回填、关注池行情与到价提醒、`review.yaml`→Obsidian），再采集行情、涨跌停、板块、北向资金等，生成全日盘后报告并推送；写盘 `post-market.yaml` 后自动同步 `daily_market` 至 SQLite（失败记入 `data/pending_writes.json`，可用 `main.py db sync` 重试），并将盘后 YAML 导出 Obsidian
-3. **复盘辅助**：在盘后报告基础上，引导用户填写主观判断部分
-4. **趋势跟踪**：更新 `tracking/` 下的主线、情绪周期、关注池
-5. **数据整理**：统计风格化赚钱效应、溢价率等
-6. **历史对比**：在需要时回顾历史数据，寻找类似模式
-7. **提醒**：日历事件提醒、关注池到价提醒
-
-### 数据采集架构
-- Python 脚本在 `scripts/` 目录
-- 数据源采用可插拔架构：tushare（主力，10000积分）+ akshare（免费补充）
-- 自动降级：tushare 失败时自动切换到 akshare
-- 采集阶段（`pre`/`post`/`evening`/`watchlist`/`check` 等）默认临时清除 `HTTP_PROXY`/`HTTPS_PROXY` 等，避免 Tushare 误走本机代理超时；推送前恢复，Discord 等仍可走代理。需采集也走代理时设置 `TRADESYSTEM_USE_HTTP_PROXY=1`
-- 新数据源只需继承 `DataProvider` 基类并注册即可
-- 数据库模块 `scripts/db/`：连接管理（`connection.py`）、Schema 定义（`schema.py`）、查询封装（`queries.py`）、版本迁移（`migrate.py`）、双写支持（`dual_write.py`）
-- 双写模式：Collector 写完 YAML 后同步插入 SQLite，DB 写失败不影响 YAML，失败记录自动重试
-
-### 本地 Web 应用
-- **后端**：FastAPI（`scripts/api/`），与现有 Python 脚本共享代码，自动生成 OpenAPI 文档
-- **前端**：React + Vite + Tailwind CSS（`web/`），TanStack Query 管理服务端状态
-- **启动**：后端 `cd scripts && uvicorn api.main:app --reload --port 8000`，前端 `cd web && npm run dev`
-- **核心页面**：仪表盘（`/`）、市场数据看板（`/market/:date`，指数/涨跌停/板块排行/历史趋势图）、八步复盘工作台（`/review/:date`，支持预填充 + localStorage 草稿）、信息查询中心（`/search`，跨实体聚合 + Markdown 导出）、老师观点、持仓池、关注池、投资日历
-
-### AI Agent 标准化写入接口
-OpenClaw/Copaw 通过 CLI 命令写入数据库：
-```bash
-python3 main.py db add-note --teacher "小鲍" --date 2026-04-01 --title "..." --input-by openclaw
-python3 main.py db query-notes --keyword "锂电"
-python3 main.py db watchlist-add --code 300750 --name "宁德时代" --tier tier1_core
-python3 main.py db init          # 初始化数据库 + 导入历史 YAML
-python3 main.py db sync          # 重试失败的写入
-python3 main.py db reconcile     # YAML 与 DB 对账
-```
-
-- **`db holdings-add` / `db watchlist-add`（Agent）**：CLI 同时需要 `--code` 与 `--name`。若用户**只提供代码**或**只提供证券简称**，须先用 Provider（如 `get_stock_basic_batch` / `get_stock_basic_list`）查询补全并经用户确认，**禁止**编造；多候选时由用户选定唯一代码。细则见 [`.cursor/skills/portfolio-manager/SKILL.md`](.cursor/skills/portfolio-manager/SKILL.md) 中「证券代码与简称」。
-
-### 数据质量规范
-每条信息必须标注：
-- **类型**：`[事实]` / `[判断]` / `[传闻]` / `[观点]`
-- **置信度**：`★★★`(高) / `★★☆`(中) / `★☆☆`(低)
-- **时效性**：`[实时]` / `[近期]` / `[滞后]` / `[历史]`
-- **来源**：具体数据源名称
-
-自动采集的行情数据标注为 `[事实] ★★★ [实时]`。
-新闻搜索结果需要区分事实与判断，标注置信度。
-AI 自身的分析结论标注为 `[判断]`，并注明依据。
-
-### 数据分层
-| 层级 | 方式 | 内容 |
-|------|------|------|
-| 全自动 | Python脚本定时运行 | 指数、成交额、涨跌停、板块排名、个股K线、北向资金、龙虎榜 |
-| 半自动 | AI联网搜索+用户确认 | 新闻政策、互动易、研报、调研 |
-| 纯手动 | 用户判断 | 情绪定性、最票识别、三位一体结论、买卖决策 |
-
-### 推送渠道
-
-**支持渠道**：Discord、QQ Bot、企业微信（多渠道并行推送）
-
-**配置方式**：
-1. 复制 `scripts/.env.example` 为 `scripts/.env`
-2. 填入各渠道的 Webhook URL / 目标 ID
-3. 在 `scripts/config.yaml` 中启用对应渠道
-
-**渠道特性**：
-- **Discord**：支持 Markdown 格式、表格、代码块，适合长报告
-- **QQ Bot**：通过 OpenClaw `message` 工具推送，支持私聊/群聊
-- **企业微信**：支持 Markdown，适合办公场景
-
-**推送类型**：
-- `pre_market`（盘前简报）：07:00 自动推送
-- `post_market`（盘后报告）：20:00 自动推送
-- `alerts`（实时告警）：触发条件时推送
-
-报告同时存储到 `daily/` 目录和 Web 数据目录。
-
-### AI 不应做的事
-- 不做具体的买卖建议
-- 不预测具体价格目标
-- 不在没有数据支撑时做主观判断
-- 不替代用户的「看得懂」判断——学技术是为了偶尔看懂，不是看不懂时硬猜
-- 不将 `[判断]` 伪装为 `[事实]`
-
-### 项目目录结构
-```
-tradeSystem/
-├── .cursor/
-│   └── skills/               # 项目级 Cursor Skills（SKILL.md + INDEX.md）
-├── scripts/                  # Python 业务脚本
-│   ├── main.py               # CLI 入口（pre/post/db 子命令）
-│   ├── db/                   # 数据库模块
-│   │   ├── connection.py     # 连接管理（WAL 模式）
-│   │   ├── schema.py         # 14 张表 + FTS + 触发器
-│   │   ├── queries.py        # 查询封装
-│   │   ├── migrate.py        # 版本迁移 + YAML 导入
-│   │   ├── dual_write.py     # 双写 + 故障恢复
-│   │   └── cli.py            # db 子命令定义
-│   ├── api/                  # FastAPI 后端
-│   │   ├── main.py           # 应用入口 + CORS
-│   │   ├── deps.py           # 连接依赖注入
-│   │   └── routes/           # 路由：review / search / crud
-│   ├── collectors/           # 数据采集器
-│   ├── providers/            # 数据源提供者
-│   └── tests/                # 单元测试
-├── web/                      # React 前端
-│   └── src/
-│       ├── pages/            # 页面组件
-│       ├── lib/              # API 客户端 + 类型定义
-│       └── __tests__/        # 前端测试
-├── data/                     # 运行时数据（.gitignore）
-│   ├── trade.db              # SQLite 数据库
-│   └── attachments/          # 附件存储
-├── daily/                    # 每日 YAML 归档
-├── tracking/                 # 主线/情绪/关注池跟踪
-├── config/                   # 静态配置
-└── templates/                # 报告模板
-```
-
-### 文件修改规范
-- 每日数据一旦归档（次日开盘后），不再修改
-- `tracking/` 文件每日更新，保留历史记录
-- `config/` 文件变更需说明原因
-- `scripts/.env` 含敏感 token，不提交到 Git
-- `data/trade.db` 和 `data/attachments/` 不提交到 Git（已在 `.gitignore`）
-- `web/node_modules/` 和 `web/dist/` 不提交到 Git
+1. [AGENTS.md](/Users/alyx/tradeSystem/AGENTS.md)
+2. [00-core-trading-framework.md](/Users/alyx/tradeSystem/.cursor/agent-context/00-core-trading-framework.md)
+3. [10-agent-collaboration.md](/Users/alyx/tradeSystem/.cursor/agent-context/10-agent-collaboration.md)
+4. [20-architecture-and-data.md](/Users/alyx/tradeSystem/.cursor/agent-context/20-architecture-and-data.md)
+5. [30-runtime-and-ops.md](/Users/alyx/tradeSystem/.cursor/agent-context/30-runtime-and-ops.md)
+6. [99-full-reference.md](/Users/alyx/tradeSystem/.cursor/agent-context/99-full-reference.md)

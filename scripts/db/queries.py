@@ -750,7 +750,10 @@ def search_macro_info(conn: sqlite3.Connection, keyword: str,
 def upsert_daily_market(conn: sqlite3.Connection, data: dict) -> None:
     """插入或替换每日行情数据。"""
     cols = [
-        "date", "sh_index_close", "sh_index_change_pct",
+        "date",
+        "sh_index_open", "sh_index_high", "sh_index_low",
+        "sh_index_close", "sh_index_change_pct",
+        "sz_index_open", "sz_index_high", "sz_index_low",
         "sz_index_close", "sz_index_change_pct", "total_amount",
         "advance_count", "decline_count",
         "sh_above_ma5w", "sz_above_ma5w", "chinext_above_ma5w",

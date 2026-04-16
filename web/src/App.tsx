@@ -18,6 +18,7 @@ const PlanWorkbench = lazy(() => import('./pages/PlanWorkbench'))
 const KnowledgeWorkbench = lazy(() => import('./pages/KnowledgeWorkbench'))
 const IngestWorkbench = lazy(() => import('./pages/IngestWorkbench'))
 const RegulatoryMonitor = lazy(() => import('./pages/RegulatoryMonitor'))
+const CognitionWorkbench = lazy(() => import('./pages/CognitionWorkbench'))
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 30_000, retry: 1 } },
@@ -38,6 +39,7 @@ const NAV = [
   { to: '/industry', label: '行业信息' },
   { to: '/calendar', label: '日历' },
   { to: '/regulatory-monitor', label: '异动监管' },
+  { to: '/cognition', label: '认知' },
   // 工作台 / 工具（低频）
   { to: `/plans/${today}`, label: '计划' },
   { to: '/knowledge', label: '资料' },
@@ -73,6 +75,7 @@ export default function App() {
                 <Route path="/holding-tasks" element={<HoldingTasks />} />
                 <Route path="/watchlist" element={<Watchlist />} />
                 <Route path="/regulatory-monitor" element={<RegulatoryMonitor />} />
+                <Route path="/cognition" element={<CognitionWorkbench />} />
                 <Route path="/calendar" element={<Calendar />} />
                 <Route path="/industry" element={<IndustryInfo />} />
                 <Route path="/plans/:date" element={<PlanWorkbench />} />

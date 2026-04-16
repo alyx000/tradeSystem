@@ -19,6 +19,7 @@ from api.routes.planning import router as planning_router
 from api.routes.ingest import router as ingest_router
 from api.routes.meta import router as meta_router
 from api.routes.regulatory_monitor import router as regulatory_monitor_router
+from api.routes.cognition import router as cognition_router
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _ATTACHMENTS_DIR = _REPO_ROOT / "data" / "attachments"
@@ -39,6 +40,7 @@ app.include_router(planning_router)
 app.include_router(ingest_router)
 app.include_router(meta_router)
 app.include_router(regulatory_monitor_router)
+app.include_router(cognition_router)
 
 # 附件图片静态路由：data/attachments/ → /attachments/
 _ATTACHMENTS_DIR.mkdir(parents=True, exist_ok=True)

@@ -331,8 +331,14 @@ _SQL_MACRO_INFO_FTS_TRIGGERS = [
 _SQL_DAILY_MARKET = """
 CREATE TABLE IF NOT EXISTS daily_market (
     date TEXT PRIMARY KEY CHECK(date GLOB '????-??-??'),
+    sh_index_open REAL,
+    sh_index_high REAL,
+    sh_index_low REAL,
     sh_index_close REAL,
     sh_index_change_pct REAL,
+    sz_index_open REAL,
+    sz_index_high REAL,
+    sz_index_low REAL,
     sz_index_close REAL,
     sz_index_change_pct REAL,
     total_amount REAL,
@@ -758,6 +764,15 @@ _SQL_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_knowledge_assets_type_created ON knowledge_assets(asset_type, created_at DESC);",
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_trade_calendar_date ON trade_calendar(date);",
     "CREATE INDEX IF NOT EXISTS idx_leader_tracking_active ON leader_tracking(is_active, last_seen_date DESC);",
+    "CREATE INDEX IF NOT EXISTS idx_trading_cognitions_category ON trading_cognitions(category);",
+    "CREATE INDEX IF NOT EXISTS idx_trading_cognitions_status ON trading_cognitions(status);",
+    "CREATE INDEX IF NOT EXISTS idx_trading_cognitions_evidence_level ON trading_cognitions(evidence_level);",
+    "CREATE INDEX IF NOT EXISTS idx_trading_cognitions_supersedes ON trading_cognitions(supersedes);",
+    "CREATE INDEX IF NOT EXISTS idx_cognition_instances_cognition_id ON cognition_instances(cognition_id);",
+    "CREATE INDEX IF NOT EXISTS idx_cognition_instances_observed_date ON cognition_instances(observed_date);",
+    "CREATE INDEX IF NOT EXISTS idx_cognition_instances_outcome ON cognition_instances(outcome);",
+    "CREATE INDEX IF NOT EXISTS idx_periodic_reviews_period ON periodic_reviews(period_type, period_start, period_end);",
+    "CREATE INDEX IF NOT EXISTS idx_periodic_reviews_scope_label ON periodic_reviews(review_scope, regime_label);",
 ]
 
 # ──────────────────────────────────────────────────────────────
@@ -802,6 +817,161 @@ CREATE TABLE IF NOT EXISTS trade_calendar (
 """
 
 # ──────────────────────────────────────────────────────────────
+# 13. 交易认知层：trading_cognitions / cognition_instances / periodic_reviews
+#     （方案 §4.1 / §4.2 / §4.3，schema v21 引入）
+# ──────────────────────────────────────────────────────────────
+_SQL_TRADING_COGNITIONS = """
+CREATE TABLE IF NOT EXISTS trading_cognitions (
+    cognition_id TEXT PRIMARY KEY,
+    category TEXT NOT NULL,
+    sub_category TEXT,
+    title TEXT NOT NULL,
+    description TEXT NOT NULL,
+    pattern TEXT,
+    time_horizon TEXT,
+    action_template TEXT,
+    position_template TEXT,
+    conditions_json TEXT,
+    exceptions_json TEXT,
+    invalidation_conditions_json TEXT,
+    evidence_level TEXT NOT NULL DEFAULT 'observation'
+        CHECK(evidence_level IN ('observation', 'hypothesis', 'principle')),
+    conflict_group TEXT,
+    first_source_note_id INTEGER REFERENCES teacher_notes(id),
+    first_observed_date TEXT,
+    version INTEGER NOT NULL DEFAULT 1,
+    supersedes TEXT,
+    instance_count INTEGER NOT NULL DEFAULT 0,
+    validated_count INTEGER NOT NULL DEFAULT 0,
+    invalidated_count INTEGER NOT NULL DEFAULT 0,
+    confidence REAL NOT NULL DEFAULT 0.5,
+    status TEXT NOT NULL DEFAULT 'candidate'
+        CHECK(status IN ('candidate', 'active', 'deprecated', 'merged')),
+    tags TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+"""
+
+_SQL_COGNITION_INSTANCES = """
+CREATE TABLE IF NOT EXISTS cognition_instances (
+    instance_id TEXT PRIMARY KEY,
+    cognition_id TEXT NOT NULL REFERENCES trading_cognitions(cognition_id),
+    observed_date TEXT NOT NULL CHECK(observed_date GLOB '????-??-??'),
+    source_type TEXT NOT NULL,
+    source_note_id INTEGER REFERENCES teacher_notes(id),
+    teacher_id INTEGER REFERENCES teachers(id),
+    teacher_name_snapshot TEXT,
+    source_plan_review_id TEXT,
+    source_daily_review_date TEXT,
+    trade_id INTEGER,
+    context_summary TEXT,
+    regime_tags_json TEXT,
+    time_horizon TEXT,
+    action_bias TEXT,
+    position_cap REAL,
+    avoid_action TEXT,
+    market_regime TEXT,
+    cross_market_anchor TEXT,
+    consensus_key TEXT,
+    parameters_json TEXT,
+    teacher_original_text TEXT,
+    outcome TEXT NOT NULL DEFAULT 'pending'
+        CHECK(outcome IN ('pending', 'validated', 'invalidated', 'partial', 'not_applicable')),
+    outcome_detail TEXT,
+    outcome_fact_source TEXT,
+    outcome_fact_refs_json TEXT,
+    outcome_date TEXT,
+    lesson TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(cognition_id, observed_date, source_type, source_note_id)
+);
+"""
+
+_SQL_PERIODIC_REVIEWS = """
+CREATE TABLE IF NOT EXISTS periodic_reviews (
+    review_id TEXT PRIMARY KEY,
+    period_type TEXT NOT NULL
+        CHECK(period_type IN ('weekly', 'monthly', 'quarterly', 'yearly')),
+    review_scope TEXT NOT NULL DEFAULT 'calendar_period'
+        CHECK(review_scope IN ('calendar_period', 'event_window', 'regime_window')),
+    regime_label TEXT,
+    period_start TEXT NOT NULL CHECK(period_start GLOB '????-??-??'),
+    period_end TEXT NOT NULL CHECK(period_end GLOB '????-??-??'),
+    trading_day_count INTEGER,
+    active_cognitions_json TEXT,
+    validation_stats_json TEXT,
+    teacher_participation_json TEXT,
+    consensus_summary_json TEXT,
+    disagreement_summary_json TEXT,
+    new_cognitions_json TEXT,
+    refined_cognitions_json TEXT,
+    deprecated_cognitions_json TEXT,
+    key_lessons_json TEXT,
+    evolving_views_json TEXT,
+    performance_notes TEXT,
+    user_reflection TEXT,
+    action_items_json TEXT,
+    status TEXT NOT NULL DEFAULT 'draft' CHECK(status IN ('draft', 'confirmed')),
+    generated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    confirmed_at TEXT,
+    UNIQUE(period_type, period_start, period_end)
+);
+"""
+
+# 触发器：INSERT 实例后重算父表 instance_count / validated_count / invalidated_count / confidence
+# 有效样本数 < 3 时 confidence 固定为 0.5，否则 = validated / max(validated + invalidated, 1)
+_SQL_COG_INST_AFTER_INSERT_TRIGGER = """
+CREATE TRIGGER IF NOT EXISTS trg_cog_inst_after_insert
+AFTER INSERT ON cognition_instances
+BEGIN
+    UPDATE trading_cognitions
+    SET instance_count = instance_count + 1,
+        validated_count = (SELECT COUNT(*) FROM cognition_instances
+                           WHERE cognition_id = NEW.cognition_id AND outcome='validated'),
+        invalidated_count = (SELECT COUNT(*) FROM cognition_instances
+                             WHERE cognition_id = NEW.cognition_id AND outcome='invalidated'),
+        confidence = CASE
+                       WHEN ((SELECT COUNT(*) FROM cognition_instances
+                              WHERE cognition_id = NEW.cognition_id
+                                AND outcome IN ('validated','invalidated'))) < 3 THEN 0.5
+                       ELSE (SELECT COUNT(*) FROM cognition_instances
+                             WHERE cognition_id = NEW.cognition_id AND outcome='validated') * 1.0
+                            / MAX((SELECT COUNT(*) FROM cognition_instances
+                                   WHERE cognition_id = NEW.cognition_id
+                                     AND outcome IN ('validated','invalidated')), 1)
+                     END,
+        updated_at = datetime('now')
+    WHERE cognition_id = NEW.cognition_id;
+END;
+"""
+
+# 触发器：UPDATE outcome 后重算 validated_count / invalidated_count / confidence（不动 instance_count）
+_SQL_COG_INST_AFTER_UPDATE_OUTCOME_TRIGGER = """
+CREATE TRIGGER IF NOT EXISTS trg_cog_inst_after_update_outcome
+AFTER UPDATE OF outcome ON cognition_instances
+BEGIN
+    UPDATE trading_cognitions
+    SET validated_count = (SELECT COUNT(*) FROM cognition_instances
+                           WHERE cognition_id = NEW.cognition_id AND outcome='validated'),
+        invalidated_count = (SELECT COUNT(*) FROM cognition_instances
+                             WHERE cognition_id = NEW.cognition_id AND outcome='invalidated'),
+        confidence = CASE
+                       WHEN ((SELECT COUNT(*) FROM cognition_instances
+                              WHERE cognition_id = NEW.cognition_id
+                                AND outcome IN ('validated','invalidated'))) < 3 THEN 0.5
+                       ELSE (SELECT COUNT(*) FROM cognition_instances
+                             WHERE cognition_id = NEW.cognition_id AND outcome='validated') * 1.0
+                            / MAX((SELECT COUNT(*) FROM cognition_instances
+                                   WHERE cognition_id = NEW.cognition_id
+                                     AND outcome IN ('validated','invalidated')), 1)
+                     END,
+        updated_at = datetime('now')
+    WHERE cognition_id = NEW.cognition_id;
+END;
+"""
+
+# ──────────────────────────────────────────────────────────────
 # 全部 DDL 的执行顺序
 # ──────────────────────────────────────────────────────────────
 _ALL_TABLE_SQL = [
@@ -835,6 +1005,9 @@ _ALL_TABLE_SQL = [
     _SQL_KNOWLEDGE_ASSETS,
     _SQL_LEADER_TRACKING,
     _SQL_TRADE_CALENDAR,
+    _SQL_TRADING_COGNITIONS,
+    _SQL_COGNITION_INSTANCES,
+    _SQL_PERIODIC_REVIEWS,
 ]
 
 _ALL_FTS_SQL = [
@@ -849,6 +1022,7 @@ _ALL_TRIGGER_SQL = (
     + [_SQL_STOCK_REGULATORY_MONITOR_TRIGGER, _SQL_STOCK_REGULATORY_STK_ALERT_TRIGGER, _SQL_LEADER_TRACKING_TRIGGER]
     + _SQL_INDUSTRY_INFO_FTS_TRIGGERS
     + _SQL_MACRO_INFO_FTS_TRIGGERS
+    + [_SQL_COG_INST_AFTER_INSERT_TRIGGER, _SQL_COG_INST_AFTER_UPDATE_OUTCOME_TRIGGER]
 )
 
 EXPECTED_TABLES = [
@@ -866,6 +1040,7 @@ EXPECTED_TABLES = [
     "market_observations", "trade_drafts", "trade_plans", "plan_reviews",
     "knowledge_assets",
     "leader_tracking",
+    "trading_cognitions", "cognition_instances", "periodic_reviews",
     "teacher_notes_fts", "industry_info_fts", "macro_info_fts",
 ]
 

@@ -291,12 +291,263 @@ def cmd_plan(config: dict, args) -> None:
     _emit_cli_result(payload, as_json=getattr(args, "json", False))
 
 
+_COGNITION_COMMANDS = {
+    "cognition-add", "cognition-list", "cognition-show",
+    "cognition-refine", "cognition-deprecate",
+    "instance-add", "instance-batch-add", "instance-pending",
+    "instance-validate", "validate",
+    "instance-list",
+    "review-generate", "review-show", "review-confirm", "review-list",
+}
+
+
+def _parse_optional_json(raw: Optional[str], field_name: str):
+    if raw is None or str(raw).strip() == "":
+        return None
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{field_name} 不是合法 JSON: {exc.msg}") from exc
+
+
+def _parse_tags_arg(raw: Optional[str]):
+    """--tags 支持 JSON 数组或逗号分隔字符串，未传返回 None。"""
+    if raw is None:
+        return None
+    s = raw.strip()
+    if not s:
+        return None
+    try:
+        parsed = json.loads(s)
+        if isinstance(parsed, list):
+            return parsed
+    except json.JSONDecodeError:
+        pass
+    return [t.strip() for t in s.split(",") if t.strip()]
+
+
+def _handle_cognition_command(args) -> dict:
+    """knowledge 下的 cognition-* / instance-* / review-* 子命令分支。"""
+    from services.cognition_service import CognitionService
+
+    service = CognitionService()
+    command = args.knowledge_command
+
+    try:
+        if command == "cognition-add":
+            cognition = service.add_cognition(
+                category=args.category,
+                title=args.title,
+                description=args.description,
+                sub_category=getattr(args, "sub_category", None),
+                pattern=getattr(args, "pattern", None),
+                time_horizon=getattr(args, "time_horizon", None),
+                action_template=getattr(args, "action_template", None),
+                position_template=getattr(args, "position_template", None),
+                conditions_json=getattr(args, "conditions_json", None),
+                exceptions_json=getattr(args, "exceptions_json", None),
+                invalidation_conditions_json=getattr(args, "invalidation_conditions_json", None),
+                evidence_level=getattr(args, "evidence_level", "observation") or "observation",
+                conflict_group=getattr(args, "conflict_group", None),
+                first_source_note_id=getattr(args, "first_source_note_id", None),
+                first_observed_date=getattr(args, "first_observed_date", None),
+                tags=_parse_tags_arg(getattr(args, "tags", None)),
+                status=getattr(args, "status", "candidate") or "candidate",
+                input_by=args.input_by,
+            )
+            return {
+                "status": "ok",
+                "message": "认知已录入",
+                "cognition": cognition,
+            }
+
+        if command == "cognition-list":
+            rows = service.list_cognitions(
+                status=getattr(args, "status", None),
+                category=getattr(args, "category", None),
+                sub_category=getattr(args, "sub_category", None),
+                evidence_level=getattr(args, "evidence_level", None),
+                conflict_group=getattr(args, "conflict_group", None),
+                keyword=getattr(args, "keyword", None),
+                limit=getattr(args, "limit", 20) or 20,
+                offset=getattr(args, "offset", 0) or 0,
+            )
+            return {"status": "ok", "message": "认知列表", "cognitions": rows}
+
+        if command == "cognition-show":
+            cognition = service.get_cognition(args.id)
+            return {"status": "ok", "message": "认知详情", "cognition": cognition}
+
+        if command == "cognition-refine":
+            cognition = service.refine_cognition(
+                args.id,
+                input_by=args.input_by,
+                description=getattr(args, "description", None),
+                pattern=getattr(args, "pattern", None),
+                conditions_json=getattr(args, "conditions_json", None),
+                action_template=getattr(args, "action_template", None),
+                position_template=getattr(args, "position_template", None),
+                exceptions_json=getattr(args, "exceptions_json", None),
+                invalidation_conditions_json=getattr(args, "invalidation_conditions_json", None),
+                evidence_level=getattr(args, "evidence_level", None),
+                tags=_parse_tags_arg(getattr(args, "tags", None)),
+                status=getattr(args, "status", None),
+            )
+            return {"status": "ok", "message": "认知已精炼", "cognition": cognition}
+
+        if command == "cognition-deprecate":
+            cognition = service.deprecate_cognition(
+                args.id, reason=args.reason, input_by=args.input_by
+            )
+            return {"status": "ok", "message": "认知已弃用", "cognition": cognition}
+
+        if command == "instance-add":
+            instance = service.add_instance(
+                cognition_id=args.cognition_id,
+                observed_date=args.observed_date,
+                source_type=args.source_type,
+                source_note_id=getattr(args, "source_note_id", None),
+                teacher_id=getattr(args, "teacher_id", None),
+                teacher_name_snapshot=getattr(args, "teacher_name_snapshot", None),
+                source_plan_review_id=getattr(args, "source_plan_review_id", None),
+                source_daily_review_date=getattr(args, "source_daily_review_date", None),
+                trade_id=getattr(args, "trade_id", None),
+                context_summary=getattr(args, "context_summary", None),
+                regime_tags_json=getattr(args, "regime_tags_json", None),
+                time_horizon=getattr(args, "time_horizon", None),
+                action_bias=getattr(args, "action_bias", None),
+                position_cap=getattr(args, "position_cap", None),
+                avoid_action=getattr(args, "avoid_action", None),
+                market_regime=getattr(args, "market_regime", None),
+                cross_market_anchor=getattr(args, "cross_market_anchor", None),
+                consensus_key=getattr(args, "consensus_key", None),
+                parameters_json=getattr(args, "parameters_json", None),
+                teacher_original_text=getattr(args, "teacher_original_text", None),
+                input_by=args.input_by,
+            )
+            return {"status": "ok", "message": "实例已录入", "instance": instance}
+
+        if command == "instance-batch-add":
+            file_path = Path(args.file)
+            if not file_path.is_file():
+                return {
+                    "status": "validation_error",
+                    "message": f"批量文件不存在: {args.file}",
+                }
+            try:
+                items = json.loads(file_path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError as exc:
+                return {
+                    "status": "validation_error",
+                    "message": f"批量文件不是合法 JSON: {exc.msg}",
+                }
+            if not isinstance(items, list):
+                return {
+                    "status": "validation_error",
+                    "message": "批量文件根节点须为 JSON 数组",
+                }
+            result = service.batch_add_instances(items, input_by=args.input_by)
+            return {
+                "status": "ok",
+                "message": f"批量写入完成：成功 {len(result['created'])} / 失败 {len(result['failed'])}",
+                **result,
+            }
+
+        if command == "instance-pending":
+            rows = service.list_pending_instances(
+                observed_date=getattr(args, "date", None),
+                check_ready=bool(getattr(args, "check_ready", False)),
+                limit=getattr(args, "limit", 200) or 200,
+            )
+            return {"status": "ok", "message": "pending 实例列表", "instances": rows}
+
+        if command in {"instance-validate", "validate"}:
+            result = service.validate_instance(
+                args.instance_id,
+                outcome=args.outcome,
+                outcome_fact_source=args.outcome_fact_source,
+                outcome_detail=getattr(args, "outcome_detail", None),
+                outcome_fact_refs_json=getattr(args, "outcome_fact_refs_json", None),
+                outcome_date=getattr(args, "outcome_date", None),
+                lesson=getattr(args, "lesson", None),
+                input_by=args.input_by,
+            )
+            return {"status": "ok", "message": "实例已验证", **result}
+
+        if command == "instance-list":
+            rows = service.list_instances(
+                cognition_id=getattr(args, "cognition_id", None),
+                outcome=getattr(args, "outcome", None),
+                date_from=getattr(args, "date_from", None),
+                date_to=getattr(args, "date_to", None),
+                limit=getattr(args, "limit", 100) or 100,
+            )
+            return {"status": "ok", "message": "实例列表", "instances": rows}
+
+        if command == "review-generate":
+            review = service.generate_review(
+                period_type=args.period_type,
+                period_start=args.from_date,
+                period_end=args.to_date,
+                review_scope=getattr(args, "scope", "calendar_period") or "calendar_period",
+                regime_label=getattr(args, "regime_label", None),
+                input_by=args.input_by,
+            )
+            return {"status": "ok", "message": "周期复盘草稿已生成", "review": review}
+
+        if command == "review-show":
+            review = service.get_review(args.id)
+            return {"status": "ok", "message": "周期复盘详情", "review": review}
+
+        if command == "review-list":
+            rows = service.list_reviews(
+                period_type=getattr(args, "period_type", None),
+                review_scope=getattr(args, "scope", None),
+                status=getattr(args, "status", None),
+                from_date=getattr(args, "from_date", None),
+                to_date=getattr(args, "to_date", None),
+                limit=getattr(args, "limit", 20) or 20,
+                offset=getattr(args, "offset", 0) or 0,
+            )
+            return {"status": "ok", "message": "周期复盘列表", "reviews": rows}
+
+        if command == "review-confirm":
+            review = service.confirm_review(
+                args.id,
+                input_by=args.input_by,
+                user_reflection=getattr(args, "user_reflection", None),
+                action_items_json=getattr(args, "action_items_json", None),
+                key_lessons_json=getattr(args, "key_lessons_json", None),
+                performance_notes=getattr(args, "performance_notes", None),
+            )
+            return {"status": "ok", "message": "周期复盘已确认", "review": review}
+
+    except KeyError as exc:
+        return {"status": "validation_error", "message": f"对象不存在: {exc}"}
+    except ValueError as exc:
+        return {"status": "validation_error", "message": str(exc)}
+
+    return {"status": "validation_error", "message": f"未知 knowledge 子命令: {command}"}
+
+
 def cmd_knowledge(args) -> None:
-    """资料命令。第四阶段先接通最小 KnowledgeService。"""
+    """资料与认知命令。
+
+    - 资料（知识资产）：add-note / list / draft-from-asset / draft-from-teacher-note
+    - 认知（trading_cognitions 等）：cognition-* / instance-* / review-*（§七 方案签名）
+    """
     from services.knowledge_service import KnowledgeService
 
-    service = KnowledgeService()
     command = args.knowledge_command
+
+    if command in _COGNITION_COMMANDS:
+        payload = _handle_cognition_command(args)
+        payload.setdefault("subcommand", command)
+        payload.setdefault("blueprint", str(BASE_DIR / "docs" / "architecture" / "tradesystem-blueprint.md"))
+        _emit_cli_result(payload, as_json=getattr(args, "json", False))
+        return
+
+    service = KnowledgeService()
     if command == "add-note":
         try:
             asset = service.add_asset(
@@ -768,6 +1019,19 @@ def cmd_post(config: dict, target_date: str):
     except Exception as e:
         logger.warning(f"Obsidian 盘后数据导出失败：{e}")
 
+    # IngestService 快照采集：写入 market_fact_snapshots / raw_interface_payloads
+    # registry 已在 without_standard_http_proxy() 块内初始化，此处复用
+    try:
+        from services.ingest_service import IngestService
+        ingest_svc = IngestService(registry=registry)
+        for stage in ("post_core", "post_extended"):
+            result = ingest_svc.execute_stage(stage, target_date, triggered_by="post_cmd", input_by=None)
+            ok = sum(1 for v in result.get("interfaces", {}).values() if v.get("status") == "success")
+            total = len(result.get("interfaces", {}))
+            logger.info(f"IngestService {stage} 完成：{ok}/{total} 接口成功")
+    except Exception as e:
+        logger.warning(f"IngestService 快照采集失败（不影响主流程）：{e}")
+
 
 def _cmd_regulatory_query(target_date: str, *, as_json: bool, type_filter: str) -> None:
     """从 SQLite 读取 stock_regulatory_monitor，不调用数据源。"""
@@ -1180,6 +1444,228 @@ def build_parser() -> argparse.ArgumentParser:
     knowledge_draft_tn.add_argument("--date", default=date.today().isoformat(), help="交易日 YYYY-MM-DD")
     knowledge_draft_tn.add_argument("--input-by", default=None, help="录入方")
     knowledge_draft_tn.add_argument("--json", action="store_true", help="输出 JSON")
+
+    # 认知层（§七 方案签名）──────────────────────────────────────
+    cog_add = knowledge_subparsers.add_parser(
+        "cognition-add", help="新增可复用交易认知（trading_cognitions，默认 status=candidate）"
+    )
+    cog_add.add_argument("--category", required=True, help="一级分类（见 cognition_taxonomy.yaml）")
+    cog_add.add_argument("--title", required=True, help="认知标题")
+    cog_add.add_argument("--description", required=True, help="人类可读说明")
+    cog_add.add_argument("--sub-category", default=None, help="二级分类")
+    cog_add.add_argument("--pattern", default=None, help="模板槽位，格式 当{条件}时，{判断}→{结论}")
+    cog_add.add_argument(
+        "--evidence-level",
+        default="observation",
+        choices=["observation", "hypothesis", "principle"],
+        help="证据等级（默认 observation）",
+    )
+    cog_add.add_argument("--time-horizon", default=None, help="时间尺度 intraday/swing/mid_term/...")
+    cog_add.add_argument("--action-template", default=None, help="动作模板")
+    cog_add.add_argument("--position-template", default=None, help="仓位模板（文本或 JSON）")
+    cog_add.add_argument("--conditions-json", default=None, help="条件 JSON 字符串")
+    cog_add.add_argument("--exceptions-json", default=None, help="例外 JSON 字符串")
+    cog_add.add_argument("--invalidation-conditions-json", default=None, help="失效条件 JSON 字符串")
+    cog_add.add_argument("--conflict-group", default=None, help="冲突分组标签")
+    cog_add.add_argument("--first-source-note-id", type=int, default=None, help="首个来源 teacher_notes.id")
+    cog_add.add_argument("--first-observed-date", default=None, help="首次观察日 YYYY-MM-DD")
+    cog_add.add_argument("--tags", default=None, help="标签（JSON 数组或逗号分隔）")
+    cog_add.add_argument(
+        "--status",
+        default="candidate",
+        choices=["candidate", "active"],
+        help="初始状态（默认 candidate；deprecated / merged 须走各自命令）",
+    )
+    cog_add.add_argument("--input-by", required=True, help="录入方 cursor/claude/web/manual")
+    cog_add.add_argument("--json", action="store_true", help="输出 JSON")
+
+    cog_list = knowledge_subparsers.add_parser("cognition-list", help="列出认知")
+    cog_list.add_argument(
+        "--status", default=None,
+        choices=["candidate", "active", "deprecated", "merged"],
+        help="按状态过滤",
+    )
+    cog_list.add_argument("--category", default=None, help="按一级分类过滤")
+    cog_list.add_argument("--sub-category", default=None, help="按二级分类过滤")
+    cog_list.add_argument(
+        "--evidence-level", default=None,
+        choices=["observation", "hypothesis", "principle"],
+        help="按证据等级过滤",
+    )
+    cog_list.add_argument("--conflict-group", default=None, help="按冲突分组过滤")
+    cog_list.add_argument("--keyword", default=None, help="title/description/pattern 关键词")
+    cog_list.add_argument("--limit", type=int, default=20, help="返回条数")
+    cog_list.add_argument("--offset", type=int, default=0, help="偏移")
+    cog_list.add_argument("--json", action="store_true", help="输出 JSON")
+
+    cog_show = knowledge_subparsers.add_parser("cognition-show", help="查看单条认知（含实例统计）")
+    cog_show.add_argument("--id", required=True, help="cognition_id")
+    cog_show.add_argument("--json", action="store_true", help="输出 JSON")
+
+    cog_refine = knowledge_subparsers.add_parser(
+        "cognition-refine", help="精炼认知（仅更新非空字段，自动 version+=1）"
+    )
+    cog_refine.add_argument("--id", required=True, help="cognition_id")
+    cog_refine.add_argument("--description", default=None)
+    cog_refine.add_argument("--pattern", default=None)
+    cog_refine.add_argument("--conditions-json", default=None)
+    cog_refine.add_argument("--action-template", default=None)
+    cog_refine.add_argument("--position-template", default=None)
+    cog_refine.add_argument("--exceptions-json", default=None)
+    cog_refine.add_argument("--invalidation-conditions-json", default=None)
+    cog_refine.add_argument(
+        "--evidence-level", default=None,
+        choices=["observation", "hypothesis", "principle"],
+    )
+    cog_refine.add_argument("--tags", default=None, help="标签（JSON 数组或逗号分隔）")
+    cog_refine.add_argument(
+        "--status", default=None,
+        choices=["candidate", "active", "deprecated"],
+        help="refine 不能设为 merged（merged 须走 merge 流程）",
+    )
+    cog_refine.add_argument("--input-by", required=True, help="录入方")
+    cog_refine.add_argument("--json", action="store_true", help="输出 JSON")
+
+    cog_dep = knowledge_subparsers.add_parser(
+        "cognition-deprecate", help="将认知置为 deprecated 并记录原因"
+    )
+    cog_dep.add_argument("--id", required=True, help="cognition_id")
+    cog_dep.add_argument("--reason", required=True, help="弃用原因（将追加到 tags）")
+    cog_dep.add_argument("--input-by", required=True, help="录入方")
+    cog_dep.add_argument("--json", action="store_true", help="输出 JSON")
+
+    inst_add = knowledge_subparsers.add_parser(
+        "instance-add", help="新增认知实例（cognition_instances）"
+    )
+    inst_add.add_argument("--cognition-id", required=True, help="父认知 cognition_id")
+    inst_add.add_argument("--observed-date", required=True, help="观察日 YYYY-MM-DD")
+    inst_add.add_argument("--source-type", required=True, help="teacher_note / plan_review / daily_review / ...")
+    inst_add.add_argument("--source-note-id", type=int, default=None, help="teacher_notes.id")
+    inst_add.add_argument("--teacher-id", type=int, default=None, help="teachers.id")
+    inst_add.add_argument("--teacher-name-snapshot", default=None, help="老师名称快照")
+    inst_add.add_argument("--source-plan-review-id", default=None, help="关联 plan_reviews.review_id")
+    inst_add.add_argument("--source-daily-review-date", default=None, help="关联 daily_reviews.date")
+    inst_add.add_argument("--trade-id", type=int, default=None, help="关联 trades.id")
+    inst_add.add_argument("--context-summary", default=None, help="背景摘要")
+    inst_add.add_argument("--regime-tags-json", default=None, help="情绪/主线 JSON")
+    inst_add.add_argument("--time-horizon", default=None, help="时间尺度")
+    inst_add.add_argument("--action-bias", default=None, help="动作倾向")
+    inst_add.add_argument("--position-cap", type=float, default=None, help="仓位上限")
+    inst_add.add_argument("--avoid-action", default=None, help="禁止动作")
+    inst_add.add_argument("--market-regime", default=None, help="市场环境")
+    inst_add.add_argument("--cross-market-anchor", default=None, help="跨市场信号锚点")
+    inst_add.add_argument("--consensus-key", default=None, help="共识聚合键")
+    inst_add.add_argument("--parameters-json", default=None, help="实例参数 JSON")
+    inst_add.add_argument("--teacher-original-text", default=None, help="原文证据")
+    inst_add.add_argument("--input-by", required=True, help="录入方")
+    inst_add.add_argument("--json", action="store_true", help="输出 JSON")
+
+    inst_batch = knowledge_subparsers.add_parser(
+        "instance-batch-add", help="批量新增实例（--file 为 JSON 数组）"
+    )
+    inst_batch.add_argument("--file", required=True, help="JSON 数组文件路径，每条字段与 instance-add 一致")
+    inst_batch.add_argument("--input-by", required=True, help="录入方")
+    inst_batch.add_argument("--json", action="store_true", help="输出 JSON")
+
+    inst_pending = knowledge_subparsers.add_parser(
+        "instance-pending", help="列出 pending 实例（--check-ready 只看可验证的）"
+    )
+    inst_pending.add_argument("--date", default=None, help="观察日 YYYY-MM-DD（不填则全量）")
+    inst_pending.add_argument(
+        "--check-ready", action="store_true",
+        help="仅返回 observed_date<今日 的实例（表示盘后可验证）",
+    )
+    inst_pending.add_argument("--limit", type=int, default=200, help="返回条数上限")
+    inst_pending.add_argument("--json", action="store_true", help="输出 JSON")
+
+    # instance-validate + 别名 validate（方案 §七 原文）
+    for validate_name in ("instance-validate", "validate"):
+        inst_validate = knowledge_subparsers.add_parser(
+            validate_name,
+            help="验证实例 outcome（必须带 outcome-fact-source）",
+        )
+        inst_validate.add_argument("--instance-id", required=True, help="实例 ID")
+        inst_validate.add_argument(
+            "--outcome", required=True,
+            choices=["validated", "invalidated", "partial", "not_applicable"],
+        )
+        inst_validate.add_argument(
+            "--outcome-fact-source", required=True,
+            help="事实源，格式 '<table>:<YYYY-MM-DD>'",
+        )
+        inst_validate.add_argument("--outcome-detail", default=None, help="验证说明")
+        inst_validate.add_argument("--outcome-fact-refs-json", default=None, help="多事实源 JSON 数组")
+        inst_validate.add_argument("--outcome-date", default=None, help="确认日 YYYY-MM-DD（缺省取今日）")
+        inst_validate.add_argument("--lesson", default=None, help="本次教训")
+        inst_validate.add_argument("--input-by", required=True, help="录入方")
+        inst_validate.add_argument("--json", action="store_true", help="输出 JSON")
+
+    inst_list = knowledge_subparsers.add_parser("instance-list", help="列出实例（支持按 outcome/date 过滤）")
+    inst_list.add_argument("--cognition-id", default=None, help="按父认知过滤")
+    inst_list.add_argument(
+        "--outcome", default=None,
+        choices=["pending", "validated", "invalidated", "partial", "not_applicable"],
+    )
+    inst_list.add_argument("--date-from", default=None, help="观察日起 YYYY-MM-DD")
+    inst_list.add_argument("--date-to", default=None, help="观察日止 YYYY-MM-DD")
+    inst_list.add_argument("--limit", type=int, default=100, help="返回条数上限")
+    inst_list.add_argument("--json", action="store_true", help="输出 JSON")
+
+    rev_gen = knowledge_subparsers.add_parser(
+        "review-generate", help="生成周期复盘草稿（periodic_reviews；Phase 1b 只做聚合查询）"
+    )
+    rev_gen.add_argument(
+        "--period-type", required=True,
+        choices=["weekly", "monthly", "quarterly", "yearly"],
+    )
+    rev_gen.add_argument("--from", dest="from_date", required=True, help="起始 YYYY-MM-DD")
+    rev_gen.add_argument("--to", dest="to_date", required=True, help="结束 YYYY-MM-DD")
+    rev_gen.add_argument(
+        "--scope", default="calendar_period",
+        choices=["calendar_period", "event_window", "regime_window"],
+    )
+    rev_gen.add_argument("--regime-label", default=None, help="阶段标签（如 修复右侧窗）")
+    rev_gen.add_argument("--input-by", required=True, help="录入方")
+    rev_gen.add_argument("--json", action="store_true", help="输出 JSON")
+
+    rev_show = knowledge_subparsers.add_parser("review-show", help="查看周期复盘")
+    rev_show.add_argument("--id", required=True, help="review_id")
+    rev_show.add_argument("--json", action="store_true", help="输出 JSON")
+
+    rev_list = knowledge_subparsers.add_parser(
+        "review-list", help="列出周期复盘（periodic_reviews；支持 period_type/status/日期区间过滤）"
+    )
+    rev_list.add_argument(
+        "--period-type", default=None,
+        choices=["weekly", "monthly", "quarterly", "yearly"],
+        help="按周期类型过滤",
+    )
+    rev_list.add_argument(
+        "--scope", default=None,
+        choices=["calendar_period", "event_window", "regime_window"],
+        help="按 review_scope 过滤",
+    )
+    rev_list.add_argument(
+        "--status", default=None,
+        choices=["draft", "confirmed"],
+        help="按状态过滤",
+    )
+    rev_list.add_argument("--from", dest="from_date", default=None, help="period_start 起 YYYY-MM-DD")
+    rev_list.add_argument("--to", dest="to_date", default=None, help="period_end 止 YYYY-MM-DD")
+    rev_list.add_argument("--limit", type=int, default=20, help="返回条数")
+    rev_list.add_argument("--offset", type=int, default=0, help="偏移")
+    rev_list.add_argument("--json", action="store_true", help="输出 JSON")
+
+    rev_confirm = knowledge_subparsers.add_parser(
+        "review-confirm", help="确认周期复盘（draft → confirmed）"
+    )
+    rev_confirm.add_argument("--id", required=True, help="review_id")
+    rev_confirm.add_argument("--user-reflection", default=None, help="用户反思文本")
+    rev_confirm.add_argument("--action-items-json", default=None, help="行动项 JSON")
+    rev_confirm.add_argument("--key-lessons-json", default=None, help="关键教训 JSON")
+    rev_confirm.add_argument("--performance-notes", default=None, help="表现注记")
+    rev_confirm.add_argument("--input-by", required=True, help="录入方")
+    rev_confirm.add_argument("--json", action="store_true", help="输出 JSON")
 
     # db
     from db.cli import register_db_subparser

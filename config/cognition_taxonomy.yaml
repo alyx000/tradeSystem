@@ -1,0 +1,365 @@
+# 交易认知分类（Taxonomy）
+# 对应方案《交易认知进化系统-v2》§3；供 CognitionService / 周期复盘引擎 / record-notes Skill 共用。
+# 修改规则：
+#   1. 增删 sub_category 须同步方案 §3.1 表
+#   2. validation_strategy 枚举见文末 validation_strategies 白名单
+#   3. 老师别名 / 板块同义词归一表在 service 层写入前使用
+version: 1
+
+# ──────────────────────────────────────────────────────────────
+# 一级分类：含默认 validation_strategy（方案 §3 表）
+# ──────────────────────────────────────────────────────────────
+categories:
+  signal:
+    name_zh: 信号模式
+    validation_strategy: semi_quantitative
+    description: 技术信号规则（尾盘加速、破底翻、率先企稳等）
+    sub_categories:
+      gap:
+        name_zh: 缺口相关
+        examples:
+          - 缺口必补
+      indicator:
+        name_zh: 指标信号
+        examples:
+          - MACD零轴
+          - 买卖点信号
+      pattern:
+        name_zh: K线形态
+        examples:
+          - 破底翻
+          - 尾盘加速 vs 拉尾盘
+      momentum:
+        name_zh: 动量加速
+        examples:
+          - 加速后回调
+          - 率先企稳选股
+      cross_market:
+        name_zh: 跨市场信号
+        examples:
+          - 离岸汇率先行指标
+          - 港股强弱
+          - 黄金/原油联动
+    pattern_example: "当{指数留下跳空缺口}时，{短期必然回补}→{今日不补则次日压力加大}"
+
+  sentiment:
+    name_zh: 情绪模型
+    validation_strategy: qualitative
+    description: 情绪与资金行为（融资反向、恐慌贪婪、消息面陷阱等）
+    sub_categories:
+      crowd_behavior:
+        name_zh: 群体行为
+        examples:
+          - 底部恐惧/顶部激进
+          - 融资反向
+      news_trap:
+        name_zh: 消息陷阱
+        examples:
+          - 消息面高开陷阱
+          - 利好出尽
+      desensitization:
+        name_zh: 脱敏
+        examples:
+          - 外部事件反复冲击后市场反应递减
+      institutional_behavior:
+        name_zh: 资金属性识别
+        examples:
+          - 机构vs游资vs量化主导的行为差异
+      market_feedback:
+        name_zh: 消息反馈模式
+        examples:
+          - 利好出尽=负反馈
+          - 预期内利空不杀跌=市场强
+    pattern_example: "当{外部事件反复冲击}时，{市场反应逐次减弱}→{进入脱敏阶段}"
+
+  structure:
+    name_zh: 市场结构
+    validation_strategy: quantitative
+    description: 盘面结构（成交量阈值、板块轮动、冷饭行情等）
+    sub_categories:
+      rotation:
+        name_zh: 轮动
+        examples:
+          - 板块轮动常态
+          - 冷饭行情高抛
+      volume:
+        name_zh: 量能
+        examples:
+          - 成交量阈值与分化
+          - 缩量轮动
+      profit_chain:
+        name_zh: 利润链转移
+        examples:
+          - 利润从下游向上游转移
+      late_stage:
+        name_zh: 末段补涨
+        examples:
+          - 边缘小票补涨=主升末段
+      theme_lifecycle:
+        name_zh: 题材生命周期
+        examples:
+          - 启动→主升→扩散→补涨→见顶→切换
+    pattern_example: "当{成交量不足以支撑当前涨幅}时，{市场分化加剧}→{涨跌比恶化}"
+
+  cycle:
+    name_zh: 时间周期
+    validation_strategy: quantitative
+    description: 时间与节奏（连涨变盘、交割日、月末效应等）
+    sub_categories:
+      calendar:
+        name_zh: 日历效应
+        examples:
+          - 月末效应
+          - 假期效应
+          - 交割日
+      symmetry:
+        name_zh: 时间对称
+        examples:
+          - 跌N天涨N天
+          - 连涨变盘
+      earnings_season:
+        name_zh: 财报季
+        examples:
+          - 财报季业绩敏感度极高
+      capex_cycle:
+        name_zh: 资本开支周期
+        examples:
+          - 投入期→利润兑现期（2-3年）
+          - 历史类比
+    pattern_example: "当{指数连跌N天后反弹}时，{反弹天数约等于下跌天数}→{到时间窗口附近需警惕}"
+
+  position:
+    name_zh: 位置趋势
+    validation_strategy: semi_quantitative
+    description: 空间与趋势（均线回踩、筹码结构、阻力区等）
+    sub_categories:
+      ma_support:
+        name_zh: 均线支撑
+        examples:
+          - 均线回踩
+          - 远离均线不追
+      resistance:
+        name_zh: 阻力区
+        examples:
+          - 阻力共振
+          - 压力区回撤正常
+      chip_structure:
+        name_zh: 筹码结构
+        examples:
+          - 无套牢盘弹性>有套牢盘
+      trend_phase:
+        name_zh: 左右侧
+        examples:
+          - 右侧每次回踩按买跌处理
+    pattern_example: "当{股价远离五日均线}时，{不应追买}→{等回踩均线再介入}"
+
+  sizing:
+    name_zh: 仓位管理
+    validation_strategy: not_applicable
+    description: 仓位与品种（分批加仓、组合轮换、涨卖未涨持等方法论）
+    sub_categories:
+      batch_building:
+        name_zh: 分批建仓
+        examples:
+          - 超跌满仓 vs 反弹分批
+      position_limit:
+        name_zh: 仓位上限
+        examples:
+          - 反弹阶段不超七成
+          - 高波动下调仓位上限
+      portfolio_rotation:
+        name_zh: 组合轮换
+        examples:
+          - 2-3只一组做完再换
+    pattern_example: "当{完全超跌}时，{可一次性重仓}；当{反弹中途}时，{必须分批}"
+
+  synthesis:
+    name_zh: 综合决策
+    validation_strategy: qualitative
+    description: 多因子综合（多因子共振、概率思维等）
+    sub_categories:
+      multi_factor:
+        name_zh: 多因子共振
+        examples:
+          - 多信号叠加减仓/加仓
+      probability:
+        name_zh: 概率思维
+        examples:
+          - 大概率≠一定
+          - 保留余地
+    pattern_example: "当{原油上破阈值+指数跌破5日线+核心龙头见顶}三中二时，{反弹结束}→{转为防守}"
+
+  fundamental:
+    name_zh: 基本面
+    validation_strategy: quantitative
+    description: 财报与企业质量（现金流背离、造血比率、合同负债前瞻等）
+    sub_categories:
+      cash_flow:
+        name_zh: 现金流质量
+        examples:
+          - 增收增利但不增现金流=危险信号
+      earnings_quality:
+        name_zh: 盈利质量
+        examples:
+          - 造血比率（经营现金流/净利润）
+          - 应收账款膨胀
+          - 困境反转+增速扩大
+      balance_sheet:
+        name_zh: 资产负债表健康度
+        examples:
+          - 合同负债下降=收入可见性下降
+          - 流动比率
+      capex_quality:
+        name_zh: 资本开支质量
+        examples:
+          - 买矿vs建厂房
+          - 研发投入增速vs收入增速
+      business_model:
+        name_zh: 商业模式
+        examples:
+          - 量价齐升
+          - 低成本优势放大利润弹性
+          - 排产数据前瞻景气
+    pattern_example: "当{利润增长但经营活动现金流下降}时，{盈利质量存疑}→{警惕应收膨胀和坏账风险}"
+
+  macro:
+    name_zh: 宏观经济
+    validation_strategy: semi_quantitative
+    description: 宏观数据与政策传导（M1/M2剪刀差、K型复苏、房地产传导链等）
+    sub_categories:
+      money_supply:
+        name_zh: 货币与信贷
+        examples:
+          - M1/M2剪刀差
+          - 存款>贷款=消费弱
+      economic_cycle:
+        name_zh: 经济周期
+        examples:
+          - K型复苏
+          - 大企业强小企业弱
+          - 美林时钟通胀象限
+      transmission:
+        name_zh: 传导链
+        examples:
+          - 房地产持续3月→消费拉动
+          - PPI→CPI传导
+      policy:
+        name_zh: 政策影响
+        examples:
+          - 并购松绑
+          - 新药定价分离
+          - 出口限制
+    pattern_example: "当{一线城市房地产持续复苏超3月}时，{消费拉动开始显现}→{可关注消费板块}"
+
+  valuation:
+    name_zh: 估值定价
+    validation_strategy: quantitative
+    description: 估值框架与定价（周期股PE锚、价格敏感度、ROE长期回报等）
+    sub_categories:
+      pe_anchor:
+        name_zh: PE锚定
+        examples:
+          - 周期股给低PE
+          - 成长股看PEG
+          - PE分层估值法
+      sensitivity:
+        name_zh: 敏感度分析
+        examples:
+          - 金价波动10%→净利润影响17-18%
+      roe_driven:
+        name_zh: ROE驱动
+        examples:
+          - ROE长期<5%则投资回报受限
+      margin_of_safety:
+        name_zh: 安全边际
+        examples:
+          - 静态估值不便宜则不出手
+      ma_premium:
+        name_zh: 并购溢价
+        examples:
+          - 供应链抓手公司获并购溢价
+          - AH溢价参考
+    pattern_example: "当{公司盈利高度依赖商品价格}时，{应给予较低PE}→{不应按成长股估值}"
+
+  execution:
+    name_zh: 交易执行
+    validation_strategy: semi_quantitative
+    description: 微观交易规则与纪律（龙头跟风联动、止盈止损方法、仓位分层等）
+    sub_categories:
+      leader_follower:
+        name_zh: 龙头跟风联动
+        examples:
+          - 龙头封板→介入龙二龙三
+          - 龙头开板→后排卖出
+      entry_timing:
+        name_zh: 入场时机
+        examples:
+          - 做主线做前排做early
+          - 不做后排不做late
+      chase_trap:
+        name_zh: 追高陷阱
+        examples:
+          - 追后排+追连续涨第四天=追高亏钱根源
+      exit_rule:
+        name_zh: 止盈止损
+        examples:
+          - 零轴止盈
+          - 吊灯止盈
+          - 30日线无条件生命线
+      open_direction:
+        name_zh: 开盘方向决策
+        examples:
+          - 直接反弹=卖点
+          - 惯性低开+普跌=买点
+      position_layering:
+        name_zh: 仓位分层
+        examples:
+          - 中期底仓≥50%不动+短差仓做高抛低吸
+    pattern_example: "当{龙头即将封板}时，{介入龙二龙三}；{龙头封板后}→{冲高做T}；{龙头开板}→{后排立即卖出}"
+
+# ──────────────────────────────────────────────────────────────
+# 老师别名归一（service 层写入 cognition_instances 前统一 canonical）
+# key = 别名 / 错别字，value = canonical name；相同 canonical 多写几条即可
+# ──────────────────────────────────────────────────────────────
+teacher_aliases:
+  沈淳: 沈纯
+  唐史主任司马迁: 唐史
+
+# ──────────────────────────────────────────────────────────────
+# 板块 / 主题同义词归一（canonical_topic）
+# key = canonical，value = 别名数组
+# ──────────────────────────────────────────────────────────────
+topic_aliases:
+  算力:
+    - AI算力
+    - 国产算力
+    - 算力租赁
+  半导体:
+    - 芯片
+    - 国产替代半导体
+
+# ──────────────────────────────────────────────────────────────
+# 与 trade_plans 的 market_bias / focus_style 映射
+# 说明：Phase 1 先占位，Phase 4 API/Web 接入时再细化具体分类权重
+# ──────────────────────────────────────────────────────────────
+plan_mappings:
+  market_bias:
+    bullish_swing:
+      categories:
+        - signal
+        - structure
+        - position
+    defense_counter:
+      categories:
+        - sentiment
+        - sizing
+  focus_style: {}
+
+# ──────────────────────────────────────────────────────────────
+# validation_strategy 枚举白名单（方案 §5.2.2）
+# ──────────────────────────────────────────────────────────────
+validation_strategies:
+  - quantitative
+  - semi_quantitative
+  - qualitative
+  - not_applicable

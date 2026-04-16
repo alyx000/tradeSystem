@@ -251,14 +251,20 @@ def _extract_market_row(date_str: str, envelope: dict) -> dict:
     ma_sh = _safe_sub(_safe_sub(source, "moving_averages"), "shanghai")
     ma_all = source.get("moving_averages") if isinstance(source.get("moving_averages"), dict) else {}
 
-    def _idx_close_pct(nest: str, legacy_close: str, legacy_pct: str):
+    def _idx_ohlc_pct(nest: str, legacy_close: str, legacy_pct: str):
         block = indices.get(nest)
         if isinstance(block, dict) and "error" not in block:
-            return block.get("close"), block.get("change_pct")
-        return indices.get(legacy_close), indices.get(legacy_pct)
+            return (
+                block.get("open"),
+                block.get("high"),
+                block.get("low"),
+                block.get("close"),
+                block.get("change_pct"),
+            )
+        return None, None, None, indices.get(legacy_close), indices.get(legacy_pct)
 
-    sh_c, sh_p = _idx_close_pct("shanghai", "sh_close", "sh_change_pct")
-    sz_c, sz_p = _idx_close_pct("shenzhen", "sz_close", "sz_change_pct")
+    sh_o, sh_h, sh_l, sh_c, sh_p = _idx_ohlc_pct("shanghai", "sh_close", "sh_change_pct")
+    sz_o, sz_h, sz_l, sz_c, sz_p = _idx_ohlc_pct("shenzhen", "sz_close", "sz_change_pct")
 
     total_amount = source.get("total_amount")
     if total_amount is None and isinstance(source.get("total_volume"), (int, float)):
@@ -360,8 +366,14 @@ def _extract_market_row(date_str: str, envelope: dict) -> dict:
 
     return {
         "date": date_str,
+        "sh_index_open": sh_o,
+        "sh_index_high": sh_h,
+        "sh_index_low": sh_l,
         "sh_index_close": sh_c,
         "sh_index_change_pct": sh_p,
+        "sz_index_open": sz_o,
+        "sz_index_high": sz_h,
+        "sz_index_low": sz_l,
         "sz_index_close": sz_c,
         "sz_index_change_pct": sz_p,
         "total_amount": total_amount,

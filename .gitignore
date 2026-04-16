@@ -27,8 +27,10 @@ venv/
 # 临时文件
 *.tmp
 
-# 文档/课件（本地保留，不入仓库）
-docs/
+# 文档/课件（本地保留，不入仓库；模板例外）
+docs/*
+!docs/templates/
+!docs/templates/**
 
 # 每日数据（本地生成，不入仓库）
 daily/

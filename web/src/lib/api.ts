@@ -287,3 +287,165 @@ export const api = {
   deleteKnowledgeAsset: (assetId: string) =>
     request<{ ok?: boolean }>(`/knowledge/assets/${assetId}`, { method: 'DELETE' }),
 }
+
+// ===== 交易认知（只读）=====
+
+export interface CognitionItem {
+  cognition_id: string
+  category: string
+  sub_category: string | null
+  title: string
+  description: string | null
+  pattern: string | null
+  time_horizon: string | null
+  action_template: string | null
+  position_template: string | null
+  conditions_json: unknown
+  exceptions_json: unknown
+  invalidation_conditions_json: unknown
+  evidence_level: string
+  conflict_group: string | null
+  first_source_note_id: number | null
+  first_observed_date: string | null
+  version: number
+  supersedes: string | null
+  instance_count: number
+  validated_count: number
+  invalidated_count: number
+  confidence: number
+  status: string
+  tags: unknown
+  created_at: string
+  updated_at: string
+}
+
+export interface InstanceItem {
+  instance_id: string
+  cognition_id: string
+  observed_date: string | null
+  source_type: string | null
+  source_note_id: number | null
+  teacher_id: number | null
+  teacher_name_snapshot: string | null
+  context_summary: string | null
+  regime_tags_json: unknown
+  time_horizon: string | null
+  action_bias: string | null
+  position_cap: string | null
+  avoid_action: string | null
+  market_regime: string | null
+  cross_market_anchor: string | null
+  consensus_key: string | null
+  parameters_json: unknown
+  teacher_original_text: string | null
+  outcome: string
+  outcome_detail: string | null
+  outcome_fact_source: string | null
+  outcome_fact_refs_json: unknown
+  outcome_date: string | null
+  lesson: string | null
+  created_at: string
+}
+
+export interface ReviewItem {
+  review_id: string
+  period_type: string
+  review_scope: string | null
+  regime_label: string | null
+  period_start: string | null
+  period_end: string | null
+  active_cognitions_json: unknown
+  validation_stats_json: unknown
+  teacher_participation_json: unknown
+  key_lessons_json: unknown
+  user_reflection: string | null
+  action_items_json: unknown
+  status: string
+  generated_at: string | null
+  confirmed_at: string | null
+  [key: string]: unknown
+}
+
+export interface CognitionListFilters {
+  category?: string
+  sub_category?: string
+  status?: string
+  evidence_level?: string
+  conflict_group?: string
+  keyword?: string
+  limit?: number
+  offset?: number
+}
+
+export interface InstanceListFilters {
+  cognition_id?: string
+  outcome?: string
+  teacher_id?: number
+  source_type?: string
+  date_from?: string
+  date_to?: string
+  limit?: number
+  offset?: number
+}
+
+export interface ReviewListFilters {
+  period_type?: string
+  review_scope?: string
+  status?: string
+  date_from?: string
+  date_to?: string
+  limit?: number
+  offset?: number
+}
+
+function buildCognitionQuery(filters: Record<string, unknown>): string {
+  const sp = new URLSearchParams()
+  for (const [k, v] of Object.entries(filters)) {
+    if (v == null) continue
+    const s = String(v)
+    if (s === '') continue
+    sp.set(k, s)
+  }
+  const q = sp.toString()
+  return q ? `?${q}` : ''
+}
+
+export async function listCognitions(
+  filters: CognitionListFilters = {},
+): Promise<{ total: number; cognitions: CognitionItem[] }> {
+  return request<{ total: number; cognitions: CognitionItem[] }>(
+    `/cognition/cognitions${buildCognitionQuery(filters as Record<string, unknown>)}`,
+  )
+}
+
+export async function getCognitionById(
+  id: string,
+): Promise<{ status?: string; message?: string; cognition: CognitionItem }> {
+  return request<{ status?: string; message?: string; cognition: CognitionItem }>(
+    `/cognition/cognitions/${encodeURIComponent(id)}`,
+  )
+}
+
+export async function listInstances(
+  filters: InstanceListFilters = {},
+): Promise<{ total: number; instances: InstanceItem[] }> {
+  return request<{ total: number; instances: InstanceItem[] }>(
+    `/cognition/instances${buildCognitionQuery(filters as Record<string, unknown>)}`,
+  )
+}
+
+export async function listReviews(
+  filters: ReviewListFilters = {},
+): Promise<{ total: number; reviews: ReviewItem[] }> {
+  return request<{ total: number; reviews: ReviewItem[] }>(
+    `/cognition/reviews${buildCognitionQuery(filters as Record<string, unknown>)}`,
+  )
+}
+
+export async function getCognitionReview(
+  id: string,
+): Promise<{ status?: string; message?: string; review: ReviewItem }> {
+  return request<{ status?: string; message?: string; review: ReviewItem }>(
+    `/cognition/reviews/${encodeURIComponent(id)}`,
+  )
+}
