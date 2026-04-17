@@ -1,4 +1,5 @@
 import { type StepProps, Section, Row, PrefillBanner, Metric, SelectField, NumberField, TextField, TextareaField } from './widgets'
+import CognitionPanel from './CognitionPanel'
 import { get, set } from './formState'
 import type { ReviewStyleFactors, ReviewStepValue, StyleFactorBoardPreference, StyleFactorCapPreference, StyleFactorPremiumSnapshotItem, StyleFactorPremiumTrend } from '../../lib/types'
 
@@ -126,6 +127,10 @@ export default function StepStyle({ data, onChange, prefill }: StepProps) {
 
   return (
     <div className="space-y-6">
+      <CognitionPanel
+        stepKey="step4_style"
+        cognitions={prefill?.cognitions_by_step?.step4_style}
+      />
       {/* 溢价率快照 + 系统推导提示 */}
       {(hasPremium || hasStyleFactors) && (
         <PrefillBanner>

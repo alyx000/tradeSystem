@@ -1,5 +1,6 @@
 import { useEffect, useMemo } from 'react'
 import { type StepProps, Row, SelectField, TextField, NumberField, CheckField, PrefillBanner, DynamicList, InvestorQaList } from './widgets'
+import CognitionPanel from './CognitionPanel'
 import type { Holding, HoldingSignalItem } from '../../lib/types'
 
 interface PositionItem {
@@ -131,6 +132,10 @@ export default function StepPositions({ data, onChange, prefill }: StepProps) {
 
   return (
     <div className="space-y-6">
+      <CognitionPanel
+        stepKey="step7_positions"
+        cognitions={prefill?.cognitions_by_step?.step7_positions}
+      />
       {holdings.length > 0 && !d.positions && (
         <PrefillBanner>
           <span>

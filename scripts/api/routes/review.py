@@ -28,11 +28,138 @@ _STOCK_LABEL_RE = re.compile(r"^(?P<name>.*?)(?:\((?P<code>[0-9]{6}(?:\.[A-Z]{2}
 # prefill 时回溯的行业信息天数
 _INDUSTRY_INFO_LOOKBACK_DAYS = 7
 
+# ──────────────────────────────────────────────────────────────
+# 8 步 → trading_cognitions.category 映射
+# 用于 prefill 中按步骤分组展示相关认知。修改映射时需与
+# `.cursor/skills/daily-review/references/eight-step-prompt-templates.md`
+# 保持一致。此常量为 review 工作台专属；`config/cognition_taxonomy.yaml`
+# 中的 `plan_mappings` 留给未来计划工作台消费，二者互不影响。
+# ──────────────────────────────────────────────────────────────
+_STEP_CATEGORY_MAP: dict[str, tuple[str, ...]] = {
+    "step1_market": ("structure", "macro", "cycle"),
+    "step2_sectors": ("structure", "signal"),
+    "step3_emotion": ("sentiment",),
+    "step4_style": ("structure", "signal"),
+    "step5_leaders": ("execution",),
+    "step6_nodes": ("cycle", "position"),
+    "step7_positions": ("sizing", "position", "execution", "fundamental"),
+    "step8_plan": ("execution", "synthesis", "valuation"),
+}
+
+# prefill 响应中仅返回的白名单字段（裁剪掉 description / 时间戳等大字段）
+_COGNITION_FIELD_WHITELIST: tuple[str, ...] = (
+    "cognition_id",
+    "title",
+    "category",
+    "sub_category",
+    "evidence_level",
+    "confidence",
+    "instance_count",
+    "validated_count",
+    "invalidated_count",
+    "pattern",
+    "conflict_group",
+    "tags",
+)
+
+# 白名单内需做 JSON 反序列化的字段（与 cognition.py `_parse_json_fields` 对齐）
+_COGNITION_JSON_FIELDS: tuple[str, ...] = ("tags",)
+
+# 每步展示上限（与 plan 「8 步 → category」章节一致）
+_COGNITION_PER_STEP_LIMIT = 5
+
 
 def _validate_date(date: str) -> str:
     if not _DATE_RE.match(date):
         raise HTTPException(422, f"Invalid date format: {date}")
     return date
+
+
+# ──────────────────────────────────────────────────────────────
+# 认知 prefill：按 8 步 → category 聚合 active 认知
+# ──────────────────────────────────────────────────────────────
+def _fetch_cognitions_multi_category(
+    conn: sqlite3.Connection,
+    categories: tuple[str, ...],
+) -> list[sqlite3.Row]:
+    """单条 SQL 聚合查询多 category 的 active 认知，避免 N+1 连接。
+
+    `CognitionService.list_cognitions` 只支持单 category 等值过滤，这里在
+    review.py 内部直查 `trading_cognitions`，复用 `get_db_conn` 依赖提供的
+    测试友好连接。
+    """
+    if not categories:
+        return []
+    placeholders = ",".join("?" * len(categories))
+    sql = (
+        "SELECT * FROM trading_cognitions "
+        f"WHERE category IN ({placeholders}) AND status = 'active'"
+    )
+    return conn.execute(sql, tuple(categories)).fetchall()
+
+
+def _parse_cognition_json_fields(row: dict[str, Any]) -> dict[str, Any]:
+    """把 `tags` 等 JSON 字段从 TEXT 反序列化为 Python 对象。
+
+    复用 `scripts/api/routes/cognition.py::_parse_json_fields` 的解析语义：
+    None 直接透传；已是 list/dict 的不动；字符串 `json.loads` 失败则置 None。
+    """
+    out = dict(row)
+    for field in _COGNITION_JSON_FIELDS:
+        v = out.get(field)
+        if v is None or isinstance(v, (list, dict)):
+            continue
+        if isinstance(v, str):
+            try:
+                out[field] = json.loads(v)
+            except (json.JSONDecodeError, TypeError):
+                out[field] = None
+    return out
+
+
+def _project_cognition_fields(row: dict[str, Any]) -> dict[str, Any]:
+    return {field: row.get(field) for field in _COGNITION_FIELD_WHITELIST}
+
+
+def _sort_cognitions_for_prefill(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """按 `confidence DESC, instance_count DESC, updated_at DESC, cognition_id ASC`
+    排序。利用 Python sorted 的稳定性，分 4 轮（从最低优先级到最高优先级）。
+    """
+    def _conf_key(r: dict[str, Any]) -> float:
+        v = r.get("confidence")
+        try:
+            return float(v) if v is not None else 0.0
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _count_key(r: dict[str, Any]) -> int:
+        v = r.get("instance_count")
+        try:
+            return int(v) if v is not None else 0
+        except (TypeError, ValueError):
+            return 0
+
+    ordered = sorted(rows, key=lambda r: str(r.get("cognition_id") or ""))
+    ordered = sorted(ordered, key=lambda r: str(r.get("updated_at") or ""), reverse=True)
+    ordered = sorted(ordered, key=_count_key, reverse=True)
+    ordered = sorted(ordered, key=_conf_key, reverse=True)
+    return ordered
+
+
+def _build_cognitions_by_step(conn: sqlite3.Connection) -> dict[str, list[dict[str, Any]]]:
+    """为 prefill 构造 `{step_key: [cognition_summary, ...]}`。
+
+    流程：查询 → JSON 解析 → 二次排序 → top 5 截断 → 字段白名单裁剪。
+    空 category 或无结果时返回 `[]`，保证前端无需处理 null/缺 key。
+    """
+    out: dict[str, list[dict[str, Any]]] = {}
+    for step_key, categories in _STEP_CATEGORY_MAP.items():
+        rows = _fetch_cognitions_multi_category(conn, categories)
+        parsed = [_parse_cognition_json_fields(dict(r)) for r in rows]
+        ordered = _sort_cognitions_for_prefill(parsed)
+        top = ordered[:_COGNITION_PER_STEP_LIMIT]
+        out[step_key] = [_project_cognition_fields(r) for r in top]
+    return out
 
 
 def _industry_info_date_from(date_str: str) -> str:
@@ -907,6 +1034,8 @@ def get_prefill(date: str, conn: sqlite3.Connection = Depends(get_db_conn)):
                 "is_prefilled": True,
             })
 
+    cognitions_by_step = _build_cognitions_by_step(conn)
+
     return {
         "date": date,
         "is_trading_day": is_trading_day,
@@ -925,6 +1054,7 @@ def get_prefill(date: str, conn: sqlite3.Connection = Depends(get_db_conn)):
         "review_signals": review_signals,
         "holding_signals": holding_signals,
         "step5_leaders": {"top_leaders": step5_prefill_leaders} if step5_prefill_leaders else None,
+        "cognitions_by_step": cognitions_by_step,
     }
 
 

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { type StepProps, Section, Row, PrefillBanner, Metric, SelectField, TextField, NumberField, TextareaField, TeacherNotesPanel } from './widgets'
+import CognitionPanel from './CognitionPanel'
 import { get, set } from './formState'
 import { api } from '../../lib/api'
 import type { ResearchCoverageRow } from '../../lib/types'
@@ -163,6 +164,10 @@ export default function StepMarket({ data, onChange, prefill }: StepProps) {
           <p className="text-sm text-amber-800 font-medium">当前日期为非交易日，市场数据可能为空或不准确</p>
         </div>
       )}
+      <CognitionPanel
+        stepKey="step1_market"
+        cognitions={prefill?.cognitions_by_step?.step1_market}
+      />
       <TeacherNotesPanel notes={teacherNotes} fields={['core_view']} />
       {m && (
         <PrefillBanner>

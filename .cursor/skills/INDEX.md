@@ -72,7 +72,7 @@
 
 | Skill | API 端点 | 方法 | 说明 |
 |-------|---------|------|------|
-| `daily-review` / `sector-projection-analysis` | `/api/review/{date}/prefill` | GET | 拉取八步复盘预填充数据（含板块候选；返回 `emotion_leader` / `capacity_leader`，`lead_stock` 仅作兼容） |
+| `daily-review` / `sector-projection-analysis` | `/api/review/{date}/prefill` | GET | 拉取八步复盘预填充数据（含板块候选；返回 `emotion_leader` / `capacity_leader`，`lead_stock` 仅作兼容；v1.4+ 额外返回 `cognitions_by_step`：按八步聚合的 `status=active` 底层认知，每步最多 5 条） |
 | `daily-review` | `/api/review/{date}` | GET | 读取已保存的复盘内容 |
 | `daily-review` | `/api/review/{date}` | PUT | 提交复盘主观判断 |
 | `daily-review` / `plan-workbench` | `/api/review/{date}/to-draft` | POST | 将复盘结果转成 `review` observation 与次日 `TradeDraft` |
@@ -121,7 +121,7 @@
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET | `/api/review/{date}` ★ | 读取指定日期复盘（含 exists 标志） |
-| GET | `/api/review/{date}/prefill` ★ | 预填充数据（行情+笔记+持仓+日历） |
+| GET | `/api/review/{date}/prefill` ★ | 预填充数据（行情+笔记+持仓+日历+ v1.4+ `cognitions_by_step`） |
 | PUT | `/api/review/{date}` ★ | 保存/更新复盘主观判断 |
 | POST | `/api/review/{date}/to-draft` ★ | 将已保存复盘转换为 `review` observation / `TradeDraft` |
 

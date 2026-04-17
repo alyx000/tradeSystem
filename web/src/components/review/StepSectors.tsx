@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { type StepProps, Section, Row, PrefillBanner, SelectField, TextField, NumberField, TagsField, TextareaField, DynamicList, TeacherNotesPanel } from './widgets'
+import CognitionPanel from './CognitionPanel'
 import { get, set } from './formState'
 import type {
   IndustryInfoItem,
@@ -325,6 +326,10 @@ export default function StepSectors({ data, onChange, prefill }: StepProps) {
 
   return (
     <div className="space-y-6">
+      <CognitionPanel
+        stepKey="step2_sectors"
+        cognitions={prefill?.cognitions_by_step?.step2_sectors}
+      />
       <TeacherNotesPanel notes={teacherNotes} fields={['sectors', 'key_points']} />
       {themes.length > 0 && (
         <PrefillBanner>

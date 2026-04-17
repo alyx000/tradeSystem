@@ -886,6 +886,27 @@ export interface ReviewNextDayFocus {
   focus_reason?: string
 }
 
+/** /api/review/{date}/prefill 中的 `cognitions_by_step` 白名单字段（与后端
+ * `scripts/api/routes/review.py::_COGNITION_FIELD_WHITELIST` 对齐）。 */
+export interface CognitionSummary {
+  cognition_id: string
+  title: string
+  category: string
+  sub_category: string | null
+  evidence_level: string
+  confidence: number
+  instance_count: number
+  validated_count: number
+  invalidated_count: number
+  pattern: string | null
+  conflict_group: string | null
+  tags: string[] | null
+}
+
+/** 后端 `GET /api/review/{date}/prefill` 保证 8 个 `ReviewStepKey` 总是齐全，
+ * 空步骤返回 `[]` 而非省略键；因此此处**不使用** `Partial`。 */
+export type CognitionsByStep = Record<ReviewStepKey, CognitionSummary[]>
+
 export interface ReviewEmotionSignals {
   ladder_rows: Array<{
     name: string
@@ -921,6 +942,9 @@ export interface ReviewPrefillData extends Omit<PrefillData, 'market' | 'main_th
       is_prefilled: boolean
     }>
   } | null
+  /** 各步骤的相关底层认知（仅 `status=active`），按 confidence/instance_count/updated_at/cognition_id
+   * 排序并截取前 5 条；字段白名单见 `CognitionSummary`。 */
+  cognitions_by_step?: CognitionsByStep
 }
 
 export interface ReviewRecord extends Partial<Record<ReviewStepKey, string | ReviewStepValue>> {

@@ -1,4 +1,5 @@
 import { type StepProps, Section, Row, PrefillBanner, SelectField, TextField, TagsField, TextareaField, DynamicList, TeacherNotesPanel } from './widgets'
+import CognitionPanel from './CognitionPanel'
 import { get, set } from './formState'
 import type { CalendarEvent } from '../../lib/types'
 
@@ -51,6 +52,10 @@ export default function StepPlan({ data, onChange, prefill }: StepProps) {
 
   return (
     <div className="space-y-6">
+      <CognitionPanel
+        stepKey="step8_plan"
+        cognitions={prefill?.cognitions_by_step?.step8_plan}
+      />
       <TeacherNotesPanel notes={teacherNotes} fields={['core_view', 'position_advice', 'avoid']} />
       <Section title="三位一体重点因子">
         <div className="space-y-4">

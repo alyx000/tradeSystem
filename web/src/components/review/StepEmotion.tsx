@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { ResponsiveContainer, ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip } from 'recharts'
 import { type StepProps, Section, Row, PrefillBanner, Metric, SelectField, TextField, TextareaField, DynamicList } from './widgets'
+import CognitionPanel from './CognitionPanel'
 import { get, set } from './formState'
 import { api } from '../../lib/api'
 import type { MarketChartItem } from '../../lib/types'
@@ -71,6 +72,10 @@ export default function StepEmotion({ data, onChange, prefill }: StepProps) {
 
   return (
     <div className="space-y-6">
+      <CognitionPanel
+        stepKey="step3_emotion"
+        cognitions={prefill?.cognitions_by_step?.step3_emotion}
+      />
       <Section title="情绪阶段">
         <Row>
           <SelectField label="整体情绪" value={g('phase')} onChange={v => s('phase', v)} options={PHASE} />

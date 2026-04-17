@@ -1,13 +1,18 @@
 import { type StepProps, Section, TextField, TextareaField } from './widgets'
+import CognitionPanel from './CognitionPanel'
 import { get, set } from './formState'
 
-export default function StepNodes({ data, onChange }: StepProps) {
+export default function StepNodes({ data, onChange, prefill }: StepProps) {
   const d = data || {}
   const g = <T = string,>(p: string, fb?: T) => get<T>(d, p, (fb ?? '') as T)
   const s = (p: string, v: unknown) => onChange(set(d, p, v))
 
   return (
     <div className="space-y-6">
+      <CognitionPanel
+        stepKey="step6_nodes"
+        cognitions={prefill?.cognitions_by_step?.step6_nodes}
+      />
       <Section title="各维度节点">
         <div className="space-y-4">
           <TextField label="大盘节点" value={g('market_node')} onChange={v => s('market_node', v)} placeholder="止跌反弹 / 突破前高 / 回踩确认..." />

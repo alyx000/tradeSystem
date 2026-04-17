@@ -291,6 +291,7 @@ make dev-web   # vite dev
 - 若用户要把旧观点批量回填到 `teacher_notes` → 先走 [`record-notes/SKILL.md`](../record-notes/SKILL.md) 录入，再回到本 skill 做认知提炼
 - 若用户要把认知映射为次日交易计划 → 切到 [`plan-workbench/SKILL.md`](../plan-workbench/SKILL.md)
 - 若用户要从课程笔记 / 新闻资料生成 observation → 切到 [`knowledge-to-plan/SKILL.md`](../knowledge-to-plan/SKILL.md)
+- 若用户要在八步复盘中**引用**（而非写入/验证）现有认知 → 切到 [`daily-review/SKILL.md`](../daily-review/SKILL.md)：`GET /api/review/{date}/prefill.cognitions_by_step` 已按八步聚合 active 认知；复盘对话中**禁止** `knowledge instance-add / knowledge validate / knowledge cognition-refine`，相关写操作发生后再回到本 skill 处理
 - 若 CLI 命令签名漂移（pytest 不过、命令重命名、`INDEX.md` 与 `test_cli_smoke.py` 不一致）→ 切到 [`repo-maintenance-workflows/SKILL.md`](../repo-maintenance-workflows/SKILL.md)
 - 若想启用 Phase 2 自动提取 / 种子库匹配 / 共识度计算 → 升级到 `cognition-evolution` 完整版（Phase 2 交付后替换本文件）
 

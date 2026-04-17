@@ -145,6 +145,107 @@ describe('ReviewWorkbench', () => {
     expect(screen.getByText('8.计划 ✓')).toBeInTheDocument()
   })
 
+  it('preserves nested saved step data when local draft contains an older partial structure', async () => {
+    vi.mocked(api.getReview).mockResolvedValue({
+      exists: true,
+      step5_leaders: JSON.stringify({
+        top_leaders: [
+          {
+            stock: '协创数据',
+            sector: '算力租赁',
+            attribute_type: '走势引领',
+            attribute: '主线最票',
+            clarity: '一眼看出',
+            position: '主升',
+            is_new: true,
+            is_prefilled: false,
+          },
+        ],
+        transition: {
+          old: '高位AI硬件后排',
+          new: '协创数据',
+          reason: '切回算力租赁主线',
+        },
+      }),
+    })
+    localStorage.setItem('review_draft_2026-04-03', JSON.stringify({
+      step5_leaders: {
+        emotion_anchor: '旧结构字段',
+      },
+    }))
+
+    renderPage()
+
+    await waitFor(() => {
+      expect(screen.getByText('5.龙头 ✓')).toBeInTheDocument()
+    })
+    fireEvent.click(screen.getByText('5.龙头 ✓'))
+    expect(await screen.findByText('StepLeaders mock')).toBeInTheDocument()
+    expect(screen.getByTestId('StepLeaders-data')).toHaveTextContent('"stock":"协创数据"')
+    expect(screen.getByTestId('StepLeaders-data')).toHaveTextContent('"old":"高位AI硬件后排"')
+    expect(screen.getByTestId('StepLeaders-data')).toHaveTextContent('"emotion_anchor":"旧结构字段"')
+  })
+
+  it('replaces prefilled step5 candidates with saved leaders after review data loads', async () => {
+    // 用 ref 容器保存 resolve，避免 TS 闭包流分析把 `let` 外部再读到时 narrow 成 never。
+    const resolver: { current: ((value: ReviewRecord) => void) | null } = { current: null }
+    vi.mocked(api.getReview).mockImplementation(() => new Promise<ReviewRecord>((resolve) => {
+      resolver.current = resolve
+    }))
+    vi.mocked(api.getPrefill).mockResolvedValue({
+      date: '2026-04-16',
+      market: null,
+      prev_market: null,
+      avg_5d_amount: null,
+      avg_20d_amount: null,
+      teacher_notes: [],
+      holdings: [],
+      calendar_events: [],
+      main_themes: [],
+      step5_leaders: {
+        top_leaders: [
+          {
+            stock: '品高股份',
+            sector: 'IT服务',
+            attribute_type: '走势引领',
+            attribute: '系统候选',
+            clarity: '需要辨别',
+            position: '启动',
+            is_new: false,
+            is_prefilled: true,
+          },
+        ],
+      },
+    } as ReviewPrefillData)
+
+    renderPage('2026-04-16')
+
+    fireEvent.click(await screen.findByText('5.龙头'))
+    expect(await screen.findByText('StepLeaders mock')).toBeInTheDocument()
+
+    resolver.current?.({
+      exists: true,
+      step5_leaders: JSON.stringify({
+        top_leaders: [
+          {
+            stock: '协创数据',
+            sector: '算力租赁',
+            attribute_type: '走势引领',
+            attribute: '主线最票',
+            clarity: '一眼看出',
+            position: '主升',
+            is_new: true,
+            is_prefilled: false,
+          },
+        ],
+      }),
+    } as ReviewRecord)
+
+    await waitFor(() => {
+      expect(screen.getByTestId('StepLeaders-data')).toHaveTextContent('协创数据')
+    })
+  })
+
   it('updates current step data and saves review payload', async () => {
     renderPage()
 

@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { type StepProps, Section, Row, SelectField, TextField, CheckField, TextareaField, DynamicList } from './widgets'
+import CognitionPanel from './CognitionPanel'
 import { get, set } from './formState'
 
 interface TopLeaderItem {
@@ -107,6 +108,10 @@ export default function StepLeaders({ data, onChange, prefill }: StepProps) {
 
   return (
     <div className="space-y-6">
+      <CognitionPanel
+        stepKey="step5_leaders"
+        cognitions={prefill?.cognitions_by_step?.step5_leaders}
+      />
       <DynamicList
         title="当前辨识度最高的最票"
         items={topLeaders}

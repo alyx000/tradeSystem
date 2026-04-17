@@ -50,6 +50,52 @@ function reviewRecordToFormData(existing?: ReviewRecord): ReviewFormData {
   return data
 }
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function isArrayOfPrefilledItems(value: unknown): value is Array<Record<string, unknown>> {
+  return Array.isArray(value) && value.length > 0 && value.every(
+    item => isPlainObject(item) && item.is_prefilled === true
+  )
+}
+
+function mergeFieldValue(base: unknown, draft: unknown): unknown {
+  if (Array.isArray(base) && Array.isArray(draft)) {
+    if (draft.length === 0) return base
+    if (isArrayOfPrefilledItems(draft)) return base.length > 0 ? base : draft
+    return draft
+  }
+
+  if (isPlainObject(base) && isPlainObject(draft)) {
+    return mergeStepValue(base, draft)
+  }
+
+  return draft
+}
+
+function mergeStepValue(base: unknown, draft: unknown): ReviewStepValue {
+  if (!isPlainObject(base)) return tryParseJSON(draft)
+  if (!isPlainObject(draft)) return base as ReviewStepValue
+
+  const merged: Record<string, unknown> = { ...base }
+  Object.entries(draft).forEach(([key, value]) => {
+    const prev = merged[key]
+    merged[key] = mergeFieldValue(prev, value)
+  })
+  return merged as ReviewStepValue
+}
+
+function mergeFormData(base: ReviewFormData, draft: ReviewFormData): ReviewFormData {
+  const merged: ReviewFormData = { ...base }
+  STEPS.forEach((s) => {
+    if (draft[s.key] !== undefined) {
+      merged[s.key] = mergeStepValue(base[s.key], draft[s.key])
+    }
+  })
+  return merged
+}
+
 function hydrateReviewFormData(date: string | undefined, existing?: ReviewRecord): ReviewFormData {
   if (!date) return {}
   const base = reviewRecordToFormData(existing)
@@ -57,10 +103,7 @@ function hydrateReviewFormData(date: string | undefined, existing?: ReviewRecord
   if (draft) {
     try {
       const parsed = JSON.parse(draft) as ReviewFormData
-      return {
-        ...base,
-        ...parsed,
-      }
+      return mergeFormData(base, parsed)
     } catch {
       return base
     }
@@ -91,10 +134,18 @@ export default function ReviewWorkbench() {
     () => hydrateReviewFormData(date, existing),
     [date, existing]
   )
-  const formData = useMemo(
-    () => (date ? (formDataByDate[date] ?? hydratedFormData) : {}),
-    [date, formDataByDate, hydratedFormData]
-  )
+  // `formData` 派生自两处：
+  //   1. `hydratedFormData`：服务端 review + localStorage draft 合并后的基准
+  //   2. `formDataByDate[date]`：用户本轮编辑的增量
+  // 当 1 随着 `existing` 异步返回而更新时，这里用 `mergeFormData` 重算合并结果，
+  // 无需在 `useEffect` 里 `setState` 回写（避免 `react-hooks/set-state-in-effect`
+  // 的级联渲染告警，同时保留嵌套 step 值按字段合并的既有语义）。
+  const formData = useMemo(() => {
+    if (!date) return {}
+    const current = formDataByDate[date]
+    if (!current) return hydratedFormData
+    return mergeFormData(hydratedFormData, current)
+  }, [date, formDataByDate, hydratedFormData])
 
   useEffect(() => {
     if (!date || Object.keys(formData).length === 0) return
