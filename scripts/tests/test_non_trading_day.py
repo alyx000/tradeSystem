@@ -1,8 +1,10 @@
 """非交易日拦截逻辑的单元测试。"""
 from __future__ import annotations
 
+from contextlib import nullcontext
 import logging
 import sqlite3
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -110,6 +112,93 @@ class TestHolidayCheck:
             except Exception:
                 pass
         assert "非交易日" not in caplog.text
+
+
+class TestPostCommandIngestAudit:
+    """盘后主流程触发的 IngestService 审计应归类为 system。"""
+
+    @patch("services.ingest_service.IngestService")
+    @patch("generators.obsidian_export.ObsidianExporter")
+    @patch("main.setup_pushers")
+    @patch("db.dual_write.sync_holdings_quotes_from_post_market", return_value=0)
+    @patch("db.dual_write.sync_daily_market_to_db", return_value=True)
+    @patch("generators.ReportGenerator")
+    @patch("collectors.WatchlistCollector")
+    @patch("collectors.HoldingsCollector")
+    @patch("collectors.MarketCollector")
+    @patch("utils.trade_date.is_trade_day", return_value=True)
+    @patch("utils.trade_date.ensure_trade_calendar", return_value=0)
+    @patch("db.connection.get_connection")
+    @patch("main.setup_providers")
+    @patch("main.cmd_evening")
+    def test_cmd_post_uses_system_triggered_by_for_ingest_service(
+        self,
+        mock_evening,
+        mock_setup_providers,
+        mock_get_connection,
+        _mock_ensure_trade_calendar,
+        _mock_is_trade_day,
+        mock_market_collector_cls,
+        mock_holdings_collector_cls,
+        mock_watchlist_collector_cls,
+        mock_report_generator_cls,
+        _mock_sync_daily_market,
+        _mock_sync_holdings_quotes,
+        mock_setup_pushers,
+        mock_obsidian_exporter_cls,
+        mock_ingest_service_cls,
+        tmp_path,
+    ):
+        from main import cmd_post
+
+        mock_get_connection.return_value = MagicMock()
+
+        registry = MagicMock()
+        registry.initialize_all.return_value = {}
+        mock_setup_providers.return_value = registry
+
+        market_collector = MagicMock()
+        market_collector.collect_post_market.return_value = {"indices": {}}
+        mock_market_collector_cls.return_value = market_collector
+
+        holdings_collector = MagicMock()
+        holdings_collector.collect_holdings_data.return_value = []
+        holdings_collector.enrich_with_ma.return_value = []
+        holdings_collector.collect_holdings_announcements.return_value = {}
+        holdings_collector.collect_stock_info.return_value = {}
+        mock_holdings_collector_cls.return_value = holdings_collector
+
+        watchlist_collector = MagicMock()
+        watchlist_collector.get_watchlist_summary.return_value = {}
+        mock_watchlist_collector_cls.return_value = watchlist_collector
+
+        yaml_path = Path(tmp_path) / "post-market.yaml"
+        yaml_path.write_text("{}", encoding="utf-8")
+        report_generator = MagicMock()
+        report_generator.generate_post_market.return_value = ("# report", str(yaml_path))
+        mock_report_generator_cls.return_value = report_generator
+
+        multi = MagicMock()
+        multi._pushers = []
+        mock_setup_pushers.return_value = multi
+
+        exporter = MagicMock()
+        exporter.export_post_market.return_value = None
+        mock_obsidian_exporter_cls.return_value = exporter
+
+        ingest_service = MagicMock()
+        ingest_service.execute_stage.return_value = {"interfaces": {}}
+        mock_ingest_service_cls.return_value = ingest_service
+
+        with patch("main.without_standard_http_proxy", return_value=nullcontext()), \
+             patch("main._schedule_task_enabled", return_value=False):
+            cmd_post({}, "2026-04-17")
+
+        assert ingest_service.execute_stage.call_count == 2
+        stages = [call.args[0] for call in ingest_service.execute_stage.call_args_list]
+        triggered_values = [call.kwargs["triggered_by"] for call in ingest_service.execute_stage.call_args_list]
+        assert stages == ["post_core", "post_extended"]
+        assert triggered_values == ["system", "system"]
 
 
 # ──────────────────────────────────────────────────────────────

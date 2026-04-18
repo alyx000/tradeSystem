@@ -1025,7 +1025,8 @@ def cmd_post(config: dict, target_date: str):
         from services.ingest_service import IngestService
         ingest_svc = IngestService(registry=registry)
         for stage in ("post_core", "post_extended"):
-            result = ingest_svc.execute_stage(stage, target_date, triggered_by="post_cmd", input_by=None)
+            # 这里属于盘后主流程内部带起的采集，不是用户显式执行 ingest CLI。
+            result = ingest_svc.execute_stage(stage, target_date, triggered_by="system", input_by=None)
             ok = sum(1 for v in result.get("interfaces", {}).values() if v.get("status") == "success")
             total = len(result.get("interfaces", {}))
             logger.info(f"IngestService {stage} 完成：{ok}/{total} 接口成功")
