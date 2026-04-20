@@ -1855,6 +1855,36 @@ class TestPlanningAndKnowledgeAPI:
         assert data["available"] is True
         assert data["raw_data"]["indices"]["shanghai"]["close"] == 3000.0
 
+    def test_post_market_envelope_sanitizes_non_finite_float(self, client, db_path):
+        env = {
+            "date": "2026-05-11",
+            "generated_at": "2026-05-11T20:00:00",
+            "raw_data": {
+                "etf_flow": [
+                    {
+                        "name": "测试ETF",
+                        "shares_change_billion": float("nan"),
+                        "total_shares_billion": float("inf"),
+                    }
+                ]
+            },
+        }
+        conn = get_connection(db_path)
+        Q.upsert_daily_market(conn, {
+            "date": "2026-05-11",
+            "sh_index_close": 3001.0,
+            "raw_data": env,
+        })
+        conn.commit()
+        conn.close()
+
+        r = client.get("/api/post-market/2026-05-11")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["available"] is True
+        assert data["raw_data"]["etf_flow"][0]["shares_change_billion"] is None
+        assert data["raw_data"]["etf_flow"][0]["total_shares_billion"] is None
+
     def test_post_market_unavailable(self, client):
         r = client.get("/api/post-market/2099-01-01")
         assert r.status_code == 200

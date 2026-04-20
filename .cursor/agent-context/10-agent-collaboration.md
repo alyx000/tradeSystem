@@ -7,6 +7,7 @@
 | 规则文件 | 作用 |
 |---------|------|
 | `language.mdc` | 所有 AI 输出使用简体中文，代码标识符保持英文 |
+| `karpathy-behavior.mdc` | 行为基线：先校验假设、简洁优先、精准修改、目标驱动验证，减少 Agent 常见失误 |
 | `dev-workflow.mdc` | 开发三阶段流程：设计验证方案 → 实现（含单测）→ 执行验证并报告；验证命令参考表 |
 | `implementation-plan.mdc` | 实施计划必须含测试验证方案 + 复杂任务多 Agent 并行分组 |
 | `solution-format.mdc` | 技术方案 / 执行计划 / 业务逻辑解析默认使用结构化章节、表格与纯 Mermaid 图表输出 |

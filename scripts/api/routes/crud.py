@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 import sqlite3
 from datetime import date as _date
 from pathlib import Path
@@ -35,6 +36,17 @@ def _apply_market_ma5w_fallback(conn: sqlite3.Connection, row: dict | None) -> d
         if row.get(key) is None and value is not None:
             row[key] = value
     return row
+
+
+def _sanitize_non_finite(value: Any) -> Any:
+    """将 NaN/Inf 递归转换为 None，避免 JSON 序列化失败。"""
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, dict):
+        return {k: _sanitize_non_finite(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_sanitize_non_finite(v) for v in value]
+    return value
 
 
 # ── Teachers / Notes ──────────────────────────────────────────
@@ -571,7 +583,7 @@ def get_post_market_envelope(date: str, conn: sqlite3.Connection = Depends(get_d
     out = dict(envelope)
     out["available"] = True
     out.setdefault("date", date)
-    return out
+    return _sanitize_non_finite(out)
 
 
 @router.get("/main-themes")
@@ -587,4 +599,4 @@ def get_market(date: str, conn: sqlite3.Connection = Depends(get_db_conn)):
     _apply_market_ma5w_fallback(conn, row)
     enrich_daily_market_row(row)
     row["available"] = True
-    return row
+    return _sanitize_non_finite(row)
