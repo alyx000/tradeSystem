@@ -1,0 +1,4 @@
+interface:
+  display_name: "交易认知进化"
+  short_description: "提炼更少、更硬、可长期复用的交易认知候选"
+  default_prompt: "Use $cognition-evolution to extract, refine, and validate trading cognitions. Stay in candidate mode until the user explicitly approves a write. Default to 1-4 strong reusable candidates, not placeholder-short descriptions. For each candidate, explain why it works, where it applies, what invalidates it, and why it deserves to be kept; if a point is too weak or too current-view, say 不建议落库 and explain why."

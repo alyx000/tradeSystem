@@ -1,7 +1,7 @@
 ---
 name: record-notes
 description: 录入老师观点、行业板块信息、宏观经济信息到 SQLite 数据库；Agent 录入老师观点前必须先做结构化总结并经用户确认，再执行 CLI（支持文字/图片/混合内容，适配 Discord/QQ/微信 channel 场景）
-version: "1.4"
+version: "1.5"
 ---
 
 # Skill: 记录信息（老师观点 / 行业 / 宏观）
@@ -91,6 +91,7 @@ python3 main.py db add-macro ...
 ## 切换条件
 
 - 若用户要把老师观点或资料继续转成计划草稿，切到 [`knowledge-to-plan/SKILL.md`](../knowledge-to-plan/SKILL.md)。
+- 若用户要从老师观点继续**提炼 / 落库 / 精炼交易认知**，切到 [`cognition-evolution/SKILL.md`](../cognition-evolution/SKILL.md)；认知候选质量、适用边界、失效边界与 refine 流程都在那里约束。
 - 若用户其实要管理关注池 / 持仓，切到 [`portfolio-manager/SKILL.md`](../portfolio-manager/SKILL.md)。
 - 若 CLI / API 写入语义异常，切到 [`repo-maintenance-workflows/SKILL.md`](../repo-maintenance-workflows/SKILL.md)。
 

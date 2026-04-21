@@ -1,7 +1,7 @@
 ---
 name: cognition-evolution
-description: 从老师观点提炼可复用交易认知，通过实例验证与周期复盘让交易体系持续进化（Phase 1b 手动闭环版）
-version: "1.0"
+description: 从老师观点提炼可复用交易认知，通过实例验证与周期复盘让交易体系持续进化（Phase 1b 手动闭环版，默认输出强候选）
+version: "1.1"
 ---
 
 # Skill: 交易认知进化（手动闭环版）
@@ -82,6 +82,28 @@ version: "1.0"
 
 3. **Phase 1b 手工归一**：老师别名归一（`沈纯` / `沈淳` 合并到 canonical teacher）与板块同义词归一（`算力` / `AI算力` / `国产算力` / `算力租赁`）**由 Agent 在提炼阶段完成**后再进入下一步——service 层 Phase 1b 未调用 `config/cognition_taxonomy.yaml` 的 `teacher_aliases` / `topic_aliases`，也不会自动从 `teacher_notes` 回填 `teacher_id` / `teacher_name_snapshot`，Agent 传入的值会被原样保存
 
+### 步骤 1.5：候选认知质量协议（默认强候选，不做占位版）
+
+用户说「能提取什么交易认知」「这篇能沉淀什么认知」「提炼认知候选」时，**默认先停留在候选预览态，不直接写库**。候选质量规则见 [references/cognition-candidate-rules.md](references/cognition-candidate-rules.md)，最小执行标准如下：
+
+1. **默认输出 1-4 条最值得长期保留的候选**，不要为了“覆盖全面”堆很多弱条目
+2. 每条候选在写库前必须至少回答清楚 6 件事：
+
+| 项 | 作用 | 最低要求 |
+|---|---|---|
+| `title` | 认知标题 | 不是当期观点口号，半年后仍能看懂 |
+| `description` | 为什么成立 | 说明驱动逻辑，不得只写一句标签式结论 |
+| `pattern` | 如何复用 | 能抽象到下一次类似盘面 / 行业 / 周期中使用 |
+| `applicability` | 适用边界 | 说明适用于什么盘面、周期、结构或数据条件 |
+| `invalidation` | 失效边界 | 说明什么时候不能再套用这条认知 |
+| `why_keep` | 值得保留的理由 | 解释它为什么比“当期观点”更值得入库 |
+
+3. **若不值得落库，要明确说“不建议落库”以及原因**；不要把一次性观点、估值口号或标题党硬抬成认知
+4. 若用户追问「太简单」「再精炼」：**默认先给 refine 候选文案，再等确认后执行 `cognition-refine`**
+5. 仅当用户明确说「确认落」「确认 refine」「写入」等，才进入 CLI 写入阶段
+
+> 一个常见误区是：为了方便确认，先给“能落库”的短描述。这里默认反过来处理：**先给能长期复用的强候选，再让用户决定是否写库**。
+
 ### 步骤 2：匹配已有认知 or 新建候选
 
 1. 列出可匹配的现有认知：
@@ -92,18 +114,36 @@ python3 main.py knowledge cognition-show --id cog_a1b2c3d4 --json
 ```
 
 2. 若能匹配现有 `active` 认知 → 直接跳到步骤 3 写实例
-3. 若无匹配 → 新建 `candidate` 级认知：
+3. 若无匹配 → 先按“强候选卡片”向用户展示，再新建 `candidate` 级认知
+
+推荐展示格式：
+
+```md
+候选 X
+标题：高位分支退潮后，资金更容易回流同一大主题下的低位承接环节
+分类：structure.rotation
+description：当大主题核心驱动未被证伪时，某个高位补涨分支的退潮往往不代表整条主线结束，资金更常见的路径是在同一主题内部迁徙，寻找共享底层逻辑、但位置更低且预期差更大的承接环节。
+pattern：当{高位补涨分支退潮}且{主线核心驱动未破坏}且{存在共享底层逻辑的低位分支}时，{资金更可能在主题内部迁徙而非整体撤退}→{优先跟踪同逻辑低位承接，而不是直接判断主线结束}
+适用边界：主题主线仍在、核心中军未破坏、资金仍围绕同一产业叙事
+失效边界：主题核心中军同步走弱；主线成交量明显衰减；资金切向完全不同的大主题
+为什么值得保留：它是复用性很强的轮动框架，不绑定单一板块名，可直接用于后续复盘和盘前判断
+```
+
+确认后再执行：
 
 ```bash
 python3 main.py knowledge cognition-add \
-  --category signal \
-  --sub-category pattern \
-  --title "尾盘加速→次日冲高" \
-  --description "盘中跌后自然回升并持续加速至收盘，次日惯性冲高" \
-  --pattern "当{盘中跌后自然回升并持续加速至收盘}时，{判定为尾盘加速}→{次日惯性冲高}" \
+  --category structure \
+  --sub-category rotation \
+  --title "高位分支退潮后，资金更容易回流同一大主题下的低位承接环节" \
+  --description "当一个产业大主题已经形成共识时，高位补涨分支的退潮往往不代表整条主线结束。只要主题核心驱动未被证伪，资金更常见的路径是在同一主题内部重新寻找逻辑相通、位置更低、预期差更大的承接环节。" \
+  --pattern "当{高位补涨分支退潮}且{主线核心驱动未破坏}且{存在共享底层逻辑的低位分支}时，{资金更可能在主题内部迁徙而非整体撤退}→{优先跟踪同逻辑低位承接，而不是直接判断主线结束}" \
   --evidence-level hypothesis \
-  --time-horizon intraday \
-  --action-template do_t \
+  --time-horizon swing \
+  --action-template hold_base_position \
+  --conditions-json '{"theme":"同一产业大主题","core_driver":"未证伪","rotation_type":"高位退潮后的内部迁徙"}' \
+  --invalidation-conditions-json '["主题核心中军同步走弱","主线成交量明显衰减","资金切向完全不同的大主题"]' \
+  --tags '["轮动","高位分支","低位承接"]' \
   --first-source-note-id 42 \
   --input-by cursor
 ```
@@ -221,6 +261,7 @@ python3 main.py knowledge review-confirm \
 - **`--input-by` 必填**：所有写入命令必须带 `--input-by cursor | claude | web | manual`，空值或缺省由 service 层拒绝（与现有 `knowledge` 规范一致）
 - **Agent 不得写 `confirmed` 级 `TradePlan`**：本 skill 范围仅到认知 / 实例 / 复盘层；映射计划走 [`plan-workbench`](../plan-workbench/SKILL.md)
 - **新建认知默认 `status=candidate`**：升 `active` 必须由用户显式确认（例如用户说「这条先留为 candidate 观察 3 个实例再升」）
+- **默认输出强候选，不做占位版短描述**：若候选还无法清楚说明“为什么成立 / 适用于何处 / 何时失效”，先继续打磨或明确“不建议落库”，不要为了尽快写库输出一条过短 description
 - **认知状态流转**：`cognition-add` 仅允许 `candidate` / `active` 初始状态；`deprecated` 必须走 `cognition-deprecate`；`merged` **仅允许通过 merge 流程达成（Phase 1b `cognition-merge` CLI 未实现，当前不可用）**
 - **`outcome_fact_source` 校验**：`<table>[:<sub>]:<YYYY-MM-DD>` 格式；表名必须 ∈ 白名单 `{daily_market, market_fact_snapshots, fact_entities}`；service 层会真实查表（按对应日期字段）确认记录存在。三项任一失败均抛 `ValueError` 并保持 `outcome=pending`
 - **多事实源必填 `outcome_fact_refs_json`**：验证同时依赖成交量、汇率、融资数据、板块快照等多个锚点时，必须写完整事实引用数组；`outcome_fact_source` 仅保留主引用
@@ -251,6 +292,7 @@ python3 main.py knowledge review-confirm \
 - 写入后 `python3 main.py knowledge cognition-show --id <id> --json` 的 `instance_count` 应 +1（触发器已维护）
 - `python3 main.py knowledge validate ...` 成功后，对应认知的 `validated_count` / `invalidated_count` / `confidence` 应相应刷新
 - 周期复盘生成后，`python3 main.py knowledge review-show --id <id> --json` 能读到 `status=draft` 且 `active_cognitions_json` / `validation_stats_json` 等快照字段已填
+- 若本轮用户先要求“提取候选”再确认写入：候选展示里应能清楚看到 `title / description / pattern / 适用边界 / 失效边界 / why_keep` 六项，不应只剩标题和一句话描述
 
 ## Web 查看入口（只读）
 
