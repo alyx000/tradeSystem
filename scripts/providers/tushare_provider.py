@@ -24,6 +24,8 @@ class TushareProvider(DataProvider):
         self._ths_concept_map: dict | None = None
 
     def initialize(self) -> bool:
+        self._initialized = False
+        self.pro = None
         try:
             import tushare as ts
             import tushare.pro.client as client
@@ -39,6 +41,8 @@ class TushareProvider(DataProvider):
             self._initialized = True
             return True
         except Exception as e:
+            self.pro = None
+            self._initialized = False
             logger.error(f"Tushare 初始化失败: {e}")
             return False
 
@@ -137,6 +141,15 @@ class TushareProvider(DataProvider):
             {key: self._clean_scalar(val) for key, val in row.items()}
             for row in df.to_dict(orient="records")
         ]
+
+    def _ensure_pro(self, method_name: str) -> DataResult | None:
+        if self.pro is not None and self._initialized:
+            return None
+        return DataResult(
+            data=None,
+            source=self.name,
+            error=f"provider_not_initialized: {method_name}",
+        )
 
     def _query_records(self, api_name: str, **params) -> list[dict]:
         return self._df_to_records(self.pro.query(api_name, **params))
@@ -1133,6 +1146,9 @@ class TushareProvider(DataProvider):
 
     def get_stock_basic_list(self, _date: str) -> DataResult:
         """获取当前上市 A 股基础信息。"""
+        missing = self._ensure_pro("get_stock_basic_list")
+        if missing is not None:
+            return missing
         try:
             df = self.pro.stock_basic(list_status="L")
             return DataResult(data=self._df_to_records(df), source="tushare:stock_basic")
@@ -1143,6 +1159,9 @@ class TushareProvider(DataProvider):
         """按代码批量拉取简称（逗号分隔 ts_code，拆块避免超长）。"""
         if not ts_codes:
             return DataResult(data=[], source="tushare:stock_basic")
+        missing = self._ensure_pro("get_stock_basic_batch")
+        if missing is not None:
+            return missing
         try:
             norm: list[str] = []
             seen: set[str] = set()

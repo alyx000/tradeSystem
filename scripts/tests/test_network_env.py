@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import requests
 
 import pytest
 
@@ -30,3 +31,27 @@ def test_use_http_proxy_for_data_collection(monkeypatch):
     assert use_http_proxy_for_data_collection() is False
     monkeypatch.setenv("TRADESYSTEM_USE_HTTP_PROXY", "true")
     assert use_http_proxy_for_data_collection() is True
+
+
+def test_without_standard_http_proxy_blocks_requests_proxy_fallback(monkeypatch):
+    monkeypatch.delenv("TRADESYSTEM_USE_HTTP_PROXY", raising=False)
+    monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:9")
+    monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:9")
+    monkeypatch.setenv("ALL_PROXY", "socks5://127.0.0.1:9")
+    monkeypatch.setattr(
+        requests.utils,
+        "getproxies",
+        lambda: {
+            "http": "http://127.0.0.1:9",
+            "https": "http://127.0.0.1:9",
+            "all": "socks5://127.0.0.1:9",
+        },
+    )
+
+    with without_standard_http_proxy():
+        assert requests.utils.get_environ_proxies("https://push2.eastmoney.com/api/qt/clist/get") == {}
+        assert os.environ.get("NO_PROXY") == "*"
+        assert os.environ.get("no_proxy") == "*"
+
+    assert "NO_PROXY" not in os.environ
+    assert "no_proxy" not in os.environ

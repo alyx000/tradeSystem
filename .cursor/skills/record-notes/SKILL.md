@@ -33,7 +33,7 @@ version: "1.5"
 | 涉及板块 | `--sectors` | 有则填 JSON 数组 |
 | 检索标签 | `--tags` | 建议填 JSON 数组 |
 | 仓位/节奏态度 | `--position-advice` | 有则填 |
-| 跟踪个股（写入 `--stocks`） | `--stocks` | **每次**从材料提炼老师**在跟踪 / 建议持续观察**的标的；材料有代码直接填入；**仅有名称无代码时**，Agent 先用 Provider（`get_stock_basic_batch` / `get_stock_basic_list`）查询补全，在确认模板中展示结果供用户验证，确认后写入；多候选由用户选定；查询失败标注「待补代码」；无合格标的时写明「跟踪个股：无（原因）」 |
+| 跟踪个股（写入 `--stocks`） | `--stocks` | **每次**从材料提炼老师**在跟踪 / 建议持续观察**的标的；材料有代码直接填入；**仅有名称无代码时**，Agent 先用 `db stock-resolve`（底层统一走 Provider `get_stock_basic_batch` / `get_stock_basic_list`）查询补全，在确认模板中展示结果供用户验证，确认后写入；多候选由用户选定；查询失败标注「待补代码」；无合格标的时写明「跟踪个股：无（原因）」 |
 | 同步到关注池（用户已确认入池后） | `--sync-watchlist-from-stocks` | **可选 flag**：默认只记 `mentioned_stocks` 并打印候选；**仅当**用户对「是否写入关注池」单独确认同意后再加此 flag |
 
 完整原文（含 OCR/PDF 长文）须进 **`--raw-content-file` 或 stdin（`-`）**；若用户提供了长原文，**不得**只写 `core-view` 而不保留原文。
@@ -57,6 +57,7 @@ make db-search KEYWORD=锂电 FROM=YYYY-MM-DD TO=YYYY-MM-DD
 写操作在 `scripts/` 目录执行：
 
 ```bash
+python3 main.py db stock-resolve --name 天孚通信 --json
 python3 main.py db add-note ...
 # 用户确认入池后（与 add-note 同次或稍后）：
 python3 main.py db add-note ... --stocks '[...]' --sync-watchlist-from-stocks
@@ -69,7 +70,7 @@ python3 main.py db add-macro ...
 ## 核心流程
 
 1. 先判断是老师观点、行业信息还是宏观信息。
-2. **老师观点**：按上文「Agent 强制要求」输出结构化总结 → 用户确认 → 再 `db add-note`。
+2. **老师观点**：按上文「Agent 强制要求」输出结构化总结；若材料里只有简称无代码，优先用 `db stock-resolve` 解析后再展示确认稿 → 用户确认 → 再 `db add-note`。
 3. 长文本优先使用 `--raw-content-file` 或 `stdin`，不要把超长正文直接塞进命令行参数。
 4. 写入后回查结果，并保留附件与原文路径。
 

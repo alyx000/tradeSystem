@@ -224,6 +224,16 @@ def register_db_subparser(subparsers: argparse._SubParsersAction) -> None:
     )
     wl_sync_note.add_argument("--note-id", type=int, required=True, help="老师笔记 ID（teacher_notes.id）")
 
+    stock_resolve = db_sub.add_parser(
+        "stock-resolve",
+        help="通过已配置 Provider 解析证券代码/简称（供 Agent 补码/补名使用）",
+    )
+    resolve_group = stock_resolve.add_mutually_exclusive_group(required=True)
+    resolve_group.add_argument("--code", action="append", default=None, help="股票代码，可重复传入")
+    resolve_group.add_argument("--name", action="append", default=None, help="证券简称，可重复传入")
+    stock_resolve.add_argument("--date", default="2000-01-01", help="名称解析时使用的占位日期，默认 2000-01-01")
+    stock_resolve.add_argument("--json", action="store_true", help="输出 JSON")
+
     # ── 交易记录 ──────────────────────────────────────────────────
     add_trade = db_sub.add_parser("add-trade", help="录入交易记录")
     add_trade.add_argument("--code", required=True, help="股票代码")
@@ -269,7 +279,7 @@ def handle_db_command(args: argparse.Namespace) -> None:
               "add-industry|add-macro|holdings-add|holdings-remove|holdings-list|"
               "holdings-refresh|holdings-import-yaml|"
               "watchlist-add|watchlist-remove|watchlist-update|watchlist-list|"
-              "watchlist-sync-from-note|"
+              "watchlist-sync-from-note|stock-resolve|"
               "add-trade|add-calendar|blacklist-add|db-search}")
         return
 
@@ -291,6 +301,7 @@ def handle_db_command(args: argparse.Namespace) -> None:
         "watchlist-update": _cmd_watchlist_update,
         "watchlist-list": _cmd_watchlist_list,
         "watchlist-sync-from-note": _cmd_watchlist_sync_from_note,
+        "stock-resolve": _cmd_stock_resolve,
         "add-trade": _cmd_add_trade,
         "add-calendar": _cmd_add_calendar,
         "blacklist-add": _cmd_blacklist_add,
@@ -788,6 +799,46 @@ def _cmd_watchlist_sync_from_note(args: argparse.Namespace) -> None:
         print(
             "📋 关注池同步: mentioned_stocks 中无有效股票代码（每项需含非空 code），已跳过"
         )
+
+
+def _cmd_stock_resolve(args: argparse.Namespace) -> None:
+    from services.stock_resolver import resolve_stock_codes, resolve_stock_names
+    from utils.network_env import without_standard_http_proxy
+
+    main_mod = _resolve_main_runtime()
+    config = main_mod.load_config()
+    with without_standard_http_proxy():
+        registry = main_mod.setup_providers(config)
+        registry.initialize_all()
+        if args.code:
+            result = resolve_stock_codes(registry, args.code)
+        else:
+            result = resolve_stock_names(registry, args.name, args.date)
+
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return
+
+    mode_label = "代码补名称" if result["mode"] == "code" else "名称补代码"
+    print(f"解析模式: {mode_label}")
+    if result.get("error"):
+        print(f"数据源错误: {result['error']}")
+
+    if result["resolved"]:
+        print(f"已解析 {len(result['resolved'])} 条:")
+        for item in result["resolved"]:
+            print(f"  - {item['query']} -> {item['code']} {item['name']}")
+    if result["ambiguous"]:
+        print(f"存在歧义 {len(result['ambiguous'])} 条:")
+        for item in result["ambiguous"]:
+            candidates = " / ".join(f"{c['code']} {c['name']}" for c in item["candidates"])
+            print(f"  - {item['query']}: {candidates}")
+    if result["not_found"]:
+        print(f"未命中 {len(result['not_found'])} 条:")
+        for item in result["not_found"]:
+            print(f"  - {item['query']} ({item['reason']})")
+    if not result["resolved"] and not result["ambiguous"] and not result["not_found"]:
+        print("无待解析输入")
 
 
 def _cmd_watchlist_add(args: argparse.Namespace) -> None:

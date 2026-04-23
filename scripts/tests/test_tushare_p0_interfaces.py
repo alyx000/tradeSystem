@@ -141,6 +141,70 @@ def test_get_stock_basic_list_returns_rows():
     assert result.data[0]["name"] == "宁德时代"
 
 
+def test_get_stock_basic_list_returns_clear_error_when_uninitialized():
+    provider = TushareProvider.__new__(TushareProvider)
+    provider.name = "tushare"
+    provider.priority = 1
+    provider.config = {}
+    provider.pro = None
+    provider._initialized = False
+    provider._sw_l2_codes = None
+    provider._ths_concept_map = None
+
+    result = provider.get_stock_basic_list("2026-04-03")
+
+    assert not result.success
+    assert result.error == "provider_not_initialized: get_stock_basic_list"
+
+
+def test_get_stock_basic_list_returns_clear_error_when_half_initialized():
+    provider = TushareProvider.__new__(TushareProvider)
+    provider.name = "tushare"
+    provider.priority = 1
+    provider.config = {}
+    provider.pro = _StubPro()
+    provider._initialized = False
+    provider._sw_l2_codes = None
+    provider._ths_concept_map = None
+
+    result = provider.get_stock_basic_list("2026-04-03")
+
+    assert not result.success
+    assert result.error == "provider_not_initialized: get_stock_basic_list"
+
+
+def test_get_stock_basic_batch_returns_clear_error_when_uninitialized():
+    provider = TushareProvider.__new__(TushareProvider)
+    provider.name = "tushare"
+    provider.priority = 1
+    provider.config = {}
+    provider.pro = None
+    provider._initialized = False
+    provider._sw_l2_codes = None
+    provider._ths_concept_map = None
+
+    result = provider.get_stock_basic_batch(["300750"])
+
+    assert not result.success
+    assert result.error == "provider_not_initialized: get_stock_basic_batch"
+
+
+def test_get_stock_basic_batch_returns_clear_error_when_half_initialized():
+    provider = TushareProvider.__new__(TushareProvider)
+    provider.name = "tushare"
+    provider.priority = 1
+    provider.config = {}
+    provider.pro = _StubPro()
+    provider._initialized = False
+    provider._sw_l2_codes = None
+    provider._ths_concept_map = None
+
+    result = provider.get_stock_basic_batch(["300750"])
+
+    assert not result.success
+    assert result.error == "provider_not_initialized: get_stock_basic_batch"
+
+
 def test_get_stock_st_returns_rows():
     provider = _provider()
 

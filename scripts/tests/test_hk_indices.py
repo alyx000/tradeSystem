@@ -13,6 +13,7 @@ def _make_provider():
     p = AkshareProvider()
     p._initialized = True
     p.ak = MagicMock()
+    p._hk_index_from_yfinance = MagicMock(return_value=None)
     return p
 
 
@@ -170,3 +171,40 @@ class TestGetHkIndices:
         r = p.get_hk_indices("2026-04-01")
         assert not r.success
         assert r.data is None
+
+    def test_falls_back_to_yfinance_when_akshare_unavailable(self, monkeypatch):
+        p = _make_provider()
+        p.ak.stock_hk_index_daily_em = MagicMock(side_effect=Exception("eastmoney down"))
+        fallback_rows = {
+            "HSI": {
+                "code": "HSI",
+                "name": "恒生指数",
+                "close": 26163.24,
+                "change_pct": -1.22,
+                "open": 26303.60,
+                "high": 26303.60,
+                "low": 26073.45,
+                "_source": "yfinance:^HSI",
+            },
+            "HSTECH": {
+                "code": "HSTECH",
+                "name": "恒生科技指数",
+                "close": 4963.94,
+                "change_pct": -1.98,
+                "open": 5009.76,
+                "high": 5009.76,
+                "low": 4940.09,
+                "_source": "yfinance:3033.HK",
+            },
+        }
+        monkeypatch.setattr(
+            p,
+            "_hk_index_from_yfinance",
+            lambda symbol, date: fallback_rows.get(symbol),
+        )
+
+        r = p.get_hk_indices("2026-04-22")
+
+        assert r.success
+        assert r.data["hsi"]["close"] == pytest.approx(26163.24, abs=0.01)
+        assert r.data["hstech"]["_source"] == "yfinance:3033.HK"

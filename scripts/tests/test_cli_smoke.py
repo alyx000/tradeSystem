@@ -79,6 +79,8 @@ RECORD_NOTES_COMMANDS = [
 # ── skill: portfolio-manager ──────────────────────────────────────
 
 PORTFOLIO_COMMANDS = [
+    ["db", "stock-resolve", "--code", "300750"],
+    ["db", "stock-resolve", "--name", "宁德时代", "--json"],
     # holdings
     ["db", "holdings-add", "--code", "300750", "--name", "宁德时代", "--price", "85.0"],
     ["db", "holdings-add", "--code", "300750", "--name", "N",
@@ -195,6 +197,7 @@ def test_all_skill_subcommands_registered() -> None:
         # record-notes
         "add-note", "add-industry", "add-macro",
         # portfolio-manager
+        "stock-resolve",
         "holdings-add", "holdings-remove", "holdings-list",
         "holdings-refresh", "holdings-import-yaml",
         "watchlist-add", "watchlist-remove", "watchlist-update", "watchlist-list",

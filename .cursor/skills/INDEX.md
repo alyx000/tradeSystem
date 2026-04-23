@@ -20,6 +20,7 @@
 |-------|-----------|------|
 | `cognition-evolution` | `knowledge cognition-* / instance-* / review-* (含 review-list)` | 认知提炼 / 实例验证 / 周期复盘（手动闭环）；`scripts/services/cognition_service.py`（已落地 Phase 1b，部分降级项见 SKILL.md） |
 | `record-notes` | `db add-note` | 录入老师观点（文字/图片/多附件）；可选 `--sync-watchlist-from-stocks`（用户确认入池后） |
+| `record-notes` / `portfolio-manager` | `db stock-resolve` | 通过已配置 Provider 统一做证券简称/代码解析，供 Agent 补码与补名使用 |
 | `record-notes` / `portfolio-manager` | `db watchlist-sync-from-note` | 按笔记 `mentioned_stocks` 写入关注池（两步确认后的第二步） |
 | `record-notes` | `db add-industry` | 录入行业板块信息 |
 | `record-notes` | `db add-macro` | 录入宏观经济信息 |
