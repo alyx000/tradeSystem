@@ -145,6 +145,28 @@ describe('ReviewWorkbench', () => {
     expect(screen.getByText('8.计划 ✓')).toBeInTheDocument()
   })
 
+  it('warns when a local draft may override saved review and can switch back to server data', async () => {
+    vi.mocked(api.getReview).mockResolvedValue({
+      exists: true,
+      step1_market: JSON.stringify({ trend: 'server' }),
+    })
+    localStorage.setItem('review_draft_2026-04-03', JSON.stringify({
+      step1_market: { trend: 'draft' },
+    }))
+
+    renderPage()
+
+    expect(await screen.findByText('当前存在本地草稿，可能覆盖服务端版本')).toBeInTheDocument()
+    expect(screen.getByTestId('StepMarket-data')).toHaveTextContent('"trend":"draft"')
+
+    fireEvent.click(screen.getByRole('button', { name: '使用服务端版本' }))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('StepMarket-data')).toHaveTextContent('"trend":"server"')
+    })
+    expect(localStorage.getItem('review_draft_2026-04-03')).toBeNull()
+  })
+
   it('preserves nested saved step data when local draft contains an older partial structure', async () => {
     vi.mocked(api.getReview).mockResolvedValue({
       exists: true,

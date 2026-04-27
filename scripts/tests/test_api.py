@@ -536,6 +536,24 @@ class TestReview:
         data = r.json()
         assert data["step2_sectors"] is None
 
+    def test_save_review_normalizes_agent_summary_fields_for_display(self, client):
+        body = {
+            "step1_market": {
+                "facts": ["上证小幅震荡收红", "成交额守住 2.5 万亿"],
+                "judgement": "今天是弱修复，不是强共振。",
+            }
+        }
+        r = client.put("/api/review/2026-04-01", json=body)
+        assert r.status_code == 200
+
+        r = client.get("/api/review/2026-04-01")
+        assert r.status_code == 200
+        data = r.json()
+        step1 = json.loads(data["step1_market"])
+        assert "上证小幅震荡收红" in step1["notes"]
+        assert "成交额守住 2.5 万亿" in step1["notes"]
+        assert "今天是弱修复，不是强共振。" in step1["notes"]
+
     def test_review_to_draft_generates_review_observation_and_trade_draft(self, client):
         body = {
             "step1_market": {

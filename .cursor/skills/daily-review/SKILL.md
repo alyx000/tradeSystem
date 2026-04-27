@@ -55,6 +55,21 @@ make db-search KEYWORD=情绪 FROM=YYYY-MM-DD TO=YYYY-MM-DD
 4. 保存前先给用户一版结构化复盘摘要，用户确认后再写入。
 5. 若用户要把复盘直接衔接到次日计划，保存后调用 `POST /api/review/{date}/to-draft`，只生成 observation / draft，不确认正式计划。
 
+## 保存字段契约
+
+复盘工作台是结构化表单。Agent 写入时优先使用页面字段：
+
+- `step1_market.notes`
+- `step2_sectors.selection_summary / projections / next_day_focus / notes`
+- `step3_emotion.phase / transition.reason / notes`
+- `step4_style.preference / effects / notes`
+- `step5_leaders.top_leaders / transition / notes`
+- `step6_nodes.market_node / sector_node / style_node / overall`
+- `step7_positions.positions[].action_plan`
+- `step8_plan.key_factor / watch_directions / risks / discipline / summary`
+
+`PUT /api/review/{date}` 会兼容摘要式 `facts / judgement / plan / holdings` 写入并轻量映射到页面可见字段，但这只是兜底；正式复盘稿仍应按上面的表单字段组织，避免“API 保存成功但页面看不到重点内容”。
+
 ## 认知联动（cognitions_by_step）
 
 从 v1.4 起，`GET /api/review/{date}/prefill` 额外返回 `cognitions_by_step`：按八步聚合的 `status=active` 底层认知快照（来自 [`cognition-evolution`](../cognition-evolution/SKILL.md) 沉淀的 `trading_cognitions`）。对应 Web 复盘工作台每步顶部的「相关底层认知」只读面板。
@@ -102,6 +117,7 @@ make db-search KEYWORD=情绪 FROM=YYYY-MM-DD TO=YYYY-MM-DD
 
 - `make review-prefill DATE=YYYY-MM-DD` 或 `GET /api/review/{date}/prefill` 能返回数据。
 - 保存后重新读取 `GET /api/review/{date}`，确认内容存在。
+- 保存后打开 `/review/{date}` 做页面级验证，至少检查 1–2 个关键文本可见；若页面提示“当前存在本地草稿，可能覆盖服务端版本”，先按用户意图选择本地草稿或服务端版本。
 - 若当天数据缺失，明确提示先切到 `market-tasks` 补跑采集。
 
 ## 切换条件

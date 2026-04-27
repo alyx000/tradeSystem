@@ -96,7 +96,12 @@ function mergeFormData(base: ReviewFormData, draft: ReviewFormData): ReviewFormD
   return merged
 }
 
-function hydrateReviewFormData(date: string | undefined, existing?: ReviewRecord): ReviewFormData {
+function hydrateReviewFormData(
+  date: string | undefined,
+  existing?: ReviewRecord,
+  _draftRevision = 0
+): ReviewFormData {
+  void _draftRevision
   if (!date) return {}
   const base = reviewRecordToFormData(existing)
   const draft = localStorage.getItem(DRAFT_KEY(date))
@@ -117,6 +122,8 @@ export default function ReviewWorkbench() {
   const queryClient = useQueryClient()
   const [activeStep, setActiveStep] = useState(0)
   const [formDataByDate, setFormDataByDate] = useState<Record<string, ReviewFormData>>({})
+  const [draftRevisionByDate, setDraftRevisionByDate] = useState<Record<string, number>>({})
+  const [dismissedDraftWarningByDate, setDismissedDraftWarningByDate] = useState<Record<string, boolean>>({})
 
   const { data: prefill } = useQuery({
     queryKey: ['prefill', date],
@@ -130,9 +137,10 @@ export default function ReviewWorkbench() {
     enabled: !!date,
   })
 
+  const draftRevision = date ? draftRevisionByDate[date] : undefined
   const hydratedFormData = useMemo(
-    () => hydrateReviewFormData(date, existing),
-    [date, existing]
+    () => hydrateReviewFormData(date, existing, draftRevision),
+    [date, existing, draftRevision]
   )
   // `formData` 派生自两处：
   //   1. `hydratedFormData`：服务端 review + localStorage draft 合并后的基准
@@ -148,12 +156,15 @@ export default function ReviewWorkbench() {
   }, [date, formDataByDate, hydratedFormData])
 
   useEffect(() => {
-    if (!date || Object.keys(formData).length === 0) return
+    if (!date) return
+    const edited = formDataByDate[date]
+    if (!edited || Object.keys(edited).length === 0) return
     const timer = setTimeout(() => {
-      localStorage.setItem(DRAFT_KEY(date), JSON.stringify(formData))
+      localStorage.setItem(DRAFT_KEY(date), JSON.stringify(edited))
+      setDraftRevisionByDate(prev => ({ ...prev, [date]: (prev[date] ?? 0) + 1 }))
     }, 2000)
     return () => clearTimeout(timer)
-  }, [formData, date])
+  }, [formDataByDate, date])
 
   useEffect(() => {
     if (prefill && prefill.is_trading_day === false && prefill.prev_trade_date) {
@@ -184,6 +195,29 @@ export default function ReviewWorkbench() {
 
   const step = STEPS[activeStep]
   const stepData = formData[step.key] || {}
+  const hasLocalDraft = !!date && localStorage.getItem(DRAFT_KEY(date)) !== null
+  const showDraftWarning = hasLocalDraft && !dismissedDraftWarningByDate[date!]
+
+  const useServerVersion = useCallback(() => {
+    if (!date) return
+    localStorage.removeItem(DRAFT_KEY(date))
+    setFormDataByDate(prev => {
+      const next = { ...prev }
+      delete next[date]
+      return next
+    })
+    setDismissedDraftWarningByDate(prev => {
+      const next = { ...prev }
+      delete next[date]
+      return next
+    })
+    setDraftRevisionByDate(prev => ({ ...prev, [date]: (prev[date] ?? 0) + 1 }))
+  }, [date])
+
+  const keepLocalDraft = useCallback(() => {
+    if (!date) return
+    setDismissedDraftWarningByDate(prev => ({ ...prev, [date]: true }))
+  }, [date])
 
   const handleChange = useCallback((value: ReviewStepValue) => {
     if (!date) return
@@ -237,6 +271,31 @@ export default function ReviewWorkbench() {
       )}
       {draftMutation.isError && (
         <div className="bg-red-50 text-red-700 px-4 py-2 rounded text-sm">生成草稿失败，请先检查复盘内容是否已保存。</div>
+      )}
+
+      {showDraftWarning && (
+        <div className="rounded border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+          <div>
+            <div className="font-medium">当前存在本地草稿，可能覆盖服务端版本</div>
+            <div className="text-xs text-amber-700 mt-0.5">页面已合并本地草稿；如果刚由 Agent 或 API 写入，请切回服务端版本。</div>
+          </div>
+          <div className="flex gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={useServerVersion}
+              className="rounded bg-amber-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-700"
+            >
+              使用服务端版本
+            </button>
+            <button
+              type="button"
+              onClick={keepLocalDraft}
+              className="rounded border border-amber-300 bg-white px-3 py-1.5 text-xs font-medium text-amber-700 hover:bg-amber-100"
+            >
+              继续使用本地草稿
+            </button>
+          </div>
+        </div>
       )}
 
       <div className="flex gap-1 border-b overflow-x-auto">
