@@ -31,7 +31,7 @@ _INDUSTRY_INFO_LOOKBACK_DAYS = 7
 # ──────────────────────────────────────────────────────────────
 # 8 步 → trading_cognitions.category 映射
 # 用于 prefill 中按步骤分组展示相关认知。修改映射时需与
-# `.cursor/skills/daily-review/references/eight-step-prompt-templates.md`
+# `.agents/skills/daily-review/references/eight-step-prompt-templates.md`
 # 保持一致。此常量为 review 工作台专属；`config/cognition_taxonomy.yaml`
 # 中的 `plan_mappings` 留给未来计划工作台消费，二者互不影响。
 # ──────────────────────────────────────────────────────────────

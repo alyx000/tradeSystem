@@ -1,0 +1,108 @@
+---
+description: 当修改 CLI 或 API 文件时，提醒同步更新 skills 文档
+globs:
+  - scripts/db/cli.py
+  - scripts/main.py
+  - scripts/api/routes/*.py
+  - .agents/skills/**/*.md
+  - .cursor/skills/**/*.md
+---
+
+# Skills 同步检查规则
+
+## 触发条件
+
+当你修改以下任何文件时，此规则自动触发：
+
+- `scripts/db/cli.py` — CLI 子命令定义
+- `scripts/main.py` — 顶层命令注册（pre/post/schedule 等）
+- `scripts/api/routes/*.py` — API 路由定义
+- `.agents/skills/**/*.md` — skill 文档本身（真源；`.cursor/skills/` 与 `.claude/skills/` 是 symlink 壳）
+
+## 必须执行的检查清单
+
+### 0. 先判断是否存在统一入口
+
+更新 `.agents/skills/**/*.md` 时，优先检查仓库根目录 `Makefile` 是否已经提供等价入口：
+
+- 检查优先写 `make check` / `make check-web` / `make check-scripts`
+- 开发启动优先写 `make dev` / `make dev-api` / `make dev-web`
+- 日常任务优先写 `make today-*`
+- 若 `Makefile` 已提供别名，SKILL.md 示例里应优先展示 `make` 入口，再补充底层 `python3 main.py ...`
+
+`INDEX.md` 里的依赖表仍保留真实底层 CLI/API，不要改成 `make` 目标名。
+
+### 1. 检查 INDEX.md 是否需要更新
+
+打开 `.agents/skills/INDEX.md`，逐行核对：
+
+- [ ] 所有新增 CLI 子命令都已添加到依赖表
+- [ ] 所有重命名的命令已在表中更新
+- [ ] 所有删除的命令已从表中移除
+- [ ] 新增 API 端点已添加到 API 依赖表
+- [ ] `main.py` 新增的 `ingest/plan/knowledge` 命令已同步到相关 skill
+- [ ] 若命令已从“骨架”变为真实可执行，移除 `SKILL.md` / `INDEX.md` 中的“规划中/骨架”描述
+
+### 2. 运行 Smoke 测试
+
+```bash
+make check-scripts
+```
+
+若仅需快速验证 CLI 签名，也可单独运行：
+
+```bash
+python3 -m pytest scripts/tests/test_cli_smoke.py -v
+```
+
+- 所有测试必须通过才算完成
+- 若有失败，说明 skill 引用的命令签名已过期，必须同时修复：
+  - `cli.py` 中的命令定义，或
+  - `test_cli_smoke.py` 中的 `ALL_SKILL_COMMANDS`，以及
+  - 对应 `SKILL.md` 中的使用示例
+
+### 3. 检查受影响的 SKILL.md
+
+根据改动内容，检查对应 skill 文档：
+
+| 改动文件 | 需检查的 SKILL.md |
+|---------|-----------------|
+| `cli.py` 的 `add-note/add-industry/add-macro` | `record-notes/SKILL.md` |
+| `cli.py` 的 `stock-resolve` | `record-notes/SKILL.md`、`portfolio-manager/SKILL.md` |
+| `cli.py` 的 `holdings-*/watchlist-*/add-trade/blacklist-*` | `portfolio-manager/SKILL.md` |
+| `cli.py` 的 `query-notes/db-search` | `daily-review/SKILL.md` |
+| `main.py` 的 `pre/post/schedule` | `market-tasks/SKILL.md` |
+| `main.py` 的 `ingest *` | `ingest-inspector/SKILL.md` |
+| `main.py` 的 `plan *` | `plan-workbench/SKILL.md` |
+| `main.py` 的 `knowledge add-note/list/draft-*` | `knowledge-to-plan/SKILL.md` |
+| `main.py` 的 `knowledge cognition-* / instance-* / review-*` | `cognition-evolution/SKILL.md` |
+| 仓库维护工作流、CLI/API 对齐、巡检、文档/索引同步 | `repo-maintenance-workflows/SKILL.md` |
+| `api/routes/review.py` | `daily-review/SKILL.md`、`sector-projection-analysis/SKILL.md`（含 `POST /api/review/{date}/to-draft` 时也检查 `plan-workbench/SKILL.md`；若预填字段语义调整，如 `lead_stock` / `emotion_leader` / `capacity_leader`，或保存字段标准化语义调整，同步 Skill 文案） |
+| `api/routes/planning.py` 中 `/api/plans/*` | `plan-workbench/SKILL.md` |
+| `api/routes/planning.py` 中 `/api/knowledge/*` | `knowledge-to-plan/SKILL.md` |
+
+### 3.1 检查 `agents/openai.yaml` 是否仍匹配
+
+若受影响的 skill 目录中存在 `agents/openai.yaml`：
+
+- [ ] `display_name` 仍与 skill 目标一致
+- [ ] `short_description` 仍能准确概括当前 SKILL.md
+- [ ] `default_prompt` 仍显式引用 `$skill-name`
+- [ ] 若 SKILL.md 已明显改义，重新生成或更新 `agents/openai.yaml`
+
+### 4. 验证报告（每次修改后输出）
+
+```
+Skills 同步检查结果：
+- [✅/❌] INDEX.md 已更新
+- [✅/❌] test_cli_smoke.py 全部通过
+- [✅/❌] 受影响的 SKILL.md 已检查并更新（如需）
+- [✅/❌] 受影响的 agents/openai.yaml 已检查并更新（如需）
+```
+
+## 背景说明
+
+AI Agent（Claude Code / Codex / Cursor）通过 `.agents/skills/` 中的文档了解如何调用 CLI 和 API（`.cursor/skills/` 与 `.claude/skills/` 是 symlink 壳）。
+如果 CLI 签名或 API 接口变更而 skill 文档未更新，Agent 将生成错误的命令，导致数据写入失败。
+尤其是 `scripts/main.py` 中新增的 `ingest`、`plan`、`knowledge` 命令组，以及 `api/routes/planning.py` 中的计划/资料接口，会直接影响 observation / draft / plan / 采集诊断 的协作流。
+此规则确保每次底层变更时，skill 文档始终与实际接口保持同步。

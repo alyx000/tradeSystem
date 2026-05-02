@@ -25,12 +25,12 @@
 
 - `scripts/main.py`
 - `scripts/api/routes/*.py`
-- `.cursor/skills/**/*.md`
+- `.agents/skills/**/*.md`
 
 同步项：
 
-- `.cursor/skills/INDEX.md`
-- `.cursor/rules/skills-sync.mdc`
+- `.agents/skills/INDEX.md`
+- `.agents/rules/skills-sync.md`
 
 若涉及命令索引，再检查：
 

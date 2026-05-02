@@ -29,7 +29,7 @@ review 当前改动，重点找这些问题：绕过人工确认直接写 confir
 ## 文档同步
 
 ```text
-检查这次改动是否需要同步 docs/commands.md、docs/commands.json、.cursor/skills/INDEX.md 和相关规则文档。有缺漏就补齐，并跑对应校验。最后告诉我哪些是代码改动，哪些是文档同步。
+检查这次改动是否需要同步 docs/commands.md、docs/commands.json、.agents/skills/INDEX.md 和相关规则文档。有缺漏就补齐，并跑对应校验。最后告诉我哪些是代码改动，哪些是文档同步。
 ```
 
 ## 每日固定巡检

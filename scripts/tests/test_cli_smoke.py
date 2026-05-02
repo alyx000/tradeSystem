@@ -187,7 +187,7 @@ def test_command_parseable(cmd: list[str]) -> None:
     except SystemExit as e:
         pytest.fail(
             f"命令解析失败（argparse 退出码 {e.code}）: {' '.join(cmd)}\n"
-            "请检查 cli.py 中对应子命令的参数定义，并同步更新 .cursor/skills/INDEX.md"
+            "请检查 cli.py 中对应子命令的参数定义，并同步更新 .agents/skills/INDEX.md"
         )
 
 

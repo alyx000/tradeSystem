@@ -39,7 +39,7 @@ python3 -m pytest scripts/tests/test_cli_smoke.py -v
    - Debug：先定位根因再改
    - Review：先报 findings 再总结
    - 对齐 / 巡检：先列真实入口，再区分确定问题与可疑风险
-3. 修改 `scripts/main.py`、`scripts/api/routes/*.py`、`.cursor/skills/**/*.md` 后，强制检查同步项。
+3. 修改 `scripts/main.py`、`scripts/api/routes/*.py`、`.agents/skills/**/*.md` 后，强制检查同步项。
 4. 修改完成后至少跑 smoke 校验，再决定是否补更大范围检查。
 
 ## 禁止事项
