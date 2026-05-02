@@ -31,6 +31,8 @@ venv/
 docs/*
 !docs/templates/
 !docs/templates/**
+!docs/architecture/
+!docs/architecture/**
 
 # 每日数据（本地生成，不入仓库）
 daily/

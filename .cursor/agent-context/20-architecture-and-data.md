@@ -2,9 +2,11 @@
 
 ## 领域分层（架构蓝图）
 
-详细蓝图见：
+详细蓝图见 `docs/architecture/`（三件套，按需加载）：
 
-- `docs/architecture/tradesystem-blueprint.md`
+- [01-system-blueprint.md](../../docs/architecture/01-system-blueprint.md)：C4 风格分层图 + 模块状态徽章
+- [02-module-map.md](../../docs/architecture/02-module-map.md)：模块清单（含模块 ID、入口、依赖）
+- [03-roadmap.md](../../docs/architecture/03-roadmap.md)：近期/中期/长期迭代路线
 
 核心分层：
 

@@ -20,6 +20,7 @@
 | 盘前/盘后/复盘/主线/情绪判断                 | [00-core-trading-framework.md](/Users/alyx/tradeSystem/.cursor/agent-context/00-core-trading-framework.md) | [20-architecture-and-data.md](/Users/alyx/tradeSystem/.cursor/agent-context/20-architecture-and-data.md) |
 | CLI / API / DB / 计划流转 / Agent 写入 | [10-agent-collaboration.md](/Users/alyx/tradeSystem/.cursor/agent-context/10-agent-collaboration.md)       | [20-architecture-and-data.md](/Users/alyx/tradeSystem/.cursor/agent-context/20-architecture-and-data.md) |
 | 架构、数据模型、事实层 / 草稿 / 计划状态流         | [20-architecture-and-data.md](/Users/alyx/tradeSystem/.cursor/agent-context/20-architecture-and-data.md)   | [10-agent-collaboration.md](/Users/alyx/tradeSystem/.cursor/agent-context/10-agent-collaboration.md)     |
+| 总览拓扑 / 模块清单 / 迭代路线              | [docs/architecture/01-system-blueprint.md](/Users/alyx/tradeSystem/docs/architecture/01-system-blueprint.md) | [02-module-map.md](/Users/alyx/tradeSystem/docs/architecture/02-module-map.md) · [03-roadmap.md](/Users/alyx/tradeSystem/docs/architecture/03-roadmap.md) |
 | 命令执行、环境、推送、目录结构、文件修改规范           | [30-runtime-and-ops.md](/Users/alyx/tradeSystem/.cursor/agent-context/30-runtime-and-ops.md)               | [10-agent-collaboration.md](/Users/alyx/tradeSystem/.cursor/agent-context/10-agent-collaboration.md)     |
 | 需要拆分对照或回滚老版本                     | [99-full-reference.md](/Users/alyx/tradeSystem/.cursor/agent-context/99-full-reference.md)                 | `00` 到 `30` 号主题文档                                                                                        |
 
@@ -77,3 +78,7 @@
 3. [20-architecture-and-data.md](/Users/alyx/tradeSystem/.cursor/agent-context/20-architecture-and-data.md)
 4. [30-runtime-and-ops.md](/Users/alyx/tradeSystem/.cursor/agent-context/30-runtime-and-ops.md)
 5. [99-full-reference.md](/Users/alyx/tradeSystem/.cursor/agent-context/99-full-reference.md)
+6. 架构蓝图三件套：
+   - [docs/architecture/01-system-blueprint.md](/Users/alyx/tradeSystem/docs/architecture/01-system-blueprint.md)（分层拓扑 + 状态徽章）
+   - [docs/architecture/02-module-map.md](/Users/alyx/tradeSystem/docs/architecture/02-module-map.md)（模块清单 + 模块 ID）
+   - [docs/architecture/03-roadmap.md](/Users/alyx/tradeSystem/docs/architecture/03-roadmap.md)（近期/中期/长期路线）
