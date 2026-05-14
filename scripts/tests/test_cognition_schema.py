@@ -102,10 +102,10 @@ def test_three_tables_created(conn):
         assert expected in tables, f"missing table: {expected}"
 
 
-def test_schema_version_is_21(conn):
-    """CURRENT_SCHEMA_VERSION 升到 21 且 migrate() 已落库。"""
-    assert CURRENT_SCHEMA_VERSION == 21
-    assert get_schema_version(conn) == 21
+def test_schema_version_is_22(conn):
+    """CURRENT_SCHEMA_VERSION 升到 22 且 migrate() 已落库。"""
+    assert CURRENT_SCHEMA_VERSION == 22
+    assert get_schema_version(conn) == 22
 
 
 def test_migration_idempotent(tmp_path):
@@ -115,7 +115,7 @@ def test_migration_idempotent(tmp_path):
     migrate(c)
     migrate(c)
     migrate(c)
-    assert get_schema_version(c) == 21
+    assert get_schema_version(c) == 22
     c.close()
 
 

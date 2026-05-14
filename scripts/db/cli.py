@@ -145,6 +145,7 @@ def register_db_subparser(subparsers: argparse._SubParsersAction) -> None:
     add_industry.add_argument("--source", default=None, help="来源")
     add_industry.add_argument("--confidence", default=None, help="置信度（高/中/低）")
     add_industry.add_argument("--tags", default=None, help="标签 JSON array")
+    add_industry.add_argument("--input-by", required=True, help="录入方: manual/openclaw/copaw/cursor")
 
     add_macro = db_sub.add_parser("add-macro", help="录入宏观经济信息")
     add_macro.add_argument("--category", required=True, help="类别（如 货币政策/财政/外贸）")
@@ -154,6 +155,7 @@ def register_db_subparser(subparsers: argparse._SubParsersAction) -> None:
     add_macro.add_argument("--source", default=None, help="来源")
     add_macro.add_argument("--impact", default=None, help="影响评估")
     add_macro.add_argument("--tags", default=None, help="标签 JSON array")
+    add_macro.add_argument("--input-by", required=True, help="录入方: manual/openclaw/copaw/cursor")
 
     # ── 持仓池（DB 路径）──────────────────────────────────────────
     holdings_add = db_sub.add_parser("holdings-add", help="新增持仓（写入 DB）")
@@ -501,6 +503,7 @@ def _cmd_add_industry(args: argparse.Namespace) -> None:
         "date": args.date,
         "sector_name": args.sector,
         "content": args.content,
+        "input_by": args.input_by,
     }
     if args.info_type:
         kwargs["info_type"] = args.info_type
@@ -526,6 +529,7 @@ def _cmd_add_macro(args: argparse.Namespace) -> None:
         "category": args.category,
         "title": args.title,
         "content": args.content,
+        "input_by": args.input_by,
     }
     if args.source:
         kwargs["source"] = args.source

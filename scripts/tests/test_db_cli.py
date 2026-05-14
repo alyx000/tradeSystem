@@ -189,6 +189,7 @@ class TestAddIndustry:
             "add-industry", "--sector", "AI算力",
             "--date", "2026-04-01",
             "--content", "AI板块持续活跃，资金流入明显",
+            "--input-by", "cursor",
             tmp_db=tmp_db,
         )
         assert result.returncode == 0
@@ -204,10 +205,19 @@ class TestAddIndustry:
             "--source", "华泰证券",
             "--confidence", "高",
             "--tags", '["锂电","储能"]',
+            "--input-by", "cursor",
             tmp_db=tmp_db,
         )
         assert result.returncode == 0
         assert "id=" in result.stdout
+        conn = get_connection(tmp_db)
+        row = conn.execute(
+            "SELECT input_by FROM industry_info WHERE sector_name = ?",
+            ("锂电池",),
+        ).fetchone()
+        conn.close()
+        assert row is not None
+        assert row[0] == "cursor"
 
     def test_missing_required(self, tmp_db):
         result = _run_cli("add-industry", "--sector", "AI", tmp_db=tmp_db)
@@ -221,6 +231,7 @@ class TestAddMacro:
             "--date", "2026-04-01",
             "--title", "央行降准25BP",
             "--content", "全面降准释放流动性约6000亿",
+            "--input-by", "cursor",
             tmp_db=tmp_db,
         )
         assert result.returncode == 0
@@ -235,9 +246,18 @@ class TestAddMacro:
             "--content", "新增专项债额度3万亿",
             "--impact", "利好股市，尤其基建板块",
             "--tags", '["财政","基建"]',
+            "--input-by", "cursor",
             tmp_db=tmp_db,
         )
         assert result.returncode == 0
+        conn = get_connection(tmp_db)
+        row = conn.execute(
+            "SELECT input_by FROM macro_info WHERE title = ?",
+            ("专项债扩容",),
+        ).fetchone()
+        conn.close()
+        assert row is not None
+        assert row[0] == "cursor"
 
 
 # ── 持仓池 ────────────────────────────────────────────────────────

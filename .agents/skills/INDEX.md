@@ -22,8 +22,8 @@
 | `record-notes` | `db add-note` | 录入老师观点（文字/图片/多附件）；可选 `--sync-watchlist-from-stocks`（用户确认入池后） |
 | `record-notes` / `portfolio-manager` | `db stock-resolve` | 通过已配置 Provider 统一做证券简称/代码解析，供 Agent 补码与补名使用 |
 | `record-notes` / `portfolio-manager` | `db watchlist-sync-from-note` | 按笔记 `mentioned_stocks` 写入关注池（两步确认后的第二步） |
-| `record-notes` | `db add-industry` | 录入行业板块信息 |
-| `record-notes` | `db add-macro` | 录入宏观经济信息 |
+| `record-notes` | `db add-industry` | 录入行业板块信息（写入须显式 `--input-by`） |
+| `record-notes` | `db add-macro` | 录入宏观经济信息（写入须显式 `--input-by`） |
 | `knowledge-to-plan` | `knowledge add-note` | 写入 `knowledge_assets`（新闻/课程/手动；不含老师观点） |
 | `knowledge-to-plan` | `knowledge list` | 列出资料资产（不含 `teacher_note` 类型） |
 | `knowledge-to-plan` | `knowledge draft-from-asset` | 从资料生成 `knowledge_asset` observation 和 `TradeDraft` |

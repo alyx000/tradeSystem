@@ -656,7 +656,7 @@ def delete_blacklist(conn: sqlite3.Connection, item_id: int) -> int:
 def insert_industry_info(conn: sqlite3.Connection, **kwargs: Any) -> int:
     cols, vals = [], []
     for k in ("date", "sector_name", "info_type", "content", "source",
-              "confidence", "timeliness", "tags"):
+              "input_by", "confidence", "timeliness", "tags"):
         if k in kwargs and kwargs[k] is not None:
             cols.append(k)
             v = kwargs[k]
@@ -671,7 +671,7 @@ def insert_industry_info(conn: sqlite3.Connection, **kwargs: Any) -> int:
 def insert_macro_info(conn: sqlite3.Connection, **kwargs: Any) -> int:
     cols, vals = [], []
     for k in ("date", "category", "title", "content", "source",
-              "impact_assessment", "confidence", "tags"):
+              "input_by", "impact_assessment", "confidence", "tags"):
         if k in kwargs and kwargs[k] is not None:
             cols.append(k)
             v = kwargs[k]
@@ -1163,12 +1163,12 @@ _TEACHER_NOTES_UPDATABLE = frozenset({
 
 _INDUSTRY_INFO_UPDATABLE = frozenset({
     "date", "sector_name", "info_type", "content", "source",
-    "confidence", "timeliness", "tags",
+    "input_by", "confidence", "timeliness", "tags",
 })
 
 _MACRO_INFO_UPDATABLE = frozenset({
     "date", "category", "title", "content", "source",
-    "impact_assessment", "confidence", "tags",
+    "input_by", "impact_assessment", "confidence", "tags",
 })
 
 _CALENDAR_UPDATABLE = frozenset({

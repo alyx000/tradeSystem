@@ -62,18 +62,20 @@ RECORD_NOTES_COMMANDS = [
     ["db", "add-note", "--teacher", "小鲍", "--date", "2026-04-01", "--title", "T",
      "--stocks", '[{"code":"300750","name":"宁德时代"}]', "--sync-watchlist-from-stocks"],
     # add-industry 最简
-    ["db", "add-industry", "--sector", "AI算力", "--date", "2026-04-01", "--content", "C"],
+    ["db", "add-industry", "--sector", "AI算力", "--date", "2026-04-01", "--content", "C",
+     "--input-by", "cursor"],
     # add-industry 完整
     ["db", "add-industry", "--sector", "锂电", "--date", "2026-04-01", "--content", "C",
      "--info-type", "研报", "--source", "华泰", "--confidence", "高",
-     "--tags", '["锂电","储能"]'],
+     "--tags", '["锂电","储能"]', "--input-by", "cursor"],
     # add-macro 最简
     ["db", "add-macro", "--category", "货币政策", "--date", "2026-04-01",
-     "--title", "降准", "--content", "C"],
+     "--title", "降准", "--content", "C", "--input-by", "cursor"],
     # add-macro 完整
     ["db", "add-macro", "--category", "财政", "--date", "2026-04-01",
      "--title", "T", "--content", "C",
-     "--source", "新华社", "--impact", "利好", "--tags", '["财政"]'],
+     "--source", "新华社", "--impact", "利好", "--tags", '["财政"]',
+     "--input-by", "cursor"],
 ]
 
 # ── skill: portfolio-manager ──────────────────────────────────────

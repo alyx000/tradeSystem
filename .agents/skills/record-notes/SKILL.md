@@ -42,7 +42,7 @@ version: "1.5"
 
 **两步入池（可选）**：若第一次执行 `add-note` 时未带 `--sync-watchlist-from-stocks`，在用户二次确认入池后可执行 `python3 main.py db watchlist-sync-from-note --note-id <笔记id>`（从该笔记的 `mentioned_stocks` 写入关注池）。
 
-行业 / 宏观录入仍须先提炼要点再写入，但字段以各子命令为准（见 ingestion-rules 与同目录说明）。
+行业 / 宏观录入仍须先提炼要点再写入，并且写入命令同样必须显式带 `--input-by`；字段以各子命令为准（见 ingestion-rules 与同目录说明）。
 
 ## 优先入口
 
@@ -63,8 +63,8 @@ python3 main.py db add-note ...
 python3 main.py db add-note ... --stocks '[...]' --sync-watchlist-from-stocks
 # 或先落笔记再同步：
 python3 main.py db watchlist-sync-from-note --note-id <id>
-python3 main.py db add-industry ...
-python3 main.py db add-macro ...
+python3 main.py db add-industry ... --input-by cursor
+python3 main.py db add-macro ... --input-by cursor
 ```
 
 ## 核心流程

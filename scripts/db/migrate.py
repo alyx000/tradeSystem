@@ -19,7 +19,7 @@ PROJECT_ROOT = SCRIPTS_DIR.parent
 
 # 与 migrate() 中「当前最新」一步一致；新增迁移时递增本常量，并把上一步的
 # set_schema_version(conn, CURRENT_SCHEMA_VERSION) 改为字面量 N（保留历史链）。
-CURRENT_SCHEMA_VERSION = 21
+CURRENT_SCHEMA_VERSION = 22
 
 
 def get_schema_version(conn: sqlite3.Connection) -> int:
@@ -375,6 +375,18 @@ def migrate(conn: sqlite3.Connection) -> None:
     if version < 21:
         logger.info("Applying schema v21: trading_cognitions + cognition_instances + periodic_reviews + triggers")
         init_schema(conn)
+        set_schema_version(conn, 21)
+        conn.commit()
+        version = get_schema_version(conn)
+
+    if version < 22:
+        logger.info("Applying schema v22: industry_info/macro_info.input_by")
+        industry_cols = {row[1] for row in conn.execute("PRAGMA table_info(industry_info)").fetchall()}
+        if "input_by" not in industry_cols:
+            conn.execute("ALTER TABLE industry_info ADD COLUMN input_by TEXT")
+        macro_cols = {row[1] for row in conn.execute("PRAGMA table_info(macro_info)").fetchall()}
+        if "input_by" not in macro_cols:
+            conn.execute("ALTER TABLE macro_info ADD COLUMN input_by TEXT")
         set_schema_version(conn, CURRENT_SCHEMA_VERSION)
         conn.commit()
 
