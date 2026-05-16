@@ -61,6 +61,21 @@ python3 -m pytest scripts/tests/test_cli_smoke.py -v
   - `test_cli_smoke.py` 中的 `ALL_SKILL_COMMANDS`，以及
   - 对应 `SKILL.md` 中的使用示例
 
+### 2.1 新增顶层 subparser 时必加 ARCHITECTURE_COMMANDS
+
+**`scripts/main.py` 新增任何顶层子命令组**（如 `recommend` / `ingest` / `plan` / `knowledge` / `executions` 等），不仅要在 `INDEX.md` 加依赖行，**还必须**：
+
+1. 在 `scripts/tests/test_cli_smoke.py` 的 `ARCHITECTURE_COMMANDS` 数组里**加参数化用例**，覆盖：
+   - 子命令的所有 mode（如 `recommend daily` / `recommend weekly`）
+   - 常用选项组合（`--dry-run` / `--lookback-days` 等）
+   - 至少 1 条最简形式 + 1 条全选项形式
+2. 这些用例由现有 `test_architecture_command_parseable` 跑参数化校验，仅做 `parser.parse_args()`，**不真实执行命令**
+3. 验证：`pytest scripts/tests/test_cli_smoke.py -k <new-cmd> -v` 必须全绿
+
+**为什么**：INDEX.md 写了新命令、SKILL.md 给了示例，但如果 argparse 实际签名不对（参数名错、required 漏标、subparser 没注册），Agent 调用就会失败。`ALL_SKILL_COMMANDS` 校验 `db` 子命令，`ARCHITECTURE_COMMANDS` 校验 `main.py` 顶层子命令，两者分工不能漏。
+
+行业推荐项目（2026-05-16）G3 R12 实战：先在 `ARCHITECTURE_COMMANDS` 加 5 条 `recommend` 参数化 → 跑出 `invalid choice: 'recommend'` RED → 再去 `main.py` 注册 subparser → 验证 GREEN。严格按这个顺序走的项目内 CLI 永远不会出现"agent 调用失败但代码全绿"的悬空状态。
+
 ### 3. 检查受影响的 SKILL.md
 
 根据改动内容，检查对应 skill 文档：

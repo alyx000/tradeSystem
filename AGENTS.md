@@ -65,7 +65,9 @@
 | `test-design.md`          | 分层测试设计：金字塔原则、隔离原则、自底向上执行                                              |
 | `subagent-code-review.md` | 每轮实质性代码改动后启动 subagent 审查（轻量本地 Explore）                                  |
 | `post-dev-codex-review.md` | 实质性代码改动后必须跑 codex:codex-rescue 审查；6 条二值结束条件 + 3 轮上限防无限循环               |
-| `skills-sync.md`          | CLI / API / Skills 变更后同步 `INDEX.md`、跑 `test_cli_smoke`、检查受影响 SKILL.md |
+| `skills-sync.md`          | CLI / API / Skills 变更后同步 `INDEX.md`、跑 `test_cli_smoke`、检查受影响 SKILL.md；新增顶层 subparser 必加 `ARCHITECTURE_COMMANDS` 参数化 |
+| `launchd-deploy.md`       | macOS launchd 定时任务部署规范：包装脚本必须 set PATH + source env；安装后必须 launchctl start 真触发验证；LLM 任务超时建议 180s+ |
+| `tdd-commit-strategy.md`  | TDD 实施完成后按功能层次切 commit（不每个 R/G 一个、不全 squash）；commit message 标 What/Why/TDD 轮数；`git add` 用具体路径不用 `-A` |
 
 
 ### Skills 入口（Codex / Claude Code / Cursor 共用，真源在 `.agents/skills/`）
