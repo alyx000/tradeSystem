@@ -5,7 +5,9 @@
 from __future__ import annotations
 
 import logging
+import os
 from .base import MessagePusher
+from .dingtalk_pusher import DingTalkPusher
 
 logger = logging.getLogger(__name__)
 
@@ -15,11 +17,21 @@ class MultiPusher:
 
     def __init__(self):
         self._pushers: list[MessagePusher] = []
+        self._register_dingtalk_from_env()
 
     def register(self, pusher: MessagePusher) -> None:
         if pusher.enabled:
             self._pushers.append(pusher)
             logger.info(f"注册推送渠道: {pusher.name}")
+
+    def _register_dingtalk_from_env(self) -> None:
+        token = os.getenv("DINGTALK_WEBHOOK_TOKEN", "")
+        secret = os.getenv("DINGTALK_WEBHOOK_SECRET", "")
+        if not token or not secret:
+            return
+        pusher = DingTalkPusher({"webhook_token": token, "webhook_secret": secret})
+        pusher.initialize()
+        self.register(pusher)
 
     def send_report(self, report_type: str, title: str, content: str) -> dict[str, bool]:
         """向所有渠道推送报告，返回各渠道结果"""
