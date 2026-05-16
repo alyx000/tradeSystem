@@ -1,7 +1,7 @@
 ---
 name: market-tasks
-description: 手动触发或自动定时执行盘前/盘后行情采集任务，并将结果摘要推送回 channel
-version: "1.2"
+description: 手动触发或自动定时执行盘前/盘后行情采集任务、行业推荐推送，并将结果摘要推送回 channel
+version: "1.3"
 ---
 
 # Skill: 市场数据任务（盘前 / 盘后采集）
@@ -14,6 +14,7 @@ version: "1.2"
 - 「执行今天的盘后任务」
 - 「补跑 2026-04-01 的盘后」
 - 「打开市场看板 / 看盘后信封」
+- 「行业推荐定时推送」/「最近值得看的行业」
 
 时激活此 skill。
 
@@ -37,6 +38,41 @@ make today-post DATE=YYYY-MM-DD
 python3 main.py pre --date YYYY-MM-DD
 python3 main.py post --date YYYY-MM-DD
 ```
+
+## 行业推荐定时推送
+
+把最近 3 / 7 日老师观点 + 行业信息聚合成 Top K 排行，可选 Gemini CLI 加点评，推送钉钉自定义机器人。
+
+定时入口（已挂 APScheduler）：
+
+- 日报：工作日 07:10（与盘前 07:00 错峰 10 分钟）
+- 周报：每周日 20:00（独占周日，与盘后 mon-fri 20:00 不冲突）
+
+手动入口（CLI 优先用 `make`）：
+
+```bash
+# 仅打印不推送
+make recommend-daily-dry      # 等价 python3 main.py recommend daily --dry-run
+make recommend-weekly-dry     # 等价 python3 main.py recommend weekly --dry-run
+
+# 真推送（需先 export DINGTALK_WEBHOOK_TOKEN / DINGTALK_WEBHOOK_SECRET）
+make recommend-daily
+make recommend-weekly
+
+# 自定义窗口（直接调底层）
+python3 main.py recommend daily  --lookback-days 5
+python3 main.py recommend weekly --lookback-days 14
+```
+
+环境变量：
+
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `DINGTALK_WEBHOOK_TOKEN` | — | 钉钉机器人 webhook access_token（必填，不入 git） |
+| `DINGTALK_WEBHOOK_SECRET` | — | 钉钉机器人加签 secret（必填，不入 git） |
+| `GEMINI_BIN` | `/opt/homebrew/bin/gemini` | gemini CLI 可执行路径 |
+| `LLM_TIMEOUT_SECONDS` | `90` | LLM 调用超时（硬上限 180s） |
+| `GEMINI_MODEL` | 空 | 指定模型，留空走 gemini 默认 |
 
 ## 核心流程
 

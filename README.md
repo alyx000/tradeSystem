@@ -369,13 +369,39 @@ cp templates/trade-log.yaml daily/$(date +%Y-%m-%d)/trades.yaml
 仓库根目录下，推荐 **两个定时点**（上海时区，工作日）：
 
 
-| 时间    | 命令                            | 说明                                                             |
-| ----- | ----------------------------- | -------------------------------------------------------------- |
-| 07:00 | `python3 scripts/main.py pre` | 盘前简报                                                           |
-| 20:00 | `bash scripts/sync_data.sh`   | `git pull` → `main.py post`（含晚间任务）→ 提交并推送 `daily/`、`tracking/` |
+| 时间       | 频率      | 命令                                          | 说明                                                             |
+| -------- | ------- | ------------------------------------------- | -------------------------------------------------------------- |
+| 07:00    | 工作日     | `python3 scripts/main.py pre`               | 盘前简报                                                           |
+| **07:10**| **工作日** | `python3 scripts/main.py recommend daily`   | **行业推荐日报**（聚合最近 3 日 teacher_notes + industry_info，可选 Gemini 点评，钉钉推送） |
+| 20:00    | 工作日     | `bash scripts/sync_data.sh`                 | `git pull` → `main.py post`（含晚间任务）→ 提交并推送 `daily/`、`tracking/` |
+| **20:00**| **周日**  | `python3 scripts/main.py recommend weekly`  | **行业推荐周报**（覆盖近 7 日 Top 8 行业） |
 
 
-也可在 `scripts/` 下长期运行 `python3 main.py schedule`，由 APScheduler 执行上述两个时刻（`post` 已内含原 `evening` 流程，无需再配 18:00）。
+也可在 `scripts/` 下长期运行 `python3 main.py schedule`，由 APScheduler 执行上述四个时刻（`post` 已内含原 `evening` 流程，无需再配 18:00）。
+
+**行业推荐定时推送** 需额外环境变量（不入 git）：
+
+```bash
+export DINGTALK_WEBHOOK_TOKEN=<钉钉自定义机器人 access_token>
+export DINGTALK_WEBHOOK_SECRET=<钉钉加签 secret>
+# 可选：覆盖 LLM 行为
+export GEMINI_BIN=/opt/homebrew/bin/gemini    # 默认值
+export LLM_TIMEOUT_SECONDS=90                  # 默认 90s，硬上限 180s
+export GEMINI_MODEL=gemini-2.5-flash           # 默认走 gemini 默认模型
+```
+
+手动入口（CLI / Makefile）：
+
+```bash
+make recommend-daily-dry        # 干跑预览，不推钉钉
+make recommend-daily            # 真推送
+make recommend-weekly-dry
+make recommend-weekly
+
+# 自定义窗口
+python3 scripts/main.py recommend daily --lookback-days 5
+python3 scripts/main.py recommend weekly --lookback-days 14
+```
 
 **由 OpenClaw 调度时**：不必部署 systemd；在 OpenClaw 里按上表配置 **工作日 07:00 / 20:00** 执行相同命令即可，**工作目录设为仓库根目录**（与 `sync_data.sh` 的路径约定一致）。请勿与 `main.py schedule` 或本机 `deploy/systemd/` 定时器同时启用，以免重复推送、重复写文件。`sync_data.sh` 会 `git push`，运行环境需已配置 SSH deploy key 或等价凭据。
 

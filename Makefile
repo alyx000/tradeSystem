@@ -1,4 +1,4 @@
-.PHONY: help bootstrap doctor check check-web check-scripts hooks-install dev dev-api dev-web commands-doc commands-check dashboard-open search-open commands-open plan-open knowledge-open ingest-open teachers-open holdings-open watchlist-open calendar-open industry-open db-init db-sync db-reconcile holdings holdings-refresh watchlist notes-search db-search market-open market-json market-envelope review-open review-prefill pre post regulatory ingest-list ingest-run-post ingest-run-interface ingest-inspect ingest-health ingest-reconcile plan-draft plan-show-draft plan-confirm plan-diagnose plan-review knowledge-list knowledge-add-note knowledge-draft-from-asset knowledge-draft-from-teacher-note today-open today-close today-pre today-post today-regulatory today-evening today-watchlist today-obsidian today-ingest-inspect today-ingest-health
+.PHONY: help bootstrap doctor check check-web check-scripts hooks-install dev dev-api dev-web commands-doc commands-check dashboard-open search-open commands-open plan-open knowledge-open ingest-open teachers-open holdings-open watchlist-open calendar-open industry-open db-init db-sync db-reconcile holdings holdings-refresh watchlist notes-search db-search market-open market-json market-envelope review-open review-prefill pre post regulatory ingest-list ingest-run-post ingest-run-interface ingest-inspect ingest-health ingest-reconcile plan-draft plan-show-draft plan-confirm plan-diagnose plan-review knowledge-list knowledge-add-note knowledge-draft-from-asset knowledge-draft-from-teacher-note today-open today-close today-pre today-post today-regulatory today-evening today-watchlist today-obsidian today-ingest-inspect today-ingest-health recommend-daily recommend-daily-dry recommend-weekly recommend-weekly-dry
 
 help:
 	@echo "Available targets:"
@@ -63,6 +63,8 @@ help:
 	@echo "  make today-obsidian - export today's obsidian notes"
 	@echo "  make today-ingest-inspect - inspect today's ingest runs"
 	@echo "  make today-ingest-health - show today's 7-day ingest health summary"
+	@echo "  make recommend-daily / recommend-daily-dry  - 行业推荐日报（钉钉推送 / 干跑预览）"
+	@echo "  make recommend-weekly / recommend-weekly-dry - 行业推荐周报（钉钉推送 / 干跑预览）"
 	@echo "  make hooks-install - enable repo-local git hooks"
 
 bootstrap:
@@ -183,6 +185,19 @@ pre:
 
 post:
 	cd scripts && python3 main.py post
+
+# 行业推荐定时推送（钉钉机器人）
+recommend-daily:
+	cd scripts && python3 main.py recommend daily
+
+recommend-daily-dry:
+	cd scripts && python3 main.py recommend daily --dry-run
+
+recommend-weekly:
+	cd scripts && python3 main.py recommend weekly
+
+recommend-weekly-dry:
+	cd scripts && python3 main.py recommend weekly --dry-run
 
 ingest-list:
 	cd scripts && python3 main.py ingest list-interfaces
