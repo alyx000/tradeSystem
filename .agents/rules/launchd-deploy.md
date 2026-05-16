@@ -18,9 +18,9 @@ VPS / Linux 走 systemd（见 `deploy/systemd/`），不适用本规则。
 | LaunchAgent plist | `deploy/launchd/com.alyx.tradesystem.<task>.plist` | `~/Library/LaunchAgents/` |
 | 部署说明 | `deploy/launchd/README.md` | — |
 
-## 包装脚本必须项（4 条）
+## 包装脚本必须项（5 条）
 
-任何 launchd 调用的 `*-runner.sh` 必须包含以下 4 段，**缺一就会运行时炸**：
+任何 launchd 调用的 `*-runner.sh` 必须包含以下 5 段，**缺一就会运行时炸（或排障无门）**：
 
 ```bash
 #!/bin/bash
@@ -39,10 +39,22 @@ fi
 
 # 4. 输出加时间戳前缀（排障时能区分多次触发）
 echo "===== $(date '+%Y-%m-%d %H:%M:%S') <task name> start ====="
+
+# 5. 凭据存在性诊断（凭据型 env 任务强制；其它任务推荐）
+#    用 ${VAR:+set} 只判存在不打值，规避把 token / secret echo 进 /tmp/*.log
+echo "[env] DINGTALK_WEBHOOK_TOKEN=${DINGTALK_WEBHOOK_TOKEN:+set} DINGTALK_WEBHOOK_SECRET=${DINGTALK_WEBHOOK_SECRET:+set}"
+
 exec /usr/bin/python3 scripts/main.py <command> "$@"
 ```
 
 `/usr/bin/python3` 用绝对路径（不是 `python3`），保证版本可预测。
+
+**第 5 段细则**：
+
+- 凡是 source `~/.config/tradeSystem.env` 后 Python 侧用 `os.getenv` 读取凭据的任务（钉钉 webhook、Discord webhook、Tushare token、broker API key 等），**必须**输出一行 `[env] VAR1=${VAR1:+set} VAR2=${VAR2:+set} ...`。
+- **绝对禁止** `echo "VAR=$VAR"` 或 `echo "VAR=${VAR:-(empty)}"` —— 会把真凭据写进 `/tmp/*.log`（可被本机任何用户读），等同泄漏。
+- `${VAR:+set}` 语义：若 `$VAR` 已 set 且非空，展开为字面量 `set`；否则展开为空串。读 log 时看到 `VAR=set` = 凭据注入成功；看到 `VAR=` = source 失败或 env 文件缺该变量。
+- 这行同时能间接证明 Python 侧 pusher 注册逻辑（如 `MultiPusher._register_dingtalk_from_env`）的 early return 分支不会触发——只要 log 里两个变量都 `set`，pusher 一定被注册。
 
 ## plist 必须项
 
