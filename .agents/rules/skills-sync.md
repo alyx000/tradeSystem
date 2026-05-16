@@ -118,6 +118,38 @@ Skills 同步检查结果：
 - [✅/❌] 受影响的 agents/openai.yaml 已检查并更新（如需）
 ```
 
+## Rules 文件真源 + IDE symlink 壳同步
+
+`.agents/rules/<rule>.md` 是真源，`.claude/rules/<rule>.md` 与 `.cursor/rules/<rule>.mdc` 是 symlink 壳（让两个 IDE 都能加载到真源）。
+
+### 新增 / 重命名 / 删除 `.agents/rules/` 文件时必须的连带操作
+
+| 操作 | `.agents/rules/` | `.claude/rules/` | `.cursor/rules/` |
+|---|---|---|---|
+| 新增 `<rule>.md` | `git add .agents/rules/<rule>.md` | `ln -s ../../.agents/rules/<rule>.md .claude/rules/<rule>.md && git add` | `ln -s ../../.agents/rules/<rule>.md .cursor/rules/<rule>.mdc && git add` |
+| 重命名 `A.md` → `B.md` | `git mv .agents/rules/A.md .agents/rules/B.md` | 删旧 symlink + 建新（路径变了） | 删旧 + 建新（文件名 + 扩展名都变） |
+| 删除 `<rule>.md` | `git rm .agents/rules/<rule>.md` | `git rm .claude/rules/<rule>.md` | `git rm .cursor/rules/<rule>.mdc` |
+
+### 验证
+
+```bash
+python3 -m pytest scripts/tests/test_agent_symlinks.py -v
+```
+
+测试覆盖：
+- `.agents/` 真源目录存在
+- `.cursor/skills` 与 `.claude/skills` 是符号链接指向 `.agents/skills/`
+- `.agents/rules/*.md` 都有对应的 `.claude/rules/<>.md` 与 `.cursor/rules/<>.mdc` symlink
+
+`pre-push` hook 也跑全套 pytest，会兜底 catch；但**别依赖 hook，新增 rule 时主动建好三处**，否则会被 pre-push 拒推 + 需要补一个 amend/follow-up commit。
+
+### 同时必须做的两件事（容易遗漏）
+
+1. **在 `CLAUDE.md` + `AGENTS.md` 的"AI 协作规则"表格里加索引行**：写明该规则的"作用"，让 agent 启动时能看到规则存在。
+2. **如果新规则涉及代码触发条件**（如"修改 X 文件时触发 Y 检查"），考虑加进现有规则的 globs / 触发条件章节，或建明确触发链。
+
+参见 [[karpathy-behavior]]（精准修改、清理影响面），[[implementation-plan]]（计划阶段的范围声明）。
+
 ## 背景说明
 
 AI Agent（Claude Code / Codex / Cursor）通过 `.agents/skills/` 中的文档了解如何调用 CLI 和 API（`.cursor/skills/` 与 `.claude/skills/` 是 symlink 壳）。
