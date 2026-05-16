@@ -292,7 +292,7 @@ class TestHoldings:
             "--name", "海光信息", "--shares", "100", "--price", "220.0",
             tmp_db=tmp_db,
         )
-        result = _run_cli("holdings-remove", "--code", "688041", tmp_db=tmp_db)
+        result = _run_cli("holdings-remove", "--code", "688041", "--input-by", "cursor", tmp_db=tmp_db)
         assert result.returncode == 0
         assert "已移除持仓" in result.stdout
 
@@ -300,9 +300,14 @@ class TestHoldings:
         assert "海光信息" not in result2.stdout
 
     def test_remove_nonexistent(self, tmp_db):
-        result = _run_cli("holdings-remove", "--code", "999999", tmp_db=tmp_db)
+        result = _run_cli("holdings-remove", "--code", "999999", "--input-by", "cursor", tmp_db=tmp_db)
         assert result.returncode == 0
         assert "未找到" in result.stdout
+
+    def test_remove_requires_input_by(self, tmp_db):
+        result = _run_cli("holdings-remove", "--code", "688041", tmp_db=tmp_db)
+        assert result.returncode == 2
+        assert "--input-by" in result.stderr
 
     def test_list_empty(self, tmp_db):
         result = _run_cli("holdings-list", tmp_db=tmp_db)
@@ -340,7 +345,7 @@ class TestHoldings:
             "--name", "海光信息", "--shares", "100", "--price", "220.0",
             tmp_db=tmp_db,
         )
-        result = _run_cli("holdings-remove", "--code", "688041", tmp_db=tmp_db)
+        result = _run_cli("holdings-remove", "--code", "688041", "--input-by", "cursor", tmp_db=tmp_db)
         assert result.returncode == 0
         assert "共 1 条置为 closed" in result.stdout
 

@@ -171,6 +171,7 @@ def register_db_subparser(subparsers: argparse._SubParsersAction) -> None:
 
     holdings_remove = db_sub.add_parser("holdings-remove", help="移除持仓（置 closed）")
     holdings_remove.add_argument("--code", required=True, help="股票代码")
+    holdings_remove.add_argument("--input-by", required=True, help="录入方: manual/openclaw/copaw/cursor")
 
     db_sub.add_parser("holdings-list", help="列出当前持仓")
 
@@ -586,7 +587,7 @@ def _cmd_holdings_remove(args: argparse.Namespace) -> None:
             print(f"⚠️ 未找到持仓: {args.code}")
             return
 
-    print(f"✅ 已移除持仓: {args.code}（共 {closed} 条置为 closed）")
+    print(f"✅ 已移除持仓: {args.code}（共 {closed} 条置为 closed，input_by={args.input_by}）")
 
 
 def _cmd_holdings_list(args: argparse.Namespace) -> None:

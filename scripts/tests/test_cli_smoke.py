@@ -90,7 +90,7 @@ PORTFOLIO_COMMANDS = [
      "--stop-loss", "80.0", "--market", "A股", "--note", "龙头"],
     ["db", "holdings-add", "--code", "300750", "--name", "N",
      "--entry-reason", "主线龙头启动", "--note", "观察量能"],
-    ["db", "holdings-remove", "--code", "300750"],
+    ["db", "holdings-remove", "--code", "300750", "--input-by", "cursor"],
     ["db", "holdings-list"],
     ["db", "holdings-refresh", "--date", "2026-04-04"],
     ["db", "holdings-refresh", "--date", "2026-04-04", "--json"],
