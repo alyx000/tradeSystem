@@ -1226,6 +1226,29 @@ def cmd_obsidian(config: dict, target_date: str, sync_all: bool = False):
             logger.warning(f"未找到可导出的文件（{target_date}）")
 
 
+def _run_recommend_scheduled(mode: str) -> None:
+    """cron 触发的行业推荐入口（日报 / 周报）。"""
+    from db.connection import get_connection
+    from services.recommend.service import run_recommend
+    from pushers.dingtalk_pusher import DingTalkPusher
+
+    defaults = {"daily": (3, 5), "weekly": (7, 8)}
+    lookback, top_k = defaults.get(mode, (3, 5))
+
+    conn = get_connection()
+    try:
+        rec = run_recommend(conn, lookback_days=lookback, top_k=top_k, skip_llm=False)
+    finally:
+        conn.close()
+
+    pusher = DingTalkPusher(config={})
+    if not pusher.initialize():
+        logger.error("[recommend %s] DingTalk pusher 未启用，跳过推送", mode)
+        return
+    ok = pusher.send_markdown(title=rec.title, content=rec.markdown)
+    logger.info("[recommend %s] 推送 %s", mode, "成功" if ok else "失败")
+
+
 def cmd_schedule(config: dict):
     """启动定时调度器"""
     try:
@@ -1253,9 +1276,27 @@ def cmd_schedule(config: dict):
         name="盘后报告",
     )
 
+    # 行业推荐日报: 工作日 07:10（与盘前 07:00 错峰 10 分）
+    scheduler.add_job(
+        lambda: _run_recommend_scheduled("daily"),
+        CronTrigger(day_of_week="mon-fri", hour=7, minute=10),
+        id="recommend_daily",
+        name="行业推荐日报",
+    )
+
+    # 行业推荐周报: 周日 20:00（独占周日，与现有 mon-fri 20:00 不冲突）
+    scheduler.add_job(
+        lambda: _run_recommend_scheduled("weekly"),
+        CronTrigger(day_of_week="sun", hour=20, minute=0),
+        id="recommend_weekly",
+        name="行业推荐周报",
+    )
+
     logger.info("定时调度器已启动")
     logger.info("  盘前简报: 周一~周五 07:00")
     logger.info("  盘后报告: 周一~周五 20:00（含溢价回填/关注池/复盘与全日盘后）")
+    logger.info("  行业推荐日报: 周一~周五 07:10（钉钉推送）")
+    logger.info("  行业推荐周报: 周日 20:00（钉钉推送）")
     logger.info("按 Ctrl+C 停止")
 
     try:
@@ -1671,6 +1712,10 @@ def build_parser() -> argparse.ArgumentParser:
     rev_confirm.add_argument("--input-by", required=True, help="录入方")
     rev_confirm.add_argument("--json", action="store_true", help="输出 JSON")
 
+    # recommend (行业推荐定时推送)
+    from cli.recommend import register_subparser as register_recommend_subparser
+    register_recommend_subparser(subparsers)
+
     # db
     from db.cli import register_db_subparser
     register_db_subparser(subparsers)
@@ -1714,6 +1759,9 @@ def main():
         cmd_plan(config, args)
     elif args.command == "knowledge":
         cmd_knowledge(args)
+    elif args.command == "recommend":
+        from cli import recommend as recommend_module
+        recommend_module.handle_command(config, args)
     elif args.command == "db":
         from db.cli import handle_db_command
         handle_db_command(args)

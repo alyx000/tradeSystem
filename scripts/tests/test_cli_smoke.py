@@ -187,6 +187,12 @@ ARCHITECTURE_COMMANDS = [
     ["executions", "audit-export", "--from", "2026-04-01", "--to", "2026-05-31"],
     ["executions", "audit-export", "--from", "2026-04-01", "--to", "2026-05-31",
      "--account", "default", "--out", "tmp/audit-reports/test.md"],
+    # recommend (G3 行业推荐定时推送)
+    ["recommend", "daily"],
+    ["recommend", "daily", "--dry-run"],
+    ["recommend", "daily", "--lookback-days", "5"],
+    ["recommend", "weekly"],
+    ["recommend", "weekly", "--dry-run", "--lookback-days", "14"],
 ]
 
 
