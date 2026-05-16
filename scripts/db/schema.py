@@ -475,6 +475,46 @@ CREATE TABLE IF NOT EXISTS trades (
 );
 """
 
+_SQL_BROKER_EXECUTIONS = """
+CREATE TABLE IF NOT EXISTS broker_executions (
+    id INTEGER PRIMARY KEY,
+    account_id TEXT NOT NULL DEFAULT 'default',
+    broker_code TEXT,
+    biz_date TEXT NOT NULL CHECK(biz_date GLOB '????-??-??'),
+    exec_time TEXT,
+    stock_code_raw TEXT NOT NULL,
+    stock_code TEXT NOT NULL,
+    stock_name TEXT NOT NULL,
+    market TEXT NOT NULL DEFAULT 'A股',
+    market_raw TEXT,
+    direction TEXT NOT NULL CHECK(direction IN ('buy','sell')),
+    direction_raw TEXT NOT NULL,
+    shares INTEGER NOT NULL,
+    price REAL NOT NULL,
+    amount REAL NOT NULL,
+    net_amount REAL,
+    balance_after INTEGER,
+    commission REAL NOT NULL DEFAULT 0,
+    stamp_duty REAL NOT NULL DEFAULT 0,
+    transfer_fee REAL NOT NULL DEFAULT 0,
+    exchange_fee REAL NOT NULL DEFAULT 0,
+    regulatory_fee REAL NOT NULL DEFAULT 0,
+    other_fees REAL NOT NULL DEFAULT 0,
+    total_fees REAL NOT NULL DEFAULT 0,
+    broker_contract_no TEXT,
+    broker_trade_no TEXT,
+    currency TEXT DEFAULT 'CNY',
+    raw_payload_json TEXT NOT NULL,
+    source_file TEXT NOT NULL,
+    source_format TEXT NOT NULL,
+    source_archive_path TEXT,
+    input_by TEXT NOT NULL,
+    import_run_id TEXT,
+    imported_at TEXT DEFAULT (datetime('now')),
+    notes TEXT
+);
+"""
+
 # ──────────────────────────────────────────────────────────────
 # 9. 原始事实层 / 采集审计
 # ──────────────────────────────────────────────────────────────
@@ -775,6 +815,9 @@ _SQL_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_cognition_instances_outcome ON cognition_instances(outcome);",
     "CREATE INDEX IF NOT EXISTS idx_periodic_reviews_period ON periodic_reviews(period_type, period_start, period_end);",
     "CREATE INDEX IF NOT EXISTS idx_periodic_reviews_scope_label ON periodic_reviews(review_scope, regime_label);",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_broker_executions_dedupe ON broker_executions(account_id, biz_date, stock_code, direction, shares, price, COALESCE(broker_contract_no, ''), COALESCE(broker_trade_no, ''));",
+    "CREATE INDEX IF NOT EXISTS idx_broker_executions_date ON broker_executions(biz_date);",
+    "CREATE INDEX IF NOT EXISTS idx_broker_executions_run_id ON broker_executions(import_run_id);",
 ]
 
 # ──────────────────────────────────────────────────────────────
@@ -993,6 +1036,7 @@ _ALL_TABLE_SQL = [
     _SQL_EMOTION_CYCLE,
     _SQL_MAIN_THEMES,
     _SQL_TRADES,
+    _SQL_BROKER_EXECUTIONS,
     _SQL_RAW_INTERFACE_PAYLOADS,
     _SQL_MARKET_FACT_SNAPSHOTS,
     _SQL_FACT_ENTITIES,
@@ -1035,6 +1079,7 @@ EXPECTED_TABLES = [
     "daily_market", "daily_reviews",
     "emotion_cycle", "main_themes",
     "trades",
+    "broker_executions",
     "raw_interface_payloads", "market_fact_snapshots", "fact_entities",
     "ingest_runs", "ingest_errors",
     "stock_regulatory_monitor",

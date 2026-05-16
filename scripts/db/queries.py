@@ -1541,3 +1541,133 @@ def list_regulatory_monitor_api(conn: sqlite3.Connection, publish_date: str, typ
         )
     )
     return merged
+
+
+# ────── Broker Executions ──────
+
+_BROKER_EXECUTION_FIELDS = (
+    "account_id", "broker_code", "biz_date", "exec_time", "stock_code_raw", "stock_code",
+    "stock_name", "market", "market_raw", "direction", "direction_raw", "shares", "price",
+    "amount", "net_amount", "balance_after", "commission", "stamp_duty", "transfer_fee",
+    "exchange_fee", "regulatory_fee", "other_fees", "total_fees", "broker_contract_no",
+    "broker_trade_no", "currency", "raw_payload_json", "source_file", "source_format",
+    "source_archive_path", "input_by", "import_run_id", "notes",
+)
+
+_BROKER_EXECUTION_DEFAULTS: dict[str, Any] = {
+    "account_id": "default",
+    "market": "A股",
+    "shares": 0,
+    "price": 0,
+    "amount": 0,
+    "commission": 0,
+    "stamp_duty": 0,
+    "transfer_fee": 0,
+    "exchange_fee": 0,
+    "regulatory_fee": 0,
+    "other_fees": 0,
+    "total_fees": 0,
+    "currency": "CNY",
+}
+
+
+def _broker_row_to_dict(cur: sqlite3.Cursor, row: sqlite3.Row | tuple[Any, ...] | None) -> dict | None:
+    if row is None:
+        return None
+    if isinstance(row, sqlite3.Row):
+        return dict(row)
+    return {desc[0]: row[index] for index, desc in enumerate(cur.description or [])}
+
+
+def _broker_rows_to_list(cur: sqlite3.Cursor, rows: list[sqlite3.Row | tuple[Any, ...]]) -> list[dict]:
+    return [_broker_row_to_dict(cur, row) or {} for row in rows]
+
+
+def insert_broker_execution(conn: sqlite3.Connection, **kwargs: Any) -> int:
+    cols, placeholders, vals = [], [], []
+    for k in _BROKER_EXECUTION_FIELDS:
+        cols.append(k)
+        if k in _BROKER_EXECUTION_DEFAULTS:
+            placeholders.append("COALESCE(?, ?)")
+            vals.extend([kwargs.get(k), _BROKER_EXECUTION_DEFAULTS[k]])
+        else:
+            placeholders.append("?")
+            vals.append(kwargs.get(k))
+    cur = conn.execute(
+        f"INSERT INTO broker_executions ({', '.join(cols)}) "
+        f"VALUES ({', '.join(placeholders)})",
+        vals,
+    )
+    return cur.lastrowid  # type: ignore[return-value]
+
+
+def find_broker_execution_by_dedupe(
+    conn: sqlite3.Connection,
+    account_id: str,
+    biz_date: str,
+    stock_code: str,
+    direction: str,
+    shares: int,
+    price: float,
+    broker_contract_no: str | None,
+    broker_trade_no: str | None,
+) -> dict | None:
+    cur = conn.execute(
+        """
+        SELECT * FROM broker_executions
+        WHERE account_id = ?
+          AND biz_date = ?
+          AND stock_code = ?
+          AND direction = ?
+          AND shares = ?
+          AND price = ?
+          AND COALESCE(broker_contract_no, '') = COALESCE(?, '')
+          AND COALESCE(broker_trade_no, '') = COALESCE(?, '')
+        """,
+        (
+            account_id,
+            biz_date,
+            stock_code,
+            direction,
+            shares,
+            price,
+            broker_contract_no,
+            broker_trade_no,
+        ),
+    )
+    return _broker_row_to_dict(cur, cur.fetchone())
+
+
+def update_broker_execution_archive_path(conn: sqlite3.Connection, import_run_id: str, archive_path: str) -> int:
+    cur = conn.execute(
+        "UPDATE broker_executions SET source_archive_path = ? WHERE import_run_id = ?",
+        (archive_path, import_run_id),
+    )
+    return cur.rowcount
+
+
+def list_broker_executions(
+    conn: sqlite3.Connection,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    account_id: str | None = None,
+) -> list[dict]:
+    sql = "SELECT * FROM broker_executions WHERE 1=1"
+    params: list[Any] = []
+    if date_from:
+        sql += " AND biz_date >= ?"
+        params.append(date_from)
+    if date_to:
+        sql += " AND biz_date <= ?"
+        params.append(date_to)
+    if account_id:
+        sql += " AND account_id = ?"
+        params.append(account_id)
+    sql += " ORDER BY biz_date DESC, exec_time DESC, id DESC"
+    cur = conn.execute(sql, params)
+    return _broker_rows_to_list(cur, cur.fetchall())
+
+
+def count_broker_executions(conn: sqlite3.Connection) -> int:
+    row = conn.execute("SELECT COUNT(*) FROM broker_executions").fetchone()
+    return int(row[0] if row else 0)

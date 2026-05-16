@@ -102,20 +102,20 @@ def test_three_tables_created(conn):
         assert expected in tables, f"missing table: {expected}"
 
 
-def test_schema_version_is_22(conn):
-    """CURRENT_SCHEMA_VERSION 升到 22 且 migrate() 已落库。"""
-    assert CURRENT_SCHEMA_VERSION == 22
-    assert get_schema_version(conn) == 22
+def test_schema_version_is_23(conn):
+    """CURRENT_SCHEMA_VERSION 升到 23 且 migrate() 已落库。"""
+    assert CURRENT_SCHEMA_VERSION == 23
+    assert get_schema_version(conn) == 23
 
 
 def test_migration_idempotent(tmp_path):
-    """连续调用 migrate() 两次不报错，版本保持 21。"""
+    """连续调用 migrate() 两次不报错，版本保持 23。"""
     db_path = tmp_path / "idempotent.db"
     c = get_connection(db_path)
     migrate(c)
     migrate(c)
     migrate(c)
-    assert get_schema_version(c) == 22
+    assert get_schema_version(c) == 23
     c.close()
 
 

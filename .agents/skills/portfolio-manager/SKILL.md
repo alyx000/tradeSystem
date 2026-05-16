@@ -43,12 +43,45 @@ python3 main.py db add-trade ...
 python3 main.py db blacklist-add ...
 ```
 
+券商成交流水（**事实层**，独立顶层组 `executions`）：
+
+```bash
+python3 main.py executions import --file <path> --input-by broker_export [--account default] [--dry-run]
+python3 main.py executions list [--from YYYY-MM-DD --to YYYY-MM-DD --account ... --limit 50 --json]
+python3 main.py executions audit-export --from YYYY-MM-DD --to YYYY-MM-DD [--account ... --out tmp/audit-reports/<name>.md]
+```
+
 ## 核心流程
 
-1. 先识别动作类型：持仓、关注池、交易记录、黑名单。
+1. 先识别动作类型：持仓、关注池、交易记录、黑名单、**券商流水导入**。
 2. 提取结构化字段：代码、名称、股数、价格、层级、方向等。
 3. 对所有写操作先展示结构化确认摘要，用户确认后再执行。
 4. 执行后立刻回查列表或目标记录，确认结果落库。
+
+## 券商成交流水导入（事实层）
+
+`db add-trade` 是单条**复盘维度**写入（写 `trades` 表 / 含 sector / role / lesson 等主观字段）；
+`executions import` 是批量**事实层**写入（写 `broker_executions` 表 / 含完整费用 / 合同号 / 原始 payload）。两条链路独立、不相互派生。
+
+### 何时用
+- 用户说「把这次的成交记录导进来」「我从券商导出了一份 xls」「定期把交易记录同步」→ 用 `executions import`
+- 用户说「记一笔我刚买/卖的」「这笔的复盘体会」→ 用 `db add-trade`
+
+### 导入流程
+1. 收到文件路径（券商导出 .xls / .tsv / .xlsx，目前仅 GBK TSV 已实装；其它格式 stub）。
+2. 默认先跑 `--dry-run` 预演，让用户看到 `inserted / skipped / conflicts / degraded / errors` 真实数字（基于 DB 现状）。
+3. 用户确认后去掉 `--dry-run` 真写库；事务 COMMIT 后自动拷贝源文件到 `tmp/imports/<ts>_<basename>` 并把路径回写 `source_archive_path`。
+4. 控制台前 10 条 skipped 摘要 + 全量 markdown 写 `tmp/import-reports/<ts>.md`，重复导入自动幂等（同行命中 UNIQUE 跳过；非键字段差异 → `conflicts` 单列、老值不覆盖）。
+5. 同账户多文件导入用 `--account <name>` 区分（多账户字段已预留，未传则 `'default'`）。
+
+### 审计
+- 按需审计（如周/月/季回顾、报税前对账、出问题时追溯）：`executions audit-export --from --to [--account] [--out]` 生成跨批次 markdown（总览 / 各股明细 / 导入批次列表）。无强制周期，由用户决定何时跑。
+- 单次回溯：`executions list --from --to [--account --json]`。
+
+### 禁止
+- 不要把 `executions import` 输出的"事实"再手工 `db add-trade` 到 `trades` 表（重复维度，且复盘字段为空）。
+- 真写库前必须 `--dry-run` 一次让用户确认 conflicts/degraded 数字。
+- 不要去 `tmp/imports/` 手工删归档副本，那是审计追溯的依据。
 
 ## 买入原因与备注（两类文本）
 

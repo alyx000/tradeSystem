@@ -48,6 +48,7 @@
 - `python3 main.py ingest ...`
 - `python3 main.py plan ...`
 - `python3 main.py knowledge ...`
+- `python3 main.py executions ...`（券商成交流水事实层：`import` / `list` / `audit-export`）
 
 ## 规则与模板入口
 

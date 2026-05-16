@@ -38,7 +38,10 @@
 | `portfolio-manager` | `db watchlist-remove` | 从关注池移除 |
 | `portfolio-manager` | `db watchlist-update` | 更新关注池标的 |
 | `portfolio-manager` | `db watchlist-list` | 列出关注池 |
-| `portfolio-manager` | `db add-trade` | 录入交易记录 |
+| `portfolio-manager` | `db add-trade` | 录入交易记录（单条，复盘维度） |
+| `portfolio-manager` | `python main.py executions import --file --input-by [--account] [--dry-run]` | 导入券商成交流水（事实层，幂等去重，含冲突检测与归档） |
+| `portfolio-manager` | `python main.py executions list [--from --to --account --limit --json]` | 列出 `broker_executions` 事实层数据 |
+| `portfolio-manager` | `python main.py executions audit-export --from --to [--account --out]` | 按时间范围导出 markdown 审计报告（总览/各股/余额轨迹/批次） |
 | `portfolio-manager` | `db blacklist-add` | 加入黑名单 |
 | `daily-review` | `db query-notes` | 搜索老师笔记（用于复盘预填充） |
 | `sector-projection-analysis` | `db query-notes` | 搜索老师笔记，补充板块逻辑与老师视角 |

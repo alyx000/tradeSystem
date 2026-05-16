@@ -1368,6 +1368,9 @@ def build_parser() -> argparse.ArgumentParser:
     ingest_reconcile.add_argument("--stale-minutes", type=int, default=5, help="超过多少分钟仍为 running 视为陈旧")
     ingest_reconcile.add_argument("--json", action="store_true", help="输出 JSON")
 
+    from cli import executions as executions_module
+    executions_module.register_subparser(subparsers)
+
     # plan
     plan_parser = subparsers.add_parser("plan", help="交易计划命令（架构骨架）")
     plan_subparsers = plan_parser.add_subparsers(dest="plan_command")
@@ -1704,6 +1707,9 @@ def main():
         cmd_schedule(config)
     elif args.command == "ingest":
         cmd_ingest(config, args)
+    elif args.command == "executions":
+        from cli import executions as executions_module
+        executions_module.handle_executions_command(config, args)
     elif args.command == "plan":
         cmd_plan(config, args)
     elif args.command == "knowledge":

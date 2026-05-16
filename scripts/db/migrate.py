@@ -19,7 +19,7 @@ PROJECT_ROOT = SCRIPTS_DIR.parent
 
 # 与 migrate() 中「当前最新」一步一致；新增迁移时递增本常量，并把上一步的
 # set_schema_version(conn, CURRENT_SCHEMA_VERSION) 改为字面量 N（保留历史链）。
-CURRENT_SCHEMA_VERSION = 22
+CURRENT_SCHEMA_VERSION = 23
 
 
 def get_schema_version(conn: sqlite3.Connection) -> int:
@@ -28,6 +28,19 @@ def get_schema_version(conn: sqlite3.Connection) -> int:
 
 def set_schema_version(conn: sqlite3.Connection, version: int) -> None:
     conn.execute(f"PRAGMA user_version = {version}")
+
+
+def _ensure_broker_executions_columns(conn: sqlite3.Connection) -> None:
+    """v23 兜底：旧版 v23（首发版本）实施时表只有 33 列，缺 broker_code/notes。
+    在已有表上补列。新建表的库则跳过（列已经在 init_schema 里完整建出）。
+    """
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(broker_executions)").fetchall()}
+    if not cols:
+        return  # 表不存在（不应该出现，因为 init_schema 已建）
+    if "broker_code" not in cols:
+        conn.execute("ALTER TABLE broker_executions ADD COLUMN broker_code TEXT")
+    if "notes" not in cols:
+        conn.execute("ALTER TABLE broker_executions ADD COLUMN notes TEXT")
 
 
 def _close_duplicate_active_holdings(conn: sqlite3.Connection) -> int:
@@ -387,7 +400,19 @@ def migrate(conn: sqlite3.Connection) -> None:
         macro_cols = {row[1] for row in conn.execute("PRAGMA table_info(macro_info)").fetchall()}
         if "input_by" not in macro_cols:
             conn.execute("ALTER TABLE macro_info ADD COLUMN input_by TEXT")
+        # TODO(deferred · plan ref: ~/.claude/plans/enchanted-roaming-simon.md "仓库原有 TODO"):
+        # 此处应为 set_schema_version(conn, 22) 字面量（与 v21/v23 风格一致，保留历史链）。
+        # 当前用 CURRENT_SCHEMA_VERSION 在 v23 下不阻断（Python 局部 `version` 未被覆写，
+        # v23 块的 `if version < 23` 仍触发），但下次 bump 到 v24 前必须先修，
+        # 否则 v22 块会把 user_version 跟着写成 24，破坏 v22/v23 边界。
         set_schema_version(conn, CURRENT_SCHEMA_VERSION)
+        conn.commit()
+
+    if version < 23:
+        logger.info("Applying schema v23: broker_executions + dedupe index")
+        init_schema(conn)
+        _ensure_broker_executions_columns(conn)
+        set_schema_version(conn, 23)
         conn.commit()
 
 

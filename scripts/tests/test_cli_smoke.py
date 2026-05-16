@@ -176,6 +176,17 @@ ARCHITECTURE_COMMANDS = [
     ["knowledge", "list"],
     ["knowledge", "draft-from-asset", "--asset-id", "asset_1", "--date", "2026-04-10", "--input-by", "pytest"],
     ["knowledge", "draft-from-teacher-note", "--note-id", "1", "--date", "2026-04-10"],
+    # executions
+    ["executions", "import", "--file", "trade0515.xls", "--input-by", "broker_export"],
+    ["executions", "import", "--file", "trade0515.xls", "--input-by", "broker_export", "--dry-run"],
+    ["executions", "import", "--file", "trade0515.xls", "--input-by", "broker_export",
+     "--account", "huatai_a", "--json"],
+    ["executions", "list"],
+    ["executions", "list", "--from", "2026-04-01", "--to", "2026-05-31",
+     "--account", "default", "--json"],
+    ["executions", "audit-export", "--from", "2026-04-01", "--to", "2026-05-31"],
+    ["executions", "audit-export", "--from", "2026-04-01", "--to", "2026-05-31",
+     "--account", "default", "--out", "tmp/audit-reports/test.md"],
 ]
 
 
