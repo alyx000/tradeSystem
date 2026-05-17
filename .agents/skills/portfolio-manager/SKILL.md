@@ -83,6 +83,47 @@ python3 main.py executions audit-export --from YYYY-MM-DD --to YYYY-MM-DD [--acc
 - 真写库前必须 `--dry-run` 一次让用户确认 conflicts/degraded 数字。
 - 不要去 `tmp/imports/` 手工删归档副本，那是审计追溯的依据。
 
+## 交易思路（thesis 中间层 / schema v24）
+
+`trade_thesis` 是事实层（`broker_executions`）与复盘（`thesis_review` / `trades`）之间的中间层，按**建仓周期（round-trip）**划分：同一票 `holdings` 从 0 涨到正再回到 0 = 一个 thesis。
+
+### 创建（严格模式 / 用户必经入口）
+
+```bash
+python3 main.py db thesis-open \
+  --code 600519 --name 贵州茅台 --account A001 --opened-at 2026-05-14 \
+  --entry-reason "板块共振+反包" --trade-mode break \
+  --failure-condition "尾盘破板" --planned-position-pct 0.15 \
+  --sector 白酒 --market-region a-share --input-by alyx \
+  # 可选: --target-price 1700 --stop-loss 1500 --mode-note "二连反包" --plan-id plan_1
+```
+
+**11 必填**（缺一即 argparse reject）：`--code --name --account --opened-at --entry-reason --trade-mode --failure-condition --planned-position-pct --sector --market-region --input-by`。`--trade-mode` 枚举：`break/dip/trend/scalp/swing/arbitrage/gap_jump/other`；`--market-region`：`a-share/hk/us`。
+
+### 与 `executions import` 的联动（严格模式）
+
+- `executions import` 默认 `enforce_strict_thesis=True`：每笔 buy 必须能匹配同账户同票当前 open thesis，否则**整批 reject** 并在错误中给出可执行 `db thesis-open` 命令模板。
+- 降级：`executions import ... --allow-orphan-buy` → 允许 `thesis_id=NULL` 写入（仅用于历史回补，事后用 `db thesis-list --filter historical-orphan` 巡检）。
+- 同批 `sell` 让某 thesis 累计 holdings 归零 → 自动 `status=closed` + notes 追加 `[auto-close YYYY-MM-DD] holdings 归零自动关闭`。`--no-auto-close` 反转。
+
+### 状态变更与复盘
+
+| 命令 | 何时用 |
+|------|--------|
+| `db thesis-close --id N --closed-at DATE --input-by U` | 手动关闭（auto-close 已覆盖大多数场景，手动主要用于异常）|
+| `db thesis-fill --id N --notes "..."` | closed 后补备注（主字段冻结；要改主字段先 `thesis-reopen`）|
+| `db thesis-reopen --id N --reason "..." --reopened-at DATE --input-by U` | 重开 closed thesis；`reopen_count++` + notes 追加 `[reopen DATE] reason`；`>3` 在 list 自动标黄（plan R6） |
+| `db thesis-review --id N --executed-as-planned {0,1,2} --input-by U [--lessons --discipline-score --exit-trigger]` | upsert thesis_review（允许多次增量更新，未传字段保留原值） |
+| `db thesis-list [--status open/closed --account --code --filter placeholder --without-review --reopened --json]` | 列表查询；`--without-review` 看 closed 但无复盘的，`--reopened` 看异常重开的 |
+| `db thesis-suggest [--account]` | 三类待补:待 open（broker_executions.thesis_id IS NULL）/ 待 close（open thesis 当前 holdings=0）/ 待 review（closed 无 thesis_review） |
+
+### Agent 调用边界
+
+- **新流程不强制写 `trades` 表**：thesis_review 是周期总账，trades 是单笔卖出细颗粒；当前双轨运行 1-2 月后评估弃用 trades（plan Q4）。
+- **跨账户独立**：同票在不同 `account_id`（如 `my-htf` + `my-ipo`）下可同时有独立 open thesis；半自动检测的判定范围是 `(account_id, stock_code)`。
+- **`market_region` 不是隔离维度**：仅 thesis 自身属性，不影响 unique 判定（同账户跨市场场景本期不支持）。
+- **关闭后主字段冻结**：`fill` closed thesis 会拒绝改 `entry_reason/failure_condition/target_price/stop_loss/trade_mode/mode_note/planned_position_pct/sector/market_region` 并提示 `Use db thesis-reopen to modify`。
+
 ## 买入原因与备注（两类文本）
 
 `holdings` 表区分两个文本字段：

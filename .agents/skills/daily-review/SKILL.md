@@ -66,6 +66,7 @@ make db-search KEYWORD=情绪 FROM=YYYY-MM-DD TO=YYYY-MM-DD
 - `step5_leaders.top_leaders / transition / notes`
 - `step6_nodes.market_node / sector_node / style_node / overall`
 - `step7_positions.positions[].action_plan`
+  - 涉及"建仓周期"复盘时,可调 `db thesis-review --id N --executed-as-planned {0,1,2} --input-by U [--lessons --discipline-score --exit-trigger]` 写到 `thesis_review` 表(plan precious-crunching-ocean v24)
 - `step8_plan.key_factor / watch_directions / risks / discipline / summary`
 
 `PUT /api/review/{date}` 会兼容摘要式 `facts / judgement / plan / holdings` 写入并轻量映射到页面可见字段，但这只是兜底；正式复盘稿仍应按上面的表单字段组织，避免“API 保存成功但页面看不到重点内容”。

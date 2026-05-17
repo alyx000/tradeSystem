@@ -44,11 +44,11 @@
 
 当前及后续标准命令组：
 
-- `python3 main.py db ...`
+- `python3 main.py db ...`（含 `db thesis-{open,close,fill,list,suggest,review,reopen}` 交易思路中间层 v24，半自动联动 broker_executions 与复盘）
 - `python3 main.py ingest ...`
 - `python3 main.py plan ...`
 - `python3 main.py knowledge ...`
-- `python3 main.py executions ...`（券商成交流水事实层：`import` / `list` / `audit-export`）
+- `python3 main.py executions ...`（券商成交流水事实层：`import` / `list` / `audit-export`；`import` 默认严格 thesis 模式 + auto-close 联动）
 
 ## 规则与模板入口
 

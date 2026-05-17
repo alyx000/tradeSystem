@@ -39,9 +39,16 @@
 | `portfolio-manager` | `db watchlist-update` | 更新关注池标的 |
 | `portfolio-manager` | `db watchlist-list` | 列出关注池 |
 | `portfolio-manager` | `db add-trade` | 录入交易记录（单条，复盘维度） |
-| `portfolio-manager` | `python main.py executions import --file --input-by [--account] [--dry-run]` | 导入券商成交流水（事实层，幂等去重，含冲突检测与归档） |
+| `portfolio-manager` | `python main.py executions import --file --input-by [--account] [--dry-run] [--allow-orphan-buy] [--no-auto-close]` | 导入券商成交流水（事实层，幂等去重，含冲突检测与归档；默认严格模式 + auto-close 联动 trade_thesis 中间层） |
 | `portfolio-manager` | `python main.py executions list [--from --to --account --limit --json]` | 列出 `broker_executions` 事实层数据 |
 | `portfolio-manager` | `python main.py executions audit-export --from --to [--account --out]` | 按时间范围导出 markdown 审计报告（总览/各股/余额轨迹/批次） |
+| `portfolio-manager` | `db thesis-open` | 新建 thesis（严格模式 11 必填:6 主观字段 + 5 元数据 ≡ stock_code/name/account/opened-at/entry-reason/trade-mode/failure-condition/planned-position-pct/sector/market-region/input-by） |
+| `portfolio-manager` | `db thesis-close --id --closed-at --input-by` | 手动关闭一个 open thesis |
+| `portfolio-manager` | `db thesis-fill --id [字段...]` | 补/改字段；closed 时主字段冻结,仅允许 notes/plan_id（要改主字段先 thesis-reopen）|
+| `portfolio-manager` | `db thesis-list [--status --account --code --from --to --filter --without-review --reopened --json]` | 列表查询；--filter=placeholder/historical-orphan、--without-review、--reopened（>3 标黄）|
+| `portfolio-manager` | `db thesis-suggest [--account]` | 三类待补输出:待 open / 待 close / 待 review |
+| `portfolio-manager` | `db thesis-review --id --executed-as-planned --input-by [--exit-trigger --lessons --discipline-score]` | upsert thesis_review（增量更新,未传字段保留原值）|
+| `portfolio-manager` | `db thesis-reopen --id --reason --reopened-at --input-by` | 重开 closed thesis（reopen_count++ + notes 追加 [reopen DATE] reason）|
 | `portfolio-manager` | `db blacklist-add` | 加入黑名单 |
 | `daily-review` | `db query-notes` | 搜索老师笔记（用于复盘预填充） |
 | `sector-projection-analysis` | `db query-notes` | 搜索老师笔记，补充板块逻辑与老师视角 |
