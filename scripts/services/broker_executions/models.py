@@ -91,6 +91,9 @@ class ImportReport:
     dry_run: bool = False
     archive_path: str | None = None
     report_path: str | None = None
+    # plan I 系列:thesis 中间层触发提示(dry-run / 实写都填,仅作参考)
+    thesis_triggers: list[dict] = field(default_factory=list)
+    auto_closed_thesis_ids: list[int] = field(default_factory=list)
 
     def to_markdown(self) -> str:
         lines = [

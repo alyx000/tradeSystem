@@ -133,6 +133,52 @@ DAILY_REVIEW_COMMANDS = [
      "--from", "2026-04-01", "--to", "2026-04-30"],
 ]
 
+# ── skill: portfolio-manager (thesis 中间层 v24 / plan precious-crunching-ocean) ──
+
+THESIS_COMMANDS = [
+    # thesis-open: 严格模式 11 必填(6 主观字段 + 5 元数据)
+    ["db", "thesis-open",
+     "--code", "600519", "--name", "贵州茅台", "--account", "A001",
+     "--opened-at", "2026-05-14",
+     "--entry-reason", "主线龙头反包", "--trade-mode", "break",
+     "--failure-condition", "尾盘破板", "--planned-position-pct", "0.15",
+     "--sector", "白酒", "--market-region", "a-share",
+     "--input-by", "alyx"],
+    # thesis-open + 可选字段
+    ["db", "thesis-open",
+     "--code", "300750", "--name", "宁德时代", "--account", "A001",
+     "--opened-at", "2026-05-14",
+     "--entry-reason", "主线龙头", "--trade-mode", "trend",
+     "--failure-condition", "跌破 20MA", "--planned-position-pct", "0.10",
+     "--sector", "锂电", "--market-region", "a-share", "--input-by", "alyx",
+     "--target-price", "320.0", "--stop-loss", "260.0",
+     "--mode-note", "趋势加仓", "--notes", "首次开仓", "--plan-id", "plan_1"],
+    # thesis-close
+    ["db", "thesis-close", "--id", "1", "--closed-at", "2026-05-20", "--input-by", "alyx"],
+    # thesis-fill: 修改 notes
+    ["db", "thesis-fill", "--id", "1", "--notes", "补充复盘备注"],
+    # thesis-fill: 修改主字段
+    ["db", "thesis-fill", "--id", "1", "--entry-reason", "修订", "--trade-mode", "dip"],
+    # thesis-list: 全部
+    ["db", "thesis-list"],
+    # thesis-list: 过滤 status + account
+    ["db", "thesis-list", "--status", "open", "--account", "A001"],
+    # thesis-list: 过滤 filter / without-review / reopened + json
+    ["db", "thesis-list", "--filter", "placeholder", "--json"],
+    ["db", "thesis-list", "--without-review"],
+    ["db", "thesis-list", "--reopened"],
+    # thesis-suggest: 三类输出
+    ["db", "thesis-suggest"],
+    # thesis-review: upsert
+    ["db", "thesis-review", "--id", "1", "--executed-as-planned", "1",
+     "--exit-trigger", "target_hit", "--lessons", "纪律到位",
+     "--discipline-score", "5", "--input-by", "alyx"],
+    # thesis-reopen: 必填 reason + input-by
+    ["db", "thesis-reopen", "--id", "1", "--reason", "发现新逻辑",
+     "--reopened-at", "2026-05-25", "--input-by", "alyx"],
+]
+
+
 # ── skill: (管理命令，所有 skill 可能用到) ─────────────────────────
 
 MANAGEMENT_COMMANDS = [
@@ -148,6 +194,7 @@ ALL_SKILL_COMMANDS = (
     RECORD_NOTES_COMMANDS
     + PORTFOLIO_COMMANDS
     + DAILY_REVIEW_COMMANDS
+    + THESIS_COMMANDS
     + MANAGEMENT_COMMANDS
 )
 
@@ -181,6 +228,11 @@ ARCHITECTURE_COMMANDS = [
     ["executions", "import", "--file", "trade0515.xls", "--input-by", "broker_export", "--dry-run"],
     ["executions", "import", "--file", "trade0515.xls", "--input-by", "broker_export",
      "--account", "huatai_a", "--json"],
+    # plan I 系列:trade_thesis 中间层 flag
+    ["executions", "import", "--file", "trade0515.xls", "--input-by", "broker_export",
+     "--allow-orphan-buy"],
+    ["executions", "import", "--file", "trade0515.xls", "--input-by", "broker_export",
+     "--no-auto-close"],
     ["executions", "list"],
     ["executions", "list", "--from", "2026-04-01", "--to", "2026-05-31",
      "--account", "default", "--json"],
@@ -224,6 +276,9 @@ def test_all_skill_subcommands_registered() -> None:
         "add-trade", "blacklist-add",
         # daily-review
         "query-notes", "db-search",
+        # thesis (v24 中间层)
+        "thesis-open", "thesis-close", "thesis-fill",
+        "thesis-list", "thesis-suggest", "thesis-review", "thesis-reopen",
         # management
         "add-calendar", "init", "sync", "reconcile",
     }

@@ -273,6 +273,116 @@ def register_db_subparser(subparsers: argparse._SubParsersAction) -> None:
     db_search.add_argument("--from", dest="date_from", default=None, help="起始日期")
     db_search.add_argument("--to", dest="date_to", default=None, help="结束日期")
 
+    # ── trade_thesis 中间层（v24 / plan precious-crunching-ocean）─────
+    thesis_open = db_sub.add_parser(
+        "thesis-open",
+        help="新建 thesis（严格模式 11 必填:6 主观字段 + 5 元数据）",
+    )
+    thesis_open.add_argument("--code", required=True, help="股票代码")
+    thesis_open.add_argument("--name", required=True, help="股票名称")
+    thesis_open.add_argument("--account", required=True, help="账户 id")
+    thesis_open.add_argument("--opened-at", required=True, help="首笔 buy 日期 YYYY-MM-DD")
+    thesis_open.add_argument("--entry-reason", required=True, help="开仓主线逻辑（必填）")
+    thesis_open.add_argument(
+        "--trade-mode", required=True,
+        choices=["break", "dip", "trend", "scalp", "swing", "arbitrage", "gap_jump", "other"],
+        help="交易模式",
+    )
+    thesis_open.add_argument("--failure-condition", required=True, help="失效条件文字（必填）")
+    thesis_open.add_argument(
+        "--planned-position-pct", type=float, required=True,
+        help="计划仓位占比 0-1（必填）",
+    )
+    thesis_open.add_argument("--sector", required=True, help="板块归属（必填）")
+    thesis_open.add_argument(
+        "--market-region", required=True,
+        choices=["a-share", "hk", "us"], help="市场（必填）",
+    )
+    thesis_open.add_argument("--input-by", required=True, help="录入方")
+    # 可选
+    thesis_open.add_argument("--target-price", type=float, default=None, help="止盈阈值")
+    thesis_open.add_argument("--stop-loss", type=float, default=None, help="止损阈值")
+    thesis_open.add_argument("--mode-note", default=None, help="模式变种说明")
+    thesis_open.add_argument("--notes", default=None, help="自由备注")
+    thesis_open.add_argument("--plan-id", default=None, help="可选关联 trade_plans.plan_id")
+
+    thesis_close = db_sub.add_parser("thesis-close", help="手动关闭一个 open thesis")
+    thesis_close.add_argument("--id", type=int, required=True, help="thesis id")
+    thesis_close.add_argument("--closed-at", required=True, help="关闭日期 YYYY-MM-DD")
+    thesis_close.add_argument("--input-by", required=True, help="录入方")
+
+    thesis_fill = db_sub.add_parser(
+        "thesis-fill",
+        help="补/改 thesis 字段(closed 时主字段冻结,只允许 notes/plan_id)",
+    )
+    thesis_fill.add_argument("--id", type=int, required=True, help="thesis id")
+    thesis_fill.add_argument("--entry-reason", default=None)
+    thesis_fill.add_argument("--failure-condition", default=None)
+    thesis_fill.add_argument("--target-price", type=float, default=None)
+    thesis_fill.add_argument("--stop-loss", type=float, default=None)
+    thesis_fill.add_argument(
+        "--trade-mode", default=None,
+        choices=["break", "dip", "trend", "scalp", "swing", "arbitrage", "gap_jump", "other"],
+    )
+    thesis_fill.add_argument("--mode-note", default=None)
+    thesis_fill.add_argument("--planned-position-pct", type=float, default=None)
+    thesis_fill.add_argument("--sector", default=None)
+    thesis_fill.add_argument(
+        "--market-region", default=None, choices=["a-share", "hk", "us"],
+    )
+    thesis_fill.add_argument("--notes", default=None)
+    thesis_fill.add_argument("--plan-id", default=None)
+
+    thesis_list = db_sub.add_parser("thesis-list", help="列表查询 thesis")
+    thesis_list.add_argument("--status", default=None, choices=["open", "closed"])
+    thesis_list.add_argument("--account", default=None, help="按 account_id 过滤")
+    thesis_list.add_argument("--code", default=None, help="按 stock_code 过滤")
+    thesis_list.add_argument("--from", dest="date_from", default=None)
+    thesis_list.add_argument("--to", dest="date_to", default=None)
+    thesis_list.add_argument(
+        "--filter", dest="filter_name", default=None,
+        choices=["placeholder", "historical-orphan"],
+        help="特殊过滤:placeholder=entry_reason IS NULL(占位)| historical-orphan=历史孤儿",
+    )
+    thesis_list.add_argument(
+        "--without-review", action="store_true",
+        help="只看 closed 但无 thesis_review 的(plan F)",
+    )
+    thesis_list.add_argument(
+        "--reopened", action="store_true",
+        help="只看 reopen_count>0;>3 标黄警告(plan R6)",
+    )
+    thesis_list.add_argument("--json", action="store_true")
+
+    thesis_suggest = db_sub.add_parser(
+        "thesis-suggest", help="列出待 open / 待 close / 待 review 的三类建议",
+    )
+    thesis_suggest.add_argument("--account", default=None)
+
+    thesis_review = db_sub.add_parser(
+        "thesis-review", help="写或更新 thesis_review(upsert)",
+    )
+    thesis_review.add_argument("--id", type=int, required=True)
+    thesis_review.add_argument(
+        "--executed-as-planned", type=int, default=None,
+        choices=[0, 1, 2], help="0=否 1=部分 2=是;首次必填",
+    )
+    thesis_review.add_argument(
+        "--exit-trigger", default=None,
+        choices=["target_hit", "stop_hit", "failure_triggered", "discretionary", "forced"],
+    )
+    thesis_review.add_argument("--lessons", default=None)
+    thesis_review.add_argument("--discipline-score", type=int, default=None)
+    thesis_review.add_argument("--input-by", required=True)
+
+    thesis_reopen = db_sub.add_parser(
+        "thesis-reopen", help="重开 closed thesis(reopen_count++,notes 留痕)",
+    )
+    thesis_reopen.add_argument("--id", type=int, required=True)
+    thesis_reopen.add_argument("--reason", required=True, help="重开理由(写入 notes)")
+    thesis_reopen.add_argument("--reopened-at", required=True, help="重开日期 YYYY-MM-DD")
+    thesis_reopen.add_argument("--input-by", required=True)
+
 
 def handle_db_command(args: argparse.Namespace) -> None:
     """处理 db 子命令。"""
@@ -309,6 +419,13 @@ def handle_db_command(args: argparse.Namespace) -> None:
         "add-calendar": _cmd_add_calendar,
         "blacklist-add": _cmd_blacklist_add,
         "db-search": _cmd_db_search,
+        "thesis-open": _cmd_thesis_open,
+        "thesis-close": _cmd_thesis_close,
+        "thesis-fill": _cmd_thesis_fill,
+        "thesis-list": _cmd_thesis_list,
+        "thesis-suggest": _cmd_thesis_suggest,
+        "thesis-review": _cmd_thesis_review,
+        "thesis-reopen": _cmd_thesis_reopen,
     }
     fn = dispatch.get(action)
     if fn:
@@ -1053,3 +1170,214 @@ def _cmd_db_search(args: argparse.Namespace) -> None:
             print(f"  [{date}] {title}")
         if len(rows) > 5:
             print(f"  ... 还有 {len(rows) - 5} 条")
+
+
+# ── trade_thesis 中间层(v24 / plan precious-crunching-ocean)─────────
+
+def _cmd_thesis_open(args: argparse.Namespace) -> None:
+    from services.trade_thesis import Thesis, repository
+
+    thesis = Thesis(
+        stock_code=args.code,
+        stock_name=args.name,
+        account_id=args.account,
+        opened_at=args.opened_at,
+        entry_reason=args.entry_reason,
+        failure_condition=args.failure_condition,
+        trade_mode=args.trade_mode,
+        market_region=args.market_region,
+        sector=args.sector,
+        planned_position_pct=args.planned_position_pct,
+        input_by=args.input_by,
+        target_price=args.target_price,
+        stop_loss=args.stop_loss,
+        mode_note=args.mode_note,
+        notes=args.notes,
+        plan_id=args.plan_id,
+    )
+    with get_db() as conn:
+        migrate(conn)
+        new_id = repository.create(conn, thesis)
+    print(f"✅ thesis #{new_id} created: {args.code} ({args.name}) @ {args.account}")
+
+
+def _cmd_thesis_close(args: argparse.Namespace) -> None:
+    from services.trade_thesis import repository
+
+    with get_db() as conn:
+        migrate(conn)
+        try:
+            repository.close(
+                conn, thesis_id=args.id,
+                closed_at=args.closed_at, input_by=args.input_by,
+            )
+        except LookupError as e:
+            print(f"❌ {e}")
+            return
+    print(f"✅ thesis #{args.id} closed at {args.closed_at}")
+
+
+def _cmd_thesis_fill(args: argparse.Namespace) -> None:
+    from services.trade_thesis import repository
+
+    # 只把 user 显式传入的字段(非 None)合进 kwargs
+    fields = {}
+    for name in (
+        "entry_reason", "failure_condition", "target_price", "stop_loss",
+        "trade_mode", "mode_note", "planned_position_pct", "sector",
+        "market_region", "notes", "plan_id",
+    ):
+        v = getattr(args, name, None)
+        if v is not None:
+            fields[name] = v
+
+    if not fields:
+        print("⚠️ 未传入任何要修改的字段")
+        return
+
+    with get_db() as conn:
+        migrate(conn)
+        try:
+            repository.fill(conn, thesis_id=args.id, **fields)
+        except (LookupError, ValueError) as e:
+            print(f"❌ {e}")
+            return
+    print(f"✅ thesis #{args.id} 已更新字段: {sorted(fields.keys())}")
+
+
+def _cmd_thesis_list(args: argparse.Namespace) -> None:
+    import json as _json
+
+    sql = "SELECT * FROM trade_thesis WHERE 1=1"
+    params: list = []
+    if args.status:
+        sql += " AND status = ?"
+        params.append(args.status)
+    if args.account:
+        sql += " AND account_id = ?"
+        params.append(args.account)
+    if args.code:
+        sql += " AND stock_code = ?"
+        params.append(args.code)
+    if args.date_from:
+        sql += " AND opened_at >= ?"
+        params.append(args.date_from)
+    if args.date_to:
+        sql += " AND opened_at <= ?"
+        params.append(args.date_to)
+    if args.filter_name == "placeholder":
+        sql += " AND entry_reason IS NULL"
+    if args.without_review:
+        sql += (
+            " AND status = 'closed' AND id NOT IN (SELECT thesis_id FROM thesis_review)"
+        )
+    if args.reopened:
+        sql += " AND reopen_count > 0"
+    sql += " ORDER BY opened_at DESC, id DESC"
+
+    with get_db() as conn:
+        migrate(conn)
+        rows = [dict(r) for r in conn.execute(sql, params).fetchall()]
+
+    if args.json:
+        print(_json.dumps(rows, ensure_ascii=False, indent=2))
+        return
+
+    if not rows:
+        print("(无匹配的 thesis)")
+        return
+    for r in rows:
+        warn = " ⚠️ reopen_count>3" if r.get("reopen_count", 0) > 3 else ""
+        print(
+            f"#{r['id']} [{r['status']}] {r['stock_code']} ({r['stock_name']}) "
+            f"acct={r['account_id']} {r['opened_at']}→{r.get('closed_at') or '...'} "
+            f"mode={r['trade_mode']} reopen={r['reopen_count']}{warn}"
+        )
+
+
+def _cmd_thesis_suggest(args: argparse.Namespace) -> None:
+    """plan E: 三类输出 — 待 open / 待 close / 待 review."""
+    from services.trade_thesis import lifecycle
+
+    with get_db() as conn:
+        migrate(conn)
+        # 待 open:broker_executions.thesis_id IS NULL 的 buy
+        pending_open_rows = conn.execute(
+            """
+            SELECT account_id, stock_code, biz_date
+              FROM broker_executions
+             WHERE thesis_id IS NULL AND direction = 'buy'
+               AND (? IS NULL OR account_id = ?)
+             ORDER BY biz_date DESC
+            """,
+            (args.account, args.account),
+        ).fetchall()
+        # 待 close:holdings shares=0 但仍有 open thesis(plan E 第二类)
+        # 简化:列出所有 open thesis,实际归零判定走 import 时
+        pending_close_rows = conn.execute(
+            """
+            SELECT t.id AS thesis_id, t.account_id, t.stock_code,
+                   COALESCE(h.shares, 0) AS holdings_shares
+              FROM trade_thesis t
+              LEFT JOIN holdings h ON h.thesis_id = t.id AND h.status = 'active'
+             WHERE t.status = 'open'
+               AND (? IS NULL OR t.account_id = ?)
+               AND (h.shares IS NULL OR h.shares = 0)
+            """,
+            (args.account, args.account),
+        ).fetchall()
+        # 待 review:closed 但无 thesis_review
+        pending_review = lifecycle.suggest_review(conn)
+
+    print("== 待 open (broker_executions 中 thesis_id IS NULL 的 buy) ==")
+    if not pending_open_rows:
+        print("  (none)")
+    for r in pending_open_rows[:50]:
+        print(f"  {r['biz_date']} {r['stock_code']} @ {r['account_id']}")
+
+    print("\n== 待 close (open thesis 当前 holdings=0) ==")
+    if not pending_close_rows:
+        print("  (none)")
+    for r in pending_close_rows[:50]:
+        print(f"  thesis #{r['thesis_id']} {r['stock_code']} @ {r['account_id']}")
+
+    print("\n== 待 review (closed 但无 thesis_review) ==")
+    if not pending_review:
+        print("  (none)")
+    for r in pending_review[:50]:
+        print(f"  thesis #{r['thesis_id']} {r['stock_code']} closed_at={r['closed_at']}")
+
+
+def _cmd_thesis_review(args: argparse.Namespace) -> None:
+    from services.trade_thesis import repository
+
+    fields = {}
+    for name in ("executed_as_planned", "exit_trigger", "lessons", "discipline_score"):
+        v = getattr(args, name, None)
+        if v is not None:
+            fields[name] = v
+
+    with get_db() as conn:
+        migrate(conn)
+        try:
+            repository.review_upsert(conn, thesis_id=args.id, input_by=args.input_by, **fields)
+        except (LookupError, ValueError) as e:
+            print(f"❌ {e}")
+            return
+    print(f"✅ thesis_review for thesis #{args.id} updated")
+
+
+def _cmd_thesis_reopen(args: argparse.Namespace) -> None:
+    from services.trade_thesis import repository
+
+    with get_db() as conn:
+        migrate(conn)
+        try:
+            repository.reopen(
+                conn, thesis_id=args.id, reason=args.reason,
+                input_by=args.input_by, reopened_at=args.reopened_at,
+            )
+        except (LookupError, ValueError) as e:
+            print(f"❌ {e}")
+            return
+    print(f"✅ thesis #{args.id} reopened at {args.reopened_at}")

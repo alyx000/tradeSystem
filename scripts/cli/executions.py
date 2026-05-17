@@ -24,6 +24,15 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
     import_parser.add_argument("--account", default="default", help="账户标识")
     import_parser.add_argument("--dry-run", action="store_true", help="只解析和校验，不提交入库")
     import_parser.add_argument("--json", action="store_true", help="输出 JSON")
+    # plan I 系列(trade_thesis 中间层)
+    import_parser.add_argument(
+        "--allow-orphan-buy", action="store_true",
+        help="降级:允许无 open thesis 的 buy 写入(thesis_id=NULL);默认严格 reject",
+    )
+    import_parser.add_argument(
+        "--no-auto-close", dest="auto_close", action="store_false", default=True,
+        help="禁用同批 sell 归零时的 thesis auto-close",
+    )
 
     list_parser = executions_subparsers.add_parser("list", help="列出已入库券商成交记录")
     list_parser.add_argument("--from", dest="date_from", help="起始日期 YYYY-MM-DD")
@@ -82,6 +91,9 @@ def _cmd_import(config: dict, args: argparse.Namespace) -> None:
             account_id=args.account,
             dry_run=args.dry_run,
             pre_errors=failed_rows,
+            enforce_strict_thesis=True,
+            allow_orphan_buy=getattr(args, "allow_orphan_buy", False),
+            auto_close=getattr(args, "auto_close", True),
         )
     finally:
         conn.close()
@@ -101,6 +113,8 @@ def _cmd_import(config: dict, args: argparse.Namespace) -> None:
         "import_run_id": report.import_run_id,
         "archive_path": report.archive_path,
         "report_path": report.report_path,
+        "thesis_triggers": report.thesis_triggers,
+        "auto_closed_thesis_ids": report.auto_closed_thesis_ids,
     }
     _emit_import_result(payload, source_path, args.json)
 
@@ -128,6 +142,30 @@ def _emit_import_result(payload: dict[str, Any], source_path: Path, as_json: boo
     _print_error_details(payload.get("error_rows") or [])
     print(f"archive_path: {payload.get('archive_path') or ''}")
     print(f"report_path: {payload['report_path']}")
+    _print_thesis_triggers(payload.get("thesis_triggers") or [])
+    auto_closed = payload.get("auto_closed_thesis_ids") or []
+    if auto_closed:
+        print(f"[thesis] auto-closed thesis_ids: {auto_closed}")
+
+
+def _print_thesis_triggers(triggers: list) -> None:
+    """plan I1:dry-run / 实写时打印「思路触发段」+ 可执行 thesis-open 命令模板."""
+    if not triggers:
+        return
+    opens = [t for t in triggers if t.get("action") == "open"]
+    attaches = [t for t in triggers if t.get("action") == "attach"]
+    print("\n[thesis triggers]")
+    if opens:
+        print(f"  待开新 thesis ({len(opens)} 只):")
+        for t in opens:
+            print(f"    - {t['stock_code']} @ {t['account_id']} ({t['biz_date']})")
+            print(f"      {t['command_template']}")
+    if attaches:
+        print(f"  归入已有 open thesis ({len(attaches)} 笔加仓):")
+        for t in attaches:
+            print(
+                f"    - {t['stock_code']} @ {t['account_id']} → thesis #{t['thesis_id']}"
+            )
 
 
 def _cmd_list(config: dict, args: argparse.Namespace) -> None:

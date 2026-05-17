@@ -57,6 +57,9 @@ def import_executions(
     report_root: Path = Path("tmp/import-reports"),
     archive_root: Path = Path("tmp/imports"),
     pre_errors: list[ErrorRow] | None = None,
+    enforce_strict_thesis: bool = False,
+    allow_orphan_buy: bool = False,
+    auto_close: bool = True,
 ) -> ImportReport:
     import_run_id = uuid.uuid4().hex[:12]
     for row in normalized_rows:
@@ -78,9 +81,40 @@ def import_executions(
         dry_run=dry_run,
     )
 
+    # plan I 系列:thesis 中间层触发检测(纯查询,dry-run 与实写都跑;
+    # dry-run 也填 report.thesis_triggers 是设计意图 —— 让 CLI 在 dry-run 阶段
+    # 给用户看到可执行的 db thesis-open 命令模板,即"预演 + 触发提示")。
+    # 严格模式 + 不允许 orphan + 有 buy 无 open thesis → 整批 reject
+    rows_to_process = list(normalized_rows)
+    if _trade_thesis_available(conn):
+        from services.trade_thesis import lifecycle as _thesis_lifecycle  # noqa: WPS433
+        triggers = _thesis_lifecycle.detect_thesis_triggers(conn, rows_to_process)
+        report.thesis_triggers = triggers
+        if enforce_strict_thesis and not allow_orphan_buy:
+            opens_needed = [t for t in triggers if t["action"] == "open"]
+            if opens_needed:
+                for t in opens_needed:
+                    report.errors.append(ErrorRow(
+                        row_index=t["row_index"],
+                        reason=(
+                            f"严格模式:股票 {t['stock_code']} 在账户 {t['account_id']} "
+                            f"没有 open thesis,请先执行: {t['command_template']}"
+                        ),
+                        raw={"stock_code": t["stock_code"]},
+                    ))
+                rows_to_process = []
+
+    # 把 thesis_id 关联收进主事务,避免"INSERT 成功 + link 崩溃"导致 thesis_id 永久 NULL
+    # —— 重跑同批 INSERT 会被 dedupe 跳过,孤儿行无法自动修复(codex review 严重 1)。
+    # auto_close 仍放事务外:它只读 broker_executions 状态,只写 trade_thesis 单表,
+    # 失败时 broker_executions 已落库且 thesis_id 已正确,下次 import 重跑 auto_close 自然幂等。
+    thesis_lifecycle_module = None
+    if _trade_thesis_available(conn):
+        from services.trade_thesis import lifecycle as thesis_lifecycle_module  # noqa: WPS433
+
     try:
         conn.execute("BEGIN")
-        for row in normalized_rows:
+        for row in rows_to_process:
             summary = _row_summary(row)
             existing = queries.find_broker_execution_by_dedupe(
                 conn,
@@ -105,6 +139,14 @@ def import_executions(
             if row._dedupe_mode == "degraded":
                 report.degraded.append(summary)
 
+        # link 放在主 COMMIT 之前:保证 broker_executions INSERT 与 thesis_id 回填要么
+        # 同时成功要么同时回滚;dry-run 时 link 也跑(只 UPDATE 本 run 的内存行),最终 ROLLBACK
+        # 不会污染。
+        if thesis_lifecycle_module is not None and rows_to_process:
+            thesis_lifecycle_module.link_thesis_to_executions(
+                conn, import_run_id=import_run_id,
+            )
+
         if dry_run:
             conn.execute("ROLLBACK")
         else:
@@ -112,6 +154,16 @@ def import_executions(
     except Exception:
         conn.execute("ROLLBACK")
         raise
+
+    # auto_close 放在 broker_executions 主事务之外:它只读 broker_executions 状态、
+    # 只写 trade_thesis 单表,与主事务无强耦合;失败时下次 import 重跑会自然幂等
+    # (auto_close_zero_balance_thesis 检查 status=='open' 才动手)。
+    if not dry_run and thesis_lifecycle_module is not None and rows_to_process and auto_close:
+        report.auto_closed_thesis_ids = (
+            thesis_lifecycle_module.auto_close_zero_balance_thesis(
+                conn, import_run_id=import_run_id,
+            )
+        )
 
     if dry_run:
         report.archive_path = None
@@ -175,6 +227,14 @@ def _float_equal(left: Any, right: Any) -> bool:
         return abs(float(left) - float(right)) < 0.01
     except (TypeError, ValueError):
         return False
+
+
+def _trade_thesis_available(conn: sqlite3.Connection) -> bool:
+    """v24 之前的旧库没有 trade_thesis 表,要兜住向后兼容."""
+    row = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='trade_thesis'"
+    ).fetchone()
+    return row is not None
 
 
 def _archive_source_file(
