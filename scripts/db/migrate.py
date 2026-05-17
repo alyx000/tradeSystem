@@ -19,7 +19,7 @@ PROJECT_ROOT = SCRIPTS_DIR.parent
 
 # 与 migrate() 中「当前最新」一步一致；新增迁移时递增本常量，并把上一步的
 # set_schema_version(conn, CURRENT_SCHEMA_VERSION) 改为字面量 N（保留历史链）。
-CURRENT_SCHEMA_VERSION = 23
+CURRENT_SCHEMA_VERSION = 24
 
 
 def get_schema_version(conn: sqlite3.Connection) -> int:
@@ -41,6 +41,21 @@ def _ensure_broker_executions_columns(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE broker_executions ADD COLUMN broker_code TEXT")
     if "notes" not in cols:
         conn.execute("ALTER TABLE broker_executions ADD COLUMN notes TEXT")
+
+
+def _ensure_thesis_columns(conn: sqlite3.Connection) -> None:
+    """v24 兜底：旧 v23 库 broker_executions / holdings 没有 thesis_id 列。
+    init_schema 用 CREATE TABLE IF NOT EXISTS 不会动既有表（memory:
+    feedback_real_db_vs_in_memory），必须逐列 PRAGMA 探查 + ALTER ADD COLUMN。
+    TODO: 若 v25 升级仍频繁出意外，再加 db migrate --dry-run 预演（U5 决议）。
+    """
+    be_cols = {row[1] for row in conn.execute("PRAGMA table_info(broker_executions)").fetchall()}
+    if be_cols and "thesis_id" not in be_cols:
+        conn.execute("ALTER TABLE broker_executions ADD COLUMN thesis_id INTEGER")
+
+    hd_cols = {row[1] for row in conn.execute("PRAGMA table_info(holdings)").fetchall()}
+    if hd_cols and "thesis_id" not in hd_cols:
+        conn.execute("ALTER TABLE holdings ADD COLUMN thesis_id INTEGER")
 
 
 def _close_duplicate_active_holdings(conn: sqlite3.Connection) -> int:
@@ -400,12 +415,7 @@ def migrate(conn: sqlite3.Connection) -> None:
         macro_cols = {row[1] for row in conn.execute("PRAGMA table_info(macro_info)").fetchall()}
         if "input_by" not in macro_cols:
             conn.execute("ALTER TABLE macro_info ADD COLUMN input_by TEXT")
-        # TODO(deferred · plan ref: ~/.claude/plans/enchanted-roaming-simon.md "仓库原有 TODO"):
-        # 此处应为 set_schema_version(conn, 22) 字面量（与 v21/v23 风格一致，保留历史链）。
-        # 当前用 CURRENT_SCHEMA_VERSION 在 v23 下不阻断（Python 局部 `version` 未被覆写，
-        # v23 块的 `if version < 23` 仍触发），但下次 bump 到 v24 前必须先修，
-        # 否则 v22 块会把 user_version 跟着写成 24，破坏 v22/v23 边界。
-        set_schema_version(conn, CURRENT_SCHEMA_VERSION)
+        set_schema_version(conn, 22)
         conn.commit()
 
     if version < 23:
@@ -413,6 +423,15 @@ def migrate(conn: sqlite3.Connection) -> None:
         init_schema(conn)
         _ensure_broker_executions_columns(conn)
         set_schema_version(conn, 23)
+        conn.commit()
+
+    if version < 24:
+        logger.info("Applying schema v24: trade_thesis 中间层 + broker_executions/holdings.thesis_id ALTER 兜底")
+        # ALTER 必须在 init_schema 之前：init_schema 包含 idx_be_thesis 这个引用
+        # thesis_id 列的索引；老库 broker_executions 缺该列时索引创建会 OperationalError。
+        _ensure_thesis_columns(conn)
+        init_schema(conn)
+        set_schema_version(conn, 24)
         conn.commit()
 
 

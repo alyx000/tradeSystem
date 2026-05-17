@@ -135,7 +135,8 @@ CREATE TABLE IF NOT EXISTS holdings (
     status TEXT DEFAULT 'active',
     entry_reason TEXT,
     note TEXT,
-    updated_at TEXT
+    updated_at TEXT,
+    thesis_id INTEGER
 );
 """
 
@@ -475,6 +476,54 @@ CREATE TABLE IF NOT EXISTS trades (
 );
 """
 
+_SQL_TRADE_THESIS = """
+CREATE TABLE IF NOT EXISTS trade_thesis (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    stock_code TEXT NOT NULL,
+    stock_name TEXT NOT NULL,
+    account_id TEXT NOT NULL,
+    opened_at TEXT NOT NULL CHECK(opened_at GLOB '????-??-??'),
+    closed_at TEXT CHECK(closed_at IS NULL OR closed_at GLOB '????-??-??'),
+    status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open', 'closed')),
+    entry_reason TEXT NOT NULL,
+    failure_condition TEXT NOT NULL,
+    target_price REAL,
+    stop_loss REAL,
+    trade_mode TEXT NOT NULL CHECK(trade_mode IN (
+        'break', 'dip', 'trend', 'scalp', 'swing', 'arbitrage', 'gap_jump', 'other'
+    )),
+    mode_note TEXT,
+    market_region TEXT NOT NULL DEFAULT 'a-share' CHECK(market_region IN ('a-share', 'hk', 'us')),
+    sector TEXT NOT NULL,
+    planned_position_pct REAL NOT NULL,
+    plan_id TEXT,
+    notes TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    input_by TEXT NOT NULL,
+    reopen_count INTEGER NOT NULL DEFAULT 0,
+    last_reopened_at TEXT
+);
+"""
+
+_SQL_THESIS_REVIEW = """
+CREATE TABLE IF NOT EXISTS thesis_review (
+    thesis_id INTEGER PRIMARY KEY NOT NULL,
+    executed_as_planned INTEGER NOT NULL CHECK(executed_as_planned IN (0, 1, 2)),
+    exit_trigger TEXT CHECK(exit_trigger IS NULL OR exit_trigger IN (
+        'target_hit', 'stop_hit', 'failure_triggered', 'discretionary', 'forced'
+    )),
+    lessons TEXT,
+    discipline_score INTEGER CHECK(discipline_score IS NULL OR (discipline_score BETWEEN 1 AND 5)),
+    realized_pnl_pct REAL,
+    realized_pnl_amount REAL,
+    holding_days INTEGER,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    input_by TEXT NOT NULL,
+    FOREIGN KEY(thesis_id) REFERENCES trade_thesis(id)
+);
+"""
+
 _SQL_BROKER_EXECUTIONS = """
 CREATE TABLE IF NOT EXISTS broker_executions (
     id INTEGER PRIMARY KEY,
@@ -511,7 +560,8 @@ CREATE TABLE IF NOT EXISTS broker_executions (
     input_by TEXT NOT NULL,
     import_run_id TEXT,
     imported_at TEXT DEFAULT (datetime('now')),
-    notes TEXT
+    notes TEXT,
+    thesis_id INTEGER
 );
 """
 
@@ -818,6 +868,11 @@ _SQL_INDEXES = [
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_broker_executions_dedupe ON broker_executions(account_id, biz_date, stock_code, direction, shares, price, COALESCE(broker_contract_no, ''), COALESCE(broker_trade_no, ''));",
     "CREATE INDEX IF NOT EXISTS idx_broker_executions_date ON broker_executions(biz_date);",
     "CREATE INDEX IF NOT EXISTS idx_broker_executions_run_id ON broker_executions(import_run_id);",
+    "CREATE INDEX IF NOT EXISTS idx_be_thesis ON broker_executions(thesis_id);",
+    "CREATE INDEX IF NOT EXISTS idx_thesis_opened_at ON trade_thesis(opened_at DESC);",
+    # partial unique index: 同账户同票同时只允许 1 个 open thesis(plan Q5 / G 账户隔离不变式)
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_thesis_account_stock_status "
+    "ON trade_thesis(account_id, stock_code) WHERE status = 'open';",
 ]
 
 # ──────────────────────────────────────────────────────────────
@@ -1036,6 +1091,8 @@ _ALL_TABLE_SQL = [
     _SQL_EMOTION_CYCLE,
     _SQL_MAIN_THEMES,
     _SQL_TRADES,
+    _SQL_TRADE_THESIS,
+    _SQL_THESIS_REVIEW,
     _SQL_BROKER_EXECUTIONS,
     _SQL_RAW_INTERFACE_PAYLOADS,
     _SQL_MARKET_FACT_SNAPSHOTS,
@@ -1079,6 +1136,8 @@ EXPECTED_TABLES = [
     "daily_market", "daily_reviews",
     "emotion_cycle", "main_themes",
     "trades",
+    "trade_thesis",
+    "thesis_review",
     "broker_executions",
     "raw_interface_payloads", "market_fact_snapshots", "fact_entities",
     "ingest_runs", "ingest_errors",
