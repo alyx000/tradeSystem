@@ -84,7 +84,7 @@ python3 -m pytest scripts/tests/test_cli_smoke.py -v
 |---------|-----------------|
 | `cli.py` 的 `add-note/add-industry/add-macro` | `record-notes/SKILL.md` |
 | `cli.py` 的 `stock-resolve` | `record-notes/SKILL.md`、`portfolio-manager/SKILL.md` |
-| `cli.py` 的 `holdings-*/watchlist-*/add-trade/blacklist-*` | `portfolio-manager/SKILL.md` |
+| `cli.py` 的 `holdings-*`（含 `--thesis-id` 关联语义）/ `watchlist-*` / `add-trade` / `blacklist-*` | `portfolio-manager/SKILL.md` |
 | `cli.py` 的 `query-notes/db-search` | `daily-review/SKILL.md` |
 | `main.py` 的 `pre/post/schedule` | `market-tasks/SKILL.md` |
 | `main.py` 的 `ingest *` | `ingest-inspector/SKILL.md` |

@@ -146,6 +146,9 @@ def import_executions(
             thesis_lifecycle_module.link_thesis_to_executions(
                 conn, import_run_id=import_run_id,
             )
+            thesis_lifecycle_module.sync_holdings_from_executions(
+                conn, import_run_id=import_run_id,
+            )
 
         if dry_run:
             conn.execute("ROLLBACK")

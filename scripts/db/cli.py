@@ -168,6 +168,7 @@ def register_db_subparser(subparsers: argparse._SubParsersAction) -> None:
     holdings_add.add_argument("--market", default="A股", help="市场（默认 A股）")
     holdings_add.add_argument("--entry-reason", default=None, help="买入原因（开仓逻辑）")
     holdings_add.add_argument("--note", default=None, help="备注（持仓期间调仓记录等）")
+    holdings_add.add_argument("--thesis-id", type=int, default=None, help="关联 trade_thesis.id")
 
     holdings_remove = db_sub.add_parser("holdings-remove", help="移除持仓（置 closed）")
     holdings_remove.add_argument("--code", required=True, help="股票代码")
@@ -686,6 +687,8 @@ def _cmd_holdings_add(args: argparse.Namespace) -> None:
         kwargs["entry_reason"] = args.entry_reason
     if args.note:
         kwargs["note"] = args.note
+    if args.thesis_id is not None:
+        kwargs["thesis_id"] = args.thesis_id
 
     with get_db() as conn:
         migrate(conn)
@@ -1312,17 +1315,33 @@ def _cmd_thesis_suggest(args: argparse.Namespace) -> None:
             """,
             (args.account, args.account),
         ).fetchall()
-        # 待 close:holdings shares=0 但仍有 open thesis(plan E 第二类)
-        # 简化:列出所有 open thesis,实际归零判定走 import 时
+        # 待 close:有已关联成交且净股数归零,或 active holdings 显式为 0.
+        # 不再把"缺 holdings 行"等同于归零;导入事实层才是 thesis 生命周期的
+        # 优先依据,否则新开 thesis 但尚未同步 holdings 会误报待 close。
         pending_close_rows = conn.execute(
             """
             SELECT t.id AS thesis_id, t.account_id, t.stock_code,
-                   COALESCE(h.shares, 0) AS holdings_shares
+                   COALESCE(h.shares, 0) AS holdings_shares,
+                   COUNT(be.id) AS execution_count,
+                   COALESCE(SUM(
+                       CASE
+                         WHEN be.direction = 'buy' THEN be.shares
+                         WHEN be.direction = 'sell' THEN -be.shares
+                         ELSE 0
+                       END
+                   ), 0) AS execution_balance
               FROM trade_thesis t
               LEFT JOIN holdings h ON h.thesis_id = t.id AND h.status = 'active'
+              LEFT JOIN broker_executions be ON be.thesis_id = t.id
              WHERE t.status = 'open'
                AND (? IS NULL OR t.account_id = ?)
-               AND (h.shares IS NULL OR h.shares = 0)
+             GROUP BY t.id, t.account_id, t.stock_code, h.shares
+             HAVING (
+                   COUNT(be.id) > 0 AND execution_balance = 0
+                )
+                OR (
+                   COUNT(h.id) > 0 AND COALESCE(h.shares, 0) = 0
+                )
             """,
             (args.account, args.account),
         ).fetchall()

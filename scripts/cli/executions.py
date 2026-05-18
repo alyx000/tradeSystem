@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from db import queries
+from db.connection import get_connection
 from services.broker_executions import import_executions, normalize_rows, parse_file
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -63,8 +64,7 @@ def handle_executions_command(config: dict, args: argparse.Namespace) -> None:
 def _open_conn(config: dict) -> sqlite3.Connection:
     database = config.get("database") or {}
     db_path = database.get("path") or str(PROJECT_ROOT / "data" / "trade.db")
-    conn = sqlite3.connect(db_path)
-    return conn
+    return get_connection(db_path)
 
 
 def _cmd_import(config: dict, args: argparse.Namespace) -> None:

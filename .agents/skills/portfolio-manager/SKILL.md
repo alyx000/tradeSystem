@@ -32,7 +32,7 @@ make watchlist
 写操作默认在 `scripts/` 目录使用底层命令：
 
 ```bash
-python3 main.py db holdings-add ...
+python3 main.py db holdings-add ... [--thesis-id <id>]
 python3 main.py db holdings-remove ...
 python3 main.py db holdings-refresh --date YYYY-MM-DD   # 现价回填（原 make holdings-refresh）
 python3 main.py db holdings-import-yaml               # 遗留 YAML 一次性导入 DB
@@ -134,6 +134,8 @@ python3 main.py db thesis-open \
 | `note` | `--note` | **备注**：持仓期间的调仓记录、观察点等（可持续补充） |
 
 Agent 录入持仓时，若用户提到「买入原因」或「进场逻辑」，写入 `--entry-reason`；若提到「备注」或「提醒」，写入 `--note`。两者均可同时使用。
+
+若持仓由已确认的 `trade_thesis` 或 `executions import` 补账产生，写入 `--thesis-id <id>` 保持持仓与建仓周期可追溯。
 
 ## 证券代码与简称（Agent 必查）
 

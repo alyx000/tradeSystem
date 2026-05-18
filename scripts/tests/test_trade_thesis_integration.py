@@ -198,6 +198,106 @@ class TestImportAttachToExistingThesis:
         assert row is not None
         assert row["thesis_id"] == thesis_id
 
+    def test_import_buy_updates_active_holding_with_thesis_id(
+        self, db_conn, fake_source, import_dirs,
+    ):
+        archive_root, report_root = import_dirs
+        thesis_id = _create_thesis_for(db_conn, code="002663", account="default")
+
+        normalized = _normalize(
+            [_make_payload(stock_code="002663", shares="1000", price="6.50")],
+            fake_source,
+        )
+
+        import_executions(
+            db_conn, normalized,
+            source_file=str(fake_source), source_format="tsv-gbk",
+            input_by="broker_export", account_id="default",
+            dry_run=False,
+            report_root=report_root, archive_root=archive_root,
+            enforce_strict_thesis=True,
+        )
+
+        row = db_conn.execute(
+            """
+            SELECT stock_code, stock_name, shares, entry_date, entry_price,
+                   sector, entry_reason, status, thesis_id
+              FROM holdings
+             WHERE stock_code = '002663'
+            """
+        ).fetchone()
+        assert row is not None
+        assert row["status"] == "active"
+        assert row["shares"] == 1000
+        assert row["entry_date"] == "2026-05-14"
+        assert row["entry_price"] == 6.5
+        assert row["sector"] == "测试板块"
+        assert row["entry_reason"] == "主线"
+        assert row["thesis_id"] == thesis_id
+
+    def test_import_sell_to_zero_closes_active_holding(
+        self, db_conn, fake_source, import_dirs,
+    ):
+        archive_root, report_root = import_dirs
+        thesis_id = _create_thesis_for(db_conn, code="002663", account="default")
+
+        normalized_buy = _normalize(
+            [_make_payload(stock_code="002663", direction="买入", trade_no="TB1")],
+            fake_source,
+        )
+        import_executions(
+            db_conn, normalized_buy,
+            source_file=str(fake_source), source_format="tsv-gbk",
+            input_by="broker_export", account_id="default",
+            dry_run=False,
+            report_root=report_root, archive_root=archive_root,
+            enforce_strict_thesis=True, auto_close=False,
+        )
+
+        normalized_sell = _normalize(
+            [_make_payload(
+                stock_code="002663", direction="卖出", trade_no="TS1",
+                biz_date="20260520",
+            )],
+            fake_source,
+        )
+        import_executions(
+            db_conn, normalized_sell,
+            source_file=str(fake_source), source_format="tsv-gbk",
+            input_by="broker_export", account_id="default",
+            dry_run=False,
+            report_root=report_root, archive_root=archive_root,
+            enforce_strict_thesis=True, auto_close=False,
+        )
+
+        row = db_conn.execute(
+            "SELECT status, shares, thesis_id FROM holdings WHERE stock_code = '002663'"
+        ).fetchone()
+        assert row is not None
+        assert row["status"] == "closed"
+        assert row["shares"] == 0
+        assert row["thesis_id"] == thesis_id
+
+    def test_import_dry_run_does_not_update_holdings(
+        self, db_conn, fake_source, import_dirs,
+    ):
+        archive_root, report_root = import_dirs
+        _create_thesis_for(db_conn, code="002663", account="default")
+
+        normalized = _normalize([_make_payload(stock_code="002663")], fake_source)
+
+        import_executions(
+            db_conn, normalized,
+            source_file=str(fake_source), source_format="tsv-gbk",
+            input_by="broker_export", account_id="default",
+            dry_run=True,
+            report_root=report_root, archive_root=archive_root,
+            enforce_strict_thesis=True,
+        )
+
+        count = db_conn.execute("SELECT COUNT(*) FROM holdings").fetchone()[0]
+        assert count == 0
+
 
 # ──────────────────────────────────────────────────────────────
 # I5 + I6: auto-close 同批 sell 归零 + notes 追加 + --no-auto-close 反转

@@ -4,8 +4,18 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
-from cli.executions import _build_audit_report, _emit_import_result
+from cli.executions import _build_audit_report, _emit_import_result, _open_conn
 from services.broker_executions.models import ConflictRow, ErrorRow, RowSummary
+
+
+def test_open_conn_returns_rows_addressable_by_column_name(tmp_path) -> None:
+    conn = _open_conn({"database": {"path": str(tmp_path / "trade.db")}})
+    try:
+        row = conn.execute("SELECT 1 AS answer").fetchone()
+    finally:
+        conn.close()
+
+    assert row["answer"] == 1
 
 
 def test_audit_report_appends_per_stock_and_import_batches() -> None:

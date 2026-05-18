@@ -390,6 +390,23 @@ class TestHoldings:
         assert "锂电主线反弹" in list_result.stdout
         assert "备注" not in list_result.stdout
 
+    def test_add_can_link_thesis_id(self, tmp_db):
+        result = _run_cli(
+            "holdings-add", "--code", "002245",
+            "--name", "蔚蓝锂芯",
+            "--shares", "600",
+            "--price", "28.32",
+            "--thesis-id", "1",
+            tmp_db=tmp_db,
+        )
+        assert result.returncode == 0
+
+        with get_connection(tmp_db) as conn:
+            row = conn.execute(
+                "SELECT thesis_id FROM holdings WHERE stock_code = '002245'"
+            ).fetchone()
+        assert row["thesis_id"] == 1
+
 
 class TestHoldingsImportYaml:
     def test_imports_rows_and_values(self, tmp_db, tmp_path):

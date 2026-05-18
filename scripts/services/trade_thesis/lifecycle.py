@@ -4,6 +4,8 @@ from __future__ import annotations
 import sqlite3
 from typing import Any, Iterable
 
+from db import queries
+
 from . import repository
 
 
@@ -197,6 +199,115 @@ def link_thesis_to_executions(
         else:
             orphan += 1
     return {"linked": linked, "orphan": orphan}
+
+
+def sync_holdings_from_executions(
+    conn: sqlite3.Connection, *, import_run_id: str,
+) -> dict[str, int]:
+    """按本批已关联 thesis 的成交事实维护 holdings 当前持仓.
+
+    只处理 `broker_executions.thesis_id IS NOT NULL` 的行;历史 orphan 不派生持仓.
+    不自行 commit,由 importer 主事务统一控制。
+    """
+    affected = conn.execute(
+        """
+        SELECT DISTINCT thesis_id
+          FROM broker_executions
+         WHERE import_run_id = ? AND thesis_id IS NOT NULL
+         ORDER BY thesis_id
+        """,
+        (import_run_id,),
+    ).fetchall()
+
+    active = 0
+    closed = 0
+    skipped = 0
+    for r in affected:
+        thesis_id = r[0]
+        thesis = conn.execute(
+            """
+            SELECT stock_code, stock_name, opened_at, entry_reason,
+                   market_region, sector, planned_position_pct
+              FROM trade_thesis
+             WHERE id = ?
+            """,
+            (thesis_id,),
+        ).fetchone()
+        if thesis is None:
+            skipped += 1
+            continue
+
+        stock_code = thesis[0]
+        balance_row = conn.execute(
+            """
+            SELECT
+                COALESCE(SUM(CASE WHEN direction = 'buy' THEN shares ELSE -shares END), 0)
+                    AS balance,
+                COALESCE(SUM(CASE WHEN direction = 'buy' THEN shares ELSE 0 END), 0)
+                    AS buy_shares,
+                COALESCE(SUM(CASE WHEN direction = 'buy' THEN amount ELSE 0 END), 0)
+                    AS buy_amount,
+                MIN(CASE WHEN direction = 'buy' THEN biz_date ELSE NULL END)
+                    AS entry_date
+              FROM broker_executions
+             WHERE thesis_id = ?
+            """,
+            (thesis_id,),
+        ).fetchone()
+        balance = int(balance_row[0] or 0)
+        buy_shares = int(balance_row[1] or 0)
+        buy_amount = float(balance_row[2] or 0)
+        entry_price = round(buy_amount / buy_shares, 6) if buy_shares else None
+
+        if balance > 0:
+            queries.upsert_holding(
+                conn,
+                stock_code=stock_code,
+                stock_name=thesis[1],
+                market=_market_label(thesis[4]),
+                sector=thesis[5],
+                shares=balance,
+                entry_date=balance_row[3] or thesis[2],
+                entry_price=entry_price,
+                position_ratio=thesis[6],
+                status="active",
+                entry_reason=thesis[3],
+                thesis_id=thesis_id,
+            )
+            active += 1
+            continue
+
+        cur = conn.execute(
+            """
+            UPDATE holdings
+               SET shares = 0, status = 'closed', updated_at = datetime('now')
+             WHERE thesis_id = ? AND status = 'active'
+            """,
+            (thesis_id,),
+        )
+        if cur.rowcount == 0:
+            cur = conn.execute(
+                """
+                UPDATE holdings
+                   SET shares = 0, status = 'closed', thesis_id = ?,
+                       updated_at = datetime('now')
+                 WHERE stock_code = ? AND status = 'active'
+                """,
+                (thesis_id, stock_code),
+            )
+        closed += cur.rowcount
+
+    return {"active": active, "closed": closed, "skipped": skipped}
+
+
+def _market_label(market_region: str | None) -> str:
+    if market_region == "a-share":
+        return "A股"
+    if market_region == "hk":
+        return "港股"
+    if market_region == "us":
+        return "美股"
+    return "A股"
 
 
 def auto_close_zero_balance_thesis(

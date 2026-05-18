@@ -629,6 +629,36 @@ class TestCLIThesisSuggest:
         # closed 但无 review 的 thesis 出现在第三段
         assert "thesis #1" in out
 
+    def test_thesis_suggest_uses_linked_execution_balance_before_holdings(
+        self, cli_args_factory, capsys,
+    ):
+        from db.cli import _cmd_thesis_open, _cmd_thesis_suggest
+        from db.connection import get_connection
+
+        make, db_path = cli_args_factory
+        _cmd_thesis_open(make(
+            code="600519", name="t", account="A001", opened_at="2026-05-01",
+            entry_reason="r", trade_mode="break", failure_condition="f",
+            planned_position_pct=0.1, sector="x", market_region="a-share",
+            input_by="alyx", target_price=None, stop_loss=None,
+            mode_note=None, notes=None, plan_id=None,
+        ))
+        capsys.readouterr()
+
+        conn = get_connection(db_path)
+        try:
+            _seed_broker_execution(
+                conn, account_id="A001", stock_code="600519",
+                direction="buy", shares=100, price=10.0,
+                biz_date="2026-05-01", thesis_id=1,
+            )
+        finally:
+            conn.close()
+
+        _cmd_thesis_suggest(make(account="A001"))
+        out = capsys.readouterr().out
+        assert "thesis #1 600519 @ A001" not in out
+
 
 class TestCLIThesisFillClosedError:
     """C12: thesis-fill closed 时主字段被冻结 → 友好错误."""
