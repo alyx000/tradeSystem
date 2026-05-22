@@ -14,26 +14,16 @@ from typing import Optional
 
 import yaml
 
+# 个股涨跌幅口径单一真源：从 utils.price_limit 复用，避免 watchlist 与盘前持仓信号口径漂移。
+# 仍以 collectors.watchlist._get_limit_pct 名义对外可导入（test_watchlist_collector 依赖）。
+from utils.price_limit import _get_limit_pct
+
 logger = logging.getLogger(__name__)
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 WATCHLIST_FILE = BASE_DIR / "tracking" / "watchlist.yaml"
 
 ALERT_THRESHOLD = 0.02  # 2%
-
-
-def _get_limit_pct(code: str, name: str = "") -> float:
-    """根据股票代码和名称确定涨跌停阈值百分比。"""
-    if "ST" in name.upper():
-        return 5.0
-    code_num = code.split(".")[0]
-    if code_num.startswith("688") or code_num.startswith("689"):
-        return 20.0
-    if code_num.startswith("300") or code_num.startswith("301"):
-        return 20.0
-    if code_num.startswith("8") or code_num.startswith("43"):
-        return 30.0
-    return 10.0
 
 
 class WatchlistCollector:

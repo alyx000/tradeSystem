@@ -173,6 +173,11 @@ class ReportGenerator:
             lines.append(f"- 融资融券汇总: {md['error']}")
         elif md.get("trade_date"):
             lines.append(f"> 统计日期: {md.get('trade_date')}\n")
+            if md.get("stale"):
+                lines.append(
+                    f"> ⚠️ 实时融资融券盘前未发布，以上为最近一次入库数据"
+                    f"（截至 {md.get('as_of') or md.get('trade_date')}），仅供参考。\n"
+                )
             cmp_d = md.get("margin_compare_date")
             drz = md.get("delta_total_rzye_yi")
             drq = md.get("delta_total_rqye_yi")

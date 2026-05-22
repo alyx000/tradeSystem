@@ -187,6 +187,21 @@ def test_generate_pre_market_us_china_error_and_empty_margin(tmp_path: Path):
     assert "（无融资融券汇总数据）" in md
 
 
+def test_generate_pre_market_stale_margin_annotation(tmp_path: Path):
+    # 融资融券走 DB 回退（stale=True）时，报告须标注"最近一次入库（截至 X）"，不冒充当日。
+    gen = ReportGenerator()
+    gen.daily_dir = tmp_path
+    market_data = _minimal_market_data()
+    market_data["margin_data"] = {
+        "trade_date": "2026-04-30", "as_of": "2026-04-30", "stale": True,
+        "total_rzye_yi": 18000.0, "total_rqye_yi": 500.0, "total_rzrqye_yi": 18500.0,
+        "exchanges": [],
+    }
+    md, _ = gen.generate_pre_market(date="2026-05-22", market_data=market_data, holdings_announcements={})
+    assert "最近一次入库" in md
+    assert "截至 2026-04-30" in md
+
+
 def test_render_holding_risk_summary_task_only_without_high_medium_flags():
     """无 high/medium 风险标但有昨日计划时，风险摘要仍应输出待跟踪行。"""
     lines = _render_holding_risk_summary({

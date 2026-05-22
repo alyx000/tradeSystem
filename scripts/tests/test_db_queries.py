@@ -586,3 +586,44 @@ class TestSchemaVersion:
         migrate(c)
         assert get_schema_version(c) == version
         c.close()
+
+
+# ──────────────────────────────────────────────────────────────
+# Raw interface rows: inclusive vs strict-before
+# ──────────────────────────────────────────────────────────────
+
+class TestGetLatestRawInterfaceRows:
+    @staticmethod
+    def _insert(conn, biz_date, close):
+        import hashlib
+        pj = json.dumps({"interface_name": "daily_basic",
+                         "rows": [{"ts_code": "600000.SH", "close": close}]}, ensure_ascii=False)
+        conn.execute(
+            """
+            INSERT INTO raw_interface_payloads
+            (interface_name, provider, stage, biz_date, target_date, raw_table, dedupe_key,
+             payload_json, payload_hash, row_count, status, params_json)
+            VALUES ('daily_basic','tushare','post_core',?,?,'raw_daily_basic',?,?,?,1,'success','{}')
+            """,
+            (biz_date, biz_date, f"daily_basic:{biz_date}", pj, hashlib.sha256(pj.encode()).hexdigest()),
+        )
+        conn.commit()
+
+    def test_inclusive_true_returns_same_day(self, conn):
+        self._insert(conn, "2026-05-21", 100.0)
+        self._insert(conn, "2026-05-22", 200.0)
+        rows = Q.get_latest_raw_interface_rows(conn, interface_name="daily_basic", biz_date="2026-05-22")
+        assert rows[0]["close"] == 200.0  # <= 2026-05-22 → 当日
+
+    def test_inclusive_false_returns_strictly_prior(self, conn):
+        self._insert(conn, "2026-05-21", 100.0)
+        self._insert(conn, "2026-05-22", 200.0)
+        rows = Q.get_latest_raw_interface_rows(
+            conn, interface_name="daily_basic", biz_date="2026-05-22", inclusive=False)
+        assert rows[0]["close"] == 100.0  # < 2026-05-22 → 前一交易日
+
+    def test_inclusive_false_no_prior_returns_empty(self, conn):
+        self._insert(conn, "2026-05-22", 200.0)
+        rows = Q.get_latest_raw_interface_rows(
+            conn, interface_name="daily_basic", biz_date="2026-05-22", inclusive=False)
+        assert rows == []  # 无严格早于当日的数据

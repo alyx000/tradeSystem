@@ -249,6 +249,22 @@ class TestReview:
                 "status": "open",
             }],
         )
+        # daily_basic 提供涨跌停价计算基准，落在前一交易日 04-02（限价取严格早于查询日的前收）；
+        # stk_limit 保留以验证其已不再被读取。
+        conn.execute(
+            """
+            INSERT INTO raw_interface_payloads
+            (interface_name, provider, stage, biz_date, target_date, raw_table, dedupe_key,
+             payload_json, payload_hash, row_count, status, params_json, source_meta_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "daily_basic", "tushare:daily_basic", "post_core", "2026-04-02", "2026-04-02", "raw_daily_basic",
+                "daily_basic:2026-04-02:test",
+                json.dumps({"rows": [{"ts_code": "300750.SZ", "close": 192.0}]}, ensure_ascii=False),
+                "dbp", 1, "success", "{}", "{}",
+            ),
+        )
         for interface_name, raw_table, payload in [
             ("anns_d", "raw_anns_d", {"rows": [{"ts_code": "300750.SZ", "title": "回购公告", "ann_date": "20260402"}]}),
             ("disclosure_date", "raw_disclosure_date", {"rows": [{"ts_code": "300750.SZ", "ann_date": "20260404", "report_end": "20260331"}]}),
@@ -291,7 +307,9 @@ class TestReview:
         item = signals["items"][0]
         assert item["stock_code"] == "300750.SZ"
         assert item["price_snapshot"]["current_price"] == 192.0
-        assert item["price_snapshot"]["up_limit"] == 209.0
+        # 创业板 20% 实时算价，基准 192.0：up = 192 × 1.2 = 230.4；
+        # stk_limit 快照（209.0，错按 10% 塞）已不再被读取。
+        assert item["price_snapshot"]["up_limit"] == 230.4
         assert item["technical_signals"]["above_ma5"] is True
         assert item["technical_signals"]["volume_vs_ma5"] == "以上"
         assert item["technical_signals"]["turnover_rate"] == 6.2
@@ -1620,6 +1638,21 @@ class TestPlanningAndKnowledgeAPI:
                 "h1", 1, "success", "{}", "{}",
             ),
         )
+        # daily_basic 提供涨跌停价计算基准（前一交易日 04-02 收盘）；stk_limit 已不再被读取。
+        conn.execute(
+            """
+            INSERT INTO raw_interface_payloads
+            (interface_name, provider, stage, biz_date, target_date, raw_table, dedupe_key,
+             payload_json, payload_hash, row_count, status, params_json, source_meta_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "daily_basic", "tushare:daily_basic", "post_core", "2026-04-02", "2026-04-02", "raw_daily_basic",
+                "daily_basic:2026-04-02:test",
+                json.dumps({"rows": [{"ts_code": "300750.SZ", "close": 192.0}]}, ensure_ascii=False),
+                "db1", 1, "success", "{}", "{}",
+            ),
+        )
         conn.commit()
         conn.close()
 
@@ -1631,7 +1664,9 @@ class TestPlanningAndKnowledgeAPI:
         item = data["items"][0]
         assert item["stock_code"] == "300750"
         assert item["price_snapshot"]["current_price"] == 192.0
-        assert item["price_snapshot"]["down_limit"] == 171.0
+        # 涨跌停价按板块比例实时算（创业板 300xxx → 20%），基准来自 daily_basic 收盘 192.0：
+        # down = 192 × 0.8 = 153.6；上面那份 stk_limit 快照（171.0，错按 10% 塞）已不再被读取。
+        assert item["price_snapshot"]["down_limit"] == 153.6
         assert item["theme_signals"]["is_main_theme"] is True
         assert item["technical_signals"]["above_ma10"] is True
         assert item["technical_signals"]["turnover_status"] == "活跃"

@@ -17,6 +17,56 @@ logger = logging.getLogger(__name__)
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
+# 网络 / 外部源不可达类失败的特征片段：本机到不了 Yahoo（yfinance）、akshare 远端瞬断、
+# tushare 不支持的国际指数等。命中则归一化为可读提示，避免把隐晦栈信息抛给用户。
+_UNREACHABLE_SIGNATURES = (
+    "RemoteDisconnected",
+    "Connection aborted",
+    "NoneType' object is not subscriptable",
+    "yfinance",
+    "未支持的国际指数键",
+    "均未获取到亚太指数",
+    "未找到 VIX",
+    "AkShare/yfinance",
+)
+
+
+def _normalize_source_error(err: str | None) -> str | None:
+    """将网络/外部源不可达类的隐晦错误统一为可读提示，保留原因作后缀；其它错误原样返回。"""
+    if not err:
+        return err
+    if any(sig in err for sig in _UNREACHABLE_SIGNATURES):
+        return f"数据源暂不可达（外部源/网络限制）：{err}"
+    return err
+
+
+def apply_margin_db_fallback(conn, market_data: dict, date: str) -> dict:
+    """盘前实时融资融券汇总取不到时，回退 DB 最近一次入库的汇总，并标注 as_of / stale。
+
+    tushare 当日融资融券汇总常在盘前 07:00 尚未发布；回退「最近一次入库」的汇总（已是聚合形态）
+    比裸 error 更可用。原地修改并返回 market_data；DB 也无数据时保留原 error。
+    """
+    md = market_data.get("margin_data")
+    if not (isinstance(md, dict) and md.get("error")):
+        return market_data
+    from db import queries as Q
+
+    # inclusive=False：严格取早于 date 的最近一次（融资融券盘前章节语义是「上一交易日」）；
+    # 用 <= 会在历史重跑 / 当日已入库时把 D 日数据回填进 D 日盘前，造成口径错配。
+    rows = Q.get_latest_raw_interface_rows(
+        conn, interface_name="margin", biz_date=date, inclusive=False,
+    )
+    if rows and isinstance(rows[0], dict):
+        summary = dict(rows[0])
+        # 最小结构校验：缺 trade_date 或全部汇总字段缺失的畸形行不回填，保留原 error 以利排障。
+        _totals = ("total_rzrqye_yi", "total_rzye_yi", "total_rqye_yi")
+        if summary.get("trade_date") and any(summary.get(k) is not None for k in _totals):
+            summary["as_of"] = summary.get("trade_date")
+            summary["stale"] = True
+            market_data["margin_data"] = summary
+    return market_data
+
+
 CALENDAR_AUTO_HEADER = """# ============================================
 # 预拉取宏观日历（自动生成）
 # 由 python main.py prefetch-calendar 写入，请勿手动编辑
@@ -839,6 +889,18 @@ class MarketCollector:
         ak_events = cal_r.data if (cal_r.success and cal_r.data) else []
         merged_cal = _merge_calendar(ak_events, date_str, BASE_DIR)
         result["calendar_events"] = filter_calendar_for_pre_market(merged_cal)
+
+        # 网络/外部源不可达类失败统一文案（yfinance→Yahoo、akshare 瞬断、tushare 不支持国际指数）。
+        for section in ("global_indices", "global_indices_apac", "commodities", "forex", "risk_indicators"):
+            for item in (result.get(section) or {}).values():
+                if isinstance(item, dict) and item.get("error"):
+                    item["error"] = _normalize_source_error(item["error"])
+        for key in ("error", "_error"):
+            block = result.get("us_china_assets")
+            if isinstance(block, dict) and block.get(key):
+                block[key] = _normalize_source_error(block[key])
+        if isinstance(result.get("margin_data"), dict) and result["margin_data"].get("error"):
+            result["margin_data"]["error"] = _normalize_source_error(result["margin_data"]["error"])
 
         logger.info("盘前数据采集完成")
         return result

@@ -819,6 +819,9 @@ def cmd_pre(config: dict, target_date: str):
                     blurbs = DbQ.extract_review_conclusion_lines(rev)
                     if blurbs:
                         market_data["prev_review_conclusion"] = blurbs
+                # 融资融券实时汇总盘前常未发布 → 回退 DB 最近一次（标注 as_of / stale）
+                from collectors.market import apply_margin_db_fallback
+                apply_margin_db_fallback(conn, market_data, target_date)
             finally:
                 conn.close()
         except Exception as e:
@@ -846,25 +849,16 @@ def cmd_pre(config: dict, target_date: str):
         except Exception as e:
             logger.warning(f"关注池信息面采集失败: {e}")
 
-        holdings_limit_overrides: dict[str, dict] = {}
-        for code, info in holdings_info.items():
-            limit_prices = info.get("limit_prices")
-            if limit_prices:
-                from db.dual_write import _normalize_stock_code_for_match
-
-                norm = _normalize_stock_code_for_match(code)
-                if norm:
-                    holdings_limit_overrides[norm] = limit_prices
-
         try:
             from db.connection import get_db
 
             with get_db() as conn:
+                # 涨跌停价由 build_holding_signals 内部按板块比例实时算（基准取 daily_basic 收盘），
+                # 不再依赖 07:00 拿不到的 stk_limit 当日数据。
                 holdings_signals = build_holding_signals(
                     conn,
                     target_date,
                     holdings=holdings_collector._holdings,
-                    limit_price_overrides=holdings_limit_overrides,
                 )
         except Exception as e:
             logger.warning("持仓信号摘要构建失败: %s", e)

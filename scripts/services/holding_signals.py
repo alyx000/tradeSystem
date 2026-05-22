@@ -7,6 +7,7 @@ from typing import Any
 from api.market_enrich import enrich_daily_market_row
 from db import queries as Q
 from db.dual_write import _normalize_stock_code_for_match, parse_post_market_envelope
+from utils.price_limit import compute_limit_prices
 
 
 def _date_digits(date_text: str) -> str:
@@ -150,18 +151,22 @@ def _get_market_basis(conn, date_str: str, market_row: dict | None = None) -> tu
     return enriched, envelope
 
 
-def _load_limit_price_map(conn, date_str: str) -> dict[str, dict[str, Any]]:
-    rows = Q.get_latest_raw_interface_rows(conn, interface_name="stk_limit", biz_date=date_str)
-    out: dict[str, dict[str, Any]] = {}
+def _load_prev_close_map(conn, date_str: str) -> dict[str, float | None]:
+    """前一交易日收盘价映射，作为当日涨跌停价的计算基准。
+
+    取 daily_basic 中 biz_date 严格早于 date_str（inclusive=False）的最近一次落库：
+    当日涨跌停价以「前一交易日收盘」为基准；用 < 而非 <= 是为了在 date_str 当日 daily_basic
+    已落库（盘后 / 复盘 / 历史回看）时仍取前一交易日，而非误用当日收盘。
+    """
+    rows = Q.get_latest_raw_interface_rows(
+        conn, interface_name="daily_basic", biz_date=date_str, inclusive=False,
+    )
+    out: dict[str, float | None] = {}
     for row in rows:
         norm = _normalize_stock_code_for_match(row.get("ts_code") or row.get("code"))
         if not norm:
             continue
-        out[norm] = {
-            "up_limit": row.get("up_limit"),
-            "down_limit": row.get("down_limit"),
-            "pre_close": row.get("pre_close"),
-        }
+        out[norm] = _to_float(row.get("close"))
     return out
 
 
@@ -380,7 +385,6 @@ def build_holding_signals(
     *,
     holdings: list[dict] | None = None,
     market_row: dict | None = None,
-    limit_price_overrides: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     normalized_holdings = _normalized_holdings(holdings or Q.get_holdings(conn, status="active"))
     market, envelope = _get_market_basis(conn, date_str, market_row=market_row)
@@ -388,9 +392,7 @@ def build_holding_signals(
         _extract_holdings_detail_map(envelope),
         Q.get_latest_holding_quote_snapshots(conn, date_str),
     )
-    limit_map = _load_limit_price_map(conn, date_str)
-    if limit_price_overrides:
-        limit_map.update(limit_price_overrides)
+    prev_close_map = _load_prev_close_map(conn, date_str)
     announcements, disclosure_dates = _load_announcement_maps(conn, date_str, normalized_holdings)
     st_set = _load_st_set(conn, date_str)
     share_float_map = _load_share_float_map(conn, date_str)
@@ -408,7 +410,6 @@ def build_holding_signals(
         code = holding["stock_code"]
         norm = _normalize_stock_code_for_match(code)
         detail = holdings_detail_map.get(norm, {})
-        limit_prices = limit_map.get(norm, {})
         current_price = _to_float(detail.get("close")) or _to_float(holding.get("current_price"))
         entry_price = _to_float(holding.get("entry_price"))
         pnl_pct = _to_float(detail.get("pnl_pct"))
@@ -449,13 +450,27 @@ def build_holding_signals(
             "is_st": norm in st_set,
             "share_float_upcoming": (share_float_map.get(norm) or [])[:3],
         }
+        # 涨跌停价基于「前一交易日收盘价 × 板块比例」实时算出，不再读 stk_limit 陈旧快照。
+        # 基准优先取 daily_basic 收盘；缺失时退回 current_price——盘前 07:00 时 current_price
+        # 即上一交易日收盘，作为基准是 best-effort 安全兜底（daily_basic 每日落库，回退极少触发）。
+        # 两者皆缺失时 prev_close=None，compute_limit_prices 会安全返回 {up/down: None}（已测）。
+        prev_close = prev_close_map.get(norm)
+        if prev_close is None:
+            prev_close = current_price
+        # is_st 优先用 stock_st 权威名单：有数据时按是否命中传 True/False（主板 ST 限价 5%）；
+        # st_set 为空（stock_st 未落库 / 失败）时传 None，回退 compute 内的名称启发式，
+        # 避免「权威数据缺失 → 全部判非 ST → 主板 *ST 误按 10%」的静默错误。
+        is_st_arg = (norm in st_set) if st_set else None
+        limit_prices = compute_limit_prices(
+            prev_close, code, holding.get("stock_name"), is_st=is_st_arg,
+        )
         price_snapshot = {
             "entry_price": entry_price,
             "current_price": current_price,
             "pnl_pct": pnl_pct,
-            "up_limit": _to_float(limit_prices.get("up_limit")),
-            "down_limit": _to_float(limit_prices.get("down_limit")),
-            "pre_close": _to_float(limit_prices.get("pre_close")),
+            "up_limit": limit_prices.get("up_limit"),
+            "down_limit": limit_prices.get("down_limit"),
+            "pre_close": limit_prices.get("pre_close"),
         }
         risk_flags = _build_risk_flags(
             date_str,

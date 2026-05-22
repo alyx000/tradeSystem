@@ -36,8 +36,9 @@ class TestGetLimitPct:
         assert _get_limit_pct("430047.BJ") == 30.0
 
     def test_st(self):
+        # 板块 × ST 矩阵：主板 ST → 5%；创业板/科创板 ST 仍按板块比例 20%（不收窄到 5%）。
         assert _get_limit_pct("600000.SH", "ST测试") == 5.0
-        assert _get_limit_pct("300750.SZ", "*ST某某") == 5.0
+        assert _get_limit_pct("300750.SZ", "*ST某某") == 20.0
 
 
 # ---------------------------------------------------------------------------

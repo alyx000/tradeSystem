@@ -297,14 +297,22 @@ def get_latest_raw_interface_rows(
     *,
     interface_name: str,
     biz_date: str,
+    inclusive: bool = True,
 ) -> list[dict]:
-    """读取某接口在给定日期及之前最近一次成功落库的 rows。"""
+    """读取某接口最近一次成功落库的 rows。
+
+    :param inclusive: True（默认）取 biz_date <= 给定日期；False 取严格早于（< 给定日期），
+        用于需要「前一交易日」语义的场景（如以前收为基准算涨跌停价）。
+    """
+    # cmp_op 仅来自布尔三元，取值只可能是两个硬编码字面量 "<=" / "<"，无用户输入，
+    # 不构成 SQL 注入面；biz_date 等值仍走参数化占位符。
+    cmp_op = "<=" if inclusive else "<"
     row = conn.execute(
-        """
+        f"""
         SELECT payload_json
         FROM raw_interface_payloads
         WHERE interface_name = ?
-          AND biz_date <= ?
+          AND biz_date {cmp_op} ?
           AND status IN ('success', 'partial')
         ORDER BY biz_date DESC, inserted_at DESC
         LIMIT 1
