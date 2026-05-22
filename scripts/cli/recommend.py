@@ -25,7 +25,7 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
     rec_parser = subparsers.add_parser("recommend", help="行业推荐定时推送（日报 / 周报）")
     rec_sub = rec_parser.add_subparsers(dest="recommend_command")
 
-    daily = rec_sub.add_parser("daily", help="生成日报（近 N 日 Top K 行业 + AI 点评）")
+    daily = rec_sub.add_parser("daily", help="生成日报（大盘判断 + 热度榜 + 催化行业三段）")
     daily.add_argument("--lookback-days", type=int, default=DAILY_DEFAULTS["lookback_days"],
                        help=f"回溯天数（默认 {DAILY_DEFAULTS['lookback_days']}）")
     daily.add_argument("--top-k", type=int, default=DAILY_DEFAULTS["top_k"],

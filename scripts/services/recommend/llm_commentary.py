@@ -1,8 +1,8 @@
-"""调本机 gemini CLI 拼接 LLM 点评（subprocess 包装 + 降级）。
+"""调本机 gemini CLI 提炼「大盘判断」文本（subprocess 包装 + 降级）。
 
 返回值：
 - str  → LLM 文本（formatter 调红线扫描后决定是否使用）
-- None → 不可用（gemini 不存在 / timeout / 非零退出），formatter 走 ⚠️ 分支
+- None → 不可用（gemini 不存在 / timeout / 非零退出），formatter 降级展示原始 core_view
 """
 from __future__ import annotations
 
