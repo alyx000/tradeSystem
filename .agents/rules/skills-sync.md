@@ -94,6 +94,7 @@ python3 -m pytest scripts/tests/test_cli_smoke.py -v
 | `main.py` 的 `executions import / list / audit-export` | `portfolio-manager/SKILL.md`（券商成交流水事实层，与 `db add-trade` 复盘维度分离） |
 | `scripts/cli/executions.py` 任意改动 | `portfolio-manager/SKILL.md` + `INDEX.md` 中 `executions ...` 行 |
 | `scripts/services/broker_executions/` 任意改动 | `portfolio-manager/SKILL.md`（若行为契约变更）；任何 schema 字段/UNIQUE 调整还需同步 `INDEX.md` |
+| `scripts/services/trade_thesis/` 或 `scripts/db/schema.py` 中 `trade_mode` 语义/枚举调整 | `portfolio-manager/SKILL.md` + `INDEX.md` 中 `thesis-*` 行 |
 | 仓库维护工作流、CLI/API 对齐、巡检、文档/索引同步 | `repo-maintenance-workflows/SKILL.md` |
 | `api/routes/review.py` | `daily-review/SKILL.md`、`sector-projection-analysis/SKILL.md`（含 `POST /api/review/{date}/to-draft` 时也检查 `plan-workbench/SKILL.md`；若预填字段语义调整，如 `lead_stock` / `emotion_leader` / `capacity_leader`，或保存字段标准化语义调整，同步 Skill 文案） |
 | `api/routes/planning.py` 中 `/api/plans/*` | `plan-workbench/SKILL.md` |

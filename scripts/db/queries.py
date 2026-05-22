@@ -127,6 +127,7 @@ def sync_watchlist_from_mentioned_stocks(
     title: str,
     teacher_name: str | None,
     stocks: list[Any],
+    input_by: str | None = None,
 ) -> dict[str, list[dict]]:
     """根据笔记中的 mentioned_stocks 写入关注池（已存在则跳过）。返回 added / skipped。"""
     if not isinstance(stocks, list):
@@ -155,6 +156,8 @@ def sync_watchlist_from_mentioned_stocks(
         }
         if sector:
             wl_kwargs["sector"] = sector
+        if input_by:
+            wl_kwargs["input_by"] = input_by
         wid = insert_watchlist(conn, **wl_kwargs)
         added.append({"watchlist_id": wid, "code": code, "name": name, "tier": tier})
     return {"added": added, "skipped": skipped}
@@ -578,8 +581,10 @@ def insert_watchlist(conn: sqlite3.Connection, **kwargs: Any) -> int:
     cols, vals = [], []
     for k in ("stock_code", "stock_name", "tier", "sector", "add_date",
               "add_reason", "trigger_condition", "entry_condition",
-              "entry_mode", "position_plan", "volume_status", "current_status",
-              "leader_type", "successor", "role", "status", "note", "source_note_id"):
+              "entry_mode", "position_plan", "current_price",
+              "current_change_pct", "volume_status", "current_status",
+              "leader_type", "successor", "role", "status", "note", "source_note_id",
+              "input_by"):
         if k in kwargs and kwargs[k] is not None:
             cols.append(k)
             vals.append(kwargs[k])
@@ -604,8 +609,9 @@ def get_watchlist(conn: sqlite3.Connection, tier: str | None = None,
 _WATCHLIST_UPDATABLE = frozenset({
     "stock_code", "stock_name", "tier", "sector", "add_date",
     "add_reason", "trigger_condition", "entry_condition", "entry_mode",
-    "position_plan", "volume_status", "current_status", "leader_type",
-    "successor", "role", "status", "note", "source_note_id",
+    "position_plan", "current_price", "current_change_pct", "volume_status",
+    "current_status", "leader_type", "successor", "role", "status", "note",
+    "source_note_id", "input_by",
 })
 
 

@@ -379,6 +379,20 @@ def _pct_map_from_range(result_rows: list[dict] | None) -> dict[str, float]:
     return m
 
 
+def _is_rate_limit_error(error: Any) -> bool:
+    s = str(error or "")
+    transient_markers = (
+        "429",
+        "Too Many Requests",
+        "Max retries exceeded",
+        "Connection refused",
+        "Connection aborted",
+        "Read timed out",
+        "Failed to establish a new connection",
+    )
+    return any(marker in s for marker in transient_markers)
+
+
 def _deviation_sum(
     dates: list[str],
     stock_map: dict[str, float],
@@ -606,6 +620,9 @@ class RegulatoryCollector:
                     "l1_source": shock_r.source or "tushare:stk_shock",
                 })
         else:
+            if _is_rate_limit_error(shock_r.error):
+                logger.warning("stk_shock 触发限流，跳过潜在监管自算: %s", shock_r.error or "")
+                return []
             logger.warning("stk_shock 不可用，降级自算 Level1: %s", shock_r.error or "")
             candidates: set[str] = set()
             daily_name_by_code: dict[str, str] = {}

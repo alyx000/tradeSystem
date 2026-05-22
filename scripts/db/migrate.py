@@ -19,7 +19,7 @@ PROJECT_ROOT = SCRIPTS_DIR.parent
 
 # 与 migrate() 中「当前最新」一步一致；新增迁移时递增本常量，并把上一步的
 # set_schema_version(conn, CURRENT_SCHEMA_VERSION) 改为字面量 N（保留历史链）。
-CURRENT_SCHEMA_VERSION = 24
+CURRENT_SCHEMA_VERSION = 27
 
 
 def get_schema_version(conn: sqlite3.Connection) -> int:
@@ -56,6 +56,78 @@ def _ensure_thesis_columns(conn: sqlite3.Connection) -> None:
     hd_cols = {row[1] for row in conn.execute("PRAGMA table_info(holdings)").fetchall()}
     if hd_cols and "thesis_id" not in hd_cols:
         conn.execute("ALTER TABLE holdings ADD COLUMN thesis_id INTEGER")
+
+
+def _rebuild_trade_thesis_trade_mode_check(conn: sqlite3.Connection) -> None:
+    """v27: SQLite CHECK 不能 ALTER,需重建 trade_thesis 以加入 sentiment_relay."""
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='trade_thesis'"
+    ).fetchone()
+    ddl = (row[0] if row else "") or ""
+    if not ddl:
+        init_schema(conn)
+        return
+    if "sentiment_relay" in ddl:
+        return
+
+    conn.commit()
+    foreign_keys_enabled = conn.execute("PRAGMA foreign_keys").fetchone()[0]
+    conn.execute("PRAGMA foreign_keys=OFF")
+    try:
+        conn.execute("DROP TABLE IF EXISTS trade_thesis__v27")
+        conn.execute(
+            """
+            CREATE TABLE trade_thesis__v27 (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                stock_code TEXT NOT NULL,
+                stock_name TEXT NOT NULL,
+                account_id TEXT NOT NULL,
+                opened_at TEXT NOT NULL CHECK(opened_at GLOB '????-??-??'),
+                closed_at TEXT CHECK(closed_at IS NULL OR closed_at GLOB '????-??-??'),
+                status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open', 'closed')),
+                entry_reason TEXT NOT NULL,
+                failure_condition TEXT NOT NULL,
+                target_price REAL,
+                stop_loss REAL,
+                trade_mode TEXT NOT NULL CHECK(trade_mode IN (
+                    'break', 'dip', 'trend', 'scalp', 'swing', 'arbitrage',
+                    'gap_jump', 'sentiment_relay', 'other'
+                )),
+                mode_note TEXT,
+                market_region TEXT NOT NULL DEFAULT 'a-share' CHECK(market_region IN ('a-share', 'hk', 'us')),
+                sector TEXT NOT NULL,
+                planned_position_pct REAL NOT NULL,
+                plan_id TEXT,
+                notes TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                input_by TEXT NOT NULL,
+                reopen_count INTEGER NOT NULL DEFAULT 0,
+                last_reopened_at TEXT
+            )
+            """
+        )
+        columns = (
+            "id, stock_code, stock_name, account_id, opened_at, closed_at, status, "
+            "entry_reason, failure_condition, target_price, stop_loss, trade_mode, "
+            "mode_note, market_region, sector, planned_position_pct, plan_id, notes, "
+            "created_at, updated_at, input_by, reopen_count, last_reopened_at"
+        )
+        conn.execute(
+            f"INSERT INTO trade_thesis__v27 ({columns}) "
+            f"SELECT {columns} FROM trade_thesis"
+        )
+        conn.execute("DROP TABLE trade_thesis")
+        conn.execute("ALTER TABLE trade_thesis__v27 RENAME TO trade_thesis")
+        init_schema(conn)
+        conn.commit()
+    finally:
+        if foreign_keys_enabled:
+            conn.execute("PRAGMA foreign_keys=ON")
+
+    violations = conn.execute("PRAGMA foreign_key_check").fetchall()
+    if violations:
+        raise sqlite3.IntegrityError(f"foreign_key_check failed after v27: {violations}")
 
 
 def _close_duplicate_active_holdings(conn: sqlite3.Connection) -> int:
@@ -432,6 +504,30 @@ def migrate(conn: sqlite3.Connection) -> None:
         _ensure_thesis_columns(conn)
         init_schema(conn)
         set_schema_version(conn, 24)
+        conn.commit()
+
+    if version < 25:
+        logger.info("Applying schema v25: watchlist.input_by")
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(watchlist)").fetchall()}
+        if "input_by" not in cols:
+            conn.execute("ALTER TABLE watchlist ADD COLUMN input_by TEXT")
+        set_schema_version(conn, 25)
+        conn.commit()
+
+    if version < 26:
+        logger.info("Applying schema v26: watchlist quote snapshot fields")
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(watchlist)").fetchall()}
+        if "current_price" not in cols:
+            conn.execute("ALTER TABLE watchlist ADD COLUMN current_price REAL")
+        if "current_change_pct" not in cols:
+            conn.execute("ALTER TABLE watchlist ADD COLUMN current_change_pct REAL")
+        set_schema_version(conn, 26)
+        conn.commit()
+
+    if version < 27:
+        logger.info("Applying schema v27: trade_thesis.trade_mode sentiment_relay")
+        _rebuild_trade_thesis_trade_mode_check(conn)
+        set_schema_version(conn, 27)
         conn.commit()
 
 

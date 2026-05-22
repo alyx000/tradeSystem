@@ -19,7 +19,7 @@ def test_sign_against_official_spec():
 def test_send_markdown_builds_correct_payload(monkeypatch):
     mock_response = Mock(status_code=200, json=lambda: {"errcode": 0})
     mock_post = Mock(return_value=mock_response)
-    monkeypatch.setattr(requests, "post", mock_post)
+    monkeypatch.setattr(requests.sessions.Session, "post", mock_post)
     monkeypatch.setenv("DINGTALK_WEBHOOK_TOKEN", "test_token")
     monkeypatch.setenv("DINGTALK_WEBHOOK_SECRET", "MOCKSECRET")
     pusher = DingTalkPusher()
@@ -46,7 +46,7 @@ def test_handles_connection_error_and_dingtalk_errcode(monkeypatch, caplog):
     pusher.initialize()
 
     mock_post = Mock(side_effect=requests.ConnectionError("network down"))
-    monkeypatch.setattr(requests, "post", mock_post)
+    monkeypatch.setattr(requests.sessions.Session, "post", mock_post)
     assert pusher.send_markdown(title="测试", content="正文") is False
     assert any("DingTalk 发送异常" in record.message for record in caplog.records)
 
@@ -55,7 +55,7 @@ def test_handles_connection_error_and_dingtalk_errcode(monkeypatch, caplog):
         status_code=200,
         json=lambda: {"errcode": 300001, "errmsg": "token invalid"},
     )
-    monkeypatch.setattr(requests, "post", Mock(return_value=mock_response))
+    monkeypatch.setattr(requests.sessions.Session, "post", Mock(return_value=mock_response))
     assert pusher.send_markdown(title="测试", content="正文") is False
     assert any("DingTalk 发送失败" in record.message for record in caplog.records)
 
@@ -77,7 +77,7 @@ def test_exception_log_redacts_credentials(monkeypatch, caplog):
         "&timestamp=1577000000000&sign=somesecret%3D"
     )
     monkeypatch.setattr(
-        requests, "post",
+        requests.sessions.Session, "post",
         Mock(side_effect=requests.ConnectionError(full_url_with_creds)),
     )
 

@@ -214,6 +214,32 @@ def test_get_stock_st_returns_rows():
     assert result.data[0]["code"] == "600234.SH"
 
 
+def test_get_suspend_change_reasons_skips_single_fallback_for_large_lists():
+    provider = _provider()
+    calls = []
+
+    def fake_query_records(api_name, **params):
+        calls.append((api_name, params))
+        return []
+
+    provider._query_records = fake_query_records
+    codes = [f"{i:06d}.SZ" for i in range(25)]
+
+    result = provider.get_suspend_change_reasons("2026-05-15", codes)
+
+    assert result.success
+    assert result.data == []
+    assert calls == [
+        (
+            "suspend",
+            {
+                "start_date": "20260505",
+                "end_date": "20260518",
+            },
+        )
+    ]
+
+
 def test_get_ths_member_uses_concept_index_scope():
     provider = _provider()
 

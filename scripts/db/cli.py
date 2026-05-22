@@ -204,9 +204,11 @@ def register_db_subparser(subparsers: argparse._SubParsersAction) -> None:
     wl_add.add_argument("--sector", default=None, help="所属板块")
     wl_add.add_argument("--note", default=None, help="备注")
     wl_add.add_argument("--source-note-id", type=int, default=None, help="来源老师笔记 ID（teacher_notes.id）")
+    wl_add.add_argument("--input-by", required=True, help="录入方: manual/openclaw/copaw/cursor")
 
     wl_remove = db_sub.add_parser("watchlist-remove", help="移除关注池标的（置 removed）")
     wl_remove.add_argument("--code", required=True, help="股票代码")
+    wl_remove.add_argument("--input-by", required=True, help="录入方: manual/openclaw/copaw/cursor")
 
     wl_update = db_sub.add_parser("watchlist-update", help="更新关注池标的信息")
     wl_update.add_argument("--code", required=True, help="股票代码")
@@ -217,6 +219,7 @@ def register_db_subparser(subparsers: argparse._SubParsersAction) -> None:
                            choices=["watching", "tracking", "removed"],
                            help="新状态")
     wl_update.add_argument("--note", default=None, help="备注")
+    wl_update.add_argument("--input-by", required=True, help="录入方: manual/openclaw/copaw/cursor")
 
     wl_list = db_sub.add_parser("watchlist-list", help="列出关注池")
     wl_list.add_argument("--tier", default=None, help="按层级过滤")
@@ -227,6 +230,7 @@ def register_db_subparser(subparsers: argparse._SubParsersAction) -> None:
         help="按 teacher_notes.mentioned_stocks 将未在池标的写入关注池（第二步确认后使用）",
     )
     wl_sync_note.add_argument("--note-id", type=int, required=True, help="老师笔记 ID（teacher_notes.id）")
+    wl_sync_note.add_argument("--input-by", required=True, help="录入方: manual/openclaw/copaw/cursor")
 
     stock_resolve = db_sub.add_parser(
         "stock-resolve",
@@ -286,7 +290,10 @@ def register_db_subparser(subparsers: argparse._SubParsersAction) -> None:
     thesis_open.add_argument("--entry-reason", required=True, help="开仓主线逻辑（必填）")
     thesis_open.add_argument(
         "--trade-mode", required=True,
-        choices=["break", "dip", "trend", "scalp", "swing", "arbitrage", "gap_jump", "other"],
+        choices=[
+            "break", "dip", "trend", "scalp", "swing", "arbitrage",
+            "gap_jump", "sentiment_relay", "other",
+        ],
         help="交易模式",
     )
     thesis_open.add_argument("--failure-condition", required=True, help="失效条件文字（必填）")
@@ -323,7 +330,10 @@ def register_db_subparser(subparsers: argparse._SubParsersAction) -> None:
     thesis_fill.add_argument("--stop-loss", type=float, default=None)
     thesis_fill.add_argument(
         "--trade-mode", default=None,
-        choices=["break", "dip", "trend", "scalp", "swing", "arbitrage", "gap_jump", "other"],
+        choices=[
+            "break", "dip", "trend", "scalp", "swing", "arbitrage",
+            "gap_jump", "sentiment_relay", "other",
+        ],
     )
     thesis_fill.add_argument("--mode-note", default=None)
     thesis_fill.add_argument("--planned-position-pct", type=float, default=None)
@@ -528,6 +538,7 @@ def _cmd_add_note(args: argparse.Namespace) -> None:
                     title=args.title,
                     teacher_name=args.teacher,
                     stocks=stocks_list,
+                    input_by=args.input_by,
                 )
                 for a in sync_result["added"]:
                     candidates.append({
@@ -892,6 +903,7 @@ def _cmd_watchlist_sync_from_note(args: argparse.Namespace) -> None:
             title=row["title"],
             teacher_name=row.get("teacher_name"),
             stocks=stocks_list,
+            input_by=args.input_by,
         )
 
     candidates = []
@@ -975,6 +987,7 @@ def _cmd_watchlist_add(args: argparse.Namespace) -> None:
         "stock_name": args.name,
         "tier": args.tier,
         "add_date": datetime.date.today().isoformat(),
+        "input_by": args.input_by,
     }
     if args.reason:
         kwargs["add_reason"] = args.reason
@@ -990,7 +1003,7 @@ def _cmd_watchlist_add(args: argparse.Namespace) -> None:
         wid = Q.insert_watchlist(conn, **kwargs)
 
     src_info = f", 来源笔记 #{args.source_note_id}" if args.source_note_id else ""
-    print(f"✅ 已添加到关注池 (id={wid}): {args.name} ({args.code}) [{args.tier}]{src_info}")
+    print(f"✅ 已添加到关注池 (id={wid}): {args.name} ({args.code}) [{args.tier}]{src_info}, input_by={args.input_by}")
 
 
 def _cmd_watchlist_remove(args: argparse.Namespace) -> None:
@@ -1006,9 +1019,9 @@ def _cmd_watchlist_remove(args: argparse.Namespace) -> None:
             print(f"⚠️ 未在关注池中找到: {args.code}")
             return
         for row in rows:
-            Q.update_watchlist_item(conn, row["id"], status="removed")
+            Q.update_watchlist_item(conn, row["id"], status="removed", input_by=args.input_by)
 
-    print(f"✅ 已从关注池移除: {args.code}")
+    print(f"✅ 已从关注池移除: {args.code}（input_by={args.input_by}）")
 
 
 def _cmd_watchlist_update(args: argparse.Namespace) -> None:
@@ -1036,6 +1049,7 @@ def _cmd_watchlist_update(args: argparse.Namespace) -> None:
             print("⚠️ 未指定任何更新字段（--tier / --status / --note）")
             return
 
+        kwargs["input_by"] = args.input_by
         for row in rows:
             Q.update_watchlist_item(conn, row["id"], **kwargs)
 

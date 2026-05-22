@@ -301,3 +301,65 @@ class TestV24UniqueOpenThesis:
             "SELECT COUNT(*) FROM trade_thesis WHERE stock_code='600519' AND account_id='A001' AND status='open'"
         ).fetchone()[0]
         assert opens == 1
+
+
+_PSEUDO_V26_TRADE_THESIS_OLD_MODES = """
+DROP TABLE IF EXISTS trade_thesis;
+CREATE TABLE trade_thesis (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    stock_code TEXT NOT NULL,
+    stock_name TEXT NOT NULL,
+    account_id TEXT NOT NULL,
+    opened_at TEXT NOT NULL CHECK(opened_at GLOB '????-??-??'),
+    closed_at TEXT CHECK(closed_at IS NULL OR closed_at GLOB '????-??-??'),
+    status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open', 'closed')),
+    entry_reason TEXT NOT NULL,
+    failure_condition TEXT NOT NULL,
+    target_price REAL,
+    stop_loss REAL,
+    trade_mode TEXT NOT NULL CHECK(trade_mode IN (
+        'break', 'dip', 'trend', 'scalp', 'swing', 'arbitrage', 'gap_jump', 'other'
+    )),
+    mode_note TEXT,
+    market_region TEXT NOT NULL DEFAULT 'a-share' CHECK(market_region IN ('a-share', 'hk', 'us')),
+    sector TEXT NOT NULL,
+    planned_position_pct REAL NOT NULL,
+    plan_id TEXT,
+    notes TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    input_by TEXT NOT NULL,
+    reopen_count INTEGER NOT NULL DEFAULT 0,
+    last_reopened_at TEXT
+);
+"""
+
+
+class TestV27TradeModeMigration:
+    """v27: 旧 v26 trade_thesis CHECK 应接受 sentiment_relay."""
+
+    def test_migrate_v26_table_rebuilds_trade_mode_check_for_sentiment_relay(self, tmp_path):
+        db_path = tmp_path / "pseudo_v26_old_modes.db"
+        c = get_connection(db_path)
+        c.executescript(_PSEUDO_V26_TRADE_THESIS_OLD_MODES)
+        c.execute("PRAGMA user_version = 26")
+        c.commit()
+
+        migrate(c)
+
+        c.execute(
+            """
+            INSERT INTO trade_thesis (
+                stock_code, stock_name, account_id, opened_at,
+                entry_reason, failure_condition, trade_mode, market_region,
+                sector, planned_position_pct, input_by
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "601991", "大唐发电", "default", "2026-05-19",
+                "情绪转暖下的连板二波接力", "跌破 5 日均线",
+                "sentiment_relay", "a-share", "电力、连板二波", 0.3333, "alyx",
+            ),
+        )
+        assert get_schema_version(c) == CURRENT_SCHEMA_VERSION
+        c.close()

@@ -1,7 +1,7 @@
 """
 关注池采集器
 
-晚间任务（由 main.py post 在 20:00 流程前半段执行）读取 tracking/watchlist.yaml，
+晚间任务（由 main.py post 在 20:00 流程前半段执行）读取 SQLite watchlist 表，
 为 tier1_core 和 tier2_watch 中的有效股票更新当日行情，
 并在价格触及目标价/止损位时生成到价提醒。
 """
@@ -39,25 +39,99 @@ def _get_limit_pct(code: str, name: str = "") -> float:
 class WatchlistCollector:
     """关注池行情采集 + 到价提醒"""
 
-    def __init__(self, registry):
+    def __init__(self, registry, db_path: str | Path | None = None):
         self.registry = registry
+        self.db_path = db_path
         self._data: dict = {}
         self._alerts: list[dict] = []
+        self._data_source = "sqlite"
+        self._quote_updates: list[tuple[int, dict]] = []
 
-    def load(self) -> dict:
-        """加载 watchlist.yaml"""
+    def _load_legacy_yaml(self) -> dict:
         if WATCHLIST_FILE.exists():
             with open(WATCHLIST_FILE, "r", encoding="utf-8") as f:
-                self._data = yaml.safe_load(f) or {}
-        else:
-            self._data = {}
+                return yaml.safe_load(f) or {}
+        return {}
+
+    def load(self, db_path: str | Path | None = None) -> dict:
+        """从 SQLite 加载关注池；仅保留 YAML 中尚未迁移的辅助上下文。"""
+        from db.connection import get_db
+        from db.migrate import migrate
+        from db import queries as Q
+
+        effective_db_path = db_path if db_path is not None else self.db_path
+        legacy = self._load_legacy_yaml()
+        data = {
+            "tier1_core": [],
+            "tier2_watch": [],
+            "tier3_sector": [],
+            "tier3_sector_leaders": legacy.get("tier3_sector_leaders", []) or [],
+            "blacklist": list(legacy.get("blacklist", []) or []),
+        }
+
+        try:
+            with get_db(effective_db_path) as conn:
+                migrate(conn)
+                rows = conn.execute(
+                    "SELECT * FROM watchlist WHERE status != 'removed' ORDER BY add_date DESC, id DESC"
+                ).fetchall()
+                blacklist_rows = Q.get_blacklist(conn)
+        except Exception as e:
+            logger.warning("无法从 SQLite 加载关注池，将降级读取 YAML: %s", e)
+            self._data_source = "yaml"
+            self._data = legacy
+            return self._data
+
+        for row in rows:
+            item = dict(row)
+            item["_source"] = "sqlite"
+            tier = item.get("tier") or "tier3_sector"
+            if tier == "tier1_core":
+                data["tier1_core"].append(item)
+            elif tier == "tier2_watch":
+                data["tier2_watch"].append(item)
+            else:
+                data["tier3_sector"].append(item)
+
+        data["blacklist"].extend(blacklist_rows)
+        self._data_source = "sqlite"
+        self._data = data
         return self._data
 
     def save(self) -> None:
-        """保存更新后的 watchlist.yaml"""
+        """保存关注池行情更新。SQLite 为主；YAML 仅作为降级路径。"""
+        if self._data_source == "sqlite":
+            self._save_sqlite_quote_updates()
+            return
+
         self._data["last_updated"] = datetime.now().isoformat()
         with open(WATCHLIST_FILE, "w", encoding="utf-8") as f:
             yaml.dump(self._data, f, allow_unicode=True, default_flow_style=False)
+
+    def _record_quote_update(self, stock: dict, **fields) -> None:
+        stock.update(fields)
+        if self._data_source != "sqlite":
+            return
+        stock_id = stock.get("id")
+        if stock_id is None:
+            return
+        self._quote_updates.append((int(stock_id), fields))
+
+    def _save_sqlite_quote_updates(self) -> None:
+        if not self._quote_updates:
+            return
+
+        from db.connection import get_db
+        from db.migrate import migrate
+        from db import queries as Q
+
+        try:
+            with get_db(self.db_path) as conn:
+                migrate(conn)
+                for item_id, fields in self._quote_updates:
+                    Q.update_watchlist_item(conn, item_id, **fields)
+        finally:
+            self._quote_updates = []
 
     def _is_blacklisted(self, code: str, ref_date: str = "") -> bool:
         """检查股票是否在黑名单中（未过期）。ref_date 为参考日期，默认当天。"""
@@ -88,6 +162,7 @@ class WatchlistCollector:
         """
         self.load()
         self._alerts = []
+        self._quote_updates = []
 
         tier1_results = self._collect_tier1(trade_date)
         tier2_results = self._collect_tier2(trade_date)
@@ -143,9 +218,13 @@ class WatchlistCollector:
             else:
                 vol_status = "正常"
 
-            stock["current_price"] = close
-            stock["current_status"] = status
-            stock["volume_status"] = vol_status
+            self._record_quote_update(
+                stock,
+                current_price=close,
+                current_change_pct=change_pct,
+                current_status=status,
+                volume_status=vol_status,
+            )
 
             entry = {
                 "code": code,
@@ -171,7 +250,8 @@ class WatchlistCollector:
         db_path: str | None = None,
     ) -> dict:
         """采集 tier1_core + tier2_watch 公告（与持仓公告逻辑一致，代码去重）"""
-        self.load()
+        effective_db_path = db_path if db_path is not None else self.db_path
+        self.load(db_path=effective_db_path)
         from collectors.holdings import collect_announcements_for_stocks
 
         seen: set[str] = set()
@@ -183,7 +263,13 @@ class WatchlistCollector:
                     continue
                 seen.add(code)
                 stocks.append((code, stock.get("stock_name", code)))
-        return collect_announcements_for_stocks(self.registry, stocks, start_date, end_date, db_path=db_path)
+        return collect_announcements_for_stocks(
+            self.registry,
+            stocks,
+            start_date,
+            end_date,
+            db_path=effective_db_path,
+        )
 
     def collect_watchlist_info(self, date: str) -> dict:
         """
@@ -231,8 +317,11 @@ class WatchlistCollector:
             close = data.get("close", 0)
             change_pct = data.get("change_pct", 0)
 
-            stock["current_price"] = close
-            stock["current_change_pct"] = change_pct
+            self._record_quote_update(
+                stock,
+                current_price=close,
+                current_change_pct=change_pct,
+            )
 
             entry = {
                 "code": code,
@@ -260,6 +349,39 @@ class WatchlistCollector:
     def _collect_tier3(self, trade_date: str) -> list[dict]:
         """采集板块龙头（tier3_sector_leaders）行情"""
         results = []
+        seen: set[str] = set()
+
+        for stock in self._data.get("tier3_sector", []) or []:
+            code = (stock.get("stock_code") or "").strip()
+            name = stock.get("stock_name") or code
+            if not code:
+                continue
+            seen.add(code)
+
+            r = self.registry.call("get_stock_daily", code, trade_date)
+            if not r.success:
+                logger.debug(f"  tier3 {code} 行情获取失败：{r.error}")
+                continue
+
+            data = r.data
+            close = data.get("close", 0)
+            change_pct = data.get("change_pct", 0)
+            self._record_quote_update(
+                stock,
+                current_price=close,
+                current_change_pct=change_pct,
+            )
+
+            results.append({
+                "code": code,
+                "name": name,
+                "sector": stock.get("sector", ""),
+                "close": close,
+                "change_pct": change_pct,
+                "leader_type": stock.get("leader_type") or stock.get("role") or "",
+                "status": stock.get("current_status") or stock.get("status") or "",
+            })
+
         leaders = self._data.get("tier3_sector_leaders", [])
 
         for item in leaders:
@@ -270,8 +392,9 @@ class WatchlistCollector:
             code = parts[0].strip()
             name = parts[1].strip() if len(parts) > 1 else code
             sector = item.get("sector", "")
-            if not code:
+            if not code or code in seen:
                 continue
+            seen.add(code)
 
             r = self.registry.call("get_stock_daily", code, trade_date)
             if not r.success:

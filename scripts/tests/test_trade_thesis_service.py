@@ -43,16 +43,16 @@ class TestThesisDataclass:
 
 
 # ──────────────────────────────────────────────────────────────
-# S2: validators.TRADE_MODES 枚举(plan U3:8 个 mode 含 gap_jump)
+# S2: validators.TRADE_MODES 枚举(plan U3 + 情绪接力 mode)
 # ──────────────────────────────────────────────────────────────
 
 class TestTradeModeValidators:
-    def test_trade_modes_contains_all_eight_enum_values(self):
+    def test_trade_modes_contains_expected_enum_values(self):
         from services.trade_thesis.validators import TRADE_MODES
 
         assert set(TRADE_MODES) == {
             "break", "dip", "trend", "scalp",
-            "swing", "arbitrage", "gap_jump", "other",
+            "swing", "arbitrage", "gap_jump", "sentiment_relay", "other",
         }
 
     def test_validate_trade_mode_accepts_valid_value(self):
@@ -61,6 +61,7 @@ class TestTradeModeValidators:
         # 不抛即可
         validate_trade_mode("break")
         validate_trade_mode("gap_jump")
+        validate_trade_mode("sentiment_relay")
 
     def test_validate_trade_mode_rejects_invalid_value(self):
         from services.trade_thesis.validators import validate_trade_mode

@@ -5,32 +5,42 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
-import yaml
 
 from collectors.watchlist import WatchlistCollector
 from providers.base import DataResult
 
 
-def test_collect_watchlist_announcements_tier1_tier2_dedupe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    wl = tmp_path / "watchlist.yaml"
-    wl.write_text(
-        yaml.dump(
-            {
-                "tier1_core": [
-                    {"stock_code": "000001.SZ", "stock_name": "A"},
-                    {"stock_code": " 000002.SZ ", "stock_name": "B"},
-                ],
-                "tier2_watch": [
-                    {"stock_code": "000002.SZ", "stock_name": "B_dup"},
-                    {"stock_code": "688000.SH", "stock_name": "C"},
-                ],
-            },
-            allow_unicode=True,
-        ),
-        encoding="utf-8",
+@pytest.fixture
+def sqlite_db(tmp_path: Path):
+    from db.connection import get_db
+    from db.migrate import migrate
+
+    path = tmp_path / "watchlist.db"
+    with get_db(path) as conn:
+        migrate(conn)
+    return path
+
+
+def _insert_watchlist(conn, code: str, name: str, tier: str) -> None:
+    from db import queries as Q
+
+    Q.insert_watchlist(
+        conn,
+        stock_code=code,
+        stock_name=name,
+        tier=tier,
+        input_by="test",
     )
 
-    monkeypatch.setattr("collectors.watchlist.WATCHLIST_FILE", wl)
+
+def test_collect_watchlist_announcements_tier1_tier2_dedupe(sqlite_db):
+    from db.connection import get_db
+
+    with get_db(sqlite_db) as conn:
+        _insert_watchlist(conn, "000001.SZ", "A", "tier1_core")
+        _insert_watchlist(conn, " 000002.SZ ", "B", "tier1_core")
+        _insert_watchlist(conn, "000002.SZ", "B_dup", "tier2_watch")
+        _insert_watchlist(conn, "688000.SH", "C", "tier2_watch")
 
     registry = MagicMock()
 
@@ -50,8 +60,8 @@ def test_collect_watchlist_announcements_tier1_tier2_dedupe(tmp_path: Path, monk
         announcements_for(a[0], a[1], a[2]) if method == "get_stock_announcements" else DataResult(data=[], source="mock")
     )
 
-    col = WatchlistCollector(registry)
-    out = col.collect_watchlist_announcements("2026-03-27", "2026-03-30")
+    col = WatchlistCollector(registry, db_path=sqlite_db)
+    out = col.collect_watchlist_announcements("2026-03-27", "2026-03-30", db_path=sqlite_db)
 
     assert set(out.keys()) == {"000001.SZ", "000002.SZ", "688000.SH"}
     assert out["000001.SZ"]["announcements"][0]["title"] == "A公告"
@@ -59,6 +69,6 @@ def test_collect_watchlist_announcements_tier1_tier2_dedupe(tmp_path: Path, monk
     assert out["688000.SH"]["name"] == "C"
 
 
-def test_collect_watchlist_announcements_no_registry():
-    col = WatchlistCollector(None)
-    assert col.collect_watchlist_announcements("2026-03-01", "2026-03-30") == {}
+def test_collect_watchlist_announcements_no_registry(sqlite_db):
+    col = WatchlistCollector(None, db_path=sqlite_db)
+    assert col.collect_watchlist_announcements("2026-03-01", "2026-03-30", db_path=sqlite_db) == {}

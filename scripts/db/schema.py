@@ -185,6 +185,8 @@ CREATE TABLE IF NOT EXISTS watchlist (
     entry_condition TEXT,
     entry_mode TEXT,
     position_plan TEXT,
+    current_price REAL,
+    current_change_pct REAL,
     volume_status TEXT,
     current_status TEXT,
     leader_type TEXT,
@@ -193,6 +195,7 @@ CREATE TABLE IF NOT EXISTS watchlist (
     status TEXT DEFAULT 'watching',
     note TEXT,
     source_note_id INTEGER,
+    input_by TEXT,
     updated_at TEXT
 );
 """
@@ -490,7 +493,8 @@ CREATE TABLE IF NOT EXISTS trade_thesis (
     target_price REAL,
     stop_loss REAL,
     trade_mode TEXT NOT NULL CHECK(trade_mode IN (
-        'break', 'dip', 'trend', 'scalp', 'swing', 'arbitrage', 'gap_jump', 'other'
+        'break', 'dip', 'trend', 'scalp', 'swing', 'arbitrage',
+        'gap_jump', 'sentiment_relay', 'other'
     )),
     mode_note TEXT,
     market_region TEXT NOT NULL DEFAULT 'a-share' CHECK(market_region IN ('a-share', 'hk', 'us')),

@@ -580,11 +580,37 @@ class TestCoerceHoldingsYaml:
 # ── 关注池 ────────────────────────────────────────────────────────
 
 class TestWatchlist:
+    def test_add_requires_input_by(self, tmp_db):
+        result = _run_cli(
+            "watchlist-add", "--code", "300750",
+            "--name", "宁德时代CLI", "--tier", "tier1_core",
+            tmp_db=tmp_db,
+        )
+        assert result.returncode != 0
+        assert "--input-by" in result.stderr
+
+    def test_add_records_input_by(self, tmp_db):
+        result = _run_cli(
+            "watchlist-add", "--code", "300750",
+            "--name", "宁德时代CLI", "--tier", "tier1_core",
+            "--input-by", "cursor",
+            tmp_db=tmp_db,
+        )
+        assert result.returncode == 0
+
+        with get_connection(tmp_db) as conn:
+            row = conn.execute(
+                "SELECT input_by FROM watchlist WHERE stock_code = ?",
+                ("300750",),
+            ).fetchone()
+        assert row["input_by"] == "cursor"
+
     def test_add_basic(self, tmp_db):
         result = _run_cli(
             "watchlist-add", "--code", "300750",
             "--name", "宁德时代CLI", "--tier", "tier1_core",
             "--reason", "龙头测试",
+            "--input-by", "cursor",
             tmp_db=tmp_db,
         )
         assert result.returncode == 0
@@ -594,6 +620,7 @@ class TestWatchlist:
         result = _run_cli(
             "watchlist-add", "--code", "300750",
             "--name", "test", "--tier", "invalid_tier",
+            "--input-by", "cursor",
             tmp_db=tmp_db,
         )
         assert result.returncode != 0
@@ -602,14 +629,23 @@ class TestWatchlist:
         _run_cli(
             "watchlist-add", "--code", "000002",
             "--name", "万科", "--tier", "tier2_watch",
+            "--input-by", "cursor",
             tmp_db=tmp_db,
         )
-        result = _run_cli("watchlist-remove", "--code", "000002", tmp_db=tmp_db)
+        result = _run_cli(
+            "watchlist-remove", "--code", "000002",
+            "--input-by", "cursor",
+            tmp_db=tmp_db,
+        )
         assert result.returncode == 0
         assert "已从关注池移除" in result.stdout
 
     def test_remove_nonexistent(self, tmp_db):
-        result = _run_cli("watchlist-remove", "--code", "999999", tmp_db=tmp_db)
+        result = _run_cli(
+            "watchlist-remove", "--code", "999999",
+            "--input-by", "cursor",
+            tmp_db=tmp_db,
+        )
         assert result.returncode == 0
         assert "未在关注池中找到" in result.stdout
 
@@ -617,11 +653,13 @@ class TestWatchlist:
         _run_cli(
             "watchlist-add", "--code", "600519",
             "--name", "贵州茅台", "--tier", "tier2_watch",
+            "--input-by", "cursor",
             tmp_db=tmp_db,
         )
         result = _run_cli(
             "watchlist-update", "--code", "600519",
             "--tier", "tier1_core",
+            "--input-by", "cursor",
             tmp_db=tmp_db,
         )
         assert result.returncode == 0
@@ -632,9 +670,14 @@ class TestWatchlist:
         _run_cli(
             "watchlist-add", "--code", "000858",
             "--name", "五粮液", "--tier", "tier3_sector",
+            "--input-by", "cursor",
             tmp_db=tmp_db,
         )
-        result = _run_cli("watchlist-update", "--code", "000858", tmp_db=tmp_db)
+        result = _run_cli(
+            "watchlist-update", "--code", "000858",
+            "--input-by", "cursor",
+            tmp_db=tmp_db,
+        )
         assert result.returncode == 0
         assert "未指定" in result.stdout
 
@@ -642,6 +685,7 @@ class TestWatchlist:
         _run_cli(
             "watchlist-add", "--code", "601318",
             "--name", "中国平安", "--tier", "tier1_core",
+            "--input-by", "cursor",
             tmp_db=tmp_db,
         )
         result = _run_cli("watchlist-list", tmp_db=tmp_db)
@@ -652,6 +696,7 @@ class TestWatchlist:
         _run_cli(
             "watchlist-add", "--code", "601166",
             "--name", "兴业银行", "--tier", "tier2_watch",
+            "--input-by", "cursor",
             tmp_db=tmp_db,
         )
         result = _run_cli("watchlist-list", "--tier", "tier2_watch", tmp_db=tmp_db)

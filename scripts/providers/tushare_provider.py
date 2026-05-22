@@ -945,9 +945,22 @@ class TushareProvider(DataProvider):
         }
 
         codes = [str(c or "").strip().upper() for c in (ts_codes or []) if str(c or "").strip()]
-        for code in codes:
-            if code in codes_done:
-                continue
+        missing_codes = [code for code in codes if code not in codes_done]
+        try:
+            fallback_limit = int(self.config.get("suspend_reason_single_fallback_limit", 20))
+        except (TypeError, ValueError):
+            fallback_limit = 20
+        if fallback_limit <= 0 or len(missing_codes) > fallback_limit:
+            logger.warning(
+                "suspend 单票原因补查跳过：缺失 %s 只，超过上限 %s；仅使用批量结果",
+                len(missing_codes),
+                fallback_limit,
+            )
+            for item in merged:
+                item.setdefault("code", item.get("ts_code"))
+            return DataResult(data=merged, source="tushare:suspend")
+
+        for code in missing_codes:
             row_added = False
             for kwargs in (
                 {"ts_code": code, "suspend_date": d},

@@ -341,7 +341,7 @@ class TestAddNoteWithStocksCLI:
         # 先加入关注池
         _run_cli(
             "watchlist-add", "--code", "300750", "--name", "宁德时代",
-            "--tier", "tier3_sector", tmp_db=tmp_db,
+            "--tier", "tier3_sector", "--input-by", "cursor", tmp_db=tmp_db,
         )
         stocks = json.dumps([
             {"code": "300750", "name": "宁德时代", "tier": "tier3_sector"},
@@ -362,7 +362,7 @@ class TestAddNoteWithStocksCLI:
     def test_all_stocks_already_in_watchlist(self, tmp_db):
         _run_cli(
             "watchlist-add", "--code", "300750", "--name", "宁德时代",
-            "--tier", "tier3_sector", tmp_db=tmp_db,
+            "--tier", "tier3_sector", "--input-by", "cursor", tmp_db=tmp_db,
         )
         stocks = json.dumps([{"code": "300750", "name": "宁德时代", "tier": "tier3_sector"}])
         result = _run_cli(
@@ -498,6 +498,7 @@ class TestWatchlistSyncFromNoteCLI:
 
         r2 = _run_cli(
             "watchlist-sync-from-note", "--note-id", str(nid),
+            "--input-by", "cursor",
             tmp_db=tmp_db,
         )
         assert r2.returncode == 0
@@ -514,6 +515,7 @@ class TestWatchlistSyncFromNoteCLI:
     def test_sync_from_note_missing(self, tmp_db):
         r = _run_cli(
             "watchlist-sync-from-note", "--note-id", "99999",
+            "--input-by", "cursor",
             tmp_db=tmp_db,
         )
         assert r.returncode == 0
@@ -529,6 +531,7 @@ class TestWatchlistAddSourceNoteIdCLI:
         result = _run_cli(
             "watchlist-add", "--code", "688041", "--name", "海光信息",
             "--tier", "tier2_watch", "--source-note-id", "42",
+            "--input-by", "cursor",
             tmp_db=tmp_db,
         )
         assert result.returncode == 0
@@ -545,7 +548,7 @@ class TestWatchlistAddSourceNoteIdCLI:
     def test_without_source_note_id_works(self, tmp_db):
         result = _run_cli(
             "watchlist-add", "--code", "300750", "--name", "宁德时代",
-            "--tier", "tier3_sector",
+            "--tier", "tier3_sector", "--input-by", "cursor",
             tmp_db=tmp_db,
         )
         assert result.returncode == 0

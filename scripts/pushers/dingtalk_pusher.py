@@ -33,6 +33,7 @@ class DingTalkPusher(MessagePusher):
         super().__init__(config)
         self.webhook_token = ""
         self.webhook_secret = ""
+        self.trust_env = False
 
     def initialize(self) -> bool:
         self.webhook_token = self.config.get("webhook_token") or os.getenv(
@@ -41,6 +42,9 @@ class DingTalkPusher(MessagePusher):
         self.webhook_secret = self.config.get("webhook_secret") or os.getenv(
             "DINGTALK_WEBHOOK_SECRET", ""
         )
+        # 默认不走系统代理，避免自动化环境里 HTTP(S)_PROXY 指向不可达本机代理导致推送失败。
+        # 如确需走代理，可在 config 里显式传入 trust_env=true。
+        self.trust_env = bool(self.config.get("trust_env", False))
         self.enabled = bool(self.webhook_token and self.webhook_secret)
         if not self.enabled:
             logger.warning("DingTalk: 未配置 webhook token 或 secret")
@@ -57,7 +61,9 @@ class DingTalkPusher(MessagePusher):
 
     def _post(self, url: str, payload: dict) -> bool:
         try:
-            resp = requests.post(url, json=payload, timeout=10)
+            sess = requests.Session()
+            sess.trust_env = self.trust_env
+            resp = sess.post(url, json=payload, timeout=10)
             if resp.status_code != 200:
                 logger.error(
                     f"DingTalk 发送失败: {resp.status_code} {getattr(resp, 'text', '')}"

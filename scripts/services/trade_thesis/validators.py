@@ -2,7 +2,7 @@ from __future__ import annotations
 
 TRADE_MODES: tuple[str, ...] = (
     "break", "dip", "trend", "scalp",
-    "swing", "arbitrage", "gap_jump", "other",
+    "swing", "arbitrage", "gap_jump", "sentiment_relay", "other",
 )
 
 MARKET_REGIONS: tuple[str, ...] = ("a-share", "hk", "us")
