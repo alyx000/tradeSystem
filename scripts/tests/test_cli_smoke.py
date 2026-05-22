@@ -373,6 +373,49 @@ def test_ingest_inspect_json_includes_health_status(tmp_path, monkeypatch, capsy
     assert payload["health"]["top_failed_interfaces"][0]["interface_name"] == "margin"
 
 
+def test_ingest_run_executes_inside_proxy_shield(monkeypatch) -> None:
+    """守 cmd_ingest 代理作用域：CLI `ingest run` 的 execute_stage 必须在
+    without_standard_http_proxy() 上下文内执行（与 cmd_post 同根因，避免走系统代理超时）。
+    旧代码 execute 调用在屏蔽块外 → observed == [False] → 此用例变红。"""
+    from unittest.mock import MagicMock
+
+    from main import build_parser, cmd_ingest
+
+    state = {"active": False, "observed": []}
+
+    class _ProxyTracker:
+        def __call__(self):
+            return self
+
+        def __enter__(self):
+            state["active"] = True
+            return self
+
+        def __exit__(self, *exc):
+            state["active"] = False
+            return False
+
+    class _FakeService:
+        def __init__(self, registry=None):
+            self.registry = registry
+
+        def execute_stage(self, stage, date, *, triggered_by, input_by):
+            state["observed"].append(state["active"])
+            return {"status": "ok", "recorded_runs": 0, "runs": []}
+
+    registry = MagicMock()
+    registry.initialize_all.return_value = {}
+    monkeypatch.setattr("main.setup_providers", lambda cfg: registry)
+    monkeypatch.setattr("main.without_standard_http_proxy", _ProxyTracker())
+    monkeypatch.setattr("services.ingest_service.IngestService", _FakeService)
+
+    parser = build_parser()
+    args = parser.parse_args(["ingest", "run", "--stage", "post_core", "--date", "2026-04-04", "--json"])
+    cmd_ingest({}, args)
+
+    assert state["observed"] == [True]
+
+
 def test_ingest_retry_json_includes_status_and_filters(tmp_path, monkeypatch, capsys) -> None:
     from db.connection import get_connection
     from db.migrate import migrate

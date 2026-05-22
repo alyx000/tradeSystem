@@ -173,9 +173,13 @@ def cmd_ingest(config: dict, args) -> None:
             **summary,
         }
     elif command == "run":
-        payload = service.execute_stage(args.stage, args.date, triggered_by="cli", input_by=args.input_by)
+        # 与 cmd_post 内嵌采集同理：provider HTTP 调用在「调用时」读 os.environ，
+        # 上面初始化块退出后代理已恢复，故执行也必须重新进入屏蔽上下文，否则走系统代理超时。
+        with without_standard_http_proxy():
+            payload = service.execute_stage(args.stage, args.date, triggered_by="cli", input_by=args.input_by)
     elif command == "run-interface":
-        payload = service.execute_interface(args.name, args.date, triggered_by="cli", input_by=args.input_by)
+        with without_standard_http_proxy():
+            payload = service.execute_interface(args.name, args.date, triggered_by="cli", input_by=args.input_by)
     else:
         payload = {
             "status": "validation_error",
@@ -1019,17 +1023,22 @@ def cmd_post(config: dict, target_date: str):
     except Exception as e:
         logger.warning(f"Obsidian 盘后数据导出失败：{e}")
 
-    # IngestService 快照采集：写入 market_fact_snapshots / raw_interface_payloads
-    # registry 已在 without_standard_http_proxy() 块内初始化，此处复用
+    # IngestService 快照采集：写入 market_fact_snapshots / raw_interface_payloads。
+    # 必须重新进入 without_standard_http_proxy()：provider 的 HTTP 调用在「调用时」读 os.environ，
+    # 复用上面块内初始化的 registry 对象不会携带代理屏蔽，否则这段会走系统代理（如 Clash）整段超时。
     try:
         from services.ingest_service import IngestService
         ingest_svc = IngestService(registry=registry)
-        for stage in ("post_core", "post_extended"):
-            # 这里属于盘后主流程内部带起的采集，不是用户显式执行 ingest CLI。
-            result = ingest_svc.execute_stage(stage, target_date, triggered_by="system", input_by=None)
-            ok = sum(1 for v in result.get("interfaces", {}).values() if v.get("status") == "success")
-            total = len(result.get("interfaces", {}))
-            logger.info(f"IngestService {stage} 完成：{ok}/{total} 接口成功")
+        with without_standard_http_proxy():
+            for stage in ("post_core", "post_extended"):
+                # 这里属于盘后主流程内部带起的采集，不是用户显式执行 ingest CLI。
+                result = ingest_svc.execute_stage(stage, target_date, triggered_by="system", input_by=None)
+                runs = result.get("runs", [])
+                ok = sum(1 for r in runs if r.get("status") == "success")
+                empty = sum(1 for r in runs if r.get("status") == "empty")
+                failed = sum(1 for r in runs if r.get("status") == "failed")
+                total = result.get("recorded_runs", len(runs))
+                logger.info(f"IngestService {stage} 完成：成功 {ok} / 空结果 {empty} / 失败 {failed}（共 {total}）")
     except Exception as e:
         logger.warning(f"IngestService 快照采集失败（不影响主流程）：{e}")
 

@@ -1,7 +1,6 @@
 """非交易日拦截逻辑的单元测试。"""
 from __future__ import annotations
 
-from contextlib import nullcontext
 import logging
 import sqlite3
 from pathlib import Path
@@ -10,6 +9,30 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from providers.base import DataResult
+
+
+class _ProxyTracker:
+    """可调用的代理屏蔽上下文桩：记录 enter/exit，供断言某段代码是否在屏蔽内执行。
+
+    cmd_post 会多次 `without_standard_http_proxy()`（主采集块、内嵌 ingest 块各一次），
+    各块顺序进入/退出，因此用单一 active 标志即可。
+    """
+
+    def __init__(self):
+        self.active = False
+        self.enter_count = 0
+
+    def __call__(self):
+        return self
+
+    def __enter__(self):
+        self.active = True
+        self.enter_count += 1
+        return self
+
+    def __exit__(self, *exc):
+        self.active = False
+        return False
 
 
 def _make_registry(is_trade_day_value=None, error=None, cal_data=None):
@@ -147,6 +170,7 @@ class TestPostCommandIngestAudit:
         mock_setup_pushers,
         mock_obsidian_exporter_cls,
         mock_ingest_service_cls,
+        caplog,
         tmp_path,
     ):
         from main import cmd_post
@@ -186,12 +210,28 @@ class TestPostCommandIngestAudit:
         exporter.export_post_market.return_value = None
         mock_obsidian_exporter_cls.return_value = exporter
 
+        proxy_tracker = _ProxyTracker()
+        observed_active: list[bool] = []
+
         ingest_service = MagicMock()
-        ingest_service.execute_stage.return_value = {"interfaces": {}}
+
+        def _execute_stage_side_effect(stage, *args, **kwargs):
+            # 守 Bug #2：记录每次 ingest 调用时是否处于代理屏蔽上下文。
+            # 不抛断言——cmd_post 的 ingest 块裹在 try/except Exception 里，断言会被吞掉；
+            # 改为记录 + 末尾统一断言，让回归（块在上下文外 → [False, False]）直接、可靠地变红。
+            observed_active.append(proxy_tracker.active)
+            # 守 Bug #1：返回真实契约（runs / recorded_runs），而非曾被误读的 interfaces。
+            return {
+                "recorded_runs": 2,
+                "runs": [{"status": "success"}, {"status": "failed"}],
+            }
+
+        ingest_service.execute_stage.side_effect = _execute_stage_side_effect
         mock_ingest_service_cls.return_value = ingest_service
 
-        with patch("main.without_standard_http_proxy", return_value=nullcontext()), \
-             patch("main._schedule_task_enabled", return_value=False):
+        with patch("main.without_standard_http_proxy", new=proxy_tracker), \
+             patch("main._schedule_task_enabled", return_value=False), \
+             caplog.at_level(logging.INFO):
             cmd_post({}, "2026-04-17")
 
         assert ingest_service.execute_stage.call_count == 2
@@ -199,6 +239,14 @@ class TestPostCommandIngestAudit:
         triggered_values = [call.kwargs["triggered_by"] for call in ingest_service.execute_stage.call_args_list]
         assert stages == ["post_core", "post_extended"]
         assert triggered_values == ["system", "system"]
+        # 守 Bug #2：两次 ingest 调用都必须在代理屏蔽上下文内（旧代码块在外 → [False, False]）。
+        assert observed_active == [True, True]
+        # 区分"真失败"与"正常 empty"：真在屏蔽内执行就不该落到 except 兜底分支。
+        assert "IngestService 快照采集失败" not in caplog.text
+        # 守 Bug #1：日志反映真实成功/空/失败数（旧代码恒打 0/0）。
+        assert "成功 1 / 空结果 0 / 失败 1" in caplog.text
+        # 主采集块 + 内嵌 ingest 块各进入一次代理屏蔽上下文。
+        assert proxy_tracker.enter_count >= 2
 
 
 # ──────────────────────────────────────────────────────────────
