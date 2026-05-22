@@ -186,6 +186,10 @@ class AkshareProvider(DataProvider):
             if hist is None or hist.empty or "Close" not in hist.columns:
                 return None
             hist = hist.sort_index()
+            # 末根 K 线常因当日未收盘/数据缺失为 NaN（^KS11 实测），跳过 NaN 取最近有效收盘
+            hist = hist.dropna(subset=["Close"])
+            if hist.empty:
+                return None
             close_val = round(float(hist["Close"].iloc[-1]), 2)
             prev_val = round(float(hist["Close"].iloc[-2]), 2) if len(hist) >= 2 else close_val
             change_pct = round((close_val - prev_val) / prev_val * 100, 2) if prev_val else 0.0
@@ -472,8 +476,11 @@ class AkshareProvider(DataProvider):
         labels = {
             "KWEB": "KWEB（中概互联网ETF）",
             "FXI": "FXI（中国大盘ETF）",
-            "HXC": "HXC（纳斯达克中国金龙ETF）",
+            "HXC": "HXC（纳斯达克中国金龙指数）",
         }
+        # 金龙是指数（NASDAQ Golden Dragon），Yahoo 符号需 ^HXC；KWEB/FXI 是 ETF，原样查询。
+        # 输出键仍用原 ticker（HXC/KWEB/FXI），不动 collectors/report 消费方。
+        yahoo_symbol = {"HXC": "^HXC"}
         try:
             import yfinance as yf
         except ImportError as e:
@@ -483,11 +490,14 @@ class AkshareProvider(DataProvider):
         try:
             for t in tickers:
                 sym = str(t).strip().upper()
-                hist = yf.Ticker(sym).history(period="5d")
+                hist = yf.Ticker(yahoo_symbol.get(sym, sym)).history(period="5d")
                 if hist is None or hist.empty or "Close" not in hist.columns:
                     out[sym] = {"error": "无K线数据", "name": labels.get(sym, sym)}
                     continue
-                hist = hist.sort_index()
+                hist = hist.sort_index().dropna(subset=["Close"])
+                if hist.empty:
+                    out[sym] = {"error": "无K线数据", "name": labels.get(sym, sym)}
+                    continue
                 close_val = float(hist["Close"].iloc[-1])
                 prev_close = float(hist["Close"].iloc[-2]) if len(hist) >= 2 else close_val
                 change_pct = (

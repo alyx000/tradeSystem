@@ -165,6 +165,10 @@ class TushareProvider(DataProvider):
             "nasdaq": ("IXIC", "纳斯达克"),
             "sp500": ("SPX", "标普500"),
             "a50": ("XIN9", "富时中国A50"),
+            # 镜像 index_global 实测支持 N225/KS11，作日经/韩国的可靠主源；
+            # 否则只能退到不稳的 yfinance + 已退化的东财 index_global_spot_em。
+            "nikkei": ("N225", "日经225"),
+            "kospi": ("KS11", "韩国综指"),
         }
         pair = code_map.get(index_name)
         if not pair:
@@ -186,10 +190,20 @@ class TushareProvider(DataProvider):
                 )
             df = df.sort_values("trade_date")
             row = df.iloc[-1]
+            close_val = float(row["close"])
+            change_val = float(row["pct_chg"])
+            # 镜像偶发返回 NaN 行：float(NaN) 不抛异常会让 success=True，
+            # registry 不再降级、报告输出 nan%。显式返回 error 以触发 AkShare 兜底。
+            if math.isnan(close_val) or math.isnan(change_val):
+                return DataResult(
+                    data=None,
+                    source=self.name,
+                    error=f"index_global 返回 NaN 行: {ts_code}",
+                )
             data = {
                 "name": display_name,
-                "close": float(row["close"]),
-                "change_pct": float(row["pct_chg"]),
+                "close": close_val,
+                "change_pct": change_val,
             }
             return DataResult(data=data, source="tushare:index_global")
         except Exception as e:

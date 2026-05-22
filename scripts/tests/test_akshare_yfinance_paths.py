@@ -86,6 +86,43 @@ def test_get_us_tickers_overnight_empty_history(mock_ticker, ak: AkshareProvider
     assert "error" in r.data["KWEB"]
 
 
+@patch("yfinance.Ticker")
+def test_get_us_tickers_overnight_hxc_uses_caret_symbol(mock_ticker, ak: AkshareProvider):
+    """金龙是指数，Yahoo 需 ^HXC；输出键仍保持 HXC 不动消费方。"""
+    mock_ticker.return_value.history.return_value = _hist_df([6400.0, 6504.73])
+    r = ak.get_us_tickers_overnight(["HXC"])
+    assert r.success
+    assert "^HXC" in str(mock_ticker.call_args)
+    assert "HXC" in r.data
+    assert r.data["HXC"]["close"] == 6504.73
+
+
+@patch("yfinance.Ticker")
+def test_get_us_tickers_overnight_hxc_all_nan(mock_ticker, ak: AkshareProvider):
+    """^HXC 全 NaN 时应返回 per-symbol error（dropna 后为空），不输出 nan。"""
+    mock_ticker.return_value.history.return_value = _hist_df([float("nan"), float("nan")])
+    r = ak.get_us_tickers_overnight(["HXC"])
+    assert r.success
+    assert "error" in r.data["HXC"]
+
+
+@patch("yfinance.Ticker")
+def test_index_from_yfinance_skips_trailing_nan(mock_ticker, ak: AkshareProvider):
+    """末根 K 线 Close 为 NaN（^KS11 实测场景）时，取前一根有效收盘。"""
+    mock_ticker.return_value.history.return_value = _hist_df([2550.0, 2600.0, float("nan")])
+    r = ak._index_from_yfinance("^KS11", "韩国综指")
+    assert r is not None
+    assert r.data["close"] == 2600.0
+
+
+@patch("yfinance.Ticker")
+def test_index_from_yfinance_all_nan_returns_none(mock_ticker, ak: AkshareProvider):
+    """全为 NaN 时返回 None，让注册表继续降级。"""
+    mock_ticker.return_value.history.return_value = _hist_df([float("nan"), float("nan")])
+    r = ak._index_from_yfinance("^N225", "日经225")
+    assert r is None
+
+
 # ---------------------------------------------------------------------------
 # get_stock_announcements（东方财富 API）
 # ---------------------------------------------------------------------------

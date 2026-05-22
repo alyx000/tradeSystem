@@ -12,6 +12,18 @@ class _StubPro:
         self.ths_index_calls: list[dict] = []
         self.ths_member_calls: list[dict] = []
         self.daily_calls: list[dict] = []
+        self.index_global_calls: list[dict] = []
+
+    def index_global(self, **kwargs):
+        self.index_global_calls.append(kwargs)
+        latest = {"DJI": 50285.66, "N225": 63339.07, "KS11": 7847.71}
+        code = kwargs.get("ts_code")
+        if code in latest:
+            return pd.DataFrame([
+                {"trade_date": "20260521", "close": latest[code] - 10, "pct_chg": 0.10},
+                {"trade_date": "20260522", "close": latest[code], "pct_chg": 0.41},
+            ])
+        return pd.DataFrame()
 
     def query(self, api_name: str, **params):
         self.query_calls.append((api_name, params))
@@ -107,6 +119,46 @@ def test_get_daily_basic_returns_records():
     assert result.source == "tushare:daily_basic"
     assert result.data[0]["ts_code"] == "300750.SZ"
     assert result.data[0]["turnover_rate"] == 3.2
+
+
+def test_get_global_index_nikkei_maps_to_n225():
+    """日经225 应注册到 Tushare 镜像 N225（与美股同源的可靠主源）。"""
+    provider = _provider()
+
+    result = provider.get_global_index("nikkei")
+
+    assert result.success
+    assert result.source == "tushare:index_global"
+    assert provider.pro.index_global_calls[-1]["ts_code"] == "N225"
+    assert result.data["name"] == "日经225"
+    assert result.data["close"] == 63339.07
+    assert result.data["change_pct"] == 0.41
+
+
+def test_get_global_index_kospi_maps_to_ks11():
+    """韩国综指 应注册到 Tushare 镜像 KS11。"""
+    provider = _provider()
+
+    result = provider.get_global_index("kospi")
+
+    assert result.success
+    assert provider.pro.index_global_calls[-1]["ts_code"] == "KS11"
+    assert result.data["name"] == "韩国综指"
+    assert result.data["close"] == 7847.71
+
+
+def test_get_global_index_returns_error_when_close_is_nan():
+    """镜像偶发返回 NaN 行时，主源应返回 error 让 registry 降级，而非静默输出 nan%。"""
+    provider = _provider()
+    nan_df = pd.DataFrame([
+        {"trade_date": "20260522", "close": float("nan"), "pct_chg": float("nan")},
+    ])
+    provider.pro.index_global = lambda **_kw: nan_df
+
+    result = provider.get_global_index("nikkei")
+
+    assert not result.success
+    assert result.data is None
 
 
 def test_get_margin_detail_adds_code_alias():
