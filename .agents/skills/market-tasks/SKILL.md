@@ -41,7 +41,13 @@ python3 main.py post --date YYYY-MM-DD
 
 ## 行业推荐定时推送
 
-把最近 3 / 7 日老师观点 + 行业信息聚合成 Top K 排行，可选 Gemini CLI 加点评，推送钉钉自定义机器人。
+把最近 3 / 7 日数据按本质拆成**三段**推送钉钉自定义机器人，三段各归各位、不相互冒充：
+
+- **📌 近期大盘判断** ← `teacher_notes.core_view`（note 级大盘观点，去重置顶）。可用 Gemini CLI 提炼成 2-4 条要点；gemini 不可用 / 命中红线则降级展示最近 3 条原始观点。
+- **🔥 行业热度榜（按老师提及）** ← `teacher_notes.sectors` 提及次数（`score = mentions × recency_decay`），仅排名 + 提及数。
+- **💡 有具体催化的行业** ← `industry_info`（真行业逻辑，按 confidence → date 倒序）。
+
+> 红线扫描只作用于 Gemini 生成的大盘判断；降级原文与催化原文是用户录入的事实层，不扫（见 `formatter.py` 注释）。
 
 定时入口（已挂 APScheduler）：
 
