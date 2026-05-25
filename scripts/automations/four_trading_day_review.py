@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import subprocess
+import sys
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -15,6 +16,8 @@ import sqlite3
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 RUN_TZ = ZoneInfo("Asia/Shanghai")
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 
 def _run_json(cmd: list[str]) -> Any:
@@ -40,6 +43,15 @@ def _parse_dt(s: str | None) -> datetime | None:
         return None
     try:
         return datetime.strptime(s, "%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return None
+
+
+def _parse_date(s: str | None) -> date | None:
+    if not s:
+        return None
+    try:
+        return datetime.strptime(s, "%Y-%m-%d").date()
     except Exception:
         return None
 
@@ -112,6 +124,10 @@ def _try_get_last_n_trade_days(n: int, as_of: date) -> list[str] | None:
         return None
 
 
+def _trade_day_index(days: list[str]) -> dict[str, int]:
+    return {d: i for i, d in enumerate(days)}
+
+
 def _group_trade_actions(day_rows: list[dict]) -> list[dict[str, Any]]:
     grouped: dict[tuple[str, str], dict[str, Any]] = {}
     for r in day_rows:
@@ -178,6 +194,228 @@ def _format_actions(actions: list[dict[str, Any]]) -> str:
     return "；".join(parts) if parts else "无券商成交流水"
 
 
+def _format_ratio(x: float | None) -> str:
+    if x is None:
+        return "-"
+    if x == float("inf"):
+        return "∞"
+    return f"{x:.2f}"
+
+
+def _format_pct(x: float | None) -> str:
+    return f"{x * 100:.1f}%" if x is not None else "-"
+
+
+def _format_signed_money(x: float | None) -> str:
+    if x is None:
+        return "-"
+    prefix = "+" if x > 0 else ""
+    return f"{prefix}{x:,.2f}"
+
+
+def _short_date(s: str | None) -> str:
+    if not s or len(s) < 10:
+        return s or "-"
+    return s[5:10]
+
+
+def _event_brief(event: dict[str, Any] | None) -> str:
+    if not event:
+        return "-"
+    stock_name = event.get("stock_name") or ""
+    name_part = f" {stock_name}" if stock_name else ""
+    thesis_id = event.get("sell_thesis_id")
+    thesis_part = f"思路#{thesis_id}" if thesis_id is not None else "无思路"
+    return (
+        f"{_short_date(event.get('biz_date'))} {event.get('stock_code')}{name_part} "
+        f"{_format_signed_money(float(event.get('realized_pnl') or 0.0))}（{thesis_part}）"
+    )
+
+
+def _change_note(name: str, delta: float) -> str:
+    direction = "↑" if delta > 0 else ("↓" if delta < 0 else "→")
+    explanations = {
+        "成交笔数": "看交易频率是否收缩。",
+        "买入金额": "看试错强度是否变化。",
+        "卖出金额": "看回收资金是否减少。",
+        "净现金流": "结合留仓判断仓位变化。",
+        "交易费用": "跟随交易活跃度变化。",
+        "近似已实现净盈亏": "回到具体标的复盘。",
+    }
+    return f"{name}{direction}{_format_signed_money(delta)}｜{explanations.get(name, '仅作短样本线索。')}"
+
+
+def _format_actions_compact(actions: list[dict[str, Any]], *, limit: int = 2) -> str:
+    if not actions:
+        return "无流水"
+    parts: list[str] = []
+    for action in actions[:limit]:
+        direction = "买" if (action.get("direction") or "").lower() == "buy" else "卖"
+        stock = action.get("stock_code") or action.get("stock_code_raw") or "-"
+        stock_name = action.get("stock_name") or ""
+        shares = _to_float(action.get("shares")) or 0.0
+        name_part = f" {stock_name}" if stock_name else ""
+        parts.append(f"{direction} {stock}{name_part} {shares:.0f}股")
+    if len(actions) > limit:
+        parts.append(f"等{len(actions)}项")
+    return "；".join(parts)
+
+
+def _normalize_anomaly_reason(reason: str | None) -> str:
+    if not reason:
+        return "待核查"
+    if "缺少" in reason:
+        return "缺少思路"
+    if "closed" in reason or "archived" in reason:
+        return "思路已关闭"
+    return reason.replace("thesis", "思路")
+
+
+def _format_anomaly_line(thesis_anomaly_rows: list[dict[str, Any]]) -> str:
+    if not thesis_anomaly_rows:
+        return "思路核查：无"
+    unique: dict[tuple[str, str], None] = {}
+    for row in thesis_anomaly_rows:
+        stock = str(row.get("stock_code") or "-")
+        reason = _normalize_anomaly_reason(row.get("reason"))
+        unique[(stock, reason)] = None
+    examples = "；".join(f"{stock}:{reason}" for stock, reason in list(unique.keys())[:3])
+    suffix = f"（{examples}）" if examples else ""
+    return f"思路核查：{len(unique)}项/{len(thesis_anomaly_rows)}行{suffix}"
+
+
+def _review_question_lines(
+    *,
+    realized_events_current: list[dict[str, Any]],
+    thesis_anomaly_rows: list[dict[str, Any]],
+    same_day_flip_n: int,
+    next_trade_day_flip_n: int,
+) -> list[str]:
+    questions: list[str] = []
+    for event in sorted(
+        realized_events_current,
+        key=lambda e: abs(float(e.get("realized_pnl") or 0.0)),
+        reverse=True,
+    )[:3]:
+        stock_name = event.get("stock_name") or ""
+        name_part = f" {stock_name}" if stock_name else ""
+        pnl = float(event.get("realized_pnl") or 0.0)
+        questions.append(
+            f"- {_short_date(event.get('biz_date'))} {event.get('stock_code')}{name_part}："
+            f"{_format_signed_money(pnl)}，核对止盈/止损与仓位执行。"
+        )
+    if thesis_anomaly_rows:
+        questions.append("- 思路核查：确认是否需要补复盘或重新归因。")
+    if same_day_flip_n or next_trade_day_flip_n:
+        questions.append(f"- 快进快出：同日{same_day_flip_n}/隔日{next_trade_day_flip_n}，核对是否由主线变化触发。")
+    if not questions:
+        questions.append("- 本期无闭环卖出：优先确认数据新鲜度和未闭环线索。")
+    return questions[:4]
+
+
+def _build_dingtalk_summary(
+    *,
+    current_start: str,
+    current_end: str,
+    current_agg: dict[str, Any],
+    prev_agg: dict[str, Any] | None,
+    current_day_summaries: list[dict[str, Any]],
+    realized_by_day: dict[str, float],
+    realized_events_current: list[dict[str, Any]],
+    current_realized_total: float,
+    realized_prev_total: float,
+    win_rate: float | None,
+    pl_ratio: float | None,
+    profit_factor: float | None,
+    max_win: float | None,
+    max_loss: float | None,
+    unclosed_clue_n: int,
+    unclosed_clues: list[dict[str, Any]],
+    thesis_anomaly_rows: list[dict[str, Any]],
+    same_day_flip_n: int,
+    next_trade_day_flip_n: int,
+    report_path: Path,
+) -> str:
+    change_lines: list[str] = []
+    if prev_agg:
+        change_candidates: list[tuple[str, float]] = [
+            ("成交笔数", float(current_agg["n"]) - float(prev_agg["n"])),
+            ("买入金额", float(current_agg["buy_amount"]) - float(prev_agg["buy_amount"])),
+            ("卖出金额", float(current_agg["sell_amount"]) - float(prev_agg["sell_amount"])),
+            ("净现金流", float(current_agg["net_cashflow"]) - float(prev_agg["net_cashflow"])),
+            ("交易费用", float(current_agg["fees"]) - float(prev_agg["fees"])),
+            ("近似已实现净盈亏", current_realized_total - realized_prev_total),
+        ]
+        change_lines = [
+            f"- {_change_note(name, delta)}"
+            for name, delta in sorted(change_candidates, key=lambda x: abs(x[1]), reverse=True)[:3]
+        ]
+    if not change_lines:
+        change_lines = ["- 样本不足：缺少上一组 4 个交易日可比窗口。"]
+
+    day_lines = []
+    for summary in current_day_summaries:
+        day = summary["day"]
+        realized = realized_by_day.get(day, 0.0)
+        actions = _format_actions_compact(summary["actions"])
+        day_lines.append(
+            f"- {day}：买{int(summary['buy_n'])}/卖{int(summary['sell_n'])}；"
+            f"现金流{_format_signed_money(summary['net_cashflow'])}；"
+            f"闭环{_format_signed_money(realized)}；{actions}"
+        )
+
+    win_event = max(
+        (e for e in realized_events_current if float(e.get("realized_pnl") or 0.0) > 1e-9),
+        key=lambda e: float(e.get("realized_pnl") or 0.0),
+        default=None,
+    )
+    loss_event = min(
+        (e for e in realized_events_current if float(e.get("realized_pnl") or 0.0) < -1e-9),
+        key=lambda e: float(e.get("realized_pnl") or 0.0),
+        default=None,
+    )
+
+    unclosed_codes = ",".join(
+        str(c["stock_code"]) for c in sorted(unclosed_clues, key=lambda x: -float(x.get("shares") or 0.0))[:5]
+    )
+    review_lines = _review_question_lines(
+        realized_events_current=realized_events_current,
+        thesis_anomaly_rows=thesis_anomaly_rows,
+        same_day_flip_n=same_day_flip_n,
+        next_trade_day_flip_n=next_trade_day_flip_n,
+    )
+
+    lines = [
+        f"### 4日复盘｜{current_start}~{current_end}",
+        "",
+        "### 核心",
+        f"- 笔数 {int(current_agg['n'])}（买{int(current_agg['buy_n'])}/卖{int(current_agg['sell_n'])}）｜现金流 {_format_signed_money(current_agg['net_cashflow'])}",
+        f"- 闭环 {_format_signed_money(current_realized_total)}｜胜率 {_format_pct(win_rate)}｜盈亏比 {_format_ratio(pl_ratio)}｜PF {_format_ratio(profit_factor)}",
+        f"- 未闭环 {unclosed_clue_n}｜快进快出 同{same_day_flip_n}/隔{next_trade_day_flip_n}",
+        "",
+        "### 逐日节奏",
+        *day_lines,
+        "",
+        "### Top 盈亏",
+        f"- 最大盈利：{_event_brief(win_event)}",
+        f"- 最大亏损：{_event_brief(loss_event)}",
+        "",
+        "### 重点变化",
+        *change_lines,
+        "",
+        "### 需核查",
+        f"- 未闭环：{unclosed_clue_n}" + (f"（{unclosed_codes}）" if unclosed_codes else ""),
+        f"- 快进快出：同日{same_day_flip_n} / 隔日{next_trade_day_flip_n}",
+        f"- {_format_anomaly_line(thesis_anomaly_rows)}",
+        "",
+        "### 复盘问题",
+        *review_lines,
+        "",
+        f"本地完整报告：{report_path}",
+    ]
+    return "\n".join(lines)
+
+
 def _merge_actions(day_rows: list[dict]) -> str:
     return _format_actions(_group_trade_actions(day_rows))
 
@@ -236,6 +474,7 @@ def generate(*, run_date: date, account: str, limit: int, push: bool) -> dict[st
 
     current_start, current_end = current4[0], current4[-1]
     prev_start, prev_end = (prev4[0], prev4[-1]) if prev4 else (None, None)
+    trade_day_idx = _trade_day_index(last8) if last8 else {}
 
     window_rows = _run_json(
         [
@@ -388,6 +627,7 @@ def generate(*, run_date: date, account: str, limit: int, push: bool) -> dict[st
         matched_cost = 0.0
         matched_shares = 0.0
         buy_thesis_ids = set()
+        matched_buy_dates: list[str] = []
         while remaining > 1e-9 and positions[key]:
             lot = positions[key][0]
             take = min(lot.shares, remaining)
@@ -399,6 +639,8 @@ def generate(*, run_date: date, account: str, limit: int, push: bool) -> dict[st
             remaining -= take
             matched_cost += cost_part
             matched_shares += take
+            if lot.buy_date:
+                matched_buy_dates.append(lot.buy_date)
             if lot.thesis_id is not None:
                 buy_thesis_ids.add(lot.thesis_id)
 
@@ -416,6 +658,7 @@ def generate(*, run_date: date, account: str, limit: int, push: bool) -> dict[st
             "realized_pnl": realized,
             "sell_thesis_id": r.get("thesis_id"),
             "buy_thesis_ids": sorted(buy_thesis_ids),
+            "buy_dates": sorted(set(matched_buy_dates)),
         }
         if ev["biz_date"] in current4:
             realized_events_current.append(ev)
@@ -457,12 +700,48 @@ def generate(*, run_date: date, account: str, limit: int, push: bool) -> dict[st
         if tid is None or status in ("closed", "archived"):
             need_thesis_review += 1
 
+    # quick in/out heuristics (by trade-day distance using calendar indices when available)
+    same_day_flip_n = 0
+    next_trade_day_flip_n = 0
+    for e in realized_events_current:
+        sell_day = e.get("biz_date")
+        buy_days = e.get("buy_dates") or []
+        if not sell_day or not buy_days:
+            continue
+        if sell_day in buy_days:
+            same_day_flip_n += 1
+        latest_buy_day = max(buy_days)
+        if sell_day in trade_day_idx and latest_buy_day in trade_day_idx:
+            if trade_day_idx[sell_day] - trade_day_idx[latest_buy_day] == 1:
+                next_trade_day_flip_n += 1
+
     # unclosed clues: remaining lots that were bought in current window
     unclosed_clues = []
     for (acct, stock), lots in positions.items():
         if any(l.buy_date in current4 for l in lots):
             unclosed_clues.append({"stock_code": stock, "shares": sum(l.shares for l in lots)})
     unclosed_clue_n = len(unclosed_clues)
+
+    # same-day switch heuristic: both buy and sell happen, with different stock sets
+    same_day_switch_days: list[dict[str, Any]] = []
+    for s in current_day_summaries:
+        bought = {a.get("stock_code") for a in s["actions"] if (a.get("direction") or "").lower() == "buy" and a.get("stock_code")}
+        sold = {a.get("stock_code") for a in s["actions"] if (a.get("direction") or "").lower() == "sell" and a.get("stock_code")}
+        if bought and sold and bought != sold:
+            same_day_switch_days.append({"day": s["day"], "bought": sorted(bought), "sold": sorted(sold)})
+
+    # thesis anomalies in current rows
+    thesis_anomaly_rows: list[dict[str, Any]] = []
+    for r in rows_current:
+        tid = r.get("thesis_id")
+        if tid is None:
+            thesis_anomaly_rows.append({"biz_date": r.get("biz_date"), "stock_code": r.get("stock_code"), "direction": r.get("direction"), "reason": "缺少 thesis_id"})
+            continue
+        t = thesis_by_id.get(tid) or {}
+        if (t.get("status") or "") in ("closed", "archived"):
+            thesis_anomaly_rows.append(
+                {"biz_date": r.get("biz_date"), "stock_code": r.get("stock_code"), "direction": r.get("direction"), "reason": f"thesis 状态为 {t.get('status')}"}
+            )
 
     # rhythm lines (merged)
     rhythm_lines = []
@@ -698,6 +977,62 @@ def generate(*, run_date: date, account: str, limit: int, push: bool) -> dict[st
     )
     lines.append("")
 
+    lines.append("## 收益集中度与风险点")
+    lines.append(
+        md_table(
+            ["指标", "值", "说明"],
+            [
+                ["亏损集中度(Top1/总亏损)", f"{loss_concentration*100:.1f}%" if loss_concentration is not None else "-", "越高表示亏损更集中"],
+                ["同日快进快出次数(按卖出笔)", str(same_day_flip_n), "卖出匹配到同日买入"],
+                ["隔日快进快出次数(按卖出笔)", str(next_trade_day_flip_n), "卖出匹配到上一个交易日买入(需交易日历)"],
+                ["同日切仓日数(启发式)", str(len(same_day_switch_days)), "同日既买又卖且股票集合不同"],
+                ["thesis_id 覆盖率(按流水行)", f"{thesis_coverage*100:.1f}%" if thesis_coverage is not None else "-", "本期流水行 thesis_id 非空比例"],
+                ["需核查 thesis_review 的闭环交易数(启发式)", str(need_thesis_review), "卖出 thesis 缺失或状态已关闭"],
+            ],
+        )
+    )
+    if same_day_switch_days:
+        lines.append("")
+        lines.append("### 同日切仓日明细(启发式)")
+        for x in same_day_switch_days:
+            lines.append(f"- {x['day']}：卖出 {','.join(x['sold'])}；买入 {','.join(x['bought'])}")
+    lines.append("")
+
+    lines.append("## 值得重点复盘的 3-6 个问题")
+    focus_questions: list[str] = []
+    big_pnls = sorted(realized_events_current, key=lambda e: abs(float(e.get("realized_pnl") or 0.0)), reverse=True)
+    for e in big_pnls[:3]:
+        pnl = float(e.get("realized_pnl") or 0.0)
+        focus_questions.append(
+            f"{e.get('biz_date')} {e.get('stock_code')} 已闭环盈亏(近似){_format_money(pnl)}：对应 thesis_id={e.get('sell_thesis_id') or '-'}；是否与 thesis 的 failure_condition / planned_position_pct 一致？"
+        )
+    if same_day_flip_n or next_trade_day_flip_n:
+        focus_questions.append("本期存在快进快出：同日/隔日次数偏高时，是否反映了主线不清、止损/止盈执行不一致或追涨杀跌？")
+    if thesis_anomaly_rows:
+        focus_questions.append("本期存在 thesis 异常流水（缺 thesis_id 或 thesis 已关闭仍交易）：是否需要补齐 thesis_review / 重新归因？")
+    if unmatched_sells_current:
+        focus_questions.append("本期存在卖出无法在近180日历史中完成 FIFO 匹配：是否意味着更早买入未覆盖、导入不全或标的代码映射异常？")
+    if not focus_questions:
+        focus_questions.append("本期无成交或无闭环卖出：重点复盘是否遵守了交易窗口节奏、是否有计划外下单。")
+    for q in focus_questions[:6]:
+        lines.append(f"- [判断] {q}")
+    lines.append("")
+
+    lines.append("## 需要用户补充确认的问题")
+    confirm_qs: list[str] = []
+    if latest_trade_date and latest_trade_date < current_end:
+        confirm_qs.append(
+            f"报告截止日为 {current_end}，但最近成交日期为 {latest_trade_date}：请确认 {latest_trade_date}~{current_end} 是否确实无成交，或是否尚未导入。"
+        )
+    if thesis_anomaly_rows:
+        confirm_qs.append("请确认本期 thesis 异常流水是否应补齐 thesis_id（或说明其不需要归入任何 thesis）。")
+    if unmatched_sells_current:
+        confirm_qs.append("请确认是否需要扩大 FIFO 历史窗口（当前为近180日），以覆盖更早的买入成本。")
+    confirm_qs.append("如需更精确的已实现盈亏口径，请确认是否以券商对账单/资金流水口径为准（本报告为 FIFO 近似）。")
+    for q in confirm_qs[:6]:
+        lines.append(f"- [判断] {q}")
+    lines.append("")
+
     lines.append("## 未闭环的新买入/剩余券商流水仓位线索")
     lines.append(unclosed_md)
     lines.append("")
@@ -730,19 +1065,27 @@ def generate(*, run_date: date, account: str, limit: int, push: bool) -> dict[st
             if not pusher.initialize():
                 push_err = "DingTalk 未启用（缺少 DINGTALK_WEBHOOK_TOKEN/SECRET）"
             else:
-                summary = "\n".join(
-                    [
-                        f"### 最近4个交易日交易复盘摘要（{current_start}~{current_end}）",
-                        "",
-                        f"- 成交笔数：{int(current_agg['n'])}（买{int(current_agg['buy_n'])}/卖{int(current_agg['sell_n'])}）",
-                        f"- 净现金流(近似)：{_format_money(current_agg['net_cashflow'])}",
-                        f"- 近似已实现净盈亏：{_format_money(current_realized_total)}",
-                        f"- 胜率/盈亏比/PF：{(f'{win_rate*100:.1f}%' if win_rate is not None else '-')}/{(f'{pl_ratio:.2f}' if pl_ratio is not None else '-')}/{('∞' if profit_factor==float('inf') else (f'{profit_factor:.2f}' if isinstance(profit_factor,float) else '-'))}",
-                        f"- 最大盈利/最大亏损：{_format_money(max_win)}/{_format_money(max_loss)}",
-                        f"- 未闭环线索数：{unclosed_clue_n}",
-                        "",
-                        f"本地完整报告：{report_path}",
-                    ]
+                summary = _build_dingtalk_summary(
+                    current_start=current_start,
+                    current_end=current_end,
+                    current_agg=current_agg,
+                    prev_agg=prev_agg,
+                    current_day_summaries=current_day_summaries,
+                    realized_by_day=realized_by_day,
+                    realized_events_current=realized_events_current,
+                    current_realized_total=current_realized_total,
+                    realized_prev_total=realized_prev_total,
+                    win_rate=win_rate,
+                    pl_ratio=pl_ratio,
+                    profit_factor=profit_factor if isinstance(profit_factor, float) else None,
+                    max_win=max_win,
+                    max_loss=max_loss,
+                    unclosed_clue_n=unclosed_clue_n,
+                    unclosed_clues=unclosed_clues,
+                    thesis_anomaly_rows=thesis_anomaly_rows,
+                    same_day_flip_n=same_day_flip_n,
+                    next_trade_day_flip_n=next_trade_day_flip_n,
+                    report_path=report_path,
                 )
                 push_ok = pusher.send_markdown("最近4个交易日交易复盘", summary)
                 if not push_ok:

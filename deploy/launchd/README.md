@@ -108,3 +108,32 @@ sudo pmset repeat cancel
 - 立即重载：`launchctl unload ... && launchctl load ...`
 - 看 launchd 自身是否报错：`log show --predicate 'process == "launchd"' --info --last 1h | grep tradesystem`
 - 钉钉凭据未注入：`today-runner.sh` 在 log 头打 `[env] DINGTALK_WEBHOOK_TOKEN=set DINGTALK_WEBHOOK_SECRET=set`；若任一为空 → 检查 `~/.config/tradeSystem.env` 路径、权限、行尾 CRLF
+
+## 最近 4 个交易日交易复盘（工作日 22:30）
+
+生成完整 Markdown 报告并推送钉钉短摘要：
+
+```bash
+# 1. 包装脚本可执行
+chmod +x deploy/launchd/four-trading-day-review-runner.sh
+
+# 2. 复制 plist
+cp deploy/launchd/com.alyx.tradesystem.four-trading-day-review.plist ~/Library/LaunchAgents/
+
+# 3. 加载
+launchctl load ~/Library/LaunchAgents/com.alyx.tradesystem.four-trading-day-review.plist
+
+# 4. 验证
+launchctl list | grep tradesystem.four-trading-day-review
+
+# 5. 真触发立即测试
+launchctl start com.alyx.tradesystem.four-trading-day-review
+tail -f /tmp/tradesystem-four-trading-day-review.log
+```
+
+卸载：
+
+```bash
+launchctl unload ~/Library/LaunchAgents/com.alyx.tradesystem.four-trading-day-review.plist
+rm ~/Library/LaunchAgents/com.alyx.tradesystem.four-trading-day-review.plist
+```
