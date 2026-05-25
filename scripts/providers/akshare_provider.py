@@ -796,18 +796,40 @@ class AkshareProvider(DataProvider):
     # ---- 北向资金 ----
 
     def get_northbound(self, date: str) -> DataResult:
-        """获取北向资金"""
+        """获取北向资金（akshare 历史数据降级路径）。
+
+        旧实现调用 stock_hsgt_north_net_flow_in_em（akshare 1.18.x 已移除，触发
+        AttributeError），改用现存的 stock_hsgt_hist_em 历史数据接口。
+
+        注意几个经实跑核对（akshare 1.18.49）确认的语义：
+        - 该接口返回全量历史（分页 1000/页，比旧 realtime 接口重；仅在 tushare
+          北向失败时才走此降级路径，可接受）；按请求 date **精确匹配**，不再盲取
+          最近一行，避免把另一天的数据误标成目标日期。
+        - 「当日成交净买额」列单位即为**亿元**（如 2024-08-16 为 -67.75），直接作为
+          net_buy_billion，无需再换算。
+        - 沪深交易所自 2024-08-16 起停更北向资金每日净流入：之后日期要么无该行、
+          要么该列为 NaN。NaN 必须视为「无数据」返回 error，**不得伪装成 0.0 净流入**。
+        """
         try:
-            df = self.ak.stock_hsgt_north_net_flow_in_em(symbol="北上")
-            if df.empty:
+            df = self.ak.stock_hsgt_hist_em(symbol="北向资金")
+            if df is None or df.empty:
                 return DataResult(data=None, source=self.name, error="无北向资金数据")
-            # 取最近一行
-            row = df.iloc[-1]
+            match = df[df["日期"].astype(str) == date]
+            if match.empty:
+                return DataResult(
+                    data=None, source=self.name, error=f"无北向资金数据: {date}"
+                )
+            row = match.iloc[0]
+            net = _to_float_or_none(row.get("当日成交净买额"))  # 单位：亿元
+            if net is None:  # 停更日 NaN → 无数据，不伪装成 0.0
+                return DataResult(
+                    data=None, source=self.name, error=f"无北向资金数据: {date}"
+                )
             data = {
                 "date": str(row.get("日期", "")),
-                "net_buy_billion": float(row.get("当日资金流入", 0)) / 1e4,
+                "net_buy_billion": round(net, 2),
             }
-            return DataResult(data=data, source="akshare:northbound")
+            return DataResult(data=data, source="akshare:stock_hsgt_hist_em")
         except Exception as e:
             return DataResult(data=None, source=self.name, error=str(e))
 
