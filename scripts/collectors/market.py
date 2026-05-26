@@ -699,47 +699,47 @@ class MarketCollector:
     def _compute_index_ma(self, result: dict, date: str) -> None:
         """计算上证指数日线均线（MA5/10/20/60）和三大指数 5 周均线"""
         daily_dir = BASE_DIR / "daily"
-        closes: list[float] = []
 
         sh_data = result.get("indices", {}).get("shanghai", {})
-        today_close = sh_data.get("close", 0)
-        if not today_close:
-            return
-        today_close = float(today_close)
-        closes.append(today_close)
-
-        try:
-            dirs = sorted(
-                [d for d in daily_dir.iterdir()
-                 if d.is_dir() and d.name != "example" and d.name < date],
-                key=lambda d: d.name,
-                reverse=True,
-            )
-        except FileNotFoundError:
-            dirs = []
-
-        for d in dirs[:70]:
-            pm_file = d / "post-market.yaml"
-            if not pm_file.exists():
-                continue
-            try:
-                with open(pm_file, encoding="utf-8") as f:
-                    data = yaml.safe_load(f) or {}
-                raw = data.get("raw_data", data)
-                sh = raw.get("indices", {}).get("shanghai", {})
-                c = sh.get("close", 0)
-                if c and c > 0:
-                    closes.append(float(c))
-            except Exception:
-                continue
+        sh_close_raw = sh_data.get("close")
+        today_close = float(sh_close_raw) if sh_close_raw else None
 
         ma_data: dict = {}
-        if len(closes) >= 5:
-            for period in [5, 10, 20, 60]:
-                if len(closes) >= period:
-                    ma_val = round(sum(closes[:period]) / period, 2)
-                    ma_data[f"ma{period}"] = ma_val
-                    ma_data[f"above_ma{period}"] = today_close > ma_val
+        # 日线 MA5/10/20/60：仅在上证 close 可用时计算。
+        # 上证缺失不再整体 return，避免连带深证/创业板的 5 周线一起丢（2026-05-25 实测缺口）。
+        if today_close is not None:
+            closes: list[float] = [today_close]
+            try:
+                dirs = sorted(
+                    [d for d in daily_dir.iterdir()
+                     if d.is_dir() and d.name != "example" and d.name < date],
+                    key=lambda d: d.name,
+                    reverse=True,
+                )
+            except FileNotFoundError:
+                dirs = []
+
+            for d in dirs[:70]:
+                pm_file = d / "post-market.yaml"
+                if not pm_file.exists():
+                    continue
+                try:
+                    with open(pm_file, encoding="utf-8") as f:
+                        data = yaml.safe_load(f) or {}
+                    raw = data.get("raw_data", data)
+                    sh = raw.get("indices", {}).get("shanghai", {})
+                    c = sh.get("close", 0)
+                    if c and c > 0:
+                        closes.append(float(c))
+                except Exception:
+                    continue
+
+            if len(closes) >= 5:
+                for period in [5, 10, 20, 60]:
+                    if len(closes) >= period:
+                        ma_val = round(sum(closes[:period]) / period, 2)
+                        ma_data[f"ma{period}"] = ma_val
+                        ma_data[f"above_ma{period}"] = today_close > ma_val
 
         # 5 周均线：调用 get_index_weekly 获取真实周线
         start_date = (datetime.strptime(date, "%Y-%m-%d") - timedelta(days=60)).strftime("%Y-%m-%d")

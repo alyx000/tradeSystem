@@ -96,19 +96,39 @@ class NodeSignalAnalyzer:
     # MA 突破/跌破信号
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _latest_prev_above(history: list[dict], key: str) -> bool | None:
+        """逐周期回退：返回最近一个含该 above_ma* 键的历史快照取值，找不到返回 None。"""
+        for snap in history:
+            ma = snap.get("ma") or {}
+            v = ma.get(key)
+            if v is not None:
+                return v
+        return None
+
     def _check_ma_cross(self, today: dict, history: list[dict]) -> list[dict]:
         signals: list[dict] = []
         ma_today = today.get("moving_averages", {}).get("shanghai", {})
         if not ma_today or not history:
             return signals
 
-        ma_prev = history[0].get("ma", {}) if history else {}
+        # 全部历史快照都缺 MA → 数据缺口，显式告警（区分"市场平静"与"数据缺失"），
+        # 否则前一天恰好缺采集（如 tushare 限流/缺口）会把信号静默吞掉。
+        if not any(snap.get("ma") for snap in history):
+            logger.warning(
+                "节点信号：最近 %d 天历史快照均缺失 MA 基准（moving_averages），"
+                "本轮 MA 突破/跌破信号跳过（非市场平静，而是数据缺口）",
+                len(history),
+            )
+            return signals
 
         for period, label in [(5, "MA5"), (10, "MA10"), (20, "MA20"),
                                (60, "MA60"), ("5w", "5周均线")]:
             key = f"above_ma{period}"
             today_above = ma_today.get(key)
-            prev_above = ma_prev.get(key)
+            # 逐周期回退：取最近一个含该周期基准的历史快照，跳过 partial-MA 缺口
+            # （如某日有日线 MA 却缺 5 周线），避免单周期信号被静默吞掉。
+            prev_above = self._latest_prev_above(history, key)
             ma_val = ma_today.get(f"ma{period}")
 
             if today_above is None or prev_above is None:

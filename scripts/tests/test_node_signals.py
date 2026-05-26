@@ -162,6 +162,78 @@ class TestMaCrossSignals:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# MA 基准回退：前一日缺 moving_averages 时不得静默吞掉信号
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _make_gap_day_yaml(base_dir: Path, date: str) -> None:
+    """写一个缺失 moving_averages 的快照（模拟 tushare 缺口导致指数未采集的日子）。"""
+    day_dir = base_dir / "daily" / date
+    day_dir.mkdir(parents=True, exist_ok=True)
+    data = {
+        "raw_data": {
+            "indices": {"shanghai": {"error": "所有数据源均失败"}},
+            # 故意不写 moving_averages
+            "total_volume": {"total_billion": 9000.0},
+            "limit_up": {"count": 80, "seal_rate_pct": 85.0, "broken_rate_pct": 15.0},
+            "breadth": {"advance": 2500, "total": 5000},
+        }
+    }
+    with open(day_dir / "post-market.yaml", "w", encoding="utf-8") as f:
+        yaml.dump(data, f, allow_unicode=True)
+
+
+class TestMaBaselineFallback:
+    def test_falls_back_when_latest_day_missing_ma(self, tmp_path):
+        """最近一天缺 moving_averages 时，应回退到更早一天的有效 MA 作为基准。"""
+        _make_day_yaml(tmp_path, "2026-03-24", above_ma20=False)  # 有效基准
+        _make_gap_day_yaml(tmp_path, "2026-03-25")                # 最近一天缺口（history[0]）
+
+        today = _make_today_result(above_ma20=True, ma20=3350.0)
+        analyzer = NodeSignalAnalyzer(tmp_path)
+        signals = analyzer.analyze(today, "2026-04-01")
+
+        ma20 = [s for s in signals if s["type"] == "ma_cross" and "MA20" in s["signal"]]
+        assert len(ma20) == 1, "前一天缺口时本应回退到更早有效基准并产出 MA20 信号"
+        assert ma20[0]["direction"] == "positive"
+        assert "突破" in ma20[0]["signal"]
+
+    def test_per_period_baseline_when_latest_snapshot_partial(self, tmp_path):
+        """最近快照只有日线 MA 缺 5 周线时，5 周线信号应回退到更早含 ma5w 的快照。"""
+        # 更早一天：含 above_ma5w=False（5 周线基准源）
+        _make_day_yaml(tmp_path, "2026-03-23", above_ma5w=False, above_ma20=False)
+        # 最近一天（history[0]）：只有 above_ma20，故意缺 above_ma5w / ma5w
+        day_dir = tmp_path / "daily" / "2026-03-24"
+        day_dir.mkdir(parents=True, exist_ok=True)
+        with open(day_dir / "post-market.yaml", "w", encoding="utf-8") as f:
+            yaml.dump({"raw_data": {"moving_averages": {"shanghai": {
+                "ma20": 3300.0, "above_ma20": False,
+            }}}}, f, allow_unicode=True)
+
+        today = _make_today_result(above_ma5w=True, above_ma20=False, ma5w=3370.0)
+        analyzer = NodeSignalAnalyzer(tmp_path)
+        signals = analyzer.analyze(today, "2026-04-01")
+
+        w5 = [s for s in signals if s["type"] == "ma_cross" and "5周均线" in s["signal"]]
+        assert len(w5) == 1, "history[0] 缺 ma5w 时本应回退到更早含 ma5w 的快照"
+        assert w5[0]["direction"] == "positive"
+
+    def test_warns_when_all_history_missing_ma(self, tmp_path, caplog):
+        """全部历史快照都缺 moving_averages 时，不产出 MA 信号但须告警（区分'平静'与'数据缺失'）。"""
+        for i in range(3):
+            _make_gap_day_yaml(tmp_path, f"2026-03-2{i}")
+
+        today = _make_today_result(above_ma20=True)
+        analyzer = NodeSignalAnalyzer(tmp_path)
+        with caplog.at_level("WARNING"):
+            signals = analyzer.analyze(today, "2026-04-01")
+
+        ma_signals = [s for s in signals if s["type"] == "ma_cross"]
+        assert len(ma_signals) == 0
+        assert any("MA" in rec.message and "基准" in rec.message for rec in caplog.records), \
+            "全历史缺 MA 时应记录 warning"
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # 成交额极值信号
 # ──────────────────────────────────────────────────────────────────────────────
 
