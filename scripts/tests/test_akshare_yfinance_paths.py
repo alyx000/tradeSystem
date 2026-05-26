@@ -1,6 +1,7 @@
 """AkShareProvider：亚太 yfinance 与 get_us_tickers_overnight，mock yfinance，无东财。"""
 from __future__ import annotations
 
+from datetime import date
 from unittest.mock import MagicMock, Mock, patch
 
 import pandas as pd
@@ -121,6 +122,37 @@ def test_index_from_yfinance_all_nan_returns_none(mock_ticker, ak: AkshareProvid
     mock_ticker.return_value.history.return_value = _hist_df([float("nan"), float("nan")])
     r = ak._index_from_yfinance("^N225", "日经225")
     assert r is None
+
+
+# ---------------------------------------------------------------------------
+# is_trade_day（交易日历，tool_trade_date_hist_sina 返回 datetime.date）
+# ---------------------------------------------------------------------------
+
+
+class TestIsTradeDay:
+    def _cal_df(self) -> pd.DataFrame:
+        # tool_trade_date_hist_sina 实际返回 datetime.date 对象（非字符串）
+        return pd.DataFrame({"trade_date": [date(2026, 5, 22), date(2026, 5, 26)]})
+
+    def test_recognizes_trading_day_despite_date_object(self, ak: AkshareProvider):
+        """日历是 datetime.date，astype(str) 得 '2026-05-26'；不得因去横杠比较而误判。"""
+        ak.ak.tool_trade_date_hist_sina.return_value = self._cal_df()
+        r = ak.is_trade_day("2026-05-26")
+        assert r.success
+        assert r.data is True
+
+    def test_non_trading_day_returns_false(self, ak: AkshareProvider):
+        ak.ak.tool_trade_date_hist_sina.return_value = self._cal_df()
+        r = ak.is_trade_day("2026-05-24")  # 周日，不在日历内
+        assert r.success
+        assert r.data is False
+
+    def test_accepts_compact_date_input(self, ak: AkshareProvider):
+        """对无横杠输入（20260526）也应正确判定，避免调用方格式差异再次踩坑。"""
+        ak.ak.tool_trade_date_hist_sina.return_value = self._cal_df()
+        r = ak.is_trade_day("20260526")
+        assert r.success
+        assert r.data is True
 
 
 # ---------------------------------------------------------------------------

@@ -104,6 +104,7 @@ class AkshareProvider(DataProvider):
     def get_capabilities(self) -> list[str]:
         return [
             "get_index_daily",
+            "get_market_volume",
             "get_limit_up_list",
             "get_limit_down_list",
             "get_sector_rankings",
@@ -716,6 +717,79 @@ class AkshareProvider(DataProvider):
 
     # ---- 指数周线 ----
 
+    # AkShare 指数代码映射（与 get_index_weekly 共用）
+    _INDEX_CODE_MAP = {
+        "shanghai": "000001",
+        "shenzhen": "399001",
+        "chinext": "399006",
+        "star50": "000688",
+    }
+
+    def get_index_daily(self, index_code: str, date: str) -> DataResult:
+        """获取指数单日日线（AkShare index_zh_a_hist daily）作为 tushare 降级。
+
+        输出字段对齐 tushare get_index_daily，关键差异：AkShare 成交额单位为元，
+        需 /1e8 转为亿（tushare 为千元 /1e5）。
+        """
+        try:
+            # 命名 key（shanghai…）走映射；ts-code（000300.SH）剥离后缀取 6 位码，
+            # 让 csi300/csi1000 也能享受降级，而不只是 4 个命名指数。
+            symbol = self._INDEX_CODE_MAP.get(index_code, index_code.split(".")[0])
+            d = date.replace("-", "")
+            df = self.ak.index_zh_a_hist(symbol=symbol, period="daily", start_date=d, end_date=d)
+            if df is None or df.empty:
+                return DataResult(data=None, source=self.name, error=f"无数据: {symbol} {date}")
+            # 必须精确匹配目标交易日，不得回退到邻近日期当作当日事实（事实层污染防护）
+            matched = df[df["日期"].astype(str).str.replace("-", "", regex=False) == d]
+            if matched.empty:
+                return DataResult(data=None, source=self.name, error=f"无目标日期数据: {symbol} {date}")
+            row = matched.iloc[0]
+            # close 是 MA / 节点信号的核心比较量，NaN 不得穿透成 success
+            close_raw = row["收盘"]
+            if pd.isna(close_raw):
+                return DataResult(data=None, source=self.name, error=f"收盘价无效(NaN): {symbol} {date}")
+
+            def _num(col, default=None):
+                if col not in df.columns or pd.isna(row[col]):
+                    return default
+                return float(row[col])
+
+            amount = _num("成交额")
+            data = {
+                "code": symbol,
+                "open": _num("开盘", 0.0),
+                "high": _num("最高", 0.0),
+                "low": _num("最低", 0.0),
+                "close": float(close_raw),
+                "change_pct": _num("涨跌幅"),
+                "volume": _num("成交量", 0.0),
+                "amount_billion": round(amount / 1e8, 2) if amount is not None else None,
+            }
+            return DataResult(data=data, source="akshare:index_zh_a_hist")
+        except Exception as e:
+            return DataResult(data=None, source=self.name, error=str(e))
+
+    def get_market_volume(self, date: str) -> DataResult:
+        """两市总成交额降级：取沪深指数日线成交额加总（单位：亿）。"""
+        try:
+            sh = self.get_index_daily("shanghai", date)
+            sz = self.get_index_daily("shenzhen", date)
+            if not sh.success or not sz.success:
+                err = sh.error if not sh.success else sz.error
+                return DataResult(data=None, source=self.name, error=f"无成交额数据: {date} ({err})")
+            sh_amount = sh.data.get("amount_billion")
+            sz_amount = sz.data.get("amount_billion")
+            if sh_amount is None or sz_amount is None:
+                return DataResult(data=None, source=self.name, error=f"成交额字段缺失: {date}")
+            data = {
+                "shanghai_billion": round(sh_amount, 2),
+                "shenzhen_billion": round(sz_amount, 2),
+                "total_billion": round(sh_amount + sz_amount, 2),
+            }
+            return DataResult(data=data, source="akshare:index_zh_a_hist")
+        except Exception as e:
+            return DataResult(data=None, source=self.name, error=str(e))
+
     def get_index_weekly(self, index_code: str, start_date: str, end_date: str) -> DataResult:
         """获取指数周线数据（AkShare index_zh_a_hist weekly）"""
         try:
@@ -1259,11 +1333,17 @@ class AkshareProvider(DataProvider):
     # ---- 交易日历 ----
 
     def is_trade_day(self, date: str) -> DataResult:
-        """判断是否为交易日"""
+        """判断是否为交易日。
+
+        tool_trade_date_hist_sina 的 trade_date 列是 datetime.date 对象，astype(str)
+        得到带横杠的 '2026-05-26'；两侧统一去横杠归一化再比较，避免格式不一致导致
+        所有日期恒为 False（原 bug：只去了入参一侧的横杠）。
+        """
         try:
             trade_dates = self.ak.tool_trade_date_hist_sina()
             target = date.replace("-", "")
-            is_open = target in trade_dates["trade_date"].astype(str).values
+            cal = trade_dates["trade_date"].astype(str).str.replace("-", "", regex=False)
+            is_open = bool((cal == target).any())
             return DataResult(data=is_open, source="akshare:trade_cal")
         except Exception as e:
             return DataResult(data=None, source=self.name, error=str(e))
