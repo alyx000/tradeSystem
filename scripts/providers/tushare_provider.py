@@ -13,6 +13,28 @@ from .base import DataProvider, DataResult, DataType, Confidence, Timeliness
 logger = logging.getLogger(__name__)
 
 
+def _normalize_trade_date(raw) -> str | None:
+    """index_global 的 trade_date 规范化为 YYYY-MM-DD；脏值返回 None。
+
+    覆盖 NaN/NaT/None/Timestamp/带时分秒字符串/「20260522」「2026-05-22」等形态，
+    避免「截至 nan」「截至 NaT」「截至 2026-05-22 00:00:00」泄漏到盘前简报。
+    """
+    if raw is None:
+        return None
+    if isinstance(raw, float) and math.isnan(raw):
+        return None
+    if hasattr(raw, "strftime"):  # pandas Timestamp / datetime.date
+        try:
+            raw = raw.strftime("%Y-%m-%d")
+        except Exception:
+            return None
+    digits = str(raw).strip().replace("-", "")
+    if len(digits) >= 8 and digits[:8].isdigit():
+        d = digits[:8]
+        return f"{d[:4]}-{d[4:6]}-{d[6:8]}"
+    return None
+
+
 class TushareProvider(DataProvider):
     name = "tushare"
     priority = 1
@@ -164,7 +186,9 @@ class TushareProvider(DataProvider):
             "dow_jones": ("DJI", "道琼斯"),
             "nasdaq": ("IXIC", "纳斯达克"),
             "sp500": ("SPX", "标普500"),
-            "a50": ("XIN9", "富时中国A50"),
+            # a50 故意不在此：盘前「隔夜」语境要 SGX A50 夜盘期货（含美股时段情绪），
+            # 由 akshare futures_global_spot_em 提供；XIN9 指数只有中国时段前日收盘，
+            # 当作「A50期货」会语义错位。tushare 返回 unsupported 触发 registry 降级。
             # 镜像 index_global 实测支持 N225/KS11，作日经/韩国的可靠主源；
             # 否则只能退到不稳的 yfinance + 已退化的东财 index_global_spot_em。
             "nikkei": ("N225", "日经225"),
@@ -200,10 +224,14 @@ class TushareProvider(DataProvider):
                     source=self.name,
                     error=f"index_global 返回 NaN 行: {ts_code}",
                 )
+            # 数据交易日：美股跨周末/美国节假日时取到的是上一个美股交易日（如周一休市→上周五），
+            # 带 as_of 让简报标注「截至 日期」，避免被误读为「日期不对」。脏值规范化为 None
+            # （见 _normalize_trade_date），不让 nan/NaT/带时分秒透传成「截至 nan」。
             data = {
                 "name": display_name,
                 "close": close_val,
                 "change_pct": change_val,
+                "as_of": _normalize_trade_date(row.get("trade_date")),
             }
             return DataResult(data=data, source="tushare:index_global")
         except Exception as e:

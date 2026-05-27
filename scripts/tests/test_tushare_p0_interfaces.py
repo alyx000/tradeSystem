@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import pandas as pd
+import pytest
 
 from providers.tushare_provider import TushareProvider
 
@@ -159,6 +160,55 @@ def test_get_global_index_returns_error_when_close_is_nan():
 
     assert not result.success
     assert result.data is None
+
+
+def test_get_global_index_exposes_as_of_trade_date():
+    """国际指数须带 as_of（数据交易日，YYYY-MM-DD），让简报标注「截至 日期」可验证。
+
+    背景：美股跨周末/美国节假日时，盘前简报显示的是上一个美股交易日收盘（如周一休市→上周五），
+    不标日期会被误读为「日期不对」。as_of 让混合市场日期一目了然。
+    """
+    provider = _provider()
+    result = provider.get_global_index("nikkei")
+    assert result.data["as_of"] == "2026-05-22", "trade_date 20260522 应规范化为 2026-05-22"
+
+
+def test_a50_not_handled_by_tushare_falls_through_to_akshare_futures():
+    """A50 盘前是「隔夜」语境，应走 akshare A50 期货（夜盘价），而非 tushare XIN9 指数前日收盘。
+
+    tushare 不再认领 a50，返回 unsupported，让 registry 降级到 akshare futures_global_spot_em。
+    """
+    provider = _provider()
+    result = provider.get_global_index("a50")
+    assert not result.success
+    assert "未支持" in (result.error or ""), "a50 应从 tushare code_map 移除，触发 registry 降级"
+
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        ("20260522", "2026-05-22"),       # 8 位纯数字
+        ("2026-05-22", "2026-05-22"),     # 已带横杠
+        ("2026-05-22 00:00:00", "2026-05-22"),  # 带时分秒（剥掉）
+        (None, None),                     # 缺失
+        (float("nan"), None),             # 浮点 NaN
+        ("nan", None),                    # 字符串 nan
+        ("None", None),                   # 字符串 None
+        ("", None),                       # 空串
+    ],
+)
+def test_normalize_trade_date_handles_dirty_values(raw, expected):
+    """脏值（NaN/None/空/带时分秒）须规范化为 None 或干净 YYYY-MM-DD，
+    避免「截至 nan」「截至 2026-05-22 00:00:00」泄漏到简报。"""
+    from providers.tushare_provider import _normalize_trade_date
+    assert _normalize_trade_date(raw) == expected
+
+
+def test_normalize_trade_date_handles_timestamp():
+    """pandas Timestamp 应转成 YYYY-MM-DD，不带时分秒。"""
+    from providers.tushare_provider import _normalize_trade_date
+    ts = pd.Timestamp("2026-05-22 09:30:00")
+    assert _normalize_trade_date(ts) == "2026-05-22"
 
 
 def test_get_margin_detail_adds_code_alias():

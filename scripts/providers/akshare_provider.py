@@ -8,6 +8,7 @@ AkShare 数据提供者（免费，作为 tushare 的补充和降级）
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from typing import Any, Optional
 
 import pandas as pd
@@ -47,6 +48,46 @@ def _to_float_or_none(val: Any) -> float | None:
         return float(val)
     except (TypeError, ValueError):
         return None
+
+
+def _us_eastern_today():
+    """美东当前日期。优先 zoneinfo；缺 IANA 数据（如部分 launchd 环境）时退到固定 UTC-5。
+
+    固定偏移不处理夏令时（夏季美东实为 UTC-4），但只用于「这根 bar 是不是今日」的日期判定，
+    盘前简报约美东 19:00 运行，离午夜很远，1 小时误差不影响日期归属——比静默返回 None
+    （彻底跳过成形 bar 剔除、可能用未收盘价算出反号隔夜涨跌）安全得多。
+    """
+    try:
+        from zoneinfo import ZoneInfo
+
+        return datetime.now(ZoneInfo("America/New_York")).date()
+    except Exception as e:
+        from datetime import timedelta, timezone
+
+        logger.warning("zoneinfo 美东时区不可用，退到固定 UTC-5 估算今日: %s", e)
+        return datetime.now(timezone(timedelta(hours=-5))).date()
+
+
+def _overnight_from_hist(hist: pd.DataFrame, today_et) -> tuple[float, float, str] | None:
+    """从日线历史取「最近一个已收盘美股交易日」的收盘 + 隔夜涨跌幅 + as_of。
+
+    盘前简报在美股开盘前生成：若 yfinance 已带「今日」bar，那是盘前/盘中价而非结算收盘，
+    必须剔除，否则隔夜涨跌幅会拿"未收盘 vs 上一收盘"算出错误（甚至反号）的结果。
+    历史不足两个已收盘交易日时返回 None（让调用方诚实报"无隔夜对比"，不编 0.0%）。
+    """
+    if hist is None or hist.empty or "Close" not in hist.columns:
+        return None
+    hist = hist.sort_index().dropna(subset=["Close"])
+    # 剔除当日未收盘的成形 bar（最后一根日期 >= 美东今日）
+    if today_et is not None and len(hist) >= 2 and hist.index[-1].date() >= today_et:
+        hist = hist.iloc[:-1]
+    if len(hist) < 2:
+        return None
+    close_val = float(hist["Close"].iloc[-1])
+    prev_close = float(hist["Close"].iloc[-2])
+    change_pct = round((close_val - prev_close) / prev_close * 100, 2) if prev_close else 0.0
+    as_of = hist.index[-1].strftime("%Y-%m-%d")
+    return close_val, change_pct, as_of
 
 
 def _normalize_amount_to_billion(val: Any) -> float:
@@ -377,49 +418,70 @@ class AkshareProvider(DataProvider):
                 )
 
             if index_name == "us10y":
-                # 先尝试 index_global_spot_em
-                df = self._global_spot_em()
-                for kw in ("美国10年期国债", "美10年期国债", "美债10年"):
-                    sub = df[df["名称"].str.contains(kw, na=False)]
-                    if not sub.empty and pd.notna(sub.iloc[0].get("最新价")):
-                        row = sub.iloc[0]
-                        close_val = _to_float_price(row.get("最新价"))
-                        change_pct = _to_float_pct(row.get("涨跌幅"))
-                        return DataResult(
-                            data={
-                                "name": "美债10年期收益率",
-                                "close": close_val,
-                                "change_pct": change_pct,
-                                # 将涨跌幅近似转为基点（收益率×涨跌幅%×100）
-                                "change_bps": round(close_val * change_pct, 2),
-                            },
-                            source="akshare:index_global_spot_em",
-                        )
-                # 回退：bond_zh_us_rate
+                # 先尝试 index_global_spot_em（东财全球指数现货）。该端点不稳定，
+                # 抛 JSONDecodeError 时不能让异常冒泡到外层 except——否则下面的
+                # bond_zh_us_rate 回退形同死代码（实测 2026-05-26 端点宕，us10y 整体失败）。
                 try:
-                    df_bond = self.ak.bond_zh_us_rate(start_date="20200101")
-                    if df_bond is not None and not df_bond.empty:
-                        df_bond = df_bond.sort_values(df_bond.columns[0])
-                        # 找 10 年期列
-                        col_10y = next(
-                            (c for c in df_bond.columns if "10" in str(c)), None
-                        )
-                        if col_10y:
-                            row = df_bond.iloc[-1]
-                            prev_row = df_bond.iloc[-2] if len(df_bond) >= 2 else row
-                            close_val = _to_float_price(row[col_10y])
-                            prev_val = _to_float_price(prev_row[col_10y])
-                            change_bps = round((close_val - prev_val) * 100, 2)
+                    df = self._global_spot_em()
+                except Exception as spot_err:
+                    logger.warning(
+                        "us10y index_global_spot_em 不可用，回退 bond_zh_us_rate: %s", spot_err
+                    )
+                    df = None
+                if df is not None:
+                    for kw in ("美国10年期国债", "美10年期国债", "美债10年"):
+                        sub = df[df["名称"].str.contains(kw, na=False)]
+                        if not sub.empty and pd.notna(sub.iloc[0].get("最新价")):
+                            row = sub.iloc[0]
+                            close_val = _to_float_price(row.get("最新价"))
+                            change_pct = _to_float_pct(row.get("涨跌幅"))
                             return DataResult(
                                 data={
                                     "name": "美债10年期收益率",
                                     "close": close_val,
-                                    "change_bps": change_bps,
+                                    "change_pct": change_pct,
+                                    # 将涨跌幅近似转为基点（收益率×涨跌幅%×100）
+                                    "change_bps": round(close_val * change_pct, 2),
                                 },
-                                source="akshare:bond_zh_us_rate",
+                                source="akshare:index_global_spot_em",
                             )
-                except Exception:
-                    pass
+                # 回退：bond_zh_us_rate（中/美多档收益率宽表）
+                try:
+                    df_bond = self.ak.bond_zh_us_rate(start_date="20200101")
+                    if df_bond is not None and not df_bond.empty:
+                        date_col = df_bond.columns[0]
+                        df_bond = df_bond.sort_values(date_col)
+                        # 必须显式锁定「美国国债收益率10年」：原 `"10" in col` 会先命中
+                        # 「中国国债收益率10年」误报中债收益率；排除「10年-2年」利差列。
+                        col_10y = next(
+                            (
+                                c
+                                for c in df_bond.columns
+                                if "美国" in str(c) and "10年" in str(c) and "-" not in str(c)
+                            ),
+                            None,
+                        )
+                        if col_10y:
+                            # 末几行常因美债数据滞后/美股休市为 NaN，取最近一个有效交易日，
+                            # 否则 iloc[-1] 会落在当日空行→ close 归零、日期错位。
+                            valid = df_bond[df_bond[col_10y].notna()]
+                            if not valid.empty:
+                                row = valid.iloc[-1]
+                                prev_row = valid.iloc[-2] if len(valid) >= 2 else row
+                                close_val = _to_float_price(row[col_10y])
+                                prev_val = _to_float_price(prev_row[col_10y])
+                                change_bps = round((close_val - prev_val) * 100, 2)
+                                return DataResult(
+                                    data={
+                                        "name": "美债10年期收益率",
+                                        "close": close_val,
+                                        "change_bps": change_bps,
+                                        "as_of": str(row[date_col]),
+                                    },
+                                    source="akshare:bond_zh_us_rate",
+                                )
+                except Exception as bond_err:
+                    logger.warning("us10y bond_zh_us_rate 回退失败: %s", bond_err)
                 return DataResult(
                     data=None, source=self.name, error="AkShare: 未找到美债10年期数据"
                 )
@@ -473,41 +535,38 @@ class AkshareProvider(DataProvider):
             return DataResult(data=None, source=self.name, error=str(e))
 
     def get_us_tickers_overnight(self, tickers: list[str]) -> DataResult:
-        """美股 ETF 隔夜涨跌：yfinance 最近两个交易日收盘推算涨跌幅（与 VIX 一致）。"""
+        """美股 ETF 隔夜涨跌：yfinance 最近一个已收盘美股交易日 + 上一交易日推算涨跌幅。"""
         labels = {
             "KWEB": "KWEB（中概互联网ETF）",
             "FXI": "FXI（中国大盘ETF）",
-            "HXC": "HXC（纳斯达克中国金龙指数）",
+            "HXC": "HXC（纳斯达克中国金龙ETF·PGJ）",
         }
-        # 金龙是指数（NASDAQ Golden Dragon），Yahoo 符号需 ^HXC；KWEB/FXI 是 ETF，原样查询。
+        # 金龙：Yahoo 的指数符号 ^HXC 只给单点实时报价、无历史 K 线（隔夜涨跌幅恒算成 0%），
+        # 改用 PGJ（Invesco 纳斯达克金龙中国 ETF，跟踪同一指数）取可靠日线。KWEB/FXI 原样查询。
         # 输出键仍用原 ticker（HXC/KWEB/FXI），不动 collectors/report 消费方。
-        yahoo_symbol = {"HXC": "^HXC"}
+        yahoo_symbol = {"HXC": "PGJ"}
         try:
             import yfinance as yf
         except ImportError as e:
             return DataResult(data=None, source=self.name, error=f"yfinance 不可用: {e}")
 
+        today_et = _us_eastern_today()
         out: dict[str, dict] = {}
         try:
             for t in tickers:
                 sym = str(t).strip().upper()
-                hist = yf.Ticker(yahoo_symbol.get(sym, sym)).history(period="5d")
-                if hist is None or hist.empty or "Close" not in hist.columns:
-                    out[sym] = {"error": "无K线数据", "name": labels.get(sym, sym)}
+                # period=1mo：跨长周末 + 美国节假日时 5d 可能不足两个已收盘交易日。
+                hist = yf.Ticker(yahoo_symbol.get(sym, sym)).history(period="1mo")
+                parsed = _overnight_from_hist(hist, today_et)
+                if parsed is None:
+                    out[sym] = {"error": "无隔夜对比数据", "name": labels.get(sym, sym)}
                     continue
-                hist = hist.sort_index().dropna(subset=["Close"])
-                if hist.empty:
-                    out[sym] = {"error": "无K线数据", "name": labels.get(sym, sym)}
-                    continue
-                close_val = float(hist["Close"].iloc[-1])
-                prev_close = float(hist["Close"].iloc[-2]) if len(hist) >= 2 else close_val
-                change_pct = (
-                    round((close_val - prev_close) / prev_close * 100, 2) if prev_close else 0.0
-                )
+                close_val, change_pct, as_of = parsed
                 out[sym] = {
                     "name": labels.get(sym, sym),
                     "close": round(close_val, 2),
                     "change_pct": change_pct,
+                    "as_of": as_of,
                 }
             return DataResult(data=out, source="yfinance")
         except Exception as e:

@@ -88,23 +88,78 @@ def test_get_us_tickers_overnight_empty_history(mock_ticker, ak: AkshareProvider
 
 
 @patch("yfinance.Ticker")
-def test_get_us_tickers_overnight_hxc_uses_caret_symbol(mock_ticker, ak: AkshareProvider):
-    """金龙是指数，Yahoo 需 ^HXC；输出键仍保持 HXC 不动消费方。"""
-    mock_ticker.return_value.history.return_value = _hist_df([6400.0, 6504.73])
+def test_get_us_tickers_overnight_hxc_uses_pgj_etf(mock_ticker, ak: AkshareProvider):
+    """金龙改用 PGJ ETF：^HXC 在 yfinance 无历史 K 线，隔夜涨跌幅恒算成 0%。
+
+    PGJ（跟踪同一金龙指数）有可靠日线；输出键仍保持 HXC 不动消费方。
+    注意 close 是 ETF 价位（约 25），不是指数点位（约 6500）。
+    """
+    mock_ticker.return_value.history.return_value = _hist_df([25.71, 25.16])
     r = ak.get_us_tickers_overnight(["HXC"])
     assert r.success
-    assert "^HXC" in str(mock_ticker.call_args)
+    assert "PGJ" in str(mock_ticker.call_args)
+    assert "^HXC" not in str(mock_ticker.call_args)
     assert "HXC" in r.data
-    assert r.data["HXC"]["close"] == 6504.73
+    assert r.data["HXC"]["close"] == 25.16
+    assert r.data["HXC"]["change_pct"] != 0.0, "有真实历史时不应再恒 0%"
+    assert r.data["HXC"]["as_of"] == "2026-03-21"
 
 
 @patch("yfinance.Ticker")
 def test_get_us_tickers_overnight_hxc_all_nan(mock_ticker, ak: AkshareProvider):
-    """^HXC 全 NaN 时应返回 per-symbol error（dropna 后为空），不输出 nan。"""
+    """全 NaN 时应返回 per-symbol error（dropna 后为空），不输出 nan。"""
     mock_ticker.return_value.history.return_value = _hist_df([float("nan"), float("nan")])
     r = ak.get_us_tickers_overnight(["HXC"])
     assert r.success
     assert "error" in r.data["HXC"]
+
+
+@patch("yfinance.Ticker")
+def test_get_us_tickers_overnight_single_row_is_honest_not_zero(mock_ticker, ak: AkshareProvider):
+    """单行历史（^HXC 旧 bug 场景）应诚实报「无隔夜对比数据」，不编造 +0.0%。"""
+    mock_ticker.return_value.history.return_value = _hist_df([6557.0])
+    r = ak.get_us_tickers_overnight(["HXC"])
+    assert r.success
+    assert "error" in r.data["HXC"], "单行不该输出 change_pct=0.0 冒充"
+    assert "change_pct" not in r.data["HXC"]
+
+
+def _hist_with_dates(pairs: list[tuple[str, float]]) -> pd.DataFrame:
+    idx = pd.to_datetime([p[0] for p in pairs])
+    return pd.DataFrame({"Close": [p[1] for p in pairs]}, index=idx)
+
+
+def test_overnight_from_hist_uses_last_two_completed_sessions():
+    from providers.akshare_provider import _overnight_from_hist
+    h = _hist_with_dates([("2026-05-21", 25.71), ("2026-05-22", 25.16)])
+    close, chg, as_of = _overnight_from_hist(h, date(2026, 5, 26))
+    assert close == pytest.approx(25.16)
+    assert chg == pytest.approx(-2.14, abs=0.01)
+    assert as_of == "2026-05-22"
+
+
+def test_overnight_from_hist_drops_forming_today_bar():
+    """末根是「今日」未收盘成形 bar，应剔除，用最近两个已收盘日（05-21→05-22）。"""
+    from providers.akshare_provider import _overnight_from_hist
+    h = _hist_with_dates([("2026-05-21", 25.71), ("2026-05-22", 25.16), ("2026-05-26", 25.32)])
+    close, chg, as_of = _overnight_from_hist(h, date(2026, 5, 26))
+    assert as_of == "2026-05-22", "今日成形 bar 未被剔除，会拿未收盘价算隔夜"
+    assert close == pytest.approx(25.16)
+    assert chg == pytest.approx(-2.14, abs=0.01)
+
+
+def test_overnight_from_hist_insufficient_after_drop_returns_none():
+    """只有「昨收 + 今日成形」，剔除今日后仅剩 1 行，无法算隔夜对比 → None。"""
+    from providers.akshare_provider import _overnight_from_hist
+    h = _hist_with_dates([("2026-05-22", 25.16), ("2026-05-26", 25.32)])
+    assert _overnight_from_hist(h, date(2026, 5, 26)) is None
+
+
+def test_overnight_from_hist_single_row_returns_none():
+    """^HXC 式单点报价：无昨收可比 → None（诚实），不编 0.0%。"""
+    from providers.akshare_provider import _overnight_from_hist
+    h = _hist_with_dates([("2026-05-26", 6557.0)])
+    assert _overnight_from_hist(h, date(2026, 5, 26)) is None
 
 
 @patch("yfinance.Ticker")
