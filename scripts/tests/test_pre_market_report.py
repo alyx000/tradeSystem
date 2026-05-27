@@ -187,6 +187,44 @@ def test_generate_pre_market_us_china_error_and_empty_margin(tmp_path: Path):
     assert "（无融资融券汇总数据）" in md
 
 
+def test_overnight_index_shows_as_of_date(tmp_path: Path):
+    """隔夜指数带 as_of 时须标注「截至 日期」，让跨市场/跨节假日的数据日期可验证。"""
+    gen = ReportGenerator()
+    gen.daily_dir = tmp_path
+    market_data = _minimal_market_data()
+    market_data["global_indices"]["dow_jones"] = {
+        "close": 50579.7, "change_pct": 0.58, "as_of": "2026-05-22",
+    }
+    md, _ = gen.generate_pre_market(date="2026-05-26", market_data=market_data, holdings_announcements={})
+    assert "截至 2026-05-22" in md, "带 as_of 的隔夜指数应显示数据日期"
+
+
+def test_golden_dragon_shows_as_of_date(tmp_path: Path):
+    """金龙(HXC)走 PGJ ETF 历史时带 as_of，须显示「截至 日期」（隔夜跨节假日数据日期可验证）。"""
+    gen = ReportGenerator()
+    gen.daily_dir = tmp_path
+    market_data = _minimal_market_data()
+    market_data["us_china_assets"] = {
+        "HXC": {"name": "HXC（纳斯达克中国金龙ETF·PGJ）", "close": 25.16,
+                "change_pct": -2.14, "as_of": "2026-05-22"},
+    }
+    md, _ = gen.generate_pre_market(date="2026-05-26", market_data=market_data, holdings_announcements={})
+    assert "截至 2026-05-22" in md
+    assert "金龙ETF·PGJ" in md
+
+
+def test_overnight_index_without_as_of_has_no_date_suffix(tmp_path: Path):
+    """实时源（无 as_of，如 A50 夜盘期货）不应硬塞日期后缀。"""
+    gen = ReportGenerator()
+    gen.daily_dir = tmp_path
+    market_data = _minimal_market_data()
+    # a50 走期货实时报价，无 as_of
+    market_data["global_indices"]["a50"] = {"close": 15714.0, "change_pct": -0.44}
+    md, _ = gen.generate_pre_market(date="2026-05-26", market_data=market_data, holdings_announcements={})
+    a50_line = next(line for line in md.splitlines() if "A50期货" in line and "15714" in line)
+    assert "截至" not in a50_line, f"无 as_of 不应出现截至后缀: {a50_line}"
+
+
 def test_generate_pre_market_stale_margin_annotation(tmp_path: Path):
     # 融资融券走 DB 回退（stale=True）时，报告须标注"最近一次入库（截至 X）"，不冒充当日。
     gen = ReportGenerator()

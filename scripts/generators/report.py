@@ -92,8 +92,12 @@ class ReportGenerator:
             else:
                 pct = info.get("change_pct", 0)
                 sign = "+" if pct >= 0 else ""
+                # 历史日线源（tushare index_global）带 as_of：跨周末/美国节假日时数据日期早于简报日，
+                # 显式标出；实时源（akshare 期货/现货）无 as_of，不加后缀。
+                as_of = info.get("as_of")
+                as_of_str = f"，截至 {as_of}" if as_of else ""
                 lines.append(
-                    f"- [事实] {label}: {info.get('close', 'N/A')} ({sign}{pct}%) [★★★]"
+                    f"- [事实] {label}: {info.get('close', 'N/A')} ({sign}{pct}%{as_of_str}) [★★★]"
                 )
 
         lines.append("\n### 亚太股指\n")
@@ -105,8 +109,10 @@ class ReportGenerator:
             else:
                 pct = info.get("change_pct", 0)
                 sign = "+" if pct >= 0 else ""
+                as_of = info.get("as_of")
+                as_of_str = f"，截至 {as_of}" if as_of else ""
                 lines.append(
-                    f"- [事实] {label}: {info.get('close', 'N/A')} ({sign}{pct}%) [★★★]"
+                    f"- [事实] {label}: {info.get('close', 'N/A')} ({sign}{pct}%{as_of_str}) [★★★]"
                 )
 
         lines.append("\n### 风险指标\n")
@@ -121,17 +127,21 @@ class ReportGenerator:
         us10y_info = ri.get("us10y", {})
         if us10y_info and "error" not in us10y_info:
             close_val = us10y_info.get("close", "N/A")
+            # 回退源（bond_zh_us_rate）带 as_of：美债数据滞后/美股休市时数据日期会早于简报日，
+            # 显式标出截止日，避免误读为「当日实时」。
+            as_of = us10y_info.get("as_of")
+            as_of_str = f"，截至 {as_of}" if as_of else ""
             if "change_bps" in us10y_info:
                 bps = us10y_info["change_bps"]
                 bps_str = f"+{bps}bp" if bps >= 0 else f"{bps}bp"
                 lines.append(
-                    f"- [事实] 美债10年期收益率: {close_val}% ({bps_str}) [★★★]"
+                    f"- [事实] 美债10年期收益率: {close_val}% ({bps_str}{as_of_str}) [★★★]"
                 )
             else:
                 pct = us10y_info.get("change_pct", 0)
                 sign = "+" if pct >= 0 else ""
                 lines.append(
-                    f"- [事实] 美债10年期收益率: {close_val}% ({sign}{pct}%) [★★★]"
+                    f"- [事实] 美债10年期收益率: {close_val}% ({sign}{pct}%{as_of_str}) [★★★]"
                 )
 
         # 二、美股中国金龙（隔夜）
@@ -150,8 +160,10 @@ class ReportGenerator:
                 pct = info.get("change_pct", 0)
                 sign = "+" if pct >= 0 else ""
                 nm = info.get("name", sym)
+                as_of = info.get("as_of")
+                as_of_str = f"，截至 {as_of}" if as_of else ""
                 lines.append(
-                    f"- [事实] {nm}: {info.get('close', 'N/A')} ({sign}{pct}%) [★★★]"
+                    f"- [事实] {nm}: {info.get('close', 'N/A')} ({sign}{pct}%{as_of_str}) [★★★]"
                 )
 
         # 三、商品 & 汇率
