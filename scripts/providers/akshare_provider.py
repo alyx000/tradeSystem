@@ -50,37 +50,47 @@ def _to_float_or_none(val: Any) -> float | None:
         return None
 
 
-def _us_eastern_today():
-    """美东当前日期。优先 zoneinfo；缺 IANA 数据（如部分 launchd 环境）时退到固定 UTC-5。
+_US_MARKET_CLOSE_HOUR_ET = 16  # 美股 16:00 ET 收盘（半日市忽略，盘前简报在 19:00 ET 运行不受影响）
 
-    固定偏移不处理夏令时（夏季美东实为 UTC-4），但只用于「这根 bar 是不是今日」的日期判定，
-    盘前简报约美东 19:00 运行，离午夜很远，1 小时误差不影响日期归属——比静默返回 None
-    （彻底跳过成形 bar 剔除、可能用未收盘价算出反号隔夜涨跌）安全得多。
+
+def _us_eastern_now():
+    """美东当前 tz-aware datetime。优先 zoneinfo；缺 IANA 数据（如部分 launchd 环境）退固定 UTC-5。
+
+    固定偏移不处理夏令时（夏季美东实为 UTC-4），仅用于「bar 是否当日 + 是否已过收盘」判定；
+    盘前简报约美东 19:00 运行，离午夜与收盘点都很远，1 小时误差不影响判定——比静默退化
+    （跳过成形 bar 剔除、可能用未收盘价算出反号隔夜涨跌）安全得多。
     """
     try:
         from zoneinfo import ZoneInfo
 
-        return datetime.now(ZoneInfo("America/New_York")).date()
+        return datetime.now(ZoneInfo("America/New_York"))
     except Exception as e:
         from datetime import timedelta, timezone
 
-        logger.warning("zoneinfo 美东时区不可用，退到固定 UTC-5 估算今日: %s", e)
-        return datetime.now(timezone(timedelta(hours=-5))).date()
+        logger.warning("zoneinfo 美东时区不可用，退到固定 UTC-5 估算美东时间: %s", e)
+        return datetime.now(timezone(timedelta(hours=-5)))
 
 
-def _overnight_from_hist(hist: pd.DataFrame, today_et) -> tuple[float, float, str] | None:
+def _overnight_from_hist(hist: pd.DataFrame, now_et) -> tuple[float, float, str] | None:
     """从日线历史取「最近一个已收盘美股交易日」的收盘 + 隔夜涨跌幅 + as_of。
 
-    盘前简报在美股开盘前生成：若 yfinance 已带「今日」bar，那是盘前/盘中价而非结算收盘，
-    必须剔除，否则隔夜涨跌幅会拿"未收盘 vs 上一收盘"算出错误（甚至反号）的结果。
+    只剔除「仍在盘中/盘前未收盘」的当日 bar——末根日期是美东今日且现在还没到 16:00 ET 收盘
+    （或末根日期在未来）。关键：盘前简报跑在美东约 19:00（北京次日 07:00），此时当日美股已
+    收盘，当日 bar 就是要的"隔夜"数据，不能因"日期==今天"误剔（否则少取一个交易日，
+    如 05-29 简报本应取 05-28 却退成 05-27）。盘中手动跑时今日 bar 仍是成形价，照常剔除。
     历史不足两个已收盘交易日时返回 None（让调用方诚实报"无隔夜对比"，不编 0.0%）。
+
+    now_et: 美东当前 tz-aware datetime；None 则不剔除（退化）。
     """
     if hist is None or hist.empty or "Close" not in hist.columns:
         return None
     hist = hist.sort_index().dropna(subset=["Close"])
-    # 剔除当日未收盘的成形 bar（最后一根日期 >= 美东今日）
-    if today_et is not None and len(hist) >= 2 and hist.index[-1].date() >= today_et:
-        hist = hist.iloc[:-1]
+    if now_et is not None and len(hist) >= 2:
+        last_date = hist.index[-1].date()
+        et_date = now_et.date()
+        still_open = last_date == et_date and now_et.hour < _US_MARKET_CLOSE_HOUR_ET
+        if last_date > et_date or still_open:
+            hist = hist.iloc[:-1]
     if len(hist) < 2:
         return None
     close_val = float(hist["Close"].iloc[-1])
@@ -550,14 +560,14 @@ class AkshareProvider(DataProvider):
         except ImportError as e:
             return DataResult(data=None, source=self.name, error=f"yfinance 不可用: {e}")
 
-        today_et = _us_eastern_today()
+        now_et = _us_eastern_now()
         out: dict[str, dict] = {}
         try:
             for t in tickers:
                 sym = str(t).strip().upper()
                 # period=1mo：跨长周末 + 美国节假日时 5d 可能不足两个已收盘交易日。
                 hist = yf.Ticker(yahoo_symbol.get(sym, sym)).history(period="1mo")
-                parsed = _overnight_from_hist(hist, today_et)
+                parsed = _overnight_from_hist(hist, now_et)
                 if parsed is None:
                     out[sym] = {"error": "无隔夜对比数据", "name": labels.get(sym, sym)}
                     continue

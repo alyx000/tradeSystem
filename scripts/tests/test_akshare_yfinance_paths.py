@@ -1,8 +1,9 @@
 """AkShareProvider：亚太 yfinance 与 get_us_tickers_overnight，mock yfinance，无东财。"""
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from unittest.mock import MagicMock, Mock, patch
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import pytest
@@ -129,37 +130,55 @@ def _hist_with_dates(pairs: list[tuple[str, float]]) -> pd.DataFrame:
     return pd.DataFrame({"Close": [p[1] for p in pairs]}, index=idx)
 
 
+_ET = ZoneInfo("America/New_York")
+
+
 def test_overnight_from_hist_uses_last_two_completed_sessions():
     from providers.akshare_provider import _overnight_from_hist
     h = _hist_with_dates([("2026-05-21", 25.71), ("2026-05-22", 25.16)])
-    close, chg, as_of = _overnight_from_hist(h, date(2026, 5, 26))
+    # 数据都在过去，now 任意都不剔
+    close, chg, as_of = _overnight_from_hist(h, datetime(2026, 5, 26, 19, 0, tzinfo=_ET))
     assert close == pytest.approx(25.16)
     assert chg == pytest.approx(-2.14, abs=0.01)
     assert as_of == "2026-05-22"
 
 
-def test_overnight_from_hist_drops_forming_today_bar():
-    """末根是「今日」未收盘成形 bar，应剔除，用最近两个已收盘日（05-21→05-22）。"""
+def test_overnight_from_hist_drops_forming_today_bar_during_session():
+    """盘中手动跑：末根是「美东今日」且未到 16:00 收盘 → 成形 bar，剔除用上一已收盘日。"""
     from providers.akshare_provider import _overnight_from_hist
-    h = _hist_with_dates([("2026-05-21", 25.71), ("2026-05-22", 25.16), ("2026-05-26", 25.32)])
-    close, chg, as_of = _overnight_from_hist(h, date(2026, 5, 26))
-    assert as_of == "2026-05-22", "今日成形 bar 未被剔除，会拿未收盘价算隔夜"
+    h = _hist_with_dates([("2026-05-26", 25.50), ("2026-05-27", 25.16), ("2026-05-28", 25.32)])
+    now = datetime(2026, 5, 28, 12, 0, tzinfo=_ET)  # 美东 05-28 盘中（< 16:00）
+    close, chg, as_of = _overnight_from_hist(h, now)
+    assert as_of == "2026-05-27", "盘中今日(05-28)成形 bar 应被剔除，取上一已收盘日 05-27"
     assert close == pytest.approx(25.16)
-    assert chg == pytest.approx(-2.14, abs=0.01)
+
+
+def test_overnight_from_hist_keeps_today_bar_after_close():
+    """定时简报场景（北京次日 07:00 = 美东今日 19:00 已收盘）：当日 bar 是隔夜数据，必须保留。
+
+    回归 off-by-one：05-29 早间简报应取 05-28（而非误剔成 05-27）。
+    """
+    from providers.akshare_provider import _overnight_from_hist
+    h = _hist_with_dates([("2026-05-27", 25.58), ("2026-05-28", 25.45)])
+    now = datetime(2026, 5, 28, 19, 0, tzinfo=_ET)  # 美东 05-28 19:00，已过 16:00 收盘
+    close, chg, as_of = _overnight_from_hist(h, now)
+    assert as_of == "2026-05-28", "已收盘的当日 session 不能被当成形 bar 剔掉"
+    assert close == pytest.approx(25.45)
 
 
 def test_overnight_from_hist_insufficient_after_drop_returns_none():
-    """只有「昨收 + 今日成形」，剔除今日后仅剩 1 行，无法算隔夜对比 → None。"""
+    """盘中只有「昨收 + 今日成形」，剔今日后仅剩 1 行，无法算隔夜对比 → None。"""
     from providers.akshare_provider import _overnight_from_hist
-    h = _hist_with_dates([("2026-05-22", 25.16), ("2026-05-26", 25.32)])
-    assert _overnight_from_hist(h, date(2026, 5, 26)) is None
+    h = _hist_with_dates([("2026-05-26", 25.16), ("2026-05-27", 25.32)])
+    now = datetime(2026, 5, 27, 12, 0, tzinfo=_ET)
+    assert _overnight_from_hist(h, now) is None
 
 
 def test_overnight_from_hist_single_row_returns_none():
     """^HXC 式单点报价：无昨收可比 → None（诚实），不编 0.0%。"""
     from providers.akshare_provider import _overnight_from_hist
     h = _hist_with_dates([("2026-05-26", 6557.0)])
-    assert _overnight_from_hist(h, date(2026, 5, 26)) is None
+    assert _overnight_from_hist(h, datetime(2026, 5, 26, 19, 0, tzinfo=_ET)) is None
 
 
 @patch("yfinance.Ticker")
