@@ -199,6 +199,27 @@ def test_index_from_yfinance_all_nan_returns_none(mock_ticker, ak: AkshareProvid
 
 
 # ---------------------------------------------------------------------------
+# get_limit_up_list（涨停榜：封单金额列名 = 「封板资金」，非「封单额」）
+# ---------------------------------------------------------------------------
+
+
+def test_get_limit_up_list_reads_seal_amount_from_fengban_zijin(ak: AkshareProvider):
+    """东财 stock_zt_pool_em 的封单金额列名是「封板资金」（原始元），不是「封单额」。
+
+    回归：曾误取「封单额」（不存在的列）→ seal_amount 恒为 0.0。
+    """
+    ak.ak.stock_zt_pool_em.return_value = pd.DataFrame([
+        {"代码": "300001", "名称": "高标A", "涨跌幅": 20.0, "成交额": 6.2e8,
+         "换手率": 12.0, "首次封板时间": "093000", "最后封板时间": "093000",
+         "连板数": 3, "封板资金": 1.23e8},
+    ])
+    r = ak.get_limit_up_list("2026-05-29")
+    assert r.success
+    stock = r.data["stocks"][0]
+    assert stock["seal_amount"] == pytest.approx(1.23e8), "封单金额应取自「封板资金」列"
+
+
+# ---------------------------------------------------------------------------
 # is_trade_day（交易日历，tool_trade_date_hist_sina 返回 datetime.date）
 # ---------------------------------------------------------------------------
 

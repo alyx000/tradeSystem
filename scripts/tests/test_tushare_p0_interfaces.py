@@ -376,3 +376,31 @@ def test_get_stock_ma_normalizes_plain_code():
     assert result.data["ma5"] == 180.0
     assert result.data["volume_ma5"] == 1400.0
     assert provider.pro.daily_calls[-1]["ts_code"] == "300750.SZ"
+
+
+class _TopVolumePro:
+    """get_top_volume_stocks 专用桩：daily 走 trade_date 全市场查询。"""
+
+    def daily(self, **kwargs):
+        return pd.DataFrame([
+            {"ts_code": "600519.SH", "name": "贵州茅台", "close": 1500.0,
+             "amount": 5_000_000.0, "pct_chg": 1.2},  # amount 单位千元 → 50 亿
+        ])
+
+
+def test_get_top_volume_stocks_amount_billion_uses_qianyuan_to_yi():
+    """tushare daily.amount 单位是千元，转亿应 /1e5（千元→元×1e3，元→亿÷1e8）。
+
+    回归：曾误用 /1e4 → amount_billion 偏大 10 倍。
+    """
+    provider = TushareProvider.__new__(TushareProvider)
+    provider.name = "tushare"
+    provider.config = {}
+    provider.pro = _TopVolumePro()
+    provider._initialized = True
+
+    result = provider.get_top_volume_stocks("2026-05-29", top_n=20)
+
+    assert result.success
+    # 5_000_000 千元 = 50 亿，而非偏大 10 倍的 500 亿
+    assert result.data[0]["amount_billion"] == pytest.approx(50.0)

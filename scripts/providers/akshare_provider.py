@@ -907,7 +907,7 @@ class AkshareProvider(DataProvider):
                     "first_time": str(row.get("首次封板时间", "")),
                     "last_time": str(row.get("最后封板时间", "")),
                     "limit_times": int(row.get("连板数", 1)),
-                    "seal_amount": float(row.get("封单额", 0)),
+                    "seal_amount": float(row.get("封板资金", 0)),  # 东财列名为「封板资金」(原始元)，与 tushare fd_amount 同量级
                 })
             return DataResult(
                 data={"count": len(stocks), "stocks": stocks},

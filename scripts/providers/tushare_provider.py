@@ -521,7 +521,7 @@ class TushareProvider(DataProvider):
                     "code": str(row["ts_code"]),
                     "name": str(row.get("name", "")),
                     "close": round(float(row.get("close", 0) or 0), 2),
-                    "amount_billion": round(float(row["amount"]) / 1e4, 2),
+                    "amount_billion": round(float(row["amount"]) / 1e5, 2),  # 千元 → 亿
                     "change_pct": round(float(row.get("pct_chg", 0) or 0), 2),
                 })
             return DataResult(data=stocks, source="tushare:daily")
