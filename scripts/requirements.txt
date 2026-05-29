@@ -1,6 +1,7 @@
 # 数据采集
 tushare>=1.4.0
 akshare>=1.12.0
+pytdx>=1.72            # 通达信直连，仅用于平均股价 880003 五周均线（TdxProvider）
 
 # 工具
 pyyaml>=6.0

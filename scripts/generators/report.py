@@ -398,11 +398,14 @@ class ReportGenerator:
             if ma_items:
                 lines.append(f"\n上证均线: {'　'.join(ma_items)}")
 
-        # 四大指数 5 周线全景（沪/深/创业板/科创50），缺失的指数跳过
+        # 5 周线全景（沪/深/创业板/科创50 + 平均股价），缺失的标的跳过
         ma_all = raw_data.get("moving_averages", {})
-        idx_label = {"shanghai": "上证", "shenzhen": "深证", "chinext": "创业板", "star50": "科创50"}
+        idx_label = {
+            "shanghai": "上证", "shenzhen": "深证", "chinext": "创业板",
+            "star50": "科创50", "avg_price": "平均股价",
+        }
         wk_items = []
-        for key in ("shanghai", "shenzhen", "chinext", "star50"):
+        for key in ("shanghai", "shenzhen", "chinext", "star50", "avg_price"):
             sub = ma_all.get(key)
             if isinstance(sub, dict) and "ma5w" in sub:
                 pos = "上" if sub.get("above_ma5w") else "下"

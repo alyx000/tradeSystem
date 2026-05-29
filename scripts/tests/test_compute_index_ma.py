@@ -75,6 +75,68 @@ class TestComputeIndexMaDecoupling:
         assert ma["star50"]["ma5w"] == round(sum([1010, 1020, 1030, 1040, 1200]) / 5, 2)
         assert ma["star50"]["above_ma5w"] is True  # 1200 > 1060
 
+    def test_avg_price_5w_from_tdx_call_specific(self):
+        """平均股价经 call_specific('tdx') 取 880003 周线 → moving_averages['avg_price']。
+
+        关键：avg_price 无 indices 日收盘，day_close 取周线末根（当周 partial）；
+        且必须走 call_specific（不能 registry.call，会被 tushare 空成功遮蔽）。
+        """
+        registry = MagicMock()
+        # registry.call（沪深创科）返回空，聚焦 avg_price 路径
+        registry.call.return_value = DataResult(data=[], source="test", error="skip")
+        tdx_weekly = [
+            {"trade_date": "20260424", "close": 30.26, "open": 30.0, "high": 30.5, "low": 29.9},
+            {"trade_date": "20260430", "close": 30.92, "open": 30.3, "high": 31.0, "low": 30.2},
+            {"trade_date": "20260508", "close": 32.36, "open": 31.0, "high": 32.5, "low": 30.9},
+            {"trade_date": "20260515", "close": 32.62, "open": 32.4, "high": 32.8, "low": 32.1},
+            {"trade_date": "20260522", "close": 32.96, "open": 32.7, "high": 33.1, "low": 32.5},
+            {"trade_date": "20260529", "close": 31.28, "open": 32.4, "high": 32.4, "low": 31.0},
+        ]
+
+        def call_specific(provider, method, *args, **kwargs):
+            if provider == "tdx" and method == "get_index_weekly" and args and args[0] == "avg_price":
+                return DataResult(data=tdx_weekly, source="tdx:880003_weekly")
+            return DataResult(data=None, source="test", error="no")
+
+        registry.call_specific = call_specific
+        collector = MarketCollector(registry)
+
+        result = {"indices": {"shanghai": {"error": "x"}}}  # 无任何指数 close
+        collector._compute_index_ma(result, "2026-05-29")
+
+        ma = result.get("moving_averages", {})
+        assert "avg_price" in ma and "ma5w" in ma["avg_price"]
+        # 采集日 2026-05-29（周22）末根 20260529 同周 → 覆盖末根为 day_close(31.28，本就相同)
+        # → mean([30.92,32.36,32.62,32.96,31.28])
+        assert ma["avg_price"]["ma5w"] == round(sum([30.92, 32.36, 32.62, 32.96, 31.28]) / 5, 2)
+        assert ma["avg_price"]["above_ma5w"] is False  # 31.28 < 32.03
+
+    def test_avg_price_nan_day_close_skipped_not_nan_ma5w(self):
+        """pytdx 周线末根 close 为 NaN → avg_price 锚点失效，跳过，不写 NaN 的 ma5w。"""
+        registry = MagicMock()
+        registry.call.return_value = DataResult(data=[], source="test", error="skip")
+        tdx_weekly = [
+            {"trade_date": "20260424", "close": 30.26, "open": 30.0, "high": 30.5, "low": 29.9},
+            {"trade_date": "20260430", "close": 30.92, "open": 30.3, "high": 31.0, "low": 30.2},
+            {"trade_date": "20260508", "close": 32.36, "open": 31.0, "high": 32.5, "low": 30.9},
+            {"trade_date": "20260515", "close": 32.62, "open": 32.4, "high": 32.8, "low": 32.1},
+            {"trade_date": "20260522", "close": 32.96, "open": 32.7, "high": 33.1, "low": 32.5},
+            {"trade_date": "20260529", "close": float("nan"), "open": 32.4, "high": 32.4, "low": 31.0},
+        ]
+
+        def call_specific(provider, method, *args, **kwargs):
+            if provider == "tdx" and args and args[0] == "avg_price":
+                return DataResult(data=tdx_weekly, source="tdx:880003_weekly")
+            return DataResult(data=None, source="test", error="no")
+
+        registry.call_specific = call_specific
+        collector = MarketCollector(registry)
+        result = {"indices": {"shanghai": {"error": "x"}}}
+        collector._compute_index_ma(result, "2026-05-29")
+
+        # 锚点 NaN → 不写 avg_price（绝不写 NaN 的 ma5w 污染 DB）
+        assert "avg_price" not in result.get("moving_averages", {})
+
 
 class TestComputeIndexMaDailyPath:
     def test_shanghai_present_computes_daily_ma(self, tmp_path, monkeypatch):

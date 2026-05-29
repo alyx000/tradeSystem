@@ -431,6 +431,17 @@ class TestAugmentWeeklyCloses:
         assert result == [3160.0, 3170.0, 3180.0, 3190.0, 3250.0]
         assert not any(c != c for c in result)  # 无 NaN
 
+    def test_skips_inf_close(self):
+        """inf/-inf close 被跳过（与 NaN 同类，否则 ma5w 算成 inf 污染）。"""
+        import math as _m
+        rows = _wk([
+            ("20260424", 3160.0), ("20260430", 3170.0), ("20260508", 3180.0),
+            ("20260515", 3190.0),
+        ]) + [{"trade_date": "20260520", "close": float("inf")}]
+        result = _augment_weekly_closes(rows, "2026-05-26", 3250.0)
+        assert result == [3160.0, 3170.0, 3180.0, 3190.0, 3250.0]
+        assert all(_m.isfinite(c) for c in result)  # 无 inf
+
     def test_iso_week_boundary_across_calendar_year(self):
         """跨自然年但同 ISO 周：2025-12-29 与 2026-01-02 同属 ISO 2026-W01 → 覆盖而非追加。"""
         rows = _wk([

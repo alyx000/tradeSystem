@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from datetime import datetime, timedelta
 from pathlib import Path
 import yaml
@@ -66,7 +67,7 @@ def _augment_weekly_closes(
             cf = float(c)
         except (TypeError, ValueError):
             continue
-        if cf != cf:  # NaN（float(nan) 能过 float() 但非有限值）
+        if not math.isfinite(cf):  # NaN / inf / -inf（都能过 float() 但非有限值，会污染 ma5w）
             continue
         closes.append(cf)
         td = str(r.get("trade_date", "")).replace("-", "")[:8]  # 兼容 YYYYMMDD / YYYY-MM-DD
@@ -821,6 +822,35 @@ class MarketCollector:
         for idx_key, _day_close, target_dict in ma5w_indices:
             if idx_key != "shanghai" and target_dict:
                 all_ma[idx_key] = target_dict
+
+        # 平均股价（通达信 880003）：非市值指数，无 indices 日收盘，唯一可达源是 pytdx
+        # 直连通达信（TdxProvider）。必须 call_specific 直连 —— registry.call 会被 tushare 对
+        # 未知 code 返回「空列表 + 无 error」的 success 遮蔽（DataResult.success=error==""）。
+        # day_close 取周线末根（pytdx 周线最新一根即当周 partial，收盘=今日均价）。
+        try:
+            r = self.registry.call_specific("tdx", "get_index_weekly", "avg_price", start_date, date)
+            # r.data 为空列表时 `and r.data` 即 falsy 跳过（无需再 len()>0，非空列表 sort 后必非空，
+            # rows[-1] 不会越界）；tdx 未注册时 call_specific 返回 error → r.success False。
+            if r.success and r.data:
+                rows = sorted(r.data, key=lambda x: x.get("trade_date", ""))
+                avg_close = rows[-1].get("close")
+                # 锚点（当周 partial 收盘）必须是有限数值：avg_close 取自 pytdx 周线末根，
+                # 未在源头挡 NaN（不同于 akshare get_index_daily）；NaN 锚点会让 ma5w 算成 nan
+                # 写库污染，故 None / 非有限值一律跳过 avg_price。
+                if avg_close is not None and math.isfinite(float(avg_close)):
+                    avg_close = float(avg_close)
+                    weekly_closes = _augment_weekly_closes(r.data, date, avg_close)
+                    if len(weekly_closes) == 5:
+                        ma5w = round(sum(weekly_closes) / 5, 2)
+                        all_ma["avg_price"] = {
+                            "ma5w": ma5w,
+                            "above_ma5w": avg_close > ma5w,
+                        }
+                    else:
+                        logger.warning("5周均线: avg_price 增补当周后仍不足 5 根周线，跳过 (rows=%d)", len(r.data))
+        except Exception as e:
+            logger.debug("5周均线计算失败 avg_price: %s", e)
+
         if all_ma:
             result["moving_averages"] = all_ma
 

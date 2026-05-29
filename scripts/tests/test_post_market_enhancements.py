@@ -665,6 +665,7 @@ class TestPostMarketReport:
                     "shenzhen": {"ma5w": 15354.0, "above_ma5w": True},
                     "chinext": {"ma5w": 3801.0, "above_ma5w": False},
                     "star50": {"ma5w": 1100.0, "above_ma5w": False},
+                    "avg_price": {"ma5w": 32.03, "above_ma5w": False},
                 },
                 "limit_up": {},
                 "limit_down": {},
@@ -676,11 +677,12 @@ class TestPostMarketReport:
             md, _ = gen.generate_post_market("2026-03-28", raw)
 
         assert "5周线:" in md
-        # 四个标的都要出现在 5 周线汇总行
-        for label in ("上证", "深证", "创业板", "科创50"):
+        # 五个标的都要出现在 5 周线汇总行（含平均股价）
+        for label in ("上证", "深证", "创业板", "科创50", "平均股价"):
             assert label in md
         assert "15354.0(上)" in md   # 深证站上
         assert "3801.0(下)" in md    # 创业板跌破
+        assert "32.03(下)" in md     # 平均股价跌破
 
     def test_report_breadth_inf_displays_symbol(self):
         """报告中 decline=0 时涨跌比显示 ∞"""

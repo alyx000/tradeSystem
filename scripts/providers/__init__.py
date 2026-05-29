@@ -1,6 +1,7 @@
 from .base import DataProvider, DataResult
 from .tushare_provider import TushareProvider
 from .akshare_provider import AkshareProvider
+from .tdx_provider import TdxProvider
 from .registry import ProviderRegistry
 
 __all__ = [
@@ -8,5 +9,6 @@ __all__ = [
     "DataResult",
     "TushareProvider",
     "AkshareProvider",
+    "TdxProvider",
     "ProviderRegistry",
 ]

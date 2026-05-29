@@ -640,7 +640,7 @@ def load_config() -> dict:
 
 def setup_providers(config: dict):
     """初始化数据源注册中心"""
-    from providers import ProviderRegistry, TushareProvider, AkshareProvider
+    from providers import ProviderRegistry, TushareProvider, AkshareProvider, TdxProvider
 
     registry = ProviderRegistry()
 
@@ -660,6 +660,17 @@ def setup_providers(config: dict):
         ak = AkshareProvider(ak_config)
         ak.priority = ak_config.get("priority", 2)
         registry.register(ak)
+
+    # TDX（通达信，仅服务平均股价 880003，通过 call_specific 直连；默认启用）
+    # pytdx 缺失或配置 enabled=false 时跳过，不影响其它数据源。
+    tdx_config = config.get("providers", {}).get("tdx", {})
+    if tdx_config.get("enabled", True):
+        try:
+            tdx = TdxProvider(tdx_config)
+            tdx.priority = tdx_config.get("priority", 4)
+            registry.register(tdx)
+        except Exception as e:
+            logger.warning("TDX provider 注册失败（平均股价 5 周线将缺失）：%s", e)
 
     return registry
 
