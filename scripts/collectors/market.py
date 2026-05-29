@@ -40,6 +40,48 @@ def _normalize_source_error(err: str | None) -> str | None:
     return err
 
 
+def _augment_weekly_closes(
+    weekly_rows: list[dict], date_str: str, day_close: float, n: int = 5
+) -> list[float]:
+    """已完成周收盘序列 + 当周走动收盘 → 最近 n 根周收盘，增补后不足 n 返回 []。
+
+    根因修复：Tushare index_weekly 是「按已完成周入库」的表，进行中的当周没有行，
+    直接取 weekly_rows[-n:] 会漏掉当周 → ma5w 周内冻结、周五才跳。这里把「当周从周一到
+    今天的最新日收盘」补成当周 bar，对齐通达信/同花顺周线 MA5（每日更新）口径。源无关：
+    AkShare 周线含当周 partial bar（或周五 Tushare 已收官当周）时走「覆盖」分支，避免重复。
+
+    用 ISO 周（isocalendar()[:2]）判定当周，天然处理跨自然年的 ISO-W01 边界。
+    """
+    cur_iso = datetime.strptime(date_str, "%Y-%m-%d").isocalendar()[:2]
+    # 逐行容错：close 必须可解析为「有限数值」才纳入（None / 脏字符串 / NaN 整根丢弃）。
+    # last_iso 只跟随「有效 close 那一行」的 trade_date —— 不能用 rows[-1]：若最新一根
+    # 的 close 脏被丢，却仍拿它的日期判当周，会让覆盖分支误改上一根有效完成周收盘。
+    closes: list[float] = []
+    last_iso = None
+    for r in sorted(weekly_rows, key=lambda x: x.get("trade_date", "")):
+        c = r.get("close")
+        if c is None:
+            continue
+        try:
+            cf = float(c)
+        except (TypeError, ValueError):
+            continue
+        if cf != cf:  # NaN（float(nan) 能过 float() 但非有限值）
+            continue
+        closes.append(cf)
+        td = str(r.get("trade_date", "")).replace("-", "")[:8]  # 兼容 YYYYMMDD / YYYY-MM-DD
+        try:
+            last_iso = datetime.strptime(td, "%Y%m%d").isocalendar()[:2]
+        except ValueError:
+            last_iso = None  # 有效行但日期不可解析 → 不据此判当周（退化为追加）
+    if last_iso == cur_iso and closes:
+        closes[-1] = float(day_close)   # 最新有效 bar 即当周（AkShare partial / 周五）→ 覆盖
+    else:
+        # 含 closes 为空（全脏/全 None）的边界：追加后仍不足 n，下方按 [] 返回，上层告警跳过
+        closes.append(float(day_close)) # 最新有效 bar 是上一完成周（Tushare 周一~周四）→ 追加
+    return closes[-n:] if len(closes) >= n else []
+
+
 def apply_margin_db_fallback(conn, market_data: dict, date: str) -> dict:
     """盘前实时融资融券汇总取不到时，回退 DB 最近一次入库的汇总，并标注 as_of / stale。
 
@@ -697,7 +739,7 @@ class MarketCollector:
             vol_data["vs_ma20"] = "高于" if today_vol > ma20 else ("低于" if today_vol < ma20 else "持平")
 
     def _compute_index_ma(self, result: dict, date: str) -> None:
-        """计算上证指数日线均线（MA5/10/20/60）和三大指数 5 周均线"""
+        """计算上证指数日线均线（MA5/10/20/60）和四大指数（沪/深/创业板/科创50）5 周均线"""
         daily_dir = BASE_DIR / "daily"
 
         sh_data = result.get("indices", {}).get("shanghai", {})
@@ -741,12 +783,14 @@ class MarketCollector:
                         ma_data[f"ma{period}"] = ma_val
                         ma_data[f"above_ma{period}"] = today_close > ma_val
 
-        # 5 周均线：调用 get_index_weekly 获取真实周线
+        # 5 周均线：调用 get_index_weekly 获取真实周线，并用 _augment_weekly_closes
+        # 把当周走动收盘补进序列（修「周内冻结」根因，详见该函数 docstring）。
         start_date = (datetime.strptime(date, "%Y-%m-%d") - timedelta(days=60)).strftime("%Y-%m-%d")
         ma5w_indices = [
             ("shanghai", today_close, ma_data),
             ("shenzhen", None, {}),
             ("chinext", None, {}),
+            ("star50", None, {}),
         ]
         for idx_key, day_close, target_dict in ma5w_indices:
             if day_close is None:
@@ -758,22 +802,25 @@ class MarketCollector:
             try:
                 r = self.registry.call("get_index_weekly", idx_key, start_date, date)
                 if r.success and r.data:
-                    weekly_rows = sorted(r.data, key=lambda x: x.get("trade_date", ""))
-                    weekly_closes = [row["close"] for row in weekly_rows[-5:]]
+                    weekly_closes = _augment_weekly_closes(r.data, date, day_close)
                     if len(weekly_closes) == 5:
                         ma5w = round(sum(weekly_closes) / 5, 2)
                         target_dict["ma5w"] = ma5w
                         target_dict["above_ma5w"] = day_close > ma5w
+                    else:
+                        logger.warning(
+                            "5周均线: %s 增补当周后仍不足 5 根周线，跳过 (rows=%d)",
+                            idx_key, len(r.data),
+                        )
             except Exception as e:
                 logger.debug("5周均线计算失败 %s: %s", idx_key, e)
 
         all_ma: dict = {}
         if ma_data:
             all_ma["shanghai"] = ma_data
-        for idx_key in ("shenzhen", "chinext"):
-            entry = ma5w_indices[["shanghai", "shenzhen", "chinext"].index(idx_key)]
-            if entry[2]:
-                all_ma[idx_key] = entry[2]
+        for idx_key, _day_close, target_dict in ma5w_indices:
+            if idx_key != "shanghai" and target_dict:
+                all_ma[idx_key] = target_dict
         if all_ma:
             result["moving_averages"] = all_ma
 

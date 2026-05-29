@@ -55,6 +55,26 @@ class TestComputeIndexMaDecoupling:
         collector._compute_index_ma(result, "2026-05-26")
         assert "moving_averages" not in result
 
+    def test_star50_5w_computed_when_close_present(self):
+        """科创50 日收盘在 indices 时，应算出 moving_averages['star50'] 的 ma5w/above_ma5w。"""
+        registry = MagicMock()
+        registry.call.return_value = _weekly_result([1000, 1010, 1020, 1030, 1040])
+        collector = MarketCollector(registry)
+
+        result = {
+            "indices": {
+                "shanghai": {"error": "x"},  # 不影响 star50
+                "star50": {"close": 1200.0},
+            }
+        }
+        collector._compute_index_ma(result, "2026-05-26")
+
+        ma = result.get("moving_averages", {})
+        assert "star50" in ma and "ma5w" in ma["star50"]
+        # 末根周线 2026040x（周14）非当周 → 追加 1200 → mean([1010,1020,1030,1040,1200])
+        assert ma["star50"]["ma5w"] == round(sum([1010, 1020, 1030, 1040, 1200]) / 5, 2)
+        assert ma["star50"]["above_ma5w"] is True  # 1200 > 1060
+
 
 class TestComputeIndexMaDailyPath:
     def test_shanghai_present_computes_daily_ma(self, tmp_path, monkeypatch):

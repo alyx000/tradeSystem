@@ -19,7 +19,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 import yaml
 
-from collectors.market import MarketCollector, _is_st_stock
+from collectors.market import MarketCollector, _is_st_stock, _augment_weekly_closes
 from providers.base import DataResult
 from providers.registry import ProviderRegistry
 
@@ -294,6 +294,8 @@ class TestComputeIndexMaWeekly:
                 return DataResult(data={"close": 10500.0, "change_pct": 0.3}, source="test")
             if method == "get_index_daily" and args and args[0] == "chinext":
                 return DataResult(data={"close": 2050.0, "change_pct": 0.4}, source="test")
+            if method == "get_index_daily" and args and args[0] == "star50":
+                return DataResult(data={"close": 1050.0, "change_pct": 0.2}, source="test")
             if method == "get_limit_up_list":
                 return DataResult(data={"count": 0, "stocks": []}, source="test")
             if method == "get_limit_down_list":
@@ -329,7 +331,9 @@ class TestComputeIndexMaWeekly:
         ma = result.get("moving_averages", {})
         sh = ma.get("shanghai", {})
         assert "ma5w" in sh
-        expected_ma5w = round(sum([3160.0, 3170.0, 3180.0, 3190.0, 3200.0]) / 5, 2)
+        # 采集日 2026-04-10（ISO 周15）末根周线 20260403（周14）非当周 → 追加当日收盘 3250，
+        # ma5w = mean([3170,3180,3190,3200,3250])（修根因前为 mean([3160..3200])=3180.0）
+        expected_ma5w = round(sum([3170.0, 3180.0, 3190.0, 3200.0, 3250.0]) / 5, 2)
         assert sh["ma5w"] == expected_ma5w
         assert sh["above_ma5w"] is True
 
@@ -337,3 +341,102 @@ class TestComputeIndexMaWeekly:
         assert "ma5w" in ma["shenzhen"]
         assert "chinext" in ma
         assert "ma5w" in ma["chinext"]
+        assert "star50" in ma
+        assert "ma5w" in ma["star50"]
+
+
+# =====================================================================
+# T-A. _augment_weekly_closes：拼接当周走动收盘（修「周内冻结」根因）
+# =====================================================================
+
+
+def _wk(rows):
+    """[(trade_date, close), ...] → provider 周线行格式。"""
+    return [
+        {"trade_date": td, "close": c, "open": c, "high": c, "low": c}
+        for td, c in rows
+    ]
+
+
+class TestAugmentWeeklyCloses:
+    def test_appends_current_week_when_latest_bar_is_prior_completed_week(self):
+        """Tushare 周一~周四：最新周 bar 是上一已完成周 → 追加当周走动收盘。"""
+        rows = _wk([
+            ("20260424", 3160.0), ("20260430", 3170.0), ("20260508", 3180.0),
+            ("20260515", 3190.0), ("20260522", 3200.0),  # 末根=ISO 周21（上一完成周）
+        ])
+        # 采集日 2026-05-26 属 ISO 周22 → 末根非当周 → 追加 day_close
+        result = _augment_weekly_closes(rows, "2026-05-26", 3250.0)
+        assert result == [3170.0, 3180.0, 3190.0, 3200.0, 3250.0]
+
+    def test_replaces_last_close_when_latest_bar_is_current_week(self):
+        """AkShare partial / 周五：最新周 bar 已是当周 → 用走动收盘覆盖末根，不追加。"""
+        rows = _wk([
+            ("20260424", 3160.0), ("20260430", 3170.0), ("20260508", 3180.0),
+            ("20260515", 3190.0), ("20260522", 3200.0),  # 末根=ISO 周21
+        ])
+        # 采集日 2026-05-22 本身就是 ISO 周21（周五）→ 末根即当周 → 覆盖为 3210
+        result = _augment_weekly_closes(rows, "2026-05-22", 3210.0)
+        assert result == [3160.0, 3170.0, 3180.0, 3190.0, 3210.0]
+
+    def test_intra_week_value_tracks_day_close_not_frozen(self):
+        """同一组已完成周、不同当日收盘 → ma5w 必须不同（钉死周内冻结 bug）。"""
+        rows = _wk([
+            ("20260424", 3160.0), ("20260430", 3170.0), ("20260508", 3180.0),
+            ("20260515", 3190.0), ("20260522", 3200.0),
+        ])
+        wed = _augment_weekly_closes(rows, "2026-05-26", 4077.0)
+        thu = _augment_weekly_closes(rows, "2026-05-27", 4162.0)
+        assert sum(wed) / 5 != sum(thu) / 5
+
+    def test_returns_empty_when_fewer_than_five_after_augment(self):
+        """增补当周后仍不足 5 根 → 返回 []（上层据此跳过 + 告警）。"""
+        rows = _wk([("20260508", 3160.0), ("20260515", 3170.0), ("20260522", 3180.0)])
+        result = _augment_weekly_closes(rows, "2026-05-26", 3250.0)
+        assert result == []
+
+    def test_skips_dirty_close_values_without_dropping_index(self):
+        """脏 close（None / 非数值字符串）被跳过，不抛异常连带丢整指数。"""
+        rows = _wk([
+            ("20260424", 3160.0), ("20260430", 3170.0),
+            ("20260508", 3180.0), ("20260515", 3190.0),
+        ]) + [
+            {"trade_date": "20260516", "close": None},
+            {"trade_date": "20260517", "close": "N/A"},
+        ]
+        # 末根有效日期 20260517（ISO 周20）非当周（采集日 2026-05-26 周22）→ 追加 day_close
+        result = _augment_weekly_closes(rows, "2026-05-26", 3250.0)
+        assert result == [3160.0, 3170.0, 3180.0, 3190.0, 3250.0]
+
+    def test_dirty_close_on_current_week_bar_does_not_corrupt_prior_week(self):
+        """当周 bar 的 close 脏时，覆盖分支不能误改上一根有效完成周收盘（codex 中等）。"""
+        rows = _wk([
+            ("20260424", 3160.0), ("20260430", 3170.0), ("20260508", 3180.0),
+            ("20260515", 3190.0), ("20260522", 3200.0),  # 末根有效完成周（ISO 周21）
+        ]) + [
+            {"trade_date": "20260526", "close": None},   # 当周（周22）bar 但 close 脏
+        ]
+        # 采集日 2026-05-26（周22）：当周 bar close 脏 → 应「追加」day_close 当当周，
+        # 上一完成周 3200 必须保留，绝不能被覆盖成 day_close。
+        result = _augment_weekly_closes(rows, "2026-05-26", 4000.0)
+        assert result == [3170.0, 3180.0, 3190.0, 3200.0, 4000.0]
+
+    def test_skips_nan_close(self):
+        """NaN close 被跳过，不污染 ma5w（float(nan) 能过 float() 但非有限值）。"""
+        rows = _wk([
+            ("20260424", 3160.0), ("20260430", 3170.0), ("20260508", 3180.0),
+            ("20260515", 3190.0),
+        ]) + [{"trade_date": "20260520", "close": float("nan")}]
+        result = _augment_weekly_closes(rows, "2026-05-26", 3250.0)
+        assert result == [3160.0, 3170.0, 3180.0, 3190.0, 3250.0]
+        assert not any(c != c for c in result)  # 无 NaN
+
+    def test_iso_week_boundary_across_calendar_year(self):
+        """跨自然年但同 ISO 周：2025-12-29 与 2026-01-02 同属 ISO 2026-W01 → 覆盖而非追加。"""
+        rows = _wk([
+            ("20251205", 100.0), ("20251212", 110.0), ("20251219", 120.0),
+            ("20251226", 130.0), ("20251229", 140.0),  # 末根 ISO (2026,1)
+        ])
+        # 采集日 2026-01-02 ISO (2026,1) 同周 → 覆盖末根为 145（按自然年比较会误判为追加）
+        result = _augment_weekly_closes(rows, "2026-01-02", 145.0)
+        assert result == [100.0, 110.0, 120.0, 130.0, 145.0]

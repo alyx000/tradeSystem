@@ -650,6 +650,38 @@ class TestPostMarketReport:
         assert "融资" in md
         assert "数据摘要" in md
 
+    def test_report_renders_four_index_5w(self):
+        """报告渲染四大指数（沪/深/创业板/科创50）5 周线状态全景。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            gen = ReportGenerator()
+            gen.daily_dir = Path(tmp) / "daily"
+            raw = {
+                "date": "2026-03-28",
+                "indices": {"shanghai": {"close": 3900, "change_pct": 0.5}},
+                "total_volume": {},
+                "breadth": {},
+                "moving_averages": {
+                    "shanghai": {"ma5w": 4124.0, "above_ma5w": True},
+                    "shenzhen": {"ma5w": 15354.0, "above_ma5w": True},
+                    "chinext": {"ma5w": 3801.0, "above_ma5w": False},
+                    "star50": {"ma5w": 1100.0, "above_ma5w": False},
+                },
+                "limit_up": {},
+                "limit_down": {},
+                "sector_industry": {"data": []},
+                "sector_concept": {"data": []},
+                "northbound": {},
+                "dragon_tiger": {"data": []},
+            }
+            md, _ = gen.generate_post_market("2026-03-28", raw)
+
+        assert "5周线:" in md
+        # 四个标的都要出现在 5 周线汇总行
+        for label in ("上证", "深证", "创业板", "科创50"):
+            assert label in md
+        assert "15354.0(上)" in md   # 深证站上
+        assert "3801.0(下)" in md    # 创业板跌破
+
     def test_report_breadth_inf_displays_symbol(self):
         """报告中 decline=0 时涨跌比显示 ∞"""
         with tempfile.TemporaryDirectory() as tmp:
