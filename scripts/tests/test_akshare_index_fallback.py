@@ -19,6 +19,9 @@ def ak() -> AkshareProvider:
     p = AkshareProvider({})
     p._initialized = True
     p.ak = MagicMock()
+    # 本套件专测东财 index_zh_a_hist 兜底路径：显式禁用 sina 优先路径，
+    # 避免依赖「MagicMock 非 DataFrame 守卫」的隐式行为。
+    p.ak.stock_zh_index_daily.side_effect = Exception("sina disabled in EM fallback test")
     return p
 
 
@@ -158,6 +161,7 @@ class TestRegistryFallback:
         ak_provider = AkshareProvider({})
         ak_provider._initialized = True
         ak_provider.ak = MagicMock()
+        ak_provider.ak.stock_zh_index_daily.side_effect = Exception("sina disabled")
         ak_provider.ak.index_zh_a_hist.return_value = _daily_df(
             "2026-05-26", close=4145.373, amount_yuan=1.461685e12,
         )

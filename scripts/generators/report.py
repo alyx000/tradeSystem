@@ -349,11 +349,15 @@ class ReportGenerator:
             if "error" in info:
                 lines.append(f"| {label} | - | - | - |")
             else:
-                pct = info.get("change_pct", 0)
-                sign = "+" if pct >= 0 else ""
+                # change_pct / amount_billion 可能为 None（如 tushare 失败、akshare sina
+                # 降级路径成交额缺列）：缺失统一渲染 '-'，避免字面 None 与 None>=0 崩溃。
+                pct = info.get("change_pct")
+                close = info.get("close")
+                amount = info.get("amount_billion")
+                pct_str = f"{'+' if pct >= 0 else ''}{pct}%" if pct is not None else "-"
                 lines.append(
-                    f"| {label} | {info.get('close', '-')} | {sign}{pct}% | "
-                    f"{info.get('amount_billion', '-')} |"
+                    f"| {label} | {close if close is not None else '-'} | {pct_str} | "
+                    f"{amount if amount is not None else '-'} |"
                 )
 
         # 成交额 + 对比

@@ -156,6 +156,9 @@ class AkshareProvider(DataProvider):
         return [
             "get_index_daily",
             "get_market_volume",
+            "get_stock_daily",
+            "get_stock_ma",
+            "get_disclosure_dates",
             "get_limit_up_list",
             "get_limit_down_list",
             "get_sector_rankings",
@@ -526,6 +529,19 @@ class AkshareProvider(DataProvider):
                     error=f"AkShare/yfinance 均未获取到亚太指数: {index_name}",
                 )
 
+            # 美股三大指数：优先 yfinance（东财 index_global_spot_em 现货端点不稳定），
+            # yfinance 不可用时落到下方东财兜底块。
+            us_yf: dict[str, tuple[str, str]] = {
+                "dow_jones": ("^DJI", "道琼斯"),
+                "nasdaq": ("^IXIC", "纳斯达克"),
+                "sp500": ("^GSPC", "标普500"),
+            }
+            if index_name in us_yf:
+                ysym, label = us_yf[index_name]
+                yf_r = self._index_from_yfinance(ysym, label)
+                if yf_r is not None:
+                    return yf_r
+
             if zh_name not in ("__A50_FUTURES__", "__VIX__", "__US10Y__"):
                 row = self._row_global_spot_by_name(zh_name)
                 if row is not None and pd.notna(row.get("最新价")):
@@ -794,7 +810,74 @@ class AkshareProvider(DataProvider):
         "star50": "000688",
     }
 
+    _SINA_INDEX_SYMBOL = {
+        "shanghai": "sh000001",
+        "shenzhen": "sz399001",
+        "chinext": "sz399006",
+        "star50": "sh000688",
+    }
+
+    def _sina_index_symbol(self, index_code: str) -> str:
+        """指数 key / ts-code → sina 符号（sh/sz + 6 位码）。"""
+        if index_code in self._SINA_INDEX_SYMBOL:
+            return self._SINA_INDEX_SYMBOL[index_code]
+        code = str(index_code or "").strip()
+        if "." in code:
+            num, suf = code.split(".", 1)
+            return f"{'sh' if suf.upper() == 'SH' else 'sz'}{num}"
+        return f"sz{code}" if code.startswith("399") else f"sh{code}"
+
+    def _index_daily_sina(self, index_code: str, date: str) -> DataResult | None:
+        """sina stock_zh_index_daily 取指数日线：OHLC 精确、volume 股→手÷100、pct 自算。
+
+        sina 日线无成交额列，amount_billion 返回 None（由东财兜底或 tushare 主源补）。
+        非真 DataFrame（如测试 MagicMock）或无目标日匹配 → 返回 None 让上层退东财。
+        """
+        try:
+            symbol = self._sina_index_symbol(index_code)
+            df = self.ak.stock_zh_index_daily(symbol=symbol)
+            if not isinstance(df, pd.DataFrame) or df.empty:
+                return None
+            df = df.copy()
+            df["__dt"] = pd.to_datetime(df["date"], errors="coerce")
+            df = df.sort_values("__dt").reset_index(drop=True)  # 防御乱序：prev_close 必须是真前一交易日
+            df["__d"] = df["__dt"].dt.strftime("%Y-%m-%d")
+            matches = df.index[df["__d"] == date].tolist()
+            if not matches:
+                return None
+            i = matches[-1]
+            row = df.iloc[i]
+            close_raw = row["close"]
+            if pd.isna(close_raw):
+                return None
+            prev_close = float(df.iloc[i - 1]["close"]) if i > 0 and pd.notna(df.iloc[i - 1]["close"]) else None
+            close = float(close_raw)
+            change_pct = round((close - prev_close) / prev_close * 100, 2) if prev_close else None
+            vol_raw = row.get("volume")
+            volume = round(float(vol_raw) / 100, 0) if pd.notna(vol_raw) else None
+            data = {
+                "code": symbol,
+                "open": round(float(row["open"]), 2) if pd.notna(row.get("open")) else None,
+                "high": round(float(row["high"]), 2) if pd.notna(row.get("high")) else None,
+                "low": round(float(row["low"]), 2) if pd.notna(row.get("low")) else None,
+                "close": round(close, 2),
+                "change_pct": change_pct,
+                "volume": volume,
+                "amount_billion": None,  # sina 日线无成交额列
+            }
+            return DataResult(data=data, source="akshare:stock_zh_index_daily")
+        except Exception as e:
+            logger.debug("sina 指数日线失败 %s %s: %s", index_code, date, e)
+            return None
+
     def get_index_daily(self, index_code: str, date: str) -> DataResult:
+        """指数日线降级：sina `stock_zh_index_daily` 优先，东财 `index_zh_a_hist` 兜底。"""
+        sina = self._index_daily_sina(index_code, date)
+        if sina is not None and sina.success:
+            return sina
+        return self._index_daily_em(index_code, date)
+
+    def _index_daily_em(self, index_code: str, date: str) -> DataResult:
         """获取指数单日日线（AkShare index_zh_a_hist daily）作为 tushare 降级。
 
         输出字段对齐 tushare get_index_daily，关键差异：AkShare 成交额单位为元，
@@ -838,11 +921,63 @@ class AkshareProvider(DataProvider):
         except Exception as e:
             return DataResult(data=None, source=self.name, error=str(e))
 
-    def get_market_volume(self, date: str) -> DataResult:
-        """两市总成交额降级：取沪深指数日线成交额加总（单位：亿）。"""
+    @staticmethod
+    def _today_cn() -> str:
+        """A 股「今日」按上海时区判定，避免 launchd/UTC 环境本地时区漂移误判。"""
         try:
-            sh = self.get_index_daily("shanghai", date)
-            sz = self.get_index_daily("shenzhen", date)
+            from zoneinfo import ZoneInfo
+
+            return datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d")
+        except Exception:
+            return datetime.now().strftime("%Y-%m-%d")
+
+    def _market_volume_sina_realtime(self, date: str) -> DataResult | None:
+        """当日两市成交额：sina 实时指数现货 stock_zh_index_spot_sina（成交额单位元）。
+
+        仅当 date 为今日（上海时区）才适用（实时快照只反映当前交易日）；
+        非今日或取数失败返回 None。
+        """
+        if date != self._today_cn():
+            return None
+        try:
+            df = self.ak.stock_zh_index_spot_sina()
+            if not isinstance(df, pd.DataFrame) or df.empty or "成交额" not in df.columns:
+                return None
+
+            def _amt_yi(symbol: str) -> float | None:
+                m = df[df["代码"] == symbol]
+                if m.empty:
+                    return None
+                v = _to_float_or_none(m.iloc[0].get("成交额"))
+                return round(v / 1e8, 2) if v is not None else None
+
+            sh = _amt_yi("sh000001")
+            sz = _amt_yi("sz399001")
+            # 盘前未开盘时实时成交额可能为 0，不可冒充全日；<=0 退东财兜底。
+            if sh is None or sz is None or sh <= 0 or sz <= 0:
+                return None
+            return DataResult(
+                data={
+                    "shanghai_billion": sh,
+                    "shenzhen_billion": sz,
+                    "total_billion": round(sh + sz, 2),
+                },
+                source="akshare:stock_zh_index_spot_sina",
+            )
+        except Exception as e:
+            logger.debug("sina 实时两市成交额失败 %s: %s", date, e)
+            return None
+
+    def get_market_volume(self, date: str) -> DataResult:
+        """两市总成交额降级：当日走 sina 实时现货，历史/兜底取东财指数日线成交额加总（亿）。"""
+        realtime = self._market_volume_sina_realtime(date)
+        if realtime is not None and realtime.success:
+            return realtime
+        try:
+            # sina 日线无成交额列，历史成交额必须走东财日线（_index_daily_em），
+            # 不能用 get_index_daily（已 sina 优先、amount_billion 为 None）。
+            sh = self._index_daily_em("shanghai", date)
+            sz = self._index_daily_em("shenzhen", date)
             if not sh.success or not sz.success:
                 err = sh.error if not sh.success else sz.error
                 return DataResult(data=None, source=self.name, error=f"无成交额数据: {date} ({err})")
@@ -859,20 +994,148 @@ class AkshareProvider(DataProvider):
         except Exception as e:
             return DataResult(data=None, source=self.name, error=str(e))
 
+    # ---- 个股日线（sina）----
+
+    def _sina_stock_symbol(self, code: str) -> str:
+        """个股代码 → sina 符号（sh/sz/bj + 6 位码）。"""
+        c = str(code or "").strip().upper()
+        digits = "".join(ch for ch in c if ch.isdigit())[:6]
+        if not digits:
+            return c.lower()
+        if "." in c:
+            suf = c.split(".", 1)[1]
+            return f"{ {'SH': 'sh', 'SZ': 'sz', 'BJ': 'bj'}.get(suf, 'sz') }{digits}"
+        if digits.startswith(("60", "68", "90", "51", "52", "53", "56", "58")):
+            return f"sh{digits}"
+        if digits.startswith(("43", "82", "83", "87", "88", "89", "92")):
+            return f"bj{digits}"
+        return f"sz{digits}"
+
+    def get_stock_daily(self, stock_code: str, date: str) -> DataResult:
+        """个股日线降级：sina `stock_zh_a_daily`（OHLC/成交额精确，volume 股→手÷100、
+        换手率 小数→%×100、pct/振幅自算）。输出字段对齐 tushare get_stock_daily。"""
+        try:
+            symbol = self._sina_stock_symbol(stock_code)
+            df = self.ak.stock_zh_a_daily(symbol=symbol, adjust="")
+            if not isinstance(df, pd.DataFrame) or df.empty:
+                return DataResult(data=None, source=self.name, error=f"无数据: {symbol} {date}")
+            df = df.copy()
+            df["__dt"] = pd.to_datetime(df["date"], errors="coerce")
+            df = df.sort_values("__dt").reset_index(drop=True)  # 防御乱序：prev_close 必须是真前一交易日
+            df["__d"] = df["__dt"].dt.strftime("%Y-%m-%d")
+            matches = df.index[df["__d"] == date].tolist()
+            if not matches:
+                return DataResult(data=None, source=self.name, error=f"无目标日期数据: {symbol} {date}")
+            i = matches[-1]
+            row = df.iloc[i]
+            if pd.isna(row.get("close")):
+                return DataResult(data=None, source=self.name, error=f"收盘价无效(NaN): {symbol} {date}")
+            close = float(row["close"])
+            high = float(row["high"])
+            low = float(row["low"])
+            prev_close = float(df.iloc[i - 1]["close"]) if i > 0 and pd.notna(df.iloc[i - 1]["close"]) else None
+            change_pct = round((close - prev_close) / prev_close * 100, 2) if prev_close else None
+            amplitude_pct = round((high - low) / prev_close * 100, 2) if prev_close else None
+            vol_raw = row.get("volume")
+            volume = round(float(vol_raw) / 100, 0) if pd.notna(vol_raw) else None
+            amount = _to_float_or_none(row.get("amount"))
+            amount_billion = round(amount / 1e8, 4) if amount is not None else None
+            turnover_raw = _to_float_or_none(row.get("turnover"))
+            turnover_rate = round(turnover_raw * 100, 4) if turnover_raw is not None else None
+            data = {
+                "code": stock_code,
+                "open": round(float(row["open"]), 2),
+                "high": round(high, 2),
+                "low": round(low, 2),
+                "close": round(close, 2),
+                "change_pct": change_pct,
+                "volume": volume,
+                "amount_billion": amount_billion,
+                "turnover_rate": turnover_rate,
+                "amplitude_pct": amplitude_pct,
+            }
+            return DataResult(data=data, source="akshare:stock_zh_a_daily")
+        except Exception as e:
+            return DataResult(data=None, source=self.name, error=str(e))
+
+    def get_stock_ma(self, stock_code: str, date: str, periods: list[int] | None = None) -> DataResult:
+        """个股均线降级：sina `stock_zh_a_daily` 历史自算（收盘均值口径，与 tushare 一致）。
+
+        只用截止目标日（含）的历史，volume_ma5 取最近 5 日均量并 股→手÷100。
+        """
+        periods = periods or [5, 10, 20]
+        try:
+            symbol = self._sina_stock_symbol(stock_code)
+            df = self.ak.stock_zh_a_daily(symbol=symbol, adjust="")
+            if not isinstance(df, pd.DataFrame) or df.empty:
+                return DataResult(data=None, source=self.name, error=f"无历史数据: {symbol}")
+            df = df.copy()
+            df["__dt"] = pd.to_datetime(df["date"], errors="coerce")
+            df = df.dropna(subset=["__dt"])
+            df = df[df["__dt"] <= pd.to_datetime(date)].sort_values("__dt")
+            if df.empty:
+                return DataResult(data=None, source=self.name, error=f"无历史数据: {symbol}")
+            closes = df["close"].astype(float)
+            data: dict = {}
+            for p in periods:
+                if len(df) >= p:
+                    data[f"ma{p}"] = round(float(closes.tail(p).mean()), 2)
+            if len(df) >= 5 and "volume" in df.columns:
+                vols = df["volume"].astype(float).tail(5) / 100
+                data["volume_ma5"] = round(float(vols.mean()), 2)
+            return DataResult(data=data, source="akshare:stock_zh_a_daily")
+        except Exception as e:
+            return DataResult(data=None, source=self.name, error=str(e))
+
+    def _index_weekly_sina(self, index_code: str, start_date: str, end_date: str) -> DataResult | None:
+        """sina 日线按自然周（W-FRI）聚合出周线：open=周首、high=周内最高、low=周内最低、
+        close=周末、trade_date=当周最后交易日。非真 DataFrame / 区间无数据 → None 退东财。"""
+        try:
+            symbol = self._sina_index_symbol(index_code)
+            df = self.ak.stock_zh_index_daily(symbol=symbol)
+            if not isinstance(df, pd.DataFrame) or df.empty:
+                return None
+            df = df.copy()
+            df["__dt"] = pd.to_datetime(df["date"], errors="coerce")
+            sd = pd.to_datetime(start_date)
+            ed = pd.to_datetime(end_date)
+            df = df.dropna(subset=["__dt", "close"])
+            df = df[(df["__dt"] >= sd) & (df["__dt"] <= ed)]
+            if df.empty:
+                return None
+            df = df.sort_values("__dt")
+            df["__wk"] = df["__dt"].dt.to_period("W-FRI")
+            rows: list[dict] = []
+            for _, g in df.groupby("__wk"):
+                g = g.sort_values("__dt")
+                last = g.iloc[-1]
+                rows.append({
+                    "trade_date": last["__dt"].strftime("%Y%m%d"),
+                    "close": round(float(last["close"]), 2),
+                    "open": round(float(g.iloc[0]["open"]), 2),
+                    "high": round(float(g["high"].max()), 2),
+                    "low": round(float(g["low"].min()), 2),
+                })
+            rows.sort(key=lambda x: x["trade_date"])
+            return DataResult(data=rows, source="akshare:stock_zh_index_daily:weekly")
+        except Exception as e:
+            logger.debug("sina 指数周线失败 %s: %s", index_code, e)
+            return None
+
     def get_index_weekly(self, index_code: str, start_date: str, end_date: str) -> DataResult:
+        """指数周线降级：sina 日线 resample(W-FRI) 优先，东财 index_zh_a_hist(weekly) 兜底。"""
+        sina = self._index_weekly_sina(index_code, start_date, end_date)
+        if sina is not None and sina.success and sina.data:
+            return sina
+        return self._index_weekly_em(index_code, start_date, end_date)
+
+    def _index_weekly_em(self, index_code: str, start_date: str, end_date: str) -> DataResult:
         """获取指数周线数据（AkShare index_zh_a_hist weekly）"""
         try:
-            import akshare as ak
-            code_map = {
-                "shanghai": "000001",
-                "shenzhen": "399001",
-                "chinext": "399006",
-                "star50": "000688",
-            }
-            symbol = code_map.get(index_code, index_code)
+            symbol = self._INDEX_CODE_MAP.get(index_code, index_code.split(".")[0])
             sd = start_date.replace("-", "")
             ed = end_date.replace("-", "")
-            df = ak.index_zh_a_hist(symbol=symbol, period="weekly", start_date=sd, end_date=ed)
+            df = self.ak.index_zh_a_hist(symbol=symbol, period="weekly", start_date=sd, end_date=ed)
             if df is None or df.empty:
                 return DataResult(data=[], source="akshare:index_zh_a_hist_weekly")
             rows = []
@@ -1296,6 +1559,90 @@ class AkshareProvider(DataProvider):
                     "date": str(row.get("发布日期", ""))[:10],
                 })
             return DataResult(data=results, source="akshare:stock_rank_forecast_cninfo")
+        except Exception as e:
+            return DataResult(data=None, source=self.name, error=str(e))
+
+    # ---- 财报披露计划 ----
+
+    def _ts_code_from_symbol(self, symbol: str) -> str:
+        """6 位代码补交易所后缀，口径与 TushareProvider._normalize_stock_code 一致。"""
+        digits = "".join(ch for ch in str(symbol or "") if ch.isdigit())[:6]
+        if not digits:
+            return str(symbol or "").strip().upper()
+        if digits.startswith(("43", "82", "83", "87", "88", "89", "92")):
+            return f"{digits}.BJ"
+        if digits.startswith(("60", "68", "90", "51", "52", "53", "56", "58")):
+            return f"{digits}.SH"
+        return f"{digits}.SZ"
+
+    def _quarter_end_for_date(self, date_str: str) -> str:
+        """取目标日所在时点「最近一个已结束的报告期」末，与 TushareProvider 一致。"""
+        dt = datetime.strptime(date_str, "%Y-%m-%d")
+        if dt.month <= 3:
+            return f"{dt.year - 1}1231"
+        if dt.month <= 6:
+            return f"{dt.year}0331"
+        if dt.month <= 9:
+            return f"{dt.year}0630"
+        return f"{dt.year}0930"
+
+    @staticmethod
+    def _period_from_quarter_end(quarter_end: str) -> str:
+        """季度末 YYYYMMDD → 巨潮 stock_report_disclosure 的 period 串。"""
+        year, mmdd = quarter_end[:4], quarter_end[4:]
+        return {
+            "1231": f"{year}年报",
+            "0331": f"{year}一季",
+            "0630": f"{year}半年报",
+            "0930": f"{year}三季",
+        }.get(mmdd, f"{year}年报")
+
+    @staticmethod
+    def _fmt_cn_date(val) -> str:
+        """巨潮日期单元（datetime.date / NaT / 字符串）规范化为 YYYYMMDD；空值返回空串。"""
+        if val is None:
+            return ""
+        try:
+            if pd.isna(val):
+                return ""
+        except (TypeError, ValueError):
+            pass
+        if hasattr(val, "strftime"):
+            return val.strftime("%Y%m%d")
+        return str(val).replace("-", "").replace("/", "")[:8]
+
+    def get_disclosure_dates(self, date: str) -> DataResult:
+        """财报披露计划降级：巨潮 stock_report_disclosure（cninfo，非东财，本机稳定）。
+
+        输出字段对齐 TushareProvider.get_disclosure_dates，便于 registry 降级透明：
+        code/ts_code、pre_date（首次预约）、actual_date（实际披露）、ann_date、
+        report_end/end_date（报告期末 YYYYMMDD）。
+        """
+        try:
+            quarter_end = self._quarter_end_for_date(date)
+            period = self._period_from_quarter_end(quarter_end)
+            df = self.ak.stock_report_disclosure(market="沪深京", period=period)
+            if df is None or df.empty:
+                return DataResult(data=[], source="akshare:stock_report_disclosure")
+            records: list[dict] = []
+            for _, row in df.iterrows():
+                symbol = str(row.get("股票代码", "") or "").strip()
+                if not symbol:
+                    continue
+                ts_code = self._ts_code_from_symbol(symbol)
+                pre_date = self._fmt_cn_date(row.get("首次预约"))
+                actual_date = self._fmt_cn_date(row.get("实际披露"))
+                records.append({
+                    "ts_code": ts_code,
+                    "code": ts_code,
+                    "name": str(row.get("股票简称", "") or "").strip(),
+                    "pre_date": pre_date,
+                    "ann_date": actual_date or pre_date,
+                    "actual_date": actual_date,
+                    "end_date": quarter_end,
+                    "report_end": quarter_end,
+                })
+            return DataResult(data=records, source="akshare:stock_report_disclosure")
         except Exception as e:
             return DataResult(data=None, source=self.name, error=str(e))
 

@@ -1368,3 +1368,21 @@ class TestCollectPostMarketE2E:
 
         assert result["date"] == "2026-03-28"
         assert "generated_at" in result
+
+
+def test_index_table_handles_none_amount_and_pct():
+    """tushare 失败、akshare sina 降级时 amount_billion/change_pct 可能为 None：
+    指数表成交额列应显示 '-' 而非字面 'None'，且不因 None>=0 崩溃。"""
+    with tempfile.TemporaryDirectory() as tmp:
+        gen = ReportGenerator()
+        gen.daily_dir = Path(tmp) / "daily"
+        raw = {
+            "date": "2026-03-28",
+            "indices": {
+                "shanghai": {"close": 3900.0, "change_pct": None, "amount_billion": None},
+            },
+        }
+        md, _ = gen.generate_post_market("2026-03-28", raw)
+    line = [l for l in md.splitlines() if l.startswith("| 上证指数 |")][0]
+    assert "None" not in line, f"指数行渲染出字面 None: {line}"
+    assert line.count("-") >= 2  # 涨跌幅/成交额缺失均以 - 兜底
