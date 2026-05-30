@@ -234,6 +234,10 @@ class ReportGenerator:
         else:
             lines.append("- （无融资融券汇总数据）")
 
+        # 宏观经济指标（无序号，置于固定「四」与动态「五」之间，不影响 _roman(idx) 序号）
+        lines.append("\n## 宏观经济指标\n")
+        _render_macro_indicators(lines, market_data.get("macro_indicators") or {})
+
         # 今日日历（采集侧已过滤为高/中、至多约 15 条）
         cal_shown: list[dict] = list(calendar_events or [])
 
@@ -823,6 +827,76 @@ def _roman(n: int) -> str:
         prefix = f"{one_to_nine[tens - 1]}十"
         return prefix if ones == 0 else f"{prefix}{one_to_nine[ones - 1]}"
     return str(n)
+
+
+_MACRO_ORDER = ["pmi", "cpi", "m2", "lpr", "shrzgm"]
+
+
+def _format_macro_value(v) -> str:
+    """宏观数值格式化：避免大数（M2/社融 亿元量级）被科学计数法表示且丢精度。
+
+    整数值用千分位无小数；非整数保留 2 位并去尾零；非数值原样转字符串。
+    """
+    if v is None:
+        return ""
+    if isinstance(v, bool):
+        return str(v)
+    if isinstance(v, (int, float)):
+        f = float(v)
+        if f == int(f):
+            return f"{int(f):,}"
+        return f"{f:,.2f}".rstrip("0").rstrip(".")
+    return str(v)
+
+
+def _render_macro_indicators(lines: list[str], macro: dict) -> None:
+    """渲染宏观经济指标段：每个指标最新值 + 近 N 期同比走势表。
+
+    macro 形如 {"pmi": {name, period_col, source, latest, trend}, ...}；
+    指标级失败为 {name, source, error}；整体失败为 {"error": ...}。
+    """
+    if not isinstance(macro, dict) or not macro:
+        lines.append("- （无宏观经济指标数据）")
+        return
+    if macro.get("error"):
+        lines.append(f"- 宏观经济指标: {macro['error']}")
+        return
+    keys = [k for k in _MACRO_ORDER if k in macro] + [
+        k for k in macro if k not in _MACRO_ORDER
+    ]
+    rendered = False
+    for key in keys:
+        block = macro.get(key)
+        if not isinstance(block, dict):
+            continue
+        name = block.get("name", key)
+        if block.get("error"):
+            lines.append(f"\n### {name}\n")
+            lines.append(f"- 获取失败: {block['error']}")
+            rendered = True
+            continue
+        trend = block.get("trend") or []
+        latest = block.get("latest") or {}
+        if not trend:
+            continue
+        period_col = block.get("period_col", "period")
+        value_cols = [
+            c for c in latest.keys() if c not in (period_col, "period", "name", "source")
+        ]
+        lines.append(f"\n### {name}\n")
+        lines.append(
+            f"> [事实] 来源: {block.get('source', '')} | 最新期: {latest.get('period', 'N/A')}\n"
+        )
+        lines.append("| " + period_col + " | " + " | ".join(value_cols) + " |")
+        lines.append("|" + "---|" * (len(value_cols) + 1))
+        for row in trend:
+            cells = [str(row.get(period_col, "") or "")]
+            for c in value_cols:
+                cells.append(_format_macro_value(row.get(c)))
+            lines.append("| " + " | ".join(cells) + " |")
+        rendered = True
+    if not rendered:
+        lines.append("- （无宏观经济指标数据）")
 
 
 _PHASE_ICON = {

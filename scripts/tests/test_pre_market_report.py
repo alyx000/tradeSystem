@@ -54,6 +54,19 @@ def _minimal_market_data() -> dict:
                 },
             ],
         },
+        "macro_indicators": {
+            "pmi": {
+                "name": "采购经理人指数 PMI",
+                "source": "macro_china_pmi",
+                "period_col": "月份",
+                "latest": {"月份": "202505", "制造业-指数": 49.5, "制造业-同比增长": -0.3, "period": "202505"},
+                "trend": [
+                    {"月份": "202504", "制造业-指数": 49.0, "制造业-同比增长": -0.5, "period": "202504"},
+                    {"月份": "202505", "制造业-指数": 49.5, "制造业-同比增长": -0.3, "period": "202505"},
+                ],
+            },
+            "lpr": {"name": "贷款市场报价利率 LPR", "source": "macro_china_lpr", "error": "backend down"},
+        },
     }
 
 
@@ -156,6 +169,14 @@ def test_generate_pre_market_sections_and_yaml(tmp_path: Path):
     assert "十一、今日日历" in md
     assert "预约披露: 20260420（报告期 20260331）" in md
     assert "财经新闻" not in md
+    # 宏观经济指标段（无序号，置于「四」与「五」之间，不影响后续中文序号）
+    assert "## 宏观经济指标" in md
+    assert "### 采购经理人指数 PMI" in md
+    assert "制造业-指数" in md
+    assert "获取失败: backend down" in md  # 指标级失败优雅降级
+    # 宏观段位于「四」之后、「五」之前
+    assert md.index("## 宏观经济指标") > md.index("## 四、融资融券")
+    assert md.index("## 宏观经济指标") < md.index("五、昨日计划未完成持仓")
 
     p = Path(yaml_path)
     assert p.exists()
@@ -185,6 +206,48 @@ def test_generate_pre_market_us_china_error_and_empty_margin(tmp_path: Path):
     assert "数据获取失败: yfinance down" in md
     assert "日经225: 数据获取失败" in md
     assert "（无融资融券汇总数据）" in md
+
+
+def test_generate_pre_market_macro_large_value_no_scientific_notation(tmp_path: Path):
+    """M2/社融 大数值（亿元量级）须以千分位呈现，不能输出科学计数法。"""
+    gen = ReportGenerator()
+    gen.daily_dir = tmp_path
+    market_data = _minimal_market_data()
+    market_data["macro_indicators"] = {
+        "m2": {
+            "name": "货币供应量 M2",
+            "source": "macro_china_money_supply",
+            "period_col": "月份",
+            "latest": {"月份": "202505", "M2数量": 3200000.0, "period": "202505"},
+            "trend": [{"月份": "202505", "M2数量": 3200000.0, "period": "202505"}],
+        }
+    }
+    md, _ = gen.generate_pre_market(date="2026-03-30", market_data=market_data, holdings_announcements={})
+    assert "3,200,000" in md
+    assert "e+0" not in md  # 无科学计数法
+
+
+def test_generate_pre_market_macro_whole_error(tmp_path: Path):
+    """宏观整体失败 {"error": ...}：渲染单行错误，不抛异常、不出指标表。"""
+    gen = ReportGenerator()
+    gen.daily_dir = tmp_path
+    market_data = _minimal_market_data()
+    market_data["macro_indicators"] = {"error": "所有宏观指标获取失败"}
+    md, _ = gen.generate_pre_market(date="2026-03-30", market_data=market_data, holdings_announcements={})
+    assert "## 宏观经济指标" in md
+    assert "- 宏观经济指标: 所有宏观指标获取失败" in md
+    assert "### 采购经理人指数 PMI" not in md
+
+
+def test_generate_pre_market_macro_missing_renders_placeholder(tmp_path: Path):
+    """无 macro_indicators 键：渲染占位，不抛异常。"""
+    gen = ReportGenerator()
+    gen.daily_dir = tmp_path
+    market_data = _minimal_market_data()
+    market_data.pop("macro_indicators", None)
+    md, _ = gen.generate_pre_market(date="2026-03-30", market_data=market_data, holdings_announcements={})
+    assert "## 宏观经济指标" in md
+    assert "（无宏观经济指标数据）" in md
 
 
 def test_overnight_index_shows_as_of_date(tmp_path: Path):

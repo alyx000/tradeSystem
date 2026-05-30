@@ -8,6 +8,7 @@ AkShare 数据提供者（免费，作为 tushare 的补充和降级）
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime
 from typing import Any, Optional
 
@@ -15,7 +16,7 @@ import pandas as pd
 
 import requests
 
-from .base import DataProvider, DataResult
+from .base import DataProvider, DataResult, DataType, Timeliness
 
 logger = logging.getLogger(__name__)
 
@@ -195,6 +196,7 @@ class AkshareProvider(DataProvider):
             "get_research_report_list",
             "get_macro_calendar",
             "get_macro_calendar_range",
+            "get_macro_indicators",
             "is_trade_day",
             "get_etf_flow",
             "get_hk_indices",
@@ -1733,6 +1735,144 @@ class AkshareProvider(DataProvider):
             d += timedelta(days=1)
 
         return DataResult(data=all_events, source="akshare:news_economic_baidu_range")
+
+    # ---- 宏观经济指标 ----
+
+    _MACRO_SPECS: tuple[tuple[str, str, str], ...] = (
+        ("pmi", "采购经理人指数 PMI", "macro_china_pmi"),
+        ("cpi", "居民消费价格指数 CPI", "macro_china_cpi"),
+        ("m2", "货币供应量 M2", "macro_china_money_supply"),
+        ("lpr", "贷款市场报价利率 LPR", "macro_china_lpr"),
+        ("shrzgm", "社会融资规模增量", "macro_china_shrzgm"),
+    )
+
+    @staticmethod
+    def _macro_period_key(val: Any) -> str:
+        """把周期标签归一为可比较的定宽数字键，兼容多种 akshare 周期格式。
+
+        规则：提取数字组，首组（年）原样，其后各组（月/日）左补零到 2 位，最多取年+月+日。
+        例：'2024年1月'→'202401'、'2024年10月'→'202410'、'202401'→'202401'、
+        '2024-05-01 00:00:00'→'20240501'、'20240501'→'20240501'。
+        同一指标格式一致时，归一后键等长，字典序即时间序；无数字则返回空串。
+        """
+        if val is None:
+            return ""
+        groups = re.findall(r"\d+", str(val))
+        if not groups:
+            return ""
+        key = groups[0]
+        for g in groups[1:3]:
+            key += g.zfill(2)
+        return key
+
+    @staticmethod
+    def _macro_clean_cell(val: Any) -> Any:
+        """单元格归一化：NaN/None→None；数值→float；其余→去空白字符串。"""
+        if val is None:
+            return None
+        try:
+            if pd.isna(val):
+                return None
+        except (TypeError, ValueError):
+            pass
+        if isinstance(val, bool):
+            return val
+        if isinstance(val, (int, float)):
+            return float(val)
+        parsed = _to_float_or_none(val)
+        if parsed is not None:
+            return parsed
+        return _to_clean_str(val)
+
+    def _macro_indicator_payload(self, df: pd.DataFrame, periods: int) -> dict | None:
+        """把单个宏观指标 DataFrame 归一化为 {period_col, latest, trend}。
+
+        约定：首列为周期列（月份/日期）。akshare 不同接口行序不一致（部分最新在前、
+        部分最旧在前），故先按周期列「数字提取」做时间升序排序，再取末尾 periods 行，
+        确保 `latest` 始终是最近一期、`trend` 为最近 N 期升序。每行保留全部原始列
+        （已清洗），并补充统一的 `period` 键便于下游渲染。
+        """
+        if df is None or getattr(df, "empty", True):
+            return None
+        cols = [str(c) for c in df.columns]
+        if not cols:
+            return None
+        period_col = cols[0]
+        n = max(1, int(periods or 1))
+        first_col = df.columns[0]
+        ordered = df
+        # 按周期列归一键做时间升序，兼容 akshare 各接口的升/降序差异（eastmoney 多为降序、
+        # mofcom 为字典序），确保 tail(n) 取到最近 N 期。仅当归一键等长（同一指标格式一致）
+        # 才排序，避免非日期周期列误排；归一后等长可覆盖非零填充中文月份（2024年1月→202401）。
+        try:
+            keys = df[first_col].map(self._macro_period_key)
+            nonempty_lens = {len(k) for k in keys if k}
+            if len(nonempty_lens) == 1:
+                ordered = df.assign(_macro_sort=keys).sort_values(
+                    "_macro_sort", kind="stable"
+                ).drop(columns=["_macro_sort"])
+        except Exception as e:  # 排序异常不致命，退回原序
+            logger.debug("宏观指标周期排序失败，退回原序: %s", e)
+            ordered = df
+        tail = ordered.tail(n)
+        trend: list[dict] = []
+        for _, raw in tail.iterrows():
+            row: dict = {}
+            for col in df.columns:
+                # 周期列（首列，如月份/日期）保持字符串，避免 "202503" 被误转成数值
+                if str(col) == period_col:
+                    row[str(col)] = _to_clean_str(raw[col])
+                else:
+                    row[str(col)] = self._macro_clean_cell(raw[col])
+            row["period"] = row.get(period_col)
+            trend.append(row)
+        if not trend:
+            return None
+        return {"period_col": period_col, "latest": trend[-1], "trend": trend}
+
+    def get_macro_indicators(self, date: str = "", periods: int = 6) -> DataResult:
+        """宏观经济指标（PMI/CPI/M2/LPR/社融），各取最近 periods 期及同比走势。
+
+        `date` 仅作 as_of 语义占位（ingest 经 registry.call 透传 target_date），
+        akshare 的 macro_china_* 均无参数。每个子指标独立 try，单一后端不可达
+        不致整体失败；仅当 5 个全失败时返回 error。
+        """
+        if self.ak is None:
+            return DataResult(data=None, source=self.name, error="akshare 未初始化")
+        data: dict = {}
+        errors: list[str] = []
+        for key, label, func_name in self._MACRO_SPECS:
+            try:
+                func = getattr(self.ak, func_name, None)
+                if func is None:
+                    raise AttributeError(f"akshare 无接口 {func_name}")
+                df = func()
+                payload = self._macro_indicator_payload(df, periods)
+                if payload is None:
+                    data[key] = {"name": label, "source": func_name, "error": "无数据"}
+                    errors.append(f"{key}: empty")
+                else:
+                    payload["name"] = label
+                    payload["source"] = func_name
+                    data[key] = payload
+            except Exception as e:  # 单指标失败不影响其余
+                logger.warning("宏观指标 %s(%s) 获取失败: %s", key, func_name, e)
+                data[key] = {"name": label, "source": func_name, "error": str(e)}
+                errors.append(f"{key}: {e}")
+        if len(errors) == len(self._MACRO_SPECS):
+            return DataResult(
+                data=None,
+                source=self.name,
+                error="所有宏观指标获取失败: " + "; ".join(errors),
+                timeliness=Timeliness.DELAYED,
+            )
+        return DataResult(
+            data=data,
+            source="akshare:macro_china_*",
+            data_type=DataType.FACT,
+            timeliness=Timeliness.DELAYED,
+            note=("部分指标失败: " + "; ".join(errors)) if errors else "",
+        )
 
     # ---- 市场宽度 ----
 

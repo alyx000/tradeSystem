@@ -53,6 +53,7 @@ INTERFACE_FALLBACK_LABELS: dict[str, str] = {
     "trade_cal": "交易日历",
     "regulatory_suspend": "停牌核查数据",
     "stk_shock": "异常波动个股",
+    "macro_china_indicators": "宏观经济指标",
 }
 
 

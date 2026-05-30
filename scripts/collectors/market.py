@@ -1085,6 +1085,15 @@ class MarketCollector:
         merged_cal = _merge_calendar(ak_events, date_str, BASE_DIR)
         result["calendar_events"] = filter_calendar_for_pre_market(merged_cal)
 
+        # 宏观经济指标（PMI/CPI/M2/LPR/社融，最新一期 + 近 N 期同比走势）
+        macro_r = self.registry.call("get_macro_indicators")
+        if macro_r.success and macro_r.data:
+            result["macro_indicators"] = macro_r.data
+        else:
+            err = macro_r.error if not macro_r.success else "无数据"
+            result["macro_indicators"] = {"error": err}
+            logger.warning("宏观经济指标获取失败: %s", err)
+
         # 网络/外部源不可达类失败统一文案（yfinance→Yahoo、akshare 瞬断、tushare 不支持国际指数）。
         for section in ("global_indices", "global_indices_apac", "commodities", "forex", "risk_indicators"):
             for item in (result.get(section) or {}).values():

@@ -48,6 +48,7 @@ def test_list_interfaces_returns_registry_entries(tmp_path):
     assert "moneyflow_mkt_dc" in names
     assert "margin_detail" in names
     assert "anns_d" in names
+    assert "macro_china_indicators" in names
     assert any(item["enabled_by_default"] is False for item in interfaces)
     daily_basic = next(item for item in interfaces if item["interface_name"] == "daily_basic")
     assert daily_basic["interface_label"] == "盘后核心基础面快照"
@@ -723,6 +724,76 @@ def test_top_inst_run_creates_snapshot_and_fact_entities(tmp_path):
     assert entities[0]["role"] == "top_ranked"
     attrs = json.loads(entities[0]["attributes_json"])
     assert "net_amount" in attrs
+
+
+def test_macro_indicators_run_raw_only_no_snapshot(tmp_path):
+    """宏观指标无派生分支：应只落 raw_interface_payloads，snapshot_ids 为空。"""
+    db_path = tmp_path / "test.db"
+    macro_payload = {
+        "pmi": {
+            "name": "采购经理人指数 PMI",
+            "source": "macro_china_pmi",
+            "period_col": "月份",
+            "latest": {"月份": "202505", "制造业-指数": 49.5, "period": "202505"},
+            "trend": [
+                {"月份": "202504", "制造业-指数": 49.0, "period": "202504"},
+                {"月份": "202505", "制造业-指数": 49.5, "period": "202505"},
+            ],
+        }
+    }
+    registry = _FakeRegistry(
+        _FakeProvider(
+            {"get_macro_indicators"},
+            {"get_macro_indicators": DataResult(data=macro_payload, source="akshare:macro_china_*")},
+        )
+    )
+    service = IngestService(str(db_path), registry=registry)
+
+    result = service.execute_interface("macro_china_indicators", "2026-05-30", input_by="cursor")
+    assert result["status"] == "success"
+    assert result["run"]["snapshot_ids"] == []  # 无派生快照
+    assert result["run"].get("entity_count", 0) == 0
+
+    conn = get_connection(db_path)
+    raw = conn.execute(
+        "SELECT raw_table, payload_json FROM raw_interface_payloads WHERE interface_name = ?",
+        ("macro_china_indicators",),
+    ).fetchone()
+    snap = conn.execute(
+        "SELECT COUNT(*) AS c FROM market_fact_snapshots WHERE biz_date = ?",
+        ("2026-05-30",),
+    ).fetchone()
+    conn.close()
+
+    assert raw is not None
+    assert raw["raw_table"] == "raw_macro_china_indicators"
+    payload = json.loads(raw["payload_json"])
+    assert payload["rows"]  # 整块 dict 作为单行存档
+    assert "pmi" in payload["rows"][0]
+    assert snap["c"] == 0
+
+
+def test_macro_indicators_all_fail_marks_failed_no_raw(tmp_path):
+    """宏观 provider 全失败：execute_interface 记 failed，且不落 raw_interface_payloads。"""
+    db_path = tmp_path / "test.db"
+    registry = _FakeRegistry(
+        _FakeProvider(
+            {"get_macro_indicators"},
+            {"get_macro_indicators": DataResult(data=None, source="akshare", error="所有宏观指标获取失败")},
+        )
+    )
+    service = IngestService(str(db_path), registry=registry)
+
+    result = service.execute_interface("macro_china_indicators", "2026-05-30", input_by="cursor")
+    assert result["status"] == "failed"
+
+    conn = get_connection(db_path)
+    raw = conn.execute(
+        "SELECT COUNT(*) AS c FROM raw_interface_payloads WHERE interface_name = ?",
+        ("macro_china_indicators",),
+    ).fetchone()
+    conn.close()
+    assert raw["c"] == 0
 
 
 def test_store_payload_uses_params_in_dedupe_key(tmp_path):

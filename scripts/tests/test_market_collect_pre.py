@@ -52,6 +52,22 @@ def test_collect_pre_market_shapes_margin_and_margin_wow(tmp_path, monkeypatch):
         if method == "get_macro_calendar":
             assert args[0] == "2026-03-30"
             return DataResult(data=[], source="mock")
+        if method == "get_macro_indicators":
+            return DataResult(
+                data={
+                    "pmi": {
+                        "name": "采购经理人指数 PMI",
+                        "source": "macro_china_pmi",
+                        "period_col": "月份",
+                        "latest": {"月份": "202505", "制造业-指数": 49.5, "period": "202505"},
+                        "trend": [
+                            {"月份": "202504", "制造业-指数": 49.0, "period": "202504"},
+                            {"月份": "202505", "制造业-指数": 49.5, "period": "202505"},
+                        ],
+                    }
+                },
+                source="akshare:macro_china_*",
+            )
         if method == "get_margin_data":
             d = args[0]
             if d == "2026-03-27":
@@ -104,6 +120,32 @@ def test_collect_pre_market_shapes_margin_and_margin_wow(tmp_path, monkeypatch):
     assert md["exchanges"][0]["delta_rzrqye_yi"] == 5.0
     assert "calendar_events" in out
     assert any(c[0] == "get_margin_data" for c in calls)
+    # 宏观经济指标采集进入结果
+    assert "macro_indicators" in out
+    assert out["macro_indicators"]["pmi"]["latest"]["period"] == "202505"
+    assert any(c[0] == "get_macro_indicators" for c in calls)
+
+
+def test_collect_pre_market_macro_failure_writes_error_not_raise():
+    """宏观指标 provider 失败时：collector 写 {"error": ...}，不抛异常。"""
+    def fake(m, *a, **kw):
+        if m == "get_global_index":
+            return DataResult(data={"close": 1, "change_pct": 0, "name": a[0]}, source="mock")
+        if m == "get_us_tickers_overnight":
+            return DataResult(data={"HXC": {"close": 1, "change_pct": 0, "name": "H"}}, source="mock")
+        if m in ("get_commodity", "get_forex"):
+            return DataResult(data={"name": a[0], "close": 1, "change_pct": 0}, source="mock")
+        if m == "get_macro_calendar":
+            return DataResult(data=[], source="mock")
+        if m == "get_macro_indicators":
+            return DataResult(data=None, source="mock", error="所有宏观指标获取失败")
+        return DataResult(data=None, source="mock", error="bad")
+
+    registry = MagicMock()
+    registry.call.side_effect = fake
+    col = MarketCollector(registry)
+    out = col.collect_pre_market(target_date="2026-03-30", prev_trade_date=None)
+    assert out["macro_indicators"] == {"error": "所有宏观指标获取失败"}
 
 
 def test_collect_pre_market_no_prev_date_skips_margin():
@@ -118,6 +160,8 @@ def test_collect_pre_market_no_prev_date_skips_margin():
             return DataResult(data={"name": a[0], "close": 1, "change_pct": 0}, source="mock")
         if m == "get_macro_calendar":
             return DataResult(data=[], source="mock")
+        if m == "get_macro_indicators":
+            return DataResult(data={"pmi": {"name": "PMI", "source": "x", "latest": {"period": "1"}, "trend": [{"period": "1"}], "period_col": "period"}}, source="mock")
         return DataResult(data=None, source="mock", error="bad")
 
     registry = MagicMock()

@@ -271,6 +271,11 @@ class DataProvider(ABC):
     def get_macro_calendar(self, date: str) -> DataResult:
         return DataResult(data=None, source=self.name, error="not implemented")
 
+    # ---- 宏观经济指标 ----
+    def get_macro_indicators(self, date: str = "", periods: int = 6) -> DataResult:
+        """宏观经济指标（PMI/CPI/M2/LPR/社融），各取最近 periods 期及同比走势。"""
+        return DataResult(data=None, source=self.name, error="not implemented")
+
     def get_macro_calendar_range(self, from_date: str, to_date: str) -> DataResult:
         return DataResult(data=None, source=self.name, error="not implemented")
 

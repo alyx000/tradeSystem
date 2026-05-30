@@ -325,6 +325,17 @@ INTERFACE_REGISTRY: dict[str, InterfaceConfig] = {
         "enabled_by_default": False,
         "notes": "全市场研报列表，用于覆盖统计。",
     },
+    "macro_china_indicators": {
+        "interface_name": "macro_china_indicators",
+        "provider_method": "get_macro_indicators",
+        "stage": "backfill",
+        "use_cases": ["research", "pre_report", "history_compare"],
+        "params_policy": "metadata_refresh",
+        "dedupe_keys": [],
+        "raw_table": "raw_macro_china_indicators",
+        "enabled_by_default": False,
+        "notes": "宏观经济指标（PMI/CPI/M2/LPR/社融），月度低频，手动或盘前触发。",
+    },
 }
 
 
