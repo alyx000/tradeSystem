@@ -255,6 +255,103 @@ class TestStyleAnalyzer:
         assert snap["first_board"]["premium_median"] == 0.14
         assert snap["second_board"]["open_up_rate"] == 0.71
 
+    def test_popularity_injected_from_prev_yaml(self, tmp_path):
+        """analyze 把 T-1 yaml 的 popularity_backfill 注入 result['popularity']"""
+        import yaml
+        from analyzers.style_factors import StyleAnalyzer
+        sa = StyleAnalyzer()
+        day_dir = tmp_path / "2026-03-27"
+        day_dir.mkdir()
+        pop = [
+            {"code": "000003.SZ", "name": "连板A", "source": ["consecutive"],
+             "prev_close": 8.0, "t_open_premium_pct": 3.0, "t_close_change_pct": 10.0,
+             "t_is_limit_up": True, "t_is_limit_down": False},
+        ]
+        (day_dir / "post-market.yaml").write_text(
+            yaml.dump({"popularity_backfill": pop}), encoding="utf-8")
+
+        with patch("analyzers.style_factors.DAILY_DIR", tmp_path):
+            result = sa.analyze(self._make_raw_data(), "2026-03-28")
+
+        assert result["popularity"]
+        assert result["popularity"][0]["name"] == "连板A"
+
+    def test_popularity_empty_when_absent(self, tmp_path):
+        """无 popularity_backfill 时 result['popularity'] 为空列表，不报错"""
+        from analyzers.style_factors import StyleAnalyzer
+        sa = StyleAnalyzer()
+        with patch("analyzers.style_factors.DAILY_DIR", tmp_path):
+            result = sa.analyze(self._make_raw_data(), "2026-03-28")
+        assert result.get("popularity") == []
+
+    def test_popularity_no_reach_back_to_older_day(self, tmp_path):
+        """T-1（最近前一日）yaml 无 popularity_backfill 时，不得回退读取 T-2 旧值。
+
+        渲染语义固定为「T-1 高标 → T 日结局」，回退会把 T-2 数据伪装成 T-1→T。
+        """
+        import yaml
+        from analyzers.style_factors import StyleAnalyzer
+        sa = StyleAnalyzer()
+
+        # T-2 (2026-03-26) 有 popularity_backfill
+        d2 = tmp_path / "2026-03-26"
+        d2.mkdir()
+        (d2 / "post-market.yaml").write_text(
+            yaml.dump({"popularity_backfill": [
+                {"code": "000099.SZ", "name": "陈年旧标", "source": ["consecutive"],
+                 "prev_close": 5.0, "t_open_premium_pct": 1.0, "t_close_change_pct": 2.0,
+                 "t_is_limit_up": False, "t_is_limit_down": False},
+            ]}), encoding="utf-8")
+
+        # T-1 (2026-03-27) 存在但无 popularity_backfill（如当日 cmd_evening 未写入）
+        d1 = tmp_path / "2026-03-27"
+        d1.mkdir()
+        (d1 / "post-market.yaml").write_text(
+            yaml.dump({"premium_backfill": {"first_board": {"count": 0}}}), encoding="utf-8")
+
+        with patch("analyzers.style_factors.DAILY_DIR", tmp_path):
+            result = sa.analyze(self._make_raw_data(), "2026-03-28")
+
+        assert result.get("popularity") == [], "T-1 缺失时不应回退读 T-2 旧人气股"
+
+    def test_first_only_no_leak_when_t1_yaml_missing(self, tmp_path):
+        """紧邻前一日(T-1)目录存在但 yaml 缺失时，first_only 不得回退读 T-2 的字段"""
+        import yaml
+        from analyzers.style_factors import StyleAnalyzer
+        sa = StyleAnalyzer()
+
+        # T-2 (2026-03-26) 有 promotion_backfill
+        d2 = tmp_path / "2026-03-26"
+        d2.mkdir()
+        (d2 / "post-market.yaml").write_text(
+            yaml.dump({"promotion_backfill": {"first_to_second": {"base": 9, "promoted": 9, "rate": 1.0}}}),
+            encoding="utf-8")
+        # T-1 (2026-03-27) 目录在，但 post-market.yaml 缺失（最近的前序目录）
+        (tmp_path / "2026-03-27").mkdir()
+
+        with patch("analyzers.style_factors.DAILY_DIR", tmp_path):
+            result = sa.analyze(self._make_raw_data(), "2026-03-28")
+
+        assert result.get("promotion") is None, "T-1 yaml 缺失时 first_only 不应回退读 T-2 的 promotion"
+
+    def test_first_only_no_leak_when_t1_yaml_corrupt(self, tmp_path):
+        """T-1 yaml 损坏（解析失败）时同样不回退"""
+        import yaml
+        from analyzers.style_factors import StyleAnalyzer
+        sa = StyleAnalyzer()
+        d2 = tmp_path / "2026-03-26"
+        d2.mkdir()
+        (d2 / "post-market.yaml").write_text(
+            yaml.dump({"popularity_backfill": [{"code": "X", "name": "旧"}]}), encoding="utf-8")
+        d1 = tmp_path / "2026-03-27"
+        d1.mkdir()
+        (d1 / "post-market.yaml").write_text("{ this is : : invalid yaml :", encoding="utf-8")
+
+        with patch("analyzers.style_factors.DAILY_DIR", tmp_path):
+            result = sa.analyze(self._make_raw_data(), "2026-03-28")
+
+        assert result.get("popularity") == [], "T-1 yaml 损坏时不应回退读 T-2 旧人气股"
+
     def test_premium_trend(self, tmp_path):
         from analyzers.style_factors import StyleAnalyzer
         sa = StyleAnalyzer()
@@ -380,6 +477,75 @@ class TestReportStyleSection:
         assert "10cm 为主" in text
         assert "偏小盘" in text
         assert "风格切换信号" in text
+        assert new_idx == 9
+
+    def test_render_popularity_table(self):
+        """风格化章渲染昨日人气股今日表现具名表，来源标签映射 + 续板/跌停标记"""
+        from generators.report import _render_style_factors
+
+        raw_data = {
+            "style_factors": {
+                "popularity": [
+                    {"code": "000003.SZ", "name": "连板A", "source": ["consecutive"],
+                     "prev_close": 8.0, "t_open_premium_pct": 3.0,
+                     "t_close_change_pct": 10.0, "t_is_limit_up": True,
+                     "t_is_limit_down": False},
+                    {"code": "000009.SZ", "name": "退潮B", "source": ["dragon_tiger", "volume_top10"],
+                     "prev_close": 20.0, "t_open_premium_pct": -2.0,
+                     "t_close_change_pct": -10.0, "t_is_limit_up": False,
+                     "t_is_limit_down": True},
+                ],
+            }
+        }
+        lines = []
+        new_idx = _render_style_factors(lines, raw_data, 8)
+        text = "\n".join(lines)
+
+        assert "人气股" in text
+        assert "连板A" in text
+        assert "退潮B" in text
+        assert "连板" in text       # source consecutive → 连板
+        assert "龙虎榜" in text     # source dragon_tiger → 龙虎榜
+        assert new_idx == 9
+
+    def test_render_popularity_empty_name_falls_back_to_code(self):
+        """name 为空串（量能前10 来源）时回退显示 code，不出现空名行"""
+        from generators.report import _render_style_factors
+        raw_data = {
+            "style_factors": {
+                "popularity": [
+                    {"code": "300308.SZ", "name": "", "source": ["volume_top10"],
+                     "prev_close": 1197.99, "t_open_premium_pct": 4.34,
+                     "t_close_change_pct": 1.71, "t_is_limit_up": False,
+                     "t_is_limit_down": False},
+                ],
+            }
+        }
+        lines = []
+        _render_style_factors(lines, raw_data, 8)
+        text = "\n".join(lines)
+        assert "300308.SZ" in text, "name 为空时应回退显示 code"
+        # 表格不应出现 "|  |"（空名单元格）后紧跟来源
+        assert "|  | 量能前10" not in text
+
+    def test_render_popularity_alone_triggers_section(self):
+        """仅有 popularity（无溢价/偏好）时风格化章仍渲染"""
+        from generators.report import _render_style_factors
+        raw_data = {
+            "style_factors": {
+                "popularity": [
+                    {"code": "000003.SZ", "name": "连板A", "source": ["consecutive"],
+                     "prev_close": 8.0, "t_open_premium_pct": 3.0,
+                     "t_close_change_pct": 10.0, "t_is_limit_up": True,
+                     "t_is_limit_down": False},
+                ],
+            }
+        }
+        lines = []
+        new_idx = _render_style_factors(lines, raw_data, 8)
+        text = "\n".join(lines)
+        assert "风格化赚钱效应" in text
+        assert "连板A" in text
         assert new_idx == 9
 
     def test_render_empty_style(self):

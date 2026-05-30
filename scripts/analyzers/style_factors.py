@@ -37,6 +37,16 @@ class StyleAnalyzer:
         result["board_preference"] = self._build_board_preference(raw_data)
         result["cap_preference"] = self._build_cap_preference(raw_data)
         result["switch_signals"] = self._build_switch_signals(result)
+        # 昨日人气股今日表现（具名）：来自 T-1 yaml 的 popularity_backfill。
+        # 渲染文案语义固定为「T-1 高标 → T 日结局」，因此只读紧邻前一交易日，
+        # 缺失/空即返回 []，禁止向更早日期回退（否则会把 T-2 旧值伪装成 T-1→T）。
+        result["popularity"] = self._load_prev_field(
+            date, "popularity_backfill", first_only=True
+        ) or []
+        # 晋级率（T-1 首板→T 二板等）：与 popularity 同为严格 T-1 时序，禁止回退
+        result["promotion"] = self._load_prev_field(
+            date, "promotion_backfill", first_only=True
+        )
 
         return result
 
@@ -189,6 +199,40 @@ class StyleAnalyzer:
     # 历史数据加载
     # ------------------------------------------------------------------
 
+    def _prev_dirs(self, date: str) -> list[Path]:
+        """按日期倒序返回 date 之前的交易日目录（不判断 yaml 是否存在/可读）。"""
+        try:
+            return sorted(
+                [d for d in DAILY_DIR.iterdir()
+                 if d.is_dir() and d.name != "example" and d.name < date],
+                key=lambda d: d.name,
+                reverse=True,
+            )
+        except FileNotFoundError:
+            return []
+
+    def _iter_prev_yaml(self, date: str):
+        """按时间倒序产出 date 之前每个交易日的 post-market.yaml 解析结果。
+
+        注：本迭代器是从原 `_load_recent_backfills` 内联目录遍历抽出的共享逻辑，
+        语义与原实现一致——只负责"按倒序产出已存在且可解析的 yaml"（跳过缺失/损坏），
+        是否计入「最近 n 个」由调用方的过滤条件决定（见 _load_recent_backfills
+        仍保留 `first_board.count>0` 过滤 + `len(results)>=n` 仅统计有效项）。
+        因此「最近 n 个有有效溢价的交易日」语义未改变。
+
+        ⚠ 本迭代器会跳过缺失/损坏的 yaml，因此不适合需要"严格锁紧邻前一日"的场景
+        （见 _load_prev_field first_only 分支——它直接走 _prev_dirs[0]，不复用本迭代器）。
+        """
+        for d in self._prev_dirs(date):
+            pm = d / "post-market.yaml"
+            if not pm.exists():
+                continue
+            try:
+                with open(pm, encoding="utf-8") as f:
+                    yield yaml.safe_load(f) or {}
+            except Exception:
+                continue
+
     def _load_prev_backfill(self, date: str) -> dict | None:
         """读取距离 date 最近的一次 premium_backfill。"""
         for bf in self._load_recent_backfills(date, n=1):
@@ -198,28 +242,46 @@ class StyleAnalyzer:
     def _load_recent_backfills(self, date: str, n: int = 5) -> list[dict]:
         """按时间倒序读取最近 n 个交易日的 premium_backfill。"""
         results: list[dict] = []
-        try:
-            dirs = sorted(
-                [d for d in DAILY_DIR.iterdir()
-                 if d.is_dir() and d.name != "example" and d.name < date],
-                key=lambda d: d.name,
-                reverse=True,
-            )
-        except FileNotFoundError:
-            return results
-
-        for d in dirs:
+        for data in self._iter_prev_yaml(date):
             if len(results) >= n:
                 break
-            pm = d / "post-market.yaml"
+            bf = data.get("premium_backfill")
+            if bf and bf.get("first_board", {}).get("count", 0) > 0:
+                results.append(bf)
+        return results
+
+    def _load_prev_field(self, date: str, field: str, first_only: bool = False):
+        """读取 date 之前 yaml 的指定 field。
+
+        - first_only=False：按倒序返回第一个含非空 field 的值（可回退到更早日期）。
+        - first_only=True：严格只看紧邻的前一个交易日目录（_prev_dirs[0]）；
+          其 yaml 缺失 / 损坏 / 无该字段一律返回 None，**绝不回退到更早日期**。
+          用于有严格 T-1 时序语义的字段（如 popularity_backfill / promotion_backfill）——
+          这些字段渲染文案固定为「T-1 → T」，回退到 T-2 会把旧值伪装成 T-1→T。
+        找不到返回 None。
+
+        注：以 `if val`（truthiness）判定——空 dict/空 list 视为「无数据」等同缺失，
+        这是有意为之：promotion/popularity 的生产端（premium.py）只在非空时才写入
+        （`if promotion:` / `if popularity:`），故空值不会真实落盘；即便落盘，
+        空回填对渲染也无意义，按缺失处理即可。
+        """
+        if first_only:
+            dirs = self._prev_dirs(date)
+            if not dirs:
+                return None
+            pm = dirs[0] / "post-market.yaml"  # 紧邻前一交易日，不跳过、不回退
             if not pm.exists():
-                continue
+                return None
             try:
                 with open(pm, encoding="utf-8") as f:
                     data = yaml.safe_load(f) or {}
-                bf = data.get("premium_backfill")
-                if bf and bf.get("first_board", {}).get("count", 0) > 0:
-                    results.append(bf)
             except Exception:
-                continue
-        return results
+                return None
+            val = data.get(field)
+            return val if val else None
+
+        for data in self._iter_prev_yaml(date):
+            val = data.get(field)
+            if val:
+                return val
+        return None

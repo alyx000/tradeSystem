@@ -464,6 +464,9 @@ class MarketCollector:
         else:
             result["limit_down"] = {"error": limit_down.error}
 
+        # 4b. 跌停结构：连续跌停天数（多日 yaml join；天地板因缺分时数据不做）
+        self._enrich_limit_down_structure(result, date)
+
         # 5. 板块排名（涨幅前30 + 跌幅前5）
         for stype in ["industry", "concept"]:
             r = self.registry.call("get_sector_rankings", date, stype)
@@ -650,6 +653,17 @@ class MarketCollector:
         except Exception as e:
             logger.warning(f"港股指数采集异常: {e}")
 
+        # 18b. 大宗交易
+        try:
+            r = self.registry.call("get_block_trade", date)
+            if r.success and r.data:
+                result["block_trade"] = {"data": r.data, "_source": r.source}
+                logger.info(f"大宗交易采集完成，共 {len(r.data)} 笔")
+            else:
+                logger.warning(f"大宗交易获取失败: {r.error}")
+        except Exception as e:
+            logger.warning(f"大宗交易采集异常: {e}")
+
         # 18. 研报覆盖统计
         try:
             report_result = self.registry.call("get_research_report_list", date)
@@ -687,6 +701,76 @@ class MarketCollector:
         except Exception as e:
             logger.debug(f"炸板数据获取失败: {e}")
             return 0
+
+    def _enrich_limit_down_structure(self, result: dict, date: str) -> None:
+        """计算今日跌停股的连续跌停天数，并产出 down_ladder（>=2 连跌梯队）。
+
+        数据来源：今日 result['limit_down'].stocks + 历史 post-market.yaml 的
+        limit_down.stocks（按 code 在相邻交易日是否同为跌停判定连续性）。
+        个股在某日跌停列表中即视为当日跌停（兼容 ST/20cm 等不同跌幅限制）。
+        天地板需分时/最高最低价，yaml 无该数据，故不做。
+        """
+        ld = result.get("limit_down")
+        if not isinstance(ld, dict):
+            return
+        today_stocks = ld.get("stocks")
+        if not today_stocks:
+            return
+
+        daily_dir = BASE_DIR / "daily"
+        try:
+            dirs = sorted(
+                [d for d in daily_dir.iterdir()
+                 if d.is_dir() and d.name != "example" and d.name < date],
+                key=lambda d: d.name,
+                reverse=True,
+            )
+        except FileNotFoundError:
+            dirs = []
+
+        # 倒序加载相邻交易日的跌停 code 集合（最多回看 10 个交易日）。
+        # 关键：目录存在但 yaml 缺失 / 不可读时一律 append 空集（而非跳过），让连续性在该日断裂——
+        # 数据缺口下宁可少算连跌天数（保守），也不能跨缺口把 T-2 误当 T-1 相邻累计。
+        # 已知限制：若某交易日「整个目录」不存在（如当日 cmd_post 从未运行），该日不会出现在
+        # dirs 中，本方法无交易日历可据以区分「周末正常跳空」与「缺失交易日」，故此种极端
+        # 情况下连续性仍可能被跨越（streak 偏高）。属首版已知边界（天地板亦未做），
+        # 待引入交易日历窗口后再收敛。
+        prev_down_sets: list[set] = []
+        for d in dirs[:10]:
+            pm_file = d / "post-market.yaml"
+            codes: set = set()
+            if pm_file.exists():
+                try:
+                    with open(pm_file, encoding="utf-8") as f:
+                        data = yaml.safe_load(f) or {}
+                    raw = data.get("raw_data", data)
+                    prev_ld = raw.get("limit_down", {})
+                    prev_stocks = prev_ld.get("stocks") if isinstance(prev_ld, dict) else None
+                    codes = {s.get("code") for s in (prev_stocks or []) if s.get("code")}
+                except Exception:
+                    codes = set()
+            prev_down_sets.append(codes)
+
+        down_ladder: dict[int, list[str]] = {}
+        max_streak = 1
+        for stock in today_stocks:
+            code = stock.get("code")
+            streak = 1  # 今日跌停计 1 日
+            if code:
+                for codes in prev_down_sets:
+                    if code in codes:
+                        streak += 1
+                    else:
+                        break
+            stock["consecutive_down"] = streak
+            max_streak = max(max_streak, streak)
+            if streak >= 2:
+                down_ladder.setdefault(streak, []).append(stock.get("name", ""))
+
+        ld["consecutive_down_max"] = max_streak
+        ld["down_ladder"] = {
+            str(k): v for k, v in sorted(down_ladder.items(), reverse=True)
+        }
 
     def _enrich_volume_comparison(self, vol_data: dict, date: str) -> None:
         """从历史 post-market.yaml 读取近20日成交额，计算对比指标"""

@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from datetime import datetime
 from pathlib import Path
 
@@ -444,6 +445,11 @@ class ReportGenerator:
                     lines.append(f"  - {boards}板: {', '.join(names[:8])}")
         if "count" in ld:
             lines.append(f"- 跌停: **{ld['count']}家**")
+        down_ladder = ld.get("down_ladder", {})
+        if down_ladder:
+            lines.append("- 连续跌停梯队:")
+            for streak, names in sorted(down_ladder.items(), key=lambda x: -int(x[0])):
+                lines.append(f"  - {streak}连跌: {', '.join(names[:8])}")
 
         # ---- 板块排名 ----
         lines.append(f"\n## {_roman(section_idx)}、板块排名\n")
@@ -565,6 +571,31 @@ class ReportGenerator:
                 direction = "净买" if net > 0 else "净卖"
                 net_yi = abs(net) / 1e8
                 lines.append(f"- {d.get('name', '')} | {d.get('reason', '')} | {direction} {net_yi:.2f}亿")
+
+        # ---- 大宗交易 ----
+        bt_data = raw_data.get("block_trade", {}).get("data", []) or []
+        if bt_data:
+            lines.append(f"\n## {_roman(section_idx)}、大宗交易 [事实] ★★★\n")
+            section_idx += 1
+            # Tushare block_trade 接口 amount 字段单位为万元（见官方数据字典），
+            # 故 /1e4 换算为亿元；若未来镜像源单位变化，此处需同步调整。
+            # 按成交额降序取前 10
+            def _bt_amount_yi(row):
+                try:
+                    return float(row.get("amount") or 0) / 1e4
+                except (TypeError, ValueError):
+                    return 0.0
+
+            top_bt = sorted(bt_data, key=_bt_amount_yi, reverse=True)[:10]
+            lines.append("| 股票 | 成交价 | 成交额(亿) | 买方 | 卖方 |")
+            lines.append("|------|--------|-----------|------|------|")
+            for row in top_bt:
+                name = row.get("name") or row.get("code") or row.get("ts_code") or "-"
+                price = row.get("price", "-")
+                lines.append(
+                    f"| {name} | {price} | {_bt_amount_yi(row):.2f} | "
+                    f"{row.get('buyer', '-')} | {row.get('seller', '-')} |"
+                )
 
         # ---- 板块节奏分析 ----
         section_idx = _render_sector_rhythm(lines, raw_data, section_idx)
@@ -934,6 +965,15 @@ def _to_yi(amount) -> float | None:
         return None
 
 
+def _finite_float(value) -> float | None:
+    """安全转 float：非数值（含 AkShare 历史占位符 '-'/'--'）或非有限值返回 None。"""
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return None
+    return f if math.isfinite(f) else None
+
+
 def _render_p0_market_enhancements(lines: list[str], raw_data: dict, section_idx: int) -> int:
     limit_step_rows = raw_data.get("limit_step", {}).get("data", []) or []
     strongest_rows = raw_data.get("limit_cpt_list", {}).get("data", []) or []
@@ -945,8 +985,15 @@ def _render_p0_market_enhancements(lines: list[str], raw_data: dict, section_idx
     concept_dc_rows_raw = raw_data.get("concept_moneyflow_dc", {}).get("data", []) or []
     market_flow_rows = raw_data.get("market_moneyflow_dc", {}).get("data", []) or []
     daily_info_rows = raw_data.get("daily_info", {}).get("data", []) or []
+    # etf_flow 在 raw_data 顶层（非 {data: [...]} 包裹）；仅保留份额变动可安全解析为有限数的条目，
+    # 预解析为 (row, chg) 避免渲染时重复 float() 并隔离脏数据（如 AkShare 历史占位符字符串）
+    etf_rows = []
+    for r in (raw_data.get("etf_flow") or []):
+        chg = _finite_float(r.get("shares_change_billion"))
+        if chg is not None:
+            etf_rows.append((r, chg))
 
-    has_any = any([limit_step_rows, strongest_rows, ths_rows, dc_rows, concept_ths_rows_raw, concept_dc_rows_raw, market_flow_rows, daily_info_rows])
+    has_any = any([limit_step_rows, strongest_rows, ths_rows, dc_rows, concept_ths_rows_raw, concept_dc_rows_raw, market_flow_rows, daily_info_rows, etf_rows])
     if not has_any:
         return section_idx
 
@@ -1077,6 +1124,22 @@ def _render_p0_market_enhancements(lines: list[str], raw_data: dict, section_idx
             lines.append(f"| {name} | {amount} | {vol} |")
         lines.append("")
 
+    if etf_rows:
+        # 按份额变动绝对值降序（净申购与净赎回中变动最大者均靠前，便于一眼看到资金异动）
+        ordered = sorted(etf_rows, key=lambda rc: abs(rc[1]), reverse=True)
+        lines.append("### ETF 净申购（份额变动）\n")
+        lines.append("| ETF | 份额变动(亿份) | 当前份额(亿份) |")
+        lines.append("|------|--------------|---------------|")
+        for row, chg in ordered:
+            # 主源 tushare:fund_share 只给份额（total_shares_billion），不给元规模；
+            # 故列改为"当前份额"，读 total_shares_billion，兼容 akshare 旧字段 fund_size_billion 兜底
+            size = row.get("total_shares_billion")
+            if size is None:
+                size = row.get("fund_size_billion")
+            size_str = f"{size}" if size is not None else "-"
+            lines.append(f"| {row.get('name', row.get('code', ''))} | {chg:+.2f} | {size_str} |")
+        lines.append("")
+
     return section_idx
 
 
@@ -1135,8 +1198,10 @@ def _render_style_factors(lines: list, raw_data: dict, section_idx: int) -> int:
     cap_pref = sf.get("cap_preference", {})
     trend = sf.get("premium_trend", {})
     signals = sf.get("switch_signals", [])
+    popularity = sf.get("popularity", []) or []
+    promotion = sf.get("promotion") or {}
 
-    if not snap and not board_pref and not cap_pref:
+    if not snap and not board_pref and not cap_pref and not popularity and not promotion:
         return section_idx
 
     lines.append(f"\n## {_roman(section_idx)}、风格化赚钱效应 [事实] ★★★\n")
@@ -1175,6 +1240,20 @@ def _render_style_factors(lines: list, raw_data: dict, section_idx: int) -> int:
             lines.append(f"| {label} | {cnt} | {rate_s} | {med_s} | {mean_s} |")
         lines.append("")
 
+    # 晋级率（T-1 涨停 → T 日连板晋级）
+    if promotion:
+        def _promo_line(label: str, tier: dict) -> str:
+            base = tier.get("base", 0)
+            promoted = tier.get("promoted", 0)
+            rate = tier.get("rate")
+            rate_s = f"{rate:.0%}" if rate is not None else "-"
+            return f"- {label}: {promoted}/{base}（晋级率 {rate_s}）"
+
+        lines.append("### 晋级率（昨日涨停 → 今日连板）\n")
+        lines.append(_promo_line("首板→二板", promotion.get("first_to_second", {})))
+        lines.append(_promo_line("二板→三板", promotion.get("second_to_third", {})))
+        lines.append("")
+
     # 溢价趋势
     if trend:
         direction = trend.get("direction", "")
@@ -1208,6 +1287,41 @@ def _render_style_factors(lines: list, raw_data: dict, section_idx: int) -> int:
         lines.append("### 风格切换信号\n")
         for sig in signals:
             lines.append(f"- ⚠ {sig}")
+        lines.append("")
+
+    # 昨日人气股今日表现（T-1 高标 → T 日结局，具名）
+    if popularity:
+        _SOURCE_LABEL = {
+            "dragon_tiger": "龙虎榜",
+            "consecutive": "连板",
+            "volume_top10": "量能前10",
+        }
+        # 按今收涨跌降序，强者在前
+        ordered = sorted(
+            popularity,
+            key=lambda r: (r.get("t_close_change_pct") if r.get("t_close_change_pct") is not None else -999),
+            reverse=True,
+        )
+        lines.append("### 昨日人气股今日表现（T-1 高标 → T 日结局）\n")
+        lines.append("| 名称 | 来源 | 昨收 | 今开溢价 | 今收涨跌 | 续板 | 跌停 |")
+        lines.append("|------|------|------|---------|---------|------|------|")
+        for row in ordered:
+            srcs = "/".join(_SOURCE_LABEL.get(s, s) for s in (row.get("source") or []))
+            prev_close = row.get("prev_close")
+            prev_s = f"{prev_close}" if prev_close is not None else "-"
+            op = row.get("t_open_premium_pct")
+            op_s = f"{op:+.2f}%" if op is not None else "-"
+            cc = row.get("t_close_change_pct")
+            cc_s = f"{cc:+.2f}%" if cc is not None else "-"
+            up_s = "✓" if row.get("t_is_limit_up") else "—"
+            down_s = "✓" if row.get("t_is_limit_down") else "—"
+            # 量能前10 来源的条目 name 可能为空串（get_top_volume_stocks 只带 code），
+            # 用 `or` 链回退到 code（.get 默认值对空串不生效，故不能用 get(k, default)）
+            label = row.get("name") or row.get("code") or "-"
+            lines.append(
+                f"| {label} | {srcs} | {prev_s} | "
+                f"{op_s} | {cc_s} | {up_s} | {down_s} |"
+            )
         lines.append("")
 
     return section_idx

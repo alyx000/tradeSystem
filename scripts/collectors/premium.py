@@ -179,6 +179,11 @@ class PremiumCollector:
         if popularity:
             prev_data["popularity_backfill"] = popularity
 
+        # 4b. 晋级率回填（T-1 首板→T 二板、T-1 二板→T 三板）
+        promotion = self._compute_promotion(stocks, trade_date, prev_date)
+        if promotion:
+            prev_data["promotion_backfill"] = promotion
+
         # 5. 写回 T-1 的 post-market.yaml
         prev_data["premium_backfill"] = result
         with open(prev_yaml, "w", encoding="utf-8") as f:
@@ -191,7 +196,67 @@ class PremiumCollector:
         )
         if popularity:
             logger.info(f"人气股回填完成，共 {len(popularity)} 只")
+        if promotion:
+            fts = promotion["first_to_second"]
+            logger.info(
+                f"晋级率回填完成｜首板→二板 {fts['promoted']}/{fts['base']}"
+            )
         return result
+
+    def _compute_promotion(
+        self, prev_stocks: list[dict], trade_date: str, prev_date: str
+    ) -> Optional[dict]:
+        """计算晋级率：T-1 首板→T 二板、T-1 二板→T 三板。
+
+        判定口径：T-1 某连板档位的个股 code 若出现在 T 日涨停列表中即视为晋级
+        （T-1 首板今日再涨停 = 二板；T-1 二板今日再涨停 = 三板）。
+        基于两份涨停 list 的 code 集合 join，不依赖 T 日 limit_times 字段精度。
+
+        Args:
+            prev_stocks: T-1 涨停股列表（含 code / limit_times）
+            trade_date:  当日 T
+            prev_date:   前一交易日 T-1
+        Returns:
+            promotion_backfill 字典；T 日涨停 list 不可得时返回 None
+        """
+        r = self.registry.call("get_limit_up_list", trade_date)
+        if not r.success or not r.data:
+            logger.warning(f"T 日涨停列表不可得，跳过晋级率回填：{trade_date}")
+            return None
+
+        t_day_codes = {
+            s.get("code")
+            for s in (r.data.get("stocks") or [])
+            if s.get("code")
+        }
+
+        def _tier(times: int) -> dict:
+            # limit_times==1 即「新首板」(连板计数当日重置)，不存在「已连板的首板」；
+            # 同时过滤 code 为空的脏数据，保证分子(promoted)与分母(base)口径一致。
+            # 严格用 `== times`（不写 `or 1`）：limit_times 缺失/None/0 的脏数据不归入任何档位，
+            # 否则会把未知连板数的股虚算进首板分母，系统性压低首板→二板晋级率。
+            tier_stocks = [
+                s for s in prev_stocks
+                if s.get("limit_times") == times and s.get("code")
+            ]
+            promoted = [s for s in tier_stocks if s.get("code") in t_day_codes]
+            failed = [s for s in tier_stocks if s.get("code") not in t_day_codes]
+            base = len(tier_stocks)
+            return {
+                "base": base,
+                "promoted": len(promoted),
+                "rate": round(len(promoted) / base, 3) if base else None,
+                "promoted_names": [s.get("name", "") for s in promoted],
+                "failed_names": [s.get("name", "") for s in failed],
+            }
+
+        return {
+            "computed_at": datetime.now().isoformat(),
+            "trade_date": trade_date,
+            "prev_date": prev_date,
+            "first_to_second": _tier(1),
+            "second_to_third": _tier(2),
+        }
 
     def _collect_popularity_backfill(
         self, prev_data: dict, trade_date: str, prev_date: str | None = None

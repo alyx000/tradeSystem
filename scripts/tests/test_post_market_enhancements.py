@@ -798,6 +798,224 @@ class TestPostMarketReport:
         assert "概念板块资金流入前列" in md
         assert "交易所市场统计摘录" in md
 
+    def test_report_renders_etf_flow(self):
+        """ETF 净申购在情绪与资金增强章内渲染，净申购/净赎回符号正确"""
+        with tempfile.TemporaryDirectory() as tmp:
+            gen = ReportGenerator()
+            gen.daily_dir = Path(tmp) / "daily"
+            raw = {
+                "date": "2026-03-28",
+                "indices": {},
+                "total_volume": {},
+                "limit_up": {},
+                "limit_down": {},
+                "sector_industry": {"data": []},
+                "sector_concept": {"data": []},
+                "northbound": {},
+                "dragon_tiger": {"data": []},
+                "etf_flow": [
+                    {"code": "510300", "name": "沪深300ETF(华泰)",
+                     "shares_change_billion": 1.25, "total_shares_billion": 279.69},
+                    {"code": "588000", "name": "科创50ETF",
+                     "shares_change_billion": -0.8, "total_shares_billion": 330.36},
+                ],
+            }
+            md, _ = gen.generate_post_market("2026-03-28", raw)
+
+        assert "ETF 净申购" in md
+        assert "当前份额(亿份)" in md     # 列名为份额（主源 fund_share 给的是份额非元规模）
+        assert "沪深300ETF(华泰)" in md
+        assert "科创50ETF" in md
+        assert "+1.25" in md   # 净申购为正
+        assert "-0.8" in md    # 净赎回为负
+        assert "279.69" in md  # 当前份额列读 total_shares_billion，不再恒为 -
+
+    def test_report_etf_flow_empty_no_subsection(self):
+        """etf_flow 为空时不渲染 ETF 小节（但不影响其他 p0 增强章）"""
+        with tempfile.TemporaryDirectory() as tmp:
+            gen = ReportGenerator()
+            gen.daily_dir = Path(tmp) / "daily"
+            raw = {
+                "date": "2026-03-28",
+                "indices": {},
+                "total_volume": {},
+                "limit_up": {},
+                "limit_down": {},
+                "sector_industry": {"data": []},
+                "sector_concept": {"data": []},
+                "northbound": {},
+                "dragon_tiger": {"data": []},
+                "limit_step": {"data": [{"name": "高标A", "nums": "5"}]},
+                "etf_flow": [],
+            }
+            md, _ = gen.generate_post_market("2026-03-28", raw)
+
+        assert "连板天梯" in md       # 其他增强章正常
+        assert "ETF 净申购" not in md  # 空 ETF 不打印小节
+
+    def test_report_etf_flow_all_none_shares_no_section(self):
+        """etf_flow 项全部缺 shares_change_billion 时，ETF 小节不渲染（过滤生效）"""
+        with tempfile.TemporaryDirectory() as tmp:
+            gen = ReportGenerator()
+            gen.daily_dir = Path(tmp) / "daily"
+            raw = {
+                "date": "2026-03-28",
+                "indices": {},
+                "total_volume": {},
+                "limit_up": {},
+                "limit_down": {},
+                "sector_industry": {"data": []},
+                "sector_concept": {"data": []},
+                "northbound": {},
+                "dragon_tiger": {"data": []},
+                "etf_flow": [
+                    {"code": "510300", "name": "沪深300ETF(华泰)", "fund_size_billion": 600.0},
+                    {"code": "588000", "name": "科创50ETF", "total_shares_billion": 30.0},
+                ],
+            }
+            md, _ = gen.generate_post_market("2026-03-28", raw)
+
+        assert "ETF 净申购" not in md  # 无 shares_change_billion 项被过滤，整节不出现
+
+    def test_report_etf_flow_nonnumeric_shares_skipped(self):
+        """shares_change_billion 为非数值占位符（AkShare 历史 '--'）时跳过该行，不崩报告"""
+        with tempfile.TemporaryDirectory() as tmp:
+            gen = ReportGenerator()
+            gen.daily_dir = Path(tmp) / "daily"
+            raw = {
+                "date": "2026-03-28",
+                "indices": {},
+                "total_volume": {},
+                "limit_up": {},
+                "limit_down": {},
+                "sector_industry": {"data": []},
+                "sector_concept": {"data": []},
+                "northbound": {},
+                "dragon_tiger": {"data": []},
+                "etf_flow": [
+                    {"code": "510300", "name": "沪深300ETF(华泰)", "shares_change_billion": "--"},
+                    {"code": "588000", "name": "科创50ETF", "shares_change_billion": 0.6},
+                ],
+            }
+            md, _ = gen.generate_post_market("2026-03-28", raw)  # 不应抛 ValueError
+
+        assert "科创50ETF" in md          # 有效行正常渲染
+        assert "沪深300ETF(华泰)" not in md  # 脏数据行被过滤
+
+    def test_report_etf_flow_alone_triggers_section(self):
+        """仅有 etf_flow（其余 p0 增强皆空）时，情绪与资金增强章仍应出现"""
+        with tempfile.TemporaryDirectory() as tmp:
+            gen = ReportGenerator()
+            gen.daily_dir = Path(tmp) / "daily"
+            raw = {
+                "date": "2026-03-28",
+                "indices": {},
+                "total_volume": {},
+                "limit_up": {},
+                "limit_down": {},
+                "sector_industry": {"data": []},
+                "sector_concept": {"data": []},
+                "northbound": {},
+                "dragon_tiger": {"data": []},
+                "etf_flow": [
+                    {"code": "510300", "name": "沪深300ETF(华泰)",
+                     "shares_change_billion": 1.25},
+                ],
+            }
+            md, _ = gen.generate_post_market("2026-03-28", raw)
+
+        assert "情绪与资金增强" in md
+        assert "ETF 净申购" in md
+
+    def test_report_renders_block_trade(self):
+        """大宗交易在龙虎榜后渲染，amount(万元)换算为亿"""
+        with tempfile.TemporaryDirectory() as tmp:
+            gen = ReportGenerator()
+            gen.daily_dir = Path(tmp) / "daily"
+            raw = {
+                "date": "2026-03-28",
+                "indices": {},
+                "total_volume": {},
+                "limit_up": {},
+                "limit_down": {},
+                "sector_industry": {"data": []},
+                "sector_concept": {"data": []},
+                "northbound": {},
+                "dragon_tiger": {"data": []},
+                "block_trade": {
+                    "data": [
+                        {"code": "000001.SZ", "ts_code": "000001.SZ", "price": 10.5,
+                         "vol": 100.0, "amount": 5000.0,
+                         "buyer": "机构专用", "seller": "中信证券上海分公司"},
+                        {"code": "300750.SZ", "ts_code": "300750.SZ", "price": 200.0,
+                         "vol": 50.0, "amount": 10000.0,
+                         "buyer": "华泰证券", "seller": "机构专用"},
+                    ]
+                },
+            }
+            md, _ = gen.generate_post_market("2026-03-28", raw)
+
+        assert "大宗交易" in md
+        assert "000001.SZ" in md
+        assert "300750.SZ" in md
+        assert "0.50" in md   # 5000万元 → 0.50亿
+        assert "1.00" in md   # 10000万元 → 1.00亿
+        assert "机构专用" in md
+
+    def test_report_block_trade_empty_no_section(self):
+        """无大宗交易数据时不渲染该章"""
+        with tempfile.TemporaryDirectory() as tmp:
+            gen = ReportGenerator()
+            gen.daily_dir = Path(tmp) / "daily"
+            raw = {
+                "date": "2026-03-28",
+                "indices": {},
+                "total_volume": {},
+                "limit_up": {},
+                "limit_down": {},
+                "sector_industry": {"data": []},
+                "sector_concept": {"data": []},
+                "northbound": {},
+                "dragon_tiger": {"data": []},
+                "block_trade": {"data": []},
+            }
+            md, _ = gen.generate_post_market("2026-03-28", raw)
+
+        assert "大宗交易" not in md
+
+
+class TestBlockTradeCollection:
+    def test_block_trade_collected(self):
+        """collect_post_market 把 get_block_trade 数据写入 result['block_trade']"""
+        reg = _mock_registry()
+        bt_data = [
+            {"code": "000001.SZ", "ts_code": "000001.SZ", "price": 10.5,
+             "vol": 100.0, "amount": 5000.0, "buyer": "机构专用", "seller": "营业部A"},
+        ]
+
+        def mock_call(method, *args, **kwargs):
+            if method == "get_block_trade":
+                return DataResult(data=bt_data, source="tushare:block_trade")
+            if method == "get_limit_up_list":
+                return DataResult(data={"count": 0, "stocks": []}, source="test")
+            if method == "get_limit_down_list":
+                return DataResult(data={"count": 0, "stocks": []}, source="test")
+            return DataResult(data=None, source="test", error="skip")
+
+        reg.call = mock_call
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch("collectors.market.BASE_DIR", Path(tmp)):
+                collector = MarketCollector(reg)
+                collector._rhythm_analyzer = MagicMock()
+                collector._rhythm_analyzer.load_main_theme_names = MagicMock(return_value=[])
+                collector._rhythm_analyzer.analyze = MagicMock(return_value=[])
+
+                result = collector.collect_post_market("2026-03-28")
+
+        assert "block_trade" in result
+        assert result["block_trade"]["data"][0]["code"] == "000001.SZ"
+
 
 # =====================================================================
 # T9b. 章节编号动态一致性
