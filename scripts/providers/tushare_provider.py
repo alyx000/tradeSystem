@@ -35,6 +35,20 @@ def _normalize_trade_date(raw) -> str | None:
     return None
 
 
+def _to_clean_str(val) -> str:
+    """NaN / None → 空串，其余 str() 去空白；兜底过滤脏值文本。
+
+    与 akshare provider 同名 helper 行为对齐：不能用 `str(val or "")`（NaN truthy 会漏成
+    字面 'nan'）。tushare 未引入 pandas，故用 math.isnan 判 NaN。
+    """
+    if val is None:
+        return ""
+    if isinstance(val, float) and math.isnan(val):
+        return ""
+    s = str(val).strip()
+    return "" if s.lower() in ("nan", "<na>", "none") else s
+
+
 class TushareProvider(DataProvider):
     name = "tushare"
     priority = 1
@@ -390,6 +404,8 @@ class TushareProvider(DataProvider):
                     "first_time": row.get("first_time", ""),
                     "last_time": row.get("last_time", ""),
                     "limit_times": int(row.get("limit_times", 1)),  # 连板天数
+                    "industry": _to_clean_str(row.get("industry", "")),  # 与 akshare 降级口径对齐；字段缺失留空
+                    "limit_stat": _to_clean_str(row.get("up_stat", "")),  # N天M板
                 })
             summary = {
                 "count": len(stocks),

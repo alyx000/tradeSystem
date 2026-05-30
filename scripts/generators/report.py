@@ -443,6 +443,13 @@ class ReportGenerator:
                 lines.append("- 连板梯队:")
                 for boards, names in sorted(ladder.items(), key=lambda x: -int(x[0])):
                     lines.append(f"  - {boards}板: {', '.join(names[:8])}")
+            industry_ranking = lu.get("industry_ranking", [])
+            if industry_ranking:
+                parts = [
+                    f"{item.get('industry', '')} {item.get('count', 0)}家(最高{item.get('max_board', 1)}板)"
+                    for item in industry_ranking[:8]
+                ]
+                lines.append(f"- 涨停行业分布: {', '.join(parts)}")
         if "count" in ld:
             lines.append(f"- 跌停: **{ld['count']}家**")
         down_ladder = ld.get("down_ladder", {})

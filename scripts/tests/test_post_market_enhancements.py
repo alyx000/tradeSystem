@@ -1604,3 +1604,250 @@ def test_index_table_handles_none_amount_and_pct():
     line = [l for l in md.splitlines() if l.startswith("| 上证指数 |")][0]
     assert "None" not in line, f"指数行渲染出字面 None: {line}"
     assert line.count("-") >= 2  # 涨跌幅/成交额缺失均以 - 兜底
+
+
+# =====================================================================
+# T13. 涨停行业归因（A 层：所属行业 + 涨停统计 → industry_ranking）
+# =====================================================================
+
+class TestLimitUpIndustryExtraction:
+    """Provider 层：get_limit_up_list 提取 industry / limit_stat。"""
+
+    def test_akshare_extracts_industry_and_stat(self):
+        from providers.akshare_provider import AkshareProvider
+        import pandas as pd
+
+        p = AkshareProvider({})
+        p._initialized = True
+        p.ak = MagicMock()
+        p.ak.stock_zt_pool_em.return_value = pd.DataFrame([
+            {"代码": "300001", "名称": "特锐德", "涨跌幅": 20.0, "成交额": 1e8,
+             "换手率": 5.0, "首次封板时间": "093000", "最后封板时间": "093000",
+             "连板数": 1, "封板资金": 1e7, "涨停统计": "1/1", "所属行业": "电网设备"},
+            {"代码": "000004", "名称": "连板B", "涨跌幅": 10.0, "成交额": 2e8,
+             "换手率": 8.0, "首次封板时间": "092500", "最后封板时间": "092500",
+             "连板数": 3, "封板资金": 2e7, "涨停统计": "5/3", "所属行业": "电网设备"},
+        ])
+        r = p.get_limit_up_list("2026-05-29")
+        assert r.success
+        stocks = r.data["stocks"]
+        assert stocks[0]["industry"] == "电网设备"
+        assert stocks[0]["limit_stat"] == "1/1"
+        assert stocks[1]["limit_stat"] == "5/3"
+
+    def test_akshare_missing_columns_degrade_to_empty(self):
+        """旧/精简列（无所属行业/涨停统计）不抛错，降级为空串。"""
+        from providers.akshare_provider import AkshareProvider
+        import pandas as pd
+
+        p = AkshareProvider({})
+        p._initialized = True
+        p.ak = MagicMock()
+        p.ak.stock_zt_pool_em.return_value = pd.DataFrame([
+            {"代码": "300001", "名称": "特锐德", "涨跌幅": 20.0, "成交额": 1e8,
+             "换手率": 5.0, "首次封板时间": "093000", "最后封板时间": "093000",
+             "连板数": 1, "封板资金": 1e7},
+        ])
+        r = p.get_limit_up_list("2026-05-29")
+        assert r.success
+        assert r.data["stocks"][0]["industry"] == ""
+        assert r.data["stocks"][0]["limit_stat"] == ""
+
+    def test_tushare_maps_up_stat_and_industry(self):
+        from providers.tushare_provider import TushareProvider
+        import pandas as pd
+
+        p = TushareProvider.__new__(TushareProvider)
+        p.name = "tushare"
+        p.config = {}
+        p.pro = MagicMock()
+        p.pro.limit_list_d.return_value = pd.DataFrame([
+            {"ts_code": "300001.SZ", "name": "特锐德", "close": 30.0, "pct_chg": 20.0,
+             "amount": 100000.0, "turnover_rate_f": 5.0, "fd_amount": 1e7,
+             "first_time": "093000", "last_time": "093000", "limit_times": 1,
+             "up_stat": "1/1", "industry": "电网设备"},
+        ])
+        r = p.get_limit_up_list("2026-05-29")
+        assert r.success
+        assert r.data["stocks"][0]["limit_stat"] == "1/1"
+        assert r.data["stocks"][0]["industry"] == "电网设备"
+
+    def test_tushare_missing_fields_degrade(self):
+        """limit_list_d 无 up_stat/industry 时降级为空串，不报错。"""
+        from providers.tushare_provider import TushareProvider
+        import pandas as pd
+
+        p = TushareProvider.__new__(TushareProvider)
+        p.name = "tushare"
+        p.config = {}
+        p.pro = MagicMock()
+        p.pro.limit_list_d.return_value = pd.DataFrame([
+            {"ts_code": "300001.SZ", "name": "特锐德", "close": 30.0, "pct_chg": 20.0,
+             "amount": 100000.0, "turnover_rate_f": 5.0, "fd_amount": 1e7,
+             "first_time": "093000", "last_time": "093000", "limit_times": 1},
+        ])
+        r = p.get_limit_up_list("2026-05-29")
+        assert r.success
+        assert r.data["stocks"][0]["limit_stat"] == ""
+        assert r.data["stocks"][0]["industry"] == ""
+
+    def test_akshare_nan_industry_value_becomes_empty(self):
+        """列存在但值为 NaN/None → 空串（不能产出字面 'nan' 脏值）。"""
+        from providers.akshare_provider import AkshareProvider
+        import numpy as np
+        import pandas as pd
+
+        p = AkshareProvider({})
+        p._initialized = True
+        p.ak = MagicMock()
+        p.ak.stock_zt_pool_em.return_value = pd.DataFrame([
+            {"代码": "300001", "名称": "特锐德", "涨跌幅": 20.0, "成交额": 1e8,
+             "换手率": 5.0, "首次封板时间": "093000", "最后封板时间": "093000",
+             "连板数": 1, "封板资金": 1e7, "涨停统计": np.nan, "所属行业": np.nan},
+        ])
+        r = p.get_limit_up_list("2026-05-29")
+        assert r.success
+        assert r.data["stocks"][0]["industry"] == ""
+        assert r.data["stocks"][0]["limit_stat"] == ""
+
+    def test_tushare_nan_value_becomes_empty(self):
+        from providers.tushare_provider import TushareProvider
+        import numpy as np
+        import pandas as pd
+
+        p = TushareProvider.__new__(TushareProvider)
+        p.name = "tushare"
+        p.config = {}
+        p.pro = MagicMock()
+        p.pro.limit_list_d.return_value = pd.DataFrame([
+            {"ts_code": "300001.SZ", "name": "特锐德", "close": 30.0, "pct_chg": 20.0,
+             "amount": 100000.0, "turnover_rate_f": 5.0, "fd_amount": 1e7,
+             "first_time": "093000", "last_time": "093000", "limit_times": 1,
+             "up_stat": np.nan, "industry": np.nan},
+        ])
+        r = p.get_limit_up_list("2026-05-29")
+        assert r.success
+        assert r.data["stocks"][0]["limit_stat"] == ""
+        assert r.data["stocks"][0]["industry"] == ""
+
+
+def _make_limit_up_stocks_with_industry():
+    """带 industry 的涨停股列表，用于聚合测试。"""
+    return {
+        "count": 5,
+        "stocks": [
+            {"code": "300001.SZ", "name": "电网1", "pct_chg": 20.0, "limit_times": 1,
+             "first_time": "93000", "last_time": "93000", "close": 30.0, "industry": "电网设备"},
+            {"code": "300002.SZ", "name": "电网2", "pct_chg": 20.0, "limit_times": 3,
+             "first_time": "92500", "last_time": "92500", "close": 18.0, "industry": "电网设备"},
+            {"code": "000001.SZ", "name": "化工1", "pct_chg": 10.0, "limit_times": 1,
+             "first_time": "93000", "last_time": "93000", "close": 12.0, "industry": "化学制品"},
+            {"code": "000002.SZ", "name": "ST垃圾", "pct_chg": 5.0, "limit_times": 1,
+             "first_time": "93000", "last_time": "93000", "close": 3.0, "industry": "电网设备"},
+            {"code": "000003.SZ", "name": "无行业", "pct_chg": 10.0, "limit_times": 1,
+             "first_time": "93000", "last_time": "93000", "close": 8.0, "industry": ""},
+        ],
+    }
+
+
+class TestIndustryRankingAggregation:
+    """Collector 层：第3节按 industry 聚合 industry_ranking / _ex_st。"""
+
+    def _run(self, limit_data):
+        reg = _mock_registry()
+
+        def mock_call(method, *args, **kwargs):
+            if method == "get_limit_up_list":
+                return DataResult(data=limit_data, source="test")
+            if method == "get_limit_down_list":
+                return DataResult(data={"count": 0, "stocks": []}, source="test")
+            return DataResult(data=None, source="test", error="skip")
+
+        reg.call = mock_call
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch("collectors.market.BASE_DIR", Path(tmp)):
+                collector = MarketCollector(reg)
+                collector._get_broken_board_count = MagicMock(return_value=0)
+                collector._rhythm_analyzer = MagicMock()
+                collector._rhythm_analyzer.load_main_theme_names = MagicMock(return_value=[])
+                collector._rhythm_analyzer.analyze = MagicMock(return_value=[])
+                return collector.collect_post_market("2026-03-28")["limit_up"]
+
+    def test_ranking_count_order_and_max_board(self):
+        lu = self._run(_make_limit_up_stocks_with_industry())
+        ranking = lu["industry_ranking"]
+        # 电网设备 3 家(含 ST)、化学制品 1 家；空行业被过滤
+        assert ranking[0]["industry"] == "电网设备"
+        assert ranking[0]["count"] == 3
+        assert ranking[0]["max_board"] == 3
+        assert all(item["industry"] for item in ranking)  # 无空行业
+        names = {item["industry"] for item in ranking}
+        assert names == {"电网设备", "化学制品"}
+
+    def test_ranking_ex_st_excludes_st(self):
+        lu = self._run(_make_limit_up_stocks_with_industry())
+        ex_st = {item["industry"]: item["count"] for item in lu["industry_ranking_ex_st"]}
+        # 排除 ST 后电网设备只剩 2 家
+        assert ex_st["电网设备"] == 2
+
+    def test_non_str_industry_does_not_crash(self):
+        """industry 为 None/NaN 时不崩溃，按缺失过滤。"""
+        data = {"count": 2, "stocks": [
+            {"code": "1", "name": "A", "limit_times": 1, "industry": None},
+            {"code": "2", "name": "B", "limit_times": 1},  # 完全无 industry 键
+        ]}
+        lu = self._run(data)
+        assert lu["industry_ranking"] == []
+
+    def test_tie_break_is_deterministic_by_industry_name(self):
+        """同 count 同 max_board 时按行业名稳定排序，避免报告抖动。"""
+        # 插入顺序故意与目标顺序相反，验证排序确实生效（而非沿用遍历顺序）
+        data = {"count": 2, "stocks": [
+            {"code": "1", "name": "x", "limit_times": 1, "industry": "B行业"},
+            {"code": "2", "name": "y", "limit_times": 1, "industry": "A行业"},
+        ]}
+        ranking = self._run(data)["industry_ranking"]
+        # 两行业 count=1、max_board=1，按行业名升序：A行业 在前
+        assert [item["industry"] for item in ranking] == ["A行业", "B行业"]
+
+
+class TestIndustryRankingReport:
+    """Report 层：涨跌停章节渲染涨停行业分布。"""
+
+    def test_report_renders_industry_distribution(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            gen = ReportGenerator()
+            gen.daily_dir = Path(tmp) / "daily"
+            raw = {
+                "date": "2026-03-28",
+                "limit_up": {
+                    "count": 4,
+                    "industry_ranking": [
+                        {"industry": "电网设备", "count": 3, "max_board": 3, "names": ["a", "b", "c"]},
+                        {"industry": "化学制品", "count": 1, "max_board": 1, "names": ["d"]},
+                    ],
+                },
+            }
+            md, _ = gen.generate_post_market("2026-03-28", raw)
+        line = [l for l in md.splitlines() if "行业分布" in l]
+        assert line, "报告未渲染涨停行业分布"
+        assert "电网设备" in line[0]
+        assert "3家" in line[0]
+
+    def test_report_no_industry_ranking_skips(self):
+        """无 industry_ranking 时不渲染行业分布行，且不报错。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            gen = ReportGenerator()
+            gen.daily_dir = Path(tmp) / "daily"
+            raw = {"date": "2026-03-28", "limit_up": {"count": 0}}
+            md, _ = gen.generate_post_market("2026-03-28", raw)
+        assert not [l for l in md.splitlines() if "行业分布" in l]
+
+    def test_report_empty_industry_ranking_skips(self):
+        """有 count 但 industry_ranking 为空列表时仍不渲染行业分布行。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            gen = ReportGenerator()
+            gen.daily_dir = Path(tmp) / "daily"
+            raw = {"date": "2026-03-28", "limit_up": {"count": 5, "industry_ranking": []}}
+            md, _ = gen.generate_post_market("2026-03-28", raw)
+        assert not [l for l in md.splitlines() if "行业分布" in l]

@@ -50,6 +50,22 @@ def _to_float_or_none(val: Any) -> float | None:
         return None
 
 
+def _to_clean_str(val: Any) -> str:
+    """NaN / None / pd.NA → 空串，其余 str() 去空白。
+
+    不能用 `str(val or "")`：pandas NaN 为 truthy 会漏到 str() 变成字面 'nan'，
+    pd.NA 做布尔运算还会抛 'ambiguous'。统一走 pd.isna 判定，再兜底过滤脏值文本，
+    避免下游行业聚合产出伪行业桶。
+    """
+    try:
+        if val is None or pd.isna(val):
+            return ""
+    except (TypeError, ValueError):
+        pass  # 非标量（如 list）：pd.isna 返回数组，落到下方 str()
+    s = str(val).strip()
+    return "" if s.lower() in ("nan", "<na>", "none") else s
+
+
 _US_MARKET_CLOSE_HOUR_ET = 16  # 美股 16:00 ET 收盘（半日市忽略，盘前简报在 19:00 ET 运行不受影响）
 
 
@@ -1159,6 +1175,11 @@ class AkshareProvider(DataProvider):
             df = self.ak.stock_zt_pool_em(date=date.replace("-", ""))
             if df.empty:
                 return DataResult(data=None, source=self.name, error=f"无涨停数据: {date}")
+            # 列名漂移可观测性：东财偶改列名，缺列会被 _to_clean_str 静默降级为空行业，
+            # 行业归因会悄悄消失。显式告警，便于排查「功能静默失效 vs 真无数据」。
+            for _col in ("所属行业", "涨停统计"):
+                if _col not in df.columns:
+                    logger.warning("stock_zt_pool_em 缺列「%s」，涨停行业归因将降级为空（列名可能漂移）", _col)
             stocks = []
             for _, row in df.iterrows():
                 stocks.append({
@@ -1171,6 +1192,8 @@ class AkshareProvider(DataProvider):
                     "last_time": str(row.get("最后封板时间", "")),
                     "limit_times": int(row.get("连板数", 1)),
                     "seal_amount": float(row.get("封板资金", 0)),  # 东财列名为「封板资金」(原始元)，与 tushare fd_amount 同量级
+                    "industry": _to_clean_str(row.get("所属行业", "")),  # 东财行业分类（题材文本归因为硬缺口，此处仅行业级）
+                    "limit_stat": _to_clean_str(row.get("涨停统计", "")),  # N天M板，形如「5/3」
                 })
             return DataResult(
                 data={"count": len(stocks), "stocks": stocks},

@@ -445,6 +445,12 @@ class MarketCollector:
                 data["seal_rate_pct_ex_st"] = 0
                 data["broken_rate_pct_ex_st"] = 0
 
+            # 涨停行业分布：按东财所属行业聚合（count 降序、同 count 按最高连板降序），过滤空/非字符串行业。
+            # 报告默认呈现含 ST 的 industry_ranking，与本章节其它指标（count/board_ladder）口径一致；
+            # _ex_st 同步入库供下游/后续按需消费，避免口径混用。
+            data["industry_ranking"] = self._aggregate_limit_up_industry(stocks)
+            data["industry_ranking_ex_st"] = self._aggregate_limit_up_industry(stocks_ex_st)
+
             data["_source"] = limit_up.source
             result["limit_up"] = data
         else:
@@ -691,6 +697,34 @@ class MarketCollector:
     # ------------------------------------------------------------------
     # 辅助方法
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _aggregate_limit_up_industry(stocks: list[dict]) -> list[dict]:
+        """按 industry(东财所属行业) 聚合涨停股，产出行业分布排名。
+
+        - 过滤空 / 非字符串 industry（provider 缺列时降级为空串，tushare 降级源亦可能为空）。
+        - 排序：涨停家数降序，同家数按最高连板降序，便于报告突出强势行业。
+        """
+        agg: dict[str, dict] = {}
+        for s in stocks:
+            ind = s.get("industry")
+            if not isinstance(ind, str):
+                continue
+            ind = ind.strip()
+            if not ind:
+                continue
+            bucket = agg.setdefault(
+                ind, {"industry": ind, "count": 0, "max_board": 0, "names": []}
+            )
+            bucket["count"] += 1
+            try:
+                lt = int(s.get("limit_times", 1) or 1)
+            except (TypeError, ValueError):
+                lt = 1
+            bucket["max_board"] = max(bucket["max_board"], lt)
+            bucket["names"].append(s.get("name", ""))
+        # 第三键 industry 名做确定性 tie-break：同家数同最高板时顺序稳定，避免报告抖动
+        return sorted(agg.values(), key=lambda x: (-x["count"], -x["max_board"], x["industry"]))
 
     def _get_broken_board_count(self, date: str) -> int:
         """获取炸板数量（曾触及涨停但收盘未封住的股票数）"""
