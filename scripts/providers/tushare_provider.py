@@ -98,6 +98,7 @@ class TushareProvider(DataProvider):
             "get_margin_detail",
             "get_dragon_tiger",
             "get_block_trade",
+            "get_etf_flow",
             "get_stock_announcements",
             "get_market_announcements",
             "get_disclosure_dates",
@@ -856,6 +857,73 @@ class TushareProvider(DataProvider):
             return DataResult(data=records, source="tushare:block_trade")
         except Exception as e:
             return DataResult(data=None, source=self.name, error=str(e))
+
+    # ---- ETF 净申购（份额变动） ----
+
+    # 重点 ETF（bare code → 名称）；后缀按交易所：5xxxxx→.SH，其余→.SZ
+    _ETF_WATCHLIST: dict[str, str] = {
+        "510300": "沪深300ETF(华泰)",
+        "159919": "沪深300ETF(嘉实)",
+        "588000": "科创50ETF",
+        "512880": "证券ETF",
+    }
+
+    @staticmethod
+    def _etf_ts_code(code: str) -> str:
+        return f"{code}.SH" if code.startswith("5") else f"{code}.SZ"
+
+    def get_etf_flow(self, date: str) -> DataResult:
+        """重点 ETF 日度净申购：基于 tushare fund_share 的 fd_share(万份) 末两日差。
+
+        fund_share.fd_share 单位为万份，/1e4 换算亿份；正=净申购、负=净赎回。
+        相比 akshare fund_etf_fund_info_em（返回净值非份额，曾被误当份额导致恒 0），
+        fund_share 是份额变动的正确数据源。
+
+        语义说明（codex review M1 的处置）：取窗口内"最近两条份额记录之差"，而非强制
+        等于请求日。理由：fund_share 按日披露且 ETF 极少停牌，相邻两条记录几乎总是相邻
+        交易日，其差即日度净申购；而 fund_share 常有 T+1 披露滞后，若强制 last==请求日，
+        正常滞后日 ETF 段会整体消失（体验更差）。因此采用"最近一次份额变动"语义，
+        接受极端停牌缺口下差值可能跨多日的小概率偏差。"""
+        d = self._date_fmt(date)
+        start = (datetime.strptime(d, "%Y%m%d") - timedelta(days=15)).strftime("%Y%m%d")
+
+        results: list[dict] = []
+        errors: list[str] = []
+        for code, name in self._ETF_WATCHLIST.items():
+            ts_code = self._etf_ts_code(code)
+            try:
+                df = self.pro.fund_share(ts_code=ts_code, start_date=start, end_date=d)
+                if df is None or df.empty or len(df) < 2:
+                    errors.append(f"{code} 份额历史不足两行")
+                    continue
+                df = df.sort_values("trade_date")
+                last_share = float(df.iloc[-1]["fd_share"])
+                prev_share = float(df.iloc[-2]["fd_share"])
+                # 提主源后补健壮性守卫：fd_share 为 NaN/inf 时 float() 不抛异常但会污染输出，
+                # 显式剔除非有限值，避免净申购渲染出 nan 亿份
+                if not (math.isfinite(last_share) and math.isfinite(prev_share)):
+                    errors.append(f"{code} 份额含非有限值，跳过")
+                    continue
+                results.append({
+                    "code": code,
+                    "name": name,
+                    "total_shares_billion": round(last_share / 1e4, 4),
+                    "shares_change_billion": round((last_share - prev_share) / 1e4, 4),
+                })
+            except Exception as e:
+                errors.append(f"{code} 异常: {e}")
+                logger.debug(f"ETF {code} fund_share 获取失败: {e}")
+
+        if not results:
+            return DataResult(
+                data=None, source=self.name,
+                error="; ".join(errors) or "无 ETF 份额数据",
+            )
+        return DataResult(
+            data=results,
+            source="tushare:fund_share",
+            note="; ".join(errors) if errors else "",
+        )
 
     # ---- 公告 ----
 
