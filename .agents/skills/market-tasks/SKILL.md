@@ -80,6 +80,25 @@ python3 main.py recommend weekly --lookback-days 14
 | `LLM_TIMEOUT_SECONDS` | `90` | LLM 调用超时（硬上限 180s） |
 | `GEMINI_MODEL` | 空 | 指定模型，留空走 gemini 默认 |
 
+## 成交额板块集中度监控（volume-watch）
+
+每交易日 21:00 自动跑（launchd `com.alyx.tradesystem.volume-watch`），也可手动：
+
+```bash
+make volume-watch-daily        # = python3 main.py volume-watch daily（采集+落库+渲染+钉钉推送）
+make volume-watch-daily-dry    # = ... --dry-run（仅打印,不落库不推送,预览用）
+make volume-watch-trend        # = python3 main.py volume-watch trend（只读打印最近 30 日趋势）
+
+# 指定日期 / 窗口（直接调底层）
+python3 main.py volume-watch daily --date 2026-05-29 --dry-run
+python3 main.py volume-watch trend --date 2026-05-29 --days 10
+```
+
+- `daily`：read-through 读 `daily_market.top_volume_stocks`（缺则重拉）→ 申万二级打标（三级降级：申万成分命中 → `stock_basic` 兜 name → 「未分类」）→ 聚合 → 落 `daily_volume_concentration` → 渲染 → 钉钉。非交易日无数据自动跳过（不写库不推送）。
+- `trend`：只读最近 N 日（默认 30），输出板块轮动 / 头部量级环比 / 个股连续在榜；不采集、不落库、不推送。
+- 行业口径=**申万二级**（联动 `get_sector_rankings`）；「未分类」（次新等）不计入前3行业集中度，报告标 `industry_coverage`。
+- 依赖 env：`TUSHARE_TOKEN`（`scripts/.env`，`index_member_all` 需积分）、`DINGTALK_WEBHOOK_TOKEN/SECRET`（`~/.config/tradeSystem.env`，daily 推送）。
+
 ## 核心流程
 
 1. 先确认任务类型、日期和是否属于历史补跑。

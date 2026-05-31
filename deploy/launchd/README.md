@@ -7,6 +7,8 @@
 - `recommend-runner.sh` — 包装脚本：cd 仓库根 → source 项目 env → 调 `python3 main.py recommend`
 - `com.alyx.tradesystem.recommend-daily.plist` — 工作日 07:10 触发（行业日报）
 - `com.alyx.tradesystem.recommend-weekly.plist` — 周日 20:00 触发（行业周报）
+- `volume-watch-runner.sh` — 包装脚本：cd 仓库根 → source `scripts/.env`(TUSHARE_TOKEN) + `~/.config/tradeSystem.env`(钉钉) → 调 `python3 main.py volume-watch daily`
+- `com.alyx.tradesystem.volume-watch.plist` — 工作日 21:00 触发（成交额 Top20 板块集中度日报；非交易日无数据自动跳过）
 - `today-runner.sh` — 包装脚本：cd 仓库根 → source 项目 env → 调 `python3 main.py pre|post`
 - `com.alyx.tradesystem.today-pre.plist` — 工作日 07:00 触发（盘前简报，含钉钉推送）
 - `com.alyx.tradesystem.today-post.plist` — 工作日 20:00 触发（盘后报告，含钉钉推送）
@@ -137,3 +139,36 @@ tail -f /tmp/tradesystem-four-trading-day-review.log
 launchctl unload ~/Library/LaunchAgents/com.alyx.tradesystem.four-trading-day-review.plist
 rm ~/Library/LaunchAgents/com.alyx.tradesystem.four-trading-day-review.plist
 ```
+
+## 成交额 Top20 板块集中度（工作日 21:00）
+
+盘后 20:00 任务之后、tushare 日线落地后,出当日 top20 板块集中度 + 趋势,推钉钉。
+runner 同时 source `scripts/.env`(TUSHARE_TOKEN,`index_member_all` 申万成分需积分)与
+`~/.config/tradeSystem.env`(钉钉);非交易日无成交额数据时任务内自动跳过,不写库不推送。
+
+```bash
+# 1. 包装脚本可执行
+chmod +x deploy/launchd/volume-watch-runner.sh
+
+# 2. 复制 plist
+cp deploy/launchd/com.alyx.tradesystem.volume-watch.plist ~/Library/LaunchAgents/
+
+# 3. 加载
+launchctl load ~/Library/LaunchAgents/com.alyx.tradesystem.volume-watch.plist
+
+# 4. 验证
+launchctl list | grep tradesystem.volume-watch
+
+# 5. 真触发立即测试（非交易日仅验 launchd 链路 + 凭据注入,无数据则跳过不推送）
+launchctl start com.alyx.tradesystem.volume-watch
+tail -f /tmp/tradesystem-volume-watch.log   # 看 [env] 三凭据 =set + 运行结果
+```
+
+卸载：
+
+```bash
+launchctl unload ~/Library/LaunchAgents/com.alyx.tradesystem.volume-watch.plist
+rm ~/Library/LaunchAgents/com.alyx.tradesystem.volume-watch.plist
+```
+
+**时段**：21:00 在 today-post(20:00)与 four-trading-day-review(22:30)之间,无冲突。
