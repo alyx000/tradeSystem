@@ -1,0 +1,26 @@
+{
+  "mcpServers": {
+    "raindrop": {
+      "command": "/Users/alyx/.raindrop/bin/raindrop",
+      "args": [
+        "workshop",
+        "mcp"
+      ]
+    },
+    "context7": {
+      "command": "/opt/homebrew/bin/npx",
+      "args": [
+        "-y",
+        "@upstash/context7-mcp"
+      ]
+    },
+    "sqlite-readonly": {
+      "command": "/opt/homebrew/bin/npx",
+      "args": [
+        "-y",
+        "mcp-server-sqlite-npx",
+        "/Users/alyx/tradeSystem/data/trade.db"
+      ]
+    }
+  }
+}
