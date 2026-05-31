@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Sleep policy: 成交额板块集中度错过可接受（非交易决策任务）；macOS 休眠期间不触发，可接受 -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.alyx.tradesystem.volume-watch</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/alyx/tradeSystem/deploy/launchd/volume-watch-runner.sh</string>
+    </array>
+
+    <!-- 工作日 21:00（盘后 20:00 任务 + tushare 日线落地后）。Weekday: 1=周一 ... 5=周五。
+         非交易日（节假日）仍会触发，但任务内判无数据自动跳过。 -->
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>21</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>21</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>21</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>21</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>21</integer><key>Minute</key><integer>0</integer></dict>
+    </array>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/tradesystem-volume-watch.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/tradesystem-volume-watch.log</string>
+
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>
