@@ -58,7 +58,7 @@
 | `market-tasks` | `python main.py post --date` | 盘后任务采集 |
 | `market-tasks` | `python main.py recommend daily [--lookback-days N] [--top-k K] [--dry-run]` | 行业推荐日报（聚合 teacher_notes + industry_info，可选 gemini 点评，钉钉推送） |
 | `market-tasks` | `python main.py recommend weekly [--lookback-days N] [--top-k K] [--dry-run]` | 行业推荐周报（深度版，默认 7 日 Top 8） |
-| `market-tasks` | `python main.py volume-watch daily [--date YYYY-MM-DD] [--dry-run]` | 成交额 Top20 板块集中度日报（read-through 采集 + 申万二级打标 + 落库 `daily_volume_concentration` + 钉钉推送；`--dry-run` 仅打印不落库不推送） |
+| `market-tasks` | `python main.py volume-watch daily [--date YYYY-MM-DD] [--dry-run] [--refetch]` | 成交额 Top20 板块集中度日报（read-through 采集 + 申万二级打标 + 落库 `daily_volume_concentration` + 钉钉推送；报告含 Top20 个股明细表；`--dry-run` 仅打印不落库不推送；`--refetch` 强制重拉绕过 `daily_market` 陈旧缓存，回填历史用） |
 | `market-tasks` | `python main.py volume-watch trend [--date YYYY-MM-DD] [--days N]` | 只读打印最近 N 日集中度趋势（板块轮动 / 头部量级环比 / 个股留存），不采集不推送 |
 | `ingest-inspector` | `python main.py ingest run --stage --date` | 运行采集阶段任务，写 `ingest_runs` / `raw_interface_payloads` |
 | `ingest-inspector` | `python main.py ingest run-interface --name --date` | 运行单接口采集，真实执行 provider 并记录失败 |
