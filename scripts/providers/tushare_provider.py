@@ -58,6 +58,7 @@ class TushareProvider(DataProvider):
         self.pro = None
         self._sw_l2_codes: set | None = None
         self._ths_concept_map: dict | None = None
+        self._sw_member_map: dict | None = None
 
     def initialize(self) -> bool:
         self._initialized = False
@@ -103,6 +104,7 @@ class TushareProvider(DataProvider):
             "get_ths_index",
             "get_ths_member",
             "get_index_classify",
+            "get_stock_sw_industry_map",
             "get_market_breadth",
             "get_daily_info",
             "get_market_moneyflow_dc",
@@ -675,6 +677,65 @@ class TushareProvider(DataProvider):
                 logger.warning(f"获取同花顺概念列表失败: {e}")
                 self._ths_concept_map = {}
         return self._ths_concept_map
+
+    def _ensure_sw_member_map(self) -> dict:
+        """惰性加载个股 → 申万二级映射 {ts_code: {name, sw_l2}}。
+
+        index_member_all 默认单页 2000 行,**必须 offset/limit 分页拉满**,否则映射缺一半
+        (实测全 A ~5847 只,3 页;参见 memory reference_tushare_index_member_all_pagination)。
+        """
+        if self._sw_member_map is None:
+            result_map: dict = {}
+            offset, limit = 0, 2000
+            while True:
+                df = self.pro.index_member_all(
+                    is_new="Y",
+                    fields="ts_code,name,l1_name,l2_name,l2_code,is_new",
+                    offset=offset,
+                    limit=limit,
+                )
+                records = self._df_to_records(df)  # df is None / empty → []
+                if not records:
+                    break
+                for r in records:
+                    code = _to_clean_str(r.get("ts_code"))
+                    if not code:
+                        continue
+                    result_map[code] = {
+                        "name": _to_clean_str(r.get("name")),
+                        "sw_l2": _to_clean_str(r.get("l2_name")),
+                    }
+                if len(records) < limit:
+                    break
+                offset += limit
+            self._sw_member_map = result_map  # 仅成功构建后缓存
+        return self._sw_member_map
+
+    def get_stock_sw_industry_map(self) -> DataResult:
+        """个股 → 申万二级行业映射(成交额集中度联动 get_sector_rankings 申万口径)。
+
+        分页拉全 A 股 index_member_all → {ts_code: {name, sw_l2}}。缺成分(多为次新,
+        如 688635.SH C长进 上市2天未归类)由上层 collector 三级降级:① 命中→申万二级+name
+        ② 不在成分→name 退 get_stock_basic_batch、行业「未分类」③ 仍失败→name=""、「未分类」。
+
+        失败语义:接口异常 → 返回 error DataResult(success=False),让上层能区分「申万源全挂」
+        与「全部未分类」(申万成分无 akshare 降级源);失败不缓存,下次调用可重试。
+        """
+        missing = self._ensure_pro("get_stock_sw_industry_map")
+        if missing is not None:
+            return missing
+        try:
+            return DataResult(
+                data=self._ensure_sw_member_map(),
+                source="tushare:index_member_all",
+            )
+        except Exception as e:
+            logger.warning(f"获取申万成分映射失败: {e}")
+            return DataResult(
+                data=None,
+                source=self.name,
+                error=f"index_member_all_failed: {e}",
+            )
 
     def get_sector_rankings(self, date: str, sector_type: str = "industry") -> DataResult:
         """板块涨跌幅排名（涨幅前30 + 跌幅前5）"""
