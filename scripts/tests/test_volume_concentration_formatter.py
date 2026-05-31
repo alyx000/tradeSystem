@@ -72,3 +72,63 @@ def test_negative_change_pct_sign():
 
     assert "-10.0%" in out
     assert "+-" not in out
+
+
+def _record_with_stocks():
+    r = _record()
+    r["stocks"] = [
+        {"rank": 1, "code": "300308.SZ", "name": "中际旭创", "industry": "通信设备",
+         "close": 1161.16, "amount_billion": 338.92, "change_pct": -3.07},
+        {"rank": 2, "code": "300394.SZ", "name": "天孚通信", "industry": "通信设备",
+         "close": 455.2, "amount_billion": 289.27, "change_pct": 1.71},
+        {"rank": 3, "code": "688981.SH", "name": "", "industry": "半导体",
+         "close": 100.0, "amount_billion": 200.0, "change_pct": 0.0},
+    ]
+    return r
+
+
+def test_stock_detail_table_lists_top_stocks_with_signed_change():
+    """平铺 Top N 个股明细表:名称(代码) + 行业 + 成交额 + 带符号涨跌。"""
+    out = formatter.format_daily_report(_record_with_stocks(), _trend(sufficient=False))
+    assert "个股明细" in out
+    assert "中际旭创(300308.SZ)" in out   # 名称(代码)
+    assert "通信设备" in out               # 行业列
+    assert "338.92" in out                 # 成交额
+    assert "-3.07%" in out                 # 负涨幅
+    assert "+1.71%" in out                 # 正涨幅带 + 号
+
+
+def test_stock_detail_no_name_falls_back_to_code():
+    out = formatter.format_daily_report(_record_with_stocks(), _trend(sufficient=False))
+    assert "688981.SH" in out              # name 为空 → 仅展示代码
+
+
+def test_stock_detail_omitted_when_no_stocks():
+    out = formatter.format_daily_report(_record(), _trend(sufficient=False))  # stocks=[]
+    assert "个股明细" not in out
+
+
+def test_stock_detail_zero_change_no_plus_sign():
+    """change_pct=0 渲染为 0.0%,不带 + 号(+ 仅用于正涨幅,审查中-6)。"""
+    out = formatter.format_daily_report(_record_with_stocks(), _trend(sufficient=False))
+    assert "0.0%" in out
+    assert "+0.0%" not in out
+
+
+def test_stock_detail_tolerates_missing_code_and_none_amount():
+    """陈旧/异常数据:stock 缺 code 键、amount_billion 为 None → 不崩溃,优雅渲染(审查高-1/高-2)。"""
+    r = _record()
+    r["stocks"] = [
+        {"rank": 1, "name": "", "industry": "未分类", "amount_billion": None, "change_pct": None},  # 无 code 键
+    ]
+    out = formatter.format_daily_report(r, _trend(sufficient=False))
+    assert "个股明细" in out
+    assert "None" not in out   # amount None 不渲染成字面 "None"
+
+
+def test_stock_detail_omitted_when_stocks_none():
+    """record["stocks"] 为 None(非空 list)→ 段省略,不崩溃(审查低-7)。"""
+    r = _record()
+    r["stocks"] = None
+    out = formatter.format_daily_report(r, _trend(sufficient=False))
+    assert "个股明细" not in out

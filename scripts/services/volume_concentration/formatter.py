@@ -45,6 +45,26 @@ def format_daily_report(record: dict | None, trend_result: dict) -> str:
         )
     lines.append("")
 
+    stocks = record.get("stocks") or []
+    if stocks:
+        lines.append(f"### Top{top_n} 个股明细(成交额降序)")
+        lines.append("| # | 名称(代码) | 行业 | 成交额(亿) | 涨跌 |")
+        lines.append("|---|---|---|---|---|")
+        # 按成交额降序重排,# 即成交额排名(与 provider 原始 rank 同序;重排仅防输入未排序)。
+        # 全部用 .get 兜底:陈旧/异常 record 可能缺 code 或 amount_billion=None,不应让报告崩。
+        for i, s in enumerate(sorted(stocks, key=lambda x: x.get("amount_billion") or 0, reverse=True), 1):
+            code = s.get("code") or ""
+            name = s.get("name") or ""
+            label = f"{name}({code})" if name else code
+            amount = s.get("amount_billion")
+            amount_str = amount if amount is not None else "—"
+            cp = s.get("change_pct")
+            cp_str = f"{'+' if cp > 0 else ''}{cp}%" if cp is not None else "—"  # + 仅正涨幅,0 不带号
+            lines.append(
+                f"| {i} | {label} | {s.get('industry', '')} | {amount_str} | {cp_str} |"
+            )
+        lines.append("")
+
     lines.append(f"### 趋势(近 {trend_result['days']} 交易日)")
     if not trend_result["sufficient"]:
         lines.append(

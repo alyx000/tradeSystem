@@ -260,6 +260,8 @@ ARCHITECTURE_COMMANDS = [
     ["volume-watch", "daily"],
     ["volume-watch", "daily", "--date", "2026-05-29"],
     ["volume-watch", "daily", "--dry-run"],
+    ["volume-watch", "daily", "--refetch"],
+    ["volume-watch", "daily", "--date", "2026-05-29", "--refetch"],
     ["volume-watch", "trend"],
     ["volume-watch", "trend", "--days", "30"],
     ["volume-watch", "trend", "--date", "2026-05-29", "--days", "10"],

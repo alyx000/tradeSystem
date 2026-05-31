@@ -24,14 +24,19 @@ def _coerce_stock_list(raw) -> list:
     return []
 
 
-def load_top20(conn, registry, date: str, top_n: int = 20) -> list[dict]:
+def load_top20(conn, registry, date: str, top_n: int = 20, refetch: bool = False) -> list[dict]:
     """read-through 取当日 top20:先读 daily_market.top_volume_stocks(命中即用,零重拉),
-    缺失/空则 registry.call('get_top_volume_stocks') 自愈重拉(dec-1 C 方案)。"""
-    row = queries.get_daily_market(conn, date)
-    if row is not None:
-        stocks = _coerce_stock_list(row.get("top_volume_stocks"))
-        if stocks:
-            return stocks
+    缺失/空则 registry.call('get_top_volume_stocks') 自愈重拉(dec-1 C 方案)。
+
+    refetch=True:跳过读库,强制重拉 provider —— 用于回填历史(库里 top_volume_stocks
+    可能是某次换算 fix 之前采集的陈旧值,read-through 命中即用会灌坏数据)。
+    """
+    if not refetch:
+        row = queries.get_daily_market(conn, date)
+        if row is not None:
+            stocks = _coerce_stock_list(row.get("top_volume_stocks"))
+            if stocks:
+                return stocks
     result = registry.call("get_top_volume_stocks", date, top_n)
     return result.data if (result.success and result.data) else []
 
@@ -44,11 +49,13 @@ def _fetch_market_total(registry, date: str):
     return None, None
 
 
-def build_record(conn, registry, date: str, top_n: int = 20) -> dict | None:
+def build_record(conn, registry, date: str, top_n: int = 20, refetch: bool = False) -> dict | None:
     """编排当日集中度 record:read-through 取 top20 → 申万打标 → market_total 单拉 →
     聚合 → 组装。无 top20 数据(非交易日/源全挂)返 None,由上层不写库不推送。
+
+    refetch=True 透传给 load_top20,强制重拉绕过陈旧缓存(回填历史用)。
     """
-    stocks = load_top20(conn, registry, date, top_n)
+    stocks = load_top20(conn, registry, date, top_n, refetch=refetch)
     if not stocks:
         return None
 

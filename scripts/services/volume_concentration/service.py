@@ -7,15 +7,16 @@ TREND_DAYS = 30
 
 
 def run_daily(conn, registry, date: str, trend_days: int = TREND_DAYS,
-              persist: bool = True) -> str | None:
+              persist: bool = True, refetch: bool = False) -> str | None:
     """daily 模式:read-through 采集 + 申万打标 → (落库) → 读最近 N 日算趋势 → 渲染 Markdown。
 
     无 top20 数据(非交易日/源全挂)→ collector 返 None,本函数直接返 None,
     上层据此不写库不推送(dec-8 非交易日兜底)。
     persist=False(CLI --dry-run 预览):不落库;趋势用「库里历史 + 内存中今日 record」拼,
     保证预览含当日而不污染真实库。
+    refetch=True(CLI --refetch 回填历史):强制重拉 top20,绕过 daily_market 陈旧缓存。
     """
-    record = collector.build_record(conn, registry, date)
+    record = collector.build_record(conn, registry, date, refetch=refetch)
     if record is None:
         return None
 

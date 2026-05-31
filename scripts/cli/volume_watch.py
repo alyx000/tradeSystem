@@ -1,9 +1,10 @@
 """CLI: 成交额 Top20 板块集中度监控。
 
-  volume-watch daily  [--date YYYY-MM-DD] [--dry-run]
+  volume-watch daily  [--date YYYY-MM-DD] [--dry-run] [--refetch]
   volume-watch trend  [--date YYYY-MM-DD] [--days N]
 
-daily:read-through 采集 + 申万打标 + 落库 + 渲染 + 推钉钉(--dry-run 仅打印不推送)。
+daily:read-through 采集 + 申万打标 + 落库 + 渲染 + 推钉钉(--dry-run 仅打印不推送;
+      --refetch 强制重拉绕过 daily_market 陈旧缓存,回填历史用)。
 trend:只读最近 N 日打印,不采集、不落库、不推送。
 """
 from __future__ import annotations
@@ -28,6 +29,8 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
     daily = sub.add_parser("daily", help="采集 + 落库 + 渲染 + 推钉钉")
     daily.add_argument("--date", default=None, help="交易日 YYYY-MM-DD(默认今天)")
     daily.add_argument("--dry-run", action="store_true", help="仅打印 markdown,不推送")
+    daily.add_argument("--refetch", action="store_true",
+                       help="强制重拉 top20,绕过 daily_market 陈旧缓存(回填历史用)")
 
     trend = sub.add_parser("trend", help="只读打印最近 N 日趋势(不采集不推送)")
     trend.add_argument("--date", default=None, help="截止交易日 YYYY-MM-DD(默认今天)")
@@ -59,7 +62,8 @@ def _run_daily(config: dict, args: argparse.Namespace) -> None:
     registry.initialize_all()  # 必须:register 不自动初始化,漏了则所有 provider 调用返 provider_not_initialized
     conn = get_connection()
     try:
-        md = service.run_daily(conn, registry, date, persist=not args.dry_run)
+        md = service.run_daily(conn, registry, date,
+                               persist=not args.dry_run, refetch=args.refetch)
     finally:
         conn.close()
 

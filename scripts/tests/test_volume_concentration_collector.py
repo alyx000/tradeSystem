@@ -181,3 +181,47 @@ def test_build_record_market_total_none_on_failure():
 
     assert record["market_total_billion"] is None
     assert record["source"]["market_total_source"] is None
+
+
+def test_load_top20_refetch_flag_bypasses_db_cache():
+    """refetch=True → 即使 daily_market 已落库(可能是陈旧 10× 值)也强制重拉 provider。"""
+    conn = _conn()
+    stale = [{"rank": 1, "code": "STALE.SZ", "amount_billion": 9999.0}]
+    conn.execute(
+        "INSERT INTO daily_market (date, top_volume_stocks) VALUES (?, ?)",
+        ("2026-05-29", json.dumps(stale)),
+    )
+    conn.commit()
+    fresh = [{"rank": 1, "code": "300750.SZ", "amount_billion": 60.0}]
+    registry = _FakeRegistry({
+        "get_top_volume_stocks": DataResult(data=fresh, source="tushare:daily"),
+    })
+
+    result = collector.load_top20(conn, registry, "2026-05-29", refetch=True)
+
+    assert result == fresh                                              # 用重拉值,不用陈旧库值
+    assert any(c[0] == "get_top_volume_stocks" for c in registry.calls)  # 强制触发重拉
+
+
+def test_build_record_refetch_ignores_stale_db():
+    """build_record(refetch=True) → 绕过库里陈旧 top_volume_stocks,用重拉数据组装。"""
+    conn = _conn()
+    conn.execute(
+        "INSERT INTO daily_market (date, top_volume_stocks) VALUES (?, ?)",
+        ("2026-05-29", json.dumps([{"rank": 1, "code": "STALE.SZ", "amount_billion": 9999.0}])),
+    )
+    conn.commit()
+    registry = _FakeRegistry({
+        "get_top_volume_stocks": DataResult(
+            data=[{"rank": 1, "code": "300750.SZ", "name": "", "amount_billion": 60.0}], source="tushare:daily"),
+        "get_stock_sw_industry_map": DataResult(
+            data={"300750.SZ": {"name": "宁德时代", "sw_l2": "电池"}}, source="tushare:index_member_all"),
+        "get_stock_basic_batch": DataResult(data=[], source="tushare:stock_basic"),
+        "get_market_volume": DataResult(data={"total_billion": 9800.0}, source="tushare:index_daily"),
+    })
+
+    record = collector.build_record(conn, registry, "2026-05-29", refetch=True)
+
+    codes = {s["code"] for s in record["stocks"]}
+    assert codes == {"300750.SZ"}     # 用重拉数据
+    assert "STALE.SZ" not in codes    # 没用陈旧库值

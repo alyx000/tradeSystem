@@ -100,3 +100,43 @@ def test_run_trend_empty_message():
     conn = _conn()
     md = service.run_trend(conn, "2026-05-29", days=30)
     assert "暂无" in md
+
+
+def test_run_daily_refetch_bypasses_stale_db():
+    """run_daily(refetch=True) → 即使库里有陈旧 top_volume_stocks,也用重拉数据落库(回填历史用)。"""
+    conn = _conn()
+    _seed_daily_market(conn, "2026-05-29", [{"code": "STALE.SZ", "name": "", "amount_billion": 9999.0}])
+    registry = _FakeRegistry({
+        "get_top_volume_stocks": DataResult(
+            data=[{"code": "300750.SZ", "name": "", "amount_billion": 60.0}], source="tushare:daily"),
+        "get_stock_sw_industry_map": DataResult(
+            data={"300750.SZ": {"name": "宁德时代", "sw_l2": "电池"}}, source="tushare:index_member_all"),
+        "get_stock_basic_batch": DataResult(data=[], source="tushare:stock_basic"),
+        "get_market_volume": DataResult(data={"total_billion": 9000.0}, source="tushare:index_daily"),
+    })
+
+    md = service.run_daily(conn, registry, "2026-05-29", refetch=True)
+
+    saved = repo.get_concentration(conn, "2026-05-29")
+    assert saved["total_amount_billion"] == 60.0   # 重拉值,非陈旧 9999
+    assert "电池" in md
+
+
+def test_run_daily_dry_run_with_refetch_composes():
+    """persist=False + refetch=True 组合(回填预览):不落库 + 用重拉数据(审查中-4)。"""
+    conn = _conn()
+    _seed_daily_market(conn, "2026-05-29", [{"code": "STALE.SZ", "name": "", "amount_billion": 9999.0}])
+    registry = _FakeRegistry({
+        "get_top_volume_stocks": DataResult(
+            data=[{"code": "300750.SZ", "name": "", "amount_billion": 60.0}], source="tushare:daily"),
+        "get_stock_sw_industry_map": DataResult(
+            data={"300750.SZ": {"name": "宁德时代", "sw_l2": "电池"}}, source="tushare:index_member_all"),
+        "get_stock_basic_batch": DataResult(data=[], source="tushare:stock_basic"),
+        "get_market_volume": DataResult(data={"total_billion": 9000.0}, source="tushare:index_daily"),
+    })
+
+    md = service.run_daily(conn, registry, "2026-05-29", persist=False, refetch=True)
+
+    assert md is not None
+    assert "电池" in md                                          # 用重拉数据(非陈旧 STALE)
+    assert repo.get_concentration(conn, "2026-05-29") is None   # 未落库
