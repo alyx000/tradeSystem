@@ -7,7 +7,7 @@
 """
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
@@ -220,8 +220,11 @@ def test_index_weekly_falls_back_to_em(ak: AkshareProvider):
 
 # ---------------- ⑤ 行情：两市成交额 sina 实时当日（东财兜底） ----------------
 
-def test_market_volume_today_uses_sina_realtime(ak: AkshareProvider):
-    today = datetime.now().strftime("%Y-%m-%d")
+def test_market_volume_today_uses_sina_realtime(ak: AkshareProvider, monkeypatch):
+    # 钉死「今日」并与 provider 同源:_market_volume_sina_realtime 用 _today_cn()(上海时区)判当日,
+    # 直接 datetime.now()(本机时区)会在本机时区跨 CN 午夜时与之错配 → 实时分支被跳过致用例非交易日漂移失败。
+    today = "2026-05-29"
+    monkeypatch.setattr(ak, "_today_cn", lambda: today)
     ak.ak.stock_zh_index_spot_sina.return_value = pd.DataFrame({
         "代码": ["sh000001", "sz399001"],
         "名称": ["上证指数", "深证成指"],

@@ -1730,6 +1730,10 @@ def build_parser() -> argparse.ArgumentParser:
     from cli.recommend import register_subparser as register_recommend_subparser
     register_recommend_subparser(subparsers)
 
+    # volume-watch (成交额 Top20 板块集中度)
+    from cli.volume_watch import register_subparser as register_volume_watch_subparser
+    register_volume_watch_subparser(subparsers)
+
     # db
     from db.cli import register_db_subparser
     register_db_subparser(subparsers)
@@ -1776,6 +1780,9 @@ def main():
     elif args.command == "recommend":
         from cli import recommend as recommend_module
         recommend_module.handle_command(config, args)
+    elif args.command == "volume-watch":
+        from cli import volume_watch as volume_watch_module
+        volume_watch_module.handle_command(config, args)
     elif args.command == "db":
         from db.cli import handle_db_command
         handle_db_command(args)

@@ -256,6 +256,15 @@ ARCHITECTURE_COMMANDS = [
     ["recommend", "daily", "--lookback-days", "5"],
     ["recommend", "weekly"],
     ["recommend", "weekly", "--dry-run", "--lookback-days", "14"],
+    # volume-watch (成交额 Top20 板块集中度)
+    ["volume-watch", "daily"],
+    ["volume-watch", "daily", "--date", "2026-05-29"],
+    ["volume-watch", "daily", "--dry-run"],
+    ["volume-watch", "daily", "--refetch"],
+    ["volume-watch", "daily", "--date", "2026-05-29", "--refetch"],
+    ["volume-watch", "trend"],
+    ["volume-watch", "trend", "--days", "30"],
+    ["volume-watch", "trend", "--date", "2026-05-29", "--days", "10"],
 ]
 
 
