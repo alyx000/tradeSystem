@@ -140,3 +140,21 @@ def test_run_daily_dry_run_with_refetch_composes():
     assert md is not None
     assert "电池" in md                                          # 用重拉数据(非陈旧 STALE)
     assert repo.get_concentration(conn, "2026-05-29") is None   # 未落库
+
+
+def test_run_daily_dry_run_caps_trend_window(tmp=None):
+    """codex 中等:dry-run 拼入内存今日后,窗口须截到 trend_days,与真跑(先落库再 LIMIT)同窗。"""
+    conn = _conn()
+    for d, total in [("2026-05-26", 100.0), ("2026-05-27", 110.0), ("2026-05-28", 120.0)]:
+        repo.save_concentration(conn, {
+            "date": d, "top_n": 20, "total_amount_billion": total, "stocks": [],
+            "sector_summary": [{"industry": "电池", "count": 1, "amount_billion": total,
+                                "share_in_top_n": 1.0, "codes": []}],
+            "source": {"industry_coverage": 1.0},
+        })
+    _seed_daily_market(conn, "2026-05-29", [{"code": "300750.SZ", "name": "", "amount_billion": 60.0}])
+
+    md = service.run_daily(conn, _full_registry(), "2026-05-29", persist=False, trend_days=3)
+
+    assert "近 3 交易日" in md       # 历史3 + 今日截到窗口 3
+    assert "近 4 交易日" not in md   # 不溢出成 4

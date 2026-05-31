@@ -26,6 +26,8 @@ def run_daily(conn, registry, date: str, trend_days: int = TREND_DAYS,
     else:
         recent = repo.get_recent_concentration(conn, date, trend_days)
         recent = [r for r in recent if r["date"] != date] + [record]  # 拼入内存今日
+        # 截到窗口:与真跑(先落库再 LIMIT trend_days)同窗,避免 dry-run 多出一天致 CR3 分位/留存基准漂移(codex 中等)
+        recent = sorted(recent, key=lambda r: r["date"])[-trend_days:]
 
     trend_result = trend.compute_trend(recent)
     return formatter.format_daily_report(record, trend_result)

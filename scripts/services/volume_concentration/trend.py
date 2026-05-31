@@ -50,6 +50,44 @@ def _sector_rotation(records: list[dict], unclassified: str) -> dict:
     }
 
 
+def _stock_rotation(records: list[dict]) -> dict:
+    """最新日 vs 前一日的 Top20 个股成员差异(新进 / 退出),带 name。
+
+    new/dropped 各保留来源日的成交额降序(stocks 已按额降序)。不足 2 天返空。
+    """
+    if len(records) < 2:
+        return {"new": [], "dropped": []}
+
+    def by_code(rec):  # {code: name},保持 stocks 原顺序(成交额降序)
+        return {s.get("code"): s.get("name", "") for s in rec["stocks"] if s.get("code")}
+
+    latest, prev = by_code(records[-1]), by_code(records[-2])
+    return {
+        "new": [{"code": c, "name": latest[c]} for c in latest if c not in prev],
+        "dropped": [{"code": c, "name": prev[c]} for c in prev if c not in latest],
+    }
+
+
+def _cr3(rec: dict, unclassified: str) -> float:
+    """前 3 行业集中度(%);排除「未分类」后取前 3(与 formatter 同口径)。
+    sector_summary 已按成交额降序(aggregator),故 [:3] 即前三。"""
+    sectors = [s for s in rec["sector_summary"] if s.get("industry") != unclassified]
+    return round(sum(s.get("share_in_top_n", 0) for s in sectors[:3]) * 100, 1)
+
+
+def _cr3_trend(records: list[dict], unclassified: str) -> dict:
+    """CR3 环比(pp)+ 窗口分位(从高到低第几,1=最集中)。"""
+    if not records:
+        return {"current": None, "previous": None, "delta_pp": None, "rank": None, "window": 0}
+    series = [_cr3(r, unclassified) for r in records]
+    current = series[-1]
+    previous = series[-2] if len(series) >= 2 else None
+    delta_pp = round(current - previous, 1) if previous is not None else None
+    rank = sum(1 for v in series if v > current) + 1  # 比今天高的天数 + 1
+    return {"current": current, "previous": previous, "delta_pp": delta_pp,
+            "rank": rank, "window": len(series)}
+
+
 def _amount_trend(records: list[dict]) -> dict:
     """头部 topN 合计成交额环比(最新 vs 前一日)。"""
     if not records:
@@ -69,6 +107,8 @@ def compute_trend(records: list[dict], unclassified: str = UNCLASSIFIED) -> dict
         "days": len(records),
         "sufficient": len(records) >= 2,
         "sector_rotation": _sector_rotation(records, unclassified),
+        "stock_rotation": _stock_rotation(records),
+        "cr3_trend": _cr3_trend(records, unclassified),
         "amount_trend": _amount_trend(records),
         "stock_retention": _stock_retention(records),
     }

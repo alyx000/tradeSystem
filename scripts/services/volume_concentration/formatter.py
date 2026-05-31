@@ -3,11 +3,35 @@
 - 前3行业集中度(CR3)排除「未分类」(codex 中3:映射缺口不当真实板块);
 - 「未分类」金额/只数单列,显式标注不计入;
 - 行业覆盖率标注;占两市为近似(get_market_volume 指数口径,深证成指不全);
-- 趋势不足 2 个交易日 → 兜底文案(dec-10);连续在榜仅展示 streak≥2。
+- 趋势不足 2 个交易日 → 兜底文案(dec-10);连续在榜仅展示 streak≥2、截断 Top8。
+- 头部摘要补:涨跌分布(红/绿/平+均值+最强弱)、CR3 环比(pp)+窗口分位、今日 Top20 新进/退出。
 """
 from __future__ import annotations
 
 from .aggregator import UNCLASSIFIED
+
+_RETENTION_TOP_N = 8  # 连续在榜最多展示只数(超出截断,避免移动端过长)
+
+
+def _change_distribution(stocks: list[dict]) -> dict | None:
+    """Top N 当日涨跌分布:红/绿/平 计数 + 均值 + 最强/最弱(含 name)。无评级数据返 None。"""
+    rated = [s for s in stocks if s.get("change_pct") is not None]
+    if not rated:
+        return None
+    cps = [s["change_pct"] for s in rated]
+
+    def _tag(s):
+        cp = s["change_pct"]
+        return f"{s.get('name') or s.get('code')} {'+' if cp > 0 else ''}{cp}%"
+
+    return {
+        "up": sum(1 for c in cps if c > 0),
+        "down": sum(1 for c in cps if c < 0),
+        "flat": sum(1 for c in cps if c == 0),
+        "avg": round(sum(cps) / len(cps), 2),
+        "top": _tag(max(rated, key=lambda s: s["change_pct"])),
+        "bottom": _tag(min(rated, key=lambda s: s["change_pct"])),
+    }
 
 
 def format_daily_report(record: dict | None, trend_result: dict) -> str:
@@ -27,11 +51,27 @@ def format_daily_report(record: dict | None, trend_result: dict) -> str:
     coverage = (record.get("source") or {}).get("industry_coverage")
     if coverage is not None:
         lines.append(f"- 行业覆盖率:{round(coverage * 100, 1)}%")
+
+    dist = _change_distribution(record.get("stocks") or [])
+    if dist:
+        line = f"- 涨跌分布:{dist['up']} 红 {dist['down']} 绿"
+        if dist["flat"]:
+            line += f" {dist['flat']} 平"
+        line += f",均 {'+' if dist['avg'] > 0 else ''}{dist['avg']}%"
+        if dist["up"] or dist["down"]:  # 全平时最强=最弱,无区分意义,省略(审查高-2)
+            line += f";最强 {dist['top']} / 最弱 {dist['bottom']}"
+        lines.append(line)
     lines.append("")
 
     sectors = [s for s in record["sector_summary"] if s["industry"] != UNCLASSIFIED]
     cr3 = round(sum(s["share_in_top_n"] for s in sectors[:3]) * 100, 1)
-    lines.append(f"### 板块集中度(前3行业 {cr3}%)")
+    cr3_hdr = f"### 板块集中度(前3行业 {cr3}%"
+    ct = trend_result.get("cr3_trend") or {}
+    if ct.get("previous") is not None:
+        delta = ct["delta_pp"]
+        cr3_hdr += f",环比 {'+' if delta > 0 else ''}{delta}pp · 近{ct['window']}日第{ct['rank']}高"
+    cr3_hdr += ")"
+    lines.append(cr3_hdr)
     lines.append("| 行业 | 只数 | 成交额(亿) | 占Top20 |")
     lines.append("|---|---|---|---|")
     for s in sectors:
@@ -74,16 +114,25 @@ def format_daily_report(record: dict | None, trend_result: dict) -> str:
         rot = trend_result["sector_rotation"]
         lines.append(
             f"- 板块轮动:新进 {'、'.join(rot['new']) or '无'} / "
-            f"退出 {'、'.join(rot['dropped']) or '无'} / 持续 {'、'.join(rot['持续']) or '无'}"
+            f"退出 {'、'.join(rot['dropped']) or '无'} / 持续 {len(rot['持续'])} 个"  # 持续只给数量,瘦身
         )
+        srot = trend_result.get("stock_rotation") or {}
+        if srot.get("new") or srot.get("dropped"):
+            new_names = "、".join(x.get("name") or x.get("code") for x in srot.get("new", [])) or "无"
+            drop_names = "、".join(x.get("name") or x.get("code") for x in srot.get("dropped", [])) or "无"
+            lines.append(f"- 今日 Top20 新进:{new_names} / 退出:{drop_names}")
         at = trend_result["amount_trend"]
         cp = at["change_pct"]
         cp_str = f"{'+' if cp >= 0 else ''}{cp}%" if cp is not None else "—"
         lines.append(f"- 头部量级:{at['latest']} 亿,环比 {cp_str}")
         held = [r for r in trend_result["stock_retention"] if r["streak"] >= 2]
         if held:
+            shown = held[:_RETENTION_TOP_N]
+            tail = f" 等 {len(held) - len(shown)} 只" if len(held) > _RETENTION_TOP_N else ""
             lines.append(
-                "- 连续在榜:" + "、".join(f"{r['name'] or r['code']}({r['streak']}天)" for r in held)
+                "- 连续在榜:"
+                + "、".join(f"{r['name'] or r['code']}({r['streak']}天)" for r in shown)
+                + tail
             )
 
     return "\n".join(lines)
