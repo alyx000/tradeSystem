@@ -104,7 +104,7 @@ done
 - `daily`：read-through 读 `daily_market.top_volume_stocks`（缺则重拉）→ 申万二级打标（三级降级：申万成分命中 → `stock_basic` 兜 name → 「未分类」）→ 聚合 → 落 `daily_volume_concentration` → 渲染（含 **Top20 个股明细表**：名称(代码)/申万二级行业/成交额/带符号涨跌，成交额降序）→ 钉钉。非交易日无数据自动跳过（不写库不推送）。
 - `--refetch`：跳过 read-through，强制走 provider 重拉 top20。用于**回填历史**——库里 `top_volume_stocks` 可能是某次换算 fix（如 `/1e4`→`/1e5`）之前采集的陈旧值，read-through 命中即用会灌坏数据；`--refetch` 用当前（已修复）provider 代码重取。
 - `trend`：只读最近 N 日（默认 30），输出板块轮动 / 头部量级环比 / 个股连续在榜；不采集、不落库、不推送。
-- **报告头部摘要**（事实层，守红线）：涨跌分布（红/绿/平 + 均值 + 最强/最弱）、CR3 旁标「环比 ±X pp · 近 N 日第 M 高」（分位）、趋势段「今日 Top20 新进/退出」个股；「持续」行业只显数量、「连续在榜」截断 Top8，避免移动端过长。
+- **报告结构 v2**（全事实层，守红线，钉钉手机端友好）：头部摘要(合计/占两市 + 涨跌分布红/绿/平+均值+最强弱) → CR3 行(环比 pp + 窗口分位 + 连升/连降) → 板块集中度(**列表非表格**——钉钉手机端不渲染 markdown 表格) → 🔥 板块热度趋势(各行业占 Top20 比重 vs 前期,🔴升温/🟢降温,A股红涨绿跌) → 💰 头部资金(量级 vs 近期均值放/缩量 + 新陈代谢核心/今日新进 + 今日新进资金流向行业) → 🔄 异动个股(今日新进带行业+涨跌 / 退出,替代逐只罗列 Top20) → 📌 连续在榜(streak≥2,Top8)。不足 2 交易日出兜底文案、不渲染跨日块。
 - 行业口径=**申万二级**（联动 `get_sector_rankings`）；「未分类」（次新等）不计入前3行业集中度，报告标 `industry_coverage`。
 - 依赖 env：`TUSHARE_TOKEN`（`scripts/.env`，`index_member_all` 需积分）、`DINGTALK_WEBHOOK_TOKEN/SECRET`（`~/.config/tradeSystem.env`，daily 推送）。
 
