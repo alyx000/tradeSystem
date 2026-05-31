@@ -378,6 +378,23 @@ CREATE TABLE IF NOT EXISTS daily_market (
 """
 
 # ──────────────────────────────────────────────────────────────
+# 5b. 成交额 Top20 板块集中度（一天一行快照；JSON 列存嵌套明细）
+# ──────────────────────────────────────────────────────────────
+_SQL_DAILY_VOLUME_CONCENTRATION = """
+CREATE TABLE IF NOT EXISTS daily_volume_concentration (
+    date TEXT PRIMARY KEY CHECK(date GLOB '????-??-??'),
+    top_n INTEGER NOT NULL DEFAULT 20,
+    total_amount_billion REAL NOT NULL,
+    market_total_billion REAL,
+    stocks_json TEXT NOT NULL,
+    sector_summary_json TEXT NOT NULL,
+    source_json TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT
+);
+"""
+
+# ──────────────────────────────────────────────────────────────
 # 6. 八步复盘
 # ──────────────────────────────────────────────────────────────
 _SQL_DAILY_REVIEWS = """
@@ -1091,6 +1108,7 @@ _ALL_TABLE_SQL = [
     _SQL_INDUSTRY_INFO,
     _SQL_MACRO_INFO,
     _SQL_DAILY_MARKET,
+    _SQL_DAILY_VOLUME_CONCENTRATION,
     _SQL_DAILY_REVIEWS,
     _SQL_EMOTION_CYCLE,
     _SQL_MAIN_THEMES,
@@ -1137,7 +1155,7 @@ EXPECTED_TABLES = [
     "calendar_events",
     "holdings", "holding_tasks", "holding_quote_snapshots", "watchlist", "blacklist",
     "industry_info", "macro_info",
-    "daily_market", "daily_reviews",
+    "daily_market", "daily_volume_concentration", "daily_reviews",
     "emotion_cycle", "main_themes",
     "trades",
     "trade_thesis",

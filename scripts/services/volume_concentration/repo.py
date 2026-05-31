@@ -1,0 +1,88 @@
+"""daily_volume_concentration 表的读写 — JSON 列序列化/反序列化在此封装。
+
+stocks / sector_summary / source 以 python 对象进出,JSON 编解码是存储细节,
+不外泄给调用方(collector / trend / formatter 直接拿 list/dict)。
+"""
+from __future__ import annotations
+
+import json
+import sqlite3
+
+
+def save_concentration(conn: sqlite3.Connection, record: dict) -> None:
+    """写入/覆盖某交易日的集中度快照(UPSERT,幂等)。
+
+    重跑同 date:刷新所有字段 + updated_at,但**保留首次 created_at**——用
+    ON CONFLICT DO UPDATE 而非 INSERT OR REPLACE(后者=删+插,会把 created_at 重置为
+    当前时间,破坏 dec-3「created_at 首次 / updated_at 末次」审计语义)。
+    record 键:date / total_amount_billion(必填)/ top_n / market_total_billion(可空)
+    / stocks(list) / sector_summary(list) / source(dict,可空)。
+    """
+    if not record.get("date"):
+        raise ValueError("save_concentration: 缺少必填字段 date")
+    if record.get("total_amount_billion") is None:
+        raise ValueError("save_concentration: 缺少必填字段 total_amount_billion")
+    conn.execute(
+        """
+        INSERT INTO daily_volume_concentration (
+            date, top_n, total_amount_billion, market_total_billion,
+            stocks_json, sector_summary_json, source_json, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+        ON CONFLICT(date) DO UPDATE SET
+            top_n = excluded.top_n,
+            total_amount_billion = excluded.total_amount_billion,
+            market_total_billion = excluded.market_total_billion,
+            stocks_json = excluded.stocks_json,
+            sector_summary_json = excluded.sector_summary_json,
+            source_json = excluded.source_json,
+            updated_at = excluded.updated_at
+        """,
+        (
+            record["date"],
+            int(record.get("top_n", 20)),
+            record["total_amount_billion"],
+            record.get("market_total_billion"),
+            json.dumps(record.get("stocks", []), ensure_ascii=False),
+            json.dumps(record.get("sector_summary", []), ensure_ascii=False),
+            json.dumps(record["source"], ensure_ascii=False)
+            if record.get("source") is not None
+            else None,
+        ),
+    )
+    conn.commit()
+
+
+def _row_to_record(row: sqlite3.Row) -> dict:
+    return {
+        "date": row["date"],
+        "top_n": row["top_n"],
+        "total_amount_billion": row["total_amount_billion"],
+        "market_total_billion": row["market_total_billion"],
+        "stocks": json.loads(row["stocks_json"]) if row["stocks_json"] else [],
+        "sector_summary": json.loads(row["sector_summary_json"]) if row["sector_summary_json"] else [],
+        "source": json.loads(row["source_json"]) if row["source_json"] else None,
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
+
+
+def get_concentration(conn: sqlite3.Connection, date: str) -> dict | None:
+    """读某交易日的集中度快照;无则 None。"""
+    row = conn.execute(
+        "SELECT * FROM daily_volume_concentration WHERE date = ?", (date,)
+    ).fetchone()
+    return _row_to_record(row) if row else None
+
+
+def get_recent_concentration(
+    conn: sqlite3.Connection, end_date: str, days: int
+) -> list[dict]:
+    """取 <= end_date 的最近 days 天快照,**按日期正序**返回(供 trend dense series)。
+
+    SQL 用 ORDER BY date DESC LIMIT 取最近 N 条,再 reverse 成时间正序。
+    """
+    rows = conn.execute(
+        "SELECT * FROM daily_volume_concentration WHERE date <= ? ORDER BY date DESC LIMIT ?",
+        (end_date, days),
+    ).fetchall()
+    return [_row_to_record(r) for r in reversed(rows)]
