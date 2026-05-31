@@ -149,3 +149,94 @@ def test_stock_rotation_new_preserves_amount_order():
     ]
     rot = trend.compute_trend(records)["stock_rotation"]
     assert [x["code"] for x in rot["new"]] == ["B", "C"]   # 保留 stocks 顺序
+
+
+# ---- v2 趋势分析:板块热度 / CR3 序列+连升降 / 头部均值 / 新陈代谢 ----
+
+def test_sector_heat_rising_and_falling():
+    """板块热度:各行业占比 最新日 vs lookback 日前,按 delta 降序(升温在前),排除未分类。"""
+    records = [
+        _rec_share("2026-05-22", [("半导体", 0.38), ("通信", 0.22), ("未分类", 0.40)]),  # base
+        _rec_share("2026-05-29", [("半导体", 0.30), ("通信", 0.30), ("未分类", 0.40)]),
+    ]
+    heat = trend.compute_trend(records, heat_lookback=5)["sector_heat"]
+    by = {h["industry"]: h for h in heat}
+    assert by["通信"]["delta_pp"] == 8.0       # 30 - 22 升温
+    assert by["半导体"]["delta_pp"] == -8.0     # 降温
+    assert heat[0]["industry"] == "通信"        # delta 降序:升温在前
+    assert "未分类" not in by                    # 排除
+
+
+def test_cr3_trend_series_and_streak():
+    """CR3 趋势序列 + 连升/连降天数。"""
+    records = [
+        _rec_share("2026-05-27", [("半导体", 0.40), ("通信", 0.25), ("电池", 0.12)]),  # CR3=77
+        _rec_share("2026-05-28", [("半导体", 0.38), ("通信", 0.25), ("电池", 0.12)]),  # CR3=75
+        _rec_share("2026-05-29", [("半导体", 0.37), ("通信", 0.25), ("电池", 0.12)]),  # CR3=74
+    ]
+    ct = trend.compute_trend(records)["cr3_trend"]
+    assert ct["series"] == [77.0, 75.0, 74.0]
+    assert ct["streak_dir"] == "down"
+    assert ct["streak_days"] == 2   # 连降 2 个变动
+
+
+def test_amount_trend_avg_and_vs_avg():
+    """头部量级:近 N 日均值 + 今日 vs 均值。"""
+    records = [
+        _rec("2026-05-27", [], ["电池"], 100.0),
+        _rec("2026-05-28", [], ["电池"], 120.0),
+        _rec("2026-05-29", [], ["电池"], 140.0),
+    ]
+    at = trend.compute_trend(records, heat_lookback=5)["amount_trend"]
+    assert at["avg"] == 120.0                       # (100+120+140)/3
+    assert at["vs_avg_pct"] == 16.7                 # (140-120)/120*100
+
+
+def test_metabolism_core_fresh_and_new_flow():
+    """新陈代谢:核心(streak≥阈) / 新晋(streak==1) 计数 + 今日新进资金流向行业。"""
+    r1 = {"date": "2026-05-28", "total_amount_billion": 100.0, "sector_summary": [],
+          "stocks": [{"code": "A", "name": "甲", "industry": "半导体"},
+                     {"code": "B", "name": "乙", "industry": "电池"}]}
+    r2 = {"date": "2026-05-29", "total_amount_billion": 110.0, "sector_summary": [],
+          "stocks": [{"code": "A", "name": "甲", "industry": "半导体"},   # streak 2
+                     {"code": "C", "name": "丙", "industry": "通信"}]}     # 新进 streak 1
+    m = trend.compute_trend([r1, r2], core_threshold=2)["metabolism"]
+    assert m["core"] == 1                       # A streak 2 ≥ 2
+    assert m["fresh"] == 1                       # C streak 1
+    assert m["new_by_sector"] == [("通信", 1)]   # C 新进属通信
+
+
+def test_streak_reversal_resets_count():
+    """CR3 反转(审查中-6):[77,75,76] → 最新为升,连升 1 日(不计入之前的降)。"""
+    records = [
+        _rec_share("2026-05-27", [("半导体", 0.40), ("通信", 0.25), ("电池", 0.12)]),  # 77
+        _rec_share("2026-05-28", [("半导体", 0.38), ("通信", 0.25), ("电池", 0.12)]),  # 75
+        _rec_share("2026-05-29", [("半导体", 0.39), ("通信", 0.25), ("电池", 0.12)]),  # 76
+    ]
+    ct = trend.compute_trend(records)["cr3_trend"]
+    assert ct["streak_dir"] == "up" and ct["streak_days"] == 1
+
+
+def test_metabolism_empty_when_no_new():
+    """无今日新进 → new_by_sector 空(审查低-12 补缺口)。"""
+    r1 = {"date": "2026-05-28", "total_amount_billion": 100.0, "sector_summary": [],
+          "stocks": [{"code": "A", "name": "甲", "industry": "电池"}]}
+    r2 = {"date": "2026-05-29", "total_amount_billion": 110.0, "sector_summary": [],
+          "stocks": [{"code": "A", "name": "甲", "industry": "电池"}]}   # 无新进
+    m = trend.compute_trend([r1, r2], core_threshold=2)["metabolism"]
+    assert m["new_by_sector"] == []
+
+
+def test_amount_trend_single_day():
+    """仅 1 日:avg=当日值、vs_avg=0、无环比(审查低-12 补缺口)。"""
+    at = trend.compute_trend([_rec("2026-05-29", [], ["电池"], 140.0)])["amount_trend"]
+    assert at["avg"] == 140.0 and at["vs_avg_pct"] == 0.0
+    assert at["previous"] is None and at["change_pct"] is None
+
+
+def test_compute_trend_clamps_nonpositive_lookback():
+    """heat_lookback ≤0 钳到 1,不触发 IndexError(codex 轻微:防御参数误用)。"""
+    records = [_rec("2026-05-28", [], ["电池"], 100.0), _rec("2026-05-29", [], ["电池"], 120.0)]
+    out = trend.compute_trend(records, heat_lookback=-1)   # 负数原会 IndexError
+    assert out["sufficient"] is True
+    assert out["amount_trend"]["avg"] is not None

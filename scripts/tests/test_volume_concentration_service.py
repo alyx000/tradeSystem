@@ -92,7 +92,7 @@ def test_run_trend_reads_recent_and_renders():
 
     md = service.run_trend(conn, "2026-05-29", days=30)
 
-    assert "趋势" in md
+    assert "集中度 CR3" in md   # 稳定渲染元素(热度趋势块在无显著变动时会省略)
     assert "2026-05-29" in md
 
 
