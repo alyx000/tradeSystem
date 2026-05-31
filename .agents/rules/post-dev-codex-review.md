@@ -43,11 +43,20 @@ alwaysApply: true
 ## 强制流程
 
 1. **代码改动完成、pytest / make check-scripts 跑通后**，立刻用 `Agent(subagent_type="codex:codex-rescue")` 把改动 diff + 关键文件路径发给 codex，明确要求：
+   - **前台运行(foreground),禁止 `--background` / BG 模式**——见下方"为什么 review 必须前台"。
    - 按"严重 / 中等 / 轻微 / 无问题"分级输出
    - 每条给"现象 / 为什么是问题 / 修正方向"
    - 重点检查：bug / 行为回归 / 边界 / 测试缺口 / 类型与接口一致性 / 安全
 2. 不要等用户提醒，不要在汇报"完成"之后才补审查。
 3. codex review 与代码修改是同步动作：先审查、按结论改代码 / 测试、再向用户汇报。
+
+### 为什么 review 必须前台(foreground)
+
+post-dev codex review 是**卡门型门禁**:短(截图实测 ~3 分钟回)、必须当场拿到结论才能推进、ghost 一旦发生会堵死整条 dev 流。
+
+- **派 `codex:codex-rescue` 做 review 时,prompt 里显式写"前台运行 / foreground / 不要 --background"**。rescue 子 agent 自身路由对"小而明确"任务本就 prefer foreground,但 review diff 可能被它误判为"复杂"而转 BG —— 显式钉死前台,杜绝这种漂移。
+- **禁止把 review 交给 `codex-companion task --background` 或任何返回 `started in the background as task-` 的 BG 路径**。BG 静默路径是"幽灵 job"(worker 猝死、状态永久卡 running)的唯一温床;前台 review 同步返回,根本不进这个风险面。
+- BG 模式仍保留给 **>30min 的实现 / 测试 / 大规模生成**(沿用 [`implementation-plan.md`](implementation-plan.md) 三轴),且由全局守卫脚本 `~/.claude/scripts/codex-reap-ghosts.py` + 回访机制兜底(见全局 `~/.claude/CLAUDE.md` 「委托 Codex 走 background 模式时必须主动回访」)。
 
 ## Review 完成的 6 条二值结束条件（全部满足才算收敛）
 
