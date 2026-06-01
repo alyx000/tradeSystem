@@ -63,6 +63,7 @@
 | `market-tasks` | `python main.py sector-correlation daily [--date] [--windows 5,20,60] [--top-industries 15] [--top-concepts 10] [--activity-days 10] [--indices a,b] [--no-concept] [--dry-run]` | 板块相关性日报（Tushare 主源：多日活跃选板块[行业按成交额 / 概念按换手率] + 4 指数 → 多窗 5/20/60 原始相关 + 剔大盘超额相关 + β → 落 `sector_correlation_daily` + 钉钉；报告含近5日联动榜(短期共振)、板块×大盘同向/逆向、结构联动榜(60日)、反向榜双窗对照(5日/60日)；`--dry-run` 仅打印） |
 | `market-tasks` | `python main.py sector-correlation matrix [--date] [--windows 20,60] [--top-industries N] [--top-concepts N] [--no-concept] [--refetch]` | 打印完整相关矩阵（板块×指数 + 板块×板块 原始/超额，逐窗）；缓存命中纯只读免初始化 Tushare，`--refetch` 强制现算；不推送 |
 | `market-tasks` | `python main.py sector-correlation trend [--date] [--days N]` | 只读打印最近 N 日相关性漂移（板块数 / 样本数 / 强逆向对数演变），不采集不推送 |
+| `market-tasks` | `python main.py research-digest daily [--date YYYY-MM-DD] [--dry-run] [--no-llm]` | 每日研报速读：A股研报评级（巨潮 cninfo `get_research_report_list`，含评级变化/前次评级/目标价区间）+ 美股机构评级（yfinance `get_us_rating_changes`，仅 init/up/down/reinit 方向变动）→ 鞠磊「首次覆盖」加权 Top3 → MD 落盘 `data/reports/research-digest/` + 钉钉；`--dry-run` 仅打印不落盘不推送、`--no-llm` 关美股 LLM 叙事；红线只约束 gemini 叙事不约束取数；工作日 06:42 launchd 单源调度 |
 | `ingest-inspector` | `python main.py ingest run --stage --date` | 运行采集阶段任务，写 `ingest_runs` / `raw_interface_payloads` |
 | `ingest-inspector` | `python main.py ingest run-interface --name --date` | 运行单接口采集，真实执行 provider 并记录失败 |
 | `ingest-inspector` | `python main.py ingest list-interfaces` | 查看接口注册表 |
