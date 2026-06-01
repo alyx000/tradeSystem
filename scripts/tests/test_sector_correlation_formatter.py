@@ -37,6 +37,26 @@ def test_daily_report_sections_and_footnote():
     assert "非因果" in md                                 # 红线脚注
 
 
+def test_daily_report_today_comovement_section():
+    rec = _rec()
+    rec["sectors"] = [
+        {"name": "半导体", "type": "industry", "latest_change_pct": 2.1},
+        {"name": "存储芯片", "type": "concept", "latest_change_pct": 3.4},
+        {"name": "电力", "type": "industry", "latest_change_pct": -1.2},
+    ]
+    md = formatter.format_daily_report(rec)
+    assert "📅 今日联动" in md
+    assert "🔴 齐涨：" in md and "存储芯片 +3.40%" in md and "半导体 +2.10%" in md
+    assert "🟢 齐跌：" in md and "电力 -1.20%" in md
+
+
+def test_daily_report_today_comovement_missing_data():
+    rec = _rec()
+    rec["sectors"] = []  # 无 latest_change_pct
+    md = formatter.format_daily_report(rec)
+    assert "今日板块涨跌数据缺失" in md
+
+
 def test_daily_report_no_inverse_fallback():
     rec = _rec()
     rec["sector_index"]["60"]["黄金"]["000001.SH"]["label"] = "独立"

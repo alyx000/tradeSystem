@@ -5,6 +5,8 @@ matrix：打印更全的逐窗矩阵（命令行细看）。trend：跨日漂移
 """
 from __future__ import annotations
 
+from . import analyzer
+
 # 超额阈值（与 analyzer 一致）：弱逆向=反向榜列入门槛，强逆向=双窗"稳定跷跷板"判定
 _EXCESS_WEAK_INV = -0.2
 _EXCESS_STRONG_INV = -0.4
@@ -48,6 +50,17 @@ def format_daily_report(record: dict, top_k: int = 8) -> str:
         f"- 窗口 {windows} | 样本 {_sample_str(sample)} 天 | 板块 {record.get('top_n')} 个 "
         f"| 对标 {len(record.get('indices', []))} 指数（基准 {base}）"
     )
+    L.append("")
+
+    # 今日联动快照：当日齐涨/齐跌（事实层，A股 红涨绿跌）
+    co = analyzer.today_comovement(record.get("sectors", []))
+    L.append(f"### 📅 今日联动（{date} 当日涨跌）")
+    if co["up"]:
+        L.append("- 🔴 齐涨：" + "、".join(f"{x['name']} +{x['change_pct']:.2f}%" for x in co["up"]))
+    if co["down"]:
+        L.append("- 🟢 齐跌：" + "、".join(f"{x['name']} {x['change_pct']:.2f}%" for x in co["down"]))
+    if not co["up"] and not co["down"]:
+        L.append("- （今日板块涨跌数据缺失）")
     L.append("")
 
     # 板块 × 大盘：重点列逆向（A股稀少、最有信息量）+ 高弹性同向

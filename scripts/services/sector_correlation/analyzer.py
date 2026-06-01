@@ -88,6 +88,26 @@ def classify_sector_vs_index(window_result: dict, thresholds: dict | None = None
     return out
 
 
+def today_comovement(sectors: list[dict], top_k: int = 12) -> dict:
+    """单日联动快照：按当日涨跌幅(latest_change_pct)分齐涨/齐跌，各自排序取 top_k。
+
+    回答"今天哪些板块联袂涨/跌"（事实层，对照窗口结构联动）。0 涨幅记平、不入两组。
+    """
+    up, down = [], []
+    for s in sectors:
+        pct = s.get("latest_change_pct")
+        if pct is None:
+            continue
+        item = {"name": s.get("name"), "type": s.get("type"), "change_pct": pct}
+        if pct > 0:
+            up.append(item)
+        elif pct < 0:
+            down.append(item)
+    up.sort(key=lambda d: d["change_pct"], reverse=True)
+    down.sort(key=lambda d: d["change_pct"])
+    return {"up": up[:top_k], "down": down[:top_k]}
+
+
 def build_window_payload(window_result: dict, thresholds: dict | None = None) -> dict:
     """单窗口 JSON-ready 结构（进 DB 的按窗口键内容）。"""
     sector_cols = window_result["sector_cols"]
