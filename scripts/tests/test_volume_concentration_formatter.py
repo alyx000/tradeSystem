@@ -34,6 +34,7 @@ def _trend(sufficient=True):
                              "avg": 200.0, "vs_avg_pct": 0.0},
             "metabolism": {"core": 0, "fresh": 0, "new_by_sector": []},
             "stock_retention": [],
+            "prev_compare": None,
         }
     return {
         "days": 30, "sufficient": True,
@@ -48,6 +49,13 @@ def _trend(sufficient=True):
                          "avg": 190.0, "vs_avg_pct": 5.3},
         "metabolism": {"core": 14, "fresh": 4, "new_by_sector": [("证券Ⅱ", 1)]},
         "stock_retention": [{"code": "A", "name": "甲", "streak": 3}, {"code": "B", "name": "乙", "streak": 1}],
+        "prev_compare": {
+            "prev_date": "2026-05-28",
+            "head_amount": {"current": 200.0, "previous": 180.0, "change_pct": 11.1},
+            "market_share": {"current": 2.0, "previous": 1.8, "delta_pp": 0.2},
+            "cr3": {"current": 80.0, "previous": 72.0, "delta_pp": 8.0},
+            "change_avg": {"current": None, "previous": None},  # _record() 无 stocks
+        },
     }
 
 
@@ -85,6 +93,12 @@ def test_sufficient_renders_all_analysis_blocks():
     assert "异动个股" in out and "今日新进:甲" in out and "今日退出:癸" in out
     assert "连续在榜" in out and "甲(3天)" in out
     assert "乙" not in out              # streak 1 不进连续在榜
+    # 📅 环比前一交易日:头部成交额 / 占两市 / CR3(change_avg=None 时无涨跌均值行)
+    assert "📅 环比前一交易日(05-28)" in out
+    assert "头部成交额:200.0 亿 vs 180.0 亿(+11.1%)" in out
+    assert "占两市:2.0% vs 1.8%(+0.2pp)" in out
+    assert "CR3:80.0% vs 72.0%(+8.0pp)" in out
+    assert "涨跌均值" not in out         # change_avg current/previous 均 None → 省略
 
 
 def test_insufficient_omits_analysis_blocks():
@@ -92,6 +106,108 @@ def test_insufficient_omits_analysis_blocks():
     out = formatter.format_daily_report(_record(), _trend(sufficient=False))
     assert "累积" in out and "1 天" in out
     assert "板块热度趋势" not in out and "头部资金" not in out and "异动个股" not in out
+    assert "环比前一交易日" not in out   # 不足 2 日不渲染对比块
+
+
+# ---- 📅 环比前一交易日(独立对比小块) ----
+
+def test_prev_compare_block_full_lines():
+    """四行齐全:头部成交额(±%)/ 占两市(±pp)/ CR3(±pp)/ 涨跌均值(带符号)。"""
+    t = _trend(sufficient=True)
+    t["prev_compare"] = {
+        "prev_date": "2026-05-30",
+        "head_amount": {"current": 3718.28, "previous": 4050.1, "change_pct": -8.2},
+        "market_share": {"current": 12.92, "previous": 13.3, "delta_pp": -0.4},
+        "cr3": {"current": 73.3, "previous": 74.5, "delta_pp": -1.2},
+        "change_avg": {"current": -3.48, "previous": 1.2},
+    }
+    out = formatter.format_daily_report(_record(), t)
+    assert "### 📅 环比前一交易日(05-30)" in out
+    assert "头部成交额:3718.28 亿 vs 4050.1 亿(-8.2%)" in out
+    assert "占两市:12.92% vs 13.3%(-0.4pp)" in out
+    assert "CR3:73.3% vs 74.5%(-1.2pp)" in out
+    assert "涨跌均值:-3.48% vs +1.2%" in out
+
+
+def test_prev_compare_omits_share_line_when_no_market_total():
+    """缺 market_total → 不渲染「占两市」行,其余行正常。"""
+    t = _trend(sufficient=True)
+    t["prev_compare"] = {
+        "prev_date": "2026-05-30",
+        "head_amount": {"current": 200.0, "previous": 180.0, "change_pct": 11.1},
+        "market_share": {"current": None, "previous": None, "delta_pp": None},
+        "cr3": {"current": 80.0, "previous": 72.0, "delta_pp": 8.0},
+        "change_avg": {"current": -1.0, "previous": 1.0},
+    }
+    out = formatter.format_daily_report(_record(), t)
+    assert "环比前一交易日" in out
+    assert "占两市:" not in out          # 块内占两市行省略(headline 用「占两市 X%」无冒号,不误命中)
+    assert "涨跌均值:-1.0% vs +1.0%" in out
+
+
+def test_prev_compare_omits_avg_line_when_no_ratings():
+    """无评级 → change_avg 子项 None → 不渲染「涨跌均值」行。"""
+    t = _trend(sufficient=True)
+    t["prev_compare"] = {
+        "prev_date": "2026-05-30",
+        "head_amount": {"current": 200.0, "previous": 180.0, "change_pct": 11.1},
+        "market_share": {"current": 2.0, "previous": 1.8, "delta_pp": 0.2},
+        "cr3": {"current": 80.0, "previous": 72.0, "delta_pp": 8.0},
+        "change_avg": {"current": None, "previous": None},
+    }
+    out = formatter.format_daily_report(_record(), t)
+    assert "环比前一交易日" in out
+    assert "涨跌均值" not in out
+
+
+def test_prev_compare_flat_label_when_delta_zero():
+    """环比项四舍五入为 0(头部成交额% / 占两市pp / CR3pp)→ 标『持平』而非『0.0pp/0.0%』(用户反馈)。"""
+    t = _trend(sufficient=True)
+    t["prev_compare"] = {
+        "prev_date": "2026-05-30",
+        "head_amount": {"current": 200.0, "previous": 200.0, "change_pct": 0.0},
+        "market_share": {"current": 12.92, "previous": 12.89, "delta_pp": 0.0},
+        "cr3": {"current": 73.3, "previous": 73.3, "delta_pp": 0.0},
+        "change_avg": {"current": -1.0, "previous": -1.0},
+    }
+    out = formatter.format_daily_report(_record(), t)
+    assert "头部成交额:200.0 亿 vs 200.0 亿(持平)" in out
+    assert "占两市:12.92% vs 12.89%(持平)" in out
+    assert "CR3:73.3% vs 73.3%(持平)" in out
+    assert "涨跌均值:-1.0% vs -1.0%" in out   # 涨跌均值是两个原始值非 delta,不套持平
+    assert "(0.0pp)" not in out and "(0.0%)" not in out   # 环比项不再出现 0 值括号(带前导括号避免误命中表头 80.0%))
+
+
+def test_prev_compare_omits_share_line_when_only_current_present():
+    """单侧有值(当日有 / 前一日缺 market_total)→ 省略占两市对比行(当日值已在表头,不丢数据)。"""
+    t = _trend(sufficient=True)
+    t["prev_compare"] = {
+        "prev_date": "2026-05-30",
+        "head_amount": {"current": 200.0, "previous": 180.0, "change_pct": 11.1},
+        "market_share": {"current": 2.0, "previous": None, "delta_pp": None},
+        "cr3": {"current": 80.0, "previous": 72.0, "delta_pp": 8.0},
+        "change_avg": {"current": -1.0, "previous": None},  # 前一日无评级
+    }
+    out = formatter.format_daily_report(_record(), t)
+    assert "环比前一交易日" in out
+    assert "占两市:" not in out          # 单侧缺 → 省略,不渲染「2.0% vs —」
+    assert "涨跌均值" not in out          # 单侧缺 → 省略
+    assert "CR3:80.0% vs 72.0%(+8.0pp)" in out   # 两侧都有的指标照常
+
+
+def test_prev_compare_head_amount_no_paren_when_change_none():
+    """前一日总额为 0 → change_pct=None → 头部成交额行不带括号,不崩。"""
+    t = _trend(sufficient=True)
+    t["prev_compare"] = {
+        "prev_date": "2026-05-30",
+        "head_amount": {"current": 200.0, "previous": 0.0, "change_pct": None},
+        "market_share": {"current": None, "previous": None, "delta_pp": None},
+        "cr3": {"current": 80.0, "previous": 72.0, "delta_pp": 8.0},
+        "change_avg": {"current": None, "previous": None},
+    }
+    out = formatter.format_daily_report(_record(), t)
+    assert "头部成交额:200.0 亿 vs 0.0 亿" in out
+    assert "vs 0.0 亿(" not in out       # change None → 无括号
 
 
 def test_trend_insufficient_fallback_text():

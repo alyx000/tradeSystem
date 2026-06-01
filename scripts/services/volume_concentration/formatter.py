@@ -40,6 +40,46 @@ def _change_distribution(stocks: list[dict]) -> dict | None:
     }
 
 
+def _signed_pct(v: float) -> str:
+    """带符号百分比(原始值用,非环比):正数加 +,负/零不加(与现有 vs_avg/环比口径一致)。"""
+    return f"{'+' if v > 0 else ''}{v}%"
+
+
+def _delta_label(v: float, unit: str) -> str:
+    """环比变化标签:四舍五入后为 0 → 『持平』(避免『12.92% vs 12.89%(0.0pp)』的突兀);
+    否则带符号 + 单位(unit 为 'pp' 或 '%')。"""
+    if v == 0:
+        return "持平"
+    return f"{'+' if v > 0 else ''}{v}{unit}"
+
+
+def _format_prev_compare(pc: dict) -> list[str]:
+    """📅 环比前一交易日小块:头部成交额 / 占两市 / CR3 / 涨跌均值 的今日 vs 昨日。
+    pc 由 trend.compute_trend 提供且已保证 not None;缺数据的子项(None)对应行略过。"""
+    out = [f"### 📅 环比前一交易日({pc['prev_date'][5:]})"]  # YYYY-MM-DD → MM-DD
+
+    ha = pc["head_amount"]
+    paren = f"({_delta_label(ha['change_pct'], '%')})" if ha["change_pct"] is not None else ""
+    out.append(f"- 头部成交额:{ha['current']} 亿 vs {ha['previous']} 亿{paren}")
+
+    # 占两市 / 涨跌均值仅当两侧都有值才出对比行:本块是「环比」块,缺一侧无可比性;
+    # 且当日值已在表头(占两市行 / 涨跌分布行)展示,省略此处不丢数据(审查高-2 反驳:非隐藏当日值)。
+    ms = pc["market_share"]
+    if ms["current"] is not None and ms["previous"] is not None:
+        paren = f"({_delta_label(ms['delta_pp'], 'pp')})" if ms["delta_pp"] is not None else ""
+        out.append(f"- 占两市:{ms['current']}% vs {ms['previous']}%{paren}")
+
+    cr = pc["cr3"]
+    out.append(f"- CR3:{cr['current']}% vs {cr['previous']}%({_delta_label(cr['delta_pp'], 'pp')})")
+
+    ca = pc["change_avg"]
+    if ca["current"] is not None and ca["previous"] is not None:
+        out.append(f"- 涨跌均值:{_signed_pct(ca['current'])} vs {_signed_pct(ca['previous'])}")
+
+    out.append("")
+    return out
+
+
 def format_daily_report(record: dict | None, trend_result: dict) -> str:
     if not record:
         return "当日无成交额数据,跳过。"
@@ -104,6 +144,11 @@ def format_daily_report(record: dict | None, trend_result: dict) -> str:
             f"> 集中度趋势:累积交易日仅 {trend_result['days']} 天,满 ≥2 日起逐步展示(目标 30+)。"
         )
         return "\n".join(lines)
+
+    # 📅 环比前一交易日(独立对比小块):头部成交额 / 占两市 / CR3 / 涨跌均值 今日 vs 昨日
+    pc = trend_result.get("prev_compare")
+    if pc:
+        lines.extend(_format_prev_compare(pc))
 
     # 🔥 板块热度趋势(占 Top20 比重 vs 前期):升温 / 降温(|delta|>1pp 才列,各取前 5)
     heat = trend_result.get("sector_heat") or []

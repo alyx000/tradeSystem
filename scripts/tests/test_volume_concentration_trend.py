@@ -240,3 +240,72 @@ def test_compute_trend_clamps_nonpositive_lookback():
     out = trend.compute_trend(records, heat_lookback=-1)   # 负数原会 IndexError
     assert out["sufficient"] is True
     assert out["amount_trend"]["avg"] is not None
+
+
+# ---- 环比前一交易日(独立对比小块) ----
+
+def _rec_full(date, total, market_total, sectors, change_pcts=None):
+    """造带 market_total / share / change_pct 的 record(供 prev_compare 计算)。
+    sectors=[(行业, share_in_top_n)],change_pcts=[个股涨跌%]。"""
+    return {
+        "date": date,
+        "total_amount_billion": total,
+        "market_total_billion": market_total,
+        "stocks": [{"code": f"S{i}", "name": f"股{i}", "change_pct": cp}
+                   for i, cp in enumerate(change_pcts or [])],
+        "sector_summary": [{"industry": i, "share_in_top_n": sh} for i, sh in sectors],
+    }
+
+
+def test_prev_compare_full():
+    """环比前一交易日:头部成交额 / 占两市 / CR3 / 涨跌均值 的今日 vs 昨日。"""
+    records = [
+        _rec_full("2026-05-28", 4000.0, 40000.0,
+                  [("半导体", 0.32), ("通信", 0.25), ("电池", 0.17)], [2.0, 0.0]),
+        _rec_full("2026-05-29", 3680.0, 40000.0,
+                  [("半导体", 0.30), ("通信", 0.25), ("电池", 0.18), ("未分类", 0.27)], [-4.0, -2.0]),
+    ]
+    pc = trend.compute_trend(records)["prev_compare"]
+    assert pc["prev_date"] == "2026-05-28"
+    assert pc["head_amount"] == {"current": 3680.0, "previous": 4000.0, "change_pct": -8.0}
+    assert pc["market_share"] == {"current": 9.2, "previous": 10.0, "delta_pp": -0.8}
+    assert pc["cr3"] == {"current": 73.0, "previous": 74.0, "delta_pp": -1.0}   # 未分类不计入
+    assert pc["change_avg"] == {"current": -3.0, "previous": 1.0}
+
+
+def test_prev_compare_none_when_single_day():
+    """仅 1 天 → 无前一日可比,prev_compare=None。"""
+    records = [_rec_full("2026-05-29", 100.0, 1000.0, [("电池", 0.5)], [1.0])]
+    assert trend.compute_trend(records)["prev_compare"] is None
+
+
+def test_prev_compare_share_none_without_market_total():
+    """缺 market_total → 占两市子项为 None,但头部成交额仍可比。"""
+    records = [
+        _rec_full("2026-05-28", 100.0, None, [("电池", 0.5)], [1.0]),
+        _rec_full("2026-05-29", 120.0, None, [("电池", 0.5)], [1.0]),
+    ]
+    pc = trend.compute_trend(records)["prev_compare"]
+    assert pc["market_share"] == {"current": None, "previous": None, "delta_pp": None}
+    assert pc["head_amount"]["change_pct"] == 20.0
+
+
+def test_prev_compare_change_avg_none_without_ratings():
+    """无评级数据(无 change_pct) → 涨跌均值子项为 None。"""
+    records = [
+        _rec_full("2026-05-28", 100.0, 1000.0, [("电池", 0.5)], []),
+        _rec_full("2026-05-29", 120.0, 1000.0, [("电池", 0.5)], []),
+    ]
+    pc = trend.compute_trend(records)["prev_compare"]
+    assert pc["change_avg"] == {"current": None, "previous": None}
+
+
+def test_prev_compare_head_change_none_when_prev_total_zero():
+    """前一日总额=0 → change_pct=None(除零保护),锁住 compute_trend 真实产物(codex 轻微:两层间缺口)。"""
+    records = [
+        _rec_full("2026-05-28", 0.0, 1000.0, [("电池", 0.5)], [1.0]),
+        _rec_full("2026-05-29", 120.0, 1000.0, [("电池", 0.5)], [1.0]),
+    ]
+    pc = trend.compute_trend(records)["prev_compare"]
+    assert pc["head_amount"]["previous"] == 0.0
+    assert pc["head_amount"]["change_pct"] is None

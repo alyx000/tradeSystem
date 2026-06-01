@@ -164,6 +164,41 @@ def _metabolism(records: list[dict], core_threshold: int) -> dict:
     return {"core": core, "fresh": fresh, "new_by_sector": new_by_sector}
 
 
+def _prev_compare(records: list[dict], unclassified: str) -> dict | None:
+    """环比前一交易日(独立对比小块):头部成交额 / 占两市 / CR3 / 涨跌均值 的今日 vs 昨日。
+
+    不足 2 个交易日返 None(无前一日可比)。各指标缺数据时对应子项为 None
+    (无 market_total → 占两市 None;无评级 → 涨跌均值 None;前一日总额 0 → change_pct None),
+    由 formatter 决定是否略过该行。current 取自最新日,与 header / cr3_trend 同源同口径。
+    """
+    if len(records) < 2:
+        return None
+    cur, prev = records[-1], records[-2]
+
+    def _share(rec):  # 占两市(%):total / market_total;缺 market_total 返 None
+        mt = rec.get("market_total_billion")
+        t = rec.get("total_amount_billion")
+        return round(t / mt * 100, 2) if mt else None
+
+    def _avg_chg(rec):  # 当日涨跌均值(%):有评级个股的均值;无评级返 None(与 formatter 同口径)
+        cps = [s["change_pct"] for s in (rec.get("stocks") or []) if s.get("change_pct") is not None]
+        return round(sum(cps) / len(cps), 2) if cps else None
+
+    ca, pa = cur["total_amount_billion"], prev["total_amount_billion"]
+    amount_change = round((ca - pa) / pa * 100, 1) if pa else None
+    cs, ps = _share(cur), _share(prev)
+    share_delta = round(cs - ps, 1) if (cs is not None and ps is not None) else None
+    cc, pc = _cr3(cur, unclassified), _cr3(prev, unclassified)
+    cavg, pavg = _avg_chg(cur), _avg_chg(prev)
+    return {
+        "prev_date": prev["date"],
+        "head_amount": {"current": ca, "previous": pa, "change_pct": amount_change},
+        "market_share": {"current": cs, "previous": ps, "delta_pp": share_delta},
+        "cr3": {"current": cc, "previous": pc, "delta_pp": round(cc - pc, 1)},
+        "change_avg": {"current": cavg, "previous": pavg},
+    }
+
+
 def compute_trend(records: list[dict], unclassified: str = UNCLASSIFIED,
                   heat_lookback: int = 5, core_threshold: int = 10) -> dict:
     """综合趋势面板。内部按日期正序防御(乱序传入也正确;比 assert 在 -O 下更稳)。
@@ -181,4 +216,5 @@ def compute_trend(records: list[dict], unclassified: str = UNCLASSIFIED,
         "amount_trend": _amount_trend(records, heat_lookback),
         "metabolism": _metabolism(records, core_threshold),
         "stock_retention": _stock_retention(records),
+        "prev_compare": _prev_compare(records, unclassified),
     }
