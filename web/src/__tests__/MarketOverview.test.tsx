@@ -178,6 +178,8 @@ describe('MarketOverview', () => {
     expect(screen.getByText('封板稳')).toBeInTheDocument()
     expect(screen.getByText('高标打开')).toBeInTheDocument()
     expect(screen.getByText('主线集中')).toBeInTheDocument()
+    // 北向净额已下线(口径存疑),即便 northbound_net=86.5 也不渲染
+    expect(screen.queryByText('北向净额')).not.toBeInTheDocument()
     expect(screen.getByText('大盘资金流向')).toBeInTheDocument()
     expect(screen.getAllByText('+25.00亿').length).toBeGreaterThan(0)
     expect(screen.getByText('+2.80%')).toBeInTheDocument()

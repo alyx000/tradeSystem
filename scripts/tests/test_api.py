@@ -745,6 +745,28 @@ class TestSearch:
         data = r.json()
         assert len(data) == 2
 
+    def test_style_factors_capacity_and_first_open_series(self, client, db_path):
+        """容量票 / 一字首开溢价应可经 /api/style-factors/series 取序列（趋势图数据源）。"""
+        conn = get_connection(db_path)
+        Q.upsert_daily_market(conn, {
+            "date": "2026-04-01", "premium_capacity": 1.79, "premium_first_open": -0.71,
+        })
+        Q.upsert_daily_market(conn, {
+            "date": "2026-04-02", "premium_capacity": 2.18, "premium_first_open": 8.02,
+        })
+        conn.commit()
+        conn.close()
+
+        r = client.get("/api/style-factors/series", params={
+            "metrics": "premium_capacity,premium_first_open",
+            "from": "2026-04-01", "to": "2026-04-02",
+        })
+        assert r.status_code == 200
+        data = r.json()
+        assert len(data) == 2
+        assert data[0]["premium_capacity"] == 1.79
+        assert data[1]["premium_first_open"] == 8.02
+
     def test_export_markdown(self, seeded_client, db_path):
         conn = get_connection(db_path)
         tid = Q.get_or_create_teacher(conn, "小鲍")
@@ -2177,7 +2199,15 @@ _RICH_RAW_DATA = {
         "sector_rhythm_concept": [
             {"name": "低空经济", "phase": "发酵", "rank_today": 2, "change_today": 2.3, "confidence": "高"},
         ],
-        "indices": {"shanghai": {"close": 3200.0, "change_pct": -1.5}},
+        "indices": {
+            "shanghai": {"close": 3200.0, "change_pct": -1.5},
+            "chinext": {"close": 2333.1, "change_pct": -2.15},
+            "star50": {"close": 1663.69, "change_pct": -5.0},
+        },
+        "moving_averages": {
+            "avg_price": {"ma5w": 32.01, "above_ma5w": False},
+            "shanghai": {"ma5w": 4110.91, "above_ma5w": False},
+        },
     },
 }
 
@@ -2250,6 +2280,19 @@ class TestEnrichMarketRow:
         assert m["sector_rhythm_industry"][0]["phase"] == "启动"
         assert "sector_industry" in m
         assert m["sector_industry"]["data"][0]["name"] == "油服工程"
+
+    def test_prefill_market_contains_moving_averages(self, client, db_path):
+        """/api/review/{date}/prefill 中 market 应展开 moving_averages（平均股价 5 周线）。
+
+        平均股价当日数值未落库（采集器算完丢弃），只持久化了 ma5w；
+        大盘步骤用此值 + above_ma5w 展示「平均股价 32.01 · 线下」。
+        """
+        self._seed(db_path)
+        r = client.get("/api/review/2026-05-20/prefill")
+        m = r.json()["market"]
+        assert "moving_averages" in m, "prefill.market 未展开 moving_averages"
+        assert m["moving_averages"]["avg_price"]["ma5w"] == 32.01
+        assert m["moving_averages"]["avg_price"]["above_ma5w"] is False
 
     def test_prefill_contains_review_signals(self, client, db_path):
         """/api/review/{date}/prefill 应返回结构化 review_signals，供前三步只读展示使用。"""

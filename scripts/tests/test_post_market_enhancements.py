@@ -1301,8 +1301,12 @@ class TestUnitConversions:
         assert "8.23亿" in md
         assert "119949496万" not in md
 
-    def test_northbound_active_display(self):
-        """北向十大活跃股以亿为单位展示"""
+    def test_northbound_section_removed(self):
+        """北向资金 section 已下线:即便 northbound 有完整净额/活跃股数据,盘后报告也不再出现北向。
+
+        沪深交易所 2024-08-16 起停更北向每日净额,tushare moneyflow_hsgt.north_money 口径存疑
+        (同份数据十大活跃股净额全 0、聚合 north_money 却非 0,自相矛盾),故整段下线。
+        """
         with tempfile.TemporaryDirectory() as tmp:
             gen = ReportGenerator()
             gen.daily_dir = Path(tmp) / "daily"
@@ -1324,9 +1328,8 @@ class TestUnitConversions:
             }
             md, _ = gen.generate_post_market("2026-03-28", raw)
 
-        assert "十大活跃股" in md
-        assert "37.0亿" in md
-        assert "3695423094" not in md
+        assert "北向" not in md, "北向资金已下线,盘后报告不应再出现北向"
+        assert "十大活跃股" not in md
 
 
 # =====================================================================

@@ -63,7 +63,7 @@ export default function MarketSummaryCards({
         <h2 className="text-sm font-semibold text-gray-700 mb-3">成交与资金</h2>
         <div className="grid grid-cols-2 gap-4">
           <StatCard label="两市成交额" value={fmtAmount(market.total_amount)} />
-          <StatCard label="北向净额" value={market.northbound_net} suffix="亿" />
+          {/* 北向净额已下线:沪深交易所 2024-08-16 起停更每日净额,tushare north_money 口径存疑(个股净额全 0/聚合非 0)。 */}
           <StatCard label="上涨家数" value={market.advance_count} />
           <StatCard label="下跌家数" value={market.decline_count} />
         </div>

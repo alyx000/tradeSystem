@@ -175,7 +175,26 @@ export default function StepMarket({ data, onChange, prefill }: StepProps) {
             <Metric label="上证" value={m.sh_index_close} change={m.sh_index_change_pct} />
             <Metric label="深证" value={m.sz_index_close} change={m.sz_index_change_pct} />
             <Metric label="成交额" value={fmtAmount(m.total_amount)} />
-            <Metric label="北向净额" value={m.northbound_net} suffix="亿" />
+            {/* 北向净额已下线:沪深交易所 2024-08-16 起停更每日净额,tushare north_money 口径存疑(个股净额全 0/聚合非 0)。 */}
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-2">
+            <Metric label="创业板指" value={m.indices?.chinext?.close} change={m.indices?.chinext?.change_pct} />
+            <Metric label="科创50" value={m.indices?.star50?.close} change={m.indices?.star50?.change_pct} />
+            {/* 平均股价当日数值未落库,只显示 5 周线 ma5w + 线上/线下。
+                采集器(collectors/market.py)对 ma5w 与 above_ma5w 同处写入(above_ma5w=avg_close>ma5w,必为 bool),
+                故此分支已 gate ma5w!=null,above_ma5w 不会是 null —— 无需额外的 null 三态处理。 */}
+            {m.moving_averages?.avg_price?.ma5w != null && (
+              <div>
+                <div className="text-xs text-gray-400">平均股价</div>
+                <div className="text-sm font-medium text-gray-700">
+                  {m.moving_averages.avg_price.ma5w}
+                  <span className={`ml-1 ${m.moving_averages.avg_price.above_ma5w ? 'text-red-500' : 'text-green-600'}`}>
+                    {m.moving_averages.avg_price.above_ma5w ? '线上' : '线下'}
+                  </span>
+                </div>
+                <div className="text-[10px] text-gray-400">5周线</div>
+              </div>
+            )}
           </div>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-2">
             <Metric label="涨" value={m.advance_count} />
@@ -209,41 +228,6 @@ export default function StepMarket({ data, onChange, prefill }: StepProps) {
             <Metric label="大单" value={fmtSignedYi(marketSignals.moneyflow_summary.large_yi)} />
           </div>
         </PrefillBanner>
-      )}
-
-      {(marketSignals?.market_structure_rows?.length ?? 0) > 0 && (
-        (() => {
-          const structureRows = marketSignals?.market_structure_rows ?? []
-          return (
-            <PrefillBanner>
-              <div className="text-xs font-medium text-gray-600 mb-2">A股市场结构</div>
-              <div className="overflow-x-auto">
-                <table className="min-w-full text-xs text-gray-600">
-                  <thead>
-                    <tr className="text-left text-gray-400">
-                      <th className="py-1 pr-4 font-medium">市场</th>
-                      <th className="py-1 pr-4 font-medium text-right">成交额(亿)</th>
-                      <th className="py-1 pr-4 font-medium text-right">PE</th>
-                      <th className="py-1 pr-4 font-medium text-right">换手率</th>
-                      <th className="py-1 font-medium text-right">公司数</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {structureRows.map((row) => (
-                      <tr key={row.name} className="border-t border-gray-200/70">
-                        <td className="py-1.5 pr-4 font-medium text-gray-700">{row.name}</td>
-                        <td className="py-1.5 pr-4 text-right">{row.amount != null ? Number(row.amount).toFixed(1) : '-'}</td>
-                        <td className="py-1.5 pr-4 text-right">{row.pe != null ? Number(row.pe).toFixed(1) : '-'}</td>
-                        <td className="py-1.5 pr-4 text-right">{row.turnover_rate != null ? `${Number(row.turnover_rate).toFixed(2)}%` : '-'}</td>
-                        <td className="py-1.5 text-right">{row.com_count ?? '-'}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </PrefillBanner>
-          )
-        })()
       )}
 
       <ResearchCoveragePanel todayItems={marketSignals?.research_coverage_top} />

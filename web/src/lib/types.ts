@@ -98,6 +98,19 @@ export interface MarketIndexEntry {
   change_pct: number | null
 }
 
+// daily_market.raw_data.moving_averages 的单条:沪深含 ma5/10/20/5w,创业板/科创50/平均股价仅 ma5w。
+// 平均股价(通达信 880003)当日数值未落库,只持久化 ma5w + above_ma5w。
+export interface MarketMaEntry {
+  ma5?: number | null
+  ma10?: number | null
+  ma20?: number | null
+  ma5w?: number | null
+  above_ma5?: boolean | null
+  above_ma10?: boolean | null
+  above_ma20?: boolean | null
+  above_ma5w?: boolean | null
+}
+
 export interface SectorSnapshotRow {
   name?: string | null
   sector_name?: string | null
@@ -174,6 +187,7 @@ export interface BoardCountItem {
 export interface MarketFullData extends DailyMarket {
   available: boolean
   indices?: Record<string, MarketIndexEntry>
+  moving_averages?: Record<string, MarketMaEntry>
   sector_industry?: MarketSection<SectorSnapshotRow>
   sector_concept?: MarketSection<SectorSnapshotRow>
   sector_fund_flow?: MarketSection<SectorSnapshotRow>
@@ -806,6 +820,8 @@ export interface StyleFactorPremiumSnapshotItem {
 export interface StyleFactorPremiumTrend {
   direction?: string | null
   first_board_median_5d?: Array<string | number>
+  /** 与 first_board_median_5d 等长对齐的溢价实现日（most-recent-first）；前端展示时配合反转为旧→新。 */
+  dates?: string[]
 }
 
 export interface ReviewStyleFactors {

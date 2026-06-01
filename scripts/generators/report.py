@@ -71,9 +71,8 @@ class ReportGenerator:
                     f"- [事实] 封板率 {sr if sr is not None else '-'}% / "
                     f"炸板率 {br if br is not None else '-'}% [★★★]"
                 )
-            nb = snap.get("northbound_net")
-            if nb is not None:
-                lines.append(f"- [事实] 北向净额: {nb} 亿 [★★★]")
+            # 北向净额已下线:沪深交易所 2024-08-16 起停更每日净流入,
+            # tushare moneyflow_hsgt.north_money 口径存疑(个股净额全 0 但聚合非 0),不再当"事实"展示。
 
         prev_rev = market_data.get("prev_review_conclusion")
         if prev_rev:
@@ -495,20 +494,8 @@ class ReportGenerator:
                     f"{s.get('change_pct', 0)}% |"
                 )
 
-        # ---- 北向资金 ----
-        nb = raw_data.get("northbound", {})
-        if "net_buy_billion" in nb:
-            lines.append(f"\n## {_roman(section_idx)}、北向资金\n")
-            section_idx += 1
-            val = nb["net_buy_billion"]
-            direction = "净买入" if val >= 0 else "净卖出"
-            lines.append(f"- {direction}: **{abs(val):.2f}亿**")
-            top_active = nb.get("top_active_stocks", [])
-            if top_active:
-                active_names = ", ".join(
-                    f"{s['name']}({s['amount_yi']:.1f}亿)" for s in top_active[:5]
-                )
-                lines.append(f"- 十大活跃股: {active_names}")
+        # 北向资金 section 已下线:沪深交易所 2024-08-16 起停更北向每日净额,
+        # tushare north_money 口径存疑(个股净额全 0 / 聚合非 0);仍在披露的北向成交额暂未接入,故整段移除。
 
         # ---- 融资融券 ----
         margin = raw_data.get("margin_data", {})
@@ -965,12 +952,7 @@ def _generate_auto_analysis(raw_data: dict) -> list[str]:
             desc += f"，最高 {hb}板"
         items.append(desc)
 
-    # 北向资金评估
-    nb = raw_data.get("northbound", {})
-    nb_val = nb.get("net_buy_billion", 0)
-    if nb_val:
-        direction = "净买入" if nb_val >= 0 else "净卖出"
-        items.append(f"北向资金{direction} {abs(nb_val):.2f}亿")
+    # 北向资金评估已下线:每日净额停更后 tushare north_money 口径存疑(个股净额全 0 / 聚合非 0),不再纳入盘后评估。
 
     # 板块评估
     top_ind = raw_data.get("sector_industry", {}).get("data", [])

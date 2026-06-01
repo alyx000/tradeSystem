@@ -43,6 +43,13 @@ const prefill: ReviewPrefillData = {
     premium_second_board: 4.4,
     northbound_net: 56.2,
     margin_balance: null,
+    indices: {
+      chinext: { close: 2333.1, change_pct: -2.15 },
+      star50: { close: 1663.69, change_pct: -5.0 },
+    },
+    moving_averages: {
+      avg_price: { ma5w: 32.01, above_ma5w: false },
+    },
   },
   prev_market: {
     date: '2026-04-02',
@@ -125,10 +132,36 @@ describe('StepMarket', () => {
     expect(screen.getByLabelText('5周均线')).toHaveValue('线上')
     expect(screen.getByDisplayValue('【小鲍】量能配合较好')).toBeInTheDocument()
     expect(screen.getByText('主力资金流向')).toBeInTheDocument()
-    expect(screen.getByText('A股市场结构')).toBeInTheDocument()
-    expect(screen.getByText('上海A股')).toBeInTheDocument()
+    // 创业板指 / 科创50:取自 indices,与上证/深证同样式(close + 涨跌%)
+    expect(screen.getByText('创业板指')).toBeInTheDocument()
+    expect(screen.getByText('2333.1')).toBeInTheDocument()
+    expect(screen.getByText('科创50')).toBeInTheDocument()
+    expect(screen.getByText('1663.69')).toBeInTheDocument()
+    // 平均股价:当日数值未落库,展示 5 周线 ma5w + 线上/线下
+    expect(screen.getByText('平均股价')).toBeInTheDocument()
+    expect(screen.getByText('32.01')).toBeInTheDocument()
+    expect(screen.getByText('线下')).toBeInTheDocument()
+    // A股市场结构块已移除(用户:无意义),market_structure_rows 即便存在也不渲染
+    expect(screen.queryByText('A股市场结构')).not.toBeInTheDocument()
+    expect(screen.queryByText('上海A股')).not.toBeInTheDocument()
+    // 北向净额已下线(口径存疑),即便 northbound_net 有值也不渲染
+    expect(screen.queryByText('北向净额')).not.toBeInTheDocument()
     expect(screen.getByText('+6.50亿')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: /查看完整市场数据/i })).toHaveAttribute('href', '/market/2026-04-03')
+  })
+
+  it('degrades gracefully when indices and moving_averages are absent', () => {
+    const noIdx: ReviewPrefillData = {
+      ...prefill,
+      market: { ...prefill.market!, indices: undefined, moving_averages: undefined },
+    }
+    renderStep({}, noIdx)
+    // 创业板指/科创50 标签仍渲染,close 缺失时 Metric 降级为 '-'
+    expect(screen.getByText('创业板指')).toBeInTheDocument()
+    expect(screen.getByText('科创50')).toBeInTheDocument()
+    // 平均股价整块在 ma5w 缺失时不渲染(不会出现裸 '线下')
+    expect(screen.queryByText('平均股价')).not.toBeInTheDocument()
+    expect(screen.queryByText('线下')).not.toBeInTheDocument()
   })
 
   it('shows non-trading-day warning when is_trading_day is false', () => {

@@ -17,6 +17,7 @@ _ENRICH_KEYS = (
     "limit_step",
     "limit_cpt_list",
     "indices",
+    "moving_averages",
     "style_factors",
     "sector_rhythm_industry",
     "sector_rhythm_concept",
