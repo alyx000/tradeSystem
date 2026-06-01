@@ -210,6 +210,35 @@ export interface MarketChartItem extends MarketHistoryItem {
   date_short: string
 }
 
+// ── 成交额板块集中度趋势（盘面概览图表） ──
+export interface ConcentrationSeriesPoint {
+  date: string
+  date_short: string
+  cr3: number
+  total_amount_billion: number
+  market_share_pct: number | null
+  sectors: Record<string, number>
+}
+
+export interface ConcentrationRotationNew {
+  name: string
+  industry: string
+  change_pct: number | null
+}
+
+export interface ConcentrationSnapshot {
+  date: string
+  retention: { name: string; streak: number }[]
+  rotation: { new: ConcentrationRotationNew[]; dropped: { name: string }[] }
+}
+
+export interface ConcentrationTrendPayload {
+  requested_days: number
+  series: ConcentrationSeriesPoint[]
+  sector_keys: string[]
+  snapshot: ConcentrationSnapshot | null
+}
+
 export interface MainThemeItem {
   date?: string
   theme_name: string

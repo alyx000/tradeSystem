@@ -30,4 +30,16 @@ describe('api client', () => {
     const result = await api.getTeachers()
     expect(result).toEqual([{ id: 1, name: 'test' }])
   })
+
+  it('getConcentrationHistory hits concentration endpoint with days param', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      headers: new Headers({ 'content-type': 'application/json' }),
+      json: () => Promise.resolve({ requested_days: 30, series: [], sector_keys: [], snapshot: null }),
+    })
+    globalThis.fetch = fetchMock
+    const result = await api.getConcentrationHistory(15)
+    expect(fetchMock).toHaveBeenCalledWith('/api/market/concentration/history?days=15', expect.anything())
+    expect(result.requested_days).toBe(30)
+  })
 })

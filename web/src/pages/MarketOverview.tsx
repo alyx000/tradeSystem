@@ -28,6 +28,7 @@ import {
 } from '../components/market/marketSelectors'
 
 const MarketChartsPanel = lazy(() => import('../components/market/MarketChartsPanel'))
+const ConcentrationTrendPanel = lazy(() => import('../components/market/ConcentrationTrendPanel'))
 
 function fmtPct(v: number | null | undefined) {
   if (v == null) return '-'
@@ -92,6 +93,11 @@ export default function MarketOverview() {
     queryFn: api.getMainThemes,
   })
 
+  const { data: concentration } = useQuery({
+    queryKey: ['concentration-history'],
+    queryFn: () => api.getConcentrationHistory(30),
+  })
+
   const chartData: MarketChartItem[] = (history || [])
     .slice()
     .sort((a, b) => a.date.localeCompare(b.date))
@@ -100,8 +106,11 @@ export default function MarketOverview() {
       date_short: d.date.slice(5),
     }))
 
+  // 图表区在「行情趋势」或「集中度趋势」任一有数据时展示(二者均来自盘后采集,通常同时具备)
+  const hasChartData = chartData.length > 0 || (concentration?.series.length ?? 0) > 0
+
   useEffect(() => {
-    if (loadCharts || chartData.length === 0) return
+    if (loadCharts || !hasChartData) return
     if (typeof window === 'undefined' || typeof window.IntersectionObserver === 'undefined') {
       queueMicrotask(() => setLoadCharts(true))
       return
@@ -122,7 +131,7 @@ export default function MarketOverview() {
     )
     observer.observe(node)
     return () => observer.disconnect()
-  }, [chartData.length, loadCharts])
+  }, [hasChartData, loadCharts])
 
   if (isLoading) {
     return <div className="text-center py-12 text-gray-400">加载中...</div>
@@ -246,11 +255,12 @@ export default function MarketOverview() {
         onToggleShowAll={() => setShowAllSectors((v) => !v)}
       />
 
-      {chartData.length > 0 && (
+      {hasChartData && (
         <div ref={chartsRef}>
           {loadCharts ? (
             <Suspense fallback={<ChartLoadingFallback />}>
               <MarketChartsPanel chartData={chartData} />
+              {concentration && <ConcentrationTrendPanel payload={concentration} />}
             </Suspense>
           ) : (
             <DeferredChartPlaceholder />
