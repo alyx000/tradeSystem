@@ -30,7 +30,7 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
 
     def _common(p: argparse.ArgumentParser) -> None:
         p.add_argument("--date", default=None, help="交易日 YYYY-MM-DD(默认今天)")
-        p.add_argument("--windows", default=None, help="相关窗口,逗号分隔(默认 20,60)")
+        p.add_argument("--windows", default=None, help="相关窗口,逗号分隔(默认 5,20,60:近5日共振/中期/结构)")
         p.add_argument("--top-industries", type=int, default=service.TOP_INDUSTRIES,
                        help=f"申万二级行业数(按多日均成交额,默认 {service.TOP_INDUSTRIES})")
         p.add_argument("--top-concepts", type=int, default=service.TOP_CONCEPTS,

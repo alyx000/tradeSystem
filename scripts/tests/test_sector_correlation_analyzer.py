@@ -75,23 +75,6 @@ def test_classify_sector_vs_index():
     assert si["黄金"]["000001.SH"]["label"] == "弱逆向"
 
 
-def test_today_comovement_groups_by_sign_sorted():
-    sectors = [
-        {"name": "半导体", "type": "industry", "latest_change_pct": 2.1},
-        {"name": "电力", "type": "industry", "latest_change_pct": -1.2},
-        {"name": "存储芯片", "type": "concept", "latest_change_pct": 3.4},
-        {"name": "白酒", "type": "industry", "latest_change_pct": -0.4},
-        {"name": "持平板块", "type": "industry", "latest_change_pct": 0.0},
-        {"name": "缺数据", "type": "industry", "latest_change_pct": None},
-    ]
-    co = ana.today_comovement(sectors)
-    assert [x["name"] for x in co["up"]] == ["存储芯片", "半导体"]    # 齐涨降序(最涨在前)
-    assert [x["name"] for x in co["down"]] == ["电力", "白酒"]        # 齐跌升序(最跌在前: -1.2<-0.4)
-    # 0 与 None 不入任何组
-    names = {x["name"] for x in co["up"] + co["down"]}
-    assert "持平板块" not in names and "缺数据" not in names
-
-
 def test_build_window_payload_empty_excess_safe():
     raw = pd.DataFrame([[1.0]], index=["000001.SH"], columns=["000001.SH"])
     wr = {

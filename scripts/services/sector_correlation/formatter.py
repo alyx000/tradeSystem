@@ -5,8 +5,6 @@ matrix：打印更全的逐窗矩阵（命令行细看）。trend：跨日漂移
 """
 from __future__ import annotations
 
-from . import analyzer
-
 # 超额阈值（与 analyzer 一致）：弱逆向=反向榜列入门槛，强逆向=双窗"稳定跷跷板"判定
 _EXCESS_WEAK_INV = -0.2
 _EXCESS_STRONG_INV = -0.4
@@ -40,7 +38,8 @@ def _pair_lookup(pairs: list[dict]) -> dict:
 def format_daily_report(record: dict, top_k: int = 8) -> str:
     date = record["date"]
     windows = record.get("windows") or [60]
-    pw = _primary_window(record)
+    pw = _primary_window(record)          # 结构窗口=最长(默认60)
+    nw = min(windows)                     # 近期窗口=最短(默认5)
     base = record.get("base_index", "")
     sample = record.get("sample_days", {})
     L: list[str] = []
@@ -50,17 +49,6 @@ def format_daily_report(record: dict, top_k: int = 8) -> str:
         f"- 窗口 {windows} | 样本 {_sample_str(sample)} 天 | 板块 {record.get('top_n')} 个 "
         f"| 对标 {len(record.get('indices', []))} 指数（基准 {base}）"
     )
-    L.append("")
-
-    # 今日联动快照：当日齐涨/齐跌（事实层，A股 红涨绿跌）
-    co = analyzer.today_comovement(record.get("sectors", []))
-    L.append(f"### 📅 今日联动（{date} 当日涨跌）")
-    if co["up"]:
-        L.append("- 🔴 齐涨：" + "、".join(f"{x['name']} +{x['change_pct']:.2f}%" for x in co["up"]))
-    if co["down"]:
-        L.append("- 🟢 齐跌：" + "、".join(f"{x['name']} {x['change_pct']:.2f}%" for x in co["down"]))
-    if not co["up"] and not co["down"]:
-        L.append("- （今日板块涨跌数据缺失）")
     L.append("")
 
     # 板块 × 大盘：重点列逆向（A股稀少、最有信息量）+ 高弹性同向
@@ -79,9 +67,20 @@ def format_daily_report(record: dict, top_k: int = 8) -> str:
         L.append(f"- 高弹性同向（β≥1.2）：{'、'.join(high_beta[:top_k])}")
     L.append("")
 
-    # 联动榜（原始相关降序）
+    # 近期联动榜（最短窗口=近期共振，原始相关降序）；仅多窗口时单列，单窗与下方重复则跳过
+    if nw != pw:
+        near_pairs = (record.get("pair_raw") or {}).get(str(nw), [])
+        L.append(f"### 🤝 近{nw}日联动榜（短期共振·原始相关）")
+        if near_pairs:
+            for p in near_pairs[:top_k]:
+                L.append(f"- {p['a']} ⟷ {p['b']}  {_sign(p['corr'])}")
+        else:
+            L.append("- （样本不足，无可用对）")
+        L.append("")
+
+    # 联动榜（结构窗口=最长，原始相关降序）
     raw_pairs = (record.get("pair_raw") or {}).get(str(pw), [])
-    L.append(f"### 🤝 联动榜 · {pw}日（原始相关）")
+    L.append(f"### 🤝 联动榜 · {pw}日（结构·原始相关）")
     if raw_pairs:
         for p in raw_pairs[:top_k]:
             L.append(f"- {p['a']} ⟷ {p['b']}  {_sign(p['corr'])}")

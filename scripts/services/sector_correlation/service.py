@@ -13,13 +13,13 @@ from . import collector, formatter, repo
 logger = logging.getLogger(__name__)
 
 # 默认参数（CLI 可覆盖）
-WINDOWS = [20, 60]
+WINDOWS = [5, 20, 60]  # 5=近期共振 / 20=中期 / 60=结构
 TOP_INDUSTRIES = 15
 TOP_CONCEPTS = 10
 ACTIVITY_DAYS = 10
 INDICES = ["000001.SH", "399006.SZ", "000300.SH", "000688.SH"]
 BASE_INDEX = "000001.SH"
-MIN_SAMPLE_BY_WINDOW = {20: 15, 60: 20}
+MIN_SAMPLE_BY_WINDOW = {5: 5, 20: 15, 60: 20}
 
 
 def _build(provider, date, *, windows, top_industries, top_concepts,

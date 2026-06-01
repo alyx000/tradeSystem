@@ -37,24 +37,18 @@ def test_daily_report_sections_and_footnote():
     assert "非因果" in md                                 # 红线脚注
 
 
-def test_daily_report_today_comovement_section():
+def test_daily_report_near_window_linkage_section():
+    """多窗口时单列近期(最短窗)联动榜，用最短窗的 pair_raw。"""
     rec = _rec()
-    rec["sectors"] = [
-        {"name": "半导体", "type": "industry", "latest_change_pct": 2.1},
-        {"name": "存储芯片", "type": "concept", "latest_change_pct": 3.4},
-        {"name": "电力", "type": "industry", "latest_change_pct": -1.2},
-    ]
+    rec["windows"] = [5, 20, 60]
+    rec["pair_raw"] = {
+        "5": [{"a": "半导体", "b": "存储芯片", "corr": 0.91, "label": "强同向"}],
+        "20": [],
+        "60": [{"a": "证券", "b": "保险", "corr": 0.79, "label": "强同向"}],
+    }
     md = formatter.format_daily_report(rec)
-    assert "📅 今日联动" in md
-    assert "🔴 齐涨：" in md and "存储芯片 +3.40%" in md and "半导体 +2.10%" in md
-    assert "🟢 齐跌：" in md and "电力 -1.20%" in md
-
-
-def test_daily_report_today_comovement_missing_data():
-    rec = _rec()
-    rec["sectors"] = []  # 无 latest_change_pct
-    md = formatter.format_daily_report(rec)
-    assert "今日板块涨跌数据缺失" in md
+    assert "近5日联动榜" in md and "半导体 ⟷ 存储芯片  +0.91" in md   # 近期=5日窗
+    assert "联动榜 · 60日" in md and "证券 ⟷ 保险  +0.79" in md       # 结构=60日窗
 
 
 def test_daily_report_no_inverse_fallback():
