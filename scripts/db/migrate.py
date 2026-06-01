@@ -19,7 +19,7 @@ PROJECT_ROOT = SCRIPTS_DIR.parent
 
 # 与 migrate() 中「当前最新」一步一致；新增迁移时递增本常量，并把上一步的
 # set_schema_version(conn, CURRENT_SCHEMA_VERSION) 改为字面量 N（保留历史链）。
-CURRENT_SCHEMA_VERSION = 28
+CURRENT_SCHEMA_VERSION = 29
 
 
 def get_schema_version(conn: sqlite3.Connection) -> int:
@@ -534,6 +534,12 @@ def migrate(conn: sqlite3.Connection) -> None:
         logger.info("Applying schema v28: daily_volume_concentration (成交额板块集中度)")
         init_schema(conn)  # 新表:CREATE IF NOT EXISTS 在老库上建出;新表无需 ALTER 兜底
         set_schema_version(conn, 28)
+        conn.commit()
+
+    if version < 29:
+        logger.info("Applying schema v29: sector_correlation_daily (板块相关性)")
+        init_schema(conn)  # 新表:CREATE IF NOT EXISTS 在老库上建出;新表无需 ALTER 兜底
+        set_schema_version(conn, 29)
         conn.commit()
 
 

@@ -1734,6 +1734,10 @@ def build_parser() -> argparse.ArgumentParser:
     from cli.volume_watch import register_subparser as register_volume_watch_subparser
     register_volume_watch_subparser(subparsers)
 
+    # sector-correlation (板块相关性:同向/逆向/跷跷板)
+    from cli.sector_correlation import register_subparser as register_sector_correlation_subparser
+    register_sector_correlation_subparser(subparsers)
+
     # db
     from db.cli import register_db_subparser
     register_db_subparser(subparsers)
@@ -1783,6 +1787,9 @@ def main():
     elif args.command == "volume-watch":
         from cli import volume_watch as volume_watch_module
         volume_watch_module.handle_command(config, args)
+    elif args.command == "sector-correlation":
+        from cli import sector_correlation as sector_correlation_module
+        sector_correlation_module.handle_command(config, args)
     elif args.command == "db":
         from db.cli import handle_db_command
         handle_db_command(args)

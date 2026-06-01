@@ -35,6 +35,8 @@ make notes-search KEYWORD=主线 FROM=YYYY-MM-DD TO=YYYY-MM-DD
 - `GET /api/review/{date}/prefill`
 - `GET /api/market/{date}`
 
+**定量板块联动证据**（定性推演的客观补充）：可调取 `python3 main.py sector-correlation matrix --date YYYY-MM-DD`（见 [`market-tasks`](../market-tasks/SKILL.md) 的 sector-correlation），拿板块×板块联动/跷跷板、板块×指数同向/逆向（双窗 20/60）。本 skill 的"节奏匹配 / 回流预期 / 连接点"判断可用相关性数据交叉印证，但二者方法论不同（此为定性推演、那为定量统计），不互相替代。
+
 ## 核心流程
 
 1. 先确认分析日期，优先用盘后日期。

@@ -108,6 +108,24 @@ done
 - 行业口径=**申万二级**（联动 `get_sector_rankings`）；「未分类」（次新等）不计入前3行业集中度，报告标 `industry_coverage`。
 - 依赖 env：`TUSHARE_TOKEN`（`scripts/.env`，`index_member_all` 需积分）、`DINGTALK_WEBHOOK_TOKEN/SECRET`（`~/.config/tradeSystem.env`，daily 推送）。
 
+## 板块相关性监控（sector-correlation）
+
+每交易日 21:15 自动跑（launchd `com.alyx.tradesystem.sector-correlation`，错开 volume-watch 21:00），也可手动：
+
+```bash
+python3 main.py sector-correlation daily --date 2026-05-29 --dry-run   # 预览,不落库不推送
+python3 main.py sector-correlation matrix --date 2026-05-29            # 打印完整矩阵(不推送)
+python3 main.py sector-correlation trend --date 2026-05-29 --days 20   # 只读漂移趋势
+```
+
+- **数据源 Tushare 主源**（镜像 `tushare.xyz`，区间拉取）：指数 `index_daily`(`pct_chg`)、申万二级 `sw_daily`(`pct_change`/`amount`)、同花顺概念 `ths_daily`(`pct_change`/`turnover_rate`，**无成交额列**)。akshare/eastmoney 降为 fallback（实测当前不通）。
+- **多日活跃选板块（固定配额）**：行业按**多日平均成交额** Top-`--top-industries`(默认15)、概念按**多日平均换手率** Top-`--top-concepts`(默认10)，各排各的；逐日快照取近 `--activity-days`(默认10) 天。概念名撞行业名自动加 `(概念)` 后缀防丢数据。
+- **多窗 5/20/60**：原始日涨跌幅 Pearson（联动）+ **剔除上证后的残差超额相关**（真跷跷板，逆向以此为准）+ 板块对 4 指数（上证/创业板/沪深300/科创50）的相关与 β。日报头条出**近5日联动榜**（短期共振）+ **结构联动榜 60 日**；反向榜双窗对照取 **5日/60日**（两窗都显著=稳定跷跷板，仅 5 日显著=近期偶然，5 个点相关噪声大需结合 60 日）。20 日窗仍入库 / matrix。
+- 行业口径=申万二级（同 volume-watch）；概念=同花顺，名撞行业时自动加 `(概念)` 后缀防丢数据。
+- `daily`：采集→落 `sector_correlation_daily`（一天一行 JSON 列）→ 渲染→钉钉；`matrix`：读当天(缓存命中纯只读免初始化 Tushare，`--refetch` 强制现算)打印完整矩阵不推送；`trend`：只读最近 N 日漂移。无指数/有效板块<5/各窗有效列<5 → 跳过(不落库不推送)。
+- **守红线**：报告标注"相关为同期统计共现，非因果、非买卖建议"；窗口/样本天数显式展示。
+- 依赖 env 同 volume-watch（`TUSHARE_TOKEN` + 钉钉）。详见 [`sector-projection-analysis`](../sector-projection-analysis/SKILL.md) 的定性推演可调取本定量证据。
+
 ## 核心流程
 
 1. 先确认任务类型、日期和是否属于历史补跑。

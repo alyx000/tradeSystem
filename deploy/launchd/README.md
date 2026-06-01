@@ -172,3 +172,37 @@ rm ~/Library/LaunchAgents/com.alyx.tradesystem.volume-watch.plist
 ```
 
 **时段**：21:00 在 today-post(20:00)与 four-trading-day-review(22:30)之间,无冲突。
+
+## 板块相关性（工作日 21:15）
+
+错开 volume-watch(21:00) 15 分钟,降 Tushare 镜像并发。Tushare 主源拉多日活跃板块(行业按成交额 /
+概念按换手率)+ 4 指数 → 双窗 20/60 原始相关 + 剔大盘超额相关 + β → 落 `sector_correlation_daily`
++ 推钉钉。runner source `scripts/.env`(TUSHARE_TOKEN)+`~/.config/tradeSystem.env`(钉钉);
+非交易日/数据不足任务内自动跳过,不写库不推送。
+
+```bash
+# 1. 包装脚本可执行
+chmod +x deploy/launchd/sector-correlation-runner.sh
+
+# 2. 复制 plist
+cp deploy/launchd/com.alyx.tradesystem.sector-correlation.plist ~/Library/LaunchAgents/
+
+# 3. 加载
+launchctl load ~/Library/LaunchAgents/com.alyx.tradesystem.sector-correlation.plist
+
+# 4. 验证
+launchctl list | grep tradesystem.sector-correlation
+
+# 5. 真触发立即测试（非交易日仅验 launchd 链路 + 凭据注入,无数据则跳过不推送）
+launchctl start com.alyx.tradesystem.sector-correlation
+tail -f /tmp/tradesystem-sector-correlation.log   # 看 [env] 三凭据 =set + 运行结果
+```
+
+卸载：
+
+```bash
+launchctl unload ~/Library/LaunchAgents/com.alyx.tradesystem.sector-correlation.plist
+rm ~/Library/LaunchAgents/com.alyx.tradesystem.sector-correlation.plist
+```
+
+**时段**：21:15 在 volume-watch(21:00)与 four-trading-day-review(22:30)之间,无冲突。

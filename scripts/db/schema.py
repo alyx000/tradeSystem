@@ -395,6 +395,28 @@ CREATE TABLE IF NOT EXISTS daily_volume_concentration (
 """
 
 # ──────────────────────────────────────────────────────────────
+# 5c. 板块相关性（一天一行快照；JSON 列存按窗口键的矩阵；双窗 20/60）
+# ──────────────────────────────────────────────────────────────
+_SQL_SECTOR_CORRELATION_DAILY = """
+CREATE TABLE IF NOT EXISTS sector_correlation_daily (
+    date TEXT PRIMARY KEY CHECK(date GLOB '????-??-??'),
+    windows_json TEXT NOT NULL,
+    top_n INTEGER NOT NULL,
+    activity_days INTEGER,
+    sample_days_json TEXT,
+    base_index TEXT NOT NULL,
+    indices_json TEXT NOT NULL,
+    sectors_json TEXT NOT NULL,
+    sector_index_json TEXT NOT NULL,
+    pair_raw_json TEXT NOT NULL,
+    pair_excess_json TEXT NOT NULL,
+    meta_json TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT
+);
+"""
+
+# ──────────────────────────────────────────────────────────────
 # 6. 八步复盘
 # ──────────────────────────────────────────────────────────────
 _SQL_DAILY_REVIEWS = """
@@ -1109,6 +1131,7 @@ _ALL_TABLE_SQL = [
     _SQL_MACRO_INFO,
     _SQL_DAILY_MARKET,
     _SQL_DAILY_VOLUME_CONCENTRATION,
+    _SQL_SECTOR_CORRELATION_DAILY,
     _SQL_DAILY_REVIEWS,
     _SQL_EMOTION_CYCLE,
     _SQL_MAIN_THEMES,
@@ -1155,7 +1178,7 @@ EXPECTED_TABLES = [
     "calendar_events",
     "holdings", "holding_tasks", "holding_quote_snapshots", "watchlist", "blacklist",
     "industry_info", "macro_info",
-    "daily_market", "daily_volume_concentration", "daily_reviews",
+    "daily_market", "daily_volume_concentration", "sector_correlation_daily", "daily_reviews",
     "emotion_cycle", "main_themes",
     "trades",
     "trade_thesis",
