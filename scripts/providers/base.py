@@ -267,6 +267,13 @@ class DataProvider(ABC):
         """获取全市场当日研报列表"""
         return DataResult(data=None, source=self.name, error="not implemented")
 
+    def get_us_rating_changes(self, tickers: list[str], date_window: tuple[str, str]) -> DataResult:
+        """美股分析师评级变动（yfinance upgrades_downgrades，窗口/方向过滤）。
+
+        date_window: (start, end)，每端可为 'YYYY-MM-DD' 字符串或 datetime.date（闭区间，美东日历）。
+        """
+        return DataResult(data=None, source=self.name, error="not implemented")
+
     # ---- 宏观日历 ----
     def get_macro_calendar(self, date: str) -> DataResult:
         return DataResult(data=None, source=self.name, error="not implemented")

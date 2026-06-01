@@ -117,6 +117,90 @@ def _overnight_from_hist(hist: pd.DataFrame, now_et) -> tuple[float, float, str]
     return close_val, change_pct, as_of
 
 
+# ---- 美股分析师评级变动（yfinance upgrades_downgrades）窗口/方向过滤纯函数 ----
+# 真方向变化的 Action；main=维持 / reit=重申 视为无变动，不算评级变动。
+_US_RATING_DIRECTION_ACTIONS = frozenset({"up", "down", "init", "reinit"})
+# 某标的最新评级事件距窗口末 > 此天数 → 视为"源头永久冻结"（如 META 实测仅到 2024-09-30），
+# 与"窗口内恰无变动"分别打日志，便于精选池体检剔除（见实施计划 H5）。
+_US_RATING_FROZEN_DAYS = 120
+
+
+def _grade_date(idx):
+    """yfinance GradeDate（pandas Timestamp，可能 tz-aware 美东）→ datetime.date。
+
+    tz-aware 先 tz_convert 到美东再取 .date()，杜绝时区错位把昨夜评级算到错误日历日（H2）。
+    """
+    try:
+        ts = pd.Timestamp(idx)
+    except Exception:
+        return None
+    if ts is None or pd.isna(ts):
+        return None
+    if ts.tzinfo is not None:
+        try:
+            ts = ts.tz_convert("America/New_York")
+        except Exception:
+            pass
+    return ts.date()
+
+
+def _to_rating_date(val):
+    """'YYYY-MM-DD' / date / datetime / Timestamp → datetime.date；失败返 None。"""
+    from datetime import date as _date
+    if val is None:
+        return None
+    if isinstance(val, datetime):
+        return val.date()
+    if isinstance(val, _date):
+        return val
+    try:
+        return pd.Timestamp(val).date()
+    except Exception:
+        return None
+
+
+def _filter_us_rating_window(df, window_start, window_end, *, direction_only=True):
+    """从 yfinance upgrades_downgrades 取窗口内 [window_start, window_end] 的评级事件。
+
+    window_start/window_end: datetime.date，闭区间；GradeDate 经 _grade_date tz 归一为美东日历日再比。
+    direction_only=True 只保留 Action∈{up,down,init,reinit}（真方向变化），丢 main/reit。
+    陈旧标的（末行 GradeDate 远早于窗口，如 META 2024）在此被过滤为空——设计内行为。
+    返回 list[dict]：firm/from_grade/to_grade/action/grade_date/current_pt/prior_pt。
+    """
+    if df is None or len(df) == 0:
+        return []
+    out = []
+    for idx, row in df.iterrows():
+        d = _grade_date(idx)
+        if d is None or d < window_start or d > window_end:
+            continue
+        action = str(row.get("Action", "")).strip().lower()
+        if direction_only and action not in _US_RATING_DIRECTION_ACTIONS:
+            continue
+        out.append({
+            "firm": str(row.get("Firm", "")).strip(),
+            "from_grade": str(row.get("FromGrade", "")).strip(),
+            "to_grade": str(row.get("ToGrade", "")).strip(),
+            "action": action,
+            "grade_date": d.strftime("%Y-%m-%d"),
+            # 反驳 codex 阶段1 S-1：currentPriceTarget/priorPriceTarget 确为 yfinance>=1.x
+            # upgrades_downgrades 真实列（实测 yfinance 1.2.0：列=[Firm,ToGrade,FromGrade,Action,
+            # priceTargetAction,currentPriceTarget,priorPriceTarget]，NVDA 最新行 425.0/360.0）。
+            # 旧版 yfinance 仅 4 列才无目标价——本仓锁定 1.x。raw 留存供溯源，渲染层剔除（红线）。
+            "current_pt": _to_float_or_none(row.get("currentPriceTarget")),
+            "prior_pt": _to_float_or_none(row.get("priorPriceTarget")),
+        })
+    return out
+
+
+def _most_recent_grade_date(df):
+    """upgrades_downgrades 最新一行的 GradeDate（date），用于判断标的是否整体冻结。"""
+    if df is None or len(df) == 0:
+        return None
+    dates = [d for d in (_grade_date(i) for i in df.index) if d is not None]
+    return max(dates) if dates else None
+
+
 def _normalize_amount_to_billion(val: Any) -> float:
     parsed = _to_float_or_none(val)
     if parsed is None:
@@ -194,6 +278,7 @@ class AkshareProvider(DataProvider):
             "get_investor_qa",
             "get_research_reports",
             "get_research_report_list",
+            "get_us_rating_changes",
             "get_macro_calendar",
             "get_macro_calendar_range",
             "get_macro_indicators",
@@ -1582,10 +1667,71 @@ class AkshareProvider(DataProvider):
                     "institution": str(row.get("研究机构简称", "")).strip(),
                     "rating": str(row.get("投资评级", "")).strip(),
                     "date": str(row.get("发布日期", ""))[:10],
+                    # v6 扩列（additive，原 5 基础键不变）：源头自带评级方向，直接复用不自算（F6）
+                    "rating_change": str(row.get("评级变化", "")).strip(),
+                    "prev_rating": str(row.get("前一次投资评级", "")).strip(),
+                    # 目标价入 raw 供溯源；渲染层剔除不输出（红线：约束生成不约束取数）
+                    "target_price_low": _to_float_or_none(row.get("目标价格-下限")),
+                    "target_price_high": _to_float_or_none(row.get("目标价格-上限")),
                 })
             return DataResult(data=results, source="akshare:stock_rank_forecast_cninfo")
         except Exception as e:
             return DataResult(data=None, source=self.name, error=str(e))
+
+    def get_us_rating_changes(self, tickers, date_window) -> DataResult:
+        """美股分析师评级变动：yfinance upgrades_downgrades + 窗口/方向过滤（逐只循环）。
+
+        date_window: (start, end)，'YYYY-MM-DD' 或 date，闭区间（美东日历，见 H2）。
+        - 只取真方向变化（Action up/down/init/reinit），维持/重申丢弃（方向稀疏，F7）。
+        - 陈旧陷阱：某标的最新评级远早于窗口（如 META 仅到 2024）→ 窗口过滤为空；
+          距今 > _US_RATING_FROZEN_DAYS 时单独标"疑似冻结"日志（供精选池体检，H5）。
+        - 单 ticker 拉取异常不中断其余（M9）。
+        - target price 入 raw（current_pt/prior_pt）供溯源，渲染层剔除（红线）。
+        """
+        try:
+            import yfinance as yf
+        except ImportError as e:
+            return DataResult(data=None, source=self.name, error=f"yfinance 不可用: {e}")
+        if not date_window or len(date_window) != 2:
+            return DataResult(data=None, source=self.name,
+                              error=f"date_window 需要恰好 2 元素 (start, end)，得 {date_window!r}")
+        win_start = _to_rating_date(date_window[0])
+        win_end = _to_rating_date(date_window[1])
+        if win_start is None or win_end is None:
+            return DataResult(data=None, source=self.name, error=f"date_window 日期非法: {date_window!r}")
+        out: list[dict] = []
+        attempted = 0
+        fetch_failures = 0
+        for t in tickers or []:
+            sym = str(t).strip().upper()
+            if not sym:
+                continue
+            attempted += 1
+            try:
+                ud = yf.Ticker(sym).upgrades_downgrades
+            except Exception as e:
+                fetch_failures += 1
+                logger.warning("get_us_rating_changes %s 拉取失败，跳过: %s", sym, e)
+                continue
+            events = _filter_us_rating_window(ud, win_start, win_end)
+            if not events:
+                recent = _most_recent_grade_date(ud)
+                if recent is not None and (win_end - recent).days > _US_RATING_FROZEN_DAYS:
+                    logger.info(
+                        "get_us_rating_changes %s 疑似冻结（最新评级 %s，距窗口末 %d 天），建议池子体检剔除",
+                        sym, recent, (win_end - recent).days,
+                    )
+                continue
+            for ev in events:
+                ev["ticker"] = sym
+                ev["source_quality"] = "high"
+                out.append(ev)
+        # M-1：全部 ticker 抓取失败（如 yahoo 限流 429）≠「窗口内无变动」，返 error 让下游区分，
+        # 不让"静默空列表"被当成"今日无评级变动"误报。
+        if attempted > 0 and fetch_failures == attempted:
+            return DataResult(data=None, source=self.name,
+                              error=f"全部 {attempted} 只美股评级拉取失败（疑似 yahoo 限流/网络）")
+        return DataResult(data=out, source="yfinance")
 
     # ---- 财报披露计划 ----
 
