@@ -1,7 +1,6 @@
 import type { StatusSignalItem } from './StatusSignalPanel'
 import type {
   BoardCountItem,
-  DailyInfoRow,
   LimitStepRow,
   MarketFullData,
   MarketMoneyflowSummary,
@@ -67,13 +66,17 @@ export function getSectorData(m: MarketSelectorSource, tab: SectorTab): SectorSn
   return extractRows(m[key])
 }
 
-export function getDailyInfoRows(m: MarketSelectorSource): DailyInfoRow[] {
-  return extractRows(m.daily_info)
+// ST/*ST 判定:镜像后端 utils.is_st_stock(去空格大写后前缀匹配),保持 web 与采集端同口径。
+function isStStock(name: string | null | undefined): boolean {
+  if (!name) return false
+  const n = name.replace(/\s+/g, '').toUpperCase()
+  return n.startsWith('ST') || n.startsWith('*ST') || n.startsWith('S*ST') || n.startsWith('SST')
 }
 
 export function getLimitStepRows(m: MarketSelectorSource): LimitStepRow[] {
   const rows = extractRows(m.limit_step)
   return rows
+    .filter((r) => !isStStock(r?.name))   // 剔除 ST 个股:连板数分析与板梯队 ex_st 口径一致
     .slice()
     .sort((a, b) => Number(b?.nums || 0) - Number(a?.nums || 0))
 }

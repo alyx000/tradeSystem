@@ -16,7 +16,6 @@ import StatusSignalPanel from '../components/market/StatusSignalPanel'
 import ThemeRhythmPanel from '../components/market/ThemeRhythmPanel'
 import {
   extractIndex,
-  getDailyInfoRows,
   getEmotionSignals,
   getLimitStepRows,
   getMarketMoneyflowSummary,
@@ -145,7 +144,6 @@ export default function MarketOverview() {
   const sectorData = sortOrder === 'loss' ? rawSectorData.slice().reverse() : rawSectorData
   const visibleSectors = showAllSectors ? sectorData : sectorData.slice(0, 10)
   const activeThemes: MainThemeItem[] = (mainThemes || []).filter((t) => t.status === 'active')
-  const dailyInfoRows = m ? getDailyInfoRows(m) : []
   const strongestSectors = m ? getStrongestSectorRows(m) : []
   const highMarkRows = m ? getLimitStepRows(m) : []
   const thsMoneyflowRows = m ? getSectorMoneyflowRows(m, 'ths') : []
@@ -226,7 +224,6 @@ export default function MarketOverview() {
       <MarketSummaryCards
         market={m}
         marketMoneyflow={marketMoneyflow}
-        dailyInfoRows={dailyInfoRows}
       />
 
       <LimitStatsPanel

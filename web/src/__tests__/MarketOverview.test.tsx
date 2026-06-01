@@ -98,7 +98,7 @@ beforeEach(() => {
 })
 
 describe('MarketOverview', () => {
-  it('renders market status, emotion status, daily_info, limit_step, strongest sectors and dual-source sector moneyflow sections in summary view', async () => {
+  it('renders market status, emotion status, limit_step, strongest sectors and dual-source sector moneyflow sections in summary view', async () => {
     const market: MarketFullData = {
       available: true,
       date: '2026-04-03',
@@ -143,12 +143,6 @@ describe('MarketOverview', () => {
           { net_amount: 2500000000, net_amount_rate: 2.8, buy_elg_amount: 1200000000, buy_lg_amount: 800000000 },
         ],
       },
-      daily_info: {
-        data: [
-          { ts_code: 'SH_MARKET', ts_name: '上海市场', amount: 5234.5, total_mv: 620000, tr: 1.82 },
-          { ts_code: 'SZ_MARKET', ts_name: '深圳市场', amount: 6042.8, total_mv: 580000, tr: 2.16 },
-        ],
-      },
       limit_step: {
         data: [
           { ts_code: '000001.SZ', name: '高标A', nums: '6' },
@@ -172,7 +166,7 @@ describe('MarketOverview', () => {
     renderPage()
 
     await waitFor(() => {
-      expect(screen.getByText('市场交易结构')).toBeInTheDocument()
+      expect(screen.getByText('成交与资金')).toBeInTheDocument()
     })
     expect(screen.getByText('市场状态观察')).toBeInTheDocument()
     expect(screen.getByText('放量')).toBeInTheDocument()
@@ -187,7 +181,6 @@ describe('MarketOverview', () => {
     expect(screen.getByText('大盘资金流向')).toBeInTheDocument()
     expect(screen.getAllByText('+25.00亿').length).toBeGreaterThan(0)
     expect(screen.getByText('+2.80%')).toBeInTheDocument()
-    expect(screen.getByText('上海市场')).toBeInTheDocument()
     expect(screen.getByText('高标明细')).toBeInTheDocument()
     expect(screen.getAllByText('高标A').length).toBeGreaterThan(0)
     expect(screen.getByText('最强板块')).toBeInTheDocument()

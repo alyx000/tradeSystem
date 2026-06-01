@@ -1,5 +1,4 @@
 import type {
-  DailyInfoRow,
   MarketFullData,
   MarketMoneyflowSummary,
 } from '../../lib/types'
@@ -54,14 +53,12 @@ function Ma5wBadge({ label, value }: { label: string; value: boolean | number | 
 export default function MarketSummaryCards({
   market,
   marketMoneyflow,
-  dailyInfoRows,
 }: {
   market: MarketFullData
   marketMoneyflow: MarketMoneyflowSummary | null
-  dailyInfoRows: DailyInfoRow[]
 }) {
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
       <div className="bg-white rounded-lg shadow p-4">
         <h2 className="text-sm font-semibold text-gray-700 mb-3">成交与资金</h2>
         <div className="grid grid-cols-2 gap-4">
@@ -82,31 +79,6 @@ export default function MarketSummaryCards({
           </div>
         ) : (
           <div className="text-sm text-gray-400 py-6 text-center">暂无大盘资金流向</div>
-        )}
-      </div>
-      <div className="bg-white rounded-lg shadow p-4">
-        <h2 className="text-sm font-semibold text-gray-700 mb-3">市场交易结构</h2>
-        {dailyInfoRows.length > 0 ? (
-          <div className="space-y-2">
-            {dailyInfoRows.slice(0, 5).map((row) => (
-              <div key={row.ts_code || row.ts_name} className="flex items-center justify-between gap-3 text-sm border-b border-gray-50 pb-2 last:border-0 last:pb-0">
-                <div className="min-w-0">
-                  <div className="font-medium text-gray-800 truncate">{row.ts_name || row.ts_code || '-'}</div>
-                  <div className="text-xs text-gray-400">
-                    总市值 {row.total_mv != null ? fmtAmount(Number(row.total_mv)) : '-'}
-                  </div>
-                </div>
-                <div className="text-right shrink-0">
-                  <div className="font-semibold text-gray-800">{row.amount != null ? fmtAmount(Number(row.amount)) : '-'}</div>
-                  <div className="text-xs text-gray-400">
-                    换手 {row.tr != null ? `${Number(row.tr).toFixed(2)}%` : '-'}
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div className="text-sm text-gray-400 py-6 text-center">暂无市场结构数据</div>
         )}
       </div>
       <div className="bg-white rounded-lg shadow p-4">

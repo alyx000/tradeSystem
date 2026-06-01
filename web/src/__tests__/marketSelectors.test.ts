@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   getEmotionSignals,
+  getLimitStepRows,
   getMarketMoneyflowSummary,
   getMarketSignals,
   getSectorMoneyflowRows,
@@ -8,6 +9,22 @@ import {
 } from '../components/market/marketSelectors'
 
 describe('marketSelectors', () => {
+  it('getLimitStepRows excludes ST/*ST stocks and sorts by nums desc', () => {
+    const rows = getLimitStepRows({
+      limit_step: {
+        data: [
+          { ts_code: '1', name: '*ST雅博', nums: '6' },
+          { ts_code: '2', name: '粤电力A', nums: '4' },
+          { ts_code: '3', name: 'ST海王', nums: '3' },
+          { ts_code: '4', name: '合锻智能', nums: '4' },
+          { ts_code: '5', name: '深南电A', nums: '2' },
+        ],
+      },
+    })
+    // ST/*ST 全剔除(与板梯队 ex_st 同口径),余下按连板数降序
+    expect(rows.map((r) => r.name)).toEqual(['粤电力A', '合锻智能', '深南电A'])
+  })
+
   it('parses board counts from json object and sorts by board desc', () => {
     const rows = parseBoardCounts(JSON.stringify({ 3: ['A', 'B'], 6: ['C'] }))
 
