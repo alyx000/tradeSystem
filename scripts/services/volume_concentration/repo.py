@@ -86,3 +86,15 @@ def get_recent_concentration(
         (end_date, days),
     ).fetchall()
     return [_row_to_record(r) for r in reversed(rows)]
+
+
+def get_latest_concentration(conn: sqlite3.Connection, days: int) -> list[dict]:
+    """取库内**最新 N 天**快照,**按日期正序**返回(供趋势图,不依赖服务端 today/非交易日)。
+
+    镜像 queries.get_daily_market_history:ORDER BY date DESC LIMIT 取最近 N 条,再 reverse。
+    """
+    rows = conn.execute(
+        "SELECT * FROM daily_volume_concentration ORDER BY date DESC LIMIT ?",
+        (days,),
+    ).fetchall()
+    return [_row_to_record(r) for r in reversed(rows)]

@@ -1888,6 +1888,76 @@ class TestPlanningAndKnowledgeAPI:
         assert len(data) >= 2
         assert "raw_data" not in data[0]
 
+    def _seed_concentration(self, db_path, days):
+        """days=[(date, total, [(行业,share)], [stocks])]。"""
+        from services.volume_concentration import repo
+        conn = get_connection(db_path)
+        for d, total, sectors, stocks in days:
+            repo.save_concentration(conn, {
+                "date": d, "top_n": 20, "total_amount_billion": total,
+                "market_total_billion": 40000.0, "stocks": stocks,
+                "sector_summary": [{"industry": i, "count": 1, "amount_billion": total * sh,
+                                    "share_in_top_n": sh, "codes": []} for i, sh in sectors],
+                "source": {"industry_coverage": 1.0},
+            })
+        conn.commit()
+        conn.close()
+
+    def test_concentration_history_series_and_snapshot(self, client, db_path):
+        self._seed_concentration(db_path, [
+            ("2026-05-28", 4000.0, [("半导体", 0.32), ("通信", 0.25), ("电池", 0.17), ("未分类", 0.26)],
+             [{"code": "A", "name": "甲", "industry": "半导体", "change_pct": 1.0}]),
+            ("2026-05-29", 3680.0, [("半导体", 0.30), ("通信", 0.25), ("电池", 0.18), ("未分类", 0.27)],
+             [{"code": "B", "name": "乙", "industry": "通信", "change_pct": -3.5}]),
+        ])
+        r = client.get("/api/market/concentration/history", params={"days": 30})
+        assert r.status_code == 200
+        p = r.json()
+        assert [s["date"] for s in p["series"]] == ["2026-05-28", "2026-05-29"]
+        assert p["series"][1]["cr3"] == 73.0
+        assert p["series"][1]["market_share_pct"] == 9.2
+        assert "未分类" not in p["sector_keys"]
+        assert p["snapshot"]["date"] == "2026-05-29"
+        assert p["snapshot"]["rotation"]["new"] == [{"name": "乙", "industry": "通信", "change_pct": -3.5}]
+        assert p["snapshot"]["rotation"]["dropped"] == [{"name": "甲"}]
+
+    def test_concentration_history_empty(self, client):
+        r = client.get("/api/market/concentration/history")
+        assert r.status_code == 200
+        p = r.json()
+        assert p["series"] == [] and p["sector_keys"] == [] and p["snapshot"] is None
+
+    def test_concentration_history_caps_days(self, client):
+        """days 超上限 → 钳到 120(requested_days 反映生效窗口)。"""
+        r = client.get("/api/market/concentration/history", params={"days": 500})
+        assert r.status_code == 200
+        assert r.json()["requested_days"] == 120
+
+    def test_concentration_history_negative_days_clamped(self, client, db_path):
+        """days<=0 → 钳到 1(防 SQLite LIMIT 负数返全表),不 500。"""
+        self._seed_concentration(db_path, [
+            ("2026-05-28", 1000.0, [("电池", 1.0)], []),
+            ("2026-05-29", 1100.0, [("电池", 1.0)], []),
+        ])
+        r = client.get("/api/market/concentration/history", params={"days": -5})
+        assert r.status_code == 200
+        p = r.json()
+        assert p["requested_days"] == 1
+        assert len(p["series"]) == 1   # 只取最新 1 日,非全表
+
+    def test_concentration_history_sanitizes_non_finite_change_pct(self, client, db_path):
+        """脏数据 change_pct=NaN → 端点清洗为 null,不 500(与其它 market 端点一致)。"""
+        self._seed_concentration(db_path, [
+            ("2026-05-28", 1000.0, [("电池", 1.0)],
+             [{"code": "A", "name": "甲", "industry": "电池", "change_pct": 1.0}]),
+            ("2026-05-29", 1000.0, [("通信", 1.0)],
+             [{"code": "B", "name": "乙", "industry": "通信", "change_pct": float("nan")}]),
+        ])
+        r = client.get("/api/market/concentration/history", params={"days": 30})
+        assert r.status_code == 200   # 不因 NaN 序列化 500
+        new = r.json()["snapshot"]["rotation"]["new"]
+        assert new == [{"name": "乙", "industry": "通信", "change_pct": None}]   # NaN→null
+
     def test_post_market_envelope_from_db(self, client, db_path):
         env = {
             "date": "2026-05-10",

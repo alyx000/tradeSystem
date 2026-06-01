@@ -130,6 +130,24 @@ def test_get_recent_concentration_empty():
     assert repo.get_recent_concentration(conn, "2026-05-29", days=30) == []
 
 
+def test_get_latest_concentration_returns_latest_n_chronological():
+    """无日期参数:取库内最新 N 天,按日期正序(供趋势图,免墙钟/非交易日依赖)。"""
+    conn = _conn()
+    for d, total in [("2026-05-26", 1.0), ("2026-05-27", 2.0), ("2026-05-28", 3.0), ("2026-05-29", 4.0)]:
+        repo.save_concentration(conn, {
+            "date": d, "top_n": 20, "total_amount_billion": total,
+            "stocks": [], "sector_summary": [], "source": None,
+        })
+
+    rows = repo.get_latest_concentration(conn, days=2)
+    assert [r["date"] for r in rows] == ["2026-05-28", "2026-05-29"]  # 最新2天,正序
+
+
+def test_get_latest_concentration_empty():
+    conn = _conn()
+    assert repo.get_latest_concentration(conn, days=30) == []
+
+
 def test_migrate_v28_creates_table_on_pre_v28_db():
     """模拟 pre-v28 老库(有表删掉 + 版本回退 27)→ migrate 应重建表并升到 v28。"""
     conn = sqlite3.connect(":memory:")

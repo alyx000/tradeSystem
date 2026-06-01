@@ -15,6 +15,7 @@ from api.deps import get_db_conn
 from api.market_enrich import enrich_daily_market_row
 from db import queries as Q
 from services.holding_signals import build_holding_signals
+from services.volume_concentration import service as vc_service
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -552,6 +553,15 @@ def get_research_coverage(
 def get_market_history(days: int = 20,
                        conn: sqlite3.Connection = Depends(get_db_conn)):
     return Q.get_daily_market_history(conn, days=min(days, 120))
+
+
+@router.get("/market/concentration/history")
+def get_concentration_history(days: int = 30,
+                              conn: sqlite3.Connection = Depends(get_db_conn)):
+    """成交额 Top20 板块集中度趋势(供盘面概览图表):库内最新 N 日的 CR3 / 头部成交额 /
+    占两市 / 板块占比序列 + 最新日连续在榜/异动快照。无数据返空壳。"""
+    payload = vc_service.build_trend_payload(conn, days=max(1, min(days, 120)))  # 钳非负:防 days<=0 致 LIMIT 负数返全表
+    return _sanitize_non_finite(payload)  # 脏数据 change_pct=NaN/Inf 透传会致 JSON 序列化 500(与其它 market 端点一致)
 
 
 @router.get("/post-market/{date}")
