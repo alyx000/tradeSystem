@@ -55,10 +55,11 @@ def test_daily_report_single_window_no_dual():
     """单窗：反向榜退单值渲染，不出现"双窗对照"与 短/长 对照（review L1）。"""
     rec = _rec()
     rec["windows"] = [60]
+    rec["sample_days"] = {"60": 58}  # 与单窗一致
     rec["pair_excess"] = {"60": [{"a": "算力", "b": "黄金", "corr": -0.45, "label": "强逆向"}]}
     md = formatter.format_daily_report(rec)
     assert "双窗对照" not in md
-    assert "60日 -0.45" in md and "/ 60日" not in md  # 无自我对照
+    assert "算力 ⟷ 黄金  60日 -0.45" in md  # 单值渲染,无 短/长 对照
     assert "[稳定]" not in md and "[近期]" not in md
 
 

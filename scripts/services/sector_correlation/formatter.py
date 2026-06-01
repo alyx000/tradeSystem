@@ -5,7 +5,8 @@ matrix：打印更全的逐窗矩阵（命令行细看）。trend：跨日漂移
 """
 from __future__ import annotations
 
-# 超额强逆向阈值（与 analyzer 一致）：判定双窗"稳定跷跷板"
+# 超额阈值（与 analyzer 一致）：弱逆向=反向榜列入门槛，强逆向=双窗"稳定跷跷板"判定
+_EXCESS_WEAK_INV = -0.2
 _EXCESS_STRONG_INV = -0.4
 
 
@@ -13,6 +14,13 @@ def _sign(v) -> str:
     if v is None:
         return "—"
     return f"+{v:.2f}" if v >= 0 else f"{v:.2f}"
+
+
+def _sample_str(sample: dict) -> str:
+    """{'20':20,'60':58} → '20日窗20 / 60日窗58'（避免 dict repr 漏进报告）。"""
+    if not sample:
+        return "—"
+    return " / ".join(f"{w}日窗{n if n is not None else '—'}" for w, n in sample.items())
 
 
 def _primary_window(record: dict) -> int:
@@ -37,7 +45,7 @@ def format_daily_report(record: dict, top_k: int = 8) -> str:
 
     L.append(f"## 板块相关性 · {date}")
     L.append(
-        f"- 窗口 {windows} | 样本 {sample} 日 | 板块 {record.get('top_n')} 个 "
+        f"- 窗口 {windows} | 样本 {_sample_str(sample)} 天 | 板块 {record.get('top_n')} 个 "
         f"| 对标 {len(record.get('indices', []))} 指数（基准 {base}）"
     )
     L.append("")
@@ -75,9 +83,11 @@ def format_daily_report(record: dict, top_k: int = 8) -> str:
     excess_pw = (record.get("pair_excess") or {}).get(str(pw), [])
     excess_short = _pair_lookup((record.get("pair_excess") or {}).get(str(short_w), [])) if dual else {}
     listed = 0
-    for p in excess_pw[:top_k] if excess_pw else []:
-        if p["corr"] is None or p["corr"] >= 0:
-            continue  # 反向榜只列负相关
+    for p in excess_pw if excess_pw else []:
+        if listed >= top_k:
+            break
+        if p["corr"] is None or p["corr"] > _EXCESS_WEAK_INV:
+            continue  # 只列达到弱逆向(≤-0.2)的对，过滤近零噪声
         if dual:
             sv = excess_short.get(_pair_key(p))
             both = sv is not None and sv <= _EXCESS_STRONG_INV and p["corr"] <= _EXCESS_STRONG_INV
@@ -90,7 +100,7 @@ def format_daily_report(record: dict, top_k: int = 8) -> str:
         L.append("- （无显著反向对）")
     L.append("")
 
-    L.append(f"> 窗口 {windows} 日、样本 {sample} 日；超额=剔除 {base} 后的残差相关。")
+    L.append(f"> 窗口 {windows} 日、样本 {_sample_str(sample)} 天；超额=剔除 {base} 后的残差相关。")
     L.append("> 相关为同期统计共现，**非因果、非买卖建议**（仅供复盘参考）。")
     return "\n".join(L)
 

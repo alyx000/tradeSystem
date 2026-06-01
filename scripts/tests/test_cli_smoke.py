@@ -265,6 +265,19 @@ ARCHITECTURE_COMMANDS = [
     ["volume-watch", "trend"],
     ["volume-watch", "trend", "--days", "30"],
     ["volume-watch", "trend", "--date", "2026-05-29", "--days", "10"],
+    # sector-correlation (板块相关性:同向/逆向/跷跷板)
+    ["sector-correlation", "daily"],
+    ["sector-correlation", "daily", "--date", "2026-05-29"],
+    ["sector-correlation", "daily", "--windows", "20,60", "--top-industries", "15", "--top-concepts", "10"],
+    ["sector-correlation", "daily", "--activity-days", "10"],
+    ["sector-correlation", "daily", "--indices", "000001.SH,399006.SZ,000300.SH,000688.SH"],
+    ["sector-correlation", "daily", "--dry-run"],
+    ["sector-correlation", "daily", "--no-concept"],
+    ["sector-correlation", "matrix"],
+    ["sector-correlation", "matrix", "--date", "2026-05-29", "--windows", "20,60"],
+    ["sector-correlation", "matrix", "--refetch", "--no-concept"],
+    ["sector-correlation", "trend"],
+    ["sector-correlation", "trend", "--date", "2026-05-29", "--days", "20"],
 ]
 
 
