@@ -1738,6 +1738,10 @@ def build_parser() -> argparse.ArgumentParser:
     from cli.sector_correlation import register_subparser as register_sector_correlation_subparser
     register_sector_correlation_subparser(subparsers)
 
+    # research-digest (每日研报速读:A股研报评级 + 美股 yfinance 评级 → Top3)
+    from cli.research_digest import register_subparser as register_research_digest_subparser
+    register_research_digest_subparser(subparsers)
+
     # db
     from db.cli import register_db_subparser
     register_db_subparser(subparsers)
@@ -1790,6 +1794,9 @@ def main():
     elif args.command == "sector-correlation":
         from cli import sector_correlation as sector_correlation_module
         sector_correlation_module.handle_command(config, args)
+    elif args.command == "research-digest":
+        from cli import research_digest as research_digest_module
+        research_digest_module.handle_command(config, args)
     elif args.command == "db":
         from db.cli import handle_db_command
         handle_db_command(args)

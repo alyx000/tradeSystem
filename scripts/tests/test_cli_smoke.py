@@ -278,6 +278,12 @@ ARCHITECTURE_COMMANDS = [
     ["sector-correlation", "matrix", "--refetch", "--no-concept"],
     ["sector-correlation", "trend"],
     ["sector-correlation", "trend", "--date", "2026-05-29", "--days", "20"],
+    # research-digest (每日研报速读:A股研报评级 + 美股 yfinance 评级 → Top3)
+    ["research-digest", "daily"],
+    ["research-digest", "daily", "--date", "2026-05-29"],
+    ["research-digest", "daily", "--dry-run"],
+    ["research-digest", "daily", "--no-llm"],
+    ["research-digest", "daily", "--date", "2026-05-29", "--dry-run", "--no-llm"],
 ]
 
 
