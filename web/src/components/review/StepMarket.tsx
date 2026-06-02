@@ -60,6 +60,23 @@ const RANGE_OPTIONS = [
   { label: '近30日', days: 30 },
 ] as const
 
+// 评级方向徽章（A股色：红=利好/上调，绿=利空/下调）。无 icon 的「维持」走中性灰。
+const DIRECTION_BADGE: Record<string, { icon: string; cls: string }> = {
+  首次覆盖: { icon: '🆕', cls: 'bg-amber-100 text-amber-700' },
+  上调: { icon: '📈', cls: 'bg-red-100 text-red-600' },
+  下调: { icon: '📉', cls: 'bg-green-100 text-green-600' },
+  维持: { icon: '', cls: 'bg-gray-100 text-gray-500' },
+}
+
+function CoveragePill({ row }: { row: ResearchCoverageRow }) {
+  return (
+    <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-blue-50 text-xs text-blue-700">
+      <span className="font-medium">{row.stock_name || row.stock_code}</span>
+      <span className="text-blue-400">{row.report_count}篇</span>
+    </span>
+  )
+}
+
 function ResearchCoveragePanel({ todayItems }: { todayItems?: ResearchCoverageRow[] }) {
   const [rangeDays, setRangeDays] = useState(0)
   const [rangeData, setRangeData] = useState<{ covered_days: number; items: ResearchCoverageRow[] } | null>(null)
@@ -104,14 +121,46 @@ function ResearchCoveragePanel({ todayItems }: { todayItems?: ResearchCoverageRo
       {loading ? (
         <div className="text-xs text-gray-400 py-2">加载中...</div>
       ) : items.length ? (
-        <div className="flex flex-wrap gap-2">
-          {items.map((row) => (
-            <span key={row.stock_code} className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-blue-50 text-xs text-blue-700">
-              <span className="font-medium">{row.stock_name || row.stock_code}</span>
-              <span className="text-blue-400">{row.report_count}篇</span>
-            </span>
-          ))}
-        </div>
+        (() => {
+          // 仅「当日」tab 富化：展开项（评级方向徽章+观点）排前，长尾仍是紧凑药丸。
+          // 范围 tab / 老数据：无 expanded 项 → 全部走药丸（向后兼容）。
+          const expanded = items.filter((r) => r.expanded)
+          const pills = items.filter((r) => !r.expanded)
+          return (
+            <div className="space-y-2">
+              {expanded.length > 0 && (
+                <div className="space-y-1.5">
+                  {expanded.map((row) => {
+                    const badge = row.rating_direction ? DIRECTION_BADGE[row.rating_direction] : undefined
+                    return (
+                      <div key={row.stock_code} className="flex flex-col gap-0.5">
+                        <div className="flex items-center gap-2 text-xs">
+                          {row.rating_direction && (
+                            <span className={`px-1.5 py-0.5 rounded ${badge?.cls ?? 'bg-gray-100 text-gray-500'}`}>
+                              {badge?.icon ? `${badge.icon} ` : ''}{row.rating_direction}
+                            </span>
+                          )}
+                          <span className="font-medium text-gray-700">{row.stock_name || row.stock_code}</span>
+                          <span className="text-gray-400">{row.report_count}篇</span>
+                        </div>
+                        {row.viewpoint && (
+                          <div className="text-xs text-gray-500 pl-1 leading-snug">· {row.viewpoint}</div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+              {pills.length > 0 && (
+                <div className="flex flex-wrap gap-2">
+                  {pills.map((row) => (
+                    <CoveragePill key={row.stock_code} row={row} />
+                  ))}
+                </div>
+              )}
+            </div>
+          )
+        })()
       ) : (
         <div className="text-xs text-gray-400 py-2">暂无数据</div>
       )}

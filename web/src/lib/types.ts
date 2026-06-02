@@ -842,6 +842,11 @@ export interface ResearchCoverageRow {
   stock_code: string
   stock_name: string
   report_count: number
+  // 「当日」面板对高信号 Top 标的的富化字段（后端 build_coverage_panel 产出，全 optional）。
+  // 老数据 / 范围 tab 只有上面 3 个基础键 → 前端降级为纯药丸。
+  expanded?: boolean
+  rating_direction?: string  // 首次覆盖 / 上调 / 下调 / 维持
+  viewpoint?: string         // 研报标题（后端已过红线）
 }
 
 export interface ReviewMarketSignals {

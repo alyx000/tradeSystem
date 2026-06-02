@@ -188,4 +188,38 @@ describe('StepMarket', () => {
       node: { current: '突破前高' },
     })
   })
+
+  function withCoverage(rows: NonNullable<NonNullable<ReviewPrefillData['review_signals']>['market']>['research_coverage_top']): ReviewPrefillData {
+    return {
+      ...prefill,
+      review_signals: {
+        ...prefill.review_signals!,
+        market: { ...prefill.review_signals!.market!, research_coverage_top: rows },
+      },
+    }
+  }
+
+  it('renders expanded research coverage rows with direction badge and viewpoint', () => {
+    renderStep({}, withCoverage([
+      { stock_code: '300999', stock_name: '新覆盖股', report_count: 1, expanded: true, rating_direction: '首次覆盖', viewpoint: '再融资落地，业务全面高增' },
+      { stock_code: '000001', stock_name: '平安银行', report_count: 2 },
+    ]))
+    expect(screen.getByText('研报覆盖排行')).toBeInTheDocument()
+    // 展开项：方向徽章 + 观点标题
+    expect(screen.getByText(/首次覆盖/)).toBeInTheDocument()
+    expect(screen.getByText(/再融资落地/)).toBeInTheDocument()
+    // 长尾药丸：名称 + 篇数
+    expect(screen.getByText('平安银行')).toBeInTheDocument()
+  })
+
+  it('degrades old coverage rows (only base fields) to plain pills', () => {
+    renderStep({}, withCoverage([
+      { stock_code: '000001', stock_name: '平安银行', report_count: 2 },
+      { stock_code: '000002', stock_name: '万科A', report_count: 1 },
+    ]))
+    expect(screen.getByText('平安银行')).toBeInTheDocument()
+    expect(screen.getByText('万科A')).toBeInTheDocument()
+    // 无富化字段 → 不出现徽章/观点结构
+    expect(screen.queryByText('首次覆盖')).not.toBeInTheDocument()
+  })
 })
