@@ -99,3 +99,14 @@ def test_collect_is_readonly(db_path):
     collector.collect(db_path, "2026-05-31", "2026-06-02")
     after = sqlite3.connect(db_path).execute("PRAGMA user_version").fetchone()[0]
     assert before == after
+
+
+def test_ro_connect_rejects_writes(db_path):
+    # 强化只读门禁：直接证明 _ro_connect 的连接拒绝任何写（比 user_version 比对更强，codex 中项）
+    import sqlite3
+    conn = collector._ro_connect(db_path)
+    try:
+        with pytest.raises(sqlite3.OperationalError):
+            conn.execute("UPDATE trading_cognitions SET title = 'x'")
+    finally:
+        conn.close()

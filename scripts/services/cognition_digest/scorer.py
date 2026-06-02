@@ -28,15 +28,20 @@ class ScoredCognition:
 
 
 def _distinct_teachers(instances: list[dict]) -> int:
-    ids: set = set()
-    names: set = set()
+    # 同一老师可能既有 teacher_id 实例、又有仅 teacher_name 的历史实例 → 必须按 name 归并，
+    # 避免重复计数抬高 consensus（codex 中项：成功但产出错数据）。
+    id_names: dict = {}     # teacher_id -> 该 id 实例携带的 name（可能为 None）
+    name_only: set = set()  # 仅有 name、无 id 的实例
     for it in instances:
         tid = it.get("teacher_id")
+        name = it.get("teacher_name")
         if tid is not None:
-            ids.add(tid)
-        elif it.get("teacher_name"):
-            names.add(it["teacher_name"])
-    return len(ids) + len(names)
+            id_names[tid] = name
+        elif name:
+            name_only.add(name)
+    # 排除已被某个 id 实例同名覆盖的 name-only 老师
+    covered = {n for n in id_names.values() if n}
+    return len(id_names) + len(name_only - covered)
 
 
 def _recency_decay(instances: list[dict], anchor: str, lookback_days: int) -> float:

@@ -73,6 +73,18 @@ def test_score_consensus_by_name_fallback():
     assert out[0].consensus == 2  # 沈纯 / 李四 去重
 
 
+def test_score_consensus_mixed_id_and_name_no_double_count():
+    # 同一老师既有 id 实例又有仅 name 实例 → 按 name 归并，不重复计数（codex 中项回归）
+    insts = [
+        {"observed_date": "2026-06-01", "teacher_id": 3, "teacher_name": "沈纯"},
+        {"observed_date": "2026-06-01", "teacher_id": None, "teacher_name": "沈纯"},  # 同一老师
+        {"observed_date": "2026-06-01", "teacher_id": None, "teacher_name": "李四"},  # 另一老师
+    ]
+    out = scorer.score_activities([_act("c1", instances=insts)], anchor="2026-06-02",
+                                  start="2026-05-31", lookback_days=3, top_n=5)
+    assert out[0].consensus == 2  # 沈纯(id=3) + 李四(name) = 2，不是 3
+
+
 def test_score_is_new_boundary_equal_start_and_anchor():
     # created_at 日期恰好 == start 或 == anchor 都算 is_new（闭区间端点）
     at_start = _act("s", instances=[_inst("2026-06-01", 1)], created_at="2026-05-31 00:00:00")
