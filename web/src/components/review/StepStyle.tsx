@@ -1,5 +1,6 @@
 import { type StepProps, Section, Row, PrefillBanner, Metric, SelectField, NumberField, TextField, TextareaField } from './widgets'
 import CognitionPanel from './CognitionPanel'
+import StylePremiumTrendPanel from './StylePremiumTrendPanel'
 import { get, set } from './formState'
 import type { ReviewStyleFactors, ReviewStepValue, StyleFactorBoardPreference, StyleFactorCapPreference, StyleFactorPremiumSnapshotItem, StyleFactorPremiumTrend } from '../../lib/types'
 
@@ -182,7 +183,14 @@ export default function StepStyle({ data, onChange, prefill }: StepProps) {
             <div className="mt-2 flex items-center gap-4 text-xs text-gray-600">
               <span>溢价趋势：<strong>{premTrend.direction}</strong></span>
               {Array.isArray(premTrend.first_board_median_5d) && premTrend.first_board_median_5d.length > 0 && (
-                <span>首板5日中位：{premTrend.first_board_median_5d.join(' → ')}</span>
+                <span>首板5日中位（旧→新）：{
+                  // analyzer 输出 most-recent-first，展示时反转为旧→新，并前缀实现日(MM-DD)修正箭头方向误导
+                  premTrend.first_board_median_5d
+                    .map((v, i) => ({ v, d: premTrend.dates?.[i] }))
+                    .reverse()
+                    .map(({ v, d }) => (d ? `${String(d).slice(5)} ${v}` : `${v}`))
+                    .join(' → ')
+                }</span>
               )}
             </div>
           )}
@@ -203,6 +211,9 @@ export default function StepStyle({ data, onChange, prefill }: StepProps) {
           </div>
         </PrefillBanner>
       )}
+
+      {/* 各风格赚钱效应趋势图（透出到复盘「风格」页） */}
+      <StylePremiumTrendPanel date={m?.date ?? prefill?.date} />
 
       <Section title="当前市场审美偏好">
         <Row cols={3}>
