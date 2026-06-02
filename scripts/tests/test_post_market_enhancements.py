@@ -796,7 +796,10 @@ class TestPostMarketReport:
         assert "大盘资金流向" in md
         assert "行业资金流入前列" in md
         assert "概念板块资金流入前列" in md
-        assert "交易所市场统计摘录" in md
+        # 瘦身：删除次要表（资金撤离 / 交易所市场统计摘录），减轻钉钉渲染负担
+        assert "行业资金撤离前列" not in md
+        assert "概念板块资金撤离前列" not in md
+        assert "交易所市场统计摘录" not in md
 
     def test_report_renders_etf_flow(self):
         """ETF 净申购在情绪与资金增强章内渲染，净申购/净赎回符号正确"""
@@ -1854,3 +1857,362 @@ class TestIndustryRankingReport:
             raw = {"date": "2026-03-28", "limit_up": {"count": 5, "industry_ranking": []}}
             md, _ = gen.generate_post_market("2026-03-28", raw)
         assert not [l for l in md.splitlines() if "行业分布" in l]
+
+
+# =====================================================================
+# T14. 盘后报告瘦身（钉钉单条消息渲染减负）
+#   背景：单条 markdown 376 行 / 154 表格行在钉钉客户端渲染卡顿，
+#   通过删次要表、收紧行数上限、删超宽列把单条压到约一半体量。
+#   仅作用于盘后；盘前简报 _render_stock_info_section(compact=False) 不变。
+# =====================================================================
+
+def _render_p0(raw: dict) -> str:
+    from generators.report import _render_p0_market_enhancements
+    lines: list[str] = []
+    _render_p0_market_enhancements(lines, raw, 4)
+    return "\n".join(lines)
+
+
+class TestPostMarketSlimming:
+    def test_industry_inflow_capped_at_5(self):
+        """行业资金流入只取净额前 5（原前 8）。"""
+        raw = {"sector_moneyflow_ths": {"data": [
+            {"name": f"行业{i}", "net_amount_yi": 100.0 - i, "pct_change": 1.0, "lead_stock": "X"}
+            for i in range(8)
+        ]}}
+        md = _render_p0(raw)
+        assert "行业资金流入前列" in md
+        assert "行业4" in md       # 前 5 名（行业0~4）保留
+        assert "行业5" not in md   # 第 6 名起被裁
+        # 撤离表删除后，低净额板块不再以任何形式出现
+        assert "行业资金撤离前列" not in md
+
+    def test_concept_inflow_capped_at_5_and_withdrawal_removed(self):
+        raw = {"concept_moneyflow_ths": {"data": [
+            {"name": f"概念{i}", "net_amount_yi": 100.0 - i, "pct_change": 1.0, "lead_stock": "X"}
+            for i in range(8)
+        ]}}
+        md = _render_p0(raw)
+        assert "概念板块资金流入前列" in md
+        assert "概念4" in md
+        assert "概念5" not in md
+        assert "概念板块资金撤离前列" not in md
+
+    def test_strongest_sectors_capped_at_5(self):
+        raw = {"limit_cpt_list": {"data": [
+            {"rank": i + 1, "name": f"强板块{i}", "up_nums": 10, "cons_nums": 3,
+             "pct_chg": 3.0, "up_stat": "5天4板"}
+            for i in range(8)
+        ]}}
+        md = _render_p0(raw)
+        assert "最强板块" in md
+        assert "强板块4" in md
+        assert "强板块5" not in md
+
+    def test_etf_capped_at_8(self):
+        raw = {"etf_flow": [
+            {"code": f"5100{i:02d}", "name": f"ETF{i}",
+             "shares_change_billion": 100.0 - i, "total_shares_billion": 50.0}
+            for i in range(12)
+        ]}
+        md = _render_p0(raw)
+        assert "ETF 净申购" in md
+        assert "ETF7" in md       # 按 |变动| 降序前 8（ETF0~7）
+        assert "ETF8" not in md
+
+    def test_exchange_stats_table_removed(self):
+        """交易所市场统计摘录整表删除。"""
+        raw = {"daily_info": {"data": [
+            {"market": f"板块{i}", "amount": 1000.0, "vol": 1000} for i in range(5)
+        ]}}
+        md = _render_p0(raw)
+        assert "交易所市场统计摘录" not in md
+        # daily_info 已从 has_any 移除：仅有该数据时不应再生成空的「情绪与资金增强」章节
+        assert "情绪与资金增强" not in md
+
+    def test_sector_rhythm_drops_signal_column_and_caps_rows(self):
+        """板块节奏表删除超宽「关键信号」列，且每类最多 8 行。"""
+        from generators.report import _render_sector_rhythm
+        lines: list[str] = []
+        raw = {"sector_rhythm_industry": [
+            {"name": f"节奏{i}", "rank_today": i + 1, "change_today": 2.0,
+             "consecutive_in_top30": 3, "cumulative_pct_5d": 5.0,
+             "phase": "发酵", "confidence": "中", "evidence": [f"独特证据{i}"]}
+            for i in range(12)
+        ]}
+        _render_sector_rhythm(lines, raw, 9)
+        md = "\n".join(lines)
+        assert "板块节奏分析" in md
+        assert "关键信号" not in md           # 超宽长文本列删除
+        assert "独特证据0" not in md          # evidence 不再渲染
+        assert "节奏7" in md                  # 前 8 行（节奏0~7）保留
+        assert "节奏8" not in md              # 第 9 行起被裁
+
+    def test_stock_info_compact_trims_counts_and_answer(self):
+        """compact=True：互动易仅 1 条且答案截至 80 字，研报/新闻各最多 2 条。"""
+        from generators.report import _render_stock_info_section
+        info = {"000001.SZ": {
+            "name": "测试股",
+            "limit_prices": {"up_limit": 11.0, "down_limit": 9.0, "pre_close": 10.0},
+            "investor_qa": [{"question": f"问题{i}", "answer": "答" * 200} for i in range(3)],
+            "research_reports": [{"institution": f"机构{i}", "rating": "买入", "date": "20260328"} for i in range(3)],
+            "news": [{"title": f"新闻{i}", "time": "10:00"} for i in range(3)],
+        }}
+        lines: list[str] = []
+        _render_stock_info_section(lines, info, compact=True)
+        md = "\n".join(lines)
+        assert "盘前边界" not in md                       # 盘前导向噪音，盘后跳过
+        assert "问题0" in md and "问题1" not in md       # 互动易仅 1 条
+        assert "答" * 80 in md and "答" * 100 not in md   # 答案截至 80 字
+        assert "机构1" in md and "机构2" not in md        # 研报 2 条
+        assert "新闻1" in md and "新闻2" not in md        # 新闻 2 条
+
+    def test_stock_info_default_unchanged_for_premarket(self):
+        """compact 默认 False：盘前简报渲染条数/截断长度与改动前一致（3/3/3 + 150 字）。"""
+        from generators.report import _render_stock_info_section
+        info = {"000001.SZ": {
+            "name": "测试股",
+            "limit_prices": {"up_limit": 11.0, "down_limit": 9.0, "pre_close": 10.0},
+            "investor_qa": [{"question": f"问题{i}", "answer": "答" * 200} for i in range(3)],
+            "research_reports": [{"institution": f"机构{i}", "rating": "买入", "date": "20260328"} for i in range(3)],
+            "news": [{"title": f"新闻{i}", "time": "10:00"} for i in range(3)],
+        }}
+        lines: list[str] = []
+        _render_stock_info_section(lines, info)   # 不传 compact → 默认 False
+        md = "\n".join(lines)
+        assert "盘前边界" in md                            # 盘前简报仍渲染盘前边界
+        assert "问题2" in md                              # 互动易 3 条
+        assert "答" * 150 in md and "答" * 151 not in md  # 答案截至 150 字
+        assert "机构2" in md                              # 研报 3 条
+        assert "新闻2" in md                              # 新闻 3 条
+
+    def test_block_trade_capped_at_5(self):
+        """大宗交易按成交额只取前 5（原前 10）。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            gen = ReportGenerator()
+            gen.daily_dir = Path(tmp) / "daily"
+            raw = {
+                "date": "2026-03-28",
+                "block_trade": {"data": [
+                    {"code": f"00000{i}.SZ", "name": f"大宗{i}", "price": 10.0,
+                     "amount": (100 - i) * 1e4, "buyer": "机构专用", "seller": "营业部"}
+                    for i in range(8)
+                ]},
+            }
+            md, _ = gen.generate_post_market("2026-03-28", raw)
+        assert "大宗交易" in md
+        assert "大宗4" in md       # 成交额前 5（大宗0~4）保留
+        assert "大宗5" not in md   # 第 6 名起被裁
+
+    def test_industry_gainers_capped_at_5(self):
+        """板块排名「行业涨幅」只取前 5（原前 10），标题同步改为前5。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            gen = ReportGenerator()
+            gen.daily_dir = Path(tmp) / "daily"
+            raw = {
+                "date": "2026-03-28",
+                "sector_industry": {"data": [
+                    {"name": f"行业{i}", "change_pct": 9.0 - i, "volume_billion": 100, "top_stock": "X"}
+                    for i in range(8)
+                ], "bottom": []},
+            }
+            md, _ = gen.generate_post_market("2026-03-28", raw)
+        assert "行业涨幅前5" in md
+        assert "行业涨幅前10" not in md
+        assert "行业4" in md
+        assert "行业5" not in md
+
+    def test_slimmed_full_report_size_guard(self):
+        """重数据场景下整篇盘后报告体量护栏：防未来移除上限导致单条再度膨胀。
+
+        用「各重段均喂满」的合成极端输入（非真实样本）做回归护栏：瘦身后约 5.2K 字符，
+        未瘦身同等输入约 10.7K，移除任一行数/列上限都会顶破 8000。
+        阈值 8000 同时高于真实样本量级（2026-05-22 实测约 7.1K），避免与真实数据语义打架。
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            gen = ReportGenerator()
+            gen.daily_dir = Path(tmp) / "daily"
+            raw = {
+                "date": "2026-03-28",
+                "indices": {"shanghai": {"close": 3900, "change_pct": 0.5, "amount_billion": 8000}},
+                "total_volume": {"total_billion": 12000},
+                "limit_up": {"count": 60, "highest_board": 5},
+                "limit_down": {"count": 5},
+                "sector_industry": {"data": [
+                    {"name": f"行业{i}", "change_pct": 3.0, "volume_billion": 100, "top_stock": "X"}
+                    for i in range(12)
+                ], "bottom": []},
+                "sector_concept": {"data": []},
+                "sector_fund_flow": {"data": [
+                    {"name": f"流入{i}", "net_inflow_billion": 50.0, "change_pct": 3.0} for i in range(12)
+                ]},
+                "limit_step": {"data": [{"name": f"高标{i}", "nums": str(10 - i)} for i in range(12)]},
+                "limit_cpt_list": {"data": [
+                    {"rank": i + 1, "name": f"强{i}", "up_nums": 10, "cons_nums": 3,
+                     "pct_chg": 3.0, "up_stat": "5天4板"} for i in range(12)
+                ]},
+                "sector_moneyflow_ths": {"data": [
+                    {"name": f"行业流{i}", "net_amount_yi": 100.0 - i, "pct_change": 1.0, "lead_stock": "X"}
+                    for i in range(12)
+                ]},
+                "concept_moneyflow_ths": {"data": [
+                    {"name": f"概念流{i}", "net_amount_yi": 100.0 - i, "pct_change": 1.0, "lead_stock": "X"}
+                    for i in range(12)
+                ]},
+                "etf_flow": [
+                    {"code": f"5100{i:02d}", "name": f"ETF{i}",
+                     "shares_change_billion": 100.0 - i, "total_shares_billion": 50.0}
+                    for i in range(12)
+                ],
+                "daily_info": {"data": [{"market": f"板块{i}", "amount": 1000.0, "vol": 1000} for i in range(8)]},
+                "dragon_tiger": {"data": [
+                    {"name": f"龙{i}", "reason": "涨幅偏离", "net_amount": 1e8} for i in range(12)
+                ]},
+                "sector_rhythm_industry": [
+                    {"name": f"节奏行业{i}", "rank_today": i + 1, "change_today": 2.0,
+                     "consecutive_in_top30": 3, "cumulative_pct_5d": 5.0,
+                     "phase": "发酵", "confidence": "中", "evidence": [f"证据{i}"]}
+                    for i in range(20)
+                ],
+                "sector_rhythm_concept": [
+                    {"name": f"节奏概念{i}", "rank_today": i + 1, "change_today": 2.0,
+                     "consecutive_in_top30": 3, "cumulative_pct_5d": 5.0,
+                     "phase": "发酵", "confidence": "中", "evidence": [f"证据{i}"]}
+                    for i in range(20)
+                ],
+            }
+            holdings = [
+                {"name": f"持仓{i}", "code": f"00000{i}.SZ", "close": 10, "change_pct": 1.0,
+                 "cost": 9, "pnl_pct": 11.1, "amount_billion": 1}
+                for i in range(6)
+            ]
+            holdings_info = {
+                f"00000{i}.SZ": {
+                    "name": f"持仓{i}",
+                    "investor_qa": [{"question": f"Q{j}", "answer": "答" * 200} for j in range(3)],
+                    "research_reports": [{"institution": f"机构{j}", "rating": "买入", "date": "20260328"} for j in range(3)],
+                    "news": [{"title": f"新闻{j}", "time": "10:00"} for j in range(3)],
+                }
+                for i in range(6)
+            }
+            md, _ = gen.generate_post_market(
+                "2026-03-28", raw, holdings_data=holdings, holdings_info=holdings_info
+            )
+
+        assert len(md) < 8000, f"瘦身后整篇仍过大: {len(md)} 字符"
+
+
+# =====================================================================
+# T15. 连板排除 ST 股
+#   连板天梯（limit_step，来自 tushare）会混入大量 ST 连板（ST 长期连板霸榜）；
+#   连板梯队/连板数/最高连板改用 collector 已算好的 _ex_st 口径。
+# =====================================================================
+
+class TestConsecutiveBoardExcludeST:
+    def test_limit_step_ladder_excludes_st(self):
+        """连板天梯过滤 ST：ST 连板不进榜，正常股保留。"""
+        raw = {"limit_step": {"data": [
+            {"name": "*ST闻泰", "nums": "9"},
+            {"name": "ST海王", "nums": "7"},
+            {"name": "真龙头", "nums": "5"},
+            {"name": "正常二板", "nums": "2"},
+        ]}}
+        md = _render_p0(raw)
+        assert "连板天梯" in md
+        assert "真龙头" in md
+        assert "正常二板" in md
+        assert "*ST闻泰" not in md
+        assert "ST海王" not in md
+
+    def test_limit_step_all_st_no_ladder_table(self):
+        """连板天梯全为 ST 且无其它增强数据时：既不渲染子表，也不留空的章节标题。"""
+        raw = {"limit_step": {"data": [
+            {"name": "*ST闻泰", "nums": "9"},
+            {"name": "ST海王", "nums": "7"},
+        ]}}
+        md = _render_p0(raw)
+        assert "连板天梯" not in md
+        assert "情绪与资金增强" not in md   # 过滤后 ladder_rows 空 → has_any 不因 ST limit_step 触发空章节
+
+    def test_consecutive_metrics_use_ex_st(self):
+        """连板数/最高连板/连板梯队改用 _ex_st 口径，ST 不出现在梯队。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            gen = ReportGenerator()
+            gen.daily_dir = Path(tmp) / "daily"
+            raw = {
+                "date": "2026-03-28",
+                "limit_up": {
+                    "count": 20,
+                    "consecutive_board_count": 10, "consecutive_board_count_ex_st": 7,
+                    "highest_board": 9, "highest_board_ex_st": 5,
+                    "board_ladder": {"9": ["*ST妖股"], "3": ["真龙头", "正常股"]},
+                    "board_ladder_ex_st": {"5": ["真龙头"], "3": ["正常股"]},
+                },
+            }
+            md, _ = gen.generate_post_market("2026-03-28", raw)
+        assert "连板: 7)" in md            # ex-ST 连板数
+        assert "最高连板: **5板**" in md     # ex-ST 最高连板
+        assert "真龙头" in md
+        assert "*ST妖股" not in md          # ST 不进连板梯队
+        assert "9板" not in md              # 含 ST 的 9 板既不在梯队也不在最高连板
+
+    def test_consecutive_metrics_fallback_when_no_ex_st(self):
+        """老归档无 _ex_st 字段时回退到含 ST 值，不渲染出 None。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            gen = ReportGenerator()
+            gen.daily_dir = Path(tmp) / "daily"
+            raw = {
+                "date": "2026-03-28",
+                "limit_up": {
+                    "count": 5, "consecutive_board_count": 4, "highest_board": 3,
+                    "board_ladder": {"3": ["甲股"], "2": ["乙股"]},
+                },
+            }
+            md, _ = gen.generate_post_market("2026-03-28", raw)
+        assert "连板: 4)" in md
+        assert "最高连板: **3板**" in md
+        assert "甲股" in md
+        assert "None" not in md
+
+    def test_empty_ex_st_ladder_does_not_fall_back_to_st(self):
+        """当日连板全是 ST → board_ladder_ex_st 为空 dict：应不渲染梯队，
+        绝不能 `or` 回退到含 ST 的 board_ladder（否则 ST 又冒出来）。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            gen = ReportGenerator()
+            gen.daily_dir = Path(tmp) / "daily"
+            raw = {
+                "date": "2026-03-28",
+                "limit_up": {
+                    "count": 3,
+                    "consecutive_board_count": 2, "consecutive_board_count_ex_st": 0,
+                    "highest_board": 5, "highest_board_ex_st": 0,
+                    "board_ladder": {"5": ["*ST妖股"], "2": ["ST垃圾"]},
+                    "board_ladder_ex_st": {},   # 已计算但无 ex-ST 连板
+                },
+            }
+            md, _ = gen.generate_post_market("2026-03-28", raw)
+        assert "连板梯队" not in md      # 空 ex-ST 梯队 → 不渲染
+        assert "*ST妖股" not in md       # 绝不回退到含 ST 梯队
+        assert "ST垃圾" not in md
+
+    def test_auto_analysis_highest_board_uses_ex_st(self):
+        """数据摘要「最高 N板」用 ex-ST 口径（ST 9 板不应顶替真实 3 板）。"""
+        raw = {
+            "limit_up": {"count": 20, "highest_board": 9, "highest_board_ex_st": 3,
+                         "seal_rate_pct": 80.0},
+            "limit_down": {"count": 2},
+        }
+        items = _generate_auto_analysis(raw)
+        line = [s for s in items if "最高" in s]
+        assert line and "最高 3板" in line[0]
+        assert "9板" not in line[0]
+
+    def test_limit_step_none_name_kept(self):
+        """连板天梯行 name 为 None / 仅有 ts_code 时不被误过滤（is_st_stock 安全）。"""
+        raw = {"limit_step": {"data": [
+            {"name": None, "ts_code": "300999.SZ", "nums": "4"},
+            {"name": "*ST坑", "nums": "9"},
+        ]}}
+        md = _render_p0(raw)
+        assert "300999.SZ" in md       # 无 name 的正常行保留
+        assert "*ST坑" not in md        # ST 仍被过滤

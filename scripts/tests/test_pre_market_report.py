@@ -342,6 +342,38 @@ def test_render_holding_risk_summary_prioritizes_stop_loss_before_other_medium_f
     assert "临近止盈" not in lines[0]
 
 
+def test_pre_market_info_section_not_compact(tmp_path: Path):
+    """端到端守护：盘后瘦身引入 compact 后，盘前简报的持仓信息面必须仍走 compact=False。
+
+    若有人误把 generate_pre_market 的 _render_stock_info_section 调用改成 compact=True，
+    本测试会失败（盘前应保留 3 条互动易 / 答案 150 字 / 盘前边界，不被盘后瘦身波及）。
+    """
+    gen = ReportGenerator()
+    gen.daily_dir = tmp_path
+    holdings_info = {
+        "000001.SZ": {
+            "name": "测试银行",
+            "limit_prices": {"pre_close": 10.0, "up_limit": 11.0, "down_limit": 9.0},
+            "investor_qa": [{"question": f"问题{i}", "answer": "答" * 200} for i in range(3)],
+            "research_reports": [
+                {"institution": f"机构{i}", "rating": "买入", "date": "20260328"} for i in range(3)
+            ],
+            "news": [{"title": f"新闻{i}", "time": "10:00"} for i in range(3)],
+        }
+    }
+    md, _ = gen.generate_pre_market(
+        "2026-03-30",
+        {**_minimal_market_data()},
+        holdings_announcements={},
+        holdings_info=holdings_info,
+    )
+    assert "盘前边界" in md                            # 盘前保留盘前边界（compact 会删）
+    assert "问题2" in md                              # 互动易 3 条（compact 仅 1 条）
+    assert "答" * 150 in md and "答" * 151 not in md  # 答案 150 字（compact 截至 80）
+    assert "机构2" in md                              # 研报 3 条（compact 仅 2 条）
+    assert "新闻2" in md                              # 新闻 3 条（compact 仅 2 条）
+
+
 def test_roman_chinese_section_index():
     assert _roman(1) == "一"
     assert _roman(4) == "四"

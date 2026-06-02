@@ -626,6 +626,26 @@ class TestReportStyleSection:
         assert "龙虎榜" in text     # source dragon_tiger → 龙虎榜
         assert new_idx == 9
 
+    def test_render_popularity_capped_at_8(self):
+        """钉钉单条减负：人气股表只取今收最强前 8（原无上限）。"""
+        from generators.report import _render_style_factors
+        raw_data = {
+            "style_factors": {
+                "popularity": [
+                    {"code": f"00000{i}.SZ", "name": f"人气{i}", "source": ["consecutive"],
+                     "prev_close": 8.0, "t_open_premium_pct": 1.0,
+                     "t_close_change_pct": 20.0 - i,  # 降序：人气0 最强
+                     "t_is_limit_up": False, "t_is_limit_down": False}
+                    for i in range(12)
+                ],
+            }
+        }
+        lines = []
+        _render_style_factors(lines, raw_data, 8)
+        text = "\n".join(lines)
+        assert "人气7" in text       # 前 8（人气0~7）保留
+        assert "人气8" not in text   # 第 9 名起被裁
+
     def test_render_popularity_empty_name_falls_back_to_code(self):
         """name 为空串（量能前10 来源）时回退显示 code，不出现空名行"""
         from generators.report import _render_style_factors

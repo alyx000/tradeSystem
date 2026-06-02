@@ -446,8 +446,9 @@ class MarketCollector:
                 data["broken_rate_pct_ex_st"] = 0
 
             # 涨停行业分布：按东财所属行业聚合（count 降序、同 count 按最高连板降序），过滤空/非字符串行业。
-            # 报告默认呈现含 ST 的 industry_ranking，与本章节其它指标（count/board_ladder）口径一致；
-            # _ex_st 同步入库供下游/后续按需消费，避免口径混用。
+            # 含 ST 与 _ex_st 两套口径均入库，供报告/下游按各自指标选用：
+            # 报告「连板」类指标（连板数/最高连板/连板梯队/连板天梯）用 ex-ST，
+            # 涨停家数/首板细分/封板率/涨停行业分布仍用含 ST。
             data["industry_ranking"] = self._aggregate_limit_up_industry(stocks)
             data["industry_ranking_ex_st"] = self._aggregate_limit_up_industry(stocks_ex_st)
 

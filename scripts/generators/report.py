@@ -11,6 +11,8 @@ from pathlib import Path
 
 import yaml
 
+from utils import is_st_stock
+
 logger = logging.getLogger(__name__)
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
@@ -427,21 +429,30 @@ class ReportGenerator:
         lu = raw_data.get("limit_up", {})
         ld = raw_data.get("limit_down", {})
         if "count" in lu:
+            # 「连板」类指标统一用排除 ST 的口径（_ex_st 由 collector 算好；老归档缺该字段时回退含 ST 值）。
+            # 涨停家数 / 首板细分 / 封板率仍为含 ST 口径（非连板指标，不受本次调整影响）。
+            consecutive_ex_st = lu.get(
+                "consecutive_board_count_ex_st", lu.get("consecutive_board_count", "-")
+            )
+            highest_ex_st = lu.get("highest_board_ex_st", lu.get("highest_board", "-"))
             lines.append(
                 f"- 涨停: **{lu['count']}家** "
                 f"(10cm: {lu.get('first_board_10cm', '-')}, "
                 f"20cm: {lu.get('first_board_20cm', '-')}, "
                 f"30cm: {lu.get('first_board_30cm', '-')}, "
-                f"连板: {lu.get('consecutive_board_count', '-')})"
+                f"连板: {consecutive_ex_st})"
             )
-            lines.append(f"- 最高连板: **{lu.get('highest_board', '-')}板**")
+            lines.append(f"- 最高连板: **{highest_ex_st}板**")
             seal = lu.get("seal_rate_pct")
             broken = lu.get("broken_count", 0)
             if seal is not None:
                 lines.append(
                     f"- 封板率: **{seal}%**　炸板: {broken}家 ({lu.get('broken_rate_pct', 0)}%)"
                 )
-            ladder = lu.get("board_ladder", {})
+            # 用 .get(key, fallback) 而非 `or`：board_ladder_ex_st 为空 dict（当日连板全是 ST）时
+            # 代表"无 ex-ST 连板"，应渲染空梯队，绝不能 `or` 回退到含 ST 的 board_ladder（否则 ST 又冒出来）。
+            # 仅当老归档完全缺该字段时才回退含 ST 版本。
+            ladder = lu.get("board_ladder_ex_st", lu.get("board_ladder", {}))
             if ladder:
                 lines.append("- 连板梯队:")
                 for boards, names in sorted(ladder.items(), key=lambda x: -int(x[0])):
@@ -464,10 +475,10 @@ class ReportGenerator:
         # ---- 板块排名 ----
         lines.append(f"\n## {_roman(section_idx)}、板块排名\n")
         section_idx += 1
-        lines.append("### 行业涨幅前10\n")
+        lines.append("### 行业涨幅前5\n")
         lines.append("| 板块 | 涨跌幅 | 成交额(亿) | 领涨股 |")
         lines.append("|------|--------|-----------|--------|")
-        for s in raw_data.get("sector_industry", {}).get("data", [])[:10]:
+        for s in raw_data.get("sector_industry", {}).get("data", [])[:5]:
             vol_str = f"{s.get('volume_billion', 0)}" if s.get("volume_billion") else "-"
             lines.append(
                 f"| {s.get('name', '')} | {s.get('change_pct', 0)}% | "
@@ -485,10 +496,10 @@ class ReportGenerator:
         # 板块资金净流入
         fund_flow = raw_data.get("sector_fund_flow", {}).get("data", [])
         if fund_flow:
-            lines.append("\n### 资金净流入前10\n")
+            lines.append("\n### 资金净流入前5\n")
             lines.append("| 板块 | 净流入(亿) | 涨跌幅 |")
             lines.append("|------|-----------|--------|")
-            for s in fund_flow[:10]:
+            for s in fund_flow[:5]:
                 lines.append(
                     f"| {s.get('name', '')} | {s.get('net_inflow_billion', 0):.2f} | "
                     f"{s.get('change_pct', 0)}% |"
@@ -557,14 +568,14 @@ class ReportGenerator:
             if has_info:
                 lines.append(f"\n## {_roman(section_idx)}、持仓信息面\n")
                 section_idx += 1
-                _render_stock_info_section(lines, holdings_info)
+                _render_stock_info_section(lines, holdings_info, compact=True)
 
         # ---- 龙虎榜 ----
         dt_data = raw_data.get("dragon_tiger", {}).get("data", [])
         if dt_data:
             lines.append(f"\n## {_roman(section_idx)}、龙虎榜\n")
             section_idx += 1
-            for d in dt_data[:10]:
+            for d in dt_data[:5]:
                 net = d.get("net_amount", 0)
                 direction = "净买" if net > 0 else "净卖"
                 net_yi = abs(net) / 1e8
@@ -584,7 +595,7 @@ class ReportGenerator:
                 except (TypeError, ValueError):
                     return 0.0
 
-            top_bt = sorted(bt_data, key=_bt_amount_yi, reverse=True)[:10]
+            top_bt = sorted(bt_data, key=_bt_amount_yi, reverse=True)[:5]
             lines.append("| 股票 | 成交价 | 成交额(亿) | 买方 | 卖方 |")
             lines.append("|------|--------|-----------|------|------|")
             for row in top_bt:
@@ -654,8 +665,16 @@ class ReportGenerator:
 # 板块节奏渲染（模块级工具函数）
 # ------------------------------------------------------------------
 
-def _render_stock_info_section(lines: list[str], info_dict: dict) -> None:
-    """渲染个股信息面（互动易/研报/新闻），持仓和关注池共用。"""
+def _render_stock_info_section(lines: list[str], info_dict: dict, compact: bool = False) -> None:
+    """渲染个股信息面（互动易/研报/新闻），持仓和关注池共用。
+
+    compact=True 仅用于盘后钉钉单条消息减负：互动易仅 1 条、答案截至 80 字，
+    研报/新闻各最多 2 条。compact=False（默认，盘前简报沿用）保持 3/3/3 + 答案 150 字。
+    """
+    qa_limit = 1 if compact else 3
+    answer_limit = 80 if compact else 150
+    rr_limit = 2 if compact else 3
+    news_limit = 2 if compact else 3
     for code, info in info_dict.items():
         stock_name = info.get("name", code)
         limit_prices = info.get("limit_prices") or {}
@@ -663,7 +682,9 @@ def _render_stock_info_section(lines: list[str], info_dict: dict) -> None:
         rr_list = info.get("research_reports", [])
         news_list = info.get("news", [])
         lines.append(f"### {stock_name} ({code})\n")
-        if limit_prices:
+        # 「盘前边界」是盘前导向数据（今日涨停/跌停价），盘后报告里属噪音（昨收常为空），
+        # compact（盘后钉钉）下整块跳过；盘前简报 compact=False 仍渲染。
+        if limit_prices and not compact:
             up_limit = limit_prices.get("up_limit")
             down_limit = limit_prices.get("down_limit")
             pre_close = limit_prices.get("pre_close")
@@ -675,15 +696,15 @@ def _render_stock_info_section(lines: list[str], info_dict: dict) -> None:
             lines.append("")
         if qa_list:
             lines.append("**互动易问答**")
-            for qa in qa_list[:3]:
+            for qa in qa_list[:qa_limit]:
                 lines.append(f"- Q: {qa.get('question', '')}")
                 ans = qa.get("answer", "")
                 if ans:
-                    lines.append(f"  A: {ans[:150]}")
+                    lines.append(f"  A: {ans[:answer_limit]}")
             lines.append("")
         if rr_list:
             lines.append("**研报动态**")
-            for rr in rr_list[:3]:
+            for rr in rr_list[:rr_limit]:
                 inst = rr.get("institution", "")
                 rating = rr.get("rating", "")
                 tp = rr.get("target_price", 0)
@@ -692,7 +713,7 @@ def _render_stock_info_section(lines: list[str], info_dict: dict) -> None:
             lines.append("")
         if news_list:
             lines.append("**个股新闻**")
-            for n in news_list[:3]:
+            for n in news_list[:news_limit]:
                 lines.append(f"- [事实] ★★☆ {n.get('title', '')} ({n.get('time', '')})")
             lines.append("")
 
@@ -947,7 +968,9 @@ def _generate_auto_analysis(raw_data: dict) -> list[str]:
             broken = lu.get("broken_count", 0)
             if broken:
                 desc += f"（炸板 {broken}家）"
-        hb = lu.get("highest_board", 0)
+        # 最高连板用排除 ST 口径（与报告涨跌停段一致；老归档缺字段时回退含 ST 值）。
+        # 此处兜底用数值 0（非涨跌停段的展示用 "-"）：下面有 `hb >= 2` 比较，必须是数字。
+        hb = lu.get("highest_board_ex_st", lu.get("highest_board", 0))
         if hb >= 2:
             desc += f"，最高 {hb}板"
         items.append(desc)
@@ -1039,6 +1062,9 @@ def _finite_float(value) -> float | None:
 
 def _render_p0_market_enhancements(lines: list[str], raw_data: dict, section_idx: int) -> int:
     limit_step_rows = raw_data.get("limit_step", {}).get("data", []) or []
+    # 连板天梯排除 ST：tushare limit_step 含大量 ST 连板（ST 长期连板会霸榜），剔除后才反映真实情绪高度。
+    # 提前过滤并用 ladder_rows 参与 has_any：避免"当日 limit_step 全为 ST"时仍生成空的「情绪与资金增强」章节。
+    ladder_rows = [r for r in limit_step_rows if not is_st_stock(r.get("name") or r.get("ts_code") or "")]
     strongest_rows = raw_data.get("limit_cpt_list", {}).get("data", []) or []
     ths_rows = raw_data.get("sector_moneyflow_ths", {}).get("data", []) or []
     dc_rows = raw_data.get("sector_moneyflow_dc", {}).get("data", []) or []
@@ -1047,7 +1073,7 @@ def _render_p0_market_enhancements(lines: list[str], raw_data: dict, section_idx
     concept_ths_rows_raw = raw_data.get("concept_moneyflow_ths", {}).get("data", []) or []
     concept_dc_rows_raw = raw_data.get("concept_moneyflow_dc", {}).get("data", []) or []
     market_flow_rows = raw_data.get("market_moneyflow_dc", {}).get("data", []) or []
-    daily_info_rows = raw_data.get("daily_info", {}).get("data", []) or []
+    # daily_info（交易所市场统计摘录）已不再渲染，故不参与 has_any 判定，避免"仅有该数据时"出现空章节。
     # etf_flow 在 raw_data 顶层（非 {data: [...]} 包裹）；仅保留份额变动可安全解析为有限数的条目，
     # 预解析为 (row, chg) 避免渲染时重复 float() 并隔离脏数据（如 AkShare 历史占位符字符串）
     etf_rows = []
@@ -1056,27 +1082,31 @@ def _render_p0_market_enhancements(lines: list[str], raw_data: dict, section_idx
         if chg is not None:
             etf_rows.append((r, chg))
 
-    has_any = any([limit_step_rows, strongest_rows, ths_rows, dc_rows, concept_ths_rows_raw, concept_dc_rows_raw, market_flow_rows, daily_info_rows, etf_rows])
+    has_any = any([ladder_rows, strongest_rows, ths_rows, dc_rows, concept_ths_rows_raw, concept_dc_rows_raw, market_flow_rows, etf_rows])
     if not has_any:
         return section_idx
 
     lines.append(f"\n## {_roman(section_idx)}、情绪与资金增强\n")
     section_idx += 1
 
-    if limit_step_rows:
-        top_ladder = sorted(limit_step_rows, key=lambda x: int(x.get("nums", 0) or 0), reverse=True)[:10]
+    if ladder_rows:
+        top_ladder = sorted(ladder_rows, key=lambda x: int(x.get("nums", 0) or 0), reverse=True)[:10]
         lines.append("### 连板天梯\n")
         lines.append("| 股票 | 连板数 |")
         lines.append("|------|--------|")
         for row in top_ladder:
-            lines.append(f"| {row.get('name', row.get('ts_code', ''))} | {row.get('nums', '-')} |")
+            # 与上面过滤一致用 or 兜底：name 键存在但值为 None 时 .get('name', x) 会返回 None → 渲染出 "None"
+            name = row.get("name") or row.get("ts_code") or "-"
+            lines.append(f"| {name} | {row.get('nums', '-')} |")
         lines.append("")
 
     if strongest_rows:
+        # 注：本表「连板家数/连板高度」是 tushare limit_cpt_list 的板块级聚合（每个板块有几只连板），
+        # 非个股连板榜，无个股明细可剔 ST，故不在本次「个股连板排除 ST」范围内（仍为含 ST 口径）。
         lines.append("### 最强板块\n")
         lines.append("| 排名 | 板块 | 涨停家数 | 连板家数 | 涨跌幅 | 连板高度 |")
         lines.append("|------|------|----------|----------|--------|----------|")
-        for row in strongest_rows[:10]:
+        for row in strongest_rows[:5]:
             lines.append(
                 f"| {row.get('rank', '-')} | {row.get('name', '')} | {row.get('up_nums', '-')} | "
                 f"{row.get('cons_nums', '-')} | {row.get('pct_chg', '-')}% | {row.get('up_stat', '-') } |"
@@ -1109,7 +1139,8 @@ def _render_p0_market_enhancements(lines: list[str], raw_data: dict, section_idx
                 return float(v)
             return float(row.get("net_amount", 0) or 0)
 
-        top_ths = sorted(ths_rows, key=_mf_yi, reverse=True)[:8]
+        # 钉钉单条减负：只取净额前 5（撤离表已删，撤离信息次要）
+        top_ths = sorted(ths_rows, key=_mf_yi, reverse=True)[:5]
         lines.append("### 行业资金流入前列\n")
         lines.append("| 板块 | 净额(亿) | 涨跌幅 | 领涨股 |")
         lines.append("|------|----------|--------|--------|")
@@ -1121,19 +1152,6 @@ def _render_p0_market_enhancements(lines: list[str], raw_data: dict, section_idx
             )
         lines.append("")
 
-        bottom_ths = sorted(ths_rows, key=_mf_yi)[:5]
-        if bottom_ths:
-            lines.append("### 行业资金撤离前列\n")
-            lines.append("| 板块 | 净额(亿) | 涨跌幅 |")
-            lines.append("|------|----------|--------|")
-            for row in bottom_ths:
-                net_v = _mf_yi(row)
-                lines.append(
-                    f"| {row.get('name', row.get('industry', ''))} | {net_v:+.2f} | "
-                    f"{row.get('pct_change', '-')}% |"
-                )
-            lines.append("")
-
     concept_ths_rows = raw_data.get("concept_moneyflow_ths", {}).get("data", []) or []
     concept_dc_rows = raw_data.get("concept_moneyflow_dc", {}).get("data", []) or []
     concept_rows = concept_ths_rows or concept_dc_rows
@@ -1144,7 +1162,8 @@ def _render_p0_market_enhancements(lines: list[str], raw_data: dict, section_idx
                 return float(v)
             return float(row.get("net_amount", 0) or 0)
 
-        top_concept = sorted(concept_rows, key=_concept_yi, reverse=True)[:8]
+        # 钉钉单条减负：只取净额前 5（撤离表已删）
+        top_concept = sorted(concept_rows, key=_concept_yi, reverse=True)[:5]
         lines.append("### 概念板块资金流入前列\n")
         lines.append("| 概念 | 净额(亿) | 涨跌幅 | 领涨股 |")
         lines.append("|------|----------|--------|--------|")
@@ -1156,36 +1175,8 @@ def _render_p0_market_enhancements(lines: list[str], raw_data: dict, section_idx
             )
         lines.append("")
 
-        bottom_concept = sorted(concept_rows, key=_concept_yi)[:5]
-        if bottom_concept:
-            lines.append("### 概念板块资金撤离前列\n")
-            lines.append("| 概念 | 净额(亿) | 涨跌幅 |")
-            lines.append("|------|----------|--------|")
-            for row in bottom_concept:
-                net_v = _concept_yi(row)
-                lines.append(
-                    f"| {row.get('name', '')} | {net_v:+.2f} | "
-                    f"{row.get('pct_change', '-')}% |"
-                )
-            lines.append("")
-
-    if daily_info_rows:
-        lines.append("### 交易所市场统计摘录\n")
-        lines.append("| 交易所/板块 | 成交额 | 成交量 |")
-        lines.append("|------------|--------|--------|")
-        for row in daily_info_rows[:8]:
-            name = (
-                row.get("market")
-                or row.get("board")
-                or row.get("exchange")
-                or row.get("ts_code")
-                or row.get("trade_date")
-                or "-"
-            )
-            amount = row.get("amount") or row.get("turnover") or row.get("deal_amount") or "-"
-            vol = row.get("vol") or row.get("volume") or row.get("deal_vol") or "-"
-            lines.append(f"| {name} | {amount} | {vol} |")
-        lines.append("")
+    # 「交易所市场统计摘录」表已删除：与指数/成交额段重复、信息次要，钉钉单条减负。
+    # daily_info 既不再渲染也已从 has_any 移除（见函数顶部），不会再单独触发空章节。
 
     if etf_rows:
         # 按份额变动绝对值降序（净申购与净赎回中变动最大者均靠前，便于一眼看到资金异动）
@@ -1193,7 +1184,7 @@ def _render_p0_market_enhancements(lines: list[str], raw_data: dict, section_idx
         lines.append("### ETF 净申购（份额变动）\n")
         lines.append("| ETF | 份额变动(亿份) | 当前份额(亿份) |")
         lines.append("|------|--------------|---------------|")
-        for row, chg in ordered:
+        for row, chg in ordered[:8]:
             # 主源 tushare:fund_share 只给份额（total_shares_billion），不给元规模；
             # 故列改为"当前份额"，读 total_shares_billion，兼容 akshare 旧字段 fund_size_billion 兜底
             size = row.get("total_shares_billion")
@@ -1222,9 +1213,10 @@ def _render_sector_rhythm(lines: list, raw_data: dict, section_idx: int) -> int:
         if not rhythm_list:
             continue
         lines.append(f"### {label}\n")
-        lines.append("| 板块 | 今日排名 | 今日涨幅 | 连续上榜 | 5日累计 | 阶段 | 置信度 | 关键信号 |")
-        lines.append("|------|---------|---------|---------|---------|------|-------|---------|")
-        for item in rhythm_list:
+        # 钉钉单条减负：删除超宽长文本「关键信号」列（8 列→7 列），每类最多 8 行
+        lines.append("| 板块 | 今日排名 | 今日涨幅 | 连续上榜 | 5日累计 | 阶段 | 置信度 |")
+        lines.append("|------|---------|---------|---------|---------|------|-------|")
+        for item in rhythm_list[:8]:
             rank = item.get("rank_today")
             rank_str = f"#{rank}" if rank else "-"
             change = item.get("change_today")
@@ -1238,11 +1230,9 @@ def _render_sector_rhythm(lines: list, raw_data: dict, section_idx: int) -> int:
             phase = item.get("phase", "观察中")
             phase_label = _PHASE_ICON.get(phase, phase)
             conf = item.get("confidence", "-")
-            evidence = item.get("evidence", [])
-            signal_str = "；".join(evidence[:2]) if evidence else "-"
             lines.append(
                 f"| {item.get('name', '')} | {rank_str} | {change_str} | "
-                f"{consec}天 | {cumul_str} | {phase_label} | {conf} | {signal_str} |"
+                f"{consec}天 | {cumul_str} | {phase_label} | {conf} |"
             )
         lines.append("")
 
@@ -1369,7 +1359,8 @@ def _render_style_factors(lines: list, raw_data: dict, section_idx: int) -> int:
         lines.append("### 昨日人气股今日表现（T-1 高标 → T 日结局）\n")
         lines.append("| 名称 | 来源 | 昨收 | 今开溢价 | 今收涨跌 | 续板 | 跌停 |")
         lines.append("|------|------|------|---------|---------|------|------|")
-        for row in ordered:
+        # 钉钉单条减负：人气股表只取今收最强前 8（原无上限，强日可达 20+ 行）
+        for row in ordered[:8]:
             srcs = "/".join(_SOURCE_LABEL.get(s, s) for s in (row.get("source") or []))
             prev_close = row.get("prev_close")
             prev_s = f"{prev_close}" if prev_close is not None else "-"
