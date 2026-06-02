@@ -199,6 +199,7 @@ const SECTOR_TYPE = [
   { value: 'sentiment_core', label: '情绪核心' },
 ]
 const BIG_CYCLE_STAGE = [
+  { value: '启动', label: '启动' },
   { value: '将成龙', label: '将成龙' },
   { value: '主升', label: '主升' },
   { value: '震荡', label: '震荡' },
