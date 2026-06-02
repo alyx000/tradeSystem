@@ -8,9 +8,10 @@ def render_md(spec: WindowSpec, start: str, end: str, scored, stats: dict,
               suggestions: dict, *, llm_used: bool) -> tuple[str, str]:
     title = f"📚 交易认知沉淀·{spec.label}（{start}~{end}）"
     lines = [f"## {title}", ""]
+    # stats 用 .get 兜底：上游漏键不应让整条日报渲染崩（codex 中项：测试永远绿但生产静默炸）
     lines.append(
-        f"**概览**：活跃认知 {stats['active']} 条｜新增 {stats['new']}｜"
-        f"实例 {stats['instances']}｜覆盖老师 {stats['teachers']} 位"
+        f"**概览**：活跃认知 {stats.get('active', 0)} 条｜新增 {stats.get('new', 0)}｜"
+        f"实例 {stats.get('instances', 0)}｜覆盖老师 {stats.get('teachers', 0)} 位"
     )
     lines.append("")
 

@@ -59,3 +59,14 @@ def test_llm_missing_key_falls_back():
     out = narrator.generate_suggestions([_sc()], no_llm=False, llm_runner=runner)
     assert out["_llm_used"] is False
     assert out["system_suggestions"]  # 模板兜底非空
+
+
+def test_llm_non_string_bullets_dropped():
+    # list 内含非字符串元素 → 逐条丢弃，不渲染 "None"/dict 串（codex 中项回归）
+    def runner(prompt, payload):
+        return {"system_suggestions": [None, "完善复盘节奏", {"x": 1}],
+                "direction_suggestions": [123]}
+    out = narrator.generate_suggestions([_sc()], no_llm=False, llm_runner=runner)
+    assert out["system_suggestions"] == ["完善复盘节奏"]  # 非字符串全丢
+    assert "None" not in "".join(out["system_suggestions"])
+    assert out["direction_suggestions"]  # direction 全非字符串 → 清空 → 模板兜底

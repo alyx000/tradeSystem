@@ -47,7 +47,12 @@ def _clean_bullets(raw) -> list[str]:
     if not isinstance(raw, list):
         return out
     for item in raw:
-        text = str(item).strip()
+        # 只接受字符串；LLM 可能返 [None] / [{...}] 等，str(item) 会渲染出 "None"/dict 串
+        # 且绕过红线护栏（codex 中项）→ 非字符串直接丢弃
+        if not isinstance(item, str):
+            logger.warning("[cognition-digest] 建议条目非字符串(%s)，丢弃", type(item).__name__)
+            continue
+        text = item.strip()
         if not text:
             continue
         hit = _scan_redline(text)
@@ -101,6 +106,9 @@ def generate_suggestions(scored, *, no_llm: bool = False, llm_runner=None) -> di
     system = _clean_bullets(result["system_suggestions"])
     direction = _clean_bullets(result["direction_suggestions"])
     tmpl = _template_suggestions(scored)
+    # _llm_used 为整体单标记：任一段保留了 LLM bullet 即 True。混合段（一段 LLM + 一段红线清空后
+    # 走模板）不细分 per-section source —— 有意取舍：per-section 审计收益边际，徒增 renderer/契约复杂度
+    # （YAGNI；codex 轻微项，defer）。如未来需要精确审计，再加 system_llm_used/direction_llm_used。
     return {
         "system_suggestions": system or tmpl["system_suggestions"],
         "direction_suggestions": direction or tmpl["direction_suggestions"],

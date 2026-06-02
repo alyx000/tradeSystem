@@ -46,3 +46,12 @@ def test_render_no_llm_marker():
     _, md = renderer.render_md(spec, "2026-05-04", "2026-06-02",
                                [_sc()], _stats(), sug, llm_used=False)
     assert "纯结构化" in md
+
+
+def test_render_missing_stats_key_no_crash():
+    # stats 缺键不应 KeyError（codex 中项回归）；缺键按 0 渲染
+    spec = resolve_window("weekly")
+    sug = {"system_suggestions": [], "direction_suggestions": []}
+    title, md = renderer.render_md(spec, "2026-05-27", "2026-06-02",
+                                   [], {}, sug, llm_used=False)  # 空 stats
+    assert "活跃认知 0 条" in md
