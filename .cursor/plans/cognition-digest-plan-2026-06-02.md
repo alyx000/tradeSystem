@@ -171,8 +171,25 @@ def _add_cog(svc, title, *, category="signal", status="candidate"):
     )["cognition_id"]
 
 
+def _seed_teachers(db_path, teachers):
+    """teacher_id 有 FK → teachers(id)，且 PRAGMA foreign_keys=1，写实例前必须先建老师行。"""
+    with get_db(db_path) as conn:
+        migrate(conn)
+        for tid, name in teachers:
+            conn.execute("INSERT OR IGNORE INTO teachers (id, name) VALUES (?, ?)",
+                         (tid, name))
+
+
+def _backdate_created(db_path, cid, date="2026-01-01 00:00:00"):
+    """把 created_at 退到窗口外，隔离 collector「created_at∈窗口 纳新」分支对 wall-clock 的依赖。"""
+    with get_db(db_path) as conn:
+        conn.execute("UPDATE trading_cognitions SET created_at=? WHERE cognition_id=?",
+                     (date, cid))
+
+
 def test_collect_groups_instances_in_window(db_path):
     svc = CognitionService(db_path)
+    _seed_teachers(db_path, [(1, "沈纯"), (2, "李四")])  # 满足 teacher_id FK
     cid = _add_cog(svc, "认知A")
     svc.add_instance(cognition_id=cid, observed_date="2026-06-01",
                      source_type="teacher_note", teacher_id=1,
@@ -192,6 +209,7 @@ def test_collect_groups_instances_in_window(db_path):
 def test_collect_excludes_out_of_window(db_path):
     svc = CognitionService(db_path)
     cid = _add_cog(svc, "认知B")
+    _backdate_created(db_path, cid)  # created_at 退出窗口，确保仅靠"窗口外实例"判定排除
     svc.add_instance(cognition_id=cid, observed_date="2026-05-20",
                      source_type="teacher_note", input_by="manual")
     data = collector.collect(db_path, "2026-05-31", "2026-06-02")
@@ -230,6 +248,17 @@ def test_collect_is_readonly(db_path):
     collector.collect(db_path, "2026-05-31", "2026-06-02")
     after = sqlite3.connect(db_path).execute("PRAGMA user_version").fetchone()[0]
     assert before == after
+
+
+def test_ro_connect_rejects_writes(db_path):
+    # 强化只读门禁：直接证明 _ro_connect 的连接拒绝任何写（比 user_version 比对更强，codex 中项）
+    import sqlite3
+    conn = collector._ro_connect(db_path)
+    try:
+        with pytest.raises(sqlite3.OperationalError):
+            conn.execute("UPDATE trading_cognitions SET title = 'x'")
+    finally:
+        conn.close()
 ```
 
 - [ ] **Step 1.6: 跑 collector 测试确认失败**
@@ -416,6 +445,18 @@ def test_score_consensus_by_name_fallback():
     assert out[0].consensus == 2  # 沈纯 / 李四 去重
 
 
+def test_score_consensus_mixed_id_and_name_no_double_count():
+    # 同一老师既有 id 实例又有仅 name 实例 → 按 name 归并，不重复计数（codex 中项回归）
+    insts = [
+        {"observed_date": "2026-06-01", "teacher_id": 3, "teacher_name": "沈纯"},
+        {"observed_date": "2026-06-01", "teacher_id": None, "teacher_name": "沈纯"},  # 同一老师
+        {"observed_date": "2026-06-01", "teacher_id": None, "teacher_name": "李四"},  # 另一老师
+    ]
+    out = scorer.score_activities([_act("c1", instances=insts)], anchor="2026-06-02",
+                                  start="2026-05-31", lookback_days=3, top_n=5)
+    assert out[0].consensus == 2  # 沈纯(id=3) + 李四(name) = 2，不是 3
+
+
 def test_score_is_new_boundary_equal_start_and_anchor():
     # created_at 日期恰好 == start 或 == anchor 都算 is_new（闭区间端点）
     at_start = _act("s", instances=[_inst("2026-06-01", 1)], created_at="2026-05-31 00:00:00")
@@ -475,15 +516,20 @@ class ScoredCognition:
 
 
 def _distinct_teachers(instances: list[dict]) -> int:
-    ids: set = set()
-    names: set = set()
+    # 同一老师可能既有 teacher_id 实例、又有仅 teacher_name 的历史实例 → 必须按 name 归并，
+    # 避免重复计数抬高 consensus（codex 中项：成功但产出错数据）。
+    id_names: dict = {}     # teacher_id -> 该 id 实例携带的 name（可能为 None）
+    name_only: set = set()  # 仅有 name、无 id 的实例
     for it in instances:
         tid = it.get("teacher_id")
+        name = it.get("teacher_name")
         if tid is not None:
-            ids.add(tid)
-        elif it.get("teacher_name"):
-            names.add(it["teacher_name"])
-    return len(ids) + len(names)
+            id_names[tid] = name
+        elif name:
+            name_only.add(name)
+    # 排除已被某个 id 实例同名覆盖的 name-only 老师
+    covered = {n for n in id_names.values() if n}
+    return len(id_names) + len(name_only - covered)
 
 
 def _recency_decay(instances: list[dict], anchor: str, lookback_days: int) -> float:
@@ -526,7 +572,7 @@ def score_activities(activities, *, anchor: str, start: str,
 - [ ] **Step 1.12: 跑 G1 全部测试确认通过**
 
 Run: `cd scripts && python3 -m pytest tests/test_cognition_digest_collector.py tests/test_cognition_digest_scorer.py -v`
-Expected: PASS（windows 3 + collector 5 + scorer 6 = 14 绿）
+Expected: PASS（windows 3 + collector 6 + scorer 7 = 16 绿）
 
 - [ ] **Step 1.13: 提交 G1**
 
@@ -542,8 +588,8 @@ git commit -m "feat(cognition-digest): G1 窗口+采集+打分
 
 windows 三窗口闭区间换算；collector 只读连接（mode=ro，不 migrate/不 commit）聚合
 （窗口实例分组 + deprecated 排除 + created_at∈窗口 纳新，total/老师口径只数 activities）；
-scorer 热度+共识+新增 5 因子常量化打分排序（created_at 第四兜底键）。
-14 个 TDD 用例（windows 3 / collector 5 / scorer 6），tmp_path 真库 + CognitionService seed。
+scorer 热度+共识+新增 5 因子常量化打分排序（created_at 第四兜底键，混合 id/name 共识归并）。
+16 个 TDD 用例（windows 3 / collector 6 / scorer 7），tmp_path 真库 + CognitionService seed。
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 ```
@@ -626,6 +672,17 @@ def test_llm_missing_key_falls_back():
     out = narrator.generate_suggestions([_sc()], no_llm=False, llm_runner=runner)
     assert out["_llm_used"] is False
     assert out["system_suggestions"]  # 模板兜底非空
+
+
+def test_llm_non_string_bullets_dropped():
+    # list 内含非字符串元素 → 逐条丢弃，不渲染 "None"/dict 串（codex 中项回归）
+    def runner(prompt, payload):
+        return {"system_suggestions": [None, "完善复盘节奏", {"x": 1}],
+                "direction_suggestions": [123]}
+    out = narrator.generate_suggestions([_sc()], no_llm=False, llm_runner=runner)
+    assert out["system_suggestions"] == ["完善复盘节奏"]  # 非字符串全丢
+    assert "None" not in "".join(out["system_suggestions"])
+    assert out["direction_suggestions"]  # direction 全非字符串 → 清空 → 模板兜底
 ```
 
 - [ ] **Step 2.2: 跑确认失败**
@@ -687,7 +744,12 @@ def _clean_bullets(raw) -> list[str]:
     if not isinstance(raw, list):
         return out
     for item in raw:
-        text = str(item).strip()
+        # 只接受字符串；LLM 可能返 [None] / [{...}] 等，str(item) 会渲染出 "None"/dict 串
+        # 且绕过红线护栏（codex 中项）→ 非字符串直接丢弃
+        if not isinstance(item, str):
+            logger.warning("[cognition-digest] 建议条目非字符串(%s)，丢弃", type(item).__name__)
+            continue
+        text = item.strip()
         if not text:
             continue
         hit = _scan_redline(text)
@@ -741,6 +803,9 @@ def generate_suggestions(scored, *, no_llm: bool = False, llm_runner=None) -> di
     system = _clean_bullets(result["system_suggestions"])
     direction = _clean_bullets(result["direction_suggestions"])
     tmpl = _template_suggestions(scored)
+    # _llm_used 为整体单标记：任一段保留了 LLM bullet 即 True。混合段（一段 LLM + 一段红线清空后
+    # 走模板）不细分 per-section source —— 有意取舍：per-section 审计收益边际，徒增 renderer/契约复杂度
+    # （YAGNI；codex 轻微项，defer）。如未来需要精确审计，再加 system_llm_used/direction_llm_used。
     return {
         "system_suggestions": system or tmpl["system_suggestions"],
         "direction_suggestions": direction or tmpl["direction_suggestions"],
@@ -751,7 +816,7 @@ def generate_suggestions(scored, *, no_llm: bool = False, llm_runner=None) -> di
 - [ ] **Step 2.4: 跑 narrator 测试确认通过**
 
 Run: `cd scripts && python3 -m pytest tests/test_cognition_digest_narrator.py -v`
-Expected: PASS（6 绿）。若 `REDLINE_KEYWORDS` import 路径报错，`grep -n "REDLINE_KEYWORDS" scripts/services/recommend/formatter.py` 核对后修正 import。
+Expected: PASS（7 绿）。若 `REDLINE_KEYWORDS` import 路径报错，`grep -n "REDLINE_KEYWORDS" scripts/services/recommend/formatter.py` 核对后修正 import。
 
 - [ ] **Step 2.5: 写 renderer 失败测试**
 
@@ -806,6 +871,15 @@ def test_render_no_llm_marker():
     _, md = renderer.render_md(spec, "2026-05-04", "2026-06-02",
                                [_sc()], _stats(), sug, llm_used=False)
     assert "纯结构化" in md
+
+
+def test_render_missing_stats_key_no_crash():
+    # stats 缺键不应 KeyError（codex 中项回归）；缺键按 0 渲染
+    spec = resolve_window("weekly")
+    sug = {"system_suggestions": [], "direction_suggestions": []}
+    title, md = renderer.render_md(spec, "2026-05-27", "2026-06-02",
+                                   [], {}, sug, llm_used=False)  # 空 stats
+    assert "活跃认知 0 条" in md
 ```
 
 - [ ] **Step 2.6: 跑确认失败**
@@ -828,9 +902,10 @@ def render_md(spec: WindowSpec, start: str, end: str, scored, stats: dict,
               suggestions: dict, *, llm_used: bool) -> tuple[str, str]:
     title = f"📚 交易认知沉淀·{spec.label}（{start}~{end}）"
     lines = [f"## {title}", ""]
+    # stats 用 .get 兜底：上游漏键不应让整条日报渲染崩（codex 中项：测试永远绿但生产静默炸）
     lines.append(
-        f"**概览**：活跃认知 {stats['active']} 条｜新增 {stats['new']}｜"
-        f"实例 {stats['instances']}｜覆盖老师 {stats['teachers']} 位"
+        f"**概览**：活跃认知 {stats.get('active', 0)} 条｜新增 {stats.get('new', 0)}｜"
+        f"实例 {stats.get('instances', 0)}｜覆盖老师 {stats.get('teachers', 0)} 位"
     )
     lines.append("")
 
@@ -871,7 +946,7 @@ def render_md(spec: WindowSpec, start: str, end: str, scored, stats: dict,
 - [ ] **Step 2.8: 跑 renderer 测试确认通过**
 
 Run: `cd scripts && python3 -m pytest tests/test_cognition_digest_renderer.py -v`
-Expected: PASS（3 绿）
+Expected: PASS（4 绿）
 
 - [ ] **Step 2.9: 提交 G2**
 
@@ -885,7 +960,7 @@ git commit -m "feat(cognition-digest): G2 叙事红线护栏 + 渲染
 
 narrator 复用 build_gemini_runner + REDLINE_KEYWORDS：L1 调用异常/结构不符(缺键/非list)整段
 模板兜底、L2 逐条 bullet 红线丢弃+空段兜底、L3 no_llm 纯结构化；renderer 出概览/Top-N/建议/页脚 MD，
-空窗口优雅降级 + no-llm 标注。9 个 TDD 用例（narrator 6 / renderer 3）。
+空窗口优雅降级 + no-llm 标注。11 个 TDD 用例（narrator 7 / renderer 4）。
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 ```
@@ -908,7 +983,7 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 ```python
 from __future__ import annotations
 import pytest
-from db.connection import get_connection
+from db.connection import get_connection, get_db
 from db.migrate import migrate
 from services.cognition_service import CognitionService
 from services.cognition_digest import run_window_digest, RenderedCognitionDigest
@@ -923,8 +998,18 @@ def db_path(tmp_path):
     return str(p)
 
 
+def _seed_teachers(db_path, teachers):
+    """teacher_id 有 FK → teachers(id)，写带 teacher_id 的实例前须先建老师行。"""
+    with get_db(db_path) as conn:
+        migrate(conn)
+        for tid, name in teachers:
+            conn.execute("INSERT OR IGNORE INTO teachers (id, name) VALUES (?, ?)",
+                         (tid, name))
+
+
 def test_run_window_digest_end_to_end_no_llm(db_path):
     svc = CognitionService(db_path)
+    _seed_teachers(db_path, [(1, "沈纯")])  # 满足 teacher_id FK
     cid = svc.add_cognition(category="signal", title="认知A",
                             description="d", status="candidate", input_by="manual")["cognition_id"]
     svc.add_instance(cognition_id=cid, observed_date="2026-06-02",
@@ -972,7 +1057,8 @@ class RenderedCognitionDigest:
 
     @property
     def is_empty(self) -> bool:
-        return not self.ranked and self.stats.get("instances", 0) == 0
+        # (self.stats or {}) 兜底：stats 显式传 None 时不抛 AttributeError（codex 轻微项）
+        return not self.ranked and (self.stats or {}).get("instances", 0) == 0
 
 
 def run_window_digest(db_path, window: str, anchor_date: str, *,
@@ -1040,12 +1126,21 @@ logger = logging.getLogger(__name__)
 WINDOW_CHOICES = ("recent3d", "weekly", "monthly")
 
 
+def _iso_date(s: str) -> str:
+    """argparse type 校验：--date 必须 YYYY-MM-DD，否则给 argparse 风格报错 + exit 2（codex 中项）。"""
+    try:
+        datetime.date.fromisoformat(s)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"--date 需为 YYYY-MM-DD 格式，收到: {s!r}")
+    return s
+
+
 def register_subparser(subparsers: argparse._SubParsersAction) -> None:
     p = subparsers.add_parser("cognition-digest", help="交易认知沉淀定时汇总（近3日/周/月 → 钉钉）")
     sub = p.add_subparsers(dest="cognition_digest_window")
     for win in WINDOW_CHOICES:
         sp = sub.add_parser(win, help=f"{win} 窗口认知沉淀汇总")
-        sp.add_argument("--date", default=None, help="anchor 日期 YYYY-MM-DD（默认今天）")
+        sp.add_argument("--date", default=None, type=_iso_date, help="anchor 日期 YYYY-MM-DD（默认今天）")
         sp.add_argument("--dry-run", action="store_true", help="仅打印 markdown，不推送")
         sp.add_argument("--no-llm", action="store_true", help="关闭 LLM，纯结构化建议")
 
@@ -1072,6 +1167,10 @@ def _run(config: dict, args: argparse.Namespace, window: str) -> None:
     if args.dry_run:
         print(digest.markdown)
         logger.info("[cognition-digest] dry-run 完成（未推送）")
+        return
+    # 空窗口不推送：避免安静日（尤其每日 recent3d）发"无新增认知"噪音通知（钉钉减负；消费 is_empty）
+    if digest.is_empty:
+        logger.info("[cognition-digest] %s 本窗口无新增认知沉淀，跳过推送", window)
         return
     _push_to_dingtalk(digest.title, digest.markdown)
 
@@ -1118,6 +1217,54 @@ def _push_to_dingtalk(title: str, markdown: str) -> None:
     ["cognition-digest", "monthly", "--dry-run", "--no-llm"],
 ```
 
+- [ ] **Step 3.7b: 写 CLI 行为测试（--date 校验 + 空窗口跳推）**
+
+`scripts/tests/test_cognition_digest_cli.py`：
+
+```python
+from __future__ import annotations
+import argparse
+import pytest
+import services.cognition_digest as cd_pkg
+from services.cognition_digest import RenderedCognitionDigest
+from cli import cognition_digest
+
+
+def test_date_validator_rejects_bad_format():
+    with pytest.raises(argparse.ArgumentTypeError):
+        cognition_digest._iso_date("2026/06/02")
+    assert cognition_digest._iso_date("2026-06-02") == "2026-06-02"
+
+
+def _args(**kw):
+    base = dict(cognition_digest_window="weekly", date=None, dry_run=False, no_llm=True)
+    base.update(kw)
+    return argparse.Namespace(**base)
+
+
+def test_empty_window_skips_push(monkeypatch):
+    empty = RenderedCognitionDigest("t", "m", [], {"instances": 0}, {})
+    monkeypatch.setattr(cd_pkg, "run_window_digest", lambda *a, **k: empty)
+    pushed = []
+    monkeypatch.setattr(cognition_digest, "_push_to_dingtalk", lambda *a, **k: pushed.append(1))
+    cognition_digest.handle_command({}, _args())
+    assert pushed == []  # 空窗口 → 不推送
+
+
+def test_nonempty_window_pushes(monkeypatch):
+    full = RenderedCognitionDigest("t", "m", [object()], {"instances": 3}, {})
+    monkeypatch.setattr(cd_pkg, "run_window_digest", lambda *a, **k: full)
+    pushed = []
+    monkeypatch.setattr(cognition_digest, "_push_to_dingtalk", lambda *a, **k: pushed.append(1))
+    cognition_digest.handle_command({}, _args())
+    assert pushed == [1]
+```
+
+> 说明：CLI `_run` 内 `from services.cognition_digest import run_window_digest` 是**调用期惰性导入**，故 monkeypatch `cd_pkg.run_window_digest`（包属性）能被拾取；`_push_to_dingtalk` 是模块级名，直接 patch。
+
+Run: `cd scripts && python3 -m pytest tests/test_cognition_digest_cli.py -v`
+Expected: PASS（3 绿）
+
 - [ ] **Step 3.8: 跑 smoke + dispatch 验证**
 
 Run: `cd scripts && python3 -m pytest tests/test_cli_smoke.py -k cognition-digest -v`
@@ -1129,7 +1276,7 @@ Expected: 真实库打印 markdown（概览 + Top 段），无推送、无报错
 - [ ] **Step 3.9: 跑模块全套 + check-scripts**
 
 Run: `cd scripts && python3 -m pytest tests/test_cognition_digest_*.py tests/test_cli_smoke.py -v`
-Expected: PASS（模块 25 + smoke 全绿）
+Expected: PASS（模块 32 + smoke 全绿）
 Run: `cd /Users/alyx/tradeSystem && make check-scripts`
 Expected: 全绿无新增 Warning
 
@@ -1142,13 +1289,14 @@ git add scripts/services/cognition_digest/service.py \
         scripts/cli/cognition_digest.py \
         scripts/main.py \
         scripts/tests/test_cognition_digest_service.py \
+        scripts/tests/test_cognition_digest_cli.py \
         scripts/tests/test_cli_smoke.py
 git commit -m "feat(cognition-digest): G3 编排 service + CLI + 注册
 
 service.run_window_digest 串起 采集→打分→建议→渲染，RenderedCognitionDigest.is_empty；
-顶层 CLI cognition-digest recent3d/weekly/monthly（--date/--dry-run/--no-llm，dry-run 不调 gemini）；
-main.py 注册 subparser + dispatch；ARCHITECTURE_COMMANDS +5 smoke。
-2 个 service 用例 + 5 条 smoke；真实库 dry-run 自检通过。
+顶层 CLI cognition-digest recent3d/weekly/monthly（--date 校验/--dry-run/--no-llm，dry-run 不调 gemini，
+空窗口跳推送）；main.py 注册 subparser + dispatch；ARCHITECTURE_COMMANDS +5 smoke。
+2 service + 3 CLI 行为用例 + 5 条 smoke；真实库 dry-run 自检通过。
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 ```
@@ -1395,7 +1543,26 @@ explore subagent + codex:codex-rescue 双门方案审查结论已并入本计划
 | 低 | explore | Task 4 缺回滚步骤 | **已修**：Step 4.8 补 `launchctl unload` 回滚清单 |
 | — | explore | "Task 5 缺 `.agents/skills/cognition-digest/` 目录" | **反驳**：cognition-digest 是 CLI 命令，经 `market-tasks/SKILL.md` + INDEX.md 行透出即可；`test_agent_symlinks` 只校验已有 symlink 完整性，不要求每命令一个 skill 目录，无需新建 |
 
-> 修订后用例数：windows 3 / collector 5 / scorer 6 / narrator 6 / renderer 3 / service 2 + smoke 5 = **30**。
+> 修订后用例数：windows 3 / collector 6 / scorer 7 / narrator 7 / renderer 4 / service 2 / cli 3 + smoke 5 = **37**。
+>
+> **G3 代码 review 修订（codex 中等 1 + 轻微 2）**：① `--date` 加 `type=_iso_date` 校验，格式错给 argparse 风格
+> 报错 + exit 2（非 traceback）；② 空窗口跳过推送（消费 `is_empty`，对齐用户「钉钉减负」偏好，dry-run 仍打印）；
+> ③ `is_empty` 用 `(self.stats or {})` 兜底防 None。新增 `test_cognition_digest_cli.py` 3 用例。
+>
+> **G2 代码 review 修订（codex 中等 2 + 轻微 1）**：① renderer `stats` 改 `.get(k,0)` 兜底防上游漏键
+> KeyError 静默炸推送，补 `test_render_missing_stats_key_no_crash`；② `_clean_bullets` 只收 `isinstance str`，
+> 非字符串元素（`[None]`/`[{..}]`）丢弃防绕过红线渲染脏串，补 `test_llm_non_string_bullets_dropped`；
+> ③ 轻微 `_llm_used` 单标记不区分混合段 —— defer 并落 narrator.py 注释（per-section 审计 YAGNI）。
+>
+> **G1 代码 review 修订（codex 中等 2 条）**：① `_distinct_teachers` 按 name 归并，避免同一老师 id 实例 +
+> name-only 实例被重复计数抬高 consensus，补 `test_score_consensus_mixed_id_and_name_no_double_count`；
+> ② 加 `test_ro_connect_rejects_writes` 直接证明只读连接拒写（比 user_version 比对更强的只读门禁）。
+
+> **实施期补丁（G1 Task 1 执行时由 implementer 发现，两审查均漏，因其只静态读 plan 未真跑）**：
+> collector 测试 fixture 漏两处真实库约束 —— ① `cognition_instances.teacher_id` 有 FK→`teachers(id)` 且
+> `PRAGMA foreign_keys=1`，写带 `teacher_id` 的实例前必须 `_seed_teachers`；② `add_cognition` 的
+> `created_at` 默认 `datetime('now')`，当 today 落在测试窗口内会污染 collector「created_at∈窗口 纳新」分支，
+> `test_collect_excludes_out_of_window` 须 `_backdate_created` 把创建时间退出窗口。两处均测试 fixture 修复，未动已审源码。
 
 ## 自检（writing-plans Self-Review）
 
