@@ -153,6 +153,101 @@ def collect_cn(registry, date: str) -> list[dict]:
     return items
 
 
+# ---- 复盘网站「研报覆盖排行·当日」面板 ----
+# 与研报速读同源（get_research_report_list），但产出形态不同：篇数排行 + 为高信号 Top 标的
+# 补评级方向徽章 + 观点标题。复用本模块打分/信号/补观点件，避免与速读漂移。
+COVERAGE_TOP_CAP = 20        # 面板总展示条数（保持历史 most_common(20) 口径）
+COVERAGE_EXPAND_CAP = 5      # 展开行上限
+_COVERAGE_ENRICH_POOL = 8    # 补观点候选池（>expand_cap，给"有信号或有观点才展开"留筛选余量）
+
+
+def _coverage_direction(signals: list[str], rating_changes: list[str]) -> str:
+    """单一评级方向徽章值：首次覆盖 > 上调 > 下调 > 维持 > ''。
+    首次覆盖兼顾 cninfo `评级变化` 列与 _enrich 从标题补的 signal（鞠磊 #1 更全）。"""
+    if "首次覆盖" in signals or any(t in rc for rc in rating_changes for t in _CN_FIRST_TOKENS):
+        return "首次覆盖"
+    if any(t in rc for rc in rating_changes for t in _CN_UP_TOKENS):
+        return "上调"
+    if any(t in rc for rc in rating_changes for t in _CN_DOWN_TOKENS):
+        return "下调"
+    if any(rc for rc in rating_changes):
+        return "维持"
+    return ""
+
+
+def build_coverage_panel(rows, registry, date, *, top_cap=COVERAGE_TOP_CAP, expand_cap=COVERAGE_EXPAND_CAP):
+    """复盘网站「研报覆盖排行·当日」面板数据。
+
+    在「篇数排行」基础上，为高信号 Top 标的补评级方向徽章 + 观点标题（红线兜底）。
+    `rows` = get_research_report_list 的 .data（market.py 已取，不在此重复网络）。
+
+    输出每项至少 {stock_code, stock_name, report_count}；展开项额外带
+    {expanded: True, rating_direction?, viewpoint?}。新字段全 optional —— 老前端/老数据
+    （只有 3 基础键）天然降级为纯药丸，不报错。展开项按鞠磊分排前，长尾药丸按篇数。
+    """
+    from services.research_digest.renderer import _safe_text  # 惰性 import 规避 renderer↔collector 循环
+
+    by_code: dict[str, dict] = {}
+    for r in rows or []:
+        code = str(r.get("stock_code") or "").strip()
+        if not code:
+            continue
+        e = by_code.setdefault(code, {
+            "stock_code": code, "stock_name": "", "report_count": 0,
+            "institutions": [], "rating_changes": [], "signals": [], "_seen_rc": set(),
+        })
+        e["report_count"] += 1  # 篇数=源行数，与历史 Counter 口径一致
+        if not e["stock_name"] and r.get("stock_name"):
+            e["stock_name"] = str(r["stock_name"]).strip()
+        inst = str(r.get("institution") or "").strip()
+        if inst:
+            e["institutions"].append(inst)
+        rc = str(r.get("rating_change") or "").strip()
+        if rc:
+            key = (inst, rc)  # 同机构同方向去重，与 collect_cn 一致
+            if key not in e["_seen_rc"]:
+                e["_seen_rc"].add(key)
+                e["rating_changes"].append(rc)
+
+    # 长尾药丸保持「篇数排行」历史口径（report_count=源行数，与原 market.py Counter 一致）；
+    # 展开行另按鞠磊 score 重排（见下）。两者口径有意不同：药丸=覆盖热度榜，展开=最值得读 Top。
+    ranked = sorted(by_code.values(), key=lambda e: (-e["report_count"], e["stock_code"]))[:top_cap]
+    for e in ranked:
+        org_count = len(set(e["institutions"]))
+        e["_score"] = _cn_score(org_count, e["rating_changes"])  # 打分用去重机构数（覆盖广度），非篇数
+        e["signals"] = _cn_signals(org_count, e["rating_changes"])
+
+    # 候选池按分取 ≤pool，仅给这些补观点（控网络调用数）→ 筛"有信号或有观点"为展开集。
+    # 注：此处 by_code/ranked/pool 都是本函数自建的新 dict，与 collect_cn 的 items 互不共享对象；
+    # _enrich_cn_viewpoints 在本函数内只调一次，不存在跨函数重复 in-place 修改 signals 的问题。
+    pool = sorted(ranked, key=lambda e: (-e["_score"], -e["report_count"], e["stock_code"]))[:_COVERAGE_ENRICH_POOL]
+    _enrich_cn_viewpoints(registry, pool, date)  # in place 写 e["viewpoint"]（dict）+ 可能从标题补 signal
+    # 优雅降级（有意）：多篇标的必有东财研报→必有观点→必入展开；只有"全 1 篇且无东财覆盖"的
+    # 空研报日才会 expandable 偏少甚至为空，此时面板退化为纯药丸（= 历史现状），符合设计预期。
+    expandable = [e for e in pool if e["signals"] or e.get("viewpoint")]
+    expandable.sort(key=lambda e: (-e["_score"], -e["report_count"], e["stock_code"]))
+    expand_list = expandable[:expand_cap]
+    expand_codes = {e["stock_code"] for e in expand_list}  # by_code 以 code 为键，天然去重，无重复风险
+
+    def _shape(e: dict) -> dict:
+        out = {"stock_code": e["stock_code"], "stock_name": e["stock_name"], "report_count": e["report_count"]}
+        if e["stock_code"] in expand_codes:
+            out["expanded"] = True
+            direction = _coverage_direction(e["signals"], e["rating_changes"])
+            if direction:
+                out["rating_direction"] = direction
+            vp = e.get("viewpoint")
+            if vp and vp.get("title"):
+                safe = _safe_text(vp["title"], source="研报覆盖观点")  # 命中红线整条丢
+                if safe:
+                    out["viewpoint"] = safe
+        return out
+
+    expanded_rows = [_shape(e) for e in expand_list]                                # 鞠磊分序
+    pill_rows = [_shape(e) for e in ranked if e["stock_code"] not in expand_codes]   # 篇数序
+    return expanded_rows + pill_rows
+
+
 # 鞠磊框架：美股 Action 映射到同一套信号标签（init=首次覆盖为 #1 信号）。
 _US_ACTION_SIGNAL = {"init": "首次覆盖", "reinit": "重启覆盖", "up": "评级上调", "down": "评级下调"}
 

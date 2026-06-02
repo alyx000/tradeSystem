@@ -187,3 +187,98 @@ def test_us_date_window_uses_eastern_calendar():
     start, end = collector.us_date_window(lookback_days=5, now_et=now)
     assert end == "2026-06-01"
     assert start == "2026-05-27"
+
+
+# ---- build_coverage_panel：复盘网站「研报覆盖排行·当日」面板数据 ----
+
+def test_coverage_panel_report_count_is_row_count_and_ranked():
+    """篇数=源行数（与历史口径一致），按篇数降序，top_cap 截断。"""
+    rows = [
+        {"stock_code": "600519", "stock_name": "茅台", "institution": "中信", "rating_change": "维持"},
+        {"stock_code": "600519", "stock_name": "茅台", "institution": "国君", "rating_change": "维持"},
+        {"stock_code": "000001", "stock_name": "平安", "institution": "广发", "rating_change": "维持"},
+    ]
+    reg = FakeReg({"get_research_reports": _res([])})
+    out = collector.build_coverage_panel(rows, reg, "2026-05-29", top_cap=2)
+    assert [r["stock_code"] for r in out] == ["600519", "000001"]  # 2篇 排前
+    assert out[0]["report_count"] == 2
+    assert out[1]["report_count"] == 1
+
+
+def test_coverage_panel_expands_top_with_direction_and_viewpoint():
+    """高信号标的展开：带评级方向徽章 + 观点标题（红线已过）。"""
+    rows = [{"stock_code": "300999", "stock_name": "新覆盖股", "institution": "中信", "rating_change": "首次"}]
+    reports = [{"date": "2026-05-29", "institution": "东吴", "title": "再融资落地，业务全面高增"}]
+    reg = FakeReg({"get_research_reports": _res(reports)})
+    out = collector.build_coverage_panel(rows, reg, "2026-05-29")
+    item = out[0]
+    assert item["expanded"] is True
+    assert item["rating_direction"] == "首次覆盖"
+    assert item["viewpoint"] == "再融资落地，业务全面高增"
+
+
+def test_coverage_panel_redline_scrubs_viewpoint():
+    """观点标题命中红线（目标价）→ 整条丢弃，但仍保留 expanded + 徽章。"""
+    rows = [{"stock_code": "300999", "stock_name": "X", "institution": "中信", "rating_change": "首次"}]
+    reports = [{"date": "2026-05-29", "institution": "东吴", "title": "上调目标价至 100 元"}]
+    reg = FakeReg({"get_research_reports": _res(reports)})
+    out = collector.build_coverage_panel(rows, reg, "2026-05-29")
+    assert out[0]["expanded"] is True
+    assert out[0]["rating_direction"] == "首次覆盖"
+    assert "viewpoint" not in out[0]
+
+
+def test_coverage_panel_no_signal_no_viewpoint_all_pills():
+    """无信号（纯维持）且无研报观点 → 不产生展开行，全药丸；新字段缺省（向后兼容）。"""
+    rows = [
+        {"stock_code": "000001", "stock_name": "平安", "institution": "广发", "rating_change": "维持"},
+        {"stock_code": "000002", "stock_name": "万科", "institution": "中信", "rating_change": "维持"},
+    ]
+    reg = FakeReg({"get_research_reports": _res([])})
+    out = collector.build_coverage_panel(rows, reg, "2026-05-29")
+    assert all("expanded" not in r for r in out)
+    for r in out:
+        assert set(r.keys()) == {"stock_code", "stock_name", "report_count"}
+
+
+def test_coverage_panel_graceful_when_reports_raise():
+    """逐股研报抛异常 → 不附 viewpoint、不崩，仍返回篇数行。"""
+    rows = [{"stock_code": "300999", "stock_name": "X", "institution": "中信", "rating_change": "首次"}]
+
+    class Boom:
+        def call(self, method, *args):
+            raise RuntimeError("em down")
+    out = collector.build_coverage_panel(rows, Boom(), "2026-05-29")
+    assert out and out[0]["report_count"] == 1
+    assert "viewpoint" not in out[0]
+
+
+def test_coverage_panel_empty_rows_returns_empty():
+    """空 rows / None → 返空（不崩）。"""
+    reg = FakeReg({"get_research_reports": _res([])})
+    assert collector.build_coverage_panel([], reg, "2026-05-29") == []
+    assert collector.build_coverage_panel(None, reg, "2026-05-29") == []
+
+
+def test_coverage_panel_skips_blank_stock_codes():
+    """缺 stock_code 的脏行被跳过，不混入输出。"""
+    rows = [
+        {"stock_code": "", "stock_name": "脏行", "rating_change": "首次"},
+        {"stock_code": "000001", "stock_name": "平安", "institution": "广发", "rating_change": "维持"},
+    ]
+    reg = FakeReg({"get_research_reports": _res([])})
+    out = collector.build_coverage_panel(rows, reg, "2026-05-29")
+    assert [r["stock_code"] for r in out] == ["000001"]
+
+
+def test_coverage_panel_expanded_sorted_before_pills_by_score():
+    """展开项（高分）排在长尾药丸之前。"""
+    rows = [
+        {"stock_code": "300999", "stock_name": "首覆股", "institution": "中信", "rating_change": "首次"},
+        {"stock_code": "000001", "stock_name": "平安", "institution": "广发", "rating_change": "维持"},
+        {"stock_code": "000002", "stock_name": "万科", "institution": "国君", "rating_change": "维持"},
+    ]
+    reg = FakeReg({"get_research_reports": _res([])})
+    out = collector.build_coverage_panel(rows, reg, "2026-05-29")
+    assert out[0]["stock_code"] == "300999"  # 首次覆盖分最高，排首且展开
+    assert out[0].get("expanded") is True

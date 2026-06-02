@@ -671,24 +671,13 @@ class MarketCollector:
         except Exception as e:
             logger.warning(f"大宗交易采集异常: {e}")
 
-        # 18. 研报覆盖统计
+        # 18. 研报覆盖统计（复用 research_digest.build_coverage_panel：篇数排行 + 高信号标的补方向徽章/观点）
         try:
-            report_result = self.registry.call("get_research_report_list", date)
-            if report_result.success and report_result.data:
-                from collections import Counter
-                stock_counts: Counter[str] = Counter()
-                stock_names: dict[str, str] = {}
-                for r in report_result.data:
-                    code = r.get("stock_code", "")
-                    if code:
-                        stock_counts[code] += 1
-                        stock_names[code] = r.get("stock_name", "")
-                top_covered = [
-                    {"stock_code": code, "stock_name": stock_names.get(code, ""), "report_count": count}
-                    for code, count in stock_counts.most_common(20)
-                ]
+            top_covered = self._collect_research_coverage(date)
+            if top_covered:
                 result["research_coverage_top"] = top_covered
-                logger.info(f"研报覆盖统计完成，共 {len(report_result.data)} 篇，覆盖 {len(stock_counts)} 只")
+                expanded_n = sum(1 for r in top_covered if r.get("expanded"))
+                logger.info(f"研报覆盖统计完成，{len(top_covered)} 只（{expanded_n} 只展开补观点）")
         except Exception as e:
             logger.warning(f"研报覆盖统计失败: {e}")
 
@@ -698,6 +687,16 @@ class MarketCollector:
     # ------------------------------------------------------------------
     # 辅助方法
     # ------------------------------------------------------------------
+
+    def _collect_research_coverage(self, date: str) -> list[dict]:
+        """研报覆盖排行（复盘网站「当日」面板）：取巨潮当日评级清单，交 build_coverage_panel
+        产出篇数排行 + 高信号 Top 标的的评级方向徽章/观点（与研报速读同源，不重复网络）。
+        采集失败 / 空 → 返 []（不致命，由调用方决定是否落库）。"""
+        report_result = self.registry.call("get_research_report_list", date)
+        if not (report_result.success and report_result.data):
+            return []
+        from services.research_digest.collector import build_coverage_panel
+        return build_coverage_panel(report_result.data, self.registry, date)
 
     @staticmethod
     def _aggregate_limit_up_industry(stocks: list[dict]) -> list[dict]:
