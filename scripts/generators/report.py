@@ -1264,7 +1264,8 @@ def _render_style_factors(lines: list, raw_data: dict, section_idx: int) -> int:
     popularity = sf.get("popularity", []) or []
     promotion = sf.get("promotion") or {}
 
-    if not snap and not board_pref and not cap_pref and not popularity and not promotion:
+    if (not snap and not board_pref and not cap_pref and not popularity
+            and not promotion and not trend and not signals):
         return section_idx
 
     lines.append(f"\n## {_roman(section_idx)}、风格化赚钱效应 [事实] ★★★\n")

@@ -22,6 +22,8 @@ from typing import Optional
 
 import yaml
 
+from utils import is_st_stock
+
 logger = logging.getLogger(__name__)
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
@@ -72,13 +74,22 @@ class PremiumCollector:
             "first_board_yizi": [],
             "yizi_first_open": [],
         }
-        all_entries: list[dict] = []
+        st_excluded = 0
 
         for stock in stocks:
             code = stock.get("code")
             prev_close = stock.get("close", 0)
             limit_times = stock.get("limit_times", 1)
             if not code or not prev_close:
+                continue
+
+            # G 修复：ST/*ST 走 5% 涨跌停制度，不属于 10/20/30cm 审美档位。
+            # abs(pct_chg)≈5 会落进 else 分支被误判为 10cm 首板，系统性污染题材首板溢价中位，
+            # 故整体排除出全部连板分组桶（与 limit_up 其它环节的 ex-ST 口径一致）。
+            # 用 is_st_stock（startswith ST/*ST/S*ST/SST）而非子串匹配，避免误伤含 "ST" 的正常名。
+            name = stock.get("name", "")
+            if is_st_stock(name):
+                st_excluded += 1
                 continue
 
             r = self.registry.call("get_stock_daily", code, trade_date)
@@ -98,7 +109,7 @@ class PremiumCollector:
 
             entry = {
                 "code": code,
-                "name": stock.get("name", ""),
+                "name": name,
                 "limit_times": limit_times,
                 "prev_close": prev_close,
                 "t_open": t_open,
@@ -107,7 +118,6 @@ class PremiumCollector:
                 "is_yizi": is_yizi,
                 "amount_billion": stock.get("amount_billion", 0),
             }
-            all_entries.append(entry)
 
             if limit_times == 1:
                 if pct_chg > 25:
@@ -132,12 +142,13 @@ class PremiumCollector:
             if is_yizi and limit_times >= 2:
                 groups["yizi_first_open"].append(entry)
 
-        # 容量票：按 T-1 成交额降序取前 10
-        capacity_top10 = sorted(
-            all_entries,
-            key=lambda x: x.get("amount_billion", 0),
-            reverse=True,
-        )[:10]
+        if st_excluded:
+            logger.info(f"溢价分组已排除 ST/*ST 共 {st_excluded} 只（5% 板不计入审美档位）")
+
+        # 容量票：全市场成交额前 10（T-1 raw_data.top_volume_stocks）→ T 日开盘溢价。
+        # B 修复：旧实现仅在「涨停股池」内按成交额取前 10，语义偏窄；
+        # 改为全市场大成交额票口径，度量真正的「容量票赚钱效应」。
+        capacity_top10 = self._compute_capacity_entries(prev_data, trade_date, prev_date)
 
         # 3. 聚合统计
         def _agg(items: list[dict]) -> dict:
@@ -202,6 +213,49 @@ class PremiumCollector:
                 f"晋级率回填完成｜首板→二板 {fts['promoted']}/{fts['base']}"
             )
         return result
+
+    def _compute_capacity_entries(
+        self, prev_data: dict, trade_date: str, prev_date: str
+    ) -> list[dict]:
+        """容量票：全市场成交额前 10（T-1）→ T 日开盘溢价 entries。
+
+        数据源优先读 T-1 yaml 的 raw_data.top_volume_stocks（盘后已落、全市场口径）；
+        历史 yaml 无该字段时回拉一次 get_top_volume_stocks(prev_date, 10)。
+        每只取 item.close 作 T-1 收盘价，registry 拉 T 日开盘价算溢价。
+        """
+        raw = prev_data.get("raw_data", {})
+        top_volume = raw.get("top_volume_stocks")
+        if not (isinstance(top_volume, list) and top_volume):
+            r = self.registry.call("get_top_volume_stocks", prev_date, 10)
+            if r.success and r.data:
+                logger.info(f"T-1 成交额前10缺失，已回拉 {prev_date} 全市场成交额排名（容量票）")
+                top_volume = list(r.data)
+            else:
+                logger.debug("容量票全市场成交额排名不可得，capacity_top10 置空")
+                return []
+
+        entries: list[dict] = []
+        for item in top_volume[:10]:
+            code = str(item.get("code", ""))
+            prev_close = item.get("close", 0)
+            if not code or not prev_close:
+                continue
+            r = self.registry.call("get_stock_daily", code, trade_date)
+            if not r.success or not r.data:
+                continue
+            t_open = r.data.get("open", 0)
+            if not t_open:
+                continue
+            premium_pct = round((t_open - prev_close) / prev_close * 100, 2)
+            entries.append({
+                "code": code,
+                "name": item.get("name", ""),
+                "prev_close": prev_close,
+                "t_open": t_open,
+                "premium_pct": premium_pct,
+                "amount_billion": item.get("amount_billion", item.get("amount", 0)),
+            })
+        return entries
 
     def _compute_promotion(
         self, prev_stocks: list[dict], trade_date: str, prev_date: str
