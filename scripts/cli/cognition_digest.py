@@ -18,12 +18,21 @@ logger = logging.getLogger(__name__)
 WINDOW_CHOICES = ("recent3d", "weekly", "monthly")
 
 
+def _iso_date(s: str) -> str:
+    """argparse type 校验：--date 必须 YYYY-MM-DD，否则给 argparse 风格报错 + exit 2（codex 中项）。"""
+    try:
+        datetime.date.fromisoformat(s)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"--date 需为 YYYY-MM-DD 格式，收到: {s!r}")
+    return s
+
+
 def register_subparser(subparsers: argparse._SubParsersAction) -> None:
     p = subparsers.add_parser("cognition-digest", help="交易认知沉淀定时汇总（近3日/周/月 → 钉钉）")
     sub = p.add_subparsers(dest="cognition_digest_window")
     for win in WINDOW_CHOICES:
         sp = sub.add_parser(win, help=f"{win} 窗口认知沉淀汇总")
-        sp.add_argument("--date", default=None, help="anchor 日期 YYYY-MM-DD（默认今天）")
+        sp.add_argument("--date", default=None, type=_iso_date, help="anchor 日期 YYYY-MM-DD（默认今天）")
         sp.add_argument("--dry-run", action="store_true", help="仅打印 markdown，不推送")
         sp.add_argument("--no-llm", action="store_true", help="关闭 LLM，纯结构化建议")
 
@@ -50,6 +59,10 @@ def _run(config: dict, args: argparse.Namespace, window: str) -> None:
     if args.dry_run:
         print(digest.markdown)
         logger.info("[cognition-digest] dry-run 完成（未推送）")
+        return
+    # 空窗口不推送：避免安静日（尤其每日 recent3d）发"无新增认知"噪音通知（钉钉减负；消费 is_empty）
+    if digest.is_empty:
+        logger.info("[cognition-digest] %s 本窗口无新增认知沉淀，跳过推送", window)
         return
     _push_to_dingtalk(digest.title, digest.markdown)
 

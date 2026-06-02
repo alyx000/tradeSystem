@@ -17,7 +17,8 @@ class RenderedCognitionDigest:
 
     @property
     def is_empty(self) -> bool:
-        return not self.ranked and self.stats.get("instances", 0) == 0
+        # (self.stats or {}) 兜底：stats 显式传 None 时不抛 AttributeError（codex 轻微项）
+        return not self.ranked and (self.stats or {}).get("instances", 0) == 0
 
 
 def run_window_digest(db_path, window: str, anchor_date: str, *,
