@@ -249,6 +249,15 @@ class TestDailyMarket:
         assert row["premium_20cm"] == 5.0
         assert row["premium_30cm"] == 0.8
 
+    def test_update_premium_capacity_and_first_open(self, conn):
+        """update_premium 支持容量票/一字首开两新列，缺省时不动其它列。"""
+        Q.upsert_daily_market(conn, {"date": "2026-04-02", "premium_10cm": 1.1})
+        Q.update_premium(conn, "2026-04-02", premium_capacity=1.79, premium_first_open=-0.71)
+        row = Q.get_daily_market(conn, "2026-04-02")
+        assert row["premium_capacity"] == 1.79
+        assert row["premium_first_open"] == -0.71
+        assert row["premium_10cm"] == 1.1  # 未传参的列保持原值
+
     def test_range_query(self, conn):
         for d in ["2026-03-29", "2026-03-30", "2026-03-31", "2026-04-01"]:
             Q.upsert_daily_market(conn, {"date": d, "total_amount": 10000.0})

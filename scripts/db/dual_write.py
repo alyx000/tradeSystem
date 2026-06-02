@@ -340,6 +340,10 @@ def _extract_market_row(date_str: str, envelope: dict) -> dict:
     if premium_second_board is None:
         premium_second_board = style.get("premium_second_board")
 
+    # 容量票（全市场成交额前10）/ 一字首开溢价中位：仅快照来源，无 legacy YAML 标量列
+    premium_capacity = _snap_premium_med("capacity_top10")
+    premium_first_open = _snap_premium_med("yizi_first_open")
+
     northbound_net = northbound.get("net_buy_billion")
     if northbound_net is None:
         northbound_net = capital.get("northbound_net")
@@ -397,6 +401,8 @@ def _extract_market_row(date_str: str, envelope: dict) -> dict:
         "premium_20cm": premium_20cm,
         "premium_30cm": premium_30cm,
         "premium_second_board": premium_second_board,
+        "premium_capacity": premium_capacity,
+        "premium_first_open": premium_first_open,
         "northbound_net": northbound_net,
         "margin_balance": margin_balance,
         "market_breadth": market_breadth_out,

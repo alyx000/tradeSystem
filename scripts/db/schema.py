@@ -365,6 +365,8 @@ CREATE TABLE IF NOT EXISTS daily_market (
     premium_20cm REAL,
     premium_30cm REAL,
     premium_second_board REAL,
+    premium_capacity REAL,
+    premium_first_open REAL,
     northbound_net REAL,
     margin_balance REAL,
     market_breadth TEXT,

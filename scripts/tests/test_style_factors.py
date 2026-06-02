@@ -60,7 +60,7 @@ def _make_registry_with_open(open_price_map: dict):
 class TestPremiumCollectorEnhanced:
     """验证 PremiumCollector 的新分组逻辑"""
 
-    def _run_collect(self, stocks, open_map, tmp_path):
+    def _run_collect(self, stocks, open_map, tmp_path, top_volume=None):
         from collectors.premium import PremiumCollector
 
         prev_date = "2026-03-27"
@@ -70,12 +70,11 @@ class TestPremiumCollectorEnhanced:
         day_dir.mkdir()
 
         import yaml
+        raw: dict = {"limit_up": {"count": len(stocks), "stocks": stocks}}
+        if top_volume is not None:
+            raw["top_volume_stocks"] = top_volume
         yaml_path = day_dir / "post-market.yaml"
-        yaml_path.write_text(yaml.dump({
-            "raw_data": {
-                "limit_up": {"count": len(stocks), "stocks": stocks}
-            }
-        }), encoding="utf-8")
+        yaml_path.write_text(yaml.dump({"raw_data": raw}), encoding="utf-8")
 
         registry = _make_registry_with_open(open_map)
 
@@ -114,20 +113,46 @@ class TestPremiumCollectorEnhanced:
         assert result["first_board_yizi"]["count"] == 1
         assert result["first_board_yizi"]["detail"][0]["code"] == "Y.SZ"
 
-    def test_capacity_top10(self, tmp_path):
-        """容量票 Top10 按 amount_billion 降序取前 10"""
-        stocks = [
-            _make_stock(f"S{i}.SZ", f"S{i}", 10.0, 10.0, amount_billion=float(i))
-            for i in range(1, 15)
-        ]
-        open_map = {f"S{i}.SZ": 10.5 for i in range(1, 15)}
+    def test_capacity_top10_from_market_top_volume(self, tmp_path):
+        """容量票 Top10 改为全市场成交额前10（raw_data.top_volume_stocks），非涨停池。
 
-        result = self._run_collect(stocks, open_map, tmp_path)
+        B 修复：容量票度量「全市场大成交额票」次日溢价，不再局限于涨停股池。
+        """
+        # 涨停池里只有一只小成交额涨停股
+        stocks = [_make_stock("LU1.SZ", "涨停1", 10.0, 10.0, amount_billion=1.0)]
+        # 全市场成交额前10（含非涨停的大票，按 amount 已降序）
+        top_volume = [
+            {"code": f"BIG{i}.SH", "name": f"大票{i}", "close": 100.0,
+             "amount": 9_000_000_000 - i}
+            for i in range(10)
+        ]
+        open_map = {"LU1.SZ": 10.5}
+        open_map.update({f"BIG{i}.SH": 101.0 for i in range(10)})  # 全部 +1% 高开
+
+        result = self._run_collect(stocks, open_map, tmp_path, top_volume=top_volume)
         cap = result["capacity_top10"]
         assert cap["count"] == 10
         codes = [d["code"] for d in cap["detail"]]
-        assert "S14.SZ" in codes
-        assert "S1.SZ" not in codes
+        assert "BIG0.SH" in codes
+        assert "LU1.SZ" not in codes, "涨停小票不应再进容量票（已改全市场口径）"
+        # premium = (101-100)/100*100 = 1.0
+        assert cap["premium_median"] == 1.0
+
+    def test_st_excluded_from_first_board(self, tmp_path):
+        """ST / *ST（5% 板）不应落入 10cm 首板桶（G 修复）。"""
+        stocks = [
+            _make_stock("ST1.SZ", "ST金科", 10.0, 5.0, limit_times=1),    # ST 5% 板
+            _make_stock("ST2.SZ", "*ST海航", 10.0, 5.0, limit_times=1),   # *ST 5% 板
+            _make_stock("N1.SZ", "正常股", 10.0, 10.0, limit_times=1),     # 正常 10cm 首板
+        ]
+        open_map = {"ST1.SZ": 10.2, "ST2.SZ": 10.2, "N1.SZ": 10.3}
+
+        result = self._run_collect(stocks, open_map, tmp_path)
+        codes_10cm = [d["code"] for d in result["first_board_10cm"]["detail"]]
+        assert "ST1.SZ" not in codes_10cm
+        assert "ST2.SZ" not in codes_10cm
+        assert "N1.SZ" in codes_10cm
+        assert result["first_board_10cm"]["count"] == 1
 
     def test_amount_billion_in_entry(self, tmp_path):
         """entry 中应包含 amount_billion 字段"""
@@ -243,6 +268,7 @@ class TestStyleAnalyzer:
         from analyzers.style_factors import StyleAnalyzer
         sa = StyleAnalyzer()
         backfill = {
+            "trade_date": "2026-03-28",
             "first_board": {"count": 68, "premium_median": 0.14, "premium_mean": 0.5, "open_up_rate": 0.52},
             "second_board": {"count": 7, "premium_median": 2.46, "premium_mean": 2.58, "open_up_rate": 0.71},
         }
@@ -369,6 +395,95 @@ class TestStyleAnalyzer:
         assert len(trend["first_board_median_5d"]) == 5
         assert trend["direction"] == "走弱"
 
+    def test_premium_snapshot_strict_no_fallback_to_older(self, tmp_path):
+        """T-1（紧邻前一日）无 premium_backfill 时，快照不回退读 T-2 旧值（D 修复）。"""
+        # T-2 有 backfill（陈旧值，不应被取用）
+        self._write_backfill(tmp_path, "2026-03-26", {
+            "first_board": {"count": 68, "premium_median": 9.9, "premium_mean": 9.9, "open_up_rate": 0.5},
+        })
+        # T-1 存在但无 premium_backfill（当日 backfill 缺失，如节后真空日）
+        import yaml
+        (tmp_path / "2026-03-27").mkdir()
+        (tmp_path / "2026-03-27" / "post-market.yaml").write_text(
+            yaml.dump({"popularity_backfill": []}), encoding="utf-8")
+
+        from analyzers.style_factors import StyleAnalyzer
+        sa = StyleAnalyzer()
+        with patch("analyzers.style_factors.DAILY_DIR", tmp_path):
+            result = sa.analyze(self._make_raw_data(), "2026-03-28")
+
+        assert result["premium_snapshot"] == {}, "T-1 缺 backfill 时不应回退读 T-2 陈旧快照"
+
+    def test_premium_snapshot_count_zero_no_fallback(self, tmp_path):
+        """T-1 backfill first_board.count==0（真空日）→ 快照空，不回退 T-2（D 修复）。"""
+        self._write_backfill(tmp_path, "2026-03-26", {
+            "first_board": {"count": 68, "premium_median": 9.9, "premium_mean": 9.9, "open_up_rate": 0.5},
+        })
+        self._write_backfill(tmp_path, "2026-03-27", {"first_board": {"count": 0}})
+
+        from analyzers.style_factors import StyleAnalyzer
+        sa = StyleAnalyzer()
+        with patch("analyzers.style_factors.DAILY_DIR", tmp_path):
+            result = sa.analyze(self._make_raw_data(), "2026-03-28")
+
+        assert result["premium_snapshot"] == {}, "count==0 真空日不应回退 T-2"
+
+    def test_premium_snapshot_trade_date_mismatch_guard(self, tmp_path):
+        """T-1 backfill 的 trade_date 与当前 date 不一致（陈旧写入）→ 视为无回填（D 守卫）。"""
+        self._write_backfill(tmp_path, "2026-03-27", {
+            "trade_date": "2026-03-27",  # 错位：应为 2026-03-28
+            "first_board": {"count": 68, "premium_median": 5.5, "premium_mean": 5.5, "open_up_rate": 0.5},
+        })
+
+        from analyzers.style_factors import StyleAnalyzer
+        sa = StyleAnalyzer()
+        with patch("analyzers.style_factors.DAILY_DIR", tmp_path):
+            result = sa.analyze(self._make_raw_data(), "2026-03-28")
+
+        assert result["premium_snapshot"] == {}, "trade_date 错位的陈旧 backfill 不应被取用"
+
+    def test_premium_trend_dates_aligned(self, tmp_path):
+        """premium_trend 输出与 medians 等长对齐的 dates（A/F 支撑前端旧→新带日期展示）。"""
+        for i, med in enumerate([0.5, 0.3, 0.1, -0.1, -0.3]):
+            date = f"2026-03-{20 + i:02d}"
+            self._write_backfill(tmp_path, date, {
+                "first_board": {"count": 68, "premium_median": med, "premium_mean": med, "open_up_rate": 0.5},
+                "trade_date": f"2026-03-{21 + i:02d}",
+            })
+
+        from analyzers.style_factors import StyleAnalyzer
+        sa = StyleAnalyzer()
+        with patch("analyzers.style_factors.DAILY_DIR", tmp_path):
+            result = sa.analyze(self._make_raw_data(), "2026-03-26")
+
+        trend = result["premium_trend"]
+        assert "dates" in trend
+        assert len(trend["dates"]) == len(trend["first_board_median_5d"])
+
+    def test_premium_trend_window_bounded_to_5_trading_days(self, tmp_path):
+        """趋势窗口限定最近 5 个交易日目录，中间空日剔除后不回溯第 6 日（F 修复）。"""
+        meds = {
+            "2026-03-20": 11.0, "2026-03-21": 99.0, "2026-03-22": 0.1,
+            "2026-03-23": 0.2, "2026-03-25": 0.3, "2026-03-26": 0.4,
+        }
+        for d, m in meds.items():
+            self._write_backfill(tmp_path, d, {
+                "first_board": {"count": 68, "premium_median": m, "premium_mean": m, "open_up_rate": 0.5},
+            })
+        # 03-24 为真空日（count==0），位于最近 5 个目录之内
+        self._write_backfill(tmp_path, "2026-03-24", {"first_board": {"count": 0}})
+
+        from analyzers.style_factors import StyleAnalyzer
+        sa = StyleAnalyzer()
+        with patch("analyzers.style_factors.DAILY_DIR", tmp_path):
+            result = sa.analyze(self._make_raw_data(), "2026-03-27")
+
+        # prev_dirs[:5] = [03-26,03-25,03-24,03-23,03-22]；03-24 空 → medians=[0.4,0.3,0.2,0.1]
+        medians = result["premium_trend"]["first_board_median_5d"]
+        assert 99.0 not in medians, "不应回溯到第 6 个交易日 03-21"
+        assert 11.0 not in medians, "不应回溯到第 7 个交易日 03-20"
+        assert len(medians) == 4
+
     def test_trend_direction_strengthening(self):
         from analyzers.style_factors import StyleAnalyzer
         assert StyleAnalyzer._judge_trend([-0.3, -0.1, 0.1, 0.3, 0.5]) == "走弱"
@@ -379,6 +494,7 @@ class TestStyleAnalyzer:
         from analyzers.style_factors import StyleAnalyzer
         sa = StyleAnalyzer()
         self._write_backfill(tmp_path, "2026-03-27", {
+            "trade_date": "2026-03-28",
             "first_board": {"count": 68, "premium_median": -0.5, "premium_mean": -0.3, "open_up_rate": 0.35},
         })
 
@@ -393,6 +509,7 @@ class TestStyleAnalyzer:
         from analyzers.style_factors import StyleAnalyzer
         sa = StyleAnalyzer()
         self._write_backfill(tmp_path, "2026-03-27", {
+            "trade_date": "2026-03-28",
             "first_board": {"count": 68, "premium_median": 0.5, "premium_mean": 0.5, "open_up_rate": 0.6},
             "third_board_plus": {"count": 3, "premium_median": -5.0, "premium_mean": -4.0, "open_up_rate": 0.3},
         })
@@ -407,6 +524,7 @@ class TestStyleAnalyzer:
         from analyzers.style_factors import StyleAnalyzer
         sa = StyleAnalyzer()
         self._write_backfill(tmp_path, "2026-03-27", {
+            "trade_date": "2026-03-28",
             "first_board": {"count": 68, "premium_median": 0.5, "premium_mean": 0.5, "open_up_rate": 0.6},
         })
         raw = self._make_raw_data(indices={
@@ -555,6 +673,22 @@ class TestReportStyleSection:
         new_idx = _render_style_factors(lines, {}, 5)
         assert new_idx == 5
         assert lines == []
+
+    def test_render_trend_only_still_renders_section(self):
+        """快照为空但趋势/信号有值时仍渲染风格章节（D 修复后缺口日 snap 常空，不能丢趋势）。"""
+        from generators.report import _render_style_factors
+
+        raw_data = {
+            "style_factors": {
+                "premium_snapshot": {},
+                "premium_trend": {"direction": "走弱", "first_board_median_5d": [0.21, 1.83]},
+                "switch_signals": ["近5日首板溢价趋势走弱"],
+            }
+        }
+        lines: list = []
+        new_idx = _render_style_factors(lines, raw_data, 8)
+        assert new_idx == 9, "trend/signals 有值时不应早退跳过整段"
+        assert any("走弱" in ln for ln in lines)
 
     def test_auto_analysis_includes_style(self):
         from generators.report import _generate_auto_analysis

@@ -75,20 +75,39 @@ class StyleAnalyzer:
     # ------------------------------------------------------------------
 
     def _build_premium_trend(self, date: str) -> dict:
+        """近 5 个交易日（严格最近 5 个前序目录）首板溢价中位走势。
+
+        F 修复：旧实现经 _load_recent_backfills 的 count>0 过滤会跳过空/缺失日、
+        向更早回溯，使「5日」实际跨越 >2 周。改为限定 _prev_dirs[:5]（最近 5 个交易日目录），
+        空/缺失日剔除但不外扩窗口；medians 与 dates（取 backfill.trade_date，即溢价实现日）
+        等长对齐。medians 保持 most-recent-first（_judge_trend 约定 series[0] 为最近一天）。
+        """
         medians: list[float] = []
-        for backfill in self._load_recent_backfills(date, n=5):
-            fb = backfill.get("first_board", {})
-            med = fb.get("premium_median")
-            if med is not None:
-                medians.append(med)
+        dates: list[str] = []
+        for d in self._prev_dirs(date)[:5]:
+            pm = d / "post-market.yaml"
+            if not pm.exists():
+                continue
+            try:
+                with open(pm, encoding="utf-8") as f:
+                    data = yaml.safe_load(f) or {}
+            except Exception:
+                continue
+            bf = data.get("premium_backfill") or {}
+            fb = bf.get("first_board", {})
+            med = fb.get("premium_median") if fb.get("count") else None
+            if med is None:
+                continue
+            medians.append(med)
+            dates.append(bf.get("trade_date") or d.name)
 
         if not medians:
             return {}
 
-        direction = self._judge_trend(medians)
         return {
             "first_board_median_5d": medians,
-            "direction": direction,
+            "dates": dates,
+            "direction": self._judge_trend(medians),
         }
 
     @staticmethod
@@ -214,11 +233,9 @@ class StyleAnalyzer:
     def _iter_prev_yaml(self, date: str):
         """按时间倒序产出 date 之前每个交易日的 post-market.yaml 解析结果。
 
-        注：本迭代器是从原 `_load_recent_backfills` 内联目录遍历抽出的共享逻辑，
-        语义与原实现一致——只负责"按倒序产出已存在且可解析的 yaml"（跳过缺失/损坏），
-        是否计入「最近 n 个」由调用方的过滤条件决定（见 _load_recent_backfills
-        仍保留 `first_board.count>0` 过滤 + `len(results)>=n` 仅统计有效项）。
-        因此「最近 n 个有有效溢价的交易日」语义未改变。
+        只负责"按倒序产出已存在且可解析的 yaml"（跳过缺失/损坏），是否计入「最近 n 个」
+        由调用方的过滤条件决定。当前仅 `_load_prev_field(first_only=False)` 复用本迭代器
+        （premium 快照/趋势已改走 `_prev_dirs[:N]` 的严格窗口，不再经此迭代器）。
 
         ⚠ 本迭代器会跳过缺失/损坏的 yaml，因此不适合需要"严格锁紧邻前一日"的场景
         （见 _load_prev_field first_only 分支——它直接走 _prev_dirs[0]，不复用本迭代器）。
@@ -234,21 +251,37 @@ class StyleAnalyzer:
                 continue
 
     def _load_prev_backfill(self, date: str) -> dict | None:
-        """读取距离 date 最近的一次 premium_backfill。"""
-        for bf in self._load_recent_backfills(date, n=1):
-            return bf
-        return None
+        """严格读取紧邻前一交易日（_prev_dirs[0]）的 premium_backfill。
 
-    def _load_recent_backfills(self, date: str, n: int = 5) -> list[dict]:
-        """按时间倒序读取最近 n 个交易日的 premium_backfill。"""
-        results: list[dict] = []
-        for data in self._iter_prev_yaml(date):
-            if len(results) >= n:
-                break
-            bf = data.get("premium_backfill")
-            if bf and bf.get("first_board", {}).get("count", 0) > 0:
-                results.append(bf)
-        return results
+        D 修复：旧实现走 _load_recent_backfills(n=1)，其 first_board.count>0 过滤会跳过
+        缺失/真空日、静默回退到更早某天的旧值（陈旧数据冒充当日）。节假日缺口 / 当日 backfill
+        缺失 / count==0 真空日都会触发，且无 source_date 标记，DB 与 UI 都看不出是陈旧值。
+        改为严格只看紧邻前一日，绝不跨日回退：
+        - 该日 yaml 缺失 / 无 premium_backfill → None；
+        - backfill 携带 trade_date 且与当前 date 不一致（陈旧错位写入）→ None；
+        count==0（真空日）仍返回该 backfill，由下游 _build_premium_snapshot 按空处理
+        （只会让快照为空，不会冒充旧值）。与 popularity/promotion 的 first_only 范式一致。
+        """
+        dirs = self._prev_dirs(date)
+        if not dirs:
+            return None
+        pm = dirs[0] / "post-market.yaml"  # 紧邻前一交易日，不跳过、不回退
+        if not pm.exists():
+            return None
+        try:
+            with open(pm, encoding="utf-8") as f:
+                data = yaml.safe_load(f) or {}
+        except Exception:
+            return None
+        bf = data.get("premium_backfill")
+        if not bf:
+            return None
+        # 严格要求 backfill 的 trade_date 恰等于当前 date：premium.py 落盘时总会原子写入
+        # trade_date（见 collect() result 字典），故缺失/错位都视为「非本日的可信回填」→ None，
+        # 不让任何无法定位到本日的陈旧/损坏数据穿透守卫。
+        if bf.get("trade_date") != date:
+            return None
+        return bf
 
     def _load_prev_field(self, date: str, field: str, first_only: bool = False):
         """读取 date 之前 yaml 的指定 field。

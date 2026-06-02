@@ -777,6 +777,7 @@ def upsert_daily_market(conn: sqlite3.Connection, data: dict) -> None:
         "limit_up_count", "limit_down_count", "seal_rate", "broken_rate",
         "highest_board", "continuous_board_counts",
         "premium_10cm", "premium_20cm", "premium_30cm", "premium_second_board",
+        "premium_capacity", "premium_first_open",
         "northbound_net", "margin_balance",
         "market_breadth", "raw_data",
         "node_signals", "top_volume_stocks", "etf_flow", "hk_indices",
@@ -814,7 +815,9 @@ def update_premium(conn: sqlite3.Connection, target_date: str,
                    premium_10cm: float | None = None,
                    premium_20cm: float | None = None,
                    premium_30cm: float | None = None,
-                   premium_second_board: float | None = None) -> None:
+                   premium_second_board: float | None = None,
+                   premium_capacity: float | None = None,
+                   premium_first_open: float | None = None) -> None:
     """T+1 回填溢价率。"""
     sets, vals = [], []
     if premium_10cm is not None:
@@ -829,6 +832,12 @@ def update_premium(conn: sqlite3.Connection, target_date: str,
     if premium_second_board is not None:
         sets.append("premium_second_board = ?")
         vals.append(premium_second_board)
+    if premium_capacity is not None:
+        sets.append("premium_capacity = ?")
+        vals.append(premium_capacity)
+    if premium_first_open is not None:
+        sets.append("premium_first_open = ?")
+        vals.append(premium_first_open)
     if not sets:
         return
     vals.append(target_date)
@@ -857,7 +866,13 @@ def get_avg_amount(conn: sqlite3.Connection, target_date: str, days: int = 5) ->
 
 
 def get_daily_market_history(conn: sqlite3.Connection, days: int = 20) -> list[dict]:
-    """获取近 N 日 daily_market（不含 raw_data），供趋势图使用。"""
+    """获取近 N 日 daily_market（不含 raw_data），供大盘概览趋势图使用。
+
+    注（codex review #4b defer）：本接口是「大盘概览」契约，故意不含 premium_capacity /
+    premium_first_open。风格赚钱效应趋势图走 /api/style-factors/series（已含全部 premium_* 6 列），
+    不复用本接口。触发补列条件：未来 /market/history 的前端消费方需要风格档位 premium 时再加，
+    并同步 web types.ts MarketHistoryItem。
+    """
     rows = conn.execute(
         "SELECT date, sh_index_close, sh_index_change_pct, "
         "sz_index_close, sz_index_change_pct, total_amount, "
@@ -915,6 +930,7 @@ def get_style_factors_series(conn: sqlite3.Connection, metrics: list[str],
                              date_from: str, date_to: str) -> list[dict]:
     """获取风格化因子时间序列。"""
     allowed = {"premium_10cm", "premium_20cm", "premium_30cm", "premium_second_board",
+               "premium_capacity", "premium_first_open",
                "seal_rate", "broken_rate", "limit_up_count", "limit_down_count",
                "highest_board", "total_amount", "northbound_net"}
     safe_cols = [m for m in metrics if m in allowed]
