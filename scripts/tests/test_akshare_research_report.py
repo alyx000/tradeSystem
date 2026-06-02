@@ -57,3 +57,12 @@ def test_empty_returns_empty_list(ak: AkshareProvider):
     ak.ak.stock_rank_forecast_cninfo.return_value = pd.DataFrame()
     r = ak.get_research_report_list("2026-05-29")
     assert r.success and r.data == []
+
+
+def test_get_research_reports_keyerror_is_empty_not_error(ak: AkshareProvider):
+    """零研报票：akshare 内部空表取 infoCode 列抛 KeyError，应按"无数据"返回成功空列表，
+    而非冒充 error（否则 registry 误判失败 → 打 warning + 无意义降级）。"""
+    ak.ak.stock_research_report_em.side_effect = KeyError("infoCode")
+    r = ak.get_research_reports("000509.SZ")
+    assert r.success and r.data == []
+    assert r.error == ""

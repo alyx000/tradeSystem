@@ -1622,7 +1622,9 @@ class AkshareProvider(DataProvider):
             code_num = stock_code.split(".")[0]
             try:
                 df = self.ak.stock_research_report_em(symbol=code_num)
-            except (AttributeError, TypeError, ValueError):
+            except (AttributeError, TypeError, ValueError, KeyError):
+                # KeyError('infoCode')：零研报票 akshare 内部取空表的 infoCode 列抛错，
+                # 属"无数据"而非"失败"——按空结果处理，避免冒充 error 触发 registry 误判降级。
                 df = None
 
             if df is None or df.empty:
