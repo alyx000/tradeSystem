@@ -284,6 +284,12 @@ ARCHITECTURE_COMMANDS = [
     ["research-digest", "daily", "--dry-run"],
     ["research-digest", "daily", "--no-llm"],
     ["research-digest", "daily", "--date", "2026-05-29", "--dry-run", "--no-llm"],
+    # cognition-digest (交易认知沉淀定时汇总:近3日/周/月 → 钉钉)
+    ["cognition-digest", "recent3d"],
+    ["cognition-digest", "weekly"],
+    ["cognition-digest", "monthly"],
+    ["cognition-digest", "weekly", "--date", "2026-05-31"],
+    ["cognition-digest", "monthly", "--dry-run", "--no-llm"],
 ]
 
 
