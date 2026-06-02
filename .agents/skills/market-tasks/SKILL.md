@@ -147,6 +147,36 @@ python3 main.py research-digest daily --no-llm
 - **守红线**：红线只扫 LLM 生成的 `theme/one_liner`（含中英目标价/买入等关键词 + `neutralize_rating` 把"买入/Buy"中性化为"偏多档"）；**用户/源侧事实层（评级原文、目标价区间）不扫**——红线约束 AI 生成、不约束取数。
 - 依赖 env：`DINGTALK_WEBHOOK_TOKEN/SECRET`（`~/.config/tradeSystem.env`，推送）、可选 `GEMINI_BIN`/`GEMINI_MODEL`/`LLM_TIMEOUT_SECONDS`（默认 180，launchd 下 LLM 启动慢）、`RESEARCH_DIGEST_US_TICKERS`（美股池，不设走内置）。A股 cninfo 免 key、yfinance 免 key。
 
+## 交易认知沉淀定时推送（cognition-digest）
+
+按窗口对 `cognition-evolution` 沉淀下来的交易认知做**只读**汇总推送钉钉，三个独立周期各挂自己的 per-task launchd（**不进 `main.py schedule` APScheduler**）：
+
+- **recent3d**（`com.alyx.tradesystem.cognition-digest-recent3d`）：每天 18:30，近 3 日窗口。
+- **weekly**（`com.alyx.tradesystem.cognition-digest-weekly`）：每周日 20:00，近 7 日窗口。
+- **monthly**（`com.alyx.tradesystem.cognition-digest-monthly`）：每月 1 号 09:00，近 30 日窗口。
+
+手动入口（在 `scripts/` 目录运行）：
+
+```bash
+# 仅打印不推送（预览）
+python3 main.py cognition-digest recent3d --dry-run
+python3 main.py cognition-digest weekly --dry-run
+python3 main.py cognition-digest monthly --dry-run
+
+# 真推送（需先 export DINGTALK_WEBHOOK_TOKEN / DINGTALK_WEBHOOK_SECRET）
+python3 main.py cognition-digest recent3d
+
+# 指定锚点日期 / 关 gemini 叙事走模板兜底
+python3 main.py cognition-digest weekly --date 2026-05-29 --dry-run
+python3 main.py cognition-digest monthly --no-llm
+```
+
+- **取数**：只读认知三表（`trading_cognitions` / `cognition_instances`），按日历日窗口（非交易日）算**热度**（窗口内实例数）+ **共识**（不同老师数，按 name 归并防重复计数）+ **新增**（`created_at` 落窗口），排序后取各窗口 Top-N。`total_instances` / `teacher_names` 只数非弃用认知的窗口实例。
+- **gemini 建议（受控）**：对汇总结果补「体系 / 方向」两类建议，复用 `build_gemini_runner` + `REDLINE_KEYWORDS` 红线护栏（structural L1 校验 + 非字符串 bullet 丢弃 + 关键词中性化）；`--no-llm` 或 gemini 不可用 / 命中红线 → 整段模板兜底。
+- **只读边界**：用 SQLite `mode=ro` URI 连接，**不 migrate / 不 commit / 不改 schema / 不写 user_version**；与 `cognition-evolution` skill 的**手动写入闭环**严格区分（本命令永不写库）。
+- **空窗口**：窗口内无活跃认知 → 跳过推送（对齐钉钉减负），`--dry-run` 仍打印。
+- 依赖 env：`DINGTALK_WEBHOOK_TOKEN/SECRET`（推送）、可选 `GEMINI_BIN`/`GEMINI_MODEL`/`LLM_TIMEOUT_SECONDS`（默认 180）。
+
 ## 核心流程
 
 1. 先确认任务类型、日期和是否属于历史补跑。

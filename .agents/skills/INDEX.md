@@ -64,6 +64,7 @@
 | `market-tasks` | `python main.py sector-correlation matrix [--date] [--windows 20,60] [--top-industries N] [--top-concepts N] [--no-concept] [--refetch]` | 打印完整相关矩阵（板块×指数 + 板块×板块 原始/超额，逐窗）；缓存命中纯只读免初始化 Tushare，`--refetch` 强制现算；不推送 |
 | `market-tasks` | `python main.py sector-correlation trend [--date] [--days N]` | 只读打印最近 N 日相关性漂移（板块数 / 样本数 / 强逆向对数演变），不采集不推送 |
 | `market-tasks` | `python main.py research-digest daily [--date YYYY-MM-DD] [--dry-run] [--no-llm]` | 每日研报速读：A股研报评级（巨潮 cninfo `get_research_report_list`，含评级变化/前次评级/目标价区间）+ 美股机构评级（yfinance `get_us_rating_changes`，仅 init/up/down/reinit 方向变动）→ 鞠磊「首次覆盖」加权 Top3 → MD 落盘 `data/reports/research-digest/` + 钉钉；`--dry-run` 仅打印不落盘不推送、`--no-llm` 关美股 LLM 叙事；红线只约束 gemini 叙事不约束取数；工作日 06:42 launchd 单源调度 |
+| `market-tasks` | `python main.py cognition-digest recent3d\|weekly\|monthly [--date YYYY-MM-DD] [--dry-run] [--no-llm]` | 交易认知沉淀只读汇总：只读认知三表（`trading_cognitions`/`cognition_instances`）按窗口算热度+共识+新增 Top-N → gemini 体系/方向建议（复用 gemini runner + `REDLINE_KEYWORDS` 红线护栏）→ 钉钉推送；只读不写库、不改 schema、不进 `main.py schedule`，由 3 个 per-task launchd（recent3d 日 18:30 / weekly 周日 20:00 / monthly 每月 1 号 09:00）独立调度；`--dry-run` 仅打印、`--no-llm` 走模板兜底关 gemini 叙事 |
 | `ingest-inspector` | `python main.py ingest run --stage --date` | 运行采集阶段任务，写 `ingest_runs` / `raw_interface_payloads` |
 | `ingest-inspector` | `python main.py ingest run-interface --name --date` | 运行单接口采集，真实执行 provider 并记录失败 |
 | `ingest-inspector` | `python main.py ingest list-interfaces` | 查看接口注册表 |

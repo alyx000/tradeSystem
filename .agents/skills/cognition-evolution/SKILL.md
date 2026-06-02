@@ -315,6 +315,7 @@ Phase 1b + 增量交付了只读 Web 看板，路径：`http://localhost:5173/co
 ### 范围与限制
 
 - **仅读**：所有写操作（`cognition-add / refine / deprecate / instance-add / validate / review-generate / confirm`）仍走 CLI，Web 不提供任何写入
+- **定时只读汇总走 `cognition-digest`**：认知三表的周期性热度+共识+新增 Top-N 推送由 `python3 main.py cognition-digest recent3d|weekly|monthly`（[`market-tasks/SKILL.md`](../market-tasks/SKILL.md)）承载——**只读、不写库、不改 schema**，与本 skill 的**手动写入闭环**（add/refine/validate/review）严格区分；本 skill 永不被定时推送触发写操作
 - **默认 limit**：API 与 Web 默认 `limit=100`（与 CLI `--limit 20` 差异有意为之，看板场景合理放大）
 - **JSON 字段**：API 层统一 `json.loads` 返回对象/数组，前端不再 parse
 - **未实现**（Phase 4 完整版再做）：认证中间件、instance-validate UI、conflict_group 自动告警、teacher_aliases 归一显示
