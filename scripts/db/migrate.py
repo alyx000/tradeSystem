@@ -19,7 +19,7 @@ PROJECT_ROOT = SCRIPTS_DIR.parent
 
 # 与 migrate() 中「当前最新」一步一致；新增迁移时递增本常量，并把上一步的
 # set_schema_version(conn, CURRENT_SCHEMA_VERSION) 改为字面量 N（保留历史链）。
-CURRENT_SCHEMA_VERSION = 29
+CURRENT_SCHEMA_VERSION = 30
 
 
 def get_schema_version(conn: sqlite3.Connection) -> int:
@@ -56,6 +56,17 @@ def _ensure_thesis_columns(conn: sqlite3.Connection) -> None:
     hd_cols = {row[1] for row in conn.execute("PRAGMA table_info(holdings)").fetchall()}
     if hd_cols and "thesis_id" not in hd_cols:
         conn.execute("ALTER TABLE holdings ADD COLUMN thesis_id INTEGER")
+
+
+def _ensure_daily_market_premium_columns(conn: sqlite3.Connection) -> None:
+    """v30 兜底：为既有 daily_market 补 premium_capacity / premium_first_open 列。
+    init_schema 的 CREATE TABLE IF NOT EXISTS 不会给已存在的老表补列
+    （memory: feedback_real_db_vs_in_memory），故 PRAGMA 探查 + ALTER（列已存在则跳过）。
+    """
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(daily_market)").fetchall()}
+    for col in ("premium_capacity", "premium_first_open"):
+        if cols and col not in cols:
+            conn.execute(f"ALTER TABLE daily_market ADD COLUMN {col} REAL")
 
 
 def _rebuild_trade_thesis_trade_mode_check(conn: sqlite3.Connection) -> None:
@@ -540,6 +551,12 @@ def migrate(conn: sqlite3.Connection) -> None:
         logger.info("Applying schema v29: sector_correlation_daily (板块相关性)")
         init_schema(conn)  # 新表:CREATE IF NOT EXISTS 在老库上建出;新表无需 ALTER 兜底
         set_schema_version(conn, 29)
+        conn.commit()
+
+    if version < 30:
+        logger.info("Applying schema v30: daily_market.premium_capacity / premium_first_open")
+        _ensure_daily_market_premium_columns(conn)  # ALTER 兜底:老表补容量票/一字首开溢价列
+        set_schema_version(conn, 30)
         conn.commit()
 
 

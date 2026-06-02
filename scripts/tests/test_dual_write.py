@@ -157,6 +157,45 @@ class TestSyncDailyMarket:
         assert row["premium_30cm"] == 3.3
         assert row["premium_second_board"] == 4.4
 
+    def test_sync_premium_capacity_and_first_open_from_style_factors(self, db_path):
+        """容量票 / 一字首开溢价中位落 daily_market.premium_capacity / premium_first_open。"""
+        envelope = {
+            "date": "2026-04-12",
+            "raw_data": {
+                "style_factors": {
+                    "premium_snapshot": {
+                        "capacity_top10": {"premium_median": 1.79, "count": 10},
+                        "yizi_first_open": {"premium_median": -0.71, "count": 2},
+                    },
+                },
+            },
+        }
+        ok = sync_daily_market_to_db("2026-04-12", envelope, db_path=db_path)
+        assert ok is True
+        with get_db(db_path) as conn:
+            row = Q.get_daily_market(conn, "2026-04-12")
+        assert row["premium_capacity"] == 1.79
+        assert row["premium_first_open"] == -0.71
+
+    def test_sync_premium_capacity_first_open_none_when_snapshot_absent(self, db_path):
+        """快照缺 capacity_top10 / yizi_first_open 时，两新列落 None 而非报错。"""
+        envelope = {
+            "date": "2026-04-13",
+            "raw_data": {
+                "style_factors": {
+                    "premium_snapshot": {
+                        "first_board_10cm": {"premium_median": 1.1, "count": 5},
+                    },
+                },
+            },
+        }
+        ok = sync_daily_market_to_db("2026-04-13", envelope, db_path=db_path)
+        assert ok is True
+        with get_db(db_path) as conn:
+            row = Q.get_daily_market(conn, "2026-04-13")
+        assert row["premium_capacity"] is None
+        assert row["premium_first_open"] is None
+
 
 class TestPendingWrites:
     def test_db_failure_writes_pending(self, tmp_path, sample_yaml_data, monkeypatch):
