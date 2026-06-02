@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Sleep policy: 认知沉淀错过可接受（非交易决策任务）；macOS 休眠期间不触发，可接受，不配 pmset 唤醒。 -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.alyx.tradesystem.cognition-digest-weekly</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/alyx/tradeSystem/deploy/launchd/cognition-digest-runner.sh</string>
+        <string>weekly</string>
+    </array>
+
+    <!-- 周日 20:00（Weekday 0=周日）。 -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Weekday</key><integer>0</integer>
+        <key>Hour</key><integer>20</integer>
+        <key>Minute</key><integer>0</integer>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/tradesystem-cognition-digest.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/tradesystem-cognition-digest.log</string>
+
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>

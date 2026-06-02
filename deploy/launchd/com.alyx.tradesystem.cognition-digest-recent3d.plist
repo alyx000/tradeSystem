@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Sleep policy: 认知沉淀错过可接受（非交易决策任务）；macOS 休眠期间不触发，可接受，不配 pmset 唤醒。 -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.alyx.tradesystem.cognition-digest-recent3d</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/alyx/tradeSystem/deploy/launchd/cognition-digest-runner.sh</string>
+        <string>recent3d</string>
+    </array>
+
+    <!-- 每交易日 18:30（盘后）。Weekday 1-5 各一个 dict（launchd 不支持范围语法）。 -->
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>18</integer><key>Minute</key><integer>30</integer></dict>
+        <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>18</integer><key>Minute</key><integer>30</integer></dict>
+        <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>18</integer><key>Minute</key><integer>30</integer></dict>
+        <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>18</integer><key>Minute</key><integer>30</integer></dict>
+        <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>18</integer><key>Minute</key><integer>30</integer></dict>
+    </array>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/tradesystem-cognition-digest.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/tradesystem-cognition-digest.log</string>
+
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>

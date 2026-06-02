@@ -14,6 +14,10 @@
 - `com.alyx.tradesystem.today-post.plist` — 工作日 20:00 触发（盘后报告，含钉钉推送）
 - `research-digest-runner.sh` — 包装脚本：cd 仓库根 → source `scripts/.env`(TUSHARE_TOKEN) + `~/.config/tradeSystem.env`(钉钉/GEMINI) → 调 `python3 main.py research-digest daily`
 - `com.alyx.tradesystem.research-digest.plist` — 工作日 06:42 触发（研报速读：A股研报评级[巨潮] + 美股 yfinance 评级 → Top3；非交易日/窗口内无变动自动标注，不报错）
+- `cognition-digest-runner.sh` — 包装脚本（参数化，window 作为 `$1` 透传）：cd 仓库根 → source `scripts/.env` + `~/.config/tradeSystem.env`(钉钉/GEMINI) → 调 `python3 main.py cognition-digest <window>`
+- `com.alyx.tradesystem.cognition-digest-recent3d.plist` — 每交易日 18:30 触发（认知沉淀近 3 日汇总；日志 `/tmp/tradesystem-cognition-digest.log`）
+- `com.alyx.tradesystem.cognition-digest-weekly.plist` — 周日 20:00 触发（认知沉淀周汇总；同一日志 `/tmp/tradesystem-cognition-digest.log`）
+- `com.alyx.tradesystem.cognition-digest-monthly.plist` — 每月 1 号 09:00 触发（认知沉淀月汇总；同一日志 `/tmp/tradesystem-cognition-digest.log`）
 
 ## 前置条件
 
@@ -242,3 +246,40 @@ rm ~/Library/LaunchAgents/com.alyx.tradesystem.research-digest.plist
 ```
 
 **时段**：06:42 为盘前最早一档,与 today-pre(07:00)、recommend-daily(07:10) 错峰,均 I/O 短任务无资源争用。研报错过可接受(非交易决策),不配 pmset 唤醒。**调度唯一入口=launchd per-task plist**,不进 `main.py schedule`/APScheduler(避免双触发)。
+
+## 交易认知沉淀汇总（recent3d 工作日 18:30 / weekly 周日 20:00 / monthly 每月1号 09:00）
+
+参数化 runner（window 作为 `$1` 透传）+ 3 个 plist 各自触发一个窗口。只读认知三表 → 热度 + 共识 +
+新增 → gemini 建议 → 推钉钉。三个任务共用同一 runner、同一 `~/.config/tradeSystem.env`(钉钉/GEMINI)
+与合并日志 `/tmp/tradesystem-cognition-digest.log`；非交易日 / 窗口内无认知数据时任务内自动标注，不报错、不冒充。
+
+```bash
+# 1. 包装脚本可执行
+chmod +x deploy/launchd/cognition-digest-runner.sh
+
+# 2. 复制 plist（3 个一起拷）
+cp deploy/launchd/com.alyx.tradesystem.cognition-digest-*.plist ~/Library/LaunchAgents/
+
+# 3. 加载
+launchctl load ~/Library/LaunchAgents/com.alyx.tradesystem.cognition-digest-recent3d.plist
+launchctl load ~/Library/LaunchAgents/com.alyx.tradesystem.cognition-digest-weekly.plist
+launchctl load ~/Library/LaunchAgents/com.alyx.tradesystem.cognition-digest-monthly.plist
+
+# 4. 验证
+launchctl list | grep tradesystem.cognition-digest
+
+# 5. 真触发立即测试（先 dry-run 验产物再真推；非交易日仅验 launchd 链路 + 凭据注入）
+launchctl start com.alyx.tradesystem.cognition-digest-weekly
+tail -f /tmp/tradesystem-cognition-digest.log   # 看 [env] DINGTALK/GEMINI =set + 运行结果
+```
+
+卸载：
+
+```bash
+launchctl unload ~/Library/LaunchAgents/com.alyx.tradesystem.cognition-digest-recent3d.plist
+launchctl unload ~/Library/LaunchAgents/com.alyx.tradesystem.cognition-digest-weekly.plist
+launchctl unload ~/Library/LaunchAgents/com.alyx.tradesystem.cognition-digest-monthly.plist
+rm ~/Library/LaunchAgents/com.alyx.tradesystem.cognition-digest-*.plist
+```
+
+**时段**：recent3d 18:30 在 today-post(20:00) 之前、空档无冲突；weekly 周日 20:00 与 recommend-weekly(周日 20:00) 同点但互不依赖、均短 I/O 任务可接受；monthly 每月 1 号 09:00 为非交易时段无争用。认知沉淀错过可接受(非交易决策),不配 pmset 唤醒。**调度唯一入口=launchd per-task plist**,不进 `main.py schedule`/APScheduler(避免双触发)。
