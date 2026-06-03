@@ -849,6 +849,12 @@ export interface ResearchCoverageRow {
   viewpoint?: string         // 研报标题（后端已过红线）
 }
 
+export interface ResearchCoverageIndustryRow {
+  industry: string       // 申万一级行业名；缺成分 → "未分类"
+  stock_count: number    // 该行业在当前聚合结果（当日 / 近 N 日 Top-limit）内的覆盖股票数
+  report_count: number   // 该行业总研报篇数（同上范围）
+}
+
 export interface ReviewMarketSignals {
   moneyflow_summary: {
     net_amount_yi: number | null
@@ -865,6 +871,7 @@ export interface ReviewMarketSignals {
     com_count: number | null
   }>
   research_coverage_top?: ResearchCoverageRow[]
+  research_coverage_industry?: ResearchCoverageIndustryRow[]
 }
 
 export interface ReviewSectorSignals {

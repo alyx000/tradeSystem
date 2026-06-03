@@ -4,7 +4,7 @@ import { type StepProps, Section, Row, PrefillBanner, Metric, SelectField, TextF
 import CognitionPanel from './CognitionPanel'
 import { get, set } from './formState'
 import { api } from '../../lib/api'
-import type { ResearchCoverageRow } from '../../lib/types'
+import type { ResearchCoverageRow, ResearchCoverageIndustryRow } from '../../lib/types'
 
 const TREND = [
   { value: '主升', label: '主升' },
@@ -36,6 +36,7 @@ const POSITION = [
 ]
 
 const AMOUNT_THRESHOLD = 0.05
+const INDUSTRY_DISPLAY_CAP = 8  // 行业热度条展示上限（与后端 collector.INDUSTRY_DISPLAY_CAP 对齐）
 
 function deriveVolChange(cur: number | null | undefined, prev: number | null | undefined): string {
   if (cur == null || prev == null || prev === 0) return ''
@@ -77,22 +78,45 @@ function CoveragePill({ row }: { row: ResearchCoverageRow }) {
   )
 }
 
-function ResearchCoveragePanel({ todayItems }: { todayItems?: ResearchCoverageRow[] }) {
+function IndustryHeatBar({ rows }: { rows: ResearchCoverageIndustryRow[] }) {
+  if (!rows.length) return null
+  const shown = rows.slice(0, INDUSTRY_DISPLAY_CAP)
+  const extra = rows.length - shown.length
+  return (
+    <div className="mb-2 pb-2 border-b border-gray-100">
+      <div className="text-xs font-medium text-gray-500 mb-1">行业热度</div>
+      <div className="text-xs text-gray-600 leading-relaxed">
+        {shown.map((b, i) => (
+          <span key={b.industry}>
+            {i > 0 && <span className="text-gray-300"> · </span>}
+            <span className="text-gray-700">{b.industry}</span>
+            <span className="text-gray-400"> {b.stock_count}只/{b.report_count}篇</span>
+          </span>
+        ))}
+        {extra > 0 && <span className="text-gray-400"> …还有 {extra} 个</span>}
+      </div>
+    </div>
+  )
+}
+
+function ResearchCoveragePanel({ todayItems, todayIndustry }: { todayItems?: ResearchCoverageRow[]; todayIndustry?: ResearchCoverageIndustryRow[] }) {
   const [rangeDays, setRangeDays] = useState(0)
-  const [rangeData, setRangeData] = useState<{ covered_days: number; items: ResearchCoverageRow[] } | null>(null)
+  const [rangeData, setRangeData] = useState<{ covered_days: number; items: ResearchCoverageRow[]; industry: ResearchCoverageIndustryRow[] } | null>(null)
   const [loading, setLoading] = useState(false)
 
   const handleRangeChange = (days: number) => {
     setRangeDays(days)
     if (days === 0) { setRangeData(null); return }
+    setRangeData(null)  // 先清旧 range 数据：避免新 tab 请求失败时复用上一轮的 items/industry（在新标题下展示错数据）
     setLoading(true)
     api.getResearchCoverage(days)
-      .then((res) => setRangeData({ covered_days: res.covered_days, items: res.items }))
+      .then((res) => setRangeData({ covered_days: res.covered_days, items: res.items, industry: res.industry ?? [] }))
       .catch(() => {})
       .finally(() => setLoading(false))
   }
 
   const items = rangeDays === 0 ? (todayItems || []) : (rangeData?.items || [])
+  const industry = rangeDays === 0 ? (todayIndustry || []) : (rangeData?.industry || [])
   const subtitle = rangeDays === 0
     ? '当日'
     : `近${rangeDays}日（${rangeData?.covered_days ?? 0}日有数据）`
@@ -128,6 +152,7 @@ function ResearchCoveragePanel({ todayItems }: { todayItems?: ResearchCoverageRo
           const pills = items.filter((r) => !r.expanded)
           return (
             <div className="space-y-2">
+              <IndustryHeatBar rows={industry} />
               {expanded.length > 0 && (
                 <div className="space-y-1.5">
                   {expanded.map((row) => {
@@ -279,7 +304,10 @@ export default function StepMarket({ data, onChange, prefill }: StepProps) {
         </PrefillBanner>
       )}
 
-      <ResearchCoveragePanel todayItems={marketSignals?.research_coverage_top} />
+      <ResearchCoveragePanel
+        todayItems={marketSignals?.research_coverage_top}
+        todayIndustry={marketSignals?.research_coverage_industry}
+      />
 
       <Section title="成交量对比">
         {m && (

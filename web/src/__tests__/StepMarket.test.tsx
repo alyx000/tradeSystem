@@ -1,7 +1,8 @@
 import { fireEvent, render, screen } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter } from 'react-router-dom'
 import StepMarket from '../components/review/StepMarket'
+import { api } from '../lib/api'
 import type { ReviewPrefillData, ReviewStepValue } from '../lib/types'
 
 function renderStep(data: ReviewStepValue = {}, prefill?: ReviewPrefillData) {
@@ -222,4 +223,66 @@ describe('StepMarket', () => {
     // 无富化字段 → 不出现徽章/观点结构
     expect(screen.queryByText('首次覆盖')).not.toBeInTheDocument()
   })
+
+  function withIndustry(
+    rows: NonNullable<NonNullable<ReviewPrefillData['review_signals']>['market']>['research_coverage_top'],
+    industry: NonNullable<NonNullable<ReviewPrefillData['review_signals']>['market']>['research_coverage_industry'],
+  ): ReviewPrefillData {
+    return {
+      ...prefill,
+      review_signals: {
+        ...prefill.review_signals!,
+        market: { ...prefill.review_signals!.market!, research_coverage_top: rows, research_coverage_industry: industry },
+      },
+    }
+  }
+
+  it('renders industry heat bar above the stock list', () => {
+    renderStep({}, withIndustry(
+      [{ stock_code: '601398', stock_name: '青岛银行', report_count: 2 }],
+      [
+        { industry: '银行', stock_count: 2, report_count: 6 },
+        { industry: '机械设备', stock_count: 3, report_count: 3 },
+      ],
+    ))
+    // 行业名与「N只/M篇」分属不同 span（深/浅灰分层），逐元素断言
+    expect(screen.getByText('行业热度')).toBeInTheDocument()
+    expect(screen.getByText('银行')).toBeInTheDocument()
+    expect(screen.getByText('机械设备')).toBeInTheDocument()
+    expect(screen.getByText(/2只\/6篇/)).toBeInTheDocument()
+    expect(screen.getByText(/3只\/3篇/)).toBeInTheDocument()
+  })
+
+  it('does not render industry bar when summary empty (explicit [] with stocks present)', () => {
+    renderStep({}, withIndustry([{ stock_code: '601398', stock_name: '青岛银行', report_count: 2 }], []))
+    expect(screen.getByText('青岛银行')).toBeInTheDocument()  // 有个股
+    expect(screen.queryByText('行业热度')).not.toBeInTheDocument()  // 但行业空 → 不渲染行业条
+  })
+
+  it('does not render industry bar when summary undefined (old prefill)', () => {
+    renderStep({}, withCoverage([{ stock_code: '601398', stock_name: '青岛银行', report_count: 2 }]))
+    expect(screen.queryByText('行业热度')).not.toBeInTheDocument()
+  })
+
+  it('loads range industry + items when switching to 近5日 tab', async () => {
+    const spy = vi.spyOn(api, 'getResearchCoverage').mockResolvedValue({
+      days: 5,
+      covered_days: 4,
+      items: [{ stock_code: '600519', stock_name: '贵州茅台', report_count: 5 }],
+      industry: [{ industry: '食品饮料', stock_count: 1, report_count: 5 }],
+    })
+    renderStep({}, withIndustry(
+      [{ stock_code: '601398', stock_name: '青岛银行', report_count: 2 }],
+      [{ industry: '银行', stock_count: 2, report_count: 6 }],
+    ))
+    fireEvent.click(screen.getByText('近5日'))
+    // range 分支：异步加载后渲染 res.industry + res.items（驱动三元 + res.industry ?? [] 兜底）
+    expect(await screen.findByText('食品饮料')).toBeInTheDocument()
+    expect(screen.getByText('贵州茅台')).toBeInTheDocument()
+    expect(spy).toHaveBeenCalledWith(5)
+  })
+})
+
+afterEach(() => {
+  vi.restoreAllMocks()
 })

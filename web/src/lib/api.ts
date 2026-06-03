@@ -60,6 +60,7 @@ import type {
   WatchlistItem,
   RegulatoryMonitorRecord,
   ConcentrationTrendPayload,
+  ResearchCoverageIndustryRow,
 } from './types'
 
 const BASE = '/api'
@@ -164,7 +165,7 @@ export const api = {
   getMarketHistory: (days: number = 20) => request<MarketChartItem[]>(`/market/history?days=${days}`),
   getConcentrationHistory: (days: number = 30) =>
     request<ConcentrationTrendPayload>(`/market/concentration/history?days=${days}`),
-  getResearchCoverage: (days: number = 5) => request<{ days: number; covered_days: number; items: Array<{ stock_code: string; stock_name: string; report_count: number }> }>(`/market/research-coverage?days=${days}`),
+  getResearchCoverage: (days: number = 5) => request<{ days: number; covered_days: number; items: Array<{ stock_code: string; stock_name: string; report_count: number }>; industry: ResearchCoverageIndustryRow[] }>(`/market/research-coverage?days=${days}`),
   getPostMarket: (date: string) => request<PostMarketPayload>(`/post-market/${date}`),
   getMainThemes: () => request<MainThemeItem[]>('/main-themes'),
 
