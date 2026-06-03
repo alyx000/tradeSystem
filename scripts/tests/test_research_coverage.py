@@ -329,3 +329,61 @@ class TestPrefillIndustryPassthrough:
         assert r.status_code == 200
         rci = r.json()["review_signals"]["market"]["research_coverage_industry"]
         assert rci[0] == {"industry": "银行", "stock_count": 2, "report_count": 6}
+
+
+class TestRangeApiIndustry:
+    """GET /api/market/research-coverage 响应新增 industry 汇总。"""
+
+    def _seed(self, db_path, date, top):
+        conn = sqlite3.connect(db_path)
+        env = json.dumps({"research_coverage_top": top}, ensure_ascii=False)
+        conn.execute(
+            "INSERT OR REPLACE INTO daily_market (date, raw_data) VALUES (?, ?)",
+            (date, env),
+        )
+        conn.commit()
+        conn.close()
+
+    def test_range_returns_industry_summary(self, api_client):
+        client, db_path = api_client
+        self._seed(db_path, "2026-05-28", [
+            {"stock_code": "600519", "stock_name": "贵州茅台", "report_count": 2, "industry": "食品饮料"},
+            {"stock_code": "601318", "stock_name": "中国平安", "report_count": 1, "industry": "非银金融"},
+        ])
+        self._seed(db_path, "2026-05-29", [
+            {"stock_code": "600519", "stock_name": "贵州茅台", "report_count": 3, "industry": "食品饮料"},
+        ])
+        resp = client.get("/api/market/research-coverage?days=5").json()
+        assert "industry" in resp
+        ind = {b["industry"]: b for b in resp["industry"]}
+        # 600519 跨两日合计 5 篇
+        assert ind["食品饮料"] == {"industry": "食品饮料", "stock_count": 1, "report_count": 5}
+        assert ind["非银金融"] == {"industry": "非银金融", "stock_count": 1, "report_count": 1}
+
+    def test_old_envelope_without_industry_degrades_unclassified(self, api_client):
+        client, db_path = api_client
+        self._seed(db_path, "2026-05-29", [
+            {"stock_code": "600519", "stock_name": "贵州茅台", "report_count": 2},  # 无 industry（老数据）
+        ])
+        resp = client.get("/api/market/research-coverage?days=5").json()
+        assert resp["industry"][0] == {"industry": "未分类", "stock_count": 1, "report_count": 2}
+
+    def test_empty_and_malformed_envelopes_return_empty_arrays(self, api_client):
+        """无 rows / 空 raw_data / research_coverage_top 非 list → 空壳返 []，不 500。"""
+        client, db_path = api_client
+        # 1) 完全无 rows
+        resp = client.get("/api/market/research-coverage?days=5").json()
+        assert resp == {"days": 5, "covered_days": 0, "items": [], "industry": []}
+        # 2) 空 raw_data + research_coverage_top 非 list
+        conn = sqlite3.connect(db_path)
+        conn.execute("INSERT OR REPLACE INTO daily_market (date, raw_data) VALUES (?, ?)", ("2026-05-27", ""))
+        conn.execute(
+            "INSERT OR REPLACE INTO daily_market (date, raw_data) VALUES (?, ?)",
+            ("2026-05-28", json.dumps({"research_coverage_top": "oops"})),
+        )
+        conn.commit()
+        conn.close()
+        resp = client.get("/api/market/research-coverage?days=5").json()
+        assert resp["items"] == []
+        assert resp["industry"] == []
+        assert resp["covered_days"] == 0

@@ -509,9 +509,10 @@ def get_research_coverage(
     limit: int = 20,
     conn: sqlite3.Connection = Depends(get_db_conn),
 ):
-    """区间研报覆盖排行：聚合最近 N 个交易日的研报覆盖 top，返回合并排行。"""
+    """区间研报覆盖排行：聚合最近 N 个交易日的研报覆盖 top，返回合并排行 + 按申万一级行业汇总。"""
     from collections import Counter
     from db.dual_write import parse_post_market_envelope
+    from services.research_digest.collector import aggregate_by_industry, UNCLASSIFIED
 
     days = max(1, min(days, 60))
     limit = max(1, min(limit, 50))
@@ -523,6 +524,7 @@ def get_research_coverage(
 
     stock_counts: Counter[str] = Counter()
     stock_names: dict[str, str] = {}
+    stock_industry: dict[str, str] = {}   # 每股行业：取首个非未分类（老 envelope 缺字段 → 未分类），API 内零网络
     covered_days = 0
 
     for row in rows:
@@ -541,12 +543,23 @@ def get_research_coverage(
             stock_counts[code] += item.get("report_count", 0)
             if code not in stock_names:
                 stock_names[code] = item.get("stock_name", "")
+            ind = item.get("industry")
+            # rows 按 date DESC，取每股「首个非未分类」= 最近日分类；空串/None 被 `if ind` 拒（视作未分类，
+            # 与 aggregate_by_industry 的 `or UNCLASSIFIED` 同语义）。
+            if ind and ind != UNCLASSIFIED and stock_industry.get(code, UNCLASSIFIED) == UNCLASSIFIED:
+                stock_industry[code] = ind
 
+    top = stock_counts.most_common(limit)
     result = [
         {"stock_code": code, "stock_name": stock_names.get(code, ""), "report_count": count}
-        for code, count in stock_counts.most_common(limit)
+        for code, count in top
     ]
-    return {"days": days, "covered_days": covered_days, "items": result}
+    # 行业汇总：仅对 Top-limit 的股票聚合（与 items 口径一致），缺行业落未分类
+    industry = aggregate_by_industry([
+        {"industry": stock_industry.get(code, UNCLASSIFIED), "report_count": count}
+        for code, count in top
+    ])
+    return {"days": days, "covered_days": covered_days, "items": result, "industry": industry}
 
 
 @router.get("/market/history")
