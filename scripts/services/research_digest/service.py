@@ -22,6 +22,7 @@ class RenderedDigest:
     cn: list[dict] = field(default_factory=list)
     us: list[dict] = field(default_factory=list)
     top3: list[dict] = field(default_factory=list)
+    cn_industry: list[dict] = field(default_factory=list)
 
     @property
     def is_empty(self) -> bool:
@@ -56,9 +57,11 @@ def run_daily_digest(
             us = narrator.narrate(us, llm_runner=llm_runner, market="us")
 
     top3 = ranker.pick_top3(cn, us)
-    title, markdown = renderer.render_md(date, cn, us, top3)
+    # 行业覆盖热度：复用 label_industry（此处对 sw map 的唯一额外网络调用，digest job 有凭据）+ aggregate；cn 空跳过
+    cn_industry = collector.aggregate_by_industry(collector.label_industry(cn, registry)) if cn else []
+    title, markdown = renderer.render_md(date, cn, us, top3, cn_industry=cn_industry or None)
 
     if not cn and not us:
         logger.info("[research-digest] %s 两市均无符合条件评级变动（A股空 + 美股空）", date)
 
-    return RenderedDigest(title=title, markdown=markdown, cn=cn, us=us, top3=top3)
+    return RenderedDigest(title=title, markdown=markdown, cn=cn, us=us, top3=top3, cn_industry=cn_industry)

@@ -173,7 +173,20 @@ def _top_line(rank: int, it: dict) -> str:
     return f"{rank}. **{who}** {sig_tag} — {base}{tail}"
 
 
-def render_md(date: str, cn_items: list[dict], us_items: list[dict], top3: list[dict]) -> tuple[str, str]:
+def _industry_line(cn_industry: list[dict]) -> str:
+    """行业覆盖热度单行：「银行 2只/6篇 · 机械设备 3只/3篇 …还有 N 个」。"""
+    from services.research_digest.collector import INDUSTRY_DISPLAY_CAP
+    shown = cn_industry[:INDUSTRY_DISPLAY_CAP]
+    parts = [f"{b['industry']} {b['stock_count']}只/{b['report_count']}篇" for b in shown]
+    line = " · ".join(parts)
+    extra = len(cn_industry) - len(shown)
+    if extra > 0:
+        line += f" …还有 {extra} 个"
+    return line
+
+
+def render_md(date: str, cn_items: list[dict], us_items: list[dict], top3: list[dict],
+              *, cn_industry: list[dict] | None = None) -> tuple[str, str]:
     """返回 (title, markdown)。纯函数，不落盘（落盘见 write_md）。"""
     title = f"研报速读 · {date}"
     L = [f"# {title}", ""]
@@ -185,6 +198,10 @@ def render_md(date: str, cn_items: list[dict], us_items: list[dict], top3: list[
             L.append(_top_line(i, it))
     else:
         L.append("- 今日两市均无符合条件的评级变动")
+
+    if cn_industry:
+        L.append("\n## 📊 行业覆盖热度")
+        L.append(_industry_line(cn_industry))
 
     L.append("\n## 🇨🇳 A股机构评级")
     if cn_items:
