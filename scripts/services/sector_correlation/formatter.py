@@ -27,6 +27,15 @@ def _primary_window(record: dict) -> int:
     return max(record.get("windows") or [60])
 
 
+def _linkage_title(w: int, nw: int, pw: int) -> str:
+    """联动榜分档标题：最短=短期共振、最长=结构、中间=中期；单窗按结构。"""
+    if w == nw and w != pw:
+        return f"### 🤝 近{w}日联动榜（短期共振·原始相关）"
+    if nw < w < pw:
+        return f"### 🤝 联动榜 · {w}日（中期·原始相关）"
+    return f"### 🤝 联动榜 · {w}日（结构·原始相关）"
+
+
 def _pair_key(p: dict) -> tuple:
     return tuple(sorted((p["a"], p["b"])))
 
@@ -67,26 +76,19 @@ def format_daily_report(record: dict, top_k: int = 8) -> str:
         L.append(f"- 高弹性同向（β≥1.2）：{'、'.join(high_beta[:top_k])}")
     L.append("")
 
-    # 近期联动榜（最短窗口=近期共振，原始相关降序）；仅多窗口时单列，单窗与下方重复则跳过
-    if nw != pw:
-        near_pairs = (record.get("pair_raw") or {}).get(str(nw), [])
-        L.append(f"### 🤝 近{nw}日联动榜（短期共振·原始相关）")
-        if near_pairs:
-            for p in near_pairs[:top_k]:
+    # 联动榜：删最长(结构)窗，只列短/中窗（最短=短期共振、中间=中期），原始相关降序。
+    # 60 日等长窗信息与 20 日高度重叠，单列价值低 → 不进每日推送（结构仍驱动大盘 β / 反向榜长窗对照）。
+    sorted_windows = sorted(set(windows))
+    linkage_windows = [w for w in sorted_windows if w != pw] or sorted_windows  # 单窗时回退展示自身
+    for w in linkage_windows:
+        pairs = (record.get("pair_raw") or {}).get(str(w), [])
+        L.append(_linkage_title(w, nw, pw))
+        if pairs:
+            for p in pairs[:top_k]:
                 L.append(f"- {p['a']} ⟷ {p['b']}  {_sign(p['corr'])}")
         else:
             L.append("- （样本不足，无可用对）")
         L.append("")
-
-    # 联动榜（结构窗口=最长，原始相关降序）
-    raw_pairs = (record.get("pair_raw") or {}).get(str(pw), [])
-    L.append(f"### 🤝 联动榜 · {pw}日（结构·原始相关）")
-    if raw_pairs:
-        for p in raw_pairs[:top_k]:
-            L.append(f"- {p['a']} ⟷ {p['b']}  {_sign(p['corr'])}")
-    else:
-        L.append("- （样本不足，无可用对）")
-    L.append("")
 
     # 反向榜（超额相关）⭐；双窗时给 短/长 对照 + 稳定/近期 标签，单窗退单值（review L1）
     short_w = min(windows)

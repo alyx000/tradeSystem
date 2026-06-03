@@ -17,7 +17,10 @@ def _rec() -> dict:
             },
             "20": {"半导体": {"000001.SH": {"raw_corr": 0.79, "beta": 1.38, "label": "强同向"}}},
         },
-        "pair_raw": {"60": [{"a": "半导体", "b": "算力", "corr": 0.86, "label": "强同向"}], "20": []},
+        "pair_raw": {
+            "20": [{"a": "半导体", "b": "算力", "corr": 0.84, "label": "强同向"}],
+            "60": [{"a": "半导体", "b": "算力", "corr": 0.86, "label": "强同向"}],
+        },
         "pair_excess": {
             "60": [{"a": "算力", "b": "黄金", "corr": -0.45, "label": "强逆向"}],
             "20": [{"a": "算力", "b": "黄金", "corr": -0.47, "label": "强逆向"}],
@@ -31,24 +34,27 @@ def test_daily_report_sections_and_footnote():
     assert "板块相关性 · 2026-05-29" in md
     assert "黄金" in md and "逆向板块" in md            # 黄金进逆向行
     assert "高弹性同向" in md and "半导体" in md          # β1.42 进高弹性
-    assert "🤝 联动榜" in md and "半导体 ⟷ 算力" in md
+    assert "联动榜" in md and "半导体 ⟷ 算力" in md        # 联动榜（20日窗，最长60已删）
+    assert "联动榜 · 60日" not in md                       # 最长(结构)窗不进每日推送
     assert "⚖️ 反向榜" in md
     assert "20日 -0.47 / 60日 -0.45  [稳定]" in md        # 双窗都≤-0.4 → 稳定
     assert "非因果" in md                                 # 红线脚注
 
 
-def test_daily_report_near_window_linkage_section():
-    """多窗口时单列近期(最短窗)联动榜，用最短窗的 pair_raw。"""
+def test_daily_report_drops_longest_window_linkage():
+    """联动榜只列短/中窗(5/20)，删最长(60=结构)窗；20 仍因全窗中位标'中期'。"""
     rec = _rec()
     rec["windows"] = [5, 20, 60]
     rec["pair_raw"] = {
         "5": [{"a": "半导体", "b": "存储芯片", "corr": 0.91, "label": "强同向"}],
-        "20": [],
+        "20": [{"a": "通信设备", "b": "元件", "corr": 0.83, "label": "强同向"}],
         "60": [{"a": "证券", "b": "保险", "corr": 0.79, "label": "强同向"}],
     }
     md = formatter.format_daily_report(rec)
-    assert "近5日联动榜" in md and "半导体 ⟷ 存储芯片  +0.91" in md   # 近期=5日窗
-    assert "联动榜 · 60日" in md and "证券 ⟷ 保险  +0.79" in md       # 结构=60日窗
+    assert "近5日联动榜" in md and "半导体 ⟷ 存储芯片  +0.91" in md       # 最短=短期共振
+    assert "联动榜 · 20日（中期" in md and "通信设备 ⟷ 元件  +0.83" in md  # 中间=中期
+    assert "联动榜 · 60日" not in md                                     # 最长(结构)窗已删
+    assert "证券 ⟷ 保险" not in md                                       # 60日的对不出现
 
 
 def test_daily_report_no_inverse_fallback():
