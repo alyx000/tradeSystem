@@ -230,7 +230,7 @@
 |------|------|------|
 | GET | `/api/market/history` | 近 N 日行情摘要（`?days=`，不含 raw_data） |
 | GET | `/api/market/concentration/history` | 成交额 Top20 板块集中度趋势（`?days=`，库内最新 N 日 CR3/头部成交额/占两市/板块占比序列 + 最新日连续在榜/异动快照，供盘面概览图表） |
-| GET | `/api/market/research-coverage` | 区间研报覆盖排行（`?days=&limit=`，合并最近 N 日篇数排行 `items` + 按申万一级行业汇总 `industry`：`[{industry, stock_count, report_count}]`，缺成分降级未分类） |
+| GET | `/api/market/research-coverage` | 区间研报覆盖排行（`?days=&limit=`，合并最近 N 日篇数排行 `items`（仅 `stock_code/stock_name/report_count`，**per-stock 不含行业**）+ 按申万一级行业汇总 `industry`：`[{industry, stock_count, report_count}]`，缺成分降级未分类；行业统计只看 `industry` 字段） |
 | GET | `/api/market/{date}` | 读取指定日期全市场行情摘要（扁平列 + 部分从 raw_data 展开） |
 | GET | `/api/post-market/{date}` | 整包盘后信封（与 post-market.yaml / DB raw_data 一致） |
 

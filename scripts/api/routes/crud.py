@@ -554,7 +554,10 @@ def get_research_coverage(
         {"stock_code": code, "stock_name": stock_names.get(code, ""), "report_count": count}
         for code, count in top
     ]
-    # 行业汇总：仅对 Top-limit 的股票聚合（与 items 口径一致），缺行业落未分类
+    # 行业汇总：仅对 Top-limit 的股票聚合（与 items 口径一致），缺行业落未分类。
+    # 已知小差异（仅影响本特性上线前的历史天）：range 此处重算 → 老数据全落「未分类」并展示；
+    # 而「当日」出口读 envelope 存储的 research_coverage_industry，老 envelope 无此字段 → 前端隐藏行业条。
+    # 新采集天两条出口一致；老数据差异随时间消化，不回填，接受为已知。
     industry = aggregate_by_industry([
         {"industry": stock_industry.get(code, UNCLASSIFIED), "report_count": count}
         for code, count in top
