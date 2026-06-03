@@ -1,6 +1,8 @@
 """研报覆盖统计逻辑的单元测试。"""
 from __future__ import annotations
 
+import json
+import sqlite3
 from collections import Counter
 from unittest.mock import MagicMock
 
@@ -139,6 +141,39 @@ class TestCollectorIntegration:
 
         assert "research_coverage_top" not in result
 
+    def test_research_coverage_industry_in_result(self):
+        registry = MagicMock()
+
+        def call_side(method, *args, **kwargs):
+            if method == "get_research_report_list":
+                return DataResult(
+                    data=[
+                        {"stock_code": "600519", "stock_name": "贵州茅台"},
+                        {"stock_code": "600519", "stock_name": "贵州茅台"},
+                        {"stock_code": "300750", "stock_name": "宁德时代"},
+                    ],
+                    source="mock",
+                )
+            if method == "get_stock_sw_industry_map":
+                return DataResult(
+                    data={
+                        "600519.SH": {"name": "贵州茅台", "sw_l1": "食品饮料", "sw_l2": "白酒Ⅱ"},
+                        "300750.SZ": {"name": "宁德时代", "sw_l1": "电力设备", "sw_l2": "电池"},
+                    },
+                    source="mock",
+                )
+            return DataResult(data=None, source="mock", error="skip")
+
+        registry.call.side_effect = call_side
+        from collectors.market import MarketCollector
+        result = MarketCollector(registry).collect_post_market("2026-04-10")
+
+        assert "research_coverage_industry" in result
+        ind = result["research_coverage_industry"]
+        # 食品饮料 1只2篇 排 电力设备 1只1篇 前
+        assert ind[0] == {"industry": "食品饮料", "stock_count": 1, "report_count": 2}
+        assert ind[1] == {"industry": "电力设备", "stock_count": 1, "report_count": 1}
+
 
 class TestLabelIndustry:
     """label_industry：给 coverage items 附申万一级行业（三级降级）。"""
@@ -269,3 +304,28 @@ class TestCollectCnReportCount:
         items = collector.collect_cn(reg, "2026-04-10")
         assert items[0]["stock_code"] == "600519"
         assert items[0]["report_count"] == 2
+
+
+class TestPrefillIndustryPassthrough:
+    """GET /api/review/{date}/prefill 透传 research_coverage_industry。"""
+
+    def test_prefill_passes_through_research_coverage_industry(self, api_client):
+        client, db_path = api_client
+        date = "2026-04-17"  # 周五，避开非交易日分支
+        conn = sqlite3.connect(db_path)
+        env = json.dumps({
+            "research_coverage_top": [
+                {"stock_code": "601398", "stock_name": "青岛银行", "report_count": 2, "industry": "银行"},
+            ],
+            "research_coverage_industry": [
+                {"industry": "银行", "stock_count": 2, "report_count": 6},
+            ],
+        }, ensure_ascii=False)
+        conn.execute("INSERT OR REPLACE INTO daily_market (date, raw_data) VALUES (?, ?)", (date, env))
+        conn.commit()
+        conn.close()
+
+        r = client.get(f"/api/review/{date}/prefill")
+        assert r.status_code == 200
+        rci = r.json()["review_signals"]["market"]["research_coverage_industry"]
+        assert rci[0] == {"industry": "银行", "stock_count": 2, "report_count": 6}

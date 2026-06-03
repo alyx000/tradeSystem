@@ -46,3 +46,25 @@ def test_collect_research_coverage_empty_on_failure():
     """get_research_report_list 失败 → 返空（不致命）。"""
     reg = _Reg({"get_research_report_list": _res(None, success=False, error="dns")})
     assert MarketCollector(reg)._collect_research_coverage("2026-05-29") == []
+
+
+def test_collect_research_coverage_attaches_industry():
+    """每条覆盖项带 industry；命中申万成分 → 一级行业名。"""
+    rows = [{"stock_code": "600519", "stock_name": "贵州茅台", "institution": "中信", "rating_change": "维持"}]
+    sw_map = {"600519.SH": {"name": "贵州茅台", "sw_l1": "食品饮料", "sw_l2": "白酒Ⅱ"}}
+    reg = _Reg({
+        "get_research_report_list": _res(rows),
+        "get_research_reports": _res([]),
+        "get_stock_sw_industry_map": _res(sw_map),
+    })
+    out = MarketCollector(reg)._collect_research_coverage("2026-05-29")
+    assert out[0]["stock_code"] == "600519"
+    assert out[0]["industry"] == "食品饮料"
+
+
+def test_collect_research_coverage_unclassified_when_no_member():
+    """缺申万成分 → 未分类（_Reg 未配 sw map → 空 → 未分类）。"""
+    rows = [{"stock_code": "688635", "stock_name": "C长进", "institution": "中信"}]
+    reg = _Reg({"get_research_report_list": _res(rows), "get_research_reports": _res([])})
+    out = MarketCollector(reg)._collect_research_coverage("2026-05-29")
+    assert out[0]["industry"] == "未分类"

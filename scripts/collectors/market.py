@@ -676,6 +676,10 @@ class MarketCollector:
             top_covered = self._collect_research_coverage(date)
             if top_covered:
                 result["research_coverage_top"] = top_covered
+                from services.research_digest.collector import aggregate_by_industry
+                industry_summary = aggregate_by_industry(top_covered)
+                if industry_summary:
+                    result["research_coverage_industry"] = industry_summary  # 当日行业热度汇总（additive）
                 expanded_n = sum(1 for r in top_covered if r.get("expanded"))
                 logger.info(f"研报覆盖统计完成，{len(top_covered)} 只（{expanded_n} 只展开补观点）")
         except Exception as e:
@@ -690,13 +694,15 @@ class MarketCollector:
 
     def _collect_research_coverage(self, date: str) -> list[dict]:
         """研报覆盖排行（复盘网站「当日」面板）：取巨潮当日评级清单，交 build_coverage_panel
-        产出篇数排行 + 高信号 Top 标的的评级方向徽章/观点（与研报速读同源，不重复网络）。
+        产出篇数排行 + 高信号 Top 标的的评级方向徽章/观点（与研报速读同源，不重复网络），
+        再 label_industry 附申万一级行业（缺成分 / 映射失败 → 未分类）。
         采集失败 / 空 → 返 []（不致命，由调用方决定是否落库）。"""
         report_result = self.registry.call("get_research_report_list", date)
         if not (report_result.success and report_result.data):
             return []
-        from services.research_digest.collector import build_coverage_panel
-        return build_coverage_panel(report_result.data, self.registry, date)
+        from services.research_digest.collector import build_coverage_panel, label_industry
+        panel = build_coverage_panel(report_result.data, self.registry, date)
+        return label_industry(panel, self.registry)
 
     @staticmethod
     def _aggregate_limit_up_industry(stocks: list[dict]) -> list[dict]:

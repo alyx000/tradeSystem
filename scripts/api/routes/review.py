@@ -1103,6 +1103,8 @@ def get_prefill(date: str, conn: sqlite3.Connection = Depends(get_db_conn)):
     post_src = _extract_post_market_source(env)
     rct = post_src.get("research_coverage_top")
     review_signals["market"]["research_coverage_top"] = rct if isinstance(rct, list) else []
+    rci = post_src.get("research_coverage_industry")
+    review_signals["market"]["research_coverage_industry"] = rci if isinstance(rci, list) else []
 
     review_signals["sectors"]["projection_candidates"] = _build_sector_projection_candidates(
         market=market,
