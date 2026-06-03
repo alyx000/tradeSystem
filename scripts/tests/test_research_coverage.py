@@ -138,3 +138,134 @@ class TestCollectorIntegration:
         result = collector.collect_post_market("2026-04-10")
 
         assert "research_coverage_top" not in result
+
+
+class TestLabelIndustry:
+    """label_industry：给 coverage items 附申万一级行业（三级降级）。"""
+
+    def _reg(self, sw_map, *, success=True, error=None):
+        reg = MagicMock()
+        if success:
+            reg.call.return_value = DataResult(data=sw_map, source="mock")
+        else:
+            reg.call.return_value = DataResult(data=None, source="mock", error=error or "fail")
+        return reg
+
+    def test_hits_sw_l1_via_six_digit_prefix(self):
+        from services.research_digest.collector import label_industry
+        sw_map = {"600519.SH": {"name": "贵州茅台", "sw_l1": "食品饮料", "sw_l2": "白酒Ⅱ"}}
+        items = [{"stock_code": "600519", "report_count": 3}]
+        out = label_industry(items, self._reg(sw_map))
+        assert out[0]["industry"] == "食品饮料"
+        assert out[0]["report_count"] == 3  # 原字段保留
+
+    def test_missing_member_falls_back_to_unclassified(self):
+        from services.research_digest.collector import label_industry, UNCLASSIFIED
+        items = [{"stock_code": "688635", "report_count": 1}]
+        out = label_industry(items, self._reg({}))  # 空 map → 缺成分
+        assert out[0]["industry"] == UNCLASSIFIED
+
+    def test_map_failure_all_unclassified(self):
+        from services.research_digest.collector import label_industry, UNCLASSIFIED
+        items = [{"stock_code": "600519", "report_count": 2}]
+        out = label_industry(items, self._reg(None, success=False, error="dns"))
+        assert out[0]["industry"] == UNCLASSIFIED
+
+    def test_empty_l1_value_falls_back_to_unclassified(self):
+        from services.research_digest.collector import label_industry, UNCLASSIFIED
+        sw_map = {"600519.SH": {"name": "x", "sw_l1": "", "sw_l2": "白酒Ⅱ"}}
+        out = label_industry([{"stock_code": "600519", "report_count": 1}], self._reg(sw_map))
+        assert out[0]["industry"] == UNCLASSIFIED
+
+    def test_does_not_mutate_input(self):
+        from services.research_digest.collector import label_industry
+        sw_map = {"600519.SH": {"name": "x", "sw_l1": "食品饮料", "sw_l2": "白酒Ⅱ"}}
+        items = [{"stock_code": "600519", "report_count": 1}]
+        label_industry(items, self._reg(sw_map))
+        assert "industry" not in items[0]  # 返回新 dict，不改原列表
+
+    def test_empty_or_missing_stock_code_unclassified(self):
+        from services.research_digest.collector import label_industry, UNCLASSIFIED
+        sw_map = {"600519.SH": {"name": "x", "sw_l1": "食品饮料", "sw_l2": "白酒Ⅱ"}}
+        out = label_industry([{"report_count": 1}, {"stock_code": "", "report_count": 1}], self._reg(sw_map))
+        assert out[0]["industry"] == UNCLASSIFIED  # 缺 stock_code
+        assert out[1]["industry"] == UNCLASSIFIED  # 空 stock_code
+
+
+class TestAggregateByIndustry:
+    """aggregate_by_industry：纯函数按行业聚合 + 排序。"""
+
+    def test_aggregates_and_sorts_by_report_count_desc(self):
+        from services.research_digest.collector import aggregate_by_industry
+        items = [
+            {"stock_code": "600519", "industry": "食品饮料", "report_count": 2},
+            {"stock_code": "601318", "industry": "银行", "report_count": 6},
+            {"stock_code": "600036", "industry": "银行", "report_count": 1},
+        ]
+        out = aggregate_by_industry(items)
+        assert out[0] == {"industry": "银行", "stock_count": 2, "report_count": 7}
+        assert out[1] == {"industry": "食品饮料", "stock_count": 1, "report_count": 2}
+
+    def test_tie_breaks_by_stock_count_then_name(self):
+        from services.research_digest.collector import aggregate_by_industry
+        items = [
+            {"industry": "机械设备", "report_count": 3},
+            {"industry": "机械设备", "report_count": 0},
+            {"industry": "机械设备", "report_count": 0},
+            {"industry": "电子", "report_count": 3},
+        ]
+        out = aggregate_by_industry(items)
+        # 同篇数 3：机械设备(3只) 排 电子(1只) 前
+        assert [b["industry"] for b in out] == ["机械设备", "电子"]
+
+    def test_tie_breaks_by_name_when_both_counts_equal(self):
+        from services.research_digest.collector import aggregate_by_industry
+        # report_count 与 stock_count 全并列 → 末级按行业名升序
+        items = [
+            {"industry": "银行", "report_count": 2},
+            {"industry": "电子", "report_count": 2},
+        ]
+        out = aggregate_by_industry(items)
+        assert [b["industry"] for b in out] == ["电子", "银行"]  # 电 < 银（Unicode 升序）
+
+    def test_unclassified_always_last(self):
+        from services.research_digest.collector import aggregate_by_industry, UNCLASSIFIED
+        items = [
+            {"industry": UNCLASSIFIED, "report_count": 99},  # 篇数最高也排最后
+            {"industry": "银行", "report_count": 1},
+        ]
+        out = aggregate_by_industry(items)
+        assert out[-1]["industry"] == UNCLASSIFIED
+
+    def test_empty_input(self):
+        from services.research_digest.collector import aggregate_by_industry
+        assert aggregate_by_industry([]) == []
+
+    def test_missing_report_count_treated_as_zero(self):
+        from services.research_digest.collector import aggregate_by_industry
+        out = aggregate_by_industry([{"industry": "银行"}])
+        assert out[0] == {"industry": "银行", "stock_count": 1, "report_count": 0}
+
+
+class TestCollectCnReportCount:
+    """collect_cn item 须带 report_count（篇数=源行数，钉钉行业聚合用）。"""
+
+    def test_collect_cn_item_has_report_count_equals_row_count(self):
+        from services.research_digest import collector
+        reg = MagicMock()
+
+        def call_side(method, *a, **k):
+            if method == "get_research_report_list":
+                return DataResult(
+                    data=[
+                        {"stock_code": "600519", "stock_name": "贵州茅台", "institution": "A"},
+                        {"stock_code": "600519", "stock_name": "贵州茅台", "institution": "B"},
+                    ],
+                    source="mock",
+                )
+            return DataResult(data=[], source="mock")  # 补观点网络调用返空
+
+        reg.call.side_effect = call_side
+        items = collector.collect_cn(reg, "2026-04-10")
+        assert items[0]["stock_code"] == "600519"
+        assert items[0]["report_count"] == 2

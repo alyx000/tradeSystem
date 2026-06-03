@@ -118,8 +118,10 @@ def collect_cn(registry, date: str) -> list[dict]:
             continue
         e = by_code.setdefault(code, {
             "stock_code": code, "stock_name": "",
+            "report_count": 0,
             "institutions": [], "ratings": [], "rating_changes": [], "_seen_rc": set(),
         })
+        e["report_count"] += 1  # 篇数=源行数，与 build_coverage_panel 同口径（钉钉行业聚合用）
         if not e["stock_name"] and r.get("stock_name"):  # L1：取首个非空名（首行可能空）
             e["stock_name"] = str(r["stock_name"]).strip()
         inst = str(r.get("institution") or "").strip()
@@ -140,6 +142,7 @@ def collect_cn(registry, date: str) -> list[dict]:
             "market": "A",
             "stock_code": code,
             "stock_name": e["stock_name"],
+            "report_count": e["report_count"],
             "org_count": len(orgs),
             "institutions": orgs,
             "ratings": e["ratings"],
@@ -246,6 +249,59 @@ def build_coverage_panel(rows, registry, date, *, top_cap=COVERAGE_TOP_CAP, expa
     expanded_rows = [_shape(e) for e in expand_list]                                # 鞠磊分序
     pill_rows = [_shape(e) for e in ranked if e["stock_code"] not in expand_codes]   # 篇数序
     return expanded_rows + pill_rows
+
+
+# ---- 研报覆盖·行业聚合（web 当日/近N日 + 钉钉共用单一真源）----
+UNCLASSIFIED = "未分类"      # 缺申万成分（次新/北交所）或映射全挂时的兜底桶名
+INDUSTRY_DISPLAY_CAP = 8     # 行业热度条/钉钉段展示上限（超出由各渲染层折叠）
+
+
+def label_industry(items: list[dict], registry) -> list[dict]:
+    """给研报覆盖 items 附申万一级行业，返回新列表（不改原入参）。三级降级：
+
+    ① get_stock_sw_industry_map 命中 → industry = sw_l1
+    ② 缺成分（次新/北交所）→ industry = "未分类"
+    ③ 映射接口异常（success=False）→ 全部 "未分类"
+
+    join：sw_map 以 ts_code（600519.SH）为键，研报源是 6 位裸码（600519）；
+    建 {ts_code[:6]: entry} 反查索引，避免逐条拼 .SH/.SZ/.BJ 后缀的边界遗漏。
+    """
+    sw_result = registry.call("get_stock_sw_industry_map")
+    sw_map = sw_result.data if (getattr(sw_result, "success", False) and sw_result.data) else {}
+    by_prefix: dict[str, dict] = {}
+    for ts_code, entry in sw_map.items():
+        prefix = str(ts_code)[:6]
+        # A股 6 位裸码与交易所一一对应（60x→SH / 00x,30x→SZ / 8x,4x,920→BJ），同一前缀不会跨两所，
+        # 故反查无歧义；`not in` 仅作"未来跨市场扩展"的理论兜底（首个胜出），当前不会触发。
+        if prefix and prefix not in by_prefix:
+            by_prefix[prefix] = entry
+    out: list[dict] = []
+    for it in items:
+        code6 = str(it.get("stock_code") or "").strip()[:6]
+        entry = by_prefix.get(code6)
+        industry = (entry.get("sw_l1") if entry else "") or UNCLASSIFIED
+        out.append({**it, "industry": industry})
+    return out
+
+
+def aggregate_by_industry(items: list[dict]) -> list[dict]:
+    """纯函数（无网络）：按 industry 聚合 → [{industry, stock_count, report_count}]。
+
+    排序：report_count 降序 → stock_count 降序 → 行业名升序；"未分类" 桶恒排最后。
+    输入项需带 industry + report_count（缺 industry 视作未分类、缺 report_count 视作 0）。
+    """
+    buckets: dict[str, dict] = {}
+    for it in items:
+        ind = it.get("industry") or UNCLASSIFIED
+        b = buckets.setdefault(ind, {"industry": ind, "stock_count": 0, "report_count": 0})
+        b["stock_count"] += 1
+        # report_count 由 collect_cn / build_coverage_panel / range API 产出，恒为 int；`or 0` 仅兜 None/缺键
+        b["report_count"] += int(it.get("report_count") or 0)
+
+    def _sort_key(b: dict):
+        return (b["industry"] == UNCLASSIFIED, -b["report_count"], -b["stock_count"], b["industry"])
+
+    return sorted(buckets.values(), key=_sort_key)
 
 
 # 鞠磊框架：美股 Action 映射到同一套信号标签（init=首次覆盖为 #1 信号）。
