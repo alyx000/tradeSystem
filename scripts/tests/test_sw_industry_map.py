@@ -64,14 +64,14 @@ def test_get_stock_sw_industry_map_paginates_beyond_2000():
 
 
 def test_maps_ts_code_to_name_and_sw_l2():
-    """映射语义:l2_name → sw_l2,name 一并带回。"""
+    """映射语义:l1_name → sw_l1、l2_name → sw_l2,name 一并带回。"""
     provider = _make_provider(_MemberAllPro(3))
 
     result = provider.get_stock_sw_industry_map()
 
     assert result.success
     assert result.source == "tushare:index_member_all"
-    assert result.data["000001.SZ"] == {"name": "股1", "sw_l2": "行业1"}
+    assert result.data["000001.SZ"] == {"name": "股1", "sw_l1": "L1", "sw_l2": "行业1"}
 
 
 def test_caches_map_and_does_not_requery():

@@ -679,7 +679,7 @@ class TushareProvider(DataProvider):
         return self._ths_concept_map
 
     def _ensure_sw_member_map(self) -> dict:
-        """惰性加载个股 → 申万二级映射 {ts_code: {name, sw_l2}}。
+        """惰性加载个股 → 申万一/二级映射 {ts_code: {name, sw_l1, sw_l2}}。
 
         index_member_all 默认单页 2000 行,**必须 offset/limit 分页拉满**,否则映射缺一半
         (实测全 A ~5847 只,3 页;参见 memory reference_tushare_index_member_all_pagination)。
@@ -703,6 +703,7 @@ class TushareProvider(DataProvider):
                         continue
                     result_map[code] = {
                         "name": _to_clean_str(r.get("name")),
+                        "sw_l1": _to_clean_str(r.get("l1_name")),  # additive：申万一级（研报覆盖行业聚合用）
                         "sw_l2": _to_clean_str(r.get("l2_name")),
                     }
                 if len(records) < limit:
