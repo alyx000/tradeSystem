@@ -816,7 +816,11 @@ def generate(*, run_date: date, account: str, limit: int, push: bool) -> dict[st
     win_rate = (len(wins) / len(pnls)) if pnls else None
     avg_win = (sum(wins) / len(wins)) if wins else None
     avg_loss = (sum(losses) / len(losses)) if losses else None
-    pl_ratio = (avg_win / abs(avg_loss)) if (avg_win is not None and avg_loss) else None
+    # 与 profit_factor 同口径：全胜无亏损 → ∞（而非 -）；全亏无盈利 → 0.0；无样本 → None。
+    pl_ratio = (
+        (avg_win / abs(avg_loss)) if (wins and losses)
+        else (float("inf") if wins else (0.0 if losses else None))
+    )
     profit_factor = (sum(wins) / abs(sum(losses))) if losses else (None if not wins else float("inf"))
     max_win = max(wins) if wins else None
     max_loss = min(losses) if losses else None
@@ -1102,7 +1106,7 @@ def generate(*, run_date: date, account: str, limit: int, push: bool) -> dict[st
                 ["胜率(按卖出笔)", f"{win_rate*100:.1f}%" if win_rate is not None else "-", "realized_pnl>0 计胜"],
                 ["平均盈利", _format_money(avg_win) if avg_win is not None else "-", ""],
                 ["平均亏损", _format_money(avg_loss) if avg_loss is not None else "-", ""],
-                ["盈亏比", f"{pl_ratio:.2f}" if pl_ratio is not None else "-", "avg_win / |avg_loss|"],
+                ["盈亏比", _format_ratio(pl_ratio), "avg_win / |avg_loss|"],
                 [
                     "Profit Factor",
                     ("∞" if profit_factor == float("inf") else (f"{profit_factor:.2f}" if isinstance(profit_factor, float) else "-")),

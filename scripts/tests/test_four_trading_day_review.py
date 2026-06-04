@@ -413,6 +413,54 @@ def test_push_summary_excludes_cashflow_but_report_keeps_it(tmp_path, monkeypatc
     assert "现金流" in report_md
 
 
+def test_pl_ratio_shows_infinity_when_no_losses(tmp_path, monkeypatch):
+    # 本期全胜无亏损：盈亏比应显示 ∞（与 PF 口径一致），而非 -
+    rows = [
+        {
+            "id": 1, "account_id": "default", "biz_date": "2026-05-26", "exec_time": "09:40:00",
+            "stock_code": "600333", "stock_name": "测试", "direction": "buy",
+            "shares": 200, "amount": 2000.0, "net_amount": -2000.0, "total_fees": 0.0, "thesis_id": None,
+        },
+        {
+            "id": 2, "account_id": "default", "biz_date": "2026-05-27", "exec_time": "10:10:00",
+            "stock_code": "600333", "stock_name": "测试", "direction": "sell",
+            "shares": 200, "amount": 2400.0, "net_amount": 2400.0, "total_fees": 0.0, "thesis_id": None,
+        },
+    ]
+    sent: dict[str, str] = {}
+
+    def fake_run_json(cmd: list[str]):
+        if cmd[2:4] == ["db", "thesis-list"]:
+            return []
+        if cmd[2:4] == ["executions", "list"]:
+            return rows
+        raise AssertionError(f"unexpected command: {cmd}")
+
+    class FakePusher:
+        def __init__(self, config):
+            pass
+
+        def initialize(self):
+            return True
+
+        def send_markdown(self, title, markdown):
+            sent["markdown"] = markdown
+            return True
+
+    monkeypatch.setattr(review, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(review, "_try_get_last_n_trade_days", lambda n, as_of: _EIGHT_DAYS)
+    monkeypatch.setattr(review, "_run_json", fake_run_json)
+    fake_dingtalk_module = ModuleType("scripts.pushers.dingtalk_pusher")
+    fake_dingtalk_module.DingTalkPusher = FakePusher
+    monkeypatch.setitem(sys.modules, "scripts.pushers.dingtalk_pusher", fake_dingtalk_module)
+
+    result = review.generate(run_date=date(2026, 5, 29), account="default", limit=10000, push=True)
+
+    assert "盈亏比 ∞" in sent["markdown"]  # 摘要
+    report_md = Path(result["report_path"]).read_text(encoding="utf-8")
+    assert "| 盈亏比 | ∞ |" in report_md  # 本地已闭环表（inf 渲染为 ∞ 而非 "inf"）
+
+
 def test_discipline_out_of_window_unreviewed_counts_as_backlog(tmp_path, monkeypatch):
     # 窗口外已平仓且无 review → 只增 backlog 计数，不进本期明细表
     theses = [
