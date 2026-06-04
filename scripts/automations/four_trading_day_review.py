@@ -124,6 +124,25 @@ def _try_get_last_n_trade_days(n: int, as_of: date) -> list[str] | None:
         return None
 
 
+def _load_thesis_reviews() -> dict[int, dict]:
+    """只读读取 thesis_review 全表，返回 {thesis_id: row_dict}。
+
+    与 _try_get_last_n_trade_days 同样的容错风格：fresh DB / 表不存在 /
+    PROJECT_ROOT 指向无 DB 的临时目录时，整体兜底返回 {}，绝不抛。
+    """
+    conn = None
+    try:
+        conn = sqlite3.connect(_db_uri_readonly(), uri=True)
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute("SELECT * FROM thesis_review").fetchall()
+        return {int(r["thesis_id"]): dict(r) for r in rows}
+    except Exception:
+        return {}
+    finally:
+        if conn is not None:
+            conn.close()
+
+
 def _trade_day_index(days: list[str]) -> dict[str, int]:
     return {d: i for i, d in enumerate(days)}
 
@@ -334,6 +353,9 @@ def _build_dingtalk_summary(
     thesis_anomaly_rows: list[dict[str, Any]],
     same_day_flip_n: int,
     next_trade_day_flip_n: int,
+    open_check_n: int,
+    unreviewed_n: int,
+    deviation_n: int,
     report_path: Path,
 ) -> str:
     change_lines: list[str] = []
@@ -408,6 +430,9 @@ def _build_dingtalk_summary(
         f"- 快进快出：同日{same_day_flip_n} / 隔日{next_trade_day_flip_n}",
         f"- {_format_anomaly_line(thesis_anomaly_rows)}",
         "",
+        "### 失效与纪律",
+        f"- 持仓自查 {open_check_n} 项｜未复盘 {unreviewed_n}｜偏离/低分 {deviation_n}",
+        "",
         "### 复盘问题",
         *review_lines,
         "",
@@ -422,6 +447,122 @@ def _merge_actions(day_rows: list[dict]) -> str:
 
 def _row_key_time(r: dict) -> tuple:
     return (r.get("biz_date") or "", r.get("exec_time") or "", r.get("id") or 0)
+
+
+def _md_cell(s: Any) -> str:
+    """把自由文本安全放进 Markdown 表格单元格：竖线/换行会破坏表格结构。"""
+    text = "-" if s is None else str(s)
+    return text.replace("|", "｜").replace("\n", " ").strip() or "-"
+
+
+def _held_days(opened_at: str | None, run_date: date) -> int | None:
+    od = _parse_date(opened_at)
+    return (run_date - od).days if od else None
+
+
+def _stock_label(t: dict) -> str:
+    return _md_cell(f"{t.get('stock_code') or '-'} {t.get('stock_name') or ''}".strip())
+
+
+def _render_failure_self_check(open_theses: list[dict], run_date: date) -> str:
+    """持仓失效自查清单：列出 open 状态 thesis 的失效条件/止损/目标价，供人工核对。
+
+    不取行情、不机械判定文本型 failure_condition 是否触发——保持报告事实层纯度。
+    """
+    if not open_theses:
+        return "（当前无 open 状态 thesis，无需自查）"
+    # 预计算持仓天数：排序与渲染共用，避免对同一 opened_at 解析两次。
+    with_days = [(t, _held_days(t.get("opened_at"), run_date)) for t in open_theses]
+    rows: list[list[str]] = []
+    for t, days in sorted(with_days, key=lambda x: (x[1] if x[1] is not None else -1), reverse=True):
+        stop = _to_float(t.get("stop_loss"))
+        target = _to_float(t.get("target_price"))
+        pos = _to_float(t.get("planned_position_pct"))
+        rows.append(
+            [
+                f"#{t.get('id')}",
+                _stock_label(t),
+                str(t.get("opened_at") or "-"),
+                str(days) if days is not None else "-",
+                _md_cell(t.get("failure_condition")),
+                _format_money(stop) if stop is not None else "-",
+                _format_money(target) if target is not None else "-",
+                f"{pos:.0f}%" if pos is not None else "-",
+                _md_cell(t.get("entry_reason")),
+            ]
+        )
+    return md_table(
+        ["思路#", "股票", "开仓日", "持仓天数(自然日)", "失效条件", "止损", "目标价", "计划仓位%", "开仓逻辑"],
+        rows,
+    )
+
+
+_EP_LABEL = {0: "偏离", 1: "按计划", 2: "未执行"}
+
+
+def _render_discipline_review(
+    *,
+    relevant_closed: list[dict],
+    unreviewed: list[dict],
+    deviation: list[tuple[dict, dict]],
+    backlog_n: int,
+) -> list[str]:
+    """纪律执行回顾：基于 thesis_review，回顾本期相关已平仓交易的复盘缺口与偏离。"""
+    if not relevant_closed and backlog_n == 0:
+        return ["（本期无已平仓 thesis 需复盘）"]
+
+    out: list[str] = []
+    out.append("### 未复盘（已平仓缺 thesis_review）")
+    if unreviewed:
+        out.append(
+            md_table(
+                ["思路#", "股票", "平仓日", "失效条件"],
+                [
+                    [
+                        f"#{t.get('id')}",
+                        _stock_label(t),
+                        str(t.get("closed_at") or "-"),
+                        _md_cell(t.get("failure_condition")),
+                    ]
+                    for t in unreviewed
+                ],
+            )
+        )
+        out.append("- [判断] 上述已平仓交易尚未复盘，建议补 `python3 main.py db thesis-review`。")
+    else:
+        out.append("（本期相关已平仓 thesis 均已复盘）")
+
+    out.append("")
+    out.append("### 复盘标记偏离/未执行/低分")
+    if deviation:
+        rows: list[list[str]] = []
+        for t, rev in deviation:
+            score = rev.get("discipline_score")
+            pnl = _to_float(rev.get("realized_pnl_amount"))
+            rows.append(
+                [
+                    f"#{t.get('id')}",
+                    _stock_label(t),
+                    _EP_LABEL.get(rev.get("executed_as_planned"), str(rev.get("executed_as_planned"))),
+                    str(rev.get("exit_trigger") or "-"),
+                    str(score) if score is not None else "-",
+                    _format_signed_money(pnl) if pnl is not None else "-",
+                    _md_cell(rev.get("lessons")),
+                ]
+            )
+        out.append(
+            md_table(
+                ["思路#", "股票", "执行情况", "exit_trigger", "纪律分", "已实现盈亏", "教训"],
+                rows,
+            )
+        )
+    else:
+        out.append("（无偏离/未执行/低分标记）")
+
+    if backlog_n > 0:
+        out.append("")
+        out.append(f"- [判断] 另有 {backlog_n} 笔历史已平仓 thesis 仍未复盘（不在本期窗口）。")
+    return out
 
 
 @dataclass
@@ -1041,6 +1182,58 @@ def generate(*, run_date: date, account: str, limit: int, push: bool) -> dict[st
     lines.append(thesis_md)
     lines.append("")
 
+    open_theses = [t for t in theses if (t.get("status") or "") == "open"]
+    lines.append("## 持仓失效自查清单（需人工核对）")
+    lines.append(
+        "- [判断] 以下为当前 open 状态的交易思路（不限本期窗口），请逐条人工核对失效条件/止损/目标价是否已触发；"
+        "本清单不取行情、不替代你的判断。"
+    )
+    lines.append(_render_failure_self_check(open_theses, run_date))
+    lines.append("")
+
+    # 纪律执行回顾：本期相关已平仓 thesis（窗口内有流水 或 closed_at 落窗口）对照 thesis_review
+    reviews = _load_thesis_reviews()
+    window_thesis_ids = set(thesis_refs.keys())
+    relevant_closed: list[dict] = []
+    relevant_ids: set[int] = set()
+    for t in theses:
+        if (t.get("status") or "") != "closed" or t.get("id") is None:
+            continue
+        closed_at = t.get("closed_at")
+        in_window = bool(closed_at and current_start <= closed_at <= current_end)
+        if int(t["id"]) in window_thesis_ids or in_window:
+            relevant_closed.append(t)
+            relevant_ids.add(int(t["id"]))
+    unreviewed: list[dict] = []
+    deviation: list[tuple[dict, dict]] = []
+    for t in relevant_closed:
+        rev = reviews.get(int(t["id"]))
+        if rev is None:
+            unreviewed.append(t)
+            continue
+        score = rev.get("discipline_score")
+        if rev.get("executed_as_planned") in (0, 2) or (score is not None and score <= 2):
+            deviation.append((t, rev))
+    backlog_unreviewed_n = sum(
+        1
+        for t in theses
+        if (t.get("status") or "") == "closed"
+        and t.get("id") is not None
+        and int(t["id"]) not in reviews
+        and int(t["id"]) not in relevant_ids
+    )
+    lines.append("## 纪律执行回顾")
+    lines.append(
+        "- [判断] 以下基于 thesis_review 纪律记录，回顾本期相关已平仓交易的复盘缺口与偏离。"
+    )
+    lines += _render_discipline_review(
+        relevant_closed=relevant_closed,
+        unreviewed=unreviewed,
+        deviation=deviation,
+        backlog_n=backlog_unreviewed_n,
+    )
+    lines.append("")
+
     lines.append("## 样本限制")
     lines.append("- [事实] 本报告以券商成交流水为唯一事实层，按指定交易日窗口聚合。")
     lines.append("- [事实] 已实现盈亏为 FIFO 近似：优先使用 net_amount；缺失时用 amount 与 total_fees 近似，可能与券商口径存在偏差。")
@@ -1085,6 +1278,9 @@ def generate(*, run_date: date, account: str, limit: int, push: bool) -> dict[st
                     thesis_anomaly_rows=thesis_anomaly_rows,
                     same_day_flip_n=same_day_flip_n,
                     next_trade_day_flip_n=next_trade_day_flip_n,
+                    open_check_n=len(open_theses),
+                    unreviewed_n=len(unreviewed),
+                    deviation_n=len(deviation),
                     report_path=report_path,
                 )
                 push_ok = pusher.send_markdown("最近4个交易日交易复盘", summary)
