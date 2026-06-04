@@ -77,7 +77,7 @@ alwaysApply: true
 
 **(1) 后端 / 跨文件实现 —— 默认：Claude Code 主 agent**
 
-理由：后端改动通常涉及 service / API / DB 多层联动，需要与用户即时确认契约、改完顺手跑 lint / 起 subagent + codex review 双门，打断频率天然偏高。
+理由：后端改动通常涉及 service / API / DB 多层联动，需要与用户即时确认契约、改完顺手跑 lint / 起门1（`/simplify` + `/code-review`）+ 门2 codex review，打断频率天然偏高。
 
 升级 Codex BG 的触发条件（三条**同时**满足）：
 1. 不是当前主线 —— 主任务是另一件事，后端只是顺带跑；
@@ -162,7 +162,7 @@ alwaysApply: true
 
 计划中如果包含**多阶段实施**(如阶段 1 数据层 / 阶段 2 service / 阶段 3 CLI / ...),plan 正文**必须显式规定**:
 
-> "**每个大阶段结束 + 阶段测试通过后,立即跑一次 subagent + codex review 双门;不允许把多阶段的 review 全部攒到最后一个'后置审查'阶段才一次性做。**"
+> "**每个大阶段结束 + 阶段测试通过后,立即跑一次门1（`/simplify` + `/code-review`）+ 门2（codex review）;不允许把多阶段的 review 全部攒到最后一个'后置审查'阶段才一次性做。**"
 
 **为什么硬性规定**:trade_thesis 中间层 v24 实施(2026-05-17)的 plan 把 review 写成阶段 6 G4「后置审查」收尾,等于 6 个独立的"实质性改动"攒成一波过审。代价:
 - codex 严重 1(事务边界)在阶段 4 写完就能查出来,但因为攒到阶段 6,变成"6 阶段写完才回头修阶段 4"
@@ -172,8 +172,8 @@ alwaysApply: true
 **plan 文档怎么写**(模板):每个阶段的"完成标准"段必须含一句:
 
 ```
-> 完成标准:<阶段 pytest 路径> 全绿 + **立即跑 subagent 审查 + codex:codex-rescue review,
-> 满足 [subagent-code-review.md](.../subagent-code-review.md) 4 条结束条件
+> 完成标准:<阶段 pytest 路径> 全绿 + **立即跑门1（`/simplify` + `/code-review`）+ 门2 codex:codex-rescue review,
+> 满足 [code-review-gate.md](.../code-review-gate.md) 4 条结束条件
 > + [post-dev-codex-review.md](.../post-dev-codex-review.md) 6 条结束条件,才能进入下一阶段。**
 ```
 

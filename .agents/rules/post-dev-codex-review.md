@@ -5,16 +5,16 @@ alwaysApply: true
 
 # 开发后 Codex Review 规范（防无限循环）
 
-> **与 [`subagent-code-review.md`](subagent-code-review.md) 的关系（触发矩阵）**：两条规则触发条件相同，但执行**串行**，不替代：
-> 1. 改动完成 + 测试通过 → **先**跑 `subagent-code-review.md`（本地 Explore，快速发现明显 bug / 测试缺口）；
-> 2. subagent 高优先级问题修完后 → **再**跑本规则（codex:codex-rescue，独立审查 + 6 条结束条件 + 3 轮上限）；
+> **与 [`code-review-gate.md`](code-review-gate.md) 的关系（触发矩阵）**：两条规则触发条件相同，但执行**串行**，不替代：
+> 1. 改动完成 + 测试通过 → **先**跑门1（`code-review-gate.md`：`/simplify` 清理 → `/code-review` 本地多 agent 审查，快速发现明显 bug / 质量问题）；
+> 2. 门1 高优先级问题修完后 → **再**跑本规则门2（codex:codex-rescue，独立审查 + 6 条结束条件 + 3 轮上限）；
 > 3. codex review 通过后才向用户汇报。
 >
 > 单文件改 / 纯文档改 / 单测试增改 → 两条都不触发。
 
 ## 触发条件
 
-完成一轮**实质性代码改动**后必触发(**本节同时是 [`subagent-code-review.md`](subagent-code-review.md) 的触发真源**,两条规则触发同步):
+完成一轮**实质性代码改动**后必触发(**本节同时是 [`code-review-gate.md`](code-review-gate.md) 的触发真源**,两条规则触发同步):
 
 - 修改了 3 个或以上文件的业务逻辑
 - 引入新函数、新 CLI 命令、新 DB 表/列、新 API 路由
@@ -38,7 +38,7 @@ alwaysApply: true
 - 没出大事是运气;如果严重 1 是个 schema 缺陷(阶段 1 留下来的),要回滚 5 个阶段
 - 单阶段 diff vs 全实施 diff,后者 review 质量明显下降(codex 一次性吞 2645 行 diff,信号被稀释)
 
-**How to apply**:**每个大阶段结束 + 阶段测试通过后,立即跑 subagent + codex review 双门**;不允许"等所有阶段都做完才一次性 review"。对应 [`implementation-plan.md`](implementation-plan.md) 步骤 3 阶段触发约束。
+**How to apply**:**每个大阶段结束 + 阶段测试通过后,立即跑门1（`/simplify` + `/code-review`）+ 门2（codex review）**;不允许"等所有阶段都做完才一次性 review"。对应 [`implementation-plan.md`](implementation-plan.md) 步骤 3 阶段触发约束。
 
 ## 强制流程
 

@@ -12,7 +12,7 @@
 | `implementation-plan.md` | 实施计划必须含测试验证方案 + 复杂任务多 Agent 并行分组 |
 | `solution-format.md` | 技术方案 / 执行计划 / 业务逻辑解析默认使用结构化章节、表格与纯 Mermaid 图表输出 |
 | `test-design.md` | 分层测试设计：金字塔原则、隔离原则、自底向上执行 |
-| `subagent-code-review.md` | 每轮实质性代码改动后启动 subagent 审查，按高/中/低分类处理 |
+| `code-review-gate.md` | 每轮实质性代码改动后先 `/simplify` 清理 → `/code-review`（门1，替代旧本地 Explore）；门2 codex 见 `post-dev-codex-review.md` |
 | `skills-sync.md` | CLI / API / Skills 变更后同步 `INDEX.md`、跑 `test_cli_smoke`、检查受影响 SKILL.md |
 
 ## Skills（项目级工作流）
