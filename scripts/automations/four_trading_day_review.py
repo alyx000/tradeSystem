@@ -364,7 +364,6 @@ def _build_dingtalk_summary(
             ("成交笔数", float(current_agg["n"]) - float(prev_agg["n"])),
             ("买入金额", float(current_agg["buy_amount"]) - float(prev_agg["buy_amount"])),
             ("卖出金额", float(current_agg["sell_amount"]) - float(prev_agg["sell_amount"])),
-            ("净现金流", float(current_agg["net_cashflow"]) - float(prev_agg["net_cashflow"])),
             ("交易费用", float(current_agg["fees"]) - float(prev_agg["fees"])),
             ("近似已实现净盈亏", current_realized_total - realized_prev_total),
         ]
@@ -382,8 +381,7 @@ def _build_dingtalk_summary(
         actions = _format_actions_compact(summary["actions"])
         day_lines.append(
             f"- {day}：买{int(summary['buy_n'])}/卖{int(summary['sell_n'])}；"
-            f"现金流{_format_signed_money(summary['net_cashflow'])}；"
-            f"闭环{_format_signed_money(realized)}；{actions}"
+            f"已实现盈亏{_format_signed_money(realized)}；{actions}"
         )
 
     win_event = max(
@@ -411,8 +409,8 @@ def _build_dingtalk_summary(
         f"### 4日复盘｜{current_start}~{current_end}",
         "",
         "### 核心",
-        f"- 笔数 {int(current_agg['n'])}（买{int(current_agg['buy_n'])}/卖{int(current_agg['sell_n'])}）｜现金流 {_format_signed_money(current_agg['net_cashflow'])}",
-        f"- 闭环 {_format_signed_money(current_realized_total)}｜胜率 {_format_pct(win_rate)}｜盈亏比 {_format_ratio(pl_ratio)}｜PF {_format_ratio(profit_factor)}",
+        f"- 笔数 {int(current_agg['n'])}（买{int(current_agg['buy_n'])}/卖{int(current_agg['sell_n'])}）",
+        f"- 已实现盈亏 {_format_signed_money(current_realized_total)}｜胜率 {_format_pct(win_rate)}｜盈亏比 {_format_ratio(pl_ratio)}｜PF {_format_ratio(profit_factor)}",
         f"- 未闭环 {unclosed_clue_n}｜快进快出 同{same_day_flip_n}/隔{next_trade_day_flip_n}",
         "",
         "### 逐日节奏",

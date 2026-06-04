@@ -361,6 +361,58 @@ def test_discipline_executed_as_planned_2_renders_in_deviation_bucket(tmp_path, 
     assert "没执行计划" in report_md
 
 
+def test_push_summary_excludes_cashflow_but_report_keeps_it(tmp_path, monkeypatch):
+    rows = [
+        {
+            "id": 1, "account_id": "default", "biz_date": "2026-05-26", "exec_time": "09:40:00",
+            "stock_code": "600333", "stock_name": "测试", "direction": "buy",
+            "shares": 200, "amount": 2000.0, "net_amount": -2000.0, "total_fees": 0.0, "thesis_id": None,
+        },
+        {
+            "id": 2, "account_id": "default", "biz_date": "2026-05-27", "exec_time": "10:10:00",
+            "stock_code": "600333", "stock_name": "测试", "direction": "sell",
+            "shares": 200, "amount": 1800.0, "net_amount": 1800.0, "total_fees": 0.0, "thesis_id": None,
+        },
+    ]
+    sent: dict[str, str] = {}
+
+    def fake_run_json(cmd: list[str]):
+        if cmd[2:4] == ["db", "thesis-list"]:
+            return []
+        if cmd[2:4] == ["executions", "list"]:
+            return rows
+        raise AssertionError(f"unexpected command: {cmd}")
+
+    class FakePusher:
+        def __init__(self, config):
+            pass
+
+        def initialize(self):
+            return True
+
+        def send_markdown(self, title, markdown):
+            sent["markdown"] = markdown
+            return True
+
+    monkeypatch.setattr(review, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(review, "_try_get_last_n_trade_days", lambda n, as_of: _EIGHT_DAYS)
+    monkeypatch.setattr(review, "_run_json", fake_run_json)
+    fake_dingtalk_module = ModuleType("scripts.pushers.dingtalk_pusher")
+    fake_dingtalk_module.DingTalkPusher = FakePusher
+    monkeypatch.setitem(sys.modules, "scripts.pushers.dingtalk_pusher", fake_dingtalk_module)
+
+    result = review.generate(run_date=date(2026, 5, 29), account="default", limit=10000, push=True)
+
+    # 钉钉短摘要：现金流已撤掉，但盈亏/胜率仍在；闭环改名为「已实现盈亏」
+    markdown = sent["markdown"]
+    assert "现金流" not in markdown
+    assert "已实现盈亏" in markdown
+    assert "胜率" in markdown
+    # 本地完整报告：现金流保留（仅短摘要精简）
+    report_md = Path(result["report_path"]).read_text(encoding="utf-8")
+    assert "现金流" in report_md
+
+
 def test_discipline_out_of_window_unreviewed_counts_as_backlog(tmp_path, monkeypatch):
     # 窗口外已平仓且无 review → 只增 backlog 计数，不进本期明细表
     theses = [
