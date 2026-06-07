@@ -234,7 +234,7 @@ def _huibo_lines(huibo_digest: dict | None) -> list[str]:
             safe_sources = [
                 safe
                 for s in sources[:3]
-                if (safe := _safe_text(s, "慧博行业来源"))
+                if (safe := _safe_text(_huibo_source_label(s), "慧博行业来源"))
             ]
             src = f"｜来源：{'；'.join(safe_sources)}" if safe_sources else ""
             L.append(f"- **{name}**：{viewpoint or '—'}{src}")
@@ -305,6 +305,12 @@ def _huibo_lines(huibo_digest: dict | None) -> list[str]:
                 L.append(f"- Reader 未完成：{title}")
 
     return L
+
+
+def _huibo_source_label(source) -> str:
+    if isinstance(source, dict):
+        return str(source.get("title") or source.get("institution") or source.get("report_id") or "")
+    return str(source or "")
 
 
 def render_md(date: str, cn_items: list[dict], us_items: list[dict], top3: list[dict],

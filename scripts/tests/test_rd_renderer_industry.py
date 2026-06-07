@@ -218,6 +218,25 @@ def test_huibo_renderer_ignores_non_list_sources():
     assert "来源：A；证；券" not in md
 
 
+def test_huibo_renderer_formats_dict_sources():
+    huibo_digest = {
+        "industry_summary": {
+            "industries": [
+                {
+                    "industry": "机器人",
+                    "viewpoint": "链条升温",
+                    "sources": [{"report_id": "abc", "title": "A证券-机器人行业深度", "institution": "A证券"}],
+                },
+            ],
+        },
+    }
+
+    _, md = render_md("2026-06-03", cn_items=[], us_items=[], top3=[], huibo_digest=huibo_digest)
+
+    assert "来源：A证券-机器人行业深度" in md
+    assert "{'report_id'" not in md
+
+
 def test_huibo_renderer_ignores_bad_recommendation_items():
     huibo_digest = {
         "recommendations": [
