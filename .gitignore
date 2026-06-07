@@ -12,6 +12,7 @@ dist/
 build/
 .venv/
 venv/
+.venv-raindrop/
 
 # 日志
 *.log
@@ -26,6 +27,13 @@ venv/
 
 # 临时文件
 *.tmp
+tmp/
+scripts/tmp/
+.coverage
+.codex/
+.cursor/mcp.json
+.claude/scheduled_tasks.lock
+opencode.json
 
 # 文档/课件（本地保留，不入仓库；模板例外）
 docs/*

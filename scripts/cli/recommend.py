@@ -4,16 +4,18 @@
   recommend daily   [--lookback-days N] [--dry-run]
   recommend weekly  [--lookback-days N] [--dry-run]
 
---dry-run：只生成 markdown 打印到 stdout，不调 gemini、不真推钉钉。
+--dry-run：只生成 markdown 打印到 stdout，不调 Antigravity、不真推钉钉。
 """
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import sys
 
 from db.connection import get_connection
 from services.recommend.service import run_recommend
+from utils import raindrop_tracing as tracing
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +33,7 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
     daily.add_argument("--top-k", type=int, default=DAILY_DEFAULTS["top_k"],
                        help=f"Top K 截断（默认 {DAILY_DEFAULTS['top_k']}）")
     daily.add_argument("--dry-run", action="store_true",
-                       help="仅打印 markdown 到 stdout，不调 gemini、不真推送")
+                       help="仅打印 markdown 到 stdout，不调 Antigravity、不真推送")
 
     weekly = rec_sub.add_parser("weekly", help="生成周报（近 N 日深度版）")
     weekly.add_argument("--lookback-days", type=int, default=WEEKLY_DEFAULTS["lookback_days"],
@@ -39,7 +41,7 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
     weekly.add_argument("--top-k", type=int, default=WEEKLY_DEFAULTS["top_k"],
                         help=f"Top K 截断（默认 {WEEKLY_DEFAULTS['top_k']}）")
     weekly.add_argument("--dry-run", action="store_true",
-                        help="仅打印 markdown 到 stdout，不调 gemini、不真推送")
+                        help="仅打印 markdown 到 stdout，不调 Antigravity、不真推送")
 
 
 def handle_command(config: dict, args: argparse.Namespace) -> None:
@@ -56,25 +58,51 @@ def handle_command(config: dict, args: argparse.Namespace) -> None:
 
 
 def _run(mode: str, args: argparse.Namespace) -> None:
-    conn = get_connection()
+    # Raindrop Workshop 埋点：begin/finish 包住整次推荐调用（best-effort，不可用时为 no-op）。
+    interaction = tracing.begin(
+        "recommend",
+        user_id=f"recommend_{mode}",
+        input=json.dumps(
+            {
+                "mode": mode,
+                "lookback_days": args.lookback_days,
+                "top_k": args.top_k,
+                "dry_run": args.dry_run,
+            },
+            ensure_ascii=False,
+        ),
+        properties={
+            "mode": mode,
+            "lookback_days": args.lookback_days,
+            "top_k": args.top_k,
+            "dry_run": args.dry_run,
+            "source": "cli",
+        },
+    )
     try:
-        rec = run_recommend(
-            conn,
-            lookback_days=args.lookback_days,
-            top_k=args.top_k,
-            skip_llm=args.dry_run,
-        )
-    finally:
-        conn.close()
+        conn = get_connection()
+        try:
+            rec = run_recommend(
+                conn,
+                lookback_days=args.lookback_days,
+                top_k=args.top_k,
+                skip_llm=args.dry_run,
+            )
+        finally:
+            conn.close()
 
-    if args.dry_run:
-        # 仅打印，不推送
-        print(rec.markdown)
-        logger.info("[%s] dry-run 完成，未推送", mode)
-        return
-
-    # 真推送
-    _push_to_dingtalk(rec.title, rec.markdown, mode=mode)
+        if args.dry_run:
+            # 仅打印，不推送
+            print(rec.markdown)
+            logger.info("[%s] dry-run 完成，未推送", mode)
+        else:
+            # 真推送
+            _push_to_dingtalk(rec.title, rec.markdown, mode=mode)
+    except Exception as exc:  # noqa: BLE001 - 上报错误后原样抛出，不吞异常
+        tracing.finish(interaction, error=str(exc))
+        raise
+    else:
+        tracing.finish(interaction, output=rec.markdown)
 
 
 def _push_to_dingtalk(title: str, markdown: str, *, mode: str) -> None:

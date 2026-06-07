@@ -372,7 +372,7 @@ cp templates/trade-log.yaml daily/$(date +%Y-%m-%d)/trades.yaml
 | 时间       | 频率      | 命令                                          | 说明                                                             |
 | -------- | ------- | ------------------------------------------- | -------------------------------------------------------------- |
 | 07:00    | 工作日     | `python3 scripts/main.py pre`               | 盘前简报                                                           |
-| **07:10**| **工作日** | `python3 scripts/main.py recommend daily`   | **行业推荐日报**（聚合最近 3 日 teacher_notes + industry_info，可选 Gemini 点评，钉钉推送） |
+| **07:10**| **工作日** | `python3 scripts/main.py recommend daily`   | **行业推荐日报**（聚合最近 3 日 teacher_notes + industry_info，可选 Antigravity 点评，钉钉推送） |
 | 20:00    | 工作日     | `bash scripts/sync_data.sh`                 | `git pull` → `main.py post`（含晚间任务）→ 提交并推送 `daily/`、`tracking/` |
 | **20:00**| **周日**  | `python3 scripts/main.py recommend weekly`  | **行业推荐周报**（覆盖近 7 日 Top 8 行业） |
 
@@ -385,9 +385,9 @@ cp templates/trade-log.yaml daily/$(date +%Y-%m-%d)/trades.yaml
 export DINGTALK_WEBHOOK_TOKEN=<钉钉自定义机器人 access_token>
 export DINGTALK_WEBHOOK_SECRET=<钉钉加签 secret>
 # 可选：覆盖 LLM 行为
-export GEMINI_BIN=/opt/homebrew/bin/gemini    # 默认值
+export ANTIGRAVITY_BIN=/Users/alyx/.local/bin/agy    # 默认值
 export LLM_TIMEOUT_SECONDS=90                  # 默认 90s，硬上限 180s
-export GEMINI_MODEL=gemini-2.5-flash           # 默认走 gemini 默认模型
+export LLM_MODEL=<model-name>                  # 可选，留空走 Antigravity 默认模型
 ```
 
 手动入口（CLI / Makefile）：
@@ -528,4 +528,3 @@ To enable the local hook on a fresh clone:
 git config core.hooksPath .githooks
 chmod +x .githooks/pre-push
 ```
-

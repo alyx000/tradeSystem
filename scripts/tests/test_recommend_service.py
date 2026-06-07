@@ -2,7 +2,7 @@
 
 锁定 LLM 触发条件：从「有 sectors」改为「有 market_views」后，
 确保 comment() 只在有大盘观点时被调、skip_llm 时永不被调。
-mock comment() 隔离 gemini subprocess。
+mock comment() 隔离 Antigravity subprocess。
 """
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""gemini 建议合成 + 红线三级护栏。复用 build_gemini_runner 与 REDLINE_KEYWORDS。
+"""Antigravity 建议合成 + 红线三级护栏。复用 build_antigravity_runner 与 REDLINE_KEYWORDS。
 
 红线只扫 LLM 生成内容，不扫认知事实（对齐红线约束『生成』非『事实』）。
 L1 调用/解析失败 → 模板兜底；L2 逐条 bullet 命中红线丢弃、空段兜底；L3 no_llm 纯结构化。

@@ -12,9 +12,9 @@
 - `today-runner.sh` — 包装脚本：cd 仓库根 → source 项目 env → 调 `python3 main.py pre|post`
 - `com.alyx.tradesystem.today-pre.plist` — 工作日 07:00 触发（盘前简报，含钉钉推送）
 - `com.alyx.tradesystem.today-post.plist` — 工作日 20:00 触发（盘后报告，含钉钉推送）
-- `research-digest-runner.sh` — 包装脚本：cd 仓库根 → source `scripts/.env`(TUSHARE_TOKEN) + `~/.config/tradeSystem.env`(钉钉/GEMINI) → 调 `python3 main.py research-digest daily`
+- `research-digest-runner.sh` — 包装脚本：cd 仓库根 → source `scripts/.env`(TUSHARE_TOKEN) + `~/.config/tradeSystem.env`(钉钉/ANTIGRAVITY) → 调 `python3 main.py research-digest daily`
 - `com.alyx.tradesystem.research-digest.plist` — 工作日 06:42 触发（研报速读：A股研报评级[巨潮] + 美股 yfinance 评级 → Top3；非交易日/窗口内无变动自动标注，不报错）
-- `cognition-digest-runner.sh` — 包装脚本（参数化，window 作为 `$1` 透传）：cd 仓库根 → source `scripts/.env` + `~/.config/tradeSystem.env`(钉钉/GEMINI) → 调 `python3 main.py cognition-digest <window>`
+- `cognition-digest-runner.sh` — 包装脚本（参数化，window 作为 `$1` 透传）：cd 仓库根 → source `scripts/.env` + `~/.config/tradeSystem.env`(钉钉/ANTIGRAVITY) → 调 `python3 main.py cognition-digest <window>`
 - `com.alyx.tradesystem.cognition-digest-recent3d.plist` — 每交易日 18:30 触发（认知沉淀近 3 日汇总；日志 `/tmp/tradesystem-cognition-digest.log`）
 - `com.alyx.tradesystem.cognition-digest-weekly.plist` — 周日 20:00 触发（认知沉淀周汇总；同一日志 `/tmp/tradesystem-cognition-digest.log`）
 - `com.alyx.tradesystem.cognition-digest-monthly.plist` — 每月 1 号 09:00 触发（认知沉淀月汇总；同一日志 `/tmp/tradesystem-cognition-digest.log`）
@@ -23,7 +23,7 @@
 
 - `~/.config/tradeSystem.env` 已存在且含 `DINGTALK_WEBHOOK_TOKEN` + `DINGTALK_WEBHOOK_SECRET`（盘前/盘后/行业推荐共用同一对凭据）
 - `python3` 在 `/usr/bin/python3`（或修改 runner 内的绝对路径）
-- `gemini` 在 `/opt/homebrew/bin/gemini`（或修改 PATH，仅行业推荐用到）
+- `agy` 在 PATH 中，或通过 `ANTIGRAVITY_BIN` 指向 Antigravity CLI
 
 ## 安装（一次性）
 
@@ -216,9 +216,13 @@ rm ~/Library/LaunchAgents/com.alyx.tradesystem.sector-correlation.plist
 ## 研报速读（工作日 06:42）
 
 盘前最早一档,早于 today-pre(07:00)/recommend-daily(07:10)。A股取最近交易日研报评级(巨潮 cninfo,鞠磊「首次覆盖」加权),
-美股按美东窗口拉 yfinance 评级方向变动(init/up/down/reinit)→ Top3 → MD 落盘 `data/reports/research-digest/` + 推钉钉。
-runner source `scripts/.env`(TUSHARE_TOKEN)+`~/.config/tradeSystem.env`(钉钉/GEMINI);
+美股按美东窗口拉 yfinance 评级方向变动(init/up/down/reinit),可选慧博热点研报候选预筛 + Antigravity 每篇独立 reader 深读 + 独立聚合/ranker,最多推荐 2 篇 → MD 落盘 `data/reports/research-digest/` + 推钉钉。
+runner source `scripts/.env`(TUSHARE_TOKEN)+`~/.config/tradeSystem.env`(钉钉/ANTIGRAVITY);
 非交易日 / 窗口内无评级变动时,任务内显式标注「无符合条件」,不报错、不冒充。
+
+慧博增强默认 `HUIBO_MODE=desktop_terminal`。如使用终端快照/URL,在 env 中配置 `HUIBO_HOT_REPORT_JSON` 或 `HUIBO_HOT_REPORT_URL`; URL 源优先调用慧博页面背后的 `/redian/HotReport/GetList` 接口并构造 PDF 下载链接,HTML 解析只做回退; 可选 `HUIBO_REPORT_TEXT_DIR`/`HUIBO_REPORT_PDF_DIR` 补充本地预览文本或已下载 PDF。如后续接官方 API,配置 `HUIBO_MODE=official_api` + `HUIBO_API_BASE_URL`/`HUIBO_API_TOKEN`。系统只在预筛后为 reader 池下载 raw PDF,不会在候选采集阶段批量下载; reader 优先让 Antigravity CLI 通过 `@PDF路径` 并发读取 raw PDF,默认 `HUIBO_READER_CONCURRENCY=4`,如需一篇 PDF 一个 Antigravity 同时读,将并发数设为 reader cap; 预览文本只做预筛/兜底; 用户已授权本项目把慧博 raw PDF 交给外部 Antigravity 阅读,默认启用 PDF reader,需关闭时配置 `HUIBO_ALLOW_EXTERNAL_PDF_LLM=0`; `LLM_MODEL` 不设时由 Antigravity CLI 使用默认/自动模型。正式任务结束会清理慧博本地存储: raw PDF 默认 30 天、summary 默认 180 天; 可手动用 `python3 main.py research-digest daily --huibo-cleanup-only --dry-run` 预览清理对象。
+
+可观测/断点续跑场景优先用 JS workflow: `node scripts/workflows/research-digest-workflow.mjs daily --date YYYY-MM-DD --reader-cap 20 --reader-concurrency 20 --reader-max-attempts 2 --resume`。产物落 `data/runs/research-digest/YYYY-MM-DD/`,包含 `state.json`、`events.jsonl`、`reader/*.json`、`summary.json`、`report.md`; workflow 默认只落本地 artifact,不推钉钉。正式 PDF 仍在 raw 目录归档/去重,read 阶段会复制单篇 PDF 到 `HUIBO_LLM_INPUT_DIR` 或 `--llm-input-dir` 指定 base 下的 `YYYY-MM-DD/` 子目录后再传给 Antigravity; resume 会重建缺失副本,正常 cleanup 只删除带 marker 的本次临时输入子目录。reader 失败会在同一次 read 阶段自动重试到 `--reader-max-attempts` 上限; 已达到上限的失败项后续可用 `--retry-failed --reader-max-attempts 4` 继续追加尝试。当前 launchd 包装脚本仍走旧 CLI 推送路径; 若要把定时任务切到 workflow,需另加发布/推送阶段后再替换。
 
 ```bash
 # 1. 包装脚本可执行
@@ -235,7 +239,7 @@ launchctl list | grep tradesystem.research-digest
 
 # 5. 真触发立即测试（非交易日仅验 launchd 链路 + 凭据注入；先 dry-run 验产物再真推）
 launchctl start com.alyx.tradesystem.research-digest
-tail -f /tmp/tradesystem-research-digest.log   # 看 [env] DINGTALK/GEMINI =set + 运行结果
+tail -f /tmp/tradesystem-research-digest.log   # 看 [env] DINGTALK/ANTIGRAVITY =set + 运行结果
 ```
 
 卸载：
@@ -250,7 +254,7 @@ rm ~/Library/LaunchAgents/com.alyx.tradesystem.research-digest.plist
 ## 交易认知沉淀汇总（recent3d 工作日 18:30 / weekly 周日 20:00 / monthly 每月1号 09:00）
 
 参数化 runner（window 作为 `$1` 透传）+ 3 个 plist 各自触发一个窗口。只读认知三表 → 热度 + 共识 +
-新增 → gemini 建议 → 推钉钉。三个任务共用同一 runner、同一 `~/.config/tradeSystem.env`(钉钉/GEMINI)
+新增 → Antigravity 建议 → 推钉钉。三个任务共用同一 runner、同一 `~/.config/tradeSystem.env`(钉钉/ANTIGRAVITY)
 与合并日志 `/tmp/tradesystem-cognition-digest.log`；非交易日 / 窗口内无认知数据时任务内自动标注，不报错、不冒充。
 
 ```bash
@@ -270,7 +274,7 @@ launchctl list | grep tradesystem.cognition-digest
 
 # 5. 真触发立即测试（先 dry-run 验产物再真推；非交易日仅验 launchd 链路 + 凭据注入）
 launchctl start com.alyx.tradesystem.cognition-digest-weekly
-tail -f /tmp/tradesystem-cognition-digest.log   # 看 [env] DINGTALK/GEMINI =set + 运行结果
+tail -f /tmp/tradesystem-cognition-digest.log   # 看 [env] DINGTALK/ANTIGRAVITY =set + 运行结果
 ```
 
 卸载：

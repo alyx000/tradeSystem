@@ -79,23 +79,23 @@ def test_llm_cannot_overwrite_facts():
     assert out[0]["ticker"] == "NVDA"
 
 
-# ---- build_gemini_runner 健壮性（codex 阶段3 轻微：契约「任何失败降级」须真成立）----
+# ---- build_antigravity_runner 健壮性（Antigravity CLI，契约「任何失败降级」须真成立）----
 
 def test_build_runner_non_int_timeout_does_not_crash(monkeypatch):
     """LLM_TIMEOUT_SECONDS 非整数:构造期(在 narrate try/except 之外)不得崩,回退 180s。"""
     monkeypatch.setenv("LLM_TIMEOUT_SECONDS", "abc")
-    runner = narrator.build_gemini_runner()  # 此前会 ValueError 崩 CLI
+    runner = narrator.build_antigravity_runner()  # 此前会 ValueError 崩 CLI
     assert callable(runner)
 
 
 def test_build_runner_permission_error_degrades_to_none(monkeypatch):
-    """gemini 不可执行(PermissionError,OSError 子类)→ runner 返 None 而非抛出。"""
+    """agy 不可执行(PermissionError,OSError 子类)→ runner 返 None 而非抛出。"""
     import subprocess
 
     def boom(*a, **k):
         raise PermissionError("not executable")
     monkeypatch.setattr(subprocess, "run", boom)
-    runner = narrator.build_gemini_runner()
+    runner = narrator.build_antigravity_runner()
     assert runner("prompt", [{"id": 0}]) is None
 
 
@@ -106,8 +106,56 @@ def test_build_runner_nonzero_returncode_degrades_to_none(monkeypatch):
         returncode = 1
         stdout = "whatever"
     monkeypatch.setattr(subprocess, "run", lambda *a, **k: R())
-    runner = narrator.build_gemini_runner()
+    runner = narrator.build_antigravity_runner()
     assert runner("prompt", [{"id": 0}]) is None
+
+
+def test_build_runner_uses_antigravity_print_mode(monkeypatch):
+    import subprocess
+
+    seen = {}
+
+    class R:
+        returncode = 0
+        stdout = '{"items":[]}'
+
+    def fake_run(cmd, **kwargs):
+        seen["cmd"] = cmd
+        return R()
+
+    monkeypatch.setenv("ANTIGRAVITY_BIN", "agy")
+    monkeypatch.setenv("LLM_TIMEOUT_SECONDS", "77")
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    runner = narrator.build_antigravity_runner()
+    assert runner("prompt", []) == {"items": []}
+    assert seen["cmd"][0] == "agy"
+    assert "--prompt" in seen["cmd"]
+    assert "--print-timeout" in seen["cmd"]
+    assert "77s" in seen["cmd"]
+
+
+def test_build_runner_passes_antigravity_model(monkeypatch):
+    import subprocess
+
+    seen = {}
+
+    class R:
+        returncode = 0
+        stdout = '{"items":[]}'
+
+    def fake_run(cmd, **kwargs):
+        seen["cmd"] = cmd
+        return R()
+
+    monkeypatch.setenv("ANTIGRAVITY_BIN", "agy")
+    monkeypatch.setenv("LLM_MODEL", "test-model")
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    runner = narrator.build_antigravity_runner()
+    assert runner("prompt", []) == {"items": []}
+    assert "--model" in seen["cmd"]
+    assert "test-model" in seen["cmd"]
 
 
 # ---- _parse_json 边界（阶段3 接线后补覆盖）----
@@ -139,7 +187,7 @@ def test_parse_json_unbalanced_returns_none():
     assert narrator._parse_json('{"a":{"b":1') is None
 
 
-# ---- prompt 收紧（真实采集复核：gemini 曾凭空编降级理由，根因=prompt 未禁因果）----
+# ---- prompt 收紧（真实采集复核：LLM 曾凭空编降级理由，根因=prompt 未禁因果）----
 
 def test_prompt_forbids_inventing_rationale():
     """one_liner 须显式限定『只复述板块归类+方向』且『严禁编造理由/因果』（A股/美股都生效）。"""

@@ -8,6 +8,8 @@ import logging
 import sqlite3
 from dataclasses import dataclass
 
+from utils import raindrop_tracing as tracing
+
 from .aggregator import AggregateResult, aggregate
 from .formatter import render_daily
 from .llm_commentary import comment
@@ -31,17 +33,33 @@ def run_recommend(
 ) -> RenderedRecommendation:
     """执行完整推荐流程，返回 (title, markdown, raw aggregate)。
 
-    skip_llm=True 用于 --dry-run，不调 gemini；此时「📌 大盘判断」段降级展示
+    skip_llm=True 用于 --dry-run，不调 Antigravity；此时「📌 大盘判断」段降级展示
     最近 3 条原始 core_view（formatter 负责降级）。
     """
-    result = aggregate(conn, lookback_days=lookback_days, top_k=top_k)
+    # 工具边界：板块/大盘观点聚合（SQLite 查询）。
+    with tracing.tool_span("aggregate_sectors") as agg_span:
+        agg_span.record_input({"lookback_days": lookback_days, "top_k": top_k})
+        result = aggregate(conn, lookback_days=lookback_days, top_k=top_k)
+        agg_span.record_output(
+            {
+                "sectors": len(result.sectors),
+                "market_views": len(result.market_views),
+                "top_sectors": [s.sector_name for s in result.sectors[:top_k]],
+            }
+        )
 
     # LLM 只负责把老师大盘观点提炼成「近期大盘判断」bullets；无大盘观点则不调，
     # formatter 自行降级（占位或原文）。
     commentary: str | None = None
     if not skip_llm and result.market_views:
         payload = _build_llm_payload(result)
-        commentary = comment(payload)
+        # 模型边界：Antigravity CLI 子进程点评（非 SDK 调用，手动建 span 记录 prompt/输出）。
+        with tracing.tool_span("antigravity_commentary") as llm_span:
+            llm_span.record_input(payload)
+            commentary = comment(payload)
+            llm_span.record_output(
+                commentary if commentary is not None else "(LLM 降级：无输出)"
+            )
         if commentary is None:
             logger.info("LLM 不可用，大盘判断降级展示原始观点")
 
@@ -55,7 +73,7 @@ _LLM_TOP_SECTORS = 5
 
 
 def _build_llm_payload(result: AggregateResult) -> str:
-    """把近期老师大盘观点 + 当前热度板块塞成 prompt，让 gemini 提炼「大盘判断」。
+    """把近期老师大盘观点 + 当前热度板块塞成 prompt，让 Antigravity 提炼「大盘判断」。
 
     注意：输入是 note 级大盘观点（core_view），不是板块评分；任务是总结大盘节奏 /
     情绪 / 仓位，不是逐板块点评——后者已由「催化行业」段（industry_info）承担。

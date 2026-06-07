@@ -284,6 +284,10 @@ ARCHITECTURE_COMMANDS = [
     ["research-digest", "daily", "--dry-run"],
     ["research-digest", "daily", "--no-llm"],
     ["research-digest", "daily", "--date", "2026-05-29", "--dry-run", "--no-llm"],
+    ["research-digest", "daily", "--huibo-mode", "desktop_terminal", "--huibo-window-days", "5"],
+    ["research-digest", "daily", "--huibo-reader-cap", "20", "--huibo-reader-concurrency", "4", "--huibo-recommend-cap", "2"],
+    ["research-digest", "daily", "--huibo-raw-retention-days", "30", "--huibo-summary-retention-days", "180"],
+    ["research-digest", "daily", "--huibo-cleanup-only", "--dry-run"],
     # cognition-digest (交易认知沉淀定时汇总:近3日/周/月 → 钉钉)
     ["cognition-digest", "recent3d"],
     ["cognition-digest", "weekly"],
@@ -297,7 +301,7 @@ ARCHITECTURE_COMMANDS = [
                          ids=[" ".join(c[:4]) for c in ALL_SKILL_COMMANDS])
 def test_command_parseable(cmd: list[str]) -> None:
     """每条 skill 引用的命令都必须能被 argparse 成功解析。"""
-    parser = _build_db_parser()
+    parser = _build_main_parser()
     try:
         parser.parse_args(cmd)
     except SystemExit as e:
@@ -305,6 +309,77 @@ def test_command_parseable(cmd: list[str]) -> None:
             f"命令解析失败（argparse 退出码 {e.code}）: {' '.join(cmd)}\n"
             "请检查 cli.py 中对应子命令的参数定义，并同步更新 .agents/skills/INDEX.md"
         )
+
+
+def test_research_digest_huibo_env_defaults_ignore_invalid_values(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HUIBO_MODE", "bad_mode")
+    monkeypatch.setenv("HUIBO_WINDOW_DAYS", "bad_int")
+    monkeypatch.setenv("HUIBO_READER_CAP", "0")
+    monkeypatch.setenv("HUIBO_READER_CONCURRENCY", "bad_int")
+    monkeypatch.setenv("HUIBO_RECOMMEND_CAP", "-1")
+    monkeypatch.setenv("HUIBO_RAW_RETENTION_DAYS", "0")
+    monkeypatch.setenv("HUIBO_SUMMARY_RETENTION_DAYS", "-1")
+
+    parser = _build_main_parser()
+    args = parser.parse_args(["research-digest", "daily"])
+
+    assert args.huibo_mode == "desktop_terminal"
+    assert args.huibo_window_days == 5
+    assert args.huibo_reader_cap == 20
+    assert args.huibo_reader_concurrency == 4
+    assert args.huibo_recommend_cap == 2
+    assert args.huibo_raw_retention_days == 30
+    assert args.huibo_summary_retention_days == 180
+
+
+def test_research_digest_huibo_cli_rejects_non_positive_caps() -> None:
+    parser = _build_main_parser()
+
+    with pytest.raises(SystemExit):
+        parser.parse_args(["research-digest", "daily", "--huibo-reader-cap", "0"])
+
+    with pytest.raises(SystemExit):
+        parser.parse_args(["research-digest", "daily", "--huibo-raw-retention-days", "0"])
+
+
+def test_research_digest_cleanup_failure_after_push_is_best_effort(monkeypatch: pytest.MonkeyPatch) -> None:
+    import argparse
+    from types import SimpleNamespace
+    import main
+    from cli import research_digest
+    import services.research_digest as rd_pkg
+    from services.research_digest import renderer
+    from services.research_digest import huibo
+
+    class Registry:
+        def initialize_all(self):
+            pass
+
+    monkeypatch.setattr(main, "setup_providers", lambda config: Registry())
+    monkeypatch.setattr(research_digest, "_push_to_dingtalk", lambda title, markdown: None)
+    monkeypatch.setattr(research_digest, "datetime", SimpleNamespace(
+        date=SimpleNamespace(today=lambda: SimpleNamespace(isoformat=lambda: "2026-06-03"))
+    ))
+    monkeypatch.setattr(rd_pkg, "run_daily_digest", lambda *a, **k: SimpleNamespace(
+        title="研报速读",
+        markdown="# md",
+    ))
+    monkeypatch.setattr(renderer, "write_md", lambda markdown, date: "tmp/research-digest.md")
+    monkeypatch.setattr(huibo, "cleanup_storage", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("cleanup failed")))
+
+    research_digest._run_daily({}, argparse.Namespace(
+        date="2026-06-03",
+        dry_run=False,
+        no_llm=True,
+        huibo_mode="off",
+        huibo_window_days=5,
+        huibo_reader_cap=20,
+        huibo_reader_concurrency=4,
+        huibo_recommend_cap=2,
+        huibo_raw_retention_days=30,
+        huibo_summary_retention_days=180,
+        huibo_cleanup_only=False,
+    ))
 
 
 def test_all_skill_subcommands_registered() -> None:

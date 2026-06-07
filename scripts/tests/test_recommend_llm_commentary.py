@@ -1,4 +1,4 @@
-"""TDD: gemini CLI subprocess 包装单测
+"""TDD: Antigravity CLI subprocess 包装单测
 
 L1 成功路径 / L2 超时与非零退出降级路径。
 """
@@ -15,7 +15,7 @@ import pytest
 # ─────────────────────────────────────────────────────────────
 def test_l1_comment_returns_stdout_on_success():
     fake_result = subprocess.CompletedProcess(
-        args=["/opt/homebrew/bin/gemini", "--prompt", "..."],
+        args=["agy", "--prompt", "..."],
         returncode=0,
         stdout="半导体逻辑：周期回升。\n",
         stderr="",
@@ -31,9 +31,9 @@ def test_l1_comment_returns_stdout_on_success():
     call_args = mock_run.call_args
     # 命令行包含必要参数
     cmd = call_args[0][0] if call_args[0] else call_args[1]["args"]
+    assert cmd[0].endswith("agy") or cmd[0] == "agy"
     assert "--prompt" in cmd or any("--prompt" in str(a) for a in cmd)
-    assert "--output-format" in cmd or any("--output-format" in str(a) for a in cmd)
-    assert "--approval-mode" in cmd or any("--approval-mode" in str(a) for a in cmd)
+    assert "--print-timeout" in cmd or any("--print-timeout" in str(a) for a in cmd)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -41,13 +41,13 @@ def test_l1_comment_returns_stdout_on_success():
 # ─────────────────────────────────────────────────────────────
 @pytest.mark.parametrize("scenario, side_effect, return_value", [
     ("timeout",
-     subprocess.TimeoutExpired(cmd="gemini", timeout=90),
+     subprocess.TimeoutExpired(cmd="agy", timeout=90),
      None),
     ("non_zero_exit",
      None,
-     subprocess.CompletedProcess(args=["gemini"], returncode=1, stdout="", stderr="rate limited")),
+     subprocess.CompletedProcess(args=["agy"], returncode=1, stdout="", stderr="rate limited")),
     ("file_not_found",
-     FileNotFoundError("[Errno 2] No such file or directory: 'gemini'"),
+     FileNotFoundError("[Errno 2] No such file or directory: 'agy'"),
      None),
 ])
 def test_l2_comment_returns_none_on_failure(scenario, side_effect, return_value, caplog):

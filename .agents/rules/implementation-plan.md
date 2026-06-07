@@ -19,14 +19,14 @@ alwaysApply: true
 3. 若触发 [`test-design.md`](test-design.md) 中的条件（新模块、存储/协议变更、3+ 文件等），分层测试方案须**符合**该文件的金字塔与隔离原则。
 4. **多 Agent 并行执行方案（复杂任务必须）**：当计划涉及 3 个以上独立改动项**且不命中下方「逃逸条款」**（见「输出计划前的强制步骤」步骤 1）时，必须在计划中输出「并行分组」章节，每组须含以下 7 个字段：
    - **角色（role）**：从主角色枚举中选 —— `前端 / 后端 / 测试 / 架构师 / DevOps / 文档 / 数据`；允许复合（例如「后端 + 测试」），但**禁止以「全栈」笼统化**；复合时须写明主角色 + 辅助角色。
-   - **执行 Agent（executor）**：本组由谁执行，从 4 类中选一项 —— ① `Claude Code 主 agent`（当前会话主 Claude，串行，有完整对话上下文）；② `Claude Code subagent`（`Task` 工具，细分 `Explore`=readonly / `generalPurpose`=全工具）；③ `Codex`（`codex:codex-rescue` subagent 或 `codex-companion task --background`）；④ `Gemini`（Gemini CLI）。**一组只能一个执行体**；若同一职能需要多执行体协作（如 backend 实现 + codex review），拆成两组。选择规则见下方「执行 Agent 三轴决策」。
+   - **执行 Agent（executor）**：本组由谁执行，从 4 类中选一项 —— ① `Claude Code 主 agent`（当前会话主 Claude，串行，有完整对话上下文）；② `Claude Code subagent`（`Task` 工具，细分 `Explore`=readonly / `generalPurpose`=全工具）；③ `Codex`（`codex:codex-rescue` subagent 或 `codex-companion task --background`）；④ `Antigravity`（Antigravity CLI）。**一组只能一个执行体**；若同一职能需要多执行体协作（如 backend 实现 + codex review），拆成两组。选择规则见下方「执行 Agent 三轴决策」。
    - **专项关注（focus，条件必填）**：当本组交付物是横切改进（`安全 / 性能 / 可观测性 / 合规`）时必填；否则可省。
    - **职责边界（responsibility）**：一句话说明本组要交付的产物（功能 / 接口 / 测试 / 文档 等）。
    - **文件范围（files）**：本组将触碰的目录与文件清单；同一文件的不同区域改动尽量归入同组。
    - **禁区（off-limits）**：写成三类可执行清单 —— `允许改 / 不得改 / 需要先询问`；至少覆盖 ① 另一 agent 正在改的区域（防 StrReplace 冲突）；② 不属于本组职能的代码（防越权，例如「测试」组不得修改业务实现）。
    - **冲突标注**：明确标出多组共享的文件，并指定唯一归属组。
 
-   执行阶段按各组「执行 Agent」字段并行启动：Claude Code subagent 用 `Task` 工具（`Explore` / `generalPurpose`）；Codex 用 `Agent(subagent_type="codex:codex-rescue")` 或 `codex-companion task --background`；Gemini 用对应 CLI；Claude Code 主 agent 自行处理。一条消息内可同时发出多种执行体的调用。每组 prompt 中须把上述全部 7 个字段原文带入（含冲突标注与唯一归属组）。
+   执行阶段按各组「执行 Agent」字段并行启动：Claude Code subagent 用 `Task` 工具（`Explore` / `generalPurpose`）；Codex 用 `Agent(subagent_type="codex:codex-rescue")` 或 `codex-companion task --background`；Antigravity 用对应 CLI；Claude Code 主 agent 自行处理。一条消息内可同时发出多种执行体的调用。每组 prompt 中须把上述全部 7 个字段原文带入（含冲突标注与唯一归属组）。
 
    **禁区默认矩阵**（按主角色，作为模板，可在具体计划中覆盖；具体路径以仓库当前结构为准）：
 
@@ -40,7 +40,7 @@ alwaysApply: true
    | DevOps | `Makefile`、CI、部署脚本 | 业务代码 | 入口脚本 |
    | 文档 | `docs/`、`AGENTS.md`、`CLAUDE.md`、`.agents/rules/` | 代码 | INDEX/索引同步项 |
 
-   > **执行 Agent 不由职能决定**：即「前端」组不强制走主 agent、「文档」组不强制走 Gemini —— 而是按下方「执行 Agent 三轴决策」判断。同一职能在不同上下文下可走不同执行体。
+   > **执行 Agent 不由职能决定**：即「前端」组不强制走主 agent、「文档」组不强制走 Antigravity —— 而是按下方「执行 Agent 三轴决策」判断。同一职能在不同上下文下可走不同执行体。
 
 ## 执行 Agent 三轴决策
 
@@ -69,7 +69,7 @@ alwaysApply: true
 |---|---|---|
 | 只读探查 / 文件勘察 / grep 概念 | Claude Code `Explore` subagent | readonly，成本最低；**禁止指派"写代码"任务给 Explore** |
 | 方案级审查 / 代码级审查 / 独立第二意见 | Codex（`codex:codex-rescue`） | 独立模型链路，避开同源 bias；参见 [`post-dev-codex-review.md`](post-dev-codex-review.md) |
-| 多语种 / 文档校对 / 备用第二意见 | Gemini CLI | 性价比补充，目前用例少；无强场景时优先 Codex |
+| 多语种 / 文档校对 / 备用第二意见 | Antigravity CLI | 性价比补充，目前用例少；无强场景时优先 Codex |
 
 ### 具名场景：三类常见任务的默认执行体
 

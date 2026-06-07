@@ -82,45 +82,42 @@ def _build_prompt(market: str) -> str:
     )
 
 
-def build_gemini_runner():
-    """构造受控 gemini 叙事 callable（独立 env/prompt/timeout，**不 import llm_commentary.comment**，M8）。
+def build_antigravity_runner():
+    """构造受控 Antigravity 叙事 callable（独立 env/prompt/timeout，**不 import llm_commentary.comment**，M8）。
 
-    返回 runner(prompt, payload)->dict|None：subprocess 调 gemini，解析 JSON；任何失败返 None
+    返回 runner(prompt, payload)->dict|None：subprocess 调 agy，解析 JSON；任何失败返 None
     （→ narrate 全量降级走纯结构化）。launchd 下 LLM 启动慢，默认 timeout 180s。
     """
     import json
-    import os
     import subprocess
 
-    bin_path = os.getenv("GEMINI_BIN", "/opt/homebrew/bin/gemini")
-    # 构造期解析,在 narrate() 的 try/except 之外:env 手填成非整数若直接 int() 会崩整个 CLI
-    # 任务(launchd 下排障无门),故兜底回退 180s,与 docstring「任何失败降级」契约一致。
-    raw_timeout = os.getenv("LLM_TIMEOUT_SECONDS", "180")
-    try:
-        timeout = int(raw_timeout)
-    except (TypeError, ValueError):
-        logger.warning("[research-digest] LLM_TIMEOUT_SECONDS=%r 非整数，回退 180s", raw_timeout)
-        timeout = 180
-    model = os.getenv("GEMINI_MODEL", "")
+    from utils.llm_cli import build_prompt_command, resolve_config
+
+    config = resolve_config(default_timeout=180)
+    timeout = config.timeout_seconds
 
     def runner(prompt, payload):
         full = prompt + "\n\n输入数据（JSON 数组）：\n" + json.dumps(payload, ensure_ascii=False)
-        cmd = [bin_path, "--prompt", full]
-        if model:
-            cmd += ["-m", model]
+        cmd = build_prompt_command(config, full)
         try:
-            r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+            r = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                stdin=subprocess.DEVNULL,
+            )
         except subprocess.TimeoutExpired:
-            logger.warning("[research-digest] gemini 超时 %ds，叙事降级", timeout)
+            logger.warning("[research-digest] antigravity 超时 %ds，叙事降级", timeout)
             return None
         except OSError as e:
-            # FileNotFoundError(gemini 缺) / PermissionError(不可执行) 等都是 OSError 子类:
+            # FileNotFoundError(agy 缺) / PermissionError(不可执行) 等都是 OSError 子类:
             # 统一降级返 None,而非仅捕 FileNotFoundError 漏掉权限/其它 OS 错。
             # 不扩到裸 Exception:那会吞掉编程错误,且 _parse_json 已自带异常安全。
-            logger.warning("[research-digest] gemini 启动失败(%s)，叙事降级", e)
+            logger.warning("[research-digest] antigravity 启动失败(%s)，叙事降级", e)
             return None
         if r.returncode != 0:
-            logger.warning("[research-digest] gemini returncode=%s，叙事降级", r.returncode)
+            logger.warning("[research-digest] antigravity returncode=%s，叙事降级", r.returncode)
             return None
         return _parse_json(r.stdout)
 
@@ -128,7 +125,7 @@ def build_gemini_runner():
 
 
 def _parse_json(text):
-    """解析 gemini 输出 JSON：直接 loads → 去 markdown 围栏 → 平衡括号提取首个 {...}。失败返 None。"""
+    """解析 Antigravity 输出 JSON：直接 loads → 去 markdown 围栏 → 平衡括号提取首个 {...}。失败返 None。"""
     import json
     if not text:
         return None

@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 
-from . import collector, narrator, ranker, renderer, universe
+from . import collector, huibo, narrator, ranker, renderer, universe
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +23,7 @@ class RenderedDigest:
     us: list[dict] = field(default_factory=list)
     top3: list[dict] = field(default_factory=list)
     cn_industry: list[dict] = field(default_factory=list)
+    huibo_digest: dict | None = None
 
     @property
     def is_empty(self) -> bool:
@@ -39,6 +40,14 @@ def run_daily_digest(
     cn_narrate: bool = False,   # 决策：A股 narrator 默认关（纯结构化）
     us_narrate: bool = True,    # 美股 narrator 默认开
     llm_runner=None,
+    huibo_mode: str = "off",
+    huibo_source=None,
+    huibo_summary_dir: str = "data/reports/huibo/summaries",
+    huibo_window_days: int = 5,
+    huibo_reader_cap: int = 20,
+    huibo_recommend_cap: int = 2,
+    huibo_reader_concurrency: int = 4,
+    huibo_llm_runner=None,
 ) -> RenderedDigest:
     """date = A股目标交易日（北京，CLI 已 resolve）；美股窗口按美东日历独立计算（H2）。"""
     # A股（失败不致命）
@@ -59,9 +68,50 @@ def run_daily_digest(
     top3 = ranker.pick_top3(cn, us)
     # 行业覆盖热度：复用 label_industry（此处对 sw map 的唯一额外网络调用，digest job 有凭据）+ aggregate；cn 空跳过
     cn_industry = collector.aggregate_by_industry(collector.label_industry(cn, registry)) if cn else []
-    title, markdown = renderer.render_md(date, cn, us, top3, cn_industry=cn_industry or None)
+    huibo_payload = None
+    if huibo_mode != "off" and not no_llm and huibo_source is not None:
+        try:
+            candidates, report_texts = huibo_source(registry, date, huibo_window_days)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[research-digest] 慧博候选采集失败: %s", e)
+            candidates, report_texts = [], {}
+        runner = huibo_llm_runner if huibo_llm_runner is not None else huibo.build_role_runner(llm_runner)
+        if candidates and runner is not None:
+            try:
+                digest = huibo.run_huibo_digest(
+                    candidates,
+                    report_texts=report_texts,
+                    llm_runner=runner,
+                    date=date,
+                    summary_dir=huibo_summary_dir,
+                    reader_cap=huibo_reader_cap,
+                    recommend_cap=huibo_recommend_cap,
+                    lookback_days=huibo_window_days,
+                    reader_concurrency=huibo_reader_concurrency,
+                )
+                huibo_payload = digest.to_jsonable()
+            except Exception as e:  # noqa: BLE001
+                logger.warning("[research-digest] 慧博深读失败，降级为基础研报速读: %s", e)
+                huibo_payload = None
+
+    title, markdown = renderer.render_md(
+        date,
+        cn,
+        us,
+        top3,
+        cn_industry=cn_industry or None,
+        huibo_digest=huibo_payload,
+    )
 
     if not cn and not us:
         logger.info("[research-digest] %s 两市均无符合条件评级变动（A股空 + 美股空）", date)
 
-    return RenderedDigest(title=title, markdown=markdown, cn=cn, us=us, top3=top3, cn_industry=cn_industry)
+    return RenderedDigest(
+        title=title,
+        markdown=markdown,
+        cn=cn,
+        us=us,
+        top3=top3,
+        cn_industry=cn_industry,
+        huibo_digest=huibo_payload,
+    )

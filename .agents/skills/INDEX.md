@@ -56,15 +56,16 @@
 | `daily-review` | `db db-search` | 跨表关键词搜索 |
 | `market-tasks` | `python main.py pre --date` | 盘前任务采集 |
 | `market-tasks` | `python main.py post --date` | 盘后任务采集 |
-| `market-tasks` | `python main.py recommend daily [--lookback-days N] [--top-k K] [--dry-run]` | 行业推荐日报（聚合 teacher_notes + industry_info，可选 gemini 点评，钉钉推送） |
+| `market-tasks` | `python main.py recommend daily [--lookback-days N] [--top-k K] [--dry-run]` | 行业推荐日报（聚合 teacher_notes + industry_info，可选 Antigravity 点评，钉钉推送） |
 | `market-tasks` | `python main.py recommend weekly [--lookback-days N] [--top-k K] [--dry-run]` | 行业推荐周报（深度版，默认 7 日 Top 8） |
 | `market-tasks` | `python main.py volume-watch daily [--date YYYY-MM-DD] [--dry-run] [--refetch]` | 成交额 Top20 板块集中度日报（read-through 采集 + 申万二级打标 + 落库 `daily_volume_concentration` + 钉钉推送；报告含 Top20 个股明细表；`--dry-run` 仅打印不落库不推送；`--refetch` 强制重拉绕过 `daily_market` 陈旧缓存，回填历史用） |
 | `market-tasks` | `python main.py volume-watch trend [--date YYYY-MM-DD] [--days N]` | 只读打印最近 N 日集中度趋势（板块轮动 / 头部量级环比 / 个股留存），不采集不推送 |
 | `market-tasks` | `python main.py sector-correlation daily [--date] [--windows 5,20,60] [--top-industries 15] [--top-concepts 10] [--activity-days 10] [--indices a,b] [--no-concept] [--dry-run]` | 板块相关性日报（Tushare 主源：多日活跃选板块[行业按成交额 / 概念按换手率] + 4 指数 → 多窗 5/20/60 原始相关 + 剔大盘超额相关 + β → 落 `sector_correlation_daily` + 钉钉；报告含近5日联动榜(短期共振)、板块×大盘同向/逆向、结构联动榜(60日)、反向榜双窗对照(5日/60日)；`--dry-run` 仅打印） |
 | `market-tasks` | `python main.py sector-correlation matrix [--date] [--windows 20,60] [--top-industries N] [--top-concepts N] [--no-concept] [--refetch]` | 打印完整相关矩阵（板块×指数 + 板块×板块 原始/超额，逐窗）；缓存命中纯只读免初始化 Tushare，`--refetch` 强制现算；不推送 |
 | `market-tasks` | `python main.py sector-correlation trend [--date] [--days N]` | 只读打印最近 N 日相关性漂移（板块数 / 样本数 / 强逆向对数演变），不采集不推送 |
-| `market-tasks` | `python main.py research-digest daily [--date YYYY-MM-DD] [--dry-run] [--no-llm]` | 每日研报速读：A股研报评级（巨潮 cninfo `get_research_report_list`，含评级变化/前次评级/目标价区间）+ 美股机构评级（yfinance `get_us_rating_changes`，仅 init/up/down/reinit 方向变动）→ 鞠磊「首次覆盖」加权 Top3 → MD 落盘 `data/reports/research-digest/` + 钉钉；`--dry-run` 仅打印不落盘不推送、`--no-llm` 关美股 LLM 叙事；红线只约束 gemini 叙事不约束取数；工作日 06:42 launchd 单源调度 |
-| `market-tasks` | `python main.py cognition-digest recent3d\|weekly\|monthly [--date YYYY-MM-DD] [--dry-run] [--no-llm]` | 交易认知沉淀只读汇总：只读认知三表（`trading_cognitions`/`cognition_instances`）按窗口算热度+共识+新增 Top-N → gemini 体系/方向建议（复用 gemini runner + `REDLINE_KEYWORDS` 红线护栏）→ 钉钉推送；只读不写库、不改 schema、不进 `main.py schedule`，由 3 个 per-task launchd（recent3d 日 18:30 / weekly 周日 20:00 / monthly 每月 1 号 09:00）独立调度；`--dry-run` 仅打印、`--no-llm` 走模板兜底关 gemini 叙事 |
+| `market-tasks` | `python main.py research-digest daily [--date YYYY-MM-DD] [--dry-run] [--no-llm] [--huibo-mode desktop_terminal\|official_api\|off] [--huibo-window-days N] [--huibo-reader-cap N] [--huibo-reader-concurrency N] [--huibo-recommend-cap N] [--huibo-raw-retention-days N] [--huibo-summary-retention-days N] [--huibo-cleanup-only]` | 每日研报速读：A股研报评级（巨潮 cninfo `get_research_report_list`）+ 美股机构评级（yfinance `get_us_rating_changes`）+ 可选慧博深读增强（热点研报候选 URL 优先调慧博 `/redian/HotReport/GetList`→预筛 10-20 篇→仅对 reader 池下载/保存 raw PDF→Antigravity 每篇独立 reader 通过 `@PDF` 并发深读→所有 reader JSON 收齐后独立聚合/趋势/ranker→最多推荐 2 篇）→ MD 落盘 `data/reports/research-digest/` + 钉钉；`--dry-run` 仅打印不落盘不推送且不调 Antigravity、`--no-llm` 关闭 LLM；慧博 raw PDF 默认保留 30 天、summary 默认保留 180 天，正式任务结束自动清理，`--huibo-cleanup-only --dry-run` 仅预览清理对象；工作日 06:42 launchd 单源调度 |
+| `market-tasks` | `node scripts/workflows/research-digest-workflow.mjs daily [--date YYYY-MM-DD] [--reader-cap N] [--reader-concurrency N] [--reader-max-attempts N] [--llm-input-dir PATH] [--resume] [--retry-failed] [--no-aggregate-llm]` | 慧博深读 JS workflow：复用 Python helper 做候选/预筛/下载/聚合/渲染，JS 负责编排、JSONL 阶段日志、`state.json` 断点续跑、Antigravity PDF reader 并发池和失败自动重试（默认累计 2 次）；正式 PDF 仍在 raw 目录归档/去重，read 阶段复制单篇 PDF 到 `HUIBO_LLM_INPUT_DIR`/`--llm-input-dir` 指定 base 下的 `YYYY-MM-DD/` 子目录后再传给 Antigravity，resume 会重建缺失副本，cleanup 只删除带 marker 的本次子目录；产物落 `data/runs/research-digest/YYYY-MM-DD/`（state/events/candidates/prescreened/downloaded/reader/summary/report），默认不推钉钉 |
+| `market-tasks` | `python main.py cognition-digest recent3d\|weekly\|monthly [--date YYYY-MM-DD] [--dry-run] [--no-llm]` | 交易认知沉淀只读汇总：只读认知三表（`trading_cognitions`/`cognition_instances`）按窗口算热度+共识+新增 Top-N → Antigravity 体系/方向建议（复用 Antigravity runner + `REDLINE_KEYWORDS` 红线护栏）→ 钉钉推送；只读不写库、不改 schema、不进 `main.py schedule`，由 3 个 per-task launchd（recent3d 日 18:30 / weekly 周日 20:00 / monthly 每月 1 号 09:00）独立调度；`--dry-run` 仅打印、`--no-llm` 走模板兜底关 LLM 叙事 |
 | `ingest-inspector` | `python main.py ingest run --stage --date` | 运行采集阶段任务，写 `ingest_runs` / `raw_interface_payloads` |
 | `ingest-inspector` | `python main.py ingest run-interface --name --date` | 运行单接口采集，真实执行 provider 并记录失败 |
 | `ingest-inspector` | `python main.py ingest list-interfaces` | 查看接口注册表 |
@@ -82,6 +83,8 @@
 | `repo-maintenance-workflows` | `python3 -m pytest scripts/tests/test_cli_smoke.py -v` | 快速验证 skills 依赖的 CLI 签名未漂移 |
 | `repo-maintenance-workflows` | `make commands-doc` | 重新生成命令索引 |
 | `repo-maintenance-workflows` | `make commands-check` | 校验命令索引与 Makefile 一致 |
+| `instrument-agent` | 无固定业务 CLI | 为任意 agent 接入 Raindrop Workshop tracing；按目标仓库运行时选择 SDK/入口并验证 Workshop 可见性 |
+| `setup-agent-replay` | 无固定业务 CLI | 为已 instrument 的 agent 配置本地 replay server 与 `.raindrop/agents.yaml`，供 Workshop 复放 |
 | `daily-review` | `db add-calendar` | 手动录入投资日历事件（节假日/财经/财报等） |
 | *(管理)* | `db init` | 初始化数据库 + 导入历史 YAML |
 | *(管理)* | `db sync` | 重试 pending_writes 中的失败记录 |

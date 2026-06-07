@@ -99,7 +99,7 @@ def _safe_text(text, source: str = "文本") -> str:
     日志只打 source + 命中的通用关键词，**绝不打原文片段**——否则被丢的"目标价/买入"会写进
     /tmp/*.log（本机任何用户可读）形成旁路泄漏（同凭据不进日志的纪律）。
     """
-    t = str(text or "").strip()
+    t = _repair_common_text(str(text or "").strip())
     if not t:
         return ""
     hit = _scan_redline(t)
@@ -109,8 +109,22 @@ def _safe_text(text, source: str = "文本") -> str:
     return t
 
 
+def _repair_common_text(text: str) -> str:
+    replacements = {
+        "\ufffd": "",
+        "AI数据中用电": "AI数据中心用电",
+        "数据中用电": "数据中心用电",
+        "数据中 心": "数据中心",
+        "半体": "半导体",
+        "半 导体": "半导体",
+    }
+    for bad, good in replacements.items():
+        text = text.replace(bad, good)
+    return text
+
+
 def _narration(item: dict) -> str:
-    """只渲染 gemini 的 theme（板块归类，过红线）。
+    """只渲染 LLM 的 theme（板块归类，过红线）。
 
     one_liner **不再渲染**：收紧 prompt 后它只能复述"板块·方向"，与结构化 theme 标签 + action 前缀冗余
     （见记忆 feedback_llm_narration_fabricates_rationale）。narrate 仍生成它并留在 raw（+ prompt 禁编造作
@@ -133,7 +147,7 @@ def _cn_line(it: dict) -> str:
         vp_title = _emphasize_hints(vp_title)  # 强提示词就地加粗（重点推荐/重点关注…，鞠磊②）
         src = vp.get("institution")
         parts.append(f"观点：「{vp_title}」" + (f"（{src}）" if src else ""))
-    extra = _narration(it)  # gemini 叙事（A股默认关，通常空；若开则已扫红线）
+    extra = _narration(it)  # Antigravity 叙事（A股默认关，通常空；若开则已扫红线）
     if extra:
         parts.append(extra)
     tail = " — " + " ｜ ".join(parts) if parts else ""
@@ -164,7 +178,7 @@ def _top_line(rank: int, it: dict) -> str:
         base = f"{it.get('org_count', 0)} 家机构覆盖"
     # 鞠磊框架信号标签（首次覆盖/评级上调/多家覆盖）—— 点出"为什么值得读"
     sig_tag = _badges(it.get("signals"))  # 显著徽章（emoji+加粗），首次覆盖最突出
-    # 美股追加 gemini theme（板块归类，one_liner 冗余已砍）；A股追加真实研报观点标题——出口都过红线兜底
+    # 美股追加 LLM theme（板块归类，one_liner 冗余已砍）；A股追加真实研报观点标题——出口都过红线兜底
     if it.get("market") == "US":
         extra = _safe_text(it.get("theme"), "LLM theme")
     else:
@@ -185,8 +199,117 @@ def _industry_line(cn_industry: list[dict]) -> str:
     return line
 
 
+def _huibo_lines(huibo_digest: dict | None) -> list[str]:
+    if not huibo_digest:
+        return []
+    L: list[str] = []
+    has_rendered_content = False
+
+    recs_raw = huibo_digest.get("recommendations") or []
+    recs = [rec for rec in recs_raw if isinstance(rec, dict)] if isinstance(recs_raw, list) else []
+    if recs:
+        has_rendered_content = True
+        rendered_recs = recs
+        L.append(f"\n## 📚 慧博深读 Top{len(rendered_recs)}")
+        for i, rec in enumerate(rendered_recs, 1):
+            title = _safe_text(rec.get("title"), "慧博推荐标题") or "未命名研报"
+            reason = _safe_text(rec.get("reason"), "慧博推荐理由")
+            source = _safe_text(rec.get("source"), "慧博推荐来源")
+            tail = f" — {reason}" if reason else ""
+            src = f"（{source}）" if source else ""
+            L.append(f"{i}. **{title}**{src}{tail}")
+
+    industry_raw = (huibo_digest.get("industry_summary") or {}).get("industries") or []
+    industry = industry_raw if isinstance(industry_raw, list) else []
+    if industry:
+        has_rendered_content = True
+        L.append("\n## 🧭 慧博行业观点聚合")
+        for item in industry[:8]:
+            if not isinstance(item, dict):
+                continue
+            name = _safe_text(item.get("industry"), "慧博行业") or "未分类"
+            viewpoint = _safe_text(item.get("viewpoint") or item.get("consensus"), "慧博行业观点")
+            sources_raw = item.get("sources") or []
+            sources = sources_raw if isinstance(sources_raw, list) else []
+            safe_sources = [
+                safe
+                for s in sources[:3]
+                if (safe := _safe_text(s, "慧博行业来源"))
+            ]
+            src = f"｜来源：{'；'.join(safe_sources)}" if safe_sources else ""
+            L.append(f"- **{name}**：{viewpoint or '—'}{src}")
+
+    stock_lines = []
+    for report in huibo_digest.get("reader_results") or []:
+        if not isinstance(report, dict):
+            continue
+        reader = report.get("reader") or {}
+        if not isinstance(reader, dict):
+            continue
+        title = _safe_text(report.get("title"), "慧博报告标题")
+        inst = _safe_text(report.get("institution"), "慧博报告机构")
+        date = _safe_text(report.get("date"), "慧博报告日期")
+        stocks_raw = reader.get("mentioned_stocks") or []
+        stocks = stocks_raw if isinstance(stocks_raw, list) else []
+        for stock in stocks:
+            if not isinstance(stock, dict):
+                continue
+            name = _safe_text(stock.get("name"), "慧博个股名称")
+            if not name:
+                continue
+            viewpoint = _safe_text(stock.get("viewpoint"), "慧博个股观点")
+            source = _safe_text(stock.get("source"), "慧博个股来源")
+            meta = " ".join(part for part in (inst, date) if part)
+            suffix = f"（{meta}）" if meta else ""
+            stock_lines.append(
+                f"- **{name}**：{viewpoint or '—'}｜来源：{source or title or '—'}{suffix}"
+            )
+    if stock_lines:
+        has_rendered_content = True
+        L.append("\n## 🧾 慧博提及个股")
+        L.extend(stock_lines[:12])
+
+    changes_raw = (huibo_digest.get("trend_summary") or {}).get("changes") or []
+    changes = changes_raw if isinstance(changes_raw, list) else []
+    if changes:
+        has_rendered_content = True
+        L.append("\n## 🔄 慧博近5交易日热点变化")
+        for change in changes[:6]:
+            text = _safe_text(change, "慧博热点变化")
+            if text:
+                L.append(f"- {text}")
+
+    if not has_rendered_content:
+        reader_results_raw = huibo_digest.get("reader_results") or []
+        prescreened_raw = huibo_digest.get("prescreened") or []
+        reader_results = reader_results_raw if isinstance(reader_results_raw, list) else []
+        prescreened = prescreened_raw if isinstance(prescreened_raw, list) else []
+        if reader_results or prescreened:
+            success = sum(
+                1
+                for r in reader_results
+                if isinstance(r, dict)
+                and isinstance(r.get("reader"), dict)
+                and not r["reader"].get("error")
+            )
+            failed = max(0, len(reader_results) - success)
+            L.append("\n## 📚 慧博深读")
+            L.append(f"- 已采集候选 {len(prescreened)} 篇；Antigravity 阅读成功 {success} 篇，失败 {failed} 篇；未生成推荐。")
+            failed_titles = [
+                _safe_text(r.get("title"), "慧博失败报告标题")
+                for r in reader_results
+                if isinstance(r, dict)
+                if isinstance(r.get("reader"), dict) and r["reader"].get("error")
+            ]
+            for title in [t for t in failed_titles if t][:3]:
+                L.append(f"- Reader 未完成：{title}")
+
+    return L
+
+
 def render_md(date: str, cn_items: list[dict], us_items: list[dict], top3: list[dict],
-              *, cn_industry: list[dict] | None = None) -> tuple[str, str]:
+              *, cn_industry: list[dict] | None = None,
+              huibo_digest: dict | None = None) -> tuple[str, str]:
     """返回 (title, markdown)。纯函数，不落盘（落盘见 write_md）。"""
     title = f"研报速读 · {date}"
     L = [f"# {title}", ""]
@@ -202,6 +325,8 @@ def render_md(date: str, cn_items: list[dict], us_items: list[dict], top3: list[
     if cn_industry:
         L.append("\n## 📊 行业覆盖热度")
         L.append(_industry_line(cn_industry))
+
+    L.extend(_huibo_lines(huibo_digest))
 
     L.append("\n## 🇨🇳 A股机构评级")
     if cn_items:

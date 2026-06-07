@@ -26,7 +26,7 @@ VPS / Linux 走 systemd（见 `deploy/systemd/`），不适用本规则。
 #!/bin/bash
 set -e
 
-# 1. 设 PATH（launchd 不继承 shell PATH，gemini/python 等都拿不到）
+# 1. 设 PATH（launchd 不继承 shell PATH，agy/python 等都拿不到）
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
 
 # 2. cd 到仓库根（python import 才能正确解析）
@@ -89,7 +89,7 @@ tail -f /tmp/tradesystem-<task>.log
 
 ## LLM 任务的超时调整
 
-launchd 子进程下 LLM CLI（gemini / claude / codex）启动比交互式 shell **慢 2-3 倍**（无 TTY，初始化路径不同）。
+launchd 子进程下 LLM CLI（agy / claude / codex）启动比交互式 shell **慢 2-3 倍**（无 TTY，初始化路径不同）。
 
 - 默认 `LLM_TIMEOUT_SECONDS=90` 在 launchd 下经常超时
 - **launchd 触发的 LLM 任务**：建议 `~/.config/tradeSystem.env` 配 `LLM_TIMEOUT_SECONDS=180` 或更高
@@ -115,6 +115,6 @@ launchd 子进程下 LLM CLI（gemini / claude / codex）启动比交互式 shel
 |---|---|
 | `launchctl list` 不显示 task | plist 语法错（用 `plutil -lint ~/Library/LaunchAgents/*.plist` 验） |
 | log 文件不生成 | StandardOutPath/StandardErrorPath 路径不存在或权限不够 |
-| log 显示 `command not found: gemini` | PATH 没 set，回看包装脚本第 1 步 |
+| log 显示 `command not found: agy` | PATH 没 set，回看包装脚本第 1 步 |
 | log 显示 `[task] DingTalk pusher 未启用，跳过推送` | env 没 source，回看包装脚本第 3 步 |
 | log 启动后无下文 | LLM 卡 timeout 或 subprocess 卡 stdin，看 `LLM_TIMEOUT_SECONDS` 是否够 |

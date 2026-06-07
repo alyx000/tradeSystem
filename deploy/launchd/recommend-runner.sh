@@ -9,14 +9,14 @@ set -e
 
 MODE="${1:-daily}"
 
-# 设 PATH 让 gemini CLI 可被找到（launchd 默认 PATH 不含 /opt/homebrew/bin）
+# 设 PATH 让 agy CLI 可被找到（launchd 默认 PATH 不含 /opt/homebrew/bin）
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
 
 # 仓库根
 REPO_ROOT="/Users/alyx/tradeSystem"
 cd "$REPO_ROOT"
 
-# 加载项目专属 env（DingTalk webhook、可选 Gemini 覆盖）
+# 加载项目专属 env（DingTalk webhook、可选 Antigravity 覆盖）
 if [ -f "$HOME/.config/tradeSystem.env" ]; then
     # shellcheck disable=SC1091
     source "$HOME/.config/tradeSystem.env"

@@ -3,7 +3,7 @@
   cognition-digest recent3d|weekly|monthly [--date YYYY-MM-DD] [--dry-run] [--no-llm]
 
 - 默认推送钉钉（对齐 research-digest 语义，无 --push）。
-- --dry-run：仅打印 markdown，不调 gemini、不推送。
+- --dry-run：仅打印 markdown，不调 Antigravity、不推送。
 - --no-llm：关闭 LLM 叙事，纯结构化建议。
 """
 from __future__ import annotations
@@ -48,11 +48,11 @@ def handle_command(config: dict, args: argparse.Namespace) -> None:
 
 def _run(config: dict, args: argparse.Namespace, window: str) -> None:
     from services.cognition_digest import run_window_digest
-    from services.research_digest.narrator import build_gemini_runner
+    from services.research_digest.narrator import build_antigravity_runner
 
     anchor = args.date or datetime.date.today().isoformat()
     no_llm = bool(args.no_llm or args.dry_run)
-    llm_runner = None if no_llm else build_gemini_runner()
+    llm_runner = None if no_llm else build_antigravity_runner()
 
     digest = run_window_digest(None, window, anchor, no_llm=no_llm, llm_runner=llm_runner)
 

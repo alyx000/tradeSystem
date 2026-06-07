@@ -14,7 +14,7 @@ def _us(**kw):
 
 
 def test_us_renders_theme_not_one_liner():
-    """美股只渲染 gemini 的 theme（板块归类）；one_liner 收紧后与 theme+action 冗余，已砍不渲染。"""
+    """美股只渲染 LLM 的 theme（板块归类）；one_liner 收紧后与 theme+action 冗余，已砍不渲染。"""
     us = [_us(theme="AI算力", one_liner="AI算力·评级上调")]
     _, md = renderer.render_md("2026-05-29", [], us, us)
     assert "AI算力" in md                  # theme 渲染
