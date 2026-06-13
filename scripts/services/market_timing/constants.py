@@ -27,3 +27,22 @@ MID_YANG_MIN_PCT = 0.01
 MIN_BARS_FOR_SIGNAL = 10
 # 地量分位窗口：当日两市成交额在近 N 日中的分位
 AMOUNT_PCTILE_WINDOW = 20
+
+# ── 扫描指数清单（Stage 0 本机实测可达性定稿）──
+# 微盘股万得 8841431 免费源取不到 → 用中证2000(932000.CSI)代理（老师本人即用中证2000 ETF 代理）；
+# 平均股价 880003 经 pytdx 日线可达（哨兵 code "avg_price" 走 fetch.py 专路直连 tdx）。
+INDEX_LIST = (
+    {"code": "000001.SH", "name": "上证综指"},
+    {"code": "399001.SZ", "name": "深证成指"},
+    {"code": "399006.SZ", "name": "创业板指"},
+    {"code": "000688.SH", "name": "科创50"},
+    {"code": "932000.CSI", "name": "中证2000", "note": "微盘股代理"},
+    {"code": "avg_price", "name": "平均股价", "note": "通达信880003"},
+)
+
+# 拉区间日线的自然日跨度（保证 ≥60 交易日供 swing/斐波那契/底分型窗口）
+RANGE_LOOKBACK_DAYS = 180
+
+# 两市成交额取数指数（tushare index_daily amount 单位=千元，亿 = 千元 / 1e5）
+MARKET_AMOUNT_INDICES = ("000001.SH", "399001.SZ")
+QIANYUAN_PER_YI = 1e5

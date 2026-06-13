@@ -419,6 +419,41 @@ CREATE TABLE IF NOT EXISTS sector_correlation_daily (
 """
 
 # ──────────────────────────────────────────────────────────────
+# 5d. 大盘择时观察（market-timing）：一指数一天一行快照（派生信号层，全 [判断]）
+#     时间周期(斐波那契变盘点) + 底分型生命周期(none/forming/confirmed/invalid)
+#     + 市场级客观上下文(成交额分位/跌停家数/涨跌家数/共振数，冗余写各行)。
+#     底分型生命周期靠读上一交易日同指数行推进；同日重跑按 PK upsert(refreshed)。
+# ──────────────────────────────────────────────────────────────
+_SQL_MARKET_TIMING_SIGNAL = """
+CREATE TABLE IF NOT EXISTS market_timing_signal (
+    trade_date TEXT NOT NULL CHECK(trade_date GLOB '????-??-??'),
+    index_code TEXT NOT NULL,
+    index_name TEXT,
+    swing_pivot_date TEXT,
+    swing_pivot_type TEXT,
+    swing_pivot_price REAL,
+    fib_day_count INTEGER,
+    fib_hit INTEGER,
+    fib_near INTEGER,
+    fractal_status TEXT NOT NULL DEFAULT 'none',
+    fractal_low_date TEXT,
+    fractal_low_price REAL,
+    fractal_confirm_date TEXT,
+    fractal_json TEXT,
+    resonance_count INTEGER,
+    market_amount_yi REAL,
+    amount_pctile_20d REAL,
+    limit_down_count INTEGER,
+    advance INTEGER,
+    decline INTEGER,
+    data_source TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT,
+    PRIMARY KEY (trade_date, index_code)
+);
+"""
+
+# ──────────────────────────────────────────────────────────────
 # 6. 八步复盘
 # ──────────────────────────────────────────────────────────────
 _SQL_DAILY_REVIEWS = """
@@ -1134,6 +1169,7 @@ _ALL_TABLE_SQL = [
     _SQL_DAILY_MARKET,
     _SQL_DAILY_VOLUME_CONCENTRATION,
     _SQL_SECTOR_CORRELATION_DAILY,
+    _SQL_MARKET_TIMING_SIGNAL,
     _SQL_DAILY_REVIEWS,
     _SQL_EMOTION_CYCLE,
     _SQL_MAIN_THEMES,
