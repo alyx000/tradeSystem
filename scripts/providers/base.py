@@ -195,6 +195,14 @@ class DataProvider(ABC):
     def get_disclosure_dates(self, date: str) -> DataResult:
         return DataResult(data=None, source=self.name, error="not implemented")
 
+    def get_earnings_forecast(self, date: str) -> DataResult:
+        """业绩预告（全市场，按公告日回看窗口）"""
+        return DataResult(data=None, source=self.name, error="not implemented")
+
+    def get_earnings_express(self, date: str) -> DataResult:
+        """业绩快报（全市场，按公告日回看窗口）"""
+        return DataResult(data=None, source=self.name, error="not implemented")
+
     def get_share_float(self, date: str) -> DataResult:
         return DataResult(data=None, source=self.name, error="not implemented")
 

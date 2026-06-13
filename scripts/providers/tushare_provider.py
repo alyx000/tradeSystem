@@ -35,6 +35,13 @@ def _normalize_trade_date(raw) -> str | None:
     return None
 
 
+# 业绩预告/快报分页参数（STEP0 2026-06-12 实测：镜像 *_vip 接口 period 拉满 4404 行
+# 单次返回未截断，cap≥4404；显式传 limit 防默认值漂移，页数上限纯防御兜底）
+EARNINGS_PAGE_LIMIT = 5000
+EARNINGS_MAX_PAGES = 50
+_EARNINGS_DEFAULT_LOOKBACK_DAYS = 3
+
+
 def _to_clean_str(val) -> str:
     """NaN / None → 空串，其余 str() 去空白；兜底过滤脏值文本。
 
@@ -118,6 +125,11 @@ class TushareProvider(DataProvider):
             "get_stock_announcements",
             "get_market_announcements",
             "get_disclosure_dates",
+            "get_earnings_forecast",
+            "get_earnings_express",
+            "get_market_daily_quotes",
+            "get_analyst_forecasts",
+            "get_income_history",
             "get_share_float",
             "get_stock_st",
             "get_global_index",
@@ -1050,6 +1062,126 @@ class TushareProvider(DataProvider):
         except Exception as e:
             return DataResult(data=None, source=self.name, error=str(e))
 
+    # ---- 业绩预告 / 业绩快报 ----
+
+    def get_earnings_forecast(self, date: str) -> DataResult:
+        """业绩预告（forecast_vip 全市场，公告日回看窗口 [T-LOOKBACK+1, T]，净利单位=万元）。
+
+        镜像实测（2026-06-12 STEP0）：`forecast` 必填 ts_code 不能全市场拉，必须走
+        `forecast_vip`（支持 start_date/end_date 区间，区间 1920 行实测未截断）。
+        同一公告可能返回 update_flag 0/1 双行（修正前后快照），raw 层全保留由消费端去重。
+        """
+        return self._query_earnings_window("forecast_vip", "get_earnings_forecast", date)
+
+    def get_earnings_express(self, date: str) -> DataResult:
+        """业绩快报（express_vip 全市场，窗口同 forecast；营收/净利单位=元）。"""
+        return self._query_earnings_window("express_vip", "get_earnings_express", date)
+
+    def _earnings_lookback_days(self) -> int:
+        # config 优先、env 兜底（对齐 __init__ 的 token 取值模式）。
+        # 0/负值/非整数视为非法回退默认：lookback 最小有意义取值是 1（仅当日），
+        # 0 天窗口无业务语义，故 falsy-0 走 or 短路进 env/默认是预期行为而非陷阱。
+        raw = self.config.get("earnings_lookback_days") or os.getenv("EARNINGS_LOOKBACK_DAYS", "")
+        try:
+            value = int(raw)
+            if value > 0:
+                return value
+        except (TypeError, ValueError):  # TypeError 兜未来 config 显式 null 等非串值
+            pass
+        if raw not in ("", None):
+            logger.warning("earnings_lookback_days 配置非法（%r），回退默认 %d 天",
+                           raw, _EARNINGS_DEFAULT_LOOKBACK_DAYS)
+        return _EARNINGS_DEFAULT_LOOKBACK_DAYS
+
+    def _query_earnings_window(self, api_name: str, method_name: str, date: str) -> DataResult:
+        guard = self._ensure_pro(method_name)
+        if guard:
+            return guard
+        try:
+            lookback = self._earnings_lookback_days()
+            end_dt = datetime.strptime(self._date_fmt(date), "%Y%m%d")
+            start_day = (end_dt - timedelta(days=lookback - 1)).strftime("%Y%m%d")
+            end_day = end_dt.strftime("%Y%m%d")
+            # 分页契约（codex review 修订）：不可假设服务器精确遵守 limit——若镜像
+            # 真实单页 cap < limit，"短页即取完"会静默截断。故：① 空页是唯一可信的
+            # 终止信号；② offset 按实际收到行数推进（兼容 cap<limit）；③ 连续两页
+            # 首行相同 = offset 未生效，显式报错而非静默重复（区间 >4404 行的多页
+            # 场景 2026-06-12 未实测，实测峰值 3 日窗 1920 行单页内）。
+            records: list[dict] = []
+            offset = 0
+            prev_first_row: dict | None = None
+            for _page in range(EARNINGS_MAX_PAGES):
+                df = self.pro.query(
+                    api_name,
+                    start_date=start_day,
+                    end_date=end_day,
+                    offset=offset,
+                    limit=EARNINGS_PAGE_LIMIT,
+                )
+                page = self._df_to_records(df)
+                if not page:
+                    break
+                if prev_first_row is not None and page[0] == prev_first_row:
+                    return DataResult(
+                        data=None,
+                        source=self.name,
+                        error=f"{api_name} window=[{start_day},{end_day}] offset 未生效（连续两页首行相同），疑似镜像不支持分页",
+                    )
+                prev_first_row = page[0]
+                records.extend(page)
+                offset += len(page)
+            else:
+                return DataResult(
+                    data=None,
+                    source=self.name,
+                    error=f"{api_name} window=[{start_day},{end_day}] 分页超过 {EARNINGS_MAX_PAGES} 页上限，疑似异常",
+                )
+            for item in records:
+                item.setdefault("code", item.get("ts_code"))
+            return DataResult(
+                data=records,
+                source=f"tushare:{api_name}",
+                note=f"ann_date_window=[{start_day},{end_day}]",
+            )
+        except Exception as e:
+            return DataResult(data=None, source=self.name, error=str(e))
+
+    def get_analyst_forecasts(self, ts_code: str, start_date: str, end_date: str) -> DataResult:
+        """个股券商盈利预测明细（report_rc，按报告日窗口）。
+
+        镜像实测（2026-06-12 STEP0）：np 为**全年**归母净利预测（单位万元），
+        quarter 形如 2026Q4；无中报预测——中报一致预期由消费端用 H1 占比折算。
+        """
+        guard = self._ensure_pro("get_analyst_forecasts")
+        if guard:
+            return guard
+        try:
+            records = self._query_records(
+                "report_rc", ts_code=self._normalize_stock_code(ts_code),
+                start_date=self._date_fmt(start_date), end_date=self._date_fmt(end_date),
+            )
+            return DataResult(data=records, source="tushare:report_rc")
+        except Exception as e:
+            return DataResult(data=None, source=self.name, error=str(e))
+
+    def get_income_history(self, ts_code: str, start_date: str, end_date: str) -> DataResult:
+        """个股历史利润表（income，按报告期窗口；归母净利 n_income_attr_p 单位元）。
+
+        同一报告期可能返回多行（原始 vs 调整），消费端按 end_date + update_flag 去重。
+        """
+        guard = self._ensure_pro("get_income_history")
+        if guard:
+            return guard
+        try:
+            records = self._query_records(
+                "income", ts_code=self._normalize_stock_code(ts_code),
+                start_date=self._date_fmt(start_date), end_date=self._date_fmt(end_date),
+                fields="ts_code,end_date,report_type,update_flag,n_income_attr_p",
+            )
+            return DataResult(data=records, source="tushare:income")
+        except Exception as e:
+            return DataResult(data=None, source=self.name, error=str(e))
+
     def get_share_float(self, date: str) -> DataResult:
         """按解禁日期获取限售股解禁数据。"""
         try:
@@ -1210,6 +1342,26 @@ class TushareProvider(DataProvider):
                     if len(s) == 8:
                         item["trade_date_norm"] = f"{s[:4]}-{s[4:6]}-{s[6:8]}"
             return DataResult(data=records, source="tushare:stk_shock")
+        except Exception as e:
+            return DataResult(data=None, source=self.name, error=str(e))
+
+    def get_market_daily_quotes(self, date: str) -> DataResult:
+        """全市场个股当日 OHLC + 昨收（业绩预告次日缺口验证用）。
+
+        日志记返回行数：单次 pro.daily(trade_date=) 对全市场 A 股（~5400 只 < 单页
+        ~6000 上限）通常一次返完，但若镜像截断/部分返回，下游缺口验证对缺行情候选静默
+        跳过——行数落日志使截断可事后诊断（消费端再做地板校验，见 service）。
+        """
+        try:
+            d = self._date_fmt(date)
+            df = self.pro.daily(trade_date=d, fields="ts_code,open,high,low,close,pre_close")
+            if df is None or df.empty:
+                return DataResult(data=[], source="tushare:daily")
+            records = self._df_to_records(df)
+            for item in records:
+                item.setdefault("code", item.get("ts_code"))
+            logger.info("[market_daily_quotes] %s 返回 %d 行", d, len(records))
+            return DataResult(data=records, source="tushare:daily")
         except Exception as e:
             return DataResult(data=None, source=self.name, error=str(e))
 
