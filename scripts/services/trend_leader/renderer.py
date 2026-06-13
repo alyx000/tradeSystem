@@ -45,7 +45,7 @@ def render_daily(conn: sqlite3.Connection, summary: dict) -> str:
         "## 漏斗概览",
         f"- 当日涨停：{summary.get('limit_up', 0)}",
         f"- 主线板块（Top-K∪手工）{degraded}：{'、'.join(main_sectors) or '（无）'}",
-        f"- 涨停∩主线候选：{summary.get('candidates', 0)}",
+        f"- 加速∩主线候选（涨停∪双创15%）：{summary.get('candidates', 0)}",
         f"- 今日新入池：{len(todays)} · 在池退出：{len(summary.get('exited') or [])}",
         "",
     ]

@@ -88,7 +88,11 @@ def run_daily(conn: sqlite3.Connection, registry, date: str, *,
 
     lu = registry.call("get_limit_up_list", date)
     lu_ok = getattr(lu, "success", False)
-    limit_stocks = (lu.data or {}).get("stocks", []) if lu_ok else []
+    _raw_limit = (lu.data or {}).get("stocks", []) if lu_ok else []
+    # 行级防御：涨停榜可能 stocks=None / 混入非 dict / 缺码脏行 → 规整为合法 dict 列表，
+    # 否则后续 limit_bares/candidate_map 的 .split 会崩掉整个日跑（与 market_changes 同等容错）。
+    limit_stocks = ([s for s in _raw_limit if isinstance(s, dict) and s.get("code")]
+                    if isinstance(_raw_limit, list) else [])
     sw = registry.call("get_stock_sw_industry_map")
     sw_ok = getattr(sw, "success", False) and isinstance(sw.data, dict)
     sw_map = sw.data if sw_ok else {}
@@ -180,8 +184,11 @@ def run_daily(conn: sqlite3.Connection, registry, date: str, *,
         shrink, sd = D.is_volume_shrink_pullback(bars)
         near, nd = D.is_near_ma5(bars)
         far, fdd = D.is_far_from_ma5(bars)
+        # 维护会整体重写 last_signal_json → 显式带上入池触发，否则次日就丢失「涨停/双创15%」辨识。
+        prev_trigger = (r.get("last_signal") or {}).get("entry_trigger")
         pool.touch(conn, code, date=date,
-                   signal_json={"shrink_pullback": sd, "near_ma5": nd, "overheat": fdd, "trend": bd})
+                   signal_json={"shrink_pullback": sd, "near_ma5": nd, "overheat": fdd,
+                                "trend": bd, "entry_trigger": prev_trigger})
         summary["in_pool_signals"].append({
             "code": code, "shrink_pullback_buy": shrink, "near_ma5": near, "overheat": far,
         })

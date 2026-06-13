@@ -54,6 +54,14 @@ def test_render_daily_has_judgment_marker_and_redline(conn):
     assert "不构成买卖建议" in md  # 红线声明
 
 
+def test_render_daily_candidate_label_covers_dual15(conn):
+    """概览候选标签为「加速∩主线候选（涨停∪双创15%）」，不再误导为「涨停∩主线候选」。"""
+    md = renderer.render_daily(conn, _summary(
+        limit_up=0, candidates=1, entered=[], refreshed=[], in_pool_signals=[], exited=[]))
+    assert "加速∩主线候选" in md
+    assert "涨停∩主线候选" not in md
+
+
 def test_render_daily_renders_funnel_counts(conn):
     _seed(conn)
     md = renderer.render_daily(conn, _summary())

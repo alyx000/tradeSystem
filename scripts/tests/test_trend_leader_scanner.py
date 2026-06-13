@@ -296,6 +296,43 @@ def test_dual_accelerators_skips_malformed_rows(conn):
     assert "688512" in summary["entered"]                    # 好票入池，未被脏行带崩
 
 
+def test_funnel_limit_up_skips_malformed_rows(conn):
+    """涨停榜含脏行（None/非 dict/缺码）→ 跳过不崩，好票入池，Pass2 维护照常执行。"""
+    pool.record(conn, code="000001", name="平安", sw_l2="股份制银行Ⅱ",
+                first_limit_date="2026-06-08", date="2026-06-08")  # 在池股验证 Pass2 仍跑
+    _seed_concentration(conn, "2026-06-09", ["玻璃玻纤"])
+    reg = FakeRegistry(
+        limit_stocks=[None, "garbage", {"name": "无码"},
+                      {"code": "600552.SH", "name": "凯盛科技", "pct_chg": 10.0}],
+        sw_map={"600552.SH": {"name": "凯盛科技", "sw_l2": "玻璃玻纤"},
+                "000001.SZ": {"name": "平安", "sw_l2": "股份制银行Ⅱ"}},
+        bars_by_code={"600552": _leader_bars(), "000001": _mk_bars([10] * 10)},
+    )
+    summary = scanner.run_daily(conn, reg, "2026-06-09")
+    assert "600552" in summary["entered"]               # 好票未被脏行带崩
+    a = pool.get_active(conn, "000001")
+    assert a is not None and a["days_in_pool"] == 2     # Pass2 维护照常（touch 推进）
+
+
+def test_entry_trigger_persists_after_maintenance(conn):
+    """双创15%入池后，次日维护（Pass2 touch 整体重写 signal）仍保留 entry_trigger 辨识。"""
+    _seed_concentration(conn, "2026-06-09", ["半导体"])
+    reg1 = FakeRegistry(
+        limit_stocks=[], sw_map={"688512.SH": {"name": "慧智微", "sw_l2": "半导体"}},
+        bars_by_code={"688512": _leader_bars()},
+        market_changes=[{"ts_code": "688512.SH", "name": "慧智微", "pct_chg": 16.0}],
+    )
+    scanner.run_daily(conn, reg1, "2026-06-09")
+    assert pool.get_active(conn, "688512")["last_signal"]["entry_trigger"] == "双创15%加速"
+    _seed_concentration(conn, "2026-06-10", ["半导体"])
+    reg2 = FakeRegistry(limit_stocks=[], sw_map={},
+                        bars_by_code={"688512": _mk_bars([10] * 10)})  # 平走维护
+    scanner.run_daily(conn, reg2, "2026-06-10")
+    a = pool.get_active(conn, "688512")
+    assert a["days_in_pool"] == 2
+    assert a["last_signal"]["entry_trigger"] == "双创15%加速"   # 维护后仍保留
+
+
 def test_funnel_market_changes_failure_degrades_to_limit_only(conn):
     """get_market_daily_changes 失败 → 记 source_errors，降级仅涨停源（不中断）。"""
     _seed_concentration(conn, "2026-06-09", ["玻璃玻纤"])
