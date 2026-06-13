@@ -53,19 +53,24 @@ def _today() -> str:
     return datetime.date.today().strftime("%Y-%m-%d")
 
 
+def _validate_pivot_args(args: argparse.Namespace) -> None:
+    """单侧 pivot 参数 fail-fast：避免用户以为已手工校准、实际跑了自动口径还落库/推送。"""
+    pi, pd = getattr(args, "pivot_index", None), getattr(args, "pivot_date", None)
+    if bool(pi) != bool(pd):
+        logger.error("[market-timing] --pivot-index 与 --pivot-date 必须成对提供")
+        raise SystemExit(2)
+
+
 def _pivot_overrides(args: argparse.Namespace) -> dict | None:
     pi, pd = getattr(args, "pivot_index", None), getattr(args, "pivot_date", None)
-    if pi and pd:
-        return {pi: pd}
-    if pi or pd:
-        logger.warning("[market-timing] --pivot-index 与 --pivot-date 须成对提供,已忽略单侧覆盖")
-    return None
+    return {pi: pd} if pi and pd else None
 
 
 def _run_daily(config: dict, args: argparse.Namespace) -> None:
     from main import setup_providers
     from utils.network_env import without_standard_http_proxy
 
+    _validate_pivot_args(args)  # 在采集/落库/推送之前 fail-fast
     date = args.date or _today()
     conn = get_connection()
     try:
@@ -86,8 +91,11 @@ def _run_daily(config: dict, args: argparse.Namespace) -> None:
         print(md)
         logger.info("[market-timing daily] %s 完成(%s,未推送)", date, "dry-run" if args.dry_run else "no-push")
         return
-    _push_to_dingtalk(f"大盘择时观察 · {date}", md)
+    ok = _push_to_dingtalk(f"大盘择时观察 · {date}", md)
     print(md)
+    if not ok:
+        logger.error("[market-timing daily] %s 推送失败,以非零退出供定时任务/监控发现", date)
+        raise SystemExit(1)
 
 
 def _run_signals(args: argparse.Namespace) -> None:
@@ -102,12 +110,14 @@ def _run_signals(args: argparse.Namespace) -> None:
     print(formatter.render_signals(rows))
 
 
-def _push_to_dingtalk(title: str, markdown: str) -> None:
+def _push_to_dingtalk(title: str, markdown: str) -> bool:
+    """推送钉钉。返回是否成功（未初始化/发送失败均 False，供裸跑分支非零退出）。"""
     from pushers.dingtalk_pusher import DingTalkPusher
 
     pusher = DingTalkPusher(config={})
     if not pusher.initialize():
         logger.error("[market-timing] DingTalk pusher 未启用(缺 env DINGTALK_WEBHOOK_TOKEN/SECRET),跳过推送")
-        return
+        return False
     ok = pusher.send_markdown(title=title, content=markdown)
     logger.info("[market-timing] 推送 %s", "成功" if ok else "失败")
+    return bool(ok)

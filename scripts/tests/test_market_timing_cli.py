@@ -20,9 +20,16 @@ def test_pivot_overrides_pair():
     assert mt._pivot_overrides(_args(pivot_index="000001.SH", pivot_date="2026-04-25")) == {"000001.SH": "2026-04-25"}
 
 
-def test_pivot_overrides_single_side_ignored():
-    assert mt._pivot_overrides(_args(pivot_index="000001.SH")) is None
-    assert mt._pivot_overrides(_args(pivot_date="2026-04-25")) is None
+def test_validate_pivot_args_single_side_fails_fast():
+    with pytest.raises(SystemExit) as e1:
+        mt._validate_pivot_args(_args(pivot_index="000001.SH"))
+    assert e1.value.code == 2
+    with pytest.raises(SystemExit) as e2:
+        mt._validate_pivot_args(_args(pivot_date="2026-04-25"))
+    assert e2.value.code == 2
+    # 成对/均空均不报错
+    mt._validate_pivot_args(_args(pivot_index="000001.SH", pivot_date="2026-04-25"))
+    mt._validate_pivot_args(_args())
 
 
 _CANNED = {
@@ -39,11 +46,16 @@ _CANNED = {
 
 @pytest.fixture
 def _patched(monkeypatch):
-    """隔离网络/DB/推送：scanner 返回 canned，setup_providers/连接/推送替身。"""
+    """隔离网络/DB/推送：scanner 返回 canned，setup_providers/连接/推送替身（默认推送成功）。"""
     pushed = []
+
+    def _fake_push(title, md):
+        pushed.append(title)
+        return True
+
     monkeypatch.setattr(mt.scanner, "run_daily", lambda *a, **k: _CANNED)
     monkeypatch.setattr(mt, "get_connection", lambda: _DummyConn())
-    monkeypatch.setattr(mt, "_push_to_dingtalk", lambda title, md: pushed.append(title))
+    monkeypatch.setattr(mt, "_push_to_dingtalk", _fake_push)
 
     import main
     monkeypatch.setattr(main, "setup_providers", lambda config: _DummyRegistry())
@@ -75,3 +87,29 @@ def test_daily_no_push_prints_only(_patched, capsys):
 def test_daily_bare_pushes(_patched):
     mt._run_daily({}, _args())
     assert _patched == ["大盘择时观察 · 2026-06-13"]   # 裸跑推送
+
+
+def test_daily_bare_push_failure_exits_nonzero(monkeypatch):
+    """裸跑推送失败 → 非零退出，供定时任务/监控发现日报缺失。"""
+    monkeypatch.setattr(mt.scanner, "run_daily", lambda *a, **k: _CANNED)
+    monkeypatch.setattr(mt, "get_connection", lambda: _DummyConn())
+    monkeypatch.setattr(mt, "_push_to_dingtalk", lambda title, md: False)  # 推送失败
+    import main
+    monkeypatch.setattr(main, "setup_providers", lambda config: _DummyRegistry())
+    with pytest.raises(SystemExit) as e:
+        mt._run_daily({}, _args())
+    assert e.value.code == 1
+
+
+def test_push_returns_false_when_pusher_uninitialized(monkeypatch):
+    """pusher 未初始化(缺 env) → _push_to_dingtalk 返回 False（不静默成功）。"""
+    class _StubPusher:
+        def __init__(self, config=None):
+            pass
+
+        def initialize(self):
+            return False
+
+    import pushers.dingtalk_pusher as dp
+    monkeypatch.setattr(dp, "DingTalkPusher", _StubPusher)
+    assert mt._push_to_dingtalk("t", "md") is False
