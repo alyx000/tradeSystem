@@ -52,6 +52,7 @@
 - `python3 main.py volume-watch ...`（成交额 Top20 板块集中度：`daily` 采集+落库+渲染+钉钉推送 / `trend` 只读趋势；申万二级口径联动 `get_sector_rankings`，落 `daily_volume_concentration`）
 - `python3 main.py sector-correlation ...`（板块相关性：`daily` 采集+落库+渲染+钉钉 / `matrix` 完整矩阵只读 / `trend` 漂移趋势；Tushare 主源多日活跃选板块[行业成交额 / 概念换手率]+4 指数，多窗 5/20/60 原始相关+剔大盘超额相关+β，落 `sector_correlation_daily`）
 - `python3 main.py research-digest daily ...`（每日研报速读：A股研报评级[巨潮 cninfo `get_research_report_list`] + 美股机构评级[yfinance `upgrades_downgrades`，仅方向变动 init/up/down/reinit] → 鞠磊框架「首次覆盖」加权 Top3 → MD 落盘 + 钉钉；`--dry-run` 仅打印、`--no-llm` 关美股叙事；红线只约束 LLM 叙事不约束取数；工作日 06:42 launchd 单源调度，不进 `schedule`/APScheduler）
+- `python3 main.py earnings-digest daily ...`（业绩预告/快报速报：全市场 `forecast_vip`/`express_vip` 按公告日回看窗口[默认3自然日]采集落 `raw_interface_payloads` + 水位线增量[只认 success] + 次日缺口验证[下一交易日开盘跳空≥2%，市场投票 2×2] + 五段渲染[命中/缺口/申万行业Top5/分类计数/净利中值≥5000万Top榜]+口径三券商一致预期[全年预测×H1占比折算,标 [判断]] → MD 落盘 + 钉钉；空窗口日不推送；`--dry-run` 仅打印[采集落库照常]、`--lookback-days` 手动补采、`--no-consensus` 关一致预期；工作日+周日 22:00 launchd 单源调度，不进 `schedule`/APScheduler）
 - `python3 main.py cognition-digest recent3d|weekly|monthly ...`（交易认知沉淀只读汇总：只读认知三表[`trading_cognitions`/`cognition_instances`]按窗口算热度+共识+新增 Top-N + gemini 体系/方向建议[复用 gemini runner + `REDLINE_KEYWORDS` 红线护栏] → 钉钉；`--dry-run` 仅打印、`--no-llm` 模板兜底；3 个 per-task launchd[recent3d 日 18:30 / weekly 周日 20:00 / monthly 每月 1 号 09:00]，不写库不改 schema 不进 `schedule`/APScheduler）
 
 ## 规则与模板入口
@@ -68,7 +69,7 @@
 | `solution-format.md`      | 技术方案 / 执行计划 / 业务逻辑解析默认使用结构化章节、表格与纯 Mermaid 图表输出                       |
 | `test-design.md`          | 分层测试设计：金字塔原则、隔离原则、自底向上执行                                              |
 | `code-review-gate.md` | 每轮实质性代码改动后先 `/simplify` 清理 → `/code-review`（门1，默认 medium，替代旧本地 Explore）；4 条结束条件 + 软上限 2 轮                                  |
-| `post-dev-codex-review.md` | 实质性代码改动后必须跑 codex:codex-rescue 审查；6 条二值结束条件 + 3 轮上限防无限循环               |
+| `post-dev-codex-review.md` | 实质性代码改动后必须跑 codex 原生 adversarial-review 审查（方案级 codex 独立意见才走 codex:codex-rescue freeform；不替代 Explore CreatePlan 门）；6 条二值结束条件 + 3 轮上限防无限循环 |
 | `skills-sync.md`          | CLI / API / Skills 变更后同步 `INDEX.md`、跑 `test_cli_smoke`、检查受影响 SKILL.md；新增顶层 subparser 必加 `ARCHITECTURE_COMMANDS` 参数化 |
 | `launchd-deploy.md`       | macOS launchd 定时任务部署规范：包装脚本必须 set PATH + source env；安装后必须 launchctl start 真触发验证；LLM 任务超时建议 180s+ |
 | `tdd-commit-strategy.md`  | TDD 实施完成后按功能层次切 commit（不每个 R/G 一个、不全 squash）；commit message 标 What/Why/TDD 轮数；`git add` 用具体路径不用 `-A` |

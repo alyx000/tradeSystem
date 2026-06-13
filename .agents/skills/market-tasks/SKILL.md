@@ -144,8 +144,8 @@ python3 main.py research-digest daily --huibo-mode desktop_terminal --huibo-wind
 python3 main.py research-digest daily --huibo-mode off --dry-run
 python3 main.py research-digest daily --huibo-cleanup-only --dry-run
 
-# 慧博深读生产 workflow（推荐：分阶段日志、断点续跑、并发 reader）
-node scripts/workflows/research-digest-workflow.mjs daily --date 2026-06-06 --reader-cap 20 --reader-concurrency 20 --reader-max-attempts 2 --resume
+# 慧博深读生产 workflow（launchd 使用：分阶段日志、断点续跑、并发 reader、发布钉钉）
+node scripts/workflows/research-digest-workflow.mjs daily --date 2026-06-06 --reader-cap 20 --reader-concurrency 20 --reader-max-attempts 2 --resume --publish --include-base-digest
 node scripts/workflows/research-digest-workflow.mjs daily --date 2026-06-06 --retry-failed --reader-max-attempts 4
 node scripts/workflows/research-digest-workflow.mjs daily --date 2026-06-06 --llm-input-dir /private/tmp/huibo-llm-input --resume
 ```
@@ -153,12 +153,34 @@ node scripts/workflows/research-digest-workflow.mjs daily --date 2026-06-06 --ll
 - **A股段** ← 巨潮 cninfo `get_research_report_list`（provider registry，主源 akshare `stock_rank_forecast_cninfo`）：取评级 + **评级变化 / 前次评级 / 目标价区间**；按机构聚合去重，`_cn_score` 排序——**鞠磊框架（teacher_notes#91）「首次覆盖」权重最高**（首次覆盖 +3.0 > 调高/上调 +1.5 > 调低 -1.0），signal 标签含 `首次覆盖 / 评级上调 / 多家覆盖`。
 - **美股段** ← yfinance `get_us_rating_changes`（registry，新增 capability）：**只取方向变动** `init/up/down/reinit`（剔除 maintain/reiterate），按精选股票池（`RESEARCH_DIGEST_US_TICKERS` 或内置龙头池）逐 ticker 拉 `upgrades_downgrades`，美东窗口过滤（默认近 5 日）。源时效稀疏，**窗口内无变动 → 显式标注「无符合条件」，不冒充**（429/全失败也降级成空段，日志可区分、MD 暂不区分，留 v2）。
 - **慧博深读增强** ← 默认 `--huibo-mode desktop_terminal`，通过 `HUIBO_HOT_REPORT_JSON` 快照或 `HUIBO_HOT_REPORT_URL` 读取慧博终端可访问的热点研报候选；URL 源优先调用页面背后的 `/redian/HotReport/GetList` 接口，按 `abc/def/vidd/keyy/xyz/op` token 构造阅读/PDF 下载链接，HTML 表格解析只做回退；可选 `HUIBO_REPORT_TEXT_DIR` / `HUIBO_REPORT_PDF_DIR` 补充本地预览文本或已下载 PDF。系统不会在候选采集阶段批量下载 PDF，只会在预筛后为进入 reader 池的报告下载并保存到 raw PDF 目录；后续如有官方 API 切 `--huibo-mode official_api` + `HUIBO_API_BASE_URL`/`HUIBO_API_TOKEN`，不改后续 reader/aggregator/ranker。预筛保留深度/专题/首次覆盖/行业策略/产业链/系列/跟踪，降权周报/日报/早报/晨会/点评/简评；首次覆盖/首次评级、`重点关注/重点跟踪/重点推荐/核心推荐/首推/建议关注` 等提示词加权；同主题限流防单一热点占满候选池。Antigravity 分工固定为**每篇一个 `report_reader`**，reader 优先通过 Antigravity CLI `@PDF路径` 读取 raw PDF，reader 默认并发数 `--huibo-reader-concurrency 4`（`HUIBO_READER_CONCURRENCY` 可覆盖；需要一篇 PDF 一个 Antigravity 同时读时可设为 reader cap），`report_text` 只是首页/核心观点/目录预筛摘录和兜底；没有 raw PDF 的候选只记录缺失状态，不派 reader、不进入最终推荐；用户已授权本项目把慧博 raw PDF 交给外部 Antigravity 阅读，默认启用，需关闭时设置 `HUIBO_ALLOW_EXTERNAL_PDF_LLM=0`；再由独立 `industry_aggregator` / `trend_aggregator` / `ranker` 在所有 reader JSON 收齐后执行，只读 reader JSON 和历史 summary JSON，聚合 agent 不接收原文/PDF。
-- **慧博 JS workflow** ← `scripts/workflows/research-digest-workflow.mjs` 是慧博深读生产推荐入口，JS 负责 workflow 编排和可观测性，Python helper 复用既有采集/预筛/下载/聚合/渲染能力。阶段固定为 `collect → prescreen → download → read → finalize → cleanup`；run 目录默认 `data/runs/research-digest/YYYY-MM-DD/`，包含 `state.json`、`events.jsonl`、`candidates.json`、`prescreened.json`、`downloaded.json`、`reader/*.json`、`summary.json`、`report.md`。`--resume` 会跳过已完成阶段和已完成 reader JSON；`--retry-failed` 只重跑失败 reader；reader 并发由 `--reader-concurrency` 控制，可设为 reader cap 以实现一篇 PDF 一个 Antigravity 同时读。正式 raw PDF 仍归档/去重在 `--raw-dir`（默认 `data/reports/huibo/raw`），read 阶段会把单篇 PDF 复制到 LLM 临时输入目录后再传 `@PDF`；`HUIBO_LLM_INPUT_DIR` / `--llm-input-dir` 表示临时输入 base 目录，workflow 实际使用其中的 `YYYY-MM-DD/` 子目录并写入 marker，cleanup 只删除带 marker 的本次子目录。`state.json` 同时记录 `pdfPath` 与 `llmPdfPath`，resume 时如临时副本缺失会从 raw 重新复制。reader 失败会在同一次 read 阶段自动重试，`--reader-max-attempts` 默认 2（累计尝试次数，`HUIBO_READER_MAX_ATTEMPTS` 可覆盖）；如果失败项已经达到上限，后续继续重试需显式提高上限，如 `--retry-failed --reader-max-attempts 4`。JS workflow 默认直接 `spawn` Antigravity CLI。默认不推钉钉，只落本地 artifact；如需推送，再接独立发布阶段。
+- **慧博 JS workflow** ← `scripts/workflows/research-digest-workflow.mjs` 是慧博深读生产与 launchd 推荐入口，JS 负责 workflow 编排和可观测性，Python helper 复用既有采集/预筛/下载/聚合/渲染/发布能力。阶段固定为 `collect → prescreen → download → read → finalize → cleanup`，带 `--publish` 时追加 `publish`；run 目录默认 `data/runs/research-digest/YYYY-MM-DD/`，包含 `state.json`、`events.jsonl`、`candidates.json`、`prescreened.json`、`downloaded.json`、`reader/*.json`、`summary.json`、`report.md`，发布后还有 `published.json`。`--resume` 会跳过已完成阶段和已完成 reader JSON；`--retry-failed` 只重跑失败 reader，并刷新 finalize/publish；reader 并发由 `--reader-concurrency` 控制，可设为 reader cap 以实现一篇 PDF 一个 Antigravity 同时读。正式 raw PDF 仍归档/去重在 `--raw-dir`（默认 `data/reports/huibo/raw`），read 阶段会把单篇 PDF 复制到 LLM 临时输入目录后再传 `@PDF`；`HUIBO_LLM_INPUT_DIR` / `--llm-input-dir` 表示临时输入 base 目录，workflow 实际使用其中的 `YYYY-MM-DD/` 子目录并写入 marker，cleanup 只删除带 marker 的本次子目录。`state.json` 同时记录 `pdfPath` 与 `llmPdfPath`，resume 时如临时副本缺失会从 raw 重新复制。reader 失败会在同一次 read 阶段自动重试，`--reader-max-attempts` 默认 2（累计尝试次数，`HUIBO_READER_MAX_ATTEMPTS` 可覆盖）；如果失败项已经达到上限，后续继续重试需显式提高上限，如 `--retry-failed --reader-max-attempts 4`。JS workflow 默认直接 `spawn` Antigravity CLI；`--publish` 会把 `report.md` 同步到 `data/reports/research-digest/YYYY-MM-DD.md` 并推钉钉；launchd 默认带 `--include-base-digest`，发布时按最近交易日重新采集 A股/美股基础段并合并慧博深读段。
 - **Top3** ← `ranker.pick_top3`：A股 / 美股各软保证 ≥1，某侧空则全给另一侧（不编造）；美股侧 `init`（首次覆盖）优先。
 - **LLM 叙事（受控）**：仅对**已拉到的真实条目**补 `theme/one_liner` 两软字段（Antigravity，独立 `build_antigravity_runner`，超时/缺失/解析失败自动降级纯结构化）。**A股默认不叙事**（`cn_narrate=False`），美股默认叙事；事实为主键，LLM 不得新增/改 ticker/code/firm（三级 fallback 防幻觉）。
 - **守红线**：红线只扫 LLM 生成的 `theme/one_liner`（含中英目标价/买入等关键词 + `neutralize_rating` 把"买入/Buy"中性化为"偏多档"）；**用户/源侧事实层（评级原文、目标价区间）不扫**——红线约束 AI 生成、不约束取数。
 - **慧博本地存储清理**：raw 目录默认 `data/reports/huibo/raw`（`HUIBO_RAW_DIR` 可覆盖，保存/复制原始 PDF）保留 30 天，summary 目录默认 `data/reports/huibo/summaries`（`HUIBO_SUMMARY_DIR` 可覆盖）保留 180 天；正式任务结束后自动清理，`--huibo-cleanup-only` 只清理，配合 `--dry-run` 只展示将清理对象、不删除。
 - 依赖 env：`DINGTALK_WEBHOOK_TOKEN/SECRET`（`~/.config/tradeSystem.env`，推送）、可选 `ANTIGRAVITY_BIN`/`LLM_MODEL`/`LLM_TIMEOUT_SECONDS`（默认 180，launchd 下 LLM 启动慢；`LLM_MODEL` 不设时由 Antigravity CLI 使用默认/自动模型）、`RESEARCH_DIGEST_US_TICKERS`（美股池，不设走内置）、慧博可选 `HUIBO_MODE`/`HUIBO_HOT_REPORT_JSON`/`HUIBO_HOT_REPORT_URL`/`HUIBO_REPORT_TEXT_DIR`/`HUIBO_REPORT_PDF_DIR`/`HUIBO_READER_CONCURRENCY`/`HUIBO_ALLOW_EXTERNAL_PDF_LLM`/`HUIBO_API_BASE_URL`/`HUIBO_API_TOKEN`。A股 cninfo 免 key、yfinance 免 key；`--dry-run` 对齐现有语义，不调 Antigravity。
+
+## 业绩预告/快报速报（earnings-digest）
+
+全市场业绩预告（`forecast_vip`）+ 业绩快报（`express_vip`）每日采集存档 + 推送，**工作日 + 周日 22:00** 自动跑（launchd `com.alyx.tradesystem.earnings-digest`，周日档供周日复盘；周六不跑——周六公告由周日 3 日回看窗口覆盖；**不进 `main.py schedule` APScheduler**），也可手动：
+
+```bash
+make earnings-digest-dry       # = python3 main.py earnings-digest daily --dry-run（仅打印；采集落库照常，不落盘 MD/不推送）
+make earnings-digest           # = python3 main.py earnings-digest daily（采集存档+缺口验证+落盘+钉钉）
+
+# 指定日期 / 手动补采（直接调底层）
+python3 main.py earnings-digest daily --date 2026-06-12 --dry-run
+python3 main.py earnings-digest daily --lookback-days 7    # 连续漏跑后扩窗补采
+```
+
+要点：
+
+- **采集层零筛选**：8 类预告 type + 修正公告 + 快报全量整行落 `raw_interface_payloads`（接口 `earnings_forecast` / `earnings_express`），筛选只发生在渲染层 Top 榜。
+- **水位线增量**：只推 `ann_date` 晚于上次 success 采集日的新公告（周日推过的周末公告周一不重复；empty/failed 不推进水位线防镜像迟到公告丢失）。
+- **次日缺口验证（着重段）**：「次日」=预告后的下一交易日；开盘跳空 ≥2%（env `EARNINGS_DIGEST_GAP_THRESHOLD_PCT` 可调）输出市场投票 2×2 标签（✅超预期确认 / ⚠️利好不及预期 / 💡利空出尽 / ❌暴雷确认）+ 严格缺口 / 一字板标注；交易日行情故障会渲染可见警示，不静默装空日。
+- **五段渲染**：① 持仓/关注命中（不筛）② 缺口验证（截 30 条+尾注）③ 申万行业 Top5 ④ 分类计数 ⑤ 净利中值 ≥5000 万 Top 榜（env `EARNINGS_DIGEST_MIN_PROFIT_WAN` 可调；forecast/express 分开排名）。快报附「vs 此前预告区间」位置标签（90 天历史存档回看）。①⑤ 命中/Top 候选票附「vs 一致预期」列（口径三：券商全年预测中值×历史 H1 占比折算隐含中报预期，±10% 判超/符/低，标 `[判断·H1占比折算]`；亏损/无覆盖显示暂无；`--no-consensus` 关闭，每股 2 次外网调用）。
+- **空窗口日不推送**（淡季静音）；MD 落 `data/reports/earnings-digest/YYYY-MM-DD.md`。
+- 依赖 env：`TUSHARE_TOKEN` + 钉钉两变量；红线口径：预告数字属事实层取数（非 AI 生成），不做关键词过滤。
 
 ## 交易认知沉淀定时推送（cognition-digest）
 

@@ -1,4 +1,4 @@
-.PHONY: help bootstrap doctor check check-web check-scripts hooks-install dev dev-api dev-web commands-doc commands-check dashboard-open search-open commands-open plan-open knowledge-open ingest-open teachers-open holdings-open watchlist-open calendar-open industry-open db-init db-sync db-reconcile holdings holdings-refresh watchlist notes-search db-search market-open market-json market-envelope review-open review-prefill pre post regulatory ingest-list ingest-run-post ingest-run-interface ingest-inspect ingest-health ingest-reconcile plan-draft plan-show-draft plan-confirm plan-diagnose plan-review knowledge-list knowledge-add-note knowledge-draft-from-asset knowledge-draft-from-teacher-note today-open today-close today-pre today-post today-regulatory today-evening today-watchlist today-obsidian today-ingest-inspect today-ingest-health recommend-daily recommend-daily-dry recommend-weekly recommend-weekly-dry recommend-trace volume-watch-daily volume-watch-daily-dry volume-watch-trend research-digest research-digest-dry
+.PHONY: help bootstrap doctor check check-web check-scripts hooks-install dev dev-api dev-web commands-doc commands-check dashboard-open search-open commands-open plan-open knowledge-open ingest-open teachers-open holdings-open watchlist-open calendar-open industry-open db-init db-sync db-reconcile holdings holdings-refresh watchlist notes-search db-search market-open market-json market-envelope review-open review-prefill pre post regulatory ingest-list ingest-run-post ingest-run-interface ingest-inspect ingest-health ingest-reconcile plan-draft plan-show-draft plan-confirm plan-diagnose plan-review knowledge-list knowledge-add-note knowledge-draft-from-asset knowledge-draft-from-teacher-note today-open today-close today-pre today-post today-regulatory today-evening today-watchlist today-obsidian today-ingest-inspect today-ingest-health recommend-daily recommend-daily-dry recommend-weekly recommend-weekly-dry recommend-trace volume-watch-daily volume-watch-daily-dry volume-watch-trend research-digest research-digest-dry earnings-digest earnings-digest-dry
 
 help:
 	@echo "Available targets:"
@@ -65,6 +65,7 @@ help:
 	@echo "  make today-ingest-health - show today's 7-day ingest health summary"
 	@echo "  make recommend-daily / recommend-daily-dry  - 行业推荐日报（钉钉推送 / 干跑预览）"
 	@echo "  make research-digest / research-digest-dry  - 每日研报速读（A股+美股机构评级 Top3，钉钉 / 干跑）"
+	@echo "  make earnings-digest / earnings-digest-dry  - 业绩预告/快报速报（全市场+缺口验证，钉钉 / 干跑）"
 	@echo "  make recommend-weekly / recommend-weekly-dry - 行业推荐周报（钉钉推送 / 干跑预览）"
 	@echo "  make recommend-trace - 行业推荐日报带 Raindrop 埋点（dry-run，进 Workshop 看 trace）"
 	@echo "  make hooks-install - enable repo-local git hooks"
@@ -216,6 +217,12 @@ research-digest:
 
 research-digest-dry:
 	cd scripts && python3 main.py research-digest daily --dry-run
+
+earnings-digest:
+	cd scripts && python3 main.py earnings-digest daily
+
+earnings-digest-dry:
+	cd scripts && python3 main.py earnings-digest daily --dry-run
 
 # 行业推荐日报 + Raindrop Workshop 埋点（dry-run，不推钉钉/不调 LLM）；用 .venv-raindrop 的 python3.12
 recommend-trace:
