@@ -99,6 +99,18 @@ def test_render_daily_no_price_or_buy_advice(conn):
     assert not re.search(r"\d+(\.\d+)?\s*元", md)  # 无「N 元」价位
 
 
+def test_render_daily_no_buy_sell_action_terms(conn):
+    """红线：用户可见 MD 只描述客观状态，不出现可操作买卖动作词。
+
+    «不构成买卖建议» 是免责声明（含『买卖』）属允许；这里挡的是暗示动作的具体词。
+    """
+    _seed(conn)
+    md = renderer.render_daily(conn, _summary(degraded_main=True,
+                                              source_errors=["limit_up"], data_errors=["600552"]))
+    for term in ["低吸", "买点", "买入", "卖出", "了结", "止盈", "止损", "目标价", "见顶"]:
+        assert term not in md, f"红线违规：渲染出现买卖动作词「{term}」"
+
+
 def test_render_daily_degraded_main_annotated(conn):
     _seed(conn)
     md = renderer.render_daily(conn, _summary(degraded_main=True))

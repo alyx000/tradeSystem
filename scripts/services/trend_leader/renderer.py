@@ -10,15 +10,17 @@ import sqlite3
 
 from services.trend_leader import pool
 
-# 在池信号 → 展示标签（顺序即列顺序）
+# 在池信号 → 展示标签（顺序即列顺序）。
+# 红线：只描述客观技术状态，禁用可操作买卖动作词（低吸/买点/了结/见顶/止盈…）；
+# 是否买卖由用户自行判断，渲染层不暗示动作。
 _SIGNAL_LABELS = [
     ("shrink_pullback_buy", "缩量阴线回踩"),
     ("near_ma5", "贴MA5"),
-    ("overheat", "远离MA5(了结提示)"),
+    ("overheat", "远离MA5(乖离过大)"),
 ]
 
 _REDLINE = ("> 盘后只读观察清单 · 全部为 [判断] · "
-            "不构成买卖建议、不含价位、不写交易计划层；临盘买点请自行判断。")
+            "不构成买卖建议、不含价位、不预测点位、不写交易计划层。")
 
 
 def _hit(flag) -> str:
@@ -61,7 +63,7 @@ def render_daily(conn: sqlite3.Connection, summary: dict) -> str:
         lines.append("")
 
     # 在池信号（回踩/见顶提示）
-    lines += ["## 在池信号（回踩低吸 / 见顶了结提示）[判断]"]
+    lines += ["## 在池信号（缩量回踩 / 贴MA5 / 乖离状态）[判断]"]
     signals = summary.get("in_pool_signals") or []
     if not signals:
         lines += ["在池无新信号。", ""]
