@@ -4,9 +4,11 @@
 FIRST_LIMIT_LOOKBACK_DAYS = 60
 
 # 缓涨（角度）：近 M 交易日累计涨幅区间，且期间无涨停
+# 上限校准（2026-06-13，用户判断）：40→45。真实样本 605358 立昂微 0508 半导体首板，
+# 20 日累涨 42.6% 原差 2.6 点被剔；用户判定其为有效趋势主升，放宽至 45%。单样本调参，后续多日复核。
 GENTLE_RISE_WINDOW = 20
 GENTLE_RISE_MIN_PCT = 5.0
-GENTLE_RISE_MAX_PCT = 40.0
+GENTLE_RISE_MAX_PCT = 45.0
 
 # 贴 MA5：|close - MA5| / MA5 <= 阈值
 NEAR_MA5_MAX_DEVIATION = 0.03

@@ -138,6 +138,14 @@ def test_gentle_rise_false_when_too_steep():
     assert matched is False
 
 
+def test_gentle_rise_true_at_42_pct_within_45_cap():
+    """校准锚点：上限 40→45 后，42% 累涨落带内（真实样本 605358 立昂微 0508 42.6%）。"""
+    closes = [round(10.0 + i * 4.2 / 19, 4) for i in range(20)]  # 累计 +42%
+    matched, detail = is_gentle_rise(_bars(closes), MAIN)
+    assert matched is True
+    assert detail["cum_pct"] == pytest.approx(42.0, abs=0.5)
+
+
 def test_gentle_rise_false_when_has_limit_in_window():
     closes = [round(10.0 + i * 1.5 / 19, 4) for i in range(20)]
     pcts = [0.0] * 20
