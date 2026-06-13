@@ -50,12 +50,14 @@ def render_daily(conn: sqlite3.Connection, summary: dict) -> str:
 
     # 今日新入池
     lines += ["## 今日新入池（首次涨停加速 + 主线缓涨）[判断]"]
-    entered = summary.get("entered") or []
-    if not entered:
+    # entered=首见入池；refreshed=同日重跑 / 推送失败重试时同一票再命中（pool 已 active）。
+    # 两者合并展示，否则重试报告会因「已 active→refreshed」丢掉首次运行发现的新入池，用户误判无新增。
+    todays = (summary.get("entered") or []) + (summary.get("refreshed") or [])
+    if not todays:
         lines += ["今日无新入池。", ""]
     else:
         lines += ["| 代码 | 名称 | 申万二级 | 首次涨停日 |", "| --- | --- | --- | --- |"]
-        for code in entered:
+        for code in todays:
             r = active.get(code, {})
             lines.append(
                 f"| {code} | {r.get('name', '')} | {r.get('sw_l2', '')} | "
@@ -79,7 +81,7 @@ def render_daily(conn: sqlite3.Connection, summary: dict) -> str:
         lines.append("")
 
     # 今日退池（趋势破坏）
-    lines += ["## 今日退池（趋势破坏）"]
+    lines += ["## 今日退池（趋势破坏）[判断]"]
     exited_codes = summary.get("exited") or []
     if not exited_codes:
         lines += ["今日无退池。", ""]

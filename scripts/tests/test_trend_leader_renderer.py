@@ -85,9 +85,25 @@ def test_render_daily_exited_section_shows_reason(conn):
 
 def test_render_daily_empty_states(conn):
     md = renderer.render_daily(conn, _summary(
-        entered=[], exited=[], in_pool_signals=[]))
+        entered=[], refreshed=[], exited=[], in_pool_signals=[]))
     assert "今日无新入池" in md
     assert "今日无退池" in md
+
+
+def test_render_daily_refreshed_shown_as_entry(conn):
+    """同日重跑/推送失败重试：入池票变 refreshed 仍须出现在「今日新入池」，不能消失。"""
+    _seed(conn)
+    md = renderer.render_daily(conn, _summary(
+        entered=[], refreshed=["300750"], in_pool_signals=[]))
+    assert "宁德时代" in md          # refreshed 命中仍渲染
+    assert "今日无新入池" not in md   # 不能误报无新增
+
+
+def test_render_daily_exit_section_marked_judgment(conn):
+    """红线：退池区块（趋势破坏=派生判断）必须带 [判断] 标记。"""
+    _seed(conn)
+    md = renderer.render_daily(conn, _summary())
+    assert "今日退池（趋势破坏）[判断]" in md
 
 
 def test_render_daily_no_price_or_buy_advice(conn):

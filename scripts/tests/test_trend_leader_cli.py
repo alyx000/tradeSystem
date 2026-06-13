@@ -155,6 +155,18 @@ def test_parse_sectors_valid_list():
     assert tl._parse_sectors('["半导体","电池"]') == ["半导体", "电池"]
 
 
+def test_daily_same_day_rerun_still_shows_entry(wired, capsys):
+    """端到端：同日重跑（模拟推送失败重试），第二次报告仍须显示首次发现的新入池。"""
+    tl._run_daily({}, _daily_args(no_push=True))   # 首次：600552 入池
+    capsys.readouterr()                             # 清掉第一次输出
+    tl._run_daily({}, _daily_args(no_push=True))   # 同日重跑：600552→refreshed
+    out = capsys.readouterr().out
+    assert "600552" in out
+    # 必须落在「今日新入池」段，而非仅出现在在池信号
+    head = out.split("## 在池信号")[0]
+    assert "600552" in head
+
+
 def test_daily_top_k_rejects_non_positive():
     """--top-k 0/负数必须 argparse 退出(2)，避免 [:top_k] 切出异常主线池后落池+推送。"""
     parser = main_module.build_parser()
