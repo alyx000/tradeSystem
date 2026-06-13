@@ -290,7 +290,7 @@
 
 ## 自动化检查
 
-`scripts/tests/test_cli_smoke.py` 会验证上表中所有 **`db` 子命令**与架构命令 `ingest` / `plan` / `knowledge` 的 argparse 签名（不启动子进程、不连库）。`main.py pre` / `post` 仍由 `market-tasks` 文档与人工/定时流程保证。
+`scripts/tests/test_cli_smoke.py` 会验证上表中所有 **`db` 子命令**（`ALL_SKILL_COMMANDS`）与 `main.py` 顶层架构命令（`ARCHITECTURE_COMMANDS`：`ingest` / `plan` / `knowledge` / `executions` / `recommend` / `volume-watch` / `sector-correlation` / `research-digest` / `earnings-digest` / `cognition-digest` / `trend-leader`）的 argparse 签名（不启动子进程、不连库）。`main.py pre` / `post` 仍由 `market-tasks` 文档与人工/定时流程保证。
 
 每次 `pytest scripts/tests/test_cli_smoke.py` 都会同步检查：
 - 依赖表所列 `db` 子命令名未被重命名
@@ -302,4 +302,4 @@
 1. 修改 `cli.py` 或 API routes 时，同步更新此 INDEX.md
 2. 优先运行 `make check-scripts`；若仅需检查 CLI 签名，可运行 `python3 -m pytest scripts/tests/test_cli_smoke.py -v`
 3. 若命令参数有不向后兼容的变更，更新对应 SKILL.md 中的示例
-4. 修改 `scripts/main.py` 新增/调整 `ingest`、`plan`、`knowledge` 命令时，同步更新相关 SKILL.md 与 AGENTS.md
+4. 修改 `scripts/main.py` 新增/调整顶层命令（`ingest` / `plan` / `knowledge` / `executions` / `recommend` / `volume-watch` / `sector-correlation` / `*-digest` / `trend-leader` 等）时，须在 `test_cli_smoke.py` 的 `ARCHITECTURE_COMMANDS` 加参数化用例，并同步更新相关 SKILL.md 与 AGENTS.md（见 `.agents/rules/skills-sync.md` §2.1）
