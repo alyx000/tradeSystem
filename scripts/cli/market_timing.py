@@ -14,11 +14,15 @@ import argparse
 import datetime
 import json
 import logging
+import re
 
 from db.connection import get_connection
+from services.market_timing import constants as C
 from services.market_timing import formatter, repo, scanner
 
 logger = logging.getLogger(__name__)
+
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 def register_subparser(subparsers: argparse._SubParsersAction) -> None:
@@ -54,10 +58,20 @@ def _today() -> str:
 
 
 def _validate_pivot_args(args: argparse.Namespace) -> None:
-    """单侧 pivot 参数 fail-fast：避免用户以为已手工校准、实际跑了自动口径还落库/推送。"""
+    """pivot 参数 fail-fast：成对缺失 / 未知指数 / 日期格式非法都在采集落库前报错，
+    避免用户以为已手工校准、实际跑了自动口径还落库/推送（date 是否在 K 线窗口由 scanner 兜底）。"""
     pi, pd = getattr(args, "pivot_index", None), getattr(args, "pivot_date", None)
     if bool(pi) != bool(pd):
         logger.error("[market-timing] --pivot-index 与 --pivot-date 必须成对提供")
+        raise SystemExit(2)
+    if not (pi and pd):
+        return
+    valid_codes = {idx["code"] for idx in C.INDEX_LIST}
+    if pi not in valid_codes:
+        logger.error("[market-timing] --pivot-index %s 不在扫描指数清单 %s", pi, sorted(valid_codes))
+        raise SystemExit(2)
+    if not _DATE_RE.match(pd):
+        logger.error("[market-timing] --pivot-date 须为 YYYY-MM-DD: %s", pd)
         raise SystemExit(2)
 
 
@@ -79,6 +93,10 @@ def _run_daily(config: dict, args: argparse.Namespace) -> None:
             registry.initialize_all()
             result = scanner.run_daily(conn, registry, date,
                                        dry_run=args.dry_run, pivot_overrides=_pivot_overrides(args))
+    except ValueError as e:
+        # 手工 pivot 覆盖未命中（日期不在窗口/未知指数）→ 提交/推送前硬失败
+        logger.error("[market-timing] pivot 覆盖无效: %s", e)
+        raise SystemExit(2)
     finally:
         conn.close()
 

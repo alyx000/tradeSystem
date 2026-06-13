@@ -43,7 +43,8 @@ def _resolve_pivot(bars: list[dict], code: str, pivot_overrides: dict | None) ->
                 ptype = "high" if bars[-1]["close"] < b["close"] else "low"
                 price = b["high"] if ptype == "high" else b["low"]
                 return {"index": i, "date": pdate, "price": price, "type": ptype, "manual": True}
-        return None
+        # 手工覆盖日不在该指数区间日线内：硬失败，不退回自动口径静默落库
+        raise ValueError(f"--pivot-date {pdate} 不在 {code} 区间日线内（非交易日/超出回看窗口）")
     return D.find_swing_pivot(bars)
 
 
@@ -102,6 +103,11 @@ def run_daily(conn: sqlite3.Connection, registry, date: str, *, dry_run: bool = 
     返回结构化结果。
     """
     index_list = indices if indices is not None else C.INDEX_LIST
+    if pivot_overrides:
+        valid_codes = {idx["code"] for idx in index_list}
+        unknown = set(pivot_overrides) - valid_codes
+        if unknown:
+            raise ValueError(f"--pivot-index {sorted(unknown)} 不在本次扫描指数清单内")
     bars_by_code: dict[str, list] = {}
     per_index: list[dict] = []
     turning_points: list[dict] = []

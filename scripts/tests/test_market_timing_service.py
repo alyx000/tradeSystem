@@ -127,6 +127,24 @@ def test_dry_run_does_not_persist(conn):
     assert conn.execute("SELECT COUNT(*) FROM market_timing_signal").fetchone()[0] == 0
 
 
+def test_pivot_override_date_not_in_window_raises(conn):
+    reg = _lifecycle_registry()
+    with pytest.raises(ValueError, match="不在"):
+        scanner.run_daily(conn, reg, _D_CONFIRM, indices=_IDX, pivot_overrides={"TEST.SH": "2099-01-01"})
+
+
+def test_pivot_override_unknown_index_raises(conn):
+    reg = _lifecycle_registry()
+    with pytest.raises(ValueError, match="不在本次扫描"):
+        scanner.run_daily(conn, reg, _D_CONFIRM, indices=_IDX, pivot_overrides={"NOPE.SH": _D_FORM})
+
+
+def test_pivot_override_hits_sets_manual_pivot(conn):
+    reg = _lifecycle_registry()
+    r = scanner.run_daily(conn, reg, _D_CONFIRM, indices=_IDX, pivot_overrides={"TEST.SH": _D_FORM})
+    assert r["signals"][0]["swing_pivot_date"] == _D_FORM
+
+
 def test_confirm_recovers_when_forming_day_missing(conn):
     """成型日漏跑/跳过/dry_run（库中无成型行）→ 确认日仍能无状态推导出 confirmed。"""
     reg = _lifecycle_registry()

@@ -32,6 +32,31 @@ def test_validate_pivot_args_single_side_fails_fast():
     mt._validate_pivot_args(_args())
 
 
+def test_validate_pivot_args_unknown_index_exits():
+    with pytest.raises(SystemExit) as e:
+        mt._validate_pivot_args(_args(pivot_index="NOPE.SH", pivot_date="2026-04-25"))
+    assert e.value.code == 2
+
+
+def test_validate_pivot_args_bad_date_format_exits():
+    with pytest.raises(SystemExit) as e:
+        mt._validate_pivot_args(_args(pivot_index="000001.SH", pivot_date="2026/04/25"))
+    assert e.value.code == 2
+
+
+def test_daily_invalid_pivot_override_exits(monkeypatch):
+    """scanner 因手工 pivot 未命中抛 ValueError → CLI 提交/推送前 SystemExit(2)。"""
+    def _raise(*a, **k):
+        raise ValueError("--pivot-date 2099-01-01 不在 000001.SH 区间日线内")
+    monkeypatch.setattr(mt.scanner, "run_daily", _raise)
+    monkeypatch.setattr(mt, "get_connection", lambda: _DummyConn())
+    import main
+    monkeypatch.setattr(main, "setup_providers", lambda config: _DummyRegistry())
+    with pytest.raises(SystemExit) as e:
+        mt._run_daily({}, _args(pivot_index="000001.SH", pivot_date="2026-04-25"))
+    assert e.value.code == 2
+
+
 _CANNED = {
     "date": "2026-06-13",
     "signals": [{"index_name": "上证综指", "fib_day_count": 21, "fib_hit": 21, "fib_near": None,
