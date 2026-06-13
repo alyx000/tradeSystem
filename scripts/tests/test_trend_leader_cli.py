@@ -153,3 +153,11 @@ def test_parse_sectors_invalid_json_exits():
 
 def test_parse_sectors_valid_list():
     assert tl._parse_sectors('["半导体","电池"]') == ["半导体", "电池"]
+
+
+def test_daily_top_k_rejects_non_positive():
+    """--top-k 0/负数必须 argparse 退出(2)，避免 [:top_k] 切出异常主线池后落池+推送。"""
+    parser = main_module.build_parser()
+    for bad in ["0", "-1", "abc"]:
+        with pytest.raises(SystemExit):
+            parser.parse_args(["trend-leader", "daily", "--top-k", bad])

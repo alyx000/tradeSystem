@@ -28,6 +28,17 @@ from services.trend_leader import pool, renderer, scanner
 logger = logging.getLogger(__name__)
 
 
+def _positive_int(raw: str) -> int:
+    """--top-k 必须为正整数：否则 [:top_k] 切片会静默扩成「全部除末尾」等异常主线池。"""
+    try:
+        v = int(raw)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("必须为正整数") from exc
+    if v <= 0:
+        raise argparse.ArgumentTypeError("必须为正整数")
+    return v
+
+
 def register_subparser(subparsers: argparse._SubParsersAction) -> None:
     tl = subparsers.add_parser("trend-leader", help="趋势主升漏斗扫描（观察清单 / 看池）")
     sub = tl.add_subparsers(dest="trend_leader_command")
@@ -36,8 +47,8 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
     daily.add_argument("--date", default=None, help="交易日 YYYY-MM-DD（默认今天）")
     daily.add_argument("--sectors", default=None,
                        help='手工主线板块 JSON 数组，∪ 自动 Top-K（如 \'["半导体","玻璃玻纤"]\'）')
-    daily.add_argument("--top-k", type=int, default=C.DEFAULT_TOP_K_SECTORS,
-                       help=f"自动主线取成交额集中度 Top-K 申万二级（默认 {C.DEFAULT_TOP_K_SECTORS}）")
+    daily.add_argument("--top-k", type=_positive_int, default=C.DEFAULT_TOP_K_SECTORS,
+                       help=f"自动主线取成交额集中度 Top-K 申万二级（正整数，默认 {C.DEFAULT_TOP_K_SECTORS}）")
     daily.add_argument("--dry-run", action="store_true",
                        help="内存副本跑，不落池/不推送（历史校准用）")
     daily.add_argument("--no-push", action="store_true", help="落池但仅打印，不推送")
