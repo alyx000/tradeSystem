@@ -1750,6 +1750,10 @@ def build_parser() -> argparse.ArgumentParser:
     from cli.earnings_digest import register_subparser as register_earnings_digest_subparser
     register_earnings_digest_subparser(subparsers)
 
+    # trend-leader (趋势主升漏斗扫描:涨停∩主线→首次涨停加速+缓涨→持久化观察池)
+    from cli.trend_leader import register_subparser as register_trend_leader_subparser
+    register_trend_leader_subparser(subparsers)
+
     # db
     from db.cli import register_db_subparser
     register_db_subparser(subparsers)
@@ -1811,6 +1815,9 @@ def main():
     elif args.command == "earnings-digest":
         from cli import earnings_digest as earnings_digest_module
         earnings_digest_module.handle_command(config, args)
+    elif args.command == "trend-leader":
+        from cli import trend_leader as trend_leader_module
+        trend_leader_module.handle_command(config, args)
     elif args.command == "db":
         from db.cli import handle_db_command
         handle_db_command(args)

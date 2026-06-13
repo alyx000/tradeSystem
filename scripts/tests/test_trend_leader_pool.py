@@ -124,6 +124,7 @@ def test_signal_json_roundtrip(conn):
     _rec(conn, "2026-06-09", signal_json={"near_ma5": True, "deviation": 0.012})
     a = pool.get_active(conn, "600552")
     assert a["last_signal"]["near_ma5"] is True and a["last_signal"]["deviation"] == pytest.approx(0.012)
+    assert "last_signal_json" not in a  # 原始内部列不外泄，只暴露已解析的 last_signal
 
 
 def test_active_unique_index_blocks_two_active(conn):

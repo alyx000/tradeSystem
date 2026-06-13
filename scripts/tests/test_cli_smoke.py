@@ -301,6 +301,18 @@ ARCHITECTURE_COMMANDS = [
     ["cognition-digest", "monthly"],
     ["cognition-digest", "weekly", "--date", "2026-05-31"],
     ["cognition-digest", "monthly", "--dry-run", "--no-llm"],
+    # trend-leader (趋势主升漏斗:涨停∩主线→首次涨停加速+缓涨→持久化观察池;只读观察清单)
+    ["trend-leader", "daily"],
+    ["trend-leader", "daily", "--date", "2026-06-12"],
+    ["trend-leader", "daily", "--dry-run"],
+    ["trend-leader", "daily", "--no-push"],
+    ["trend-leader", "daily", "--sectors", '["半导体","玻璃玻纤"]'],
+    ["trend-leader", "daily", "--top-k", "8"],
+    ["trend-leader", "daily", "--date", "2026-06-12", "--sectors", '["半导体"]',
+     "--top-k", "8", "--no-push", "--dry-run"],
+    ["trend-leader", "pool"],
+    ["trend-leader", "pool", "--status", "active"],
+    ["trend-leader", "pool", "--status", "exited", "--json"],
 ]
 
 

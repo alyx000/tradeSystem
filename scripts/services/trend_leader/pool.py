@@ -24,7 +24,7 @@ def _rows(cur) -> list[dict]:
     out = []
     for r in cur.fetchall():
         d = dict(zip(cols, r))
-        raw = d.get("last_signal_json")
+        raw = d.pop("last_signal_json", None)  # 原始串归一为已解析的 last_signal，不外泄内部列
         d["last_signal"] = json.loads(raw) if raw else None
         out.append(d)
     return out
