@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- 大盘择时观察：工作日 21:40 + 周日 21:40（周日供周日晚复盘把变盘点/底分型推进周日复盘；
+     接 volume-watch 21:00 / trend-leader 21:30 之后，盘后数据已就绪）。
+     Sleep policy: 错过可接受——大盘择时是复盘参考(非交易决策)，漏跑用 market-timing signals 回看，
+     或带 date 手动补跑。 -->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.alyx.tradesystem.market-timing</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/alyx/tradeSystem/deploy/launchd/market-timing-runner.sh</string>
+    </array>
+
+    <!-- launchd 不支持 Weekday 范围语法，逐日列出：0=周日, 1-5=周一到周五 -->
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict><key>Weekday</key><integer>0</integer><key>Hour</key><integer>21</integer><key>Minute</key><integer>40</integer></dict>
+        <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>21</integer><key>Minute</key><integer>40</integer></dict>
+        <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>21</integer><key>Minute</key><integer>40</integer></dict>
+        <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>21</integer><key>Minute</key><integer>40</integer></dict>
+        <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>21</integer><key>Minute</key><integer>40</integer></dict>
+        <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>21</integer><key>Minute</key><integer>40</integer></dict>
+    </array>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/tradesystem-market-timing.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/tradesystem-market-timing.log</string>
+
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>
