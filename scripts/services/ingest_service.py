@@ -690,10 +690,31 @@ class IngestService:
         payload_json = json.dumps(payload, ensure_ascii=False, sort_keys=True)
         payload_hash = hashlib.sha256(payload_json.encode("utf-8")).hexdigest()
         dedupe_key = self._build_payload_dedupe_key(interface, target_date, params)
+        # 「空结果不抹非空 payload」保护按接口 opt-in（codex review 2026-06-13）：
+        # 仅对显式声明 preserve_nonempty_on_empty 的接口（如 earnings_forecast/express，
+        # 公告一经发布不会缩回空、同日返空必是数据源瞬时空窗）生效；其余接口保持默认
+        # 覆盖语义，否则合法的「非空→空」修正（口径变更/坏导入纠错）会被永久挡住。
+        # 下方 _payload_set 仅由该 bool 在两段固定字面量间二选一，无外部输入、无注入。
+        if interface.get("preserve_nonempty_on_empty"):
+            _payload_set = """
+                    payload_json = CASE WHEN excluded.row_count = 0 AND raw_interface_payloads.row_count > 0
+                                        THEN raw_interface_payloads.payload_json ELSE excluded.payload_json END,
+                    payload_hash = CASE WHEN excluded.row_count = 0 AND raw_interface_payloads.row_count > 0
+                                        THEN raw_interface_payloads.payload_hash ELSE excluded.payload_hash END,
+                    row_count = CASE WHEN excluded.row_count = 0 AND raw_interface_payloads.row_count > 0
+                                     THEN raw_interface_payloads.row_count ELSE excluded.row_count END,
+                    status = CASE WHEN excluded.row_count = 0 AND raw_interface_payloads.row_count > 0
+                                  THEN raw_interface_payloads.status ELSE excluded.status END,"""
+        else:
+            _payload_set = """
+                    payload_json = excluded.payload_json,
+                    payload_hash = excluded.payload_hash,
+                    row_count = excluded.row_count,
+                    status = excluded.status,"""
         with get_db(self.db_path) as conn:
             migrate(conn)
             conn.execute(
-                """
+                f"""
                 INSERT INTO raw_interface_payloads
                 (interface_name, provider, stage, biz_date, target_date, raw_table, dedupe_key,
                  payload_json, payload_hash, row_count, status, params_json, source_meta_json)
@@ -702,11 +723,7 @@ class IngestService:
                     provider = excluded.provider,
                     stage = excluded.stage,
                     target_date = excluded.target_date,
-                    raw_table = excluded.raw_table,
-                    payload_json = excluded.payload_json,
-                    payload_hash = excluded.payload_hash,
-                    row_count = excluded.row_count,
-                    status = excluded.status,
+                    raw_table = excluded.raw_table,{_payload_set}
                     params_json = excluded.params_json,
                     source_meta_json = excluded.source_meta_json,
                     inserted_at = datetime('now')

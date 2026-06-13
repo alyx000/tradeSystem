@@ -845,6 +845,43 @@ def test_store_payload_uses_params_in_dedupe_key(tmp_path):
     assert {payload["params"]["ann_date"] for payload in payloads} == {"20260401", "20260402"}
 
 
+def _store_then_empty(tmp_path, interface):
+    """先写非空 payload，再同键空重跑；返回最终 (row_count, status)。"""
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    migrate(conn)
+    conn.close()
+    service = IngestService(str(db_path))
+    service._store_payload(interface, "2026-06-12", provider="t", params={},
+                           result=DataResult(data=[{"x": 1}], source="t"))
+    service._store_payload(interface, "2026-06-12", provider="t", params={},
+                           result=DataResult(data=[], source="t"))
+    conn = get_connection(db_path)
+    row = conn.execute(
+        "SELECT row_count, status FROM raw_interface_payloads WHERE interface_name = ?",
+        (interface["interface_name"],),
+    ).fetchone()
+    conn.close()
+    return row["row_count"], row["status"]
+
+
+def test_store_payload_empty_overwrites_for_non_optin_interface(tmp_path):
+    """codex round4 回归：未 opt-in preserve 的普通接口，空重跑应能覆盖——
+    保证合法的「非空→空」修正（口径变更/坏导入纠错）不被全局守卫永久挡住。"""
+    iface = {"interface_name": "demo_default", "stage": "post_extended",
+             "raw_table": "raw_demo", "dedupe_keys": []}  # 无 preserve_nonempty_on_empty
+    row_count, status = _store_then_empty(tmp_path, iface)
+    assert row_count == 0 and status == "empty"  # 非 opt-in：空可纠正
+
+
+def test_store_payload_empty_preserved_for_optin_interface(tmp_path):
+    """对照：显式 opt-in 的接口（如 earnings）空重跑保留非空 payload（瞬时空窗保护）。"""
+    iface = {"interface_name": "demo_keep", "stage": "post_extended",
+             "raw_table": "raw_demo", "dedupe_keys": [], "preserve_nonempty_on_empty": True}
+    row_count, status = _store_then_empty(tmp_path, iface)
+    assert row_count == 1 and status == "success"  # opt-in：保留
+
+
 def test_limit_cpt_list_run_creates_sector_snapshot_and_entities(tmp_path):
     db_path = tmp_path / "test.db"
     registry = _FakeRegistry(
