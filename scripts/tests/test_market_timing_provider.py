@@ -34,7 +34,7 @@ class TestTushareIndexDailyRangeOHLCV:
         prov.pro = _StubIndexPro()
         r = prov.get_index_daily_range("932000.CSI", "2026-05-01", "2026-06-13")
         assert r.success
-        row = r.data[0]
+        row = r.data[-1]                                   # 最新一行在末尾（升序契约）
         assert row["trade_date"] == "2026-06-12"          # 归一化 YYYY-MM-DD
         assert row["open"] == 3394.08
         assert row["high"] == 3419.96
@@ -43,11 +43,20 @@ class TestTushareIndexDailyRangeOHLCV:
         assert row["vol"] == 337202617.0
         assert row["amount"] == 610139652.6
 
+    def test_normalizes_to_ascending_order(self):
+        """tushare index_daily 倒序返回 → 输出必须升序（最旧在前），契合检测器 bars[-1]=今日。"""
+        prov = TushareProvider({})
+        prov.pro = _StubIndexPro()  # stub 故意倒序（0612 在前、0611 在后）
+        r = prov.get_index_daily_range("932000.CSI", "2026-05-01", "2026-06-13")
+        dates = [row["trade_date"] for row in r.data]
+        assert dates == sorted(dates)
+        assert dates[0] == "2026-06-11" and dates[-1] == "2026-06-12"
+
     def test_keeps_pct_chg_and_ts_code_backcompat(self):
         prov = TushareProvider({})
         prov.pro = _StubIndexPro()
         r = prov.get_index_daily_range("932000.CSI", "2026-05-01", "2026-06-13")
-        row = r.data[0]
+        row = r.data[-1]                                   # 末尾=最新(0612)
         assert row["pct_chg"] == 0.4971
         assert row["ts_code"] == "932000.CSI"
 

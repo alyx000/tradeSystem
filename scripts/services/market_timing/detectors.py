@@ -147,3 +147,28 @@ def is_breakout_confirm(bars: list[dict]) -> tuple[bool, dict]:
         "ma5": ma5_today,
         "ma5_turning": ma5_turning,
     }
+
+
+def is_fractal_confirmed(bars: list[dict], fractal: dict) -> tuple[bool, dict]:
+    """底分型确认：在已成型底分型(fractal)基础上，今日同时满足
+      ① 放量中阳突破 MA5 + MA5 拐头（is_breakout_confirm）
+      ② 突破前高：收盘 > max(left_high, right_high)（消费 is_bottom_fractal 返回的前高，
+         否则放量中阳日可能在没破前高时被误判确认）
+      ③ 结构未破：收盘 > 底分型低点（跌破则 invalid 而非确认）
+    返回 (bool, detail)。
+    """
+    ok_breakout, det = is_breakout_confirm(bars)
+    today = bars[-1] if bars else {}
+    close = today.get("close")
+    highs = [h for h in (fractal.get("left_high"), fractal.get("right_high")) if h is not None]
+    prior_high = max(highs) if highs else None
+    low = fractal.get("low_price")
+    broke_prior_high = bool(prior_high is not None and close is not None and close > prior_high)
+    structure_held = bool(low is not None and close is not None and close > low)
+    ok = bool(ok_breakout and broke_prior_high and structure_held)
+    return ok, {
+        **det,
+        "broke_prior_high": broke_prior_high,
+        "prior_high": prior_high,
+        "structure_held": structure_held,
+    }

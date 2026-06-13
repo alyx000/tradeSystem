@@ -1444,6 +1444,11 @@ class TushareProvider(DataProvider):
                     "pct_chg": _f(row, "pct_chg"),
                     "ts_code": code,
                 })
+            # tushare index_daily 默认倒序（最新在前）；统一升序（最旧在前、最新在末尾），
+            # 与检测器 bars[-1]=今日 契约对齐，避免消费方把最旧行当今日算出错误信号。
+            # trade_date 为 YYYY-MM-DD，字符串序即时间序。regulatory 按 trade_date 建 dict 取值，
+            # 与顺序无关，不受影响。
+            out.sort(key=lambda r: r["trade_date"])
             return DataResult(data=out, source="tushare:index_daily")
         except Exception as e:
             return DataResult(data=None, source=self.name, error=str(e))

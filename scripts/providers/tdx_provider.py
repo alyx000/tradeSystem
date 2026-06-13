@@ -161,6 +161,8 @@ class TdxProvider(DataProvider):
                 })
             if not rows:
                 return DataResult(data=None, source=self.name, error="tdx 880003 日线窗口内无有效行")
+            # 升序（最旧在前、最新在末尾），与 tushare get_index_daily_range 及检测器契约对齐。
+            rows.sort(key=lambda r: r["trade_date"])
             return DataResult(
                 data=rows, source="tdx:880003_daily",
                 confidence=Confidence.HIGH, timeliness=Timeliness.HISTORICAL,
