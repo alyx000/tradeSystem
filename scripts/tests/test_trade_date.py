@@ -47,3 +47,16 @@ def test_get_prev_trade_date_respects_is_trade_day_failure():
 
     registry.call.side_effect = call_side
     assert get_prev_trade_date(registry, "2026-03-30") == "2026-03-27"
+
+
+def test_get_prev_trade_date_spans_long_holiday():
+    """codex 回归：国庆长假（Oct1-8 休市）后首个交易日 Oct9 必须扫到 Sep30，
+    而非旧 7 天上限触不到、错误回退到假期内的「昨天」(Oct8)。"""
+    registry = MagicMock()
+
+    def call_side(method: str, date: str):
+        # 仅 9-30 是交易日；10-01..10-08 长假；从 10-09 回看需跨 9 天
+        return DataResult(data=(date == "2026-09-30"), source="mock")
+
+    registry.call.side_effect = call_side
+    assert get_prev_trade_date(registry, "2026-10-09") == "2026-09-30"

@@ -7,13 +7,19 @@ from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
+# 向前查找上一交易日的最大扫描天数。旧值 7 在 A 股长假（国庆 ~8 天、春节叠加前后
+# 周末可达 ~11 天）后的首个交易日会扫不到真正的上一开市日，错误回退到「昨天」（假期内），
+# 下游缺口验证候选窗会塌缩并静默漏掉假期公告（codex review 2026-06-12）。15 天覆盖
+# 所有 A 股法定长假 + 余量。
+_PREV_TRADE_SCAN_DAYS = 15
+
 
 def get_prev_trade_date(registry, today: str) -> str:
     """
-    向前最多查找 7 天，找到最近一个交易日（不含 today）。
-    若 provider 不可用则简单回退到昨天。
+    向前最多查找 _PREV_TRADE_SCAN_DAYS 天，找到最近一个交易日（不含 today）。
+    若 provider 不可用或扫描窗内均休市则回退到昨天。
     """
-    for delta in range(1, 8):
+    for delta in range(1, _PREV_TRADE_SCAN_DAYS + 1):
         candidate = (datetime.strptime(today, "%Y-%m-%d") - timedelta(days=delta)).strftime("%Y-%m-%d")
         r = registry.call("is_trade_day", candidate)
         if r.success and r.data:
