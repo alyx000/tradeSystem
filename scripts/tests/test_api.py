@@ -2562,3 +2562,77 @@ class TestEnrichMarketRow:
         data = r.json()
         assert data["available"] is True
         assert "style_factors" not in data
+
+
+# ──────────────────────────────────────────────────────────────
+# market-timing（大盘择时观察：盘面概览面板数据）
+# ──────────────────────────────────────────────────────────────
+
+def _seed_timing(conn, date, *, indices, resonance, amount_yi, pctile, advance=None,
+                 decline=None, limit_down=None):
+    """向 market_timing_signal 灌一日数据（市场级列冗余写各行）。"""
+    from services.market_timing import repo as mt_repo
+    for code, name, extra in indices:
+        row = {
+            "trade_date": date, "index_code": code, "index_name": name,
+            "fractal_status": "none",  # NOT NULL（scanner 必填，测试默认补齐，extra 可覆盖）
+            "resonance_count": resonance, "market_amount_yi": amount_yi,
+            "amount_pctile_20d": pctile, "advance": advance, "decline": decline,
+            "limit_down_count": limit_down, "data_source": "test",
+        }
+        row.update(extra)
+        mt_repo.upsert_signal(conn, row)
+    conn.commit()
+
+
+def test_market_timing_by_date_returns_signals_and_context(client, db_path):
+    conn = get_connection(db_path)
+    _seed_timing(conn, "2026-06-12", indices=[
+        ("000001.SH", "上证综指", {"swing_pivot_date": "2026-05-14", "swing_pivot_type": "high",
+                                "swing_pivot_price": 4258.86, "fib_day_count": 21, "fib_hit": 21,
+                                "fractal_status": "forming", "fractal_low_date": "2026-06-11",
+                                "fractal_low_price": 3958.44}),
+        ("932000.CSI", "中证2000", {"swing_pivot_date": "2026-05-14", "swing_pivot_type": "high",
+                                  "fib_day_count": 21, "fib_hit": 21, "fractal_status": "forming"}),
+    ], resonance=3, amount_yi=32150.0, pctile=0.8, advance=4500, decline=900, limit_down=12)
+    conn.close()
+
+    data = client.get("/api/market/timing/2026-06-12").json()
+    assert data["available"] is True
+    assert data["resonance_count"] == 3
+    assert data["context"]["market_amount_yi"] == 32150.0
+    assert data["context"]["amount_pctile_20d"] == 0.8
+    assert data["context"]["limit_down_count"] == 12
+    assert len(data["signals"]) == 2
+    sh = next(s for s in data["signals"] if s["index_code"] == "000001.SH")
+    assert sh["fib_hit"] == 21 and sh["swing_pivot_price"] == 4258.86
+    assert sh["fractal_status"] == "forming"
+    # 市场级列不混进逐指数行
+    assert "resonance_count" not in sh
+
+
+def test_market_timing_empty_returns_available_false(client):
+    data = client.get("/api/market/timing/2026-06-12").json()
+    assert data["available"] is False
+    assert data["signals"] == []
+
+
+def test_market_timing_history_series_ascending_and_deduped(client, db_path):
+    conn = get_connection(db_path)
+    for d, res, pct in [("2026-06-10", 1, 0.3), ("2026-06-11", 0, 0.1), ("2026-06-12", 3, 0.8)]:
+        _seed_timing(conn, d, indices=[
+            ("000001.SH", "上证综指", {}), ("932000.CSI", "中证2000", {}),
+        ], resonance=res, amount_yi=30000.0, pctile=pct)
+    conn.close()
+
+    data = client.get("/api/market/timing/history?days=30").json()
+    series = data["series"]
+    assert len(series) == 3  # 6 行/3日 去重为 3 个日期点
+    assert [p["date"] for p in series] == ["2026-06-10", "2026-06-11", "2026-06-12"]  # 升序
+    assert series[-1]["resonance_count"] == 3 and series[-1]["amount_pctile_20d"] == 0.8
+    assert series[0]["date_short"] == "06-10"
+
+
+def test_market_timing_history_empty(client):
+    data = client.get("/api/market/timing/history?days=30").json()
+    assert data["series"] == []

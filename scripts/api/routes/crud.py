@@ -580,6 +580,24 @@ def get_concentration_history(days: int = 30,
     return _sanitize_non_finite(payload)  # 脏数据 change_pct=NaN/Inf 透传会致 JSON 序列化 500(与其它 market 端点一致)
 
 
+@router.get("/market/timing/history")
+def get_market_timing_history(days: int = 30,
+                              conn: sqlite3.Connection = Depends(get_db_conn)):
+    """大盘择时市场级序列(供盘面概览趋势图):共振指数数 / 成交额近20日地量分位 随时间。
+    路由声明在 /market/timing/{date} 之前,避免 'history' 被当作 {date} 路径参数吞掉。"""
+    from services.market_timing import web_payload
+    return _sanitize_non_finite(web_payload.build_history_payload(conn, days=days))
+
+
+@router.get("/market/timing/{date}")
+def get_market_timing(date: str,
+                      conn: sqlite3.Connection = Depends(get_db_conn)):
+    """大盘择时观察(某交易日 6 指数斐波那契变盘点 + 底分型 + 市场上下文)。
+    全 [判断] 派生信号,前端渲染须守红线(不出方向/价位/买卖建议)。无数据返 available=False。"""
+    from services.market_timing import web_payload
+    return _sanitize_non_finite(web_payload.build_daily_payload(conn, date))
+
+
 @router.get("/post-market/{date}")
 def get_post_market_envelope(date: str, conn: sqlite3.Connection = Depends(get_db_conn)):
     """返回与 post-market.yaml 一致的整包信封（优先 DB raw_data，否则读 daily 文件）。"""
