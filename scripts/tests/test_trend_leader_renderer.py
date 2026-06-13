@@ -97,6 +97,7 @@ def test_render_daily_refreshed_shown_as_entry(conn):
         entered=[], refreshed=["300750"], in_pool_signals=[]))
     assert "宁德时代" in md          # refreshed 命中仍渲染
     assert "今日无新入池" not in md   # 不能误报无新增
+    assert "今日新入池：1" in md      # 概览计数与表格一致（不能显示 0 却列出该票）
 
 
 def test_render_daily_exit_section_marked_judgment(conn):

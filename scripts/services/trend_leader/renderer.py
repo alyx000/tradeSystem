@@ -38,21 +38,20 @@ def render_daily(conn: sqlite3.Connection, summary: dict) -> str:
     # 漏斗概览
     main_sectors = summary.get("main_sectors") or []
     degraded = "（当日主线缺失,已回退最近一日）" if summary.get("degraded_main") else ""
+    # entered=首见入池；refreshed=同日重跑 / 推送失败重试时同一票再命中（pool 已 active，仍是今日入池）。
+    # 概览计数与下方表格统一用合并集，否则重试报告会出现「今日新入池：0」却列出该票的自相矛盾。
+    todays = (summary.get("entered") or []) + (summary.get("refreshed") or [])
     lines += [
         "## 漏斗概览",
         f"- 当日涨停：{summary.get('limit_up', 0)}",
         f"- 主线板块（Top-K∪手工）{degraded}：{'、'.join(main_sectors) or '（无）'}",
         f"- 涨停∩主线候选：{summary.get('candidates', 0)}",
-        f"- 今日新入池：{len(summary.get('entered') or [])} · "
-        f"在池退出：{len(summary.get('exited') or [])}",
+        f"- 今日新入池：{len(todays)} · 在池退出：{len(summary.get('exited') or [])}",
         "",
     ]
 
     # 今日新入池
     lines += ["## 今日新入池（首次涨停加速 + 主线缓涨）[判断]"]
-    # entered=首见入池；refreshed=同日重跑 / 推送失败重试时同一票再命中（pool 已 active）。
-    # 两者合并展示，否则重试报告会因「已 active→refreshed」丢掉首次运行发现的新入池，用户误判无新增。
-    todays = (summary.get("entered") or []) + (summary.get("refreshed") or [])
     if not todays:
         lines += ["今日无新入池。", ""]
     else:
