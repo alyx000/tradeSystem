@@ -110,6 +110,7 @@ def is_bottom_fractal(bars: list[dict]) -> tuple[bool, dict]:
         "low_price": mid["low"],
         "left_high": left["high"],
         "right_high": right["high"],
+        "right_date": right["trade_date"],   # 底分型右沿日：确认必须晚于此日（时序门）
     }
 
 
@@ -151,14 +152,20 @@ def is_breakout_confirm(bars: list[dict]) -> tuple[bool, dict]:
 
 def is_fractal_confirmed(bars: list[dict], fractal: dict) -> tuple[bool, dict]:
     """底分型确认：在已成型底分型(fractal)基础上，今日同时满足
-      ① 放量中阳突破 MA5 + MA5 拐头（is_breakout_confirm）
-      ② 突破前高：收盘 > max(left_high, right_high)（消费 is_bottom_fractal 返回的前高，
-         否则放量中阳日可能在没破前高时被误判确认）
-      ③ 结构未破：收盘 > 底分型低点（跌破则 invalid 而非确认）
+      ① 时序：今日(bars[-1])必须**晚于** fractal 右沿日（底分型在更早的窗口成型，
+         确认是其后某日的突破；用同一 bars 既成型又确认是误用——right_high=今日最高、
+         close≤high 会让突破前高永不可达，故显式判否而非静默漏报）
+      ② 放量中阳突破 MA5 + MA5 拐头（is_breakout_confirm）
+      ③ 突破前高：收盘 > max(left_high, right_high)（消费 is_bottom_fractal 返回的前高）
+      ④ 结构未破：收盘 > 底分型低点（跌破则 invalid 而非确认）
     返回 (bool, detail)。
     """
-    ok_breakout, det = is_breakout_confirm(bars)
     today = bars[-1] if bars else {}
+    today_date = today.get("trade_date")
+    right_date = fractal.get("right_date")
+    if right_date is not None and today_date is not None and today_date <= right_date:
+        return False, {"reason": "confirm_not_after_fractal", "today": today_date, "right_date": right_date}
+    ok_breakout, det = is_breakout_confirm(bars)
     close = today.get("close")
     highs = [h for h in (fractal.get("left_high"), fractal.get("right_high")) if h is not None]
     prior_high = max(highs) if highs else None

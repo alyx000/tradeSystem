@@ -196,19 +196,39 @@ def test_breakout_confirm_insufficient():
     assert info["reason"] == "insufficient_history"
 
 
-# ── is_fractal_confirmed（消费前高 + 结构未破）──
+# ── is_fractal_confirmed（真实 is_bottom_fractal 产物 + 时序门 + 消费前高）──
 
-def test_fractal_confirmed_all_true():
-    bars = _series(_BASE_CLOSES, _BASE_OPENS, _BASE_VOLS)  # 今日 close=103，放量中阳破MA5拐头
-    fractal = {"low_price": 98.0, "left_high": 101.0, "right_high": 101.0}
-    ok, det = D.is_fractal_confirmed(bars, fractal)
+# 12 根：底分型成型于 idx9（前 11 根的倒数第二根），idx11 为其后的放量中阳突破确认日。
+_LIFECYCLE_CLOSES = [100, 100, 100, 100, 100, 100, 99, 98, 97, 96, 98, 102]
+_LIFECYCLE_OPENS = [100, 100, 100, 100, 100, 100, 100, 99, 98, 97, 97, 98]
+_LIFECYCLE_VOLS = [1000] * 11 + [2000]
+
+
+def test_fractal_confirmed_real_lifecycle_true():
+    """真实组合：is_bottom_fractal(bars[:-1]) 成型 → 其后一日 is_fractal_confirmed(bars,…) 通过。"""
+    bars = _series(_LIFECYCLE_CLOSES, _LIFECYCLE_OPENS, _LIFECYCLE_VOLS)
+    formed, fractal = D.is_bottom_fractal(bars[:-1])   # 底分型在更早窗口成型（右沿=idx10）
+    assert formed is True
+    ok, det = D.is_fractal_confirmed(bars, fractal)    # 今日=idx11，晚于右沿
     assert ok is True
     assert det["broke_prior_high"] and det["structure_held"]
 
 
+def test_fractal_confirmed_same_bars_misuse_is_unreachable():
+    """误用：同一 bars 既成型又确认 → 时序门判否（right_high=今日最高，close≤high 永不可达）。"""
+    closes = [100, 100, 100, 100, 100, 100, 100, 99, 98, 97, 95, 99]
+    opens = [100, 100, 100, 100, 100, 100, 100, 100, 99, 98, 97, 96]
+    bars = _series(closes, opens)                       # 底分型成型于 idx10（最后三根中间，低点严格最小）
+    formed, fractal = D.is_bottom_fractal(bars)
+    assert formed is True
+    ok, det = D.is_fractal_confirmed(bars, fractal)     # 今日=idx11=右沿，时序门拦截
+    assert ok is False
+    assert det["reason"] == "confirm_not_after_fractal"
+
+
 def test_fractal_confirmed_fails_when_prior_high_not_broken():
     bars = _series(_BASE_CLOSES, _BASE_OPENS, _BASE_VOLS)  # 放量中阳全真，但前高定在 110
-    fractal = {"low_price": 98.0, "left_high": 110.0, "right_high": 110.0}
+    fractal = {"low_price": 98.0, "left_high": 110.0, "right_high": 110.0, "right_date": "2025-01-01"}
     ok, det = D.is_fractal_confirmed(bars, fractal)
     assert ok is False
     assert det["broke_prior_high"] is False
@@ -217,7 +237,7 @@ def test_fractal_confirmed_fails_when_prior_high_not_broken():
 def test_fractal_confirmed_fails_when_breakout_fails():
     vols = [1000] * 10  # 今日不放量 → breakout 不成立，确认整体 False
     bars = _series(_BASE_CLOSES, _BASE_OPENS, vols)
-    fractal = {"low_price": 98.0, "left_high": 101.0, "right_high": 101.0}
+    fractal = {"low_price": 98.0, "left_high": 101.0, "right_high": 101.0, "right_date": "2025-01-01"}
     ok, det = D.is_fractal_confirmed(bars, fractal)
     assert ok is False
     assert det["volume_up"] is False
