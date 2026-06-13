@@ -241,3 +241,21 @@ def test_fractal_confirmed_fails_when_breakout_fails():
     ok, det = D.is_fractal_confirmed(bars, fractal)
     assert ok is False
     assert det["volume_up"] is False
+
+
+def test_fractal_confirmed_fail_closed_on_missing_right_date():
+    """畸形 fractal 缺 right_date → 时序门 fail-closed，不放行。"""
+    bars = _series(_BASE_CLOSES, _BASE_OPENS, _BASE_VOLS)
+    ok, det = D.is_fractal_confirmed(bars, {"low_price": 98.0, "left_high": 101.0, "right_high": 101.0})
+    assert ok is False
+    assert det["reason"] == "missing_fractal_right_date"
+
+
+def test_fractal_confirmed_fail_closed_on_missing_today_date():
+    """今日 bar 缺 trade_date → fail-closed。"""
+    bars = _series(_BASE_CLOSES, _BASE_OPENS, _BASE_VOLS)
+    bars[-1].pop("trade_date")
+    fractal = {"low_price": 98.0, "left_high": 101.0, "right_high": 101.0, "right_date": "2025-01-01"}
+    ok, det = D.is_fractal_confirmed(bars, fractal)
+    assert ok is False
+    assert det["reason"] == "missing_today_date"

@@ -24,3 +24,14 @@ def test_standard_index_routes_to_registry_call():
         "get_index_daily_range", "000001.SH", "2026-05-01", "2026-06-13"
     )
     reg.call_specific.assert_not_called()
+
+
+def test_avg_price_sentinel_normalizes_case_and_whitespace():
+    """大小写/空格变体也须命中专路并传规范 code，避免漏到 tushare 被遮蔽。"""
+    for variant in ("AVG_PRICE", " avg_price ", "Avg_Price"):
+        reg = MagicMock()
+        fetch.fetch_index_daily(reg, variant, "2026-05-01", "2026-06-13")
+        reg.call_specific.assert_called_once_with(
+            "tdx", "get_index_daily_range", "avg_price", "2026-05-01", "2026-06-13"
+        )
+        reg.call.assert_not_called()

@@ -18,6 +18,8 @@ def fetch_index_daily(registry, index_code: str, start_date: str, end_date: str)
     - `avg_price`：`call_specific("tdx", ...)` 绕开 tushare 空成功遮蔽
     - 其余：`registry.call(...)` 按优先级降级
     """
-    if index_code == AVG_PRICE_CODE:
-        return registry.call_specific("tdx", "get_index_daily_range", index_code, start_date, end_date)
+    # 归一化哨兵比对：大小写/空格变体（如 "AVG_PRICE"、" avg_price "）都须命中专路，
+    # 否则会漏到 registry.call 被 tushare 空成功遮蔽，重蹈原 masking 故障。
+    if str(index_code).strip().lower() == AVG_PRICE_CODE:
+        return registry.call_specific("tdx", "get_index_daily_range", AVG_PRICE_CODE, start_date, end_date)
     return registry.call("get_index_daily_range", index_code, start_date, end_date)

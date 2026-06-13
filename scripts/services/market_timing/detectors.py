@@ -163,7 +163,12 @@ def is_fractal_confirmed(bars: list[dict], fractal: dict) -> tuple[bool, dict]:
     today = bars[-1] if bars else {}
     today_date = today.get("trade_date")
     right_date = fractal.get("right_date")
-    if right_date is not None and today_date is not None and today_date <= right_date:
+    # 时序门 fail-closed：缺日期字段不放行（畸形/手搓 fractal 不得绕过时序不变量）
+    if right_date is None:
+        return False, {"reason": "missing_fractal_right_date"}
+    if today_date is None:
+        return False, {"reason": "missing_today_date"}
+    if today_date <= right_date:
         return False, {"reason": "confirm_not_after_fractal", "today": today_date, "right_date": right_date}
     ok_breakout, det = is_breakout_confirm(bars)
     close = today.get("close")
