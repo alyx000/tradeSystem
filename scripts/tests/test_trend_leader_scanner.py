@@ -314,6 +314,19 @@ def test_funnel_limit_up_skips_malformed_rows(conn):
     assert a is not None and a["days_in_pool"] == 2     # Pass2 维护照常（touch 推进）
 
 
+def test_funnel_limit_up_normalizes_non_string_code(conn):
+    """涨停榜非字符串 code（如 int 600552）规范化为字符串，不崩且好票入池。"""
+    _seed_concentration(conn, "2026-06-09", ["玻璃玻纤"])
+    reg = FakeRegistry(
+        limit_stocks=[{"code": 600552, "name": "凯盛科技", "pct_chg": 10.0}],  # int code
+        sw_map={"600552.SH": {"name": "凯盛科技", "sw_l2": "玻璃玻纤"}},
+        bars_by_code={"600552": _leader_bars()},
+    )
+    summary = scanner.run_daily(conn, reg, "2026-06-09")
+    assert "600552" in summary["entered"]
+    assert pool.get_active(conn, "600552") is not None
+
+
 def test_entry_trigger_persists_after_maintenance(conn):
     """双创15%入池后，次日维护（Pass2 touch 整体重写 signal）仍保留 entry_trigger 辨识。"""
     _seed_concentration(conn, "2026-06-09", ["半导体"])

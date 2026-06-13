@@ -86,6 +86,7 @@ def test_render_daily_entered_shows_accel_date_and_trigger(conn):
         entered=["688512"], refreshed=[], in_pool_signals=[], exited=[]))
     assert "首次加速日" in md
     assert "首次涨停日" not in md       # 旧标签已替换
+    assert "首次涨停加速" not in md     # 区块标题也 board-aware（双创15%票不被标涨停）
     assert "双创15%加速" in md          # 触发类型展示
 
 

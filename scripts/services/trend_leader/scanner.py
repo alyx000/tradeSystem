@@ -54,6 +54,15 @@ def _break_reason(trend_detail: dict) -> str:
     return "趋势破坏"
 
 
+def _clean_code(raw) -> str | None:
+    """规范个股代码为非空字符串；None/空/nan/非字符串(如 int 600552) 统一处理 → None 或规范串。
+    防 provider/schema drift 用非字符串 code 击穿 .split() 行级防御。"""
+    if raw is None:
+        return None
+    s = str(raw).strip()
+    return s if s and s.lower() != "nan" else None
+
+
 def _dual_board_accelerators(registry, date: str) -> tuple[list[dict], bool]:
     """双创(20cm) 涨幅≥15% 的加速票（鞠磊「20cm 涨15%+」即加速，不必全 20% 涨停）。
 
@@ -69,15 +78,15 @@ def _dual_board_accelerators(registry, date: str) -> tuple[list[dict], bool]:
         # 崩掉整个日跑（result 级失败已兜底，行级也必须容错；对齐监管采集的防御解析）。
         if not isinstance(row, dict):
             continue
-        code = row.get("ts_code") or row.get("code")
+        code = _clean_code(row.get("ts_code") or row.get("code"))
         if not code:
             continue
         try:
             pct = float(row.get("pct_chg"))
         except (TypeError, ValueError):
             continue
-        if is_dual_board(str(code)) and pct >= C.ACCEL_DUAL_BOARD_MIN_PCT:
-            out.append({"code": str(code).strip(), "name": row.get("name", "")})
+        if is_dual_board(code) and pct >= C.ACCEL_DUAL_BOARD_MIN_PCT:
+            out.append({"code": code, "name": row.get("name", "")})
     return out, True
 
 
@@ -89,10 +98,15 @@ def run_daily(conn: sqlite3.Connection, registry, date: str, *,
     lu = registry.call("get_limit_up_list", date)
     lu_ok = getattr(lu, "success", False)
     _raw_limit = (lu.data or {}).get("stocks", []) if lu_ok else []
-    # 行级防御：涨停榜可能 stocks=None / 混入非 dict / 缺码脏行 → 规整为合法 dict 列表，
-    # 否则后续 limit_bares/candidate_map 的 .split 会崩掉整个日跑（与 market_changes 同等容错）。
-    limit_stocks = ([s for s in _raw_limit if isinstance(s, dict) and s.get("code")]
-                    if isinstance(_raw_limit, list) else [])
+    # 行级防御：涨停榜可能 stocks=None / 混入非 dict / 缺码 / 非字符串码(int) 脏行 → 规整为
+    # code 已规范化的合法 dict 列表，否则后续 limit_bares/candidate_map 的 .split 崩整个日跑。
+    limit_stocks = []
+    if isinstance(_raw_limit, list):
+        for s in _raw_limit:
+            if isinstance(s, dict):
+                _c = _clean_code(s.get("code"))
+                if _c:
+                    limit_stocks.append({**s, "code": _c})
     sw = registry.call("get_stock_sw_industry_map")
     sw_ok = getattr(sw, "success", False) and isinstance(sw.data, dict)
     sw_map = sw.data if sw_ok else {}

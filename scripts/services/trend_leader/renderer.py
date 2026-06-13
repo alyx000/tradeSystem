@@ -51,7 +51,7 @@ def render_daily(conn: sqlite3.Connection, summary: dict) -> str:
     ]
 
     # 今日新入池
-    lines += ["## 今日新入池（首次涨停加速 + 主线缓涨）[判断]"]
+    lines += ["## 今日新入池（首次加速 + 主线缓涨）[判断]"]
     if not todays:
         lines += ["今日无新入池。", ""]
     else:
