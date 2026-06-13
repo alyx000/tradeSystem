@@ -1420,6 +1420,9 @@ class TushareProvider(DataProvider):
                     "amount": _f(item.get("amount")),
                     "pct_chg": _f(item.get("pct_chg")),
                 })
+            # Tushare daily 通常按 trade_date 倒序返回；统一归一为升序，
+            # 满足下游趋势主升 detector「bars 升序、最后一根=今日」契约。
+            out.sort(key=lambda r: r["trade_date"])
             return DataResult(data=out, source="tushare:daily")
         except Exception as e:
             return DataResult(data=None, source=self.name, error=str(e))

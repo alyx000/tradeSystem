@@ -87,23 +87,34 @@ def test_ma5_detectors_insufficient_history():
 # ---- is_first_limit_up_acceleration ----
 
 def test_first_limit_true_when_today_limit_and_no_prior():
-    bars = _bars([10, 10.1, 10.2, 10.3, 11.3], pcts=[1.0, 1.0, 1.0, 1.0, 10.0])
+    # 11 根历史(无涨停) + 今日涨停 → 首次成立；历史 < 60 标 partial_history
+    closes = [round(10 + i * 0.05, 4) for i in range(12)]
+    bars = _bars(closes, pcts=[1.0] * 11 + [10.0])
     matched, detail = is_first_limit_up_acceleration(bars, MAIN, today_limit_up=True)
     assert matched is True
     assert detail["prior_limit_in_window"] is False
+    assert detail["partial_history"] is True
 
 
 def test_first_limit_false_when_prior_limit_in_window():
-    bars = _bars([10, 11, 11.1, 11.2, 12.3], pcts=[1.0, 9.9, 0.9, 0.9, 10.0])
-    matched, detail = is_first_limit_up_acceleration(bars, MAIN, today_limit_up=True)
+    closes = [round(10 + i * 0.05, 4) for i in range(12)]
+    pcts = [1.0] * 11 + [10.0]
+    pcts[5] = 9.9  # 历史窗口内有一根涨停
+    matched, detail = is_first_limit_up_acceleration(_bars(closes, pcts=pcts), MAIN, today_limit_up=True)
     assert matched is False
     assert detail["prior_limit_in_window"] is True
 
 
 def test_first_limit_false_when_today_not_limit():
-    bars = _bars([10, 10.1, 10.2, 10.3, 10.4], pcts=[1.0, 1.0, 1.0, 1.0, 1.0])
-    matched, _ = is_first_limit_up_acceleration(bars, MAIN, today_limit_up=False)
+    matched, _ = is_first_limit_up_acceleration(_bars([10] * 12), MAIN, today_limit_up=False)
     assert matched is False
+
+
+def test_first_limit_insufficient_when_history_below_min():
+    # 历史 5 根(<MIN_BARS_FOR_SIGNAL) → 无法断言"近 60 日首次" → insufficient
+    bars = _bars([10] * 6, pcts=[1.0] * 5 + [10.0])
+    matched, detail = is_first_limit_up_acceleration(bars, MAIN, today_limit_up=True)
+    assert matched is False and detail["insufficient_history"] is True
 
 
 def test_first_limit_insufficient_when_no_history():

@@ -73,13 +73,17 @@ def is_first_limit_up_acceleration(
     if not today_limit_up:
         return False, {"today_limit_up": False, "insufficient_history": False}
     history = (bars or [])[:-1]  # 排除今日
-    if not history:
-        return False, {"today_limit_up": True, "insufficient_history": True}
+    # 历史太短无法断言「近 60 日首次」（IPO/复牌/区间截断会把「未知」误判成「无涨停」事实）。
+    # 部分反驳 codex「< 60 即 insufficient」：只要 ≥ MIN_BARS_FOR_SIGNAL 即可断言并标 partial_history，
+    # 不强制满 60——否则会漏掉次新主升龙头（老师框架本就含新股），domain 上代价更大。
+    if len(history) < C.MIN_BARS_FOR_SIGNAL:
+        return False, {"today_limit_up": True, "lookback": len(history), "insufficient_history": True}
     window = history[-C.FIRST_LIMIT_LOOKBACK_DAYS:]
     prior = _has_limit_up(window, _limit_up_threshold(code, is_st))
     return (not prior), {
         "today_limit_up": True, "prior_limit_in_window": prior,
-        "lookback": len(window), "insufficient_history": False,
+        "lookback": len(window), "partial_history": len(window) < C.FIRST_LIMIT_LOOKBACK_DAYS,
+        "insufficient_history": False,
     }
 
 

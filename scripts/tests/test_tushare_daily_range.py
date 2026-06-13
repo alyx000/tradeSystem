@@ -65,3 +65,12 @@ def test_get_stock_daily_range_keeps_legacy_fields(provider):
     row = r.data[0]
     assert "trade_date" in row and "pct_chg" in row
     assert row["trade_date"].count("-") == 2  # 归一为 YYYY-MM-DD
+
+
+def test_get_stock_daily_range_sorted_ascending(provider):
+    """即使 Tushare 倒序返回，输出也必须按 trade_date 升序（detector 契约：最后一根=今日）。"""
+    provider.pro.query.return_value = _daily_df()  # fixture 为倒序 0609→0608
+    r = TushareProvider.get_stock_daily_range(provider, "600552", "2026-06-08", "2026-06-09")
+    dates = [b["trade_date"] for b in r.data]
+    assert dates == sorted(dates)          # 升序
+    assert dates[-1] == "2026-06-09"       # 最后一根=最新（今日）
