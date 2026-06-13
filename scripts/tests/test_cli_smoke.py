@@ -288,6 +288,13 @@ ARCHITECTURE_COMMANDS = [
     ["research-digest", "daily", "--huibo-reader-cap", "20", "--huibo-reader-concurrency", "4", "--huibo-recommend-cap", "2"],
     ["research-digest", "daily", "--huibo-raw-retention-days", "30", "--huibo-summary-retention-days", "180"],
     ["research-digest", "daily", "--huibo-cleanup-only", "--dry-run"],
+    # earnings-digest (业绩预告/快报速报:全市场采集存档+次日缺口验证+钉钉)
+    ["earnings-digest", "daily"],
+    ["earnings-digest", "daily", "--date", "2026-06-12"],
+    ["earnings-digest", "daily", "--dry-run"],
+    ["earnings-digest", "daily", "--lookback-days", "5"],
+    ["earnings-digest", "daily", "--no-consensus"],
+    ["earnings-digest", "daily", "--date", "2026-06-12", "--dry-run", "--lookback-days", "3", "--no-consensus"],
     # cognition-digest (交易认知沉淀定时汇总:近3日/周/月 → 钉钉)
     ["cognition-digest", "recent3d"],
     ["cognition-digest", "weekly"],

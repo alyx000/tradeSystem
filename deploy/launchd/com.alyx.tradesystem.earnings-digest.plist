@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- 业绩预告/快报速报：工作日 22:00 + 周日 22:00（周日供周日晚复盘；周六公告由周日回看窗口覆盖，周六不跑）。
+     Sleep policy: 错过可接受——provider 固定回看 3 日窗口，漏跑次日自动补齐
+     （连续漏 >3 天用 earnings-digest daily 带 lookback-days 参数手动补采；
+     XML 注释禁双连字符，完整命令见 SKILL.md）。 -->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.alyx.tradesystem.earnings-digest</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/alyx/tradeSystem/deploy/launchd/earnings-digest-runner.sh</string>
+    </array>
+
+    <!-- launchd 不支持 Weekday 范围语法，逐日列出：0=周日, 1-5=周一到周五 -->
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict><key>Weekday</key><integer>0</integer><key>Hour</key><integer>22</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>22</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>22</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>22</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>22</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>22</integer><key>Minute</key><integer>0</integer></dict>
+    </array>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/tradesystem-earnings-digest.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/tradesystem-earnings-digest.log</string>
+
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>

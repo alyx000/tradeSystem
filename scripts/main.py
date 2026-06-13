@@ -1746,6 +1746,10 @@ def build_parser() -> argparse.ArgumentParser:
     from cli.cognition_digest import register_subparser as register_cognition_digest_subparser
     register_cognition_digest_subparser(subparsers)
 
+    # earnings-digest (业绩预告/快报速报:全市场采集存档+次日缺口验证+钉钉)
+    from cli.earnings_digest import register_subparser as register_earnings_digest_subparser
+    register_earnings_digest_subparser(subparsers)
+
     # db
     from db.cli import register_db_subparser
     register_db_subparser(subparsers)
@@ -1804,6 +1808,9 @@ def main():
     elif args.command == "cognition-digest":
         from cli import cognition_digest as cognition_digest_module
         cognition_digest_module.handle_command(config, args)
+    elif args.command == "earnings-digest":
+        from cli import earnings_digest as earnings_digest_module
+        earnings_digest_module.handle_command(config, args)
     elif args.command == "db":
         from db.cli import handle_db_command
         handle_db_command(args)
