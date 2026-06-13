@@ -86,30 +86,32 @@ def run_daily(conn: sqlite3.Connection, registry, date: str, *,
     # Pass 1 — 发现：主线∩涨停 + 首次涨停 + 缓涨。sw 映射不可用时跳过发现（无法可靠映射主线，
     # 不静默把全部当未分类过滤；失败已记 source_errors，Pass2 维护仍照常）。
     for st in (limit_stocks if sw_ok else []):
-        code = st.get("code")
-        if not code:
+        code_raw = st.get("code")
+        if not code_raw:
             continue
-        sw_entry = sw_map.get(code) or sw_by_bare.get(code.split(".")[0]) or {}
+        bare = code_raw.split(".")[0]          # 池内唯一身份（裸码），防 ts_code/裸码建重复 active
+        sw_entry = sw_map.get(code_raw) or sw_by_bare.get(bare) or {}
         sw_l2 = sw_entry.get("sw_l2", UNCLASSIFIED)
         if sw_l2 not in main_sectors:          # 涨停 ∩ 主线
             continue
         # candidates = 主线∩涨停（进入检测阶段的数量），与 entered（过检入池）故意分开：
         # 二者之差 = 漏斗的检测器过滤层，是设计意图而非统计错误。
         summary["candidates"] += 1
-        bars = _bars(registry, code, start, date)
+        bars = _bars(registry, bare, start, date)
         if not bars:                            # 行情拉取失败/空：记错误，不误判为"无信号"
-            summary["data_errors"].append(code)
+            summary["data_errors"].append(bare)
             continue
-        first, fd = D.is_first_limit_up_acceleration(bars, code, today_limit_up=True)
-        gentle, gd = D.is_gentle_rise(bars, code)
+        first, fd = D.is_first_limit_up_acceleration(bars, bare, today_limit_up=True)
+        gentle, gd = D.is_gentle_rise(bars, bare)
         if not (first and gentle):
             continue
         name = st.get("name") or sw_entry.get("name", "")
-        res = pool.record(conn, code=code, name=name, sw_l2=sw_l2,
+        res = pool.record(conn, code=bare, name=name, sw_l2=sw_l2,
                           first_limit_date=date, date=date,
                           signal_json={"first_limit": fd, "gentle": gd})
-        entered_codes.add(code)
-        summary["entered" if res == "entered" else "refreshed"].append(code)
+        entered_codes.add(bare)
+        if res in ("entered", "refreshed"):     # 据实汇报，stale(更早日期 no-op) 不报转换
+            summary[res].append(bare)
 
     # Pass 2 — 维护：在池 active（未在 Pass1 处理）→ 退池 / 记信号
     for r in pool.list_pool(conn, status="active"):
@@ -122,8 +124,8 @@ def run_daily(conn: sqlite3.Connection, registry, date: str, *,
             continue
         broken, bd = D.is_trend_broken(bars)
         if broken:
-            pool.mark_exited(conn, code, date=date, reason=_break_reason(bd))
-            summary["exited"].append(code)
+            if pool.mark_exited(conn, code, date=date, reason=_break_reason(bd)):
+                summary["exited"].append(code)   # 据实汇报：旧日期 no-op 不报退出
             continue
         shrink, sd = D.is_volume_shrink_pullback(bars)
         near, nd = D.is_near_ma5(bars)

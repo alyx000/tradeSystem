@@ -2,6 +2,7 @@
 
 漏斗：涨停列表 → 映射申万二级 → ∩ 主线(Top-K ∪ sectors) → 拉OHLCV → 检测 → 入池/维护/退池。
 入池门槛 = 主线∩ + 首次涨停加速 + 缓涨（**不含贴MA5**：涨停日必远离 MA5，贴MA5 是在池后回踩信号）。
+池内唯一身份 = 裸码：scanner 用 bare 请求行情并入池，故 bars_by_code 与 summary 均以裸码为键。
 """
 from __future__ import annotations
 
@@ -85,13 +86,13 @@ def test_funnel_enters_main_line_first_limit_leader(conn):
             "600552.SH": {"name": "凯盛科技", "sw_l2": "玻璃玻纤"},
             "000001.SZ": {"name": "平安银行", "sw_l2": "股份制银行Ⅱ"},
         },
-        bars_by_code={"600552.SH": _leader_bars(), "000001.SZ": _leader_bars()},
+        bars_by_code={"600552": _leader_bars(), "000001": _leader_bars()},  # scanner 用裸码请求
     )
     summary = scanner.run_daily(conn, reg, "2026-06-09")
     assert summary["candidates"] == 1          # 只有玻璃玻纤的凯盛进候选（平安非主线被滤）
-    assert "600552.SH" in summary["entered"]
-    assert pool.get_active(conn, "600552.SH") is not None
-    assert pool.get_active(conn, "000001.SZ") is None
+    assert "600552" in summary["entered"]
+    assert pool.get_active(conn, "600552") is not None
+    assert pool.get_active(conn, "000001") is None
 
 
 def test_funnel_skips_when_detectors_fail(conn):
@@ -102,12 +103,12 @@ def test_funnel_skips_when_detectors_fail(conn):
     reg = FakeRegistry(
         limit_stocks=[{"code": "600552.SH", "name": "凯盛科技", "pct_chg": 10.0}],
         sw_map={"600552.SH": {"name": "凯盛科技", "sw_l2": "玻璃玻纤"}},
-        bars_by_code={"600552.SH": bars},
+        bars_by_code={"600552": bars},
     )
     summary = scanner.run_daily(conn, reg, "2026-06-09")
     assert summary["candidates"] == 1
     assert summary["entered"] == []
-    assert pool.get_active(conn, "600552.SH") is None
+    assert pool.get_active(conn, "600552") is None
 
 
 def test_funnel_matches_bare_code_against_suffixed_sw_map(conn):
@@ -123,17 +124,37 @@ def test_funnel_matches_bare_code_against_suffixed_sw_map(conn):
     assert "600552" in summary["entered"]
 
 
+def test_funnel_identity_dedup_bare_then_suffixed_one_active(conn):
+    """同一逻辑股先裸码入池、后 ts_code 再命中 → 仅一条 active 行（身份归一，防重复 active）。"""
+    _seed_concentration(conn, "2026-06-09", ["玻璃玻纤"])
+    reg1 = FakeRegistry(
+        limit_stocks=[{"code": "600552", "name": "凯盛科技", "pct_chg": 10.0}],
+        sw_map={"600552.SH": {"name": "凯盛科技", "sw_l2": "玻璃玻纤"}},
+        bars_by_code={"600552": _leader_bars()},
+    )
+    scanner.run_daily(conn, reg1, "2026-06-09")
+    _seed_concentration(conn, "2026-06-10", ["玻璃玻纤"])
+    reg2 = FakeRegistry(
+        limit_stocks=[{"code": "600552.SH", "name": "凯盛科技", "pct_chg": 10.0}],  # 换 ts_code 源
+        sw_map={"600552.SH": {"name": "凯盛科技", "sw_l2": "玻璃玻纤"}},
+        bars_by_code={"600552": _leader_bars()},
+    )
+    scanner.run_daily(conn, reg2, "2026-06-10")
+    actives = pool.list_pool(conn, status="active")
+    assert len(actives) == 1 and actives[0]["code"] == "600552"
+
+
 def test_funnel_skips_touch_on_data_failure(conn):
     """在池股今日拉不到行情(失败/空) → 不 touch 推进、不退池，记 data_errors。"""
-    pool.record(conn, code="600552.SH", name="凯盛科技", sw_l2="玻璃玻纤",
+    pool.record(conn, code="600552", name="凯盛科技", sw_l2="玻璃玻纤",
                 first_limit_date="2026-06-09", date="2026-06-09")
     _seed_concentration(conn, "2026-06-10", ["玻璃玻纤"])
-    reg = FakeRegistry(limit_stocks=[], sw_map={}, bars_by_code={})  # 600552.SH 拉不到 → []
+    reg = FakeRegistry(limit_stocks=[], sw_map={}, bars_by_code={})  # 600552 拉不到 → []
     summary = scanner.run_daily(conn, reg, "2026-06-10")
-    a = pool.get_active(conn, "600552.SH")
+    a = pool.get_active(conn, "600552")
     assert a["days_in_pool"] == 1 and a["last_seen_date"] == "2026-06-09"  # 未推进
-    assert "600552.SH" in summary["data_errors"]
-    assert "600552.SH" not in summary["exited"]                            # 数据缺失不退池
+    assert "600552" in summary["data_errors"]
+    assert "600552" not in summary["exited"]                              # 数据缺失不退池
 
 
 def test_funnel_records_source_errors_on_discovery_failure(conn):
@@ -152,30 +173,42 @@ def test_funnel_records_source_errors_on_discovery_failure(conn):
 
 def test_funnel_exits_active_on_trend_break(conn):
     """在池股今日不涨停 → 走维护；跌破 MA10 → 退池。"""
-    pool.record(conn, code="600552.SH", name="凯盛科技", sw_l2="玻璃玻纤",
+    pool.record(conn, code="600552", name="凯盛科技", sw_l2="玻璃玻纤",
                 first_limit_date="2026-06-09", date="2026-06-09")
     _seed_concentration(conn, "2026-06-12", ["玻璃玻纤"])
     reg = FakeRegistry(
         limit_stocks=[],  # 今日无涨停
         sw_map={},
-        bars_by_code={"600552.SH": _mk_bars([10] * 9 + [8])},  # 跌破 MA10
+        bars_by_code={"600552": _mk_bars([10] * 9 + [8])},  # 跌破 MA10
     )
     summary = scanner.run_daily(conn, reg, "2026-06-12")
-    assert "600552.SH" in summary["exited"]
-    assert pool.get_active(conn, "600552.SH") is None
+    assert "600552" in summary["exited"]
+    assert pool.get_active(conn, "600552") is None
+
+
+def test_funnel_no_exit_report_on_stale_backfill(conn):
+    """已 last_seen=06-10 后补跑更早的 06-09：mark_exited no-op → 不报 exited、仍 active。"""
+    pool.record(conn, code="600552", name="凯盛科技", sw_l2="玻璃玻纤",
+                first_limit_date="2026-06-10", date="2026-06-10")
+    _seed_concentration(conn, "2026-06-09", ["玻璃玻纤"])
+    reg = FakeRegistry(limit_stocks=[], sw_map={},
+                       bars_by_code={"600552": _mk_bars([10] * 9 + [8])})  # 旧日 broken bars
+    summary = scanner.run_daily(conn, reg, "2026-06-09")
+    assert "600552" not in summary["exited"]
+    assert pool.get_active(conn, "600552") is not None
 
 
 def test_funnel_touches_active_without_break(conn):
     """在池股今日不涨停、未破趋势 → touch 保活并记信号。"""
-    pool.record(conn, code="600552.SH", name="凯盛科技", sw_l2="玻璃玻纤",
+    pool.record(conn, code="600552", name="凯盛科技", sw_l2="玻璃玻纤",
                 first_limit_date="2026-06-09", date="2026-06-09")
     _seed_concentration(conn, "2026-06-10", ["玻璃玻纤"])
     reg = FakeRegistry(
         limit_stocks=[],
         sw_map={},
-        bars_by_code={"600552.SH": _mk_bars([10] * 10)},  # 平走，未破 MA10
+        bars_by_code={"600552": _mk_bars([10] * 10)},  # 平走，未破 MA10
     )
     summary = scanner.run_daily(conn, reg, "2026-06-10")
-    assert "600552.SH" not in summary["exited"]
-    a = pool.get_active(conn, "600552.SH")
+    assert "600552" not in summary["exited"]
+    a = pool.get_active(conn, "600552")
     assert a is not None and a["days_in_pool"] == 2

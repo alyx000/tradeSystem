@@ -1,15 +1,22 @@
 """趋势主升观察池状态机（trend_leader_pool 读写）。
 
-状态：active ⇄ exited。PK=(code, entered_date)。
-- record：命中趋势主升 → 无 active 则入池(entered)、有 active 则刷新(refreshed)
-- touch：在池股每日维护，更新 last_seen/days/signal（不新建；无 active 则忽略）
-- mark_exited：active → exited（趋势破坏触发）
+状态：active ⇄ exited。池内唯一身份 = **裸代码**（`_norm`），避免 Tushare ts_code(600552.SH)
+与 AkShare 裸码(600552) 被当成两只股建重复 active 行（A股裸码跨所不冲突）。
+- record：命中趋势主升 → 无 active 则入池(entered)、有 active 则刷新(refreshed)/更早日期(stale no-op)
+- touch：在池股每日维护，更新 last_seen/days/signal（不新建；无 active/更早日期则 no-op）
+- mark_exited：active → exited（趋势破坏触发；旧日期 no-op）
+- 写操作返回「是否真改动」，供 scanner 据实汇报转换，不谎报。
 - days_in_pool：按「出现的扫描日数」计，同日重扫不重复 +1（去掉对交易日历的依赖）
 """
 from __future__ import annotations
 
 import json
 import sqlite3
+
+
+def _norm(code: str) -> str:
+    """池内唯一身份：去交易所后缀的裸代码。"""
+    return (code or "").split(".")[0]
 
 
 def _rows(cur) -> list[dict]:
@@ -30,7 +37,7 @@ def _dump(signal_json) -> str | None:
 def get_active(conn: sqlite3.Connection, code: str) -> dict | None:
     rows = _rows(conn.execute(
         "SELECT * FROM trend_leader_pool WHERE code=? AND status='active' "
-        "ORDER BY entered_date DESC", (code,)))
+        "ORDER BY entered_date DESC", (_norm(code),)))
     return rows[0] if rows else None
 
 
@@ -48,9 +55,10 @@ def _active_row(conn: sqlite3.Connection, code: str):
         "WHERE code=? AND status='active'", (code,)).fetchone()
 
 
-def _refresh(conn, code, entered_date, last_seen, days, date, sig, *, keep_sig_if_none: bool) -> None:
+def _refresh(conn, code, entered_date, last_seen, days, date, sig, *, keep_sig_if_none: bool) -> bool:
+    """刷新 active 行；返回是否真改动（更早日期 → False no-op，日期单调保护）。"""
     if date < last_seen:
-        return  # 乱序/补跑更早日期：不回拨 last_seen、不错增 days（日期单调保护）
+        return False  # 乱序/补跑更早日期：不回拨 last_seen、不错增 days
     new_days = days if last_seen == date else days + 1  # 同日重扫不重复计
     sig_expr = "COALESCE(?, last_signal_json)" if keep_sig_if_none else "?"
     conn.execute(
@@ -59,11 +67,13 @@ def _refresh(conn, code, entered_date, last_seen, days, date, sig, *, keep_sig_i
         f"WHERE code=? AND entered_date=?",
         (date, new_days, sig, code, entered_date))
     conn.commit()
+    return True
 
 
 def record(conn: sqlite3.Connection, *, code: str, name: str, sw_l2: str,
            first_limit_date: str, date: str, signal_json=None) -> str:
-    """命中趋势主升入池或刷新。返回 'entered'（新建 active）/ 'refreshed'（已有 active）。"""
+    """命中趋势主升入池或刷新。返回 'entered'（新建 active）/ 'refreshed'（刷新）/ 'stale'（更早日期 no-op）。"""
+    code = _norm(code)
     active = _active_row(conn, code)
     sig = _dump(signal_json)
     if active is None:
@@ -83,25 +93,27 @@ def record(conn: sqlite3.Connection, *, code: str, name: str, sw_l2: str,
         conn.commit()
         return "entered"
     entered_date, last_seen, days = active
-    _refresh(conn, code, entered_date, last_seen, days, date, sig, keep_sig_if_none=False)
-    return "refreshed"
+    changed = _refresh(conn, code, entered_date, last_seen, days, date, sig, keep_sig_if_none=False)
+    return "refreshed" if changed else "stale"
 
 
-def touch(conn: sqlite3.Connection, code: str, date: str, signal_json=None) -> None:
-    """在池股每日维护：刷新 last_seen/days/signal；无 active 行则忽略（signal=None 时保留原值）。"""
+def touch(conn: sqlite3.Connection, code: str, date: str, signal_json=None) -> bool:
+    """在池股每日维护：刷新 last_seen/days/signal；无 active/更早日期 → False no-op。"""
+    code = _norm(code)
     active = _active_row(conn, code)
     if active is None:
-        return
+        return False
     entered_date, last_seen, days = active
-    _refresh(conn, code, entered_date, last_seen, days, date, _dump(signal_json), keep_sig_if_none=True)
+    return _refresh(conn, code, entered_date, last_seen, days, date, _dump(signal_json), keep_sig_if_none=True)
 
 
-def mark_exited(conn: sqlite3.Connection, code: str, date: str, reason: str) -> None:
-    """active → exited（趋势破坏）。"""
+def mark_exited(conn: sqlite3.Connection, code: str, date: str, reason: str) -> bool:
+    """active → exited（趋势破坏）。返回是否真退池（旧日期 last_seen>date → False no-op）。"""
     # 日期单调保护：旧日期(补跑/乱序)不退当前更晚的 active，避免用陈旧行情误退池。
-    conn.execute(
+    cur = conn.execute(
         "UPDATE trend_leader_pool SET status='exited', exit_date=?, exit_reason=?, "
         "last_seen_date=?, updated_at=datetime('now') "
         "WHERE code=? AND status='active' AND last_seen_date <= ?",
-        (date, reason, date, code, date))
+        (date, reason, date, _norm(code), date))
     conn.commit()
+    return cur.rowcount > 0
