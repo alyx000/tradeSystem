@@ -31,9 +31,25 @@ def _bars_through(registry, code: str, date: str):
     return bars, res.source
 
 
-def _time_cycle(bars: list[dict]) -> tuple[dict | None, dict]:
-    """swing 拐点 + 斐波那契变盘点判定。返回 (pivot, turning_point)。"""
-    pivot = D.find_swing_pivot(bars)
+def _resolve_pivot(bars: list[dict], code: str, pivot_overrides: dict | None) -> dict | None:
+    """起算 swing 拐点：有手工覆盖(--pivot-date)用之，否则自动检测(D3 hybrid)。
+
+    手工覆盖的 type 仅供显示（其后整体走低记 high、走高记 low）；指定日不在区间 → 无 pivot。
+    """
+    if pivot_overrides and code in pivot_overrides:
+        pdate = pivot_overrides[code]
+        for i, b in enumerate(bars):
+            if b["trade_date"] == pdate:
+                ptype = "high" if bars[-1]["close"] < b["close"] else "low"
+                price = b["high"] if ptype == "high" else b["low"]
+                return {"index": i, "date": pdate, "price": price, "type": ptype, "manual": True}
+        return None
+    return D.find_swing_pivot(bars)
+
+
+def _time_cycle(bars: list[dict], code: str, pivot_overrides: dict | None) -> tuple[dict | None, dict]:
+    """swing 拐点(自动/手工) + 斐波那契变盘点判定。返回 (pivot, turning_point)。"""
+    pivot = _resolve_pivot(bars, code, pivot_overrides)
     if not pivot:
         return None, {"day_count": None, "hit": None, "near": None}
     dc = D.fib_day_count(bars, pivot["date"])
@@ -78,8 +94,13 @@ def _limit_down_count(registry, date: str) -> int | None:
     return None
 
 
-def run_daily(conn: sqlite3.Connection, registry, date: str, *, dry_run: bool = False, indices=None) -> dict:
-    """盘后扫描一日。dry_run=True 时不落库（内存副本，历史校准用）。返回结构化结果。"""
+def run_daily(conn: sqlite3.Connection, registry, date: str, *, dry_run: bool = False,
+              indices=None, pivot_overrides: dict | None = None) -> dict:
+    """盘后扫描一日。dry_run=True 时不落库（内存副本，历史校准用）。
+
+    pivot_overrides: {index_code: pivot_date} 手工指定 swing 起算点（D3 hybrid）。
+    返回结构化结果。
+    """
     index_list = indices if indices is not None else C.INDEX_LIST
     bars_by_code: dict[str, list] = {}
     per_index: list[dict] = []
@@ -94,7 +115,7 @@ def run_daily(conn: sqlite3.Connection, registry, date: str, *, dry_run: bool = 
             per_index.append({"code": code, "name": name, "skipped": True, "reason": "no_data_for_date", "source": source})
             turning_points.append({"hit": None, "near": None})
             continue
-        pivot, tp = _time_cycle(bars)
+        pivot, tp = _time_cycle(bars, code, pivot_overrides)
         turning_points.append(tp)
         fractal = D.evaluate_fractal_status(bars)  # 无状态：从 bars 直接推导，不依赖历史行
         per_index.append({"code": code, "name": name, "skipped": False, "source": source,

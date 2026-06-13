@@ -278,6 +278,16 @@ ARCHITECTURE_COMMANDS = [
     ["sector-correlation", "matrix", "--refetch", "--no-concept"],
     ["sector-correlation", "trend"],
     ["sector-correlation", "trend", "--date", "2026-05-29", "--days", "20"],
+    # market-timing (大盘择时观察:斐波那契变盘点 + 底分型)
+    ["market-timing", "daily"],
+    ["market-timing", "daily", "--date", "2026-05-29"],
+    ["market-timing", "daily", "--no-push"],
+    ["market-timing", "daily", "--dry-run"],
+    ["market-timing", "daily", "--pivot-index", "000001.SH", "--pivot-date", "2026-04-25"],
+    ["market-timing", "signals"],
+    ["market-timing", "signals", "--date", "2026-05-29"],
+    ["market-timing", "signals", "--index", "932000.CSI", "--limit", "10"],
+    ["market-timing", "signals", "--json"],
     # research-digest (每日研报速读:A股研报评级 + 美股 yfinance 评级 → Top3)
     ["research-digest", "daily"],
     ["research-digest", "daily", "--date", "2026-05-29"],

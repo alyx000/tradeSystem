@@ -1738,6 +1738,10 @@ def build_parser() -> argparse.ArgumentParser:
     from cli.sector_correlation import register_subparser as register_sector_correlation_subparser
     register_sector_correlation_subparser(subparsers)
 
+    # market-timing (大盘择时观察:斐波那契变盘点 + 底分型)
+    from cli.market_timing import register_subparser as register_market_timing_subparser
+    register_market_timing_subparser(subparsers)
+
     # research-digest (每日研报速读:A股研报评级 + 美股 yfinance 评级 → Top3)
     from cli.research_digest import register_subparser as register_research_digest_subparser
     register_research_digest_subparser(subparsers)
@@ -1802,6 +1806,9 @@ def main():
     elif args.command == "sector-correlation":
         from cli import sector_correlation as sector_correlation_module
         sector_correlation_module.handle_command(config, args)
+    elif args.command == "market-timing":
+        from cli import market_timing as market_timing_module
+        market_timing_module.handle_command(config, args)
     elif args.command == "research-digest":
         from cli import research_digest as research_digest_module
         research_digest_module.handle_command(config, args)
