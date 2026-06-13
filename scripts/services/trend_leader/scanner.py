@@ -59,22 +59,33 @@ def run_daily(conn: sqlite3.Connection, registry, date: str, *,
     start = range_start or _lookback_start(date)
 
     lu = registry.call("get_limit_up_list", date)
-    limit_stocks = (lu.data or {}).get("stocks", []) if getattr(lu, "success", False) else []
+    lu_ok = getattr(lu, "success", False)
+    limit_stocks = (lu.data or {}).get("stocks", []) if lu_ok else []
     sw = registry.call("get_stock_sw_industry_map")
-    sw_map = sw.data if (getattr(sw, "success", False) and isinstance(sw.data, dict)) else {}
+    sw_ok = getattr(sw, "success", False) and isinstance(sw.data, dict)
+    sw_map = sw.data if sw_ok else {}
     # AkShare 降级回裸码(600552)、Tushare sw_map 键是 ts_code(600552.SH)；建裸码副索引兜底匹配，
     # 否则降级源的涨停股会因 sw_map miss → 未分类 → 被主线交集静默漏掉。
     sw_by_bare = {k.split(".")[0]: v for k, v in sw_map.items()}
 
+    # 发现链路 provider 失败显式记账：否则「链路断了」会伪装成「今日无候选」，运营无法区分。
+    source_errors = []
+    if not lu_ok:
+        source_errors.append("limit_up")
+    if not sw_ok:
+        source_errors.append("sw_map")
+
     summary = {
         "date": date, "limit_up": len(limit_stocks), "main_sectors": sorted(main_sectors),
         "degraded_main": degraded, "candidates": 0,
-        "entered": [], "refreshed": [], "exited": [], "in_pool_signals": [], "data_errors": [],
+        "entered": [], "refreshed": [], "exited": [], "in_pool_signals": [],
+        "data_errors": [], "source_errors": source_errors,
     }
 
     entered_codes = set()
-    # Pass 1 — 发现：主线∩涨停 + 首次涨停 + 缓涨
-    for st in limit_stocks:
+    # Pass 1 — 发现：主线∩涨停 + 首次涨停 + 缓涨。sw 映射不可用时跳过发现（无法可靠映射主线，
+    # 不静默把全部当未分类过滤；失败已记 source_errors，Pass2 维护仍照常）。
+    for st in (limit_stocks if sw_ok else []):
         code = st.get("code")
         if not code:
             continue

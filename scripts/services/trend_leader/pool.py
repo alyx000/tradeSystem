@@ -49,6 +49,8 @@ def _active_row(conn: sqlite3.Connection, code: str):
 
 
 def _refresh(conn, code, entered_date, last_seen, days, date, sig, *, keep_sig_if_none: bool) -> None:
+    if date < last_seen:
+        return  # 乱序/补跑更早日期：不回拨 last_seen、不错增 days（日期单调保护）
     new_days = days if last_seen == date else days + 1  # 同日重扫不重复计
     sig_expr = "COALESCE(?, last_signal_json)" if keep_sig_if_none else "?"
     conn.execute(
@@ -96,8 +98,10 @@ def touch(conn: sqlite3.Connection, code: str, date: str, signal_json=None) -> N
 
 def mark_exited(conn: sqlite3.Connection, code: str, date: str, reason: str) -> None:
     """active → exited（趋势破坏）。"""
+    # 日期单调保护：旧日期(补跑/乱序)不退当前更晚的 active，避免用陈旧行情误退池。
     conn.execute(
         "UPDATE trend_leader_pool SET status='exited', exit_date=?, exit_reason=?, "
-        "last_seen_date=?, updated_at=datetime('now') WHERE code=? AND status='active'",
-        (date, reason, date, code))
+        "last_seen_date=?, updated_at=datetime('now') "
+        "WHERE code=? AND status='active' AND last_seen_date <= ?",
+        (date, reason, date, code, date))
     conn.commit()

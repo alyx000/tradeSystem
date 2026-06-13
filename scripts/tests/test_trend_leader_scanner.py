@@ -136,6 +136,20 @@ def test_funnel_skips_touch_on_data_failure(conn):
     assert "600552.SH" not in summary["exited"]                            # 数据缺失不退池
 
 
+def test_funnel_records_source_errors_on_discovery_failure(conn):
+    """涨停榜/申万映射 provider 失败 → 记 source_errors，不伪装成「今日无候选」。"""
+    _seed_concentration(conn, "2026-06-09", ["玻璃玻纤"])
+
+    class FailReg:
+        def call(self, name, *a):
+            return _R(None, success=False)
+
+    summary = scanner.run_daily(conn, FailReg(), "2026-06-09")
+    assert "limit_up" in summary["source_errors"]
+    assert "sw_map" in summary["source_errors"]
+    assert summary["candidates"] == 0  # sw 不可用 → 跳过 Pass1，但 source_errors 可区分
+
+
 def test_funnel_exits_active_on_trend_break(conn):
     """在池股今日不涨停 → 走维护；跌破 MA10 → 退池。"""
     pool.record(conn, code="600552.SH", name="凯盛科技", sw_l2="玻璃玻纤",

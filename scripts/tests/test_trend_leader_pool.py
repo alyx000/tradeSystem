@@ -92,6 +92,29 @@ def test_touch_updates_signal_without_entering(conn):
     assert a["days_in_pool"] == 2 and a["last_signal"]["overheat"] is True
 
 
+def test_touch_stale_earlier_date_is_noop(conn):
+    """补跑更早日期：不回拨 last_seen、不错增 days。"""
+    _rec(conn, "2026-06-10")
+    pool.touch(conn, "600552", date="2026-06-09", signal_json={"x": 1})
+    a = pool.get_active(conn, "600552")
+    assert a["last_seen_date"] == "2026-06-10" and a["days_in_pool"] == 1
+
+
+def test_record_refresh_stale_date_is_noop(conn):
+    """已 last_seen=06-10 后补跑 06-09 再命中：状态不回拨。"""
+    _rec(conn, "2026-06-10")
+    _rec(conn, "2026-06-09")
+    a = pool.get_active(conn, "600552")
+    assert a["last_seen_date"] == "2026-06-10" and a["days_in_pool"] == 1
+
+
+def test_mark_exited_stale_earlier_date_is_noop(conn):
+    """旧日期退池请求不退当前(更晚)的 active。"""
+    _rec(conn, "2026-06-10")
+    pool.mark_exited(conn, "600552", date="2026-06-09", reason="stale")
+    assert pool.get_active(conn, "600552") is not None
+
+
 def test_touch_noop_when_no_active(conn):
     pool.touch(conn, "000001", date="2026-06-10", signal_json={"x": 1})
     assert pool.list_pool(conn) == []
