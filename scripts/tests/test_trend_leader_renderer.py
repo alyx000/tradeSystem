@@ -69,6 +69,18 @@ def test_render_daily_entered_section_lists_name_sector(conn):
     assert "600552" in md
 
 
+def test_render_daily_entered_shows_accel_date_and_trigger(conn):
+    """GAP A：入池表头为「首次加速日」(board-aware)，非旧「首次涨停日」；触发列区分涨停/双创15%。"""
+    pool.record(conn, code="688512", name="慧智微", sw_l2="半导体",
+                first_limit_date="2026-06-12", date="2026-06-12",
+                signal_json={"entry_trigger": "双创15%加速"})
+    md = renderer.render_daily(conn, _summary(
+        entered=["688512"], refreshed=[], in_pool_signals=[], exited=[]))
+    assert "首次加速日" in md
+    assert "首次涨停日" not in md       # 旧标签已替换
+    assert "双创15%加速" in md          # 触发类型展示
+
+
 def test_render_daily_in_pool_signal_marked(conn):
     _seed(conn)
     md = renderer.render_daily(conn, _summary())

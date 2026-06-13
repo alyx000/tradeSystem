@@ -55,12 +55,14 @@ def render_daily(conn: sqlite3.Connection, summary: dict) -> str:
     if not todays:
         lines += ["今日无新入池。", ""]
     else:
-        lines += ["| 代码 | 名称 | 申万二级 | 首次涨停日 |", "| --- | --- | --- | --- |"]
+        lines += ["| 代码 | 名称 | 申万二级 | 首次加速日 | 触发 |", "| --- | --- | --- | --- | --- |"]
         for code in todays:
             r = active.get(code, {})
+            sig = r.get("last_signal") or {}
+            # 触发区分：涨停 vs 双创15%加速（双创涨15%+未到全涨停）；老数据无此字段默认涨停。
             lines.append(
                 f"| {code} | {r.get('name', '')} | {r.get('sw_l2', '')} | "
-                f"{r.get('first_limit_date', '')} |")
+                f"{r.get('first_limit_date', '')} | {sig.get('entry_trigger', '涨停')} |")
         lines.append("")
 
     # 在池信号（回踩/见顶提示）

@@ -65,10 +65,19 @@ def _dual_board_accelerators(registry, date: str) -> tuple[list[dict], bool]:
         return [], False
     out = []
     for row in r.data:
+        # 行级防御：单条脏行（非 dict / 缺码 / pct 非数）跳过，不让全市场 feed 一条坏数据
+        # 崩掉整个日跑（result 级失败已兜底，行级也必须容错；对齐监管采集的防御解析）。
+        if not isinstance(row, dict):
+            continue
         code = row.get("ts_code") or row.get("code")
-        pct = row.get("pct_chg")
-        if code and pct is not None and is_dual_board(code) and pct >= C.ACCEL_DUAL_BOARD_MIN_PCT:
-            out.append({"code": code, "name": row.get("name", "")})
+        if not code:
+            continue
+        try:
+            pct = float(row.get("pct_chg"))
+        except (TypeError, ValueError):
+            continue
+        if is_dual_board(str(code)) and pct >= C.ACCEL_DUAL_BOARD_MIN_PCT:
+            out.append({"code": str(code).strip(), "name": row.get("name", "")})
     return out, True
 
 
@@ -108,6 +117,9 @@ def run_daily(conn: sqlite3.Connection, registry, date: str, *,
         "data_errors": [], "source_errors": source_errors,
     }
 
+    # 涨停裸码集：用于区分入池触发类型（涨停 vs 双创15%加速），写入 signal_json 供池/报告辨识。
+    limit_bares = {(s.get("code") or "").split(".")[0] for s in (limit_stocks if sw_ok else [])}
+
     # 合并候选：涨停 ∪ 双创@15%，按裸码去重（涨停源字段更全，后写覆盖）。
     candidate_map: dict[str, dict] = {}
     for st in dual_accel:
@@ -141,9 +153,12 @@ def run_daily(conn: sqlite3.Connection, registry, date: str, *,
         if not (first and gentle):
             continue
         name = st.get("name") or sw_entry.get("name", "")
+        # 入池触发：涨停（主板/双创全板）vs 双创15%加速（未到全涨停）。first_limit_date 列名沿用，
+        # 语义已泛化为「首次加速日」（board-aware）；trigger 落 signal_json 让两类入池可辨识。
+        trigger = "涨停" if bare in limit_bares else "双创15%加速"
         res = pool.record(conn, code=bare, name=name, sw_l2=sw_l2,
                           first_limit_date=date, date=date,
-                          signal_json={"first_limit": fd, "gentle": gd})
+                          signal_json={"first_limit": fd, "gentle": gd, "entry_trigger": trigger})
         entered_codes.add(bare)
         if res in ("entered", "refreshed"):     # 据实汇报，stale(更早日期 no-op) 不报转换
             summary[res].append(bare)

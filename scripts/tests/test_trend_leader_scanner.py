@@ -262,6 +262,40 @@ def test_funnel_main_board_15pct_not_added_by_dual_rule(conn):
     assert pool.get_active(conn, "600519") is None
 
 
+def test_funnel_entry_trigger_distinguishes_limit_vs_dual15(conn):
+    """涨停入池 trigger=涨停；双创15%入池 trigger=双创15%加速（池可辨识两类，防 first_limit 语义污染）。"""
+    _seed_concentration(conn, "2026-06-09", ["半导体", "玻璃玻纤"])
+    reg = FakeRegistry(
+        limit_stocks=[{"code": "600552.SH", "name": "凯盛科技", "pct_chg": 10.0}],  # 主板涨停
+        sw_map={"600552.SH": {"name": "凯盛科技", "sw_l2": "玻璃玻纤"},
+                "688512.SH": {"name": "慧智微", "sw_l2": "半导体"}},
+        bars_by_code={"600552": _leader_bars(), "688512": _leader_bars()},
+        market_changes=[{"ts_code": "688512.SH", "name": "慧智微", "pct_chg": 16.0}],  # 双创15%(非涨停)
+    )
+    scanner.run_daily(conn, reg, "2026-06-09")
+    assert pool.get_active(conn, "600552")["last_signal"]["entry_trigger"] == "涨停"
+    assert pool.get_active(conn, "688512")["last_signal"]["entry_trigger"] == "双创15%加速"
+
+
+def test_dual_accelerators_skips_malformed_rows(conn):
+    """全市场 feed 含脏行（非 dict / 缺码 / pct 非数）→ 跳过不崩，好票仍入候选。"""
+    _seed_concentration(conn, "2026-06-09", ["半导体"])
+    reg = FakeRegistry(
+        limit_stocks=[],
+        sw_map={"688512.SH": {"name": "慧智微", "sw_l2": "半导体"}},
+        bars_by_code={"688512": _leader_bars()},
+        market_changes=[
+            None,                                                        # 非 dict
+            {"name": "无码"},                                            # 缺 code
+            {"ts_code": "300001.SZ", "pct_chg": "bad"},                  # pct 非数
+            {"ts_code": "688512.SH", "name": "慧智微", "pct_chg": 16.0},  # 好票
+        ],
+    )
+    summary = scanner.run_daily(conn, reg, "2026-06-09")
+    assert "market_changes" not in summary["source_errors"]  # result 级成功（脏行不算 feed 失败）
+    assert "688512" in summary["entered"]                    # 好票入池，未被脏行带崩
+
+
 def test_funnel_market_changes_failure_degrades_to_limit_only(conn):
     """get_market_daily_changes 失败 → 记 source_errors，降级仅涨停源（不中断）。"""
     _seed_concentration(conn, "2026-06-09", ["玻璃玻纤"])
