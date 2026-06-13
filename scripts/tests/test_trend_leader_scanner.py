@@ -110,6 +110,32 @@ def test_funnel_skips_when_detectors_fail(conn):
     assert pool.get_active(conn, "600552.SH") is None
 
 
+def test_funnel_matches_bare_code_against_suffixed_sw_map(conn):
+    """AkShare 降级回裸码 600552，sw_map 是 ts_code 键 600552.SH → 仍须匹配到主线。"""
+    _seed_concentration(conn, "2026-06-09", ["玻璃玻纤"])
+    reg = FakeRegistry(
+        limit_stocks=[{"code": "600552", "name": "凯盛科技", "pct_chg": 10.0}],  # 裸码
+        sw_map={"600552.SH": {"name": "凯盛科技", "sw_l2": "玻璃玻纤"}},          # 后缀键
+        bars_by_code={"600552": _leader_bars()},
+    )
+    summary = scanner.run_daily(conn, reg, "2026-06-09")
+    assert summary["candidates"] == 1
+    assert "600552" in summary["entered"]
+
+
+def test_funnel_skips_touch_on_data_failure(conn):
+    """在池股今日拉不到行情(失败/空) → 不 touch 推进、不退池，记 data_errors。"""
+    pool.record(conn, code="600552.SH", name="凯盛科技", sw_l2="玻璃玻纤",
+                first_limit_date="2026-06-09", date="2026-06-09")
+    _seed_concentration(conn, "2026-06-10", ["玻璃玻纤"])
+    reg = FakeRegistry(limit_stocks=[], sw_map={}, bars_by_code={})  # 600552.SH 拉不到 → []
+    summary = scanner.run_daily(conn, reg, "2026-06-10")
+    a = pool.get_active(conn, "600552.SH")
+    assert a["days_in_pool"] == 1 and a["last_seen_date"] == "2026-06-09"  # 未推进
+    assert "600552.SH" in summary["data_errors"]
+    assert "600552.SH" not in summary["exited"]                            # 数据缺失不退池
+
+
 def test_funnel_exits_active_on_trend_break(conn):
     """在池股今日不涨停 → 走维护；跌破 MA10 → 退池。"""
     pool.record(conn, code="600552.SH", name="凯盛科技", sw_l2="玻璃玻纤",

@@ -19,7 +19,7 @@ PROJECT_ROOT = SCRIPTS_DIR.parent
 
 # 与 migrate() 中「当前最新」一步一致；新增迁移时递增本常量，并把上一步的
 # set_schema_version(conn, CURRENT_SCHEMA_VERSION) 改为字面量 N（保留历史链）。
-CURRENT_SCHEMA_VERSION = 30
+CURRENT_SCHEMA_VERSION = 31
 
 
 def get_schema_version(conn: sqlite3.Connection) -> int:
@@ -557,6 +557,12 @@ def migrate(conn: sqlite3.Connection) -> None:
         logger.info("Applying schema v30: daily_market.premium_capacity / premium_first_open")
         _ensure_daily_market_premium_columns(conn)  # ALTER 兜底:老表补容量票/一字首开溢价列
         set_schema_version(conn, 30)
+        conn.commit()
+
+    if version < 31:
+        logger.info("Applying schema v31: trend_leader_pool 趋势主升观察池表 + active 唯一索引")
+        init_schema(conn)  # CREATE IF NOT EXISTS 建新表 + _SQL_INDEXES（含 active partial unique）
+        set_schema_version(conn, 31)
         conn.commit()
 
 

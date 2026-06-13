@@ -101,3 +101,28 @@ def test_signal_json_roundtrip(conn):
     _rec(conn, "2026-06-09", signal_json={"near_ma5": True, "deviation": 0.012})
     a = pool.get_active(conn, "600552")
     assert a["last_signal"]["near_ma5"] is True and a["last_signal"]["deviation"] == pytest.approx(0.012)
+
+
+def test_active_unique_index_blocks_two_active(conn):
+    """partial unique index 强制每 code 至多一 active 行（DB 级不变量护栏）。"""
+    _rec(conn, "2026-06-09")
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO trend_leader_pool "
+            "(code, name, sw_l2, first_limit_date, entered_date, last_seen_date, days_in_pool, status) "
+            "VALUES ('600552','凯盛科技','玻璃玻纤','2026-06-20','2026-06-20','2026-06-20',1,'active')")
+
+
+def test_migrate_v30_db_creates_trend_leader_pool():
+    """已有 v30 真实库走 migrate 必须补建 trend_leader_pool（init_schema 只管 fresh 库）。"""
+    from db.migrate import migrate, set_schema_version, get_schema_version
+
+    c = sqlite3.connect(":memory:")
+    c.row_factory = sqlite3.Row
+    init_schema(c)
+    c.execute("DROP TABLE trend_leader_pool")      # 模拟 v30 老库：尚无此表
+    set_schema_version(c, 30)
+    migrate(c)
+    cols = {r[1] for r in c.execute("PRAGMA table_info(trend_leader_pool)")}
+    assert "code" in cols and "status" in cols
+    assert get_schema_version(c) >= 31

@@ -29,7 +29,8 @@ def _dump(signal_json) -> str | None:
 
 def get_active(conn: sqlite3.Connection, code: str) -> dict | None:
     rows = _rows(conn.execute(
-        "SELECT * FROM trend_leader_pool WHERE code=? AND status='active'", (code,)))
+        "SELECT * FROM trend_leader_pool WHERE code=? AND status='active' "
+        "ORDER BY entered_date DESC", (code,)))
     return rows[0] if rows else None
 
 

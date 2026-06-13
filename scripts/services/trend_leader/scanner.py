@@ -62,11 +62,14 @@ def run_daily(conn: sqlite3.Connection, registry, date: str, *,
     limit_stocks = (lu.data or {}).get("stocks", []) if getattr(lu, "success", False) else []
     sw = registry.call("get_stock_sw_industry_map")
     sw_map = sw.data if (getattr(sw, "success", False) and isinstance(sw.data, dict)) else {}
+    # AkShare 降级回裸码(600552)、Tushare sw_map 键是 ts_code(600552.SH)；建裸码副索引兜底匹配，
+    # 否则降级源的涨停股会因 sw_map miss → 未分类 → 被主线交集静默漏掉。
+    sw_by_bare = {k.split(".")[0]: v for k, v in sw_map.items()}
 
     summary = {
         "date": date, "limit_up": len(limit_stocks), "main_sectors": sorted(main_sectors),
         "degraded_main": degraded, "candidates": 0,
-        "entered": [], "refreshed": [], "exited": [], "in_pool_signals": [],
+        "entered": [], "refreshed": [], "exited": [], "in_pool_signals": [], "data_errors": [],
     }
 
     entered_codes = set()
@@ -75,18 +78,22 @@ def run_daily(conn: sqlite3.Connection, registry, date: str, *,
         code = st.get("code")
         if not code:
             continue
-        sw_l2 = (sw_map.get(code) or {}).get("sw_l2", UNCLASSIFIED)
+        sw_entry = sw_map.get(code) or sw_by_bare.get(code.split(".")[0]) or {}
+        sw_l2 = sw_entry.get("sw_l2", UNCLASSIFIED)
         if sw_l2 not in main_sectors:          # 涨停 ∩ 主线
             continue
         # candidates = 主线∩涨停（进入检测阶段的数量），与 entered（过检入池）故意分开：
         # 二者之差 = 漏斗的检测器过滤层，是设计意图而非统计错误。
         summary["candidates"] += 1
         bars = _bars(registry, code, start, date)
+        if not bars:                            # 行情拉取失败/空：记错误，不误判为"无信号"
+            summary["data_errors"].append(code)
+            continue
         first, fd = D.is_first_limit_up_acceleration(bars, code, today_limit_up=True)
         gentle, gd = D.is_gentle_rise(bars, code)
         if not (first and gentle):
             continue
-        name = st.get("name") or (sw_map.get(code) or {}).get("name", "")
+        name = st.get("name") or sw_entry.get("name", "")
         res = pool.record(conn, code=code, name=name, sw_l2=sw_l2,
                           first_limit_date=date, date=date,
                           signal_json={"first_limit": fd, "gentle": gd})
@@ -99,6 +106,9 @@ def run_daily(conn: sqlite3.Connection, registry, date: str, *,
         if code in entered_codes:
             continue
         bars = _bars(registry, code, start, date)
+        if not bars:                            # 行情缺失：不 touch 推进 last_seen/days、不退池，记错误
+            summary["data_errors"].append(code)
+            continue
         broken, bd = D.is_trend_broken(bars)
         if broken:
             pool.mark_exited(conn, code, date=date, reason=_break_reason(bd))

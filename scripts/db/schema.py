@@ -880,6 +880,8 @@ CREATE TABLE IF NOT EXISTS knowledge_assets (
 # ──────────────────────────────────────────────────────────────
 _SQL_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_teacher_notes_date ON teacher_notes(date);",
+    # 趋势主升池：每 code 至多一 active 行（DB 级不变量护栏）
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_trend_leader_active ON trend_leader_pool(code) WHERE status='active';",
     "CREATE INDEX IF NOT EXISTS idx_teacher_notes_teacher_date ON teacher_notes(teacher_id, date);",
     "CREATE INDEX IF NOT EXISTS idx_calendar_date ON calendar_events(date);",
     "CREATE INDEX IF NOT EXISTS idx_calendar_impact ON calendar_events(impact);",
