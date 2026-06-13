@@ -68,4 +68,21 @@ describe('MarketTimingPanel', () => {
     expect(screen.getByText(/时间周期 · 变盘点/)).toBeInTheDocument()
     expect(screen.queryByText(/成交额地量分位 趋势/)).not.toBeInTheDocument()
   })
+
+  it('asOfDate 防前瞻：窗口内仍渲染、全为未来点时趋势图隐藏', () => {
+    const future: MarketTimingHistoryPayload = {
+      requested_days: 30,
+      series: [
+        { date: '2026-06-20', date_short: '06-20', resonance_count: 9, amount_pctile_20d: 0.99 },
+        { date: '2026-06-21', date_short: '06-21', resonance_count: 5, amount_pctile_20d: 0.88 },
+      ],
+    }
+    // 复盘 06-12，趋势点全在其后 → 全滤除 → 趋势图隐藏（表格仍在）；杜绝历史复盘看到未来
+    render(<MarketTimingPanel payload={payload} history={future} asOfDate="2026-06-12" />)
+    expect(screen.getByText(/时间周期 · 变盘点/)).toBeInTheDocument()
+    expect(screen.queryByText(/成交额地量分位 趋势/)).not.toBeInTheDocument()
+    // 同 history 不带 asOfDate（实时）→ 趋势图正常渲染，证明是 asOfDate 在过滤
+    render(<MarketTimingPanel payload={payload} history={future} />)
+    expect(screen.getByText(/成交额地量分位 趋势/)).toBeInTheDocument()
+  })
 })

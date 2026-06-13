@@ -33,9 +33,11 @@ function fmtPctile(v: number | null) {
 export default function MarketTimingPanel({
   payload,
   history,
+  asOfDate,
 }: {
   payload: MarketTimingPayload
   history?: MarketTimingHistoryPayload
+  asOfDate?: string
 }) {
   if (!payload.available) {
     return (
@@ -50,7 +52,8 @@ export default function MarketTimingPanel({
 
   const { context, signals, resonance_count } = payload
   const lowVolume = context.amount_pctile_20d != null && context.amount_pctile_20d <= 0.2
-  const series = history?.series ?? []
+  // 防前瞻偏差：复盘历史日期时只展示该日及之前的趋势（后端 to_date 已限窗，此处前端兜底）
+  const series = (history?.series ?? []).filter((p) => !asOfDate || p.date <= asOfDate)
 
   return (
     <div className="space-y-4">

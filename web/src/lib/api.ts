@@ -168,8 +168,10 @@ export const api = {
   getConcentrationHistory: (days: number = 30) =>
     request<ConcentrationTrendPayload>(`/market/concentration/history?days=${days}`),
   getMarketTiming: (date: string) => request<MarketTimingPayload>(`/market/timing/${date}`),
-  getMarketTimingHistory: (days: number = 30) =>
-    request<MarketTimingHistoryPayload>(`/market/timing/history?days=${days}`),
+  getMarketTimingHistory: (days: number = 30, toDate?: string) =>
+    request<MarketTimingHistoryPayload>(
+      `/market/timing/history?days=${days}${toDate ? `&to_date=${toDate}` : ''}`,
+    ),
   getResearchCoverage: (days: number = 5) => request<{ days: number; covered_days: number; items: Array<{ stock_code: string; stock_name: string; report_count: number }>; industry: ResearchCoverageIndustryRow[] }>(`/market/research-coverage?days=${days}`),
   getPostMarket: (date: string) => request<PostMarketPayload>(`/post-market/${date}`),
   getMainThemes: () => request<MainThemeItem[]>('/main-themes'),

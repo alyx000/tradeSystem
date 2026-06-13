@@ -2636,3 +2636,14 @@ def test_market_timing_history_series_ascending_and_deduped(client, db_path):
 def test_market_timing_history_empty(client):
     data = client.get("/api/market/timing/history?days=30").json()
     assert data["series"] == []
+
+
+def test_market_timing_history_to_date_excludes_future(client, db_path):
+    """复盘历史日期：to_date 给定时不带出该日之后的未来数据（前瞻偏差）。"""
+    conn = get_connection(db_path)
+    for d, res in [("2026-06-10", 1), ("2026-06-11", 0), ("2026-06-12", 3)]:
+        _seed_timing(conn, d, indices=[("000001.SH", "上证综指", {})],
+                     resonance=res, amount_yi=30000.0, pctile=0.3)
+    conn.close()
+    data = client.get("/api/market/timing/history?days=30&to_date=2026-06-11").json()
+    assert [p["date"] for p in data["series"]] == ["2026-06-10", "2026-06-11"]  # 不含 06-12

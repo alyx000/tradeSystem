@@ -43,17 +43,24 @@ def build_daily_payload(conn: sqlite3.Connection, date: str) -> dict:
     }
 
 
-def build_history_payload(conn: sqlite3.Connection, days: int) -> dict:
-    """市场级序列（按日去重，升序）。共振数 + 成交额地量分位随时间。"""
+def build_history_payload(conn: sqlite3.Connection, days: int, end_date: str | None = None) -> dict:
+    """市场级序列（按日去重，升序）。共振数 + 成交额地量分位随时间。
+
+    end_date 给定时只取 trade_date <= end_date 的窗口——复盘历史日期时**不得**带出该日之后
+    的未来数据（前瞻偏差是复盘工具的大忌）。
+    """
     days = max(1, min(days, 120))
     # 市场级列同日各指数一致 → GROUP BY trade_date 取一份；DESC 取最近 days 天后升序
+    where = "WHERE trade_date <= ? " if end_date else ""
+    params: list = [end_date] if end_date else []
+    params.append(days)
     cur = conn.execute(
         "SELECT trade_date, "
         "       MAX(resonance_count) AS resonance_count, "
         "       MAX(amount_pctile_20d) AS amount_pctile_20d "
-        "FROM market_timing_signal GROUP BY trade_date "
+        f"FROM market_timing_signal {where}GROUP BY trade_date "
         "ORDER BY trade_date DESC LIMIT ?",
-        (days,),
+        params,
     )
     rows = cur.fetchall()
     series = [

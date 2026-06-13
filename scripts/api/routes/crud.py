@@ -581,12 +581,13 @@ def get_concentration_history(days: int = 30,
 
 
 @router.get("/market/timing/history")
-def get_market_timing_history(days: int = 30,
+def get_market_timing_history(days: int = 30, to_date: Optional[str] = None,
                               conn: sqlite3.Connection = Depends(get_db_conn)):
     """大盘择时市场级序列(供盘面概览趋势图):共振指数数 / 成交额近20日地量分位 随时间。
-    路由声明在 /market/timing/{date} 之前,避免 'history' 被当作 {date} 路径参数吞掉。"""
+    路由声明在 /market/timing/{date} 之前,避免 'history' 被当作 {date} 路径参数吞掉。
+    to_date 给定时只取该日及之前——复盘历史日期不带出未来数据(前瞻偏差)。"""
     from services.market_timing import web_payload
-    return _sanitize_non_finite(web_payload.build_history_payload(conn, days=days))
+    return _sanitize_non_finite(web_payload.build_history_payload(conn, days=days, end_date=to_date))
 
 
 @router.get("/market/timing/{date}")

@@ -105,8 +105,9 @@ export default function MarketOverview() {
   })
 
   const { data: marketTimingHistory } = useQuery({
-    queryKey: ['market-timing-history'],
-    queryFn: () => api.getMarketTimingHistory(30),
+    queryKey: ['market-timing-history', date],
+    queryFn: () => api.getMarketTimingHistory(30, date),
+    enabled: !!date,
   })
 
   const chartData: MarketChartItem[] = (history || [])
@@ -235,7 +236,7 @@ export default function MarketOverview() {
 
       {marketTiming && (
         <Suspense fallback={<ChartLoadingFallback />}>
-          <MarketTimingPanel payload={marketTiming} history={marketTimingHistory} />
+          <MarketTimingPanel payload={marketTiming} history={marketTimingHistory} asOfDate={date} />
         </Suspense>
       )}
 
