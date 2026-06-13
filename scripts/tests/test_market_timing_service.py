@@ -145,6 +145,13 @@ def test_pivot_override_hits_sets_manual_pivot(conn):
     assert r["signals"][0]["swing_pivot_date"] == _D_FORM
 
 
+def test_pivot_override_on_index_with_no_data_for_date_raises(conn):
+    """被覆盖指数当日无数据 → 硬失败，不静默跳过（否则用户以为校准生效）。"""
+    reg = _lifecycle_registry()  # TEST.SH 末日 2026-06-13
+    with pytest.raises(ValueError, match="无数据"):
+        scanner.run_daily(conn, reg, "2026-06-20", indices=_IDX, pivot_overrides={"TEST.SH": _D_FORM})
+
+
 def test_confirm_recovers_when_forming_day_missing(conn):
     """成型日漏跑/跳过/dry_run（库中无成型行）→ 确认日仍能无状态推导出 confirmed。"""
     reg = _lifecycle_registry()

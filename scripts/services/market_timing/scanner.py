@@ -118,6 +118,9 @@ def run_daily(conn: sqlite3.Connection, registry, date: str, *, dry_run: bool = 
         bars_by_code[code] = bars
         # 当日无数据（数据未就绪/指数无该日）→ 跳过，不写空行
         if not bars or bars[-1].get("trade_date") != date:
+            # 但若该指数被手工 pivot 覆盖，静默跳过会让用户以为校准生效→硬失败
+            if pivot_overrides and code in pivot_overrides:
+                raise ValueError(f"--pivot-index {code} 当日({date})无数据，手工 pivot 覆盖无法验证")
             per_index.append({"code": code, "name": name, "skipped": True, "reason": "no_data_for_date", "source": source})
             turning_points.append({"hit": None, "near": None})
             continue

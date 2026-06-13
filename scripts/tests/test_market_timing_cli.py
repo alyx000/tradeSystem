@@ -44,6 +44,12 @@ def test_validate_pivot_args_bad_date_format_exits():
     assert e.value.code == 2
 
 
+def test_validate_pivot_args_calendar_invalid_date_exits():
+    with pytest.raises(SystemExit) as e:
+        mt._validate_pivot_args(_args(pivot_index="000001.SH", pivot_date="2026-02-31"))
+    assert e.value.code == 2
+
+
 def test_daily_invalid_pivot_override_exits(monkeypatch):
     """scanner 因手工 pivot 未命中抛 ValueError → CLI 提交/推送前 SystemExit(2)。"""
     def _raise(*a, **k):

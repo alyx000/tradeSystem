@@ -73,6 +73,11 @@ def _validate_pivot_args(args: argparse.Namespace) -> None:
     if not _DATE_RE.match(pd):
         logger.error("[market-timing] --pivot-date 须为 YYYY-MM-DD: %s", pd)
         raise SystemExit(2)
+    try:
+        datetime.date.fromisoformat(pd)  # 形状之外再校验日历有效性（挡 2026-02-31 这类）
+    except ValueError:
+        logger.error("[market-timing] --pivot-date 非法日期: %s", pd)
+        raise SystemExit(2)
 
 
 def _pivot_overrides(args: argparse.Namespace) -> dict | None:
