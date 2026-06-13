@@ -28,6 +28,7 @@ import {
 
 const MarketChartsPanel = lazy(() => import('../components/market/MarketChartsPanel'))
 const ConcentrationTrendPanel = lazy(() => import('../components/market/ConcentrationTrendPanel'))
+const MarketTimingPanel = lazy(() => import('../components/market/MarketTimingPanel'))
 
 function fmtPct(v: number | null | undefined) {
   if (v == null) return '-'
@@ -95,6 +96,17 @@ export default function MarketOverview() {
   const { data: concentration } = useQuery({
     queryKey: ['concentration-history'],
     queryFn: () => api.getConcentrationHistory(30),
+  })
+
+  const { data: marketTiming } = useQuery({
+    queryKey: ['market-timing', date],
+    queryFn: () => api.getMarketTiming(date!),
+    enabled: !!date,
+  })
+
+  const { data: marketTimingHistory } = useQuery({
+    queryKey: ['market-timing-history'],
+    queryFn: () => api.getMarketTimingHistory(30),
   })
 
   const chartData: MarketChartItem[] = (history || [])
@@ -220,6 +232,12 @@ export default function MarketOverview() {
       <StatusSignalPanel title="市场状态观察" signals={marketSignals} />
 
       <StatusSignalPanel title="情绪状态观察" signals={emotionSignals} />
+
+      {marketTiming && (
+        <Suspense fallback={<ChartLoadingFallback />}>
+          <MarketTimingPanel payload={marketTiming} history={marketTimingHistory} />
+        </Suspense>
+      )}
 
       <MarketSummaryCards
         market={m}

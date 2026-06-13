@@ -1153,3 +1153,47 @@ export interface PlanReviewInput {
   outcome_summary?: string
   input_by?: string
 }
+
+// 大盘择时观察（market-timing 盘面概览面板）
+export interface MarketTimingSignal {
+  index_code: string
+  index_name: string
+  swing_pivot_date: string | null
+  swing_pivot_type: string | null
+  swing_pivot_price: number | null
+  fib_day_count: number | null
+  fib_hit: number | null
+  fib_near: number | null
+  fractal_status: string
+  fractal_low_date: string | null
+  fractal_low_price: number | null
+  fractal_confirm_date: string | null
+}
+
+export interface MarketTimingContext {
+  market_amount_yi: number | null
+  amount_pctile_20d: number | null
+  advance: number | null
+  decline: number | null
+  limit_down_count: number | null
+}
+
+export interface MarketTimingPayload {
+  date: string
+  available: boolean
+  resonance_count: number
+  context: MarketTimingContext
+  signals: MarketTimingSignal[]
+}
+
+export interface MarketTimingHistoryPoint {
+  date: string
+  date_short: string
+  resonance_count: number | null
+  amount_pctile_20d: number | null
+}
+
+export interface MarketTimingHistoryPayload {
+  requested_days: number
+  series: MarketTimingHistoryPoint[]
+}
