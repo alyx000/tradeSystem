@@ -1408,7 +1408,9 @@ class TushareProvider(DataProvider):
     def get_index_daily_range(
         self, index_ts_code: str, start_date: str, end_date: str
     ) -> DataResult:
-        """指数区间日线涨跌幅。"""
+        """指数区间日线 OHLCV。返回每行含 open/high/low/close/vol/amount/pct_chg/ts_code。
+        单位沿用 tushare index_daily 原生：vol=手、amount=千元（消费方负责换算）。
+        保留 pct_chg/ts_code 向后兼容 regulatory 偏离度消费方。"""
         try:
             code = str(index_ts_code or "").strip().upper()
             if not code:
@@ -1418,17 +1420,30 @@ class TushareProvider(DataProvider):
             df = self.pro.index_daily(ts_code=code, start_date=sd, end_date=ed)
             if df is None or df.empty:
                 return DataResult(data=[], source="tushare:index_daily")
+
+            def _f(row, key):
+                v = row.get(key)
+                try:
+                    return float(v) if v is not None else None
+                except (TypeError, ValueError):
+                    return None
+
             out = []
             for _, row in df.iterrows():
                 td = row.get("trade_date")
                 s = str(td).replace("-", "")[:8]
                 norm = f"{s[:4]}-{s[4:6]}-{s[6:8]}" if len(s) == 8 else str(td)
-                pc = row.get("pct_chg")
-                try:
-                    pct = float(pc) if pc is not None else None
-                except (TypeError, ValueError):
-                    pct = None
-                out.append({"trade_date": norm, "pct_chg": pct, "ts_code": code})
+                out.append({
+                    "trade_date": norm,
+                    "open": _f(row, "open"),
+                    "high": _f(row, "high"),
+                    "low": _f(row, "low"),
+                    "close": _f(row, "close"),
+                    "vol": _f(row, "vol"),
+                    "amount": _f(row, "amount"),
+                    "pct_chg": _f(row, "pct_chg"),
+                    "ts_code": code,
+                })
             return DataResult(data=out, source="tushare:index_daily")
         except Exception as e:
             return DataResult(data=None, source=self.name, error=str(e))

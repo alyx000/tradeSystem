@@ -27,7 +27,9 @@ _DEFAULT_SERVERS = [
 _AVG_PRICE_CODE = "880003"  # 通达信「平均股价」
 _TDX_MARKET_SH = 1          # 880xxx 通达信板块指数走沪市站（实测 market=0 返回 0 根）
 _KLINE_WEEKLY = 5           # pytdx K 线周期：5=周线
+_KLINE_DAILY = 9            # pytdx K 线周期：9=日线（实测 880003 日线可取）
 _WEEKLY_COUNT = 20          # 取最近 20 根周线，够算 5 周均线 + 窗口冗余
+_DAILY_COUNT = 120          # 取最近 120 根日线 ≈ 半年，够 swing/斐波那契/底分型窗口
 
 
 class TdxProvider(DataProvider):
@@ -47,7 +49,7 @@ class TdxProvider(DataProvider):
         return True
 
     def get_capabilities(self) -> list[str]:
-        return ["get_index_weekly"]
+        return ["get_index_weekly", "get_index_daily_range"]
 
     def _connect(self):
         """按服务器列表逐个尝试连接，返回 (api, "") 或 (None, err)。"""
@@ -112,6 +114,59 @@ class TdxProvider(DataProvider):
             )
         except Exception as e:
             return DataResult(data=None, source=self.name, error=f"tdx 880003 取数异常: {e}")
+        finally:
+            try:
+                api.disconnect()
+            except Exception as e:
+                logger.debug("tdx disconnect 失败: %s", e)
+
+    def get_index_daily_range(self, index_code: str, start_date: str, end_date: str) -> DataResult:
+        """平均股价(880003) 日线区间。仅支持 avg_price，走 pytdx 日线(category=9)。
+        归一化 trade_date 为 YYYY-MM-DD（与 tushare get_index_daily_range 对齐，供 scanner 统一消费）。
+        pct_chg 留空（由检测器按 close 自算）；vol/amount 透传。"""
+        if index_code != "avg_price":
+            return DataResult(
+                data=None, source=self.name,
+                error="tdx provider 仅支持 avg_price（通达信 880003 平均股价）",
+            )
+        api, err = self._connect()
+        if api is None:
+            return DataResult(data=None, source=self.name, error=err)
+        try:
+            bars = api.get_index_bars(_KLINE_DAILY, _TDX_MARKET_SH, _AVG_PRICE_CODE, 0, _DAILY_COUNT)
+            if not bars:
+                return DataResult(data=None, source=self.name, error="tdx 880003 日线无数据")
+            sd = start_date.replace("-", "")
+            ed = end_date.replace("-", "")
+            rows = []
+            for b in bars:
+                td = str(b.get("datetime", "")).split()[0].replace("-", "")[:8]
+                if not (len(td) == 8 and td.isdigit()):
+                    continue
+                if td < sd or td > ed:  # 钳到调用方请求窗口内
+                    continue
+                close = b.get("close")
+                if close is None:
+                    continue
+                rows.append({
+                    "trade_date": f"{td[:4]}-{td[4:6]}-{td[6:8]}",
+                    "open": float(b.get("open", close)),
+                    "high": float(b.get("high", close)),
+                    "low": float(b.get("low", close)),
+                    "close": float(close),
+                    "vol": float(b.get("vol", 0.0) or 0.0),
+                    "amount": float(b.get("amount", 0.0) or 0.0),
+                    "pct_chg": None,
+                    "ts_code": "avg_price",
+                })
+            if not rows:
+                return DataResult(data=None, source=self.name, error="tdx 880003 日线窗口内无有效行")
+            return DataResult(
+                data=rows, source="tdx:880003_daily",
+                confidence=Confidence.HIGH, timeliness=Timeliness.HISTORICAL,
+            )
+        except Exception as e:
+            return DataResult(data=None, source=self.name, error=f"tdx 880003 日线取数异常: {e}")
         finally:
             try:
                 api.disconnect()
