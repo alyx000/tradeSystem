@@ -23,10 +23,11 @@ class _R:
 
 
 class FakeRegistry:
-    def __init__(self, limit_stocks, sw_map, bars_by_code):
+    def __init__(self, limit_stocks, sw_map, bars_by_code, market_changes=None):
         self._lu = limit_stocks
         self._sw = sw_map
         self._bars = bars_by_code
+        self._mc = market_changes or []  # 全市场日涨跌（双创@15% 候选源）；默认空=无额外候选
 
     def call(self, name, *args):
         if name == "get_limit_up_list":
@@ -35,6 +36,8 @@ class FakeRegistry:
             return _R(self._sw)
         if name == "get_stock_daily_range":
             return _R(self._bars.get(args[0], []))
+        if name == "get_market_daily_changes":
+            return _R(self._mc)
         return _R(None, success=False)
 
 
@@ -212,3 +215,68 @@ def test_funnel_touches_active_without_break(conn):
     assert "600552" not in summary["exited"]
     a = pool.get_active(conn, "600552")
     assert a is not None and a["days_in_pool"] == 2
+
+
+# ---- GAP A: 双创@15% 加速候选（鞠磊「20cm 涨15%+」，不必全涨停）----
+
+def test_funnel_enters_dual_board_15pct_via_market_changes(conn):
+    """双创@16%（非全涨停、不在涨停榜）经 get_market_daily_changes 入候选并入池。"""
+    _seed_concentration(conn, "2026-06-09", ["半导体"])
+    reg = FakeRegistry(
+        limit_stocks=[],                                   # 不在涨停榜（未到 20%）
+        sw_map={"688512.SH": {"name": "慧智微", "sw_l2": "半导体"}},
+        bars_by_code={"688512": _leader_bars()},
+        market_changes=[{"ts_code": "688512.SH", "name": "慧智微", "pct_chg": 16.0}],
+    )
+    summary = scanner.run_daily(conn, reg, "2026-06-09")
+    assert summary["candidates"] == 1
+    assert "688512" in summary["entered"]
+    assert pool.get_active(conn, "688512") is not None
+
+
+def test_funnel_dual_board_below_15pct_not_candidate(conn):
+    """双创@14%（< 15% 加速阈值）不进候选。"""
+    _seed_concentration(conn, "2026-06-09", ["半导体"])
+    reg = FakeRegistry(
+        limit_stocks=[],
+        sw_map={"688512.SH": {"name": "慧智微", "sw_l2": "半导体"}},
+        bars_by_code={"688512": _leader_bars()},
+        market_changes=[{"ts_code": "688512.SH", "name": "慧智微", "pct_chg": 14.0}],
+    )
+    summary = scanner.run_daily(conn, reg, "2026-06-09")
+    assert summary["candidates"] == 0
+    assert pool.get_active(conn, "688512") is None
+
+
+def test_funnel_main_board_15pct_not_added_by_dual_rule(conn):
+    """主板@15%（非涨停）不因双创规则进候选——主板只认涨停榜。"""
+    _seed_concentration(conn, "2026-06-09", ["半导体"])
+    reg = FakeRegistry(
+        limit_stocks=[],
+        sw_map={"600519.SH": {"name": "某主板", "sw_l2": "半导体"}},
+        bars_by_code={"600519": _leader_bars()},
+        market_changes=[{"ts_code": "600519.SH", "name": "某主板", "pct_chg": 15.0}],
+    )
+    summary = scanner.run_daily(conn, reg, "2026-06-09")
+    assert summary["candidates"] == 0
+    assert pool.get_active(conn, "600519") is None
+
+
+def test_funnel_market_changes_failure_degrades_to_limit_only(conn):
+    """get_market_daily_changes 失败 → 记 source_errors，降级仅涨停源（不中断）。"""
+    _seed_concentration(conn, "2026-06-09", ["玻璃玻纤"])
+
+    class PartialReg(FakeRegistry):
+        def call(self, name, *a):
+            if name == "get_market_daily_changes":
+                return _R(None, success=False)
+            return super().call(name, *a)
+
+    reg = PartialReg(
+        limit_stocks=[{"code": "600552.SH", "name": "凯盛科技", "pct_chg": 10.0}],
+        sw_map={"600552.SH": {"name": "凯盛科技", "sw_l2": "玻璃玻纤"}},
+        bars_by_code={"600552": _leader_bars()},
+    )
+    summary = scanner.run_daily(conn, reg, "2026-06-09")
+    assert "market_changes" in summary["source_errors"]
+    assert "600552" in summary["entered"]              # 涨停源仍正常入池

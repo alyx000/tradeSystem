@@ -20,6 +20,7 @@ from services.trend_leader import detectors as D
 from services.trend_leader import pool
 from services.volume_concentration import repo as vc_repo
 from services.volume_concentration.aggregator import UNCLASSIFIED
+from utils.price_limit import is_dual_board
 
 
 def _lookback_start(date: str) -> str:
@@ -53,6 +54,24 @@ def _break_reason(trend_detail: dict) -> str:
     return "趋势破坏"
 
 
+def _dual_board_accelerators(registry, date: str) -> tuple[list[dict], bool]:
+    """双创(20cm) 涨幅≥15% 的加速票（鞠磊「20cm 涨15%+」即加速，不必全 20% 涨停）。
+
+    全市场日涨跌（get_market_daily_changes）→ 过滤 双创前缀 + pct_chg≥阈值。返回 ([{code,name}], ok)；
+    含全涨停(20%)的票也会进，与涨停榜按裸码去重。provider 失败 → ([], False)，由上层记 source_errors。
+    """
+    r = registry.call("get_market_daily_changes", date)
+    if not (getattr(r, "success", False) and isinstance(r.data, list)):
+        return [], False
+    out = []
+    for row in r.data:
+        code = row.get("ts_code") or row.get("code")
+        pct = row.get("pct_chg")
+        if code and pct is not None and is_dual_board(code) and pct >= C.ACCEL_DUAL_BOARD_MIN_PCT:
+            out.append({"code": code, "name": row.get("name", "")})
+    return out, True
+
+
 def run_daily(conn: sqlite3.Connection, registry, date: str, *,
               sectors=None, top_k: int = C.DEFAULT_TOP_K_SECTORS, range_start: str | None = None) -> dict:
     main_sectors, degraded = _main_sectors(conn, date, top_k, sectors)
@@ -68,12 +87,19 @@ def run_daily(conn: sqlite3.Connection, registry, date: str, *,
     # 否则降级源的涨停股会因 sw_map miss → 未分类 → 被主线交集静默漏掉。
     sw_by_bare = {k.split(".")[0]: v for k, v in sw_map.items()}
 
+    # 候选源扩并：双创(20cm) 涨幅≥15% 的加速票（鞠磊「20cm 涨15%+」），sw 可用时才取（要映射主线）。
+    dual_accel, dual_ok = ([], True)
+    if sw_ok:
+        dual_accel, dual_ok = _dual_board_accelerators(registry, date)
+
     # 发现链路 provider 失败显式记账：否则「链路断了」会伪装成「今日无候选」，运营无法区分。
     source_errors = []
     if not lu_ok:
         source_errors.append("limit_up")
     if not sw_ok:
         source_errors.append("sw_map")
+    if not dual_ok:
+        source_errors.append("market_changes")
 
     summary = {
         "date": date, "limit_up": len(limit_stocks), "main_sectors": sorted(main_sectors),
@@ -82,13 +108,22 @@ def run_daily(conn: sqlite3.Connection, registry, date: str, *,
         "data_errors": [], "source_errors": source_errors,
     }
 
-    entered_codes = set()
-    # Pass 1 — 发现：主线∩涨停 + 首次涨停 + 缓涨。sw 映射不可用时跳过发现（无法可靠映射主线，
-    # 不静默把全部当未分类过滤；失败已记 source_errors，Pass2 维护仍照常）。
+    # 合并候选：涨停 ∪ 双创@15%，按裸码去重（涨停源字段更全，后写覆盖）。
+    candidate_map: dict[str, dict] = {}
+    for st in dual_accel:
+        b = (st.get("code") or "").split(".")[0]
+        if b:
+            candidate_map[b] = st
     for st in (limit_stocks if sw_ok else []):
+        b = (st.get("code") or "").split(".")[0]
+        if b:
+            candidate_map[b] = st
+
+    entered_codes = set()
+    # Pass 1 — 发现：主线∩(涨停∪双创加速) + 首次加速 + 缓涨。sw 映射不可用时跳过发现（无法可靠
+    # 映射主线，不静默把全部当未分类过滤；失败已记 source_errors，Pass2 维护仍照常）。
+    for st in candidate_map.values():
         code_raw = st.get("code")
-        if not code_raw:
-            continue
         bare = code_raw.split(".")[0]          # 池内唯一身份（裸码），防 ts_code/裸码建重复 active
         sw_entry = sw_map.get(code_raw) or sw_by_bare.get(bare) or {}
         sw_l2 = sw_entry.get("sw_l2", UNCLASSIFIED)
@@ -101,7 +136,7 @@ def run_daily(conn: sqlite3.Connection, registry, date: str, *,
         if not bars:                            # 行情拉取失败/空：记错误，不误判为"无信号"
             summary["data_errors"].append(bare)
             continue
-        first, fd = D.is_first_limit_up_acceleration(bars, bare, today_limit_up=True)
+        first, fd = D.is_first_limit_up_acceleration(bars, bare, today_accelerated=True)
         gentle, gd = D.is_gentle_rise(bars, bare)
         if not (first and gentle):
             continue

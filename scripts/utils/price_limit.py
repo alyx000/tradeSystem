@@ -16,6 +16,17 @@ from decimal import Decimal, ROUND_HALF_UP
 # 用 startswith 多字符前缀，"51" 已覆盖 518xxx，无需单列。
 _FUND_PREFIXES = ("15", "16", "18", "50", "51", "56", "58")
 
+# 创业板（300/301）/ 科创板（688/689）= 20cm 板块。单一真源，_board_limit_pct 与 is_dual_board 共用。
+_DUAL_BOARD_PREFIXES = ("300", "301", "688", "689")
+
+
+def is_dual_board(code: str) -> bool:
+    """创业板/科创板（20cm）个股；ETF/LOF 等基金前缀不算。板块前缀口径单一真源。"""
+    code_num = code.split(".")[0]
+    if code_num.startswith(_FUND_PREFIXES):
+        return False
+    return code_num.startswith(_DUAL_BOARD_PREFIXES)
+
 
 def _board_limit_pct(code: str, is_st: bool) -> float:
     """按板块 × ST 状态返回涨跌幅比例（个股口径，不含基金）。
@@ -31,7 +42,7 @@ def _board_limit_pct(code: str, is_st: bool) -> float:
     # —— 8x（83/87/88）、43x、920x 新代码段（920 以 9 开头，不被 "8" 覆盖，需显式列出）。
     if suffix == "BJ" or code_num.startswith(("8", "43", "920")):
         return 30.0
-    if code_num.startswith(("688", "689", "300", "301")):
+    if code_num.startswith(_DUAL_BOARD_PREFIXES):
         return 20.0   # 创业板 / 科创板，ST 仍 20%
     return 5.0 if is_st else 10.0   # 沪深主板：ST 5% / 普通 10%
 

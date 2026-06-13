@@ -90,7 +90,7 @@ def test_first_limit_true_when_today_limit_and_no_prior():
     # 11 根历史(无涨停) + 今日涨停 → 首次成立；历史 < 60 标 partial_history
     closes = [round(10 + i * 0.05, 4) for i in range(12)]
     bars = _bars(closes, pcts=[1.0] * 11 + [10.0])
-    matched, detail = is_first_limit_up_acceleration(bars, MAIN, today_limit_up=True)
+    matched, detail = is_first_limit_up_acceleration(bars, MAIN, today_accelerated=True)
     assert matched is True
     assert detail["prior_limit_in_window"] is False
     assert detail["partial_history"] is True
@@ -100,26 +100,26 @@ def test_first_limit_false_when_prior_limit_in_window():
     closes = [round(10 + i * 0.05, 4) for i in range(12)]
     pcts = [1.0] * 11 + [10.0]
     pcts[5] = 9.9  # 历史窗口内有一根涨停
-    matched, detail = is_first_limit_up_acceleration(_bars(closes, pcts=pcts), MAIN, today_limit_up=True)
+    matched, detail = is_first_limit_up_acceleration(_bars(closes, pcts=pcts), MAIN, today_accelerated=True)
     assert matched is False
     assert detail["prior_limit_in_window"] is True
 
 
 def test_first_limit_false_when_today_not_limit():
-    matched, _ = is_first_limit_up_acceleration(_bars([10] * 12), MAIN, today_limit_up=False)
+    matched, _ = is_first_limit_up_acceleration(_bars([10] * 12), MAIN, today_accelerated=False)
     assert matched is False
 
 
 def test_first_limit_insufficient_when_history_below_min():
     # 历史 5 根(<MIN_BARS_FOR_SIGNAL) → 无法断言"近 60 日首次" → insufficient
     bars = _bars([10] * 6, pcts=[1.0] * 5 + [10.0])
-    matched, detail = is_first_limit_up_acceleration(bars, MAIN, today_limit_up=True)
+    matched, detail = is_first_limit_up_acceleration(bars, MAIN, today_accelerated=True)
     assert matched is False and detail["insufficient_history"] is True
 
 
 def test_first_limit_insufficient_when_no_history():
     bars = _bars([11.3], pcts=[10.0])
-    matched, detail = is_first_limit_up_acceleration(bars, MAIN, today_limit_up=True)
+    matched, detail = is_first_limit_up_acceleration(bars, MAIN, today_accelerated=True)
     assert matched is False and detail["insufficient_history"] is True
 
 
@@ -212,3 +212,65 @@ def test_trend_broken_false_when_flat():
 def test_trend_broken_insufficient():
     matched, detail = is_trend_broken(_bars([10] * 9))
     assert matched is False and detail["insufficient_history"] is True
+
+
+# ---- GAP A: board-aware 加速阈值（双创 15%，鞠磊「20cm 涨15%+」）----
+
+DUAL_CYB = "300750.SZ"  # 创业板 20cm
+DUAL_KCB = "688512.SH"  # 科创板 20cm
+
+
+def test_accel_threshold_dual_board_is_15():
+    from services.trend_leader.detectors import accel_threshold
+    assert accel_threshold(DUAL_CYB) == pytest.approx(15.0)
+    assert accel_threshold(DUAL_KCB) == pytest.approx(15.0)
+
+
+def test_accel_threshold_main_board_keeps_limit():
+    from services.trend_leader.detectors import accel_threshold
+    assert accel_threshold(MAIN) == pytest.approx(9.8)  # 10% × 0.98 容差，主板不变
+
+
+def test_first_accel_dual_board_15pct_no_prior():
+    """双创今日 +16%（非全 20% 涨停）+ 窗口内无 15%+ → 首次加速成立。"""
+    closes = [round(10 + i * 0.05, 4) for i in range(12)]
+    bars = _bars(closes, pcts=[1.0] * 11 + [16.0])
+    matched, detail = is_first_limit_up_acceleration(bars, DUAL_KCB, today_accelerated=True)
+    assert matched is True
+    assert detail["prior_limit_in_window"] is False
+
+
+def test_first_accel_dual_board_prior_15pct_disqualifies():
+    """双创窗口内已有 15.5% 加速日 → 非首次。"""
+    closes = [round(10 + i * 0.05, 4) for i in range(12)]
+    pcts = [1.0] * 11 + [16.0]
+    pcts[5] = 15.5
+    matched, detail = is_first_limit_up_acceleration(_bars(closes, pcts=pcts), DUAL_KCB, today_accelerated=True)
+    assert matched is False and detail["prior_limit_in_window"] is True
+
+
+def test_first_accel_dual_board_prior_14pct_allowed():
+    """双创窗口内 14%（< 15% 加速阈值）不算先前加速 → 仍首次。"""
+    closes = [round(10 + i * 0.05, 4) for i in range(12)]
+    pcts = [1.0] * 11 + [16.0]
+    pcts[5] = 14.0
+    matched, detail = is_first_limit_up_acceleration(_bars(closes, pcts=pcts), DUAL_KCB, today_accelerated=True)
+    assert matched is True and detail["prior_limit_in_window"] is False
+
+
+def test_gentle_rise_dual_board_excludes_15pct_window_day():
+    """双创缓涨窗口内有 15.5% 加速日 → 算已加速 → 非缓涨。"""
+    closes = [round(10.0 + i * 1.5 / 19, 4) for i in range(20)]  # +15% 累计
+    pcts = [0.0] * 20
+    pcts[5] = 15.5
+    matched, detail = is_gentle_rise(_bars(closes, pcts=pcts), DUAL_KCB)
+    assert matched is False and detail["has_limit_in_window"] is True
+
+
+def test_gentle_rise_dual_board_allows_10pct_window_day():
+    """双创窗口内 10%（< 15% 双创加速阈值）不算加速 → 仍缓涨（主板口径下 10% 会被算涨停）。"""
+    closes = [round(10.0 + i * 1.5 / 19, 4) for i in range(20)]
+    pcts = [0.0] * 20
+    pcts[5] = 10.0
+    matched, detail = is_gentle_rise(_bars(closes, pcts=pcts), DUAL_KCB)
+    assert matched is True and detail["has_limit_in_window"] is False
