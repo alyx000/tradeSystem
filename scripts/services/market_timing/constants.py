@@ -22,6 +22,9 @@ FRACTAL_VOLUME_RATIO = 1.5
 # 中阳线最小实体：(close - open) / open ≥ 此比例
 MID_YANG_MIN_PCT = 0.01
 
+# 在最近 N 根内寻找最新底分型（无状态生命周期判定的回看窗口）
+FRACTAL_LOOKBACK = 20
+
 # ── 通用兜底 ──
 # bar 数 < 此值的检测返回 insufficient_history（历史不足不硬算）
 MIN_BARS_FOR_SIGNAL = 10

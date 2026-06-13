@@ -127,6 +127,14 @@ def test_dry_run_does_not_persist(conn):
     assert conn.execute("SELECT COUNT(*) FROM market_timing_signal").fetchone()[0] == 0
 
 
+def test_confirm_recovers_when_forming_day_missing(conn):
+    """成型日漏跑/跳过/dry_run（库中无成型行）→ 确认日仍能无状态推导出 confirmed。"""
+    reg = _lifecycle_registry()
+    r = scanner.run_daily(conn, reg, _D_CONFIRM, indices=_IDX)  # 直接跑确认日，无前置成型行
+    assert r["signals"][0]["fractal_status"] == "confirmed"
+    assert conn.execute("SELECT COUNT(*) FROM market_timing_signal").fetchone()[0] == 1
+
+
 # ── 斐波那契变盘点 ──
 
 def test_fib_hit_written_from_swing_pivot(conn):
@@ -161,6 +169,19 @@ def test_market_context_written(conn):
     assert sig["limit_down_count"] == 3
     assert sig["advance"] == 4500 and sig["decline"] == 900
     assert r["resonance_count"] == 0  # 平盘无变盘点命中
+
+
+def test_market_amount_none_when_one_side_missing(conn):
+    """单侧指数缺当日数据 → 不把半截成交额当两市总额落库（fail-safe 为 None）。"""
+    flat = [(100, 100, 1000, 400000.0)] * 11
+    sh = _bars("2026-06-13", flat + [(100, 100, 1000, 100000.0)])
+    sz = _bars("2026-06-10", flat + [(100, 100, 1000, 100000.0)])  # 深成末日 != 目标日 → 当日缺
+    reg = FakeRegistry({"000001.SH": sh, "399001.SZ": sz})
+    idx = [{"code": "000001.SH", "name": "上证综指"}, {"code": "399001.SZ", "name": "深证成指"}]
+    r = scanner.run_daily(conn, reg, "2026-06-13", indices=idx)
+    sh_sig = [s for s in r["signals"] if s["index_code"] == "000001.SH"][0]
+    assert sh_sig["market_amount_yi"] is None
+    assert sh_sig["amount_pctile_20d"] is None
 
 
 # ── 跳过 ──

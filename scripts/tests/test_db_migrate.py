@@ -441,3 +441,25 @@ def test_migrate_v16_repairs_teacher_notes_fts_missing_mentioned_stocks(tmp_path
     )
     assert note_id > 0
     conn.close()
+
+
+def test_v31_migration_creates_market_timing_signal(tmp_path):
+    """既有 v30 库（无 market_timing_signal）经 migrate → 表存在且 user_version 到最新。"""
+    conn = get_connection(tmp_path / "v30.db")
+    migrate(conn)
+    # 模拟回退到 v30：删表 + 降版本号
+    conn.execute("DROP TABLE IF EXISTS market_timing_signal")
+    conn.execute("PRAGMA user_version = 30")
+    conn.commit()
+    assert get_schema_version(conn) == 30
+    assert conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='market_timing_signal'"
+    ).fetchone() is None
+
+    migrate(conn)
+    assert get_schema_version(conn) == CURRENT_SCHEMA_VERSION
+    assert get_schema_version(conn) == 31
+    assert conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='market_timing_signal'"
+    ).fetchone() is not None
+    conn.close()

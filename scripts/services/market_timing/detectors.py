@@ -114,6 +114,54 @@ def is_bottom_fractal(bars: list[dict]) -> tuple[bool, dict]:
     }
 
 
+def find_recent_bottom_fractal(bars: list[dict], *, lookback: int = C.FRACTAL_LOOKBACK) -> dict | None:
+    """从最新往回找最近一个底分型（中间低点严格最小）；需左右各一根 → 中间 index ∈ [1, n-2]。
+
+    返回 {low_date, low_price, left_high, right_high, right_date, right_index} 或 None。
+    （is_bottom_fractal 是其 i=n-2 的特例；本函数支持更早成型的底分型，供无状态生命周期判定。）
+    """
+    n = len(bars)
+    if n < 3:
+        return None
+    lo = max(1, n - 1 - lookback)
+    for i in range(n - 2, lo - 1, -1):
+        if bars[i]["low"] < bars[i - 1]["low"] and bars[i]["low"] < bars[i + 1]["low"]:
+            return {
+                "low_date": bars[i]["trade_date"], "low_price": bars[i]["low"],
+                "left_high": bars[i - 1]["high"], "right_high": bars[i + 1]["high"],
+                "right_date": bars[i + 1]["trade_date"], "right_index": i + 1,
+            }
+    return None
+
+
+def evaluate_fractal_status(bars: list[dict]) -> dict:
+    """从 bars **无状态**推导最近底分型的当前状态（none/forming/confirmed/invalid）。
+
+    不依赖历史落库行 → 对漏跑/跳过/dry_run/重跑均健壮（同一 bars 必得同一状态，
+    数据缺口不会把一次确认永久漏记）。自底分型右沿之后按时间顺序推进：
+      - 先跌破结构低点 → invalid（终态）
+      - 否则首次满足放量中阳突破前高 → confirmed
+      - 都没有 → forming
+    返回 {status, low_date, low_price, confirm_date, left_high, right_high, right_date}。
+    """
+    f = find_recent_bottom_fractal(bars)
+    if not f:
+        return {"status": "none", "low_date": None, "low_price": None, "confirm_date": None,
+                "left_high": None, "right_high": None, "right_date": None}
+    status, confirm_date = "forming", None
+    for j in range(f["right_index"] + 1, len(bars)):
+        if bars[j]["close"] < f["low_price"]:
+            status = "invalid"
+            break
+        if status == "forming":
+            ok, _ = is_fractal_confirmed(bars[:j + 1], f)
+            if ok:
+                status, confirm_date = "confirmed", bars[j]["trade_date"]
+    return {"status": status, "low_date": f["low_date"], "low_price": f["low_price"],
+            "confirm_date": confirm_date, "left_high": f["left_high"],
+            "right_high": f["right_high"], "right_date": f["right_date"]}
+
+
 def is_breakout_confirm(bars: list[dict]) -> tuple[bool, dict]:
     """放量中阳突破确认：当日同时满足 中阳 + 放量 + 收盘破 MA5 + MA5 拐头。
 

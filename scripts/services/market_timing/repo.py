@@ -23,11 +23,6 @@ def _rows(cur) -> list[dict]:
     return [dict(zip(cols, r)) for r in cur.fetchall()]
 
 
-def _one(cur) -> dict | None:
-    rows = _rows(cur)
-    return rows[0] if rows else None
-
-
 def upsert_signal(conn: sqlite3.Connection, row: dict) -> None:
     """按 (trade_date, index_code) upsert。冲突即刷新所有列(refreshed)。"""
     placeholders = ",".join("?" for _ in _COLUMNS)
@@ -38,16 +33,6 @@ def upsert_signal(conn: sqlite3.Connection, row: dict) -> None:
         f"ON CONFLICT(trade_date, index_code) DO UPDATE SET {updates}, updated_at=datetime('now')"
     )
     conn.execute(sql, [row.get(c) for c in _COLUMNS])
-
-
-def get_prior_signal(conn: sqlite3.Connection, index_code: str, before_date: str) -> dict | None:
-    """该指数最近一条 trade_date < before_date 的行（推进底分型生命周期用）。"""
-    cur = conn.execute(
-        "SELECT * FROM market_timing_signal WHERE index_code=? AND trade_date<? "
-        "ORDER BY trade_date DESC LIMIT 1",
-        (index_code, before_date),
-    )
-    return _one(cur)
 
 
 def list_signals(

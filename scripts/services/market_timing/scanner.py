@@ -40,66 +40,26 @@ def _time_cycle(bars: list[dict]) -> tuple[dict | None, dict]:
     return pivot, D.fib_turning_point(dc)
 
 
-def _advance_fractal(prior: dict | None, bars: list[dict]) -> dict:
-    """据上一交易日同指数行 prior + 今日 bars 推进底分型状态。
-
-    none/invalid → 检测新成型(forming)；forming → 尝试确认(confirmed)或维持；
-    forming/confirmed 跌破结构低点 → invalid；confirmed 持有 → 维持。
-    返回 {status, low_date, low_price, confirm_date, json}。
-    """
-    today = bars[-1] if bars else {}
-    close = today.get("close")
-    prior_status = (prior or {}).get("fractal_status", "none")
-    prior_json = (prior or {}).get("fractal_json")
-    stored = json.loads(prior_json) if prior_json else None
-    prior_confirm = (prior or {}).get("fractal_confirm_date")
-
-    def _pack(status, info, confirm_date):
-        return {
-            "status": status,
-            "low_date": (info or {}).get("low_date"),
-            "low_price": (info or {}).get("low_price"),
-            "confirm_date": confirm_date,
-            "json": json.dumps(info) if info else None,
-        }
-
-    # 结构跌破 → invalid
-    if (prior_status in ("forming", "confirmed") and stored and close is not None
-            and stored.get("low_price") is not None and close < stored["low_price"]):
-        return _pack("invalid", stored, prior_confirm)
-
-    # forming → 尝试确认
-    if prior_status == "forming" and stored:
-        ok, _ = D.is_fractal_confirmed(bars, stored)
-        if ok:
-            return _pack("confirmed", stored, today.get("trade_date"))
-        return _pack("forming", stored, None)
-
-    # confirmed 持有（结构未破）→ 维持
-    if prior_status == "confirmed" and stored:
-        return _pack("confirmed", stored, prior_confirm)
-
-    # none/invalid → 检测新成型
-    formed, info = D.is_bottom_fractal(bars)
-    if formed:
-        return _pack("forming", info, None)
-    return _pack("none", None, None)
-
-
 def _market_amount(bars_by_code: dict, date: str) -> tuple[float | None, float | None]:
-    """两市成交额(亿) + 近 N 交易日分位（地量识别）。amount 单位千元→亿。"""
-    series: dict[str, float] = {}
-    for code in C.MARKET_AMOUNT_INDICES:
+    """两市成交额(亿) + 近 N 交易日分位（地量识别）。amount 单位千元→亿。
+
+    仅统计「完整两市日」：某日须 MARKET_AMOUNT_INDICES 全部有 amount 才计入，
+    避免单侧指数缺当日数据时把半截成交额当两市总额静默落库。目标日不完整 → 返回 None。
+    """
+    required = set(C.MARKET_AMOUNT_INDICES)
+    per_date: dict[str, dict[str, float]] = {}
+    for code in required:
         for b in bars_by_code.get(code, []):
             amt = b.get("amount")
             if amt is None:
                 continue
-            series[b["trade_date"]] = series.get(b["trade_date"], 0.0) + amt
-    if date not in series:
+            per_date.setdefault(b["trade_date"], {})[code] = amt
+    complete = {d: sum(m.values()) for d, m in per_date.items() if required <= set(m)}
+    if date not in complete:
         return None, None
-    today_total = series[date]
-    window_dates = sorted(d for d in series if d <= date)[-C.AMOUNT_PCTILE_WINDOW:]
-    totals = [series[d] for d in window_dates]
+    today_total = complete[date]
+    window_dates = sorted(d for d in complete if d <= date)[-C.AMOUNT_PCTILE_WINDOW:]
+    totals = [complete[d] for d in window_dates]
     pctile = sum(1 for t in totals if t <= today_total) / len(totals) if totals else None
     return round(today_total / C.QIANYUAN_PER_YI, 1), (round(pctile, 3) if pctile is not None else None)
 
@@ -136,8 +96,7 @@ def run_daily(conn: sqlite3.Connection, registry, date: str, *, dry_run: bool = 
             continue
         pivot, tp = _time_cycle(bars)
         turning_points.append(tp)
-        prior = repo.get_prior_signal(conn, code, date)
-        fractal = _advance_fractal(prior, bars)
+        fractal = D.evaluate_fractal_status(bars)  # 无状态：从 bars 直接推导，不依赖历史行
         per_index.append({"code": code, "name": name, "skipped": False, "source": source,
                           "pivot": pivot, "tp": tp, "fractal": fractal})
 
@@ -151,6 +110,10 @@ def run_daily(conn: sqlite3.Connection, registry, date: str, *, dry_run: bool = 
         if item.get("skipped"):
             continue
         pivot, tp, fr = item["pivot"], item["tp"], item["fractal"]
+        fractal_json = (
+            json.dumps({k: fr[k] for k in ("low_date", "low_price", "left_high", "right_high", "right_date")})
+            if fr["status"] != "none" else None
+        )
         row = {
             "trade_date": date, "index_code": item["code"], "index_name": item["name"],
             "swing_pivot_date": pivot["date"] if pivot else None,
@@ -159,7 +122,7 @@ def run_daily(conn: sqlite3.Connection, registry, date: str, *, dry_run: bool = 
             "fib_day_count": tp.get("day_count"), "fib_hit": tp.get("hit"), "fib_near": tp.get("near"),
             "fractal_status": fr["status"], "fractal_low_date": fr["low_date"],
             "fractal_low_price": fr["low_price"], "fractal_confirm_date": fr["confirm_date"],
-            "fractal_json": fr["json"],
+            "fractal_json": fractal_json,
             "resonance_count": resonance, "market_amount_yi": amount_yi, "amount_pctile_20d": amount_pctile,
             "limit_down_count": limit_down, "advance": advance, "decline": decline,
             "data_source": item["source"],

@@ -259,3 +259,22 @@ def test_fractal_confirmed_fail_closed_on_missing_today_date():
     ok, det = D.is_fractal_confirmed(bars, fractal)
     assert ok is False
     assert det["reason"] == "missing_today_date"
+
+
+# ── find_recent_bottom_fractal / evaluate_fractal_status（无状态生命周期）──
+
+def test_find_recent_bottom_fractal_locates_earlier_fractal():
+    """底分型不在最后三根、而在更早窗口时也能定位（区别于 is_bottom_fractal 只看末三根）。"""
+    bars = [_b(i, o, c) for i, (o, c) in enumerate(
+        [(100, 100), (100, 99), (99, 98), (98, 99), (99, 100), (100, 101)])]
+    bars[2]["low"] = 90.0  # idx2 为结构低点，其后两根抬升
+    f = D.find_recent_bottom_fractal(bars, lookback=20)
+    assert f is not None
+    assert f["low_date"] == _d(2)
+    assert f["low_price"] == 90.0
+    assert f["right_index"] == 3
+
+
+def test_evaluate_fractal_status_none_when_no_fractal():
+    bars = [_hl(i, 100 - i) for i in range(12)]  # 单调下行，无底分型
+    assert D.evaluate_fractal_status(bars)["status"] == "none"
