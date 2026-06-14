@@ -68,7 +68,8 @@ alwaysApply: true
 | 职能场景 | 执行 Agent | 备注 |
 |---|---|---|
 | 只读探查 / 文件勘察 / grep 概念 | Claude Code `Explore` subagent | readonly，成本最低；**禁止指派"写代码"任务给 Explore** |
-| 方案级审查 / 代码级审查 / 独立第二意见 | Codex（`codex:codex-rescue`） | 独立模型链路，避开同源 bias；参见 [`post-dev-codex-review.md`](post-dev-codex-review.md) |
+| 代码级审查（git diff） | Codex 原生 `adversarial-review`（`codex-companion.mjs adversarial-review --wait`） | 内置 reviewer，自读 git 状态，结构化分级 findings；参见 [`post-dev-codex-review.md`](post-dev-codex-review.md) |
+| 方案级审查 / 独立第二意见（无 diff，审设计文档） | Codex（`codex:codex-rescue` freeform） | 原生 reviewer 只吃 git diff，方案文档无 diff，仍走 freeform task |
 | 多语种 / 文档校对 / 备用第二意见 | Antigravity CLI | 性价比补充，目前用例少；无强场景时优先 Codex |
 
 ### 具名场景：三类常见任务的默认执行体
@@ -106,7 +107,7 @@ alwaysApply: true
 - **Claude Code `Explore` subagent**（仅限只读勘察组件结构 / grep 概念）
 
 例外（允许 Codex 介入前端的两种场景）：
-- **代码 review / 第二意见**：`codex:codex-rescue` 看前端 diff 找 bug —— 审查是"看出问题"，不要求"写得好"，允许；
+- **代码 review / 第二意见**：用 Codex 原生 `adversarial-review`（前端 diff 也照常自读 git；`codex:codex-rescue` 仅作无 diff 时回退）看前端 diff 找 bug —— 审查是"看出问题"，不要求"写得好"，允许；
 - **安全审查**（XSS / CSRF / 依赖漏洞 / 敏感信息泄漏）：Codex 的安全视角有价值，允许。
 
 理由：Codex 在前端框架 idiom（React hooks / Tailwind class 习惯 / Vue composition / 组件命名 / 视觉细节）上质量不稳定；前端是用户直接看见的产物，质量代价高；Claude 系在前端项目里有更稳的输出基线。
@@ -172,7 +173,7 @@ alwaysApply: true
 **plan 文档怎么写**(模板):每个阶段的"完成标准"段必须含一句:
 
 ```
-> 完成标准:<阶段 pytest 路径> 全绿 + **立即跑门1（`/simplify` + `/code-review`）+ 门2 codex:codex-rescue review,
+> 完成标准:<阶段 pytest 路径> 全绿 + **立即跑门1（`/simplify` + `/code-review`）+ 门2 codex 原生 adversarial-review,
 > 满足 [code-review-gate.md](.../code-review-gate.md) 4 条结束条件
 > + [post-dev-codex-review.md](.../post-dev-codex-review.md) 6 条结束条件,才能进入下一阶段。**
 ```

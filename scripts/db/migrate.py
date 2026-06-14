@@ -19,7 +19,7 @@ PROJECT_ROOT = SCRIPTS_DIR.parent
 
 # 与 migrate() 中「当前最新」一步一致；新增迁移时递增本常量，并把上一步的
 # set_schema_version(conn, CURRENT_SCHEMA_VERSION) 改为字面量 N（保留历史链）。
-CURRENT_SCHEMA_VERSION = 32
+CURRENT_SCHEMA_VERSION = 33
 
 
 def get_schema_version(conn: sqlite3.Connection) -> int:
@@ -70,9 +70,9 @@ def _ensure_daily_market_premium_columns(conn: sqlite3.Connection) -> None:
 
 
 def _ensure_market_timing_signal(conn: sqlite3.Connection) -> None:
-    """v31 兜底：确保 market_timing_signal 表存在(版本无关)。
+    """v32 兜底：确保 market_timing_signal 表存在(版本无关)。
 
-    防"DB 已标记到 v31 但表缺失"的半迁移态——版本门会跳过 v31 块，导致表永不创建、
+    防"DB 已标记到 v32 但表缺失"的半迁移态——版本门会跳过 v32 块，导致表永不创建、
     运行期报 no such table。复用 schema 真源 SQL 不重复。
 
     健康库（表已存在）走**纯只读探查后直接返回**：不做 DDL、不 commit，
@@ -90,7 +90,7 @@ def _ensure_market_timing_signal(conn: sqlite3.Connection) -> None:
 
 
 def _ensure_market_timing_quote_columns(conn: sqlite3.Connection) -> None:
-    """v32 兜底：为既有 market_timing_signal 补 close / change_pct 列。
+    """v33 兜底：为既有 market_timing_signal 补 close / change_pct 列。
 
     CREATE IF NOT EXISTS 不给老表补列（memory: feedback_real_db_vs_in_memory）；
     表不存在时直接返回（由 _ensure_market_timing_signal 用新 schema 建表，已含这两列）。
@@ -596,15 +596,21 @@ def migrate(conn: sqlite3.Connection) -> None:
         conn.commit()
 
     if version < 31:
-        logger.info("Applying schema v31: market_timing_signal (大盘择时观察)")
-        init_schema(conn)  # 新表:CREATE IF NOT EXISTS 在老库上建出;新表无需 ALTER 兜底
+        logger.info("Applying schema v31: trend_leader_pool 趋势主升观察池表 + active 唯一索引")
+        init_schema(conn)  # CREATE IF NOT EXISTS 建新表 + _SQL_INDEXES（含 active partial unique）
         set_schema_version(conn, 31)
         conn.commit()
 
     if version < 32:
-        logger.info("Applying schema v32: market_timing_signal.close / change_pct (当日点位)")
-        _ensure_market_timing_quote_columns(conn)  # ALTER 兜底:老表补当日收盘/涨跌幅列
+        logger.info("Applying schema v32: market_timing_signal (大盘择时观察)")
+        init_schema(conn)  # 新表:CREATE IF NOT EXISTS 在老库上建出;新表无需 ALTER 兜底
         set_schema_version(conn, 32)
+        conn.commit()
+
+    if version < 33:
+        logger.info("Applying schema v33: market_timing_signal.close / change_pct (当日点位)")
+        _ensure_market_timing_quote_columns(conn)  # ALTER 兜底:老表补当日收盘/涨跌幅列
+        set_schema_version(conn, 33)
         conn.commit()
 
     # 版本无关兜底:DB 已标记到最新版但 market_timing_signal 缺失/缺列(异常半迁移态/历史遗留)时,
@@ -612,7 +618,6 @@ def migrate(conn: sqlite3.Connection) -> None:
     # 健康库纯探查直接返回,不给调用方加事务边界(见 feedback_real_db_vs_in_memory)。
     _ensure_market_timing_signal(conn)
     _ensure_market_timing_quote_columns(conn)
-
 
 # ──────────────────────────────────────────────────────────────
 # YAML 数据导入

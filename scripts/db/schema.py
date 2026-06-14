@@ -396,6 +396,27 @@ CREATE TABLE IF NOT EXISTS daily_volume_concentration (
 );
 """
 
+# 趋势主升观察池（派生信号层）：漏斗命中的个股 + 状态机。
+# PK=(code, entered_date)：exited 再命中=新建一行保留历史审计；active 每 code 至多一行。
+_SQL_TREND_LEADER_POOL = """
+CREATE TABLE IF NOT EXISTS trend_leader_pool (
+    code TEXT NOT NULL,
+    name TEXT NOT NULL,
+    sw_l2 TEXT NOT NULL,
+    first_limit_date TEXT NOT NULL,
+    entered_date TEXT NOT NULL,
+    last_seen_date TEXT NOT NULL,
+    days_in_pool INTEGER NOT NULL DEFAULT 1,
+    status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'exited')),
+    exit_date TEXT,
+    exit_reason TEXT,
+    last_signal_json TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT,
+    PRIMARY KEY (code, entered_date)
+);
+"""
+
 # ──────────────────────────────────────────────────────────────
 # 5c. 板块相关性（一天一行快照；JSON 列存按窗口键的矩阵；双窗 20/60）
 # ──────────────────────────────────────────────────────────────
@@ -896,6 +917,8 @@ CREATE TABLE IF NOT EXISTS knowledge_assets (
 # ──────────────────────────────────────────────────────────────
 _SQL_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_teacher_notes_date ON teacher_notes(date);",
+    # 趋势主升池：每 code 至多一 active 行（DB 级不变量护栏）
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_trend_leader_active ON trend_leader_pool(code) WHERE status='active';",
     "CREATE INDEX IF NOT EXISTS idx_teacher_notes_teacher_date ON teacher_notes(teacher_id, date);",
     "CREATE INDEX IF NOT EXISTS idx_calendar_date ON calendar_events(date);",
     "CREATE INDEX IF NOT EXISTS idx_calendar_impact ON calendar_events(impact);",
@@ -1170,6 +1193,7 @@ _ALL_TABLE_SQL = [
     _SQL_MACRO_INFO,
     _SQL_DAILY_MARKET,
     _SQL_DAILY_VOLUME_CONCENTRATION,
+    _SQL_TREND_LEADER_POOL,
     _SQL_SECTOR_CORRELATION_DAILY,
     _SQL_MARKET_TIMING_SIGNAL,
     _SQL_DAILY_REVIEWS,
@@ -1218,7 +1242,7 @@ EXPECTED_TABLES = [
     "calendar_events",
     "holdings", "holding_tasks", "holding_quote_snapshots", "watchlist", "blacklist",
     "industry_info", "macro_info",
-    "daily_market", "daily_volume_concentration", "sector_correlation_daily",
+    "daily_market", "daily_volume_concentration", "trend_leader_pool", "sector_correlation_daily",
     "market_timing_signal", "daily_reviews",
     "emotion_cycle", "main_themes",
     "trades",

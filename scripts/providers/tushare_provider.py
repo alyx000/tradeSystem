@@ -1382,12 +1382,25 @@ class TushareProvider(DataProvider):
     def get_stock_daily_range(
         self, stock_code: str, start_date: str, end_date: str
     ) -> DataResult:
-        """个股区间日线，含 pct_chg。"""
+        """个股区间日线，含完整 OHLCV（open/high/low/close/pre_close/vol/amount）+ pct_chg。
+
+        底层 Tushare daily 接口本就返回全列；趋势主升 scanner 的贴 MA5 / 缩量阴线 /
+        远离 MA5 检测器需要 close 与 vol，故在此透传 OHLCV（旧消费方仅读 trade_date+pct_chg，向后兼容）。
+        """
         try:
             ts_code = self._normalize_stock_code(stock_code)
             sd = self._date_fmt(start_date)
             ed = self._date_fmt(end_date)
             records = self._query_records("daily", ts_code=ts_code, start_date=sd, end_date=ed)
+
+            # 说明：pandas NaN 已由 _df_to_records → _clean_scalar 清成 None（见 _clean_scalar），
+            # 故此处只需 float 容错，下游 detectors 的 `is None` 守卫兜底，无需再判 NaN。
+            def _f(v):
+                try:
+                    return float(v) if v is not None else None
+                except (TypeError, ValueError):
+                    return None
+
             out = []
             for item in records:
                 td = item.get("trade_date")
@@ -1395,12 +1408,21 @@ class TushareProvider(DataProvider):
                     continue
                 s = str(td).replace("-", "")[:8]
                 norm = f"{s[:4]}-{s[4:6]}-{s[6:8]}" if len(s) == 8 else str(td)
-                pc = item.get("pct_chg")
-                try:
-                    pct = float(pc) if pc is not None else None
-                except (TypeError, ValueError):
-                    pct = None
-                out.append({"trade_date": norm, "pct_chg": pct, "ts_code": ts_code})
+                out.append({
+                    "trade_date": norm,
+                    "ts_code": ts_code,
+                    "open": _f(item.get("open")),
+                    "high": _f(item.get("high")),
+                    "low": _f(item.get("low")),
+                    "close": _f(item.get("close")),
+                    "pre_close": _f(item.get("pre_close")),
+                    "vol": _f(item.get("vol")),
+                    "amount": _f(item.get("amount")),
+                    "pct_chg": _f(item.get("pct_chg")),
+                })
+            # Tushare daily 通常按 trade_date 倒序返回；统一归一为升序，
+            # 满足下游趋势主升 detector「bars 升序、最后一根=今日」契约。
+            out.sort(key=lambda r: r["trade_date"])
             return DataResult(data=out, source="tushare:daily")
         except Exception as e:
             return DataResult(data=None, source=self.name, error=str(e))

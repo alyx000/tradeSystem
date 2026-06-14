@@ -4,6 +4,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  diagnoseAntigravityFailure,
+  isGlobalLlmFailure,
+  sanitizeDiagnostics,
+} from "./antigravity_diagnostics.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const WORKFLOW_DIR = path.dirname(__filename);
@@ -13,6 +18,7 @@ const HELPER = path.join(WORKFLOW_DIR, "huibo_helper.py");
 const LLM_INPUT_MARKER = ".research-digest-workflow";
 let fatalCleanupDir = null;
 let helperEnvOverrides = {};
+let currentInvocationId = "";
 
 async function main() {
   const { command, opts } = parseArgs(process.argv.slice(2));
@@ -36,6 +42,7 @@ async function main() {
   const statePath = artifact("state.json");
   const eventsPath = artifact("events.jsonl");
   const readerDir = artifact("reader");
+  const antigravityLogDir = artifact("antigravity-logs");
   const readerCap = intOpt(opts.readerCap, 20);
   const readerConcurrency = intOpt(opts.readerConcurrency || process.env.HUIBO_READER_CONCURRENCY, 4);
   const readerMaxAttempts = intOpt(opts.readerMaxAttempts || process.env.HUIBO_READER_MAX_ATTEMPTS, 2);
@@ -43,6 +50,10 @@ async function main() {
   const windowDays = intOpt(opts.windowDays, 5);
   const resume = Boolean(opts.resume || opts.retryFailed);
   const retryFailed = Boolean(opts.retryFailed);
+  const invocationStartedAt = nowIso();
+  const invocationId = newInvocationId(invocationStartedAt);
+  currentInvocationId = invocationId;
+  helperEnvOverrides.HUIBO_WORKFLOW_INVOCATION_ID = invocationId;
 
   fs.mkdirSync(readerDir, { recursive: true });
   let state = readJsonIfExists(statePath) || {
@@ -50,8 +61,19 @@ async function main() {
     runDir,
     stages: {},
     reports: {},
+    llmStatus: "ok",
     options: {},
     startedAt: nowIso(),
+  };
+  state.llmStatus = state.llmStatus || "ok";
+  if (opts.resetLlmStatus) {
+    resetLlmStatus(state, eventsPath);
+  }
+  state.currentInvocation = {
+    id: invocationId,
+    startedAt: invocationStartedAt,
+    resume,
+    retryFailed,
   };
   state.options = {
     readerCap,
@@ -63,10 +85,25 @@ async function main() {
     summaryDir,
     llmInputBaseDir,
     llmInputDir,
+    antigravityLogDir,
   };
   saveState(statePath, state);
 
-  const ctx = { date, runDir, statePath, eventsPath, state, resume, retryFailed };
+  const ctx = { date, runDir, statePath, eventsPath, state, resume, retryFailed, opts };
+  if (preflightEnabled(opts) && !isLlmUnavailable(state)) {
+    await stage(ctx, "preflight", artifact("preflight.json"), async () => {
+      const result = await runAntigravityPreflight({
+        timeoutSeconds: intOpt(opts.preflightTimeoutSeconds || process.env.HUIBO_PREFLIGHT_TIMEOUT_SECONDS, 45),
+        antigravityLogDir,
+      });
+      writeJson(artifact("preflight.json"), result);
+      if (isGlobalLlmFailure(result.reason)) {
+        markLlmUnavailable(state, statePath, eventsPath, result, { stage: "preflight" });
+      }
+      return result;
+    });
+  }
+
   await stage(ctx, "collect", artifact("candidates.json"), async () => {
     return runHelper([
       "collect",
@@ -142,6 +179,10 @@ async function main() {
         };
         continue;
       }
+      if (isLlmUnavailable(state)) {
+        markReportSkippedForLlmUnavailable(item, state, eventsPath, readerPath);
+        continue;
+      }
       jobs.push({ item, readerPath });
     }
     saveState(statePath, state);
@@ -151,6 +192,11 @@ async function main() {
       const current = pending;
       pending = [];
       await runPool(current, Math.max(1, readerConcurrency), async ({ item, readerPath }) => {
+        if (isLlmUnavailable(state)) {
+          markReportSkippedForLlmUnavailable(item, state, eventsPath, readerPath);
+          saveState(statePath, state);
+          return;
+        }
         await readOneReport({
           item,
           readerPath,
@@ -158,6 +204,7 @@ async function main() {
           statePath,
           eventsPath,
           llmInputDir,
+          antigravityLogDir,
           timeoutSeconds: intOpt(opts.llmTimeoutSeconds || process.env.LLM_TIMEOUT_SECONDS, 240),
         });
       });
@@ -165,7 +212,7 @@ async function main() {
         const c = job.item.candidate;
         const reportState = state.reports[c.report_id] || {};
         const attempts = Number(reportState.attempts || 0);
-        if (reportState.status === "failed" && attempts < readerMaxAttempts) {
+        if (!isLlmUnavailable(state) && reportState.status === "failed" && attempts < readerMaxAttempts) {
           retryCount += 1;
           event(eventsPath, "report_read_retry", {
             report_id: c.report_id,
@@ -183,6 +230,7 @@ async function main() {
       retry_count: retryCount,
       reader_dir: readerDir,
       max_attempts: readerMaxAttempts,
+      ...readerStats(state),
     };
   });
 
@@ -197,14 +245,35 @@ async function main() {
       "--events-path", eventsPath,
       "--recommend-cap", String(recommendCap),
       "--lookback-days", String(windowDays),
+      "--antigravity-status", state.llmStatus || "ok",
+      "--antigravity-reason", state.llmFailureReason || "",
+      "--antigravity-message", state.llmFailureMessage || "",
+      "--antigravity-log-file", state.llmFailureLogFile || "",
       ...(opts.noAggregateLlm ? ["--no-llm"] : []),
     ]);
     const summaryPath = path.join(summaryDir, `${date}.json`);
     if (fs.existsSync(summaryPath)) {
       fs.copyFileSync(summaryPath, artifact("summary.json"));
     }
+    syncLlmStatusFromFinalizeResult(state, statePath, eventsPath, result);
     return result;
   });
+
+  if (opts.publish) {
+    await stage(ctx, "publish", artifact("published.json"), async () => {
+      return runHelper([
+        "publish",
+        "--date", date,
+        "--markdown", artifact("report.md"),
+        "--huibo-summary", artifact("summary.json"),
+        "--out", artifact("published.json"),
+        "--out-root", opts.publishOutRoot || path.join(REPO_ROOT, "data/reports/research-digest"),
+        ...(opts.publishDryRun ? ["--dry-run"] : []),
+        ...(opts.publishNoPush ? ["--no-push"] : []),
+        ...(opts.includeBaseDigest ? ["--include-base-digest"] : []),
+      ]);
+    });
+  }
 
   await stage(ctx, "cleanup", null, async () => {
     const llmCleanup = cleanupLlmInputDir(llmInputDir, Boolean(opts.cleanupDryRun));
@@ -218,6 +287,15 @@ async function main() {
     ], llmCleanup);
   });
 
+  const runReportPath = artifact("run_report.md");
+  const summaryPayload = workflowSummary(state, opts);
+  try {
+    writeRunReport(runReportPath, state, opts);
+    event(eventsPath, "workflow_summary", { ...summaryPayload, run_report: runReportPath });
+  } catch (err) {
+    event(eventsPath, "run_report_error", { error: String(err.message || err), run_report: runReportPath });
+    event(eventsPath, "workflow_summary", { ...summaryPayload, run_report: runReportPath, run_report_error: String(err.message || err) });
+  }
   console.log(`[workflow] done run_dir=${runDir}`);
   process.exit(0);
 }
@@ -244,12 +322,46 @@ function parseArgs(argv) {
 
 function resolveWorkflowDate(rawDate) {
   if (rawDate === undefined) {
-    return defaultDateInShanghai();
+    return resolveDefaultTradeDate(defaultDateInShanghai());
   }
   if (typeof rawDate !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(rawDate)) {
     throw new Error("--date requires YYYY-MM-DD");
   }
   return rawDate;
+}
+
+function resolveDefaultTradeDate(today) {
+  const result = spawnSync("python3", [HELPER, "resolve-date", "--date", today], {
+    cwd: SCRIPTS_DIR,
+    encoding: "utf-8",
+    env: process.env,
+  });
+  if (result.status === 0) {
+    try {
+      const parsed = JSON.parse(result.stdout);
+      if (parsed && typeof parsed.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(parsed.date)) {
+        return parsed.date;
+      }
+    } catch (_) {
+      // fall through to local weekday fallback
+    }
+  } else {
+    console.warn(`[workflow] resolve-date helper failed, using weekday fallback: ${result.stderr || result.stdout}`);
+  }
+  return previousWeekday(today);
+}
+
+function previousWeekday(today) {
+  const d = new Date(`${today}T00:00:00Z`);
+  for (let delta = 1; delta <= 15; delta += 1) {
+    const candidate = new Date(d);
+    candidate.setUTCDate(candidate.getUTCDate() - delta);
+    const day = candidate.getUTCDay();
+    if (day !== 0 && day !== 6) {
+      return candidate.toISOString().slice(0, 10);
+    }
+  }
+  return today;
 }
 
 function defaultDateInShanghai() {
@@ -266,7 +378,7 @@ function defaultDateInShanghai() {
 
 async function stage(ctx, name, outputPath, fn) {
   const existing = outputPath && fs.existsSync(outputPath);
-  const mustRefresh = ctx.retryFailed && name === "finalize";
+  const mustRefresh = shouldRefreshStage(ctx, name, outputPath);
   if (ctx.resume && !mustRefresh && existing && ctx.state.stages[name]?.status === "done") {
     event(ctx.eventsPath, "stage_skip", { stage: name, output: outputPath });
     return;
@@ -300,6 +412,25 @@ async function stage(ctx, name, outputPath, fn) {
   saveState(ctx.statePath, ctx.state);
 }
 
+function shouldRefreshStage(ctx, name, outputPath) {
+  if (ctx.retryFailed && (name === "finalize" || name === "publish")) {
+    return true;
+  }
+  if (
+    name === "publish"
+    && ctx.opts?.publish
+    && !ctx.opts?.publishDryRun
+    && !ctx.opts?.publishNoPush
+    && outputPath
+    && fs.existsSync(outputPath)
+    && ctx.state.stages[name]?.status === "done"
+  ) {
+    const published = readJsonIfExists(outputPath) || {};
+    return published.pushed !== true;
+  }
+  return false;
+}
+
 function runHelper(args, extra = null) {
   const result = spawnSync("python3", [HELPER, ...args], {
     cwd: SCRIPTS_DIR,
@@ -320,7 +451,7 @@ function runHelper(args, extra = null) {
   }
 }
 
-async function readOneReport({ item, readerPath, state, statePath, eventsPath, llmInputDir, timeoutSeconds }) {
+async function readOneReport({ item, readerPath, state, statePath, eventsPath, llmInputDir, antigravityLogDir, timeoutSeconds }) {
   const c = item.candidate;
   const reportState = state.reports[c.report_id] || {};
   const attempts = Number(reportState.attempts || 0) + 1;
@@ -341,7 +472,7 @@ async function readOneReport({ item, readerPath, state, statePath, eventsPath, l
       llmPdfPath,
     };
     saveState(statePath, state);
-    const reader = await runAntigravityReader({ ...c, llm_pdf_path: llmPdfPath }, timeoutSeconds);
+    const reader = await runAntigravityReader({ ...c, llm_pdf_path: llmPdfPath }, { timeoutSeconds, antigravityLogDir });
     writeJson(readerPath, reader);
     state.reports[c.report_id] = {
       ...state.reports[c.report_id],
@@ -352,13 +483,26 @@ async function readOneReport({ item, readerPath, state, statePath, eventsPath, l
     };
     event(eventsPath, "report_read_end", { report_id: c.report_id, title: c.title, reader_path: readerPath });
   } catch (err) {
+    const diagnostics = sanitizeDiagnostics(err.diagnostics);
     state.reports[c.report_id] = {
       ...state.reports[c.report_id],
       status: "failed",
       lastError: String(err.message || err),
+      ...(diagnostics.reason ? { lastErrorReason: diagnostics.reason } : {}),
+      ...(diagnostics.log_file ? { lastErrorLogFile: diagnostics.log_file } : {}),
       updatedAt: nowIso(),
     };
-    event(eventsPath, "report_read_error", { report_id: c.report_id, title: c.title, error: String(err.message || err) });
+    event(eventsPath, "report_read_error", {
+      report_id: c.report_id,
+      title: c.title,
+      error: String(err.message || err),
+      ...(diagnostics.reason ? { reason: diagnostics.reason } : {}),
+      ...(diagnostics.message ? { message: diagnostics.message } : {}),
+      ...(diagnostics.log_file ? { log_file: diagnostics.log_file } : {}),
+    });
+    if (isGlobalLlmFailure(diagnostics.reason)) {
+      markLlmUnavailable(state, statePath, eventsPath, diagnostics);
+    }
   } finally {
     saveState(statePath, state);
   }
@@ -375,7 +519,211 @@ function prepareLlmPdf(candidate, llmInputDir) {
   return target;
 }
 
-async function runAntigravityReader(candidate, timeoutSeconds) {
+function nextAntigravityLogFile(root, reportId) {
+  const dir = root || path.join(os.tmpdir(), "tradesystem-antigravity-logs");
+  fs.mkdirSync(dir, { recursive: true });
+  return path.join(dir, `${safeFileStem(reportId)}-${process.pid}-${Date.now()}.log`);
+}
+
+function isLlmUnavailable(state) {
+  return state.llmStatus === "unavailable";
+}
+
+function markLlmUnavailable(state, statePath, eventsPath, diagnostics, eventExtra = {}) {
+  if (isLlmUnavailable(state)) return;
+  const d = sanitizeDiagnostics(diagnostics);
+  state.llmStatus = "unavailable";
+  state.llmFailureReason = d.reason || "antigravity_unavailable";
+  state.llmFailureMessage = d.message || state.llmFailureReason;
+  state.llmFailureLogFile = d.log_file || "";
+  state.llmGlobalFailureAt = nowIso();
+  event(eventsPath, "llm_global_failure", {
+    reason: state.llmFailureReason,
+    message: state.llmFailureMessage,
+    log_file: state.llmFailureLogFile,
+    ...eventExtra,
+  });
+  saveState(statePath, state);
+}
+
+function syncLlmStatusFromFinalizeResult(state, statePath, eventsPath, result) {
+  if (!result || result.llm_status !== "unavailable") {
+    return;
+  }
+  markLlmUnavailable(
+    state,
+    statePath,
+    eventsPath,
+    {
+      reason: result.llm_failure_reason || "antigravity_unavailable",
+      message: result.llm_failure_message || result.llm_failure_reason || "antigravity_unavailable",
+      log_file: result.llm_failure_log_file || "",
+    },
+    { stage: "finalize" },
+  );
+}
+
+function markReportSkippedForLlmUnavailable(item, state, eventsPath, readerPath = "") {
+  const c = item.candidate;
+  const existing = state.reports[c.report_id] || {};
+  if (existing.status === "read_done" || existing.status === "skipped_llm_unavailable") return;
+  state.reports[c.report_id] = {
+    ...existing,
+    reportId: c.report_id,
+    title: c.title,
+    pdfPath: c.pdf_path || existing.pdfPath || "",
+    status: "skipped_llm_unavailable",
+    lastError: state.llmFailureReason || "llm_unavailable",
+    updatedAt: nowIso(),
+  };
+  if (readerPath) {
+    writeJson(readerPath, {
+      reader: {
+        error: "skipped_llm_unavailable",
+        reason: state.llmFailureReason || "llm_unavailable",
+        message: state.llmFailureMessage || "",
+      },
+    });
+  }
+  event(eventsPath, "report_read_skip", {
+    report_id: c.report_id,
+    title: c.title,
+    reason: "skipped_llm_unavailable",
+  });
+}
+
+function readerStats(state) {
+  const reports = Object.values(state.reports || {});
+  return {
+    llm_status: state.llmStatus || "ok",
+    reader_success_count: reports.filter((report) => report.status === "read_done").length,
+    reader_failed_count: reports.filter((report) => report.status === "failed").length,
+    reader_skipped_count: reports.filter((report) => report.status === "skipped_llm_unavailable").length,
+  };
+}
+
+function resetLlmStatus(state, eventsPath) {
+  const oldStatus = state.llmStatus || "ok";
+  const oldReason = state.llmFailureReason || "";
+  state.llmStatus = "ok";
+  delete state.llmFailureReason;
+  delete state.llmFailureMessage;
+  delete state.llmFailureLogFile;
+  delete state.llmGlobalFailureAt;
+  for (const report of Object.values(state.reports || {})) {
+    if (report.status === "skipped_llm_unavailable") {
+      report.status = "failed";
+      report.lastError = "reset_llm_status";
+      delete report.lastErrorReason;
+      delete report.lastErrorLogFile;
+      report.updatedAt = nowIso();
+    }
+  }
+  event(eventsPath, "llm_status_reset", {
+    old_status: oldStatus,
+    old_reason: oldReason,
+    new_status: "ok",
+  });
+}
+
+function workflowSummary(state, opts) {
+  const stats = readerStats(state);
+  const finalizeResult = state.stages?.finalize?.result || {};
+  const publishResult = state.stages?.publish?.result || {};
+  return {
+    invocation_id: state.currentInvocation?.id || currentInvocationId,
+    llm_status: stats.llm_status,
+    reader_success_count: stats.reader_success_count,
+    reader_failed_count: stats.reader_failed_count,
+    reader_skipped_count: stats.reader_skipped_count,
+    ranker_status: finalizeResult.ranker_status || "",
+    include_base_digest: Boolean(opts.includeBaseDigest),
+    base_digest_included: Boolean(publishResult.base_digest_included),
+    published: Boolean(opts.publish && state.stages?.publish?.status === "done"),
+    pushed: Boolean(publishResult.pushed),
+    summary: state.runDir ? path.join(state.runDir, "summary.json") : finalizeResult.summary || "",
+    markdown: state.runDir ? path.join(state.runDir, "report.md") : finalizeResult.markdown || "",
+  };
+}
+
+function preflightEnabled(opts) {
+  const raw = process.env.HUIBO_ANTIGRAVITY_PREFLIGHT;
+  return Boolean(opts.preflight || raw === "1" || String(raw || "").toLowerCase() === "true");
+}
+
+async function runAntigravityPreflight({ timeoutSeconds, antigravityLogDir }) {
+  const logFile = nextAntigravityLogFile(antigravityLogDir, "preflight");
+  const cmd = buildAntigravityCommand("Antigravity health check. Output exactly JSON: {\"ok\":true}", {
+    timeoutSeconds,
+    logFile,
+  });
+  let stdout = "";
+  let stderr = "";
+  try {
+    const result = await runProcess(cmd.command, cmd.args, (timeoutSeconds + 10) * 1000, { logFile });
+    stdout = result.stdout;
+    stderr = result.stderr;
+  } catch (err) {
+    const diagnostics = sanitizeDiagnostics(err.diagnostics || diagnoseAntigravityFailure({
+      stdout: err.stdout || "",
+      stderr: err.stderr || String(err.message || err),
+      logFile,
+      reason: err.reason || "antigravity_failed",
+    }));
+    return {
+      status: isGlobalLlmFailure(diagnostics.reason) ? "unavailable" : "warning",
+      ...diagnostics,
+    };
+  }
+  if (!String(stdout || "").trim()) {
+    const diagnostics = diagnoseAntigravityFailure({ stdout, stderr, logFile, reason: "empty_stdout" });
+    return {
+      status: isGlobalLlmFailure(diagnostics.reason) ? "unavailable" : "warning",
+      ...diagnostics,
+    };
+  }
+  const parsed = parseJsonObject(stdout);
+  if (!parsed) {
+    const diagnostics = diagnoseAntigravityFailure({ stdout, stderr, logFile, reason: "parse_failed" });
+    return { status: "warning", ...diagnostics };
+  }
+  return { status: "ok", reason: "ok", message: "ok", log_file: logFile };
+}
+
+function writeRunReport(file, state, opts) {
+  const stats = readerStats(state);
+  const lines = [
+    `# Research Digest Workflow Run · ${state.date || ""}`,
+    "",
+    "## Summary",
+    "",
+    `| key | value |`,
+    `| --- | --- |`,
+    `| invocation_id | ${state.currentInvocation?.id || currentInvocationId} |`,
+    `| llm_status | ${stats.llm_status} |`,
+    `| reader_success_count | ${stats.reader_success_count} |`,
+    `| reader_failed_count | ${stats.reader_failed_count} |`,
+    `| reader_skipped_count | ${stats.reader_skipped_count} |`,
+    `| ranker_status | ${state.stages?.finalize?.result?.ranker_status || ""} |`,
+    `| include_base_digest | ${Boolean(opts.includeBaseDigest)} |`,
+    `| base_digest_included | ${Boolean(state.stages?.publish?.result?.base_digest_included)} |`,
+    "",
+    "## Stages",
+    "",
+    `| stage | status | duration_ms |`,
+    `| --- | --- | ---: |`,
+  ];
+  for (const [name, row] of Object.entries(state.stages || {})) {
+    lines.push(`| ${name} | ${row.status || ""} | ${row.durationMs ?? ""} |`);
+  }
+  lines.push("", "## Reports", "", `| title | status | attempts | last_error |`, `| --- | --- | ---: | --- |`);
+  for (const report of Object.values(state.reports || {})) {
+    lines.push(`| ${escapeMd(report.title || report.reportId || "")} | ${report.status || ""} | ${report.attempts || 0} | ${escapeMd(report.lastErrorReason || report.lastError || "")} |`);
+  }
+  fs.writeFileSync(file, `${lines.join("\n")}\n`, "utf-8");
+}
+
+async function runAntigravityReader(candidate, { timeoutSeconds, antigravityLogDir }) {
   const pdfPath = candidate.llm_pdf_path || candidate.pdf_path;
   const prompt = [
     "请读取这个PDF研报，只输出JSON，不要markdown。",
@@ -385,14 +733,50 @@ async function runAntigravityReader(candidate, timeoutSeconds) {
     "source_page/source_section 尽量给页码或章节；不要输出目标价、买入卖出、仓位或价格预测。",
     `候选标题：${candidate.title}。PDF：@${path.resolve(pdfPath)}`,
   ].join("");
+  const logFile = nextAntigravityLogFile(antigravityLogDir, candidate.report_id);
   const cmd = buildAntigravityCommand(prompt, {
     addDirs: [path.dirname(path.resolve(pdfPath))],
     timeoutSeconds,
+    logFile,
   });
-  const { stdout } = await runProcess(cmd.command, cmd.args, (timeoutSeconds + 30) * 1000);
+  let stdout = "";
+  let stderr = "";
+  try {
+    const result = await runProcess(cmd.command, cmd.args, (timeoutSeconds + 30) * 1000, { logFile });
+    stdout = result.stdout;
+    stderr = result.stderr;
+  } catch (err) {
+    const diagnostics = sanitizeDiagnostics(err.diagnostics || diagnoseAntigravityFailure({
+      stdout: err.stdout || "",
+      stderr: err.stderr || String(err.message || err),
+      logFile,
+      reason: err.reason || "antigravity_failed",
+    }));
+    err.diagnostics = diagnostics;
+    throw err;
+  }
+  if (!String(stdout || "").trim()) {
+    const diagnostics = diagnoseAntigravityFailure({
+      stdout,
+      stderr,
+      logFile,
+      reason: "empty_stdout",
+    });
+    const err = new Error(diagnostics.message || "antigravity stdout is empty");
+    err.diagnostics = diagnostics;
+    throw err;
+  }
   const parsed = parseJsonObject(stdout);
   if (!parsed) {
-    throw new Error("antigravity output has no JSON object");
+    const diagnostics = diagnoseAntigravityFailure({
+      stdout,
+      stderr,
+      logFile,
+      reason: "parse_failed",
+    });
+    const err = new Error("antigravity output has no JSON object");
+    err.diagnostics = diagnostics;
+    throw err;
   }
   return parsed;
 }
@@ -422,11 +806,12 @@ function buildAntigravityCommand(prompt, options = {}) {
   args.push("--dangerously-skip-permissions");
   const model = process.env.LLM_MODEL || process.env.ANTIGRAVITY_MODEL || "";
   if (model) args.push("--model", model);
+  if (options.logFile) args.push("--log-file", options.logFile);
   args.push("--prompt", prompt);
   return { command: agy, args };
 }
 
-function runProcess(command, args, timeoutMs) {
+function runProcess(command, args, timeoutMs, options = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       env: process.env,
@@ -458,6 +843,13 @@ function runProcess(command, args, timeoutMs) {
       const fatal = detectFatalAntigravityPrompt(`${stdout}\n${stderr}`);
       if (!fatal) return;
       earlyError = new Error(fatal);
+      earlyError.reason = "auth_required";
+      earlyError.diagnostics = diagnoseAntigravityFailure({
+        stdout,
+        stderr,
+        logFile: options.logFile,
+        reason: "auth_required",
+      });
       clearTimeout(timer);
       signalProcessGroup(child, "SIGTERM");
       forceTimer = setTimeout(() => {
@@ -473,17 +865,40 @@ function runProcess(command, args, timeoutMs) {
       inspectOutput();
     });
     child.on("error", (err) => {
+      err.reason = "startup_failed";
+      err.diagnostics = diagnoseAntigravityFailure({
+        stdout,
+        stderr: String(err.message || err),
+        logFile: options.logFile,
+        reason: "startup_failed",
+      });
       finish(reject, err);
     });
     child.on("close", (code) => {
       if (earlyError) {
         finish(reject, earlyError);
       } else if (timeoutError) {
+        timeoutError.diagnostics = diagnoseAntigravityFailure({
+          stdout,
+          stderr,
+          logFile: options.logFile,
+          reason: "timeout",
+        });
         finish(reject, timeoutError);
       } else if (code === 0) {
         finish(resolve, { stdout, stderr });
       } else {
-        finish(reject, new Error(`process exited ${code}: ${stderr || stdout}`));
+        const err = new Error(`process exited ${code}: ${stderr || stdout}`);
+        err.stdout = stdout;
+        err.stderr = stderr;
+        err.diagnostics = diagnoseAntigravityFailure({
+          stdout,
+          stderr,
+          logFile: options.logFile,
+          reason: "antigravity_failed",
+          returncode: code,
+        });
+        finish(reject, err);
       }
     });
   });
@@ -555,7 +970,7 @@ function parseJsonObject(text) {
 
 function event(eventsPath, eventName, payload) {
   fs.mkdirSync(path.dirname(eventsPath), { recursive: true });
-  fs.appendFileSync(eventsPath, `${JSON.stringify({ ts: nowIso(), event: eventName, ...payload })}\n`, "utf-8");
+  fs.appendFileSync(eventsPath, `${JSON.stringify({ ts: nowIso(), event: eventName, invocation_id: currentInvocationId, ...payload })}\n`, "utf-8");
 }
 
 function readJson(file) {
@@ -588,6 +1003,10 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+function newInvocationId(startedAt) {
+  return `${startedAt.replace(/[^0-9A-Za-z]/g, "").slice(0, 17)}-${process.pid}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 function intOpt(value, fallback) {
   const n = Number.parseInt(String(value ?? ""), 10);
   return Number.isFinite(n) && n > 0 ? n : fallback;
@@ -599,6 +1018,10 @@ function abs(value) {
 
 function safeFileStem(value) {
   return String(value || "report").replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 120) || "report";
+}
+
+function escapeMd(value) {
+  return String(value || "").replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
 }
 
 function camel(key) {

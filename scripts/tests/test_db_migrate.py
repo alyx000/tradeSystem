@@ -443,8 +443,8 @@ def test_migrate_v16_repairs_teacher_notes_fts_missing_mentioned_stocks(tmp_path
     conn.close()
 
 
-def test_v31_migration_creates_market_timing_signal(tmp_path):
-    """既有 v30 库（无 market_timing_signal）经 migrate → 表存在且 user_version 到最新。"""
+def test_v32_migration_creates_market_timing_signal(tmp_path):
+    """既有 v30 库（无 market_timing_signal）经 migrate → 表存在且 user_version 到最新（v32 建表）。"""
     conn = get_connection(tmp_path / "v30.db")
     migrate(conn)
     # 模拟回退到 v30：删表 + 降版本号
@@ -458,18 +458,18 @@ def test_v31_migration_creates_market_timing_signal(tmp_path):
 
     migrate(conn)
     assert get_schema_version(conn) == CURRENT_SCHEMA_VERSION
-    assert get_schema_version(conn) == 32
+    assert get_schema_version(conn) == 33
     assert conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table' AND name='market_timing_signal'"
     ).fetchone() is not None
     conn.close()
 
 
-def test_v32_backfills_market_timing_quote_columns(tmp_path):
-    """既有 v31 库（market_timing_signal 无 close/change_pct）经 migrate → ALTER 补列且不丢数据。"""
-    conn = get_connection(tmp_path / "v31_noquote.db")
+def test_v33_backfills_market_timing_quote_columns(tmp_path):
+    """既有 v32 库（market_timing_signal 无 close/change_pct）经 migrate → v33 ALTER 补列且不丢数据。"""
+    conn = get_connection(tmp_path / "v32_noquote.db")
     migrate(conn)
-    # 模拟 v31 老表：去掉 close/change_pct 列（重建一张不含这两列的同名表 + 塞一行）
+    # 模拟 v32 老表：去掉 close/change_pct 列（重建一张不含这两列的同名表 + 塞一行）
     conn.execute("DROP TABLE market_timing_signal")
     conn.execute(
         "CREATE TABLE market_timing_signal ("
@@ -481,7 +481,7 @@ def test_v32_backfills_market_timing_quote_columns(tmp_path):
         "INSERT INTO market_timing_signal (trade_date, index_code, index_name, resonance_count) "
         "VALUES ('2026-06-12', '932000.CSI', '中证2000', 3)"
     )
-    conn.execute("PRAGMA user_version = 31")  # 退回 v31，版本门触发 v32 ALTER
+    conn.execute("PRAGMA user_version = 32")  # 退回 v32（表已建未补列）→ 版本门触发 v33 ALTER
     conn.commit()
     cols_before = {r[1] for r in conn.execute("PRAGMA table_info(market_timing_signal)").fetchall()}
     assert "close" not in cols_before and "change_pct" not in cols_before
@@ -500,28 +500,28 @@ def test_v32_backfills_market_timing_quote_columns(tmp_path):
     conn.close()
 
 
-def test_migrate_self_heals_v31_db_missing_table(tmp_path):
-    """异常半迁移态：DB 已是 v31 但缺 market_timing_signal → migrate 版本无关兜底重建。"""
-    conn = get_connection(tmp_path / "v31_broken.db")
+def test_migrate_self_heals_db_missing_market_timing_table(tmp_path):
+    """异常半迁移态：DB 已是最新版但缺 market_timing_signal → migrate 版本无关兜底重建。"""
+    conn = get_connection(tmp_path / "healed_broken.db")
     migrate(conn)
-    conn.execute("DROP TABLE market_timing_signal")  # 模拟"已 v31 但表缺失"
-    conn.execute("PRAGMA user_version = 31")          # 版本仍 31 → 版本门会跳过 v31 块
+    conn.execute("DROP TABLE market_timing_signal")          # 模拟"已最新版但表缺失"
+    conn.execute(f"PRAGMA user_version = {CURRENT_SCHEMA_VERSION}")  # 版本最新 → 版本门跳过所有迁移块
     conn.commit()
     assert conn.execute(
         "SELECT name FROM sqlite_master WHERE name='market_timing_signal'"
     ).fetchone() is None
 
-    migrate(conn)  # 版本无关兜底应重建表
+    migrate(conn)  # 仅版本无关兜底能重建表
     assert conn.execute(
         "SELECT name FROM sqlite_master WHERE name='market_timing_signal'"
     ).fetchone() is not None
     conn.close()
 
 
-def test_migrate_healthy_v31_preserves_caller_transaction(tmp_path):
-    """健康 v31 库上 migrate() 不得提交调用方未提交的写入（兜底探查须无事务副作用）。"""
-    conn = get_connection(tmp_path / "v31_healthy.db")
-    migrate(conn)  # 到 v31，表已在
+def test_migrate_healthy_db_preserves_caller_transaction(tmp_path):
+    """健康最新版库上 migrate() 不得提交调用方未提交的写入（兜底探查须无事务副作用）。"""
+    conn = get_connection(tmp_path / "healthy.db")
+    migrate(conn)  # 到最新版，表已在
     teacher_id = Q.get_or_create_teacher(conn, "事务测试")
     conn.commit()
     # 未提交的业务写入

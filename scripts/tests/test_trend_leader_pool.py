@@ -1,0 +1,152 @@
+"""趋势主升观察池 trend_leader_pool 的 schema + 状态机单测（Stage 2a/2b）。
+
+PK=(code, entered_date)：exited 再命中=新建一行保留历史；active 每 code 至多一行。
+"""
+from __future__ import annotations
+
+import sqlite3
+
+import pytest
+
+from db.schema import init_schema
+from services.trend_leader import pool
+
+
+@pytest.fixture
+def conn():
+    c = sqlite3.connect(":memory:")
+    c.row_factory = sqlite3.Row  # 与生产 db.connection 一致
+    init_schema(c)
+    return c
+
+
+def _rec(conn, date, **over):
+    kw = dict(code="600552", name="凯盛科技", sw_l2="玻璃玻纤",
+              first_limit_date="2026-06-09", date=date)
+    kw.update(over)
+    return pool.record(conn, **kw)
+
+
+# ---- 2a schema ----
+
+def test_schema_creates_trend_leader_pool(conn):
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(trend_leader_pool)")}
+    assert {
+        "code", "name", "sw_l2", "first_limit_date", "entered_date", "last_seen_date",
+        "days_in_pool", "status", "exit_date", "exit_reason", "last_signal_json",
+    } <= cols
+
+
+# ---- 2b 状态机 ----
+
+def test_enter_creates_active_days_1(conn):
+    assert _rec(conn, "2026-06-09") == "entered"
+    a = pool.get_active(conn, "600552")
+    assert a["status"] == "active" and a["days_in_pool"] == 1 and a["entered_date"] == "2026-06-09"
+
+
+def test_refresh_next_day_increments_days(conn):
+    _rec(conn, "2026-06-09")
+    assert _rec(conn, "2026-06-10") == "refreshed"
+    a = pool.get_active(conn, "600552")
+    assert a["days_in_pool"] == 2 and a["last_seen_date"] == "2026-06-10"
+
+
+def test_same_day_rescan_does_not_double_count(conn):
+    _rec(conn, "2026-06-09")
+    _rec(conn, "2026-06-09")
+    assert pool.get_active(conn, "600552")["days_in_pool"] == 1
+
+
+def test_mark_exited_clears_active_and_records_reason(conn):
+    _rec(conn, "2026-06-09")
+    pool.mark_exited(conn, "600552", date="2026-06-12", reason="跌破MA10")
+    assert pool.get_active(conn, "600552") is None
+    exited = pool.list_pool(conn, status="exited")
+    assert len(exited) == 1 and exited[0]["exit_reason"] == "跌破MA10" and exited[0]["exit_date"] == "2026-06-12"
+
+
+def test_reentry_after_exit_new_row_keeps_history(conn):
+    _rec(conn, "2026-06-09")
+    pool.mark_exited(conn, "600552", date="2026-06-12", reason="跌破MA10")
+    assert _rec(conn, "2026-06-20") == "entered"
+    a = pool.get_active(conn, "600552")
+    assert a["entered_date"] == "2026-06-20" and a["days_in_pool"] == 1
+    assert len(pool.list_pool(conn)) == 2  # 1 exited 历史 + 1 active
+
+
+def test_reentry_same_date_after_exit_reactivates(conn):
+    # 极端：同日入池→退池→同日再命中。ON CONFLICT 重新激活，不崩、不新增行。
+    _rec(conn, "2026-06-09")
+    pool.mark_exited(conn, "600552", date="2026-06-09", reason="盘中破位")
+    assert _rec(conn, "2026-06-09") == "entered"
+    a = pool.get_active(conn, "600552")
+    assert a is not None and a["status"] == "active" and a["exit_reason"] is None
+    assert len(pool.list_pool(conn)) == 1  # 同 (code,entered_date) 复用
+
+
+def test_touch_updates_signal_without_entering(conn):
+    _rec(conn, "2026-06-09")
+    pool.touch(conn, "600552", date="2026-06-10", signal_json={"overheat": True, "deviation": 0.09})
+    a = pool.get_active(conn, "600552")
+    assert a["days_in_pool"] == 2 and a["last_signal"]["overheat"] is True
+
+
+def test_touch_stale_earlier_date_is_noop(conn):
+    """补跑更早日期：不回拨 last_seen、不错增 days。"""
+    _rec(conn, "2026-06-10")
+    pool.touch(conn, "600552", date="2026-06-09", signal_json={"x": 1})
+    a = pool.get_active(conn, "600552")
+    assert a["last_seen_date"] == "2026-06-10" and a["days_in_pool"] == 1
+
+
+def test_record_refresh_stale_date_is_noop(conn):
+    """已 last_seen=06-10 后补跑 06-09 再命中：状态不回拨。"""
+    _rec(conn, "2026-06-10")
+    _rec(conn, "2026-06-09")
+    a = pool.get_active(conn, "600552")
+    assert a["last_seen_date"] == "2026-06-10" and a["days_in_pool"] == 1
+
+
+def test_mark_exited_stale_earlier_date_is_noop(conn):
+    """旧日期退池请求不退当前(更晚)的 active。"""
+    _rec(conn, "2026-06-10")
+    pool.mark_exited(conn, "600552", date="2026-06-09", reason="stale")
+    assert pool.get_active(conn, "600552") is not None
+
+
+def test_touch_noop_when_no_active(conn):
+    pool.touch(conn, "000001", date="2026-06-10", signal_json={"x": 1})
+    assert pool.list_pool(conn) == []
+
+
+def test_signal_json_roundtrip(conn):
+    _rec(conn, "2026-06-09", signal_json={"near_ma5": True, "deviation": 0.012})
+    a = pool.get_active(conn, "600552")
+    assert a["last_signal"]["near_ma5"] is True and a["last_signal"]["deviation"] == pytest.approx(0.012)
+    assert "last_signal_json" not in a  # 原始内部列不外泄，只暴露已解析的 last_signal
+
+
+def test_active_unique_index_blocks_two_active(conn):
+    """partial unique index 强制每 code 至多一 active 行（DB 级不变量护栏）。"""
+    _rec(conn, "2026-06-09")
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO trend_leader_pool "
+            "(code, name, sw_l2, first_limit_date, entered_date, last_seen_date, days_in_pool, status) "
+            "VALUES ('600552','凯盛科技','玻璃玻纤','2026-06-20','2026-06-20','2026-06-20',1,'active')")
+
+
+def test_migrate_v30_db_creates_trend_leader_pool():
+    """已有 v30 真实库走 migrate 必须补建 trend_leader_pool（init_schema 只管 fresh 库）。"""
+    from db.migrate import migrate, set_schema_version, get_schema_version
+
+    c = sqlite3.connect(":memory:")
+    c.row_factory = sqlite3.Row
+    init_schema(c)
+    c.execute("DROP TABLE trend_leader_pool")      # 模拟 v30 老库：尚无此表
+    set_schema_version(c, 30)
+    migrate(c)
+    cols = {r[1] for r in c.execute("PRAGMA table_info(trend_leader_pool)")}
+    assert "code" in cols and "status" in cols
+    assert get_schema_version(c) >= 31

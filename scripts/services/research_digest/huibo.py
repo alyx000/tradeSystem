@@ -75,6 +75,7 @@ class HuiboDigest:
     industry_summary: dict[str, Any] = field(default_factory=dict)
     trend_summary: dict[str, Any] = field(default_factory=dict)
     recommendations: list[dict[str, Any]] = field(default_factory=list)
+    meta: dict[str, Any] = field(default_factory=dict)
 
     def to_jsonable(self) -> dict[str, Any]:
         return {
@@ -92,6 +93,7 @@ class HuiboDigest:
             "industry_summary": self.industry_summary,
             "trend_summary": self.trend_summary,
             "recommendations": self.recommendations,
+            "meta": self.meta,
         }
 
 
@@ -380,15 +382,21 @@ def build_role_runner(prompt_runner):
         return None
 
     def runner(role: str, payload: dict[str, Any]):
+        runner.last_diagnostics = None
         prompt = _build_role_prompt(role)
         pdf_path = _clean_str(payload.get("report_pdf_path")) if role == "report_reader" else ""
         if pdf_path:
             if not _allow_external_pdf_llm():
                 logger.warning("[research-digest] HUIBO_ALLOW_EXTERNAL_PDF_LLM 未启用，跳过外部 Antigravity PDF 阅读")
                 return None
-            return _run_antigravity_pdf_reader(payload)
-        return prompt_runner(prompt, payload)
+            result = _run_antigravity_pdf_reader(payload)
+            runner.last_diagnostics = getattr(_run_antigravity_pdf_reader, "last_diagnostics", None)
+            return result
+        result = prompt_runner(prompt, payload)
+        runner.last_diagnostics = getattr(prompt_runner, "last_diagnostics", None)
+        return result
 
+    runner.last_diagnostics = None
     return runner
 
 
@@ -649,12 +657,21 @@ def _score_candidate(c: HuiboCandidate, preview_texts: dict[str, str]) -> Prescr
 
 def _rank_recommendations(reader_results: list[dict[str, Any]], *, recommend_cap: int) -> list[dict[str, Any]]:
     def score(r: dict[str, Any]) -> float:
+        return _fallback_score(r)["total_score"]
+
+    def explanation(r: dict[str, Any]) -> dict[str, Any]:
+        payload = _fallback_score(r)
         reader = r.get("reader") or {}
-        try:
-            read_score = float(reader.get("read_score") or 0)
-        except (TypeError, ValueError):
-            read_score = 0.0
-        return read_score + float(r.get("prescreen_score") or 0)
+        quality = reader.get("quality") if isinstance(reader.get("quality"), dict) else {}
+        return {
+            "ranker": "fallback",
+            "read_score": payload["read_score"],
+            "prescreen_score": payload["prescreen_score"],
+            "quality_penalty": payload["quality_penalty"],
+            "total_score": payload["total_score"],
+            "prescreen_reasons": list(r.get("prescreen_reasons") or []),
+            "quality_issues": list(quality.get("issues") or []),
+        }
 
     usable = [r for r in reader_results if not (r.get("reader") or {}).get("error")]
     ranked = sorted(usable, key=lambda r: (-score(r), str(r.get("title") or "")))
@@ -670,9 +687,26 @@ def _rank_recommendations(reader_results: list[dict[str, Any]], *, recommend_cap
             "reason": reader.get("recommend_reason") or reader.get("viewpoint") or "综合评分靠前",
             "score": round(score(r), 2),
             "source": f"{r.get('institution') or ''} {r.get('date') or ''}".strip(),
+            "ranking_explanation": explanation(r),
         })
     return out
 
+
+def _fallback_score(r: dict[str, Any]) -> dict[str, float]:
+    reader = r.get("reader") or {}
+    try:
+        read_score = float(reader.get("read_score") or 0)
+    except (TypeError, ValueError):
+        read_score = 0.0
+    prescreen_score = float(r.get("prescreen_score") or 0)
+    quality = reader.get("quality") if isinstance(reader.get("quality"), dict) else {}
+    quality_penalty = -10.0 if quality.get("status") == "warning" else 0.0
+    return {
+        "read_score": read_score,
+        "prescreen_score": prescreen_score,
+        "quality_penalty": quality_penalty,
+        "total_score": read_score + prescreen_score + quality_penalty,
+    }
 
 def _normalize_reader_result(result: dict[str, Any]) -> dict[str, Any]:
     key_points = result.get("key_points")
@@ -777,6 +811,13 @@ def _safe_llm_call(llm_runner, role: str, payload: dict[str, Any]) -> dict[str, 
     try:
         result = llm_runner(role, payload)
     except Exception as exc:  # noqa: BLE001
+        try:
+            llm_runner.last_diagnostics = {
+                "reason": "exception",
+                "message": str(exc),
+            }
+        except Exception:  # noqa: BLE001
+            pass
         logger.warning("[research-digest] 慧博 %s LLM 失败: %s", role, exc)
         return None
     return result if isinstance(result, dict) else None
@@ -939,13 +980,18 @@ def _allow_external_pdf_llm() -> bool:
 
 
 def _run_antigravity_pdf_reader(payload: dict[str, Any]) -> dict[str, Any] | None:
+    _run_antigravity_pdf_reader.last_diagnostics = None
     pdf_path = Path(_clean_str(payload.get("report_pdf_path"))).expanduser().resolve()
     metadata = payload.get("metadata") or {}
     title = _clean_str(metadata.get("title"))
+    from utils.antigravity_diagnostics import build_diagnostics
     from utils.llm_cli import build_prompt_command, resolve_config
 
     config = resolve_config(default_timeout=180)
     timeout = config.timeout_seconds
+    from services.research_digest import narrator as _narrator
+
+    log_file = _narrator._next_antigravity_log_file()  # noqa: SLF001
     prompt = (
         "请读取这个PDF研报，只输出JSON，不要markdown。字段："
         "title, industry, viewpoint, key_points(数组最多3条), recommend_reason, read_score(0-100), "
@@ -960,6 +1006,7 @@ def _run_antigravity_pdf_reader(payload: dict[str, Any]) -> dict[str, Any] | Non
         prompt,
         add_dirs=[str(pdf_path.parent)],
         skip_permissions=True,
+        log_file=str(log_file) if log_file else None,
     )
     try:
         result = subprocess.run(
@@ -970,15 +1017,59 @@ def _run_antigravity_pdf_reader(payload: dict[str, Any]) -> dict[str, Any] | Non
             stdin=subprocess.DEVNULL,
         )
     except subprocess.TimeoutExpired:
+        _run_antigravity_pdf_reader.last_diagnostics = build_diagnostics(
+            stdout="",
+            stderr=f"timeout after {timeout}s",
+            log_file=log_file,
+            reason="timeout",
+        )
         logger.warning("[research-digest] 慧博 PDF reader antigravity 超时 %ds，降级", timeout)
         return None
     except OSError as exc:
+        _run_antigravity_pdf_reader.last_diagnostics = build_diagnostics(
+            stdout="",
+            stderr=str(exc),
+            log_file=log_file,
+            reason="startup_failed",
+        )
         logger.warning("[research-digest] 慧博 PDF reader antigravity 启动失败(%s)，降级", exc)
         return None
+    stdout = result.stdout or ""
+    stderr = result.stderr or ""
     if result.returncode != 0:
+        _run_antigravity_pdf_reader.last_diagnostics = build_diagnostics(
+            stdout=stdout,
+            stderr=stderr,
+            log_file=log_file,
+            returncode=result.returncode,
+        )
         logger.warning("[research-digest] 慧博 PDF reader antigravity returncode=%s，降级", result.returncode)
         return None
-    return _parse_json_object(result.stdout)
+    if not stdout.strip():
+        _run_antigravity_pdf_reader.last_diagnostics = build_diagnostics(
+            stdout=stdout,
+            stderr=stderr,
+            log_file=log_file,
+            reason="empty_stdout",
+        )
+        logger.warning(
+            "[research-digest] 慧博 PDF reader antigravity stdout 为空，降级: %s",
+            _run_antigravity_pdf_reader.last_diagnostics.get("message")
+            or _run_antigravity_pdf_reader.last_diagnostics.get("reason"),
+        )
+        return None
+    parsed = _parse_json_object(stdout)
+    if parsed is None:
+        _run_antigravity_pdf_reader.last_diagnostics = build_diagnostics(
+            stdout=stdout,
+            stderr=stderr,
+            log_file=log_file,
+            reason="parse_failed",
+        )
+    return parsed
+
+
+_run_antigravity_pdf_reader.last_diagnostics = None
 
 
 def _parse_json_object(text: str) -> dict[str, Any] | None:

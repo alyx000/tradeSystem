@@ -1,0 +1,69 @@
+[
+  {
+    "name": "empty stdout with quota in log",
+    "stdout": "",
+    "stderr": "",
+    "log_text": "RESOURCE_EXHAUSTED (code 429): Individual quota reached\n",
+    "reason": "empty_stdout",
+    "expected_reason": "quota_exhausted",
+    "expected_global": true,
+    "expected_message_contains": "RESOURCE_EXHAUSTED",
+    "expected_stdout_empty": true,
+    "expected_stderr_empty": true
+  },
+  {
+    "name": "interactive auth prompt",
+    "stdout": "Opening authentication page in your browser. Do you want to continue?",
+    "stderr": "",
+    "reason": "antigravity_failed",
+    "expected_reason": "auth_required",
+    "expected_global": true,
+    "expected_message_contains": "authentication",
+    "expected_stdout_empty": false,
+    "expected_stderr_empty": true
+  },
+  {
+    "name": "startup failure fallback",
+    "stdout": "",
+    "stderr": "spawn agy ENOENT",
+    "reason": "startup_failed",
+    "expected_reason": "startup_failed",
+    "expected_global": true,
+    "expected_message_contains": "spawn agy",
+    "expected_stdout_empty": true,
+    "expected_stderr_empty": false
+  },
+  {
+    "name": "timeout stays local",
+    "stdout": "",
+    "stderr": "process timed out after 240000ms",
+    "reason": "timeout",
+    "expected_reason": "timeout",
+    "expected_global": false,
+    "expected_message_contains": "timed out",
+    "expected_stdout_empty": true,
+    "expected_stderr_empty": false
+  },
+  {
+    "name": "parse failed stays local",
+    "stdout": "not json",
+    "stderr": "",
+    "reason": "parse_failed",
+    "expected_reason": "parse_failed",
+    "expected_global": false,
+    "expected_message_contains": "not json",
+    "expected_stdout_empty": false,
+    "expected_stderr_empty": true
+  },
+  {
+    "name": "generic antigravity failure",
+    "stdout": "",
+    "stderr": "model returned no usable output",
+    "reason": "antigravity_failed",
+    "expected_reason": "antigravity_failed",
+    "expected_global": false,
+    "expected_message_contains": "model returned",
+    "expected_stdout_empty": true,
+    "expected_stderr_empty": false
+  }
+]
