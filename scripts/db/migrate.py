@@ -73,10 +73,20 @@ def _ensure_market_timing_signal(conn: sqlite3.Connection) -> None:
     """v31 兜底：确保 market_timing_signal 表存在(版本无关)。
 
     防"DB 已标记到 v31 但表缺失"的半迁移态——版本门会跳过 v31 块，导致表永不创建、
-    运行期报 no such table。CREATE TABLE IF NOT EXISTS 幂等，复用 schema 真源 SQL 不重复。
+    运行期报 no such table。复用 schema 真源 SQL 不重复。
+
+    健康库（表已存在）走**纯只读探查后直接返回**：不做 DDL、不 commit，
+    保持 migrate() 对调用方未提交事务的无副作用（executescript/commit 会隐式提交，
+    migrate() 被 services/CLI 广泛调用，不能凭空给调用方加事务边界）。
     """
+    exists = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='market_timing_signal'"
+    ).fetchone()
+    if exists:
+        return
     from .schema import _SQL_MARKET_TIMING_SIGNAL
     conn.executescript(_SQL_MARKET_TIMING_SIGNAL)
+    conn.commit()  # 仅在确需修复时才提交
 
 
 def _rebuild_trade_thesis_trade_mode_check(conn: sqlite3.Connection) -> None:
@@ -576,10 +586,9 @@ def migrate(conn: sqlite3.Connection) -> None:
         conn.commit()
 
     # 版本无关兜底:DB 已标记到 v31 但 market_timing_signal 缺失(异常半迁移态/历史遗留)时,
-    # 版本门会跳过 v31 块导致表永不建,运行期报 no such table。CREATE IF NOT EXISTS 幂等,
-    # 确保表始终存在(见 feedback_real_db_vs_in_memory:别只靠版本门,加兜底)。
+    # 版本门会跳过 v31 块导致表永不建,运行期报 no such table。仅在表缺失时 DDL+commit;
+    # 健康库纯探查直接返回,不给调用方加事务边界(见 feedback_real_db_vs_in_memory)。
     _ensure_market_timing_signal(conn)
-    conn.commit()
 
 
 # ──────────────────────────────────────────────────────────────

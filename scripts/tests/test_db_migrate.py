@@ -481,3 +481,20 @@ def test_migrate_self_heals_v31_db_missing_table(tmp_path):
         "SELECT name FROM sqlite_master WHERE name='market_timing_signal'"
     ).fetchone() is not None
     conn.close()
+
+
+def test_migrate_healthy_v31_preserves_caller_transaction(tmp_path):
+    """健康 v31 库上 migrate() 不得提交调用方未提交的写入（兜底探查须无事务副作用）。"""
+    conn = get_connection(tmp_path / "v31_healthy.db")
+    migrate(conn)  # 到 v31，表已在
+    teacher_id = Q.get_or_create_teacher(conn, "事务测试")
+    conn.commit()
+    # 未提交的业务写入
+    Q.insert_teacher_note(conn, teacher_id=teacher_id, date="2026-06-01", title="未提交", core_view="x")
+    migrate(conn)        # 健康库：不应把上面这条未提交写入顺带提交
+    conn.rollback()
+    cnt = conn.execute(
+        "SELECT COUNT(*) FROM teacher_notes WHERE title='未提交'"
+    ).fetchone()[0]
+    assert cnt == 0      # 回滚后应消失，证明 migrate() 未提交它
+    conn.close()
