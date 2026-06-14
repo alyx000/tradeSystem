@@ -5,7 +5,7 @@ alwaysApply: true
 
 # 开发后代码审查门1：/simplify + /code-review 规范
 
-> **与 [`post-dev-codex-review.md`](post-dev-codex-review.md) 的关系**：本规则是**门1**（本地 `/code-review`，多 agent + 置信打分，快速发现明显 bug / 质量问题），codex review 是**门2**（独立 codex:codex-rescue，6 条结束条件 + 3 轮上限）。**串行不替代**：门1 的 4 条结束条件全部满足后，才进门2 codex review 流程；门2 通过后才向用户汇报。
+> **与 [`post-dev-codex-review.md`](post-dev-codex-review.md) 的关系**：本规则是**门1**（本地 `/code-review`，多 agent + 置信打分，快速发现明显 bug / 质量问题），codex review 是**门2**（独立 codex 原生 adversarial-review，6 条结束条件 + 3 轮上限）。**串行不替代**：门1 的 4 条结束条件全部满足后，才进门2 codex review 流程；门2 通过后才向用户汇报。
 >
 > 单文件改 / 纯文档改 / 单测试增改 → 两条都不触发。
 

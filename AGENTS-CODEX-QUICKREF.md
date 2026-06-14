@@ -10,9 +10,21 @@
 
 ## Review
 
-```text
-review 当前改动，重点找这些问题：绕过人工确认直接写 confirmed TradePlan、把 judgement 伪装成 fact、CLI/API/Web 语义不一致、双写或回填链路的数据不一致风险、缺少必要测试。按严重程度列 findings，给出文件和行号。先说问题，再说总结。
+代码级 review 默认走 **Codex 原生 adversarial-review**（内置 reviewer，自读 git、前台同步、结构化分级 findings）。Claude 直接 Bash 调（`/codex:review` / `/codex:adversarial-review` 两个 slash 命令 `disable-model-invocation`，模型不能自触发）：
+
+```bash
+COMPANION="$(ls -t /Users/alyx/.claude/plugins/cache/openai-codex/codex/*/scripts/codex-companion.mjs 2>/dev/null | head -1)"
+node "$COMPANION" adversarial-review --wait "重点:绕过人工确认写 confirmed TradePlan / judgement 伪装 fact / CLI·API·Web 语义不一致 / 双写·回填数据不一致 / 缺必要测试 / bug / 边界 / 安全"
+# 改动已提交在分支上 → 追加 --base main；用户手打等价 /codex:adversarial-review --wait "<聚焦>"
 ```
+
+详见 [`.agents/rules/post-dev-codex-review.md`](/Users/alyx/tradeSystem/.agents/rules/post-dev-codex-review.md)。
+
+> **仅当没有 git diff**（审一段贴进来的代码片段 / 设计 prose）才退回 freeform `codex:codex-rescue` + 下面这段文字模板；有 diff 的常规代码 review 一律走上面原生 reviewer。
+>
+> ```text
+> review 当前改动，重点找这些问题：绕过人工确认直接写 confirmed TradePlan、把 judgement 伪装成 fact、CLI/API/Web 语义不一致、双写或回填链路的数据不一致风险、缺少必要测试。按严重程度列 findings，给出文件和行号。先说问题，再说总结。
+> ```
 
 ## CLI / API 对齐
 
