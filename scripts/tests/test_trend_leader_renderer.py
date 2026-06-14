@@ -77,6 +77,17 @@ def test_render_daily_entered_section_lists_name_sector(conn):
     assert "600552" in md
 
 
+def test_render_daily_entered_annotates_concept_branch(conn):
+    """概念分支入池（二级不在主线）→ 申万二级列标注「·分支:概念名」说明为何算主线。"""
+    pool.record(conn, code="301628", name="强达电路", sw_l2="其他电子Ⅱ",
+                first_limit_date="2026-06-12", date="2026-06-12",
+                signal_json={"entry_trigger": "涨停", "branch_concepts": ["PCB概念"]})
+    md = renderer.render_daily(conn, _summary(
+        main_sectors=["半导体"], entered=["301628"], refreshed=[],
+        in_pool_signals=[], exited=[]))
+    assert "其他电子Ⅱ·分支:PCB概念" in md   # 标注分支来源
+
+
 def test_render_daily_entered_shows_accel_date_and_trigger(conn):
     """GAP A：入池表头为「首次加速日」(board-aware)，非旧「首次涨停日」；触发列区分涨停/双创15%。"""
     pool.record(conn, code="688512", name="慧智微", sw_l2="半导体",

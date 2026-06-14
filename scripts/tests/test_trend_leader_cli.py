@@ -96,7 +96,8 @@ def wired(tmp_db, monkeypatch):
 
 
 def _daily_args(**over):
-    base = dict(date="2026-06-12", sectors=None, top_k=5, dry_run=False, no_push=False)
+    base = dict(date="2026-06-12", sectors=None, top_k=5, dry_run=False, no_push=False,
+                main_line="l2", top_concepts=8)
     base.update(over)
     return argparse.Namespace(**base)
 

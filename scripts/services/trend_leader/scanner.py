@@ -90,8 +90,76 @@ def _dual_board_accelerators(registry, date: str) -> tuple[list[dict], bool]:
     return out, True
 
 
+def _main_concepts(registry, date: str, top_m: int, member_count: dict,
+                   max_members: int | None = None) -> tuple[set, bool]:
+    """主线分支 = 同花顺概念资金净流入 Top-M（鞠磊「主线或其分支」）。
+
+    先按成员数闸过滤「容器概念」再排序：融资融券(3845)/深股通(1738)/华为概念(1009) 这类资格类
+    标签覆盖几千只票，聚合净流入天然霸榜，但绝非鞠磊式窄分支（大硅片/MLCC/CPO 仅几十到一两百只）。
+    0522 真实数据验证 cap=300 干净分离。成员数=0（命名错配/ths_member 未覆盖）一并排除。
+    返回 (Top-M 概念名集合, ok)；失败 → (set(), False)。
+
+    name 与 member_count 跨两个独立接口（concept_moneyflow_ths.name / ths_member.index_name）靠
+    字符串相等匹配——这是安全的：两接口概念名同源于 THS ths_index 概念母表，0522 实测 386/386
+    moneyflow 概念在 ths_member 里逐字命中（member_count=0 者 0 个），命名分歧静默漏网面=0；境外
+    成员（CAT.N 等）也实测不会把任何窄概念从 <cap 顶到 >=cap。故不需额外做概念名归一/对账。
+    （cap<=0 会让 `0<x<=cap` 恒 False → main_concepts 全空；当前 cap 由常量固定为正，无 CLI/config
+    覆盖入口，不可达；若将来加 --concept-max-members 类 flag，须在入口校验为正。）
+
+    max_members=None 时读 C.CONCEPT_MAX_MEMBERS（默认参数会在 import 时绑定，使 monkeypatch 失效，
+    故用哨兵在调用时取值）。
+    """
+    cap = C.CONCEPT_MAX_MEMBERS if max_members is None else max_members
+    r = registry.call("get_concept_moneyflow_ths", date)
+    if not (getattr(r, "success", False) and isinstance(r.data, list)):
+        return set(), False
+    rows = []
+    for row in r.data:
+        if not isinstance(row, dict):
+            continue
+        name = row.get("name")
+        if not name:
+            continue
+        name = str(name)
+        if not 0 < member_count.get(name, 0) <= cap:   # 容器概念/未知规模概念出局，只留窄主题分支
+            continue
+        try:                                            # 身份/成员数闸先过，再解析数值（提前短路垃圾行）
+            amt = float(row.get("net_amount"))
+        except (TypeError, ValueError):
+            continue
+        rows.append((name, amt))
+    rows.sort(key=lambda x: x[1], reverse=True)
+    return {n for n, _ in rows[:top_m]}, True
+
+
+def _stock_concept_map(registry, date: str) -> tuple[dict, dict, bool]:
+    """个股 → 同花顺概念 反向映射 {裸码: set(概念名)} + 概念成员数 {概念名: 去重个股数}。
+
+    成员数供 _main_concepts 过滤容器概念。返回 (map, member_count, ok)；失败 → ({}, {}, False)
+    由上层记 source_errors。含美股/全球成员（con_code 如 CAT.N），裸码归一后 A 股候选查不到则不命中，无害。
+    """
+    r = registry.call("get_ths_member", date)
+    if not (getattr(r, "success", False) and isinstance(r.data, list)):
+        return {}, {}, False
+    out: dict[str, set] = {}
+    member_count: dict[str, int] = {}                   # 概念 → 去重个股数（每只票每概念计一次）
+    for row in r.data:
+        if not isinstance(row, dict):
+            continue
+        code = _clean_code(row.get("con_code"))
+        concept = row.get("index_name")
+        if code and concept:
+            concept = str(concept)
+            s = out.setdefault(code.split(".")[0], set())  # 键=裸码，与候选查询口径一致
+            if concept not in s:                        # 同一票同概念去重后才计数，与 set 语义一致
+                s.add(concept)
+                member_count[concept] = member_count.get(concept, 0) + 1
+    return out, member_count, True
+
+
 def run_daily(conn: sqlite3.Connection, registry, date: str, *,
-              sectors=None, top_k: int = C.DEFAULT_TOP_K_SECTORS, range_start: str | None = None) -> dict:
+              sectors=None, top_k: int = C.DEFAULT_TOP_K_SECTORS, range_start: str | None = None,
+              main_line: str = "l2", top_concepts: int = C.DEFAULT_TOP_CONCEPTS) -> dict:
     main_sectors, degraded = _main_sectors(conn, date, top_k, sectors)
     start = range_start or _lookback_start(date)
 
@@ -119,6 +187,16 @@ def run_daily(conn: sqlite3.Connection, registry, date: str, *,
     if sw_ok:
         dual_accel, dual_ok = _dual_board_accelerators(registry, date)
 
+    # 概念分支主线（鞠磊「主线或其分支」）：main_line=l2+concept 时主线门放宽为
+    # 二级∈主线 OR 概念∩主线概念。默认 l2 不取概念（行为不变）。
+    concept_mode = main_line == "l2+concept"
+    main_concepts, concept_ok = (set(), True)
+    concept_map, ths_ok = ({}, True)
+    if concept_mode:
+        # 先取成员 map（含成员数），再用成员数闸过滤容器概念后取净流入 Top-M。
+        concept_map, member_count, ths_ok = _stock_concept_map(registry, date)
+        main_concepts, concept_ok = _main_concepts(registry, date, top_concepts, member_count)
+
     # 发现链路 provider 失败显式记账：否则「链路断了」会伪装成「今日无候选」，运营无法区分。
     source_errors = []
     if not lu_ok:
@@ -127,6 +205,11 @@ def run_daily(conn: sqlite3.Connection, registry, date: str, *,
         source_errors.append("sw_map")
     if not dual_ok:
         source_errors.append("market_changes")
+    if concept_mode:
+        if not concept_ok:
+            source_errors.append("concept_flow")
+        if not ths_ok:
+            source_errors.append("ths_member")
 
     summary = {
         "date": date, "limit_up": len(limit_stocks), "main_sectors": sorted(main_sectors),
@@ -157,7 +240,9 @@ def run_daily(conn: sqlite3.Connection, registry, date: str, *,
         bare = code_raw.split(".")[0]          # 池内唯一身份（裸码），防 ts_code/裸码建重复 active
         sw_entry = sw_map.get(code_raw) or sw_by_bare.get(bare) or {}
         sw_l2 = sw_entry.get("sw_l2", UNCLASSIFIED)
-        if sw_l2 not in main_sectors:          # 涨停 ∩ 主线
+        # 主线门：二级∈主线 OR（concept 模式下）个股概念∩主线概念。branch_concepts 记命中分支供报告标注。
+        branch_concepts = sorted(concept_map.get(bare, set()) & main_concepts) if concept_mode else []
+        if sw_l2 not in main_sectors and not branch_concepts:
             continue
         # candidates = 主线∩涨停（进入检测阶段的数量），与 entered（过检入池）故意分开：
         # 二者之差 = 漏斗的检测器过滤层，是设计意图而非统计错误。
@@ -176,7 +261,8 @@ def run_daily(conn: sqlite3.Connection, registry, date: str, *,
         trigger = "涨停" if bare in limit_bares else "双创15%加速"
         res = pool.record(conn, code=bare, name=name, sw_l2=sw_l2,
                           first_limit_date=date, date=date,
-                          signal_json={"first_limit": fd, "gentle": gd, "entry_trigger": trigger})
+                          signal_json={"first_limit": fd, "gentle": gd, "entry_trigger": trigger,
+                                       "branch_concepts": branch_concepts})
         entered_codes.add(bare)
         if res in ("entered", "refreshed"):     # 据实汇报，stale(更早日期 no-op) 不报转换
             summary[res].append(bare)

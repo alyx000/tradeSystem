@@ -55,13 +55,18 @@ def render_daily(conn: sqlite3.Connection, summary: dict) -> str:
     if not todays:
         lines += ["今日无新入池。", ""]
     else:
+        main_l2 = set(summary.get("main_sectors") or [])
         lines += ["| 代码 | 名称 | 申万二级 | 首次加速日 | 触发 |", "| --- | --- | --- | --- | --- |"]
         for code in todays:
             r = active.get(code, {})
             sig = r.get("last_signal") or {}
+            sw_l2 = r.get("sw_l2", "")
+            branch = sig.get("branch_concepts") or []
+            # 经概念分支入主线（二级不在主线 Top-K）时标注命中概念，说明它为何算主线。
+            sw_disp = sw_l2 if (sw_l2 in main_l2 or not branch) else f"{sw_l2}·分支:{'/'.join(branch)}"
             # 触发区分：涨停 vs 双创15%加速（双创涨15%+未到全涨停）；老数据无此字段默认涨停。
             lines.append(
-                f"| {code} | {r.get('name', '')} | {r.get('sw_l2', '')} | "
+                f"| {code} | {r.get('name', '')} | {sw_disp} | "
                 f"{r.get('first_limit_date', '')} | {sig.get('entry_trigger', '涨停')} |")
         lines.append("")
 

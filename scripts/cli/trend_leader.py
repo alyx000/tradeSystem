@@ -49,6 +49,10 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
                        help='手工主线板块 JSON 数组，∪ 自动 Top-K（如 \'["半导体","玻璃玻纤"]\'）')
     daily.add_argument("--top-k", type=_positive_int, default=C.DEFAULT_TOP_K_SECTORS,
                        help=f"自动主线取成交额集中度 Top-K 申万二级（正整数，默认 {C.DEFAULT_TOP_K_SECTORS}）")
+    daily.add_argument("--main-line", default="l2", choices=["l2", "l2+concept"],
+                       help="主线口径：l2=仅申万二级（默认）；l2+concept=∪同花顺概念资金净流入 Top-M 分支")
+    daily.add_argument("--top-concepts", type=_positive_int, default=C.DEFAULT_TOP_CONCEPTS,
+                       help=f"概念分支取资金净流入 Top-M（正整数，默认 {C.DEFAULT_TOP_CONCEPTS}，仅 l2+concept 生效）")
     daily.add_argument("--dry-run", action="store_true",
                        help="内存副本跑，不落池/不推送（历史校准用）")
     daily.add_argument("--no-push", action="store_true", help="落池但仅打印，不推送")
@@ -107,12 +111,14 @@ def _run_daily(config: dict, args: argparse.Namespace) -> None:
             mem.row_factory = sqlite3.Row
             real_conn.backup(mem)
             try:
-                summary = scanner.run_daily(mem, registry, date, sectors=sectors, top_k=args.top_k)
+                summary = scanner.run_daily(mem, registry, date, sectors=sectors, top_k=args.top_k,
+                                        main_line=args.main_line, top_concepts=args.top_concepts)
                 md = renderer.render_daily(mem, summary)
             finally:
                 mem.close()
         else:
-            summary = scanner.run_daily(real_conn, registry, date, sectors=sectors, top_k=args.top_k)
+            summary = scanner.run_daily(real_conn, registry, date, sectors=sectors, top_k=args.top_k,
+                                        main_line=args.main_line, top_concepts=args.top_concepts)
             md = renderer.render_daily(real_conn, summary)
     finally:
         real_conn.close()
