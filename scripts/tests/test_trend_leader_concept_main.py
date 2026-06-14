@@ -90,9 +90,9 @@ def test_main_concepts_ranks_by_net_amount():
         {"name": "CPO", "net_amount": 80.0},
         {"name": "PET铜箔", "net_amount": 30.0},
     ])
-    mc = {"PCB概念": 50, "融资融券": 40, "CPO": 30, "PET铜箔": 25}  # 均≤cap，本例只测排序
-    got, ok = scanner._main_concepts(reg, "2026-06-09", 2, mc)
-    assert ok is True
+    mc = {"PCB概念": 50, "融资融券": 40, "CPO": 30, "PET铜箔": 25}  # 均≤cap 且>0，本例只测排序
+    got, ok, cov = scanner._main_concepts(reg, "2026-06-09", 2, mc)
+    assert ok is True and cov is True         # 入选窗口内概念成员充足，无覆盖缺失
     assert got == {"CPO", "PCB概念"}          # net_amount Top-2，融资融券/PET铜箔 出局
 
 
@@ -104,28 +104,30 @@ def test_main_concepts_excludes_container_by_member_cap():
         {"name": "PCB概念", "net_amount": 40.0},
     ])
     mc = {"融资融券": 3845, "CPO": 195, "PCB概念": 216}
-    got, ok = scanner._main_concepts(reg, "2026-06-09", 2, mc)
+    got, ok, cov = scanner._main_concepts(reg, "2026-06-09", 2, mc)
     assert ok is True
+    assert cov is True                        # 容器(>cap)被剔不算覆盖缺失
     assert got == {"CPO", "PCB概念"}
     assert "融资融券" not in got               # 成员数 3845 > 300 → 出局，不因净流入第一入选
 
 
 def test_main_concepts_excludes_unknown_size_concept():
-    """概念有资金但 ths_member 无成员（成员数=0，命名错配/未覆盖）→ 排除，避免当窄分支误放。"""
+    """概念净流入靠前但 ths_member 无成员（成员数=0）→ 排除，且 coverage_ok=False（疑似部分覆盖缺失）。"""
     reg = FakeRegistry(concept_flow=[
-        {"name": "幽灵概念", "net_amount": 99.0},
+        {"name": "幽灵概念", "net_amount": 99.0},   # 净流入最高却无成员 → 覆盖缺失信号
         {"name": "CPO", "net_amount": 10.0},
     ])
-    got, ok = scanner._main_concepts(reg, "2026-06-09", 5, {"CPO": 195})
+    got, ok, cov = scanner._main_concepts(reg, "2026-06-09", 5, {"CPO": 195})
     assert got == {"CPO"}                      # 幽灵概念成员数 0，出局
+    assert cov is False                        # 入选窗口内热概念无成员 → 标覆盖缺失
 
 
 def test_main_concepts_failure_returns_false():
     class Fail:
         def call(self, name, *a):
             return _R(None, success=False)
-    got, ok = scanner._main_concepts(Fail(), "2026-06-09", 5, {})
-    assert got == set() and ok is False
+    got, ok, cov = scanner._main_concepts(Fail(), "2026-06-09", 5, {})
+    assert got == set() and ok is False and cov is True  # 取数失败由 ok 表达，coverage 无意义→True
 
 
 # ---- _stock_concept_map ----
@@ -268,6 +270,24 @@ def test_concept_mode_empty_ths_member_flags_coverage(conn):
     summary = scanner.run_daily(conn, reg, "2026-06-09", main_line="l2+concept", top_concepts=5)
     assert "concept_coverage" in summary["source_errors"]  # 显式记账，运营可辨「链路降级」非「无候选」
     assert "688512" in summary["entered"]              # 二级命中票仍入（降级 l2）
+
+
+def test_concept_mode_partial_ths_coverage_flags(conn):
+    """门2 codex M2'：ths_member 部分截断——净流入最高的热概念缺成员、另一概念有成员。
+    main_concepts 仍非空，但热分支被静默漏，须记 concept_coverage（不能无声）。"""
+    _seed_concentration(conn, "2026-06-09", ["半导体"])
+    reg = FakeRegistry(
+        limit_stocks=[{"code": "301628.SZ", "name": "强达电路", "pct_chg": 20.0}],
+        sw_map={"301628.SZ": {"name": "强达电路", "sw_l2": "其他电子Ⅱ"}},
+        bars_by_code={"301628": _leader_bars()},
+        # 「液冷服务器」净流入最高但 ths_member 没有它的成员（部分截断）；「PCB概念」有成员。
+        concept_flow=[{"name": "液冷服务器", "net_amount": 200.0},
+                      {"name": "PCB概念", "net_amount": 50.0}],
+        ths_member=[{"con_code": "301628.SZ", "index_name": "PCB概念"}],
+    )
+    summary = scanner.run_daily(conn, reg, "2026-06-09", main_line="l2+concept", top_concepts=5)
+    assert "concept_coverage" in summary["source_errors"]  # 热概念液冷无成员 → 部分覆盖缺失记账
+    assert "301628" in summary["entered"]                  # PCB概念有成员，301628 仍经分支入池
 
 
 def test_concept_source_failure_degrades(conn):

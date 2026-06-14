@@ -91,13 +91,18 @@ def _dual_board_accelerators(registry, date: str) -> tuple[list[dict], bool]:
 
 
 def _main_concepts(registry, date: str, top_m: int, member_count: dict,
-                   max_members: int | None = None) -> tuple[set, bool]:
+                   max_members: int | None = None) -> tuple[set, bool, bool]:
     """主线分支 = 同花顺概念资金净流入 Top-M（鞠磊「主线或其分支」）。
 
     先按成员数闸过滤「容器概念」再排序：融资融券(3845)/深股通(1738)/华为概念(1009) 这类资格类
     标签覆盖几千只票，聚合净流入天然霸榜，但绝非鞠磊式窄分支（大硅片/MLCC/CPO 仅几十到一两百只）。
-    0522 真实数据验证 cap=300 干净分离。成员数=0（命名错配/ths_member 未覆盖）一并排除。
-    返回 (Top-M 概念名集合, ok)；失败 → (set(), False)。
+    0522 真实数据验证 cap=300 干净分离。
+    返回 (Top-M 概念名集合, ok, coverage_ok)；取数失败 → (set(), False, True)。
+
+    coverage_ok=False 表示：净流入排在「入选窗口内」（比第 top_m 名更热）的概念里出现 member_count==0
+    ——健康日 0522 实测前排概念成员数均充足（386/386 命中），故热概念无成员强烈指向 ths_member
+    success 但分页/部分截断丢了该概念成员（本仓库 tushare 批量接口有静默截断前科），属静默部分覆盖
+    缺失，上层据此记 concept_coverage 警示（门2 codex M2'）。容器概念(>cap)被剔不算覆盖缺失。
 
     name 与 member_count 跨两个独立接口（concept_moneyflow_ths.name / ths_member.index_name）靠
     字符串相等匹配——这是安全的：两接口概念名同源于 THS ths_index 概念母表，0522 实测 386/386
@@ -112,24 +117,33 @@ def _main_concepts(registry, date: str, top_m: int, member_count: dict,
     cap = C.CONCEPT_MAX_MEMBERS if max_members is None else max_members
     r = registry.call("get_concept_moneyflow_ths", date)
     if not (getattr(r, "success", False) and isinstance(r.data, list)):
-        return set(), False
-    rows = []
+        return set(), False, True
+    parsed = []
     for row in r.data:
         if not isinstance(row, dict):
             continue
         name = row.get("name")
         if not name:
             continue
-        name = str(name)
-        if not 0 < member_count.get(name, 0) <= cap:   # 容器概念/未知规模概念出局，只留窄主题分支
-            continue
-        try:                                            # 身份/成员数闸先过，再解析数值（提前短路垃圾行）
+        try:                                            # 身份过后再解析数值（提前短路垃圾行）
             amt = float(row.get("net_amount"))
         except (TypeError, ValueError):
             continue
-        rows.append((name, amt))
-    rows.sort(key=lambda x: x[1], reverse=True)
-    return {n for n, _ in rows[:top_m]}, True
+        parsed.append((str(name), amt))
+    parsed.sort(key=lambda x: x[1], reverse=True)
+    kept: list[str] = []
+    coverage_ok = True
+    for name, _ in parsed:                              # 净流入降序逐个判，填满 top_m 即停
+        mc = member_count.get(name, 0)
+        if mc > cap:                                    # 容器概念，正常剔除（非覆盖缺失）
+            continue
+        if mc == 0:                                     # 排在入选窗口内却无成员 → 疑似部分覆盖缺失
+            coverage_ok = False
+            continue
+        kept.append(name)
+        if len(kept) >= top_m:
+            break
+    return set(kept), True, coverage_ok
 
 
 def _stock_concept_map(registry, date: str) -> tuple[dict, dict, bool]:
@@ -195,12 +209,13 @@ def run_daily(conn: sqlite3.Connection, registry, date: str, *,
     if include_candidates:
         dual_accel, dual_ok = _dual_board_accelerators(registry, date)
 
-    main_concepts, concept_ok = (set(), True)
+    main_concepts, concept_ok, coverage_ok = (set(), True, True)
     concept_map, ths_ok = ({}, True)
     if concept_mode:
         # 先取成员 map（含成员数），再用成员数闸过滤容器概念后取净流入 Top-M。
         concept_map, member_count, ths_ok = _stock_concept_map(registry, date)
-        main_concepts, concept_ok = _main_concepts(registry, date, top_concepts, member_count)
+        main_concepts, concept_ok, coverage_ok = _main_concepts(
+            registry, date, top_concepts, member_count)
 
     # 发现链路 provider 失败显式记账：否则「链路断了」会伪装成「今日无候选」，运营无法区分。
     source_errors = []
@@ -215,11 +230,11 @@ def run_daily(conn: sqlite3.Connection, registry, date: str, *,
             source_errors.append("concept_flow")
         if not ths_ok:
             source_errors.append("ths_member")
-        elif concept_ok and not main_concepts:
-            # ths/concept 取数都报成功却没产出任何主线概念 → 多半是 ths_member success 但空/部分覆盖
-            # （member_count 全 0 被成员数闸剔光），概念分支会静默失效；显式记账，避免误读为「今日无概念
-            # 候选」（门2 codex M2）。注：极罕见「当日所有热概念都>cap」也会触发，但真实交易日总有窄概念，
-            # 故作为降级信号可接受（宁可多记一条警示，不可静默吞掉分支瘫痪）。
+        elif concept_ok and not coverage_ok:
+            # ths/concept 取数都报成功，但「入选窗口内的热概念」出现 member_count==0 → ths_member
+            # success 但空/部分截断（本仓库 tushare 批量接口有静默截断前科），概念分支会静默漏热分支；
+            # 显式记账，避免「链路部分降级」被误读为「今日无概念候选」（门2 codex M2/M2'）。容器概念被剔
+            # 不触发（coverage_ok 不受 >cap 影响），故容器-only 日不误报。
             source_errors.append("concept_coverage")
 
     summary = {
@@ -252,6 +267,11 @@ def run_daily(conn: sqlite3.Connection, registry, date: str, *,
         bare = code_raw.split(".")[0]          # 池内唯一身份（裸码），防 ts_code/裸码建重复 active
         sw_entry = sw_map.get(code_raw) or sw_by_bare.get(bare) or {}
         sw_l2 = sw_entry.get("sw_l2", UNCLASSIFIED)
+        # 已知限制（defer，门2 codex M1'，触发条件=将默认翻到 l2+concept 时补修复路径）：concept 模式
+        # 下若 sw_map 故障，经概念分支入池的票 sw_l2 落「未分类」；Pass2 维护(pool.touch)只更 last_signal
+        # 不更 sw_l2，故 sw 恢复后该票 sw_l2 仍滞留「未分类」直到退池。当前可接受：① renderer 仍标
+        # 「未分类·分支:概念名」分支信号不丢；② 默认 l2 不触发（l2 下 sw 故障直接全挡无入池）；③ sw_map
+        # 故障本就罕见。翻默认前应在 Pass2 加：active 行 sw_l2==未分类 且当日 sw 可用时回填真实二级。
         # 主线门：二级∈主线 OR（concept 模式下）个股概念∩主线概念。branch_concepts 记命中分支供报告标注。
         branch_concepts = sorted(concept_map.get(bare, set()) & main_concepts) if concept_mode else []
         if sw_l2 not in main_sectors and not branch_concepts:
