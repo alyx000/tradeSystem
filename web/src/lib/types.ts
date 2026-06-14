@@ -1,3 +1,22 @@
+/** 趋势主升观察池行（只读 [判断]；不含价位，与后端白名单 DTO 一致）。 */
+export interface TrendLeaderRow {
+  code: string
+  name: string
+  sw_l2: string
+  first_limit_date: string
+  entered_date: string
+  last_seen_date: string
+  days_in_pool: number
+  status: 'active' | 'exited'
+  exit_date: string | null
+  exit_reason: string | null
+  entry_trigger: string | null // 涨停 / 双创15%加速（事件，非价位）
+  branch_concepts: string[]
+  // 在池信号命中布尔；null = 该行还停在 Pass1（入池未维护）→「待维护」。
+  // Record 而非固定键：advisory 信号落地后无需改类型即可多出 chip（数据驱动）。
+  signal_hits: Record<string, boolean> | null
+}
+
 export interface DailyMarket {
   date: string
   sh_index_close: number | null

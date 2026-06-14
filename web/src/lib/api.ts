@@ -63,6 +63,7 @@ import type {
   ResearchCoverageIndustryRow,
   MarketTimingPayload,
   MarketTimingHistoryPayload,
+  TrendLeaderRow,
 } from './types'
 
 const BASE = '/api'
@@ -84,6 +85,10 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 export const api = {
   // Meta
   getCommandIndex: () => request<CommandIndexPayload>('/meta/commands'),
+
+  // Trend Leader（趋势主升观察池，只读）
+  getTrendLeaders: (status?: 'active' | 'exited') =>
+    request<TrendLeaderRow[]>(`/trend-leaders${status ? `?status=${status}` : ''}`),
 
   // Review
   getReview: (date: string) => request<ReviewRecord>(`/review/${date}`),

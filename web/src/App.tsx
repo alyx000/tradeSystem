@@ -12,6 +12,7 @@ const TeacherNotes = lazy(() => import('./pages/TeacherNotes'))
 const Holdings = lazy(() => import('./pages/Holdings'))
 const HoldingTasks = lazy(() => import('./pages/HoldingTasks'))
 const Watchlist = lazy(() => import('./pages/Watchlist'))
+const TrendLeaderPool = lazy(() => import('./pages/TrendLeaderPool'))
 const Calendar = lazy(() => import('./pages/Calendar'))
 const IndustryInfo = lazy(() => import('./pages/IndustryInfo'))
 const PlanWorkbench = lazy(() => import('./pages/PlanWorkbench'))
@@ -34,6 +35,7 @@ const NAV = [
   // 交易管理（高频）
   { to: '/holdings', label: '持仓' },
   { to: '/watchlist', label: '关注池' },
+  { to: '/trend-leaders', label: '趋势池' },
   { to: '/teachers', label: '老师观点' },
   // 辅助分析（中频）
   { to: '/industry', label: '行业信息' },
@@ -74,6 +76,7 @@ export default function App() {
                 <Route path="/holdings" element={<Holdings />} />
                 <Route path="/holding-tasks" element={<HoldingTasks />} />
                 <Route path="/watchlist" element={<Watchlist />} />
+                <Route path="/trend-leaders" element={<TrendLeaderPool />} />
                 <Route path="/regulatory-monitor" element={<RegulatoryMonitor />} />
                 <Route path="/cognition" element={<CognitionWorkbench />} />
                 <Route path="/calendar" element={<Calendar />} />
