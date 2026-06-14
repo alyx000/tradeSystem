@@ -14,6 +14,7 @@ import pytest
 from db.schema import init_schema
 from services.trend_leader import constants as C
 from services.trend_leader import pool, scanner
+from services.volume_concentration.aggregator import UNCLASSIFIED
 
 
 class _R:
@@ -209,6 +210,64 @@ def test_concept_mode_container_concept_filtered(conn, monkeypatch):
     summary = scanner.run_daily(conn, reg, "2026-06-09", main_line="l2+concept", top_concepts=5)
     assert summary["candidates"] == 0           # 容器被挡 → 无分支 → 二级不在主线 → 不入候选
     assert pool.get_active(conn, "301628") is None
+
+
+def test_concept_mode_enters_branch_when_sw_map_down(conn):
+    """门2 codex M1：sw_map 失败但概念源健康 → concept 模式应仍靠概念分支放行涨停票（sw_l2=未分类），
+    不被与概念分支无关的 sw 故障静默全挡（concept 分支门不依赖 sw_map）。"""
+    _seed_concentration(conn, "2026-06-09", ["半导体"])
+
+    class SwDownReg(FakeRegistry):
+        def call(self, name, *a):
+            if name == "get_stock_sw_industry_map":
+                return _R(None, success=False)
+            return super().call(name, *a)
+
+    reg = SwDownReg(
+        limit_stocks=[{"code": "301628.SZ", "name": "强达电路", "pct_chg": 20.0}],
+        bars_by_code={"301628": _leader_bars()},
+        concept_flow=[{"name": "PCB概念", "net_amount": 99.0}],
+        ths_member=[{"con_code": "301628.SZ", "index_name": "PCB概念"}],
+    )
+    summary = scanner.run_daily(conn, reg, "2026-06-09", main_line="l2+concept", top_concepts=5)
+    assert "sw_map" in summary["source_errors"]        # sw 故障仍记账
+    assert "301628" in summary["entered"]              # 概念分支仍放行，不被 sw 故障静默全挡
+    rec = pool.get_active(conn, "301628")
+    assert rec["sw_l2"] == UNCLASSIFIED                # sw 缺失 → 未分类
+    assert "PCB概念" in (rec["last_signal"].get("branch_concepts") or [])
+
+
+def test_l2_mode_sw_down_still_blocks(conn):
+    """对照：l2 模式 sw_map 失败仍应全挡（无概念分支兜底，无法判二级主线）——M1 修复不能泄漏到 l2。"""
+    _seed_concentration(conn, "2026-06-09", ["半导体"])
+
+    class SwDownReg(FakeRegistry):
+        def call(self, name, *a):
+            if name == "get_stock_sw_industry_map":
+                return _R(None, success=False)
+            return super().call(name, *a)
+
+    reg = SwDownReg(limit_stocks=[{"code": "301628.SZ", "name": "强达电路", "pct_chg": 20.0}],
+                    bars_by_code={"301628": _leader_bars()})
+    summary = scanner.run_daily(conn, reg, "2026-06-09", main_line="l2")
+    assert summary["candidates"] == 0
+    assert pool.get_active(conn, "301628") is None
+
+
+def test_concept_mode_empty_ths_member_flags_coverage(conn):
+    """门2 codex M2：ths_member 返回成功但空（部分/空覆盖）→ 概念分支静默失效，须记 concept_coverage
+    警示，不能伪装成「今日无概念候选」。二级命中票仍降级 l2 入池。"""
+    _seed_concentration(conn, "2026-06-09", ["半导体"])
+    reg = FakeRegistry(
+        limit_stocks=[{"code": "688512.SH", "name": "慧智微", "pct_chg": 20.0}],
+        sw_map={"688512.SH": {"name": "慧智微", "sw_l2": "半导体"}},
+        bars_by_code={"688512": _leader_bars()},
+        concept_flow=[{"name": "PCB概念", "net_amount": 99.0}],
+        ths_member=[],                                  # success 但空 → 覆盖缺失
+    )
+    summary = scanner.run_daily(conn, reg, "2026-06-09", main_line="l2+concept", top_concepts=5)
+    assert "concept_coverage" in summary["source_errors"]  # 显式记账，运营可辨「链路降级」非「无候选」
+    assert "688512" in summary["entered"]              # 二级命中票仍入（降级 l2）
 
 
 def test_concept_source_failure_degrades(conn):

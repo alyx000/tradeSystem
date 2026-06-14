@@ -182,14 +182,19 @@ def run_daily(conn: sqlite3.Connection, registry, date: str, *,
     # 否则降级源的涨停股会因 sw_map miss → 未分类 → 被主线交集静默漏掉。
     sw_by_bare = {k.split(".")[0]: v for k, v in sw_map.items()}
 
-    # 候选源扩并：双创(20cm) 涨幅≥15% 的加速票（鞠磊「20cm 涨15%+」），sw 可用时才取（要映射主线）。
-    dual_accel, dual_ok = ([], True)
-    if sw_ok:
-        dual_accel, dual_ok = _dual_board_accelerators(registry, date)
-
     # 概念分支主线（鞠磊「主线或其分支」）：main_line=l2+concept 时主线门放宽为
     # 二级∈主线 OR 概念∩主线概念。默认 l2 不取概念（行为不变）。
     concept_mode = main_line == "l2+concept"
+    # 候选准入：l2 模式必须 sw 可用（否则无法判二级主线，全挡）；concept 模式下概念分支门与 sw_map
+    # 无关（main_concepts 源自 concept_moneyflow、concept_map 源自 ths_member），故 sw 挂了仍放候选
+    # 进来靠概念分支匹配，不被无关的 sw 故障静默全挡（门2 codex M1）。
+    include_candidates = sw_ok or concept_mode
+
+    # 候选源扩并：双创(20cm) 涨幅≥15% 的加速票（鞠磊「20cm 涨15%+」）。
+    dual_accel, dual_ok = ([], True)
+    if include_candidates:
+        dual_accel, dual_ok = _dual_board_accelerators(registry, date)
+
     main_concepts, concept_ok = (set(), True)
     concept_map, ths_ok = ({}, True)
     if concept_mode:
@@ -210,6 +215,12 @@ def run_daily(conn: sqlite3.Connection, registry, date: str, *,
             source_errors.append("concept_flow")
         if not ths_ok:
             source_errors.append("ths_member")
+        elif concept_ok and not main_concepts:
+            # ths/concept 取数都报成功却没产出任何主线概念 → 多半是 ths_member success 但空/部分覆盖
+            # （member_count 全 0 被成员数闸剔光），概念分支会静默失效；显式记账，避免误读为「今日无概念
+            # 候选」（门2 codex M2）。注：极罕见「当日所有热概念都>cap」也会触发，但真实交易日总有窄概念，
+            # 故作为降级信号可接受（宁可多记一条警示，不可静默吞掉分支瘫痪）。
+            source_errors.append("concept_coverage")
 
     summary = {
         "date": date, "limit_up": len(limit_stocks), "main_sectors": sorted(main_sectors),
@@ -219,7 +230,7 @@ def run_daily(conn: sqlite3.Connection, registry, date: str, *,
     }
 
     # 涨停裸码集：用于区分入池触发类型（涨停 vs 双创15%加速），写入 signal_json 供池/报告辨识。
-    limit_bares = {(s.get("code") or "").split(".")[0] for s in (limit_stocks if sw_ok else [])}
+    limit_bares = {(s.get("code") or "").split(".")[0] for s in (limit_stocks if include_candidates else [])}
 
     # 合并候选：涨停 ∪ 双创@15%，按裸码去重（涨停源字段更全，后写覆盖）。
     candidate_map: dict[str, dict] = {}
@@ -227,14 +238,15 @@ def run_daily(conn: sqlite3.Connection, registry, date: str, *,
         b = (st.get("code") or "").split(".")[0]
         if b:
             candidate_map[b] = st
-    for st in (limit_stocks if sw_ok else []):
+    for st in (limit_stocks if include_candidates else []):
         b = (st.get("code") or "").split(".")[0]
         if b:
             candidate_map[b] = st
 
     entered_codes = set()
-    # Pass 1 — 发现：主线∩(涨停∪双创加速) + 首次加速 + 缓涨。sw 映射不可用时跳过发现（无法可靠
-    # 映射主线，不静默把全部当未分类过滤；失败已记 source_errors，Pass2 维护仍照常）。
+    # Pass 1 — 发现：主线∩(涨停∪双创加速) + 首次加速 + 缓涨。l2 模式 sw 映射不可用时跳过发现（无法
+    # 可靠映射二级主线，全挡；失败已记 source_errors）；concept 模式 sw 挂仍靠概念分支放行（sw_l2=未分类）。
+    # Pass2 维护照常。
     for st in candidate_map.values():
         code_raw = st.get("code")
         bare = code_raw.split(".")[0]          # 池内唯一身份（裸码），防 ts_code/裸码建重复 active
