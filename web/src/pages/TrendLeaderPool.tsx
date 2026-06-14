@@ -46,9 +46,13 @@ function SignalChips({ hits }: { hits: TrendLeaderRow['signal_hits'] }) {
         if (!hit) cls = 'border border-gray-200 text-gray-300'
         else if (caution) cls = 'bg-amber-100 text-amber-700'
         else cls = 'bg-blue-100 text-blue-700'
+        // a11y：命中/未命中此前仅靠填充与颜色传达，屏幕阅读器与色盲不可辨。
+        // aria-label/title 补「命中/未命中」非视觉通道；caution 命中再加 ⚠ 非纯色彩标记。
+        const name = `${label}（${hit ? '命中' : '未命中'}）`
         return (
-          <span key={key} className={`px-1.5 py-0.5 rounded text-xs ${cls}`}>
-            {label}
+          <span key={key} className={`px-1.5 py-0.5 rounded text-xs ${cls}`}
+                title={name} aria-label={name}>
+            {caution && hit ? '⚠ ' : ''}{label}
           </span>
         )
       })}
@@ -169,11 +173,13 @@ export default function TrendLeaderPool() {
         {REDLINE}
       </div>
 
-      <div className="flex gap-1">
+      <div className="flex gap-1" role="tablist" aria-label="趋势池视图">
         {([['active', `在池 (${active.length})`], ['exited', `历史退池 (${exited.length})`]] as const).map(
           ([key, label]) => (
             <button
               key={key}
+              role="tab"
+              aria-selected={tab === key}
               onClick={() => setTab(key)}
               className={`px-3 py-1 text-xs rounded-full transition-colors ${
                 tab === key ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
@@ -187,7 +193,11 @@ export default function TrendLeaderPool() {
 
       {isLoading && <EmptyCard text="加载中..." />}
       {isError && <EmptyCard text={`加载失败：${(error as Error)?.message ?? '未知错误'}`} />}
-      {!isLoading && !isError && (tab === 'active' ? <ActiveTable rows={active} /> : <ExitedTable rows={exited} />)}
+      {!isLoading && !isError && (
+        <div role="tabpanel">
+          {tab === 'active' ? <ActiveTable rows={active} /> : <ExitedTable rows={exited} />}
+        </div>
+      )}
     </div>
   )
 }

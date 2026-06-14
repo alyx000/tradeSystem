@@ -68,6 +68,33 @@ describe('TrendLeaderPool', () => {
     expect(screen.getByText('涨停')).toBeTruthy()
   })
 
+  it('信号 chip 命中/未命中状态有非视觉通道(aria-label)', async () => {
+    renderPage()
+    // 凯盛科技：缩量回踩命中、贴MA5未命中
+    expect(await screen.findByLabelText('缩量阴线回踩（命中）')).toBeTruthy()
+    expect(screen.getByLabelText('贴MA5（未命中）')).toBeTruthy() // ghost 态也可被读屏识别
+  })
+
+  it('caution 信号命中带 ⚠ 非色彩标记 + aria-label', async () => {
+    vi.mocked(api.getTrendLeaders).mockResolvedValue([
+      { ...ROWS[0], code: '601138', name: '工业富联',
+        signal_hits: { shrink_pullback_buy: false, near_ma5: false, overheat: true } },
+    ])
+    renderPage()
+    const chip = await screen.findByLabelText('远离MA5(乖离过大)（命中）')
+    expect(chip.textContent).toContain('⚠')
+  })
+
+  it('Tab 暴露 role/aria-selected 供读屏识别当前选中', async () => {
+    renderPage()
+    const activeTab = await screen.findByRole('tab', { name: /在池/ })
+    const exitedTab = screen.getByRole('tab', { name: /历史退池/ })
+    expect(activeTab.getAttribute('aria-selected')).toBe('true')
+    expect(exitedTab.getAttribute('aria-selected')).toBe('false')
+    fireEvent.click(exitedTab)
+    await waitFor(() => expect(exitedTab.getAttribute('aria-selected')).toBe('true'))
+  })
+
   it('Pass1 未维护行显示「待维护」而非 chip', async () => {
     renderPage()
     expect(await screen.findByText('立昂微')).toBeTruthy()
