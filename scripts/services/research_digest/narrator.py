@@ -91,14 +91,17 @@ def build_antigravity_runner():
     import json
     import subprocess
 
+    from utils.antigravity_diagnostics import build_diagnostics
     from utils.llm_cli import build_prompt_command, resolve_config
 
     config = resolve_config(default_timeout=180)
     timeout = config.timeout_seconds
 
     def runner(prompt, payload):
+        runner.last_diagnostics = None
         full = prompt + "\n\n输入数据（JSON 数组）：\n" + json.dumps(payload, ensure_ascii=False)
-        cmd = build_prompt_command(config, full)
+        log_file = _next_antigravity_log_file()
+        cmd = build_prompt_command(config, full, log_file=str(log_file) if log_file else None)
         try:
             r = subprocess.run(
                 cmd,
@@ -108,20 +111,77 @@ def build_antigravity_runner():
                 stdin=subprocess.DEVNULL,
             )
         except subprocess.TimeoutExpired:
+            runner.last_diagnostics = build_diagnostics(
+                stdout="",
+                stderr=f"timeout after {timeout}s",
+                log_file=log_file,
+                reason="timeout",
+            )
             logger.warning("[research-digest] antigravity 超时 %ds，叙事降级", timeout)
             return None
         except OSError as e:
             # FileNotFoundError(agy 缺) / PermissionError(不可执行) 等都是 OSError 子类:
             # 统一降级返 None,而非仅捕 FileNotFoundError 漏掉权限/其它 OS 错。
             # 不扩到裸 Exception:那会吞掉编程错误,且 _parse_json 已自带异常安全。
+            runner.last_diagnostics = build_diagnostics(
+                stdout="",
+                stderr=str(e),
+                log_file=log_file,
+                reason="startup_failed",
+            )
             logger.warning("[research-digest] antigravity 启动失败(%s)，叙事降级", e)
             return None
-        if r.returncode != 0:
-            logger.warning("[research-digest] antigravity returncode=%s，叙事降级", r.returncode)
+        stdout = getattr(r, "stdout", "") or ""
+        stderr = getattr(r, "stderr", "") or ""
+        returncode = getattr(r, "returncode", 0)
+        if returncode != 0:
+            runner.last_diagnostics = build_diagnostics(
+                stdout=stdout,
+                stderr=stderr,
+                log_file=log_file,
+                returncode=returncode,
+            )
+            logger.warning("[research-digest] antigravity returncode=%s，叙事降级", returncode)
             return None
-        return _parse_json(r.stdout)
+        if not stdout.strip():
+            runner.last_diagnostics = build_diagnostics(
+                stdout=stdout,
+                stderr=stderr,
+                log_file=log_file,
+                reason="empty_stdout",
+            )
+            logger.warning(
+                "[research-digest] antigravity stdout 为空，叙事降级: %s",
+                runner.last_diagnostics.get("message") or runner.last_diagnostics.get("reason"),
+            )
+            return None
+        parsed = _parse_json(stdout)
+        if parsed is None:
+            runner.last_diagnostics = build_diagnostics(
+                stdout=stdout,
+                stderr=stderr,
+                log_file=log_file,
+                reason="parse_failed",
+            )
+            return None
+        return parsed
 
+    runner.last_diagnostics = None
     return runner
+
+
+def _next_antigravity_log_file():
+    import os
+    import time
+    from pathlib import Path
+
+    root = Path(os.getenv("ANTIGRAVITY_LOG_DIR", "/private/tmp/tradesystem-antigravity-logs"))
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        logger.warning("[research-digest] antigravity log dir 创建失败(%s): %s", root, exc)
+        return None
+    return root / f"research-digest-{os.getpid()}-{int(time.time() * 1000)}.log"
 
 
 def _parse_json(text):

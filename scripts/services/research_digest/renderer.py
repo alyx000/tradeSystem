@@ -205,6 +205,18 @@ def _huibo_lines(huibo_digest: dict | None) -> list[str]:
     L: list[str] = []
     has_rendered_content = False
 
+    antigravity = _huibo_antigravity_meta(huibo_digest)
+    ranker = _huibo_ranker_meta(huibo_digest)
+    if antigravity.get("status") == "unavailable":
+        has_rendered_content = True
+        reason = _safe_text(antigravity.get("reason"), "慧博Antigravity状态") or "unavailable"
+        L.append("\n## ⚠️ 慧博 Antigravity 不可用")
+        L.append(f"> Antigravity 不可用：{reason}；后续 reader/ranker/聚合调用已停止，如有 Top 推荐则来自本地兜底排序。")
+    if ranker.get("status") == "fallback":
+        has_rendered_content = True
+        reason = _safe_text(ranker.get("reason"), "慧博ranker状态") or "ranker_failed"
+        L.append(f"> ranker=fallback：{reason}；慧博 Top 推荐不是 ranker agent 生成。")
+
     recs_raw = huibo_digest.get("recommendations") or []
     recs = [rec for rec in recs_raw if isinstance(rec, dict)] if isinstance(recs_raw, list) else []
     if recs:
@@ -245,6 +257,8 @@ def _huibo_lines(huibo_digest: dict | None) -> list[str]:
             continue
         reader = report.get("reader") or {}
         if not isinstance(reader, dict):
+            continue
+        if _huibo_reader_quality_failed(reader):
             continue
         title = _safe_text(report.get("title"), "慧博报告标题")
         inst = _safe_text(report.get("institution"), "慧博报告机构")
@@ -307,6 +321,18 @@ def _huibo_lines(huibo_digest: dict | None) -> list[str]:
     return L
 
 
+def _huibo_antigravity_meta(huibo_digest: dict) -> dict:
+    meta = huibo_digest.get("meta") or {}
+    antigravity = meta.get("antigravity") if isinstance(meta, dict) else {}
+    return antigravity if isinstance(antigravity, dict) else {}
+
+
+def _huibo_ranker_meta(huibo_digest: dict) -> dict:
+    meta = huibo_digest.get("meta") or {}
+    ranker = meta.get("ranker") if isinstance(meta, dict) else {}
+    return ranker if isinstance(ranker, dict) else {}
+
+
 def _huibo_source_label(source) -> str:
     if isinstance(source, dict):
         return str(source.get("title") or source.get("institution") or source.get("report_id") or "")
@@ -351,6 +377,13 @@ def render_md(date: str, cn_items: list[dict], us_items: list[dict], top3: list[
     L.append("\n---")
     L.append("> 本报告基于公开机构评级数据整理，不构成任何买卖建议，不预测价格目标。")
     return title, "\n".join(L)
+
+
+def _huibo_reader_quality_failed(reader: dict) -> bool:
+    quality = reader.get("quality")
+    return reader.get("error") == "quality_failed" or (
+        isinstance(quality, dict) and quality.get("status") == "failed"
+    )
 
 
 def write_md(markdown: str, date: str, *, out_root: str = _OUT_ROOT_DEFAULT) -> str:

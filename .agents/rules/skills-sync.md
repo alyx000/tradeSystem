@@ -88,6 +88,7 @@ python3 -m pytest scripts/tests/test_cli_smoke.py -v
 | `cli.py` 的 `query-notes/db-search` | `daily-review/SKILL.md` |
 | `main.py` 的 `pre/post/schedule` | `market-tasks/SKILL.md` |
 | `scripts/utils/llm_cli.py` 或 LLM CLI/env 语义调整 | `market-tasks/SKILL.md` + `INDEX.md` 中 recommend/research-digest/cognition-digest 行 |
+| `scripts/workflows/research-digest-workflow.mjs` / `scripts/workflows/huibo_helper.py` / 慧博 Antigravity 诊断语义调整 | `market-tasks/SKILL.md` + `INDEX.md` 中 research-digest workflow 行 |
 | `main.py` 的 `ingest *` | `ingest-inspector/SKILL.md` |
 | `main.py` 的 `plan *` | `plan-workbench/SKILL.md` |
 | `main.py` 的 `knowledge add-note/list/draft-*` | `knowledge-to-plan/SKILL.md` |

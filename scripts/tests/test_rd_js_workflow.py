@@ -3,11 +3,20 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import subprocess
 from pathlib import Path
 
+import pytest
+
 
 WORKFLOW = Path(__file__).resolve().parents[1] / "workflows" / "research-digest-workflow.mjs"
+
+
+@pytest.fixture(autouse=True)
+def _disable_real_dingtalk(monkeypatch):
+    monkeypatch.delenv("DINGTALK_WEBHOOK_TOKEN", raising=False)
+    monkeypatch.delenv("DINGTALK_WEBHOOK_SECRET", raising=False)
 
 
 def test_js_workflow_runs_and_resumes_without_rereading(tmp_path, monkeypatch):
@@ -136,7 +145,85 @@ def test_js_workflow_auto_retries_failed_reader(tmp_path, monkeypatch):
     assert '"event":"report_read_retry"' in events
 
 
-def test_js_workflow_default_date_uses_asia_shanghai_day(tmp_path, monkeypatch):
+def test_js_workflow_global_quota_failure_stops_reader_and_marks_outputs(tmp_path, monkeypatch):
+    pdf_dir = tmp_path / "pdfs"
+    pdf_dir.mkdir()
+    rows = []
+    for i in range(3):
+        pdf = pdf_dir / f"{i}.pdf"
+        pdf.write_bytes(b"%PDF-1.4\nfixture")
+        rows.append({
+            "报告名称": f"{chr(65 + i)}证券-机器人行业深度：重点推荐产业链{i}",
+            "报告评级": "买入（首次）",
+            "作者": "张三",
+            "页数": "20页",
+            "时间": "2026-06-03",
+            "分类": "行业分析",
+            "PDF路径": str(pdf),
+        })
+    snapshot = tmp_path / "hot.json"
+    snapshot.write_text(json.dumps({"rows": rows}, ensure_ascii=False), encoding="utf-8")
+    calls = tmp_path / "antigravity-calls.jsonl"
+    fake_agy = tmp_path / "fake-agy"
+    fake_agy.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, pathlib, sys\n"
+        f"pathlib.Path({str(calls)!r}).open('a', encoding='utf-8').write(json.dumps(sys.argv, ensure_ascii=False)+'\\n')\n"
+        "if '--log-file' in sys.argv:\n"
+        "    pathlib.Path(sys.argv[sys.argv.index('--log-file') + 1]).write_text('RESOURCE_EXHAUSTED (code 429): Individual quota reached\\n', encoding='utf-8')\n"
+        "raise SystemExit(0)\n",
+        encoding="utf-8",
+    )
+    fake_agy.chmod(0o755)
+
+    monkeypatch.setenv("HUIBO_HOT_REPORT_JSON", str(snapshot))
+    monkeypatch.setenv("HUIBO_RAW_DIR", str(tmp_path / "raw"))
+    monkeypatch.setenv("ANTIGRAVITY_BIN", str(fake_agy))
+    cmd = [
+        "node", str(WORKFLOW), "daily",
+        "--date", "2026-06-03",
+        "--run-root", str(tmp_path / "runs"),
+        "--raw-dir", str(tmp_path / "raw"),
+        "--summary-dir", str(tmp_path / "summaries"),
+        "--reader-cap", "3",
+        "--reader-concurrency", "1",
+        "--reader-max-attempts", "3",
+        "--recommend-cap", "1",
+        "--publish",
+        "--publish-dry-run",
+    ]
+    subprocess.run(cmd, text=True, capture_output=True, check=True)
+
+    run_dir = tmp_path / "runs" / "2026-06-03"
+    assert len(calls.read_text(encoding="utf-8").splitlines()) == 1
+    state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+    assert state["llmStatus"] == "unavailable"
+    assert state["llmFailureReason"] == "quota_exhausted"
+    reports = list(state["reports"].values())
+    assert sum(1 for report in reports if report["status"] == "failed") == 1
+    assert sum(1 for report in reports if report["status"] == "skipped_llm_unavailable") == 2
+    events = [
+        json.loads(line)
+        for line in (run_dir / "events.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    global_failures = [event for event in events if event["event"] == "llm_global_failure"]
+    assert len(global_failures) == 1
+    assert global_failures[0]["reason"] == "quota_exhausted"
+    assert "RESOURCE_EXHAUSTED" in global_failures[0]["message"]
+    assert not [event for event in events if event["event"] == "report_read_retry"]
+    summary = json.loads((run_dir / "summary.json").read_text(encoding="utf-8"))
+    assert summary["meta"]["antigravity"]["status"] == "unavailable"
+    assert summary["meta"]["ranker"]["status"] == "fallback"
+    assert summary["meta"]["ranker"]["reason"] == "quota_exhausted"
+    markdown = (run_dir / "report.md").read_text(encoding="utf-8")
+    assert "Antigravity 不可用" in markdown
+    assert "ranker=fallback" in markdown
+    published = json.loads((run_dir / "published.json").read_text(encoding="utf-8"))
+    assert published["huibo_antigravity"]["status"] == "unavailable"
+    assert published["huibo_ranker"]["status"] == "fallback"
+
+
+def test_js_workflow_preflight_quota_failure_skips_reader_calls(tmp_path, monkeypatch):
     pdf = tmp_path / "source.pdf"
     pdf.write_bytes(b"%PDF-1.4\nfixture")
     snapshot = tmp_path / "hot.json"
@@ -146,7 +233,485 @@ def test_js_workflow_default_date_uses_asia_shanghai_day(tmp_path, monkeypatch):
                 "报告名称": "A证券-机器人行业深度：重点推荐产业链",
                 "报告评级": "买入（首次）",
                 "页数": "20页",
-                "时间": "2026-06-07",
+                "时间": "2026-06-03",
+                "分类": "行业分析",
+                "PDF路径": str(pdf),
+            }
+        ]
+    }, ensure_ascii=False), encoding="utf-8")
+    calls = tmp_path / "antigravity-calls.jsonl"
+    fake_agy = tmp_path / "fake-agy"
+    fake_agy.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, pathlib, sys\n"
+        f"pathlib.Path({str(calls)!r}).open('a', encoding='utf-8').write(json.dumps(sys.argv, ensure_ascii=False)+'\\n')\n"
+        "if '--log-file' in sys.argv:\n"
+        "    pathlib.Path(sys.argv[sys.argv.index('--log-file') + 1]).write_text('RESOURCE_EXHAUSTED (code 429): quota\\n', encoding='utf-8')\n"
+        "raise SystemExit(0)\n",
+        encoding="utf-8",
+    )
+    fake_agy.chmod(0o755)
+
+    monkeypatch.setenv("HUIBO_HOT_REPORT_JSON", str(snapshot))
+    monkeypatch.setenv("HUIBO_RAW_DIR", str(tmp_path / "raw"))
+    monkeypatch.setenv("ANTIGRAVITY_BIN", str(fake_agy))
+    cmd = [
+        "node", str(WORKFLOW), "daily",
+        "--date", "2026-06-03",
+        "--run-root", str(tmp_path / "runs"),
+        "--raw-dir", str(tmp_path / "raw"),
+        "--summary-dir", str(tmp_path / "summaries"),
+        "--reader-cap", "1",
+        "--reader-concurrency", "1",
+        "--reader-max-attempts", "2",
+        "--recommend-cap", "1",
+        "--preflight",
+        "--no-aggregate-llm",
+    ]
+    subprocess.run(cmd, text=True, capture_output=True, check=True)
+
+    run_dir = tmp_path / "runs" / "2026-06-03"
+    assert len(calls.read_text(encoding="utf-8").splitlines()) == 1
+    state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+    assert state["llmStatus"] == "unavailable"
+    assert state["llmFailureReason"] == "quota_exhausted"
+    assert state["stages"]["preflight"]["status"] == "done"
+    report = next(iter(state["reports"].values()))
+    assert report["status"] == "skipped_llm_unavailable"
+    events = [
+        json.loads(line)
+        for line in (run_dir / "events.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert any(event["event"] == "llm_global_failure" and event.get("stage") == "preflight" for event in events)
+
+
+def test_js_workflow_reset_llm_status_allows_retry_after_global_failure(tmp_path, monkeypatch):
+    pdf_dir = tmp_path / "pdfs"
+    pdf_dir.mkdir()
+    rows = []
+    for i in range(2):
+        pdf = pdf_dir / f"{i}.pdf"
+        pdf.write_bytes(b"%PDF-1.4\nfixture")
+        rows.append({
+            "报告名称": f"{chr(65 + i)}证券-机器人行业深度：重点推荐产业链{i}",
+            "报告评级": "买入（首次）",
+            "作者": "张三",
+            "页数": "20页",
+            "时间": "2026-06-03",
+            "分类": "行业分析",
+            "PDF路径": str(pdf),
+        })
+    snapshot = tmp_path / "hot.json"
+    snapshot.write_text(json.dumps({"rows": rows}, ensure_ascii=False), encoding="utf-8")
+    calls = tmp_path / "antigravity-calls.jsonl"
+    mode = tmp_path / "mode.txt"
+    mode.write_text("quota", encoding="utf-8")
+    fake_agy = tmp_path / "fake-agy"
+    fake_agy.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, pathlib, sys\n"
+        f"calls = pathlib.Path({str(calls)!r})\n"
+        f"mode = pathlib.Path({str(mode)!r}).read_text(encoding='utf-8').strip()\n"
+        "calls.open('a', encoding='utf-8').write(json.dumps({'mode': mode, 'argv': sys.argv}, ensure_ascii=False)+'\\n')\n"
+        "if mode == 'quota':\n"
+        "    if '--log-file' in sys.argv:\n"
+        "        pathlib.Path(sys.argv[sys.argv.index('--log-file') + 1]).write_text('RESOURCE_EXHAUSTED (code 429): quota\\n', encoding='utf-8')\n"
+        "    raise SystemExit(0)\n"
+        "print(json.dumps({'industry':'机器人','key_points':['reset ok'],'mentioned_stocks':[],'read_score':81}, ensure_ascii=False))\n",
+        encoding="utf-8",
+    )
+    fake_agy.chmod(0o755)
+
+    monkeypatch.setenv("HUIBO_HOT_REPORT_JSON", str(snapshot))
+    monkeypatch.setenv("HUIBO_RAW_DIR", str(tmp_path / "raw"))
+    monkeypatch.setenv("ANTIGRAVITY_BIN", str(fake_agy))
+    cmd = [
+        "node", str(WORKFLOW), "daily",
+        "--date", "2026-06-03",
+        "--run-root", str(tmp_path / "runs"),
+        "--raw-dir", str(tmp_path / "raw"),
+        "--summary-dir", str(tmp_path / "summaries"),
+        "--reader-cap", "2",
+        "--reader-concurrency", "1",
+        "--reader-max-attempts", "2",
+        "--recommend-cap", "1",
+        "--no-aggregate-llm",
+    ]
+    subprocess.run(cmd, text=True, capture_output=True, check=True)
+    run_dir = tmp_path / "runs" / "2026-06-03"
+    state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+    assert state["llmStatus"] == "unavailable"
+
+    mode.write_text("ok", encoding="utf-8")
+    subprocess.run([*cmd, "--retry-failed", "--reset-llm-status"], text=True, capture_output=True, check=True)
+
+    state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+    assert state["llmStatus"] == "ok"
+    assert all(report["status"] == "read_done" for report in state["reports"].values())
+    call_modes = [json.loads(line)["mode"] for line in calls.read_text(encoding="utf-8").splitlines()]
+    assert call_modes == ["quota", "ok", "ok"]
+    events = [
+        json.loads(line)
+        for line in (run_dir / "events.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert any(event["event"] == "llm_status_reset" for event in events)
+
+
+def test_js_workflow_retry_failed_refreshes_publish_after_finalize(tmp_path, monkeypatch):
+    pdf = tmp_path / "source.pdf"
+    pdf.write_bytes(b"%PDF-1.4\nfixture")
+    snapshot = tmp_path / "hot.json"
+    snapshot.write_text(json.dumps({
+        "rows": [
+            {
+                "报告名称": "A证券-机器人行业深度：重点推荐产业链",
+                "报告评级": "买入（首次）",
+                "页数": "20页",
+                "时间": "2026-06-03",
+                "分类": "行业分析",
+                "PDF路径": str(pdf),
+            }
+        ]
+    }, ensure_ascii=False), encoding="utf-8")
+    calls = tmp_path / "antigravity-calls.jsonl"
+    mode = tmp_path / "mode.txt"
+    mode.write_text("quota", encoding="utf-8")
+    fake_agy = tmp_path / "fake-agy"
+    fake_agy.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, pathlib, sys\n"
+        f"calls = pathlib.Path({str(calls)!r})\n"
+        f"mode = pathlib.Path({str(mode)!r}).read_text(encoding='utf-8').strip()\n"
+        "calls.open('a', encoding='utf-8').write(mode+'\\n')\n"
+        "if mode == 'quota':\n"
+        "    if '--log-file' in sys.argv:\n"
+        "        pathlib.Path(sys.argv[sys.argv.index('--log-file') + 1]).write_text('RESOURCE_EXHAUSTED (code 429): quota\\n', encoding='utf-8')\n"
+        "    raise SystemExit(0)\n"
+        "print(json.dumps({'industry':'机器人','key_points':['ok after reset'],'mentioned_stocks':[],'read_score':80}, ensure_ascii=False))\n",
+        encoding="utf-8",
+    )
+    fake_agy.chmod(0o755)
+
+    monkeypatch.setenv("HUIBO_HOT_REPORT_JSON", str(snapshot))
+    monkeypatch.setenv("HUIBO_RAW_DIR", str(tmp_path / "raw"))
+    monkeypatch.setenv("ANTIGRAVITY_BIN", str(fake_agy))
+    cmd = [
+        "node", str(WORKFLOW), "daily",
+        "--date", "2026-06-03",
+        "--run-root", str(tmp_path / "runs"),
+        "--raw-dir", str(tmp_path / "raw"),
+        "--summary-dir", str(tmp_path / "summaries"),
+        "--reader-cap", "1",
+        "--reader-concurrency", "1",
+        "--reader-max-attempts", "2",
+        "--recommend-cap", "1",
+        "--publish",
+        "--publish-dry-run",
+    ]
+    subprocess.run(cmd, text=True, capture_output=True, check=True)
+    run_dir = tmp_path / "runs" / "2026-06-03"
+    first_published = json.loads((run_dir / "published.json").read_text(encoding="utf-8"))
+    assert first_published["huibo_antigravity"]["status"] == "unavailable"
+
+    mode.write_text("ok", encoding="utf-8")
+    subprocess.run([*cmd, "--retry-failed", "--reset-llm-status"], text=True, capture_output=True, check=True)
+
+    refreshed = json.loads((run_dir / "published.json").read_text(encoding="utf-8"))
+    assert refreshed["huibo_antigravity"]["status"] == "ok"
+    events = [
+        json.loads(line)
+        for line in (run_dir / "events.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    publish_starts = [event for event in events if event["event"] == "stage_start" and event["stage"] == "publish"]
+    assert len(publish_starts) == 2
+
+
+def test_js_workflow_resume_refreshes_publish_when_previous_push_failed(tmp_path, monkeypatch):
+    pdf = tmp_path / "source.pdf"
+    pdf.write_bytes(b"%PDF-1.4\nfixture")
+    snapshot = tmp_path / "hot.json"
+    snapshot.write_text(json.dumps({
+        "rows": [
+            {
+                "报告名称": "A证券-机器人行业深度：重点推荐产业链",
+                "报告评级": "买入（首次）",
+                "页数": "20页",
+                "时间": "2026-06-03",
+                "分类": "行业分析",
+                "PDF路径": str(pdf),
+            }
+        ]
+    }, ensure_ascii=False), encoding="utf-8")
+    fake_agy = tmp_path / "fake-agy"
+    fake_agy.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json\n"
+        "print(json.dumps({'industry':'机器人','key_points':['ok'],'mentioned_stocks':[],'read_score':80}, ensure_ascii=False))\n",
+        encoding="utf-8",
+    )
+    fake_agy.chmod(0o755)
+
+    monkeypatch.setenv("HUIBO_HOT_REPORT_JSON", str(snapshot))
+    monkeypatch.setenv("HUIBO_RAW_DIR", str(tmp_path / "raw"))
+    monkeypatch.setenv("ANTIGRAVITY_BIN", str(fake_agy))
+    base_cmd = [
+        "node", str(WORKFLOW), "daily",
+        "--date", "2026-06-03",
+        "--run-root", str(tmp_path / "runs"),
+        "--raw-dir", str(tmp_path / "raw"),
+        "--summary-dir", str(tmp_path / "summaries"),
+        "--publish-out-root", str(tmp_path / "reports"),
+        "--reader-cap", "1",
+        "--reader-concurrency", "1",
+        "--recommend-cap", "1",
+        "--no-aggregate-llm",
+        "--publish",
+    ]
+    subprocess.run([*base_cmd, "--publish-dry-run"], text=True, capture_output=True, check=True)
+    run_dir = tmp_path / "runs" / "2026-06-03"
+    first_published = json.loads((run_dir / "published.json").read_text(encoding="utf-8"))
+    assert first_published["dry_run"] is True
+    assert first_published["pushed"] is False
+
+    subprocess.run([*base_cmd, "--resume"], text=True, capture_output=True, check=True)
+
+    refreshed = json.loads((run_dir / "published.json").read_text(encoding="utf-8"))
+    assert refreshed["dry_run"] is False
+    assert refreshed["pushed"] is False
+    events = [
+        json.loads(line)
+        for line in (run_dir / "events.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    publish_starts = [event for event in events if event["event"] == "stage_start" and event["stage"] == "publish"]
+    assert len(publish_starts) == 2
+
+
+def test_js_workflow_writes_workflow_summary_event(tmp_path, monkeypatch):
+    pdf = tmp_path / "source.pdf"
+    pdf.write_bytes(b"%PDF-1.4\nfixture")
+    snapshot = tmp_path / "hot.json"
+    snapshot.write_text(json.dumps({
+        "rows": [
+            {
+                "报告名称": "A证券-机器人行业深度：重点推荐产业链",
+                "报告评级": "买入（首次）",
+                "页数": "20页",
+                "时间": "2026-06-03",
+                "分类": "行业分析",
+                "PDF路径": str(pdf),
+            }
+        ]
+    }, ensure_ascii=False), encoding="utf-8")
+    fake_agy = tmp_path / "fake-agy"
+    fake_agy.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json\n"
+        "print(json.dumps({'industry':'机器人','key_points':['ok'],'mentioned_stocks':[],'read_score':80}, ensure_ascii=False))\n",
+        encoding="utf-8",
+    )
+    fake_agy.chmod(0o755)
+
+    monkeypatch.setenv("HUIBO_HOT_REPORT_JSON", str(snapshot))
+    monkeypatch.setenv("HUIBO_RAW_DIR", str(tmp_path / "raw"))
+    monkeypatch.setenv("ANTIGRAVITY_BIN", str(fake_agy))
+    cmd = [
+        "node", str(WORKFLOW), "daily",
+        "--date", "2026-06-03",
+        "--run-root", str(tmp_path / "runs"),
+        "--raw-dir", str(tmp_path / "raw"),
+        "--summary-dir", str(tmp_path / "summaries"),
+        "--reader-cap", "1",
+        "--reader-concurrency", "1",
+        "--recommend-cap", "1",
+        "--no-aggregate-llm",
+        "--publish",
+        "--publish-dry-run",
+    ]
+    subprocess.run(cmd, text=True, capture_output=True, check=True)
+
+    run_dir = tmp_path / "runs" / "2026-06-03"
+    events = [
+        json.loads(line)
+        for line in (run_dir / "events.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    summaries = [event for event in events if event["event"] == "workflow_summary"]
+    assert len(summaries) == 1
+    summary = summaries[0]
+    assert isinstance(summary["invocation_id"], str) and summary["invocation_id"]
+    assert summary["llm_status"] == "ok"
+    assert summary["reader_success_count"] == 1
+    assert summary["reader_failed_count"] == 0
+    assert summary["reader_skipped_count"] == 0
+    assert summary["ranker_status"] == "fallback"
+    assert summary["include_base_digest"] is False
+    assert summary["base_digest_included"] is False
+    assert summary["published"] is True
+    assert summary["summary"].endswith("summary.json")
+    assert summary["markdown"].endswith("report.md")
+    assert all(event.get("invocation_id") == summary["invocation_id"] for event in events)
+    state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+    assert state["currentInvocation"]["id"] == summary["invocation_id"]
+    report_md = (run_dir / "run_report.md").read_text(encoding="utf-8")
+    assert "## Stages" in report_md
+    assert "read | done" in report_md
+    assert "reader_success_count | 1" in report_md
+
+
+def test_js_workflow_finalize_global_failure_updates_state_and_summary_event(tmp_path, monkeypatch):
+    pdf = tmp_path / "source.pdf"
+    pdf.write_bytes(b"%PDF-1.4\nfixture")
+    snapshot = tmp_path / "hot.json"
+    snapshot.write_text(json.dumps({
+        "rows": [
+            {
+                "报告名称": "A证券-机器人行业深度：重点推荐产业链",
+                "报告评级": "买入（首次）",
+                "页数": "20页",
+                "时间": "2026-06-03",
+                "分类": "行业分析",
+                "PDF路径": str(pdf),
+            }
+        ]
+    }, ensure_ascii=False), encoding="utf-8")
+    calls = tmp_path / "antigravity-calls.jsonl"
+    fake_agy = tmp_path / "fake-agy"
+    fake_agy.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, pathlib, sys\n"
+        f"calls = pathlib.Path({str(calls)!r})\n"
+        "lines = calls.read_text(encoding='utf-8').splitlines() if calls.exists() else []\n"
+        "calls.open('a', encoding='utf-8').write(json.dumps(sys.argv, ensure_ascii=False)+'\\n')\n"
+        "if len(lines) == 0:\n"
+        "    print(json.dumps({'industry':'机器人','key_points':['reader ok'],'mentioned_stocks':[],'read_score':80}, ensure_ascii=False))\n"
+        "else:\n"
+        "    if '--log-file' in sys.argv:\n"
+        "        pathlib.Path(sys.argv[sys.argv.index('--log-file') + 1]).write_text('RESOURCE_EXHAUSTED (code 429): quota\\n', encoding='utf-8')\n"
+        "    raise SystemExit(0)\n",
+        encoding="utf-8",
+    )
+    fake_agy.chmod(0o755)
+
+    monkeypatch.setenv("HUIBO_HOT_REPORT_JSON", str(snapshot))
+    monkeypatch.setenv("HUIBO_RAW_DIR", str(tmp_path / "raw"))
+    monkeypatch.setenv("ANTIGRAVITY_BIN", str(fake_agy))
+    cmd = [
+        "node", str(WORKFLOW), "daily",
+        "--date", "2026-06-03",
+        "--run-root", str(tmp_path / "runs"),
+        "--raw-dir", str(tmp_path / "raw"),
+        "--summary-dir", str(tmp_path / "summaries"),
+        "--reader-cap", "1",
+        "--reader-concurrency", "1",
+        "--recommend-cap", "1",
+    ]
+    subprocess.run(cmd, text=True, capture_output=True, check=True)
+
+    run_dir = tmp_path / "runs" / "2026-06-03"
+    assert len(calls.read_text(encoding="utf-8").splitlines()) == 2
+    state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+    assert state["llmStatus"] == "unavailable"
+    assert state["llmFailureReason"] == "quota_exhausted"
+    summary = json.loads((run_dir / "summary.json").read_text(encoding="utf-8"))
+    assert summary["meta"]["antigravity"]["status"] == "unavailable"
+    events = [
+        json.loads(line)
+        for line in (run_dir / "events.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert any(event["event"] == "llm_global_failure" and event.get("stage") == "finalize" for event in events)
+    workflow_summary = next(event for event in events if event["event"] == "workflow_summary")
+    assert workflow_summary["llm_status"] == "unavailable"
+
+
+def test_js_workflow_parse_failure_is_per_report_not_global(tmp_path, monkeypatch):
+    pdf_dir = tmp_path / "pdfs"
+    pdf_dir.mkdir()
+    rows = []
+    for i in range(2):
+        pdf = pdf_dir / f"{i}.pdf"
+        pdf.write_bytes(b"%PDF-1.4\nfixture")
+        rows.append({
+            "报告名称": f"{chr(65 + i)}证券-机器人行业深度：重点推荐产业链{i}",
+            "报告评级": "买入（首次）",
+            "作者": "张三",
+            "页数": "20页",
+            "时间": "2026-06-03",
+            "分类": "行业分析",
+            "PDF路径": str(pdf),
+        })
+    snapshot = tmp_path / "hot.json"
+    snapshot.write_text(json.dumps({"rows": rows}, ensure_ascii=False), encoding="utf-8")
+    calls = tmp_path / "antigravity-calls.jsonl"
+    fake_agy = tmp_path / "fake-agy"
+    fake_agy.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, pathlib, sys\n"
+        f"calls = pathlib.Path({str(calls)!r})\n"
+        "lines = calls.read_text(encoding='utf-8').splitlines() if calls.exists() else []\n"
+        "calls.open('a', encoding='utf-8').write(json.dumps(sys.argv, ensure_ascii=False)+'\\n')\n"
+        "if len(lines) == 0:\n"
+        "    print('not json')\n"
+        "else:\n"
+        "    print(json.dumps({'industry':'机器人','key_points':['ok'],'mentioned_stocks':[],'read_score':80}, ensure_ascii=False))\n",
+        encoding="utf-8",
+    )
+    fake_agy.chmod(0o755)
+
+    monkeypatch.setenv("HUIBO_HOT_REPORT_JSON", str(snapshot))
+    monkeypatch.setenv("HUIBO_RAW_DIR", str(tmp_path / "raw"))
+    monkeypatch.setenv("ANTIGRAVITY_BIN", str(fake_agy))
+    cmd = [
+        "node", str(WORKFLOW), "daily",
+        "--date", "2026-06-03",
+        "--run-root", str(tmp_path / "runs"),
+        "--raw-dir", str(tmp_path / "raw"),
+        "--summary-dir", str(tmp_path / "summaries"),
+        "--reader-cap", "2",
+        "--reader-concurrency", "1",
+        "--reader-max-attempts", "1",
+        "--recommend-cap", "1",
+        "--no-aggregate-llm",
+    ]
+    subprocess.run(cmd, text=True, capture_output=True, check=True)
+
+    run_dir = tmp_path / "runs" / "2026-06-03"
+    assert len(calls.read_text(encoding="utf-8").splitlines()) == 2
+    state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+    assert state.get("llmStatus", "ok") == "ok"
+    statuses = [report["status"] for report in state["reports"].values()]
+    assert statuses.count("failed") == 1
+    assert statuses.count("read_done") == 1
+    events = [
+        json.loads(line)
+        for line in (run_dir / "events.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert not [event for event in events if event["event"] == "llm_global_failure"]
+    parse_errors = [
+        event for event in events
+        if event["event"] == "report_read_error" and event.get("reason") == "parse_failed"
+    ]
+    assert len(parse_errors) == 1
+
+
+def test_js_workflow_default_date_uses_previous_trade_day(tmp_path, monkeypatch):
+    db_path = tmp_path / "trade.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute("CREATE TABLE trade_calendar (date TEXT PRIMARY KEY, is_open INTEGER)")
+    conn.executemany(
+        "INSERT INTO trade_calendar(date, is_open) VALUES (?, ?)",
+        [("2026-06-05", 1), ("2026-06-06", 0), ("2026-06-07", 0)],
+    )
+    conn.commit()
+    conn.close()
+    pdf = tmp_path / "source.pdf"
+    pdf.write_bytes(b"%PDF-1.4\nfixture")
+    snapshot = tmp_path / "hot.json"
+    snapshot.write_text(json.dumps({
+        "rows": [
+            {
+                "报告名称": "A证券-机器人行业深度：重点推荐产业链",
+                "报告评级": "买入（首次）",
+                "页数": "20页",
+                "时间": "2026-06-05",
                 "分类": "行业分析",
                 "PDF路径": str(pdf),
             }
@@ -163,6 +728,7 @@ def test_js_workflow_default_date_uses_asia_shanghai_day(tmp_path, monkeypatch):
 
     monkeypatch.setenv("HUIBO_HOT_REPORT_JSON", str(snapshot))
     monkeypatch.setenv("ANTIGRAVITY_BIN", str(fake_agy))
+    monkeypatch.setenv("TRADE_DB_PATH", str(db_path))
     monkeypatch.setenv("WORKFLOW_NOW_ISO", "2026-06-06T22:42:00.000Z")
     cmd = [
         "node", str(WORKFLOW), "daily",
@@ -176,8 +742,8 @@ def test_js_workflow_default_date_uses_asia_shanghai_day(tmp_path, monkeypatch):
     ]
     subprocess.run(cmd, text=True, capture_output=True, check=True)
 
-    assert (tmp_path / "runs" / "2026-06-07" / "state.json").exists()
-    assert not (tmp_path / "runs" / "2026-06-06").exists()
+    assert (tmp_path / "runs" / "2026-06-05" / "state.json").exists()
+    assert not (tmp_path / "runs" / "2026-06-07").exists()
 
 
 def test_js_workflow_rejects_date_without_value(tmp_path):
@@ -501,6 +1067,117 @@ def test_retry_failed_reuses_completed_upstream_stages_without_explicit_resume(t
     assert {"collect", "prescreen", "download"}.issubset(set(skipped))
     assert sum(1 for e in events if e["event"] == "stage_start" and e["stage"] == "collect") == 1
     assert len(calls.read_text(encoding="utf-8").splitlines()) == 2
+
+
+def test_js_workflow_keeps_missing_pdf_when_llm_unavailable(tmp_path, monkeypatch):
+    pdf = tmp_path / "source.pdf"
+    pdf.write_bytes(b"%PDF-1.4\nfixture")
+    missing_pdf = tmp_path / "missing.pdf"
+    snapshot = tmp_path / "hot.json"
+    snapshot.write_text(json.dumps({
+        "rows": [
+            {
+                "报告名称": "A证券-机器人行业深度：重点推荐产业链",
+                "报告评级": "买入（首次）",
+                "页数": "20页",
+                "时间": "2026-06-03",
+                "分类": "行业分析",
+                "PDF路径": str(pdf),
+            },
+            {
+                "报告名称": "B证券-机器人行业深度：重点推荐产业链",
+                "报告评级": "买入（首次）",
+                "页数": "20页",
+                "时间": "2026-06-03",
+                "分类": "行业分析",
+                "PDF路径": str(missing_pdf),
+            },
+        ]
+    }, ensure_ascii=False), encoding="utf-8")
+    fake_agy = tmp_path / "fake-agy"
+    fake_agy.write_text(
+        "#!/usr/bin/env python3\n"
+        "import pathlib, sys\n"
+        "if '--log-file' in sys.argv:\n"
+        "    pathlib.Path(sys.argv[sys.argv.index('--log-file') + 1]).write_text('RESOURCE_EXHAUSTED (code 429): quota\\n', encoding='utf-8')\n"
+        "raise SystemExit(0)\n",
+        encoding="utf-8",
+    )
+    fake_agy.chmod(0o755)
+
+    monkeypatch.setenv("HUIBO_HOT_REPORT_JSON", str(snapshot))
+    monkeypatch.setenv("HUIBO_RAW_DIR", str(tmp_path / "raw"))
+    monkeypatch.setenv("ANTIGRAVITY_BIN", str(fake_agy))
+    cmd = [
+        "node", str(WORKFLOW), "daily",
+        "--date", "2026-06-03",
+        "--run-root", str(tmp_path / "runs"),
+        "--raw-dir", str(tmp_path / "raw"),
+        "--summary-dir", str(tmp_path / "summaries"),
+        "--reader-cap", "2",
+        "--reader-concurrency", "1",
+        "--reader-max-attempts", "1",
+        "--recommend-cap", "1",
+        "--no-aggregate-llm",
+    ]
+    subprocess.run(cmd, text=True, capture_output=True, check=True)
+
+    state = json.loads((tmp_path / "runs" / "2026-06-03" / "state.json").read_text(encoding="utf-8"))
+    statuses = {report["title"]: report["status"] for report in state["reports"].values()}
+    assert statuses["A证券-机器人行业深度：重点推荐产业链"] == "failed"
+    assert statuses["B证券-机器人行业深度：重点推荐产业链"] == "missing_pdf"
+
+
+def test_js_workflow_publish_passes_include_base_digest(tmp_path, monkeypatch):
+    pdf = tmp_path / "source.pdf"
+    pdf.write_bytes(b"%PDF-1.4\nfixture")
+    snapshot = tmp_path / "hot.json"
+    snapshot.write_text(json.dumps({
+        "rows": [
+            {
+                "报告名称": "A证券-机器人行业深度：重点推荐产业链",
+                "报告评级": "买入（首次）",
+                "页数": "20页",
+                "时间": "2026-06-03",
+                "分类": "行业分析",
+                "PDF路径": str(pdf),
+            }
+        ]
+    }, ensure_ascii=False), encoding="utf-8")
+    fake_agy = tmp_path / "fake-agy"
+    fake_agy.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json\n"
+        "print(json.dumps({'industry':'机器人','key_points':['ok'],'mentioned_stocks':[],'read_score':80}, ensure_ascii=False))\n",
+        encoding="utf-8",
+    )
+    fake_agy.chmod(0o755)
+
+    monkeypatch.setenv("HUIBO_HOT_REPORT_JSON", str(snapshot))
+    monkeypatch.setenv("HUIBO_RAW_DIR", str(tmp_path / "raw"))
+    monkeypatch.setenv("ANTIGRAVITY_BIN", str(fake_agy))
+    cmd = [
+        "node", str(WORKFLOW), "daily",
+        "--date", "2026-06-03",
+        "--run-root", str(tmp_path / "runs"),
+        "--raw-dir", str(tmp_path / "raw"),
+        "--summary-dir", str(tmp_path / "summaries"),
+        "--reader-cap", "1",
+        "--reader-concurrency", "1",
+        "--recommend-cap", "1",
+        "--no-aggregate-llm",
+        "--publish",
+        "--publish-dry-run",
+        "--include-base-digest",
+    ]
+    subprocess.run(cmd, text=True, capture_output=True, check=True)
+
+    events = [
+        json.loads(line)
+        for line in (tmp_path / "runs" / "2026-06-03" / "events.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    publish = next(event for event in events if event["event"] == "stage_end" and event["stage"] == "publish")
+    assert publish["result"]["include_base_digest"] is True
 
 
 def test_js_workflow_fails_fast_on_antigravity_auth_prompt(tmp_path, monkeypatch):
