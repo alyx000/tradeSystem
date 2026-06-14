@@ -15,6 +15,8 @@ from api.deps import get_db_conn
 from api.market_enrich import enrich_daily_market_row
 from db import queries as Q
 from services.holding_signals import build_holding_signals
+from services.trend_leader import pool as tl_pool
+from services.trend_leader.signals import signal_hits as tl_signal_hits
 from services.volume_concentration import service as vc_service
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -48,6 +50,46 @@ def _sanitize_non_finite(value: Any) -> Any:
     if isinstance(value, list):
         return [_sanitize_non_finite(v) for v in value]
     return value
+
+
+# ── Trend Leader（趋势主升观察池，只读） ──────────────────────────
+
+# 只读响应白名单：只放非价位字段 + 信号 chip + 非价位归因（entry_trigger/branch_concepts）。
+# 红线「不含价位」：raw last_signal 里含 near_ma5.ma5 / overheat.ma5 / trend.ma10（均线价位）
+# 与 vol 等内部明细，**绝不外泄**——与 renderer 一致（renderer 只出 chip、不出数值，门2 codex 拦）。
+_TREND_LEADER_PUBLIC_FIELDS = (
+    "code", "name", "sw_l2", "first_limit_date", "entered_date",
+    "last_seen_date", "days_in_pool", "status", "exit_date", "exit_reason",
+)
+
+
+def _trend_leader_public_row(r: dict) -> dict:
+    """池行 → 只读 DTO：白名单非价位列 + 归因 + signal_hits（Pass1 行=null）。"""
+    sig = r.get("last_signal") if isinstance(r.get("last_signal"), dict) else {}
+    out = {k: r.get(k) for k in _TREND_LEADER_PUBLIC_FIELDS}
+    out["entry_trigger"] = sig.get("entry_trigger")          # 涨停 / 双创15%加速（事件，非价位）
+    # branch_concepts 归一为 **纯字符串列表**：脏值/漂移成非 list（前端 .join 崩，round-1）或
+    # list 内含 dict（如 [{"ma5":15.2}] 会把价位明细透出 API，绕过只查顶层 key 的红线，round-3）。
+    # 只保留 str 元素：非价位、不崩、红线无条件成立。
+    bc = sig.get("branch_concepts")
+    out["branch_concepts"] = [x for x in bc if isinstance(x, str)] if isinstance(bc, list) else []
+    out["signal_hits"] = tl_signal_hits(r.get("last_signal"))
+    return out
+
+
+@router.get("/trend-leaders")
+def list_trend_leaders(
+    status: Optional[str] = Query(None, pattern="^(active|exited)$"),
+    conn: sqlite3.Connection = Depends(get_db_conn),
+):
+    """趋势主升观察池（盘后只读 [判断]）：active/exited/全部。
+
+    仅返回白名单字段（非价位）：基础列 + 归因 entry_trigger/branch_concepts + signal_hits
+    （在池信号 chip 布尔，Pass1 未维护行=null）。**不外泄 raw last_signal**——其内含 MA5/MA10/vol
+    等均线价位明细，违红线「不含价位」（与 renderer 只出 chip 一致）。
+    """
+    rows = tl_pool.list_pool(conn, status=status)
+    return [_trend_leader_public_row(r) for r in rows]
 
 
 # ── Teachers / Notes ──────────────────────────────────────────
