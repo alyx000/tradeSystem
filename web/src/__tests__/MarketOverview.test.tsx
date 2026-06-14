@@ -13,6 +13,9 @@ vi.mock('../lib/api', () => ({
     getMarketHistory: vi.fn(),
     getPostMarket: vi.fn(),
     getMainThemes: vi.fn(),
+    getConcentrationHistory: vi.fn(),
+    getMarketTiming: vi.fn(),
+    getMarketTimingHistory: vi.fn(),
   },
 }))
 
@@ -95,6 +98,10 @@ beforeEach(() => {
   vi.mocked(api.getMarketHistory).mockResolvedValue(history)
   vi.mocked(api.getPostMarket).mockResolvedValue(postMarket)
   vi.mocked(api.getMainThemes).mockResolvedValue(mainThemes)
+  // 默认无择时/集中度数据（null）：现有用例不渲染择时卡片/面板，行为与改动前一致
+  vi.mocked(api.getConcentrationHistory).mockResolvedValue(null as never)
+  vi.mocked(api.getMarketTiming).mockResolvedValue(null as never)
+  vi.mocked(api.getMarketTimingHistory).mockResolvedValue(null as never)
 })
 
 describe('MarketOverview', () => {
@@ -173,6 +180,10 @@ describe('MarketOverview', () => {
     expect(screen.getByText('普涨')).toBeInTheDocument()
     expect(screen.getByText('净流入')).toBeInTheDocument()
     expect(screen.getByText('线上占优')).toBeInTheDocument()
+    // 5周均线状态已从独立卡并入指数卡片：原面板消失，各卡显示「5周线 线上/线下」
+    expect(screen.queryByText('5周均线状态')).not.toBeInTheDocument()
+    expect(screen.getAllByText('5周线').length).toBe(5)   // 上证/深证/创业板/科创50/平均股价（中证2000 无 MA5W）
+    expect(screen.getByText('线下')).toBeInTheDocument()   // 创业板 chinext_above_ma5w=false
     expect(screen.getByText('情绪状态观察')).toBeInTheDocument()
     expect(screen.getByText('涨停扩散')).toBeInTheDocument()
     expect(screen.getByText('封板稳')).toBeInTheDocument()
@@ -190,5 +201,47 @@ describe('MarketOverview', () => {
     expect(screen.getByText('THS 行业资金流前列')).toBeInTheDocument()
     expect(screen.getByText('DC 板块资金流前列')).toBeInTheDocument()
     expect(screen.getAllByText('软件开发').length).toBeGreaterThan(0)
+  })
+
+  it('中证2000 / 平均股价：daily_market 未采集，卡片点位取自 market-timing payload', async () => {
+    const market: MarketFullData = {
+      available: true, date: '2026-04-03',
+      sh_index_close: 3200, sh_index_change_pct: 1.2, sz_index_close: 10000, sz_index_change_pct: 2.1,
+      total_amount: 11800, northbound_net: null, advance_count: 3500, decline_count: 1500,
+      sh_above_ma5w: null, sz_above_ma5w: null, chinext_above_ma5w: null, star50_above_ma5w: null,
+      avg_price_above_ma5w: null, limit_up_count: null, limit_down_count: null, highest_board: null,
+      seal_rate: null, broken_rate: null, continuous_board_counts: null,
+      premium_10cm: null, premium_20cm: null, premium_30cm: null, premium_second_board: null,
+      margin_balance: null,
+    }
+    vi.mocked(api.getMarket).mockResolvedValue(market)
+    vi.mocked(api.getMarketTiming).mockResolvedValue({
+      date: '2026-04-03', available: true, resonance_count: 1,
+      context: { market_amount_yi: 11800, amount_pctile_20d: 0.5, advance: 3500, decline: 1500, limit_down_count: 0 },
+      signals: [
+        {
+          index_code: '932000.CSI', index_name: '中证2000', close: 3313.78, change_pct: 0.82,
+          swing_pivot_date: '2026-03-10', swing_pivot_type: 'high', swing_pivot_price: 3400,
+          fib_day_count: 21, fib_hit: 21, fib_near: null,
+          fractal_status: 'forming', fractal_low_date: null, fractal_low_price: null, fractal_confirm_date: null,
+        },
+        {
+          index_code: 'avg_price', index_name: '平均股价', close: 29.7, change_pct: 1.05,
+          swing_pivot_date: '2026-03-12', swing_pivot_type: 'high', swing_pivot_price: 31,
+          fib_day_count: 16, fib_hit: null, fib_near: null,
+          fractal_status: 'forming', fractal_low_date: null, fractal_low_price: null, fractal_confirm_date: null,
+        },
+      ],
+    } as never)
+
+    renderPage()
+
+    await waitFor(() => expect(screen.getByText('中证2000')).toBeInTheDocument())
+    expect(screen.getByText('3313.78')).toBeInTheDocument()        // 点位来自 timing.close
+    expect(screen.getByText('平均股价')).toBeInTheDocument()
+    expect(screen.getByText('29.7')).toBeInTheDocument()
+    // 变盘窗口内嵌到卡片：中证2000 命中、平均股价未到
+    expect(screen.getByText(/🎯 变盘窗口 21日/)).toBeInTheDocument()
+    expect(screen.getByText(/未到（16日）/)).toBeInTheDocument()
   })
 })

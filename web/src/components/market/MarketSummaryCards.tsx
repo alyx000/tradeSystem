@@ -37,19 +37,6 @@ function StatCard({
   )
 }
 
-function Ma5wBadge({ label, value }: { label: string; value: boolean | number | null | undefined }) {
-  const above = value === true || value === 1
-  const below = value === false || value === 0
-  return (
-    <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium ${
-      above ? 'bg-red-50 text-red-700' : below ? 'bg-green-50 text-green-700' : 'bg-gray-100 text-gray-500'
-    }`}>
-      {label}
-      <span>{above ? '线上' : below ? '线下' : '-'}</span>
-    </span>
-  )
-}
-
 export default function MarketSummaryCards({
   market,
   marketMoneyflow,
@@ -58,7 +45,7 @@ export default function MarketSummaryCards({
   marketMoneyflow: MarketMoneyflowSummary | null
 }) {
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
       <div className="bg-white rounded-lg shadow p-4">
         <h2 className="text-sm font-semibold text-gray-700 mb-3">成交与资金</h2>
         <div className="grid grid-cols-2 gap-4">
@@ -80,16 +67,6 @@ export default function MarketSummaryCards({
         ) : (
           <div className="text-sm text-gray-400 py-6 text-center">暂无大盘资金流向</div>
         )}
-      </div>
-      <div className="bg-white rounded-lg shadow p-4">
-        <h2 className="text-sm font-semibold text-gray-700 mb-3">5周均线状态</h2>
-        <div className="flex flex-wrap gap-2">
-          <Ma5wBadge label="上证" value={market.sh_above_ma5w} />
-          <Ma5wBadge label="深证" value={market.sz_above_ma5w} />
-          <Ma5wBadge label="创业板" value={market.chinext_above_ma5w} />
-          <Ma5wBadge label="科创50" value={market.star50_above_ma5w} />
-          <Ma5wBadge label="均价" value={market.avg_price_above_ma5w} />
-        </div>
       </div>
     </div>
   )

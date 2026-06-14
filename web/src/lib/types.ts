@@ -1158,6 +1158,9 @@ export interface PlanReviewInput {
 export interface MarketTimingSignal {
   index_code: string
   index_name: string
+  // 当日收盘/涨跌幅：daily_market 未采集的指数（中证2000/平均股价）由 market_timing 末根 bar 提供
+  close: number | null
+  change_pct: number | null
   swing_pivot_date: string | null
   swing_pivot_type: string | null
   swing_pivot_price: number | null
