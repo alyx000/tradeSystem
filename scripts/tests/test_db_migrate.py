@@ -463,3 +463,21 @@ def test_v31_migration_creates_market_timing_signal(tmp_path):
         "SELECT name FROM sqlite_master WHERE type='table' AND name='market_timing_signal'"
     ).fetchone() is not None
     conn.close()
+
+
+def test_migrate_self_heals_v31_db_missing_table(tmp_path):
+    """异常半迁移态：DB 已是 v31 但缺 market_timing_signal → migrate 版本无关兜底重建。"""
+    conn = get_connection(tmp_path / "v31_broken.db")
+    migrate(conn)
+    conn.execute("DROP TABLE market_timing_signal")  # 模拟"已 v31 但表缺失"
+    conn.execute("PRAGMA user_version = 31")          # 版本仍 31 → 版本门会跳过 v31 块
+    conn.commit()
+    assert conn.execute(
+        "SELECT name FROM sqlite_master WHERE name='market_timing_signal'"
+    ).fetchone() is None
+
+    migrate(conn)  # 版本无关兜底应重建表
+    assert conn.execute(
+        "SELECT name FROM sqlite_master WHERE name='market_timing_signal'"
+    ).fetchone() is not None
+    conn.close()

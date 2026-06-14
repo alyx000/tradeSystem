@@ -69,6 +69,16 @@ def _ensure_daily_market_premium_columns(conn: sqlite3.Connection) -> None:
             conn.execute(f"ALTER TABLE daily_market ADD COLUMN {col} REAL")
 
 
+def _ensure_market_timing_signal(conn: sqlite3.Connection) -> None:
+    """v31 兜底：确保 market_timing_signal 表存在(版本无关)。
+
+    防"DB 已标记到 v31 但表缺失"的半迁移态——版本门会跳过 v31 块，导致表永不创建、
+    运行期报 no such table。CREATE TABLE IF NOT EXISTS 幂等，复用 schema 真源 SQL 不重复。
+    """
+    from .schema import _SQL_MARKET_TIMING_SIGNAL
+    conn.executescript(_SQL_MARKET_TIMING_SIGNAL)
+
+
 def _rebuild_trade_thesis_trade_mode_check(conn: sqlite3.Connection) -> None:
     """v27: SQLite CHECK 不能 ALTER,需重建 trade_thesis 以加入 sentiment_relay."""
     row = conn.execute(
@@ -564,6 +574,12 @@ def migrate(conn: sqlite3.Connection) -> None:
         init_schema(conn)  # 新表:CREATE IF NOT EXISTS 在老库上建出;新表无需 ALTER 兜底
         set_schema_version(conn, 31)
         conn.commit()
+
+    # 版本无关兜底:DB 已标记到 v31 但 market_timing_signal 缺失(异常半迁移态/历史遗留)时,
+    # 版本门会跳过 v31 块导致表永不建,运行期报 no such table。CREATE IF NOT EXISTS 幂等,
+    # 确保表始终存在(见 feedback_real_db_vs_in_memory:别只靠版本门,加兜底)。
+    _ensure_market_timing_signal(conn)
+    conn.commit()
 
 
 # ──────────────────────────────────────────────────────────────
