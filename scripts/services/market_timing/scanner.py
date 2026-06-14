@@ -31,6 +31,18 @@ def _bars_through(registry, code: str, date: str):
     return bars, res.source
 
 
+def _today_quote(bars: list[dict]) -> tuple[float | None, float | None]:
+    """当日收盘 + 涨跌幅(%)：末根 bar 收盘，对上一根收盘求百分比。
+
+    供 daily_market 未采集的指数（中证2000 / 平均股价）在复盘网站卡片显示当日点位。
+    上一根缺失/为 0 → 涨跌幅 None（不臆造 0%，与 fallback 脏值防线一致）。
+    """
+    close = bars[-1].get("close") if bars else None
+    prev = bars[-2].get("close") if len(bars) >= 2 else None
+    change_pct = round((close - prev) / prev * 100, 4) if close is not None and prev else None
+    return close, change_pct
+
+
 def _resolve_pivot(bars: list[dict], code: str, pivot_overrides: dict | None) -> dict | None:
     """起算 swing 拐点：有手工覆盖(--pivot-date)用之，否则自动检测(D3 hybrid)。
 
@@ -127,8 +139,10 @@ def run_daily(conn: sqlite3.Connection, registry, date: str, *, dry_run: bool = 
         pivot, tp = _time_cycle(bars, code, pivot_overrides)
         turning_points.append(tp)
         fractal = D.evaluate_fractal_status(bars)  # 无状态：从 bars 直接推导，不依赖历史行
+        close, change_pct = _today_quote(bars)
         per_index.append({"code": code, "name": name, "skipped": False, "source": source,
-                          "pivot": pivot, "tp": tp, "fractal": fractal})
+                          "pivot": pivot, "tp": tp, "fractal": fractal,
+                          "close": close, "change_pct": change_pct})
 
     resonance = D.count_resonance(turning_points)
     amount_yi, amount_pctile = _market_amount(bars_by_code, date)
@@ -146,6 +160,7 @@ def run_daily(conn: sqlite3.Connection, registry, date: str, *, dry_run: bool = 
         )
         row = {
             "trade_date": date, "index_code": item["code"], "index_name": item["name"],
+            "close": item.get("close"), "change_pct": item.get("change_pct"),
             "swing_pivot_date": pivot["date"] if pivot else None,
             "swing_pivot_type": pivot["type"] if pivot else None,
             "swing_pivot_price": pivot["price"] if pivot else None,

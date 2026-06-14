@@ -9,7 +9,7 @@ import sqlite3
 
 # upsert 写入列（updated_at 由 SQL 单独写 datetime('now')；created_at 用表默认）
 _COLUMNS = (
-    "trade_date", "index_code", "index_name",
+    "trade_date", "index_code", "index_name", "close", "change_pct",
     "swing_pivot_date", "swing_pivot_type", "swing_pivot_price",
     "fib_day_count", "fib_hit", "fib_near",
     "fractal_status", "fractal_low_date", "fractal_low_price", "fractal_confirm_date", "fractal_json",

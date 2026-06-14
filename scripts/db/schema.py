@@ -429,6 +429,8 @@ CREATE TABLE IF NOT EXISTS market_timing_signal (
     trade_date TEXT NOT NULL CHECK(trade_date GLOB '????-??-??'),
     index_code TEXT NOT NULL,
     index_name TEXT,
+    close REAL,
+    change_pct REAL,
     swing_pivot_date TEXT,
     swing_pivot_type TEXT,
     swing_pivot_price REAL,

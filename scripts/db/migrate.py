@@ -19,7 +19,7 @@ PROJECT_ROOT = SCRIPTS_DIR.parent
 
 # 与 migrate() 中「当前最新」一步一致；新增迁移时递增本常量，并把上一步的
 # set_schema_version(conn, CURRENT_SCHEMA_VERSION) 改为字面量 N（保留历史链）。
-CURRENT_SCHEMA_VERSION = 31
+CURRENT_SCHEMA_VERSION = 32
 
 
 def get_schema_version(conn: sqlite3.Connection) -> int:
@@ -87,6 +87,22 @@ def _ensure_market_timing_signal(conn: sqlite3.Connection) -> None:
     from .schema import _SQL_MARKET_TIMING_SIGNAL
     conn.executescript(_SQL_MARKET_TIMING_SIGNAL)
     conn.commit()  # 仅在确需修复时才提交
+
+
+def _ensure_market_timing_quote_columns(conn: sqlite3.Connection) -> None:
+    """v32 兜底：为既有 market_timing_signal 补 close / change_pct 列。
+
+    CREATE IF NOT EXISTS 不给老表补列（memory: feedback_real_db_vs_in_memory）；
+    表不存在时直接返回（由 _ensure_market_timing_signal 用新 schema 建表，已含这两列）。
+    健康库（列已存在）只 PRAGMA 探查、不 DDL/不 commit；仅缺列时才 ALTER + commit。
+    """
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(market_timing_signal)").fetchall()}
+    if not cols:
+        return
+    for col in ("close", "change_pct"):
+        if col not in cols:
+            conn.execute(f"ALTER TABLE market_timing_signal ADD COLUMN {col} REAL")
+            conn.commit()  # 仅在确需修复时才提交
 
 
 def _rebuild_trade_thesis_trade_mode_check(conn: sqlite3.Connection) -> None:
@@ -585,10 +601,17 @@ def migrate(conn: sqlite3.Connection) -> None:
         set_schema_version(conn, 31)
         conn.commit()
 
-    # 版本无关兜底:DB 已标记到 v31 但 market_timing_signal 缺失(异常半迁移态/历史遗留)时,
-    # 版本门会跳过 v31 块导致表永不建,运行期报 no such table。仅在表缺失时 DDL+commit;
+    if version < 32:
+        logger.info("Applying schema v32: market_timing_signal.close / change_pct (当日点位)")
+        _ensure_market_timing_quote_columns(conn)  # ALTER 兜底:老表补当日收盘/涨跌幅列
+        set_schema_version(conn, 32)
+        conn.commit()
+
+    # 版本无关兜底:DB 已标记到最新版但 market_timing_signal 缺失/缺列(异常半迁移态/历史遗留)时,
+    # 版本门会跳过迁移块导致表/列永不建,运行期报 no such table/column。仅在确缺时 DDL+commit;
     # 健康库纯探查直接返回,不给调用方加事务边界(见 feedback_real_db_vs_in_memory)。
     _ensure_market_timing_signal(conn)
+    _ensure_market_timing_quote_columns(conn)
 
 
 # ──────────────────────────────────────────────────────────────

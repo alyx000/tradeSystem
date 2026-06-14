@@ -12,7 +12,7 @@ from . import repo
 
 # 表格用的逐指数字段（市场级列单独放 context，不在每行重复）
 _SIGNAL_FIELDS = (
-    "index_code", "index_name",
+    "index_code", "index_name", "close", "change_pct",
     "swing_pivot_date", "swing_pivot_type", "swing_pivot_price",
     "fib_day_count", "fib_hit", "fib_near",
     "fractal_status", "fractal_low_date", "fractal_low_price", "fractal_confirm_date",

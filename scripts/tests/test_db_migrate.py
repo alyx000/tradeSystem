@@ -458,10 +458,45 @@ def test_v31_migration_creates_market_timing_signal(tmp_path):
 
     migrate(conn)
     assert get_schema_version(conn) == CURRENT_SCHEMA_VERSION
-    assert get_schema_version(conn) == 31
+    assert get_schema_version(conn) == 32
     assert conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table' AND name='market_timing_signal'"
     ).fetchone() is not None
+    conn.close()
+
+
+def test_v32_backfills_market_timing_quote_columns(tmp_path):
+    """既有 v31 库（market_timing_signal 无 close/change_pct）经 migrate → ALTER 补列且不丢数据。"""
+    conn = get_connection(tmp_path / "v31_noquote.db")
+    migrate(conn)
+    # 模拟 v31 老表：去掉 close/change_pct 列（重建一张不含这两列的同名表 + 塞一行）
+    conn.execute("DROP TABLE market_timing_signal")
+    conn.execute(
+        "CREATE TABLE market_timing_signal ("
+        "trade_date TEXT NOT NULL, index_code TEXT NOT NULL, index_name TEXT, "
+        "fractal_status TEXT NOT NULL DEFAULT 'none', resonance_count INTEGER, "
+        "PRIMARY KEY (trade_date, index_code))"
+    )
+    conn.execute(
+        "INSERT INTO market_timing_signal (trade_date, index_code, index_name, resonance_count) "
+        "VALUES ('2026-06-12', '932000.CSI', '中证2000', 3)"
+    )
+    conn.execute("PRAGMA user_version = 31")  # 退回 v31，版本门触发 v32 ALTER
+    conn.commit()
+    cols_before = {r[1] for r in conn.execute("PRAGMA table_info(market_timing_signal)").fetchall()}
+    assert "close" not in cols_before and "change_pct" not in cols_before
+
+    migrate(conn)
+
+    cols_after = {r[1] for r in conn.execute("PRAGMA table_info(market_timing_signal)").fetchall()}
+    assert "close" in cols_after and "change_pct" in cols_after
+    assert get_schema_version(conn) == CURRENT_SCHEMA_VERSION
+    # 老行保留，新列为 NULL（不丢数据）
+    row = conn.execute(
+        "SELECT index_name, resonance_count, close, change_pct FROM market_timing_signal "
+        "WHERE trade_date='2026-06-12' AND index_code='932000.CSI'"
+    ).fetchone()
+    assert row[0] == "中证2000" and row[1] == 3 and row[2] is None and row[3] is None
     conn.close()
 
 

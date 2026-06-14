@@ -174,6 +174,32 @@ def test_fib_hit_written_from_swing_pivot(conn):
     assert sig["fib_hit"] == 13
 
 
+# ── 当日点位（daily_market 未采集的指数：中证2000/平均股价 卡片用） ──
+
+def test_today_quote_close_and_change_pct_written(conn):
+    """末根 bar 收盘 + 对上一根求涨跌幅 → 写入 close/change_pct，并经 web_payload 暴露。"""
+    from services.market_timing import web_payload
+    ocv = [(100, 100, 1000)] * 11 + [(101, 102, 1000)]  # 上一根收 100，末根收 102 → +2%
+    reg = FakeRegistry({"932000.CSI": _bars("2026-06-13", ocv)})
+    r = scanner.run_daily(conn, reg, "2026-06-13", indices=[{"code": "932000.CSI", "name": "中证2000"}])
+    sig = r["signals"][0]
+    assert sig["close"] == 102
+    assert sig["change_pct"] == pytest.approx(2.0)
+    # 落库 → 只读查询 + 复盘网站 payload 均能取到
+    assert repo.list_signals(conn, date="2026-06-13")[0]["close"] == 102
+    payload_sig = web_payload.build_daily_payload(conn, "2026-06-13")["signals"][0]
+    assert payload_sig["close"] == 102 and payload_sig["change_pct"] == pytest.approx(2.0)
+
+
+def test_today_quote_change_pct_none_without_prior_bar(conn):
+    """仅一根 bar（无上一根）→ change_pct 为 None，不臆造 0%。"""
+    reg = FakeRegistry({"932000.CSI": _bars("2026-06-13", [(101, 102, 1000)])})
+    r = scanner.run_daily(conn, reg, "2026-06-13", indices=[{"code": "932000.CSI", "name": "中证2000"}])
+    sig = r["signals"][0]
+    assert sig["close"] == 102
+    assert sig["change_pct"] is None
+
+
 # ── 市场级上下文 ──
 
 def test_market_context_written(conn):
