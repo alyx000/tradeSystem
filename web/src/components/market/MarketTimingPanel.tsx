@@ -11,10 +11,15 @@ const FRACTAL_LABEL: Record<string, string> = {
 }
 
 function fibCell(s: MarketTimingSignal) {
-  if (s.fib_hit != null) return <span className="text-red-600 font-medium">🎯 命中斐波那契 {s.fib_hit}</span>
+  if (s.fib_hit != null) {
+    return <span className="text-red-600 font-medium">🎯 变盘窗口·第{s.fib_hit}交易日</span>
+  }
   if (s.fib_near != null) {
     const diff = s.fib_day_count != null ? Math.abs(s.fib_day_count - s.fib_near) : '?'
-    return <span className="text-amber-600">… 临近 {s.fib_near}（差 {diff} 日）</span>
+    return <span className="text-amber-600">⏳ 临近变盘窗口（斐波那契{s.fib_near}，差{diff}日）</span>
+  }
+  if (s.fib_day_count != null) {
+    return <span className="text-gray-400">未到变盘窗口（第{s.fib_day_count}日）</span>
   }
   return <span className="text-gray-400">—</span>
 }
@@ -119,6 +124,10 @@ export default function MarketTimingPanel({
             </tbody>
           </table>
         </div>
+        <p className="text-xs text-gray-400 mt-3 leading-relaxed">
+          变盘点 = 从最近拐点起算的交易日数命中斐波那契数（5/8/13/21/34/55），时间上大概率方向转折的窗口；
+          只标「时间到位」，<span className="font-medium">不预判涨跌</span>，需结合多指数共振 / 底分型 / 成交额综合看。
+        </p>
       </div>
 
       <div className="bg-white rounded-lg shadow p-4">

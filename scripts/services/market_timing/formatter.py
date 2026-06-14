@@ -16,9 +16,11 @@ _FRACTAL_LABEL = {
 def _fib_cell(sig: dict) -> str:
     hit, near, dc = sig.get("fib_hit"), sig.get("fib_near"), sig.get("fib_day_count")
     if hit is not None:
-        return f"🎯 命中斐波那契 {hit}"
+        return f"🎯 变盘窗口·第{hit}交易日"
     if near is not None:
-        return f"… 临近 {near}（差 {abs((dc or 0) - near)} 日）"
+        return f"⏳ 临近变盘窗口（斐波那契{near}，差{abs((dc or 0) - near)}日）"
+    if dc is not None:
+        return f"未到变盘窗口（第{dc}日）"
     return "—"
 
 
@@ -71,6 +73,9 @@ def render_daily(result: dict) -> str:
     for s in sigs:
         lines.append(f"| {s.get('index_name')} | {_pivot_cell(s)} | "
                      f"{s.get('fib_day_count') if s.get('fib_day_count') is not None else '—'} | {_fib_cell(s)} |")
+    lines.append("")
+    lines.append("> 变盘点=从最近拐点起算的交易日数命中斐波那契数(5/8/13/21/34/55)，时间上大概率方向转折的窗口；"
+                 "只标「时间到位」，不预判涨跌，需结合共振/底分型/成交额综合看。")
     lines.append("")
 
     # 底分型

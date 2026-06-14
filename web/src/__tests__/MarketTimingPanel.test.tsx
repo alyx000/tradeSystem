@@ -39,8 +39,9 @@ describe('MarketTimingPanel', () => {
     render(<MarketTimingPanel payload={payload} history={history} />)
     expect(screen.getByText(/大盘择时观察 · 2026-06-12/)).toBeInTheDocument()
     expect(screen.getByText(/时间周期 · 变盘点/)).toBeInTheDocument()
-    expect(screen.getByText(/命中斐波那契 21/)).toBeInTheDocument()
-    expect(screen.getByText(/临近 8/)).toBeInTheDocument()
+    expect(screen.getByText(/变盘窗口·第21交易日/)).toBeInTheDocument()
+    expect(screen.getByText(/临近变盘窗口（斐波那契8/)).toBeInTheDocument()
+    expect(screen.getByText(/不预判涨跌/)).toBeInTheDocument()  // 表下释义
     expect(screen.getByText('🟢 底分型确认')).toBeInTheDocument()
     expect(screen.getByText(/共振变盘点/)).toBeInTheDocument()
     expect(screen.getByText(/3 个指数/)).toBeInTheDocument()

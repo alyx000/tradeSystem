@@ -112,11 +112,11 @@ def test_daily_dry_run_does_not_push(_patched, capsys):
 def test_daily_no_push_prints_only(_patched, capsys):
     mt._run_daily({}, _args(no_push=True))
     assert _patched == []                       # 未推送
-    assert "命中斐波那契 21" in capsys.readouterr().out
+    assert "变盘窗口·第21交易日" in capsys.readouterr().out
 
 
 def test_daily_bare_pushes(_patched):
-    mt._run_daily({}, _args())
+    mt._run_daily({}, _args(date="2026-06-13"))         # pin 日期，标题不依赖 _today()
     assert _patched == ["大盘择时观察 · 2026-06-13"]   # 裸跑推送
 
 

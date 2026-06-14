@@ -26,8 +26,9 @@ _RESULT = {
 def test_render_daily_content():
     md = formatter.render_daily(_RESULT)
     assert "大盘择时观察 · 2026-06-13" in md
-    assert "命中斐波那契 21" in md          # 精确命中
-    assert "临近 8" in md                    # 临近
+    assert "变盘窗口·第21交易日" in md       # 精确命中
+    assert "临近变盘窗口（斐波那契8" in md     # 临近
+    assert "不预判涨跌" in md                 # 表下释义
     assert "底分型确认" in md                # confirmed 状态
     assert "高点 2026-05-15" in md           # 起算拐点(事实)
     assert "地量" in md                      # pctile 0.1 ≤ 0.2 → 地量标注
