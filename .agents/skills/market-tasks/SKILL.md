@@ -155,7 +155,7 @@ python3 main.py trend-leader pool --status exited --json
 
 ## 研报速读（research-digest）
 
-每工作日 06:42 自动跑（launchd `com.alyx.tradesystem.research-digest`，盘前最早一档，早于 today-pre 07:00 / recommend 07:10 错峰），也可手动：
+每天 22:30 由 launchd 触发一次（`com.alyx.tradesystem.research-digest`），runner 仅在 **A 股交易日** 或 **A 股交易日前一天** 继续执行；其它日期只记录 skip，也可手动：
 
 ```bash
 make research-digest-dry       # = python3 main.py research-digest daily --dry-run（仅打印,不调 Antigravity/不落盘/不推送）

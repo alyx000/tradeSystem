@@ -35,6 +35,9 @@ def main() -> None:
     resolve_date = sub.add_parser("resolve-date")
     resolve_date.add_argument("--date", required=True)
 
+    should_run = sub.add_parser("should-run")
+    should_run.add_argument("--date", required=True)
+
     collect = sub.add_parser("collect")
     collect.add_argument("--date", required=True)
     collect.add_argument("--window-days", type=int, default=5)
@@ -88,6 +91,8 @@ def main() -> None:
     args = parser.parse_args()
     if args.command == "resolve-date":
         payload = _cmd_resolve_date(args)
+    elif args.command == "should-run":
+        payload = _cmd_should_run(args)
     elif args.command == "collect":
         payload = _cmd_collect(args)
     elif args.command == "prescreen":
@@ -110,6 +115,72 @@ def _cmd_resolve_date(args: argparse.Namespace) -> dict[str, Any]:
     today = str(args.date)
     resolved, source = _resolve_prev_trade_date(today)
     return {"status": "ok", "date": resolved, "input_date": today, "source": source}
+
+
+def _cmd_should_run(args: argparse.Namespace) -> dict[str, Any]:
+    """Return whether the scheduled job should run today.
+
+    Run on A-share trading days and on the calendar day before an A-share trading day.
+    """
+    today = str(args.date)
+    decision = _trade_day_or_pre_trade_day(today)
+    return {"status": "ok", "date": today, **decision}
+
+
+def _trade_day_or_pre_trade_day(today: str) -> dict[str, Any]:
+    next_day = (datetime.strptime(today, "%Y-%m-%d").date() + timedelta(days=1)).isoformat()
+    flags = _trade_day_flags_from_db(today, next_day)
+    if flags.get("source") == "trade_calendar_db":
+        today_open = flags.get("today_is_trade_day")
+        next_open = flags.get("next_is_trade_day")
+        if today_open is not None and next_open is not None:
+            should_run = bool(today_open or next_open)
+            reason = "trade_day" if today_open else ("pre_trade_day" if next_open else "not_trade_or_pre_trade_day")
+            return {"should_run": should_run, "reason": reason, **flags}
+
+    today_weekday = _is_weekday(today)
+    next_weekday = _is_weekday(next_day)
+    should_run = bool(today_weekday or next_weekday)
+    reason = "trade_day_weekday_fallback" if today_weekday else (
+        "pre_trade_day_weekday_fallback" if next_weekday else "not_trade_or_pre_trade_day_weekday_fallback"
+    )
+    return {
+        "should_run": should_run,
+        "reason": reason,
+        "source": "weekday_fallback",
+        "today_is_trade_day": today_weekday,
+        "next_date": next_day,
+        "next_is_trade_day": next_weekday,
+    }
+
+
+def _trade_day_flags_from_db(today: str, next_day: str) -> dict[str, Any]:
+    from db.connection import _DEFAULT_DB_PATH  # noqa: PLC2701
+    from db import queries as Q
+
+    db_path = Path(os.environ.get("TRADE_DB_PATH") or _DEFAULT_DB_PATH)
+    if not db_path.exists():
+        return {"source": "missing_db", "next_date": next_day}
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn.row_factory = sqlite3.Row
+    except sqlite3.Error:
+        return {"source": "db_error", "next_date": next_day}
+    try:
+        return {
+            "source": "trade_calendar_db",
+            "today_is_trade_day": Q.is_trade_day_from_db(conn, today),
+            "next_date": next_day,
+            "next_is_trade_day": Q.is_trade_day_from_db(conn, next_day),
+        }
+    except sqlite3.Error:
+        return {"source": "db_error", "next_date": next_day}
+    finally:
+        conn.close()
+
+
+def _is_weekday(date: str) -> bool:
+    return datetime.strptime(date, "%Y-%m-%d").date().weekday() < 5
 
 
 def _resolve_prev_trade_date(today: str) -> tuple[str, str]:

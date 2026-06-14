@@ -12,8 +12,8 @@
 - `today-runner.sh` — 包装脚本：cd 仓库根 → source 项目 env → 调 `python3 main.py pre|post`
 - `com.alyx.tradesystem.today-pre.plist` — 工作日 07:00 触发（盘前简报，含钉钉推送）
 - `com.alyx.tradesystem.today-post.plist` — 工作日 20:00 触发（盘后报告，含钉钉推送）
-- `research-digest-runner.sh` — 包装脚本：cd 仓库根 → source `scripts/.env`(TUSHARE_TOKEN) + `~/.config/tradeSystem.env`(钉钉/ANTIGRAVITY) → 调 `python3 main.py research-digest daily`
-- `com.alyx.tradesystem.research-digest.plist` — 工作日 06:42 触发（研报速读：A股研报评级[巨潮] + 美股 yfinance 评级 → Top3；非交易日/窗口内无变动自动标注，不报错）
+- `research-digest-runner.sh` — 包装脚本：cd 仓库根 → source `scripts/.env`(TUSHARE_TOKEN) + `~/.config/tradeSystem.env`(钉钉/ANTIGRAVITY) → 判断 A 股交易日/交易日前一天 → 调 JS workflow
+- `com.alyx.tradesystem.research-digest.plist` — 每天 22:30 触发（runner 仅在 A 股交易日或 A 股交易日前一天继续执行；研报速读：A股研报评级[巨潮] + 美股 yfinance 评级 → Top3）
 - `cognition-digest-runner.sh` — 包装脚本（参数化，window 作为 `$1` 透传）：cd 仓库根 → source `scripts/.env` + `~/.config/tradeSystem.env`(钉钉/ANTIGRAVITY) → 调 `python3 main.py cognition-digest <window>`
 - `com.alyx.tradesystem.cognition-digest-recent3d.plist` — 每交易日 18:30 触发（认知沉淀近 3 日汇总；日志 `/tmp/tradesystem-cognition-digest.log`）
 - `com.alyx.tradesystem.cognition-digest-weekly.plist` — 周日 20:00 触发（认知沉淀周汇总；同一日志 `/tmp/tradesystem-cognition-digest.log`）
@@ -213,9 +213,9 @@ rm ~/Library/LaunchAgents/com.alyx.tradesystem.sector-correlation.plist
 
 **时段**：21:15 在 volume-watch(21:00)与 four-trading-day-review(22:30)之间,无冲突。
 
-## 研报速读（工作日 06:42）
+## 研报速读（每天 22:30，A 股交易日/交易日前一天执行）
 
-盘前最早一档,早于 today-pre(07:00)/recommend-daily(07:10)。A股取最近交易日研报评级(巨潮 cninfo,鞠磊「首次覆盖」加权),
+launchd 每天 22:30 触发一次，runner 先按 A 股交易日历判断：当天是 A 股交易日或次日是 A 股交易日才继续执行，其它日期只写 skip 日志。A股取最近交易日研报评级(巨潮 cninfo,鞠磊「首次覆盖」加权),
 美股按美东窗口拉 yfinance 评级方向变动(init/up/down/reinit),可选慧博热点研报候选预筛 + Antigravity 每篇独立 reader 深读 + 独立聚合/ranker,最多推荐 2 篇 → MD 落盘 `data/reports/research-digest/` + 推钉钉。
 runner source `scripts/.env`(TUSHARE_TOKEN)+`~/.config/tradeSystem.env`(钉钉/ANTIGRAVITY);
 非交易日 / 窗口内无评级变动时,任务内显式标注「无符合条件」,不报错、不冒充。
@@ -249,7 +249,7 @@ launchctl unload ~/Library/LaunchAgents/com.alyx.tradesystem.research-digest.pli
 rm ~/Library/LaunchAgents/com.alyx.tradesystem.research-digest.plist
 ```
 
-**时段**：06:42 为盘前最早一档,与 today-pre(07:00)、recommend-daily(07:10) 错峰,均 I/O 短任务无资源争用。研报错过可接受(非交易决策),不配 pmset 唤醒。**调度唯一入口=launchd per-task plist**,不进 `main.py schedule`/APScheduler(避免双触发)。
+**时段**：22:30 晚间执行，覆盖 A 股交易日当天和下一交易日前一晚；研报错过可接受(非交易决策),不配 pmset 唤醒。**调度唯一入口=launchd per-task plist**,不进 `main.py schedule`/APScheduler(避免双触发)。
 
 ## 交易认知沉淀汇总（recent3d 工作日 18:30 / weekly 周日 20:00 / monthly 每月1号 09:00）
 

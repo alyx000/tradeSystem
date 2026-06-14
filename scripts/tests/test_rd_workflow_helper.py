@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
+import sqlite3
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -29,6 +31,37 @@ def _run_helper(args: list[str], *, cwd: Path, env: dict[str, str] | None = None
         check=True,
     )
     return json.loads(result.stdout)
+
+
+def test_should_run_on_trade_day_or_pre_trade_day(tmp_path):
+    db_path = tmp_path / "trade.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute("CREATE TABLE trade_calendar (date TEXT PRIMARY KEY, is_open INTEGER)")
+    conn.executemany(
+        "INSERT INTO trade_calendar(date, is_open) VALUES (?, ?)",
+        [
+            ("2026-06-05", 1),
+            ("2026-06-06", 0),
+            ("2026-06-07", 0),
+            ("2026-06-08", 1),
+            ("2026-06-13", 0),
+            ("2026-06-14", 0),
+        ],
+    )
+    conn.commit()
+    conn.close()
+    env = {**os.environ, "TRADE_DB_PATH": str(db_path)}
+
+    trade_day = _run_helper(["should-run", "--date", "2026-06-05"], cwd=Path.cwd(), env=env)
+    pre_trade_day = _run_helper(["should-run", "--date", "2026-06-07"], cwd=Path.cwd(), env=env)
+    quiet_day = _run_helper(["should-run", "--date", "2026-06-13"], cwd=Path.cwd(), env=env)
+
+    assert trade_day["should_run"] is True
+    assert trade_day["reason"] == "trade_day"
+    assert pre_trade_day["should_run"] is True
+    assert pre_trade_day["reason"] == "pre_trade_day"
+    assert quiet_day["should_run"] is False
+    assert quiet_day["reason"] == "not_trade_or_pre_trade_day"
 
 
 def test_huibo_helper_collect_prescreen_download_finalize(tmp_path, monkeypatch):
