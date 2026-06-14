@@ -316,11 +316,14 @@ def run_daily(conn: sqlite3.Connection, registry, date: str, *,
         shrink, sd = D.is_volume_shrink_pullback(bars)
         near, nd = D.is_near_ma5(bars)
         far, fdd = D.is_far_from_ma5(bars)
-        # 维护会整体重写 last_signal_json → 显式带上入池触发，否则次日就丢失「涨停/双创15%」辨识。
-        prev_trigger = (r.get("last_signal") or {}).get("entry_trigger")
+        # 维护会整体重写 last_signal_json → 显式带上入池归因，否则次日就丢失辨识：
+        # entry_trigger（涨停/双创15%）+ branch_concepts（经哪条概念分支入主线）。后者尤其在 sw_map
+        # 故障期入池的「未分类」票上必须保留，否则维护一过就无法解释该票为何入池（门2 codex M1''）。
+        prev_sig = r.get("last_signal") or {}
         pool.touch(conn, code, date=date,
                    signal_json={"shrink_pullback": sd, "near_ma5": nd, "overheat": fdd,
-                                "trend": bd, "entry_trigger": prev_trigger})
+                                "trend": bd, "entry_trigger": prev_sig.get("entry_trigger"),
+                                "branch_concepts": prev_sig.get("branch_concepts") or []})
         summary["in_pool_signals"].append({
             "code": code, "shrink_pullback_buy": shrink, "near_ma5": near, "overheat": far,
         })

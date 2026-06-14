@@ -290,6 +290,28 @@ def test_concept_mode_partial_ths_coverage_flags(conn):
     assert "301628" in summary["entered"]                  # PCB概念有成员，301628 仍经分支入池
 
 
+def test_concept_branch_attribution_survives_maintenance(conn):
+    """门2 codex M1''：概念分支入池票经次日 Pass2 维护后，last_signal.branch_concepts 不被丢——
+    否则 sw 故障期入池的「未分类」票维护一过就无法解释为何入池。"""
+    _seed_concentration(conn, "2026-06-09", ["半导体"])
+    scanner.run_daily(conn, _branch_reg("其他电子Ⅱ"), "2026-06-09",
+                      main_line="l2+concept", top_concepts=5)
+    assert "PCB概念" in (pool.get_active(conn, "301628")["last_signal"].get("branch_concepts") or [])
+
+    # 次日：301628 不再是候选（无涨停/双创）→ 落入 Pass2 维护（趋势未破，touch 重写 last_signal）。
+    _seed_concentration(conn, "2026-06-10", ["半导体"])
+    reg_day2 = FakeRegistry(
+        limit_stocks=[], sw_map={"301628.SZ": {"name": "强达电路", "sw_l2": "其他电子Ⅱ"}},
+        bars_by_code={"301628": _leader_bars()},
+        concept_flow=[{"name": "PCB概念", "net_amount": 99.0}],
+        ths_member=[{"con_code": "301628.SZ", "index_name": "PCB概念"}],
+    )
+    scanner.run_daily(conn, reg_day2, "2026-06-10", main_line="l2+concept", top_concepts=5)
+    rec = pool.get_active(conn, "301628")
+    assert rec is not None                                  # 未退池
+    assert "PCB概念" in (rec["last_signal"].get("branch_concepts") or [])  # 维护后分支归因仍在
+
+
 def test_concept_source_failure_degrades(conn):
     """概念源失败（l2+concept 模式）→ 记 source_errors，二级命中票仍正常入池。"""
     _seed_concentration(conn, "2026-06-09", ["玻璃玻纤"])
