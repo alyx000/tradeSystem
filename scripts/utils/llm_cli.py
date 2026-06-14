@@ -29,8 +29,11 @@ def build_prompt_command(
     *,
     add_dirs: list[str] | None = None,
     skip_permissions: bool = False,
+    log_file: str | None = None,
 ) -> list[str]:
     cmd = [config.bin_path, "--print-timeout", f"{config.timeout_seconds}s"]
+    if log_file:
+        cmd += ["--log-file", log_file]
     for add_dir in add_dirs or []:
         cmd += ["--add-dir", add_dir]
     if skip_permissions:

@@ -2,8 +2,8 @@
 # 每日研报速读定时入口（launchd 调用）。
 #
 # 由 ~/Library/LaunchAgents/com.alyx.tradesystem.research-digest.plist 触发（工作日 06:42 盘前）。
-# 跑 main.py research-digest daily：A股研报评级（巨潮）+ 美股 yfinance 评级 → Top3 → 落盘 + 推钉钉。
-# 美股评级源时效稀疏/部分标的冻结时该段可能为空，任务内显式标注，不报错。
+# 跑 JS workflow：基础研报段 + 慧博深读 Antigravity reader → 落盘 + 推钉钉。
+# workflow 负责 state/events/run_report、断点续跑、preflight 与 Antigravity 全局失败显式标记。
 set -e
 
 # 1. PATH（launchd 默认不含 /opt/homebrew/bin，python/agy/依赖找不到）
@@ -29,4 +29,12 @@ echo "===== $(date '+%Y-%m-%d %H:%M:%S') research-digest daily start ====="
 # 5. 凭据存在性诊断（${VAR:+set} 只判存在不打值，规避 /tmp/*.log 泄漏）
 echo "[env] DINGTALK_WEBHOOK_TOKEN=${DINGTALK_WEBHOOK_TOKEN:+set} DINGTALK_WEBHOOK_SECRET=${DINGTALK_WEBHOOK_SECRET:+set} ANTIGRAVITY_BIN=${ANTIGRAVITY_BIN:+set} AGY_BIN=${AGY_BIN:+set} LLM_TIMEOUT_SECONDS=${LLM_TIMEOUT_SECONDS:+set}"
 
-exec /usr/bin/python3 scripts/main.py research-digest daily
+exec node scripts/workflows/research-digest-workflow.mjs daily \
+    --reader-cap "${HUIBO_READER_CAP:-20}" \
+    --reader-concurrency "${HUIBO_READER_CONCURRENCY:-20}" \
+    --reader-max-attempts "${HUIBO_READER_MAX_ATTEMPTS:-2}" \
+    --recommend-cap "${HUIBO_RECOMMEND_CAP:-2}" \
+    --preflight \
+    --resume \
+    --publish \
+    --include-base-digest

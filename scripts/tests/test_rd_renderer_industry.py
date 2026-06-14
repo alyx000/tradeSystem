@@ -114,6 +114,33 @@ def test_huibo_recommendation_heading_uses_actual_count():
     assert "3. **C证券-封装行业专题**" in md
 
 
+def test_huibo_antigravity_unavailable_notice_renders_without_recommendations():
+    huibo_digest = {
+        "recommendations": [],
+        "industry_summary": {
+            "industries": [
+                {"industry": "机器人", "viewpoint": "链条升温"},
+            ],
+        },
+        "meta": {
+            "antigravity": {
+                "status": "unavailable",
+                "reason": "quota_exhausted",
+            },
+            "ranker": {
+                "status": "fallback",
+                "reason": "quota_exhausted",
+            },
+        },
+    }
+
+    _, md = render_md("2026-06-03", cn_items=[], us_items=[], top3=[], huibo_digest=huibo_digest)
+
+    assert "Antigravity 不可用" in md
+    assert "quota_exhausted" in md
+    assert "ranker=fallback" in md
+
+
 def test_huibo_digest_renders_failure_fallback_when_no_reader_success():
     huibo_digest = {
         "prescreened": [{"candidate": {"title": "A证券-机器人行业深度"}}],
@@ -174,6 +201,42 @@ def test_huibo_stock_source_fallback_uses_safe_report_metadata():
 
     assert "测试股份" in md
     assert "target price" not in md
+
+
+def test_huibo_renderer_skips_quality_failed_reader_stocks():
+    huibo_digest = {
+        "reader_results": [
+            {
+                "title": "A证券-机器人行业深度",
+                "institution": "A证券",
+                "date": "2026-06-03",
+                "reader": {
+                    "error": "quality_failed",
+                    "quality": {"status": "failed", "issues": ["redline_terms"]},
+                    "mentioned_stocks": [
+                        {"name": "测试股份", "viewpoint": "目标价 100 元", "source": "第12页"},
+                    ],
+                },
+            },
+            {
+                "title": "B证券-机器人行业深度",
+                "institution": "B证券",
+                "date": "2026-06-03",
+                "reader": {
+                    "quality": {"status": "pass", "issues": []},
+                    "mentioned_stocks": [
+                        {"name": "合规股份", "viewpoint": "供应链受益", "source": "第3页"},
+                    ],
+                },
+            },
+        ],
+    }
+
+    _, md = render_md("2026-06-03", cn_items=[], us_items=[], top3=[], huibo_digest=huibo_digest)
+
+    assert "合规股份" in md
+    assert "测试股份" not in md
+    assert "目标价" not in md
 
 
 def test_huibo_renderer_ignores_unexpected_llm_shapes():
