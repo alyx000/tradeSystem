@@ -151,6 +151,27 @@ describe('StepMarket', () => {
     expect(screen.getByRole('link', { name: /查看完整市场数据/i })).toHaveAttribute('href', '/market/2026-04-03')
   })
 
+  it('shows 放量 badge next to 成交额 when today > yesterday', () => {
+    renderStep({}, prefill)  // 今日 12000 vs 昨日 10000 = +20% → 放量
+    // 徽章是带 bg-red 的 span，与 SelectField 的 <option>放量</option> 区分
+    const badges = screen.getAllByText('放量').filter((el) => el.tagName === 'SPAN' && el.className.includes('bg-red'))
+    expect(badges).toHaveLength(1)
+  })
+
+  it('shows 缩量 badge next to 成交额 when today < yesterday', () => {
+    const shrink = { ...prefill, market: { ...prefill.market!, total_amount: 8000 } }  // 8000 vs 10000 = -20% → 缩量
+    renderStep({}, shrink)
+    const badges = screen.getAllByText('缩量').filter((el) => el.tagName === 'SPAN' && el.className.includes('bg-green'))
+    expect(badges).toHaveLength(1)
+  })
+
+  it('renders no 成交额 badge when prev_market is absent', () => {
+    const noPrev = { ...prefill, prev_market: null }
+    renderStep({}, noPrev)  // 无昨日 → deriveVolChange 返回 '' → 无徽章
+    const badges = screen.queryAllByText(/放量|缩量|持平/).filter((el) => el.tagName === 'SPAN')
+    expect(badges).toHaveLength(0)
+  })
+
   it('degrades gracefully when indices and moving_averages are absent', () => {
     const noIdx: ReviewPrefillData = {
       ...prefill,

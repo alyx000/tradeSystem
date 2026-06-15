@@ -61,6 +61,13 @@ const RANGE_OPTIONS = [
   { label: '近30日', days: 30 },
 ] as const
 
+// 成交量较昨日徽章（A股色：红=放量/热，绿=缩量/冷，灰=持平）。与「成交量对比·较昨日」字段同源 deriveVolChange。
+const VOL_BADGE: Record<string, string> = {
+  放量: 'bg-red-100 text-red-600',
+  缩量: 'bg-green-100 text-green-600',
+  持平: 'bg-gray-100 text-gray-500',
+}
+
 // 评级方向徽章（A股色：红=利好/上调，绿=利空/下调）。无 icon 的「维持」走中性灰。
 const DIRECTION_BADGE: Record<string, { icon: string; cls: string }> = {
   首次覆盖: { icon: '🆕', cls: 'bg-amber-100 text-amber-700' },
@@ -248,7 +255,20 @@ export default function StepMarket({ data, onChange, prefill }: StepProps) {
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             <Metric label="上证" value={m.sh_index_close} change={m.sh_index_change_pct} />
             <Metric label="深证" value={m.sz_index_close} change={m.sz_index_change_pct} />
-            <Metric label="成交额" value={fmtAmount(m.total_amount)} />
+            {(() => {
+              const volChange = deriveVolChange(m.total_amount, pm?.total_amount)
+              return (
+                <div>
+                  <div className="text-xs text-gray-400">成交额</div>
+                  <div className="text-sm font-medium text-gray-700">
+                    {fmtAmount(m.total_amount)}
+                    {volChange && (
+                      <span className={`ml-1 px-1.5 py-0.5 rounded text-xs font-normal ${VOL_BADGE[volChange]}`}>{volChange}</span>
+                    )}
+                  </div>
+                </div>
+              )
+            })()}
             {/* 北向净额已下线:沪深交易所 2024-08-16 起停更每日净额,tushare north_money 口径存疑(个股净额全 0/聚合非 0)。 */}
           </div>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-2">
