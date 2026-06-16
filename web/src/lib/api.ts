@@ -60,6 +60,7 @@ import type {
   WatchlistItem,
   RegulatoryMonitorRecord,
   ConcentrationTrendPayload,
+  SectorGainRankingPayload,
   ResearchCoverageIndustryRow,
   MarketTimingPayload,
   MarketTimingHistoryPayload,
@@ -172,6 +173,8 @@ export const api = {
   getMarketHistory: (days: number = 20) => request<MarketChartItem[]>(`/market/history?days=${days}`),
   getConcentrationHistory: (days: number = 30) =>
     request<ConcentrationTrendPayload>(`/market/concentration/history?days=${days}`),
+  getSectorGainRanking: (date: string) =>
+    request<SectorGainRankingPayload>(`/market/sector-gain-ranking/${date}`),
   getMarketTiming: (date: string) => request<MarketTimingPayload>(`/market/timing/${date}`),
   getMarketTimingHistory: (days: number = 30, toDate?: string) =>
     request<MarketTimingHistoryPayload>(

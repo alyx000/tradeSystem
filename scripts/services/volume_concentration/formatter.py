@@ -14,9 +14,13 @@
 """
 from __future__ import annotations
 
+from . import ranking
 from .aggregator import UNCLASSIFIED
 
 _RETENTION_TOP_N = 8  # 连续在榜最多展示只数(超出截断,避免移动端过长)
+_GAIN_PERIOD_LABELS = [("5d", "5日"), ("10d", "10日"), ("20d", "20日")]
+_GAIN_SECTOR_TOP_N = 8     # 每档区间涨幅排名展示板块数上限(移动端,超出截断)
+_GAIN_OTHER_TOP_N = 2      # 领涨股之外额外展示的板块内个股数
 
 
 def _change_distribution(stocks: list[dict]) -> dict | None:
@@ -80,6 +84,42 @@ def _format_prev_compare(pc: dict) -> list[str]:
     return out
 
 
+def _fmt_gain(v: float) -> str:
+    """区间涨幅带符号百分比(已 None 过滤);正/零加 +,负不加。"""
+    return f"{'+' if v >= 0 else ''}{v}%"
+
+
+def _format_gain_ranking(universe: list[dict]) -> list[str]:
+    """📈 板块区间涨幅排名(成交额前50):5/10/20 日各一份,板块按领涨股降序。
+
+    全事实层(真实收盘价算得),守红线不出价位目标/不给买卖建议。
+    某周期全 None 的板块不展示;每档截断 Top_N 板块,超出标注略。无原始集返 []。
+    """
+    if not universe:
+        return []
+    rankings = ranking.build_sector_gain_ranking(universe)
+    out: list[str] = ["### 📈 板块区间涨幅排名(成交额前50)"]
+    rendered = False
+    for key, label in _GAIN_PERIOD_LABELS:
+        sectors = [s for s in rankings.get(key, []) if s.get("max_gain") is not None]
+        if not sectors:
+            continue
+        rendered = True
+        out.append(f"**{label}**")
+        for s in sectors[:_GAIN_SECTOR_TOP_N]:
+            stocks = s["stocks"]
+            lead = stocks[0]
+            line = f"- {s['industry']} · 领涨 {lead['name']} {_fmt_gain(lead['gain'])}"
+            others = stocks[1:1 + _GAIN_OTHER_TOP_N]
+            if others:
+                line += "(其余 " + " / ".join(f"{x['name']} {_fmt_gain(x['gain'])}" for x in others) + ")"
+            out.append(line)
+        if len(sectors) > _GAIN_SECTOR_TOP_N:
+            out.append(f"> 等 {len(sectors) - _GAIN_SECTOR_TOP_N} 个板块略")
+        out.append("")
+    return out if rendered else []  # 三档全空(如全为未分类/历史不足)→ 不出空标题
+
+
 def format_daily_report(record: dict | None, trend_result: dict) -> str:
     if not record:
         return "当日无成交额数据,跳过。"
@@ -136,6 +176,9 @@ def format_daily_report(record: dict | None, trend_result: dict) -> str:
             f"> 未分类:{unc['count']}只 / {unc['amount_billion']}亿(次新等未归类,不计入板块集中度)"
         )
     lines.append("")
+
+    # 📈 板块区间涨幅排名(成交额前50,独立于上方 Top20 集中度):不依赖趋势是否充分,恒展示
+    lines.extend(_format_gain_ranking(record.get("gain_universe") or []))
 
     # 不足 2 日:跨日趋势分析无意义,出兜底文案收尾
     if not trend_result.get("sufficient"):

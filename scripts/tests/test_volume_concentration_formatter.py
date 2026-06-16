@@ -399,3 +399,48 @@ def test_cr3_header_matches_cr3_trend_current_end_to_end():
     out = formatter.format_daily_report(records[-1], tr)
 
     assert f"前3行业 {tr['cr3_trend']['current']}%" in out   # header 数值 == cr3_trend.current(同口径)
+
+
+# ──────────────────────────────────────────────────────────────
+# 📈 板块区间涨幅排名段(成交额前50)
+# ──────────────────────────────────────────────────────────────
+
+def _gain_universe():
+    return [
+        {"code": "A.SZ", "name": "甲", "industry": "电池", "gain_5d": 12.0, "gain_10d": 3.0, "gain_20d": 1.0},
+        {"code": "B.SZ", "name": "乙", "industry": "电池", "gain_5d": 6.0, "gain_10d": 2.0, "gain_20d": 0.5},
+        {"code": "C.SZ", "name": "丙", "industry": "白酒Ⅱ", "gain_5d": 8.0, "gain_10d": 9.0, "gain_20d": 20.0},
+        {"code": "D.SZ", "name": "丁", "industry": "未分类", "gain_5d": 99.0, "gain_10d": 99.0, "gain_20d": 99.0},
+    ]
+
+
+def test_gain_ranking_section_present_and_ordered():
+    record = _record()
+    record["gain_universe"] = _gain_universe()
+    out = formatter.format_daily_report(record, _trend(sufficient=True))
+
+    assert "### 📈 板块区间涨幅排名(成交额前50)" in out
+    assert "**5日**" in out and "**10日**" in out and "**20日**" in out
+    # 5日:电池领涨甲 +12% > 白酒 丙 +8% → 电池在前
+    five_block = out.split("**5日**")[1].split("**10日**")[0]
+    assert five_block.index("电池") < five_block.index("白酒Ⅱ")
+    assert "领涨 甲 +12.0%" in five_block
+    assert "其余 乙 +6.0%" in five_block  # 板块内次股
+    # 20日:白酒 丙 +20% > 电池甲 +1% → 白酒在前
+    twenty_block = out.split("**20日**")[1]
+    assert twenty_block.index("白酒Ⅱ") < twenty_block.index("电池")
+    # 未分类不进排名
+    assert "丁" not in out
+
+
+def test_gain_ranking_section_absent_when_no_universe():
+    record = _record()  # 无 gain_universe
+    out = formatter.format_daily_report(record, _trend(sufficient=True))
+    assert "板块区间涨幅排名" not in out
+
+
+def test_gain_ranking_shown_even_when_trend_insufficient():
+    record = _record()
+    record["gain_universe"] = _gain_universe()
+    out = formatter.format_daily_report(record, _trend(sufficient=False))
+    assert "### 📈 板块区间涨幅排名(成交额前50)" in out

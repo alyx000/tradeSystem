@@ -391,6 +391,7 @@ CREATE TABLE IF NOT EXISTS daily_volume_concentration (
     stocks_json TEXT NOT NULL,
     sector_summary_json TEXT NOT NULL,
     source_json TEXT,
+    gain_universe_json TEXT,
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT
 );

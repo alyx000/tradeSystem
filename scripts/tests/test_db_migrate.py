@@ -458,7 +458,7 @@ def test_v32_migration_creates_market_timing_signal(tmp_path):
 
     migrate(conn)
     assert get_schema_version(conn) == CURRENT_SCHEMA_VERSION
-    assert get_schema_version(conn) == 33
+    assert get_schema_version(conn) == 34
     assert conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table' AND name='market_timing_signal'"
     ).fetchone() is not None
@@ -497,6 +497,41 @@ def test_v33_backfills_market_timing_quote_columns(tmp_path):
         "WHERE trade_date='2026-06-12' AND index_code='932000.CSI'"
     ).fetchone()
     assert row[0] == "中证2000" and row[1] == 3 and row[2] is None and row[3] is None
+    conn.close()
+
+
+def test_v34_backfills_volume_concentration_gain_column(tmp_path):
+    """既有库（daily_volume_concentration 无 gain_universe_json）经 migrate → v34 ALTER 补列且不丢数据。"""
+    conn = get_connection(tmp_path / "v33_nogain.db")
+    migrate(conn)
+    # 模拟老表：去掉 gain_universe_json 列（重建一张不含该列的同名表 + 塞一行）
+    conn.execute("DROP TABLE daily_volume_concentration")
+    conn.execute(
+        "CREATE TABLE daily_volume_concentration ("
+        "date TEXT PRIMARY KEY, top_n INTEGER NOT NULL DEFAULT 20, "
+        "total_amount_billion REAL NOT NULL, market_total_billion REAL, "
+        "stocks_json TEXT NOT NULL, sector_summary_json TEXT NOT NULL, source_json TEXT, "
+        "created_at TEXT, updated_at TEXT)"
+    )
+    conn.execute(
+        "INSERT INTO daily_volume_concentration (date, top_n, total_amount_billion, "
+        "stocks_json, sector_summary_json) VALUES ('2026-05-29', 20, 350.5, '[]', '[]')"
+    )
+    conn.execute("PRAGMA user_version = 33")  # 退回 v33（表已建未补列）→ 版本门触发 v34 ALTER
+    conn.commit()
+    cols_before = {r[1] for r in conn.execute("PRAGMA table_info(daily_volume_concentration)").fetchall()}
+    assert "gain_universe_json" not in cols_before
+
+    migrate(conn)
+
+    cols_after = {r[1] for r in conn.execute("PRAGMA table_info(daily_volume_concentration)").fetchall()}
+    assert "gain_universe_json" in cols_after
+    assert get_schema_version(conn) == CURRENT_SCHEMA_VERSION
+    row = conn.execute(
+        "SELECT total_amount_billion, gain_universe_json FROM daily_volume_concentration "
+        "WHERE date='2026-05-29'"
+    ).fetchone()
+    assert row[0] == 350.5 and row[1] is None  # 老行保留，新列 NULL
     conn.close()
 
 

@@ -51,6 +51,25 @@ def test_save_and_get_roundtrip():
     assert got["stocks"][0]["code"] == "300750.SZ"
     assert got["sector_summary"][0]["share_in_top_n"] == 0.166
     assert got["source"]["industry_coverage"] == 1.0
+    # gain_universe 未提供 → 读回空列表（旧记录优雅降级）
+    assert got["gain_universe"] == []
+
+
+def test_save_and_get_gain_universe_roundtrip():
+    """gain_universe（区间涨幅原始集）写入后读回完整还原。"""
+    conn = _conn()
+    record = _sample_record()
+    record["gain_universe"] = [
+        {"code": "300750.SZ", "name": "宁德时代", "industry": "电池",
+         "gain_5d": 8.1, "gain_10d": 12.3, "gain_20d": None},
+    ]
+
+    repo.save_concentration(conn, record)
+    got = repo.get_concentration(conn, "2026-05-29")
+
+    assert got["gain_universe"][0]["code"] == "300750.SZ"
+    assert got["gain_universe"][0]["gain_10d"] == 12.3
+    assert got["gain_universe"][0]["gain_20d"] is None
 
 
 def test_get_missing_date_returns_none():

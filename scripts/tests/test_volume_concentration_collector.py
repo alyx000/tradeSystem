@@ -225,3 +225,159 @@ def test_build_record_refetch_ignores_stale_db():
     codes = {s["code"] for s in record["stocks"]}
     assert codes == {"300750.SZ"}     # 用重拉数据
     assert "STALE.SZ" not in codes    # 没用陈旧库值
+
+
+# ──────────────────────────────────────────────────────────────
+# 区间涨幅 universe(成交额前50 → 5/10/20 日涨幅)
+# ──────────────────────────────────────────────────────────────
+
+def _bars(closes: list[float], end: str = "2026-05-29") -> list[dict]:
+    """升序 close 序列 → get_stock_daily_range 形态 bars，最后一根 trade_date = end。
+
+    enrich_interval_gains 要求"最新一根 = 榜单日"才算涨幅，故 bars 必须带 trade_date 且末根=end。
+    中间日期用自然日回推（仅末根需精确，gain 按位置算）。
+    """
+    from datetime import datetime, timedelta
+    base = datetime.strptime(end, "%Y-%m-%d")
+    n = len(closes)
+    return [
+        {"trade_date": (base - timedelta(days=(n - 1 - i))).strftime("%Y-%m-%d"), "close": c}
+        for i, c in enumerate(closes)
+    ]
+
+
+def test_interval_gain_basic():
+    # closes[-1]=11, closes[-6]=10 → 5日 +10%；closes[-11]=8 → 10日 +37.5%
+    closes = [8.0, 8.0, 8.0, 8.0, 8.0, 10.0, 10.0, 10.0, 10.0, 10.0, 11.0]
+    assert collector._interval_gain(closes, 5) == 10.0
+    assert collector._interval_gain(closes, 10) == 37.5
+
+
+def test_interval_gain_insufficient_history_none():
+    closes = [10.0, 10.5, 11.0]  # 仅 3 根
+    assert collector._interval_gain(closes, 5) is None
+
+
+def test_interval_gain_nonpositive_base_none():
+    closes = [0.0, 1.0, 2.0, 3.0, 4.0, 5.0]  # base=closes[-6]=0
+    assert collector._interval_gain(closes, 5) is None
+
+
+def test_interval_gain_non_finite_returns_none():
+    """NaN/Inf/非数值 base 或 last → None(防脏值污染榜单,codex 中等)。"""
+    nan_base = [float("nan")] + [10.0] * 5   # len6,base=closes[-6]=nan
+    assert collector._interval_gain(nan_base, 5) is None
+    inf_last = [10.0] * 6 + [float("inf")]   # last=inf
+    assert collector._interval_gain(inf_last, 5) is None
+    str_close = ["abc"] + [10.0] * 5         # len6,base 非数值,不得抛 TypeError
+    assert collector._interval_gain(str_close, 5) is None
+
+
+def test_enrich_interval_gains_non_finite_last_close_all_none():
+    """榜单日 close 为 NaN/Inf(脏值)→ 不冒充当日,全 None(不写非有限 gain)。"""
+    closes = [round(10.0 + 0.1 * i, 3) for i in range(25)]
+    closes[-1] = float("inf")  # 末根(榜单日)close 非有限
+    stocks = [{"code": "X.SZ", "name": "x", "industry": "电子"}]
+    registry = _FakeRegistry({
+        "get_stock_daily_range": DataResult(data=_bars(closes), source="tushare:daily"),
+    })
+
+    out = collector.enrich_interval_gains(stocks, "2026-05-29", registry)
+
+    for key in ("gain_5d", "gain_10d", "gain_20d"):
+        assert out[0][key] is None
+
+
+def test_enrich_interval_gains_attaches_fields():
+    # 25 根:close 全程从 10 线性到 13，足够 5/10/20 日
+    closes = [round(10.0 + 0.125 * i, 3) for i in range(25)]
+    stocks = [{"code": "600519.SH", "name": "甲", "industry": "白酒"}]
+    registry = _FakeRegistry({
+        "get_stock_daily_range": DataResult(data=_bars(closes), source="tushare:daily"),
+    })
+
+    out = collector.enrich_interval_gains(stocks, "2026-05-29", registry)
+
+    assert out[0]["code"] == "600519.SH"
+    for key in ("gain_5d", "gain_10d", "gain_20d"):
+        assert isinstance(out[0][key], float)
+    # 单调上行 → 三档均为正
+    assert out[0]["gain_5d"] > 0 and out[0]["gain_20d"] > 0
+
+
+def test_enrich_interval_gains_partial_history():
+    # 仅 8 根 → 5日有值、10/20 日 None
+    closes = [10.0 + 0.1 * i for i in range(8)]
+    stocks = [{"code": "688001.SH", "name": "次新", "industry": "半导体"}]
+    registry = _FakeRegistry({
+        "get_stock_daily_range": DataResult(data=_bars(closes), source="tushare:daily"),
+    })
+
+    out = collector.enrich_interval_gains(stocks, "2026-05-29", registry)
+
+    assert out[0]["gain_5d"] is not None
+    assert out[0]["gain_10d"] is None
+    assert out[0]["gain_20d"] is None
+
+
+def test_enrich_interval_gains_stale_last_bar_all_none():
+    """最新一根 bar 早于榜单日(停牌/数据延迟)→ 不冒充当日,全 None(红线诚实)。"""
+    closes = [round(10.0 + 0.1 * i, 3) for i in range(25)]
+    stocks = [{"code": "600519.SH", "name": "甲", "industry": "白酒"}]
+    registry = _FakeRegistry({
+        # 数据止于 05-28，但请求榜单日是 05-29 → 末根 != end_date
+        "get_stock_daily_range": DataResult(data=_bars(closes, end="2026-05-28"), source="tushare:daily"),
+    })
+
+    out = collector.enrich_interval_gains(stocks, "2026-05-29", registry)
+
+    assert out[0]["gain_5d"] is None
+    assert out[0]["gain_10d"] is None
+    assert out[0]["gain_20d"] is None
+
+
+def test_enrich_interval_gains_range_failure_all_none():
+    stocks = [{"code": "X.SZ", "name": "x", "industry": "电子"}]
+    registry = _FakeRegistry({
+        "get_stock_daily_range": DataResult(data=None, source="tushare", error="boom"),
+    })
+
+    out = collector.enrich_interval_gains(stocks, "2026-05-29", registry)
+
+    assert out[0]["gain_5d"] is None and out[0]["gain_20d"] is None
+
+
+def test_build_gain_universe_top50_labeled_and_enriched():
+    closes = [round(10.0 + 0.1 * i, 3) for i in range(25)]
+
+    def _range(code, start, end):
+        return DataResult(data=_bars(closes), source="tushare:daily")
+
+    registry = _FakeRegistry({
+        "get_top_volume_stocks": DataResult(
+            data=[{"rank": 1, "code": "300750.SZ", "name": "", "amount_billion": 60.0},
+                  {"rank": 2, "code": "999999.SZ", "name": "", "amount_billion": 40.0}],
+            source="tushare:daily"),
+        "get_stock_sw_industry_map": DataResult(
+            data={"300750.SZ": {"name": "宁德时代", "sw_l2": "电池"}}, source="tushare:index_member_all"),
+        "get_stock_basic_batch": DataResult(data=[], source="tushare:stock_basic"),
+        "get_stock_daily_range": _range,
+    })
+
+    universe = collector.build_gain_universe(registry, "2026-05-29")
+
+    assert len(universe) == 2
+    by_code = {s["code"]: s for s in universe}
+    assert by_code["300750.SZ"]["industry"] == "电池"
+    assert by_code["999999.SZ"]["industry"] == "未分类"
+    assert isinstance(by_code["300750.SZ"]["gain_5d"], float)
+    # 取 top50 口径
+    tv_call = next(c for c in registry.calls if c[0] == "get_top_volume_stocks")
+    assert tv_call[1][1] == collector.TOP_VOLUME_UNIVERSE_N
+
+
+def test_build_gain_universe_empty_when_no_top_volume():
+    registry = _FakeRegistry({
+        "get_top_volume_stocks": DataResult(data=[], source="tushare:daily"),
+    })
+    assert collector.build_gain_universe(registry, "2026-05-29") == []

@@ -19,7 +19,7 @@ PROJECT_ROOT = SCRIPTS_DIR.parent
 
 # 与 migrate() 中「当前最新」一步一致；新增迁移时递增本常量，并把上一步的
 # set_schema_version(conn, CURRENT_SCHEMA_VERSION) 改为字面量 N（保留历史链）。
-CURRENT_SCHEMA_VERSION = 33
+CURRENT_SCHEMA_VERSION = 34
 
 
 def get_schema_version(conn: sqlite3.Connection) -> int:
@@ -103,6 +103,21 @@ def _ensure_market_timing_quote_columns(conn: sqlite3.Connection) -> None:
         if col not in cols:
             conn.execute(f"ALTER TABLE market_timing_signal ADD COLUMN {col} REAL")
             conn.commit()  # 仅在确需修复时才提交
+
+
+def _ensure_volume_concentration_gain_column(conn: sqlite3.Connection) -> None:
+    """v34 兜底：为既有 daily_volume_concentration 补 gain_universe_json 列。
+
+    CREATE IF NOT EXISTS 不给老表补列（memory: feedback_real_db_vs_in_memory）；
+    表不存在时直接返回（首次跑 init_schema 已含该列）。
+    健康库（列已存在）只 PRAGMA 探查、不 DDL/不 commit；仅缺列时才 ALTER + commit。
+    """
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(daily_volume_concentration)").fetchall()}
+    if not cols:
+        return
+    if "gain_universe_json" not in cols:
+        conn.execute("ALTER TABLE daily_volume_concentration ADD COLUMN gain_universe_json TEXT")
+        conn.commit()  # 仅在确需修复时才提交
 
 
 def _rebuild_trade_thesis_trade_mode_check(conn: sqlite3.Connection) -> None:
@@ -613,11 +628,18 @@ def migrate(conn: sqlite3.Connection) -> None:
         set_schema_version(conn, 33)
         conn.commit()
 
+    if version < 34:
+        logger.info("Applying schema v34: daily_volume_concentration.gain_universe_json (区间涨幅排名原始集)")
+        _ensure_volume_concentration_gain_column(conn)  # ALTER 兜底:老表补区间涨幅原始集列
+        set_schema_version(conn, 34)
+        conn.commit()
+
     # 版本无关兜底:DB 已标记到最新版但 market_timing_signal 缺失/缺列(异常半迁移态/历史遗留)时,
     # 版本门会跳过迁移块导致表/列永不建,运行期报 no such table/column。仅在确缺时 DDL+commit;
     # 健康库纯探查直接返回,不给调用方加事务边界(见 feedback_real_db_vs_in_memory)。
     _ensure_market_timing_signal(conn)
     _ensure_market_timing_quote_columns(conn)
+    _ensure_volume_concentration_gain_column(conn)
 
 # ──────────────────────────────────────────────────────────────
 # YAML 数据导入

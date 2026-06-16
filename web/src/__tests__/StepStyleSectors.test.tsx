@@ -5,6 +5,7 @@
 import { render, screen } from '@testing-library/react'
 import { describe, it, expect } from 'vitest'
 import { MemoryRouter } from 'react-router-dom'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import StepStyle from '../components/review/StepStyle'
 import StepSectors from '../components/review/StepSectors'
 import type { ReviewPrefillData, ReviewStepValue } from '../lib/types'
@@ -20,10 +21,15 @@ function renderStyle(prefill?: unknown, data: ReviewStepValue = {}) {
 }
 
 function renderSectors(prefill?: unknown, data: ReviewStepValue = {}) {
+  // StepSectors 内嵌 SectorGainRanking（useQuery）→ 需 QueryClientProvider；
+  // 这些用例未传 prefill.date，组件 date=undefined 不发请求，仅满足 hook 上下文。
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
-    <MemoryRouter>
-      <StepSectors data={data} onChange={noop} prefill={prefill as ReviewPrefillData | undefined} />
-    </MemoryRouter>
+    <QueryClientProvider client={qc}>
+      <MemoryRouter>
+        <StepSectors data={data} onChange={noop} prefill={prefill as ReviewPrefillData | undefined} />
+      </MemoryRouter>
+    </QueryClientProvider>
   )
 }
 
