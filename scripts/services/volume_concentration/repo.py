@@ -26,8 +26,8 @@ def save_concentration(conn: sqlite3.Connection, record: dict) -> None:
         """
         INSERT INTO daily_volume_concentration (
             date, top_n, total_amount_billion, market_total_billion,
-            stocks_json, sector_summary_json, source_json, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+            stocks_json, sector_summary_json, source_json, gain_universe_json, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
         ON CONFLICT(date) DO UPDATE SET
             top_n = excluded.top_n,
             total_amount_billion = excluded.total_amount_billion,
@@ -35,6 +35,7 @@ def save_concentration(conn: sqlite3.Connection, record: dict) -> None:
             stocks_json = excluded.stocks_json,
             sector_summary_json = excluded.sector_summary_json,
             source_json = excluded.source_json,
+            gain_universe_json = excluded.gain_universe_json,
             updated_at = excluded.updated_at
         """,
         (
@@ -47,12 +48,18 @@ def save_concentration(conn: sqlite3.Connection, record: dict) -> None:
             json.dumps(record["source"], ensure_ascii=False)
             if record.get("source") is not None
             else None,
+            json.dumps(record["gain_universe"], ensure_ascii=False)
+            if record.get("gain_universe") is not None
+            else None,
         ),
     )
     conn.commit()
 
 
 def _row_to_record(row: sqlite3.Row) -> dict:
+    # gain_universe_json 为 v34 增列;老库经迁移 ALTER 补齐,缺列时(异常半迁移态)安全退 []。
+    has_gain = "gain_universe_json" in row.keys()
+    gain_raw = row["gain_universe_json"] if has_gain else None
     return {
         "date": row["date"],
         "top_n": row["top_n"],
@@ -61,6 +68,7 @@ def _row_to_record(row: sqlite3.Row) -> dict:
         "stocks": json.loads(row["stocks_json"]) if row["stocks_json"] else [],
         "sector_summary": json.loads(row["sector_summary_json"]) if row["sector_summary_json"] else [],
         "source": json.loads(row["source_json"]) if row["source_json"] else None,
+        "gain_universe": json.loads(gain_raw) if gain_raw else [],
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }

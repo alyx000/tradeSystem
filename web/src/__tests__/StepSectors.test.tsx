@@ -1,15 +1,25 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { MemoryRouter } from 'react-router-dom'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import StepSectors from '../components/review/StepSectors'
+import { api } from '../lib/api'
 import type { ReviewPrefillData, ReviewStepValue } from '../lib/types'
+
+// prefill 带 date → 内嵌 SectorGainRanking 会发请求；mock 成空壳避免真实 fetch 噪声。
+vi.spyOn(api, 'getSectorGainRanking').mockResolvedValue({
+  date: '2026-04-03', rankings: { '5d': [], '10d': [], '20d': [] },
+})
 
 function renderStep(data: ReviewStepValue = {}, prefill?: ReviewPrefillData) {
   const onChange = vi.fn()
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   render(
-    <MemoryRouter>
-      <StepSectors data={data} onChange={onChange} prefill={prefill} />
-    </MemoryRouter>
+    <QueryClientProvider client={qc}>
+      <MemoryRouter>
+        <StepSectors data={data} onChange={onChange} prefill={prefill} />
+      </MemoryRouter>
+    </QueryClientProvider>
   )
   return { onChange }
 }

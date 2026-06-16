@@ -2,10 +2,18 @@
 from __future__ import annotations
 
 import json
+import math
+from datetime import datetime, timedelta
 
 from db import queries
 
 from .aggregator import UNCLASSIFIED, aggregate_sectors
+
+# 区间涨幅排名(独立于 Top20 集中度):成交额前 50 → 算 5/10/20 日涨幅 → 按板块排名。
+TOP_VOLUME_UNIVERSE_N = 50
+GAIN_PERIODS = (5, 10, 20)
+# 区间回看自然日跨度:覆盖 20 日榜所需的 21 根 bar(≈ 30 个交易日,留足停牌冗余)。
+GAIN_LOOKBACK_DAYS = 45
 
 
 def _coerce_stock_list(raw) -> list:
@@ -76,6 +84,73 @@ def build_record(conn, registry, date: str, top_n: int = 20, refetch: bool = Fal
             "market_total_source": market_total_source,
         },
     }
+
+
+def _finite_num(v) -> bool:
+    """是否为有限数值(拒绝 None/bool/字符串/NaN/Inf),防脏 close 击穿涨幅计算。"""
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+
+
+def _interval_gain(closes: list, n: int) -> float | None:
+    """区间涨幅 %:(close[-1]/close[-1-n] - 1) * 100。
+
+    需 ≥ n+1 根 bar(否则历史不足);基准/最新 close 须为有限数值且基准 > 0,
+    结果须有限(否则 None)—— 防除零 + 防 NaN/Inf 脏值污染榜单(codex 中等)。
+    """
+    if len(closes) < n + 1:
+        return None
+    base = closes[-1 - n]
+    last = closes[-1]
+    if not (_finite_num(base) and _finite_num(last)) or base <= 0:
+        return None
+    gain = round((last / base - 1) * 100, 2)
+    return gain if math.isfinite(gain) else None
+
+
+def enrich_interval_gains(stocks: list[dict], end_date: str, registry,
+                          periods=GAIN_PERIODS, lookback_days: int = GAIN_LOOKBACK_DAYS) -> list[dict]:
+    """逐股取区间日线(get_stock_daily_range),算各周期区间涨幅写回 gain_{n}d。
+
+    以 end_date 为区间终点,回看 lookback_days 自然日;provider 失败/历史不足 → 该周期 None。
+    复用 get_stock_daily_range 升序 bars 契约(最后一根=区间终点),口径同趋势主升缓涨判定。
+    """
+    start = (datetime.strptime(end_date, "%Y-%m-%d")
+             - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
+    out: list[dict] = []
+    none_gains = {f"gain_{n}d": None for n in periods}
+    for s in stocks:
+        code = s.get("code")
+        bars = []
+        if code:
+            r = registry.call("get_stock_daily_range", code, start, end_date)
+            bars = r.data if (getattr(r, "success", False) and isinstance(r.data, list)) else []
+        usable = [b for b in bars if b.get("close") is not None]
+        # 红线诚实:最新一根 bar 必须正好落在榜单日(end_date)且 close 为有限数值。停牌/数据延迟/
+        # 部分区间会让 closes[-1] 落在 end_date 之前,脏 close(NaN/Inf/非数值)也不可信;此时算出的
+        # 5/10/20 日涨幅是"陈旧窗口/脏值",冒充当日 [事实] 会误导复盘 → 全 None(该股剔出排名),宁缺毋假
+        # (codex 中等:防陈旧窗口冒充当日 + 防 NaN/Inf 污染榜单)。closes 保留原位(不滤中段),
+        # 由 _interval_gain 对各周期 base/last 单独校验有限性,避免删中段 bar 致窗口错位。
+        if (not usable or usable[-1].get("trade_date") != end_date
+                or not _finite_num(usable[-1].get("close"))):
+            out.append({**s, **none_gains})
+            continue
+        closes = [b.get("close") for b in usable]
+        gains = {f"gain_{n}d": _interval_gain(closes, n) for n in periods}
+        out.append({**s, **gains})
+    return out
+
+
+def build_gain_universe(registry, date: str, top_n: int = TOP_VOLUME_UNIVERSE_N) -> list[dict]:
+    """成交额前 top_n 个股 → 申万打标 → 区间涨幅,组装区间涨幅排名原始集。
+
+    独立于 Top20 集中度(自取 top50、自标行业),无数据返 []。
+    """
+    res = registry.call("get_top_volume_stocks", date, top_n)
+    stocks = res.data if (getattr(res, "success", False) and res.data) else []
+    if not stocks:
+        return []
+    labeled = label_industries(stocks, registry)["stocks"]
+    return enrich_interval_gains(labeled, date, registry)
 
 
 def label_industries(stocks: list[dict], registry) -> dict:

@@ -2,13 +2,35 @@
 build_trend_payload(只读 → 前端集中度趋势图 API 载荷)。"""
 from __future__ import annotations
 
-from . import collector, formatter, repo, trend
+import logging
+
+from . import collector, formatter, ranking, repo, trend
 from .aggregator import UNCLASSIFIED
+
+logger = logging.getLogger(__name__)
 
 TREND_DAYS = 30
 _STACK_TOP_K = 8           # 堆叠面积图保留的行业数(其余并入「其他」)
 _RETENTION_MIN_STREAK = 2  # 连续在榜入快照的最小天数
 _RETENTION_TOP_N = 12      # 连续在榜快照截断(限制载荷)
+
+
+def _has_gain_coverage(universe) -> bool:
+    """universe 是否能产出**用户可见的排名**——直接以最终展示契约为判据:
+    跑 build_sector_gain_ranking 后,任一周期存在 max_gain 非 None 的板块即为"成功刷新"。
+
+    用最终排名(而非"≥1 非 None 涨幅"代理)判定,一并覆盖所有降级路径——空 universe /
+    全 None 涨幅 / 全『未分类』(申万映射失败但价格成功)——这些都派生出空榜单,
+    视为降级、保留库内既有 gain_universe 不抹(codex 高:幂等,失败重跑不删既有可见榜单)。
+    """
+    if not universe:
+        return False
+    ranked = ranking.build_sector_gain_ranking(universe)
+    return any(
+        sector.get("max_gain") is not None
+        for period_rows in ranked.values()
+        for sector in period_rows
+    )
 
 
 def run_daily(conn, registry, date: str, trend_days: int = TREND_DAYS,
@@ -24,6 +46,27 @@ def run_daily(conn, registry, date: str, trend_days: int = TREND_DAYS,
     record = collector.build_record(conn, registry, date, refetch=refetch)
     if record is None:
         return None
+
+    # 区间涨幅排名原始集(成交额前50 → 5/10/20 日涨幅):独立 ancillary 特性,随 record 落库 + 进报告。
+    # fail-closed —— 任何取数/解析异常(脏 bar / 非数值 close / provider 抖动)都降级并记日志,
+    # 绝不拖垮既有 Top20 集中度日报的落库+渲染+推送(codex 中等:防可选排名路径在 save 前抛错回归既有 daily 工作流)。
+    # 成功判据 = 新 universe 有"可用排名覆盖"(≥1 只票 ≥1 周期算出有限涨幅),而非仅"非空列表":
+    # top50 取数成功但全部 get_stock_daily_range 失败/陈旧/脏值时,enrich 仍逐票返行但 gain 全 None,
+    # 这种"非空全 None"无排名价值。仅在有覆盖时才覆盖落库;否则(空/全 None/异常)视为降级,
+    # **保留库内已成功落库的 gain_universe**,避免同日降级重跑把有效榜单抹成空
+    # (codex 高:Top20 read-through 成功但 top50/日线 provider 抖动的重跑不得删既有榜单;幂等)。
+    gain_universe = None
+    try:
+        gain_universe = collector.build_gain_universe(registry, date)
+    except Exception as exc:  # noqa: BLE001 — 边界吞异常是有意的(隔离 ancillary 失败,保住主日报)
+        logger.warning("[volume-watch] 区间涨幅排名取数失败,降级(不阻断集中度日报): %s", exc)
+    if _has_gain_coverage(gain_universe):
+        record["gain_universe"] = gain_universe
+    elif persist:
+        prev = repo.get_concentration(conn, date)  # 降级 → 保留前次已落库榜单,幂等不抹
+        record["gain_universe"] = (prev.get("gain_universe") if prev else None) or []
+    else:
+        record["gain_universe"] = []  # dry-run 降级:无库可保,留空(预览诚实略过该段)
 
     if persist:
         repo.save_concentration(conn, record)
@@ -106,6 +149,19 @@ def _snapshot(records: list[dict], trend_result: dict) -> dict:
     dropped = [{"name": x.get("name") or x["code"]} for x in rot["dropped"]]
     return {"date": records[-1]["date"], "retention": retention,
             "rotation": {"new": new, "dropped": dropped}}
+
+
+def build_sector_gain_ranking_payload(conn, date: str) -> dict:
+    """只读:产出某交易日「成交额前50 板块区间涨幅排名」载荷(供复盘网站 API)。
+
+    读 daily_volume_concentration[date].gain_universe → 调纯函数派生三档排名。
+    无记录/旧记录(gain_universe 空)→ 返空壳(三档空列表),前端展示空态不报错。
+    """
+    record = repo.get_concentration(conn, date)
+    universe = record.get("gain_universe") if record else None
+    if not universe:
+        return {"date": date, "rankings": {"5d": [], "10d": [], "20d": []}}
+    return {"date": date, "rankings": ranking.build_sector_gain_ranking(universe)}
 
 
 def build_trend_payload(conn, days: int = TREND_DAYS, end_date: str | None = None) -> dict:

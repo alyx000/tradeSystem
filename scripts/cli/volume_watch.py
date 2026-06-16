@@ -15,6 +15,7 @@ import logging
 import sys
 
 from db.connection import get_connection
+from db.migrate import migrate
 from services.volume_concentration import service
 
 logger = logging.getLogger(__name__)
@@ -62,6 +63,7 @@ def _run_daily(config: dict, args: argparse.Namespace) -> None:
     registry.initialize_all()  # 必须:register 不自动初始化,漏了则所有 provider 调用返 provider_not_initialized
     conn = get_connection()
     try:
+        migrate(conn)  # 必须:对齐全仓库约定(每个写库命令连库后即 migrate),保证 v34 gain_universe_json 列存在,否则老库 save 崩
         md = service.run_daily(conn, registry, date,
                                persist=not args.dry_run, refetch=args.refetch)
     finally:
@@ -82,6 +84,7 @@ def _run_trend(config: dict, args: argparse.Namespace) -> None:
     date = args.date or _today()
     conn = get_connection()
     try:
+        migrate(conn)  # 对齐全仓库约定:连库后即 migrate(只读路径亦保证 schema 齐全)
         md = service.run_trend(conn, date, days=args.days)
     finally:
         conn.close()

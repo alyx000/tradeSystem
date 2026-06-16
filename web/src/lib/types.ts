@@ -272,6 +272,29 @@ export interface ConcentrationTrendPayload {
   snapshot: ConcentrationSnapshot | null
 }
 
+// 成交额前50 板块区间涨幅排名（5/10/20 日三档独立排名，供复盘使用）。
+// 板块按板块内涨幅最大个股降序、平手比次大；全客观区间涨幅，不含价位目标。
+export interface SectorGainStock {
+  name: string
+  code: string | null // 后端 universe 个别脏行可能缺 code（返 null）；前端列表 key 已 fallback 到 name
+  gain: number
+}
+
+export interface SectorGainRow {
+  industry: string
+  max_gain: number | null
+  stocks: SectorGainStock[]
+}
+
+export interface SectorGainRankingPayload {
+  date: string
+  rankings: {
+    '5d': SectorGainRow[]
+    '10d': SectorGainRow[]
+    '20d': SectorGainRow[]
+  }
+}
+
 export interface MainThemeItem {
   date?: string
   theme_name: string
