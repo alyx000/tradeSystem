@@ -69,6 +69,10 @@ def test_js_workflow_runs_and_resumes_without_rereading(tmp_path, monkeypatch):
     run_dir = tmp_path / "runs" / "2026-06-03"
     state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
     assert state["stages"]["read"]["status"] == "done"
+    assert state["stages"]["publish"]["status"] == "skipped"
+    assert state["stages"]["publish"]["result"]["reason"] == "publish_not_requested"
+    assert state["options"]["huiboRefreshUrlFromApp"] == "1"
+    assert state["options"]["huiboReportPdfDir"].endswith("/Downloads")
     assert len(list((run_dir / "reader").glob("*.json"))) == 3
     assert (run_dir / "report.md").exists()
     events = (run_dir / "events.jsonl").read_text(encoding="utf-8")
@@ -76,6 +80,9 @@ def test_js_workflow_runs_and_resumes_without_rereading(tmp_path, monkeypatch):
     assert '"stage":"read"' in events
     assert '"event":"finalize_agent_skip"' in events
     assert '"role":"industry_aggregator"' in events
+    summary_events = [json.loads(line) for line in events.splitlines() if '"event":"workflow_summary"' in line]
+    assert summary_events[-1]["published"] is False
+    assert summary_events[-1]["pushed"] is False
     assert len(calls.read_text(encoding="utf-8").splitlines()) == 3
 
     subprocess.run([*cmd, "--resume"], text=True, capture_output=True, check=True)
@@ -692,13 +699,13 @@ def test_js_workflow_parse_failure_is_per_report_not_global(tmp_path, monkeypatc
     assert len(parse_errors) == 1
 
 
-def test_js_workflow_default_date_uses_previous_trade_day(tmp_path, monkeypatch):
+def test_js_workflow_default_date_uses_trade_or_pre_trade_day(tmp_path, monkeypatch):
     db_path = tmp_path / "trade.db"
     conn = sqlite3.connect(db_path)
     conn.execute("CREATE TABLE trade_calendar (date TEXT PRIMARY KEY, is_open INTEGER)")
     conn.executemany(
         "INSERT INTO trade_calendar(date, is_open) VALUES (?, ?)",
-        [("2026-06-05", 1), ("2026-06-06", 0), ("2026-06-07", 0)],
+        [("2026-06-05", 1), ("2026-06-06", 0), ("2026-06-07", 0), ("2026-06-08", 1)],
     )
     conn.commit()
     conn.close()
@@ -742,8 +749,8 @@ def test_js_workflow_default_date_uses_previous_trade_day(tmp_path, monkeypatch)
     ]
     subprocess.run(cmd, text=True, capture_output=True, check=True)
 
-    assert (tmp_path / "runs" / "2026-06-05" / "state.json").exists()
-    assert not (tmp_path / "runs" / "2026-06-07").exists()
+    assert (tmp_path / "runs" / "2026-06-07" / "state.json").exists()
+    assert not (tmp_path / "runs" / "2026-06-05").exists()
 
 
 def test_js_workflow_rejects_date_without_value(tmp_path):

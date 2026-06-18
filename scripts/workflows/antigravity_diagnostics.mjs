@@ -25,15 +25,27 @@ export function diagnoseAntigravityFailure({
 
 export function classifyAntigravityFailure(text, fallback = "antigravity_failed") {
   const lower = String(text || "").toLowerCase();
-  if (lower.includes("resource_exhausted") || lower.includes("code 429") || lower.includes("quota")) {
+  if (
+    lower.includes("resource_exhausted")
+    || lower.includes("code 429")
+    || lower.includes("quota reached")
+    || lower.includes("quota exceeded")
+    || lower.includes("individual quota")
+  ) {
     return "quota_exhausted";
   }
+  if (lower.includes("not a valid artifact path") || lower.includes("invalid tool call error")) {
+    return "agent_tool_error";
+  }
   if (
-    lower.includes("not logged in")
-    || lower.includes("not authenticated")
-    || lower.includes("unauthenticated")
-    || lower.includes("opening authentication page")
-    || lower.includes("authorization code")
+    !authRecovered(lower)
+    && (
+      lower.includes("not logged in")
+      || lower.includes("not authenticated")
+      || lower.includes("unauthenticated")
+      || lower.includes("opening authentication page")
+      || lower.includes("authorization code")
+    )
   ) {
     return "auth_required";
   }
@@ -44,7 +56,26 @@ export function classifyAntigravityFailure(text, fallback = "antigravity_failed"
 
 export function diagnosticMessage(text) {
   const lines = String(text || "").split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-  const preferred = ["resource_exhausted", "code 429", "quota", "not logged in", "not authenticated", "authentication", "timeout"];
+  const reason = classifyAntigravityFailure(text, "");
+  const preferredByReason = {
+    quota_exhausted: ["resource_exhausted", "code 429", "quota reached", "quota exceeded", "individual quota"],
+    auth_required: ["not logged in", "not authenticated", "authentication", "authorization code"],
+    agent_tool_error: ["not a valid artifact path", "invalid tool call error", "model output error"],
+    timeout: ["timeout", "timed out"],
+  };
+  const preferred = preferredByReason[reason] || [
+    "resource_exhausted",
+    "code 429",
+    "quota reached",
+    "quota exceeded",
+    "individual quota",
+    "not a valid artifact path",
+    "invalid tool call error",
+    "not logged in",
+    "not authenticated",
+    "authentication",
+    "timeout",
+  ];
   for (const line of lines) {
     const lower = line.toLowerCase();
     if (preferred.some((term) => lower.includes(term))) {
@@ -54,11 +85,19 @@ export function diagnosticMessage(text) {
   return lines.length ? lines[0].slice(0, 500) : "";
 }
 
+function authRecovered(lowerText) {
+  return (
+    lowerText.includes("auth succeeded")
+    || lowerText.includes("applyauthresult:")
+    || lowerText.includes("experiments refreshed after login")
+  );
+}
+
 export function readTextIfExists(file) {
   if (!file) return "";
   try {
     if (!fs.existsSync(file)) return "";
-    return fs.readFileSync(file, "utf-8").slice(0, 4000);
+    return fs.readFileSync(file, "utf-8").slice(0, 32000);
   } catch (_) {
     return "";
   }

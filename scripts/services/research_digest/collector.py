@@ -119,7 +119,7 @@ def collect_cn(registry, date: str) -> list[dict]:
         e = by_code.setdefault(code, {
             "stock_code": code, "stock_name": "",
             "report_count": 0,
-            "institutions": [], "ratings": [], "rating_changes": [], "_seen_rc": set(),
+            "institutions": [], "ratings": [], "rating_changes": [], "report_dates": [], "_seen_rc": set(),
         })
         e["report_count"] += 1  # 篇数=源行数，与 build_coverage_panel 同口径（钉钉行业聚合用）
         if not e["stock_name"] and r.get("stock_name"):  # L1：取首个非空名（首行可能空）
@@ -135,6 +135,9 @@ def collect_cn(registry, date: str) -> list[dict]:
             if key not in e["_seen_rc"]:
                 e["_seen_rc"].add(key)
                 e["rating_changes"].append(rc)
+        report_date = str(r.get("date") or "").strip()[:10]
+        if report_date:
+            e["report_dates"].append(report_date)
     items = []
     for code, e in by_code.items():
         orgs = sorted(set(e["institutions"]))
@@ -147,6 +150,7 @@ def collect_cn(registry, date: str) -> list[dict]:
             "institutions": orgs,
             "ratings": e["ratings"],
             "rating_changes": e["rating_changes"],
+            "report_dates": sorted(set(e["report_dates"])),
             "score": _cn_score(len(orgs), e["rating_changes"]),
             "signals": _cn_signals(len(orgs), e["rating_changes"]),
         }

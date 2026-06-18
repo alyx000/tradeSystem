@@ -1,14 +1,14 @@
 #!/bin/bash
 # 每日研报速读定时入口（launchd 调用）。
 #
-# 由 ~/Library/LaunchAgents/com.alyx.tradesystem.research-digest.plist 触发（每天 22:30）。
+# 由 ~/Library/LaunchAgents/com.alyx.tradesystem.research-digest.plist 触发（每天 22:00）。
 # 仅在 A 股交易日或 A 股交易日前一天继续执行；其它日期只记录 skip。
 # 跑 JS workflow：基础研报段 + 慧博深读 Antigravity reader → 落盘 + 推钉钉。
 # workflow 负责 state/events/run_report、断点续跑、preflight 与 Antigravity 全局失败显式标记。
 set -e
 
-# 1. PATH（launchd 默认不含 /opt/homebrew/bin，python/agy/依赖找不到）
-export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+# 1. PATH（launchd 默认不含 /opt/homebrew/bin / ~/.local/bin，python/agy/依赖找不到）
+export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
 
 # 2. 仓库根（python import 解析）
 REPO_ROOT="/Users/alyx/tradeSystem"
@@ -23,6 +23,7 @@ if [ -f "$HOME/.config/tradeSystem.env" ]; then
     # shellcheck disable=SC1091
     source "$HOME/.config/tradeSystem.env"
 fi
+export HUIBO_REFRESH_URL_FROM_APP="${HUIBO_REFRESH_URL_FROM_APP:-1}"
 
 # 4. 时间戳前缀方便排障
 RUN_DATE="$(date '+%Y-%m-%d')"

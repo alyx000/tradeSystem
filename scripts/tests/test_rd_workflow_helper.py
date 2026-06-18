@@ -64,6 +64,39 @@ def test_should_run_on_trade_day_or_pre_trade_day(tmp_path):
     assert quiet_day["reason"] == "not_trade_or_pre_trade_day"
 
 
+def test_resolve_date_uses_current_trade_or_pre_trade_day(tmp_path):
+    db_path = tmp_path / "trade.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute("CREATE TABLE trade_calendar (date TEXT PRIMARY KEY, is_open INTEGER)")
+    conn.executemany(
+        "INSERT INTO trade_calendar(date, is_open) VALUES (?, ?)",
+        [
+            ("2026-06-12", 1),
+            ("2026-06-13", 0),
+            ("2026-06-14", 0),
+            ("2026-06-15", 1),
+            ("2026-06-16", 1),
+            ("2026-06-20", 0),
+            ("2026-06-21", 0),
+            ("2026-06-22", 1),
+        ],
+    )
+    conn.commit()
+    conn.close()
+    env = {**os.environ, "TRADE_DB_PATH": str(db_path)}
+
+    trade_day = _run_helper(["resolve-date", "--date", "2026-06-15"], cwd=Path.cwd(), env=env)
+    pre_trade_day = _run_helper(["resolve-date", "--date", "2026-06-14"], cwd=Path.cwd(), env=env)
+    quiet_day = _run_helper(["resolve-date", "--date", "2026-06-20"], cwd=Path.cwd(), env=env)
+
+    assert trade_day["date"] == "2026-06-15"
+    assert trade_day["source"] == "trade_calendar_db"
+    assert pre_trade_day["date"] == "2026-06-14"
+    assert pre_trade_day["source"] == "trade_calendar_db"
+    assert quiet_day["date"] == "2026-06-16"
+    assert quiet_day["source"] == "prev_trade_calendar_db"
+
+
 def test_huibo_helper_collect_prescreen_download_finalize(tmp_path, monkeypatch):
     pdf_dir = tmp_path / "pdfs"
     raw_dir = tmp_path / "raw"
@@ -128,6 +161,7 @@ def test_huibo_helper_collect_prescreen_download_finalize(tmp_path, monkeypatch)
     downloaded = json.loads(downloaded_path.read_text(encoding="utf-8"))
     rid = downloaded[0]["candidate"]["report_id"]
     assert Path(downloaded[0]["candidate"]["pdf_path"]).exists()
+    assert downloaded[0]["pdf_download"]["status"] == "ok"
 
     (reader_dir / f"{rid}.json").write_text(json.dumps({
         "industry": "机器人",
@@ -486,13 +520,34 @@ def test_publish_records_false_when_dingtalk_push_fails(tmp_path, monkeypatch):
 def test_publish_include_base_digest_merges_base_and_huibo_markdown(tmp_path, monkeypatch):
     helper = _load_helper_module()
     markdown = tmp_path / "report.md"
-    markdown.write_text("# 研报速读 · 2026-06-03\n\n## 📚 慧博深读 Top1\n1. **慧博报告**\n", encoding="utf-8")
+    markdown.write_text(
+        "# 研报速读 · 2026-06-03\n\n"
+        "> 窗口 2026-06-03（最近交易日）｜A股 0 标的覆盖 ｜ 美股 0 条评级变动\n\n"
+        "## 🏆 Top3 最值得读\n"
+        "- 今日两市均无符合条件的评级变动\n\n"
+        "## 📚 慧博深读 Top1\n"
+        "1. **慧博报告**\n\n"
+        "## 🇨🇳 A股机构评级\n"
+        "- 今日 A股无研报评级数据\n\n"
+        "---\n"
+        "> 本报告基于公开机构评级数据整理，不构成任何买卖建议，不预测价格目标。\n",
+        encoding="utf-8",
+    )
     out = tmp_path / "published.json"
     out_root = tmp_path / "reports"
 
     class FakeDigest:
         title = "研报速读 · 2026-06-03"
-        markdown = "# 研报速读 · 2026-06-03\n\n## 🏆 Top3 最值得读\n- 基础研报\n\n## 🇨🇳 A股机构评级\n- 基础A股\n"
+        markdown = (
+            "# 研报速读 · 2026-06-03\n\n"
+            "> 窗口 2026-06-03（最近交易日）｜A股 1 标的覆盖 ｜ 美股 0 条评级变动\n\n"
+            "## 🏆 Top3 最值得读\n"
+            "- 基础研报\n\n"
+            "## 🇨🇳 A股机构评级\n"
+            "- 基础A股\n\n"
+            "---\n"
+            "> 本报告基于公开机构评级数据整理，不构成任何买卖建议，不预测价格目标。\n"
+        )
 
     monkeypatch.setattr(helper, "_render_base_digest", lambda args: FakeDigest())
     args = SimpleNamespace(
@@ -511,8 +566,67 @@ def test_publish_include_base_digest_merges_base_and_huibo_markdown(tmp_path, mo
     rendered = Path(payload["markdown"]).read_text(encoding="utf-8")
     assert "基础研报" in rendered
     assert "慧博深读 Top1" in rendered
+    assert rendered.count("> 窗口 2026-06-03") == 1
+    assert rendered.count("> 本报告基于公开机构评级数据整理") == 1
+    assert "今日两市均无符合条件的评级变动" not in rendered
     assert payload["base_digest_error"] == ""
     assert payload["base_digest_duration_ms"] >= 0
+
+
+def test_publish_include_base_digest_omits_empty_huibo_base_sections(tmp_path, monkeypatch):
+    helper = _load_helper_module()
+    markdown = tmp_path / "report.md"
+    markdown.write_text(
+        "# 研报速读 · 2026-06-03\n\n"
+        "> 窗口 2026-06-03（最近交易日）｜A股 0 标的覆盖 ｜ 美股 0 条评级变动\n\n"
+        "## 🏆 Top3 最值得读\n"
+        "- 今日两市均无符合条件的评级变动\n"
+        "> ranker=fallback：no_successful_reader；慧博 Top 推荐不是 ranker agent 生成。\n\n"
+        "## 🇨🇳 A股机构评级\n"
+        "- 今日 A股无研报评级数据\n\n"
+        "## 🇺🇸 美股评级变动\n"
+        "- 今日美股无符合条件的评级变动\n\n"
+        "---\n"
+        "> 本报告基于公开机构评级数据整理，不构成任何买卖建议，不预测价格目标。\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "published.json"
+    out_root = tmp_path / "reports"
+
+    class FakeDigest:
+        title = "研报速读 · 2026-06-03"
+        markdown = (
+            "# 研报速读 · 2026-06-03\n\n"
+            "> 窗口 2026-06-03（最近交易日）｜A股 1 标的覆盖 ｜ 美股 0 条评级变动\n\n"
+            "## 🏆 Top3 最值得读\n"
+            "- 基础研报\n\n"
+            "## 🇨🇳 A股机构评级\n"
+            "- 基础A股\n\n"
+            "---\n"
+            "> 本报告基于公开机构评级数据整理，不构成任何买卖建议，不预测价格目标。\n"
+        )
+
+    monkeypatch.setattr(helper, "_render_base_digest", lambda args: FakeDigest())
+    args = SimpleNamespace(
+        date="2026-06-03",
+        markdown=str(markdown),
+        huibo_summary=None,
+        include_base_digest=True,
+        out_root=str(out_root),
+        out=str(out),
+        dry_run=False,
+        no_push=True,
+    )
+
+    payload = helper._cmd_publish(args)
+
+    rendered = Path(payload["markdown"]).read_text(encoding="utf-8")
+    assert "基础研报" in rendered
+    assert "ranker=fallback" in rendered
+    assert rendered.count("> 窗口 2026-06-03") == 1
+    assert "今日两市均无符合条件的评级变动" not in rendered
+    assert "今日 A股无研报评级数据" not in rendered
+    assert "今日美股无符合条件的评级变动" not in rendered
 
 
 def test_publish_records_base_digest_error_without_blocking_huibo_publish(tmp_path, monkeypatch):

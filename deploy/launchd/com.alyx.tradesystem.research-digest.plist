@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- Sleep policy: 研报速读错过可接受（非交易决策任务）；macOS 休眠期间不触发，可接受，不配 pmset 唤醒。
-     每天 22:30 触发一次，runner 内部按 A 股交易日/交易日前一天过滤。 -->
+     每天 22:00 触发一次，runner 内部按 A 股交易日/交易日前一天过滤。 -->
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
@@ -12,11 +12,11 @@
         <string>/Users/alyx/tradeSystem/deploy/launchd/research-digest-runner.sh</string>
     </array>
 
-    <!-- 每天 22:30 触发；runner 仅在 A 股交易日或 A 股交易日前一天继续执行。 -->
+    <!-- 每天 22:00 触发；runner 仅在 A 股交易日或 A 股交易日前一天继续执行。 -->
     <key>StartCalendarInterval</key>
     <dict>
         <key>Hour</key><integer>22</integer>
-        <key>Minute</key><integer>30</integer>
+        <key>Minute</key><integer>0</integer>
     </dict>
 
     <key>StandardOutPath</key>

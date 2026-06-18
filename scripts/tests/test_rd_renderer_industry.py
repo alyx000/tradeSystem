@@ -99,6 +99,50 @@ def test_huibo_sections_render_recommendations_industries_stocks_and_trend():
     assert "机器人从分歧走向扩散" in md
 
 
+def test_renderer_labels_cn_and_huibo_time_semantics():
+    cn_items = [{
+        "stock_code": "002812",
+        "stock_name": "恩捷股份",
+        "org_count": 1,
+        "rating_changes": ["首次"],
+        "report_dates": ["2026-06-17"],
+        "signals": ["首次覆盖"],
+        "viewpoint": {
+            "title": "首次覆盖：隔膜需求景气",
+            "institution": "爱建证券",
+            "date": "2026-06-17",
+        },
+    }]
+    huibo_digest = {
+        "recommendations": [{
+            "title": "A证券-机器人行业深度",
+            "reason": "产业链观点清晰",
+            "source": "A证券",
+            "huibo_list_time": "2026-06-16",
+        }],
+        "reader_results": [{
+            "title": "A证券-机器人行业深度",
+            "institution": "A证券",
+            "date": "2026-06-16",
+            "huibo_list_time": "2026-06-16",
+            "reader": {
+                "pdf_report_date": "2026-06-15",
+                "mentioned_stocks": [
+                    {"name": "测试股份", "viewpoint": "供应链受益", "source": "第12页"},
+                ],
+            },
+        }],
+    }
+
+    _, md = render_md("2026-06-17", cn_items=cn_items, us_items=[], top3=[], huibo_digest=huibo_digest)
+
+    assert "时间口径：A股=发布日期，慧博=列表时间，PDF日期=研报内页日期" in md
+    assert "发布日期：2026-06-17；1 家机构覆盖" in md
+    assert "观点发布日期：2026-06-17" in md
+    assert "慧博列表时间：2026-06-16" in md
+    assert "PDF报告日期：2026-06-15" in md
+
+
 def test_huibo_recommendation_heading_uses_actual_count():
     huibo_digest = {
         "recommendations": [
@@ -139,6 +183,36 @@ def test_huibo_antigravity_unavailable_notice_renders_without_recommendations():
     assert "Antigravity 不可用" in md
     assert "quota_exhausted" in md
     assert "ranker=fallback" in md
+
+
+def test_huibo_antigravity_notice_distinguishes_reader_completed():
+    huibo_digest = {
+        "recommendations": [
+            {"title": "A证券-机器人行业深度", "reason": "本地兜底排序"},
+        ],
+        "reader_results": [
+            {
+                "title": "A证券-机器人行业深度",
+                "reader": {"industry": "机器人", "read_score": 80},
+            }
+        ],
+        "meta": {
+            "antigravity": {
+                "status": "unavailable",
+                "reason": "timeout",
+            },
+            "ranker": {
+                "status": "fallback",
+                "reason": "timeout",
+            },
+        },
+    }
+
+    _, md = render_md("2026-06-03", cn_items=[], us_items=[], top3=[], huibo_digest=huibo_digest)
+
+    assert "reader 已完成" in md
+    assert "后续 reader/ranker/聚合调用已停止" not in md
+    assert "Top 推荐来自本地兜底排序" in md
 
 
 def test_huibo_digest_renders_failure_fallback_when_no_reader_success():
