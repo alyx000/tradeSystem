@@ -35,6 +35,8 @@ async function main() {
   helperEnvOverrides = {
     HUIBO_RAW_DIR: rawDir,
     HUIBO_SUMMARY_DIR: summaryDir,
+    HUIBO_REPORT_PDF_DIR: process.env.HUIBO_REPORT_PDF_DIR || path.join(os.homedir(), "Downloads"),
+    HUIBO_REFRESH_URL_FROM_APP: process.env.HUIBO_REFRESH_URL_FROM_APP || "1",
   };
   const llmInputBaseDir = abs(opts.llmInputDir || process.env.HUIBO_LLM_INPUT_DIR || path.join(os.tmpdir(), "huibo-llm-input"));
   const llmInputDir = path.join(llmInputBaseDir, safeFileStem(date));
@@ -86,6 +88,8 @@ async function main() {
     llmInputBaseDir,
     llmInputDir,
     antigravityLogDir,
+    huiboReportPdfDir: helperEnvOverrides.HUIBO_REPORT_PDF_DIR,
+    huiboRefreshUrlFromApp: helperEnvOverrides.HUIBO_REFRESH_URL_FROM_APP,
   };
   saveState(statePath, state);
 
@@ -131,6 +135,7 @@ async function main() {
       "--prescreened", artifact("prescreened.json"),
       "--raw-dir", rawDir,
       "--out", artifact("downloaded.json"),
+      "--events-path", eventsPath,
     ]);
     const items = readJson(artifact("downloaded.json"));
     for (const item of items) {
@@ -273,6 +278,14 @@ async function main() {
         ...(opts.includeBaseDigest ? ["--include-base-digest"] : []),
       ]);
     });
+  } else {
+    state.stages.publish = {
+      status: "skipped",
+      startedAt: nowIso(),
+      endedAt: nowIso(),
+      result: {status: "skipped", reason: "publish_not_requested"},
+    };
+    saveState(statePath, state);
   }
 
   await stage(ctx, "cleanup", null, async () => {
@@ -346,7 +359,21 @@ function resolveDefaultTradeDate(today) {
       // fall through to local weekday fallback
     }
   } else {
-    console.warn(`[workflow] resolve-date helper failed, using weekday fallback: ${result.stderr || result.stdout}`);
+    console.warn(`[workflow] resolve-date helper failed, using schedule-day fallback: ${result.stderr || result.stdout}`);
+  }
+  return scheduleDayOrPreviousWeekday(today);
+}
+
+function scheduleDayOrPreviousWeekday(today) {
+  const d = new Date(`${today}T00:00:00Z`);
+  const day = d.getUTCDay();
+  if (day !== 0 && day !== 6) {
+    return today;
+  }
+  const next = new Date(d);
+  next.setUTCDate(next.getUTCDate() + 1);
+  if (next.getUTCDay() !== 0 && next.getUTCDay() !== 6) {
+    return today;
   }
   return previousWeekday(today);
 }
@@ -640,7 +667,7 @@ function workflowSummary(state, opts) {
     include_base_digest: Boolean(opts.includeBaseDigest),
     base_digest_included: Boolean(publishResult.base_digest_included),
     published: Boolean(opts.publish && state.stages?.publish?.status === "done"),
-    pushed: Boolean(publishResult.pushed),
+    pushed: Boolean(opts.publish && publishResult.pushed),
     summary: state.runDir ? path.join(state.runDir, "summary.json") : finalizeResult.summary || "",
     markdown: state.runDir ? path.join(state.runDir, "report.md") : finalizeResult.markdown || "",
   };
@@ -727,7 +754,8 @@ async function runAntigravityReader(candidate, { timeoutSeconds, antigravityLogD
   const pdfPath = candidate.llm_pdf_path || candidate.pdf_path;
   const prompt = [
     "请读取这个PDF研报，只输出JSON，不要markdown。",
-    "字段：title, industry, viewpoint, key_points(数组最多3条), recommend_reason, read_score(0-100), ",
+    "字段：title, pdf_report_date(研报首页/封面报告日期，YYYY-MM-DD，找不到留空), ",
+    "industry, viewpoint, key_points(数组最多3条), recommend_reason, read_score(0-100), ",
     "mentioned_stocks(数组，每项 name, viewpoint, source, source_page, source_section)。",
     "mentioned_stocks 的 viewpoint 只能写该个股在研报中的独立观点；如果只是可比公司、客户、供应商、数据引用来源，viewpoint 必须留空，把关系写到 source。",
     "source_page/source_section 尽量给页码或章节；不要输出目标价、买入卖出、仓位或价格预测。",

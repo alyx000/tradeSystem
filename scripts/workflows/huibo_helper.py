@@ -55,6 +55,7 @@ def main() -> None:
     download.add_argument("--prescreened", required=True)
     download.add_argument("--raw-dir", required=True)
     download.add_argument("--out", required=True)
+    download.add_argument("--events-path")
 
     finalize = sub.add_parser("finalize")
     finalize.add_argument("--date", required=True)
@@ -111,9 +112,9 @@ def main() -> None:
 
 
 def _cmd_resolve_date(args: argparse.Namespace) -> dict[str, Any]:
-    """Resolve workflow default date to the latest completed A-share trading day."""
+    """Resolve workflow default date for the 22:30 scheduled research digest."""
     today = str(args.date)
-    resolved, source = _resolve_prev_trade_date(today)
+    resolved, source = _resolve_workflow_date(today)
     return {"status": "ok", "date": resolved, "input_date": today, "source": source}
 
 
@@ -183,6 +184,24 @@ def _is_weekday(date: str) -> bool:
     return datetime.strptime(date, "%Y-%m-%d").date().weekday() < 5
 
 
+def _resolve_workflow_date(today: str) -> tuple[str, str]:
+    next_day = (datetime.strptime(today, "%Y-%m-%d").date() + timedelta(days=1)).isoformat()
+    flags = _trade_day_flags_from_db(today, next_day)
+    if flags.get("source") == "trade_calendar_db":
+        if flags.get("today_is_trade_day") is True or flags.get("next_is_trade_day") is True:
+            return today, "trade_calendar_db"
+        if flags.get("today_is_trade_day") is False and flags.get("next_is_trade_day") is False:
+            db_date = _prev_trade_date_from_db(today)
+            if db_date:
+                return db_date, "prev_trade_calendar_db"
+
+    today_weekday = _is_weekday(today)
+    next_weekday = _is_weekday(next_day)
+    if today_weekday or next_weekday:
+        return today, "weekday_fallback"
+    return _prev_weekday(today), "prev_weekday_fallback"
+
+
 def _resolve_prev_trade_date(today: str) -> tuple[str, str]:
     db_date = _prev_trade_date_from_db(today)
     if db_date:
@@ -242,9 +261,9 @@ def _cmd_download(args: argparse.Namespace) -> dict[str, Any]:
     out = []
     downloaded = 0
     missing = 0
+    missing_reasons: list[str] = []
     for item in items:
-        before = item.candidate.pdf_path
-        candidate = huibo._ensure_pdf_available(item.candidate, args.raw_dir)  # noqa: SLF001
+        candidate, download_diag = huibo._ensure_pdf_available_with_diagnostics(item.candidate, args.raw_dir)  # noqa: SLF001
         item = huibo.PrescreenedCandidate(
             candidate=candidate,
             score=item.score,
@@ -255,9 +274,46 @@ def _cmd_download(args: argparse.Namespace) -> dict[str, Any]:
             downloaded += 1
         else:
             missing += 1
-        out.append(_prescreened_json(item))
+            missing_reasons.append(str(download_diag.get("reason") or "unknown"))
+            _write_event(getattr(args, "events_path", None), "pdf_download_missing", {
+                "report_id": candidate.report_id,
+                "title": candidate.title,
+                "diagnostics": download_diag,
+            })
+        row = _prescreened_json(item)
+        row["pdf_download"] = download_diag
+        out.append(row)
     _write_json(args.out, out)
-    return {"status": "ok", "downloaded_count": downloaded, "missing_pdf_count": missing, "out": args.out}
+    result = {"status": "ok", "downloaded_count": downloaded, "missing_pdf_count": missing, "out": args.out}
+    if items and downloaded == 0 and missing == len(items) and set(missing_reasons) == {"hibor_mb404"}:
+        result.update({
+            "source_status": "huibo_token_expired",
+            "reason": "hibor_mb404_all",
+            "message": (
+                "慧博 PDF 全部跳转 mb404，通常表示 HUIBO_HOT_REPORT_URL token 已过期；"
+                "请打开/刷新慧博终端，或启用 HUIBO_REFRESH_URL_FROM_APP 自动读取当前终端 URL。"
+            ),
+        })
+        _write_event(getattr(args, "events_path", None), "huibo_token_expired", {
+            "reason": "hibor_mb404_all",
+            "candidate_count": len(items),
+            "message": result["message"],
+        })
+    if items and downloaded == 0 and missing == len(items) and set(missing_reasons) == {"terminal_pdf_missing"}:
+        result.update({
+            "source_status": "terminal_pdf_missing",
+            "reason": "terminal_pdf_missing_all",
+            "message": (
+                "慧博候选已采集，但未找到慧博终端实际下载/导出的本地 PDF；"
+                "请确认 HUIBO_REPORT_PDF_DIR 指向慧博终端下载目录。"
+            ),
+        })
+        _write_event(getattr(args, "events_path", None), "terminal_pdf_missing", {
+            "reason": "terminal_pdf_missing_all",
+            "candidate_count": len(items),
+            "message": result["message"],
+        })
+    return result
 
 
 def _cmd_finalize(args: argparse.Namespace) -> dict[str, Any]:
@@ -683,7 +739,7 @@ def _render_base_digest(args: argparse.Namespace):
 
 
 def _merge_base_and_huibo_markdown(base_markdown: str, huibo_markdown: str) -> str:
-    huibo_body = _strip_markdown_title(huibo_markdown).strip()
+    huibo_body = _extract_huibo_markdown_body(huibo_markdown).strip()
     if not huibo_body:
         return base_markdown
     marker = "\n---\n> 本报告"
@@ -691,6 +747,42 @@ def _merge_base_and_huibo_markdown(base_markdown: str, huibo_markdown: str) -> s
     if idx != -1:
         return base_markdown[:idx].rstrip() + "\n\n" + huibo_body + "\n" + base_markdown[idx:]
     return base_markdown.rstrip() + "\n\n" + huibo_body
+
+
+def _extract_huibo_markdown_body(markdown: str) -> str:
+    body = _strip_markdown_title(markdown)
+    lines = body.splitlines()
+    start = None
+    for idx, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith("## ") and "慧博" in stripped:
+            start = idx
+            break
+    if start is None:
+        notices = [
+            line
+            for line in lines
+            if "ranker=fallback" in line or "Antigravity 不可用" in line
+        ]
+        return "\n".join(notices).strip()
+
+    out: list[str] = []
+    for line in lines[start:]:
+        stripped = line.strip()
+        if stripped.startswith("## 🇨🇳 A股机构评级") or stripped.startswith("## 🇺🇸 美股评级变动"):
+            break
+        if stripped == "---":
+            break
+        out.append(line)
+    return "\n".join(out).strip()
+
+
+def _strip_report_disclaimer(markdown: str) -> str:
+    marker = "\n---\n> 本报告"
+    idx = markdown.find(marker)
+    if idx != -1:
+        return markdown[:idx]
+    return markdown
 
 
 def _strip_markdown_title(markdown: str) -> str:

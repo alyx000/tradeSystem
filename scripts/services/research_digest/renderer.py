@@ -123,6 +123,25 @@ def _repair_common_text(text: str) -> str:
     return text
 
 
+def _date_label(label: str, value) -> str:
+    if isinstance(value, (list, tuple, set)):
+        dates_set = set()
+        for v in value:
+            safe = _safe_text(v, f"{label}日期")
+            if safe:
+                dates_set.add(safe)
+        dates = sorted(dates_set)
+    else:
+        safe = _safe_text(value, f"{label}日期")
+        dates = [safe] if safe else []
+    if not dates:
+        return ""
+    shown = "、".join(dates[:3])
+    if len(dates) > 3:
+        shown += f" 等{len(dates)}日"
+    return f"{label}：{shown}"
+
+
 def _narration(item: dict) -> str:
     """只渲染 LLM 的 theme（板块归类，过红线）。
 
@@ -137,7 +156,9 @@ def _narration(item: dict) -> str:
 def _cn_line(it: dict) -> str:
     name = it.get("stock_name") or it.get("stock_code")
     direction = "/".join(sorted({c for c in it.get("rating_changes", []) if c})) or "—"
-    tmpl = f"{it.get('org_count', 0)} 家机构覆盖，评级方向：{direction}"
+    date_seg = _date_label("发布日期", it.get("report_dates") or it.get("date"))
+    coverage = f"{it.get('org_count', 0)} 家机构覆盖，评级方向：{direction}"
+    tmpl = f"{date_seg}；{coverage}" if date_seg else coverage
     parts = []
     # 简要观点 = 真实研报标题（事实层，出处=机构报告名）。采集层照取，渲染出口过一道红线兜底：
     # 命中（目标价/买入等）即整条丢，不 surface、不中性化（保留报告原名）；实测真实标题基本不命中。
@@ -145,8 +166,10 @@ def _cn_line(it: dict) -> str:
     vp_title = _safe_text(vp.get("title"), "A股观点标题")
     if vp_title:
         vp_title = _emphasize_hints(vp_title)  # 强提示词就地加粗（重点推荐/重点关注…，鞠磊②）
-        src = vp.get("institution")
-        parts.append(f"观点：「{vp_title}」" + (f"（{src}）" if src else ""))
+        src = _safe_text(vp.get("institution"), "A股观点机构")
+        vp_date = _date_label("观点发布日期", vp.get("date"))
+        meta = "，".join(part for part in (src, vp_date) if part)
+        parts.append(f"观点：「{vp_title}」" + (f"（{meta}）" if meta else ""))
     extra = _narration(it)  # Antigravity 叙事（A股默认关，通常空；若开则已扫红线）
     if extra:
         parts.append(extra)
@@ -175,7 +198,8 @@ def _top_line(rank: int, it: dict) -> str:
         base = f"{ {'up':'上调','down':'下调','init':'首次覆盖','reinit':'重启覆盖'}.get(str(it.get('action','')).lower(),'调整') }评级"
     else:
         who = f"[A股] {it.get('stock_name') or it.get('stock_code')}"
-        base = f"{it.get('org_count', 0)} 家机构覆盖"
+        date_seg = _date_label("发布日期", it.get("report_dates") or it.get("date"))
+        base = f"{it.get('org_count', 0)} 家机构覆盖" + (f"，{date_seg}" if date_seg else "")
     # 鞠磊框架信号标签（首次覆盖/评级上调/多家覆盖）—— 点出"为什么值得读"
     sig_tag = _badges(it.get("signals"))  # 显著徽章（emoji+加粗），首次覆盖最突出
     # 美股追加 LLM theme（板块归类，one_liner 冗余已砍）；A股追加真实研报观点标题——出口都过红线兜底
@@ -210,8 +234,15 @@ def _huibo_lines(huibo_digest: dict | None) -> list[str]:
     if antigravity.get("status") == "unavailable":
         has_rendered_content = True
         reason = _safe_text(antigravity.get("reason"), "慧博Antigravity状态") or "unavailable"
+        reader_success = _huibo_reader_success_count(huibo_digest)
         L.append("\n## ⚠️ 慧博 Antigravity 不可用")
-        L.append(f"> Antigravity 不可用：{reason}；后续 reader/ranker/聚合调用已停止，如有 Top 推荐则来自本地兜底排序。")
+        if reader_success > 0:
+            L.append(
+                f"> Antigravity 不可用：{reason}；reader 已完成 {reader_success} 篇，"
+                "后续聚合/ranker调用已停止；如有 Top 推荐来自本地兜底排序。"
+            )
+        else:
+            L.append(f"> Antigravity 不可用：{reason}；后续 reader/ranker/聚合调用已停止，如有 Top 推荐来自本地兜底排序。")
     if ranker.get("status") == "fallback":
         has_rendered_content = True
         reason = _safe_text(ranker.get("reason"), "慧博ranker状态") or "ranker_failed"
@@ -227,6 +258,8 @@ def _huibo_lines(huibo_digest: dict | None) -> list[str]:
             title = _safe_text(rec.get("title"), "慧博推荐标题") or "未命名研报"
             reason = _safe_text(rec.get("reason"), "慧博推荐理由")
             source = _safe_text(rec.get("source"), "慧博推荐来源")
+            list_time = _date_label("慧博列表时间", rec.get("huibo_list_time") or rec.get("date"))
+            source = "｜".join(part for part in (source, list_time) if part)
             tail = f" — {reason}" if reason else ""
             src = f"（{source}）" if source else ""
             L.append(f"{i}. **{title}**{src}{tail}")
@@ -262,7 +295,8 @@ def _huibo_lines(huibo_digest: dict | None) -> list[str]:
             continue
         title = _safe_text(report.get("title"), "慧博报告标题")
         inst = _safe_text(report.get("institution"), "慧博报告机构")
-        date = _safe_text(report.get("date"), "慧博报告日期")
+        list_time = _date_label("慧博列表时间", report.get("huibo_list_time") or report.get("date"))
+        pdf_report_date = _date_label("PDF报告日期", reader.get("pdf_report_date"))
         stocks_raw = reader.get("mentioned_stocks") or []
         stocks = stocks_raw if isinstance(stocks_raw, list) else []
         for stock in stocks:
@@ -273,7 +307,7 @@ def _huibo_lines(huibo_digest: dict | None) -> list[str]:
                 continue
             viewpoint = _safe_text(stock.get("viewpoint"), "慧博个股观点")
             source = _safe_text(stock.get("source"), "慧博个股来源")
-            meta = " ".join(part for part in (inst, date) if part)
+            meta = "；".join(part for part in (inst, list_time, pdf_report_date) if part)
             suffix = f"（{meta}）" if meta else ""
             stock_lines.append(
                 f"- **{name}**：{viewpoint or '—'}｜来源：{source or title or '—'}{suffix}"
@@ -333,6 +367,23 @@ def _huibo_ranker_meta(huibo_digest: dict) -> dict:
     return ranker if isinstance(ranker, dict) else {}
 
 
+def _huibo_reader_success_count(huibo_digest: dict) -> int:
+    meta = huibo_digest.get("meta") if isinstance(huibo_digest.get("meta"), dict) else {}
+    value = meta.get("reader_success_count") if isinstance(meta, dict) else None
+    if isinstance(value, int):
+        return max(0, value)
+    reader_results = huibo_digest.get("reader_results") or []
+    if not isinstance(reader_results, list):
+        return 0
+    return sum(
+        1
+        for report in reader_results
+        if isinstance(report, dict)
+        and isinstance(report.get("reader"), dict)
+        and not report["reader"].get("error")
+    )
+
+
 def _huibo_source_label(source) -> str:
     if isinstance(source, dict):
         return str(source.get("title") or source.get("institution") or source.get("report_id") or "")
@@ -345,7 +396,10 @@ def render_md(date: str, cn_items: list[dict], us_items: list[dict], top3: list[
     """返回 (title, markdown)。纯函数，不落盘（落盘见 write_md）。"""
     title = f"研报速读 · {date}"
     L = [f"# {title}", ""]
-    L.append(f"> 窗口 {date}（最近交易日）｜A股 {len(cn_items)} 标的覆盖 ｜ 美股 {len(us_items)} 条评级变动")
+    L.append(
+        f"> 窗口 {date}（最近交易日）｜A股 {len(cn_items)} 标的覆盖 ｜ 美股 {len(us_items)} 条评级变动"
+        "｜时间口径：A股=发布日期，慧博=列表时间，PDF日期=研报内页日期"
+    )
 
     L.append("\n## 🏆 Top3 最值得读")
     if top3:

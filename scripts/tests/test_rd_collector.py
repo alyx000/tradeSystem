@@ -34,6 +34,32 @@ def test_collect_cn_aggregates_and_scores():
     assert items[0]["score"] > items[1]["score"]
 
 
+def test_collect_cn_keeps_source_publish_dates():
+    rows = [
+        {
+            "stock_code": "600519",
+            "stock_name": "贵州茅台",
+            "institution": "中信",
+            "rating": "买入",
+            "rating_change": "首次",
+            "date": "2026-05-29",
+        },
+        {
+            "stock_code": "600519",
+            "stock_name": "贵州茅台",
+            "institution": "国君",
+            "rating": "增持",
+            "rating_change": "维持",
+            "date": "2026-05-28",
+        },
+    ]
+    reg = FakeReg({"get_research_report_list": _res(rows)})
+
+    items = collector.collect_cn(reg, "2026-05-29")
+
+    assert items[0]["report_dates"] == ["2026-05-28", "2026-05-29"]
+
+
 def test_first_coverage_scores_highest_and_tagged():
     """鞠磊 #1：同等机构数下『首次覆盖』分高于『调高』，且打 signal 标签。"""
     rows = [

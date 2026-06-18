@@ -13,6 +13,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -363,6 +364,8 @@ def _reader_row(item: PrescreenedCandidate, result: dict[str, Any]) -> dict[str,
         "title": c.title,
         "institution": _infer_institution(c.title),
         "date": c.date,
+        "huibo_list_time": c.date,
+        "date_source": "huibo_hot_report_time",
         "category": c.category,
         "rating": c.rating,
         "pdf_path": c.pdf_path,
@@ -468,7 +471,7 @@ def _desktop_terminal_source(_registry, date: str, window_days: int):
         )
         return candidates, _texts_from_payload(payload, candidates)
 
-    url = os.getenv("HUIBO_HOT_REPORT_URL", "").strip()
+    url = _hot_report_url_from_terminal_app() or os.getenv("HUIBO_HOT_REPORT_URL", "").strip()
     if not url:
         logger.info("[research-digest] HUIBO_HOT_REPORT_URL/JSON 未配置，跳过慧博 desktop_terminal")
         return [], {}
@@ -484,6 +487,53 @@ def _desktop_terminal_source(_registry, date: str, window_days: int):
     )
     texts = _texts_from_dir(os.getenv("HUIBO_REPORT_TEXT_DIR", "").strip(), candidates)
     return candidates, texts
+
+
+def _hot_report_url_from_terminal_app() -> str:
+    """Best-effort macOS Accessibility read of the active Huibo terminal URL."""
+    if os.getenv("HUIBO_REFRESH_URL_FROM_APP", "").strip().lower() not in {"1", "true", "yes", "on"}:
+        return ""
+    if getattr(os, "uname", None) is None or os.uname().sysname != "Darwin":
+        return ""
+    script = Path(__file__).with_name("huibo_current_urls.py")
+    if not script.exists():
+        return ""
+    try:
+        result = subprocess.run(
+            [sys.executable, str(script)],
+            text=True,
+            capture_output=True,
+            timeout=10,
+            check=False,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.info("[research-digest] 慧博终端当前 URL 读取失败：%s", exc)
+        return ""
+    for line in result.stdout.splitlines():
+        url = _normalize_huibo_hot_report_url(line.strip())
+        if url:
+            logger.info("[research-digest] 使用慧博终端当前页面刷新热点研报 URL")
+            return url
+    if result.stderr.strip():
+        logger.debug("[research-digest] 慧博终端 URL 读取 stderr: %s", result.stderr.strip()[:200])
+    return ""
+
+
+def _normalize_huibo_hot_report_url(url: str) -> str:
+    """Normalize a Huibo terminal/report URL into the HotReport list URL."""
+    if not url:
+        return ""
+    parsed = urllib.parse.urlsplit(url)
+    host = parsed.netloc.lower()
+    if not host.endswith("hibor.com.cn"):
+        return ""
+    qs = dict(urllib.parse.parse_qsl(parsed.query, keep_blank_values=True))
+    required = ("abc", "def", "vidd", "keyy", "xyz")
+    if not all(qs.get(k) for k in required):
+        return ""
+    params = [(k, qs[k]) for k in required]
+    params.append(("op", qs.get("op") or "0"))
+    return "https://sys.hibor.com.cn/redian/HotReport?" + urllib.parse.urlencode(params)
 
 
 def _fetch_hot_report_api(url: str, *, date: str, window_days: int) -> list[HuiboCandidate]:
@@ -683,10 +733,11 @@ def _rank_recommendations(reader_results: list[dict[str, Any]], *, recommend_cap
             "title": r.get("title"),
             "institution": r.get("institution"),
             "date": r.get("date"),
+            "huibo_list_time": r.get("huibo_list_time") or r.get("date"),
             "category": r.get("category"),
             "reason": reader.get("recommend_reason") or reader.get("viewpoint") or "综合评分靠前",
             "score": round(score(r), 2),
-            "source": f"{r.get('institution') or ''} {r.get('date') or ''}".strip(),
+            "source": f"{r.get('institution') or ''}".strip(),
             "ranking_explanation": explanation(r),
         })
     return out
@@ -734,6 +785,7 @@ def _normalize_reader_result(result: dict[str, Any]) -> dict[str, Any]:
         "key_points": points[:3],
         "mentioned_stocks": stocks,
         "recommend_reason": recommend_reason,
+        "pdf_report_date": _normalize_date(result.get("pdf_report_date") or result.get("report_date")),
         "read_score": _to_int(result.get("read_score")) or 0,
     }
 
@@ -765,6 +817,7 @@ def _normalize_recommendations(
             "title": title,
             "institution": _clean_str(rec.get("institution")),
             "date": _clean_str(rec.get("date")),
+            "huibo_list_time": _clean_str(rec.get("huibo_list_time")) or _clean_str(rec.get("date")),
             "category": _clean_str(rec.get("category")),
             "reason": _clean_str(rec.get("reason")) or "综合评分靠前",
             "score": rec.get("score"),
@@ -799,6 +852,8 @@ def _candidate_metadata(c: HuiboCandidate, item: PrescreenedCandidate) -> dict[s
         "authors": c.authors,
         "pages": c.pages,
         "date": c.date,
+        "huibo_list_time": c.date,
+        "date_source": "huibo_hot_report_time",
         "category": c.category,
         "prescreen_score": item.score,
         "prescreen_reasons": item.reasons,
@@ -871,13 +926,39 @@ def _attach_pdf_paths(
 
 
 def _ensure_pdf_available(c: HuiboCandidate, raw_dir: str) -> HuiboCandidate:
+    candidate, _diagnostics = _ensure_pdf_available_with_diagnostics(c, raw_dir)
+    return candidate
+
+
+def _ensure_pdf_available_with_diagnostics(c: HuiboCandidate, raw_dir: str) -> tuple[HuiboCandidate, dict[str, Any]]:
     if c.pdf_path and Path(c.pdf_path).expanduser().exists():
-        return c
+        return c, {"status": "ok", "reason": "existing_pdf", "pdf_path": c.pdf_path}
+    archived = Path(raw_dir) / f"{c.report_id}.pdf"
+    if archived.exists():
+        return replace(c, pdf_path=str(archived)), {
+            "status": "ok",
+            "reason": "existing_raw_pdf",
+            "pdf_path": str(archived),
+        }
+    if not _allow_direct_pdf_download():
+        return c, {
+            "status": "missing",
+            "reason": "terminal_pdf_missing",
+            "message": (
+                "desktop_terminal 模式只使用慧博终端实际下载/导出的本地 PDF；"
+                "请将慧博终端下载目录配置为 HUIBO_REPORT_PDF_DIR，或在候选中提供 PDF路径。"
+            ),
+        }
     if c.download_url:
-        pdf_path = _download_pdf(c, raw_dir)
+        pdf_path, diagnostics = _download_pdf_with_diagnostics(c, raw_dir)
         if pdf_path:
-            return replace(c, pdf_path=pdf_path)
-    return c
+            return replace(c, pdf_path=pdf_path), diagnostics
+        return c, diagnostics
+    return c, {"status": "missing", "reason": "missing_download_url", "message": "candidate has no download_url"}
+
+
+def _allow_direct_pdf_download() -> bool:
+    return os.getenv("HUIBO_ALLOW_DIRECT_PDF_DOWNLOAD", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _pdfs_from_payload(payload: dict[str, Any], candidates: list[HuiboCandidate]) -> dict[str, str]:
@@ -925,21 +1006,56 @@ def _copy_pdf_to_raw(pdf_path: str, c: HuiboCandidate, raw_dir: str) -> str:
 
 
 def _download_pdf(c: HuiboCandidate, raw_dir: str) -> str:
+    pdf_path, _diagnostics = _download_pdf_with_diagnostics(c, raw_dir)
+    return pdf_path
+
+
+def _download_pdf_with_diagnostics(c: HuiboCandidate, raw_dir: str) -> tuple[str, dict[str, Any]]:
     dest_dir = Path(raw_dir)
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest = dest_dir / f"{c.report_id}.pdf"
     if dest.exists():
-        return str(dest)
+        return str(dest), {"status": "ok", "reason": "existing_pdf", "pdf_path": str(dest)}
     try:
-        data = _fetch_bytes(c.download_url)
+        headers = _pdf_download_headers(c)
+        data, meta = _fetch_bytes_with_meta(c.download_url, headers=headers)
     except Exception as exc:  # noqa: BLE001
         logger.warning("[research-digest] 慧博 PDF 下载失败 %s: %s", c.title, exc)
-        return ""
+        return "", {
+            "status": "missing",
+            "reason": "request_failed",
+            "message": f"{type(exc).__name__}: {exc}",
+        }
     if not data.startswith(b"%PDF"):
-        logger.warning("[research-digest] 慧博下载结果不是 PDF: %s", c.title)
-        return ""
+        final_url = str(meta.get("final_url") or "")
+        content_type = str(meta.get("content_type") or "")
+        reason = "hibor_mb404" if "/mb404" in final_url.lower() else "not_pdf_response"
+        logger.warning(
+            "[research-digest] 慧博下载结果不是 PDF %s: reason=%s status=%s content_type=%s final_url=%s",
+            c.title,
+            reason,
+            meta.get("http_status"),
+            content_type,
+            final_url,
+        )
+        return "", {
+            "status": "missing",
+            "reason": reason,
+            "message": "download response is not a PDF",
+            **meta,
+        }
     dest.write_bytes(data)
-    return str(dest)
+    return str(dest), {"status": "ok", "reason": "downloaded", "pdf_path": str(dest), **meta}
+
+
+def _pdf_download_headers(c: HuiboCandidate) -> dict[str, str]:
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "application/pdf,application/octet-stream,*/*;q=0.8",
+    }
+    if c.read_url:
+        headers["Referer"] = c.read_url
+    return headers
 
 
 def _fetch_json(url: str, *, headers: dict[str, str] | None = None) -> dict[str, Any]:
@@ -968,11 +1084,23 @@ def _fetch_text(url: str, *, headers: dict[str, str] | None = None) -> str:
 
 
 def _fetch_bytes(url: str, *, headers: dict[str, str] | None = None) -> bytes:
+    data, _meta = _fetch_bytes_with_meta(url, headers=headers)
+    return data
+
+
+def _fetch_bytes_with_meta(url: str, *, headers: dict[str, str] | None = None) -> tuple[bytes, dict[str, Any]]:
     final_headers = {"User-Agent": "Mozilla/5.0"}
     final_headers.update(headers or {})
     req = urllib.request.Request(url, headers=final_headers)
     with urllib.request.urlopen(req, timeout=60) as resp:  # noqa: S310 - 慧博用户配置下载链接
-        return resp.read()
+        data = resp.read()
+        meta = {
+            "http_status": getattr(resp, "status", None),
+            "content_type": resp.headers.get("Content-Type", ""),
+            "final_url": resp.geturl(),
+            "byte_count": len(data),
+        }
+        return data, meta
 
 
 def _allow_external_pdf_llm() -> bool:
@@ -994,7 +1122,8 @@ def _run_antigravity_pdf_reader(payload: dict[str, Any]) -> dict[str, Any] | Non
     log_file = _narrator._next_antigravity_log_file()  # noqa: SLF001
     prompt = (
         "请读取这个PDF研报，只输出JSON，不要markdown。字段："
-        "title, industry, viewpoint, key_points(数组最多3条), recommend_reason, read_score(0-100), "
+        "title, pdf_report_date(研报首页/封面报告日期，YYYY-MM-DD，找不到留空), "
+        "industry, viewpoint, key_points(数组最多3条), recommend_reason, read_score(0-100), "
         "mentioned_stocks(数组，每项 name, viewpoint, source, source_page, source_section)。"
         "mentioned_stocks 的 viewpoint 只能写该个股在研报中的独立观点；"
         "如果只是可比公司、客户、供应商、数据引用来源，viewpoint 必须留空，把关系写到 source。"

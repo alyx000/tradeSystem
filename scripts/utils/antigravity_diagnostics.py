@@ -20,7 +20,7 @@ def build_diagnostics(
     detected_reason = classify_failure(combined, default=reason or "antigravity_failed")
     out: dict[str, Any] = {
         "reason": detected_reason,
-        "message": diagnostic_message(combined) or detected_reason,
+        "message": diagnostic_message(combined, reason=detected_reason) or detected_reason,
         "stdout_empty": not bool((stdout or "").strip()),
         "stderr_empty": not bool((stderr or "").strip()),
     }
@@ -33,14 +33,25 @@ def build_diagnostics(
 
 def classify_failure(text: str, *, default: str) -> str:
     lower = (text or "").lower()
-    if "resource_exhausted" in lower or "code 429" in lower or "quota" in lower:
-        return "quota_exhausted"
     if (
-        "not logged in" in lower
-        or "not authenticated" in lower
-        or "unauthenticated" in lower
-        or "opening authentication page" in lower
-        or "authorization code" in lower
+        "resource_exhausted" in lower
+        or "code 429" in lower
+        or "quota reached" in lower
+        or "quota exceeded" in lower
+        or "individual quota" in lower
+    ):
+        return "quota_exhausted"
+    if "not a valid artifact path" in lower or "invalid tool call error" in lower:
+        return "agent_tool_error"
+    if (
+        not _auth_recovered(lower)
+        and (
+            "not logged in" in lower
+            or "not authenticated" in lower
+            or "unauthenticated" in lower
+            or "opening authentication page" in lower
+            or "authorization code" in lower
+        )
     ):
         return "auth_required"
     if default == "startup_failed":
@@ -50,24 +61,42 @@ def classify_failure(text: str, *, default: str) -> str:
     return default
 
 
-def diagnostic_message(text: str) -> str:
+def diagnostic_message(text: str, *, reason: str | None = None) -> str:
     if not text:
         return ""
-    preferred = (
+    preferred_by_reason = {
+        "quota_exhausted": ("RESOURCE_EXHAUSTED", "code 429", "quota reached", "quota exceeded", "individual quota"),
+        "auth_required": ("not logged in", "not authenticated", "authentication", "authorization code"),
+        "agent_tool_error": ("not a valid artifact path", "invalid tool call error", "model output error"),
+        "timeout": ("timeout", "timed out"),
+    }
+    preferred = preferred_by_reason.get(reason or "", (
         "RESOURCE_EXHAUSTED",
         "code 429",
-        "quota",
+        "quota reached",
+        "quota exceeded",
+        "individual quota",
+        "not a valid artifact path",
+        "invalid tool call error",
         "not logged in",
         "not authenticated",
         "authentication",
         "timeout",
-    )
+    ))
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     for line in lines:
         lower = line.lower()
         if any(term.lower() in lower for term in preferred):
             return line[:500]
     return lines[0][:500] if lines else ""
+
+
+def _auth_recovered(lower_text: str) -> bool:
+    return (
+        "auth succeeded" in lower_text
+        or "applyauthresult:" in lower_text
+        or "experiments refreshed after login" in lower_text
+    )
 
 
 def read_text_if_exists(path: str | Path | None) -> str:
@@ -77,7 +106,7 @@ def read_text_if_exists(path: str | Path | None) -> str:
         p = Path(path)
         if not p.exists():
             return ""
-        return p.read_text(encoding="utf-8", errors="replace")[:4000]
+        return p.read_text(encoding="utf-8", errors="replace")[:32000]
     except OSError:
         return ""
 

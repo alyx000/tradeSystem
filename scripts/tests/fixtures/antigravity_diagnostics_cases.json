@@ -23,6 +23,30 @@
     "expected_stderr_empty": true
   },
   {
+    "name": "startup auth noise followed by silent auth and timeout",
+    "stdout": "",
+    "stderr": "timeout after 180s",
+    "log_text": "error getting token source: You are not logged into Antigravity.\nPrint mode: not authenticated, trying silent auth\napplyAuthResult: email=user@example.com, authMethod=consumer\nAuth succeeded, refreshing features and managers\n",
+    "reason": "timeout",
+    "expected_reason": "timeout",
+    "expected_global": false,
+    "expected_message_contains": "timeout after 180s",
+    "expected_stdout_empty": true,
+    "expected_stderr_empty": false
+  },
+  {
+    "name": "agent artifact path error is local",
+    "stdout": "",
+    "stderr": "",
+    "log_text": "Model output error: /workspace/tmp/extract_input.py is not a valid artifact path; artifacts must be in /Users/example/.gemini/antigravity-cli/brain/abc/\nmodel output error: invalid tool call error (invalid_args)\n",
+    "reason": "empty_stdout",
+    "expected_reason": "agent_tool_error",
+    "expected_global": false,
+    "expected_message_contains": "not a valid artifact path",
+    "expected_stdout_empty": true,
+    "expected_stderr_empty": true
+  },
+  {
     "name": "startup failure fallback",
     "stdout": "",
     "stderr": "spawn agy ENOENT",

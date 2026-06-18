@@ -5,6 +5,7 @@ import json
 import threading
 import time
 from datetime import datetime, timedelta
+from pathlib import Path
 
 from services.research_digest import huibo
 
@@ -227,6 +228,63 @@ def test_url_source_prefers_hot_report_api_without_downloading_all_pdfs(tmp_path
     assert not raw_dir.exists()
 
 
+def test_normalize_huibo_hot_report_url_from_terminal_urls():
+    hot_url = (
+        "https://sys.hibor.com.cn/redian/HotReport?"
+        "abc=ABC&def=DEF&vidd=3&keyy=KEY&xyz=XYZ&op=0"
+    )
+    reader_url = (
+        "https://sys.hibor.com.cn/hiborClientDownload/Download/Index?"
+        "downloadType=r&docType=2&abc=ABC&def=DEF&vidd=3&keyy=KEY&xyz=XYZ"
+        "&did=DID&degree=1"
+    )
+    sysdw_url = "http://sysdw.hibor.com.cn/FileViewAndDownload/Download/Index?info=opaque&type=r"
+
+    assert huibo._normalize_huibo_hot_report_url(hot_url) == hot_url
+    assert huibo._normalize_huibo_hot_report_url(reader_url) == hot_url
+    assert huibo._normalize_huibo_hot_report_url(sysdw_url) == ""
+
+
+def test_url_source_prefers_terminal_app_url_when_enabled(tmp_path, monkeypatch):
+    stale_url = (
+        "https://sys.hibor.com.cn/redian/HotReport?"
+        "abc=STALE&def=STALE&vidd=3&keyy=STALE&xyz=STALE&op=0"
+    )
+    current_url = (
+        "https://sys.hibor.com.cn/hiborClientDownload/Download/Index?"
+        "downloadType=r&docType=2&abc=ABC&def=DEF&vidd=3&keyy=KEY&xyz=XYZ"
+        "&did=DID&degree=1"
+    )
+    fetched_urls = []
+    fetched_payloads = []
+
+    def post_json(api_url, data, headers=None):
+        fetched_urls.append(api_url)
+        fetched_payloads.append(data)
+        return []
+
+    def fetch_text(url, headers=None):
+        fetched_urls.append(url)
+        return "<html></html>"
+
+    monkeypatch.delenv("HUIBO_HOT_REPORT_JSON", raising=False)
+    monkeypatch.setenv("HUIBO_HOT_REPORT_URL", stale_url)
+    monkeypatch.setenv("HUIBO_RAW_DIR", str(tmp_path / "raw"))
+    monkeypatch.setattr(huibo, "_hot_report_url_from_terminal_app", lambda: huibo._normalize_huibo_hot_report_url(current_url))
+    monkeypatch.setattr(huibo, "_post_json", post_json)
+    monkeypatch.setattr(huibo, "_fetch_text", fetch_text)
+
+    candidates, texts = huibo.build_source_from_env("desktop_terminal")(None, "2026-06-06", 5)
+
+    assert candidates == []
+    assert texts == {}
+    assert fetched_urls
+    assert fetched_payloads[0]["unameMi"] == "ABC"
+    assert fetched_payloads[0]["def"] == "DEF"
+    assert any("abc=ABC" in url for url in fetched_urls)
+    assert all("STALE" not in url for url in fetched_urls)
+
+
 def test_snapshot_source_attaches_pdf_from_dir_and_copies_to_raw(tmp_path, monkeypatch):
     pdf_dir = tmp_path / "pdfs"
     raw_dir = tmp_path / "raw"
@@ -266,11 +324,17 @@ def test_snapshot_source_derives_download_url_without_downloading_all_pdfs(tmp_p
 
     def fetch_bytes(url, headers=None):
         fetched.append(url)
-        return b"%PDF-1.4\nfixture"
+        return b"%PDF-1.4\nfixture", {
+            "http_status": 200,
+            "content_type": "application/pdf",
+            "final_url": url,
+            "byte_count": 17,
+        }
 
     monkeypatch.setenv("HUIBO_HOT_REPORT_JSON", str(snapshot))
     monkeypatch.setenv("HUIBO_RAW_DIR", str(raw_dir))
-    monkeypatch.setattr(huibo, "_fetch_bytes", fetch_bytes)
+    monkeypatch.setenv("HUIBO_ALLOW_DIRECT_PDF_DOWNLOAD", "1")
+    monkeypatch.setattr(huibo, "_fetch_bytes_with_meta", fetch_bytes)
 
     candidates, _ = huibo.build_source_from_env("desktop_terminal")(None, "2026-06-03", 5)
 
@@ -292,7 +356,12 @@ def test_run_huibo_digest_downloads_pdf_after_prescreen(tmp_path, monkeypatch):
 
     def fetch_bytes(url, headers=None):
         fetched.append(url)
-        return b"%PDF-1.4\nfixture"
+        return b"%PDF-1.4\nfixture", {
+            "http_status": 200,
+            "content_type": "application/pdf",
+            "final_url": url,
+            "byte_count": 17,
+        }
 
     def runner(role, payload):
         if role == "report_reader":
@@ -300,7 +369,8 @@ def test_run_huibo_digest_downloads_pdf_after_prescreen(tmp_path, monkeypatch):
         return {}
 
     monkeypatch.setenv("HUIBO_RAW_DIR", str(raw_dir))
-    monkeypatch.setattr(huibo, "_fetch_bytes", fetch_bytes)
+    monkeypatch.setenv("HUIBO_ALLOW_DIRECT_PDF_DOWNLOAD", "1")
+    monkeypatch.setattr(huibo, "_fetch_bytes_with_meta", fetch_bytes)
 
     out = huibo.run_huibo_digest(
         candidates,
@@ -657,6 +727,17 @@ def test_normalize_reader_result_converts_read_score_to_int():
     assert out["read_score"] == 85
 
 
+def test_normalize_reader_result_keeps_pdf_report_date():
+    out = huibo._normalize_reader_result({
+        "industry": "机器人",
+        "key_points": ["观点"],
+        "pdf_report_date": "2026/06/15",
+        "read_score": 80,
+    })
+
+    assert out["pdf_report_date"] == "2026-06-15"
+
+
 def test_concurrent_reader_stops_scheduling_after_repeated_failed_batches(tmp_path):
     topics = ["MLCC", "AI算力", "机器人", "商业航天", "创新药", "固态电池", "光模块", "PCB", "CCL", "SiC", "新材料", "低空经济"]
     rows = []
@@ -794,6 +875,7 @@ def test_download_counts_invalid_existing_pdf_path_as_missing(tmp_path):
     )
     prescreened = tmp_path / "prescreened.json"
     out = tmp_path / "downloaded.json"
+    events = tmp_path / "events.jsonl"
     prescreened.write_text(json.dumps([huibo_helper._prescreened_json(item)], ensure_ascii=False), encoding="utf-8")
 
     result = huibo_helper._cmd_download(Namespace(
@@ -804,3 +886,119 @@ def test_download_counts_invalid_existing_pdf_path_as_missing(tmp_path):
 
     assert result["downloaded_count"] == 0
     assert result["missing_pdf_count"] == 1
+
+
+def test_download_records_non_pdf_response_diagnostics(tmp_path, monkeypatch):
+    from argparse import Namespace
+    from workflows import huibo_helper
+
+    candidate = huibo.HuiboCandidate(
+        title="A证券-机器人行业深度：重点推荐产业链",
+        date="2026-06-03",
+        category="行业分析",
+        read_url="https://sys.hibor.com.cn/read",
+        download_url="https://sys.hibor.com.cn/download",
+    )
+    item = huibo.PrescreenedCandidate(
+        candidate=candidate,
+        score=1,
+        reasons=[],
+        topic_key="机器人",
+    )
+    prescreened = tmp_path / "prescreened.json"
+    out = tmp_path / "downloaded.json"
+    events = tmp_path / "events.jsonl"
+    prescreened.write_text(json.dumps([huibo_helper._prescreened_json(item)], ensure_ascii=False), encoding="utf-8")
+
+    def fake_fetch(_url, *, headers=None):
+        assert headers["Referer"] == "https://sys.hibor.com.cn/read"
+        assert "application/pdf" in headers["Accept"]
+        return b"<html>not pdf</html>", {
+            "http_status": 200,
+            "content_type": "text/html",
+            "final_url": "https://sys.hibor.com.cn/mb404.htm",
+            "byte_count": 20,
+        }
+
+    monkeypatch.setattr(huibo, "_fetch_bytes_with_meta", fake_fetch)
+    monkeypatch.setenv("HUIBO_ALLOW_DIRECT_PDF_DOWNLOAD", "1")
+
+    result = huibo_helper._cmd_download(Namespace(
+        prescreened=str(prescreened),
+        raw_dir=str(tmp_path / "raw"),
+        out=str(out),
+        events_path=str(events),
+    ))
+
+    rows = json.loads(out.read_text(encoding="utf-8"))
+    event_rows = [json.loads(line) for line in events.read_text(encoding="utf-8").splitlines()]
+    assert result["downloaded_count"] == 0
+    assert result["missing_pdf_count"] == 1
+    assert rows[0]["candidate"]["pdf_path"] == ""
+    assert rows[0]["pdf_download"]["status"] == "missing"
+    assert rows[0]["pdf_download"]["reason"] == "hibor_mb404"
+    assert rows[0]["pdf_download"]["http_status"] == 200
+    assert rows[0]["pdf_download"]["content_type"] == "text/html"
+    assert rows[0]["pdf_download"]["final_url"].endswith("/mb404.htm")
+    assert event_rows[0]["event"] == "pdf_download_missing"
+    assert event_rows[0]["diagnostics"]["reason"] == "hibor_mb404"
+    assert result["source_status"] == "huibo_token_expired"
+    assert result["reason"] == "hibor_mb404_all"
+    assert event_rows[1]["event"] == "huibo_token_expired"
+    assert event_rows[1]["reason"] == "hibor_mb404_all"
+
+
+def test_download_does_not_use_direct_url_by_default(tmp_path, monkeypatch):
+    from argparse import Namespace
+    from workflows import huibo_helper
+
+    candidate = huibo.HuiboCandidate(
+        title="A证券-机器人行业深度：重点推荐产业链",
+        date="2026-06-03",
+        category="行业分析",
+        read_url="https://sys.hibor.com.cn/read",
+        download_url="https://sys.hibor.com.cn/download",
+    )
+    item = huibo.PrescreenedCandidate(
+        candidate=candidate,
+        score=1,
+        reasons=[],
+        topic_key="机器人",
+    )
+    prescreened = tmp_path / "prescreened.json"
+    out = tmp_path / "downloaded.json"
+    events = tmp_path / "events.jsonl"
+    prescreened.write_text(json.dumps([huibo_helper._prescreened_json(item)], ensure_ascii=False), encoding="utf-8")
+
+    def fail_fetch(*_args, **_kwargs):
+        raise AssertionError("direct URL PDF download should be disabled by default")
+
+    monkeypatch.delenv("HUIBO_ALLOW_DIRECT_PDF_DOWNLOAD", raising=False)
+    monkeypatch.setattr(huibo, "_fetch_bytes_with_meta", fail_fetch)
+
+    result = huibo_helper._cmd_download(Namespace(
+        prescreened=str(prescreened),
+        raw_dir=str(tmp_path / "raw"),
+        out=str(out),
+        events_path=str(events),
+    ))
+
+    rows = json.loads(out.read_text(encoding="utf-8"))
+    event_rows = [json.loads(line) for line in events.read_text(encoding="utf-8").splitlines()]
+    assert result["downloaded_count"] == 0
+    assert result["missing_pdf_count"] == 1
+    assert rows[0]["candidate"]["pdf_path"] == ""
+    assert rows[0]["pdf_download"]["reason"] == "terminal_pdf_missing"
+    assert event_rows[0]["event"] == "pdf_download_missing"
+    assert event_rows[0]["diagnostics"]["reason"] == "terminal_pdf_missing"
+    assert result["source_status"] == "terminal_pdf_missing"
+    assert result["reason"] == "terminal_pdf_missing_all"
+    assert event_rows[1]["event"] == "terminal_pdf_missing"
+    assert event_rows[1]["reason"] == "terminal_pdf_missing_all"
+
+
+def test_research_digest_runner_path_includes_user_local_bin():
+    repo_root = Path(__file__).resolve().parents[2]
+    runner = (repo_root / "deploy/launchd/research-digest-runner.sh").read_text(encoding="utf-8")
+    assert 'export PATH="$HOME/.local/bin:' in runner
+    assert 'export HUIBO_REFRESH_URL_FROM_APP="${HUIBO_REFRESH_URL_FROM_APP:-1}"' in runner
