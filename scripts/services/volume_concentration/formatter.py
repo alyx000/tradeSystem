@@ -89,24 +89,19 @@ def _fmt_gain(v: float) -> str:
     return f"{'+' if v >= 0 else ''}{v}%"
 
 
-def _format_gain_ranking(universe: list[dict]) -> list[str]:
-    """📈 板块区间涨幅排名(成交额前50):5/10/20 日各一份,板块按领涨股降序。
-
+def _render_ranking(rankings: dict, title: str, group_word: str) -> list[str]:
+    """通用区间涨幅榜渲染(申万板块 / 同花顺题材共用):5/10/20 三档,组按领涨股降序。
     全事实层(真实收盘价算得),守红线不出价位目标/不给买卖建议。
-    某周期全 None 的板块不展示;每档截断 Top_N 板块,超出标注略。无原始集返 []。
-    """
-    if not universe:
-        return []
-    rankings = ranking.build_sector_gain_ranking(universe)
-    out: list[str] = ["### 📈 板块区间涨幅排名(成交额前50)"]
+    某周期全 None 的组不展示;每档截断 Top_N 组,超出标注略。三档全空 → 不出空标题返 []。"""
+    out: list[str] = [f"### {title}"]
     rendered = False
     for key, label in _GAIN_PERIOD_LABELS:
-        sectors = [s for s in rankings.get(key, []) if s.get("max_gain") is not None]
-        if not sectors:
+        groups = [s for s in rankings.get(key, []) if s.get("max_gain") is not None]
+        if not groups:
             continue
         rendered = True
         out.append(f"**{label}**")
-        for s in sectors[:_GAIN_SECTOR_TOP_N]:
+        for s in groups[:_GAIN_SECTOR_TOP_N]:
             stocks = s["stocks"]
             lead = stocks[0]
             line = f"- {s['industry']} · 领涨 {lead['name']} {_fmt_gain(lead['gain'])}"
@@ -114,10 +109,26 @@ def _format_gain_ranking(universe: list[dict]) -> list[str]:
             if others:
                 line += "(其余 " + " / ".join(f"{x['name']} {_fmt_gain(x['gain'])}" for x in others) + ")"
             out.append(line)
-        if len(sectors) > _GAIN_SECTOR_TOP_N:
-            out.append(f"> 等 {len(sectors) - _GAIN_SECTOR_TOP_N} 个板块略")
+        if len(groups) > _GAIN_SECTOR_TOP_N:
+            out.append(f"> 等 {len(groups) - _GAIN_SECTOR_TOP_N} 个{group_word}略")
         out.append("")
-    return out if rendered else []  # 三档全空(如全为未分类/历史不足)→ 不出空标题
+    return out if rendered else []
+
+
+def _format_gain_ranking(universe: list[dict]) -> list[str]:
+    """📈 板块区间涨幅排名(成交额前50,申万二级)。无原始集返 []。"""
+    if not universe:
+        return []
+    return _render_ranking(ranking.build_sector_gain_ranking(universe),
+                           "📈 板块区间涨幅排名(成交额前50)", "板块")
+
+
+def _format_concept_ranking(universe: list[dict]) -> list[str]:
+    """📈 题材区间涨幅排名(成交额前50,同花顺概念,多标签)。无概念标签返 []。"""
+    if not universe:
+        return []
+    return _render_ranking(ranking.build_concept_gain_ranking(universe),
+                           "📈 题材区间涨幅排名(成交额前50 · 同花顺概念)", "题材")
 
 
 def format_daily_report(record: dict | None, trend_result: dict) -> str:
@@ -177,8 +188,10 @@ def format_daily_report(record: dict | None, trend_result: dict) -> str:
         )
     lines.append("")
 
-    # 📈 板块区间涨幅排名(成交额前50,独立于上方 Top20 集中度):不依赖趋势是否充分,恒展示
-    lines.extend(_format_gain_ranking(record.get("gain_universe") or []))
+    # 📈 区间涨幅排名(成交额前50,独立于上方 Top20 集中度):申万板块榜 + 同花顺题材榜,恒展示
+    _universe = record.get("gain_universe") or []
+    lines.extend(_format_gain_ranking(_universe))
+    lines.extend(_format_concept_ranking(_universe))
 
     # 不足 2 日:跨日趋势分析无意义,出兜底文案收尾
     if not trend_result.get("sufficient"):

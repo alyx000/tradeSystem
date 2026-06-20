@@ -229,7 +229,8 @@ def test_build_sector_gain_ranking_payload_from_db():
 def test_build_sector_gain_ranking_payload_empty_shell_when_no_record():
     conn = _conn()
     payload = service.build_sector_gain_ranking_payload(conn, "2099-01-01")
-    assert payload == {"date": "2099-01-01", "rankings": {"5d": [], "10d": [], "20d": []}}
+    empty = {"5d": [], "10d": [], "20d": []}
+    assert payload == {"date": "2099-01-01", "rankings": empty, "concept_rankings": empty}
 
 
 def test_run_daily_gain_universe_failure_does_not_block_concentration():
@@ -388,3 +389,132 @@ def test_volume_watch_cli_migrates_v33_db_before_save(tmp_path, monkeypatch):
     ).fetchone()
     assert row is not None and row[0] == 60.0  # 集中度成功落库(未崩)
     conn2.close()
+
+
+# ──────────────────────────────────────────────────────────────
+# 题材榜（同花顺概念）接线 + fail-closed + 概念维度幂等
+# ──────────────────────────────────────────────────────────────
+
+def _ths_rows():
+    """两只票各挂 CPO（窄概念，2 成员）。"""
+    return [
+        {"con_code": "300750.SZ", "index_name": "共封装光学(CPO)"},
+        {"con_code": "600519.SH", "index_name": "共封装光学(CPO)"},
+    ]
+
+
+def _add_hot_concepts(reg):
+    """让 ths_member + 资金 moneyflow 都成功(CPO 为热概念)。"""
+    reg.responses["get_ths_member"] = DataResult(data=_ths_rows(), source="tushare:ths_member")
+    reg.responses["get_concept_moneyflow_ths"] = DataResult(
+        data=[{"name": "共封装光学(CPO)", "net_amount": 100.0}], source="tushare")
+    return reg
+
+
+def test_run_daily_persists_concepts_and_payload_has_concept_rankings():
+    conn = _conn()
+    _seed_daily_market(conn, "2026-05-29", [{"code": "300750.SZ", "name": "", "amount_billion": 60.0}])
+    reg = _add_hot_concepts(_gain_registry())
+
+    md = service.run_daily(conn, reg, "2026-05-29")
+
+    assert "题材区间涨幅排名" in md                       # 题材榜段进了报告
+    rec = repo.get_concentration(conn, "2026-05-29")
+    assert all("concepts" in s for s in rec["gain_universe"])   # 概念已落库
+    payload = service.build_sector_gain_ranking_payload(conn, "2026-05-29")
+    assert "共封装光学(CPO)" in {s["industry"] for s in payload["concept_rankings"]["5d"]}
+
+
+def test_run_daily_concept_failure_does_not_block_sector_ranking():
+    """ths_member 取数失败 → 题材榜空,但申万榜 + 主日报照常。"""
+    conn = _conn()
+    _seed_daily_market(conn, "2026-05-29", [{"code": "300750.SZ", "name": "", "amount_billion": 60.0}])
+    reg = _gain_registry()
+    reg.responses["get_ths_member"] = DataResult(data=None, source="tushare", error="boom")
+
+    md = service.run_daily(conn, reg, "2026-05-29")
+
+    assert "板块区间涨幅排名" in md            # 申万榜在
+    assert "题材区间涨幅排名" not in md        # 题材榜降级缺省
+    rec = repo.get_concentration(conn, "2026-05-29")
+    assert rec["gain_universe"][0]["concepts"] == []   # 概念空（不影响 gain）
+
+
+def test_run_daily_concept_failure_rerun_preserves_concepts():
+    """同日先成功落库题材,后 ths_member 失败重跑 → 按码回填既有 concepts,不抹题材榜（幂等）。"""
+    conn = _conn()
+    _seed_daily_market(conn, "2026-05-29", [{"code": "300750.SZ", "name": "", "amount_billion": 60.0}])
+    ok_reg = _add_hot_concepts(_gain_registry())
+    service.run_daily(conn, ok_reg, "2026-05-29")
+    before = repo.get_concentration(conn, "2026-05-29")["gain_universe"]
+    assert any(s["concepts"] for s in before)   # 已落题材
+
+    # 第二次：gains 仍成功，但 ths_member 失败
+    fail_reg = _gain_registry()
+    fail_reg.responses["get_ths_member"] = DataResult(data=None, source="tushare", error="boom")
+    service.run_daily(conn, fail_reg, "2026-05-29")
+    after = repo.get_concentration(conn, "2026-05-29")["gain_universe"]
+
+    after_concepts = {s["code"]: s["concepts"] for s in after}
+    before_concepts = {s["code"]: s["concepts"] for s in before}
+    assert after_concepts == before_concepts   # 既有题材被回填保留，未被抹空
+
+
+def test_run_daily_concept_enrich_exception_does_not_lose_sector_ranking(monkeypatch):
+    """enrich_concepts 抛异常(非预期)→ 申万 universe 不被清空,申万榜+主日报照常落库渲染。"""
+    conn = _conn()
+    _seed_daily_market(conn, "2026-05-29", [{"code": "300750.SZ", "name": "", "amount_billion": 60.0}])
+    reg = _gain_registry()
+
+    def _boom(*a, **k):
+        raise RuntimeError("concept boom")
+    monkeypatch.setattr("services.volume_concentration.collector.enrich_concepts", _boom)
+
+    md = service.run_daily(conn, reg, "2026-05-29")
+
+    assert "板块区间涨幅排名" in md           # 申万榜未被概念异常拖垮
+    rec = repo.get_concentration(conn, "2026-05-29")
+    assert service._has_gain_coverage(rec["gain_universe"])     # 申万 universe 完整落库
+    assert all(s["concepts"] == [] for s in rec["gain_universe"])  # 概念降级为空
+
+
+def test_run_daily_healthy_empty_concepts_not_backfilled():
+    """同日先成功落 CPO(2 票),后概念链路成功(concept_ok=True)但当日 CPO 只剩单票(题材榜空·健康空)
+    → 不回填旧 concepts;之前挂 CPO 的 600519 这次如实置空,不被旧 stale 题材污染(codex 高:反向污染)。"""
+    conn = _conn()
+    _seed_daily_market(conn, "2026-05-29", [{"code": "300750.SZ", "name": "", "amount_billion": 60.0}])
+
+    ok_reg = _add_hot_concepts(_gain_registry())   # CPO 2 成员(300750+600519)→ 出榜
+    service.run_daily(conn, ok_reg, "2026-05-29")
+    before = {s["code"]: s["concepts"] for s in repo.get_concentration(conn, "2026-05-29")["gain_universe"]}
+    assert before["600519.SH"] == ["共封装光学(CPO)"]   # 第一次两票都挂 CPO
+
+    # 第二次:concept_ok=True(ths+moneyflow 都成功),但 CPO 只 300750 挂(单票<2 成员→题材榜空·健康)
+    healthy_reg = _gain_registry()
+    healthy_reg.responses["get_ths_member"] = DataResult(
+        data=[{"con_code": "300750.SZ", "index_name": "共封装光学(CPO)"}], source="tushare:ths_member")
+    healthy_reg.responses["get_concept_moneyflow_ths"] = DataResult(
+        data=[{"name": "共封装光学(CPO)", "net_amount": 100.0}], source="tushare")
+    service.run_daily(conn, healthy_reg, "2026-05-29")
+    after = {s["code"]: s["concepts"] for s in repo.get_concentration(conn, "2026-05-29")["gain_universe"]}
+
+    assert after["600519.SH"] == []                    # 健康空 → 如实置空,未回填旧 CPO
+    assert after["300750.SZ"] == ["共封装光学(CPO)"]   # 当前真有 CPO 的票仍如实打标
+
+
+def test_run_daily_empty_moneyflow_rerun_preserves_concepts():
+    """同日先成功落 CPO,后 ths+gains 成功但资金 moneyflow 返空表(静默降级)→ concept_ok=False
+    → 按码回填既有 concepts,不抹题材榜(codex 高:空成功响应不冒充健康空)。"""
+    conn = _conn()
+    _seed_daily_market(conn, "2026-05-29", [{"code": "300750.SZ", "name": "", "amount_billion": 60.0}])
+    service.run_daily(conn, _add_hot_concepts(_gain_registry()), "2026-05-29")
+    before = {s["code"]: s["concepts"] for s in repo.get_concentration(conn, "2026-05-29")["gain_universe"]}
+    assert before["600519.SH"] == ["共封装光学(CPO)"]
+
+    empty_mf_reg = _gain_registry()
+    empty_mf_reg.responses["get_ths_member"] = DataResult(data=_ths_rows(), source="tushare:ths_member")
+    empty_mf_reg.responses["get_concept_moneyflow_ths"] = DataResult(data=[], source="tushare")  # 空表
+    service.run_daily(conn, empty_mf_reg, "2026-05-29")
+    after = {s["code"]: s["concepts"] for s in repo.get_concentration(conn, "2026-05-29")["gain_universe"]}
+
+    assert after == before   # 空 moneyflow=降级 → 回填保留既有 CPO,未被抹空

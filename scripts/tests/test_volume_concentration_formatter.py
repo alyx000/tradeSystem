@@ -444,3 +444,27 @@ def test_gain_ranking_shown_even_when_trend_insufficient():
     record["gain_universe"] = _gain_universe()
     out = formatter.format_daily_report(record, _trend(sufficient=False))
     assert "### 📈 板块区间涨幅排名(成交额前50)" in out
+
+
+def test_concept_ranking_section_present():
+    record = _record()
+    record["gain_universe"] = [
+        {"code": "A", "name": "甲", "industry": "通信设备", "concepts": ["共封装光学(CPO)"],
+         "gain_5d": 12.0, "gain_10d": 3.0, "gain_20d": 1.0},
+        {"code": "B", "name": "乙", "industry": "半导体", "concepts": ["共封装光学(CPO)"],
+         "gain_5d": 6.0, "gain_10d": 2.0, "gain_20d": 0.5},
+    ]
+    out = formatter.format_daily_report(record, _trend(sufficient=True))
+    assert "### 📈 题材区间涨幅排名(成交额前50 · 同花顺概念)" in out
+    assert "共封装光学(CPO) · 领涨 甲 +12.0%" in out
+
+
+def test_concept_ranking_absent_when_no_concepts():
+    record = _record()
+    record["gain_universe"] = [
+        {"code": "A", "name": "甲", "industry": "通信设备", "concepts": [],
+         "gain_5d": 12.0, "gain_10d": 3.0, "gain_20d": 1.0},
+    ]
+    out = formatter.format_daily_report(record, _trend(sufficient=True))
+    assert "题材区间涨幅排名" not in out   # 无概念标签 → 题材榜缺省
+    assert "板块区间涨幅排名" in out       # 申万榜仍在

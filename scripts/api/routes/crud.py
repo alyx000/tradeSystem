@@ -625,9 +625,10 @@ def get_concentration_history(days: int = 30,
 @router.get("/market/sector-gain-ranking/{date}")
 def get_sector_gain_ranking(date: str,
                             conn: sqlite3.Connection = Depends(get_db_conn)):
-    """成交额前50 板块区间涨幅排名(某交易日,5/10/20 日三档独立排名,供复盘使用)。
+    """成交额前50 区间涨幅排名(某交易日,5/10/20 日三档,供复盘使用):
+    `rankings`=申万二级板块榜 + `concept_rankings`=同花顺概念题材榜(多标签)。
 
-    板块按板块内涨幅最大个股降序、平手比次大(派生自 daily_volume_concentration.gain_universe)。
+    组按组内涨幅最大个股降序、平手比次大(均派生自 daily_volume_concentration.gain_universe)。
     全客观区间涨幅,守红线不出价位目标/不给买卖建议。无记录/旧记录返三档空列表。"""
     payload = vc_service.build_sector_gain_ranking_payload(conn, date)
     return _sanitize_non_finite(payload)  # 脏数据 gain=NaN/Inf 透传会致 JSON 序列化 500(与其它 market 端点一致)

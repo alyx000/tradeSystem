@@ -15,6 +15,11 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime, timedelta
 
+from services.concept_tags import (
+    _clean_code,
+    build_stock_concept_map as _stock_concept_map,
+    hot_concepts as _main_concepts,
+)
 from services.trend_leader import constants as C
 from services.trend_leader import detectors as D
 from services.trend_leader import pool
@@ -54,15 +59,6 @@ def _break_reason(trend_detail: dict) -> str:
     return "趋势破坏"
 
 
-def _clean_code(raw) -> str | None:
-    """规范个股代码为非空字符串；None/空/nan/非字符串(如 int 600552) 统一处理 → None 或规范串。
-    防 provider/schema drift 用非字符串 code 击穿 .split() 行级防御。"""
-    if raw is None:
-        return None
-    s = str(raw).strip()
-    return s if s and s.lower() != "nan" else None
-
-
 def _dual_board_accelerators(registry, date: str) -> tuple[list[dict], bool]:
     """双创(20cm) 涨幅≥15% 的加速票（鞠磊「20cm 涨15%+」即加速，不必全 20% 涨停）。
 
@@ -90,85 +86,7 @@ def _dual_board_accelerators(registry, date: str) -> tuple[list[dict], bool]:
     return out, True
 
 
-def _main_concepts(registry, date: str, top_m: int, member_count: dict,
-                   max_members: int | None = None) -> tuple[set, bool, bool]:
-    """主线分支 = 同花顺概念资金净流入 Top-M（鞠磊「主线或其分支」）。
-
-    先按成员数闸过滤「容器概念」再排序：融资融券(3845)/深股通(1738)/华为概念(1009) 这类资格类
-    标签覆盖几千只票，聚合净流入天然霸榜，但绝非鞠磊式窄分支（大硅片/MLCC/CPO 仅几十到一两百只）。
-    0522 真实数据验证 cap=300 干净分离。
-    返回 (Top-M 概念名集合, ok, coverage_ok)；取数失败 → (set(), False, True)。
-
-    coverage_ok=False 表示：净流入排在「入选窗口内」（比第 top_m 名更热）的概念里出现 member_count==0
-    ——健康日 0522 实测前排概念成员数均充足（386/386 命中），故热概念无成员强烈指向 ths_member
-    success 但分页/部分截断丢了该概念成员（本仓库 tushare 批量接口有静默截断前科），属静默部分覆盖
-    缺失，上层据此记 concept_coverage 警示（门2 codex M2'）。容器概念(>cap)被剔不算覆盖缺失。
-
-    name 与 member_count 跨两个独立接口（concept_moneyflow_ths.name / ths_member.index_name）靠
-    字符串相等匹配——这是安全的：两接口概念名同源于 THS ths_index 概念母表，0522 实测 386/386
-    moneyflow 概念在 ths_member 里逐字命中（member_count=0 者 0 个），命名分歧静默漏网面=0；境外
-    成员（CAT.N 等）也实测不会把任何窄概念从 <cap 顶到 >=cap。故不需额外做概念名归一/对账。
-    （cap<=0 会让 `0<x<=cap` 恒 False → main_concepts 全空；当前 cap 由常量固定为正，无 CLI/config
-    覆盖入口，不可达；若将来加 --concept-max-members 类 flag，须在入口校验为正。）
-
-    max_members=None 时读 C.CONCEPT_MAX_MEMBERS（默认参数会在 import 时绑定，使 monkeypatch 失效，
-    故用哨兵在调用时取值）。
-    """
-    cap = C.CONCEPT_MAX_MEMBERS if max_members is None else max_members
-    r = registry.call("get_concept_moneyflow_ths", date)
-    if not (getattr(r, "success", False) and isinstance(r.data, list)):
-        return set(), False, True
-    parsed = []
-    for row in r.data:
-        if not isinstance(row, dict):
-            continue
-        name = row.get("name")
-        if not name:
-            continue
-        try:                                            # 身份过后再解析数值（提前短路垃圾行）
-            amt = float(row.get("net_amount"))
-        except (TypeError, ValueError):
-            continue
-        parsed.append((str(name), amt))
-    parsed.sort(key=lambda x: x[1], reverse=True)
-    kept: list[str] = []
-    coverage_ok = True
-    for name, _ in parsed:                              # 净流入降序逐个判，填满 top_m 即停
-        mc = member_count.get(name, 0)
-        if mc > cap:                                    # 容器概念，正常剔除（非覆盖缺失）
-            continue
-        if mc == 0:                                     # 排在入选窗口内却无成员 → 疑似部分覆盖缺失
-            coverage_ok = False
-            continue
-        kept.append(name)
-        if len(kept) >= top_m:
-            break
-    return set(kept), True, coverage_ok
-
-
-def _stock_concept_map(registry, date: str) -> tuple[dict, dict, bool]:
-    """个股 → 同花顺概念 反向映射 {裸码: set(概念名)} + 概念成员数 {概念名: 去重个股数}。
-
-    成员数供 _main_concepts 过滤容器概念。返回 (map, member_count, ok)；失败 → ({}, {}, False)
-    由上层记 source_errors。含美股/全球成员（con_code 如 CAT.N），裸码归一后 A 股候选查不到则不命中，无害。
-    """
-    r = registry.call("get_ths_member", date)
-    if not (getattr(r, "success", False) and isinstance(r.data, list)):
-        return {}, {}, False
-    out: dict[str, set] = {}
-    member_count: dict[str, int] = {}                   # 概念 → 去重个股数（每只票每概念计一次）
-    for row in r.data:
-        if not isinstance(row, dict):
-            continue
-        code = _clean_code(row.get("con_code"))
-        concept = row.get("index_name")
-        if code and concept:
-            concept = str(concept)
-            s = out.setdefault(code.split(".")[0], set())  # 键=裸码，与候选查询口径一致
-            if concept not in s:                        # 同一票同概念去重后才计数，与 set 语义一致
-                s.add(concept)
-                member_count[concept] = member_count.get(concept, 0) + 1
-    return out, member_count, True
+# _main_concepts 已下沉为 services.concept_tags.hot_concepts（见顶部 import 别名）。
 
 
 def run_daily(conn: sqlite3.Connection, registry, date: str, *,
@@ -214,8 +132,10 @@ def run_daily(conn: sqlite3.Connection, registry, date: str, *,
     if concept_mode:
         # 先取成员 map（含成员数），再用成员数闸过滤容器概念后取净流入 Top-M。
         concept_map, member_count, ths_ok = _stock_concept_map(registry, date)
+        # 显式传 C.CONCEPT_MAX_MEMBERS（trend_leader 的容器闸常量，可被测试 monkeypatch）；
+        # 共享 hot_concepts 默认用 concept_tags.CONTAINER_MAX_MEMBERS，两者同值 300。
         main_concepts, concept_ok, coverage_ok = _main_concepts(
-            registry, date, top_concepts, member_count)
+            registry, date, top_concepts, member_count, max_members=C.CONCEPT_MAX_MEMBERS)
 
     # 发现链路 provider 失败显式记账：否则「链路断了」会伪装成「今日无候选」，运营无法区分。
     source_errors = []

@@ -120,3 +120,60 @@ def test_three_periods_independent():
 def test_empty_universe():
     out = build_sector_gain_ranking([])
     assert out == {"5d": [], "10d": [], "20d": []}
+
+
+# ──────────────────────────────────────────────────────────────
+# 同花顺题材榜（多标签 build_concept_gain_ranking）
+# ──────────────────────────────────────────────────────────────
+from services.volume_concentration.ranking import build_concept_gain_ranking
+
+
+def _cstock(code, name, concepts, g5, g10=None, g20=None):
+    return {"code": code, "name": name, "industry": "电子", "concepts": concepts,
+            "gain_5d": g5, "gain_10d": g10, "gain_20d": g20}
+
+
+def test_concept_multilabel_stock_in_multiple_groups():
+    # 甲同时属 CPO 和 PCB → 两组都含它
+    universe = [
+        _cstock("A", "甲", ["CPO", "PCB"], 12.0),
+        _cstock("B", "乙", ["CPO"], 8.0),
+        _cstock("C", "丙", ["PCB"], 5.0),
+    ]
+    out = build_concept_gain_ranking(universe, min_members=2)
+    inds = {s["industry"] for s in out["5d"]}
+    assert inds == {"CPO", "PCB"}
+    cpo = next(s for s in out["5d"] if s["industry"] == "CPO")
+    assert [s["name"] for s in cpo["stocks"]] == ["甲", "乙"]  # 组内降序
+    pcb = next(s for s in out["5d"] if s["industry"] == "PCB")
+    assert [s["name"] for s in pcb["stocks"]] == ["甲", "丙"]
+
+
+def test_concept_min_members_filter():
+    # CPO 只有 1 只 universe 成员 → 不出榜（单票不成题材）
+    universe = [
+        _cstock("A", "甲", ["CPO"], 12.0),
+        _cstock("B", "乙", ["PCB"], 8.0),
+        _cstock("C", "丙", ["PCB"], 5.0),
+    ]
+    out = build_concept_gain_ranking(universe, min_members=2)
+    assert [s["industry"] for s in out["5d"]] == ["PCB"]
+
+
+def test_concept_ranking_sorted_by_lead_stock():
+    universe = [
+        _cstock("A", "甲", ["CPO"], 20.0), _cstock("A2", "甲2", ["CPO"], 6.0),
+        _cstock("B", "乙", ["PCB"], 10.0), _cstock("B2", "乙2", ["PCB"], 9.0),
+    ]
+    out = build_concept_gain_ranking(universe, min_members=2)
+    assert [s["industry"] for s in out["5d"]] == ["CPO", "PCB"]  # CPO 领涨 20 > PCB 10
+
+
+def test_concept_no_concepts_field_empty():
+    universe = [{"code": "A", "name": "甲", "industry": "电子", "gain_5d": 9.0}]  # 无 concepts
+    out = build_concept_gain_ranking(universe, min_members=2)
+    assert out == {"5d": [], "10d": [], "20d": []}
+
+
+def test_concept_empty_universe():
+    assert build_concept_gain_ranking([]) == {"5d": [], "10d": [], "20d": []}

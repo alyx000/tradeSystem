@@ -36,6 +36,13 @@ const PAYLOAD: SectorGainRankingPayload = {
       { industry: '电池', max_gain: 1.0, stocks: [{ name: '甲', code: 'A.SZ', gain: 1.0 }] },
     ],
   },
+  concept_rankings: {
+    '5d': [
+      { industry: '共封装光学(CPO)', max_gain: 15.0, stocks: [{ name: '太辰光', code: 'X.SZ', gain: 15.0 }] },
+    ],
+    '10d': [],
+    '20d': [],
+  },
 }
 
 beforeEach(() => {
@@ -81,5 +88,28 @@ describe('SectorGainRanking', () => {
     })
     renderComp('2026-05-29')
     expect(await screen.findByText(/暂无区间涨幅数据/)).toBeTruthy()
+  })
+
+  it('切到「同花顺题材」维度：展示概念榜（太辰光 CPO +15）', async () => {
+    renderComp('2026-05-29')
+    await screen.findByText('电池')   // 默认申万维度
+    fireEvent.click(screen.getByRole('tab', { name: '同花顺题材' }))
+    await waitFor(() => expect(screen.getByText('共封装光学(CPO)')).toBeTruthy())
+    expect(screen.getByText('太辰光')).toBeTruthy()
+    expect(screen.getByText('+15.00%')).toBeTruthy()
+    // 维度 + 周期两组 tablist
+    expect(screen.getByRole('tab', { name: '申万板块' })).toBeTruthy()
+  })
+
+  it('题材维度无 concept_rankings（旧记录）→ 题材空态', async () => {
+    vi.mocked(api.getSectorGainRanking).mockResolvedValue({
+      date: '2026-05-29',
+      rankings: { '5d': [{ industry: '电池', max_gain: 5, stocks: [{ name: '甲', code: 'A', gain: 5 }] }], '10d': [], '20d': [] },
+      // 无 concept_rankings
+    })
+    renderComp('2026-05-29')
+    await screen.findByText('电池')
+    fireEvent.click(screen.getByRole('tab', { name: '同花顺题材' }))
+    expect(await screen.findByText(/暂无题材数据/)).toBeTruthy()
   })
 })

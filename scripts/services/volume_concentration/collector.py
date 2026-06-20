@@ -6,6 +6,7 @@ import math
 from datetime import datetime, timedelta
 
 from db import queries
+from services import concept_tags
 
 from .aggregator import UNCLASSIFIED, aggregate_sectors
 
@@ -14,6 +15,9 @@ TOP_VOLUME_UNIVERSE_N = 50
 GAIN_PERIODS = (5, 10, 20)
 # 区间回看自然日跨度:覆盖 20 日榜所需的 21 根 bar(≈ 30 个交易日,留足停牌冗余)。
 GAIN_LOOKBACK_DAYS = 45
+# 题材榜降噪:只对同花顺资金净流入 Top-M 热概念出榜(否则一只热票的几十个概念标签全冒头,真实数据
+# 实测 91 个题材且头部冗余)。M=15 给复盘较全的热题材视野。
+HOT_CONCEPT_TOP_M = 15
 
 
 def _coerce_stock_list(raw) -> list:
@@ -138,6 +142,33 @@ def enrich_interval_gains(stocks: list[dict], end_date: str, registry,
         gains = {f"gain_{n}d": _interval_gain(closes, n) for n in periods}
         out.append({**s, **gains})
     return out
+
+
+def enrich_concepts(universe: list[dict], registry, date: str,
+                    top_m: int = HOT_CONCEPT_TOP_M) -> tuple[list[dict], bool]:
+    """给 universe 每只票加 `concepts`(供题材榜分组):该票概念 ∩ 资金净流入 Top-M 热概念。
+    返回 (universe_with_concepts, concept_ok)。
+
+    两步过滤:① concept_tags.build_stock_concept_map(get_ths_member 反查)+ 容器过滤(≤300);
+    ② ∩ concept_tags.hot_concepts(资金 Top-M 热概念)降噪——避免一只热票的几十个概念标签全冒头。
+    **concept_ok = ok and hot_ok and cov**(provider 成功且 ths_member 无部分覆盖缺失):
+    上层据此决定降级回填——只在 concept_ok=False(真失败/部分覆盖)时保留旧 concepts;concept_ok=True
+    但当日无可出榜题材(热概念交集为空)是**健康空**,如实置空,不能回填旧 stale 题材(codex 高:反向污染)。
+    """
+    cmap, mcount, ok = concept_tags.build_stock_concept_map(registry, date)
+    hot, hot_ok, cov = (concept_tags.hot_concepts(registry, date, top_m, mcount)
+                        if ok else (set(), False, True))
+    # bool(hot):资金 moneyflow 成功但返空表(交易日静默零行)→ 无热概念 → 也算降级。否则 concept_ok 会
+    # =True 走"健康空"路径抹掉旧题材(codex 高:空成功响应不得冒充健康空)。本工作流只在交易日(build_record
+    # 已成功)到此,正常日 moneyflow 必有数百概念,空表=provider 抖动。trend_leader 的 hot_concepts 契约不动。
+    concept_ok = ok and hot_ok and cov and bool(hot)
+    out: list[dict] = []
+    for s in universe:
+        bare = (s.get("code") or "").split(".")[0]
+        concepts = ([c for c in concept_tags.stock_real_concepts(bare, cmap, mcount) if c in hot]
+                    if concept_ok else [])
+        out.append({**s, "concepts": concepts})
+    return out, concept_ok
 
 
 def build_gain_universe(registry, date: str, top_n: int = TOP_VOLUME_UNIVERSE_N) -> list[dict]:

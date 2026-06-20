@@ -23,17 +23,11 @@ _PERIODS: list[tuple[str, str]] = [
 ]
 
 
-def _rank_one_period(universe: list[dict], field: str) -> list[dict]:
-    """单周期排名：按板块分组（剔未分类）→ 板块内 gain 降序 → 板块间向量字典序降序。"""
-    by_ind: dict[str, list[dict]] = {}
-    for s in universe:
-        ind = s.get("industry") or UNCLASSIFIED
-        if ind == UNCLASSIFIED:
-            continue
-        by_ind.setdefault(ind, []).append(s)
-
-    sectors: list[dict] = []
-    for ind, stocks in by_ind.items():
+def _rank_groups(groups: dict, field: str) -> list[dict]:
+    """给定 {组名: [stocks]} → 组内 gain 降序 + 组间向量字典序降序。组名放 `industry` 字段
+    (申万板块榜与同花顺题材榜共用同一展示契约/前端表格,题材榜的 `industry` 即概念名)。"""
+    out: list[dict] = []
+    for name, stocks in groups.items():
         valid = [
             {"name": s.get("name") or s.get("code"), "code": s.get("code"), "gain": s[field]}
             for s in stocks
@@ -41,22 +35,45 @@ def _rank_one_period(universe: list[dict], field: str) -> list[dict]:
         ]
         valid.sort(key=lambda x: x["gain"], reverse=True)
         vec = [x["gain"] for x in valid]
-        sectors.append({
-            "industry": ind,
-            "max_gain": vec[0] if vec else None,
-            "stocks": valid,
-            "_vec": vec,
-        })
+        out.append({"industry": name, "max_gain": vec[0] if vec else None, "stocks": valid, "_vec": vec})
 
-    # 确定性：先按板块名升序（稳定排序保证向量全等时输出可复现），再按向量字典序降序。
+    # 确定性：先按组名升序（稳定排序保证向量全等时可复现），再按向量字典序降序。
     # 空向量（该周期全 None）的 tuple ()< 任何非空 tuple，reverse=True 后自然落末位。
-    sectors.sort(key=lambda s: s["industry"])
-    sectors.sort(key=lambda s: tuple(s["_vec"]), reverse=True)
-    for s in sectors:
+    out.sort(key=lambda s: s["industry"])
+    out.sort(key=lambda s: tuple(s["_vec"]), reverse=True)
+    for s in out:
         del s["_vec"]
-    return sectors
+    return out
+
+
+def _industry_groups(universe: list[dict]) -> dict:
+    """按申万二级单标签分组（剔未分类）。"""
+    by_ind: dict[str, list[dict]] = {}
+    for s in universe:
+        ind = s.get("industry") or UNCLASSIFIED
+        if ind == UNCLASSIFIED:
+            continue
+        by_ind.setdefault(ind, []).append(s)
+    return by_ind
+
+
+def _concept_groups(universe: list[dict], min_members: int) -> dict:
+    """按同花顺概念**多标签**分组（一只票进它的每个概念）；只保留 universe 内成员数 ≥ min_members
+    的概念（单票不成"题材"）。concepts 已在采集时做过容器过滤(≤300)。"""
+    by_c: dict[str, list[dict]] = {}
+    for s in universe:
+        for c in (s.get("concepts") or []):
+            by_c.setdefault(c, []).append(s)
+    return {c: stocks for c, stocks in by_c.items() if len(stocks) >= min_members}
 
 
 def build_sector_gain_ranking(universe: list[dict]) -> dict:
-    """产出 {"5d": [...], "10d": [...], "20d": [...]}，每档为已排好序的板块列表。"""
-    return {key: _rank_one_period(universe or [], field) for key, field in _PERIODS}
+    """申万二级板块榜：{"5d": [...], "10d": [...], "20d": [...]}，每档为已排好序的板块列表。"""
+    groups = _industry_groups(universe or [])
+    return {key: _rank_groups(groups, field) for key, field in _PERIODS}
+
+
+def build_concept_gain_ranking(universe: list[dict], min_members: int = 2) -> dict:
+    """同花顺题材榜（多标签）：结构同 build_sector_gain_ranking，组=概念（≥min_members 头部票）。"""
+    groups = _concept_groups(universe or [], min_members)
+    return {key: _rank_groups(groups, field) for key, field in _PERIODS}

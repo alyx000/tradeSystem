@@ -55,13 +55,36 @@ def run_daily(conn, registry, date: str, trend_days: int = TREND_DAYS,
     # 这种"非空全 None"无排名价值。仅在有覆盖时才覆盖落库;否则(空/全 None/异常)视为降级,
     # **保留库内已成功落库的 gain_universe**,避免同日降级重跑把有效榜单抹成空
     # (codex 高:Top20 read-through 成功但 top50/日线 provider 抖动的重跑不得删既有榜单;幂等)。
+    # 区间涨幅 universe(申万维度)与同花顺概念标签(题材维度)**各自独立保护**:
+    # 概念链路任何异常都不得清空已成功算出的申万 universe(codex 中等:题材失败不拖垮申万榜)。
     gain_universe = None
     try:
         gain_universe = collector.build_gain_universe(registry, date)
-    except Exception as exc:  # noqa: BLE001 — 边界吞异常是有意的(隔离 ancillary 失败,保住主日报)
-        logger.warning("[volume-watch] 区间涨幅排名取数失败,降级(不阻断集中度日报): %s", exc)
+    except Exception as exc:  # noqa: BLE001 — 隔离区间涨幅取数失败,保住主日报
+        logger.warning("[volume-watch] 区间涨幅取数失败,降级(不阻断集中度日报): %s", exc)
+        gain_universe = None
+    concept_ok = False
+    if gain_universe:  # 申万 universe 成功 → 才打概念标签;概念失败只置空 concepts,不动 gains
+        try:
+            gain_universe, concept_ok = collector.enrich_concepts(gain_universe, registry, date)
+        except Exception as exc:  # noqa: BLE001 — 隔离题材概念取数失败,保住申万榜
+            logger.warning("[volume-watch] 题材概念取数失败,题材榜降级(不影响申万榜): %s", exc)
+            gain_universe = [{**s, "concepts": []} for s in gain_universe]
+            concept_ok = False
     if _has_gain_coverage(gain_universe):
         record["gain_universe"] = gain_universe
+        # 题材维度幂等:**仅当概念链路确实失败**(concept_ok=False:provider/coverage/异常)才按码回填旧
+        # concepts,避免同日降级重跑把题材榜抹空。concept_ok=True 但当日无可出榜题材是"健康空",如实置空
+        # ——不能用"题材榜为空"反推失败去回填旧 stale 题材(codex 高:反向污染)。
+        if persist and not concept_ok:
+            prev = repo.get_concentration(conn, date)
+            prev_concepts = {s.get("code"): (s.get("concepts") or [])
+                             for s in ((prev or {}).get("gain_universe") or [])}
+            if any(prev_concepts.values()):
+                record["gain_universe"] = [
+                    {**s, "concepts": s.get("concepts") or prev_concepts.get(s.get("code"), [])}
+                    for s in gain_universe
+                ]
     elif persist:
         prev = repo.get_concentration(conn, date)  # 降级 → 保留前次已落库榜单,幂等不抹
         record["gain_universe"] = (prev.get("gain_universe") if prev else None) or []
@@ -151,17 +174,25 @@ def _snapshot(records: list[dict], trend_result: dict) -> dict:
             "rotation": {"new": new, "dropped": dropped}}
 
 
-def build_sector_gain_ranking_payload(conn, date: str) -> dict:
-    """只读:产出某交易日「成交额前50 板块区间涨幅排名」载荷(供复盘网站 API)。
+_EMPTY_RANK = {"5d": [], "10d": [], "20d": []}
 
-    读 daily_volume_concentration[date].gain_universe → 调纯函数派生三档排名。
-    无记录/旧记录(gain_universe 空)→ 返空壳(三档空列表),前端展示空态不报错。
+
+def build_sector_gain_ranking_payload(conn, date: str) -> dict:
+    """只读:产出某交易日「成交额前50 区间涨幅排名」载荷(供复盘网站 API)。
+
+    读 daily_volume_concentration[date].gain_universe → 派生**申万板块榜**(rankings)
+    + **同花顺题材榜**(concept_rankings)两份(都从同一 universe 纯函数派生,无网络)。
+    无记录/旧记录(gain_universe 空)→ 两份均返空壳,前端展示空态不报错。
     """
     record = repo.get_concentration(conn, date)
     universe = record.get("gain_universe") if record else None
     if not universe:
-        return {"date": date, "rankings": {"5d": [], "10d": [], "20d": []}}
-    return {"date": date, "rankings": ranking.build_sector_gain_ranking(universe)}
+        return {"date": date, "rankings": dict(_EMPTY_RANK), "concept_rankings": dict(_EMPTY_RANK)}
+    return {
+        "date": date,
+        "rankings": ranking.build_sector_gain_ranking(universe),
+        "concept_rankings": ranking.build_concept_gain_ranking(universe),
+    }
 
 
 def build_trend_payload(conn, days: int = TREND_DAYS, end_date: str | None = None) -> dict:

@@ -51,7 +51,25 @@ def test_empty_shell_when_no_record(client):
     resp = client.get("/api/market/sector-gain-ranking/2099-01-01")
     assert resp.status_code == 200
     body = resp.json()
-    assert body == {"date": "2099-01-01", "rankings": {"5d": [], "10d": [], "20d": []}}
+    empty = {"5d": [], "10d": [], "20d": []}
+    assert body == {"date": "2099-01-01", "rankings": empty, "concept_rankings": empty}
+
+
+def test_payload_includes_concept_rankings(client, db_path):
+    _seed(db_path, "2026-05-29", [
+        {"code": "A.SZ", "name": "甲", "industry": "通信设备", "concepts": ["共封装光学(CPO)"],
+         "gain_5d": 12.0, "gain_10d": 3.0, "gain_20d": 1.0},
+        {"code": "B.SZ", "name": "乙", "industry": "半导体", "concepts": ["共封装光学(CPO)"],
+         "gain_5d": 8.0, "gain_10d": 9.0, "gain_20d": 20.0},
+    ])
+
+    body = client.get("/api/market/sector-gain-ranking/2026-05-29").json()
+
+    assert set(body["concept_rankings"].keys()) == {"5d", "10d", "20d"}
+    # CPO 题材榜(2 票 ≥ min_members)出现，领涨甲 +12
+    cpo = body["concept_rankings"]["5d"]
+    assert [s["industry"] for s in cpo] == ["共封装光学(CPO)"]
+    assert cpo[0]["stocks"][0]["name"] == "甲" and cpo[0]["max_gain"] == 12.0
 
 
 def test_ranking_payload_shape_and_order(client, db_path):

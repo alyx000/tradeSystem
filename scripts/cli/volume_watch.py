@@ -3,7 +3,8 @@
   volume-watch daily  [--date YYYY-MM-DD] [--dry-run] [--refetch]
   volume-watch trend  [--date YYYY-MM-DD] [--days N]
 
-daily:read-through 采集 + 申万打标 + 落库 + 渲染 + 推钉钉(--dry-run 仅打印不推送;
+daily:read-through 采集 + 申万打标 + 区间涨幅榜(成交额前50→申万二级板块榜 + 同花顺概念题材榜)
+      + 落库 + 渲染 + 推钉钉(--dry-run 仅打印不推送;
       --refetch 强制重拉绕过 daily_market 陈旧缓存,回填历史用)。
 trend:只读最近 N 日打印,不采集、不落库、不推送。
 """

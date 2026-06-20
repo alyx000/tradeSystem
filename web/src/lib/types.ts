@@ -286,13 +286,16 @@ export interface SectorGainRow {
   stocks: SectorGainStock[]
 }
 
+export interface SectorGainPeriods {
+  '5d': SectorGainRow[]
+  '10d': SectorGainRow[]
+  '20d': SectorGainRow[]
+}
+
 export interface SectorGainRankingPayload {
   date: string
-  rankings: {
-    '5d': SectorGainRow[]
-    '10d': SectorGainRow[]
-    '20d': SectorGainRow[]
-  }
+  rankings: SectorGainPeriods            // 申万二级板块榜
+  concept_rankings?: SectorGainPeriods   // 同花顺概念题材榜（多标签；旧记录可能缺）
 }
 
 export interface MainThemeItem {

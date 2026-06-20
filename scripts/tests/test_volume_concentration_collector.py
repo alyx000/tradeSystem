@@ -381,3 +381,116 @@ def test_build_gain_universe_empty_when_no_top_volume():
         "get_top_volume_stocks": DataResult(data=[], source="tushare:daily"),
     })
     assert collector.build_gain_universe(registry, "2026-05-29") == []
+
+
+# ──────────────────────────────────────────────────────────────
+# 题材标签 enrich_concepts（同花顺概念，容器过滤）
+# ──────────────────────────────────────────────────────────────
+
+def test_enrich_concepts_attaches_filtered_concepts():
+    universe = [
+        {"code": "300570.SZ", "name": "太辰光", "industry": "通信设备", "gain_5d": 5.0},
+        {"code": "688498.SH", "name": "源杰科技", "industry": "半导体", "gain_5d": 3.0},
+    ]
+    ths_rows = [
+        {"con_code": "300570.SZ", "index_name": "共封装光学(CPO)"},
+        {"con_code": "300570.SZ", "index_name": "融资融券"},          # 容器(>300)将被剔
+        {"con_code": "688498.SH", "index_name": "共封装光学(CPO)"},
+    ]
+    # 制造融资融券 >300 成员：补 301 个不同票挂该概念
+    for i in range(301):
+        ths_rows.append({"con_code": f"{600000+i}.SH", "index_name": "融资融券"})
+    registry = _FakeRegistry({
+        "get_ths_member": DataResult(data=ths_rows, source="tushare:ths_member"),
+        "get_concept_moneyflow_ths": DataResult(
+            data=[{"name": "共封装光学(CPO)", "net_amount": 100.0}], source="tushare"),  # CPO 为热概念
+    })
+
+    out, ok = collector.enrich_concepts(universe, registry, "2026-06-15")
+
+    assert ok is True
+    by = {s["code"]: s for s in out}
+    assert by["300570.SZ"]["concepts"] == ["共封装光学(CPO)"]   # 容器融资融券被剔
+    assert by["688498.SH"]["concepts"] == ["共封装光学(CPO)"]
+
+
+def test_enrich_concepts_intersects_hot_only():
+    """题材榜降噪:只保留资金 Top-M 热概念,非热概念(光纤概念)被剔。"""
+    universe = [{"code": "300570.SZ", "name": "太辰光", "industry": "通信设备", "gain_5d": 5.0}]
+    ths_rows = [
+        {"con_code": "300570.SZ", "index_name": "共封装光学(CPO)"},
+        {"con_code": "300570.SZ", "index_name": "光纤概念"},
+        {"con_code": "688498.SH", "index_name": "共封装光学(CPO)"},   # 让 CPO 成员数 ≥1
+        {"con_code": "999999.SZ", "index_name": "光纤概念"},
+    ]
+    registry = _FakeRegistry({
+        "get_ths_member": DataResult(data=ths_rows, source="tushare:ths_member"),
+        # 只有 CPO 在资金 Top-1 → 光纤概念虽是窄概念但非热,被剔
+        "get_concept_moneyflow_ths": DataResult(
+            data=[{"name": "共封装光学(CPO)", "net_amount": 100.0},
+                  {"name": "光纤概念", "net_amount": 5.0}], source="tushare"),
+    })
+
+    out, ok = collector.enrich_concepts(universe, registry, "2026-06-15", top_m=1)
+
+    assert ok is True
+    assert out[0]["concepts"] == ["共封装光学(CPO)"]  # 光纤概念非 Top-1 热概念 → 剔
+
+
+def test_enrich_concepts_ths_failure_all_empty():
+    universe = [{"code": "300570.SZ", "name": "太辰光", "industry": "通信设备", "gain_5d": 5.0}]
+    registry = _FakeRegistry({
+        "get_ths_member": DataResult(data=None, source="tushare", error="boom"),
+    })
+    out, ok = collector.enrich_concepts(universe, registry, "2026-06-15")
+    assert ok is False           # ths_member 失败 → concept_ok=False
+    assert out[0]["concepts"] == []      # 空,不影响 gain/industry
+    assert out[0]["gain_5d"] == 5.0
+
+
+def test_enrich_concepts_moneyflow_failure_all_empty():
+    """ths_member 成功但资金 moneyflow 失败 → 题材榜降级空(由上层幂等保留既有)。"""
+    universe = [{"code": "300570.SZ", "name": "太辰光", "industry": "通信设备", "gain_5d": 5.0}]
+    registry = _FakeRegistry({
+        "get_ths_member": DataResult(
+            data=[{"con_code": "300570.SZ", "index_name": "共封装光学(CPO)"}], source="tushare:ths_member"),
+        "get_concept_moneyflow_ths": DataResult(data=None, source="tushare", error="boom"),
+    })
+    out, ok = collector.enrich_concepts(universe, registry, "2026-06-15")
+    assert ok is False           # moneyflow 失败 → concept_ok=False
+    assert out[0]["concepts"] == []
+
+
+def test_enrich_concepts_partial_coverage_degrades_to_empty():
+    """ths_member 疑似部分截断(资金热概念里有成员数=0 → hot_concepts coverage_ok=False)→
+    即便有残留可出榜概念,也全 [](由上层幂等保留旧完整榜;codex 高:部分覆盖不冒充成功)。"""
+    universe = [{"code": "300570.SZ", "name": "太辰光", "industry": "通信设备", "gain_5d": 5.0}]
+    ths_rows = [
+        {"con_code": "300570.SZ", "index_name": "共封装光学(CPO)"},   # 有成员
+        {"con_code": "688498.SH", "index_name": "共封装光学(CPO)"},
+        # 「光纤概念」在 moneyflow 热榜但 ths_member 里无成员 → member_count=0 → coverage_ok=False
+    ]
+    registry = _FakeRegistry({
+        "get_ths_member": DataResult(data=ths_rows, source="tushare:ths_member"),
+        "get_concept_moneyflow_ths": DataResult(
+            data=[{"name": "光纤概念", "net_amount": 200.0},          # 最热但 ths_member 无成员→截断信号
+                  {"name": "共封装光学(CPO)", "net_amount": 100.0}], source="tushare"),
+    })
+
+    out, ok = collector.enrich_concepts(universe, registry, "2026-06-15", top_m=5)
+
+    assert ok is False           # coverage_ok=False → concept_ok=False
+    assert out[0]["concepts"] == []   # 全降级,不写残缺榜
+
+
+def test_enrich_concepts_empty_moneyflow_degraded():
+    """资金 moneyflow 成功但返空表(交易日静默零行)→ 无热概念 → concept_ok=False(降级,由上层保留旧)。"""
+    universe = [{"code": "300570.SZ", "name": "太辰光", "industry": "通信设备", "gain_5d": 5.0}]
+    registry = _FakeRegistry({
+        "get_ths_member": DataResult(
+            data=[{"con_code": "300570.SZ", "index_name": "共封装光学(CPO)"}], source="tushare:ths_member"),
+        "get_concept_moneyflow_ths": DataResult(data=[], source="tushare"),   # 空表(非报错)
+    })
+    out, ok = collector.enrich_concepts(universe, registry, "2026-06-15")
+    assert ok is False           # 空 moneyflow → bool(hot)=False → concept_ok=False
+    assert out[0]["concepts"] == []
