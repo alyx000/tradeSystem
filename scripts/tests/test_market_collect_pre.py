@@ -5,7 +5,11 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from collectors.market import MarketCollector, filter_calendar_for_pre_market
+from collectors.market import (
+    MarketCollector,
+    _attach_margin_day_over_day,
+    filter_calendar_for_pre_market,
+)
 from providers.base import DataResult
 
 
@@ -15,6 +19,31 @@ def _ok_index(name: str):
 
 def _ok_commodity(name: str):
     return DataResult(data={"name": name, "close": 50.0, "change_pct": 0.0}, source="mock")
+
+
+def _margin(trade_date: str, total: float):
+    return {
+        "trade_date": trade_date,
+        "total_rzye_yi": total,
+        "total_rqye_yi": 0.0,
+        "total_rzrqye_yi": total,
+        "exchanges": [],
+    }
+
+
+def test_margin_dod_computed_when_curr_after_prev():
+    curr = _margin("2026-06-18", 1910.0)
+    _attach_margin_day_over_day(curr, _margin("2026-06-17", 1900.0))
+    assert curr["margin_compare_date"] == "2026-06-17"
+    assert curr["delta_total_rzye_yi"] == pytest.approx(10.0)
+
+
+def test_margin_dod_suppressed_when_same_trade_date():
+    """完整性回退使相邻请求落到同一真实交易日 → 抑制日环比，避免恒为 0 的假信号。"""
+    curr = _margin("2026-06-17", 1900.0)
+    _attach_margin_day_over_day(curr, _margin("2026-06-17", 1900.0))
+    assert "margin_compare_date" not in curr
+    assert "delta_total_rzye_yi" not in curr
 
 
 def test_filter_calendar_drops_low_importance():

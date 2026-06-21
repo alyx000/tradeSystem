@@ -286,7 +286,81 @@ class AkshareProvider(DataProvider):
             "get_etf_flow",
             "get_hk_indices",
             "get_index_weekly",
+            "get_margin_data",
         ]
+
+    # ---- 融资融券汇总（tushare 全失败时的降级源，仅沪深，无北交所） ----
+
+    def get_margin_data(self, date: str) -> DataResult:
+        """两融余额降级源（交易所官网直连，仅沪深，无北交所 BSE）。
+
+        作为 tushare pro.margin 全失败时的备份。注意两所量纲不同：
+        - stock_margin_sse 单位为元（融券余额取「融券余量金额」列），需 /1e8；
+        - stock_margin_szse 单位为亿元（已是亿，直接采用）。
+        要求沪深两所均到位才返回 success——任一缺失（如深市官网 SSL 抖动）即返 error，
+        避免半额冒充全市场总额被下游渲染/落库。北交所 BSE akshare 取不到（量级 < 0.5%），
+        作为降级源的固有缺口，由 source="akshare:margin" 标识。
+        """
+        d8 = date.replace("-", "")
+        exchanges: list[dict] = []
+        present: set[str] = set()
+        EXPECTED = {"SSE", "SZSE"}
+
+        # 沪市：单位元，仅接受日期精确匹配（避免 iloc[0] 静默回退到陈旧日期）
+        try:
+            df = self.ak.stock_margin_sse(start_date=d8, end_date=d8)
+            if df is not None and not df.empty:
+                hit = df[df["信用交易日期"].astype(str) == d8]
+                if not hit.empty:
+                    row = hit.iloc[0]
+                    exchanges.append({
+                        "exchange_id": "SSE",
+                        "rzye_yi": round(float(row["融资余额"]) / 1e8, 2),
+                        "rqye_yi": round(float(row["融券余量金额"]) / 1e8, 2),
+                        "rzrqye_yi": round(float(row["融资融券余额"]) / 1e8, 2),
+                    })
+                    present.add("SSE")
+        except Exception as e:
+            logger.warning("akshare 沪市两融获取失败: %s", e)
+
+        # 深市：单位亿元，直接采用
+        try:
+            df = self.ak.stock_margin_szse(date=d8)
+            if df is not None and not df.empty:
+                row = df.iloc[0]
+                exchanges.append({
+                    "exchange_id": "SZSE",
+                    "rzye_yi": round(float(row["融资余额"]), 2),
+                    "rqye_yi": round(float(row["融券余额"]), 2),
+                    "rzrqye_yi": round(float(row["融资融券余额"]), 2),
+                })
+                present.add("SZSE")
+        except Exception as e:
+            logger.warning("akshare 深市两融获取失败: %s", e)
+
+        if present != EXPECTED:
+            missing = sorted(EXPECTED - present)
+            return DataResult(
+                data=None,
+                source=self.name,
+                error=f"两融余额降级源数据不完整，缺 {missing}: {date}",
+            )
+
+        # market_scope 显式下传口径，供消费方/审计区分降级源与全市场口径（亦由 source 标识）。
+        # 设计取舍（反驳 codex round3 high「沪深口径不应标 success」）：akshare 结构上没有北交所
+        # 两融接口，BSE 永远取不到（量级 ~0.3%）。若因缺 BSE 就拒返 success，等于在 tushare 全挂时
+        # 彻底废掉降级源——"主源全挂给 99.7% 准确备份" 优于 "什么都不给"。北交所缺口是降级源固有、
+        # 已文档化的折损，由 source="akshare:margin" + market_scope 标识，故沪深齐全即视为该源的成功。
+        data = {
+            "trade_date": date,
+            "requested_date": date,
+            "market_scope": "SSE+SZSE",  # 降级口径：不含北交所
+            "exchanges": exchanges,
+            "total_rzye_yi": round(sum(e["rzye_yi"] for e in exchanges), 2),
+            "total_rqye_yi": round(sum(e["rqye_yi"] for e in exchanges), 2),
+            "total_rzrqye_yi": round(sum(e["rzrqye_yi"] for e in exchanges), 2),
+        }
+        return DataResult(data=data, source="akshare:margin")
 
     # ------------------------------------------------------------------
     # 缓存：单次盘前采集会多次调用，避免重复拉全表

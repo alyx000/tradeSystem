@@ -840,22 +840,54 @@ class TushareProvider(DataProvider):
 
     # ---- 融资融券汇总 ----
 
-    def get_margin_data(self, date: str) -> DataResult:
+    def get_margin_data(self, date: str, lookback_days: int = 15) -> DataResult:
         """
-        沪深两市融资融券每日汇总（pro.margin）。
-        余额单位为元，输出中附带亿元字段便于阅读。
+        沪深北三市融资融券每日汇总（pro.margin），余额单位为元，输出附带亿元字段。
+
+        完整性保证：各交易所发布有时间差（最新日常只有沪市 SSE，深市 SZSE / 北交所 BSE
+        滞后一天），单查 trade_date 会把"沪市单边"误当全市场汇总，导致总额腰斩。
+        因此改为窗口区间查询：以窗口内出现过的交易所集合为"应到集合"（对北交所历史鲁棒），
+        返回 ≤ 请求日 的最近一个完整交易日。窗口内无完整日则返回 error——半额总额绝不冒充
+        全市场汇总（避免下游把残缺数据当权威总额渲染/落库）。
+        trade_date 为返回数据的真实日期（非请求日期，可 < requested_date 表示回退到了更早的完整日）；
+        requested_date 记录调用方所请求的日期，供消费方判定数据是否陈旧。
         """
         try:
-            d = self._date_fmt(date)
-            df = self.pro.margin(trade_date=d)
+            d_end = self._date_fmt(date)
+            d_start = (
+                datetime.strptime(d_end, "%Y%m%d") - timedelta(days=lookback_days)
+            ).strftime("%Y%m%d")
+            df = self.pro.margin(start_date=d_start, end_date=d_end)
             if df is None or df.empty:
                 return DataResult(data=None, source=self.name, error=f"无融资融券汇总数据: {date}")
+
+            df = df.copy()
+            df["trade_date"] = df["trade_date"].astype(str)
+            # 应到集合 = 法定必有的沪深 ∪ 窗口内实际出现过的交易所（北交所等按其上市后是否出现自动纳入）。
+            # 必须以沪深为下限，不能纯靠窗口推导——否则镜像整窗只返沪市时 expected 会塌缩成 {SSE}，
+            # 把半额自我认证为"完整"（系统性降级测不出）。
+            expected = {"SSE", "SZSE"} | {str(x) for x in df["exchange_id"].dropna().unique()}
+            dates_desc = sorted({td for td in df["trade_date"] if td <= d_end}, reverse=True)
+
+            chosen = next(
+                (
+                    td
+                    for td in dates_desc
+                    if {str(x) for x in df.loc[df["trade_date"] == td, "exchange_id"]} == expected
+                ),
+                None,
+            )
+            if chosen is None:
+                return DataResult(
+                    data=None,
+                    source=self.name,
+                    error=f"无完整融资融券数据（窗口内各交易所覆盖不齐）: {date}",
+                )
+
+            sub = df[df["trade_date"] == chosen]
             exchanges: list[dict] = []
-            total_rzye = 0.0
-            total_rqye = 0.0
-            total_rzrqye = 0.0
-            for _, row in df.iterrows():
-                ex = str(row.get("exchange_id", "") or "")
+            total_rzye = total_rqye = total_rzrqye = 0.0
+            for _, row in sub.iterrows():
                 rzye = float(row.get("rzye", 0) or 0)
                 rqye = float(row.get("rqye", 0) or 0)
                 rzrqye = float(row.get("rzrqye", 0) or 0)
@@ -863,13 +895,17 @@ class TushareProvider(DataProvider):
                 total_rqye += rqye
                 total_rzrqye += rzrqye
                 exchanges.append({
-                    "exchange_id": ex,
+                    "exchange_id": str(row.get("exchange_id", "") or ""),
                     "rzye_yi": round(rzye / 1e8, 2),
                     "rqye_yi": round(rqye / 1e8, 2),
                     "rzrqye_yi": round(rzrqye / 1e8, 2),
                 })
+
             data = {
-                "trade_date": date,
+                "trade_date": f"{chosen[:4]}-{chosen[4:6]}-{chosen[6:8]}",
+                "requested_date": date,
+                # 全市场口径（与 akshare 降级源的 "SSE+SZSE" 区分）；含 BSE 即为沪深北全量。
+                "market_scope": "+".join(sorted(expected)),
                 "exchanges": exchanges,
                 "total_rzye_yi": round(total_rzye / 1e8, 2),
                 "total_rqye_yi": round(total_rqye / 1e8, 2),

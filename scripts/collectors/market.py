@@ -213,7 +213,13 @@ def _attach_margin_day_over_day(curr: dict, prev: dict | None) -> None:
         return
     try:
         pdate = prev.get("trade_date")
-        if not pdate or not curr.get("trade_date"):
+        cdate = curr.get("trade_date")
+        if not pdate or not cdate:
+            return
+        # 完整性回退可能让相邻两次请求落到同一真实交易日（如 06-18、06-17 都回退到 06-17），
+        # 此时 curr/prev 是同一天数据，算日环比会得出恒为 0 的假信号；逆序同理。
+        # 仅当 curr 真实日期晚于 prev 时才计算环比（trade_date 为 YYYY-MM-DD，字符串比较即日期序）。
+        if cdate <= pdate:
             return
         curr["margin_compare_date"] = pdate
         for key in ("total_rzye_yi", "total_rqye_yi", "total_rzrqye_yi"):
