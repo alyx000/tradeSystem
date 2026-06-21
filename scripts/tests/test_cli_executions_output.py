@@ -4,6 +4,8 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+from db import queries
+from db.schema import init_schema
 from cli.executions import _build_audit_report, _emit_import_result, _open_conn
 from services.broker_executions.models import ConflictRow, ErrorRow, RowSummary
 
@@ -81,6 +83,63 @@ def test_audit_report_appends_per_stock_and_import_batches() -> None:
     assert "| run_a | 2026-05-01 10:00:00~2026-05-01 10:05:00 | trade_a.tsv | 2 | tmp/imports/trade_a.tsv |" in report
 
 
+def test_list_broker_executions_excludes_void_rows_by_default(tmp_path) -> None:
+    conn = _open_conn({"database": {"path": str(tmp_path / "trade.db")}})
+    try:
+        init_schema(conn)
+        queries.insert_broker_execution(
+            conn,
+            account_id="default",
+            biz_date="2026-06-18",
+            exec_time="09:30:00",
+            stock_code_raw="601696",
+            stock_code="601696",
+            stock_name="中银证券",
+            market="A股",
+            direction="buy",
+            direction_raw="buy",
+            shares=100,
+            price=10,
+            amount=1000,
+            raw_payload_json="{}",
+            input_by="test",
+            source_file="test.tsv",
+            source_format="fixture",
+            broker_trade_no="T001",
+        )
+        queries.insert_broker_execution(
+            conn,
+            account_id="default",
+            biz_date="2026-06-18",
+            exec_time="09:31:00",
+            stock_code_raw="601696",
+            stock_code="601696",
+            stock_name="中银证券",
+            market="A股",
+            direction="buy",
+            direction_raw="buy",
+            shares=100,
+            price=10,
+            amount=1000,
+            raw_payload_json="{}",
+            input_by="test",
+            source_file="test.tsv",
+            source_format="fixture",
+            broker_trade_no="T002",
+            is_void=1,
+            void_reason="semantic_duplicate_exact",
+        )
+
+        active_rows = queries.list_broker_executions(conn)
+        all_rows = queries.list_broker_executions(conn, include_void=True)
+    finally:
+        conn.close()
+
+    assert len(active_rows) == 1
+    assert active_rows[0]["is_void"] == 0
+    assert len(all_rows) == 2
+
+
 def test_emit_import_result_prints_full_conflicts_errors_and_paths(capsys) -> None:
     summary = RowSummary(
         row_index=7,
@@ -103,6 +162,7 @@ def test_emit_import_result_prints_full_conflicts_errors_and_paths(capsys) -> No
             ConflictRow(summary=summary, diffs={"commission": (1.0, 2.0)}),
         ],
         "degraded": 0,
+        "voided_execution_rows": 0,
         "failed": 1,
         "error_rows": [
             ErrorRow(row_index=8, reason="缺少证券代码", raw={"证券名称": "空"}),

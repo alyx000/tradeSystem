@@ -312,6 +312,10 @@ class TestSchemaVersion:
         }:
             assert expected in tables
 
+    def test_broker_executions_void_columns_exist_on_fresh_schema(self, conn):
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(broker_executions)").fetchall()}
+        assert {"is_void", "void_reason", "voided_at"}.issubset(cols)
+
 
 class TestHoldingsMigration:
     def test_v4_dedupes_duplicate_active_holdings(self, tmp_path):
@@ -458,7 +462,6 @@ def test_v32_migration_creates_market_timing_signal(tmp_path):
 
     migrate(conn)
     assert get_schema_version(conn) == CURRENT_SCHEMA_VERSION
-    assert get_schema_version(conn) == 34
     assert conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table' AND name='market_timing_signal'"
     ).fetchone() is not None
@@ -550,6 +553,73 @@ def test_migrate_self_heals_db_missing_market_timing_table(tmp_path):
     assert conn.execute(
         "SELECT name FROM sqlite_master WHERE name='market_timing_signal'"
     ).fetchone() is not None
+    conn.close()
+
+
+def test_migrate_self_heals_missing_broker_execution_void_columns(tmp_path):
+    conn = get_connection(tmp_path / "missing_void_cols.db")
+    migrate(conn)
+    conn.executescript(
+        """
+        ALTER TABLE broker_executions RENAME TO broker_executions_old;
+        CREATE TABLE broker_executions (
+            id INTEGER PRIMARY KEY,
+            account_id TEXT NOT NULL DEFAULT 'default',
+            broker_code TEXT,
+            biz_date TEXT NOT NULL CHECK(biz_date GLOB '????-??-??'),
+            exec_time TEXT,
+            stock_code_raw TEXT NOT NULL,
+            stock_code TEXT NOT NULL,
+            stock_name TEXT NOT NULL,
+            market TEXT NOT NULL DEFAULT 'A股',
+            market_raw TEXT,
+            direction TEXT NOT NULL CHECK(direction IN ('buy','sell')),
+            direction_raw TEXT NOT NULL,
+            shares INTEGER NOT NULL,
+            price REAL NOT NULL,
+            amount REAL NOT NULL,
+            net_amount REAL,
+            balance_after INTEGER,
+            commission REAL NOT NULL DEFAULT 0,
+            stamp_duty REAL NOT NULL DEFAULT 0,
+            transfer_fee REAL NOT NULL DEFAULT 0,
+            exchange_fee REAL NOT NULL DEFAULT 0,
+            regulatory_fee REAL NOT NULL DEFAULT 0,
+            other_fees REAL NOT NULL DEFAULT 0,
+            total_fees REAL NOT NULL DEFAULT 0,
+            broker_contract_no TEXT,
+            broker_trade_no TEXT,
+            currency TEXT DEFAULT 'CNY',
+            raw_payload_json TEXT NOT NULL,
+            source_file TEXT NOT NULL,
+            source_format TEXT NOT NULL,
+            source_archive_path TEXT,
+            input_by TEXT NOT NULL,
+            import_run_id TEXT,
+            imported_at TEXT DEFAULT (datetime('now')),
+            notes TEXT,
+            thesis_id INTEGER
+        );
+        INSERT INTO broker_executions
+        SELECT id, account_id, broker_code, biz_date, exec_time, stock_code_raw,
+               stock_code, stock_name, market, market_raw, direction, direction_raw,
+               shares, price, amount, net_amount, balance_after, commission,
+               stamp_duty, transfer_fee, exchange_fee, regulatory_fee, other_fees,
+               total_fees, broker_contract_no, broker_trade_no, currency,
+               raw_payload_json, source_file, source_format, source_archive_path,
+               input_by, import_run_id, imported_at, notes, thesis_id
+          FROM broker_executions_old;
+        DROP TABLE broker_executions_old;
+        """
+    )
+    conn.execute(f"PRAGMA user_version = {CURRENT_SCHEMA_VERSION}")
+    conn.commit()
+
+    migrate(conn)
+
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(broker_executions)").fetchall()}
+    assert {"is_void", "void_reason", "voided_at"}.issubset(cols)
+    assert get_schema_version(conn) == CURRENT_SCHEMA_VERSION
     conn.close()
 
 

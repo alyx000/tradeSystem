@@ -192,6 +192,48 @@ def test_degraded_row_recorded_when_both_dedupe_keys_empty(
     assert len(report.degraded) == 1  # 单独计数（不互斥于 inserted）
 
 
+def test_import_voids_semantic_duplicate_split_and_aggregate_rows(
+    db_conn: sqlite3.Connection, fake_source: Path, import_dirs: tuple[Path, Path],
+) -> None:
+    archive_root, report_root = import_dirs
+    report = _run_import(
+        db_conn,
+        [
+            _make_payload(
+                shares="200", price="10.00", amount="2000.00",
+                contract="", trade_no="",
+            ),
+            _make_payload(
+                shares="300", price="10.00", amount="3000.00",
+                contract="", trade_no="",
+            ),
+            _make_payload(
+                shares="500", price="10.00", amount="5000.00",
+                contract="", trade_no="",
+            ),
+        ],
+        fake_source,
+        archive_root,
+        report_root,
+    )
+
+    rows = db_conn.execute(
+        """
+        SELECT shares, is_void, void_reason
+          FROM broker_executions
+         ORDER BY shares
+        """
+    ).fetchall()
+
+    assert len(report.inserted) == 3
+    assert report.voided_execution_rows == 2
+    assert [(r[0], r[1], r[2]) for r in rows] == [
+        (200, 1, "semantic_duplicate_component"),
+        (300, 1, "semantic_duplicate_component"),
+        (500, 0, None),
+    ]
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 5. dry-run ROLLBACK
 # ─────────────────────────────────────────────────────────────────────────────

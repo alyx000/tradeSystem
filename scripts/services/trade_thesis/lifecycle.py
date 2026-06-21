@@ -182,6 +182,7 @@ def link_thesis_to_executions(
         """
         SELECT id, account_id, stock_code FROM broker_executions
          WHERE import_run_id = ? AND thesis_id IS NULL
+           AND COALESCE(is_void, 0) = 0
         """,
         (import_run_id,),
     ).fetchall()
@@ -214,6 +215,7 @@ def sync_holdings_from_executions(
         SELECT DISTINCT thesis_id
           FROM broker_executions
          WHERE import_run_id = ? AND thesis_id IS NOT NULL
+           AND COALESCE(is_void, 0) = 0
          ORDER BY thesis_id
         """,
         (import_run_id,),
@@ -251,6 +253,7 @@ def sync_holdings_from_executions(
                     AS entry_date
               FROM broker_executions
              WHERE thesis_id = ?
+               AND COALESCE(is_void, 0) = 0
             """,
             (thesis_id,),
         ).fetchone()
@@ -321,6 +324,7 @@ def auto_close_zero_balance_thesis(
         """
         SELECT DISTINCT thesis_id, biz_date FROM broker_executions
          WHERE import_run_id = ? AND direction = 'sell' AND thesis_id IS NOT NULL
+           AND COALESCE(is_void, 0) = 0
          ORDER BY biz_date DESC
         """,
         (import_run_id,),
@@ -339,6 +343,7 @@ def auto_close_zero_balance_thesis(
                 AS balance
               FROM broker_executions
              WHERE thesis_id = ?
+               AND COALESCE(is_void, 0) = 0
             """,
             (thesis_id,),
         ).fetchone()

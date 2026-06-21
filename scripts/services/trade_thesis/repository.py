@@ -224,8 +224,9 @@ def backfill_pnl(conn: sqlite3.Connection, *, thesis_id: int) -> dict:
     rows = conn.execute(
         """
         SELECT direction, shares, amount, biz_date
-          FROM broker_executions
+         FROM broker_executions
          WHERE thesis_id = ?
+           AND COALESCE(is_void, 0) = 0
          ORDER BY biz_date ASC, id ASC
         """,
         (thesis_id,),

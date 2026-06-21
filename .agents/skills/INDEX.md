@@ -40,9 +40,10 @@
 | `portfolio-manager` | `db watchlist-list` | 列出关注池 |
 | `portfolio-manager` | `db watchlist-sync-from-note --note-id --input-by` | 从老师笔记 `mentioned_stocks` 同步关注池 |
 | `portfolio-manager` | `db add-trade` | 录入交易记录（单条，复盘维度） |
-| `portfolio-manager` | `python main.py executions import --file --input-by [--account] [--dry-run] [--allow-orphan-buy] [--no-auto-close]` | 导入券商成交流水（事实层，幂等去重，含冲突检测与归档；默认严格模式 + auto-close 联动 trade_thesis 中间层） |
-| `portfolio-manager` | `python main.py executions list [--from --to --account --limit --json]` | 列出 `broker_executions` 事实层数据 |
-| `portfolio-manager` | `python main.py executions audit-export --from --to [--account --out]` | 按时间范围导出 markdown 审计报告（总览/各股/余额轨迹/批次） |
+| `portfolio-manager` | `python main.py executions import --file --input-by [--account] [--dry-run] [--allow-orphan-buy] [--no-auto-close]` | 导入券商成交流水（事实层，幂等去重，含冲突检测与归档；默认严格模式 + auto-close 联动 trade_thesis 中间层；导入后自动标记语义重复流水为 `is_void=1`，不删除原始行） |
+| `portfolio-manager` | `python main.py executions list [--from --to --account --limit --json --include-void]` | 列出 `broker_executions` 事实层数据；默认排除 `is_void=1` 作废重复流水，需审计作废行时显式 `--include-void` |
+| `portfolio-manager` | `python main.py executions audit-export --from --to [--account --out --include-void]` | 按时间范围导出 markdown 审计报告（总览/各股/余额轨迹/批次）；默认排除作废重复流水 |
+| `portfolio-manager` | `python main.py executions repair-reconcile --from --to [--account] [--dry-run\|--apply] [--json]` | 修复历史流水与 thesis/holdings 状态漂移：标记语义重复流水 `is_void=1`、回填既有流水 `thesis_id`，并以券商最新 `balance_after` 修正当前持仓和 open thesis 状态；默认 dry-run，不删除原始流水 |
 | `portfolio-manager` | `db thesis-open` | 新建 thesis（严格模式 11 必填:6 主观字段 + 5 元数据 ≡ stock_code/name/account/opened-at/entry-reason/trade-mode/failure-condition/planned-position-pct/sector/market-region/input-by；trade-mode 含 sentiment_relay=情绪接力） |
 | `portfolio-manager` | `db thesis-close --id --closed-at --input-by` | 手动关闭一个 open thesis |
 | `portfolio-manager` | `db thesis-fill --id [字段...]` | 补/改字段；closed 时主字段冻结,仅允许 notes/plan_id（要改主字段先 thesis-reopen）|

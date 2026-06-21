@@ -1583,7 +1583,8 @@ _BROKER_EXECUTION_FIELDS = (
     "amount", "net_amount", "balance_after", "commission", "stamp_duty", "transfer_fee",
     "exchange_fee", "regulatory_fee", "other_fees", "total_fees", "broker_contract_no",
     "broker_trade_no", "currency", "raw_payload_json", "source_file", "source_format",
-    "source_archive_path", "input_by", "import_run_id", "notes",
+    "source_archive_path", "input_by", "import_run_id", "notes", "thesis_id",
+    "is_void", "void_reason", "voided_at",
 )
 
 _BROKER_EXECUTION_DEFAULTS: dict[str, Any] = {
@@ -1600,6 +1601,7 @@ _BROKER_EXECUTION_DEFAULTS: dict[str, Any] = {
     "other_fees": 0,
     "total_fees": 0,
     "currency": "CNY",
+    "is_void": 0,
 }
 
 
@@ -1683,9 +1685,12 @@ def list_broker_executions(
     date_from: str | None = None,
     date_to: str | None = None,
     account_id: str | None = None,
+    include_void: bool = False,
 ) -> list[dict]:
     sql = "SELECT * FROM broker_executions WHERE 1=1"
     params: list[Any] = []
+    if not include_void:
+        sql += " AND COALESCE(is_void, 0) = 0"
     if date_from:
         sql += " AND biz_date >= ?"
         params.append(date_from)
@@ -1700,6 +1705,9 @@ def list_broker_executions(
     return _broker_rows_to_list(cur, cur.fetchall())
 
 
-def count_broker_executions(conn: sqlite3.Connection) -> int:
-    row = conn.execute("SELECT COUNT(*) FROM broker_executions").fetchone()
+def count_broker_executions(conn: sqlite3.Connection, *, include_void: bool = False) -> int:
+    sql = "SELECT COUNT(*) FROM broker_executions"
+    if not include_void:
+        sql += " WHERE COALESCE(is_void, 0) = 0"
+    row = conn.execute(sql).fetchone()
     return int(row[0] if row else 0)

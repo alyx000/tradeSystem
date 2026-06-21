@@ -40,6 +40,7 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
     list_parser.add_argument("--to", dest="date_to", help="结束日期 YYYY-MM-DD")
     list_parser.add_argument("--account", help="账户标识")
     list_parser.add_argument("--limit", type=int, default=50, help="返回条数上限")
+    list_parser.add_argument("--include-void", action="store_true", help="包含已作废重复流水")
     list_parser.add_argument("--json", action="store_true", help="输出 JSON")
 
     audit_parser = executions_subparsers.add_parser("audit-export", help="导出成交记录审计报告")
@@ -47,6 +48,29 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
     audit_parser.add_argument("--to", required=True, dest="date_to", help="结束日期 YYYY-MM-DD")
     audit_parser.add_argument("--account", help="账户标识")
     audit_parser.add_argument("--out", help="输出 Markdown 文件路径")
+    audit_parser.add_argument("--include-void", action="store_true", help="包含已作废重复流水")
+
+    repair_parser = executions_subparsers.add_parser(
+        "repair-reconcile",
+        help="回填历史流水 thesis_id，并按券商余额修复 holdings/thesis 状态",
+    )
+    repair_parser.add_argument("--from", required=True, dest="date_from", help="起始日期 YYYY-MM-DD")
+    repair_parser.add_argument("--to", required=True, dest="date_to", help="结束日期 YYYY-MM-DD")
+    repair_parser.add_argument("--account", default="default", help="账户标识")
+    repair_parser.add_argument(
+        "--dry-run",
+        dest="dry_run",
+        action="store_true",
+        default=True,
+        help="只预演，不提交入库（默认）",
+    )
+    repair_parser.add_argument(
+        "--apply",
+        dest="dry_run",
+        action="store_false",
+        help="执行修复写入",
+    )
+    repair_parser.add_argument("--json", action="store_true", help="输出 JSON")
 
 
 def handle_executions_command(config: dict, args: argparse.Namespace) -> None:
@@ -57,8 +81,10 @@ def handle_executions_command(config: dict, args: argparse.Namespace) -> None:
         _cmd_list(config, args)
     elif command == "audit-export":
         _cmd_audit_export(config, args)
+    elif command == "repair-reconcile":
+        _cmd_repair_reconcile(config, args)
     else:
-        print("用法: main.py executions {import|list|audit-export}")
+        print("用法: main.py executions {import|list|audit-export|repair-reconcile}")
 
 
 def _open_conn(config: dict) -> sqlite3.Connection:
@@ -106,6 +132,7 @@ def _cmd_import(config: dict, args: argparse.Namespace) -> None:
         "conflicts": len(report.conflicts),
         "conflict_rows": report.conflicts,
         "degraded": len(report.degraded),
+        "voided_execution_rows": report.voided_execution_rows,
         "failed": len(report.errors),
         "error_rows": report.errors,
         "dry_run": report.dry_run,
@@ -136,6 +163,7 @@ def _emit_import_result(payload: dict[str, Any], source_path: Path, as_json: boo
     print(f"skipped: {payload['skipped']}（明细见 markdown 报告）")
     print(f"conflicts: {payload['conflicts']}")
     print(f"degraded: {payload['degraded']}")
+    print(f"voided_execution_rows: {payload.get('voided_execution_rows', 0)}")
     print(f"errors: {payload['failed']}")
     print(f"dry_run: {payload['dry_run']}")
     _print_conflict_details(payload.get("conflict_rows") or [])
@@ -176,6 +204,7 @@ def _cmd_list(config: dict, args: argparse.Namespace) -> None:
             date_from=args.date_from,
             date_to=args.date_to,
             account_id=args.account,
+            include_void=args.include_void,
         )
     finally:
         conn.close()
@@ -197,6 +226,7 @@ def _cmd_audit_export(config: dict, args: argparse.Namespace) -> None:
             date_from=args.date_from,
             date_to=args.date_to,
             account_id=args.account,
+            include_void=args.include_void,
         )
     finally:
         conn.close()
@@ -205,6 +235,51 @@ def _cmd_audit_export(config: dict, args: argparse.Namespace) -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(_build_audit_report(rows, args), encoding="utf-8")
     print(f"审计报告已导出: {out_path}")
+
+
+def _cmd_repair_reconcile(config: dict, args: argparse.Namespace) -> None:
+    from db.migrate import migrate
+    from services.broker_executions.repair import repair_reconcile
+
+    conn = _open_conn(config)
+    try:
+        migrate(conn)
+        result = repair_reconcile(
+            conn,
+            account_id=args.account,
+            date_from=args.date_from,
+            date_to=args.date_to,
+            dry_run=args.dry_run,
+        )
+        if not args.dry_run:
+            conn.commit()
+    finally:
+        conn.close()
+
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2, default=_json_default))
+        return
+
+    mode = "dry-run" if result["dry_run"] else "applied"
+    print(f"[repair-reconcile] {mode} account={result['account_id']} "
+          f"range={args.date_from}~{args.date_to}")
+    print(f"voided_execution_rows: {result['voided_execution_rows']}")
+    print(f"linked_execution_rows: {result['linked_execution_rows']}")
+    print(f"active_holdings_upserted: {result['active_holdings_upserted']}")
+    print(f"holdings_closed: {result['holdings_closed']}")
+    print(f"thesis_closed: {result['thesis_closed']}")
+    missing = result.get("missing_thesis") or []
+    if missing:
+        print(f"missing_thesis: {len(missing)}")
+        for row in missing[:10]:
+            print(
+                "  - "
+                f"{row.get('biz_date')} {row.get('stock_code')} "
+                f"{row.get('stock_name')} {row.get('direction')}"
+            )
+        if len(missing) > 10:
+            print(f"  ... 还有 {len(missing) - 10} 条")
+    print(f"operations: {len(result.get('operations') or [])}")
 
 
 def _print_rows_table(rows: list[dict]) -> None:

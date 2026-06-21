@@ -35,6 +35,8 @@ def test_use_http_proxy_for_data_collection(monkeypatch):
 
 def test_without_standard_http_proxy_blocks_requests_proxy_fallback(monkeypatch):
     monkeypatch.delenv("TRADESYSTEM_USE_HTTP_PROXY", raising=False)
+    monkeypatch.delenv("NO_PROXY", raising=False)
+    monkeypatch.delenv("no_proxy", raising=False)
     monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:9")
     monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:9")
     monkeypatch.setenv("ALL_PROXY", "socks5://127.0.0.1:9")

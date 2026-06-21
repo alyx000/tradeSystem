@@ -94,6 +94,7 @@ class ImportReport:
     # plan I 系列:thesis 中间层触发提示(dry-run / 实写都填,仅作参考)
     thesis_triggers: list[dict] = field(default_factory=list)
     auto_closed_thesis_ids: list[int] = field(default_factory=list)
+    voided_execution_rows: int = 0
 
     def to_markdown(self) -> str:
         lines = [
@@ -109,6 +110,7 @@ class ImportReport:
             f"- skipped: {len(self.skipped)}",
             f"- conflicts: {len(self.conflicts)}",
             f"- degraded: {len(self.degraded)}",
+            f"- voided_execution_rows: {self.voided_execution_rows}",
             f"- errors: {len(self.errors)}",
             f"- dry_run: {self.dry_run}",
             f"- archive_path: {self.archive_path or ''}",

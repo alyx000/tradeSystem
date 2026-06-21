@@ -250,6 +250,10 @@ ARCHITECTURE_COMMANDS = [
     ["executions", "audit-export", "--from", "2026-04-01", "--to", "2026-05-31"],
     ["executions", "audit-export", "--from", "2026-04-01", "--to", "2026-05-31",
      "--account", "default", "--out", "tmp/audit-reports/test.md"],
+    ["executions", "repair-reconcile", "--from", "2026-06-01", "--to", "2026-06-21",
+     "--account", "default", "--dry-run"],
+    ["executions", "repair-reconcile", "--from", "2026-06-01", "--to", "2026-06-21",
+     "--account", "default", "--apply", "--json"],
     # recommend (G3 行业推荐定时推送)
     ["recommend", "daily"],
     ["recommend", "daily", "--dry-run"],

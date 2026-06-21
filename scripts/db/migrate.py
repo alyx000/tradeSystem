@@ -19,7 +19,7 @@ PROJECT_ROOT = SCRIPTS_DIR.parent
 
 # 与 migrate() 中「当前最新」一步一致；新增迁移时递增本常量，并把上一步的
 # set_schema_version(conn, CURRENT_SCHEMA_VERSION) 改为字面量 N（保留历史链）。
-CURRENT_SCHEMA_VERSION = 34
+CURRENT_SCHEMA_VERSION = 35
 
 
 def get_schema_version(conn: sqlite3.Connection) -> int:
@@ -41,6 +41,12 @@ def _ensure_broker_executions_columns(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE broker_executions ADD COLUMN broker_code TEXT")
     if "notes" not in cols:
         conn.execute("ALTER TABLE broker_executions ADD COLUMN notes TEXT")
+    if "is_void" not in cols:
+        conn.execute("ALTER TABLE broker_executions ADD COLUMN is_void INTEGER NOT NULL DEFAULT 0 CHECK(is_void IN (0, 1))")
+    if "void_reason" not in cols:
+        conn.execute("ALTER TABLE broker_executions ADD COLUMN void_reason TEXT")
+    if "voided_at" not in cols:
+        conn.execute("ALTER TABLE broker_executions ADD COLUMN voided_at TEXT")
 
 
 def _ensure_thesis_columns(conn: sqlite3.Connection) -> None:
@@ -561,9 +567,10 @@ def migrate(conn: sqlite3.Connection) -> None:
 
     if version < 24:
         logger.info("Applying schema v24: trade_thesis 中间层 + broker_executions/holdings.thesis_id ALTER 兜底")
-        # ALTER 必须在 init_schema 之前：init_schema 包含 idx_be_thesis 这个引用
-        # thesis_id 列的索引；老库 broker_executions 缺该列时索引创建会 OperationalError。
+        # ALTER 必须在 init_schema 之前：init_schema 包含 idx_be_thesis / idx_be_void
+        # 这些引用新增列的索引；老库 broker_executions 缺列时索引创建会 OperationalError。
         _ensure_thesis_columns(conn)
+        _ensure_broker_executions_columns(conn)
         init_schema(conn)
         set_schema_version(conn, 24)
         conn.commit()
@@ -634,12 +641,19 @@ def migrate(conn: sqlite3.Connection) -> None:
         set_schema_version(conn, 34)
         conn.commit()
 
+    if version < 35:
+        logger.info("Applying schema v35: broker_executions void markers")
+        _ensure_broker_executions_columns(conn)
+        set_schema_version(conn, 35)
+        conn.commit()
+
     # 版本无关兜底:DB 已标记到最新版但 market_timing_signal 缺失/缺列(异常半迁移态/历史遗留)时,
     # 版本门会跳过迁移块导致表/列永不建,运行期报 no such table/column。仅在确缺时 DDL+commit;
     # 健康库纯探查直接返回,不给调用方加事务边界(见 feedback_real_db_vs_in_memory)。
     _ensure_market_timing_signal(conn)
     _ensure_market_timing_quote_columns(conn)
     _ensure_volume_concentration_gain_column(conn)
+    _ensure_broker_executions_columns(conn)
 
 # ──────────────────────────────────────────────────────────────
 # YAML 数据导入

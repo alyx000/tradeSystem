@@ -1322,8 +1322,9 @@ def _cmd_thesis_suggest(args: argparse.Namespace) -> None:
         pending_open_rows = conn.execute(
             """
             SELECT account_id, stock_code, biz_date
-              FROM broker_executions
+             FROM broker_executions
              WHERE thesis_id IS NULL AND direction = 'buy'
+               AND COALESCE(is_void, 0) = 0
                AND (? IS NULL OR account_id = ?)
              ORDER BY biz_date DESC
             """,
@@ -1346,7 +1347,8 @@ def _cmd_thesis_suggest(args: argparse.Namespace) -> None:
                    ), 0) AS execution_balance
               FROM trade_thesis t
               LEFT JOIN holdings h ON h.thesis_id = t.id AND h.status = 'active'
-              LEFT JOIN broker_executions be ON be.thesis_id = t.id
+              LEFT JOIN broker_executions be
+                ON be.thesis_id = t.id AND COALESCE(be.is_void, 0) = 0
              WHERE t.status = 'open'
                AND (? IS NULL OR t.account_id = ?)
              GROUP BY t.id, t.account_id, t.stock_code, h.shares

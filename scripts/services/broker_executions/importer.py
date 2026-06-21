@@ -146,6 +146,13 @@ def import_executions(
             thesis_lifecycle_module.link_thesis_to_executions(
                 conn, import_run_id=import_run_id,
             )
+            from services.broker_executions.repair import void_semantic_duplicates  # noqa: WPS433
+            report.voided_execution_rows = void_semantic_duplicates(
+                conn,
+                account_id=account_id,
+                date_from=min(row.biz_date for row in rows_to_process),
+                date_to=max(row.biz_date for row in rows_to_process),
+            )
             thesis_lifecycle_module.sync_holdings_from_executions(
                 conn, import_run_id=import_run_id,
             )

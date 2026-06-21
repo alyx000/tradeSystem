@@ -47,8 +47,9 @@ python3 main.py db blacklist-add ...
 
 ```bash
 python3 main.py executions import --file <path> --input-by broker_export [--account default] [--dry-run]
-python3 main.py executions list [--from YYYY-MM-DD --to YYYY-MM-DD --account ... --limit 50 --json]
-python3 main.py executions audit-export --from YYYY-MM-DD --to YYYY-MM-DD [--account ... --out tmp/audit-reports/<name>.md]
+python3 main.py executions list [--from YYYY-MM-DD --to YYYY-MM-DD --account ... --limit 50 --json --include-void]
+python3 main.py executions audit-export --from YYYY-MM-DD --to YYYY-MM-DD [--account ... --out tmp/audit-reports/<name>.md --include-void]
+python3 main.py executions repair-reconcile --from YYYY-MM-DD --to YYYY-MM-DD [--account default] [--dry-run|--apply] [--json]
 ```
 
 ## 核心流程
@@ -72,11 +73,13 @@ python3 main.py executions audit-export --from YYYY-MM-DD --to YYYY-MM-DD [--acc
 2. 默认先跑 `--dry-run` 预演，让用户看到 `inserted / skipped / conflicts / degraded / errors` 真实数字（基于 DB 现状）。
 3. 用户确认后去掉 `--dry-run` 真写库；事务 COMMIT 后自动拷贝源文件到 `tmp/imports/<ts>_<basename>` 并把路径回写 `source_archive_path`。
 4. 控制台前 10 条 skipped 摘要 + 全量 markdown 写 `tmp/import-reports/<ts>.md`，重复导入自动幂等（同行命中 UNIQUE 跳过；非键字段差异 → `conflicts` 单列、老值不覆盖）。
-5. 同账户多文件导入用 `--account <name>` 区分（多账户字段已预留，未传则 `'default'`）。
+5. 导入后同事务标记语义重复流水：精确重复、或同一成交槽位的「拆单 + 汇总单」会把重复行置为 `is_void=1`，默认列表/审计/持仓同步/盈亏回填均排除作废行；原始行保留用于追溯。
+6. 同账户多文件导入用 `--account <name>` 区分（多账户字段已预留，未传则 `'default'`）。
 
 ### 审计
-- 按需审计（如周/月/季回顾、报税前对账、出问题时追溯）：`executions audit-export --from --to [--account] [--out]` 生成跨批次 markdown（总览 / 各股明细 / 导入批次列表）。无强制周期，由用户决定何时跑。
-- 单次回溯：`executions list --from --to [--account --json]`。
+- 按需审计（如周/月/季回顾、报税前对账、出问题时追溯）：`executions audit-export --from --to [--account] [--out]` 生成跨批次 markdown（总览 / 各股明细 / 导入批次列表）。默认排除 `is_void=1` 作废重复流水；需要检查作废行时加 `--include-void`。无强制周期，由用户决定何时跑。
+- 单次回溯：`executions list --from --to [--account --json]`；默认排除作废重复流水，追溯作废行时加 `--include-void`。
+- 若历史流水先于 thesis 录入、或持仓/thesis 状态与券商余额不一致，先跑 `executions repair-reconcile --from --to --account ... --dry-run` 看预演；用户确认修复后再跑 `--apply`。该命令会标记语义重复流水 `is_void=1`、回填既有流水 `thesis_id`，并以券商最新 `balance_after` 修正 `holdings` 与 open thesis 状态，默认不删除原始流水。
 
 ### 禁止
 - 不要把 `executions import` 输出的"事实"再手工 `db add-trade` 到 `trades` 表（重复维度，且复盘字段为空）。
@@ -115,7 +118,7 @@ python3 main.py db thesis-open \
 | `db thesis-reopen --id N --reason "..." --reopened-at DATE --input-by U` | 重开 closed thesis；`reopen_count++` + notes 追加 `[reopen DATE] reason`；`>3` 在 list 自动标黄（plan R6） |
 | `db thesis-review --id N --executed-as-planned {0,1,2} --input-by U [--lessons --discipline-score --exit-trigger]` | upsert thesis_review（允许多次增量更新，未传字段保留原值） |
 | `db thesis-list [--status open/closed --account --code --filter placeholder --without-review --reopened --json]` | 列表查询；`--without-review` 看 closed 但无复盘的，`--reopened` 看异常重开的 |
-| `db thesis-suggest [--account]` | 三类待补:待 open（broker_executions.thesis_id IS NULL）/ 待 close（open thesis 当前 holdings=0）/ 待 review（closed 无 thesis_review） |
+| `db thesis-suggest [--account]` | 三类待补:待 open（非作废 broker_executions.thesis_id IS NULL）/ 待 close（open thesis 当前 holdings=0 或非作废流水净额归零）/ 待 review（closed 无 thesis_review） |
 
 ### Agent 调用边界
 

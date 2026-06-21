@@ -665,7 +665,10 @@ CREATE TABLE IF NOT EXISTS broker_executions (
     import_run_id TEXT,
     imported_at TEXT DEFAULT (datetime('now')),
     notes TEXT,
-    thesis_id INTEGER
+    thesis_id INTEGER,
+    is_void INTEGER NOT NULL DEFAULT 0 CHECK(is_void IN (0, 1)),
+    void_reason TEXT,
+    voided_at TEXT
 );
 """
 
@@ -975,6 +978,7 @@ _SQL_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_broker_executions_date ON broker_executions(biz_date);",
     "CREATE INDEX IF NOT EXISTS idx_broker_executions_run_id ON broker_executions(import_run_id);",
     "CREATE INDEX IF NOT EXISTS idx_be_thesis ON broker_executions(thesis_id);",
+    "CREATE INDEX IF NOT EXISTS idx_be_void ON broker_executions(is_void);",
     "CREATE INDEX IF NOT EXISTS idx_thesis_opened_at ON trade_thesis(opened_at DESC);",
     # partial unique index: 同账户同票同时只允许 1 个 open thesis(plan Q5 / G 账户隔离不变式)
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_thesis_account_stock_status "
