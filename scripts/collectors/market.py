@@ -529,20 +529,11 @@ class MarketCollector:
             else:
                 logger.debug("%s 获取失败: %s", method_name, r.error)
 
-        # 7. 北向资金
-        nb = self.registry.call("get_northbound", date)
-        if nb.success:
-            result["northbound"] = nb.data
-            result["northbound"]["_source"] = nb.source
-        else:
-            result["northbound"] = {"error": nb.error}
-
-        # 7b. 北向十大活跃股
-        nb_top = self.registry.call("get_northbound_top_stocks", date)
-        if nb_top.success and nb_top.data:
-            nb_block = result.get("northbound", {})
-            if "error" not in nb_block:
-                nb_block["top_active_stocks"] = nb_top.data.get("top_active", [])
+        # 7. 北向资金（已下线）：沪深交易所 2024-08-16 起停更北向每日净流入，
+        #    tushare moneyflow_hsgt.north_money 口径存疑（十大活跃股个股净额全 0、
+        #    聚合 north_money 却非 0，自相矛盾），不再采集落库为事实。十大活跃股的
+        #    成交额虽仍披露但当前无消费方，一并下线；如未来需要「北向成交额」维度
+        #    再以独立口径重新接入。原始层归档由 ingest registry 的 moneyflow_hsgt 保留。
 
         # 8. 龙虎榜
         dt = self.registry.call("get_dragon_tiger", date)

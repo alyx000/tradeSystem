@@ -98,12 +98,16 @@ INTERFACE_REGISTRY: dict[str, InterfaceConfig] = {
         "interface_name": "moneyflow_hsgt",
         "provider_method": "get_northbound",
         "stage": "post_core",
-        "use_cases": ["post_report", "plan_diagnostics"],
+        "use_cases": ["raw_archive"],
         "params_policy": "trade_date",
         "dedupe_keys": ["trade_date"],
         "raw_table": "raw_moneyflow_hsgt",
-        "enabled_by_default": True,
-        "notes": "北向资金核心数据，属于盘后主流程硬依赖。",
+        # 北向净额已下线（口径存疑）：默认不再随 post_core 自动采集，避免对已停用源持续
+        # 调用并让其失败污染核心盘后 ingest 健康/重试信号。仅保留接口定义，供手动 backfill /
+        # 原始归档时显式启用；不再派生 capital_flow 事实、不落 daily_market、不进 post_report/诊断。
+        "enabled_by_default": False,
+        "notes": "北向资金原始归档（默认停采）。净额口径已下线（2024-08-16 起停更，north_money 口径存疑），"
+                 "不再随 post_core 自动跑，仅手动 backfill 时启用；不派生 capital_flow 事实/落 daily_market。",
     },
     "daily_info": {
         "interface_name": "daily_info",

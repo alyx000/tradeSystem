@@ -1069,6 +1069,9 @@ def get_prefill(date: str, conn: sqlite3.Connection = Depends(get_db_conn)):
     enrich_daily_market_row(market)  # 展开 raw_data 中的扩展字段（style_factors/sector_*/rhythm_* 等）
     prev_market = Q.get_prev_daily_market(conn, date)
     prev_market = _apply_market_ma5w_fallback(conn, prev_market)
+    # 与当日 market 一致地展开并移除 raw_data，避免前一日历史信封里的旧 northbound 块
+    # （口径存疑，北向净额已下线）经 prefill 的 prev_market.raw_data 原样外泄。
+    enrich_daily_market_row(prev_market)
     avg_5d = Q.get_avg_amount(conn, date, 5)
     avg_20d = Q.get_avg_amount(conn, date, 20)
     emotion = Q.get_latest_emotion(conn)

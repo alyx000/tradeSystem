@@ -476,13 +476,15 @@ def test_health_summary_supports_interface_filter(tmp_path):
 
 def test_execute_stage_records_runs(tmp_path):
     db_path = tmp_path / "test.db"
+    # moneyflow_hsgt 已退出 post_core；改用仍在 post_core 的 adj_factor 作为成功样例，
+    # daily_basic 等仍因 provider 不支持而进 errors（对照失败路径）。
     registry = _FakeRegistry(
         _FakeProvider(
-            {"get_northbound"},
+            {"get_adj_factor"},
             {
-                "get_northbound": DataResult(
-                    data={"north_money": 100.0, "net_buy_billion": 1.23},
-                    source="fake:get_northbound",
+                "get_adj_factor": DataResult(
+                    data=[{"ts_code": "000001.SZ", "adj_factor": 1.23}],
+                    source="fake:get_adj_factor",
                 )
             },
         )
@@ -512,9 +514,26 @@ def test_execute_stage_records_runs(tmp_path):
     assert len(rows) == result["recorded_runs"]
     assert any(row["status"] == "success" for row in rows)
     assert rows[0]["input_by"] == "cursor"
-    assert any(item["interface_name"] == "moneyflow_hsgt" for item in payloads)
-    assert any(item["fact_type"] == "capital_flow" for item in snapshots)
+    # 北向净额下线（口径存疑）：moneyflow_hsgt 默认退出 post_core，不再自动采集/归档，
+    # 也不派生 capital_flow 事实，避免对已停用源持续调用污染核心 ingest 健康。
+    assert not any(item["interface_name"] == "moneyflow_hsgt" for item in payloads)
+    assert not any(item["fact_type"] == "capital_flow" for item in snapshots)
     assert any(item["interface_name"] == "daily_basic" for item in errors)
+
+
+def test_moneyflow_hsgt_not_scheduled_in_post_core(tmp_path):
+    """北向净额下线（口径存疑）：moneyflow_hsgt 不在默认 post_core 调度集合内，
+    其失败也不进核心盘后 ingest 健康/重试统计。"""
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    migrate(conn)
+    conn.close()
+
+    service = IngestService(str(db_path))
+    post_core = {item["interface_name"] for item in service._interfaces_for_stage("post_core")}
+    assert "moneyflow_hsgt" not in post_core
+    # daily_basic 仍是默认 post_core 成员（对照组，确认过滤器未误伤）。
+    assert "daily_basic" in post_core
 
 
 def test_execute_interface_records_single_run(tmp_path):

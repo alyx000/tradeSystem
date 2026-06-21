@@ -241,7 +241,6 @@ def _extract_market_row(date_str: str, envelope: dict) -> dict:
         style = envelope.get("style_analysis") or envelope.get("style") or {}
         if not isinstance(style, dict):
             style = {}
-    northbound = _safe_sub(source, "northbound")
     capital = _safe_sub(source, "capital_flow")
     if not capital:
         capital = _safe_sub(source, "capital")
@@ -344,9 +343,9 @@ def _extract_market_row(date_str: str, envelope: dict) -> dict:
     premium_capacity = _snap_premium_med("capacity_top10")
     premium_first_open = _snap_premium_med("yizi_first_open")
 
-    northbound_net = northbound.get("net_buy_billion")
-    if northbound_net is None:
-        northbound_net = capital.get("northbound_net")
+    # 北向净额已下线（口径存疑）：无论采集结果/capital_flow 是否带值，都不落 daily_market。
+    # 沪深交易所 2024-08-16 起停更北向每日净流入，tushare north_money 口径存疑，不当事实存储。
+    northbound_net = None
 
     margin_balance = margin.get("total_rzrqye_yi")
     if margin_balance is None:

@@ -232,6 +232,23 @@ class TestDailyMarket:
         assert row["sh_above_ma5w"] == 1
         assert row["advance_count"] == 3200
 
+    def test_full_row_reads_scrub_legacy_northbound_net(self, conn):
+        """北向净额下线（口径存疑）：旧库已存的非空 northbound_net 也不得经全行读取外泄。
+
+        历史行可能在下线前已落入口径存疑的假净额（如 42.93）；get_daily_market /
+        get_daily_market_range / get_prev_daily_market 读取时统一置空，避免经
+        /api/market/{date}、/review/{date}/prefill 等全行接口继续外泄。
+        """
+        Q.upsert_daily_market(conn, {"date": "2026-04-01", "northbound_net": 42.93, "total_amount": 100.0})
+        Q.upsert_daily_market(conn, {"date": "2026-04-02", "northbound_net": 38.5, "total_amount": 200.0})
+
+        assert Q.get_daily_market(conn, "2026-04-01")["northbound_net"] is None
+        assert Q.get_prev_daily_market(conn, "2026-04-02")["northbound_net"] is None
+        rng = Q.get_daily_market_range(conn, "2026-04-01", "2026-04-02")
+        assert all(r["northbound_net"] is None for r in rng)
+        # 其它列不受影响。
+        assert Q.get_daily_market(conn, "2026-04-01")["total_amount"] == 100.0
+
     def test_date_check(self, conn):
         import sqlite3
         with pytest.raises(sqlite3.IntegrityError):
@@ -275,6 +292,13 @@ class TestDailyMarket:
         series = Q.get_style_factors_series(conn, ["drop_table", "bad_col"], "2026-04-01", "2026-04-02")
         assert series == []
 
+    def test_style_factors_rejects_northbound_net(self, conn):
+        """北向净额下线：不再作为可查风格因子（口径存疑，API 出口封堵）。"""
+        Q.upsert_daily_market(conn, {"date": "2026-04-01", "seal_rate": 78.5})
+        series = Q.get_style_factors_series(conn, ["seal_rate", "northbound_net"], "2026-04-01", "2026-04-02")
+        for row in series:
+            assert "northbound_net" not in row
+
     def test_get_prev_daily_market(self, conn):
         Q.upsert_daily_market(conn, {"date": "2026-03-28", "total_amount": 10000.0})
         Q.upsert_daily_market(conn, {"date": "2026-03-31", "total_amount": 11000.0})
@@ -313,6 +337,8 @@ class TestDailyMarket:
         assert history[0]["date"] == "2026-04-01"
         assert "raw_data" not in history[0]
         assert "premium_30cm" in history[0]
+        # 北向净额下线：大盘概览历史接口不再返回该列（口径存疑，API 出口封堵）。
+        assert "northbound_net" not in history[0]
 
 
 # ──────────────────────────────────────────────────────────────

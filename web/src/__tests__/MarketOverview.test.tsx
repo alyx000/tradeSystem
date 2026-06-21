@@ -69,7 +69,6 @@ beforeEach(() => {
       premium_20cm: null,
       premium_30cm: null,
       premium_second_board: null,
-      northbound_net: null,
     },
     {
       date: '2026-04-03',
@@ -90,7 +89,6 @@ beforeEach(() => {
       premium_20cm: null,
       premium_30cm: null,
       premium_second_board: null,
-      northbound_net: null,
     },
   ]
   const postMarket: PostMarketPayload = { available: false }

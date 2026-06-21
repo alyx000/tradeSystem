@@ -236,7 +236,7 @@ export interface MarketHistoryItem {
   premium_20cm: number | null
   premium_30cm: number | null
   premium_second_board: number | null
-  northbound_net: number | null
+  // 北向净额已下线（口径存疑）：/market/history 不再返回该字段（DailyMarket 全行仍保留列）。
 }
 
 export interface MarketChartItem extends MarketHistoryItem {

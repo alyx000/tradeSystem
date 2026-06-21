@@ -89,7 +89,20 @@ class TestSyncDailyMarket:
         assert row["total_amount"] == 8888
         assert row["advance_count"] == 111
         assert row["limit_up_count"] == 55
-        assert row["northbound_net"] == 7.7
+        # 北向净额已下线（口径存疑）：即便采集结果带 net_buy_billion，也不得落库为事实，恒 None。
+        assert row["northbound_net"] is None
+
+    def test_northbound_net_decommissioned_from_capital_flow(self, db_path):
+        """北向净额下线回归：capital_flow.northbound_net 也不得落库（口径存疑的兜底来源同样封堵）。"""
+        flat = {
+            "indices": {"sh_close": 3000, "sh_change_pct": 0.1},
+            "capital_flow": {"northbound_net": 50.3},
+        }
+        ok = sync_daily_market_to_db("2026-04-11", flat, db_path=db_path)
+        assert ok is True
+        with get_db(db_path) as conn:
+            row = Q.get_daily_market(conn, "2026-04-11")
+        assert row["northbound_net"] is None
 
     def test_sync_advance_decline_zero_not_replaced(self, db_path):
         """advance_count / decline_count 为 0 时不应被 or 误判为缺省而改用另一字段。"""

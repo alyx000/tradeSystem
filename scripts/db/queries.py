@@ -24,6 +24,18 @@ def _rows_to_list(rows: list[sqlite3.Row]) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def _scrub_decommissioned_market_fields(row: dict | None) -> dict | None:
+    """读取边界统一剔除已下线的北向净额（口径存疑）。
+
+    沪深交易所 2024-08-16 起停更北向每日净流入，旧库历史行可能已存入口径存疑的假
+    净额；全行读取（get_daily_market / range / prev）一律置空，避免经 /api/market/{date}、
+    /review/{date}/prefill 等接口继续外泄。不改库内历史归档，仅在服务时置空。
+    """
+    if row is not None and "northbound_net" in row:
+        row["northbound_net"] = None
+    return row
+
+
 def _fts_match_expr(keyword: str) -> str:
     """将关键词转为 FTS5 MATCH 表达式。对中文用短语匹配。"""
     safe = keyword.replace('"', '""')
@@ -796,19 +808,22 @@ def upsert_daily_market(conn: sqlite3.Connection, data: dict) -> None:
 
 
 def get_daily_market(conn: sqlite3.Connection, target_date: str) -> dict | None:
-    return _row_to_dict(
-        conn.execute("SELECT * FROM daily_market WHERE date = ?", (target_date,)).fetchone()
+    return _scrub_decommissioned_market_fields(
+        _row_to_dict(
+            conn.execute("SELECT * FROM daily_market WHERE date = ?", (target_date,)).fetchone()
+        )
     )
 
 
 def get_daily_market_range(conn: sqlite3.Connection, date_from: str,
                            date_to: str) -> list[dict]:
-    return _rows_to_list(
+    rows = _rows_to_list(
         conn.execute(
             "SELECT * FROM daily_market WHERE date >= ? AND date <= ? ORDER BY date",
             (date_from, date_to),
         ).fetchall()
     )
+    return [_scrub_decommissioned_market_fields(r) for r in rows]
 
 
 def update_premium(conn: sqlite3.Connection, target_date: str,
@@ -846,11 +861,13 @@ def update_premium(conn: sqlite3.Connection, target_date: str,
 
 def get_prev_daily_market(conn: sqlite3.Connection, target_date: str) -> dict | None:
     """获取前一交易日的行情（DB 中 date < target_date 的最近一条）。"""
-    return _row_to_dict(
-        conn.execute(
-            "SELECT * FROM daily_market WHERE date < ? ORDER BY date DESC LIMIT 1",
-            (target_date,),
-        ).fetchone()
+    return _scrub_decommissioned_market_fields(
+        _row_to_dict(
+            conn.execute(
+                "SELECT * FROM daily_market WHERE date < ? ORDER BY date DESC LIMIT 1",
+                (target_date,),
+            ).fetchone()
+        )
     )
 
 
@@ -878,8 +895,8 @@ def get_daily_market_history(conn: sqlite3.Connection, days: int = 20) -> list[d
         "sz_index_close, sz_index_change_pct, total_amount, "
         "advance_count, decline_count, limit_up_count, limit_down_count, "
         "seal_rate, broken_rate, highest_board, "
-        "premium_10cm, premium_20cm, premium_30cm, premium_second_board, "
-        "northbound_net "
+        "premium_10cm, premium_20cm, premium_30cm, premium_second_board "
+        # 北向净额已下线（口径存疑），不再随大盘概览历史返回。
         "FROM daily_market ORDER BY date DESC LIMIT ?",
         (days,),
     ).fetchall()
@@ -929,10 +946,11 @@ def compute_ma5w_flags_from_history(
 def get_style_factors_series(conn: sqlite3.Connection, metrics: list[str],
                              date_from: str, date_to: str) -> list[dict]:
     """获取风格化因子时间序列。"""
+    # 北向净额已下线（口径存疑），从可查风格因子白名单移除。
     allowed = {"premium_10cm", "premium_20cm", "premium_30cm", "premium_second_board",
                "premium_capacity", "premium_first_open",
                "seal_rate", "broken_rate", "limit_up_count", "limit_down_count",
-               "highest_board", "total_amount", "northbound_net"}
+               "highest_board", "total_amount"}
     safe_cols = [m for m in metrics if m in allowed]
     if not safe_cols:
         return []

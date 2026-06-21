@@ -498,6 +498,28 @@ def test_diagnose_plan_uses_fact_snapshots(tmp_path):
     assert margin_result["result"] == "pass"
 
 
+def test_northbound_net_positive_is_unsupported_even_with_legacy_snapshot(tmp_path):
+    """北向净额下线（口径存疑）：northbound_net_positive 不再消费旧 capital_flow 快照判 pass/fail，
+    一律返回 unsupported，避免基于已下线假净额给出诊断结论。"""
+    db_path = tmp_path / "planning.db"
+    conn = get_connection(db_path)
+    migrate(conn)
+    conn.commit()
+    conn.close()
+
+    service = PlanningService(str(db_path))
+    snapshot_map = {
+        ("capital_flow", "market", "CN"): {"northbound_net_buy_billion": 42.93},
+    }
+    result = service._evaluate_fact_check(
+        {"check_type": "northbound_net_positive", "label": "北向净买入为正", "params": {}},
+        snapshot_map,
+        "2026-04-09",
+    )
+    assert result["result"] == "unsupported"
+    assert result["evidence_json"] == {}
+
+
 def test_diagnose_plan_uses_provider_fallback_for_price_and_announcements(tmp_path):
     db_path = tmp_path / "planning.db"
     conn = get_connection(db_path)

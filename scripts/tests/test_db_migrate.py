@@ -267,7 +267,8 @@ class TestDailyMarketMigration:
         assert row["total_amount"] == 7777.0
         assert row["advance_count"] == 2000
         assert row["limit_up_count"] == 60
-        assert row["northbound_net"] == 9.9
+        # 北向净额已下线（口径存疑）：即便归档 envelope 带 net_buy_billion，导入也不落库，恒 None。
+        assert row["northbound_net"] is None
         raw = json.loads(row["raw_data"])
         assert raw["raw_data"]["indices"]["shanghai"]["close"] == 3200.0
 

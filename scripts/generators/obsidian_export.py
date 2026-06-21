@@ -357,14 +357,9 @@ class ObsidianExporter:
             for s in sector_data[:10]:
                 md.append(f"| {s.get('name', '')} | {s.get('change_pct', 0)}% | {s.get('top_stock', '')} |")
 
-        # 北向资金
-        nb = raw_data.get("northbound", {})
-        if nb.get("net_buy_billion") is not None:
-            md.append("")
-            md.append("## 北向资金")
-            val = nb["net_buy_billion"]
-            direction = "净买入" if val >= 0 else "净卖出"
-            md.append(f"- **{direction}**: {abs(val)}亿")
+        # 北向资金 section 已下线（口径存疑）：沪深交易所 2024-08-16 起停更北向每日净额，
+        # tushare north_money 口径存疑（个股净额全 0、聚合非 0）；旧归档 raw_data.northbound
+        # 可能残留假净额，故整段移除，导出不再渲染北向（与盘后报告/信封口径一致）。
 
         md.append("")
         md.append("---")

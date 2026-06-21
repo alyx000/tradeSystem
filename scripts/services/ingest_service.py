@@ -871,23 +871,9 @@ class IngestService:
                 )
             )
 
-        if interface["interface_name"] == "moneyflow_hsgt" and isinstance(data, dict):
-            facts = {
-                "north_money": data.get("north_money"),
-                "south_money": data.get("south_money"),
-                "northbound_net_buy_billion": data.get("net_buy_billion"),
-            }
-            created.append(
-                self._upsert_market_fact_snapshot(
-                    biz_date=target_date,
-                    fact_type="capital_flow",
-                    subject_type="market",
-                    subject_code="CN",
-                    subject_name="A股市场",
-                    facts=facts,
-                    source_interfaces=[interface["interface_name"]],
-                )
-            )
+        # 北向净额已下线（口径存疑）：moneyflow_hsgt 不再派生 capital_flow 事实快照。
+        # 沪深交易所 2024-08-16 起停更北向每日净流入，north_money 口径存疑（个股净额全 0、
+        # 聚合非 0），不当事实存储；原始 payload 仍由 raw_interface_payloads 归档保留。
 
         if interface["interface_name"] == "top_inst":
             rows = [row for row in self._normalize_rows(data) if isinstance(row, dict)]

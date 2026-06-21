@@ -1086,17 +1086,10 @@ class PlanningService:
         label = check.get("label", check_type)
         params = check.get("params", {}) or {}
 
-        if check_type == "northbound_net_positive":
-            facts = snapshot_map.get(("capital_flow", "market", "CN"))
-            if facts is None:
-                return {"check_type": check_type, "label": label, "result": "missing_data", "evidence_json": {}}
-            value = facts.get("northbound_net_buy_billion")
-            return {
-                "check_type": check_type,
-                "label": label,
-                "result": "pass" if value is not None and value > 0 else "fail",
-                "evidence_json": {"northbound_net_buy_billion": value},
-            }
+        # northbound_net_positive 已下线（口径存疑）：不再消费 capital_flow 快照判 pass/fail。
+        # 沪深交易所 2024-08-16 起停更北向每日净流入，north_money 口径存疑（个股净额全 0、
+        # 聚合非 0），且旧 capital_flow 快照仍可能残留假净额，故直接落到默认 unsupported 分支，
+        # 不基于已下线假值给诊断结论。如未来需要可移除该 check_type 并从 PlanWorkbench 选项下线。
 
         if check_type == "margin_balance_change_positive":
             facts = snapshot_map.get(("margin_stats", "market", "CN"))

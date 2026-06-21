@@ -680,6 +680,14 @@ def get_post_market_envelope(date: str, conn: sqlite3.Connection = Depends(get_d
     if not envelope:
         return {"date": date, "available": False}
     out = dict(envelope)
+    # 北向净额下线（口径存疑）：剔除历史信封里的 northbound 块，避免旧库存假净额/活跃股
+    # 经信封面板（整包 JSON 展示+复制）外泄。仅服务时 scrub，不改库内归档。
+    out.pop("northbound", None)
+    inner = out.get("raw_data")
+    if isinstance(inner, dict) and "northbound" in inner:
+        inner = dict(inner)
+        inner.pop("northbound", None)
+        out["raw_data"] = inner
     out["available"] = True
     out.setdefault("date", date)
     return _sanitize_non_finite(out)

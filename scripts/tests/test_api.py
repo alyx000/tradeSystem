@@ -188,6 +188,41 @@ class TestReview:
         assert h[0]["current_price"] == 180.5
         assert h[0]["prefill_pnl_pct"] == 3.25
 
+    def test_prefill_prev_market_scrubs_legacy_northbound(self, client, db_path):
+        """北向净额下线（口径存疑）：复盘预填 prev_market 不得外泄前一日 raw_data.northbound。
+
+        当日 market 经 enrich_daily_market_row 已弹掉 raw_data；prev_market 须同样处理，
+        否则旧归档里的口径存疑北向净额/活跃股会经 /review/{date}/prefill 原样返回。
+        """
+        conn = get_connection(db_path)
+        prev_env = {
+            "date": "2026-06-16",
+            "raw_data": {
+                "indices": {"shanghai": {"close": 3100.0}},
+                "northbound": {"net_buy_billion": 42.93, "top_active_stocks": [{"name": "中际旭创"}]},
+            },
+        }
+        Q.upsert_daily_market(conn, {
+            "date": "2026-06-16", "sh_index_close": 3100.0, "northbound_net": 42.93,
+            "raw_data": json.dumps(prev_env, ensure_ascii=False),
+        })
+        Q.upsert_daily_market(conn, {"date": "2026-06-17", "sh_index_close": 3120.0})
+        conn.commit()
+        conn.close()
+
+        r = client.get("/api/review/2026-06-17/prefill")
+        assert r.status_code == 200
+        prev = r.json()["prev_market"]
+        assert prev is not None
+        assert prev["date"] == "2026-06-16"
+        # 顶层净额置空 + raw_data 已弹出（不携带嵌套 northbound 块）。
+        # 用嵌套块特有键判定，避免与列名 northbound_net 子串混淆。
+        assert prev.get("northbound_net") is None
+        assert "raw_data" not in prev
+        dumped = json.dumps(prev, ensure_ascii=False)
+        assert "net_buy_billion" not in dumped
+        assert "top_active_stocks" not in dumped
+
     def test_prefill_includes_holding_signals(self, client, db_path):
         conn = get_connection(db_path)
         Q.upsert_daily_market(conn, {
@@ -1999,6 +2034,31 @@ class TestPlanningAndKnowledgeAPI:
         data = r.json()
         assert data["available"] is True
         assert data["raw_data"]["indices"]["shanghai"]["close"] == 3000.0
+
+    def test_post_market_envelope_scrubs_legacy_northbound(self, client, db_path):
+        """北向净额下线（口径存疑）：历史信封 raw_data.northbound 不得经 /post-market 外泄。
+
+        旧归档里可能含口径存疑的北向净额/十大活跃股；信封面板会展示并复制整包 JSON，
+        故返回前剔除 northbound 块（不改库内归档，仅服务时 scrub）。
+        """
+        env = {
+            "date": "2026-05-12",
+            "generated_at": "2026-05-12T20:00:00",
+            "raw_data": {
+                "indices": {"shanghai": {"close": 3010.0}},
+                "northbound": {"net_buy_billion": 42.93, "top_active_stocks": [{"name": "中际旭创"}]},
+            },
+        }
+        conn = get_connection(db_path)
+        Q.upsert_daily_market(conn, {"date": "2026-05-12", "sh_index_close": 3010.0, "raw_data": env})
+        conn.commit()
+        conn.close()
+        r = client.get("/api/post-market/2026-05-12")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["available"] is True
+        assert data["raw_data"]["indices"]["shanghai"]["close"] == 3010.0
+        assert "northbound" not in data["raw_data"]
 
     def test_post_market_envelope_sanitizes_non_finite_float(self, client, db_path):
         env = {

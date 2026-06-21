@@ -1115,24 +1115,24 @@ class TestSectionNumbering:
 
 
 # =====================================================================
-# T9c. 北向个股不污染错误字典
+# T9c. 北向净额已下线：采集器不再产出 northbound
 # =====================================================================
 
-class TestNorthboundErrorIsolation:
-    def test_top_stocks_not_added_to_error_dict(self):
-        """get_northbound 失败时，get_northbound_top_stocks 的数据不应写入错误字典"""
+class TestNorthboundDecommissioned:
+    def test_collector_does_not_emit_northbound(self):
+        """北向净额下线（口径存疑）：盘后采集器不再调用 get_northbound / 写入 northbound 块。
+
+        停更后 tushare moneyflow_hsgt.north_money 口径存疑（个股净额全 0、聚合非 0），
+        十大活跃股净额同样全 0 且无消费方，故整块从采集层移除，避免假净额流入
+        daily_market / market_fact_snapshots / obsidian。
+        """
         reg = _mock_registry()
+        called = {"northbound": False}
 
         def mock_call(method, *args, **kwargs):
-            if method == "get_northbound":
-                return DataResult(data=None, source="test", error="API不可用")
-            if method == "get_northbound_top_stocks":
-                return DataResult(
-                    data={"top_active": [
-                        {"name": "招行", "amount_yi": 16.5, "net_amount_yi": 5.0},
-                    ]},
-                    source="tushare:hsgt_top10",
-                )
+            if method in ("get_northbound", "get_northbound_top_stocks"):
+                called["northbound"] = True
+                return DataResult(data={"net_buy_billion": 99.9}, source="test")
             if method == "get_limit_up_list":
                 return DataResult(data={"count": 0, "stocks": []}, source="test")
             if method == "get_limit_down_list":
@@ -1150,9 +1150,8 @@ class TestNorthboundErrorIsolation:
 
                 result = collector.collect_post_market("2026-03-28")
 
-        nb = result["northbound"]
-        assert "error" in nb
-        assert "top_active_stocks" not in nb
+        assert "northbound" not in result
+        assert called["northbound"] is False
 
 
 # =====================================================================
