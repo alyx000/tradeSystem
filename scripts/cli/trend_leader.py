@@ -92,6 +92,32 @@ def _parse_sectors(raw: str | None) -> list[str] | None:
     return val
 
 
+def _is_non_trading_day(conn, registry, date: str) -> bool:
+    """非交易日（周末/法定假日）守卫，语义对齐 main.py pre/post：仅当交易日历**明确**判定
+    为非交易日时返回 True（跳过）；判定失败 / 无日历缓存 → 返回 False（照常执行，按 weekday 兜底）。
+
+    根因：非交易日触发时 tushare 涨停榜返回「无数据」→ 降级 akshare 返回上一交易日榜单且不带
+    日期校验，导致用当日（非交易日）日期落池 + 误推送。launchd plist 节假日仍会触发，故必须守卫。
+
+    conn 由调用方传入（裸跑/no-push 传真实库，日历缓存得以持久化；dry-run 不调本守卫，见 _run_daily），
+    使日历写入随调用方所在库走，避免在 dry-run 中写真实库（codex 门2 finding，2026-06-21）。
+
+    刻意不包 without_standard_http_proxy()（codex 反驳，2026-06-21）：① 本文件历来就没包，scanner
+    的 provider 调用同样在 no-proxy 之外且生产可达，加在守卫上而 scanner 不加只会自相矛盾；② 周末经
+    is_trade_day 的 weekday 兜底必被拦，与代理/日历是否可达无关；③ fail-open（判定失败照常执行）与
+    main.py pre/post 一致，是团队已接受的语义。给整个 trend_leader scanner 套 no-proxy 是覆盖全模块
+    的既有加固（volume_watch 同样未套），属独立任务，不在本守卫范围内。
+    """
+    from utils.trade_date import ensure_trade_calendar, is_trade_day
+    try:
+        # 按目标日期年份预取日历：--date 支持跨年历史校准，默认当前年会漏目标年节假日缓存，
+        # 届时 is_trade_day 单点失败会按 weekday 兜底把目标年的工作日法定假日误判为交易日。
+        ensure_trade_calendar(conn, registry, year=int(date[:4]))
+        return is_trade_day(date, conn=conn, registry=registry) is False
+    except Exception:
+        return False
+
+
 def _run_daily(config: dict, args: argparse.Namespace) -> None:
     from main import setup_providers
 
@@ -107,6 +133,8 @@ def _run_daily(config: dict, args: argparse.Namespace) -> None:
             # 不用 scanner persist=False：scanner 有 read-after-write（Pass1 record 后 Pass2 须读到新池、
             # renderer 再读一次），no-op 写会让 dry-run 读到陈旧池、与真实跑不一致。
             # 也不能靠 rollback：pool.py 每次写内部已 commit。故用「可写但丢弃」的内存副本隔离。
+            # 刻意不套非交易日守卫：dry-run 不落池/不推送，非交易日也无污染面；且守卫的日历预取会写库，
+            # 套在真实库上会破坏 dry-run「真无副作用」契约（codex 门2 finding，2026-06-21）。
             mem = sqlite3.connect(":memory:")
             mem.row_factory = sqlite3.Row
             real_conn.backup(mem)
@@ -117,6 +145,11 @@ def _run_daily(config: dict, args: argparse.Namespace) -> None:
             finally:
                 mem.close()
         else:
+            # 裸跑/no-push 都会落池（no-push 仅不推送、仍写池），非交易日必须守卫，否则降级源
+            # 会用上一交易日榜单按当日落池（裸跑还会误推送）。
+            if _is_non_trading_day(real_conn, registry, date):
+                logger.warning("⚠️ %s 为非交易日（周末/法定假日），跳过趋势主升扫描（不落池、不推送）", date)
+                return
             summary = scanner.run_daily(real_conn, registry, date, sectors=sectors, top_k=args.top_k,
                                         main_line=args.main_line, top_concepts=args.top_concepts)
             md = renderer.render_daily(real_conn, summary)

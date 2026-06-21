@@ -540,3 +540,140 @@ class TestPrefillNoteDateRange:
         result = self._call_prefill("2026-04-12", conn)
         assert result["is_trading_day"] is False
         assert result["prev_trade_date"] == "2026-04-10"
+
+
+class TestTrendLeaderNonTradingDay:
+    """trend-leader daily 非交易日守卫：周末/法定假日跳过扫描，不落池、不推送。
+
+    根因：非交易日触发时 tushare 涨停榜返回「无数据」→ 降级 akshare 返回上一交易日榜单
+    且不带日期校验，导致用当日（非交易日）日期落池 + 误推送。守卫对齐 main.py pre/post。
+    """
+
+    def _daily_args(self, date, *, dry_run=False, no_push=False):
+        import argparse
+        return argparse.Namespace(
+            trend_leader_command="daily", date=date, sectors=None,
+            top_k=5, main_line="l2", top_concepts=8,
+            dry_run=dry_run, no_push=no_push,
+        )
+
+    @patch("cli.trend_leader._push_to_dingtalk")
+    @patch("cli.trend_leader.scanner")
+    @patch("cli.trend_leader.get_connection")
+    @patch("main.setup_providers")
+    def test_daily_skips_on_holiday(self, mock_sp, mock_conn_fn, mock_scanner, mock_push, caplog, tmp_path):
+        """工作日法定假日（交易日历 is_open=0）→ 跳过，不调 scanner、不推送。"""
+        conn = _make_test_db(tmp_path, holiday="2026-04-06")
+        mock_conn_fn.return_value = conn
+        reg = _make_registry(is_trade_day_value=False)
+        reg.initialize_all.return_value = {}
+        mock_sp.return_value = reg
+        from cli.trend_leader import _run_daily
+        with caplog.at_level(logging.WARNING):
+            _run_daily({}, self._daily_args("2026-04-06"))
+        assert "非交易日" in caplog.text
+        mock_scanner.run_daily.assert_not_called()
+        mock_push.assert_not_called()
+
+    @patch("cli.trend_leader.renderer")
+    @patch("cli.trend_leader._push_to_dingtalk")
+    @patch("cli.trend_leader.scanner")
+    @patch("cli.trend_leader.get_connection")
+    @patch("main.setup_providers")
+    def test_dry_run_not_guarded_and_no_real_db_write(
+        self, mock_sp, mock_conn_fn, mock_scanner, mock_push, mock_renderer, caplog, tmp_path
+    ):
+        """dry-run 刻意不套守卫，且不写真实库（codex 门2 finding 回归）。
+
+        dry-run 走内存副本、不落池/不推送 → 非交易日也无污染面，照常跑（历史校准）。
+        关键：守卫的日历预取若误作用于真实库会破坏「真无副作用」契约，断言真实 trade_calendar 未新增。
+        """
+        db_file = tmp_path / "test.db"
+        conn = _make_test_db(tmp_path)  # 空日历，未缓存任何年份
+        mock_conn_fn.return_value = conn
+        # cal_data 备好：若 dry-run 误调守卫并写真实库，2024-05-01 就会被写入 trade_calendar。
+        reg = _make_registry(is_trade_day_value=False, cal_data=[{"cal_date": "20240501", "is_open": 0}])
+        reg.initialize_all.return_value = {}
+        mock_sp.return_value = reg
+        mock_scanner.run_daily.return_value = {"date": "2024-05-01", "entered": []}
+        mock_renderer.render_daily.return_value = "# 报告"
+        from cli.trend_leader import _run_daily
+        with caplog.at_level(logging.WARNING):
+            _run_daily({}, self._daily_args("2024-05-01", dry_run=True))
+        # dry-run 不守卫：scanner 照常跑（在内存副本上），无「非交易日」跳过日志。
+        mock_scanner.run_daily.assert_called_once()
+        assert "非交易日" not in caplog.text
+        # 真无副作用：真实库 trade_calendar 未被守卫的日历预取写入（_run_daily 已关闭 conn，重开校验）。
+        check = sqlite3.connect(str(db_file))
+        try:
+            n = check.execute("SELECT COUNT(*) FROM trade_calendar").fetchone()[0]
+        finally:
+            check.close()
+        assert n == 0, f"dry-run 不应写真实 trade_calendar，实际新增 {n} 条"
+
+    @patch("cli.trend_leader.renderer")
+    @patch("cli.trend_leader._push_to_dingtalk")
+    @patch("cli.trend_leader.scanner")
+    @patch("cli.trend_leader.get_connection")
+    @patch("main.setup_providers")
+    def test_daily_runs_on_trading_day(self, mock_sp, mock_conn_fn, mock_scanner, mock_push, mock_renderer, tmp_path):
+        """交易日（is_trade_day=True）→ 正常调 scanner。"""
+        conn = _make_test_db(tmp_path)
+        mock_conn_fn.return_value = conn
+        reg = _make_registry(is_trade_day_value=True)
+        reg.initialize_all.return_value = {}
+        mock_sp.return_value = reg
+        mock_scanner.run_daily.return_value = {"date": "2026-04-07", "entered": []}
+        mock_renderer.render_daily.return_value = "# 报告"
+        from cli.trend_leader import _run_daily
+        _run_daily({}, self._daily_args("2026-04-07", no_push=True))
+        mock_scanner.run_daily.assert_called_once()
+
+    @patch("cli.trend_leader.renderer")
+    @patch("cli.trend_leader._push_to_dingtalk")
+    @patch("cli.trend_leader.scanner")
+    @patch("cli.trend_leader.get_connection")
+    @patch("main.setup_providers")
+    def test_api_failure_does_not_block(self, mock_sp, mock_conn_fn, mock_scanner, mock_push, mock_renderer, caplog, tmp_path):
+        """is_trade_day 判定失败且无日历缓存 → 不阻塞（工作日按 weekday 兜底放行）。"""
+        conn = _make_test_db(tmp_path)  # 空日历
+        mock_conn_fn.return_value = conn
+        reg = _make_registry(error="api down")
+        reg.initialize_all.return_value = {}
+        mock_sp.return_value = reg
+        mock_scanner.run_daily.return_value = {"date": "2026-04-07", "entered": []}
+        mock_renderer.render_daily.return_value = "# 报告"
+        from cli.trend_leader import _run_daily
+        with caplog.at_level(logging.WARNING):
+            _run_daily({}, self._daily_args("2026-04-07", no_push=True))  # 周二
+        assert "非交易日" not in caplog.text
+        mock_scanner.run_daily.assert_called_once()
+
+    @patch("cli.trend_leader._push_to_dingtalk")
+    @patch("cli.trend_leader.scanner")
+    @patch("cli.trend_leader.get_connection")
+    @patch("main.setup_providers")
+    def test_cross_year_date_prefetches_target_year_calendar(
+        self, mock_sp, mock_conn_fn, mock_scanner, mock_push, caplog, tmp_path
+    ):
+        """--date 跨年（非当前年）历史校准：按目标年份预取日历，命中目标年法定假日 → 跳过。
+
+        codex 门2 finding 2 回归：ensure_trade_calendar 默认当前年，跨年 --date 会漏目标年缓存。
+        断言 get_trade_calendar 用目标年（2024）date_str 预取，且目标年假日被正确拦截。
+        """
+        conn = _make_test_db(tmp_path)  # 空日历，强制走 ensure_trade_calendar 预取
+        mock_conn_fn.return_value = conn
+        # get_trade_calendar 返回目标年(2024)日历且把 2024-05-01 标 is_open=0；is_trade_day 单点失败。
+        reg = _make_registry(error="api down", cal_data=[{"cal_date": "20240501", "is_open": 0}])
+        reg.initialize_all.return_value = {}
+        mock_sp.return_value = reg
+        from cli.trend_leader import _run_daily
+        with caplog.at_level(logging.WARNING):
+            _run_daily({}, self._daily_args("2024-05-01"))
+        # 关键断言：日历预取用的是目标年 2024（默认当前年则会是当前年 date_str），证明 year 被正确传入。
+        cal_calls = [c for c in reg.call.call_args_list if c.args and c.args[0] == "get_trade_calendar"]
+        assert cal_calls, "应调用 get_trade_calendar 预取日历"
+        assert any("2024-" in str(c.args[1]) for c in cal_calls), \
+            f"应按目标年 2024 预取，实际: {[c.args[1] for c in cal_calls]}"
+        assert "非交易日" in caplog.text
+        mock_scanner.run_daily.assert_not_called()
