@@ -96,6 +96,12 @@ def _run_daily(config: dict, args: argparse.Namespace) -> None:
         with without_standard_http_proxy():
             registry = setup_providers(config)
             registry.initialize_all()
+            # 非交易日守卫(裸跑/no-push 会落库;--dry-run 内存不落库,豁免以免守卫的日历预取写真实库)：
+            # 节假日数据源常返上一交易日陈旧数据按当日落库+误推送。守卫天然在 no-proxy 内,与采集一致。
+            from utils.trade_date import is_non_trading_day
+            if not args.dry_run and is_non_trading_day(conn, registry, date):
+                logger.warning("⚠️ %s 为非交易日(周末/法定假日),跳过大盘择时观察(不落库、不推送)", date)
+                return
             result = scanner.run_daily(conn, registry, date,
                                        dry_run=args.dry_run, pivot_overrides=_pivot_overrides(args))
     except ValueError as e:

@@ -87,7 +87,10 @@ def _indices(args) -> list | None:
 
 def _setup_tushare(config):
     """复刻生产 init：setup_providers + initialize_all，取 tushare 实例。调用方须在
-    without_standard_http_proxy() 上下文内调用（provider HTTP 调用时读 os.environ）。"""
+    without_standard_http_proxy() 上下文内调用（provider HTTP 调用时读 os.environ）。
+
+    返回 (registry, provider)：registry 供非交易日守卫复用（is_non_trading_day 走 registry.call），
+    provider 供 service 调用。失败返回 (None, None)。"""
     from main import setup_providers
 
     registry = setup_providers(config)
@@ -95,8 +98,8 @@ def _setup_tushare(config):
     provider = registry.get_provider("tushare")
     if provider is None or not getattr(provider, "_initialized", False):
         logger.error("[sector-correlation] Tushare provider 未初始化(检查 TUSHARE_TOKEN / tushare.xyz 可达)")
-        return None
-    return provider
+        return None, None
+    return registry, provider
 
 
 def _run_daily(config: dict, args: argparse.Namespace) -> None:
@@ -106,8 +109,14 @@ def _run_daily(config: dict, args: argparse.Namespace) -> None:
     conn = get_connection()
     try:
         with without_standard_http_proxy():
-            provider = _setup_tushare(config)
+            registry, provider = _setup_tushare(config)
             if provider is None:
+                return
+            # 非交易日守卫(--dry-run persist=False 不落库,豁免以免守卫的日历预取写真实库)：
+            # 节假日 tushare 镜像常返上一交易日陈旧数据按当日落库+误推送。守卫天然在 no-proxy 内。
+            from utils.trade_date import is_non_trading_day
+            if not args.dry_run and is_non_trading_day(conn, registry, date):
+                logger.warning("⚠️ %s 为非交易日(周末/法定假日),跳过板块相关性采集(不落库、不推送)", date)
                 return
             md = service.run_daily(
                 conn, provider, date,
@@ -143,7 +152,7 @@ def _run_matrix(config: dict, args: argparse.Namespace) -> None:
             print(formatter.format_matrix(cached))
             return
         with without_standard_http_proxy():
-            provider = _setup_tushare(config)
+            _registry, provider = _setup_tushare(config)  # matrix 只读不需守卫，registry 忽略
             if provider is None:
                 return
             md = service.run_matrix(

@@ -93,3 +93,30 @@ def ensure_trade_calendar(conn: sqlite3.Connection, registry, year: int | None =
     count = Q.upsert_trade_calendar(conn, rows)
     logger.info("导入 %d 年交易日历 %d 条", year, count)
     return count
+
+
+def is_non_trading_day(conn: sqlite3.Connection, registry, date: str) -> bool:
+    """非交易日（周末/法定假日）守卫判定，供盘后类 CLI（落库/推送）跳过非交易日触发复用。
+
+    仅当交易日历**明确**判定为非交易日时返回 True（应跳过）；判定失败 / 无日历缓存 → 返回
+    False（fail-open，照常执行，与 main.py pre/post 一致；周末经 is_trade_day 的 weekday 兜底必被拦）。
+
+    背景：launchd plist 节假日仍触发，非交易日数据源常返上一交易日的陈旧数据（且不带日期校验），
+    会按当日落库 + 误推送。守卫按目标日期年份预取日历（支持 --date 跨年历史校准）。
+
+    日历写入随传入的 conn 走：调用方在 dry-run（内存副本 / 不落库）模式下应**自行豁免**本守卫，
+    避免在真实库上写日历缓存而破坏 dry-run 无副作用语义。
+
+    异常 fail-open 前会 conn.rollback()：日历导入是逐行 execute、末尾才 commit，若 provider 返回
+    脏日历致中途抛错，已执行的半截日历行会留在事务里，被调用方后续业务 commit 一并提交、污染交易日
+    缓存（codex 门2 finding）。回滚保证 fail-open 时连接上无本守卫产生的待提交写入。
+    """
+    try:
+        ensure_trade_calendar(conn, registry, year=int(date[:4]))
+        return is_trade_day(date, conn=conn, registry=registry) is False
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return False

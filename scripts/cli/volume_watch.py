@@ -65,6 +65,14 @@ def _run_daily(config: dict, args: argparse.Namespace) -> None:
     conn = get_connection()
     try:
         migrate(conn)  # 必须:对齐全仓库约定(每个写库命令连库后即 migrate),保证 v34 gain_universe_json 列存在,否则老库 save 崩
+        # 非交易日守卫(仅 persist 模式):节假日数据源常返上一交易日陈旧数据按当日落库+误推送。
+        # --dry-run 业务数据 persist=False 且不推送,故守卫豁免(也避免守卫的日历预取写真实库)。
+        # 注(codex 门2 反驳):migrate(conn) 是「连库即迁移」的全仓库既有约定(幂等 schema-only),
+        # dry-run 下亦执行,属本文件既有行为、非本次引入,与本守卫无关,不在守卫范围内。
+        from utils.trade_date import is_non_trading_day
+        if not args.dry_run and is_non_trading_day(conn, registry, date):
+            logger.warning("⚠️ %s 为非交易日(周末/法定假日),跳过成交额板块集中度采集(不落库、不推送)", date)
+            return
         md = service.run_daily(conn, registry, date,
                                persist=not args.dry_run, refetch=args.refetch)
     finally:

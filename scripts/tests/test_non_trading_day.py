@@ -677,3 +677,188 @@ class TestTrendLeaderNonTradingDay:
             f"应按目标年 2024 预取，实际: {[c.args[1] for c in cal_calls]}"
         assert "非交易日" in caplog.text
         mock_scanner.run_daily.assert_not_called()
+
+
+class TestSharedIsNonTradingDay:
+    """utils.trade_date.is_non_trading_day 共享守卫单测（4 个 CLI 复用的真源）。"""
+
+    def test_holiday_returns_true(self, tmp_path):
+        conn = _make_test_db(tmp_path, holiday="2026-04-06")
+        from utils.trade_date import is_non_trading_day
+        reg = _make_registry(is_trade_day_value=False)
+        assert is_non_trading_day(conn, reg, "2026-04-06") is True
+
+    def test_trading_day_returns_false(self, tmp_path):
+        conn = _make_test_db(tmp_path)
+        from utils.trade_date import is_non_trading_day
+        reg = _make_registry(is_trade_day_value=True)
+        assert is_non_trading_day(conn, reg, "2026-04-07") is False  # 周二
+
+    def test_failure_fails_open_false(self, tmp_path):
+        """判定失败 + 无缓存 → fail-open 返回 False（工作日按 weekday 兜底）。"""
+        conn = _make_test_db(tmp_path)
+        from utils.trade_date import is_non_trading_day
+        reg = _make_registry(error="api down")
+        assert is_non_trading_day(conn, reg, "2026-04-07") is False  # 周二兜底=交易日
+
+    def test_failure_rolls_back_partial_calendar(self, tmp_path, monkeypatch):
+        """日历导入中途抛错 → fail-open 前回滚半截写入,不污染交易日缓存(codex 门2 finding)。"""
+        conn = _make_test_db(tmp_path)
+        import utils.trade_date as td
+
+        def _boom(c, registry, year=None):
+            c.execute("INSERT INTO trade_calendar (date, is_open) VALUES ('2026-09-30', 0)")  # 未提交
+            raise RuntimeError("dirty calendar mid-write")
+
+        monkeypatch.setattr(td, "ensure_trade_calendar", _boom)
+        result = td.is_non_trading_day(conn, _make_registry(), "2026-09-30")
+        assert result is False  # fail-open
+        # 半截写入已回滚:同一连接 SELECT 不应看到未提交行(未回滚则可见)
+        n = conn.execute("SELECT COUNT(*) FROM trade_calendar WHERE date='2026-09-30'").fetchone()[0]
+        assert n == 0, "守卫异常路径未回滚,半截日历泄漏"
+
+
+class TestVolumeWatchNonTradingDay:
+    def _args(self, date, *, dry_run=False):
+        import argparse
+        return argparse.Namespace(volume_watch_command="daily", date=date, dry_run=dry_run, refetch=False)
+
+    @patch("cli.volume_watch._push_to_dingtalk")
+    @patch("cli.volume_watch.migrate")
+    @patch("cli.volume_watch.service")
+    @patch("cli.volume_watch.get_connection")
+    @patch("main.setup_providers")
+    def test_skips_on_holiday(self, mock_sp, mock_conn_fn, mock_service, _mig, mock_push, caplog, tmp_path):
+        mock_conn_fn.return_value = _make_test_db(tmp_path, holiday="2026-04-06")
+        reg = _make_registry(is_trade_day_value=False); reg.initialize_all.return_value = {}
+        mock_sp.return_value = reg
+        from cli.volume_watch import _run_daily
+        with caplog.at_level(logging.WARNING):
+            _run_daily({}, self._args("2026-04-06"))
+        assert "非交易日" in caplog.text
+        mock_service.run_daily.assert_not_called()
+        mock_push.assert_not_called()
+
+    @patch("cli.volume_watch._push_to_dingtalk")
+    @patch("cli.volume_watch.migrate")
+    @patch("cli.volume_watch.service")
+    @patch("cli.volume_watch.get_connection")
+    @patch("main.setup_providers")
+    def test_dry_run_not_guarded(self, mock_sp, mock_conn_fn, mock_service, _mig, mock_push, caplog, tmp_path):
+        mock_conn_fn.return_value = _make_test_db(tmp_path, holiday="2026-04-06")
+        reg = _make_registry(is_trade_day_value=False); reg.initialize_all.return_value = {}
+        mock_sp.return_value = reg
+        mock_service.run_daily.return_value = "# md"
+        from cli.volume_watch import _run_daily
+        with caplog.at_level(logging.WARNING):
+            _run_daily({}, self._args("2026-04-06", dry_run=True))
+        assert "非交易日" not in caplog.text
+        mock_service.run_daily.assert_called_once()
+
+    @patch("cli.volume_watch._push_to_dingtalk")
+    @patch("cli.volume_watch.migrate")
+    @patch("cli.volume_watch.service")
+    @patch("cli.volume_watch.get_connection")
+    @patch("main.setup_providers")
+    def test_runs_on_trading_day(self, mock_sp, mock_conn_fn, mock_service, _mig, mock_push, tmp_path):
+        mock_conn_fn.return_value = _make_test_db(tmp_path)
+        reg = _make_registry(is_trade_day_value=True); reg.initialize_all.return_value = {}
+        mock_sp.return_value = reg
+        mock_service.run_daily.return_value = None  # 无数据,提前 return,免去 push 真调
+        from cli.volume_watch import _run_daily
+        _run_daily({}, self._args("2026-04-07"))
+        mock_service.run_daily.assert_called_once()
+
+
+class TestMarketTimingNonTradingDay:
+    def _args(self, date, *, dry_run=False, no_push=False):
+        import argparse
+        return argparse.Namespace(market_timing_command="daily", date=date, dry_run=dry_run,
+                                  no_push=no_push, pivot_index=None, pivot_date=None)
+
+    @patch("cli.market_timing._push_to_dingtalk")
+    @patch("cli.market_timing.formatter")
+    @patch("cli.market_timing.scanner")
+    @patch("cli.market_timing.get_connection")
+    @patch("main.setup_providers")
+    def test_skips_on_holiday(self, mock_sp, mock_conn_fn, mock_scanner, _fmt, mock_push, caplog, tmp_path):
+        mock_conn_fn.return_value = _make_test_db(tmp_path, holiday="2026-04-06")
+        reg = _make_registry(is_trade_day_value=False); reg.initialize_all.return_value = {}
+        mock_sp.return_value = reg
+        from cli.market_timing import _run_daily
+        with caplog.at_level(logging.WARNING):
+            _run_daily({}, self._args("2026-04-06"))
+        assert "非交易日" in caplog.text
+        mock_scanner.run_daily.assert_not_called()
+        mock_push.assert_not_called()
+
+    @patch("cli.market_timing._push_to_dingtalk")
+    @patch("cli.market_timing.formatter")
+    @patch("cli.market_timing.scanner")
+    @patch("cli.market_timing.get_connection")
+    @patch("main.setup_providers")
+    def test_no_push_still_guarded_on_holiday(self, mock_sp, mock_conn_fn, mock_scanner, _fmt, mock_push, caplog, tmp_path):
+        """--no-push 仍会落库 → 非交易日必须守卫（与 dry-run 区分）。"""
+        mock_conn_fn.return_value = _make_test_db(tmp_path, holiday="2026-04-06")
+        reg = _make_registry(is_trade_day_value=False); reg.initialize_all.return_value = {}
+        mock_sp.return_value = reg
+        from cli.market_timing import _run_daily
+        with caplog.at_level(logging.WARNING):
+            _run_daily({}, self._args("2026-04-06", no_push=True))
+        assert "非交易日" in caplog.text
+        mock_scanner.run_daily.assert_not_called()
+
+    @patch("cli.market_timing._push_to_dingtalk")
+    @patch("cli.market_timing.formatter")
+    @patch("cli.market_timing.scanner")
+    @patch("cli.market_timing.get_connection")
+    @patch("main.setup_providers")
+    def test_dry_run_not_guarded(self, mock_sp, mock_conn_fn, mock_scanner, mock_fmt, mock_push, caplog, tmp_path):
+        mock_conn_fn.return_value = _make_test_db(tmp_path, holiday="2026-04-06")
+        reg = _make_registry(is_trade_day_value=False); reg.initialize_all.return_value = {}
+        mock_sp.return_value = reg
+        mock_scanner.run_daily.return_value = {"signals": []}
+        mock_fmt.render_daily.return_value = "# md"
+        from cli.market_timing import _run_daily
+        with caplog.at_level(logging.WARNING):
+            _run_daily({}, self._args("2026-04-06", dry_run=True))
+        assert "非交易日" not in caplog.text
+        mock_scanner.run_daily.assert_called_once()
+
+
+class TestSectorCorrelationNonTradingDay:
+    def _args(self, date, *, dry_run=False):
+        import argparse
+        return argparse.Namespace(sector_correlation_command="daily", date=date, dry_run=dry_run,
+                                  windows=None, top_industries=5, top_concepts=5, activity_days=5,
+                                  indices=None, no_concept=False)
+
+    @patch("cli.sector_correlation._push_to_dingtalk")
+    @patch("cli.sector_correlation.service")
+    @patch("cli.sector_correlation._setup_tushare")
+    @patch("cli.sector_correlation.get_connection")
+    def test_skips_on_holiday(self, mock_conn_fn, mock_setup, mock_service, mock_push, caplog, tmp_path):
+        mock_conn_fn.return_value = _make_test_db(tmp_path, holiday="2026-04-06")
+        reg = _make_registry(is_trade_day_value=False)
+        mock_setup.return_value = (reg, MagicMock())  # (registry, provider)
+        from cli.sector_correlation import _run_daily
+        with caplog.at_level(logging.WARNING):
+            _run_daily({}, self._args("2026-04-06"))
+        assert "非交易日" in caplog.text
+        mock_service.run_daily.assert_not_called()
+        mock_push.assert_not_called()
+
+    @patch("cli.sector_correlation._push_to_dingtalk")
+    @patch("cli.sector_correlation.service")
+    @patch("cli.sector_correlation._setup_tushare")
+    @patch("cli.sector_correlation.get_connection")
+    def test_dry_run_not_guarded(self, mock_conn_fn, mock_setup, mock_service, mock_push, caplog, tmp_path):
+        mock_conn_fn.return_value = _make_test_db(tmp_path, holiday="2026-04-06")
+        reg = _make_registry(is_trade_day_value=False)
+        mock_setup.return_value = (reg, MagicMock())
+        mock_service.run_daily.return_value = None  # 无数据提前 return
+        from cli.sector_correlation import _run_daily
+        with caplog.at_level(logging.WARNING):
+            _run_daily({}, self._args("2026-04-06", dry_run=True))
+        assert "非交易日" not in caplog.text
+        mock_service.run_daily.assert_called_once()
