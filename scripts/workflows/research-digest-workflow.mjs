@@ -37,6 +37,7 @@ async function main() {
     HUIBO_SUMMARY_DIR: summaryDir,
     HUIBO_REPORT_PDF_DIR: process.env.HUIBO_REPORT_PDF_DIR || path.join(os.homedir(), "Downloads"),
     HUIBO_REFRESH_URL_FROM_APP: process.env.HUIBO_REFRESH_URL_FROM_APP || "1",
+    HUIBO_ALLOW_DIRECT_PDF_DOWNLOAD: process.env.HUIBO_ALLOW_DIRECT_PDF_DOWNLOAD || "1",
   };
   const llmInputBaseDir = abs(opts.llmInputDir || process.env.HUIBO_LLM_INPUT_DIR || path.join(os.tmpdir(), "huibo-llm-input"));
   const llmInputDir = path.join(llmInputBaseDir, safeFileStem(date));
@@ -90,6 +91,7 @@ async function main() {
     antigravityLogDir,
     huiboReportPdfDir: helperEnvOverrides.HUIBO_REPORT_PDF_DIR,
     huiboRefreshUrlFromApp: helperEnvOverrides.HUIBO_REFRESH_URL_FROM_APP,
+    huiboAllowDirectPdfDownload: helperEnvOverrides.HUIBO_ALLOW_DIRECT_PDF_DOWNLOAD,
   };
   saveState(statePath, state);
 

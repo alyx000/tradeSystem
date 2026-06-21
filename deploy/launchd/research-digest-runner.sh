@@ -24,6 +24,7 @@ if [ -f "$HOME/.config/tradeSystem.env" ]; then
     source "$HOME/.config/tradeSystem.env"
 fi
 export HUIBO_REFRESH_URL_FROM_APP="${HUIBO_REFRESH_URL_FROM_APP:-1}"
+export HUIBO_ALLOW_DIRECT_PDF_DOWNLOAD="${HUIBO_ALLOW_DIRECT_PDF_DOWNLOAD:-1}"
 
 # 4. 时间戳前缀方便排障
 RUN_DATE="$(date '+%Y-%m-%d')"

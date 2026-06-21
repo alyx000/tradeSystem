@@ -1002,3 +1002,12 @@ def test_research_digest_runner_path_includes_user_local_bin():
     runner = (repo_root / "deploy/launchd/research-digest-runner.sh").read_text(encoding="utf-8")
     assert 'export PATH="$HOME/.local/bin:' in runner
     assert 'export HUIBO_REFRESH_URL_FROM_APP="${HUIBO_REFRESH_URL_FROM_APP:-1}"' in runner
+    assert 'export HUIBO_ALLOW_DIRECT_PDF_DOWNLOAD="${HUIBO_ALLOW_DIRECT_PDF_DOWNLOAD:-1}"' in runner
+
+
+def test_js_workflow_defaults_to_huibo_terminal_pdf_download():
+    repo_root = Path(__file__).resolve().parents[2]
+    workflow = (repo_root / "scripts/workflows/research-digest-workflow.mjs").read_text(encoding="utf-8")
+    assert 'HUIBO_REFRESH_URL_FROM_APP: process.env.HUIBO_REFRESH_URL_FROM_APP || "1"' in workflow
+    assert 'HUIBO_ALLOW_DIRECT_PDF_DOWNLOAD: process.env.HUIBO_ALLOW_DIRECT_PDF_DOWNLOAD || "1"' in workflow
+    assert "huiboAllowDirectPdfDownload: helperEnvOverrides.HUIBO_ALLOW_DIRECT_PDF_DOWNLOAD" in workflow
