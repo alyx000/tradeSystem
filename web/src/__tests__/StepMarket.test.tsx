@@ -1,16 +1,23 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter } from 'react-router-dom'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import StepMarket from '../components/review/StepMarket'
 import { api } from '../lib/api'
 import type { ReviewPrefillData, ReviewStepValue } from '../lib/types'
 
+// prefill 带 date → 内嵌 MarginIndexCorrelation 会发请求；mock 成空壳避免真实 fetch 噪声。
+vi.spyOn(api, 'getMarginIndexCorrelation').mockResolvedValue({ date: '2026-04-03', available: false })
+
 function renderStep(data: ReviewStepValue = {}, prefill?: ReviewPrefillData) {
   const onChange = vi.fn()
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   render(
-    <MemoryRouter>
-      <StepMarket data={data} onChange={onChange} prefill={prefill} />
-    </MemoryRouter>
+    <QueryClientProvider client={qc}>
+      <MemoryRouter>
+        <StepMarket data={data} onChange={onChange} prefill={prefill} />
+      </MemoryRouter>
+    </QueryClientProvider>
   )
   return { onChange }
 }

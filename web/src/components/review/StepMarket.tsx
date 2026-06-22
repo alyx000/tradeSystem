@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { type StepProps, Section, Row, PrefillBanner, Metric, SelectField, TextField, NumberField, TextareaField, TeacherNotesPanel } from './widgets'
 import CognitionPanel from './CognitionPanel'
+import MarginIndexCorrelation from './MarginIndexCorrelation'
 import { get, set } from './formState'
 import { api } from '../../lib/api'
 import type { ResearchCoverageRow, ResearchCoverageIndustryRow } from '../../lib/types'
@@ -328,6 +329,8 @@ export default function StepMarket({ data, onChange, prefill }: StepProps) {
         todayItems={marketSignals?.research_coverage_top}
         todayIndustry={marketSignals?.research_coverage_industry}
       />
+
+      <MarginIndexCorrelation date={prefill?.date} />
 
       <Section title="成交量对比">
         {m && (

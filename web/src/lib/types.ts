@@ -298,6 +298,57 @@ export interface SectorGainRankingPayload {
   concept_rankings?: SectorGainPeriods   // 同花顺概念题材榜（多标签；旧记录可能缺）
 }
 
+// 两融余额与指数联动性（复盘「1.大盘」）：背离/水位趋势/领先滞后/同步相关四维。
+export interface MicPairing {
+  pair_key: string
+  margin_key: string        // total / sse / szse
+  index_code: string
+  index_name: string
+  group: string             // broad / cross
+  margin_label?: string     // cross 口径中文标签（沪市两融/深市两融）
+}
+export interface MicLag {
+  best_lag: number | null
+  best_corr: number | null
+  relation: string          // 两融领先/两融滞后/同步/样本不足
+}
+export interface MicSyncCell { corr: number | null; label: string }
+export interface MicDivergence {
+  index_cum: number | null
+  margin_cum: number | null
+  diverged: boolean
+  type: string              // 涨指两融降/跌指两融升/无背离/日期缺口/样本不足/无法评估
+  magnitude: number | null
+}
+export interface MicBalance {
+  latest_yi: number | null
+  dod_pct: number | null
+  pctile_20d: number | null
+  up_streak: number
+  down_streak: number
+  ma20: number | null
+  vs_ma20: number | null
+}
+export interface MarginIndexCorrelationPayload {
+  date: string
+  available: boolean
+  data_trade_date?: string
+  windows?: number[]
+  indices?: MicPairing[]
+  base_index?: string
+  lag?: Record<string, MicLag>
+  sync_corr?: Record<string, Record<string, MicSyncCell>>      // {pair_key: {window: cell}}
+  divergence?: Record<string, Record<string, MicDivergence>>   // {pair_key: {window: div}}
+  balance?: Record<string, MicBalance>                         // {total/sse/szse: balance}
+  meta?: {
+    source?: string
+    market_scope?: string
+    analysis_trade_date?: string
+    stale?: boolean
+    divergence_windows?: number[]
+  }
+}
+
 export interface MainThemeItem {
   date?: string
   theme_name: string

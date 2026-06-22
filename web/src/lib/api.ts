@@ -29,6 +29,7 @@ import type {
   KnowledgeAssetRecord,
   KnowledgeDraftInput,
   KnowledgeDraftResult,
+  MarginIndexCorrelationPayload,
   MarketChartItem,
   MarketFullData,
   MainThemeItem,
@@ -175,6 +176,8 @@ export const api = {
     request<ConcentrationTrendPayload>(`/market/concentration/history?days=${days}`),
   getSectorGainRanking: (date: string) =>
     request<SectorGainRankingPayload>(`/market/sector-gain-ranking/${date}`),
+  getMarginIndexCorrelation: (date: string) =>
+    request<MarginIndexCorrelationPayload>(`/market/margin-index-correlation/${date}`),
   getMarketTiming: (date: string) => request<MarketTimingPayload>(`/market/timing/${date}`),
   getMarketTimingHistory: (days: number = 30, toDate?: string) =>
     request<MarketTimingHistoryPayload>(

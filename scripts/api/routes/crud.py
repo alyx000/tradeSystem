@@ -634,6 +634,16 @@ def get_sector_gain_ranking(date: str,
     return _sanitize_non_finite(payload)  # 脏数据 gain=NaN/Inf 透传会致 JSON 序列化 500(与其它 market 端点一致)
 
 
+@router.get("/market/margin-index-correlation/{date}")
+def get_margin_index_correlation(date: str,
+                                 conn: sqlite3.Connection = Depends(get_db_conn)):
+    """两融余额与指数联动性(某交易日,供复盘「1.大盘」):背离预警 / 余额水位+趋势 /
+    领先滞后 / 同步相关四维。两融余额转日变化率后与指数 pct_chg 同口径统计,全 [判断]
+    守红线(不出价位/不给买卖建议)。无记录返 available=False。"""
+    from services.margin_index_correlation import web_payload
+    return _sanitize_non_finite(web_payload.build_daily_payload(conn, date))  # 相关/分位 NaN 透传会致 500
+
+
 @router.get("/market/timing/history")
 def get_market_timing_history(days: int = 30, to_date: Optional[str] = None,
                               conn: sqlite3.Connection = Depends(get_db_conn)):
