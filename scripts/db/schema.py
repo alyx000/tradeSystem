@@ -477,6 +477,26 @@ CREATE TABLE IF NOT EXISTS market_timing_signal (
 );
 """
 
+# 两融余额与指数联动性（margin-index-correlation daily）：一天一行，JSON 列存按窗口/指数
+# 键的多维结构。date=请求日，data_trade_date=两融真实日（可 < date，stale 标记依据）。
+_SQL_MARGIN_INDEX_CORRELATION_DAILY = """
+CREATE TABLE IF NOT EXISTS margin_index_correlation_daily (
+    date TEXT PRIMARY KEY CHECK(date GLOB '????-??-??'),
+    data_trade_date TEXT,
+    windows_json TEXT NOT NULL,
+    indices_json TEXT NOT NULL,
+    base_index TEXT NOT NULL,
+    lag_json TEXT NOT NULL,
+    sync_corr_json TEXT NOT NULL,
+    divergence_json TEXT NOT NULL,
+    balance_json TEXT NOT NULL,
+    sample_days_json TEXT,
+    meta_json TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT
+);
+"""
+
 # ──────────────────────────────────────────────────────────────
 # 6. 八步复盘
 # ──────────────────────────────────────────────────────────────
@@ -1201,6 +1221,7 @@ _ALL_TABLE_SQL = [
     _SQL_TREND_LEADER_POOL,
     _SQL_SECTOR_CORRELATION_DAILY,
     _SQL_MARKET_TIMING_SIGNAL,
+    _SQL_MARGIN_INDEX_CORRELATION_DAILY,
     _SQL_DAILY_REVIEWS,
     _SQL_EMOTION_CYCLE,
     _SQL_MAIN_THEMES,
@@ -1248,7 +1269,7 @@ EXPECTED_TABLES = [
     "holdings", "holding_tasks", "holding_quote_snapshots", "watchlist", "blacklist",
     "industry_info", "macro_info",
     "daily_market", "daily_volume_concentration", "trend_leader_pool", "sector_correlation_daily",
-    "market_timing_signal", "daily_reviews",
+    "market_timing_signal", "margin_index_correlation_daily", "daily_reviews",
     "emotion_cycle", "main_themes",
     "trades",
     "trade_thesis",

@@ -19,7 +19,7 @@ PROJECT_ROOT = SCRIPTS_DIR.parent
 
 # 与 migrate() 中「当前最新」一步一致；新增迁移时递增本常量，并把上一步的
 # set_schema_version(conn, CURRENT_SCHEMA_VERSION) 改为字面量 N（保留历史链）。
-CURRENT_SCHEMA_VERSION = 35
+CURRENT_SCHEMA_VERSION = 36
 
 
 def get_schema_version(conn: sqlite3.Connection) -> int:
@@ -73,6 +73,23 @@ def _ensure_daily_market_premium_columns(conn: sqlite3.Connection) -> None:
     for col in ("premium_capacity", "premium_first_open"):
         if cols and col not in cols:
             conn.execute(f"ALTER TABLE daily_market ADD COLUMN {col} REAL")
+
+
+def _ensure_margin_index_correlation_daily(conn: sqlite3.Connection) -> None:
+    """v36 兜底：确保 margin_index_correlation_daily 表存在(版本无关)。
+
+    防"DB 已标记到 v36 但表缺失"的半迁移/恢复/drift 态——版本门会跳过 v36 块，导致表永不
+    创建，运行期 repo.get 报 no such table，复盘 web 端点 /market/margin-index-correlation
+    每次返 500 而非约定的 available=false（codex 门2 web 后端审查）。健康库纯只读探查直接返回。
+    """
+    exists = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='margin_index_correlation_daily'"
+    ).fetchone()
+    if exists:
+        return
+    from .schema import _SQL_MARGIN_INDEX_CORRELATION_DAILY
+    conn.executescript(_SQL_MARGIN_INDEX_CORRELATION_DAILY)
+    conn.commit()  # 仅在确需修复时才提交
 
 
 def _ensure_market_timing_signal(conn: sqlite3.Connection) -> None:
@@ -647,6 +664,12 @@ def migrate(conn: sqlite3.Connection) -> None:
         set_schema_version(conn, 35)
         conn.commit()
 
+    if version < 36:
+        logger.info("Applying schema v36: margin_index_correlation_daily (两融与指数联动性)")
+        init_schema(conn)  # 新表:CREATE IF NOT EXISTS 在老库上建出;新表无需 ALTER 兜底
+        set_schema_version(conn, 36)
+        conn.commit()
+
     # 版本无关兜底:DB 已标记到最新版但 market_timing_signal 缺失/缺列(异常半迁移态/历史遗留)时,
     # 版本门会跳过迁移块导致表/列永不建,运行期报 no such table/column。仅在确缺时 DDL+commit;
     # 健康库纯探查直接返回,不给调用方加事务边界(见 feedback_real_db_vs_in_memory)。
@@ -654,6 +677,7 @@ def migrate(conn: sqlite3.Connection) -> None:
     _ensure_market_timing_quote_columns(conn)
     _ensure_volume_concentration_gain_column(conn)
     _ensure_broker_executions_columns(conn)
+    _ensure_margin_index_correlation_daily(conn)
 
 # ──────────────────────────────────────────────────────────────
 # YAML 数据导入

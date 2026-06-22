@@ -118,6 +118,7 @@ class TushareProvider(DataProvider):
             "get_northbound",
             "get_northbound_top_stocks",
             "get_margin_data",
+            "get_margin_series",
             "get_margin_detail",
             "get_dragon_tiger",
             "get_block_trade",
@@ -840,6 +841,16 @@ class TushareProvider(DataProvider):
 
     # ---- 融资融券汇总 ----
 
+    @staticmethod
+    def _margin_expected_exchanges(df) -> set[str]:
+        """两融「应到交易所集合」：以沪深为下限不塌缩 ∪ 窗口内出现过的交易所。
+
+        必须以沪深为下限——否则镜像整窗只返沪市时 expected 会塌缩成 {SSE}，把半额
+        自我认证为「完整」（系统性降级测不出）。get_margin_data 与 get_margin_series
+        共用此判定，确保交易所规则（如北交所纳入）变化时单点维护。
+        """
+        return {"SSE", "SZSE"} | {str(x) for x in df["exchange_id"].dropna().unique()}
+
     def get_margin_data(self, date: str, lookback_days: int = 15) -> DataResult:
         """
         沪深北三市融资融券每日汇总（pro.margin），余额单位为元，输出附带亿元字段。
@@ -866,7 +877,7 @@ class TushareProvider(DataProvider):
             # 应到集合 = 法定必有的沪深 ∪ 窗口内实际出现过的交易所（北交所等按其上市后是否出现自动纳入）。
             # 必须以沪深为下限，不能纯靠窗口推导——否则镜像整窗只返沪市时 expected 会塌缩成 {SSE}，
             # 把半额自我认证为"完整"（系统性降级测不出）。
-            expected = {"SSE", "SZSE"} | {str(x) for x in df["exchange_id"].dropna().unique()}
+            expected = self._margin_expected_exchanges(df)
             dates_desc = sorted({td for td in df["trade_date"] if td <= d_end}, reverse=True)
 
             chosen = next(
@@ -912,6 +923,64 @@ class TushareProvider(DataProvider):
                 "total_rzrqye_yi": round(total_rzrqye / 1e8, 2),
             }
             return DataResult(data=data, source="tushare:margin")
+        except Exception as e:
+            return DataResult(data=None, source=self.name, error=str(e))
+
+    def get_margin_series(self, start_date: str, end_date: str) -> DataResult:
+        """两融余额区间时间序列（供与指数的联动性相关分析）。
+
+        与 get_margin_data 的单日快照不同，返回区间内**所有完整交易日**的升序序列。
+        复用同一完整性逻辑：以「应到交易所集合」(沪深为下限 ∪ 窗口内出现过的交易所)
+        判定每日是否完整，只保留应到集合齐全的日，剔除「仅沪市」等半额日防止污染序列。
+        每日给三市合计 + 沪/深/北各自 rzrqye 合计（亿元），支持沪深各自对照。
+        """
+        try:
+            d_start = self._date_fmt(start_date)
+            d_end = self._date_fmt(end_date)
+            df = self.pro.margin(start_date=d_start, end_date=d_end)
+            if df is None or df.empty:
+                return DataResult(
+                    data=None, source=self.name,
+                    error=f"无融资融券汇总数据: {start_date}~{end_date}",
+                )
+
+            df = df.copy()
+            df["trade_date"] = df["trade_date"].astype(str)
+            # 应到集合以沪深为下限不塌缩（同 get_margin_data：防整窗只返沪市时半额自证完整）。
+            expected = self._margin_expected_exchanges(df)
+            market_scope = "+".join(sorted(expected))
+
+            series: list[dict] = []
+            for td in sorted({t for t in df["trade_date"] if t <= d_end}):
+                sub = df[df["trade_date"] == td]
+                if {str(x) for x in sub["exchange_id"]} != expected:
+                    continue  # 不完整日剔除，不进序列
+                by_ex: dict[str, float] = {}
+                total_rzye = total_rqye = total_rzrqye = 0.0
+                for _, row in sub.iterrows():
+                    ex = str(row.get("exchange_id", "") or "")
+                    total_rzye += float(row.get("rzye", 0) or 0)
+                    total_rqye += float(row.get("rqye", 0) or 0)
+                    rzrqye = float(row.get("rzrqye", 0) or 0)
+                    total_rzrqye += rzrqye
+                    by_ex[ex] = rzrqye
+                series.append({
+                    "trade_date": f"{td[:4]}-{td[4:6]}-{td[6:8]}",
+                    "total_rzye_yi": round(total_rzye / 1e8, 2),
+                    "total_rqye_yi": round(total_rqye / 1e8, 2),
+                    "total_rzrqye_yi": round(total_rzrqye / 1e8, 2),
+                    "sse_rzrqye_yi": round(by_ex.get("SSE", 0.0) / 1e8, 2),
+                    "szse_rzrqye_yi": round(by_ex.get("SZSE", 0.0) / 1e8, 2),
+                    "bse_rzrqye_yi": round(by_ex.get("BSE", 0.0) / 1e8, 2),
+                    "market_scope": market_scope,
+                })
+
+            if not series:
+                return DataResult(
+                    data=None, source=self.name,
+                    error=f"无完整融资融券数据（窗口内各交易所覆盖不齐）: {start_date}~{end_date}",
+                )
+            return DataResult(data=series, source="tushare:margin")
         except Exception as e:
             return DataResult(data=None, source=self.name, error=str(e))
 

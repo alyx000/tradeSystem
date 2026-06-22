@@ -469,6 +469,47 @@ def test_v32_migration_creates_market_timing_signal(tmp_path):
     conn.close()
 
 
+def test_v36_migration_creates_margin_index_correlation_daily(tmp_path):
+    """既有 v35 库（无 margin_index_correlation_daily）经 migrate → 表存在且 user_version 到最新。"""
+    conn = get_connection(tmp_path / "v35.db")
+    migrate(conn)
+    conn.execute("DROP TABLE IF EXISTS margin_index_correlation_daily")
+    conn.execute("PRAGMA user_version = 35")
+    conn.commit()
+    assert get_schema_version(conn) == 35
+    assert conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='margin_index_correlation_daily'"
+    ).fetchone() is None
+
+    migrate(conn)
+    # 迁移写的 user_version 必须 == 声明的 CURRENT_SCHEMA_VERSION（codex 门2 #1：常量漏 bump 的契约破坏）
+    assert get_schema_version(conn) == CURRENT_SCHEMA_VERSION == 36
+    assert conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='margin_index_correlation_daily'"
+    ).fetchone() is not None
+    conn.close()
+
+
+def test_v36_self_heal_when_latest_version_but_table_missing(tmp_path):
+    """版本无关兜底：DB 已标 v36 但表缺失（半迁移/恢复/drift）→ migrate 自愈重建，
+    防复盘 web 端点报 no such table → 500（codex 门2 web 后端审查）。"""
+    conn = get_connection(tmp_path / "drift.db")
+    migrate(conn)
+    # 模拟 drift：删表但保留 user_version 在最新（版本门会跳过 v36 块）
+    conn.execute("DROP TABLE margin_index_correlation_daily")
+    conn.commit()
+    assert get_schema_version(conn) == CURRENT_SCHEMA_VERSION
+    assert conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='margin_index_correlation_daily'"
+    ).fetchone() is None
+
+    migrate(conn)  # 版本门跳过，但版本无关兜底应重建
+    assert conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='margin_index_correlation_daily'"
+    ).fetchone() is not None
+    conn.close()
+
+
 def test_v33_backfills_market_timing_quote_columns(tmp_path):
     """既有 v32 库（market_timing_signal 无 close/change_pct）经 migrate → v33 ALTER 补列且不丢数据。"""
     conn = get_connection(tmp_path / "v32_noquote.db")

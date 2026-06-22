@@ -287,6 +287,7 @@ class AkshareProvider(DataProvider):
             "get_hk_indices",
             "get_index_weekly",
             "get_margin_data",
+            "get_margin_series",
         ]
 
     # ---- 融资融券汇总（tushare 全失败时的降级源，仅沪深，无北交所） ----
@@ -361,6 +362,76 @@ class AkshareProvider(DataProvider):
             "total_rzrqye_yi": round(sum(e["rzrqye_yi"] for e in exchanges), 2),
         }
         return DataResult(data=data, source="akshare:margin")
+
+    def get_margin_series(self, start_date: str, end_date: str, max_days: int = 90) -> DataResult:
+        """两融余额区间序列降级源（仅沪深，无北交所 BSE）。
+
+        作为 tushare get_margin_series 全失败时的备份。沪市走 stock_margin_sse 区间，
+        深市按沪市返回的真实交易日逐日 stock_margin_szse（深市接口仅单日）。沪深任一日
+        缺失则该日跳过（半额不冒充全市场，同 get_margin_data 降级规则）；全空返 error。
+        单位归一：沪市元/1e8、深市已是亿。BSE 取不到（量级 < 0.5%）记 0.0，market_scope
+        标 "SSE+SZSE" 供下游识别降级口径。
+
+        **降级成本封顶（codex 门2 #4）**：collector 请求的日历区间可达 ~196 日，逐日调
+        深市接口会发上百次串行请求，主源宕机时反而最易超时/被限流。故按日期**从新到旧**
+        迭代，凑够 max_days(默认 90，足覆盖 60 日窗 + lag 余量) 个完整日即停，再升序返回。
+        """
+        d_start = start_date.replace("-", "")
+        d_end = end_date.replace("-", "")
+        try:
+            sse_df = self.ak.stock_margin_sse(start_date=d_start, end_date=d_end)
+        except Exception as e:
+            return DataResult(data=None, source=self.name, error=f"akshare 沪市两融区间获取失败: {e}")
+        if sse_df is None or sse_df.empty:
+            return DataResult(
+                data=None, source=self.name,
+                error=f"两融余额降级源沪市无数据: {start_date}~{end_date}",
+            )
+
+        # 从新到旧迭代，凑够 max_days 个完整日即停（封顶串行深市请求数）。
+        sse_rows = sorted(
+            (r for _, r in sse_df.iterrows()),
+            key=lambda r: str(r["信用交易日期"]), reverse=True,
+        )
+        series: list[dict] = []
+        for sse_row in sse_rows:
+            if len(series) >= max_days:
+                break
+            td = str(sse_row["信用交易日期"])
+            if td < d_start or td > d_end:
+                continue
+            try:
+                szse_df = self.ak.stock_margin_szse(date=td)
+            except Exception as e:
+                logger.warning("akshare 深市两融获取失败 %s: %s", td, e)
+                continue
+            if szse_df is None or szse_df.empty:
+                continue  # 该日深市缺，跳过（半额不冒充全市场）
+            szse_row = szse_df.iloc[0]
+            sse_rzye = float(sse_row["融资余额"]) / 1e8
+            sse_rqye = float(sse_row["融券余量金额"]) / 1e8
+            sse_rzrqye = float(sse_row["融资融券余额"]) / 1e8
+            szse_rzye = float(szse_row["融资余额"])
+            szse_rqye = float(szse_row["融券余额"])
+            szse_rzrqye = float(szse_row["融资融券余额"])
+            series.append({
+                "trade_date": f"{td[:4]}-{td[4:6]}-{td[6:8]}",
+                "total_rzye_yi": round(sse_rzye + szse_rzye, 2),
+                "total_rqye_yi": round(sse_rqye + szse_rqye, 2),
+                "total_rzrqye_yi": round(sse_rzrqye + szse_rzrqye, 2),
+                "sse_rzrqye_yi": round(sse_rzrqye, 2),
+                "szse_rzrqye_yi": round(szse_rzrqye, 2),
+                "bse_rzrqye_yi": 0.0,
+                "market_scope": "SSE+SZSE",
+            })
+
+        if not series:
+            return DataResult(
+                data=None, source=self.name,
+                error=f"两融余额降级源无完整沪深日: {start_date}~{end_date}",
+            )
+        series.sort(key=lambda d: d["trade_date"])
+        return DataResult(data=series, source="akshare:margin")
 
     # ------------------------------------------------------------------
     # 缓存：单次盘前采集会多次调用，避免重复拉全表
