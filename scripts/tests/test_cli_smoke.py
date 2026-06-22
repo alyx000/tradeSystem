@@ -292,6 +292,15 @@ ARCHITECTURE_COMMANDS = [
     ["market-timing", "signals", "--date", "2026-05-29"],
     ["market-timing", "signals", "--index", "932000.CSI", "--limit", "10"],
     ["market-timing", "signals", "--json"],
+    # margin-index-correlation (两融余额与指数联动性:背离/领先滞后/相关)
+    ["margin-index-correlation", "daily"],
+    ["margin-index-correlation", "daily", "--date", "2026-06-19"],
+    ["margin-index-correlation", "daily", "--windows", "5,20,60", "--divergence-windows", "5,20",
+     "--divergence-gap", "0.5", "--max-lag", "3"],
+    ["margin-index-correlation", "daily", "--no-push"],
+    ["margin-index-correlation", "daily", "--dry-run"],
+    ["margin-index-correlation", "signals"],
+    ["margin-index-correlation", "signals", "--date", "2026-06-19", "--days", "30", "--json"],
     # research-digest (每日研报速读:A股研报评级 + 美股 yfinance 评级 → Top3)
     ["research-digest", "daily"],
     ["research-digest", "daily", "--date", "2026-05-29"],

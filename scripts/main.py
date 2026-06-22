@@ -1047,6 +1047,15 @@ def cmd_post(config: dict, target_date: str):
     except Exception as e:
         logger.warning(f"IngestService 快照采集失败（不影响主流程）：{e}")
 
+    # 折进盘后采集：两融余额×指数联动监控（不单独挂 launchd；cmd_post 工作日 20:00 触发，
+    # 两融多为 T-1，报告标注 stale）。run_for_post 自带 without_standard_http_proxy + provider
+    # 初始化，失败隔离不影响主盘后流程；交易日守卫由本函数上游已保证。
+    try:
+        from cli.margin_index_correlation import run_for_post
+        run_for_post(config, target_date)
+    except Exception as e:
+        logger.warning(f"两融×指数联动采集失败（不影响主流程）：{e}")
+
 
 def _cmd_regulatory_query(target_date: str, *, as_json: bool, type_filter: str) -> None:
     """从 SQLite 读取 stock_regulatory_monitor，不调用数据源。"""
@@ -1742,6 +1751,10 @@ def build_parser() -> argparse.ArgumentParser:
     from cli.market_timing import register_subparser as register_market_timing_subparser
     register_market_timing_subparser(subparsers)
 
+    # margin-index-correlation (两融余额与指数联动性:背离/领先滞后/相关)
+    from cli.margin_index_correlation import register_subparser as register_margin_index_correlation_subparser
+    register_margin_index_correlation_subparser(subparsers)
+
     # research-digest (每日研报速读:A股研报评级 + 美股 yfinance 评级 → Top3)
     from cli.research_digest import register_subparser as register_research_digest_subparser
     register_research_digest_subparser(subparsers)
@@ -1813,6 +1826,9 @@ def main():
     elif args.command == "market-timing":
         from cli import market_timing as market_timing_module
         market_timing_module.handle_command(config, args)
+    elif args.command == "margin-index-correlation":
+        from cli import margin_index_correlation as margin_index_correlation_module
+        margin_index_correlation_module.handle_command(config, args)
     elif args.command == "research-digest":
         from cli import research_digest as research_digest_module
         research_digest_module.handle_command(config, args)
