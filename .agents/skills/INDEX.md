@@ -163,8 +163,8 @@
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET | `/api/teachers` | 列出所有老师 |
-| GET | `/api/teacher-notes` | 查询笔记列表（keyword/teacher/from/to；limit 默认 200、最大 500；offset 分页） |
-| GET | `/api/teacher-notes/{note_id}` | 读取单条笔记 |
+| GET | `/api/teacher-notes` | 查询笔记列表（keyword/teacher/from/to；limit 默认 200、最大 500；offset 分页）。**列表为减负不返回 `raw_content` 全文**，仅给 `has_raw_content` 布尔 + `raw_content_preview`（前 200 字）；需全文走详情端点 |
+| GET | `/api/teacher-notes/{note_id}` | 读取单条笔记（含 `raw_content` 全文） |
 | POST | `/api/teacher-notes` | 新建笔记（含 teacher_name 自动创建老师）；可选 `sync_watchlist_from_mentions: true` 同步关注池（默认不同步） |
 | PUT | `/api/teacher-notes/{note_id}` | 更新笔记 |
 | DELETE | `/api/teacher-notes/{note_id}` | 删除笔记 |

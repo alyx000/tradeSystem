@@ -622,8 +622,10 @@ function AssetList() {
         {rows.map((row) => {
           if (row.kind === 'teacher_note') {
             const note = row.note
+            // 列表端点已剔除 raw_content（见 api.getNotes），改用其轻量摘要 raw_content_preview
+            // 兜底——本工作台录入的老师笔记仅有 raw_content、无 core_view，缺它会只剩标题。
             const preview =
-              (note.raw_content || note.core_view || '').slice(0, 200) ||
+              (note.raw_content_preview || note.core_view || '').slice(0, 200) ||
               (typeof note.key_points === 'string' ? note.key_points : '') ||
               ''
             return (

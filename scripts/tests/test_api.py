@@ -1641,6 +1641,99 @@ class TestPlanningAndKnowledgeAPI:
         assert att["file_path"] == "data/attachments/2026-05-01/test.jpg"
         assert "/attachments/" in att["url"]
 
+    def test_note_list_omits_raw_content(self, client, db_path):
+        """列表端点剔除 raw_content（占 payload ~82%），仅在详情端点按需返回。"""
+        conn = get_connection(db_path)
+        tid = Q.get_or_create_teacher(conn, "全文老师")
+        nid = Q.insert_teacher_note(
+            conn, teacher_id=tid, date="2026-05-02", title="有全文的笔记",
+            core_view="结构化核心观点", raw_content="这是很长的原始全文" * 500,
+        )
+        conn.commit()
+        conn.close()
+
+        r = client.get("/api/teacher-notes")
+        assert r.status_code == 200
+        target = next((n for n in r.json() if n["id"] == nid), None)
+        assert target is not None
+        # 轻字段照常返回，供卡片渲染
+        assert target["title"] == "有全文的笔记"
+        assert target["core_view"] == "结构化核心观点"
+        # 重字段 raw_content 不进列表响应
+        assert target.get("raw_content") in (None, "")
+        # 但保留轻量布尔标记，供前端决定是否渲染「原始观点全文」入口
+        assert target["has_raw_content"] is True
+        # 以及截断到 200 字的轻量预览（供列表页摘要，远小于全文）
+        assert len(target["raw_content_preview"]) == 200
+        assert target["raw_content_preview"].startswith("这是很长的原始全文")
+
+    def test_note_list_preview_for_raw_only_note(self, client, db_path):
+        """仅录入 raw_content（无 core_view，如资料工作台所建）的笔记，
+        列表仍提供 raw_content_preview 兜底预览，避免下游只剩标题。"""
+        conn = get_connection(db_path)
+        tid = Q.get_or_create_teacher(conn, "仅全文老师")
+        nid = Q.insert_teacher_note(
+            conn, teacher_id=tid, date="2026-05-06", title="仅有全文",
+            raw_content="只有原始正文没有结构化观点",
+        )
+        conn.commit()
+        conn.close()
+
+        r = client.get("/api/teacher-notes")
+        target = next((n for n in r.json() if n["id"] == nid), None)
+        assert target is not None
+        assert target.get("core_view") in (None, "")
+        assert target["raw_content_preview"] == "只有原始正文没有结构化观点"
+
+    def test_note_list_has_raw_content_false_when_empty(self, client, db_path):
+        """无全文的笔记 has_raw_content 为 False，前端不展示空折叠入口。"""
+        conn = get_connection(db_path)
+        tid = Q.get_or_create_teacher(conn, "无全文老师")
+        nid = Q.insert_teacher_note(
+            conn, teacher_id=tid, date="2026-05-05", title="无全文笔记",
+            core_view="只有结构化观点",
+        )
+        conn.commit()
+        conn.close()
+
+        r = client.get("/api/teacher-notes")
+        target = next((n for n in r.json() if n["id"] == nid), None)
+        assert target is not None
+        assert target["has_raw_content"] is False
+        assert target["raw_content_preview"] is None
+
+    def test_note_detail_includes_raw_content(self, client, db_path):
+        """详情端点仍完整返回 raw_content，供前端展开时按需加载。"""
+        conn = get_connection(db_path)
+        tid = Q.get_or_create_teacher(conn, "全文老师2")
+        nid = Q.insert_teacher_note(
+            conn, teacher_id=tid, date="2026-05-03", title="详情笔记",
+            raw_content="完整原始全文内容",
+        )
+        conn.commit()
+        conn.close()
+
+        r = client.get(f"/api/teacher-notes/{nid}")
+        assert r.status_code == 200
+        assert r.json()["raw_content"] == "完整原始全文内容"
+
+    def test_note_list_keyword_search_still_matches_raw_content(self, client, db_path):
+        """剔除 raw_content 字段后，关键词搜索仍按 raw_content 命中（SQL 不变）。"""
+        conn = get_connection(db_path)
+        tid = Q.get_or_create_teacher(conn, "搜索老师")
+        nid = Q.insert_teacher_note(
+            conn, teacher_id=tid, date="2026-05-04", title="标题无关键词",
+            raw_content="正文里藏着 唯一关键词ZZZ 用于搜索",
+        )
+        conn.commit()
+        conn.close()
+
+        r = client.get("/api/teacher-notes?keyword=唯一关键词ZZZ")
+        assert r.status_code == 200
+        target = next((n for n in r.json() if n["id"] == nid), None)
+        assert target is not None  # 搜索仍命中
+        assert target.get("raw_content") in (None, "")  # 但响应里不带全文
+
     def test_holdings_crud(self, client):
         r = client.post("/api/holdings", json={
             "stock_code": "300750", "stock_name": "宁德时代",

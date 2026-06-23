@@ -231,18 +231,8 @@ function NoteCard({ note, onDelete, deleting }: {
           </div>
         )}
 
-        {/* 原始全文 — 折叠显示，避免撑开卡片 */}
-        {note.raw_content && (
-          <details className="group/raw">
-            <summary className="cursor-pointer text-xs text-gray-400 hover:text-gray-600 select-none list-none flex items-center gap-1 mb-1">
-              <svg className="w-3 h-3 transition-transform group-open/raw:rotate-90" viewBox="0 0 20 20" fill="currentColor">
-                <path fillRule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clipRule="evenodd"/>
-              </svg>
-              原始观点全文
-            </summary>
-            <p className="text-sm text-gray-600 whitespace-pre-wrap mt-1 pl-4 border-l-2 border-gray-100">{note.raw_content}</p>
-          </details>
-        )}
+        {/* 原始全文 — 折叠显示，避免撑开卡片；列表不带全文，展开时按需拉取 */}
+        {note.has_raw_content && <RawContentSection noteId={note.id} />}
 
         {note.attachments && note.attachments.length > 0 && (
           <div>
@@ -334,6 +324,44 @@ function NoteCard({ note, onDelete, deleting }: {
           </div>
         )}
       </div>
+    </details>
+  )
+}
+
+/**
+ * 「原始观点全文」折叠区：列表端点已剔除 raw_content，
+ * 仅在用户展开本区时才按需 GET /teacher-notes/{id} 拉取全文。
+ */
+function RawContentSection({ noteId }: { noteId: number }) {
+  const [open, setOpen] = useState(false)
+  const { data, isLoading, isError, refetch } = useQuery({
+    queryKey: ['teacher-note-raw', noteId],
+    queryFn: () => api.getNote(noteId),
+    enabled: open,
+  })
+  return (
+    <details
+      className="group/raw"
+      onToggle={e => setOpen((e.currentTarget as HTMLDetailsElement).open)}
+    >
+      <summary className="cursor-pointer text-xs text-gray-400 hover:text-gray-600 select-none list-none flex items-center gap-1 mb-1">
+        <svg className="w-3 h-3 transition-transform group-open/raw:rotate-90" viewBox="0 0 20 20" fill="currentColor">
+          <path fillRule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clipRule="evenodd"/>
+        </svg>
+        原始观点全文
+      </summary>
+      {isLoading ? (
+        <p className="text-xs text-gray-400 mt-1 pl-4">加载全文中…</p>
+      ) : isError ? (
+        <p className="text-xs text-red-400 mt-1 pl-4">
+          全文加载失败，
+          <button type="button" onClick={() => refetch()} className="text-blue-500 hover:text-blue-700 underline">
+            重试
+          </button>
+        </p>
+      ) : (
+        <p className="text-sm text-gray-600 whitespace-pre-wrap mt-1 pl-4 border-l-2 border-gray-100">{data?.raw_content ?? ''}</p>
+      )}
     </details>
   )
 }

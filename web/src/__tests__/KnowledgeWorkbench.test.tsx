@@ -96,6 +96,27 @@ describe('KnowledgeWorkbench', () => {
     expect(screen.getAllByText('老师观点').length).toBeGreaterThan(0)
   })
 
+  it('shows preview from raw_content_preview for raw-only note (no core_view)', async () => {
+    // 资料工作台录入的老师笔记仅有 raw_content；列表端点剔除全文后用 raw_content_preview 兜底预览
+    vi.mocked(api.getNotes).mockResolvedValue([
+      {
+        id: 99,
+        teacher_id: 1,
+        teacher_name: '小鲍',
+        date: '2026-04-12',
+        title: '仅全文笔记',
+        core_view: null,
+        raw_content_preview: '这是原始正文摘要前两百字',
+        tags: null,
+        sectors: null,
+        created_at: '2026-04-12T10:00:00',
+      },
+    ])
+    renderPage()
+    await waitFor(() => expect(screen.getByText('仅全文笔记')).toBeInTheDocument())
+    expect(screen.getByText('这是原始正文摘要前两百字')).toBeInTheDocument()
+  })
+
   it('shows validation error when title is empty and form submitted', async () => {
     renderPage()
     fireEvent.click(screen.getByRole('button', { name: '录入资料' }))

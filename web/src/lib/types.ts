@@ -379,6 +379,10 @@ export interface TeacherNote {
   position_advice?: string | null
   avoid?: string | null
   raw_content?: string | null
+  /** 列表端点剔除 raw_content 后，用该布尔标记是否存在全文（展开时再按需拉取） */
+  has_raw_content?: boolean
+  /** 列表端点提供的 raw_content 前 200 字摘要，供列表页预览（详情端点不含此字段） */
+  raw_content_preview?: string | null
   attachments?: TeacherNoteAttachment[]
   created_at: string
 }

@@ -99,6 +99,31 @@ def list_teachers(conn: sqlite3.Connection = Depends(get_db_conn)):
     return Q.list_teachers(conn)
 
 
+# 列表预览截断长度：足够 KnowledgeWorkbench 等列表页展示摘要，又远小于全文。
+_RAW_CONTENT_PREVIEW_LEN = 200
+
+
+def _strip_heavy_fields(notes: list[dict]) -> list[dict]:
+    """从列表笔记中移除 raw_content（单条最大数十 KB、占列表 payload ~82%），
+    显著缩小响应体积；全文仅在前端展开时经详情端点 GET /teacher-notes/{id} 按需返回。
+
+    剔除前保留两个轻量派生字段：
+    - has_raw_content：是否存在全文，供前端决定是否渲染「原始观点全文」入口；
+    - raw_content_preview：全文前 200 字摘要，供 KnowledgeWorkbench 等列表页预览
+      （部分老师笔记仅录入 raw_content 无 core_view，需要它兜底预览，否则只剩标题）。
+
+    注：此处仍读取 raw_content 以计算预览，未改为显式轻字段 SELECT。理由：① 列表 limit≤500
+    行封顶，实测整条列表请求 <0.1s（含全文读取），读取非瓶颈，被消除的是 ~3.1MB 出站序列化/传输；
+    ② 关键词分支的 LIKE 匹配本就要读 raw_content；③ 该表 schema 持续演进，显式列清单易漂移。
+    """
+    for note in notes:
+        raw = note.get("raw_content") or ""
+        note["has_raw_content"] = bool(raw)
+        note["raw_content_preview"] = raw[:_RAW_CONTENT_PREVIEW_LEN] or None
+        note.pop("raw_content", None)
+    return notes
+
+
 def _attach_note_attachments(conn: sqlite3.Connection, notes: list[dict]) -> list[dict]:
     """为笔记列表批量附加 attachments 字段。"""
     if not notes:
@@ -143,7 +168,7 @@ def list_notes(
             limit=limit,
             offset=offset,
         )
-        return _attach_note_attachments(conn, notes)
+        return _attach_note_attachments(conn, _strip_heavy_fields(notes))
     sql = "SELECT n.*, t.name as teacher_name FROM teacher_notes n JOIN teachers t ON n.teacher_id = t.id WHERE 1=1"
     params: list[Any] = []
     if teacher:
@@ -158,7 +183,7 @@ def list_notes(
     sql += " ORDER BY n.date DESC LIMIT ? OFFSET ?"
     params.extend([limit, offset])
     notes = [dict(r) for r in conn.execute(sql, params).fetchall()]
-    return _attach_note_attachments(conn, notes)
+    return _attach_note_attachments(conn, _strip_heavy_fields(notes))
 
 
 @router.get("/teacher-notes/{note_id}")

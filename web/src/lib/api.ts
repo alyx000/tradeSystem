@@ -120,6 +120,8 @@ export const api = {
     const sp = new URLSearchParams(params || {})
     return request<TeacherNote[]>(`/teacher-notes?${sp}`)
   },
+  /** 单条笔记详情（含 raw_content 全文）；列表端点已剔除 raw_content，展开时按需拉取 */
+  getNote: (id: number) => request<TeacherNote>(`/teacher-notes/${id}`),
   createNote: (data: TeacherNoteCreateInput) =>
     request<{ id: number }>('/teacher-notes', { method: 'POST', body: JSON.stringify(data) }),
   /** 老师观点与 createNote 相同，写入 teacher_notes（唯一事实源） */
