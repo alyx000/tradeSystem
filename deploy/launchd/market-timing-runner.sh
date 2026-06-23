@@ -3,7 +3,8 @@
 #
 # 由 ~/Library/LaunchAgents/com.alyx.tradesystem.market-timing.plist 触发
 # （工作日 21:40 + 周日 21:40；接 volume-watch 21:00 / trend-leader 21:30 之后，盘后数据已就绪）。
-# 逐指数斐波那契变盘点 + 底分型生命周期 + 市场级客观上下文 → MD 观察清单 + 推钉钉。
+# 逐指数斐波那契变盘点 + 底分型生命周期 + 市场级客观上下文 → MD 观察清单。
+# 注：按用户要求已停止钉钉推送（--no-push = 落库 + 打印到 log），信号仍落 market_timing_signal 供只读查看。
 set -e
 
 # 1. PATH（launchd 默认不含 /opt/homebrew/bin，python 依赖找不到）
@@ -32,4 +33,4 @@ echo "===== $(date '+%Y-%m-%d %H:%M:%S') market-timing start ====="
 # 5. 凭据存在性诊断（${VAR:+set} 只判存在不打值，禁止 echo 真凭据进 /tmp/*.log）
 echo "[env] TUSHARE_TOKEN=${TUSHARE_TOKEN:+set} DINGTALK_WEBHOOK_TOKEN=${DINGTALK_WEBHOOK_TOKEN:+set} DINGTALK_WEBHOOK_SECRET=${DINGTALK_WEBHOOK_SECRET:+set}"
 
-exec /usr/bin/python3 scripts/main.py market-timing daily "$@"
+exec /usr/bin/python3 scripts/main.py market-timing daily --no-push "$@"
