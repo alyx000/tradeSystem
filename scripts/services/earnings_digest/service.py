@@ -218,6 +218,19 @@ def run_daily_digest(
         if eligible_candidates and len(today_quotes) < _MIN_EXPECTED_MARKET_QUOTES:
             gap_note = f"行情仅 {len(today_quotes)} 行（疑似截断/部分返回），缺口命中可能不完整"
             logger.warning("[earnings-digest] %s %s", target_date, gap_note)
+        # close 字段完整性校验（收盘定调新引入的依赖）：行数地板只看行数、不看字段——若数据源
+        # close 整列漂移/改名/缺失，行数正常但 check_gaps 因无有效 close 静默跳过候选，命中或归零、
+        # 或仅剩少数侥幸带 close 的票（命中列表看似权威实则漏算）。故**不以 gap_hits 是否为空为门**
+        # （codex v3）：行数健康但全市场有效 close 占比过低时，无论有无命中都显式提示，不静默装空。
+        elif eligible_candidates:
+            valid_close = sum(
+                1 for q in today_quotes
+                if (c := normalize._to_float(q.get("close"))) is not None and c > 0
+            )
+            if valid_close < len(today_quotes) * 0.5:
+                gap_note = (f"行情有效收盘价仅 {valid_close}/{len(today_quotes)} 行"
+                            "（疑似收盘价字段漂移），收盘定调缺口验证可能不完整")
+                logger.warning("[earnings-digest] %s %s", target_date, gap_note)
     elif gap_error is None and eligible_candidates:
         # 行情「成功返回空」与故障同样需要鉴别（codex review v2/v3）：应验证候选存在时
         # 默认可见警示，**只有确证非交易日才静默**——交易日鉴别自身降级（不可用/

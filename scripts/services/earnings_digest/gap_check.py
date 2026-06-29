@@ -4,6 +4,14 @@
 即 ann_date ∈ [上一交易日, T) 自然日区间——周五晚/周末/节假日公告统一在下一交易日
 验证，不漏。候选名单从按日 payload 区间 union 读取（collector.read_payload_rows_between）。
 
+口径（跳空触发 + 收盘定调）：
+- **触发**仍看「开盘跳空」`|open-pre_close|/pre_close ≥ 阈值`——保留「缺口验证」身份，
+  即预告确实在次日引发了跳空才入选。
+- **市场投票方向**改用「次日收盘涨跌」`close-pre_close` 的符号：收盘价才是市场对这份
+  预告投出的真实一票，开盘那一下多为情绪脉冲、盘中常被回补/反转（实测高开低走收绿的
+  票若按开盘跳空会被误标「超预期确认」，按收盘则正确翻为「利好不及预期」）。
+- 严格缺口 / 一字板是「开盘跳空」结构属性，按开盘方向标注（与收盘投票方向数学上恒同向）。
+
 已知简化：极少数盘前早间公告（首反应是当日）按主流盘后发布口径归入次日验证。
 """
 from __future__ import annotations
@@ -12,7 +20,7 @@ from .normalize import NEGATIVE_TYPES, POSITIVE_TYPES, _to_float, normalize_fore
 
 DEFAULT_GAP_THRESHOLD_PCT = 2.0
 
-# 市场投票 2×2：公告方向 × 缺口方向
+# 市场投票 2×2：公告方向 × 收盘涨跌方向（投票口径＝收盘，非开盘跳空）
 VOTE_LABELS = {
     ("positive", "up"): "✅超预期确认",
     ("positive", "down"): "⚠️利好不及预期",
@@ -81,25 +89,43 @@ def check_gaps(
             continue  # 停牌/无行情跳过
         open_px = _to_float(quote.get("open"))
         pre_close = _to_float(quote.get("pre_close"))
-        # A 股价格恒 >0；<=0 即脏数据（兼防除零与负价产生的荒唐缺口），跳过
-        if open_px is None or pre_close is None or open_px <= 0 or pre_close <= 0:
+        close_px = _to_float(quote.get("close"))
+        # A 股价格恒 >0；缺失/<=0 即脏数据（兼防除零与负价产生的荒唐缺口），跳过。
+        # close 必须连 None 一起守卫——None <= 0 会抛 TypeError 崩掉整段缺口验证。
+        # 注：close 缺失/脏价的 skip 与既有「停牌无行情 / open·pre_close 脏数据」skip 同构
+        #（一行真实交易必同时有 open/close；整列漂移对 open/pre_close 一样失效，由 service
+        # 端 _MIN_EXPECTED_MARKET_QUOTES 地板校验兜底），未引入新的静默失败类（codex review 反驳）。
+        if (open_px is None or pre_close is None or close_px is None
+                or open_px <= 0 or pre_close <= 0 or close_px <= 0):
             continue
-        gap_pct = (open_px - pre_close) / pre_close * 100.0
+        # 触发口径：开盘跳空（保留「缺口验证」身份，预告确实引发次日跳空才入选）
+        open_gap_pct = (open_px - pre_close) / pre_close * 100.0
         # epsilon 防浮点误差吞掉恰好达线的缺口（实测 (10.2-10.0)/10*100 = 1.9999...）
-        if abs(gap_pct) < threshold_pct - 1e-9:
+        if abs(open_gap_pct) < threshold_pct - 1e-9:
             continue
-        gap_direction = "up" if gap_pct > 0 else "down"
+        # 投票口径：次日收盘涨跌（市场对预告的真实一票）。
+        close_pct = (close_px - pre_close) / pre_close * 100.0
+        open_direction = "up" if open_gap_pct > 0 else "down"
+        # 收盘恰平昨收＝跳空被完全回补、市场态度中性：2×2 无中性档，给独立中性标签**保留可见**
+        #（既不硬塞「暴雷/超预期确认」误标，也不静默丢弃这条真实命中——codex review）。
+        if close_pct == 0:
+            vote_direction = "flat"
+            vote_label = "➖收平昨收·中性"
+        else:
+            vote_direction = "up" if close_pct > 0 else "down"
+            vote_label = VOTE_LABELS[(direction, vote_direction)]
 
-        # 严格缺口：今低 > 昨高（向上）/ 今高 < 昨低（向下）——更强信号
+        # 严格缺口 / 一字板是「开盘跳空」结构属性 → 按开盘方向判定（与收盘投票方向恒同向：
+        # 一旦今低 > 昨高，则 close ≥ 今低 > 昨高 ≥ 昨收 ⟹ 收盘必为 up，反向同理，无矛盾）。
         prev_quote = prev_map.get(item["ts_code"]) or {}
         prev_high = _to_float(prev_quote.get("high"))
         prev_low = _to_float(prev_quote.get("low"))
         today_high = _to_float(quote.get("high"))
         today_low = _to_float(quote.get("low"))
         strict = False
-        if gap_direction == "up" and today_low is not None and prev_high is not None:
+        if open_direction == "up" and today_low is not None and prev_high is not None:
             strict = today_low > prev_high
-        elif gap_direction == "down" and today_high is not None and prev_low is not None:
+        elif open_direction == "down" and today_high is not None and prev_low is not None:
             strict = today_high < prev_low
 
         # 一字板：全天单一价（容差防浮点表示差异；行情价两位小数，1e-9 远小于最小价位）
@@ -111,12 +137,15 @@ def check_gaps(
 
         hits.append({
             **item,
-            "gap_pct": round(gap_pct, 2),
-            "gap_direction": gap_direction,
-            "vote_label": VOTE_LABELS[(direction, gap_direction)],
+            "gap_pct": round(open_gap_pct, 2),       # 开盘跳空（缺口触发口径）
+            "close_pct": round(close_pct, 2),         # 次日收盘涨跌（市场投票口径）
+            "open_direction": open_direction,
+            "gap_direction": vote_direction,          # 投票方向＝收盘符号（含 flat 中性）
+            "vote_label": vote_label,
             "strict_gap": strict,
             "one_word_board": one_word,
         })
 
-    hits.sort(key=lambda x: abs(x["gap_pct"]), reverse=True)
+    # 按收盘 verdict 强度降序（投票口径＝收盘，截断时优先保留市场表态最强的命中）
+    hits.sort(key=lambda x: abs(x["close_pct"]), reverse=True)
     return hits
