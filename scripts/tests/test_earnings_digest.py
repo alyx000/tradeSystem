@@ -51,11 +51,11 @@ def _ex(ts_code="002651.SZ", ann_date="20260611", end_date="20260630",
     return row
 
 
-def _quote(ts_code, open_px, pre_close, high=None, low=None):
+def _quote(ts_code, open_px, pre_close, high=None, low=None, close=None):
     return {"ts_code": ts_code, "open": open_px, "pre_close": pre_close,
             "high": high if high is not None else max(open_px, pre_close) * 1.01,
             "low": low if low is not None else min(open_px, pre_close) * 0.99,
-            "close": open_px}
+            "close": close if close is not None else open_px}
 
 
 # ---------- normalize ----------
@@ -253,9 +253,9 @@ def test_read_payload_rows_between_unions_daily_snapshots(tmp_path):
 
 # ---------- gap_check：市场投票 2×2 ----------
 
-def _gap_case(type_, open_px, pre_close):
+def _gap_case(type_, open_px, pre_close, close=None):
     candidates = [_fc(ts_code="600000.SH", ann_date="20260611", type_=type_)]
-    today = [_quote("600000.SH", open_px, pre_close)]
+    today = [_quote("600000.SH", open_px, pre_close, close=close)]
     return gap_check.check_gaps(
         candidates, today, [],
         prev_trade_date="2026-06-11", target_date="2026-06-12",
@@ -269,20 +269,64 @@ def _gap_case(type_, open_px, pre_close):
     ("首亏", 9.5, 10.0, "❌暴雷确认"),
 ])
 def test_gap_vote_quadrants(type_, open_px, pre_close, expected_label):
+    """开盘与收盘同向时（close 默认=open）：2×2 投票四象限。"""
     hits = _gap_case(type_, open_px, pre_close)
     assert len(hits) == 1
     assert hits[0]["vote_label"] == expected_label
 
 
+@pytest.mark.parametrize("type_,open_px,close,pre_close,expected_label", [
+    # 触发仍是开盘跳空≥2%，但投票方向取收盘——开盘↔收盘分歧时收盘说了算
+    ("预增", 10.47, 9.79, 10.0, "⚠️利好不及预期"),  # 银禧式：跳空+4.7% 高开低走收-2.1% → 翻
+    ("预增", 9.6, 10.4, 10.0, "✅超预期确认"),       # 低开-4% 但收+4% 翻红 → 确认
+    ("预减", 9.5, 10.3, 10.0, "💡利空出尽"),         # 低开-5% 但收+3% → 利空出尽
+    ("首亏", 10.5, 9.0, 10.0, "❌暴雷确认"),          # 高开+5% 但收-10% → 暴雷确认
+])
+def test_gap_vote_uses_close_direction(type_, open_px, close, pre_close, expected_label):
+    hits = _gap_case(type_, open_px, pre_close, close=close)
+    assert len(hits) == 1
+    hit = hits[0]
+    assert hit["vote_label"] == expected_label
+    assert hit["gap_direction"] == ("up" if close > pre_close else "down")  # 投票＝收盘
+    assert hit["gap_pct"] == round((open_px - pre_close) / pre_close * 100, 2)   # 跳空仍是开盘
+    assert hit["close_pct"] == round((close - pre_close) / pre_close * 100, 2)
+
+
 def test_gap_below_threshold_not_hit():
-    hits = _gap_case("预增", 10.1, 10.0)  # +1% < 2%
+    hits = _gap_case("预增", 10.1, 10.0)  # 开盘 +1% < 2%
     assert hits == []
 
 
 def test_gap_exact_threshold_hits():
-    hits = _gap_case("预增", 10.2, 10.0)  # 恰好 +2.0% —— >= 阈值即命中
+    hits = _gap_case("预增", 10.2, 10.0)  # 开盘恰好 +2.0% —— >= 阈值即命中
     assert len(hits) == 1
-    assert hits[0]["gap_pct"] == 2.0
+    assert hits[0]["gap_pct"] == 2.0  # 开盘跳空（触发口径）
+
+
+def test_gap_flat_close_neutral_label():
+    """收盘恰平昨收（缺口完全回补）→ 中性标签保留可见（不静默丢弃、不硬塞 2×2 误标）。"""
+    hits = _gap_case("首亏", 9.5, 10.0, close=10.0)  # 开盘-5%触发，收盘平昨收
+    assert len(hits) == 1
+    assert hits[0]["gap_direction"] == "flat"
+    assert "中性" in hits[0]["vote_label"]  # 负面公告平收不被硬标「暴雷确认」
+    assert hits[0]["close_pct"] == 0.0
+
+
+def test_gap_sorted_by_close_verdict_not_open_gap():
+    """排序按收盘 verdict 强度，而非开盘跳空大小（codex review 回归）。"""
+    candidates = [
+        _fc(ts_code="600001.SH", ann_date="20260611", type_="预增"),
+        _fc(ts_code="600002.SH", ann_date="20260611", type_="预增"),
+    ]
+    today = [
+        _quote("600001.SH", 10.6, 10.0, close=10.1),  # 开盘+6% 大跳空，收盘+1% 弱
+        _quote("600002.SH", 10.3, 10.0, close=10.8),  # 开盘+3% 小跳空，收盘+8% 强
+    ]
+    hits = gap_check.check_gaps(
+        candidates, today, [],
+        prev_trade_date="2026-06-11", target_date="2026-06-12",
+    )
+    assert [h["ts_code"] for h in hits] == ["600002.SH", "600001.SH"]  # 收盘强者在前
 
 
 def test_gap_dirty_negative_price_skipped():
@@ -295,6 +339,19 @@ def test_gap_dirty_negative_price_skipped():
         prev_trade_date="2026-06-11", target_date="2026-06-12",
     )
     assert hits == []
+
+
+def test_gap_dirty_or_missing_close_skipped():
+    """开盘/昨收正常但收盘缺失或 <=0 → 无法定调投票方向，跳过（不崩段）。"""
+    candidates = [_fc(ts_code="600000.SH", ann_date="20260611", type_="预增")]
+    for bad_close in (None, 0.0, -1.0):
+        today = [{"ts_code": "600000.SH", "open": 10.5, "pre_close": 10.0,
+                  "high": 10.6, "low": 10.4, "close": bad_close}]
+        hits = gap_check.check_gaps(
+            candidates, today, [],
+            prev_trade_date="2026-06-11", target_date="2026-06-12",
+        )
+        assert hits == []
 
 
 def test_gap_candidate_window_is_next_trade_day_semantics():
@@ -398,13 +455,14 @@ def test_render_gap_section_with_double_flag():
     )
     assert "② 预告次日缺口验证" in md
     assert "✅超预期确认" in md and "〔关注〕" in md  # 缺口+关注双标
+    assert "跳空+5.0% → 收盘+5.0%" in md  # 新格式：开盘跳空 + 收盘并列
 
 
 def test_render_gap_section_truncated_with_footer():
     """缺口段超显示上限 → 截断 + 尾注计数（不静默）。"""
     hits = [
         {"ts_code": f"60{i:04d}.SH", "type": "预增", "vote_label": "✅超预期确认",
-         "gap_pct": 5.0, "strict_gap": False, "one_word_board": False}
+         "gap_pct": 5.0, "close_pct": 5.0, "strict_gap": False, "one_word_board": False}
         for i in range(renderer.GAP_DISPLAY_CAP + 5)
     ]
     _, md = renderer.render_digest(
@@ -545,6 +603,69 @@ def test_service_industry_map_failure_degrades_gracefully(tmp_path):
     assert result.has_content
     assert "③" not in result.markdown  # 行业段缺席
     assert "④ 新增公告计数" in result.markdown  # 其余段照常
+
+
+def test_service_close_field_drift_surfaces_warning(tmp_path):
+    """codex v2 回归：行情行数充足（过行数地板）但 close 字段整列缺失（schema 漂移）→
+    收盘定调下命中静默归零，必须渲染可见提示，不装作干净空日。"""
+    conn, db_path = _db(tmp_path)
+    # 昨日已存档预告（构成今日缺口候选）
+    payload = {"rows": [_fc(ts_code="600000.SH", ann_date="20260611", type_="预增")]}
+    conn.execute(
+        """INSERT INTO raw_interface_payloads
+           (interface_name, provider, stage, biz_date, target_date, raw_table,
+            dedupe_key, payload_json, payload_hash, row_count, status, params_json, source_meta_json)
+           VALUES ('earnings_forecast', 't', 'post_extended', '2026-06-11', '2026-06-11',
+                   'raw_earnings_forecast', 'k:0611', ?, 'h', 1, 'success', '{}', '{}')""",
+        (json.dumps(payload, ensure_ascii=False),),
+    )
+    conn.commit()
+    conn.close()
+    # 全市场行情行数充足（≥ _MIN_EXPECTED_MARKET_QUOTES）但所有行缺 close 字段
+    quotes = [{"ts_code": f"{600100 + i}.SH", "open": 10.0, "pre_close": 10.0,
+               "high": 10.1, "low": 9.9} for i in range(4001)]
+    # 候选票本身在行情里：开盘 +5% 达触发阈值，但无 close → check_gaps 跳过 → 命中归零
+    quotes.append({"ts_code": "600000.SH", "open": 10.5, "pre_close": 10.0,
+                   "high": 10.6, "low": 10.4})
+    registry = _service_registry(
+        [_fc(ts_code="000017.SZ", ann_date="20260612")], [],  # 当日新预告 → digest 有内容可推
+        quotes={"2026-06-12": quotes}, trade_days={"2026-06-11", "2026-06-12"})
+    result = run_daily_digest(registry, "2026-06-12", db_path=db_path)
+    assert result.stats["gap_hits"] == 0
+    assert "收盘价字段漂移" in (result.stats["gap_note"] or "")  # 字段级缺失被显式识别
+    assert result.has_content and "收盘价字段漂移" in result.markdown  # 提示随推送可见
+
+
+def test_service_close_field_drift_warns_even_with_a_hit(tmp_path):
+    """codex v3 回归：close 大面积缺失但个别候选侥幸带 close 仍命中 → 警示不被命中抑制
+    （否则单条命中让漏算的报告看似权威）。校验与 gap_hits 是否为空解耦。"""
+    conn, db_path = _db(tmp_path)
+    payload = {"rows": [
+        _fc(ts_code="600000.SH", ann_date="20260611", type_="预增"),  # 有 close → 命中
+        _fc(ts_code="600001.SH", ann_date="20260611", type_="预增"),  # 缺 close → 静默漏算
+    ]}
+    conn.execute(
+        """INSERT INTO raw_interface_payloads
+           (interface_name, provider, stage, biz_date, target_date, raw_table,
+            dedupe_key, payload_json, payload_hash, row_count, status, params_json, source_meta_json)
+           VALUES ('earnings_forecast', 't', 'post_extended', '2026-06-11', '2026-06-11',
+                   'raw_earnings_forecast', 'k:0611', ?, 'h', 2, 'success', '{}', '{}')""",
+        (json.dumps(payload, ensure_ascii=False),),
+    )
+    conn.commit()
+    conn.close()
+    quotes = [{"ts_code": f"{600100 + i}.SH", "open": 10.0, "pre_close": 10.0,
+               "high": 10.1, "low": 9.9} for i in range(4001)]  # 全缺 close
+    quotes.append({"ts_code": "600000.SH", "open": 10.5, "pre_close": 10.0,
+                   "high": 10.6, "low": 10.4, "close": 10.6})  # 侥幸带 close → +6% 命中
+    quotes.append({"ts_code": "600001.SH", "open": 10.5, "pre_close": 10.0,
+                   "high": 10.6, "low": 10.4})  # 缺 close → 跳过
+    registry = _service_registry([], [],
+        quotes={"2026-06-12": quotes}, trade_days={"2026-06-11", "2026-06-12"})
+    result = run_daily_digest(registry, "2026-06-12", db_path=db_path)
+    assert result.stats["gap_hits"] == 1  # 仅 600000 命中
+    assert "收盘价字段漂移" in (result.stats["gap_note"] or "")  # 命中存在时警示仍在
+    assert "收盘价字段漂移" in result.markdown and "✅超预期确认" in result.markdown
 
 
 def test_service_quote_failure_on_trading_day_is_visible(tmp_path):

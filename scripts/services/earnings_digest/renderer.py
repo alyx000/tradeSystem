@@ -19,7 +19,7 @@ from .normalize import is_top_up_candidate
 
 DEFAULT_TOP_N = 10
 DEFAULT_MIN_PROFIT_WAN = 5000.0  # Top 榜净利中值阈值（万元，用户确认 ≥5000 万）
-GAP_DISPLAY_CAP = 30  # ② 段显示上限（年报高峰实测 68 条会刷屏；已按 |缺口| 降序，截断尾注计数）
+GAP_DISPLAY_CAP = 30  # ② 段显示上限（年报高峰实测 68 条会刷屏；已按 |收盘涨跌| 降序，截断尾注计数）
 
 # 锚定仓库根（对齐 db/connection.py 的 __file__ 锚定）：Makefile 入口 cwd=scripts/
 # 而 launchd 入口 cwd=仓库根，相对路径会落到两个不同目录（scripts/data 历史遗留
@@ -113,7 +113,8 @@ def _gap_line(item: dict, hit: str | None = None) -> str:
     parts = [f"**{_code_name(item)}** {item['vote_label']}"]
     if hit:
         parts.append(f"〔{hit}〕")
-    parts.append(f"{badge}后跳空 {item['gap_pct']:+.1f}%")
+    # 同时呈现开盘跳空与收盘涨跌：投票方向取收盘，高开低走/低开高走由两值并列自动现形
+    parts.append(f"{badge}：跳空{item['gap_pct']:+.1f}% → 收盘{item['close_pct']:+.1f}%")
     if item.get("one_word_board"):
         parts.append("一字板")
     elif item.get("strict_gap"):
@@ -192,7 +193,8 @@ def render_digest(
         )
         overflow = len(gap_hits) - len(shown)
         if overflow > 0:
-            lines.append(f"- …另有 {overflow} 条缺口命中（|缺口| 较小，已截断）")
+            # gap_hits 已按 |收盘涨跌| 降序（投票口径＝收盘），截断保留市场表态最强的命中
+            lines.append(f"- …另有 {overflow} 条缺口命中（收盘 verdict 较弱，已截断）")
         lines.append("")
     elif gap_note:
         # 行情疑似截断但零命中：截断警示仍须随本次 digest 出现（否则只剩日志），
