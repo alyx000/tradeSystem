@@ -82,23 +82,32 @@ def _filter_reason(reason: str) -> str:
 
 
 def _safe_call(llm_runner, payload):
-    """runner 守卫（门2 S3 R1）：异常一律收敛为 None（等同失败），不得打崩整场循环赛。"""
+    """runner 守卫（门2 S3 R1/R2）：调用前清空诊断（防上一场 timeout 残留误归属本场），
+    异常收敛为 (None, True)——显式标记为「非超时可重试失败」，不得打崩整场循环赛。
+    返回 (text, raised)。"""
+    if hasattr(llm_runner, "last_diagnostics"):
+        try:
+            llm_runner.last_diagnostics = None
+        except Exception:
+            pass  # 只读属性等极端情形：放弃清空，退化为旧行为
     try:
-        return llm_runner(_PROMPT, payload)
+        return llm_runner(_PROMPT, payload), False
     except Exception:
-        logger.warning("[board-break pk] runner 调用异常，按失败场处理", exc_info=True)
-        return None
+        logger.warning("[board-break pk] runner 调用异常，按可重试失败处理", exc_info=True)
+        return None, True
 
 
 def _play_match(card_a: dict, card_b: dict, llm_runner) -> tuple[str | None, str | None]:
     """单场：失败区分超时（不重试）与其它失败（重试 1 次）。返回 (winner_code, reason)；无效场为 (None, None)。"""
     payload = _build_payload(card_a, card_b)
-    verdict = parse_verdict(_safe_call(llm_runner, payload))
+    text, raised = _safe_call(llm_runner, payload)
+    verdict = parse_verdict(text)
     if verdict is None:
         diag = getattr(llm_runner, "last_diagnostics", None)
-        if diag and diag.get("reason") == "timeout":
-            return None, None  # 超时直接计无效场，不重试
-        verdict = parse_verdict(_safe_call(llm_runner, payload))  # 非超时失败：重试 1 次
+        if not raised and diag and diag.get("reason") == "timeout":
+            return None, None  # 本场超时（诊断已在调用前清空,归属可信）直接计无效场，不重试
+        text, _ = _safe_call(llm_runner, payload)  # 非超时失败（含异常）：重试 1 次
+        verdict = parse_verdict(text)
         if verdict is None:
             return None, None
     winner_code = card_a.get("code") if verdict["winner"] == "A" else card_b.get("code")
