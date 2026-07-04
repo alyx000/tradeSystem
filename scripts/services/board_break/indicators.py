@@ -41,6 +41,8 @@ def apply_qfq(bars: list[dict], factors: list[dict]) -> list[dict] | None:
         if factor is None or factor <= 0 or not math.isfinite(factor):
             return None  # 对不齐，或历史日因子非正/非有限（脏值污染）
         ratio = factor / factor_t
+        if not math.isfinite(ratio):
+            return None  # 极端因子比值溢出（门2 S2 R2）
         adjusted = dict(bar)
         for key in ("close", "high", "low"):
             value = _to_float(bar.get(key))
@@ -49,7 +51,10 @@ def apply_qfq(bars: list[dict], factors: list[dict]) -> list[dict] | None:
                 # 不得静默跳过：close=None 会让 _ema 抛 TypeError 打崩整批；
                 # high/low 缺失会让 position_250d 用残缺区间产出伪 full 分位（门2 S2 R1）。
                 return None
-            adjusted[key] = value * ratio
+            adjusted_value = value * ratio
+            if not math.isfinite(adjusted_value):
+                return None  # 复权后溢出为 inf/nan（门2 S2 R2）：宁整体缺失不出伪 ok
+            adjusted[key] = adjusted_value
         out.append(adjusted)
     return out
 

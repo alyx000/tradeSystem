@@ -59,6 +59,14 @@ class TestQfqDirtyBars:
         bars[5] = {**bars[5], key: bad}
         assert I.apply_qfq(bars, self._factors(bars)) is None
 
+    def test_overflow_ratio_returns_none(self):
+        """极端因子比值/复权后溢出 → 整体 None（门2 S2 R2）。"""
+        bars = [{"trade_date": f"2026-01-{i+1:02d}", "close": 1e308, "low": 1e308, "high": 1e308}
+                for i in range(3)]
+        factors = [{"trade_date": b["trade_date"], "adj_factor": 1e300} for b in bars]
+        factors[-1]["adj_factor"] = 1e-300  # T 日极小正因子 → ratio 溢出
+        assert I.apply_qfq(bars, factors) is None
+
 
 class TestMacd:
     def test_known_series_hand_check(self):
