@@ -1624,7 +1624,11 @@ class AkshareProvider(DataProvider):
     def get_stock_announcements(self, stock_code: str, start_date: str, end_date: str) -> DataResult:
         """个股公告：东方财富公告 API（np-anotice-stock）。"""
         try:
-            code_num = stock_code.split(".")[0]
+            code_num = str(stock_code or "").strip().split(".")[0]
+            if not code_num:
+                # 与 tushare 侧同款守卫：空/空白码不得发起外呼（空 stock_list 可能被端点当宽查询）
+                return DataResult(data=None, source=self.name,
+                                  error="stock_code 为空（不发起公告外呼）")
             url = "https://np-anotice-stock.eastmoney.com/api/security/ann"
             params = {
                 "sr": "-1",

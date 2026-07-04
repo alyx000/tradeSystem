@@ -160,6 +160,23 @@ class TestAnnouncementsNormalize:
         assert r.error
         assert p.pro.query.call_count == 0
 
+    @pytest.mark.parametrize("bad", ["", "   ", None])
+    def test_registry_blank_not_fallthrough_to_io(self, bad, monkeypatch):
+        """registry 生产路径：空白码在 tushare 报错降级后，akshare 侧同款守卫兜底，不发起外呼（门2 第3轮）。"""
+        from providers.akshare_provider import AkshareProvider
+        ak = AkshareProvider({})
+        ak._initialized = True
+        called = {"n": 0}
+        import providers.akshare_provider as akmod
+        class _Spy:
+            @staticmethod
+            def get(*a, **k):
+                called["n"] += 1
+                raise AssertionError("空白码不得发起外呼")
+        monkeypatch.setattr(akmod, "requests", _Spy)
+        r = ak.get_stock_announcements(bad, "2026-06-01", "2026-07-03")
+        assert r.error and called["n"] == 0
+
     def test_bare_code_normalized(self):
         p = _provider_with_pro()
         p.pro.query.return_value = pd.DataFrame()
