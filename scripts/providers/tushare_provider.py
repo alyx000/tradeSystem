@@ -402,6 +402,12 @@ class TushareProvider(DataProvider):
     def get_stock_adj_factor_range(self, stock_code: str, start_date: str, end_date: str) -> DataResult:
         """个股区间复权因子。空=success 空列表；异常=error。"""
         try:
+            err = self._ensure_pro("get_stock_adj_factor_range")
+            if err:
+                return err
+            if not stock_code:
+                return DataResult(data=None, source=self.name,
+                                  error="stock_code 为空（空 ts_code 会被接口当成全市场查询）")
             ts_code = self._normalize_stock_code(stock_code)
             records = self._query_records(
                 "adj_factor", ts_code=ts_code,
@@ -413,6 +419,12 @@ class TushareProvider(DataProvider):
     def get_holder_trade(self, stock_code: str, start_date: str, end_date: str) -> DataResult:
         """个股区间股东增减持（stk_holdertrade）。空=success 空列表；异常=error。"""
         try:
+            err = self._ensure_pro("get_holder_trade")
+            if err:
+                return err
+            if not stock_code:
+                return DataResult(data=None, source=self.name,
+                                  error="stock_code 为空（空 ts_code 会被接口当成全市场查询）")
             ts_code = self._normalize_stock_code(stock_code)
             records = self._query_records(
                 "stk_holdertrade", ts_code=ts_code,

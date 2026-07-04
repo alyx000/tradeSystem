@@ -38,6 +38,19 @@ class TestStockAdjFactorRange:
         r = p.get_stock_adj_factor_range("600000", "2026-06-01", "2026-07-03")
         assert r.error  # 异常路径 error 非空串
 
+    def test_not_initialized_returns_error(self):
+        # 门1 code-review 发现：未走 _ensure_pro 守卫，未初始化时会直接 AttributeError
+        p = TushareProvider(config={"token": "x"})
+        r = p.get_stock_adj_factor_range("600000", "2026-06-01", "2026-07-03")
+        assert "provider_not_initialized" in r.error
+
+    def test_empty_code_rejected(self):
+        # 空 ts_code 会被 tushare 接口当成全市场查询，必须在调用前拦截
+        p = _provider_with_pro()
+        r = p.get_stock_adj_factor_range("", "2026-06-01", "2026-07-03")
+        assert r.error
+        assert p.pro.query.call_count == 0
+
 
 class TestHolderTrade:
     def test_direction_enum_passthrough(self):
@@ -54,6 +67,17 @@ class TestHolderTrade:
         p.pro.query.return_value = pd.DataFrame()
         r = p.get_holder_trade("600000", "2026-06-01", "2026-07-03")
         assert not r.error and r.data == []
+
+    def test_not_initialized_returns_error(self):
+        p = TushareProvider(config={"token": "x"})
+        r = p.get_holder_trade("600000", "2026-06-01", "2026-07-03")
+        assert "provider_not_initialized" in r.error
+
+    def test_empty_code_rejected(self):
+        p = _provider_with_pro()
+        r = p.get_holder_trade("", "2026-06-01", "2026-07-03")
+        assert r.error
+        assert p.pro.query.call_count == 0
 
 
 class TestCapabilities:
