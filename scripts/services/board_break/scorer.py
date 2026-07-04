@@ -61,6 +61,16 @@ def classify_announcement(title: str) -> str:
 # 事实卡构建
 # ---------------------------------------------------------------------------
 
+def _norm_date(value) -> str:
+    """事件日期归一为 `YYYY-MM-DD`：兼容 tushare `holder_trade` 的 `YYYYMMDD`
+    与 akshare 公告的 `YYYY-MM-DD` 两种输入格式；空值原样返回空串。
+    """
+    s = str(value or "").strip()
+    if len(s) == 8 and s.isdigit():
+        return f"{s[:4]}-{s[4:6]}-{s[6:]}"
+    return s
+
+
 def _result_rows(result) -> tuple[list, bool]:
     """从 DataResult-like 对象取 (rows, ok)；None 或 error 均判失败。"""
     if result is None:
@@ -142,7 +152,7 @@ def build_fact_card(
             title = row.get("title", "")
             category = classify_announcement(title)
             if category in ann_events:
-                ann_events[category].append({"date": row.get("ann_date", ""), "title": title})
+                ann_events[category].append({"date": _norm_date(row.get("ann_date", "")), "title": title})
             if title:
                 ann_titles.append(title)
 
@@ -158,7 +168,7 @@ def build_fact_card(
             direction = "increase" if in_de == "IN" else ("reduce" if in_de == "DE" else None)
             if direction:
                 ann_events[direction].append({
-                    "date": row.get("ann_date", ""),
+                    "date": _norm_date(row.get("ann_date", "")),
                     "title": f"{row.get('holder_name', '')}{row.get('in_de', '')}"
                              f"{row.get('change_vol', '')}股",
                 })
@@ -227,6 +237,7 @@ def build_fact_card(
         "dif_status": dif_status,
         "position_value": position["value"],
         "position_state": position["state"],
+        "position_bar_count": position["bar_count"],
     }
 
 
@@ -296,6 +307,21 @@ def build_fact_cards(conn, registry, result: dict) -> list[dict]:
 # 打分（纯函数：只读 fact_card 字段，八维度加权求和 + 结构化 evidence）
 # ---------------------------------------------------------------------------
 
+def _format_event_detail(events: list, limit: int = 3) -> str:
+    """事件明细拼接：「MM-DD《标题》」逐条 join（D13 spec 格式）。
+
+    `date` 已在 `build_fact_card` 归一为 `YYYY-MM-DD`（见 `_norm_date`），
+    这里只做定长切片取 `MM-DD`；若日期格式异常（非归一后的定长串）则原样保留，不硬切。
+    """
+    parts = []
+    for e in events[:limit]:
+        date = e.get("date") or ""
+        mmdd = date[5:] if len(date) == 10 and date[4] == "-" else date
+        title = e.get("title", "")
+        parts.append(f"{mmdd}《{title}》" if mmdd else f"《{title}》")
+    return "；".join(parts)
+
+
 def _evidence(dimension, score, status, source, window, value, detail) -> dict:
     return {
         "dimension": dimension, "score": float(score), "status": status,
@@ -335,10 +361,10 @@ def score_candidate(fact_card: dict) -> dict:
             "increase", 0.0, "source_failed", holder_source, window_label, None,
             "增减持数据源失败，维度记0"))
     elif increase_events:
-        titles = "；".join(e.get("title", "") for e in increase_events[:3])
+        detail = _format_event_detail(increase_events)
         evidences.append(_evidence(
             "increase", C.W_INCREASE, "ok", holder_source, window_label,
-            len(increase_events), titles))
+            len(increase_events), detail))
     else:
         evidences.append(_evidence(
             "increase", 0.0, "no_event", holder_source, window_label, 0,
@@ -351,10 +377,10 @@ def score_candidate(fact_card: dict) -> dict:
             "placement", 0.0, "source_failed", "announcement", window_label, None,
             "公告数据源失败，维度记0"))
     elif placement_events:
-        titles = "；".join(e.get("title", "") for e in placement_events[:3])
+        detail = _format_event_detail(placement_events)
         evidences.append(_evidence(
             "placement", C.W_PLACEMENT, "ok", "announcement", window_label,
-            len(placement_events), titles))
+            len(placement_events), detail))
     else:
         evidences.append(_evidence(
             "placement", 0.0, "no_event", "announcement", window_label, 0,
@@ -373,23 +399,30 @@ def score_candidate(fact_card: dict) -> dict:
             "reduce", 0.0, "no_event", holder_source, window_label, 0,
             f"{window_label}无减持公告"))
     else:
-        titles = "；".join(e.get("title", "") for e in reduce_events[:3])
+        detail_events = _format_event_detail(reduce_events)
         if position_state == "missing" or position_value is None:
             evidences.append(_evidence(
                 "reduce", 0.0, "neutral", holder_source, "250日", position_value,
-                f"{titles}；位置缺失（可得样本不足250根），按中位0计"))
-        elif position_value <= C.POSITION_LOW:
-            evidences.append(_evidence(
-                "reduce", C.W_REDUCE_LOW, "ok", holder_source, "250日", position_value,
-                f"{titles}；250日分位{position_value:.0%}（低位）"))
-        elif position_value >= C.POSITION_HIGH:
-            evidences.append(_evidence(
-                "reduce", C.W_REDUCE_HIGH, "ok", holder_source, "250日", position_value,
-                f"{titles}；250日分位{position_value:.0%}（高位）"))
+                f"{detail_events}；位置缺失（可得样本不足250根），按中位0计"))
         else:
-            evidences.append(_evidence(
-                "reduce", 0.0, "neutral", holder_source, "250日", position_value,
-                f"{titles}；250日分位{position_value:.0%}（中位，不计分）"))
+            # degraded（120-249根，见 indicators.position_250d）仍按 full 同口径三档打分，
+            # 只在 detail 追加样本量提示，避免静默丢失"样本不足"信息
+            degraded_suffix = (
+                f"（样本不足250根，按可得{card.get('position_bar_count')}根计算）"
+                if position_state == "degraded" else ""
+            )
+            if position_value <= C.POSITION_LOW:
+                evidences.append(_evidence(
+                    "reduce", C.W_REDUCE_LOW, "ok", holder_source, "250日", position_value,
+                    f"{detail_events}；250日分位{position_value:.0%}（低位）{degraded_suffix}"))
+            elif position_value >= C.POSITION_HIGH:
+                evidences.append(_evidence(
+                    "reduce", C.W_REDUCE_HIGH, "ok", holder_source, "250日", position_value,
+                    f"{detail_events}；250日分位{position_value:.0%}（高位）{degraded_suffix}"))
+            else:
+                evidences.append(_evidence(
+                    "reduce", 0.0, "neutral", holder_source, "250日", position_value,
+                    f"{detail_events}；250日分位{position_value:.0%}（中位，不计分）{degraded_suffix}"))
 
     # —— 其他重大公告（利好/利空）——
     good_events = ann_events.get("good") or []
@@ -406,9 +439,9 @@ def score_candidate(fact_card: dict) -> dict:
         score = (C.W_ANN_GOOD if good_events else 0.0) + (C.W_ANN_BAD if bad_events else 0.0)
         parts = []
         if good_events:
-            parts.append("利好：" + "；".join(e.get("title", "") for e in good_events[:3]))
+            parts.append("利好：" + _format_event_detail(good_events))
         if bad_events:
-            parts.append("利空：" + "；".join(e.get("title", "") for e in bad_events[:3]))
+            parts.append("利空：" + _format_event_detail(bad_events))
         evidences.append(_evidence(
             "announce", score, "ok", "announcement", window_label,
             len(good_events) + len(bad_events), "；".join(parts)))
@@ -416,12 +449,9 @@ def score_candidate(fact_card: dict) -> dict:
     # —— 业绩 ——
     earnings_status = card.get("earnings_status", "no_event")
     earnings_type = card.get("earnings_type")
+    # earnings_direction 唯一推导来源是 build_fact_card._earnings_direction；
+    # 此处不再重复推导，避免两处口径漂移（fixture 测试须显式给出 earnings_direction）
     earnings_direction = card.get("earnings_direction")
-    if earnings_direction is None and earnings_type:
-        if earnings_type in POSITIVE_TYPES:
-            earnings_direction = "good"
-        elif earnings_type in NEGATIVE_TYPES:
-            earnings_direction = "bad"
     earn_window = f"近{C.EARNINGS_WINDOW_DAYS}日"
     if earnings_status == "source_failed":
         evidences.append(_evidence(
