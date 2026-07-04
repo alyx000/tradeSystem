@@ -60,8 +60,12 @@ def _run_daily(config: dict, args: argparse.Namespace) -> None:
             print(md)
             logger.error("[board-break] 核心源失败，不产出候选清单：%s", result.get("failed_sources"))
             if not args.dry_run:
-                path = renderer.save_report(md, date)
-                logger.info("[board-break daily] 失败报告已落盘 %s", path)
+                try:
+                    path = renderer.save_report(md, date)
+                    logger.info("[board-break daily] 失败报告已落盘 %s", path)
+                except OSError:
+                    # 落盘失败（磁盘满/权限）不得挡掉告警——告警是本分支的核心可观测性（门2 S4 R2）
+                    logger.error("[board-break daily] 失败报告落盘异常，继续尝试推送告警", exc_info=True)
                 if not args.no_push:
                     _push_to_dingtalk(f"⚠️ 断板反包·数据失败 · {date}", md)
             sys.exit(1)  # 让调度层可观测（log 里能看到非零退出）
