@@ -238,12 +238,11 @@ class TestEmptySemantics:
         assert result["empty_kind"] is None
         assert len(result["candidates"]) == 1
 
-    def test_bar_missing_all_rejected_is_rule_filtered_empty(self, monkeypatch, conn):
-        """entrance_count>0（达 D1 门槛）但全部因 bar_missing 被剔（fetch 返回 None）。
+    def test_all_bar_missing_escalates_to_source_failed(self, monkeypatch, conn):
+        """入口候选存在且全部因 bar_missing 被剔 → 升级 source_failed（门2 S1 R2 契约）。
 
-        收敛决策：bar_missing 属于「入口候选存在但被后续规则剔除」，归 rule_filtered_empty
-        展示；其计数仍保留在 rejects.bar_missing，供渲染层数据完整性脚注单列，不在 empty_kind
-        再细分（固化行为，防止未来静默改成新增第四种 empty_kind）。
+        原「固化」为 rule_filtered_empty 的行为被 codex R2 推翻：行情源整体挂掉时
+        静默渲染成"规则过滤完"是高成本静默空结果。全 bar_missing = 大概率源故障，fail-safe。
         """
         monkeypatch.setattr(scanner, "_prev_trade_date", lambda registry, d: "2026-07-03")
         registry = _make_registry(
@@ -252,9 +251,35 @@ class TestEmptySemantics:
         )
 
         result = scanner.run_daily(conn, registry, "2026-07-04")
-        assert result["status"] == "ok"
-        assert result["empty_kind"] == "rule_filtered_empty"
+        assert result["status"] == "source_failed"
+        assert "stock_daily_range" in result["failed_sources"]
         assert result["rejects"]["bar_missing"] > 0
+        import json
+        json.dumps(result, ensure_ascii=False)  # JSON-safe 契约同样适用
+
+    def test_partial_bar_missing_stays_ok(self, monkeypatch, conn):
+        """部分票缺 bar 仍按单票降级：status=ok，缺 bar 票计 bar_missing，其余正常入选。"""
+        monkeypatch.setattr(scanner, "_prev_trade_date", lambda registry, d: "2026-07-03")
+        bars_ok = [{"trade_date": "2026-07-04", "close": 10.0, "pct_chg": 3.0}]
+        calls = {"n": 0}
+
+        class _R:
+            def call(self, method, *a, **k):
+                if method == "get_limit_up_list":
+                    if a[0] == "2026-07-03":
+                        return _FakeResult({"stocks": [_lu("600002.SH", lt=2), _lu("600003.SH", lt=2)]})
+                    return _FakeResult({"stocks": []})
+                if method == "get_limit_down_list":
+                    return _FakeResult({"stocks": []})
+                if method == "get_stock_daily_range":
+                    calls["n"] += 1
+                    return _FakeResult(bars_ok) if a[0] == "600002" else _FakeResult(error="单票缺失")
+                return _FakeResult(error="unknown")
+
+        result = scanner.run_daily(conn, _R(), "2026-07-04")
+        assert result["status"] == "ok"
+        assert len(result["candidates"]) == 1
+        assert result["rejects"]["bar_missing"] == 1
 
 
 class TestClassifyEmptyKind:
