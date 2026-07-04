@@ -19,7 +19,10 @@ def _lu(code, name="某票", lt=2, industry="计算机"):
 
 
 class TestBareAndBoard:
-    @pytest.mark.parametrize("raw,expect", [("600000.SH", "600000"), ("000001.SZ", "000001"), ("600000", "600000")])
+    @pytest.mark.parametrize("raw,expect", [
+        ("600000.SH", "600000"), ("000001.SZ", "000001"), ("600000", "600000"),
+        (600000, "600000"),  # provider 降级可能给非字符串码（int），bare_code 须兜底不抛异常
+    ])
     def test_bare_code(self, raw, expect):
         assert scanner.bare_code(raw) == expect
 
@@ -105,22 +108,43 @@ class _FakeResult:
     def __init__(self, data=None, error=None):
         self.data, self.error, self.source = data, error, "fake"
 
+    @property
+    def success(self) -> bool:
+        # 与真实 providers.base.DataResult.success 语义对齐：无错误即成功
+        return not self.error
+
+
+def _make_registry(*, prev_rows=None, prev_ok=True, today_ok=True, down_ok=True, range_result=None):
+    """通用 fake registry 工厂，供 TestRunDailySourceStates / TestEmptySemantics 三处复用。
+
+    prev_rows: T-1 涨停榜行（默认单票 lt=2，满足 D1 门槛）；
+    prev_ok/today_ok/down_ok: 三源各自是否返回 error（模拟 source_failed）；
+    range_result: get_stock_daily_range 的返回（默认 T 日单根 3.0% bar），
+                  可传 _FakeResult(error=...) 模拟日线缺失。
+    """
+    prev_rows = prev_rows if prev_rows is not None else [_lu("600002.SH", lt=2)]
+    range_result = range_result if range_result is not None else _FakeResult(
+        [{"trade_date": "20260704", "close": 10.0, "pct_chg": 3.0}]
+    )
+
+    class R:
+        def call(self, method, *a, **k):
+            if method == "get_limit_up_list":
+                date = a[0]
+                if date == "2026-07-03":
+                    return _FakeResult({"stocks": prev_rows}) if prev_ok else _FakeResult(error="x")
+                return _FakeResult({"stocks": []}) if today_ok else _FakeResult(error="x")
+            if method == "get_limit_down_list":
+                return _FakeResult({"stocks": []}) if down_ok else _FakeResult(error="x")
+            if method == "get_stock_daily_range":
+                return range_result
+            return _FakeResult(error="unknown")
+    return R()
+
 
 class TestRunDailySourceStates:
     def _registry(self, prev_ok=True, today_ok=True, down_ok=True):
-        class R:
-            def call(self, method, *a, **k):
-                if method == "get_limit_up_list":
-                    date = a[0]
-                    if date == "2026-07-03":
-                        return _FakeResult({"stocks": [_lu("600002.SH", lt=2)]}) if prev_ok else _FakeResult(error="x")
-                    return _FakeResult({"stocks": []}) if today_ok else _FakeResult(error="x")
-                if method == "get_limit_down_list":
-                    return _FakeResult({"stocks": []}) if down_ok else _FakeResult(error="x")
-                if method == "get_stock_daily_range":
-                    return _FakeResult([{"trade_date": "20260704", "close": 10.0, "pct_chg": 3.0}])
-                return _FakeResult(error="unknown")
-        return R()
+        return _make_registry(prev_ok=prev_ok, today_ok=today_ok, down_ok=down_ok)
 
     def test_any_core_source_failed(self, monkeypatch, tmp_path):
         monkeypatch.setattr(scanner, "_prev_trade_date", lambda registry, d: "2026-07-03")
@@ -153,19 +177,7 @@ class TestEmptySemantics:
         return c
 
     def _registry(self, prev_rows):
-        class R:
-            def call(self, method, *a, **k):
-                if method == "get_limit_up_list":
-                    date = a[0]
-                    if date == "2026-07-03":
-                        return _FakeResult({"stocks": prev_rows})
-                    return _FakeResult({"stocks": []})
-                if method == "get_limit_down_list":
-                    return _FakeResult({"stocks": []})
-                if method == "get_stock_daily_range":
-                    return _FakeResult([{"trade_date": "20260704", "close": 10.0, "pct_chg": 3.0}])
-                return _FakeResult(error="unknown")
-        return R()
+        return _make_registry(prev_rows=prev_rows)
 
     def test_source_ok_empty(self, monkeypatch, conn):
         monkeypatch.setattr(scanner, "_prev_trade_date", lambda registry, d: "2026-07-03")
@@ -197,21 +209,25 @@ class TestEmptySemantics:
         再细分（固化行为，防止未来静默改成新增第四种 empty_kind）。
         """
         monkeypatch.setattr(scanner, "_prev_trade_date", lambda registry, d: "2026-07-03")
+        registry = _make_registry(
+            prev_rows=[_lu("600002.SH", lt=2)],
+            range_result=_FakeResult(error="日线缺失"),  # fetch_range 返回 []
+        )
 
-        class R:
-            def call(self, method, *a, **k):
-                if method == "get_limit_up_list":
-                    date = a[0]
-                    if date == "2026-07-03":
-                        return _FakeResult({"stocks": [_lu("600002.SH", lt=2)]})
-                    return _FakeResult({"stocks": []})
-                if method == "get_limit_down_list":
-                    return _FakeResult({"stocks": []})
-                if method == "get_stock_daily_range":
-                    return _FakeResult(error="日线缺失")  # fetch_range 返回 None
-                return _FakeResult(error="unknown")
-
-        result = scanner.run_daily(conn, R(), "2026-07-04")
+        result = scanner.run_daily(conn, registry, "2026-07-04")
         assert result["status"] == "ok"
         assert result["empty_kind"] == "rule_filtered_empty"
         assert result["rejects"]["bar_missing"] > 0
+
+
+class TestClassifyEmptyKind:
+    """_classify_empty_kind 纯函数直测：三分支各覆盖一次。"""
+
+    def test_has_candidates_returns_none(self):
+        assert scanner._classify_empty_kind(True, 5) is None
+
+    def test_no_entrance_returns_source_ok_empty(self):
+        assert scanner._classify_empty_kind(False, 0) == "source_ok_empty"
+
+    def test_entrance_but_no_candidates_returns_rule_filtered_empty(self):
+        assert scanner._classify_empty_kind(False, 3) == "rule_filtered_empty"

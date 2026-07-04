@@ -11,13 +11,13 @@ from datetime import datetime, timedelta
 
 from services.board_break import constants as C
 from services.volume_concentration import repo as vc_repo
-from services.volume_concentration.aggregator import UNCLASSIFIED
 from utils import is_st_stock
 from utils.trade_date import get_prev_trade_date
 
 
 def bare_code(code: str) -> str:
-    return (code or "").split(".")[0].strip()
+    # provider 降级可能给非字符串码（如 int）；str() 兜底防 .split 抛 AttributeError
+    return str(code or "").split(".")[0].strip()
 
 
 def is_main_board(code: str) -> bool:
@@ -46,7 +46,7 @@ def filter_candidates(prev_limit_up, today_limit_up_codes, today_limit_down_code
         if lt < C.MIN_LIMIT_TIMES:
             rejects["lt_below_min"] += 1
             continue
-        if not is_main_board(code):
+        if not code.startswith(C.MAIN_BOARD_PREFIXES):  # code 已裸化，直接判前缀，免二次裸化
             rejects["non_main_board"] += 1
             continue
         if is_st_stock(row.get("name", "")):
@@ -108,17 +108,24 @@ def _prev_trade_date(registry, date: str) -> str:
 
 
 def _main_sectors(conn: sqlite3.Connection, date: str, top_k: int) -> tuple[set, bool]:
-    """主线板块 = 当日成交额集中度 Top-K 申万二级；当日缺失回退最近一日（复制 trend-leader vc_repo 口径）。"""
-    rec = vc_repo.get_concentration(conn, date)
-    degraded = False
-    if rec is None:
-        degraded = True
-        recent = vc_repo.get_recent_concentration(conn, date, 1)
-        rec = recent[-1] if recent else None
-    auto = []
-    if rec and rec.get("sector_summary"):
-        auto = [s["industry"] for s in rec["sector_summary"] if s.get("industry") != UNCLASSIFIED][:top_k]
-    return set(auto), degraded
+    """主线板块 = 当日成交额集中度 Top-K 申万二级；当日缺失回退最近一日（下沉至 vc_repo.get_main_sectors）。"""
+    return vc_repo.get_main_sectors(conn, date, top_k)
+
+
+def _classify_empty_kind(has_candidates: bool, entrance_count: int) -> str | None:
+    """空语义三分：有候选→None；入口候选数为 0（源本身没有候选）→ source_ok_empty；
+    否则（入口候选存在但被后续规则剔除）→ rule_filtered_empty。
+
+    收敛决策（Stage 1 审查固化，勿再拆分）：bar_missing（单票日线缺失）归入
+    rule_filtered_empty 展示——它与 ST/主板/仍涨停/跌停一样属于「入口候选存在但
+    被后续规则剔除」；其计数保留在 rejects["bar_missing"]，由渲染层数据完整性
+    脚注单独列出，不在此 empty_kind 三分基础上再细分出第四种语义。
+    """
+    if has_candidates:
+        return None
+    if entrance_count == 0:
+        return "source_ok_empty"
+    return "rule_filtered_empty"
 
 
 def run_daily(conn: sqlite3.Connection, registry, date: str) -> dict:
@@ -133,9 +140,12 @@ def run_daily(conn: sqlite3.Connection, registry, date: str) -> dict:
     today_ld = registry.call("get_limit_down_list", date)
 
     sources = {
-        "prev_limit_up": {"ok": not bool(prev_lu.error), "source": getattr(prev_lu, "source", "")},
-        "today_limit_up": {"ok": not bool(today_lu.error), "source": getattr(today_lu, "source", "")},
-        "today_limit_down": {"ok": not bool(today_ld.error), "source": getattr(today_ld, "source", "")},
+        name: {"ok": not r.error, "source": getattr(r, "source", "")}
+        for name, r in (
+            ("prev_limit_up", prev_lu),
+            ("today_limit_up", today_lu),
+            ("today_limit_down", today_ld),
+        )
     }
     failed_sources = [name for name, s in sources.items() if not s["ok"]]
     if failed_sources:
@@ -162,22 +172,14 @@ def run_daily(conn: sqlite3.Connection, registry, date: str) -> dict:
     entrance_count = len(prev_stocks) - rejects["dirty_limit_times"] - rejects["lt_below_min"]
 
     def fetch_range(code, start, end):
+        # 口径对齐 trend_leader._bars / volume_concentration.collector：success 且 data 为 list 才算有效
         r = registry.call("get_stock_daily_range", code, start, end)
-        return r.data if not r.error and isinstance(r.data, list) else None
+        return r.data if getattr(r, "success", False) and isinstance(r.data, list) else []
 
     enriched, enrich_rejects = enrich_with_today_bar(cands, fetch_range, date)
     rejects.update(enrich_rejects)
 
-    if enriched:
-        empty_kind = None
-    elif entrance_count == 0:
-        empty_kind = "source_ok_empty"
-    else:
-        # 收敛决策（Stage 1 审查固化，勿再拆分）：bar_missing（单票日线缺失）归入
-        # rule_filtered_empty 展示——它与 ST/主板/仍涨停/跌停一样属于「入口候选存在但
-        # 被后续规则剔除」；其计数保留在 rejects["bar_missing"]，由渲染层数据完整性
-        # 脚注单独列出，不在此 empty_kind 三分基础上再细分出第四种语义。
-        empty_kind = "rule_filtered_empty"
+    empty_kind = _classify_empty_kind(bool(enriched), entrance_count)
 
     main_sectors, main_sector_degraded = _main_sectors(conn, date, C.MAIN_SECTOR_TOP_K)
 
