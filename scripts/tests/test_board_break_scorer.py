@@ -35,6 +35,16 @@ def _card(**over):
     return base
 
 
+class TestHolderEventTitle:
+    def test_readable_title(self):
+        """增减持事件标题人可读：方向翻译+万股化（真跑校准修）。"""
+        row = {"holder_name": "深圳兆伟", "in_de": "DE", "change_vol": 6375000}
+        assert scorer._holder_event_title(row, "reduce") == "深圳兆伟 减持 637.5万股"
+
+    def test_missing_vol(self):
+        assert "股数未知" in scorer._holder_event_title({"holder_name": "某", "in_de": "IN"}, "increase")
+
+
 class TestScore:
     def test_main_sector_scored_with_evidence(self):
         r = scorer.score_candidate(_card())
