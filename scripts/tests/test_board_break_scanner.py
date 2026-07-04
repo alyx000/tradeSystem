@@ -12,6 +12,7 @@ import pytest
 
 from db.schema import init_schema
 from services.board_break import constants as C, scanner
+from services.volume_concentration import repo as vc_repo
 
 
 def _lu(code, name="某票", lt=2, industry="计算机"):
@@ -90,7 +91,7 @@ class TestEnrichWithTodayBar:
     @pytest.mark.parametrize("pct,kept", [(5.99, True), (6.0, True), (6.01, False), (-3.0, True)])
     def test_pct_boundary_and_green_kept(self, pct, kept):
         cands = [{"code": "600002", "name": "x", "limit_times": 2, "industry": "计算机"}]
-        bars = {"600002": [{"trade_date": "20260704", "close": 10.0, "pct_chg": pct}]}
+        bars = {"600002": [{"trade_date": "2026-07-04", "close": 10.0, "pct_chg": pct}]}
         out, rejects = scanner.enrich_with_today_bar(cands, self._fetch(bars), date="2026-07-04")
         assert (len(out) == 1) is kept
         if kept:
@@ -99,9 +100,23 @@ class TestEnrichWithTodayBar:
     def test_missing_or_stale_bar_rejected(self):
         cands = [{"code": "600002", "name": "x", "limit_times": 2, "industry": "计算机"},
                  {"code": "600003", "name": "y", "limit_times": 2, "industry": "计算机"}]
-        bars = {"600003": [{"trade_date": "20260703", "close": 10.0, "pct_chg": 1.0}]}  # 末根非 T
+        bars = {"600003": [{"trade_date": "2026-07-03", "close": 10.0, "pct_chg": 1.0}]}  # 末根非 T
         out, rejects = scanner.enrich_with_today_bar(cands, self._fetch(bars), date="2026-07-04")
         assert out == [] and rejects["bar_missing"] == 2
+
+    def test_real_contract_dashed_trade_date_not_misjudged_bar_missing(self):
+        """揭露性用例：真实 provider（get_stock_daily_range）契约 trade_date 为带横杠
+        "YYYY-MM-DD"（见 tushare_provider.py 归一化 + test_tushare_daily_range.py 钉死），
+        而非 "YYYYMMDD" 紧凑格式。旧实现内部 _compact_date 把 date 转紧凑格式去比对
+        带横杠的真实 trade_date，恒不相等 → 候选恒被误判 bar_missing → 生产环境永远空清单。
+
+        本用例在旧代码上必须 RED（bar_missing 被误计、候选被误剔）；修复后须 GREEN。
+        """
+        cands = [{"code": "600002", "name": "x", "limit_times": 2, "industry": "计算机"}]
+        bars = {"600002": [{"trade_date": "2026-07-04", "close": 10.0, "pct_chg": 3.0}]}
+        out, rejects = scanner.enrich_with_today_bar(cands, self._fetch(bars), date="2026-07-04")
+        assert len(out) == 1
+        assert rejects["bar_missing"] == 0
 
 
 class _FakeResult:
@@ -124,7 +139,7 @@ def _make_registry(*, prev_rows=None, prev_ok=True, today_ok=True, down_ok=True,
     """
     prev_rows = prev_rows if prev_rows is not None else [_lu("600002.SH", lt=2)]
     range_result = range_result if range_result is not None else _FakeResult(
-        [{"trade_date": "20260704", "close": 10.0, "pct_chg": 3.0}]
+        [{"trade_date": "2026-07-04", "close": 10.0, "pct_chg": 3.0}]
     )
 
     class R:
@@ -231,3 +246,55 @@ class TestClassifyEmptyKind:
 
     def test_entrance_but_no_candidates_returns_rule_filtered_empty(self):
         assert scanner._classify_empty_kind(False, 3) == "rule_filtered_empty"
+
+
+class TestMainSectors:
+    """scanner._main_sectors 直测（与 trend_leader 口径一致的刻意内联副本，
+    plan 角色边界约束 volume_concentration「不得改」，不下沉共用 vc_repo helper）。
+
+    sqlite fixture 造 daily_volume_concentration 数据的方式参考
+    scripts/tests/test_volume_concentration_repo.py 既有惯例（init_schema + save_concentration）。
+    """
+
+    @pytest.fixture
+    def conn(self):
+        c = sqlite3.connect(":memory:")
+        c.row_factory = sqlite3.Row
+        init_schema(c)
+        return c
+
+    def _sample_record(self, date: str, sector_summary: list) -> dict:
+        return {
+            "date": date,
+            "top_n": 20,
+            "total_amount_billion": 350.5,
+            "market_total_billion": 9800.0,
+            "stocks": [],
+            "sector_summary": sector_summary,
+        }
+
+    def test_hits_today(self, conn):
+        """当日快照存在时,直接取其 sector_summary Top-K(剔未分类),degraded=False。"""
+        record = self._sample_record("2026-07-04", [
+            {"industry": "电池", "count": 1, "amount_billion": 58.3, "share_in_top_n": 0.5, "codes": []},
+            {"industry": "未分类", "count": 1, "amount_billion": 10.0, "share_in_top_n": 0.1, "codes": []},
+            {"industry": "半导体", "count": 1, "amount_billion": 20.0, "share_in_top_n": 0.2, "codes": []},
+        ])
+        vc_repo.save_concentration(conn, record)
+
+        sectors, degraded = scanner._main_sectors(conn, "2026-07-04", top_k=1)
+
+        assert sectors == {"电池"}  # top_k=1 只取第一条,未分类已被剔除
+        assert degraded is False
+
+    def test_falls_back_when_missing(self, conn):
+        """当日无快照 → 回退最近一日(<=date),并标记 degraded=True。"""
+        record = self._sample_record("2026-07-03", [
+            {"industry": "电池", "count": 1, "amount_billion": 58.3, "share_in_top_n": 0.5, "codes": []},
+        ])
+        vc_repo.save_concentration(conn, record)
+
+        sectors, degraded = scanner._main_sectors(conn, "2026-07-04", top_k=5)  # 07-04 当日无快照
+
+        assert sectors == {"电池"}
+        assert degraded is True

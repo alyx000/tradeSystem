@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 
 from services.board_break import constants as C
 from services.volume_concentration import repo as vc_repo
+from services.volume_concentration.aggregator import UNCLASSIFIED
 from utils import is_st_stock
 from utils.trade_date import get_prev_trade_date
 
@@ -63,11 +64,6 @@ def filter_candidates(prev_limit_up, today_limit_up_codes, today_limit_down_code
     return cands, rejects
 
 
-def _compact_date(date: str) -> str:
-    """"2026-07-04" -> "20260704"，用于与日线 bar 的 trade_date 比对。"""
-    return date.replace("-", "")
-
-
 def _lookback_start(date: str) -> str:
     """T-400 自然日窗口起点（一次取够，供 Stage 2 打分复用）。"""
     return (datetime.strptime(date, "%Y-%m-%d") - timedelta(days=C.LOOKBACK_NATURAL_DAYS)).strftime("%Y-%m-%d")
@@ -77,8 +73,12 @@ def enrich_with_today_bar(candidates, fetch_range, date: str) -> tuple[list[dict
     """逐票取 T 日 bar：校验末根 trade_date==T 与 close/pct_chg 非空，再按断板日涨幅<=6% 过滤。
 
     候选 dict 补 {close, pct_chg, ref_price, bars}；bars 挂全窗口日线供 Stage 2 打分复用。
+
+    末根 trade_date 比对直接用带横杠 date 参数（"YYYY-MM-DD"）：真实 provider
+    get_stock_daily_range 归一化输出即此格式（对齐 volume_concentration/collector.py:137
+    惯例），不再转紧凑格式 "YYYYMMDD"（旧实现 _compact_date 会导致恒不相等，
+    生产环境所有候选永远被误判 bar_missing，见修复记录）。
     """
-    compact_date = _compact_date(date)
     start = _lookback_start(date)
     out, rejects = [], {"bar_missing": 0, "pct_too_high": 0}
     for cand in candidates:
@@ -87,7 +87,7 @@ def enrich_with_today_bar(candidates, fetch_range, date: str) -> tuple[list[dict
             rejects["bar_missing"] += 1
             continue
         last = bars[-1]
-        if last.get("trade_date") != compact_date:
+        if last.get("trade_date") != date:
             rejects["bar_missing"] += 1
             continue
         close, pct = last.get("close"), last.get("pct_chg")
@@ -108,8 +108,24 @@ def _prev_trade_date(registry, date: str) -> str:
 
 
 def _main_sectors(conn: sqlite3.Connection, date: str, top_k: int) -> tuple[set, bool]:
-    """主线板块 = 当日成交额集中度 Top-K 申万二级；当日缺失回退最近一日（下沉至 vc_repo.get_main_sectors）。"""
-    return vc_repo.get_main_sectors(conn, date, top_k)
+    """主线板块 = 当日成交额集中度 Top-K 申万二级；当日缺失回退最近一日。
+
+    与 trend_leader 口径一致的刻意副本（plan 角色边界约束 volume_concentration
+    「不得改」，plan 原文口径是「复制」而非下沉共用 helper）：simplify 批次曾将
+    此实现下沉为 vc_repo.get_main_sectors 并转调，越过角色边界，本次回退为内联
+    实现。协调式下沉（统一 board_break / trend_leader 两处口径到 vc_repo 公共
+    helper）留作 tech-debt，不在本次改动范围内。
+    """
+    rec = vc_repo.get_concentration(conn, date)
+    degraded = False
+    if rec is None:
+        degraded = True
+        recent = vc_repo.get_recent_concentration(conn, date, 1)
+        rec = recent[-1] if recent else None
+    auto = []
+    if rec and rec.get("sector_summary"):
+        auto = [s["industry"] for s in rec["sector_summary"] if s.get("industry") != UNCLASSIFIED][:top_k]
+    return set(auto), degraded
 
 
 def _classify_empty_kind(has_candidates: bool, entrance_count: int) -> str | None:
