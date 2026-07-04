@@ -400,19 +400,35 @@ class TushareProvider(DataProvider):
             return DataResult(data=None, source=self.name, error=str(e))
 
     def get_stock_adj_factor_range(self, stock_code: str, start_date: str, end_date: str) -> DataResult:
-        """个股区间复权因子。空=success 空列表；异常=error。"""
+        """个股区间复权因子。空=success 空列表；异常=error。
+
+        契约对齐 get_stock_daily_range：trade_date 归一为 YYYY-MM-DD 且按日期升序，
+        输出仅保留 trade_date + adj_factor 两个 key（与 get_holder_trade 字段收窄风格一致）。
+        """
         try:
             err = self._ensure_pro("get_stock_adj_factor_range")
             if err:
                 return err
-            if not stock_code:
+            # 门2 codex 发现：原先「先判 if not stock_code 再 normalize」挡不住空白串
+            # （"   " 非空但 strip 后为空，会绕过守卫把空 ts_code 传给接口）；
+            # 现改为先 normalize 再判空，覆盖 "" / "   " / None 三种情形。
+            ts_code = self._normalize_stock_code(stock_code)
+            if not ts_code:
                 return DataResult(data=None, source=self.name,
                                   error="stock_code 为空（空 ts_code 会被接口当成全市场查询）")
-            ts_code = self._normalize_stock_code(stock_code)
             records = self._query_records(
                 "adj_factor", ts_code=ts_code,
                 start_date=self._date_fmt(start_date), end_date=self._date_fmt(end_date))
-            return DataResult(data=records, source="tushare:adj_factor")
+            out = []
+            for item in records:
+                td = item.get("trade_date")
+                if td is None:
+                    continue
+                s = str(td).replace("-", "")[:8]
+                norm = f"{s[:4]}-{s[4:6]}-{s[6:8]}" if len(s) == 8 else str(td)
+                out.append({"trade_date": norm, "adj_factor": item.get("adj_factor")})
+            out.sort(key=lambda r: r["trade_date"])
+            return DataResult(data=out, source="tushare:adj_factor")
         except Exception as e:
             return DataResult(data=None, source=self.name, error=str(e))
 
@@ -422,10 +438,11 @@ class TushareProvider(DataProvider):
             err = self._ensure_pro("get_holder_trade")
             if err:
                 return err
-            if not stock_code:
+            # 门2 codex 发现：同 get_stock_adj_factor_range，先 normalize 再判空防空白串绕过。
+            ts_code = self._normalize_stock_code(stock_code)
+            if not ts_code:
                 return DataResult(data=None, source=self.name,
                                   error="stock_code 为空（空 ts_code 会被接口当成全市场查询）")
-            ts_code = self._normalize_stock_code(stock_code)
             records = self._query_records(
                 "stk_holdertrade", ts_code=ts_code,
                 start_date=self._date_fmt(start_date), end_date=self._date_fmt(end_date))
