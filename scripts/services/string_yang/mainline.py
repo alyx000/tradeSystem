@@ -1,0 +1,348 @@
+"""串阳首阴主线融合判断。
+
+LLM 只裁决「哪些已提供的申万二级/同花顺概念属于主线」，不直接选择个股。
+个股仍必须由 scanner 的首阴机械条件过滤。
+"""
+from __future__ import annotations
+
+import json
+import logging
+import sqlite3
+import subprocess
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
+from typing import Any
+
+from services.concept_tags import build_stock_concept_map
+from services.string_yang import constants as C
+from services.volume_concentration import repo as vc_repo
+from services.volume_concentration.aggregator import UNCLASSIFIED
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class MainlineJudgment:
+    date: str
+    main_sectors: list[str]
+    main_concepts: list[str] = field(default_factory=list)
+    status: str = "fallback"
+    degraded: bool = False
+    confidence: float | None = None
+    watch_only: list[str] = field(default_factory=list)
+    evidence: list[str] = field(default_factory=list)
+    source_errors: list[str] = field(default_factory=list)
+    volume_sectors: list[dict[str, Any]] = field(default_factory=list)
+    hot_concepts: list[dict[str, Any]] = field(default_factory=list)
+    teacher_notes: list[dict[str, Any]] = field(default_factory=list)
+    stock_concept_map: dict[str, set[str]] = field(default_factory=dict)
+
+    def public_payload(self) -> dict[str, Any]:
+        return {
+            "status": self.status,
+            "main_sectors": self.main_sectors,
+            "main_concepts": self.main_concepts,
+            "confidence": self.confidence,
+            "watch_only": self.watch_only,
+            "evidence": self.evidence,
+            "volume_sectors": self.volume_sectors,
+            "hot_concepts": self.hot_concepts,
+            "teacher_notes": self.teacher_notes,
+            "source_errors": self.source_errors,
+        }
+
+
+def judge_mainline(
+    conn: sqlite3.Connection,
+    registry,
+    date: str,
+    *,
+    top_k: int,
+    top_concepts: int = C.DEFAULT_TOP_CONCEPTS,
+    teacher_lookback_days: int = C.TEACHER_LOOKBACK_DAYS,
+    use_llm: bool = False,
+    llm_runner=None,
+) -> MainlineJudgment:
+    volume_sectors, degraded = _volume_sectors(conn, date, top_k)
+    teacher_notes = _teacher_notes(conn, date, teacher_lookback_days)
+    stock_concept_map: dict[str, set[str]] = {}
+    hot_concepts: list[dict[str, Any]] = []
+    source_errors: list[str] = []
+
+    if use_llm:
+        stock_concept_map, member_count, ok = build_stock_concept_map(registry, date)
+        if not ok:
+            source_errors.append("ths_member")
+        hot_concepts, concept_ok, coverage_ok = _hot_concept_rows(registry, date, top_concepts, member_count)
+        if not concept_ok:
+            source_errors.append("concept_flow")
+        elif not coverage_ok:
+            source_errors.append("concept_coverage")
+
+    fallback = MainlineJudgment(
+        date=date,
+        main_sectors=[row["industry"] for row in volume_sectors],
+        main_concepts=[],
+        status="disabled" if not use_llm else "fallback",
+        degraded=degraded,
+        volume_sectors=volume_sectors,
+        hot_concepts=hot_concepts,
+        teacher_notes=teacher_notes,
+        stock_concept_map=stock_concept_map,
+        source_errors=source_errors.copy(),
+    )
+
+    if not use_llm:
+        return fallback
+
+    runner = llm_runner or build_antigravity_runner()
+    payload = {
+        "date": date,
+        "volume_sectors": volume_sectors,
+        "hot_concepts": hot_concepts,
+        "teacher_notes": teacher_notes,
+    }
+    try:
+        raw = runner(_build_prompt(), payload)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[string-yang] mainline LLM 异常，降级成交额主线: %s", exc)
+        fallback.status = "llm_fallback"
+        fallback.source_errors.append("llm_error")
+        return fallback
+
+    parsed = _parse_json(raw) if isinstance(raw, str) else raw
+    decision = _normalize_llm_decision(parsed, volume_sectors, hot_concepts)
+    if not decision["main_sectors"] and not decision["main_concepts"]:
+        fallback.status = "llm_fallback"
+        fallback.source_errors.append("llm_mainline_empty")
+        return fallback
+
+    return MainlineJudgment(
+        date=date,
+        main_sectors=decision["main_sectors"],
+        main_concepts=decision["main_concepts"],
+        status="llm",
+        degraded=degraded,
+        confidence=decision["confidence"],
+        watch_only=decision["watch_only"],
+        evidence=decision["evidence"],
+        source_errors=source_errors,
+        volume_sectors=volume_sectors,
+        hot_concepts=hot_concepts,
+        teacher_notes=teacher_notes,
+        stock_concept_map=stock_concept_map,
+    )
+
+
+def _volume_sectors(conn: sqlite3.Connection, date: str, top_k: int) -> tuple[list[dict[str, Any]], bool]:
+    rec = vc_repo.get_concentration(conn, date)
+    degraded = False
+    if rec is None:
+        degraded = True
+        recent = vc_repo.get_recent_concentration(conn, date, 1)
+        rec = recent[-1] if recent else None
+    rows: list[dict[str, Any]] = []
+    for item in (rec or {}).get("sector_summary") or []:
+        industry = item.get("industry")
+        if not industry or industry == UNCLASSIFIED:
+            continue
+        rows.append({
+            "industry": str(industry),
+            "amount_billion": item.get("amount_billion"),
+            "amount_share": item.get("amount_share"),
+            "stock_count": item.get("stock_count"),
+        })
+        if len(rows) >= top_k:
+            break
+    return rows, degraded
+
+
+def _teacher_notes(conn: sqlite3.Connection, date: str, lookback_days: int) -> list[dict[str, Any]]:
+    start = (datetime.strptime(date, "%Y-%m-%d") - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
+    rows = conn.execute(
+        """SELECT id, date, title, core_view, key_points, sectors, raw_content
+           FROM teacher_notes
+           WHERE date >= ? AND date <= ?
+           ORDER BY date DESC, id DESC
+           LIMIT 20""",
+        (start, date),
+    ).fetchall()
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        sectors = _json_list(row["sectors"])
+        snippets = []
+        for key in ("core_view", "key_points", "raw_content"):
+            text = _trim(row[key], 180)
+            if text:
+                snippets.append(text)
+        out.append({
+            "id": row["id"],
+            "date": row["date"],
+            "title": row["title"],
+            "sectors": sectors,
+            "snippets": snippets[:3],
+        })
+    return out
+
+
+def _hot_concept_rows(
+    registry,
+    date: str,
+    top_concepts: int,
+    member_count: dict[str, int],
+) -> tuple[list[dict[str, Any]], bool, bool]:
+    r = registry.call("get_concept_moneyflow_ths", date)
+    if not (getattr(r, "success", False) and isinstance(r.data, list)):
+        return [], False, True
+    parsed: list[dict[str, Any]] = []
+    for row in r.data:
+        if not isinstance(row, dict) or not row.get("name"):
+            continue
+        name = str(row["name"])
+        try:
+            net_amount = float(row.get("net_amount"))
+        except (TypeError, ValueError):
+            continue
+        parsed.append({"name": name, "net_amount": net_amount, "member_count": member_count.get(name, 0)})
+    parsed.sort(key=lambda item: float(item["net_amount"]), reverse=True)
+    kept: list[dict[str, Any]] = []
+    coverage_ok = True
+    for item in parsed:
+        mc = int(item.get("member_count") or 0)
+        if mc > C.CONCEPT_MAX_MEMBERS:
+            continue
+        if mc <= 0:
+            coverage_ok = False
+            continue
+        kept.append(item)
+        if len(kept) >= top_concepts:
+            break
+    return kept, True, coverage_ok
+
+
+def _normalize_llm_decision(
+    parsed: Any,
+    volume_sectors: list[dict[str, Any]],
+    hot_concepts: list[dict[str, Any]],
+) -> dict[str, Any]:
+    if not isinstance(parsed, dict):
+        return {"main_sectors": [], "main_concepts": [], "watch_only": [], "evidence": [], "confidence": None}
+    allowed_sectors = {row["industry"] for row in volume_sectors}
+    allowed_concepts = {row["name"] for row in hot_concepts}
+    main_sectors = _ordered_allowed(parsed.get("main_l2"), allowed_sectors)
+    main_concepts = _ordered_allowed(parsed.get("main_concepts"), allowed_concepts)
+    return {
+        "main_sectors": main_sectors,
+        "main_concepts": main_concepts,
+        "watch_only": _string_list(parsed.get("watch_only"), limit=8),
+        "evidence": _string_list(parsed.get("evidence"), limit=8),
+        "confidence": _confidence(parsed.get("confidence")),
+    }
+
+
+def _ordered_allowed(values: Any, allowed: set[str]) -> list[str]:
+    out: list[str] = []
+    for value in values if isinstance(values, list) else []:
+        text = str(value).strip()
+        if text and text in allowed and text not in out:
+            out.append(text)
+    return out
+
+
+def _string_list(values: Any, *, limit: int) -> list[str]:
+    out: list[str] = []
+    for value in values if isinstance(values, list) else []:
+        text = str(value).strip()
+        if text and text not in out:
+            out.append(text)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _confidence(value: Any) -> float | None:
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return None
+    return max(0.0, min(1.0, v))
+
+
+def _json_list(raw: Any) -> list[str]:
+    try:
+        data = json.loads(raw) if raw else []
+    except (TypeError, json.JSONDecodeError):
+        return []
+    return [str(x).strip() for x in data if isinstance(x, str) and str(x).strip()]
+
+
+def _trim(raw: Any, limit: int) -> str:
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    return text[:limit]
+
+
+def _build_prompt() -> str:
+    return (
+        "你是A股盘后主线判断助手。请只根据输入中的三类证据判断当前主线："
+        "1) 成交额集中度申万二级候选；2) 同花顺概念资金分支候选；3) 老师观点原文摘录。"
+        "你只能从输入 volume_sectors.industry 中选择 main_l2，只能从 hot_concepts.name 中选择 main_concepts；"
+        "不能新增行业或概念，不能选择个股，不能给买卖建议、价位、仓位或预测。"
+        "输出 JSON，不要 markdown："
+        "{\"main_l2\":[\"...\"],\"main_concepts\":[\"...\"],\"watch_only\":[\"...\"],"
+        "\"evidence\":[\"...\"],\"confidence\":0.0}"
+    )
+
+
+def build_antigravity_runner():
+    from utils.llm_cli import build_prompt_command, resolve_config
+
+    config = resolve_config(default_timeout=180)
+
+    def runner(prompt: str, payload: dict[str, Any]):
+        full_prompt = prompt + "\n\n输入证据 JSON：\n" + json.dumps(payload, ensure_ascii=False)
+        cmd = build_prompt_command(config, full_prompt)
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=config.timeout_seconds,
+            stdin=subprocess.DEVNULL,
+        )
+        if result.returncode != 0 or not (result.stdout or "").strip():
+            logger.warning("[string-yang] mainline LLM returncode=%s，降级", result.returncode)
+            return None
+        return _parse_json(result.stdout)
+
+    return runner
+
+
+def _parse_json(text: str | None):
+    if not text:
+        return None
+    t = text.strip()
+    if t.startswith("```"):
+        t = t.strip("`")
+        newline = t.find("\n")
+        if newline != -1 and t[:newline].strip().lower() in ("json", ""):
+            t = t[newline + 1 :]
+    try:
+        return json.loads(t)
+    except Exception:
+        pass
+    start = t.find("{")
+    if start == -1:
+        return None
+    depth = 0
+    for idx in range(start, len(t)):
+        if t[idx] == "{":
+            depth += 1
+        elif t[idx] == "}":
+            depth -= 1
+            if depth == 0:
+                try:
+                    return json.loads(t[start : idx + 1])
+                except Exception:
+                    return None
+    return None

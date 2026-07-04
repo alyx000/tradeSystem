@@ -8,4 +8,4 @@ def is_st_stock(name) -> bool:
     if not name:
         return False
     n = re.sub(r"\s+", "", str(name)).upper()
-    return n.startswith(("ST", "*ST", "S*ST", "SST"))
+    return n.startswith(("ST", "*ST", "S*ST", "SST", "退市")) or n.endswith("退")

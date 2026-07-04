@@ -340,6 +340,16 @@ ARCHITECTURE_COMMANDS = [
     ["trend-leader", "pool"],
     ["trend-leader", "pool", "--status", "active"],
     ["trend-leader", "pool", "--status", "exited", "--json"],
+    # string-yang (主线板块串阳首阴:连续五阳后第一根阴线,只读观察清单)
+    ["string-yang", "daily"],
+    ["string-yang", "daily", "--date", "2026-06-12"],
+    ["string-yang", "daily", "--top-k", "8"],
+    ["string-yang", "daily", "--top-concepts", "6"],
+    ["string-yang", "daily", "--teacher-lookback-days", "10"],
+    ["string-yang", "daily", "--no-llm"],
+    ["string-yang", "daily", "--dry-run"],
+    ["string-yang", "daily", "--no-push"],
+    ["string-yang", "daily", "--date", "2026-06-12", "--top-k", "8", "--top-concepts", "6", "--no-llm", "--dry-run"],
 ]
 
 

@@ -9,6 +9,8 @@
 - `com.alyx.tradesystem.recommend-weekly.plist` — 周日 20:00 触发（行业周报）
 - `volume-watch-runner.sh` — 包装脚本：cd 仓库根 → source `scripts/.env`(TUSHARE_TOKEN) + `~/.config/tradeSystem.env`(钉钉) → 调 `python3 main.py volume-watch daily`
 - `com.alyx.tradesystem.volume-watch.plist` — 工作日 21:00 触发（成交额 Top20 板块集中度日报；非交易日无数据自动跳过）
+- `string-yang-runner.sh` — 包装脚本：cd 仓库根 → source `scripts/.env`(TUSHARE_TOKEN) + `~/.config/tradeSystem.env`(钉钉/ANTIGRAVITY) → 调 `python3 main.py string-yang daily`
+- `com.alyx.tradesystem.string-yang.plist` — 工作日 21:50 触发（LLM 融合主线板块/概念分支的串阳首阴股票池；只推已出现第一根阴线的确认票）
 - `today-runner.sh` — 包装脚本：cd 仓库根 → source 项目 env → 调 `python3 main.py pre|post`
 - `com.alyx.tradesystem.today-pre.plist` — 工作日 07:00 触发（盘前简报，含钉钉推送）
 - `com.alyx.tradesystem.today-post.plist` — 工作日 20:00 触发（盘后报告，含钉钉推送）
@@ -212,6 +214,37 @@ rm ~/Library/LaunchAgents/com.alyx.tradesystem.sector-correlation.plist
 ```
 
 **时段**：21:15 在 volume-watch(21:00)与 four-trading-day-review(22:30)之间,无冲突。
+
+## 串阳首阴股票池（工作日 21:50）
+
+排在 volume-watch(21:00)、sector-correlation(21:15)、trend-leader(21:30)、market-timing(21:40)之后，读取当日成交额集中度、同花顺概念分支和老师观点，由 LLM 只裁决主线申万二级/概念分支（失败降级成交额 Top-K），再扫描“连续五阳后第一根阴线”的确认票，落 `data/reports/string-yang/YYYY-MM-DD.md` 并推钉钉。报告全标 `[判断]`，不出价位、不写交易计划层、不自动入关注池。
+
+```bash
+# 1. 包装脚本可执行
+chmod +x deploy/launchd/string-yang-runner.sh
+
+# 2. 复制 plist
+cp deploy/launchd/com.alyx.tradesystem.string-yang.plist ~/Library/LaunchAgents/
+
+# 3. 加载
+launchctl load ~/Library/LaunchAgents/com.alyx.tradesystem.string-yang.plist
+
+# 4. 验证
+launchctl list | grep tradesystem.string-yang
+
+# 5. 真触发立即测试（非交易日任务内守卫；dry-run 可手动跑 CLI）
+launchctl start com.alyx.tradesystem.string-yang
+tail -f /tmp/tradesystem-string-yang.log
+```
+
+卸载：
+
+```bash
+launchctl unload ~/Library/LaunchAgents/com.alyx.tradesystem.string-yang.plist
+rm ~/Library/LaunchAgents/com.alyx.tradesystem.string-yang.plist
+```
+
+**时段**：21:50 在 market-timing(21:40)之后、research-digest/earnings-digest(22:00)之前，避免与主线板块和趋势扫描高峰并发。
 
 ## 研报速读（每天 22:00，A 股交易日/交易日前一天执行）
 

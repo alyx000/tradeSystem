@@ -1,0 +1,22 @@
+{
+  "name": "string_yang_golden_2026_05_06",
+  "locked": true,
+  "change_policy": "Do not modify without explicit user approval.",
+  "date": "2026-05-06",
+  "items": [
+    {
+      "code": "605111",
+      "name": "新洁能",
+      "today_pct_chg": 1.62,
+      "amount_ratio_vs_prev5_max": 1.24,
+      "price_ma_ratio": 1.00
+    },
+    {
+      "code": "688785",
+      "name": "恒运昌",
+      "today_pct_chg": -0.00,
+      "amount_ratio_vs_prev5_max": 1.00,
+      "price_ma_ratio": 1.02
+    }
+  ]
+}

@@ -178,6 +178,28 @@ python3 main.py trend-leader pool --status exited --json
 - **守红线**：盘后只读观察清单，全部标 `[判断]`、不出价位、不给买卖建议、不写交易计划层；临盘买点用户自行判断。信号 label 中性化（缩量回踩/贴MA5/乖离过大），渲染层零业务决策。
 - 依赖 env 同 volume-watch（`TUSHARE_TOKEN` + 钉钉）。架构归位见 [`tradesystem-blueprint`](../../../docs/architecture/tradesystem-blueprint.md)「派生信号层」+「盘后只读监控族」。
 
+## 串阳首阴股票池（string-yang）
+
+每交易日 21:50 自动跑（launchd `com.alyx.tradesystem.string-yang`，排在 volume-watch 21:00、sector-correlation 21:15、trend-leader 21:30、market-timing 21:40 之后），也可手动：
+
+```bash
+make string-yang-daily       # = python3 main.py string-yang daily（落 MD + 钉钉）
+make string-yang-daily-dry   # = python3 main.py string-yang daily --dry-run（仅打印）
+
+python3 main.py string-yang daily --date 2026-06-12 --dry-run
+python3 main.py string-yang daily --top-k 8 --no-push
+python3 main.py string-yang daily --top-concepts 10 --teacher-lookback-days 10 --no-push
+python3 main.py string-yang daily --no-llm --dry-run
+```
+
+- **只推确认票**：只输出“今日已经出现第一根阴线”的票；连续五阳但尚未出阴线的预备池不输出。
+- **主线口径**：默认把 `daily_volume_concentration` 当日 Top-K 申万二级（默认 5）、同花顺概念资金分支 Top-N（默认 8，`get_concept_moneyflow_ths` + `get_ths_member`，成员数≤300 剔容器概念）、近 N 日老师观点（默认 7 天，`teacher_notes`）交给 LLM；LLM 只裁决主线申万二级/概念分支，不选股、不生成买卖建议；失败或无有效裁决降级成交额 Top-K。`--no-llm` 强制只用成交额 Top-K。
+- **筛选口径**：个股所属申万二级 ∈ 主线 或 个股同花顺概念 ∩ 主线概念 → 拉区间 OHLCV（`get_stock_daily_range`）→ 排除 ST/退市风险 → 昨日以前连续 ≥5 根阳线 → 串阳段无涨停且最大单日涨幅 ≤7% → 最近 20 个交易日无涨停 → 首阴收盘价 / MA60 ≤ 1.08 → 今日 `close < open` 第一根阴线且今日成交额 > 前5个交易日最大成交额。概念分支票在报告标「申万二级·分支:概念名」。
+- **排序口径**：按今日成交额 / 前5日最大成交额优先，其次今日成交额；报告同时展示今日额 / 昨日成交额。
+- **三档运行**：裸 `daily`（写 `data/reports/string-yang/YYYY-MM-DD.md` + 推钉钉）/ `--no-push`（落报告不推送）/ `--dry-run`（仅打印，不落报告不推送）。非交易日守卫仅在非 dry-run 时生效。
+- **守红线**：全标 `[判断]`，不出价位、不给买卖建议、不写交易计划层、不自动入关注池。
+- 依赖 env 同 volume-watch（`TUSHARE_TOKEN` + 钉钉），LLM 额外依赖 `ANTIGRAVITY_BIN`/`AGY_BIN`、可选 `LLM_MODEL`、`LLM_TIMEOUT_SECONDS`（默认 180）。
+
 ## 研报速读（research-digest）
 
 每天 22:00 由 launchd 触发一次（`com.alyx.tradesystem.research-digest`），runner 仅在 **A 股交易日** 或 **A 股交易日前一天** 继续执行；其它日期只记录 skip，也可手动：

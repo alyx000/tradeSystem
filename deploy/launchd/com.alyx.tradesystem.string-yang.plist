@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Sleep policy: 串阳首阴观察清单错过可接受（盘后只读非交易决策任务）；macOS 休眠期间不触发，可接受 -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.alyx.tradesystem.string-yang</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/alyx/tradeSystem/deploy/launchd/string-yang-runner.sh</string>
+    </array>
+
+    <!-- 工作日 21:50（排在 volume-watch 21:00、sector-correlation 21:15、
+         trend-leader 21:30、market-timing 21:40 之后，降低 Tushare 并发）。 -->
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>21</integer><key>Minute</key><integer>50</integer></dict>
+        <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>21</integer><key>Minute</key><integer>50</integer></dict>
+        <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>21</integer><key>Minute</key><integer>50</integer></dict>
+        <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>21</integer><key>Minute</key><integer>50</integer></dict>
+        <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>21</integer><key>Minute</key><integer>50</integer></dict>
+    </array>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/tradesystem-string-yang.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/tradesystem-string-yang.log</string>
+
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>

@@ -1771,6 +1771,10 @@ def build_parser() -> argparse.ArgumentParser:
     from cli.trend_leader import register_subparser as register_trend_leader_subparser
     register_trend_leader_subparser(subparsers)
 
+    # string-yang (主线板块串阳首阴股票池:连续五阳后第一根阴线)
+    from cli.string_yang import register_subparser as register_string_yang_subparser
+    register_string_yang_subparser(subparsers)
+
     # db
     from db.cli import register_db_subparser
     register_db_subparser(subparsers)
@@ -1841,6 +1845,9 @@ def main():
     elif args.command == "trend-leader":
         from cli import trend_leader as trend_leader_module
         trend_leader_module.handle_command(config, args)
+    elif args.command == "string-yang":
+        from cli import string_yang as string_yang_module
+        string_yang_module.handle_command(config, args)
     elif args.command == "db":
         from db.cli import handle_db_command
         handle_db_command(args)

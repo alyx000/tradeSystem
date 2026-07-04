@@ -74,6 +74,7 @@
 | `market-tasks` | `python main.py cognition-digest recent3d\|weekly\|monthly [--date YYYY-MM-DD] [--dry-run] [--no-llm]` | 交易认知沉淀只读汇总：只读认知三表（`trading_cognitions`/`cognition_instances`）按窗口算热度+共识+新增 Top-N → Antigravity 体系/方向建议（复用 Antigravity runner + `REDLINE_KEYWORDS` 红线护栏）→ 钉钉推送；只读不写库、不改 schema、不进 `main.py schedule`，由 3 个 per-task launchd（recent3d 日 18:30 / weekly 周日 20:00 / monthly 每月 1 号 09:00）独立调度；`--dry-run` 仅打印、`--no-llm` 走模板兜底关 LLM 叙事 |
 | `market-tasks` | `python main.py trend-leader daily [--date YYYY-MM-DD] [--sectors '["半导体",...]'] [--top-k N] [--main-line l2\|l2+concept] [--top-concepts M] [--dry-run] [--no-push]` | 趋势主升漏斗扫描（盘后只读观察清单，对齐鞠磊）：候选 = 当日涨停（`get_limit_up_list`）∪ 双创(20cm)涨幅≥15% 加速（`get_market_daily_changes`，board-aware「20cm 涨15%+」）；主线 = `daily_volume_concentration` Top-K 申万二级 ∪ `--sectors`，`--main-line l2+concept` 时再 ∪ 同花顺概念净流入 Top-M（`get_concept_moneyflow_ths` + `get_ths_member`，成员数≤300 剔容器概念）→ 拉区间 OHLCV（`get_stock_daily_range`）→ 首次加速（board-aware）+ 缓涨入池、缩量回踩/贴MA5/乖离信号、趋势破坏退池（落 `trend_leader_pool` 状态机）→ 渲染 MD（全标 [判断]、守红线不出价位/不给买卖建议；概念分支票标「申万二级·分支:概念名」）+ 钉钉；默认 `l2`（零行为变化，概念分支 behind 开关）；`--dry-run` 内存副本跑不落池不推送（历史校准）、`--no-push` 落池仅打印 |
 | `market-tasks` | `python main.py trend-leader pool [--status active\|exited] [--json]` | 只读看趋势主升观察池（在池天数/信号标记/退出原因），`--json` 结构化输出 |
+| `market-tasks` | `python main.py string-yang daily [--date YYYY-MM-DD] [--top-k N] [--top-concepts N] [--teacher-lookback-days N] [--no-llm] [--dry-run] [--no-push]` | 主线板块串阳首阴股票池：主线判断=成交额集中度 Top-K 申万二级 + 同花顺概念资金分支（`get_concept_moneyflow_ths` + `get_ths_member`，成员数≤300 剔容器）+ 近 N 日老师观点（`teacher_notes`）→ LLM 只裁决主线申万二级/概念分支，失败或无有效裁决降级成交额 Top-K；候选=申万二级∈主线 或 概念∩主线概念 → 拉区间 OHLCV（`get_stock_daily_range`）→ 排除 ST/退市风险 → 只筛“昨日以前连续 ≥5 根阳线、串阳段无涨停且最大单日涨幅≤7%、最近20个交易日无涨停、首阴收盘价/MA60≤1.08、今日出现第一根放量阴线[今日成交额>前5个交易日最大成交额]”的确认票；概念分支票标「申万二级·分支:概念名」；按今日成交额/前5日最大成交额排序，渲染 MD `data/reports/string-yang/YYYY-MM-DD.md` + 钉钉；全标 [判断] 守红线（不出价位/不给买卖建议/不写计划层），不输出尚未出阴线的预备池；`--no-llm` 强制降级成交额 Top-K，`--dry-run` 仅打印不落报告不推送，`--no-push` 落报告不推送；工作日 21:50 launchd 单源调度 |
 | `ingest-inspector` | `python main.py ingest run --stage --date` | 运行采集阶段任务，写 `ingest_runs` / `raw_interface_payloads` |
 | `ingest-inspector` | `python main.py ingest run-interface --name --date` | 运行单接口采集，真实执行 provider 并记录失败 |
 | `ingest-inspector` | `python main.py ingest list-interfaces` | 查看接口注册表 |
@@ -299,7 +300,7 @@
 
 ## 自动化检查
 
-`scripts/tests/test_cli_smoke.py` 会验证上表中所有 **`db` 子命令**（`ALL_SKILL_COMMANDS`）与 `main.py` 顶层架构命令（`ARCHITECTURE_COMMANDS`：`ingest` / `plan` / `knowledge` / `executions` / `recommend` / `volume-watch` / `sector-correlation` / `market-timing` / `margin-index-correlation` / `research-digest` / `earnings-digest` / `cognition-digest` / `trend-leader`）的 argparse 签名（不启动子进程、不连库）。`main.py pre` / `post` 仍由 `market-tasks` 文档与人工/定时流程保证。
+`scripts/tests/test_cli_smoke.py` 会验证上表中所有 **`db` 子命令**（`ALL_SKILL_COMMANDS`）与 `main.py` 顶层架构命令（`ARCHITECTURE_COMMANDS`：`ingest` / `plan` / `knowledge` / `executions` / `recommend` / `volume-watch` / `sector-correlation` / `market-timing` / `margin-index-correlation` / `research-digest` / `earnings-digest` / `cognition-digest` / `trend-leader` / `string-yang`）的 argparse 签名（不启动子进程、不连库）。`main.py pre` / `post` 仍由 `market-tasks` 文档与人工/定时流程保证。
 
 每次 `pytest scripts/tests/test_cli_smoke.py` 都会同步检查：
 - 依赖表所列 `db` 子命令名未被重命名
@@ -311,4 +312,4 @@
 1. 修改 `cli.py` 或 API routes 时，同步更新此 INDEX.md
 2. 优先运行 `make check-scripts`；若仅需检查 CLI 签名，可运行 `python3 -m pytest scripts/tests/test_cli_smoke.py -v`
 3. 若命令参数有不向后兼容的变更，更新对应 SKILL.md 中的示例
-4. 修改 `scripts/main.py` 新增/调整顶层命令（`ingest` / `plan` / `knowledge` / `executions` / `recommend` / `volume-watch` / `sector-correlation` / `market-timing` / `margin-index-correlation` / `*-digest` / `trend-leader` 等）时，须在 `test_cli_smoke.py` 的 `ARCHITECTURE_COMMANDS` 加参数化用例，并同步更新相关 SKILL.md 与 AGENTS.md（见 `.agents/rules/skills-sync.md` §2.1）
+4. 修改 `scripts/main.py` 新增/调整顶层命令（`ingest` / `plan` / `knowledge` / `executions` / `recommend` / `volume-watch` / `sector-correlation` / `market-timing` / `margin-index-correlation` / `*-digest` / `trend-leader` / `string-yang` 等）时，须在 `test_cli_smoke.py` 的 `ARCHITECTURE_COMMANDS` 加参数化用例，并同步更新相关 SKILL.md 与 AGENTS.md（见 `.agents/rules/skills-sync.md` §2.1）

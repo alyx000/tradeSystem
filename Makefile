@@ -1,4 +1,4 @@
-.PHONY: help bootstrap doctor check check-web check-scripts hooks-install dev dev-api dev-web commands-doc commands-check dashboard-open search-open commands-open plan-open knowledge-open ingest-open teachers-open holdings-open watchlist-open calendar-open industry-open db-init db-sync db-reconcile holdings holdings-refresh watchlist notes-search db-search market-open market-json market-envelope review-open review-prefill pre post regulatory ingest-list ingest-run-post ingest-run-interface ingest-inspect ingest-health ingest-reconcile plan-draft plan-show-draft plan-confirm plan-diagnose plan-review knowledge-list knowledge-add-note knowledge-draft-from-asset knowledge-draft-from-teacher-note today-open today-close today-pre today-post today-regulatory today-evening today-watchlist today-obsidian today-ingest-inspect today-ingest-health recommend-daily recommend-daily-dry recommend-weekly recommend-weekly-dry recommend-trace volume-watch-daily volume-watch-daily-dry volume-watch-trend research-digest research-digest-dry earnings-digest earnings-digest-dry
+.PHONY: help bootstrap doctor check check-web check-scripts hooks-install dev dev-api dev-web commands-doc commands-check dashboard-open search-open commands-open plan-open knowledge-open ingest-open teachers-open holdings-open watchlist-open calendar-open industry-open db-init db-sync db-reconcile holdings holdings-refresh watchlist notes-search db-search market-open market-json market-envelope review-open review-prefill pre post regulatory ingest-list ingest-run-post ingest-run-interface ingest-inspect ingest-health ingest-reconcile plan-draft plan-show-draft plan-confirm plan-diagnose plan-review knowledge-list knowledge-add-note knowledge-draft-from-asset knowledge-draft-from-teacher-note today-open today-close today-pre today-post today-regulatory today-evening today-watchlist today-obsidian today-ingest-inspect today-ingest-health recommend-daily recommend-daily-dry recommend-weekly recommend-weekly-dry recommend-trace volume-watch-daily volume-watch-daily-dry volume-watch-trend string-yang-daily string-yang-daily-dry research-digest research-digest-dry earnings-digest earnings-digest-dry
 
 help:
 	@echo "Available targets:"
@@ -211,6 +211,13 @@ volume-watch-daily-dry:
 
 volume-watch-trend:
 	cd scripts && python3 main.py volume-watch trend
+
+# 主线板块串阳首阴股票池
+string-yang-daily:
+	cd scripts && python3 main.py string-yang daily
+
+string-yang-daily-dry:
+	cd scripts && python3 main.py string-yang daily --dry-run
 
 research-digest:
 	cd scripts && python3 main.py research-digest daily
