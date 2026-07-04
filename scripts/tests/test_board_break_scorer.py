@@ -247,6 +247,17 @@ class TestBuildFactCard:
         assert card["in_main_sector"] is True
         assert card["main_sector_status"] == "ok"
 
+    def test_ref_price_transparently_passed_through(self):
+        """门1 硬 bug 修复：6% 参考位（scanner 层算好的 ref_price）须原样透传进事实卡，
+        否则渲染层候选表该列会恒显 "—"（scanner 算了但 scorer 没接住）。"""
+        bars = self._bars_ok()
+        card = scorer.build_fact_card(
+            {"code": "600002", "name": "x", "limit_times": 2, "industry": "计算机",
+             "close": 10.0, "pct_chg": 3.0, "ref_price": 10.6, "bars": bars, "date": "2026-07-04"},
+            main_sectors=set(), ann_result=None, holder_result=None,
+            earnings_rows=[], adj_factors=self._factors_for(bars))
+        assert card["ref_price"] == 10.6
+
     def test_ann_result_classifies_events(self):
         bars = self._bars_ok()
         ann_result = _FakeResult(data=[

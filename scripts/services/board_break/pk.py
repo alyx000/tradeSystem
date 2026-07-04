@@ -170,11 +170,13 @@ def build_llm_runner():
 
     返回 `runner(prompt, payload) -> str | None`：subprocess 调本地 LLM CLI，成功返回
     **原始 stdout**（由 `parse_verdict` 自行提取/解析 JSON，不在此层预解析）；
-    超时 / OSError（CLI 缺失或不可执行）/ 非零返回码 → 返回 None 并设
-    `runner.last_diagnostics`（dict，含 `"reason"`，超时固定为 `"timeout"`，
-    启动失败固定为 `"startup_failed"`，其余交由 `build_diagnostics` 分类）；
-    每次调用开头先自清 `last_diagnostics=None`（防上一场诊断残留误归属本场，
-    `_safe_call` 亦有防御性清空，此处是双重保险的主清空点）。
+    超时 / OSError（CLI 缺失或不可执行）/ 非零返回码 / **returncode==0 但 stdout 为空**
+    → 返回 None 并设 `runner.last_diagnostics`（dict，含 `"reason"`，超时固定为
+    `"timeout"`，启动失败固定为 `"startup_failed"`，空输出固定为 `"empty_stdout"`，
+    其余交由 `build_diagnostics` 分类）；每次调用开头先自清 `last_diagnostics=None`
+    （防上一场诊断残留误归属本场，`_safe_call` 亦有防御性清空，此处是双重保险的主
+    清空点）；每次调用同 narrator 范式接 `_next_board_break_log_file` 生成独立日志
+    文件路径传给 `build_prompt_command(..., log_file=...)`，供失败诊断读取日志内容。
     """
     import json
     import subprocess
@@ -184,38 +186,82 @@ def build_llm_runner():
 
     config = resolve_config(default_timeout=180)
     timeout = config.timeout_seconds
+    # 门1 效率复查：日志根目录只在 runner 构造时 mkdir 一次，而非每场 PK 都重复
+    # mkdir——满池 12 只候选循环赛 C(12,2)=66 场，每场都 mkdir 同一个已存在目录是
+    # 66 次冗余 syscall；每场仍各自生成独立文件名（不同 pid+timestamp），不影响
+    # 诊断可追溯性。
+    log_root = _board_break_log_root()
 
     def runner(prompt, payload):
         runner.last_diagnostics = None
         full_prompt = prompt + "\n\n输入数据（JSON）：\n" + json.dumps(payload, ensure_ascii=False)
-        cmd = build_prompt_command(config, full_prompt)
+        log_file = _next_board_break_log_file(log_root)
+        cmd = build_prompt_command(config, full_prompt, log_file=str(log_file) if log_file else None)
         try:
             r = subprocess.run(
                 cmd, capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL,
             )
         except subprocess.TimeoutExpired:
             runner.last_diagnostics = build_diagnostics(
-                stdout="", stderr=f"timeout after {timeout}s", reason="timeout")
+                stdout="", stderr=f"timeout after {timeout}s", log_file=log_file, reason="timeout")
             logger.warning("[board-break pk] LLM 调用超时 %ds", timeout)
             return None
         except OSError as e:
             # FileNotFoundError(CLI 缺失) / PermissionError(不可执行) 等均为 OSError 子类，
             # 统一归为 startup_failed；不扩到裸 Exception（那会吞编程错误）。
             runner.last_diagnostics = build_diagnostics(
-                stdout="", stderr=str(e), reason="startup_failed")
+                stdout="", stderr=str(e), log_file=log_file, reason="startup_failed")
             logger.warning("[board-break pk] LLM 启动失败(%s)", e)
             return None
         stdout = getattr(r, "stdout", "") or ""
         stderr = getattr(r, "stderr", "") or ""
         returncode = getattr(r, "returncode", 0)
         if returncode != 0:
-            runner.last_diagnostics = build_diagnostics(stdout=stdout, stderr=stderr, returncode=returncode)
+            runner.last_diagnostics = build_diagnostics(
+                stdout=stdout, stderr=stderr, log_file=log_file, returncode=returncode)
             logger.warning("[board-break pk] LLM returncode=%s", returncode)
+            return None
+        if not stdout.strip():
+            # returncode==0 但空输出：同 narrator 三级 fallback 语义，视为无效场而非"胜负已判"
+            runner.last_diagnostics = build_diagnostics(
+                stdout=stdout, stderr=stderr, log_file=log_file, reason="empty_stdout")
+            logger.warning("[board-break pk] LLM stdout 为空，判无效场")
             return None
         return stdout
 
     runner.last_diagnostics = None
     return runner
+
+
+def _board_break_log_root():
+    """日志根目录 + mkdir（只应在 `build_llm_runner` 构造时调用一次，不放进逐场
+    循环；`research_digest.narrator._next_antigravity_log_file` 是逐调用一起 mkdir
+    的旧范式——那里典型只调 1 次 LLM 无感，board-break 一场 PK 循环赛最多 66 场，
+    照抄会变成 66 次冗余 mkdir，故本服务拆开 root 与文件名两步，root 独立提出。
+    `_cell`/本函数与 narrator 的同类小工具存在跨服务重复，属已知 tech-debt，
+    与「invoke_llm_cli 共享抽取」defer 项同批次，见 task-s4-report.md「defer」节。
+    """
+    import os
+    from pathlib import Path
+
+    root = Path(os.getenv("ANTIGRAVITY_LOG_DIR", "/private/tmp/tradesystem-antigravity-logs"))
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        logger.warning("[board-break pk] antigravity log dir 创建失败(%s): %s", root, exc)
+        return None
+    return root
+
+
+def _next_board_break_log_file(log_root):
+    """按 `log_root`（`_board_break_log_root()` 产出，可能为 None）生成本场独立日志
+    文件路径；不在此处 mkdir（root 已在构造 runner 时确保过一次）。"""
+    import os
+    import time
+
+    if log_root is None:
+        return None
+    return log_root / f"board-break-{os.getpid()}-{int(time.time() * 1000)}.log"
 
 
 def run_pk(

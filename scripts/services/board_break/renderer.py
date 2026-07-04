@@ -14,7 +14,10 @@
 """
 from __future__ import annotations
 
+import logging
 import pathlib
+
+logger = logging.getLogger(__name__)
 
 _REDLINE = (
     "> 红线声明：本报告筛选结果为 [事实]，打分与 PK 排名为 [判断]，"
@@ -51,6 +54,14 @@ _REJECT_LABELS = {
 
 _MISSING_STATUSES = ("missing", "source_failed")
 
+# ② 候选表空态文案：按 scanner 的 empty_kind 三分语义区分「源本身无候选」与
+# 「入口候选存在但全被规则剔除」，避免两种截然不同的空态共用一句模糊文案。
+_EMPTY_KIND_MESSAGES = {
+    "source_ok_empty": "今日无断板反包候选（昨日无连板≥2 的入口票）。",
+    "rule_filtered_empty": "今日无断板反包候选（有入口票但全部被规则剔除，明细见脚注）。",
+}
+_DEFAULT_EMPTY_MSG = "今日无断板反包候选。"
+
 
 def _fmt_num(value, spec: str = ".2f") -> str:
     if value is None:
@@ -61,28 +72,46 @@ def _fmt_num(value, spec: str = ".2f") -> str:
         return str(value)
 
 
-def _sources_all_ok(sources: dict) -> bool:
-    """兼容两种 sources 形状：真实 scanner 输出 `{"ok": bool, "source": str}`，
-    以及测试 fixture 直接给字符串 `"ok"`。"""
-    for v in (sources or {}).values():
-        if isinstance(v, dict):
-            if not v.get("ok"):
-                return False
-        elif v not in ("ok", True):
-            return False
-    return True
-
-
 def _render_source_status_lines(sources: dict) -> list[str]:
+    """数据完整性脚注用：`sources` 恒为 scanner 产出的 `{"ok": bool, "source": str}` 形状
+    （scanner._run_daily 状态机中，走到这里的 status 必为 "ok"，不存在裸字符串兼容需求）。"""
     lines = []
     for name, v in (sources or {}).items():
-        if isinstance(v, dict):
-            status = "成功" if v.get("ok") else "失败"
-            src = v.get("source") or ""
-            lines.append(f"  - {name}：{status}" + (f"（源={src}）" if src else ""))
-        else:
-            lines.append(f"  - {name}：{v}")
+        status = "成功" if v.get("ok") else "失败"
+        src = v.get("source") or ""
+        lines.append(f"  - {name}：{status}" + (f"（源={src}）" if src else ""))
     return lines
+
+
+def _cell(x) -> str:
+    """自由文本进 markdown 表格单元格前的转义：竖线会拆表格列，换行会打断行结构。
+
+    门1 correctness 复查：`x is None` 须先兜底成空串——`c.get("name", "")` 这类
+    default 只在**键缺失**时生效，若上游给出显式 `None`（如某些行业分类为空的
+    个股），`str(None)` 会把字面量 "None" 渲染进表格单元格，而非期望的空白。
+
+    门1 reuse 复查：`scripts/automations/four_trading_day_review.py` 的 `_md_cell`
+    做同样的转义（也含 None 兜底，写法是 `.strip() or "-"`），两处小工具重复。
+    未合并抽取的理由：对方模块与本服务无引用关系、抽取需新开
+    `scripts/utils/markdown.py` 并改两处调用点，超出本轮门1 批次范围；
+    defer——下次任一侧改动时顺手提取共享。
+    """
+    if x is None:
+        return ""
+    return str(x).replace("|", "｜").replace("\n", " ")
+
+
+def _blank_wrapped(*msgs: str) -> list[str]:
+    """空态提示块：空行 + 1~N 行消息 + 空行（候选表/打分依据明细两处空候选提示复用
+    同一 shape）。门1 correctness 复查：候选表分支有两句话须相邻展示——若外部拼接
+    额外一行再包一层空行，会在两句话之间插入多余空行；改为变参一次性传入两句
+    话，保持它们相邻，同时仍与打分依据明细分支共用同一 helper。"""
+    return ["", *msgs, ""]
+
+
+def _pk_stats_phrase(attempted: int, total: int, invalid: int, valid_ratio: float) -> str:
+    """PK 场次统计短语（熔断态与正常态收尾复用同一口径，防两处措辞漂移）。"""
+    return f"已打 {attempted}/{total} 场，无效 {invalid} 场，有效率 {valid_ratio:.0%}"
 
 
 def _pk_summary_lines(pk_result: dict | None) -> list[str]:
@@ -101,9 +130,9 @@ def _pk_summary_lines(pk_result: dict | None) -> list[str]:
         return lines
     if status == "melted":
         lines.append(
-            f"PK 因预算超时或无效场占比过高熔断，未完赛（已打 {attempted}/{total} 场，"
-            f"无效 {invalid} 场，有效率 {valid_ratio:.0%}）；本报告不渲染 PK 排名列，"
-            "只出加权分排序。"
+            f"PK 因预算超时或无效场占比过高熔断，未完赛（"
+            f"{_pk_stats_phrase(attempted, total, invalid, valid_ratio)}）；"
+            "本报告不渲染 PK 排名列，只出加权分排序。"
         )
         return lines
     matches = pk_result.get("matches") or []
@@ -113,9 +142,10 @@ def _pk_summary_lines(pk_result: dict | None) -> list[str]:
         return lines
     for m in valid_matches:
         loser = m["b"] if m["winner"] == m["a"] else m["a"]
-        lines.append(f"- {m['a']} vs {m['b']} → 胜者 {m['winner']}（负 {loser}）：{m.get('reason') or '（无理由）'}")
+        reason = _cell(m.get("reason") or "（无理由）")
+        lines.append(f"- {m['a']} vs {m['b']} → 胜者 {m['winner']}（负 {loser}）：{reason}")
     lines.append("")
-    lines.append(f"（已打 {attempted}/{total} 场，无效 {invalid} 场，有效率 {valid_ratio:.0%}）")
+    lines.append(f"（{_pk_stats_phrase(attempted, total, invalid, valid_ratio)}）")
     return lines
 
 
@@ -149,11 +179,12 @@ def render_daily(result: dict, scored: list, pk_result: dict | None) -> str:
     # —— ② 候选表 ——
     lines.append("## 候选清单（按加权分降序）")
     if not scored:
-        lines.append("")
-        lines.append("今日无断板反包候选。")
-        if _sources_all_ok(result.get("sources") or {}):
-            lines.append("核心数据源全部成功，本次为真实空候选（非采集故障）。")
-        lines.append("")
+        # 走到 render_daily 说明 status=="ok"（source_failed 在 CLI 层已分流到
+        # render_source_failed），核心数据源必然全部成功——原先包一层
+        # `if _sources_all_ok(...)` 判断恒为真，是死代码，直接无条件输出该行。
+        empty_msg = _EMPTY_KIND_MESSAGES.get(result.get("empty_kind"), _DEFAULT_EMPTY_MSG)
+        lines += _blank_wrapped(
+            empty_msg, "核心数据源全部成功，本次为真实空候选（非采集故障）。")
     else:
         lines += [
             "| 代码 | 名称 | 连板 | 断板日涨幅 | 收盘 | 6%参考位 | 行业 "
@@ -177,8 +208,8 @@ def render_daily(result: dict, scored: list, pk_result: dict | None) -> str:
             else:
                 pk_cell = "—"
             lines.append(
-                f"| {code} | {c.get('name', '')} | {c.get('limit_times', '—')} | {pct_chg}% "
-                f"| {close} | {ref_price_cell} | {c.get('industry', '')} "
+                f"| {code} | {_cell(c.get('name', ''))} | {c.get('limit_times', '—')} | {pct_chg}% "
+                f"| {close} | {ref_price_cell} | {_cell(c.get('industry', ''))} "
                 f"| {total_cell} | {pk_cell} | {diverge} |"
             )
         lines.append("")
@@ -186,16 +217,14 @@ def render_daily(result: dict, scored: list, pk_result: dict | None) -> str:
     # —— ③ 每票打分依据明细 ——
     lines.append("## 打分依据明细（[判断]，0 分维度亦列出处）")
     if not scored:
-        lines.append("")
-        lines.append("（无候选，无需展示打分依据）")
-        lines.append("")
+        lines += _blank_wrapped("（无候选，无需展示打分依据）")
     for c in scored:
-        lines.append(f"### {c.get('code', '')} {c.get('name', '')}")
+        lines.append(f"### {c.get('code', '')} {_cell(c.get('name', ''))}")
         lines.append("| 维度 | 得分 | 依据 |")
         lines.append("| --- | --- | --- |")
         for ev in c.get("evidences") or []:
             dim_label = _DIMENSION_LABELS.get(ev.get("dimension"), ev.get("dimension", "?"))
-            lines.append(f"| {dim_label} | {ev.get('score', 0.0):+.1f} | {ev.get('detail', '')} |")
+            lines.append(f"| {dim_label} | {ev.get('score', 0.0):+.1f} | {_cell(ev.get('detail', ''))} |")
         lines.append("")
 
     # —— ④ PK 理由段 ——
@@ -259,8 +288,16 @@ def render_source_failed(result: dict) -> str:
 
 
 def save_report(md: str, date: str, out_root: str = "data/reports/board-break") -> pathlib.Path:
-    """落盘 `<out_root>/<date>.md`；`out_root` 可注入供测试使用 `tmp_path`。"""
+    """落盘 `<out_root>/<date>.md`；`out_root` 可注入供测试使用 `tmp_path`。
+
+    对齐 `research_digest.renderer.write_md` 约定：mkdir + 写盘均纳入 try，失败带路径
+    日志后原样 raise（不吞异常静默失败，落盘失败必须让调用方感知）。
+    """
     path = pathlib.Path(out_root) / f"{date}.md"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(md, encoding="utf-8")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(md, encoding="utf-8")
+    except OSError as e:
+        logger.error("[board-break] 落盘失败 %s: %s", path, e)
+        raise
     return path
