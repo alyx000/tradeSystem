@@ -119,7 +119,7 @@ def run_pk(
     if len(pool) < 2:
         return {
             "status": "skipped", "wins": {}, "ranks": None, "matches": [],
-            "invalid": 0, "total": 0, "valid_ratio": 0.0, "excluded": excluded,
+            "invalid": 0, "total": 0, "attempted": 0, "valid_ratio": 0.0, "excluded": excluded,
         }
 
     pairs = list(itertools.combinations(sorted(pool), 2))
@@ -144,12 +144,20 @@ def run_pk(
             wins[winner] += 1
             matches.append({"a": a, "b": b, "winner": winner, "reason": reason, "state": "valid"})
 
-    valid_ratio = (total - invalid) / total if total else 0.0
+    # attempted=实际已打场次：预算熔断中途退出时,未打场次不得被隐性算作"有效"
+    # （审查 Important1:total=理论场次会让 valid_ratio 虚高误导渲染层）
+    attempted = len(matches)
+    valid_ratio = (attempted - invalid) / attempted if attempted else 0.0
 
-    if melted_by_budget or (total and invalid / total > C.PK_INVALID_RATIO_MAX):
+    # 熔断三判据（spec 锁定）:预算超时 / 无效场占比超上限 / 有效场率低于下限。
+    # 后两者在默认常量下算术互补(0.30+0.70=1.0),仍显式各判一次——防未来只调
+    # PK_VALID_RATIO_MIN 而与 spec"两条件"静默脱钩（审查 Important2）。
+    if melted_by_budget or (attempted and invalid / attempted > C.PK_INVALID_RATIO_MAX) \
+            or valid_ratio < C.PK_VALID_RATIO_MIN:
         return {
             "status": "melted", "wins": wins, "ranks": None, "matches": matches,
-            "invalid": invalid, "total": total, "valid_ratio": valid_ratio, "excluded": excluded,
+            "invalid": invalid, "total": total, "attempted": attempted,
+            "valid_ratio": valid_ratio, "excluded": excluded,
         }
 
     ordered = sorted(pool, key=lambda code: (-wins[code], -score_map.get(code, 0.0), code))
@@ -157,5 +165,6 @@ def run_pk(
 
     return {
         "status": "ok", "wins": wins, "ranks": ranks, "matches": matches,
-        "invalid": invalid, "total": total, "valid_ratio": valid_ratio, "excluded": excluded,
+        "invalid": invalid, "total": total, "attempted": attempted,
+        "valid_ratio": valid_ratio, "excluded": excluded,
     }

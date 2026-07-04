@@ -87,6 +87,32 @@ class TestRunPk:
         result = pk.run_pk(_cards(5), _scored(_cards(5)), runner)  # 10 场中 6 场无效 → 40% 有效
         assert result["ranks"] is None
 
+    def test_budget_melt_reports_attempted_not_theoretical(self):
+        """预算熔断中途退出：attempted=实际已打场次，valid_ratio 按 attempted 计（审查 Important1）。"""
+        t = {"now": 0.0}
+        def clock():
+            t["now"] += 700.0
+            return t["now"]
+        result = pk.run_pk(_cards(4), _scored(_cards(4)),
+                           lambda p, pl: '{"winner": "A", "reason": "r"}', clock=clock)
+        assert result["status"] == "melted"
+        assert result["attempted"] < result["total"]  # 只打了部分场次
+        assert result["attempted"] == len([m for m in result["matches"]])
+
+    def test_explicit_valid_ratio_min_check(self, monkeypatch):
+        """PK_VALID_RATIO_MIN 独立判据：与无效场比上限脱钩时仍能触发熔断（审查 Important2）。"""
+        from services.board_break import constants as C
+        monkeypatch.setattr(C, "PK_INVALID_RATIO_MAX", 0.99)  # 解除第一判据
+        monkeypatch.setattr(C, "PK_VALID_RATIO_MIN", 0.95)    # 收紧第二判据
+        seq = {"n": 0}
+        def runner(p, pl):
+            seq["n"] += 1
+            runner.last_diagnostics = {"reason": "timeout"}
+            return '{"winner": "A", "reason": "r"}' if seq["n"] > 1 else None
+        # 10 场中 1 场超时无效 → 有效率 0.9 < 0.95 → melted
+        result = pk.run_pk(_cards(5), _scored(_cards(5)), runner)
+        assert result["status"] == "melted" and result["ranks"] is None
+
     def test_redline_reason_filtered(self):
         from services.recommend.formatter import REDLINE_KEYWORDS
         kw = next(iter(REDLINE_KEYWORDS))
