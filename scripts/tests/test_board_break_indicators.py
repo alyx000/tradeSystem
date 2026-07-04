@@ -59,6 +59,11 @@ class TestQfqDirtyBars:
         bars[5] = {**bars[5], key: bad}
         assert I.apply_qfq(bars, self._factors(bars)) is None
 
+    def test_gain10_overflow_returns_none(self):
+        """有限输入的派生除法溢出 → None（门2 S2 R3）。"""
+        closes = [1e-308] * 11 + [1e308]
+        assert I.gain_10d(closes[-12:]) is None
+
     def test_overflow_ratio_returns_none(self):
         """极端因子比值/复权后溢出 → 整体 None（门2 S2 R2）。"""
         bars = [{"trade_date": f"2026-01-{i+1:02d}", "close": 1e308, "low": 1e308, "high": 1e308}

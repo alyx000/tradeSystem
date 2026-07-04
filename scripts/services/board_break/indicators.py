@@ -75,7 +75,9 @@ def gain_10d(closes: list[float]) -> float | None:
     base = closes[-11]
     if base is None or base == 0:
         return None
-    return (closes[-1] / base - 1) * 100
+    result = (closes[-1] / base - 1) * 100
+    # 派生除法溢出守卫（门2 S2 R3）：有限输入也可能溢出为 inf，宁缺失不出伪 ok
+    return result if math.isfinite(result) else None
 
 
 def position_250d(bars: list[dict]) -> dict:
@@ -99,6 +101,8 @@ def position_250d(bars: list[dict]) -> dict:
         return {"value": None, "state": "missing", "bar_count": n}
 
     value = (close_t - range_low) / (range_high - range_low)
+    if not math.isfinite(value):
+        return {"value": None, "state": "missing", "bar_count": n}  # 派生除法溢出守卫（门2 S2 R3）
     state = "full" if n >= C.POSITION_BARS else "degraded"
     return {"value": value, "state": state, "bar_count": n}
 
