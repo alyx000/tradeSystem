@@ -45,6 +45,21 @@ class TestQfq:
         assert I.apply_qfq(bars, factors) is None
 
 
+class TestQfqDirtyBars:
+    """脏历史 OHLC 守卫（门2 S2 R1）：任一价格缺失/非有限 → 整体 None，防 _ema TypeError / 伪分位。"""
+
+    def _factors(self, bars):
+        return [{"trade_date": b["trade_date"], "adj_factor": 1.0} for b in bars]
+
+    @pytest.mark.parametrize("key,bad", [("close", None), ("low", None), ("high", None),
+                                         ("close", float("nan")), ("close", "abc")])
+    def test_dirty_historical_price_returns_none(self, key, bad):
+        bars = [{"trade_date": f"2026-01-{i+1:02d}", "close": 10.0, "low": 9.8, "high": 10.2}
+                for i in range(20)]
+        bars[5] = {**bars[5], key: bad}
+        assert I.apply_qfq(bars, self._factors(bars)) is None
+
+
 class TestMacd:
     def test_known_series_hand_check(self):
         closes = [float(i) for i in range(1, 131)]  # 单调升 → DIF > 0
