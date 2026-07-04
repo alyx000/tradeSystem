@@ -123,6 +123,21 @@ def test_source_failed_saves_failure_report_pushes_alert_and_exits(monkeypatch, 
     assert "数据失败" in w["pushes"][0][0]  # 告警标题,非正常清单标题
 
 
+def test_source_failed_alert_pushed_even_if_save_raises(monkeypatch, capsys):
+    """落盘失败（磁盘满/权限）不得挡掉数据失败告警（门2 S4 R2）。"""
+    import pytest as _pytest
+    failed = {"status": "source_failed", "date": "2026-07-04",
+              "failed_sources": {"today_limit_up": "接口超时"}}
+    w = _wire(monkeypatch, result=failed)
+    def _boom(md, date, **kw):
+        raise OSError("disk full")
+    monkeypatch.setattr(bb.renderer, "save_report", _boom)
+    with _pytest.raises(SystemExit) as exc:
+        bb._run_daily({}, _daily_args())
+    assert exc.value.code == 1
+    assert len(w["pushes"]) == 1  # 告警仍然发出
+
+
 def test_source_failed_dry_run_no_side_effects_but_exits(monkeypatch, capsys):
     import pytest as _pytest
     failed = {"status": "source_failed", "date": "2026-07-04",
