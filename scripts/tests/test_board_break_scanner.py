@@ -32,6 +32,13 @@ class TestBareAndBoard:
         assert scanner.is_main_board(code) is ok
 
 
+class TestCoerceLimitTimes:
+    def test_inf_coerced_to_none(self):
+        # float("inf") 会让 int(inf) 抛 OverflowError；_coerce_limit_times 须优雅归 None
+        assert scanner._coerce_limit_times(float("inf")) is None
+        assert scanner._coerce_limit_times(float("-inf")) is None
+
+
 class TestFilterCandidates:
     def test_lianban_boundary(self):
         prev = [_lu("600001.SH", lt=1), _lu("600002.SH", lt=2), _lu("600003.SH", lt=3)]
@@ -59,7 +66,7 @@ class TestFilterCandidates:
         cands, rejects = scanner.filter_candidates(prev, set(), set())
         assert cands == [] and rejects["non_main_board"] == 1
 
-    @pytest.mark.parametrize("dirty", [None, "abc", float("nan")])
+    @pytest.mark.parametrize("dirty", [None, "abc", float("nan"), float("inf")])
     def test_dirty_limit_times(self, dirty):
         prev = [_lu("600002.SH", lt=dirty)]
         cands, rejects = scanner.filter_candidates(prev, set(), set())
@@ -120,6 +127,8 @@ class TestRunDailySourceStates:
         for kw in ({"prev_ok": False}, {"today_ok": False}, {"down_ok": False}):
             result = scanner.run_daily(None, self._registry(**kw), "2026-07-04")
             assert result["status"] == "source_failed"
+            # source_failed 与 ok 两分支返回 dict 形状对称：都须含 empty_kind 键
+            assert result["empty_kind"] is None
 
     def test_today_limit_up_empty_error_treated_as_failed(self, monkeypatch):
         # get_limit_up_list 空 DataFrame 返 error：T 日按 source_failed 处理（spec 数据流）
@@ -179,3 +188,30 @@ class TestEmptySemantics:
         assert result["status"] == "ok"
         assert result["empty_kind"] is None
         assert len(result["candidates"]) == 1
+
+    def test_bar_missing_all_rejected_is_rule_filtered_empty(self, monkeypatch, conn):
+        """entrance_count>0（达 D1 门槛）但全部因 bar_missing 被剔（fetch 返回 None）。
+
+        收敛决策：bar_missing 属于「入口候选存在但被后续规则剔除」，归 rule_filtered_empty
+        展示；其计数仍保留在 rejects.bar_missing，供渲染层数据完整性脚注单列，不在 empty_kind
+        再细分（固化行为，防止未来静默改成新增第四种 empty_kind）。
+        """
+        monkeypatch.setattr(scanner, "_prev_trade_date", lambda registry, d: "2026-07-03")
+
+        class R:
+            def call(self, method, *a, **k):
+                if method == "get_limit_up_list":
+                    date = a[0]
+                    if date == "2026-07-03":
+                        return _FakeResult({"stocks": [_lu("600002.SH", lt=2)]})
+                    return _FakeResult({"stocks": []})
+                if method == "get_limit_down_list":
+                    return _FakeResult({"stocks": []})
+                if method == "get_stock_daily_range":
+                    return _FakeResult(error="日线缺失")  # fetch_range 返回 None
+                return _FakeResult(error="unknown")
+
+        result = scanner.run_daily(conn, R(), "2026-07-04")
+        assert result["status"] == "ok"
+        assert result["empty_kind"] == "rule_filtered_empty"
+        assert result["rejects"]["bar_missing"] > 0
