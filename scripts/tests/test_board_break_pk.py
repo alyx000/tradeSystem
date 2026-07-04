@@ -232,6 +232,21 @@ class TestBuildLlmRunner:
         assert runner("prompt", {}) is None
         assert runner.last_diagnostics is not None
 
+    def test_empty_stdout_returns_none_with_reason(self, monkeypatch):
+        """returncode==0 但 stdout 为空白 → 视为无效场（同 narrator L1 三级 fallback 语义），
+        不得当作真实裁决喂给 parse_verdict（空串会被判 None，但诊断原因须显式标注）。"""
+        import subprocess as sp
+
+        class _R:
+            stdout = "   "
+            stderr = ""
+            returncode = 0
+
+        monkeypatch.setattr(sp, "run", lambda *a, **k: _R())
+        runner = pk.build_llm_runner()
+        assert runner("prompt", {}) is None
+        assert runner.last_diagnostics["reason"] == "empty_stdout"
+
     def test_diagnostics_cleared_at_call_start(self, monkeypatch):
         """上一场诊断不得残留到下一场（防误判超时归属）。"""
         import subprocess as sp

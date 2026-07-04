@@ -126,6 +126,17 @@ def test_no_llm_skips_pk_run(monkeypatch):
     assert len(w["pushes"]) == 1
 
 
+def test_empty_scored_still_calls_pk_run(monkeypatch):
+    """空候选（scored=[]）也应调用 pk.run_pk——交由其内部 `len(pool) < 2` 分支自走
+    skipped 状态机，而不是在 CLI 层用 `and scored` 短路成恒定 None（那会让 0/1 候选
+    文案与 --no-llm 的 None 分支撞车，产生"PK 未运行"与"候选不足 2 只"两种不一致措辞）。
+    """
+    w = _wire(monkeypatch)
+    monkeypatch.setattr(bb.scorer, "score_all", lambda cards: [])
+    bb._run_daily({}, _daily_args())
+    assert w["pk_calls"] == [1]
+
+
 def test_non_trading_day_returns_early(monkeypatch, capsys):
     w = _wire(monkeypatch, non_trading=True)
     bb._run_daily({}, _daily_args())

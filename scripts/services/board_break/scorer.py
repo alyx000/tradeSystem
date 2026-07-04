@@ -208,6 +208,7 @@ def build_fact_card(
         "limit_times": cand.get("limit_times"),
         "pct_chg": cand.get("pct_chg"),
         "close": cand.get("close"),
+        "ref_price": cand.get("ref_price"),
         "industry": cand.get("industry", ""),
         "in_main_sector": in_main_sector,
         "main_sector_status": main_sector_status,
