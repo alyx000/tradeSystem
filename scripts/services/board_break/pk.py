@@ -164,6 +164,60 @@ def _result(
     }
 
 
+def build_llm_runner():
+    """构造断板反包 PK 用 LLM runner（同 `research_digest.narrator.build_antigravity_runner`
+    范式：独立 prompt/payload/timeout，不 import `llm_commentary.comment`）。
+
+    返回 `runner(prompt, payload) -> str | None`：subprocess 调本地 LLM CLI，成功返回
+    **原始 stdout**（由 `parse_verdict` 自行提取/解析 JSON，不在此层预解析）；
+    超时 / OSError（CLI 缺失或不可执行）/ 非零返回码 → 返回 None 并设
+    `runner.last_diagnostics`（dict，含 `"reason"`，超时固定为 `"timeout"`，
+    启动失败固定为 `"startup_failed"`，其余交由 `build_diagnostics` 分类）；
+    每次调用开头先自清 `last_diagnostics=None`（防上一场诊断残留误归属本场，
+    `_safe_call` 亦有防御性清空，此处是双重保险的主清空点）。
+    """
+    import json
+    import subprocess
+
+    from utils.antigravity_diagnostics import build_diagnostics
+    from utils.llm_cli import build_prompt_command, resolve_config
+
+    config = resolve_config(default_timeout=180)
+    timeout = config.timeout_seconds
+
+    def runner(prompt, payload):
+        runner.last_diagnostics = None
+        full_prompt = prompt + "\n\n输入数据（JSON）：\n" + json.dumps(payload, ensure_ascii=False)
+        cmd = build_prompt_command(config, full_prompt)
+        try:
+            r = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL,
+            )
+        except subprocess.TimeoutExpired:
+            runner.last_diagnostics = build_diagnostics(
+                stdout="", stderr=f"timeout after {timeout}s", reason="timeout")
+            logger.warning("[board-break pk] LLM 调用超时 %ds", timeout)
+            return None
+        except OSError as e:
+            # FileNotFoundError(CLI 缺失) / PermissionError(不可执行) 等均为 OSError 子类，
+            # 统一归为 startup_failed；不扩到裸 Exception（那会吞编程错误）。
+            runner.last_diagnostics = build_diagnostics(
+                stdout="", stderr=str(e), reason="startup_failed")
+            logger.warning("[board-break pk] LLM 启动失败(%s)", e)
+            return None
+        stdout = getattr(r, "stdout", "") or ""
+        stderr = getattr(r, "stderr", "") or ""
+        returncode = getattr(r, "returncode", 0)
+        if returncode != 0:
+            runner.last_diagnostics = build_diagnostics(stdout=stdout, stderr=stderr, returncode=returncode)
+            logger.warning("[board-break pk] LLM returncode=%s", returncode)
+            return None
+        return stdout
+
+    runner.last_diagnostics = None
+    return runner
+
+
 def run_pk(
     fact_cards: list[dict],
     scored: list[dict],

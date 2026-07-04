@@ -340,6 +340,13 @@ ARCHITECTURE_COMMANDS = [
     ["trend-leader", "pool"],
     ["trend-leader", "pool", "--status", "active"],
     ["trend-leader", "pool", "--status", "exited", "--json"],
+    # board-break (断板反包:昨日连板>=2断板<=6%未跌停主板 → 双打分观察清单;无状态不建池)
+    ["board-break", "daily"],
+    ["board-break", "daily", "--date", "2026-07-04"],
+    ["board-break", "daily", "--dry-run"],
+    ["board-break", "daily", "--no-push"],
+    ["board-break", "daily", "--no-llm"],
+    ["board-break", "daily", "--date", "2026-07-04", "--no-push", "--no-llm"],
 ]
 
 

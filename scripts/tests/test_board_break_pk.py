@@ -179,3 +179,79 @@ class TestRunPk:
 
         pk.run_pk(cards, _scored(cards[:1] + cards[2:]), runner)
         assert captured_payloads[0]["A"]["name"] == "第一条"
+
+
+class TestBuildLlmRunner:
+    """`build_llm_runner`：mock `subprocess.run`（不真调 LLM CLI）。"""
+
+    def test_success_returns_stdout(self, monkeypatch):
+        import subprocess as sp
+
+        class _R:
+            stdout = '{"winner": "A", "reason": "x"}'
+            stderr = ""
+            returncode = 0
+
+        monkeypatch.setattr(sp, "run", lambda *a, **k: _R())
+        runner = pk.build_llm_runner()
+        assert runner("prompt", {"A": {}, "B": {}}) == '{"winner": "A", "reason": "x"}'
+        assert runner.last_diagnostics is None
+
+    def test_timeout_returns_none_with_reason(self, monkeypatch):
+        import subprocess as sp
+
+        def _raise(*a, **k):
+            raise sp.TimeoutExpired(cmd="agy", timeout=180)
+
+        monkeypatch.setattr(sp, "run", _raise)
+        runner = pk.build_llm_runner()
+        assert runner("prompt", {}) is None
+        assert runner.last_diagnostics["reason"] == "timeout"
+
+    def test_oserror_returns_none(self, monkeypatch):
+        import subprocess as sp
+
+        def _raise(*a, **k):
+            raise FileNotFoundError("agy 不存在")
+
+        monkeypatch.setattr(sp, "run", _raise)
+        runner = pk.build_llm_runner()
+        assert runner("prompt", {}) is None
+        assert runner.last_diagnostics is not None
+
+    def test_nonzero_returncode_returns_none(self, monkeypatch):
+        import subprocess as sp
+
+        class _R:
+            stdout = ""
+            stderr = "boom"
+            returncode = 1
+
+        monkeypatch.setattr(sp, "run", lambda *a, **k: _R())
+        runner = pk.build_llm_runner()
+        assert runner("prompt", {}) is None
+        assert runner.last_diagnostics is not None
+
+    def test_diagnostics_cleared_at_call_start(self, monkeypatch):
+        """上一场诊断不得残留到下一场（防误判超时归属）。"""
+        import subprocess as sp
+
+        calls = {"n": 0}
+
+        def _run(*a, **k):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise sp.TimeoutExpired(cmd="agy", timeout=180)
+
+            class _R:
+                stdout = '{"winner": "B", "reason": "y"}'
+                stderr = ""
+                returncode = 0
+            return _R()
+
+        monkeypatch.setattr(sp, "run", _run)
+        runner = pk.build_llm_runner()
+        assert runner("p", {}) is None
+        assert runner.last_diagnostics["reason"] == "timeout"
+        assert runner("p", {}) == '{"winner": "B", "reason": "y"}'
+        assert runner.last_diagnostics is None
