@@ -19,7 +19,7 @@ import os
 
 from services.board_break import constants as C
 from services.board_break.indicators import apply_qfq, gain_10d, macd_dif, position_250d
-from services.board_break.scanner import _window_start, bare_code
+from services.board_break.scanner import bare_code, window_start
 from services.earnings_digest.normalize import (
     NEGATIVE_TYPES,
     POSITIVE_TYPES,
@@ -64,7 +64,9 @@ def _norm_date(value) -> str:
     """事件日期归一为 `YYYY-MM-DD`：兼容 tushare `holder_trade` 的 `YYYYMMDD`
     与 akshare 公告的 `YYYY-MM-DD` 两种输入格式；空值原样返回空串。
     """
-    s = str(value or "").strip()
+    # 显式区分 None 与假值 0：`value or ""` 会把数字 0（合法值，非"空"）误当空串，
+    # 这里只对 None 归一为空串，其余一律 str() 后再 strip。
+    s = ("" if value is None else str(value)).strip()
     if len(s) == 8 and s.isdigit():
         return f"{s[:4]}-{s[4:6]}-{s[6:]}"
     return s
@@ -115,13 +117,16 @@ def _earnings_direction_and_label(kind: str, row: dict) -> tuple[str | None, str
 
 def build_fact_card(
     cand: dict, *, main_sectors, ann_result, holder_result, earnings_rows, adj_factors,
+    main_sector_degraded: bool = False,
 ) -> dict:
     """单票聚合 [事实]：主线板块归属 + 公告分类 + 增减持事件 + 业绩类型 + 前复权指标。"""
     code = cand.get("code", "")
     bars = cand.get("bars") or []
     t_date = cand.get("date")
 
-    # —— 主线板块 ——（main_sectors=None 视为该维度整体缺失；空 set 视为"已知但不在池"）
+    # —— 主线板块 ——（main_sectors=None 视为该维度整体缺失；空 set 视为"已知但不在池"）。
+    # main_sector_degraded=True 时回退集合仍照常参与打分（对齐 trend_leader「回退值照用+
+    # 显式标注」口径），不再拿 None 整体抹掉该维度——只有回退集合本身也为空才判缺失。
     main_sector_status = "missing" if main_sectors is None else "ok"
     in_main_sector = bool(main_sectors) and cand.get("industry") in main_sectors
 
@@ -206,6 +211,7 @@ def build_fact_card(
         "industry": cand.get("industry", ""),
         "in_main_sector": in_main_sector,
         "main_sector_status": main_sector_status,
+        "main_sector_degraded": main_sector_degraded,
         "ann_status": ann_status,
         "ann_events": ann_events,
         "ann_titles": ann_titles,
@@ -257,13 +263,16 @@ def build_fact_cards(conn, registry, result: dict) -> list[dict]:
     """
     date = result.get("date")
     candidates = result.get("candidates") or []
-    # main_sector_degraded=True（当日集中度快照缺失、回退最近一日）时，主线板块归属本身
-    # 不可信，须整体降级为该维度缺失（main_sectors=None），而非拿回退数据当确定性结论打分。
+    # main_sector_degraded=True（当日集中度快照缺失、回退最近一日）时，回退集合仍照常
+    # 参与打分——与 trend_leader 既有口径一致（回退值照用+显式标注），而非拿 None 把
+    # 该维度整体抹成缺失。仅当回退集合本身也是空的，才无值可用、真正判缺失。
     main_sector_degraded = bool(result.get("main_sector_degraded"))
-    main_sectors = None if main_sector_degraded else set(result.get("main_sectors") or [])
+    main_sectors = set(result.get("main_sectors") or [])
+    if main_sector_degraded and not main_sectors:
+        main_sectors = None
 
-    ann_window_start = _window_start(date, C.ANNOUNCE_WINDOW_DAYS)
-    adj_window_start = _window_start(date, C.LOOKBACK_NATURAL_DAYS)
+    ann_window_start = window_start(date, C.ANNOUNCE_WINDOW_DAYS)
+    adj_window_start = window_start(date, C.LOOKBACK_NATURAL_DAYS)
     earnings_rows = _fetch_earnings_rows(registry, date)
 
     cards = []
@@ -280,6 +289,7 @@ def build_fact_cards(conn, registry, result: dict) -> list[dict]:
             holder_result=holder_result,
             earnings_rows=earnings_rows,
             adj_factors=adj_factors,
+            main_sector_degraded=main_sector_degraded,
         )
         cards.append(card)
     return cards
@@ -343,6 +353,8 @@ def score_candidate(fact_card: dict) -> dict:
             f"申万二级「{industry}」∈ 当日主线 Top-{C.MAIN_SECTOR_TOP_K}" if in_main
             else f"申万二级「{industry}」不在当日主线 Top-{C.MAIN_SECTOR_TOP_K}"
         )
+        if card.get("main_sector_degraded"):
+            detail += "（当日集中度缺失，回退最近一日主线）"
         evidences.append(_evidence("main_sector", score, "ok", "volume-watch", "T日", in_main, detail))
 
     ann_events = card.get("ann_events") or {}
@@ -433,10 +445,19 @@ def score_candidate(fact_card: dict) -> dict:
         evidences.append(_evidence(
             "earnings", 0.0, "source_failed", "earnings_digest", earn_window, None,
             "业绩数据源失败，维度记0"))
-    elif earnings_status == "no_event" or not earnings_type:
+    elif earnings_status == "no_event":
         evidences.append(_evidence(
             "earnings", 0.0, "no_event", "earnings_digest", earn_window, None,
             f"{earn_window}无业绩预告/快报披露"))
+    elif earnings_status == "neutral" or not earnings_type:
+        # neutral：已选中报告期记录（forecast/express 命中），但方向未知——forecast type
+        # 不在正负枚举、或 express 同比未知/为0；与"无披露"是完全不同的语义，不得混入
+        # 上面 no_event 分支（此前 `no_event or not earnings_type` 合并判断会把这种
+        # "已披露但方向未知"的情形误标成"无业绩预告/快报披露"）。
+        label = f"业绩：{earnings_type}" if earnings_type else "已披露"
+        evidences.append(_evidence(
+            "earnings", 0.0, "neutral", "earnings_digest", earn_window,
+            earnings_type, f"{label}但方向未知"))
     elif earnings_direction == "good":
         evidences.append(_evidence(
             "earnings", C.W_EARN_GOOD, "ok", "earnings_digest", earn_window,
@@ -453,9 +474,10 @@ def score_candidate(fact_card: dict) -> dict:
     # —— 近10日涨幅过高 ——
     gain10 = card.get("gain10")
     gain10_status = card.get("gain10_status", "missing")
-    # 单一真源：missing 只看 status（build_fact_card 已保证 status=="missing" 与
-    # gain10 is None 恒一致，不再双查避免两处口径漂移）
-    if gain10_status == "missing":
+    # 防御性双查：score_candidate 是纯函数容错契约，不得假设输入必经 build_fact_card
+    # （未来回放/反序列化路径可能喂入 status="ok" 但 value=None 的不一致卡片）；
+    # 不一致输入按 missing 降级处理，而非对 None 直接算术抛 TypeError 拖垮整批打分。
+    if gain10_status == "missing" or gain10 is None:
         evidences.append(_evidence(
             "gain10", 0.0, "missing", "daily_bar", "近10日", None,
             "维度缺失：前复权失败或日线样本不足"))
@@ -473,8 +495,8 @@ def score_candidate(fact_card: dict) -> dict:
     # —— MACD 零轴 ——
     dif = card.get("dif")
     dif_status = card.get("dif_status", "missing")
-    # 单一真源：同上，missing 只看 status
-    if dif_status == "missing":
+    # 防御性双查：同 gain10，见上方注释（纯函数容错契约，不假设输入必经 build_fact_card）
+    if dif_status == "missing" or dif is None:
         evidences.append(_evidence(
             "macd", 0.0, "missing", "daily_bar", "T日", None,
             "维度缺失：前复权失败/样本不足120根/末根非T日"))

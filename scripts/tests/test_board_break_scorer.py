@@ -27,7 +27,7 @@ def _card(**over):
             "industry": "计算机", "in_main_sector": True, "main_sector_status": "ok",
             "ann_status": "ok", "ann_events": {"increase": [], "placement": [], "reduce": [], "good": [], "bad": []},
             "holder_source": "announcement",
-            "earnings_status": "ok", "earnings_type": None,
+            "earnings_status": "no_event", "earnings_type": None,
             "gain10": 10.0, "gain10_status": "ok",
             "dif": 0.5, "dif_status": "ok",
             "position_value": 0.5, "position_state": "full"}
@@ -150,6 +150,29 @@ class TestScore:
         ev = {e["dimension"]: e for e in scorer.score_candidate(_card())["evidences"]}
         assert ev["earnings"]["score"] == 0.0 and ev["earnings"]["status"] == "no_event"
 
+    def test_earnings_neutral_type_none_detail_direction_unknown(self):
+        # neutral（已选中报告期记录但方向未知/type 空）不得被 no_event 分支吞掉：
+        # status 须为 neutral，detail 须显式标「方向未知」，与"无披露"语义区分
+        card = _card(earnings_status="neutral", earnings_type=None, earnings_direction=None)
+        ev = {e["dimension"]: e for e in scorer.score_candidate(card)["evidences"]}
+        assert ev["earnings"]["status"] == "neutral"
+        assert "方向未知" in ev["earnings"]["detail"]
+
+    def test_gain10_defensive_double_check_status_ok_but_value_none(self):
+        # 防御性双查：score_candidate 是纯函数容错契约，不假设输入必经 build_fact_card
+        # （如未来回放/反序列化路径喂入不一致卡片）；status="ok" 但 value=None 须按
+        # missing 降级，而非对 None 直接算术抛 TypeError 拖垮整批打分
+        card = _card(gain10=None, gain10_status="ok")
+        ev = {e["dimension"]: e for e in scorer.score_candidate(card)["evidences"]}
+        assert ev["gain10"]["score"] == 0.0
+        assert ev["gain10"]["status"] == "missing"
+
+    def test_macd_defensive_double_check_status_ok_but_value_none(self):
+        card = _card(dif=None, dif_status="ok")
+        ev = {e["dimension"]: e for e in scorer.score_candidate(card)["evidences"]}
+        assert ev["macd"]["score"] == 0.0
+        assert ev["macd"]["status"] == "missing"
+
     def test_adj_factor_failed_three_dims_missing(self):
         # D12 前提：复权因子失败 → gain10/MACD/position 三维度整体 missing，不得用未复权价硬算
         card = scorer.build_fact_card(
@@ -188,6 +211,19 @@ class _FakeResult:
     @property
     def success(self):
         return self.error == ""
+
+
+class TestNormDate:
+    """`_norm_date` falsy-0 修复：`value or ""` 会把数字 0（合法但假值）误当空串。"""
+
+    def test_zero_not_treated_as_empty(self):
+        assert scorer._norm_date(0) == "0"
+
+    def test_none_returns_empty(self):
+        assert scorer._norm_date(None) == ""
+
+    def test_compact_date_still_normalized(self):
+        assert scorer._norm_date("20260628") == "2026-06-28"
 
 
 class TestBuildFactCard:
@@ -382,13 +418,26 @@ def _orch_result(**over):
 
 
 class TestMainSectorDegradedWiring:
-    """缺陷修复：build_fact_cards 此前恒用 set(result.get("main_sectors") or [])，
-    吃掉 scanner 附带的 main_sector_degraded 信号——降级日主线板块归属本应标「缺失」，
-    却被当作确定性结论打分。"""
+    """口径调和：main_sector_degraded=True（当日集中度快照缺失、scanner 已回退最近一日）
+    时，回退集合**照常参与打分**——对齐 trend_leader 既有口径「回退值照用+显式标注」，
+    而非像此前那样把 main_sectors 整体清空为 None、白白丢弃一份可用的回退结论。
+    只有回退集合本身也是空的（scanner 也找不到任何历史快照）才真正判该维度缺失。
+    卡片额外透传 main_sector_degraded 字段，供渲染层加脚注。"""
 
-    def test_degraded_flag_marks_main_sector_missing_on_each_card(self):
+    def test_degraded_flag_scores_normally_with_detail_annotation(self):
         registry = _RecordingRegistry()
-        result = _orch_result(main_sector_degraded=True)  # 回退数据仍带 main_sectors，但不可信
+        result = _orch_result(main_sector_degraded=True)  # 回退数据带 main_sectors=["计算机"]
+        cards = scorer.build_fact_cards(conn=None, registry=registry, result=result)
+        assert cards[0]["main_sector_status"] == "ok"
+        assert cards[0]["main_sector_degraded"] is True
+        ev = {e["dimension"]: e for e in scorer.score_candidate(cards[0])["evidences"]}
+        assert ev["main_sector"]["status"] == "ok"
+        assert "当日集中度缺失" in ev["main_sector"]["detail"]
+
+    def test_degraded_flag_with_empty_fallback_set_marks_missing(self):
+        # scanner 回退后仍是空集合（连历史快照都没有）→ 无值可用，才真正判缺失
+        registry = _RecordingRegistry()
+        result = _orch_result(main_sector_degraded=True, main_sectors=[])
         cards = scorer.build_fact_cards(conn=None, registry=registry, result=result)
         assert cards[0]["main_sector_status"] == "missing"
         ev = {e["dimension"]: e for e in scorer.score_candidate(cards[0])["evidences"]}
@@ -400,8 +449,10 @@ class TestMainSectorDegradedWiring:
         cards = scorer.build_fact_cards(conn=None, registry=registry, result=result)
         assert cards[0]["main_sector_status"] == "ok"
         assert cards[0]["in_main_sector"] is True
+        assert cards[0]["main_sector_degraded"] is False
         ev = {e["dimension"]: e for e in scorer.score_candidate(cards[0])["evidences"]}
         assert ev["main_sector"]["status"] == "ok"
+        assert "当日集中度缺失" not in ev["main_sector"]["detail"]
 
 
 class TestFetchEarningsRows:
