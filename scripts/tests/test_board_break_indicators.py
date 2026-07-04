@@ -26,6 +26,24 @@ class TestQfq:
         bars = [{"trade_date": "20260702", "close": 10.0, "low": 9.8, "high": 10.2}]
         assert I.apply_qfq(bars, []) is None
 
+    def test_mid_window_zero_factor_returns_none(self):
+        # 窗口中部一日 adj_factor=0（脏值）：若不挡住会把该日 OHLC 整体乘 0 清零，
+        # 污染 250 日区间分位（range_low 拉到 0）与减持位置极性（恒判低位、方向打反）
+        bars = [{"trade_date": "20260701", "close": 20.0, "low": 19.0, "high": 21.0},
+                {"trade_date": "20260702", "close": 15.0, "low": 14.0, "high": 16.0},
+                {"trade_date": "20260703", "close": 10.5, "low": 10.0, "high": 11.0}]
+        factors = [{"trade_date": "20260701", "adj_factor": 1.0},
+                   {"trade_date": "20260702", "adj_factor": 0.0},  # 历史日因子污染
+                   {"trade_date": "20260703", "adj_factor": 2.0}]
+        assert I.apply_qfq(bars, factors) is None
+
+    def test_mid_window_non_finite_factor_returns_none(self):
+        bars = [{"trade_date": "20260701", "close": 20.0, "low": 19.0, "high": 21.0},
+                {"trade_date": "20260702", "close": 15.0, "low": 14.0, "high": 16.0}]
+        factors = [{"trade_date": "20260701", "adj_factor": float("nan")},
+                   {"trade_date": "20260702", "adj_factor": 2.0}]
+        assert I.apply_qfq(bars, factors) is None
+
 
 class TestMacd:
     def test_known_series_hand_check(self):

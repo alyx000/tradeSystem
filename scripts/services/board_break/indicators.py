@@ -21,7 +21,9 @@ def apply_qfq(bars: list[dict], factors: list[dict]) -> list[dict] | None:
     """按 `trade_date` 对齐前复权 close/high/low，归一化到 T 日（bars 末根）。
 
     factors 缺 T 日因子，或 bars 中任一交易日在 factors 里找不到对应因子（对不齐），
-    一律返回 None（不得用未复权价硬算）。
+    或**任一历史日因子 <=0 / 非有限数（NaN/inf）**，一律返回 None（不得用未复权价硬算）。
+    历史日 0 因子若不挡住，会把该日 OHLC 整体乘 0 清零，进而污染 250 日区间分位
+    （range_low 被拉到 0）与减持位置极性判断（恒判"低位"，方向打反）。
     """
     if not bars or not factors:
         return None
@@ -29,15 +31,15 @@ def apply_qfq(bars: list[dict], factors: list[dict]) -> list[dict] | None:
     factor_map = {f.get("trade_date"): f.get("adj_factor") for f in factors}
     t_date = bars[-1].get("trade_date")
     factor_t = _to_float(factor_map.get(t_date))
-    if factor_t is None or factor_t == 0:
+    if factor_t is None or factor_t <= 0 or not math.isfinite(factor_t):
         return None
 
     out = []
     for bar in bars:
         raw_factor = factor_map.get(bar.get("trade_date"))
         factor = _to_float(raw_factor)
-        if factor is None:
-            return None  # 对不齐：存在没有因子的交易日
+        if factor is None or factor <= 0 or not math.isfinite(factor):
+            return None  # 对不齐，或历史日因子非正/非有限（脏值污染）
         ratio = factor / factor_t
         adjusted = dict(bar)
         for key in ("close", "high", "low"):
