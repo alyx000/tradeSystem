@@ -167,6 +167,40 @@ def test_get_latest_concentration_empty():
     assert repo.get_latest_concentration(conn, days=30) == []
 
 
+def test_get_main_sectors_hits_today():
+    """当日快照存在时,直接取其 sector_summary Top-K(剔未分类),degraded=False。"""
+    conn = _conn()
+    record = _sample_record()
+    record["date"] = "2026-05-29"
+    record["sector_summary"] = [
+        {"industry": "电池", "count": 1, "amount_billion": 58.3, "share_in_top_n": 0.5, "codes": []},
+        {"industry": "未分类", "count": 1, "amount_billion": 10.0, "share_in_top_n": 0.1, "codes": []},
+        {"industry": "半导体", "count": 1, "amount_billion": 20.0, "share_in_top_n": 0.2, "codes": []},
+    ]
+    repo.save_concentration(conn, record)
+
+    sectors, degraded = repo.get_main_sectors(conn, "2026-05-29", top_k=1)
+
+    assert sectors == {"电池"}  # top_k=1 只取第一条,未分类已被剔除
+    assert degraded is False
+
+
+def test_get_main_sectors_falls_back_when_missing():
+    """当日无快照 → 回退最近一日(<=date),并标记 degraded=True。"""
+    conn = _conn()
+    record = _sample_record()
+    record["date"] = "2026-05-28"
+    record["sector_summary"] = [
+        {"industry": "电池", "count": 1, "amount_billion": 58.3, "share_in_top_n": 0.5, "codes": []},
+    ]
+    repo.save_concentration(conn, record)
+
+    sectors, degraded = repo.get_main_sectors(conn, "2026-05-29", top_k=5)  # 05-29 当日无快照
+
+    assert sectors == {"电池"}
+    assert degraded is True
+
+
 def test_migrate_v28_creates_table_on_pre_v28_db():
     """模拟 pre-v28 老库(有表删掉 + 版本回退 27)→ migrate 应重建表并升到 v28。"""
     conn = sqlite3.connect(":memory:")

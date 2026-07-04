@@ -8,6 +8,8 @@ from __future__ import annotations
 import json
 import sqlite3
 
+from services.volume_concentration.aggregator import UNCLASSIFIED
+
 
 def save_concentration(conn: sqlite3.Connection, record: dict) -> None:
     """写入/覆盖某交易日的集中度快照(UPSERT,幂等)。
@@ -106,3 +108,22 @@ def get_latest_concentration(conn: sqlite3.Connection, days: int) -> list[dict]:
         (days,),
     ).fetchall()
     return [_row_to_record(r) for r in reversed(rows)]
+
+
+def get_main_sectors(conn: sqlite3.Connection, date: str, top_k: int) -> tuple[set, bool]:
+    """主线板块 = 当日成交额集中度 Top-K 申万二级；当日缺失回退最近一日。
+
+    原为 board_break / trend_leader 各自内联的 `_main_sectors`（口径完全一致）；
+    此处下沉为公共 helper。trend_leader._main_sectors 暂保留独立实现（禁区，
+    留作 tech-debt，不在本次改动范围内回收）。
+    """
+    rec = get_concentration(conn, date)
+    degraded = False
+    if rec is None:
+        degraded = True
+        recent = get_recent_concentration(conn, date, 1)
+        rec = recent[-1] if recent else None
+    auto = []
+    if rec and rec.get("sector_summary"):
+        auto = [s["industry"] for s in rec["sector_summary"] if s.get("industry") != UNCLASSIFIED][:top_k]
+    return set(auto), degraded
