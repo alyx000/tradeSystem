@@ -98,6 +98,8 @@ class TushareProvider(DataProvider):
             "get_stock_ma",
             "get_daily_basic",
             "get_adj_factor",
+            "get_stock_adj_factor_range",
+            "get_holder_trade",
             "get_limit_up_list",
             "get_limit_down_list",
             "get_stock_limit_prices",
@@ -394,6 +396,31 @@ class TushareProvider(DataProvider):
                 data=self._query_records("adj_factor", trade_date=d),
                 source="tushare:adj_factor",
             )
+        except Exception as e:
+            return DataResult(data=None, source=self.name, error=str(e))
+
+    def get_stock_adj_factor_range(self, stock_code: str, start_date: str, end_date: str) -> DataResult:
+        """个股区间复权因子。空=success 空列表；异常=error。"""
+        try:
+            ts_code = self._normalize_stock_code(stock_code)
+            records = self._query_records(
+                "adj_factor", ts_code=ts_code,
+                start_date=self._date_fmt(start_date), end_date=self._date_fmt(end_date))
+            return DataResult(data=records or [], source="tushare:adj_factor")
+        except Exception as e:
+            return DataResult(data=None, source=self.name, error=str(e))
+
+    def get_holder_trade(self, stock_code: str, start_date: str, end_date: str) -> DataResult:
+        """个股区间股东增减持（stk_holdertrade）。空=success 空列表；异常=error。"""
+        try:
+            ts_code = self._normalize_stock_code(stock_code)
+            records = self._query_records(
+                "stk_holdertrade", ts_code=ts_code,
+                start_date=self._date_fmt(start_date), end_date=self._date_fmt(end_date))
+            out = [{"ann_date": r.get("ann_date"), "holder_name": r.get("holder_name"),
+                    "holder_type": r.get("holder_type"), "in_de": r.get("in_de"),
+                    "change_vol": r.get("change_vol")} for r in (records or [])]
+            return DataResult(data=out, source="tushare:stk_holdertrade")
         except Exception as e:
             return DataResult(data=None, source=self.name, error=str(e))
 
@@ -1127,7 +1154,8 @@ class TushareProvider(DataProvider):
         try:
             sd = self._date_fmt(start_date)
             ed = self._date_fmt(end_date)
-            df = self.pro.query("anns_d", ts_code=stock_code, start_date=sd, end_date=ed)
+            ts_code = self._normalize_stock_code(stock_code)
+            df = self.pro.query("anns_d", ts_code=ts_code, start_date=sd, end_date=ed)
             if df is None or df.empty:
                 return DataResult(data=[], source="tushare:anns_d")
             records = []
