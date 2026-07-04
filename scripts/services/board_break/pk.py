@@ -74,17 +74,31 @@ def _build_payload(card_a: dict, card_b: dict) -> dict:
     return {"A": _fact_payload(card_a), "B": _fact_payload(card_b)}
 
 
+def _scan_redline(text: str) -> str | None:
+    """红线扫描（复用 cognition_digest.narrator._scan_redline 范式）：命中返回命中词，否则 None。"""
+    for kw in REDLINE_KEYWORDS:
+        if kw in (text or ""):
+            return kw
+    return None
+
+
 def _filter_reason(reason: str) -> str:
-    """红线扫描（AI 生成内容） + 截断 PK_REASON_MAX_CHARS。"""
-    if any(kw in reason for kw in REDLINE_KEYWORDS):
+    """红线扫描（AI 生成内容） + 截断 PK_REASON_MAX_CHARS；过滤/截断后为空则兜底占位符（防渲染层空白行）。"""
+    hit = _scan_redline(reason)
+    if hit:
+        logger.warning("[board-break pk] reason 命中红线 '%s'，已替换", hit)
         reason = "(理由已按红线过滤)"
-    return reason[: C.PK_REASON_MAX_CHARS]
+    reason = reason[: C.PK_REASON_MAX_CHARS]
+    return reason if reason else "(无理由)"
 
 
 def _safe_call(llm_runner, payload):
     """runner 守卫（门2 S3 R1/R2）：调用前清空诊断（防上一场 timeout 残留误归属本场），
     异常收敛为 (None, True)——显式标记为「非超时可重试失败」，不得打崩整场循环赛。
-    返回 (text, raised)。"""
+    返回 (text, raised)。
+
+    注：真实 runner（narrator/huibo 模式）每次调用也会自清 last_diagnostics，
+    此处为防不合规 runner 的防御纵深，非唯一清空点。"""
     if hasattr(llm_runner, "last_diagnostics"):
         try:
             llm_runner.last_diagnostics = None
@@ -114,7 +128,7 @@ def _play_match(card_a: dict, card_b: dict, llm_runner) -> tuple[str | None, str
     return winner_code, _filter_reason(verdict["reason"])
 
 
-def _pool_and_excluded(fact_cards: list[dict], scored: list[dict]) -> tuple[list[str], list[str]]:
+def _pool_and_excluded(fact_cards: list[dict], score_map: dict) -> tuple[list[str], list[str]]:
     """按加权分 total 截断到 PK_POOL_MAX 强池；不足则全入池、excluded 为空。"""
     # 去重去空（门2 S3 R2）：重复码会造成自我对局/胜场膨胀,空码会污染配对
     seen = set()
@@ -126,9 +140,28 @@ def _pool_and_excluded(fact_cards: list[dict], scored: list[dict]) -> tuple[list
             codes_all.append(code)
     if len(codes_all) <= C.PK_POOL_MAX:
         return codes_all, []
-    score_map = {s.get("code"): s.get("total", 0.0) for s in scored}
     ranked = sorted(codes_all, key=lambda code: (-score_map.get(code, 0.0), code))
     return ranked[: C.PK_POOL_MAX], sorted(ranked[C.PK_POOL_MAX :])
+
+
+def _result(
+    status: str,
+    *,
+    wins: dict,
+    ranks: dict | None,
+    matches: list,
+    invalid: int,
+    total: int,
+    attempted: int,
+    valid_ratio: float,
+    excluded: list,
+) -> dict:
+    """三处 return 唯一构造入口（渲染层落地前收敛 shape 单源）。"""
+    return {
+        "status": status, "wins": wins, "ranks": ranks, "matches": matches,
+        "invalid": invalid, "total": total, "attempted": attempted,
+        "valid_ratio": valid_ratio, "excluded": excluded,
+    }
 
 
 def run_pk(
@@ -140,15 +173,18 @@ def run_pk(
     clock=time.monotonic,
 ) -> dict:
     """LLM 两两循环赛：预算熔断 + 无效场率熔断 + 胜场/加权分/裸码破平出名次。"""
-    card_map = {c.get("code"): c for c in fact_cards}
+    # first-wins：与 _pool_and_excluded 的去重顺序对齐（同 code 多卡时取第一条参赛）
+    card_map: dict = {}
+    for c in fact_cards:
+        card_map.setdefault(c.get("code"), c)
     score_map = {s.get("code"): s.get("total", 0.0) for s in scored}
 
-    pool, excluded = _pool_and_excluded(fact_cards, scored)
+    pool, excluded = _pool_and_excluded(fact_cards, score_map)
     if len(pool) < 2:
-        return {
-            "status": "skipped", "wins": {}, "ranks": None, "matches": [],
-            "invalid": 0, "total": 0, "attempted": 0, "valid_ratio": 0.0, "excluded": excluded,
-        }
+        return _result(
+            "skipped", wins={}, ranks=None, matches=[],
+            invalid=0, total=0, attempted=0, valid_ratio=0.0, excluded=excluded,
+        )
 
     pairs = list(itertools.combinations(sorted(pool), 2))
     total = len(pairs)
@@ -158,14 +194,17 @@ def run_pk(
     start = clock()
     melted_by_budget = False
 
+    def _over_budget() -> bool:
+        return clock() - start > budget_seconds
+
     for a, b in pairs:
-        if clock() - start > budget_seconds:
+        if _over_budget():
             melted_by_budget = True
             break
-        card_a = card_map.get(a, {"code": a})
-        card_b = card_map.get(b, {"code": b})
+        card_a = card_map[a]
+        card_b = card_map[b]
         winner, reason = _play_match(card_a, card_b, llm_runner)
-        if clock() - start > budget_seconds:
+        if _over_budget():
             # 场后复查（门2 S3 R3）：末场/单场跨预算不得落入正常排名——预算是硬熔断契约
             melted_by_budget = True
         if winner is None:
@@ -185,17 +224,17 @@ def run_pk(
     # PK_VALID_RATIO_MIN 而与 spec"两条件"静默脱钩（审查 Important2）。
     if melted_by_budget or (attempted and invalid / attempted > C.PK_INVALID_RATIO_MAX) \
             or valid_ratio < C.PK_VALID_RATIO_MIN:
-        return {
-            "status": "melted", "wins": wins, "ranks": None, "matches": matches,
-            "invalid": invalid, "total": total, "attempted": attempted,
-            "valid_ratio": valid_ratio, "excluded": excluded,
-        }
+        return _result(
+            "melted", wins=wins, ranks=None, matches=matches,
+            invalid=invalid, total=total, attempted=attempted,
+            valid_ratio=valid_ratio, excluded=excluded,
+        )
 
     ordered = sorted(pool, key=lambda code: (-wins[code], -score_map.get(code, 0.0), code))
     ranks = {code: i for i, code in enumerate(ordered, start=1)}
 
-    return {
-        "status": "ok", "wins": wins, "ranks": ranks, "matches": matches,
-        "invalid": invalid, "total": total, "attempted": attempted,
-        "valid_ratio": valid_ratio, "excluded": excluded,
-    }
+    return _result(
+        "ok", wins=wins, ranks=ranks, matches=matches,
+        invalid=invalid, total=total, attempted=attempted,
+        valid_ratio=valid_ratio, excluded=excluded,
+    )
