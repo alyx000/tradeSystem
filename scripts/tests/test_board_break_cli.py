@@ -106,15 +106,31 @@ def test_default_saves_and_pushes(monkeypatch, capsys):
     assert w["pushes"][0][0] == "断板反包观察清单 · 2026-07-04"
 
 
-def test_source_failed_does_not_save_or_push(monkeypatch, capsys):
+def test_source_failed_saves_failure_report_pushes_alert_and_exits(monkeypatch, capsys):
+    """source_failed 不推正常清单,但失败报告必须可观测（门2 S4 R1）：
+    默认模式落盘失败报告+推失败告警+SystemExit(1),防 launchd 静默成功。"""
+    import pytest as _pytest
     failed = {"status": "source_failed", "date": "2026-07-04",
               "failed_sources": {"today_limit_up": "接口超时"}}
     w = _wire(monkeypatch, result=failed)
-    bb._run_daily({}, _daily_args())
+    with _pytest.raises(SystemExit) as exc:
+        bb._run_daily({}, _daily_args())
+    assert exc.value.code == 1
     out = capsys.readouterr().out
     assert "数据失败" in out
-    assert w["saves"] == []
-    assert w["pushes"] == []
+    assert len(w["saves"]) == 1          # 落盘的是失败报告
+    assert len(w["pushes"]) == 1
+    assert "数据失败" in w["pushes"][0][0]  # 告警标题,非正常清单标题
+
+
+def test_source_failed_dry_run_no_side_effects_but_exits(monkeypatch, capsys):
+    import pytest as _pytest
+    failed = {"status": "source_failed", "date": "2026-07-04",
+              "failed_sources": {"today_limit_up": "接口超时"}}
+    w = _wire(monkeypatch, result=failed)
+    with _pytest.raises(SystemExit):
+        bb._run_daily({}, _daily_args(dry_run=True))
+    assert w["saves"] == [] and w["pushes"] == []
 
 
 def test_no_llm_skips_pk_run(monkeypatch):

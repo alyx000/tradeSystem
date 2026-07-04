@@ -54,10 +54,17 @@ def _run_daily(config: dict, args: argparse.Namespace) -> None:
             return
         result = scanner.run_daily(conn, registry, date)
         if result["status"] == "source_failed":
+            # source_failed 不产出/不推「正常清单」，但失败报告本身必须可观测（门2 S4 R1）：
+            # launchd 场景 stdout 不可见,只打印会退化成「静默成功」——落盘失败报告+推失败告警+非零退出。
             md = renderer.render_source_failed(result)
             print(md)
             logger.error("[board-break] 核心源失败，不产出候选清单：%s", result.get("failed_sources"))
-            return  # source_failed 不落盘不推正常清单
+            if not args.dry_run:
+                path = renderer.save_report(md, date)
+                logger.info("[board-break daily] 失败报告已落盘 %s", path)
+                if not args.no_push:
+                    _push_to_dingtalk(f"⚠️ 断板反包·数据失败 · {date}", md)
+            sys.exit(1)  # 让调度层可观测（log 里能看到非零退出）
         fact_cards = scorer.build_fact_cards(conn, registry, result)
         scored = scorer.score_all(fact_cards)
         # 空候选也交给 pk.run_pk（内部 len(pool)<2 时自走 skipped 状态机），
