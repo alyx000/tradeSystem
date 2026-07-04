@@ -199,6 +199,25 @@ python3 main.py string-yang daily --no-llm --dry-run
 - **三档运行**：裸 `daily`（写 `data/reports/string-yang/YYYY-MM-DD.md` + 推钉钉）/ `--no-push`（落报告不推送）/ `--dry-run`（仅打印，不落报告不推送）。非交易日守卫仅在非 dry-run 时生效。
 - **守红线**：全标 `[判断]`，不出价位、不给买卖建议、不写交易计划层、不自动入关注池。
 - 依赖 env 同 volume-watch（`TUSHARE_TOKEN` + 钉钉），LLM 额外依赖 `ANTIGRAVITY_BIN`/`AGY_BIN`、可选 `LLM_MODEL`、`LLM_TIMEOUT_SECONDS`（默认 180）。
+## 断板反包盘后扫描（board-break）
+
+每交易日 21:20 自动跑（launchd `com.alyx.tradesystem.board-break`，排在 volume-watch 21:00 + sector-correlation 21:15 之后、trend-leader 21:30 之前），也可手动：
+
+```bash
+python3 main.py board-break daily
+python3 main.py board-break daily --date 2026-06-12 --dry-run   # 只打印，不落盘不推送（历史校准）
+python3 main.py board-break daily --no-push                      # 落盘但不推送
+python3 main.py board-break daily --no-llm                       # 跳过 LLM 两两 PK，只出加权分排序
+```
+
+- **候选筛选（[事实]）**：昨日连板数≥2 只当日断板——断板日涨幅 ≤6%（用户既定 6% 参考位机械换算，非价格预测）且未跌停；仅 10cm 主板参与，剔除 ST。
+- **八维度加权打分（[判断]，附依据明细）**：主线板块（volume-watch 当日 Top-K 归属）/ 增持回购 / 定增 / 减持（**250 日分位翻极性**——低位减持记正分、高位减持记负分、中位不计分）/ 其他重大公告（利好/利空）/ 业绩（预告快报方向）/ 近10日涨幅过高 / MACD 零轴上下；单维度取数失败只降级该维度（`missing`/`source_failed`），不中断整批。
+- **LLM 两两 PK 循环赛（`--no-llm` 关闭）**：只喂 [事实] 卡（不含加权分），按加权分先截断强池再 `itertools.combinations` 循环赛；单场超时不重试记无效场，其它失败重试 1 次；无效场占比超阈值 → 熔断（`status="melted"`）；PK 理由段经红线过滤后渲染。
+- **输出**：双排序（加权分排名 + PK 胜场排名，PK 未跑/熔断显 `—`）+ 每票八维度依据明细 + 脚注（剔除统计/数据完整性/PK 熔断状态）；MD 落盘 `data/reports/board-break/` + 钉钉。
+- **三档运行**：裸 `daily`（落盘+推）/ `--no-push`（落盘+仅打印）/ `--dry-run`（只打印，不落盘不推送）。
+- **核心源失败**：不产出正常候选清单，落 `source_failed` 失败报告 + 推告警 + 非零退出（launchd 场景可观测）。
+- **无池无状态**：不落库、不建观察池；隔日盘中是否突破 6% 交易由用户自行判断，本清单不跟踪。
+- 依赖 env 同 volume-watch（`TUSHARE_TOKEN` + 钉钉）；PK 依赖 Antigravity CLI（同 research-digest/cognition-digest 家族，独立 runner）+ `services.recommend.formatter.REDLINE_KEYWORDS` 红线过滤。
 
 ## 研报速读（research-digest）
 
