@@ -122,6 +122,17 @@ class TestRunPk:
         result = pk.run_pk(_cards(2), _scored(_cards(2)), runner)
         assert result["invalid"] == 1 and calls["n"] == 2  # 重试 1 次后计无效场
 
+    def test_stale_timeout_diag_does_not_block_retry(self):
+        """上一场残留 timeout 诊断 + 本场抛异常 → 仍按可重试失败重试 1 次（门2 S3 R2）。"""
+        calls = {"n": 0}
+        def runner(p, pl):
+            calls["n"] += 1
+            raise RuntimeError("transport boom")
+        runner.last_diagnostics = {"reason": "timeout"}  # 陈旧残留
+        result = pk.run_pk(_cards(2), _scored(_cards(2)), runner)
+        assert calls["n"] == 2  # 清空诊断后异常按非超时处理 → 重试
+        assert result["invalid"] == 1
+
     def test_duplicate_and_blank_codes_deduped(self):
         """重复码/空码入池前去重去空（门2 S3 R2）：不得自我对局或胜场膨胀。"""
         cards = _cards(3) + [_cards(3)[0], {"code": "", "name": "空"}]
