@@ -350,6 +350,13 @@ ARCHITECTURE_COMMANDS = [
     ["string-yang", "daily", "--dry-run"],
     ["string-yang", "daily", "--no-push"],
     ["string-yang", "daily", "--date", "2026-06-12", "--top-k", "8", "--top-concepts", "6", "--no-llm", "--dry-run"],
+    # board-break (断板反包:昨日连板>=2断板<=6%未跌停主板 → 双打分观察清单;无状态不建池)
+    ["board-break", "daily"],
+    ["board-break", "daily", "--date", "2026-07-04"],
+    ["board-break", "daily", "--dry-run"],
+    ["board-break", "daily", "--no-push"],
+    ["board-break", "daily", "--no-llm"],
+    ["board-break", "daily", "--date", "2026-07-04", "--no-push", "--no-llm"],
 ]
 
 

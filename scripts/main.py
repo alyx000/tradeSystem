@@ -1775,6 +1775,10 @@ def build_parser() -> argparse.ArgumentParser:
     from cli.string_yang import register_subparser as register_string_yang_subparser
     register_string_yang_subparser(subparsers)
 
+    # board-break (断板反包:昨日连板>=2断板<=6%未跌停主板 → 双打分观察清单;无状态不建池)
+    from cli.board_break import register_subparser as register_board_break_subparser
+    register_board_break_subparser(subparsers)
+
     # db
     from db.cli import register_db_subparser
     register_db_subparser(subparsers)
@@ -1848,6 +1852,9 @@ def main():
     elif args.command == "string-yang":
         from cli import string_yang as string_yang_module
         string_yang_module.handle_command(config, args)
+    elif args.command == "board-break":
+        from cli import board_break as board_break_module
+        board_break_module.handle_command(config, args)
     elif args.command == "db":
         from db.cli import handle_db_command
         handle_db_command(args)
