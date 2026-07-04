@@ -140,6 +140,17 @@ class TestRunPk:
         assert result["total"] == 3  # C(3,2)，重复与空码不参与
         assert result["status"] == "ok"
 
+    def test_single_pair_over_budget_melts(self):
+        """单场即跨预算 → 场后复查熔断，不得 status=ok（门2 S3 R3）。"""
+        t = {"now": 0.0}
+        def clock():
+            v = t["now"]
+            t["now"] += 1500.0  # 每次读钟推进 1500s：首查 0s 放行,场后复查已超 1200s
+            return v
+        result = pk.run_pk(_cards(2), _scored(_cards(2)),
+                           lambda p, pl: '{"winner": "A", "reason": "r"}', clock=clock)
+        assert result["status"] == "melted" and result["ranks"] is None
+
     def test_redline_reason_filtered(self):
         from services.recommend.formatter import REDLINE_KEYWORDS
         kw = next(iter(REDLINE_KEYWORDS))
