@@ -1,6 +1,8 @@
 """scripts/tests/test_board_break_scorer.py"""
+import os
+
 import pytest
-from services.board_break import constants as C, scorer
+from services.board_break import constants as C, scanner, scorer
 
 
 class TestClassify:
@@ -329,3 +331,150 @@ class TestScoreAll:
         assert ranked[0]["rank_score"] == 1
         assert ranked[1]["rank_score"] == 2
         assert ranked[0]["total"] >= ranked[1]["total"]
+
+
+class _OrchestrationFakeResult:
+    """build_fact_cards 编排层测试专用 DataResult-like fake（与 TestBuildFactCard 上方
+    的 _FakeResult 语义一致，独立命名避免跨测试类误用）。"""
+    def __init__(self, data=None, error=""):
+        self.data = data
+        self.error = error
+
+    @property
+    def success(self):
+        return self.error == ""
+
+
+class _RecordingRegistry:
+    """记录每次 call 的方法名+参数供窗口/env 断言用；除显式覆盖的业绩两接口外，
+    其余方法一律返回空结果（不影响主线板块/复权因子相关断言）。"""
+
+    def __init__(self, *, forecast=None, express=None):
+        self.calls: list[tuple[str, tuple]] = []
+        self._forecast = forecast if forecast is not None else _OrchestrationFakeResult(data=[])
+        self._express = express if express is not None else _OrchestrationFakeResult(data=[])
+
+    def call(self, name, *args):
+        self.calls.append((name, args))
+        if name == "get_earnings_forecast":
+            return self._forecast
+        if name == "get_earnings_express":
+            return self._express
+        return _OrchestrationFakeResult(data=[])
+
+
+def _orch_bars(date="2026-07-04", n=130, close=10.0):
+    out = [{"trade_date": f"2026{(i // 28) + 1:02d}{(i % 28) + 1:02d}",
+            "close": close, "low": close * 0.98, "high": close * 1.02} for i in range(n - 1)]
+    out.append({"trade_date": date, "close": close, "low": close * 0.98, "high": close * 1.02})
+    return out
+
+
+def _orch_result(**over):
+    base = {
+        "date": "2026-07-04",
+        "candidates": [{"code": "600002", "name": "x", "industry": "计算机", "bars": _orch_bars()}],
+        "main_sectors": ["计算机"],
+        "main_sector_degraded": False,
+    }
+    base.update(over)
+    return base
+
+
+class TestMainSectorDegradedWiring:
+    """缺陷修复：build_fact_cards 此前恒用 set(result.get("main_sectors") or [])，
+    吃掉 scanner 附带的 main_sector_degraded 信号——降级日主线板块归属本应标「缺失」，
+    却被当作确定性结论打分。"""
+
+    def test_degraded_flag_marks_main_sector_missing_on_each_card(self):
+        registry = _RecordingRegistry()
+        result = _orch_result(main_sector_degraded=True)  # 回退数据仍带 main_sectors，但不可信
+        cards = scorer.build_fact_cards(conn=None, registry=registry, result=result)
+        assert cards[0]["main_sector_status"] == "missing"
+        ev = {e["dimension"]: e for e in scorer.score_candidate(cards[0])["evidences"]}
+        assert ev["main_sector"]["status"] == "missing"
+
+    def test_non_degraded_flag_uses_main_sectors_normally(self):
+        registry = _RecordingRegistry()
+        result = _orch_result(main_sector_degraded=False)
+        cards = scorer.build_fact_cards(conn=None, registry=registry, result=result)
+        assert cards[0]["main_sector_status"] == "ok"
+        assert cards[0]["in_main_sector"] is True
+        ev = {e["dimension"]: e for e in scorer.score_candidate(cards[0])["evidences"]}
+        assert ev["main_sector"]["status"] == "ok"
+
+
+class TestFetchEarningsRows:
+    """_fetch_earnings_rows 的 env 覆盖/还原 + 双源失败契约（参考 test_trend_leader_scanner.py
+    的 FakeRegistry 模式，自建轻量 fake 记录/还原 EARNINGS_LOOKBACK_DAYS）。"""
+
+    def test_env_overridden_during_call_no_prior_value(self, monkeypatch):
+        monkeypatch.delenv("EARNINGS_LOOKBACK_DAYS", raising=False)
+        seen = {}
+
+        class R:
+            def call(self, name, date):
+                seen[name] = os.environ.get("EARNINGS_LOOKBACK_DAYS")
+                return _OrchestrationFakeResult(data=[])
+
+        scorer._fetch_earnings_rows(R(), "2026-07-04")
+        assert seen["get_earnings_forecast"] == str(C.EARNINGS_WINDOW_DAYS)
+        assert seen["get_earnings_express"] == str(C.EARNINGS_WINDOW_DAYS)
+        assert "EARNINGS_LOOKBACK_DAYS" not in os.environ  # 原无值 → 还原为"无"
+
+    def test_env_overridden_during_call_restores_prior_value(self, monkeypatch):
+        monkeypatch.setenv("EARNINGS_LOOKBACK_DAYS", "3")
+        seen = {}
+
+        class R:
+            def call(self, name, date):
+                seen[name] = os.environ.get("EARNINGS_LOOKBACK_DAYS")
+                return _OrchestrationFakeResult(data=[])
+
+        scorer._fetch_earnings_rows(R(), "2026-07-04")
+        assert seen["get_earnings_forecast"] == str(C.EARNINGS_WINDOW_DAYS)
+        assert os.environ["EARNINGS_LOOKBACK_DAYS"] == "3"  # 原有值 → 还原为原值
+
+    def test_env_restored_even_if_call_raises(self, monkeypatch):
+        monkeypatch.setenv("EARNINGS_LOOKBACK_DAYS", "3")
+
+        class R:
+            def call(self, name, date):
+                raise RuntimeError("boom")
+
+        with pytest.raises(RuntimeError):
+            scorer._fetch_earnings_rows(R(), "2026-07-04")
+        assert os.environ["EARNINGS_LOOKBACK_DAYS"] == "3"  # finally 兜底还原，不因异常泄漏
+
+    def test_both_forecast_and_express_failed_returns_none(self):
+        class R:
+            def call(self, name, date):
+                return _OrchestrationFakeResult(error="boom")
+
+        assert scorer._fetch_earnings_rows(R(), "2026-07-04") is None
+
+    def test_earnings_rows_none_propagates_to_source_failed_dimension(self):
+        """两路取数失败 → earnings_rows is None → build_fact_card 业绩维度 status=="source_failed"。"""
+        card = scorer.build_fact_card(
+            {"code": "600002", "name": "x", "industry": "计算机", "close": 10.0, "pct_chg": 3.0,
+             "bars": _orch_bars(), "date": "2026-07-04"},
+            main_sectors=set(), ann_result=None, holder_result=None,
+            earnings_rows=None, adj_factors=None)
+        assert card["earnings_status"] == "source_failed"
+
+
+class TestBuildFactCardsWindowParams:
+    """逐候选调用 get_stock_announcements/get_holder_trade/get_stock_adj_factor_range
+    时窗口起点参数须分别对齐 ANNOUNCE_WINDOW_DAYS(30) 与 LOOKBACK_NATURAL_DAYS(400)。"""
+
+    def test_per_candidate_calls_use_expected_window_starts(self):
+        registry = _RecordingRegistry()
+        result = _orch_result()
+        scorer.build_fact_cards(conn=None, registry=registry, result=result)
+
+        expected_ann_start = scanner._window_start("2026-07-04", C.ANNOUNCE_WINDOW_DAYS)
+        expected_adj_start = scanner._window_start("2026-07-04", C.LOOKBACK_NATURAL_DAYS)
+        calls = {name: args for name, args in registry.calls}
+        assert calls["get_stock_announcements"] == ("600002", expected_ann_start, "2026-07-04")
+        assert calls["get_holder_trade"] == ("600002", expected_ann_start, "2026-07-04")
+        assert calls["get_stock_adj_factor_range"] == ("600002", expected_adj_start, "2026-07-04")

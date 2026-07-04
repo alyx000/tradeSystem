@@ -16,11 +16,10 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime, timedelta
 
 from services.board_break import constants as C
 from services.board_break.indicators import apply_qfq, gain_10d, macd_dif, position_250d
-from services.board_break.scanner import bare_code
+from services.board_break.scanner import _window_start, bare_code
 from services.earnings_digest.normalize import (
     NEGATIVE_TYPES,
     POSITIVE_TYPES,
@@ -72,13 +71,10 @@ def _norm_date(value) -> str:
 
 
 def _result_rows(result) -> tuple[list, bool]:
-    """从 DataResult-like 对象取 (rows, ok)；None 或 error 均判失败。"""
-    if result is None:
-        return [], False
-    ok = getattr(result, "success", None)
-    if ok is None:
-        return (result if isinstance(result, list) else []), True
-    if not ok:
+    """从 DataResult-like 对象取 (rows, ok)；None 或失败均判失败（调用方永远传 DataResult
+    或 None，不存在裸 list 入参，故不再区分"success 缺失即视为裸 list 成功"分支）。
+    """
+    if result is None or not getattr(result, "success", False):
         return [], False
     data = getattr(result, "data", None)
     return (data if isinstance(data, list) else []), True
@@ -102,32 +98,19 @@ def _select_earnings(rows: list[dict]) -> tuple[str, dict] | None:
     return (best_kind, best_row) if best_row is not None else None
 
 
-def _earnings_direction(kind: str, row: dict) -> str | None:
+def _earnings_direction_and_label(kind: str, row: dict) -> tuple[str | None, str | None]:
+    """业绩方向 + 展示标签一并推导（forecast/express 两路 kind 分发只做一次，
+    避免 direction/label 各自重复分发导致口径漂移）。"""
     if kind == "forecast":
         t = row.get("type") or ""
-        if t in POSITIVE_TYPES:
-            return "good"
-        if t in NEGATIVE_TYPES:
-            return "bad"
-        return None
+        direction = "good" if t in POSITIVE_TYPES else ("bad" if t in NEGATIVE_TYPES else None)
+        return direction, (t or None)
     # express 无离散 type，用归母净利同比符号判方向
     yoy = row.get("yoy_dedu_np")
     if yoy is None:
-        return None
-    if yoy > 0:
-        return "good"
-    if yoy < 0:
-        return "bad"
-    return None
-
-
-def _earnings_label(kind: str, row: dict) -> str | None:
-    if kind == "forecast":
-        return row.get("type") or None
-    yoy = row.get("yoy_dedu_np")
-    if yoy is None:
-        return "快报（同比未知）"
-    return f"快报归母净利同比{yoy:+.1f}%"
+        return None, "快报（同比未知）"
+    direction = "good" if yoy > 0 else ("bad" if yoy < 0 else None)
+    return direction, f"快报归母净利同比{yoy:+.1f}%"
 
 
 def build_fact_card(
@@ -191,12 +174,12 @@ def build_fact_card(
             earnings_type = None
         else:
             kind, row = selected
-            earnings_direction = _earnings_direction(kind, row)
-            earnings_type = _earnings_label(kind, row)
+            earnings_direction, earnings_type = _earnings_direction_and_label(kind, row)
             earnings_status = "ok" if earnings_direction else "neutral"
 
-    # —— 前复权 + 指标（复权因子失败 → gain10/MACD/position 三维度整体缺失）——
-    adjusted = apply_qfq(bars, adj_factors) if adj_factors else None
+    # —— 前复权 + 指标（复权因子失败 → gain10/MACD/position 三维度整体缺失；
+    # apply_qfq 自身已守卫 `not bars or not factors` 返回 None，外层无需重复判断）——
+    adjusted = apply_qfq(bars, adj_factors)
     if adjusted is None:
         gain10, gain10_status = None, "missing"
         dif, dif_status = None, "missing"
@@ -241,10 +224,6 @@ def build_fact_card(
     }
 
 
-def _window_start(date: str, days: int) -> str:
-    return (datetime.strptime(date, "%Y-%m-%d") - timedelta(days=days)).strftime("%Y-%m-%d")
-
-
 def _fetch_earnings_rows(registry, date: str) -> list[dict] | None:
     """全市场业绩窗口取数：临时覆盖 `EARNINGS_LOOKBACK_DAYS` 到 90 自然日，调用后照常还原。"""
     prev_env = os.environ.get("EARNINGS_LOOKBACK_DAYS")
@@ -278,7 +257,10 @@ def build_fact_cards(conn, registry, result: dict) -> list[dict]:
     """
     date = result.get("date")
     candidates = result.get("candidates") or []
-    main_sectors = set(result.get("main_sectors") or [])
+    # main_sector_degraded=True（当日集中度快照缺失、回退最近一日）时，主线板块归属本身
+    # 不可信，须整体降级为该维度缺失（main_sectors=None），而非拿回退数据当确定性结论打分。
+    main_sector_degraded = bool(result.get("main_sector_degraded"))
+    main_sectors = None if main_sector_degraded else set(result.get("main_sectors") or [])
 
     ann_window_start = _window_start(date, C.ANNOUNCE_WINDOW_DAYS)
     adj_window_start = _window_start(date, C.LOOKBACK_NATURAL_DAYS)
@@ -329,6 +311,20 @@ def _evidence(dimension, score, status, source, window, value, detail) -> dict:
     }
 
 
+def _simple_event_evidence(
+    dimension, failed, events, weight, source, window, no_event_msg, failed_msg,
+) -> dict:
+    """通用「数据源失败/无事件/命中记分」三态 evidence（increase/placement 共用；
+    reduce 需叠加位置极性、announce 需利好利空两路加总，两者更复杂仍手写不复用本 helper）。
+    """
+    if failed:
+        return _evidence(dimension, 0.0, "source_failed", source, window, None, failed_msg)
+    if events:
+        detail = _format_event_detail(events)
+        return _evidence(dimension, weight, "ok", source, window, len(events), detail)
+    return _evidence(dimension, 0.0, "no_event", source, window, 0, no_event_msg)
+
+
 def score_candidate(fact_card: dict) -> dict:
     """八维度加权打分：主线/增持/定增/减持(位置极性)/其他公告/业绩/涨幅过高/MACD。"""
     card = fact_card
@@ -356,35 +352,15 @@ def score_candidate(fact_card: dict) -> dict:
 
     # —— 增持/回购 ——
     increase_events = ann_events.get("increase") or []
-    if holder_status == "source_failed":
-        evidences.append(_evidence(
-            "increase", 0.0, "source_failed", holder_source, window_label, None,
-            "增减持数据源失败，维度记0"))
-    elif increase_events:
-        detail = _format_event_detail(increase_events)
-        evidences.append(_evidence(
-            "increase", C.W_INCREASE, "ok", holder_source, window_label,
-            len(increase_events), detail))
-    else:
-        evidences.append(_evidence(
-            "increase", 0.0, "no_event", holder_source, window_label, 0,
-            f"{window_label}无增持/回购事件"))
+    evidences.append(_simple_event_evidence(
+        "increase", holder_status == "source_failed", increase_events, C.W_INCREASE,
+        holder_source, window_label, f"{window_label}无增持/回购事件", "增减持数据源失败，维度记0"))
 
     # —— 定增 ——
     placement_events = ann_events.get("placement") or []
-    if card.get("ann_status") == "source_failed":
-        evidences.append(_evidence(
-            "placement", 0.0, "source_failed", "announcement", window_label, None,
-            "公告数据源失败，维度记0"))
-    elif placement_events:
-        detail = _format_event_detail(placement_events)
-        evidences.append(_evidence(
-            "placement", C.W_PLACEMENT, "ok", "announcement", window_label,
-            len(placement_events), detail))
-    else:
-        evidences.append(_evidence(
-            "placement", 0.0, "no_event", "announcement", window_label, 0,
-            f"{window_label}无定增相关公告"))
+    evidences.append(_simple_event_evidence(
+        "placement", card.get("ann_status") == "source_failed", placement_events, C.W_PLACEMENT,
+        "announcement", window_label, f"{window_label}无定增相关公告", "公告数据源失败，维度记0"))
 
     # —— 减持（D12 位置极性）——
     reduce_events = ann_events.get("reduce") or []
@@ -449,7 +425,7 @@ def score_candidate(fact_card: dict) -> dict:
     # —— 业绩 ——
     earnings_status = card.get("earnings_status", "no_event")
     earnings_type = card.get("earnings_type")
-    # earnings_direction 唯一推导来源是 build_fact_card._earnings_direction；
+    # earnings_direction 唯一推导来源是 build_fact_card._earnings_direction_and_label；
     # 此处不再重复推导，避免两处口径漂移（fixture 测试须显式给出 earnings_direction）
     earnings_direction = card.get("earnings_direction")
     earn_window = f"近{C.EARNINGS_WINDOW_DAYS}日"
@@ -477,7 +453,9 @@ def score_candidate(fact_card: dict) -> dict:
     # —— 近10日涨幅过高 ——
     gain10 = card.get("gain10")
     gain10_status = card.get("gain10_status", "missing")
-    if gain10_status == "missing" or gain10 is None:
+    # 单一真源：missing 只看 status（build_fact_card 已保证 status=="missing" 与
+    # gain10 is None 恒一致，不再双查避免两处口径漂移）
+    if gain10_status == "missing":
         evidences.append(_evidence(
             "gain10", 0.0, "missing", "daily_bar", "近10日", None,
             "维度缺失：前复权失败或日线样本不足"))
@@ -495,7 +473,8 @@ def score_candidate(fact_card: dict) -> dict:
     # —— MACD 零轴 ——
     dif = card.get("dif")
     dif_status = card.get("dif_status", "missing")
-    if dif_status == "missing" or dif is None:
+    # 单一真源：同上，missing 只看 status
+    if dif_status == "missing":
         evidences.append(_evidence(
             "macd", 0.0, "missing", "daily_bar", "T日", None,
             "维度缺失：前复权失败/样本不足120根/末根非T日"))
