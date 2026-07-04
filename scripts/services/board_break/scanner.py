@@ -64,9 +64,16 @@ def filter_candidates(prev_limit_up, today_limit_up_codes, today_limit_down_code
     return cands, rejects
 
 
+def _window_start(date: str, days: int) -> str:
+    """T-N 自然日窗口起点通用版（scanner 自身 T-400 lookback 与 scorer 打分层
+    公告/业绩等各类回看窗口共用，避免两处重复实现同一日期算术）。
+    """
+    return (datetime.strptime(date, "%Y-%m-%d") - timedelta(days=days)).strftime("%Y-%m-%d")
+
+
 def _lookback_start(date: str) -> str:
-    """T-400 自然日窗口起点（一次取够，供 Stage 2 打分复用）。"""
-    return (datetime.strptime(date, "%Y-%m-%d") - timedelta(days=C.LOOKBACK_NATURAL_DAYS)).strftime("%Y-%m-%d")
+    """T-400 自然日窗口起点（一次取够，供 Stage 2 打分复用）。薄封装 `_window_start`。"""
+    return _window_start(date, C.LOOKBACK_NATURAL_DAYS)
 
 
 def enrich_with_today_bar(candidates, fetch_range, date: str) -> tuple[list[dict], dict]:
