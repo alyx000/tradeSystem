@@ -43,9 +43,13 @@ def apply_qfq(bars: list[dict], factors: list[dict]) -> list[dict] | None:
         ratio = factor / factor_t
         adjusted = dict(bar)
         for key in ("close", "high", "low"):
-            value = bar.get(key)
-            if value is not None:
-                adjusted[key] = value * ratio
+            value = _to_float(bar.get(key))
+            if value is None or not math.isfinite(value):
+                # 历史 bar 任一价格缺失/非有限 → 整体返 None（三维度缺失），
+                # 不得静默跳过：close=None 会让 _ema 抛 TypeError 打崩整批；
+                # high/low 缺失会让 position_250d 用残缺区间产出伪 full 分位（门2 S2 R1）。
+                return None
+            adjusted[key] = value * ratio
         out.append(adjusted)
     return out
 
