@@ -406,7 +406,7 @@ class TushareProvider(DataProvider):
             records = self._query_records(
                 "adj_factor", ts_code=ts_code,
                 start_date=self._date_fmt(start_date), end_date=self._date_fmt(end_date))
-            return DataResult(data=records or [], source="tushare:adj_factor")
+            return DataResult(data=records, source="tushare:adj_factor")
         except Exception as e:
             return DataResult(data=None, source=self.name, error=str(e))
 
@@ -419,7 +419,7 @@ class TushareProvider(DataProvider):
                 start_date=self._date_fmt(start_date), end_date=self._date_fmt(end_date))
             out = [{"ann_date": r.get("ann_date"), "holder_name": r.get("holder_name"),
                     "holder_type": r.get("holder_type"), "in_de": r.get("in_de"),
-                    "change_vol": r.get("change_vol")} for r in (records or [])]
+                    "change_vol": r.get("change_vol")} for r in records]
             return DataResult(data=out, source="tushare:stk_holdertrade")
         except Exception as e:
             return DataResult(data=None, source=self.name, error=str(e))
