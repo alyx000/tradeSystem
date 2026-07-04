@@ -60,6 +60,18 @@ def classify_announcement(title: str) -> str:
 # 事实卡构建
 # ---------------------------------------------------------------------------
 
+def _holder_event_title(row: dict, direction: str) -> str:
+    """增减持事件标题：「{股东} 增持/减持 {N万股}」——原始拼接 DE6375000股 不可读（真跑校准修）。"""
+    name = str(row.get("holder_name") or "").strip() or "未知股东"
+    action = "增持" if direction == "increase" else "减持"
+    vol = row.get("change_vol")
+    try:
+        vol_txt = f"{float(vol) / 10000:.1f}万股" if vol is not None else "股数未知"
+    except (TypeError, ValueError):
+        vol_txt = "股数未知"
+    return f"{name} {action} {vol_txt}"
+
+
 def _norm_date(value) -> str:
     """事件日期归一为 `YYYY-MM-DD`：兼容 tushare `holder_trade` 的 `YYYYMMDD`
     与 akshare 公告的 `YYYY-MM-DD` 两种输入格式；空值原样返回空串。
@@ -157,8 +169,8 @@ def build_fact_card(
             if direction:
                 ann_events[direction].append({
                     "date": _norm_date(row.get("ann_date", "")),
-                    "title": f"{row.get('holder_name', '')}{row.get('in_de', '')}"
-                             f"{row.get('change_vol', '')}股",
+                    # 可读性（Task 4.3 真跑校准）：方向码翻译+股数万股化,依据须人可核对
+                    "title": _holder_event_title(row, direction),
                 })
     else:
         holder_status = ann_status  # 回退公告分类：状态跟随公告数据源
