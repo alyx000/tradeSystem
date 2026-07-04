@@ -155,6 +155,10 @@ def run_daily(conn: sqlite3.Connection, registry, date: str) -> dict:
     today_lu = registry.call("get_limit_up_list", date)
     today_ld = registry.call("get_limit_down_list", date)
 
+    # 注意:tushare get_limit_up_list 对空 DataFrame 返回 error("无涨停数据"),会落入 source_failed。
+    # 这是 spec 锁定的 fail-safe 决策(反驳 codex 门2 R1 finding):A股交易日全市场零涨停几乎不存在,
+    # 且"接口坏了返回空"与"真无涨停"在该契约下不可区分——宁可误报 source_failed 让人工核一眼,
+    # 也不把接口故障静默渲染成"今日无候选"。真零涨停的极端日,人工亦知情,可 --date 手动复核。
     sources = {
         name: {"ok": not r.error, "source": getattr(r, "source", "")}
         for name, r in (
@@ -174,7 +178,7 @@ def run_daily(conn: sqlite3.Connection, registry, date: str) -> dict:
             "sources": sources,
             "failed_sources": failed_sources,
             "empty_kind": None,  # 与 status=="ok" 分支形状对称，供消费方无需分支判断即可安全取键
-            "main_sectors": set(),
+            "main_sectors": [],  # 对外契约 JSON-safe(空 list 而非 set)
             "main_sector_degraded": False,
         }
 
@@ -207,6 +211,7 @@ def run_daily(conn: sqlite3.Connection, registry, date: str) -> dict:
         "rejects": rejects,
         "sources": sources,
         "empty_kind": empty_kind,
-        "main_sectors": main_sectors,
+        # 对外返回 sorted list(JSON-safe+顺序稳定,对齐 trend_leader 惯例);内部 membership 用 set
+        "main_sectors": sorted(main_sectors),
         "main_sector_degraded": main_sector_degraded,
     }
