@@ -5,7 +5,6 @@
 """
 from __future__ import annotations
 
-import logging
 import math
 import sqlite3
 from datetime import datetime, timedelta
@@ -15,8 +14,6 @@ from services.volume_concentration import repo as vc_repo
 from services.volume_concentration.aggregator import UNCLASSIFIED
 from utils import is_st_stock
 from utils.trade_date import get_prev_trade_date
-
-logger = logging.getLogger(__name__)
 
 
 def bare_code(code: str) -> str:
@@ -32,7 +29,7 @@ def _coerce_limit_times(raw) -> int | None:
         v = float(raw)
     except (TypeError, ValueError):
         return None
-    if math.isnan(v):
+    if not math.isfinite(v):  # 挡 NaN 与 ±inf；int(inf) 会抛 OverflowError，一律归为脏值
         return None
     return int(v)
 
@@ -150,6 +147,7 @@ def run_daily(conn: sqlite3.Connection, registry, date: str) -> dict:
             "rejects": {},
             "sources": sources,
             "failed_sources": failed_sources,
+            "empty_kind": None,  # 与 status=="ok" 分支形状对称，供消费方无需分支判断即可安全取键
             "main_sectors": set(),
             "main_sector_degraded": False,
         }
@@ -175,6 +173,10 @@ def run_daily(conn: sqlite3.Connection, registry, date: str) -> dict:
     elif entrance_count == 0:
         empty_kind = "source_ok_empty"
     else:
+        # 收敛决策（Stage 1 审查固化，勿再拆分）：bar_missing（单票日线缺失）归入
+        # rule_filtered_empty 展示——它与 ST/主板/仍涨停/跌停一样属于「入口候选存在但
+        # 被后续规则剔除」；其计数保留在 rejects["bar_missing"]，由渲染层数据完整性
+        # 脚注单独列出，不在此 empty_kind 三分基础上再细分出第四种语义。
         empty_kind = "rule_filtered_empty"
 
     main_sectors, main_sector_degraded = _main_sectors(conn, date, C.MAIN_SECTOR_TOP_K)
