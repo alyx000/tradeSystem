@@ -66,3 +66,21 @@ class TestPosition250:
     @pytest.mark.parametrize("n,state", [(119, "missing"), (120, "degraded"), (249, "degraded"), (250, "full")])
     def test_sample_states(self, n, state):
         assert I.position_250d(_bars(n))["state"] == state
+
+
+class TestMacdHandCalc:
+    def test_matches_independent_ema_recurrence(self):
+        """用与 indicators._ema 写法不同的第二套 EMA 递推手算对照，验证 DIF 数值口径一致
+        （等价于 pandas `ewm(adjust=False)` 语义，但不引入 pandas 依赖）。
+        """
+        closes = [float(100 + i) for i in range(130)]  # >=120 根等差序列，MACD warm-up 足够
+
+        def _ema_independent(values: list[float], n: int) -> float:
+            k = 2.0 / (n + 1)
+            ema = values[0]
+            for v in values[1:]:
+                ema += (v - ema) * k  # 写法与 indicators._ema 的 ema*(1-k)+v*k 不同，独立验证
+            return ema
+
+        expected = _ema_independent(closes, 12) - _ema_independent(closes, 26)
+        assert I.macd_dif(closes) == pytest.approx(expected, rel=1e-9)

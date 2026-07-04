@@ -62,6 +62,16 @@ class TestScore:
         ev = {e["dimension"]: e for e in scorer.score_candidate(card)["evidences"]}
         assert ev["reduce"]["score"] == expect
 
+    def test_reduce_degraded_position_still_scored_with_sample_note(self):
+        # D 修复：degraded（120-249根）不应被静默当 full 打分丢样本量信息，
+        # 但打分口径与 full 一致（同三档阈值），detail 追加样本不足提示
+        card = _card(position_value=0.8, position_state="degraded", position_bar_count=180,
+                     ann_events={"increase": [], "placement": [], "good": [], "bad": [],
+                                 "reduce": [{"date": "2026-06-28", "title": "减持公告"}]})
+        ev = {e["dimension"]: e for e in scorer.score_candidate(card)["evidences"]}
+        assert ev["reduce"]["score"] == C.W_REDUCE_HIGH
+        assert "样本不足250" in ev["reduce"]["detail"]
+
     def test_position_missing_reduce_neutral(self):
         card = _card(position_state="missing", position_value=None,
                      ann_events={"increase": [], "placement": [], "good": [], "bad": [],
@@ -123,12 +133,14 @@ class TestScore:
         assert ev["announce"]["score"] == pytest.approx(C.W_ANN_GOOD + C.W_ANN_BAD)
 
     def test_earnings_good(self):
-        card = _card(earnings_type="预增", earnings_status="ok")
+        # earnings_direction 由 build_fact_card._earnings_direction 唯一推导来源，
+        # 直接构造 fixture 的测试须显式给出（score_candidate 不再重复推导，避免两处口径漂移）
+        card = _card(earnings_type="预增", earnings_status="ok", earnings_direction="good")
         ev = {e["dimension"]: e for e in scorer.score_candidate(card)["evidences"]}
         assert ev["earnings"]["score"] == C.W_EARN_GOOD
 
     def test_earnings_bad(self):
-        card = _card(earnings_type="预减", earnings_status="ok")
+        card = _card(earnings_type="预减", earnings_status="ok", earnings_direction="bad")
         ev = {e["dimension"]: e for e in scorer.score_candidate(card)["evidences"]}
         assert ev["earnings"]["score"] == C.W_EARN_BAD
 
@@ -268,6 +280,33 @@ class TestBuildFactCard:
             earnings_rows=earnings_rows, adj_factors=self._factors_for(bars))
         # 同报告期 express 优先于 forecast，express yoy 为负 → 方向 bad（即便 forecast 预告是"预增"）
         assert card["earnings_direction"] == "bad"
+
+    def test_event_dates_normalized_and_formatted_mmdd_in_detail(self):
+        # D13：tushare holder_trade（YYYYMMDD）与 akshare 公告（YYYY-MM-DD）两种日期格式
+        # 均须在 build_fact_card 归一为 YYYY-MM-DD，score_candidate 依据明细按「MM-DD《标题》」拼接
+        bars = self._bars_ok()
+        ann_result = _FakeResult(data=[
+            {"title": "关于中标某项目的公告", "ann_date": "2026-06-10", "url": ""},  # akshare 格式
+        ])
+        holder_result = _FakeResult(data=[
+            {"ann_date": "20260615", "holder_name": "张三", "holder_type": "股东",
+             "in_de": "IN", "change_vol": 50000},   # tushare 格式：增持
+            {"ann_date": "20260628", "holder_name": "李四", "holder_type": "股东",
+             "in_de": "DE", "change_vol": 20000},   # tushare 格式：减持
+        ])
+        card = scorer.build_fact_card(
+            {"code": "600002", "name": "x", "limit_times": 2, "industry": "计算机",
+             "close": 10.0, "pct_chg": 3.0, "bars": bars, "date": "2026-07-04"},
+            main_sectors=set(), ann_result=ann_result, holder_result=holder_result,
+            earnings_rows=[], adj_factors=self._factors_for(bars))
+        assert card["ann_events"]["increase"][0]["date"] == "2026-06-15"
+        assert card["ann_events"]["reduce"][0]["date"] == "2026-06-28"
+
+        scored = scorer.score_candidate(card)
+        ev = {e["dimension"]: e for e in scored["evidences"]}
+        assert "06-15" in ev["increase"]["detail"]
+        assert "06-28" in ev["reduce"]["detail"]
+        assert "06-10" in ev["announce"]["detail"]  # good 事件来自 ann_result（akshare 格式日期）
 
     def test_ann_titles_capped_5_and_40_chars(self):
         bars = self._bars_ok()
