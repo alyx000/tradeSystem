@@ -151,9 +151,31 @@ class TestRunPk:
                            lambda p, pl: '{"winner": "A", "reason": "r"}', clock=clock)
         assert result["status"] == "melted" and result["ranks"] is None
 
-    def test_redline_reason_filtered(self):
+    def test_redline_reason_filtered(self, caplog):
         from services.recommend.formatter import REDLINE_KEYWORDS
         kw = next(iter(REDLINE_KEYWORDS))
-        result = pk.run_pk(_cards(2), _scored(_cards(2)),
-                           lambda p, pl: '{"winner": "A", "reason": "%s"}' % kw)
+        with caplog.at_level("WARNING"):
+            result = pk.run_pk(_cards(2), _scored(_cards(2)),
+                               lambda p, pl: '{"winner": "A", "reason": "%s"}' % kw)
         assert result["matches"][0]["reason"] == "(理由已按红线过滤)"
+        assert kw in caplog.text  # 命中词须落日志，便于事后审计
+
+    def test_empty_reason_fallback(self):
+        """过滤/截断后为空串 → 兜底占位符，防渲染层空白行。"""
+        assert pk._filter_reason("") == "(无理由)"
+
+    def test_card_map_first_wins_on_duplicate_code(self):
+        """同 code 两条内容不同的卡：参赛数据用第一条（对齐 _pool_and_excluded 去重顺序）。"""
+        cards = [
+            {"code": "600000", "name": "第一条"},
+            {"code": "600000", "name": "第二条"},
+            {"code": "600001", "name": "票1"},
+        ]
+        captured_payloads = []
+
+        def runner(prompt, payload):
+            captured_payloads.append(payload)
+            return '{"winner": "A", "reason": "r"}'
+
+        pk.run_pk(cards, _scored(cards[:1] + cards[2:]), runner)
+        assert captured_payloads[0]["A"]["name"] == "第一条"
