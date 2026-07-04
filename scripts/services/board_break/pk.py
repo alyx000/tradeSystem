@@ -14,11 +14,14 @@
 from __future__ import annotations
 
 import itertools
+import logging
 import json
 import time
 
 from services.board_break import constants as C
 from services.recommend.formatter import REDLINE_KEYWORDS
+
+logger = logging.getLogger(__name__)
 
 # 事实卡中喂给 LLM 的 [事实] 字段（不含加权分/evidence，两法独立，见 task-s2-report.md 字段清单）
 _FACT_FIELDS = (
@@ -78,15 +81,24 @@ def _filter_reason(reason: str) -> str:
     return reason[: C.PK_REASON_MAX_CHARS]
 
 
+def _safe_call(llm_runner, payload):
+    """runner 守卫（门2 S3 R1）：异常一律收敛为 None（等同失败），不得打崩整场循环赛。"""
+    try:
+        return llm_runner(_PROMPT, payload)
+    except Exception:
+        logger.warning("[board-break pk] runner 调用异常，按失败场处理", exc_info=True)
+        return None
+
+
 def _play_match(card_a: dict, card_b: dict, llm_runner) -> tuple[str | None, str | None]:
     """单场：失败区分超时（不重试）与其它失败（重试 1 次）。返回 (winner_code, reason)；无效场为 (None, None)。"""
     payload = _build_payload(card_a, card_b)
-    verdict = parse_verdict(llm_runner(_PROMPT, payload))
+    verdict = parse_verdict(_safe_call(llm_runner, payload))
     if verdict is None:
         diag = getattr(llm_runner, "last_diagnostics", None)
         if diag and diag.get("reason") == "timeout":
             return None, None  # 超时直接计无效场，不重试
-        verdict = parse_verdict(llm_runner(_PROMPT, payload))  # 非超时失败：重试 1 次
+        verdict = parse_verdict(_safe_call(llm_runner, payload))  # 非超时失败：重试 1 次
         if verdict is None:
             return None, None
     winner_code = card_a.get("code") if verdict["winner"] == "A" else card_b.get("code")
@@ -95,7 +107,14 @@ def _play_match(card_a: dict, card_b: dict, llm_runner) -> tuple[str | None, str
 
 def _pool_and_excluded(fact_cards: list[dict], scored: list[dict]) -> tuple[list[str], list[str]]:
     """按加权分 total 截断到 PK_POOL_MAX 强池；不足则全入池、excluded 为空。"""
-    codes_all = [c.get("code") for c in fact_cards]
+    # 去重去空（门2 S3 R2）：重复码会造成自我对局/胜场膨胀,空码会污染配对
+    seen = set()
+    codes_all = []
+    for c in fact_cards:
+        code = c.get("code")
+        if code and code not in seen:
+            seen.add(code)
+            codes_all.append(code)
     if len(codes_all) <= C.PK_POOL_MAX:
         return codes_all, []
     score_map = {s.get("code"): s.get("total", 0.0) for s in scored}

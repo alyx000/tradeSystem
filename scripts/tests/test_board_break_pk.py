@@ -113,6 +113,22 @@ class TestRunPk:
         result = pk.run_pk(_cards(5), _scored(_cards(5)), runner)
         assert result["status"] == "melted" and result["ranks"] is None
 
+    def test_runner_exception_treated_as_failure(self):
+        """runner 抛异常 → 收敛为失败场（重试后无效），不打崩整场（门2 S3 R1）。"""
+        calls = {"n": 0}
+        def runner(p, pl):
+            calls["n"] += 1
+            raise RuntimeError("boom")
+        result = pk.run_pk(_cards(2), _scored(_cards(2)), runner)
+        assert result["invalid"] == 1 and calls["n"] == 2  # 重试 1 次后计无效场
+
+    def test_duplicate_and_blank_codes_deduped(self):
+        """重复码/空码入池前去重去空（门2 S3 R2）：不得自我对局或胜场膨胀。"""
+        cards = _cards(3) + [_cards(3)[0], {"code": "", "name": "空"}]
+        result = pk.run_pk(cards, _scored(_cards(3)), lambda p, pl: '{"winner": "A", "reason": "r"}')
+        assert result["total"] == 3  # C(3,2)，重复与空码不参与
+        assert result["status"] == "ok"
+
     def test_redline_reason_filtered(self):
         from services.recommend.formatter import REDLINE_KEYWORDS
         kw = next(iter(REDLINE_KEYWORDS))
