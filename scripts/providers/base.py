@@ -115,6 +115,7 @@ class DataProvider(ABC):
         """个股区间复权因子（board-break 打分序列前复权用）。"""
         return DataResult(data=None, source=self.name, error="not implemented")
 
+    # ---- 股东数据 ----
     def get_holder_trade(self, stock_code: str, start_date: str, end_date: str) -> DataResult:
         """个股区间股东增减持（in_de: IN=增持 / DE=减持）。"""
         return DataResult(data=None, source=self.name, error="not implemented")
