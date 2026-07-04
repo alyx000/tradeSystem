@@ -20,6 +20,8 @@
 - `com.alyx.tradesystem.cognition-digest-recent3d.plist` — 每交易日 18:30 触发（认知沉淀近 3 日汇总；日志 `/tmp/tradesystem-cognition-digest.log`）
 - `com.alyx.tradesystem.cognition-digest-weekly.plist` — 周日 20:00 触发（认知沉淀周汇总；同一日志 `/tmp/tradesystem-cognition-digest.log`）
 - `com.alyx.tradesystem.cognition-digest-monthly.plist` — 每月 1 号 09:00 触发（认知沉淀月汇总；同一日志 `/tmp/tradesystem-cognition-digest.log`）
+- `board-break-runner.sh` — 包装脚本：cd 仓库根 → source `scripts/.env`(TUSHARE_TOKEN) + `~/.config/tradeSystem.env`(钉钉/ANTIGRAVITY) → 调 `python3 main.py board-break daily`
+- `com.alyx.tradesystem.board-break.plist` — 工作日 21:20 触发（断板反包盘后扫描：昨日连板≥2 断板→八维度加权打分+LLM两两PK→双排序观察清单；日志 `/tmp/tradesystem-board-break.log`）
 
 ## 前置条件
 
@@ -320,3 +322,36 @@ rm ~/Library/LaunchAgents/com.alyx.tradesystem.cognition-digest-*.plist
 ```
 
 **时段**：recent3d 18:30 在 today-post(20:00) 之前、空档无冲突；weekly 周日 20:00 与 recommend-weekly(周日 20:00) 同点但互不依赖、均短 I/O 任务可接受；monthly 每月 1 号 09:00 为非交易时段无争用。认知沉淀错过可接受(非交易决策),不配 pmset 唤醒。**调度唯一入口=launchd per-task plist**,不进 `main.py schedule`/APScheduler(避免双触发)。
+
+## 断板反包盘后扫描（工作日 21:20）
+
+昨日连板≥2 只当日断板（≤6%未跌停，10cm主板剔ST）→ 八维度加权打分（主线/增减持/定增/公告/业绩/近10日涨幅/MACD，全 [判断] 附依据明细）+ LLM 两两 PK 循环赛（`--no-llm` 关）→ 双排序观察清单 MD 落盘 `data/reports/board-break/` + 推钉钉。
+runner source `scripts/.env`(TUSHARE_TOKEN) + `~/.config/tradeSystem.env`(钉钉/ANTIGRAVITY)；非交易日任务内自动跳过（不落盘、不推送）；核心源失败（`source_failed`）不产出正常候选清单，落失败报告 + 推告警 + 非零退出。
+
+```bash
+# 1. 包装脚本可执行
+chmod +x deploy/launchd/board-break-runner.sh
+
+# 2. 复制 plist
+cp deploy/launchd/com.alyx.tradesystem.board-break.plist ~/Library/LaunchAgents/
+
+# 3. 加载
+launchctl load ~/Library/LaunchAgents/com.alyx.tradesystem.board-break.plist
+
+# 4. 验证
+launchctl list | grep tradesystem.board-break
+
+# 5. 真触发立即测试（非交易日仅验 launchd 链路 + 凭据注入，无候选则跳过不推送）
+rm -f /tmp/tradesystem-board-break.log
+launchctl start com.alyx.tradesystem.board-break
+tail -f /tmp/tradesystem-board-break.log   # 看 [env] 三凭据 =set + 运行结果
+```
+
+卸载：
+
+```bash
+launchctl unload ~/Library/LaunchAgents/com.alyx.tradesystem.board-break.plist
+rm ~/Library/LaunchAgents/com.alyx.tradesystem.board-break.plist
+```
+
+**时段**：21:20 在 sector-correlation(21:15) 与 trend-leader(21:30) 之间，主线板块归属取 `daily_volume_concentration` 当日快照，无冲突。断板反包是盘后只读观察清单（非交易决策），错过可接受，不配 pmset 唤醒。**调度唯一入口=per-task launchd**，不进 `main.py schedule`/APScheduler。
