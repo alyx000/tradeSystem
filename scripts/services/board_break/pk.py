@@ -165,6 +165,9 @@ def run_pk(
         card_a = card_map.get(a, {"code": a})
         card_b = card_map.get(b, {"code": b})
         winner, reason = _play_match(card_a, card_b, llm_runner)
+        if clock() - start > budget_seconds:
+            # 场后复查（门2 S3 R3）：末场/单场跨预算不得落入正常排名——预算是硬熔断契约
+            melted_by_budget = True
         if winner is None:
             invalid += 1
             matches.append({"a": a, "b": b, "winner": None, "reason": None, "state": "invalid"})
