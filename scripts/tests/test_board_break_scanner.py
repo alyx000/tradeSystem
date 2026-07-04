@@ -176,6 +176,28 @@ class TestRunDailySourceStates:
         assert result["status"] == "source_failed"
 
 
+class TestJsonSafeContract:
+    def test_run_daily_result_json_serializable(self, monkeypatch):
+        """run_daily 对外结果必须可 json.dumps(main_sectors 为 sorted list 非 set)——门2 R1 契约测试。"""
+        import json
+        monkeypatch.setattr(scanner, "_prev_trade_date", lambda registry, d: "2026-07-03")
+        monkeypatch.setattr(scanner, "_main_sectors", lambda conn, date, top_k: ({"计算机", "传媒"}, False))
+        reg = _make_registry()
+        result = scanner.run_daily(None, reg, "2026-07-04")
+        dumped = json.dumps(result, ensure_ascii=False)
+        assert isinstance(result["main_sectors"], list)
+        assert result["main_sectors"] == sorted(result["main_sectors"])
+        assert "计算机" in dumped
+
+    def test_source_failed_result_json_serializable(self, monkeypatch):
+        import json
+        monkeypatch.setattr(scanner, "_prev_trade_date", lambda registry, d: "2026-07-03")
+        reg = _make_registry(prev_ok=False)
+        result = scanner.run_daily(None, reg, "2026-07-04")
+        json.dumps(result, ensure_ascii=False)
+        assert result["main_sectors"] == []
+
+
 class TestEmptySemantics:
     """源状态三分之一：源都 ok 时，入口候选（D1 连板>=2）是否存在决定空语义归属。
 
