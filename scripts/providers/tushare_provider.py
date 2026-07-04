@@ -1184,6 +1184,10 @@ class TushareProvider(DataProvider):
             sd = self._date_fmt(start_date)
             ed = self._date_fmt(end_date)
             ts_code = self._normalize_stock_code(stock_code)
+            if not ts_code:
+                # 与 get_stock_adj_factor_range/get_holder_trade 同款守卫：空 ts_code 会被接口当成全市场查询
+                return DataResult(data=None, source=self.name,
+                                  error="stock_code 为空（空 ts_code 会被接口当成全市场查询）")
             df = self.pro.query("anns_d", ts_code=ts_code, start_date=sd, end_date=ed)
             if df is None or df.empty:
                 return DataResult(data=[], source="tushare:anns_d")

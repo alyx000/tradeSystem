@@ -152,6 +152,14 @@ class TestRegistryFallback:
 
 
 class TestAnnouncementsNormalize:
+    @pytest.mark.parametrize("bad", ["", "   ", None])
+    def test_empty_code_rejected(self, bad):
+        """归一化后为空的 stock_code 必须被拒绝，不得打全市场查询（门2 第2轮同型守卫）。"""
+        p = _provider_with_pro()
+        r = p.get_stock_announcements(bad, "2026-06-01", "2026-07-03")
+        assert r.error
+        assert p.pro.query.call_count == 0
+
     def test_bare_code_normalized(self):
         p = _provider_with_pro()
         p.pro.query.return_value = pd.DataFrame()
