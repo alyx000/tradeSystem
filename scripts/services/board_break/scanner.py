@@ -199,6 +199,23 @@ def run_daily(conn: sqlite3.Connection, registry, date: str) -> dict:
     enriched, enrich_rejects = enrich_with_today_bar(cands, fetch_range, date)
     rejects.update(enrich_rejects)
 
+    # 行情源整体失败守卫(门2 S1 R2):入口候选存在、且全部因 bar_missing 被剔 → 大概率是
+    # get_stock_daily_range 源整体超时/鉴权失效,不是"规则过滤完"。与空涨停榜同款 fail-safe:
+    # 升级为 source_failed 而非静默渲染 rule_filtered_empty。部分票缺 bar 仍按单票降级(bar_missing 计数)。
+    if cands and not enriched and rejects.get("bar_missing", 0) == len(cands):
+        return {
+            "status": "source_failed",
+            "date": date,
+            "prev_trade_date": prev_date,
+            "failed_sources": {"stock_daily_range": f"入口候选 {len(cands)} 只全部取不到 T 日有效行情"},
+            "candidates": [],
+            "rejects": rejects,
+            "sources": sources,
+            "empty_kind": None,
+            "main_sectors": [],
+            "main_sector_degraded": False,
+        }
+
     empty_kind = _classify_empty_kind(bool(enriched), entrance_count)
 
     main_sectors, main_sector_degraded = _main_sectors(conn, date, C.MAIN_SECTOR_TOP_K)
