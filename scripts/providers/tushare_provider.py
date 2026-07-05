@@ -1543,7 +1543,10 @@ class TushareProvider(DataProvider):
         """
         try:
             d = self._date_fmt(date)
-            df = self.pro.daily(trade_date=d, fields="ts_code,open,high,low,close,pre_close")
+            df = self.pro.daily(
+                trade_date=d,
+                fields="ts_code,trade_date,open,high,low,close,pre_close,pct_chg,vol,amount",
+            )
             if df is None or df.empty:
                 return DataResult(data=[], source="tushare:daily")
             records = self._df_to_records(df)

@@ -426,6 +426,9 @@ def _handle_cognition_command(args) -> dict:
                 cross_market_anchor=getattr(args, "cross_market_anchor", None),
                 consensus_key=getattr(args, "consensus_key", None),
                 parameters_json=getattr(args, "parameters_json", None),
+                viewpoint_claims_json=getattr(args, "viewpoint_claims_json", None),
+                factor_snapshot_json=getattr(args, "factor_snapshot_json", None),
+                hypothesis_json=getattr(args, "hypothesis_json", None),
                 teacher_original_text=getattr(args, "teacher_original_text", None),
                 input_by=args.input_by,
             )
@@ -474,6 +477,8 @@ def _handle_cognition_command(args) -> dict:
                 outcome_fact_refs_json=getattr(args, "outcome_fact_refs_json", None),
                 outcome_date=getattr(args, "outcome_date", None),
                 lesson=getattr(args, "lesson", None),
+                feedback_action=getattr(args, "feedback_action", None),
+                feedback_detail_json=getattr(args, "feedback_detail_json", None),
                 input_by=args.input_by,
             )
             return {"status": "ok", "message": "实例已验证", **result}
@@ -1624,6 +1629,13 @@ def build_parser() -> argparse.ArgumentParser:
     inst_add.add_argument("--cross-market-anchor", default=None, help="跨市场信号锚点")
     inst_add.add_argument("--consensus-key", default=None, help="共识聚合键")
     inst_add.add_argument("--parameters-json", default=None, help="实例参数 JSON")
+    inst_add.add_argument(
+        "--viewpoint-claims-json",
+        default=None,
+        help="老师观点原子命题 JSON 数组；label 支持 fact/judgement/opinion/rumor 或 [事实]/[判断]/[观点]/[传闻]",
+    )
+    inst_add.add_argument("--factor-snapshot-json", default=None, help="认知因子快照 JSON 对象")
+    inst_add.add_argument("--hypothesis-json", default=None, help="可证伪假设 JSON 对象")
     inst_add.add_argument("--teacher-original-text", default=None, help="原文证据")
     inst_add.add_argument("--input-by", required=True, help="录入方")
     inst_add.add_argument("--json", action="store_true", help="输出 JSON")
@@ -1665,6 +1677,13 @@ def build_parser() -> argparse.ArgumentParser:
         inst_validate.add_argument("--outcome-fact-refs-json", default=None, help="多事实源 JSON 数组")
         inst_validate.add_argument("--outcome-date", default=None, help="确认日 YYYY-MM-DD（缺省取今日）")
         inst_validate.add_argument("--lesson", default=None, help="本次教训")
+        inst_validate.add_argument(
+            "--feedback-action",
+            default=None,
+            choices=["none", "keep", "watch", "refine", "promote", "deprecate", "merge"],
+            help="验证后对交易系统的反馈动作；缺省按 outcome 保守推导",
+        )
+        inst_validate.add_argument("--feedback-detail-json", default=None, help="反馈细节 JSON 对象/数组")
         inst_validate.add_argument("--input-by", required=True, help="录入方")
         inst_validate.add_argument("--json", action="store_true", help="输出 JSON")
 
@@ -1775,6 +1794,14 @@ def build_parser() -> argparse.ArgumentParser:
     from cli.string_yang import register_subparser as register_string_yang_subparser
     register_string_yang_subparser(subparsers)
 
+    # daily-leaders (每日最票候选:预填+趋势池+老师观点→候选稿→确认写入复盘第5步)
+    from cli.daily_leaders import register_subparser as register_daily_leaders_subparser
+    register_daily_leaders_subparser(subparsers)
+
+    # ma-breakout (4日均线拐头 + 成交额突破双均量线观察池)
+    from cli.ma_breakout import register_subparser as register_ma_breakout_subparser
+    register_ma_breakout_subparser(subparsers)
+
     # board-break (断板反包:昨日连板>=2断板<=6%未跌停主板 → 双打分观察清单;无状态不建池)
     from cli.board_break import register_subparser as register_board_break_subparser
     register_board_break_subparser(subparsers)
@@ -1852,6 +1879,12 @@ def main():
     elif args.command == "string-yang":
         from cli import string_yang as string_yang_module
         string_yang_module.handle_command(config, args)
+    elif args.command == "daily-leaders":
+        from cli import daily_leaders as daily_leaders_module
+        daily_leaders_module.handle_command(config, args)
+    elif args.command == "ma-breakout":
+        from cli import ma_breakout as ma_breakout_module
+        ma_breakout_module.handle_command(config, args)
     elif args.command == "board-break":
         from cli import board_break as board_break_module
         board_break_module.handle_command(config, args)

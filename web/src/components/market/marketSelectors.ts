@@ -66,17 +66,18 @@ export function getSectorData(m: MarketSelectorSource, tab: SectorTab): SectorSn
   return extractRows(m[key])
 }
 
-// ST/*ST 判定:镜像后端 utils.is_st_stock(去空格大写后前缀匹配),保持 web 与采集端同口径。
+// ST/*ST/退市股判定: 镜像后端 utils.is_st_stock，保持 web 与采集端同口径。
 function isStStock(name: string | null | undefined): boolean {
   if (!name) return false
   const n = name.replace(/\s+/g, '').toUpperCase()
   return n.startsWith('ST') || n.startsWith('*ST') || n.startsWith('S*ST') || n.startsWith('SST')
+    || n.startsWith('退市') || n.endsWith('退')
 }
 
 export function getLimitStepRows(m: MarketSelectorSource): LimitStepRow[] {
   const rows = extractRows(m.limit_step)
   return rows
-    .filter((r) => !isStStock(r?.name))   // 剔除 ST 个股:连板数分析与板梯队 ex_st 口径一致
+    .filter((r) => !isStStock(r?.name))   // 剔除 ST / 退市股:连板数分析与板梯队过滤口径一致
     .slice()
     .sort((a, b) => Number(b?.nums || 0) - Number(a?.nums || 0))
 }

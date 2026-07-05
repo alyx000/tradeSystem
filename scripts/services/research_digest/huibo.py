@@ -24,6 +24,11 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+
+class HuiboTerminalUrlUnavailable(RuntimeError):
+    """Raised when production requires the live Huibo terminal URL but it cannot be read."""
+
+
 IMPORTANT_CATEGORIES = {"行业分析", "公司调研", "投资策略", "港美研究", "金融工程", "新股研究"}
 LOW_VALUE_CATEGORIES = {"债券研究", "期货研究", "基金频道", "外汇研究", "晨会早刊", "机构资讯"}
 
@@ -55,7 +60,12 @@ class HuiboCandidate:
 
     @property
     def report_id(self) -> str:
-        locator = self.read_url or self.download_url or str(self.raw.get("_row_index") or self.hot_rank or "")
+        locator = (
+            _stable_report_locator_from_raw(self.raw)
+            or _stable_report_locator_from_url(self.read_url)
+            or _stable_report_locator_from_url(self.download_url)
+            or str(self.raw.get("_row_index") or self.hot_rank or "")
+        )
         key = "|".join([self.date, self.title, locator])
         return hashlib.sha1(key.encode("utf-8")).hexdigest()[:16]
 
@@ -66,6 +76,7 @@ class PrescreenedCandidate:
     score: float
     reasons: list[str]
     topic_key: str
+    pdf_download: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -87,6 +98,7 @@ class HuiboDigest:
                     "score": p.score,
                     "reasons": p.reasons,
                     "topic_key": p.topic_key,
+                    "pdf_download": p.pdf_download,
                 }
                 for p in self.prescreened
             ],
@@ -103,6 +115,46 @@ class CleanupResult:
     raw_files: list[Path]
     summary_files: list[Path]
     dry_run: bool
+
+
+def _stable_report_locator_from_raw(raw: dict[str, Any]) -> str:
+    if not isinstance(raw, dict):
+        return ""
+    nested = raw.get("raw")
+    if not isinstance(nested, dict):
+        nested = {}
+    parts: list[str] = []
+    primary_found = False
+    for key in ("DId", "DocName"):
+        value = raw.get(key)
+        if value in (None, ""):
+            value = nested.get(key)
+        value_text = str(value).strip() if value not in (None, "") else ""
+        if value_text:
+            parts.append(f"{key}={value_text}")
+            primary_found = True
+    for key in (("DocType",) if primary_found else ("didMi", "did", "DocType")):
+        value = raw.get(key)
+        if value in (None, ""):
+            value = nested.get(key)
+        value_text = str(value).strip() if value not in (None, "") else ""
+        if value_text:
+            parts.append(f"{key}={value_text}")
+    return "|".join(parts)
+
+
+def _stable_report_locator_from_url(url: str) -> str:
+    if not url:
+        return ""
+    parsed = urllib.parse.urlsplit(url)
+    params = dict(urllib.parse.parse_qsl(parsed.query, keep_blank_values=True))
+    stable_keys = ("did", "docType", "degree", "baogaotype", "fromtype", "linkType")
+    stable_parts = [f"path={parsed.path}"]
+    for key in stable_keys:
+        value = params.get(key)
+        if value:
+            stable_parts.append(f"{key}={value}")
+    return "|".join(stable_parts) if len(stable_parts) > 1 else url
 
 
 def parse_hot_report_rows(rows: list[dict[str, Any]]) -> list[HuiboCandidate]:
@@ -371,6 +423,7 @@ def _reader_row(item: PrescreenedCandidate, result: dict[str, Any]) -> dict[str,
         "pdf_path": c.pdf_path,
         "prescreen_score": item.score,
         "prescreen_reasons": item.reasons,
+        "pdf_download": item.pdf_download,
         "reader": result,
     }
 
@@ -471,7 +524,16 @@ def _desktop_terminal_source(_registry, date: str, window_days: int):
         )
         return candidates, _texts_from_payload(payload, candidates)
 
-    url = _hot_report_url_from_terminal_app() or os.getenv("HUIBO_HOT_REPORT_URL", "").strip()
+    refresh_from_app = os.getenv("HUIBO_REFRESH_URL_FROM_APP", "").strip().lower() in {"1", "true", "yes", "on"}
+    if refresh_from_app:
+        url = _hot_report_url_from_terminal_app()
+        if not url:
+            raise HuiboTerminalUrlUnavailable(
+                "HUIBO_REFRESH_URL_FROM_APP 已启用，但未能读取慧博终端当前 URL；"
+                "已拒绝回退到可能过期的 HUIBO_HOT_REPORT_URL"
+            )
+    else:
+        url = os.getenv("HUIBO_HOT_REPORT_URL", "").strip()
     if not url:
         logger.info("[research-digest] HUIBO_HOT_REPORT_URL/JSON 未配置，跳过慧博 desktop_terminal")
         return [], {}
@@ -492,6 +554,8 @@ def _desktop_terminal_source(_registry, date: str, window_days: int):
 def _hot_report_url_from_terminal_app() -> str:
     """Best-effort macOS Accessibility read of the active Huibo terminal URL."""
     if os.getenv("HUIBO_REFRESH_URL_FROM_APP", "").strip().lower() not in {"1", "true", "yes", "on"}:
+        return ""
+    if os.getenv("HUIBO_DISABLE_TERMINAL_URL_READ", "").strip().lower() in {"1", "true", "yes", "on"}:
         return ""
     if getattr(os, "uname", None) is None or os.uname().sysname != "Darwin":
         return ""

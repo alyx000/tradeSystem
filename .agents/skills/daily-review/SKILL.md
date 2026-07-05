@@ -52,6 +52,7 @@ make db-search KEYWORD=情绪 FROM=YYYY-MM-DD TO=YYYY-MM-DD
    - 节点判断
    - 持仓检视
    - 次日计划
+   - 每日 22:30 会由 `python3 main.py daily-leaders propose --push` 生成第 5 步「龙头 / 最票」候选确认稿并推送钉钉 Markdown；v1 只作为确认草稿，用户在 Codex 中确认后再由 Agent 执行 `python3 main.py daily-leaders confirm --date YYYY-MM-DD --input-by codex` 写入复盘第 5 步并同步 `leader_tracking`，不要描述为钉钉按钮回调已可写回。
 4. 保存前先给用户一版结构化复盘摘要，用户确认后再写入。
 5. 若用户要把复盘直接衔接到次日计划，保存后调用 `POST /api/review/{date}/to-draft`，只生成 observation / draft，不确认正式计划。
 

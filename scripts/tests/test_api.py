@@ -2607,6 +2607,35 @@ class TestEnrichMarketRow:
         assert battery["facts"]["net_amount_yi"] == 77.0
         assert "力佳科技" not in battery["evidence_text"]
 
+    def test_moneyflow_limit_up_leader_is_not_capacity_without_top_volume(self, client, db_path):
+        self._seed(
+            db_path,
+            raw_data={
+                "sector_moneyflow_ths": {
+                    "data": [
+                        {"industry": "元件", "net_amount": 55.0, "pct_change": 0.2, "lead_stock": "贤丰控股"},
+                    ],
+                },
+                "limit_up": {
+                    "stocks": [
+                        {"name": "贤丰控股", "code": "002141.SZ", "limit_times": 1, "amount_billion": 9.05},
+                    ],
+                },
+            },
+        )
+
+        r = client.get("/api/review/2026-05-20/prefill")
+        assert r.status_code == 200
+        yuanjian = next(
+            item
+            for item in r.json()["review_signals"]["sectors"]["projection_candidates"]
+            if item["sector_name"] == "元件"
+        )
+
+        assert yuanjian["facts"]["emotion_leader"] == "贤丰控股"
+        assert yuanjian["facts"]["capacity_leader"] is None
+        assert yuanjian["facts"]["lead_stock"] == "贤丰控股"
+
     def test_projection_candidates_filter_out_st_and_bj_candidates(self, client, db_path):
         self._seed(
             db_path,

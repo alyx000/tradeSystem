@@ -130,6 +130,27 @@ def register_db_subparser(subparsers: argparse._SubParsersAction) -> None:
         help="将 --stocks 中尚未在关注池的标的写入 watchlist（须已由用户确认）；默认仅记笔记并输出候选",
     )
 
+    update_note = db_sub.add_parser("update-note", help="更新已有老师观点")
+    update_note.add_argument("--id", type=int, required=True, help="老师笔记 ID")
+    update_note.add_argument("--date", default=None, help="日期 YYYY-MM-DD")
+    update_note.add_argument("--title", default=None, help="标题")
+    update_note.add_argument("--core-view", default=None, help="核心观点")
+    update_note.add_argument("--source-type", default=None, help="来源类型: text/image/mixed")
+    update_note.add_argument("--input-by", required=True, help="录入方: manual/openclaw/copaw/cursor")
+    update_note.add_argument("--tags", default=None, help="标签 JSON array")
+    update_note.add_argument("--key-points", default=None, help="结构化要点 JSON array")
+    update_note.add_argument("--sectors", default=None, help="涉及板块 JSON array")
+    update_note.add_argument("--position-advice", default=None, help="仓位建议")
+    update_note.add_argument("--avoid", default=None, help="规避/风险提示")
+    update_raw_group = update_note.add_mutually_exclusive_group()
+    update_raw_group.add_argument("--raw-content", default=None, help="原始全文")
+    update_raw_group.add_argument("--raw-content-file", default=None, help="从文件读取原始全文；传 '-' 时从 stdin 读取")
+
+    delete_note = db_sub.add_parser("delete-note", help="删除老师观点（需 --yes）")
+    delete_note.add_argument("--id", type=int, required=True, help="老师笔记 ID")
+    delete_note.add_argument("--input-by", required=True, help="录入方: manual/openclaw/copaw/cursor")
+    delete_note.add_argument("--yes", action="store_true", help="确认删除")
+
     query_notes = db_sub.add_parser("query-notes", help="搜索老师笔记")
     query_notes.add_argument("--keyword", required=True, help="搜索关键词")
     query_notes.add_argument("--teacher", default=None, help="限定老师名称")
@@ -146,6 +167,22 @@ def register_db_subparser(subparsers: argparse._SubParsersAction) -> None:
     add_industry.add_argument("--confidence", default=None, help="置信度（高/中/低）")
     add_industry.add_argument("--tags", default=None, help="标签 JSON array")
     add_industry.add_argument("--input-by", required=True, help="录入方: manual/openclaw/copaw/cursor")
+
+    update_industry = db_sub.add_parser("update-industry", help="更新已有行业板块信息")
+    update_industry.add_argument("--id", type=int, required=True, help="行业信息 ID")
+    update_industry.add_argument("--sector", default=None, help="板块名称")
+    update_industry.add_argument("--date", default=None, help="日期 YYYY-MM-DD")
+    update_industry.add_argument("--content", default=None, help="内容")
+    update_industry.add_argument("--info-type", default=None, help="信息类型（如 研报/政策/数据）")
+    update_industry.add_argument("--source", default=None, help="来源")
+    update_industry.add_argument("--confidence", default=None, help="置信度（高/中/低）")
+    update_industry.add_argument("--tags", default=None, help="标签 JSON array")
+    update_industry.add_argument("--input-by", required=True, help="录入方: manual/openclaw/copaw/cursor")
+
+    delete_industry = db_sub.add_parser("delete-industry", help="删除行业板块信息（需 --yes）")
+    delete_industry.add_argument("--id", type=int, required=True, help="行业信息 ID")
+    delete_industry.add_argument("--input-by", required=True, help="录入方: manual/openclaw/copaw/cursor")
+    delete_industry.add_argument("--yes", action="store_true", help="确认删除")
 
     add_macro = db_sub.add_parser("add-macro", help="录入宏观经济信息")
     add_macro.add_argument("--category", required=True, help="类别（如 货币政策/财政/外贸）")
@@ -412,8 +449,12 @@ def handle_db_command(args: argparse.Namespace) -> None:
         "sync": lambda _: _cmd_sync(),
         "reconcile": lambda _: _cmd_reconcile(),
         "add-note": _cmd_add_note,
+        "update-note": _cmd_update_note,
+        "delete-note": _cmd_delete_note,
         "query-notes": _cmd_query_notes,
         "add-industry": _cmd_add_industry,
+        "update-industry": _cmd_update_industry,
+        "delete-industry": _cmd_delete_industry,
         "add-macro": _cmd_add_macro,
         "holdings-add": _cmd_holdings_add,
         "holdings-remove": _cmd_holdings_remove,
@@ -600,6 +641,60 @@ def _cmd_add_note(args: argparse.Namespace) -> None:
             )
 
 
+def _cmd_update_note(args: argparse.Namespace) -> None:
+    from . import queries as Q
+
+    kwargs: dict = {"input_by": args.input_by}
+    if args.date is not None:
+        kwargs["date"] = args.date
+    if args.title is not None:
+        kwargs["title"] = args.title
+    if args.core_view is not None:
+        kwargs["core_view"] = args.core_view
+    if args.source_type is not None:
+        kwargs["source_type"] = args.source_type
+    if args.tags is not None:
+        kwargs["tags"] = json.dumps(json.loads(args.tags), ensure_ascii=False)
+    if args.key_points is not None:
+        kwargs["key_points"] = json.dumps(json.loads(args.key_points), ensure_ascii=False)
+    if args.sectors is not None:
+        kwargs["sectors"] = json.dumps(json.loads(args.sectors), ensure_ascii=False)
+    if args.position_advice is not None:
+        kwargs["position_advice"] = args.position_advice
+    if args.avoid is not None:
+        kwargs["avoid"] = args.avoid
+    raw_content = _read_raw_content(args)
+    if raw_content is not None:
+        kwargs["raw_content"] = raw_content
+
+    with get_db() as conn:
+        migrate(conn)
+        before = conn.execute("SELECT id, title FROM teacher_notes WHERE id = ?", (args.id,)).fetchone()
+        if before is None:
+            print(f"❌ 未找到老师笔记 id={args.id}", file=sys.stderr)
+            sys.exit(1)
+        Q.update_teacher_note(conn, args.id, **kwargs)
+
+    print(f"✅ 已更新老师笔记 (id={args.id}): {before['title']}")
+
+
+def _cmd_delete_note(args: argparse.Namespace) -> None:
+    if not args.yes:
+        print("❌ 删除老师笔记必须显式传 --yes", file=sys.stderr)
+        sys.exit(1)
+
+    with get_db() as conn:
+        migrate(conn)
+        before = conn.execute("SELECT id, title FROM teacher_notes WHERE id = ?", (args.id,)).fetchone()
+        if before is None:
+            print(f"❌ 未找到老师笔记 id={args.id}", file=sys.stderr)
+            sys.exit(1)
+        conn.execute("DELETE FROM note_attachments WHERE note_id = ?", (args.id,))
+        conn.execute("DELETE FROM teacher_notes WHERE id = ?", (args.id,))
+
+    print(f"✅ 已删除老师笔记 (id={args.id}): {before['title']}")
+
+
 def _cmd_query_notes(args: argparse.Namespace) -> None:
     from . import queries as Q
 
@@ -649,6 +744,52 @@ def _cmd_add_industry(args: argparse.Namespace) -> None:
         info_id = Q.insert_industry_info(conn, **kwargs)
 
     print(f"✅ 已录入行业信息 (id={info_id}): {args.sector} [{args.date}]")
+
+
+def _cmd_update_industry(args: argparse.Namespace) -> None:
+    from . import queries as Q
+
+    kwargs: dict = {"input_by": args.input_by}
+    if args.date is not None:
+        kwargs["date"] = args.date
+    if args.sector is not None:
+        kwargs["sector_name"] = args.sector
+    if args.content is not None:
+        kwargs["content"] = args.content
+    if args.info_type is not None:
+        kwargs["info_type"] = args.info_type
+    if args.source is not None:
+        kwargs["source"] = args.source
+    if args.confidence is not None:
+        kwargs["confidence"] = args.confidence
+    if args.tags is not None:
+        kwargs["tags"] = json.dumps(json.loads(args.tags), ensure_ascii=False)
+
+    with get_db() as conn:
+        migrate(conn)
+        before = conn.execute("SELECT id, sector_name FROM industry_info WHERE id = ?", (args.id,)).fetchone()
+        if before is None:
+            print(f"❌ 未找到行业信息 id={args.id}", file=sys.stderr)
+            sys.exit(1)
+        Q.update_industry_info(conn, args.id, **kwargs)
+
+    print(f"✅ 已更新行业信息 (id={args.id}): {before['sector_name']}")
+
+
+def _cmd_delete_industry(args: argparse.Namespace) -> None:
+    if not args.yes:
+        print("❌ 删除行业信息必须显式传 --yes", file=sys.stderr)
+        sys.exit(1)
+
+    with get_db() as conn:
+        migrate(conn)
+        before = conn.execute("SELECT id, sector_name FROM industry_info WHERE id = ?", (args.id,)).fetchone()
+        if before is None:
+            print(f"❌ 未找到行业信息 id={args.id}", file=sys.stderr)
+            sys.exit(1)
+        conn.execute("DELETE FROM industry_info WHERE id = ?", (args.id,))
+
+    print(f"✅ 已删除行业信息 (id={args.id}): {before['sector_name']}")
 
 
 def _cmd_add_macro(args: argparse.Namespace) -> None:

@@ -19,6 +19,7 @@ from db.dual_write import (
     parse_post_market_envelope,
 )
 from services.holding_signals import build_holding_signals
+from services.review_leaders import sync_leader_tracking_from_step5
 
 router = APIRouter(prefix="/api/review", tags=["review"])
 
@@ -766,9 +767,7 @@ def _pick_sector_leaders(
 
     def capacity_gate(record: dict[str, Any]) -> bool:
         return bool(record["strong_sources"]) or (
-            bool(record["weak_sources"]) and (
-                isinstance(record.get("top_volume_rank"), int) or bool(record.get("limit_up"))
-            )
+            bool(record["weak_sources"]) and isinstance(record.get("top_volume_rank"), int)
         )
 
     def pick_best(gate) -> str | None:
@@ -1207,7 +1206,7 @@ def save_review(date: str, body: dict, conn: sqlite3.Connection = Depends(get_db
     if "step7_positions" in body:
         tasks = _extract_holding_tasks_from_step7(body.get("step7_positions"))
         Q.replace_holding_tasks(conn, trade_date=date, tasks=tasks, source="review_step7")
-    _sync_leader_tracking(conn, date, body.get("step5_leaders"))
+    sync_leader_tracking_from_step5(conn, date, body.get("step5_leaders"))
     conn.commit()
     return {"ok": True, "date": date}
 
@@ -1217,32 +1216,5 @@ def _sync_leader_tracking(
     review_date: str,
     step5: Any,
 ) -> None:
-    """将复盘第 5 步最票写入 leader_tracking 表。"""
-    if not step5:
-        return
-    if isinstance(step5, str):
-        try:
-            step5 = json.loads(step5)
-        except (json.JSONDecodeError, TypeError):
-            return
-    if not isinstance(step5, dict):
-        return
-    leaders = step5.get("top_leaders")
-    if not isinstance(leaders, list):
-        return
-    for item in leaders:
-        if not isinstance(item, dict):
-            continue
-        stock = (item.get("stock") or "").strip()
-        sector = (item.get("sector") or "").strip()
-        if not stock or not sector:
-            continue
-        Q.upsert_leader_tracking(
-            conn,
-            stock_code=stock,
-            stock_name=stock,
-            sector=sector,
-            attribute_type=item.get("attribute_type") or item.get("attribute") or "",
-            seen_date=review_date,
-            current_phase=item.get("position") or None,
-        )
+    """Compatibility wrapper for tests/imports; real logic lives in services.review_leaders."""
+    sync_leader_tracking_from_step5(conn, review_date, step5)

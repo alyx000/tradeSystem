@@ -1105,6 +1105,9 @@ CREATE TABLE IF NOT EXISTS cognition_instances (
     cross_market_anchor TEXT,
     consensus_key TEXT,
     parameters_json TEXT,
+    viewpoint_claims_json TEXT,
+    factor_snapshot_json TEXT,
+    hypothesis_json TEXT,
     teacher_original_text TEXT,
     outcome TEXT NOT NULL DEFAULT 'pending'
         CHECK(outcome IN ('pending', 'validated', 'invalidated', 'partial', 'not_applicable')),
@@ -1113,6 +1116,9 @@ CREATE TABLE IF NOT EXISTS cognition_instances (
     outcome_fact_refs_json TEXT,
     outcome_date TEXT,
     lesson TEXT,
+    feedback_action TEXT NOT NULL DEFAULT 'none'
+        CHECK(feedback_action IN ('none', 'keep', 'watch', 'refine', 'promote', 'deprecate', 'merge')),
+    feedback_detail_json TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE(cognition_id, observed_date, source_type, source_note_id)
 );

@@ -150,6 +150,18 @@ def _run_daily(config: dict, args: argparse.Namespace) -> None:
     _push_to_dingtalk(f"趋势主升观察清单 · {date}", md)
 
 
+def _mainline_llm_runner(args: argparse.Namespace):
+    """Build optional Antigravity runner for hybrid mainline filtering."""
+    if getattr(args, "no_llm", False) or getattr(args, "main_line", "hybrid") != "hybrid":
+        return None
+    try:
+        from services.research_digest.narrator import build_antigravity_runner
+        return build_antigravity_runner()
+    except Exception as exc:  # noqa: BLE001 - trend-leader must degrade if LLM wiring is unavailable.
+        logger.warning("[trend-leader] mainline LLM runner 初始化失败，降级确定性概念主线: %s", exc)
+        return None
+
+
 def _run_pool(config: dict, args: argparse.Namespace) -> None:
     conn = get_connection()
     try:
