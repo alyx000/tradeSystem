@@ -20,6 +20,8 @@
 - `com.alyx.tradesystem.cognition-digest-monthly.plist` — 每月 1 号 09:00 触发（认知沉淀月汇总；同一日志 `/tmp/tradesystem-cognition-digest.log`）
 - `board-break-runner.sh` — 包装脚本：cd 仓库根 → source `scripts/.env`(TUSHARE_TOKEN) + `~/.config/tradeSystem.env`(钉钉/ANTIGRAVITY) → 调 `python3 main.py board-break daily`
 - `com.alyx.tradesystem.board-break.plist` — 工作日 21:20 触发（断板反包盘后扫描：昨日连板≥2 断板→八维度加权打分+LLM两两PK→双排序观察清单；日志 `/tmp/tradesystem-board-break.log`）
+- `daily-leaders-runner.sh` — 包装脚本：cd 仓库根 → source `~/.config/tradeSystem.env`(钉钉/LLM) → 调 `/usr/bin/python3 scripts/main.py daily-leaders propose --push`
+- `com.alyx.tradesystem.daily-leaders.plist` — 工作日 22:30 触发（每日最票候选确认稿；stdout `/tmp/tradesystem-daily-leaders.out.log`，stderr `/tmp/tradesystem-daily-leaders.err.log`）
 
 ## 前置条件
 
@@ -214,6 +216,39 @@ rm ~/Library/LaunchAgents/com.alyx.tradesystem.sector-correlation.plist
 ```
 
 **时段**：21:15 在 volume-watch(21:00)与 four-trading-day-review(22:30)之间,无冲突。
+
+## 每日最票候选确认稿（工作日 22:30）
+
+汇总复盘预填、趋势池、历史最票、老师观点与认知证据 → 生成复盘第 5 步「龙头 / 最票」候选确认稿 → 落本地 Markdown/JSON → 推送钉钉 Markdown。v1 只支持钉钉草稿 + Codex/CLI 确认；钉钉按钮 callback / 直接写回 deferred 到 v2。
+
+```bash
+# 1. 包装脚本可执行
+chmod +x deploy/launchd/daily-leaders-runner.sh
+
+# 2. 复制 plist
+cp deploy/launchd/com.alyx.tradesystem.daily-leaders.plist ~/Library/LaunchAgents/
+
+# 3. 加载
+launchctl load ~/Library/LaunchAgents/com.alyx.tradesystem.daily-leaders.plist
+
+# 4. 验证
+launchctl list | grep tradesystem.daily-leaders
+
+# 5. 真触发立即测试（会执行 propose --push；确认当前允许推送再运行）
+rm -f /tmp/tradesystem-daily-leaders.out.log /tmp/tradesystem-daily-leaders.err.log
+launchctl start com.alyx.tradesystem.daily-leaders
+tail -f /tmp/tradesystem-daily-leaders.out.log
+tail -f /tmp/tradesystem-daily-leaders.err.log
+```
+
+卸载：
+
+```bash
+launchctl unload ~/Library/LaunchAgents/com.alyx.tradesystem.daily-leaders.plist
+rm ~/Library/LaunchAgents/com.alyx.tradesystem.daily-leaders.plist
+```
+
+**时段**：22:30 在 `board-break`(21:20)、`trend-leader`(21:30)、`ma-breakout`(21:35)、`market-timing`(21:40) 等盘后派生任务之后，供用户在 Codex 中确认后执行 `python3 main.py daily-leaders confirm --date YYYY-MM-DD --input-by codex`。本任务不自动写复盘、不写交易计划、不提供买卖建议或价位目标。
 
 ## 研报速读（每天 22:00，A 股交易日/交易日前一天执行）
 

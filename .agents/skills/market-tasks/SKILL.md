@@ -214,6 +214,21 @@ python3 main.py ma-breakout daily --json
 - **运行语义**：无状态、不落库；裸 `daily` 打印并推钉钉；`--dry-run` / `--no-push` 仅打印；`--json` 输出结构化结果且不推送。
 - **依赖 env**：`TUSHARE_TOKEN` + 钉钉 `DINGTALK_WEBHOOK_TOKEN/SECRET`。
 
+## 每日最票候选确认稿（daily-leaders）
+
+工作日 22:30 自动跑（launchd `com.alyx.tradesystem.daily-leaders`，排在 post-market 派生任务之后），生成复盘第 5 步「龙头 / 最票」候选确认稿并推送钉钉 Markdown，也可手动：
+
+```bash
+python3 main.py daily-leaders propose --push
+python3 main.py daily-leaders propose --date 2026-07-03 --no-llm
+python3 main.py daily-leaders show --date 2026-07-03
+python3 main.py daily-leaders confirm --date 2026-07-03 --input-by codex
+```
+
+- **口径**：汇总复盘预填候选、趋势池、历史最票、老师观点与认知证据，输出候选确认稿；全部标注事实/判断边界，不出价位、不给买卖建议。
+- **确认流**：v1 是钉钉 Markdown 草稿 + Codex/CLI 确认；用户确认后再执行 `confirm` 写入复盘第 5 步并同步 `leader_tracking`。钉钉按钮 callback / 直接写回属于 v2，不要当成已实现能力。
+- **调度**：`daily-leaders propose --push` 是 per-task launchd，工作日 22:30，接在 `board-break` / `trend-leader` / `ma-breakout` / `market-timing` 等盘后派生任务之后；不进 `main.py schedule`/APScheduler。
+
 ## 研报速读（research-digest）
 
 每天 22:00 由 Codex 自动化「每日慧博研报速读（Computer Use）」触发一次；自动化先通过 Computer Use 读取慧博终端当前 `HotReport` URL，再按预筛候选在慧博终端下载 PDF 到本地目录，最后显式传给 JS workflow 读取这些本地 PDF。workflow 仍会先按 **A 股交易日** 或 **A 股交易日前一天** 判断是否继续执行；其它日期只记录 skip，也可手动：

@@ -74,6 +74,7 @@
 | `market-tasks` | `python main.py cognition-digest recent3d\|weekly\|monthly [--date YYYY-MM-DD] [--dry-run] [--no-llm]` | 交易认知沉淀只读汇总：只读认知三表（`trading_cognitions`/`cognition_instances`）按窗口算热度+共识+新增 Top-N → Antigravity 体系/方向建议（复用 Antigravity runner + `REDLINE_KEYWORDS` 红线护栏）→ 钉钉推送；只读不写库、不改 schema、不进 `main.py schedule`，由 3 个 per-task launchd（recent3d 日 18:30 / weekly 周日 20:00 / monthly 每月 1 号 09:00）独立调度；`--dry-run` 仅打印、`--no-llm` 走模板兜底关 LLM 叙事 |
 | `market-tasks` | `python main.py trend-leader daily [--date YYYY-MM-DD] [--sectors '["半导体",...]'] [--top-k N] [--main-line l2\|l2+concept] [--top-concepts M] [--dry-run] [--no-push]` | 趋势主升漏斗扫描（盘后只读观察清单，对齐鞠磊）：候选 = 当日涨停（`get_limit_up_list`）∪ 双创(20cm)涨幅≥15% 加速（`get_market_daily_changes`，board-aware「20cm 涨15%+」）；主线 = `daily_volume_concentration` Top-K 申万二级 ∪ `--sectors`，`--main-line l2+concept` 时再 ∪ 同花顺概念净流入 Top-M（`get_concept_moneyflow_ths` + `get_ths_member`，成员数≤300 剔容器概念）→ 拉区间 OHLCV（`get_stock_daily_range`）→ 首次加速（board-aware）+ 缓涨入池、缩量回踩/贴MA5/乖离信号、趋势破坏退池（落 `trend_leader_pool` 状态机）→ 渲染 MD（全标 [判断]、守红线不出价位/不给买卖建议；概念分支票标「申万二级·分支:概念名」）+ 钉钉；默认 `l2`（零行为变化，概念分支 behind 开关）；`--dry-run` 内存副本跑不落池不推送（历史校准）、`--no-push` 落池仅打印 |
 | `market-tasks` | `python main.py trend-leader pool [--status active\|exited] [--json]` | 只读看趋势主升观察池（在池天数/信号标记/退出原因），`--json` 结构化输出 |
+| `daily-review` / `market-tasks` | `python main.py daily-leaders propose [--date YYYY-MM-DD] [--push] [--no-llm]` / `python main.py daily-leaders show --date YYYY-MM-DD [--json]` / `python main.py daily-leaders confirm --date YYYY-MM-DD --input-by USER [--leaders-file PATH]` | 每日最票候选确认流：`propose` 汇总复盘预填、趋势池、历史最票、老师观点和认知证据，生成本地 Markdown/JSON 确认稿；`--push` 推送钉钉 Markdown 草稿；`show` 只读查看已生成候选；`confirm` 必须显式 `--input-by`，经用户确认后写入复盘第 5 步并同步 `leader_tracking`。v1 仅支持钉钉 Markdown + Codex/CLI 确认，不实现钉钉按钮回调；全程守红线，不给买卖建议、不出价位 |
 | `market-tasks` | `python main.py board-break daily [--date YYYY-MM-DD] [--dry-run] [--no-push] [--no-llm]` | 断板反包盘后扫描（无状态观察清单）：候选 = 昨日连板≥2 只当日断板（跌幅≤6% 且未跌停，10cm 主板剔 ST）→ 八维度加权打分（主线/增减持[减持按 250 日分位翻极性]/定增/公告/业绩/近10日涨幅/MACD，全 [判断] 附依据明细）→ `--no-llm` 未关时再跑 LLM 两两 PK 循环赛（熔断/红线过滤）→ 加权分排序 + PK 排序双榜渲染 MD 落盘 `data/reports/board-break/` + 钉钉；三档=裸[落盘+推]/`--no-push`[落盘+仅打印]/`--dry-run`[只打印不落盘不推送]；核心源失败时状态 `source_failed`，落失败报告 + 推告警 + 非零退出；无池无状态，隔日是否交易归用户判断 |
 | `ingest-inspector` | `python main.py ingest run --stage --date` | 运行采集阶段任务，写 `ingest_runs` / `raw_interface_payloads` |
 | `ingest-inspector` | `python main.py ingest run-interface --name --date` | 运行单接口采集，真实执行 provider 并记录失败 |
@@ -300,7 +301,7 @@
 
 ## 自动化检查
 
-`scripts/tests/test_cli_smoke.py` 会验证上表中所有 **`db` 子命令**（`ALL_SKILL_COMMANDS`）与 `main.py` 顶层架构命令（`ARCHITECTURE_COMMANDS`：`ingest` / `plan` / `knowledge` / `executions` / `recommend` / `volume-watch` / `sector-correlation` / `market-timing` / `margin-index-correlation` / `research-digest` / `earnings-digest` / `cognition-digest` / `trend-leader` / `board-break`）的 argparse 签名（不启动子进程、不连库）。`main.py pre` / `post` 仍由 `market-tasks` 文档与人工/定时流程保证。
+`scripts/tests/test_cli_smoke.py` 会验证上表中所有 **`db` 子命令**（`ALL_SKILL_COMMANDS`）与 `main.py` 顶层架构命令（`ARCHITECTURE_COMMANDS`：`ingest` / `plan` / `knowledge` / `executions` / `recommend` / `volume-watch` / `sector-correlation` / `market-timing` / `margin-index-correlation` / `research-digest` / `earnings-digest` / `cognition-digest` / `trend-leader` / `daily-leaders` / `board-break`）的 argparse 签名（不启动子进程、不连库）。`main.py pre` / `post` 仍由 `market-tasks` 文档与人工/定时流程保证。
 
 每次 `pytest scripts/tests/test_cli_smoke.py` 都会同步检查：
 - 依赖表所列 `db` 子命令名未被重命名
@@ -312,4 +313,4 @@
 1. 修改 `cli.py` 或 API routes 时，同步更新此 INDEX.md
 2. 优先运行 `make check-scripts`；若仅需检查 CLI 签名，可运行 `python3 -m pytest scripts/tests/test_cli_smoke.py -v`
 3. 若命令参数有不向后兼容的变更，更新对应 SKILL.md 中的示例
-4. 修改 `scripts/main.py` 新增/调整顶层命令（`ingest` / `plan` / `knowledge` / `executions` / `recommend` / `volume-watch` / `sector-correlation` / `market-timing` / `margin-index-correlation` / `*-digest` / `trend-leader` / `board-break` 等）时，须在 `test_cli_smoke.py` 的 `ARCHITECTURE_COMMANDS` 加参数化用例，并同步更新相关 SKILL.md 与 AGENTS.md（见 `.agents/rules/skills-sync.md` §2.1）
+4. 修改 `scripts/main.py` 新增/调整顶层命令（`ingest` / `plan` / `knowledge` / `executions` / `recommend` / `volume-watch` / `sector-correlation` / `market-timing` / `margin-index-correlation` / `*-digest` / `trend-leader` / `daily-leaders` / `board-break` 等）时，须在 `test_cli_smoke.py` 的 `ARCHITECTURE_COMMANDS` 加参数化用例，并同步更新相关 SKILL.md 与 AGENTS.md（见 `.agents/rules/skills-sync.md` §2.1）
