@@ -221,7 +221,7 @@ rm ~/Library/LaunchAgents/com.alyx.tradesystem.sector-correlation.plist
 
 ## 4日均线二波观察池（中国时间工作日 21:35）
 
-近 60 自然日历史龙头/最票宇宙 → 近 10 个有效行情日 → MA4 重新拐头向上（今日 MA4 上行，且上拐前至少两根 MA4 连续下行）+ 今日成交额同时突破 5/10 日成交额均线 + 当日未涨停 → 只读二波观察清单 + 钉钉。
+近 60 自然日历史龙头/最票宇宙 → 近 10 个有效行情日 → MA4 重新拐头向上（今日 MA4 上行，且上拐前至少两根 MA4 连续下行）+ 今日成交额同时突破 5/10 日成交额均线 + 当日未涨停 → 只读二波观察清单落 `data/reports/ma-breakout/YYYY-MM-DD.{md,json}` + 钉钉。
 runner source `scripts/.env`(TUSHARE_TOKEN)+`~/.config/tradeSystem.env`(钉钉);非交易日任务内自动跳过,不推送。
 
 ```bash
