@@ -1,7 +1,7 @@
 ---
 name: daily-review
 description: 协助用户完成每日「八步复盘法」，自动拉取客观数据、引导填写主观判断，并将复盘写入数据库
-version: "1.4"
+version: "1.5"
 ---
 
 # Skill: 每日复盘（八步复盘法）
@@ -43,7 +43,8 @@ make db-search KEYWORD=情绪 FROM=YYYY-MM-DD TO=YYYY-MM-DD
 2. 拉取预填充数据，先展示客观事实，再引导用户填写主观判断。（逐步提问时可打开 [附录话术模板](references/eight-step-prompt-templates.md)。）
    其中 `projection_candidates.facts` 会同时返回 `emotion_leader` / `capacity_leader`，兼容字段 `lead_stock` 默认跟随 `capacity_leader`；资金流源字段里的股票只作“资金流字段股”参考，不要直接当成板块龙头结论。老师笔记 `sectors` 若是自由文本且匹配不到已知板块，不应直接升格成候选板块。
    预填充同时会返回 `cognitions_by_step`（按八步聚合的 `status=active` 底层认知，每步最多 5 条），用法见下文「认知联动」章节。
-3. 按八步复盘法汇总：
+3. 输出第 0 节「前日对照判分」（见下文「前日对照判分（T-1 验证）」章节）：前日观察打分 vs 当日实际、前日老师方向性观点判分。若 T-1 无打分文件或无可判分观点，对应子块写「本日不适用」，不要静默省略。
+4. 按八步复盘法汇总：
    - 大盘分析
    - 板块梳理
    - 情绪周期
@@ -52,14 +53,14 @@ make db-search KEYWORD=情绪 FROM=YYYY-MM-DD TO=YYYY-MM-DD
    - 节点判断
    - 持仓检视
    - 次日计划
-4. 保存前先给用户一版结构化复盘摘要，用户确认后再写入。
-5. 若用户要把复盘直接衔接到次日计划，保存后调用 `POST /api/review/{date}/to-draft`，只生成 observation / draft，不确认正式计划。
+5. 保存前先给用户一版结构化复盘摘要，用户确认后再写入。
+6. 若用户要把复盘直接衔接到次日计划，保存后调用 `POST /api/review/{date}/to-draft`，只生成 observation / draft，不确认正式计划。
 
 ## 保存字段契约
 
 复盘工作台是结构化表单。Agent 写入时优先使用页面字段：
 
-- `step1_market.notes`
+- `step1_market.notes`（开头放第 0 节「前日验证」段，见「前日对照判分」章节）
 - `step2_sectors.selection_summary / projections / next_day_focus / notes`
 - `step3_emotion.phase / transition.reason / notes`
 - `step4_style.preference / effects / notes`
@@ -70,6 +71,29 @@ make db-search KEYWORD=情绪 FROM=YYYY-MM-DD TO=YYYY-MM-DD
 - `step8_plan.key_factor / watch_directions / risks / discipline / summary`
 
 `PUT /api/review/{date}` 会兼容摘要式 `facts / judgement / plan / holdings` 写入并轻量映射到页面可见字段，但这只是兜底；正式复盘稿仍应按上面的表单字段组织，避免“API 保存成功但页面看不到重点内容”。
+
+## 前日对照判分（T-1 验证）
+
+从 v1.5 起，每次复盘在进入八步**之前**，先产出第 0 节「前日对照判分」；保存时并入 `step1_market.notes` 开头的「前日验证」段。两个子块都要出现（不适用时显式写「本日不适用」）：
+
+### 0a. 前日观察打分 vs 当日实际
+
+- 若存在 `data/reports/观察股打分_<T-1>.md`（观察股打分的标准落盘位置与命名），或 T-1 复盘含观察优先级排序，则用当日真实行情（tushare 只读）对照：
+  - 高 / 中 / 低分组的当日平均涨跌；
+  - 各维度分（题材 / 位置 / 承接 / 情绪）与当日收益的方向一致性，重点标记**反向失效的维度**（如兑现日「前日承接强」次日反而领跌）。
+- 结论全部标 `[判断]`。单日样本噪音大，**单日反向不构成框架否定**；同一维度连续多日（参考阈值 ≥3 个交易日）同向失效，才升级为打分框架修订议题。
+
+### 0b. 老师观点判分（多空对照记分）
+
+- 从 T-1 `teacher_notes` 提取**次日可验证的方向性观点**：有明确验证点或失效条件的短线观点才可判分；swing / 中长线观点标 `pending`，不判死。
+- 用当日事实（指数、申万行业涨跌、关键个股）逐条判 `✓ 命中 / ✗ 落空 / ◐ 部分 / pending`，同时记录当日市况标签（如「兑现日」「修复日」「风格切换日」）——跨日累计后形成「谁在什么市况下更准」的先验。
+- 判分表进复盘报告第 0 节；老师观点原文引用一律标「老师观点」，判分结论标 `[判断]`。
+
+### 边界与红线
+
+- 判分对象是「观点 vs 事实」的对照，不评价老师个人，**不得**由判分结果推导出「跟随 / 回避某老师」类操作建议。
+- 判分中发现的可复用模式（如「兑现日盘中反包次日多为反向指标」）→ **切到 [`cognition-evolution`](../cognition-evolution/SKILL.md)** 出强候选卡片，用户确认后才落库；本 skill 只判分、只记录，不写认知库（与「认知联动 · 边界」同一约束）。
+- 第 0 节所有内容不构成买卖建议。
 
 ## 认知联动（cognitions_by_step）
 
