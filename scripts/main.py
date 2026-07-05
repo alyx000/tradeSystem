@@ -1771,6 +1771,10 @@ def build_parser() -> argparse.ArgumentParser:
     from cli.trend_leader import register_subparser as register_trend_leader_subparser
     register_trend_leader_subparser(subparsers)
 
+    # daily-leaders (每日最票候选:预填+趋势池+老师观点→候选稿→确认写入复盘第5步)
+    from cli.daily_leaders import register_subparser as register_daily_leaders_subparser
+    register_daily_leaders_subparser(subparsers)
+
     # board-break (断板反包:昨日连板>=2断板<=6%未跌停主板 → 双打分观察清单;无状态不建池)
     from cli.board_break import register_subparser as register_board_break_subparser
     register_board_break_subparser(subparsers)
@@ -1845,6 +1849,9 @@ def main():
     elif args.command == "trend-leader":
         from cli import trend_leader as trend_leader_module
         trend_leader_module.handle_command(config, args)
+    elif args.command == "daily-leaders":
+        from cli import daily_leaders as daily_leaders_module
+        daily_leaders_module.handle_command(config, args)
     elif args.command == "board-break":
         from cli import board_break as board_break_module
         board_break_module.handle_command(config, args)
