@@ -130,3 +130,21 @@ class TestMacdHandCalc:
 
         expected = _ema_independent(closes, 12) - _ema_independent(closes, 26)
         assert I.macd_dif(closes) == pytest.approx(expected, rel=1e-9)
+
+
+class TestMaBias:
+    """长周期乖离展示项（[事实] 不计分）：close_T 相对末 n 根均线的乖离率（%）。"""
+
+    def test_bias_known_value(self):
+        closes = [10.0] * 59 + [13.0]
+        ma = (59 * 10.0 + 13.0) / 60
+        assert I.ma_bias(closes, 60) == pytest.approx((13.0 / ma - 1) * 100)
+
+    def test_flat_closes_zero_bias(self):
+        assert I.ma_bias([10.0] * 120, 120) == pytest.approx(0.0)
+
+    def test_insufficient_bars_returns_none(self):
+        assert I.ma_bias([10.0] * 59, 60) is None
+
+    def test_non_positive_ma_returns_none(self):
+        assert I.ma_bias([0.0] * 60, 60) is None

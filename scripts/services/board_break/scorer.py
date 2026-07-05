@@ -18,7 +18,7 @@ from __future__ import annotations
 import os
 
 from services.board_break import constants as C
-from services.board_break.indicators import apply_qfq, gain_10d, macd_dif, position_250d
+from services.board_break.indicators import apply_qfq, gain_10d, ma_bias, macd_dif, position_250d
 from services.board_break.scanner import bare_code, window_start
 from services.earnings_digest.normalize import (
     NEGATIVE_TYPES,
@@ -127,6 +127,23 @@ def _earnings_direction_and_label(kind: str, row: dict) -> tuple[str | None, str
     return direction, f"快报归母净利同比{yoy:+.1f}%"
 
 
+def _bias_detail(bias60: float | None, bias120: float | None) -> str:
+    """长周期乖离展示行文案（[事实] 不计分，回看依据见 constants.BIAS_MA_* 注释）。
+
+    与 evidences.detail 同契约：scorer 拼成品串，渲染层原样使用、不做业务格式化。
+    双窗口全缺失 → 一句缺失原因；仅长窗口缺失 → 标"—（样本不足）"
+    （bias120 需 120 根、bias60 只需 60 根，次新股可能只够短窗口）。
+    """
+    if bias60 is None and bias120 is None:
+        return "缺失（前复权失败/样本不足/末根非T日）；展示项不计分"
+
+    def _fmt(value, label):
+        return f"vs {label} {value:+.1f}%" if value is not None else f"vs {label} —（样本不足）"
+
+    return (f"{_fmt(bias60, C.BIAS_MA_SHORT_LABEL)} / "
+            f"{_fmt(bias120, C.BIAS_MA_LONG_LABEL)}；展示项不计分")
+
+
 def build_fact_card(
     cand: dict, *, main_sectors, ann_result, holder_result, earnings_rows, adj_factors,
     main_sector_degraded: bool = False,
@@ -200,6 +217,7 @@ def build_fact_card(
     if adjusted is None:
         gain10, gain10_status = None, "missing"
         dif, dif_status = None, "missing"
+        bias60 = bias120 = None
         position = {"value": None, "state": "missing", "bar_count": len(bars)}
     else:
         closes = [b.get("close") for b in adjusted]
@@ -208,9 +226,12 @@ def build_fact_card(
 
         if t_date and adjusted[-1].get("trade_date") != t_date:
             dif, dif_status = None, "missing"  # 末根非 T 日：口径不可信，不硬算
+            bias60 = bias120 = None            # 乖离与 dif 同依赖"末根=T日"的现价口径，一并缺失
         else:
             dif = macd_dif(closes)
             dif_status = "missing" if dif is None else "ok"
+            bias60 = ma_bias(closes, C.BIAS_MA_SHORT)
+            bias120 = ma_bias(closes, C.BIAS_MA_LONG)
 
         position = position_250d(adjusted)
 
@@ -237,6 +258,11 @@ def build_fact_card(
         "gain10_status": gain10_status,
         "dif": dif,
         "dif_status": dif_status,
+        # 长周期乖离：[事实] 展示项不计分（见 constants.BIAS_MA_* 注释）；
+        # 不进 pk._FACT_FIELDS——方法二输入契约保持不变
+        "bias60": bias60,
+        "bias120": bias120,
+        "bias_detail": _bias_detail(bias60, bias120),
         "position_value": position["value"],
         "position_state": position["state"],
         "position_bar_count": position["bar_count"],

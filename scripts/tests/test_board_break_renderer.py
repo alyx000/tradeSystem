@@ -106,3 +106,42 @@ def test_source_failed_report():
 def test_save_report_out_root_injectable(tmp_path):
     p = renderer.save_report("# x", "2026-07-04", out_root=str(tmp_path))
     assert p.exists() and p.name == "2026-07-04.md"
+
+
+def _bias_row(md: str) -> str:
+    rows = [line for line in md.splitlines() if line.startswith("| 长周期乖离")]
+    assert rows, "打分依据明细须包含长周期乖离展示行"
+    return rows[0]
+
+
+def test_bias_row_renders_scorer_detail_verbatim():
+    """长周期乖离行与 evidences.detail 同契约：scorer 拼好的 bias_detail 原样渲染。"""
+    scored = _scored_one()
+    scored[0]["bias_detail"] = "vs 60日线(≈13周) +34.6% / vs 120日线(≈24周) +52.1%；展示项不计分"
+    md = renderer.render_daily(_result(scored), scored, None)
+    row = _bias_row(md)
+    assert "+34.6%" in row and "+52.1%" in row
+    assert "[事实]" in row and "不计分" in row
+
+
+def test_bias_row_rendered_missing():
+    """qfq 失败（_scored_one 的 adj_factors=None）→ 乖离行经真实 scorer 链路标缺失，不静默省行。"""
+    scored = _scored_one()
+    md = renderer.render_daily(_result(scored), scored, None)
+    assert "缺失" in _bias_row(md)
+
+
+def test_bias_missing_counted_in_footnote():
+    """展示项不入 evidences 维度统计 → 脚注二须单列缺失计数（可观测水位对齐八维度）。"""
+    scored = _scored_one()  # adj_factors=None → bias60/bias120 双缺失
+    md = renderer.render_daily(_result(scored), scored, None)
+    assert "长周期乖离（展示项）整体缺失 × 1 只" in md
+
+
+def test_bias_single_window_missing_counted():
+    scored = _scored_one()
+    scored[0]["bias60"] = 12.3
+    scored[0]["bias120"] = None
+    md = renderer.render_daily(_result(scored), scored, None)
+    assert "单窗口缺失 × 1 只" in md
+    assert "整体缺失" not in md
