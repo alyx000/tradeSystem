@@ -31,11 +31,17 @@ def _proposal():
 
 
 def test_render_markdown_contains_labels_and_confirmation_instruction():
-    md = render_markdown(_proposal())
+    proposal = _proposal()
+    proposal["top_leaders"][0]["llm_rank"] = 1
+    proposal["top_leaders"][0]["llm_role"] = "走势引领"
+    proposal["top_leaders"][0]["risk_flags"] = ["容量需复核"]
+    md = render_markdown(proposal)
     assert "每日最票候选确认稿 · 2026-07-03" in md
     assert "[事实]" in md
     assert "[判断]" in md
     assert "老师观点对照：支持" in md
+    assert "LLM裁判：[判断] 排序 1 / 角色 走势引领" in md
+    assert "风险标签：[判断] 容量需复核" in md
     assert "可回复：确认，全部录入" in md
 
 
@@ -79,6 +85,42 @@ def test_llm_enrichment_uses_runner_mapping():
         runner=lambda prompt: {"688041 海光信息|半导体": "走势引领清晰，老师观点支持，仍需人工确认。"},
     )
     assert out["top_leaders"][0]["llm_reason"] == "走势引领清晰，老师观点支持，仍需人工确认。"
+    assert out["llm_status"] == {"ok": True}
+
+
+def test_llm_judgement_reorders_and_labels_candidates():
+    proposal = {
+        "date": "2026-07-03",
+        "top_leaders": [
+            {"stock": "拓普集团", "sector": "同花顺出海50", "evidence": []},
+            {"stock": "绿的谐波", "sector": "同花顺新质50", "evidence": []},
+        ],
+    }
+
+    out = enrich_with_llm_reason(
+        proposal,
+        enabled=True,
+        runner=lambda prompt: {
+            "拓普集团|同花顺出海50": {
+                "rank": 2,
+                "role": "备选",
+                "reason": "涨停但板块角色不如机器人分支清晰，仍需人工确认。",
+                "risk_flags": ["题材归属偏宽"],
+            },
+            "绿的谐波|同花顺新质50": {
+                "rank": 1,
+                "role": "走势引领",
+                "reason": "新质生产力与机器人分支共振，领涨幅度更强，仍需人工确认。",
+                "risk_flags": ["容量需复核"],
+            },
+        },
+    )
+
+    assert [item["stock"] for item in out["top_leaders"]] == ["绿的谐波", "拓普集团"]
+    assert out["top_leaders"][0]["llm_rank"] == 1
+    assert out["top_leaders"][0]["llm_role"] == "走势引领"
+    assert out["top_leaders"][0]["risk_flags"] == ["容量需复核"]
+    assert out["top_leaders"][1]["llm_rank"] == 2
 
 
 def test_llm_enrichment_drops_redline_reason():
@@ -100,4 +142,16 @@ def test_llm_fail_closed_when_runner_raises():
 
     out = enrich_with_llm_reason(proposal, enabled=True, runner=raising_runner)
 
-    assert out == proposal
+    assert out["top_leaders"] == proposal["top_leaders"]
+    assert out["llm_status"] == {"ok": False, "reason": "exception"}
+
+
+def test_llm_fail_closed_marks_empty_mapping_and_renderer_warning():
+    proposal = _proposal()
+    out = enrich_with_llm_reason(proposal, enabled=True, runner=lambda prompt: None)
+
+    assert out["top_leaders"] == proposal["top_leaders"]
+    assert out["llm_status"] == {"ok": False, "reason": "empty_mapping"}
+    md = render_markdown(out)
+    assert "LLM裁判未生效" in md
+    assert "empty_mapping" in md

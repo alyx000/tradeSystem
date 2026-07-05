@@ -231,6 +231,22 @@ def _huibo_lines(huibo_digest: dict | None) -> list[str]:
 
     antigravity = _huibo_antigravity_meta(huibo_digest)
     ranker = _huibo_ranker_meta(huibo_digest)
+    pdf_missing = _huibo_terminal_pdf_missing_summary(huibo_digest)
+    if pdf_missing:
+        has_rendered_content = True
+        total = pdf_missing["total"]
+        missing = pdf_missing["missing"]
+        L.append("\n## ⚠️ 慧博 PDF 未获取")
+        if missing == total:
+            L.append(
+                f"> 慧博候选已采集 {total} 篇，但慧博终端未生成本地 PDF（terminal_pdf_missing_all）；"
+                "reader/ranker/聚合未实际阅读 PDF，未生成慧博推荐。"
+            )
+        else:
+            L.append(
+                f"> 慧博候选已采集 {total} 篇，其中 {missing} 篇缺少慧博终端本地 PDF；"
+                "缺 PDF 的报告不会发送给 Antigravity 阅读。"
+            )
     if antigravity.get("status") == "unavailable":
         has_rendered_content = True
         reason = _safe_text(antigravity.get("reason"), "慧博Antigravity状态") or "unavailable"
@@ -365,6 +381,26 @@ def _huibo_ranker_meta(huibo_digest: dict) -> dict:
     meta = huibo_digest.get("meta") or {}
     ranker = meta.get("ranker") if isinstance(meta, dict) else {}
     return ranker if isinstance(ranker, dict) else {}
+
+
+def _huibo_terminal_pdf_missing_summary(huibo_digest: dict) -> dict[str, int] | None:
+    prescreened_raw = huibo_digest.get("prescreened") or []
+    prescreened = prescreened_raw if isinstance(prescreened_raw, list) else []
+    total = sum(1 for item in prescreened if isinstance(item, dict))
+    if total <= 0:
+        return None
+    missing = 0
+    for item in prescreened:
+        if not isinstance(item, dict):
+            continue
+        pdf_download = item.get("pdf_download")
+        if not isinstance(pdf_download, dict):
+            continue
+        if pdf_download.get("reason") == "terminal_pdf_missing" or pdf_download.get("status") == "missing":
+            missing += 1
+    if missing <= 0:
+        return None
+    return {"total": total, "missing": missing}
 
 
 def _huibo_reader_success_count(huibo_digest: dict) -> int:

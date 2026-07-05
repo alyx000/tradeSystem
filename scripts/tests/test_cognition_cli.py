@@ -74,6 +74,9 @@ KNOWLEDGE_COGNITION_COMMANDS: list[list[str]] = [
      "--teacher-id", "10", "--teacher-name-snapshot", "沈纯",
      "--position-cap", "0.3",
      "--parameters-json", '{"k":"v"}',
+     "--viewpoint-claims-json", '[{"label":"[事实]","text":"成交额放大"},{"label":"[判断]","text":"低位分支承接"}]',
+     "--factor-snapshot-json", '{"factor":"theme_rotation"}',
+     "--hypothesis-json", '{"statement":"主线内部轮动","invalidation":["核心中军破位"]}',
      "--input-by", "pytest", "--json"],
     # instance-batch-add
     ["knowledge", "instance-batch-add",
@@ -92,6 +95,8 @@ KNOWLEDGE_COGNITION_COMMANDS: list[list[str]] = [
      "--outcome", "invalidated",
      "--outcome-fact-source", "daily_market:2026-04-15",
      "--outcome-date", "2026-04-16", "--lesson", "复盘教训",
+     "--feedback-action", "refine",
+     "--feedback-detail-json", '{"next_step":"收窄适用边界"}',
      "--input-by", "pytest", "--json"],
     # instance-list
     ["knowledge", "instance-list"],
@@ -319,6 +324,34 @@ def test_cli_end_to_end_instance_add_and_pending(cli_db):
     assert inst_id in ids
 
 
+def test_cli_instance_add_structured_viewpoint_json(cli_db):
+    """CLI 能写入观点拆分、因子快照与假设快照，并把中文标签归一。"""
+    added = _run_cli_json(
+        cli_db,
+        "knowledge", "cognition-add",
+        "--category", "signal", "--title", "T", "--description", "D",
+        "--input-by", "pytest", "--json",
+    )
+    cog_id = added["cognition"]["cognition_id"]
+
+    inst = _run_cli_json(
+        cli_db,
+        "knowledge", "instance-add",
+        "--cognition-id", cog_id,
+        "--observed-date", "2026-04-10",
+        "--source-type", "teacher_note",
+        "--viewpoint-claims-json", '[{"label":"[事实]","text":"成交额放大"},{"label":"[判断]","text":"资金回流低位分支"}]',
+        "--factor-snapshot-json", '{"factor":"theme_rotation"}',
+        "--hypothesis-json", '{"statement":"主线内部轮动","invalidation":["核心中军破位"]}',
+        "--input-by", "pytest", "--json",
+    )
+
+    claims = json.loads(inst["instance"]["viewpoint_claims_json"])
+    assert [c["label"] for c in claims] == ["fact", "judgement"]
+    factor = json.loads(inst["instance"]["factor_snapshot_json"])
+    assert factor["factor"] == "theme_rotation"
+
+
 def test_cli_validate_requires_fact_source_format(cli_db):
     """validate 别名缺 YYYY-MM-DD → validation_error。"""
     added = _run_cli_json(
@@ -373,11 +406,14 @@ def test_cli_end_to_end_validate_updates_parent_counts(cli_db):
         "--instance-id", inst_id,
         "--outcome", "validated",
         "--outcome-fact-source", "daily_market:2026-04-11",
+        "--feedback-action", "keep",
+        "--feedback-detail-json", '{"reason":"事实验证通过"}',
         "--input-by", "pytest", "--json",
     )
     assert validated["status"] == "ok"
     assert validated["cognition"]["validated_count"] == 1
     assert validated["cognition"]["invalidated_count"] == 0
+    assert validated["instance"]["feedback_action"] == "keep"
 
     shown = _run_cli_json(
         cli_db, "knowledge", "cognition-show", "--id", cog_id, "--json"

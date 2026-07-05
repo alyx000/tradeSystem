@@ -8,6 +8,7 @@ current window does not expose URL attributes.
 from __future__ import annotations
 
 import ctypes
+import re
 import subprocess
 import sys
 from ctypes import c_bool, c_char_p, c_int, c_long, c_ulong, c_void_p
@@ -16,6 +17,7 @@ from ctypes.util import find_library
 TARGET_BUNDLE_ID = "com.shhy.macHB"
 MAX_DEPTH = 12
 K_CF_STRING_ENCODING_UTF8 = 0x08000100
+URL_RE = re.compile(r"https?://[^\s<>'\"]+")
 
 
 def main() -> None:
@@ -69,15 +71,18 @@ def _huibo_pid() -> int | None:
 def _walk(ax: "_AX", element: int, depth: int, seen: set[str]) -> None:
     if depth > MAX_DEPTH:
         return
-    url_ref = ax.copy_attribute(element, "AXURL")
-    if url_ref:
+    for name in ("AXURL", "AXDocument", "AXDescription", "AXValue", "AXTitle"):
+        value_ref = ax.copy_attribute(element, name)
+        if not value_ref:
+            continue
         try:
-            url = ax.to_string(url_ref)
-            if url.startswith(("http://", "https://")) and url not in seen:
-                seen.add(url)
-                print(url)
+            text = ax.to_string(value_ref)
+            for url in URL_RE.findall(text):
+                if url not in seen:
+                    seen.add(url)
+                    print(url)
         finally:
-            ax.release(url_ref)
+            ax.release(value_ref)
     for attr in ("AXChildren", "AXVisibleChildren"):
         children = ax.copy_attribute(element, attr)
         if not children:

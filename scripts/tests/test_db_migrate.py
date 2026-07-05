@@ -483,10 +483,50 @@ def test_v36_migration_creates_margin_index_correlation_daily(tmp_path):
 
     migrate(conn)
     # 迁移写的 user_version 必须 == 声明的 CURRENT_SCHEMA_VERSION（codex 门2 #1：常量漏 bump 的契约破坏）
-    assert get_schema_version(conn) == CURRENT_SCHEMA_VERSION == 36
+    assert get_schema_version(conn) == CURRENT_SCHEMA_VERSION
     assert conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table' AND name='margin_index_correlation_daily'"
     ).fetchone() is not None
+    conn.close()
+
+
+def test_v37_migration_adds_cognition_instance_feedback_columns(tmp_path):
+    """既有 v36 库经 migrate → cognition_instances 补观点结构化与反馈闭环列。"""
+    conn = get_connection(tmp_path / "v36.db")
+    conn.execute(
+        """
+        CREATE TABLE cognition_instances (
+            instance_id TEXT PRIMARY KEY,
+            cognition_id TEXT NOT NULL,
+            observed_date TEXT NOT NULL,
+            source_type TEXT NOT NULL,
+            source_note_id INTEGER,
+            outcome TEXT NOT NULL DEFAULT 'pending'
+        )
+        """
+    )
+    conn.execute("PRAGMA user_version = 36")
+    conn.commit()
+    assert get_schema_version(conn) == 36
+    before_cols = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(cognition_instances)").fetchall()
+    }
+    assert "feedback_action" not in before_cols
+
+    migrate(conn)
+    assert get_schema_version(conn) == CURRENT_SCHEMA_VERSION
+    cols = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(cognition_instances)").fetchall()
+    }
+    assert {
+        "viewpoint_claims_json",
+        "factor_snapshot_json",
+        "hypothesis_json",
+        "feedback_action",
+        "feedback_detail_json",
+    } <= cols
     conn.close()
 
 

@@ -29,6 +29,10 @@ _JSON_FIELDS_INSTANCE = [
     "regime_tags_json",
     "outcome_fact_refs_json",
     "parameters_json",
+    "viewpoint_claims_json",
+    "factor_snapshot_json",
+    "hypothesis_json",
+    "feedback_detail_json",
 ]
 _JSON_FIELDS_REVIEW = [
     "active_cognitions_json",

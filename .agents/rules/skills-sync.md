@@ -87,12 +87,13 @@ python3 -m pytest scripts/tests/test_cli_smoke.py -v
 | `cli.py` 的 `holdings-*`（含 `--thesis-id` 关联语义）/ `watchlist-*` / `add-trade` / `blacklist-*` | `portfolio-manager/SKILL.md` |
 | `cli.py` 的 `query-notes/db-search` | `daily-review/SKILL.md` |
 | `main.py` 的 `pre/post/schedule` | `market-tasks/SKILL.md` |
+| `scripts/cli/trend_leader.py` 或 `scripts/services/trend_leader/` | `market-tasks/SKILL.md` + `INDEX.md` 中 `trend-leader` 行 |
 | `scripts/utils/llm_cli.py` 或 LLM CLI/env 语义调整 | `market-tasks/SKILL.md` + `INDEX.md` 中 recommend/research-digest/cognition-digest 行 |
-| `scripts/workflows/research-digest-workflow.mjs` / `scripts/workflows/huibo_helper.py` / 慧博 Antigravity 诊断语义调整 | `market-tasks/SKILL.md` + `INDEX.md` 中 research-digest workflow 行 |
+| `scripts/workflows/research-digest-workflow.mjs` / `scripts/workflows/huibo_helper.py` / 慧博 Antigravity 诊断语义调整 / `HUIBO_REPORT_PDF_DIR` 下载归档目录约定调整 | `market-tasks/SKILL.md` + `INDEX.md` 中 research-digest workflow 行 |
 | `main.py` 的 `ingest *` | `ingest-inspector/SKILL.md` |
 | `main.py` 的 `plan *` | `plan-workbench/SKILL.md` |
 | `main.py` 的 `knowledge add-note/list/draft-*` | `knowledge-to-plan/SKILL.md` |
-| `main.py` 的 `knowledge cognition-* / instance-* / review-*` | `cognition-evolution/SKILL.md` |
+| `main.py` 的 `knowledge cognition-* / instance-* / review-*` | `cognition-evolution/SKILL.md`（若涉及观点结构化字段、`feedback_action` 或 `evolving_views_json` 聚合，也同步 `INDEX.md` 中 cognition-evolution / `/api/cognition/instances` 说明） |
 | `main.py` 的 `executions import / list / audit-export` | `portfolio-manager/SKILL.md`（券商成交流水事实层，与 `db add-trade` 复盘维度分离） |
 | `scripts/cli/executions.py` 任意改动 | `portfolio-manager/SKILL.md` + `INDEX.md` 中 `executions ...` 行 |
 | `scripts/services/broker_executions/` 任意改动 | `portfolio-manager/SKILL.md`（若行为契约变更）；任何 schema 字段/UNIQUE 调整还需同步 `INDEX.md` |

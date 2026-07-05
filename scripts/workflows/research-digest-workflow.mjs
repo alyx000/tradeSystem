@@ -35,9 +35,9 @@ async function main() {
   helperEnvOverrides = {
     HUIBO_RAW_DIR: rawDir,
     HUIBO_SUMMARY_DIR: summaryDir,
-    HUIBO_REPORT_PDF_DIR: process.env.HUIBO_REPORT_PDF_DIR || path.join(os.homedir(), "Downloads"),
+    HUIBO_REPORT_PDF_DIR: abs(process.env.HUIBO_REPORT_PDF_DIR || path.join(os.homedir(), "Downloads")),
     HUIBO_REFRESH_URL_FROM_APP: process.env.HUIBO_REFRESH_URL_FROM_APP || "1",
-    HUIBO_ALLOW_DIRECT_PDF_DOWNLOAD: process.env.HUIBO_ALLOW_DIRECT_PDF_DOWNLOAD || "1",
+    HUIBO_ALLOW_DIRECT_PDF_DOWNLOAD: process.env.HUIBO_ALLOW_DIRECT_PDF_DOWNLOAD || "0",
   };
   const llmInputBaseDir = abs(opts.llmInputDir || process.env.HUIBO_LLM_INPUT_DIR || path.join(os.tmpdir(), "huibo-llm-input"));
   const llmInputDir = path.join(llmInputBaseDir, safeFileStem(date));
@@ -111,7 +111,7 @@ async function main() {
   }
 
   await stage(ctx, "collect", artifact("candidates.json"), async () => {
-    return runHelper([
+    const result = runHelper([
       "collect",
       "--date", date,
       "--window-days", String(windowDays),
@@ -119,6 +119,10 @@ async function main() {
       "--out", artifact("candidates.json"),
       "--texts-out", artifact("texts.json"),
     ]);
+    if (result.status === "blocked") {
+      throw new Error(`${result.reason || "collect_blocked"}: ${result.message || ""}`);
+    }
+    return result;
   });
 
   await stage(ctx, "prescreen", artifact("prescreened.json"), async () => {
@@ -854,11 +858,28 @@ function runProcess(command, args, timeoutMs, options = {}) {
     let timeoutError = null;
     let earlyError = null;
     let forceTimer = null;
-    const finish = (fn, value) => {
+    const destroyPipes = () => {
+      for (const stream of [child.stdout, child.stderr]) {
+        if (stream && !stream.destroyed) stream.destroy();
+      }
+    };
+    const rejectTimeout = () => {
+      if (!timeoutError) return;
+      timeoutError.reason = "timeout";
+      timeoutError.diagnostics = diagnoseAntigravityFailure({
+        stdout,
+        stderr,
+        logFile: options.logFile,
+        reason: "timeout",
+      });
+      destroyPipes();
+      finish(reject, timeoutError);
+    };
+    const finish = (fn, value, finishOptions = {}) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      if (forceTimer) clearTimeout(forceTimer);
+      if (forceTimer && !finishOptions.keepForceTimer) clearTimeout(forceTimer);
       fn(value);
     };
     const timer = setTimeout(() => {
@@ -866,6 +887,7 @@ function runProcess(command, args, timeoutMs, options = {}) {
       signalProcessGroup(child, "SIGTERM");
       forceTimer = setTimeout(() => {
         signalProcessGroup(child, "SIGKILL");
+        rejectTimeout();
       }, 2000);
     }, timeoutMs);
     const inspectOutput = () => {
@@ -880,11 +902,14 @@ function runProcess(command, args, timeoutMs, options = {}) {
         logFile: options.logFile,
         reason: "auth_required",
       });
-      clearTimeout(timer);
       signalProcessGroup(child, "SIGTERM");
       forceTimer = setTimeout(() => {
         signalProcessGroup(child, "SIGKILL");
       }, 2000);
+      if (typeof forceTimer.unref === "function") {
+        forceTimer.unref();
+      }
+      finish(reject, earlyError, { keepForceTimer: true });
     };
     child.stdout.on("data", (chunk) => {
       stdout += chunk.toString();
@@ -908,13 +933,7 @@ function runProcess(command, args, timeoutMs, options = {}) {
       if (earlyError) {
         finish(reject, earlyError);
       } else if (timeoutError) {
-        timeoutError.diagnostics = diagnoseAntigravityFailure({
-          stdout,
-          stderr,
-          logFile: options.logFile,
-          reason: "timeout",
-        });
-        finish(reject, timeoutError);
+        rejectTimeout();
       } else if (code === 0) {
         finish(resolve, { stdout, stderr });
       } else {

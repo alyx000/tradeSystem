@@ -102,6 +102,21 @@ def test_three_tables_created(conn):
         assert expected in tables, f"missing table: {expected}"
 
 
+def test_cognition_instances_structured_feedback_columns_exist(conn):
+    """v37：实例表包含观点结构化、假设与反馈闭环字段。"""
+    cols = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(cognition_instances)").fetchall()
+    }
+    assert {
+        "viewpoint_claims_json",
+        "factor_snapshot_json",
+        "hypothesis_json",
+        "feedback_action",
+        "feedback_detail_json",
+    } <= cols
+
+
 def test_schema_version_matches_current(conn):
     """migrate() 后 schema 版本 = CURRENT_SCHEMA_VERSION,版本号随实施迭代往上走."""
     assert get_schema_version(conn) == CURRENT_SCHEMA_VERSION

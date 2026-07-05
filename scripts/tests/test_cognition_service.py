@@ -261,6 +261,49 @@ def test_add_instance_triggers_parent_counts(service):
     assert parent["confidence"] == 0.5
 
 
+def test_add_instance_records_structured_viewpoint_factor_and_hypothesis(service):
+    """老师观点实例保存事实/判断拆分、因子快照与可证伪假设。"""
+    cog = _make_cognition(service)
+    inst = _make_instance(
+        service,
+        cog["cognition_id"],
+        observed_date="2026-04-14",
+        viewpoint_claims_json=[
+            {"label": "fact", "text": "两市成交额较昨日放大"},
+            {"label": "judgement", "text": "资金回流同一主线低位分支"},
+        ],
+        factor_snapshot_json={
+            "factor": "theme_internal_rotation",
+            "direction": "low_branch_absorption",
+        },
+        hypothesis_json={
+            "statement": "高位分支退潮但主线未破坏时，低位分支更容易承接回流",
+            "invalidation": ["核心中军同步破位", "主线成交额连续衰减"],
+            "validation_window": "next_3_trading_days",
+        },
+    )
+
+    claims = json.loads(inst["viewpoint_claims_json"])
+    assert claims[0] == {"label": "fact", "text": "两市成交额较昨日放大"}
+    assert claims[1]["label"] == "judgement"
+    factor = json.loads(inst["factor_snapshot_json"])
+    assert factor["factor"] == "theme_internal_rotation"
+    hypothesis = json.loads(inst["hypothesis_json"])
+    assert hypothesis["validation_window"] == "next_3_trading_days"
+
+
+def test_add_instance_rejects_unknown_viewpoint_claim_label(service):
+    """事实/判断拆分必须使用白名单标签，防止把判断伪装成事实。"""
+    cog = _make_cognition(service)
+    with pytest.raises(ValueError, match="viewpoint_claims_json"):
+        _make_instance(
+            service,
+            cog["cognition_id"],
+            observed_date="2026-04-14",
+            viewpoint_claims_json=[{"label": "certain_fact", "text": "错误标签"}],
+        )
+
+
 def test_add_instance_unknown_cognition_raises(service):
     """父认知不存在 → ValueError。"""
     with pytest.raises(ValueError, match="cognition not found"):
@@ -367,6 +410,47 @@ def test_validate_instance_updates_confidence(service, db_path):
     assert parent["confidence"] == pytest.approx(5 / 8)
 
 
+def test_validate_instance_records_feedback_action_and_detail(service, db_path):
+    """验证结果能同步生成交易系统反馈动作，供后续复盘反向优化。"""
+    _seed_daily_market(db_path, ["2026-04-15"])
+    cog = _make_cognition(service)
+    inst = _make_instance(service, cog["cognition_id"], observed_date="2026-04-14")
+
+    result = service.validate_instance(
+        inst["instance_id"],
+        outcome="invalidated",
+        outcome_fact_source="daily_market:2026-04-15",
+        outcome_detail="板块未回流，核心中军同步走弱",
+        feedback_action="deprecate",
+        feedback_detail_json={
+            "reason": "失效条件触发",
+            "next_step": "复盘时检查是否弃用或收窄边界",
+        },
+        input_by="pytest",
+    )
+
+    updated = result["instance"]
+    assert updated["feedback_action"] == "deprecate"
+    feedback = json.loads(updated["feedback_detail_json"])
+    assert feedback["reason"] == "失效条件触发"
+
+
+def test_validate_instance_defaults_feedback_action_by_outcome(service, db_path):
+    """调用方不传反馈动作时，service 按 outcome 给出保守默认动作。"""
+    _seed_daily_market(db_path, ["2026-04-15"])
+    cog = _make_cognition(service)
+    inst = _make_instance(service, cog["cognition_id"], observed_date="2026-04-14")
+
+    result = service.validate_instance(
+        inst["instance_id"],
+        outcome="validated",
+        outcome_fact_source="daily_market:2026-04-15",
+        input_by="pytest",
+    )
+
+    assert result["instance"]["feedback_action"] == "keep"
+
+
 def test_batch_add_instances_partial_failure(service, db_path):
     """批量写入：部分失败不影响其他项；返回 created/failed/total。"""
     _seed_teacher_notes(db_path, [1, 2])
@@ -460,6 +544,54 @@ def test_generate_review_aggregates_stats(service, db_path):
     assert by_teacher[10] == 3
     assert by_teacher[20] == 2
     assert set(participation["teachers"]) == {"沈纯", "小鲍"}
+
+
+def test_generate_review_collects_evolving_view_feedback(service, db_path):
+    """周期复盘聚合验证反馈，形成认知反向优化清单。"""
+    _seed_daily_market(db_path, ["2026-04-10", "2026-04-11"])
+    cog_keep = _make_cognition(service, title="可保留认知")
+    cog_refine = _make_cognition(service, title="需精炼认知")
+    inst_keep = _make_instance(
+        service,
+        cog_keep["cognition_id"],
+        observed_date="2026-04-08",
+        context_summary="老师观点 A",
+    )
+    inst_refine = _make_instance(
+        service,
+        cog_refine["cognition_id"],
+        observed_date="2026-04-09",
+        context_summary="老师观点 B",
+    )
+    service.validate_instance(
+        inst_keep["instance_id"],
+        outcome="validated",
+        outcome_fact_source="daily_market:2026-04-10",
+        lesson="保留该回流框架",
+        input_by="pytest",
+    )
+    service.validate_instance(
+        inst_refine["instance_id"],
+        outcome="invalidated",
+        outcome_fact_source="daily_market:2026-04-11",
+        feedback_action="refine",
+        feedback_detail_json={"suggestion": "增加核心中军不能破位的边界"},
+        lesson="失效来自核心中军走弱",
+        input_by="pytest",
+    )
+
+    review = service.generate_review(
+        period_type="weekly",
+        period_start="2026-04-07",
+        period_end="2026-04-11",
+        input_by="pytest",
+    )
+
+    evolving = json.loads(review["evolving_views_json"])
+    assert evolving["by_feedback_action"] == {"keep": 1, "refine": 1}
+    refine_items = [item for item in evolving["items"] if item["feedback_action"] == "refine"]
+    assert refine_items[0]["cognition_id"] == cog_refine["cognition_id"]
+    assert refine_items[0]["lesson"] == "失效来自核心中军走弱"
 
 
 def test_generate_review_duplicate_period_raises(service):

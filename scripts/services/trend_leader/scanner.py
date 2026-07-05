@@ -18,10 +18,13 @@ from datetime import datetime, timedelta
 from services.concept_tags import (
     _clean_code,
     build_stock_concept_map as _stock_concept_map,
+    filter_hot_concepts as _filter_main_concepts,
     hot_concepts as _main_concepts,
+    ranked_concept_moneyflow as _ranked_concept_moneyflow,
 )
 from services.trend_leader import constants as C
 from services.trend_leader import detectors as D
+from services.trend_leader import mainline_llm
 from services.trend_leader import pool
 from services.volume_concentration import repo as vc_repo
 from services.volume_concentration.aggregator import UNCLASSIFIED
@@ -89,9 +92,15 @@ def _dual_board_accelerators(registry, date: str) -> tuple[list[dict], bool]:
 # _main_concepts 已下沉为 services.concept_tags.hot_concepts（见顶部 import 别名）。
 
 
+def _concept_prefetch_limit(top_concepts: int) -> int:
+    """只为 trend-leader 查资金流前排概念成员，避免 provider 全量扫 ths_member。"""
+    return max(C.CONCEPT_PREFETCH_MIN, top_concepts * C.CONCEPT_PREFETCH_MULTIPLIER)
+
+
 def run_daily(conn: sqlite3.Connection, registry, date: str, *,
               sectors=None, top_k: int = C.DEFAULT_TOP_K_SECTORS, range_start: str | None = None,
-              main_line: str = "l2", top_concepts: int = C.DEFAULT_TOP_CONCEPTS) -> dict:
+              main_line: str = "hybrid", top_concepts: int = C.DEFAULT_TOP_CONCEPTS,
+              mainline_llm_runner=None) -> dict:
     main_sectors, degraded = _main_sectors(conn, date, top_k, sectors)
     start = range_start or _lookback_start(date)
 
@@ -114,9 +123,9 @@ def run_daily(conn: sqlite3.Connection, registry, date: str, *,
     # 否则降级源的涨停股会因 sw_map miss → 未分类 → 被主线交集静默漏掉。
     sw_by_bare = {k.split(".")[0]: v for k, v in sw_map.items()}
 
-    # 概念分支主线（鞠磊「主线或其分支」）：main_line=l2+concept 时主线门放宽为
-    # 二级∈主线 OR 概念∩主线概念。默认 l2 不取概念（行为不变）。
-    concept_mode = main_line == "l2+concept"
+    # 概念分支主线（鞠磊「主线或其分支」）：main_line=l2+concept/hybrid 时主线门放宽为
+    # 二级∈主线 OR 概念∩主线概念。hybrid 额外用 LLM 过滤同花顺热概念，但永不否决申万二级 Top-K。
+    concept_mode = main_line in {"l2+concept", "hybrid"}
     # 候选准入：l2 模式必须 sw 可用（否则无法判二级主线，全挡）；concept 模式下概念分支门与 sw_map
     # 无关（main_concepts 源自 concept_moneyflow、concept_map 源自 ths_member），故 sw 挂了仍放候选
     # 进来靠概念分支匹配，不被无关的 sw 故障静默全挡（门2 codex M1）。
@@ -130,12 +139,47 @@ def run_daily(conn: sqlite3.Connection, registry, date: str, *,
     main_concepts, concept_ok, coverage_ok = (set(), True, True)
     concept_map, ths_ok = ({}, True)
     if concept_mode:
-        # 先取成员 map（含成员数），再用成员数闸过滤容器概念后取净流入 Top-M。
-        concept_map, member_count, ths_ok = _stock_concept_map(registry, date)
-        # 显式传 C.CONCEPT_MAX_MEMBERS（trend_leader 的容器闸常量，可被测试 monkeypatch）；
-        # 共享 hot_concepts 默认用 concept_tags.CONTAINER_MAX_MEMBERS，两者同值 300。
-        main_concepts, concept_ok, coverage_ok = _main_concepts(
-            registry, date, top_concepts, member_count, max_members=C.CONCEPT_MAX_MEMBERS)
+        # 先取资金流排序，再只查前排概念成员；避免 Tushare get_ths_member 对全部 THS 概念逐个请求。
+        ranked_concepts, concept_ok = _ranked_concept_moneyflow(registry, date)
+        if concept_ok:
+            prefetch_names = ranked_concepts[:_concept_prefetch_limit(top_concepts)]
+            concept_map, member_count, ths_ok = _stock_concept_map(
+                registry, date, concept_names=prefetch_names)
+            if ths_ok:
+                # 显式传 C.CONCEPT_MAX_MEMBERS（trend_leader 的容器闸常量，可被测试 monkeypatch）；
+                # 共享 hot_concepts 默认用 concept_tags.CONTAINER_MAX_MEMBERS，两者同值 300。
+                main_concepts, coverage_ok = _filter_main_concepts(
+                    ranked_concepts, top_concepts, member_count, max_members=C.CONCEPT_MAX_MEMBERS)
+
+    # 涨停裸码集：用于区分入池触发类型（涨停 vs 双创15%加速），写入 signal_json 供池/报告辨识。
+    limit_bares = {(s.get("code") or "").split(".")[0] for s in (limit_stocks if include_candidates else [])}
+
+    # 合并候选：涨停 ∪ 双创@15%，按裸码去重（涨停源字段更全，后写覆盖）。
+    candidate_map: dict[str, dict] = {}
+    for st in dual_accel:
+        b = (st.get("code") or "").split(".")[0]
+        if b:
+            candidate_map[b] = st
+    for st in (limit_stocks if include_candidates else []):
+        b = (st.get("code") or "").split(".")[0]
+        if b:
+            candidate_map[b] = st
+
+    mainline_llm_meta = {
+        "enabled": False,
+        "status": "disabled",
+        "accepted_concepts": sorted(main_concepts),
+        "rejected": [],
+    }
+    if concept_mode and main_line == "hybrid":
+        llm_candidates = _llm_candidate_facts(candidate_map, sw_map, sw_by_bare, concept_map)
+        main_concepts, mainline_llm_meta = mainline_llm.filter_concepts(
+            date=date,
+            main_sectors=main_sectors,
+            main_concepts=main_concepts,
+            candidates=llm_candidates,
+            runner=mainline_llm_runner,
+        )
 
     # 发现链路 provider 失败显式记账：否则「链路断了」会伪装成「今日无候选」，运营无法区分。
     source_errors = []
@@ -156,27 +200,17 @@ def run_daily(conn: sqlite3.Connection, registry, date: str, *,
             # 显式记账，避免「链路部分降级」被误读为「今日无概念候选」（门2 codex M2/M2'）。容器概念被剔
             # 不触发（coverage_ok 不受 >cap 影响），故容器-only 日不误报。
             source_errors.append("concept_coverage")
+    if mainline_llm_meta.get("enabled") and mainline_llm_meta.get("status") == "fallback":
+        source_errors.append("mainline_llm")
 
     summary = {
         "date": date, "limit_up": len(limit_stocks), "main_sectors": sorted(main_sectors),
+        "main_concepts": sorted(main_concepts), "main_line": main_line,
+        "mainline_llm": mainline_llm_meta,
         "degraded_main": degraded, "candidates": 0,
         "entered": [], "refreshed": [], "exited": [], "in_pool_signals": [],
         "data_errors": [], "source_errors": source_errors,
     }
-
-    # 涨停裸码集：用于区分入池触发类型（涨停 vs 双创15%加速），写入 signal_json 供池/报告辨识。
-    limit_bares = {(s.get("code") or "").split(".")[0] for s in (limit_stocks if include_candidates else [])}
-
-    # 合并候选：涨停 ∪ 双创@15%，按裸码去重（涨停源字段更全，后写覆盖）。
-    candidate_map: dict[str, dict] = {}
-    for st in dual_accel:
-        b = (st.get("code") or "").split(".")[0]
-        if b:
-            candidate_map[b] = st
-    for st in (limit_stocks if include_candidates else []):
-        b = (st.get("code") or "").split(".")[0]
-        if b:
-            candidate_map[b] = st
 
     entered_codes = set()
     # Pass 1 — 发现：主线∩(涨停∪双创加速) + 首次加速 + 缓涨。l2 模式 sw 映射不可用时跳过发现（无法
@@ -249,3 +283,19 @@ def run_daily(conn: sqlite3.Connection, registry, date: str, *,
         })
 
     return summary
+
+
+def _llm_candidate_facts(candidate_map: dict[str, dict], sw_map: dict, sw_by_bare: dict,
+                         concept_map: dict) -> list[dict]:
+    """Compact facts for mainline LLM; no prices or trade instructions."""
+    out = []
+    for bare, st in sorted(candidate_map.items()):
+        code_raw = st.get("code") or bare
+        sw_entry = sw_map.get(code_raw) or sw_by_bare.get(bare) or {}
+        out.append({
+            "code": bare,
+            "name": st.get("name") or sw_entry.get("name", ""),
+            "sw_l2": sw_entry.get("sw_l2", UNCLASSIFIED),
+            "concepts": sorted(concept_map.get(bare, set())),
+        })
+    return out

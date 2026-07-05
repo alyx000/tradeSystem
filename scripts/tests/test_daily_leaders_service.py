@@ -51,6 +51,53 @@ def test_propose_fail_closed_when_active_history_unavailable(tmp_path, monkeypat
     assert proposal["paths"]["json"].endswith("2026-07-03.json")
 
 
+def test_attach_market_quotes_adds_stock_quotes_without_mutating_source():
+    prefill = {"market": {"concept_moneyflow_ths": {"data": []}}}
+
+    class FakeRegistry:
+        def call(self, name, date):
+            assert date == "2026-06-29"
+            if name == "get_market_daily_quotes":
+                return type(
+                    "Result",
+                    (),
+                    {
+                        "success": True,
+                        "data": [
+                            {
+                                "ts_code": "688432.SH",
+                                "pct_chg": 12.34,
+                                "amount": 1880000.0,
+                            }
+                        ],
+                        "error": "",
+                    },
+                )()
+            if name == "get_stock_basic_list":
+                return type(
+                    "Result",
+                    (),
+                    {
+                        "success": True,
+                        "data": [{"ts_code": "688432.SH", "name": "有研硅"}],
+                        "error": "",
+                    },
+                )()
+            raise AssertionError(name)
+
+    out = service.attach_market_quotes(prefill, "2026-06-29", FakeRegistry())
+
+    assert "stock_quotes" not in prefill["market"]
+    assert out["market"]["stock_quotes"]["data"] == [
+        {
+            "code": "688432.SH",
+            "name": "有研硅",
+            "pct_chg": 12.34,
+            "amount_yi": 18.8,
+        }
+    ]
+
+
 def test_confirm_writes_step5_and_syncs_leader_tracking(conn, tmp_path):
     leaders_file = tmp_path / "leaders.json"
     leaders_file.write_text(

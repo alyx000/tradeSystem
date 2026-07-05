@@ -236,6 +236,39 @@ def test_huibo_digest_renders_failure_fallback_when_no_reader_success():
     assert "Reader 未完成：A证券-机器人行业深度" in md
 
 
+def test_huibo_digest_renders_terminal_pdf_missing_notice():
+    huibo_digest = {
+        "prescreened": [
+            {
+                "candidate": {"title": "A证券-机器人行业深度"},
+                "pdf_download": {"status": "missing", "reason": "terminal_pdf_missing"},
+            },
+            {
+                "candidate": {"title": "B证券-算力行业深度"},
+                "pdf_download": {"status": "missing", "reason": "terminal_pdf_missing"},
+            },
+        ],
+        "reader_results": [
+            {"title": "A证券-机器人行业深度", "reader": {"error": "reader_failed"}},
+            {"title": "B证券-算力行业深度", "reader": {"error": "reader_failed"}},
+        ],
+        "recommendations": [],
+        "meta": {
+            "ranker": {
+                "status": "fallback",
+                "reason": "no_successful_reader",
+            },
+        },
+    }
+
+    _, md = render_md("2026-06-03", cn_items=[], us_items=[], top3=[], huibo_digest=huibo_digest)
+
+    assert "## ⚠️ 慧博 PDF 未获取" in md
+    assert "慧博候选已采集 2 篇，但慧博终端未生成本地 PDF" in md
+    assert "reader/ranker/聚合未实际阅读 PDF，未生成慧博推荐" in md
+    assert "ranker=fallback" in md
+
+
 def test_huibo_industry_sources_go_through_redline_filter():
     huibo_digest = {
         "industry_summary": {

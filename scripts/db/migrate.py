@@ -19,7 +19,7 @@ PROJECT_ROOT = SCRIPTS_DIR.parent
 
 # 与 migrate() 中「当前最新」一步一致；新增迁移时递增本常量，并把上一步的
 # set_schema_version(conn, CURRENT_SCHEMA_VERSION) 改为字面量 N（保留历史链）。
-CURRENT_SCHEMA_VERSION = 36
+CURRENT_SCHEMA_VERSION = 37
 
 
 def get_schema_version(conn: sqlite3.Connection) -> int:
@@ -141,6 +141,36 @@ def _ensure_volume_concentration_gain_column(conn: sqlite3.Connection) -> None:
     if "gain_universe_json" not in cols:
         conn.execute("ALTER TABLE daily_volume_concentration ADD COLUMN gain_universe_json TEXT")
         conn.commit()  # 仅在确需修复时才提交
+
+
+def _ensure_cognition_instance_feedback_columns(conn: sqlite3.Connection) -> None:
+    """v37 兜底：为 cognition_instances 补观点结构化与反馈闭环列。
+
+    新库由 schema.py 真源创建；老库 CREATE IF NOT EXISTS 不会补列，因此必须
+    PRAGMA 探查后逐列 ALTER。健康库只读探查，不额外 commit。
+    """
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(cognition_instances)").fetchall()}
+    if not cols:
+        return
+    added = False
+    for col in (
+        "viewpoint_claims_json",
+        "factor_snapshot_json",
+        "hypothesis_json",
+        "feedback_detail_json",
+    ):
+        if col not in cols:
+            conn.execute(f"ALTER TABLE cognition_instances ADD COLUMN {col} TEXT")
+            added = True
+    if "feedback_action" not in cols:
+        conn.execute(
+            "ALTER TABLE cognition_instances ADD COLUMN feedback_action TEXT NOT NULL "
+            "DEFAULT 'none' CHECK(feedback_action IN "
+            "('none', 'keep', 'watch', 'refine', 'promote', 'deprecate', 'merge'))"
+        )
+        added = True
+    if added:
+        conn.commit()
 
 
 def _rebuild_trade_thesis_trade_mode_check(conn: sqlite3.Connection) -> None:
@@ -670,6 +700,13 @@ def migrate(conn: sqlite3.Connection) -> None:
         set_schema_version(conn, 36)
         conn.commit()
 
+    if version < 37:
+        logger.info("Applying schema v37: cognition_instances structured viewpoint + feedback columns")
+        init_schema(conn)
+        _ensure_cognition_instance_feedback_columns(conn)
+        set_schema_version(conn, 37)
+        conn.commit()
+
     # 版本无关兜底:DB 已标记到最新版但 market_timing_signal 缺失/缺列(异常半迁移态/历史遗留)时,
     # 版本门会跳过迁移块导致表/列永不建,运行期报 no such table/column。仅在确缺时 DDL+commit;
     # 健康库纯探查直接返回,不给调用方加事务边界(见 feedback_real_db_vs_in_memory)。
@@ -678,6 +715,7 @@ def migrate(conn: sqlite3.Connection) -> None:
     _ensure_volume_concentration_gain_column(conn)
     _ensure_broker_executions_columns(conn)
     _ensure_margin_index_correlation_daily(conn)
+    _ensure_cognition_instance_feedback_columns(conn)
 
 # ──────────────────────────────────────────────────────────────
 # YAML 数据导入

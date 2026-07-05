@@ -9,6 +9,7 @@ from services.daily_leaders.models import (
     TEACHER_SUPPORT,
     TEACHER_UNMENTIONED,
 )
+from utils import is_st_stock
 
 
 def _loads_list(value: Any) -> list[Any]:
@@ -28,6 +29,126 @@ def _text(value: Any) -> str:
     if value is None:
         return ""
     return str(value)
+
+
+def _rows_from_section(value: Any) -> list[dict[str, Any]]:
+    if isinstance(value, dict):
+        rows = value.get("data")
+        if isinstance(rows, list):
+            return [row for row in rows if isinstance(row, dict)]
+    if isinstance(value, list):
+        return [row for row in value if isinstance(row, dict)]
+    return []
+
+
+def _to_float(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _fmt_num(value: float | None) -> str | None:
+    if value is None:
+        return None
+    if float(value).is_integer():
+        return f"{value:.1f}"
+    text = f"{value:.2f}".rstrip("0").rstrip(".")
+    return text or "0"
+
+
+def _normalize_key(value: Any) -> str:
+    return "".join(_text(value).split()).upper()
+
+
+def _stock_matches_row(item: dict[str, Any], row: dict[str, Any]) -> bool:
+    aliases = {_normalize_key(alias) for alias in _stock_aliases(item)}
+    aliases.discard("")
+    if not aliases:
+        return False
+    for key in ("stock", "name", "stock_name", "ts_name", "lead_stock", "buy_sm_amount_stock", "code", "ts_code"):
+        value = _normalize_key(row.get(key))
+        if value and value in aliases:
+            return True
+    return False
+
+
+def _row_name_matches_sector(sector: str, row: dict[str, Any]) -> bool:
+    target = _normalize_key(sector)
+    if not target:
+        return False
+    for key in ("name", "industry", "sector_name", "ts_name", "ts_code"):
+        if _normalize_key(row.get(key)) == target:
+            return True
+    return False
+
+
+def _find_stock_strength(prefill: dict[str, Any], item: dict[str, Any]) -> dict[str, float | None]:
+    market = prefill.get("market") or {}
+    if not isinstance(market, dict):
+        return {"pct": None, "amount_yi": None}
+
+    pct_keys = ("pct_chg", "pct_change", "change_pct", "pct_change_stock")
+    amount_keys = ("amount_yi", "amount_billion", "top_volume_amount_billion", "成交额亿")
+    raw_amount_keys = ("amount", "成交额")
+    for section in ("stock_quotes", "market_daily_changes", "top_volume_stocks"):
+        for row in _rows_from_section(market.get(section)):
+            if not _stock_matches_row(item, row):
+                continue
+            pct = next((_to_float(row.get(key)) for key in pct_keys if _to_float(row.get(key)) is not None), None)
+            amount_yi = next((_to_float(row.get(key)) for key in amount_keys if _to_float(row.get(key)) is not None), None)
+            if amount_yi is None:
+                raw_amount = next((_to_float(row.get(key)) for key in raw_amount_keys if _to_float(row.get(key)) is not None), None)
+                if raw_amount is not None and abs(raw_amount) >= 1_000_000:
+                    amount_yi = round(raw_amount / 1e8, 2)
+            return {"pct": pct, "amount_yi": amount_yi}
+    return {"pct": None, "amount_yi": None}
+
+
+def _find_sector_strength(prefill: dict[str, Any], sector: str) -> dict[str, float | None]:
+    market = prefill.get("market") or {}
+    if not isinstance(market, dict):
+        return {"net_amount_yi": None, "pct": None}
+
+    for section in (
+        "sector_moneyflow_ths",
+        "concept_moneyflow_ths",
+        "sector_moneyflow_dc",
+        "concept_moneyflow_dc",
+        "limit_cpt_list",
+    ):
+        for row in _rows_from_section(market.get(section)):
+            if not _row_name_matches_sector(sector, row):
+                continue
+            net_amount = _to_float(row.get("net_amount_yi") if row.get("net_amount_yi") is not None else row.get("net_amount"))
+            if net_amount is not None and abs(net_amount) >= 1_000_000:
+                net_amount = round(net_amount / 1e8, 2)
+            pct = _to_float(row.get("pct_change") if row.get("pct_change") is not None else row.get("pct_chg"))
+            return {"net_amount_yi": net_amount, "pct": pct}
+    return {"net_amount_yi": None, "pct": None}
+
+
+def _teacher_supported_prefill_strength_evidence(prefill: dict[str, Any], item: dict[str, Any]) -> str | None:
+    stock_strength = _find_stock_strength(prefill, item)
+    sector_strength = _find_sector_strength(prefill, _text(item.get("sector")).strip())
+    parts = ["老师明确支持主线预填票，补充当日强度"]
+    stock_pct = _fmt_num(stock_strength.get("pct"))
+    amount_yi = _fmt_num(stock_strength.get("amount_yi"))
+    net_amount = _fmt_num(sector_strength.get("net_amount_yi"))
+    sector_pct = _fmt_num(sector_strength.get("pct"))
+    if stock_pct is not None:
+        parts.append(f"个股涨幅 {stock_pct}%")
+    if amount_yi is not None:
+        parts.append(f"成交额 {amount_yi} 亿")
+    if net_amount is not None:
+        parts.append(f"板块资金净流入 {net_amount} 亿")
+    if sector_pct is not None:
+        parts.append(f"板块涨幅 {sector_pct}%")
+    if len(parts) == 1:
+        return None
+    return "，".join(parts) + "，需 LLM 与人工复核"
 
 
 def teacher_alignment(stock: str, sector: str, notes: list[dict[str, Any]]) -> dict[str, Any]:
@@ -115,12 +236,63 @@ def _candidate_keys(item: dict[str, Any]) -> set[tuple[str, str]]:
     return {(stock, sector) for stock in _stock_aliases(item)}
 
 
+def _is_st_candidate(item: dict[str, Any]) -> bool:
+    return any(is_st_stock(alias) for alias in _stock_aliases(item))
+
+
 def _seen_candidate(item: dict[str, Any], seen: set[tuple[str, str]]) -> bool:
     return bool(_candidate_keys(item) & seen)
 
 
 def _mark_seen(item: dict[str, Any], seen: set[tuple[str, str]]) -> None:
     seen.update(_candidate_keys(item))
+
+
+def _market_flow_items(prefill: dict[str, Any], limit: int = 120) -> list[dict[str, Any]]:
+    market = prefill.get("market") or {}
+    if not isinstance(market, dict):
+        return []
+
+    source_specs = [
+        ("sector_moneyflow_ths", "lead_stock", "行业资金流"),
+        ("concept_moneyflow_ths", "lead_stock", "同花顺概念资金流"),
+        ("sector_moneyflow_dc", "buy_sm_amount_stock", "东方财富行业资金流"),
+        ("concept_moneyflow_dc", "buy_sm_amount_stock", "东方财富概念资金流"),
+    ]
+    raw_items: list[tuple[float, dict[str, Any]]] = []
+    for section, stock_field, source_label in source_specs:
+        for row in _rows_from_section(market.get(section)):
+            stock = _text(row.get(stock_field)).strip()
+            sector = _text(row.get("name") or row.get("industry") or row.get("sector_name")).strip()
+            net_amount = _to_float(row.get("net_amount_yi") if row.get("net_amount_yi") is not None else row.get("net_amount"))
+            pct_stock = _to_float(row.get("pct_change_stock"))
+            pct_sector = _to_float(row.get("pct_change"))
+            rank = _to_float(row.get("rank"))
+            if not stock or not sector:
+                continue
+            if net_amount is None or net_amount <= 0:
+                continue
+            rank_bonus = max(0.0, 80.0 - rank * 3.0) if rank is not None and rank <= 20 else 0.0
+            score = net_amount + max(pct_stock or 0.0, 0.0) * 5.0 + max(pct_sector or 0.0, 0.0) + rank_bonus
+            raw_items.append((
+                score,
+                {
+                    "stock": stock,
+                    "sector": sector,
+                    "attribute_type": "走势引领",
+                    "attribute": f"{source_label}：净流入 {net_amount} 亿",
+                    "clarity": CLARITY_MEDIUM,
+                    "position": None,
+                    "_flow_source": source_label,
+                    "_net_amount_yi": net_amount,
+                    "_pct_change_stock": pct_stock,
+                    "_pct_change": pct_sector,
+                    "_rank": int(rank) if rank is not None else None,
+                },
+            ))
+
+    raw_items.sort(key=lambda pair: -pair[0])
+    return [item for _, item in raw_items[:limit]]
 
 
 def _with_common_fields(
@@ -130,6 +302,7 @@ def _with_common_fields(
     history_keys: set[tuple[str, str]],
     notes: list[dict[str, Any]],
     evidence_text: str,
+    extra_evidence: list[str] | None = None,
 ) -> dict[str, Any]:
     stock = _text(item.get("stock")).strip()
     sector = _text(item.get("sector")).strip()
@@ -141,7 +314,11 @@ def _with_common_fields(
     note_ref = _note_ref(alignment["note"])
     if note_ref:
         out["teacher_note_ref"] = note_ref
-    out["evidence"] = [{"label": "[判断]", "text": evidence_text}]
+    evidence = [{"label": "[判断]", "text": evidence_text}]
+    for text in extra_evidence or []:
+        if text:
+            evidence.append({"label": "[判断]", "text": text})
+    out["evidence"] = evidence
     out["_score"] = score
     return out
 
@@ -168,11 +345,17 @@ def build_candidates(
             "clarity": raw_item.get("clarity") or CLARITY_MEDIUM,
             "position": raw_item.get("position"),
         }
-        if not item["stock"] or not item["sector"]:
+        if not item["stock"] or not item["sector"] or _is_st_candidate(item):
             continue
         if _seen_candidate(item, seen):
             continue
         _mark_seen(item, seen)
+        alignment = teacher_alignment(item["stock"], item["sector"], notes)
+        extra_evidence = []
+        if alignment["status"] == TEACHER_SUPPORT:
+            extra = _teacher_supported_prefill_strength_evidence(prefill, item)
+            if extra:
+                extra_evidence.append(extra)
         candidates.append(
             _with_common_fields(
                 item,
@@ -180,6 +363,7 @@ def build_candidates(
                 history_keys=history_keys,
                 notes=notes,
                 evidence_text="来自复盘预填候选，需用户确认",
+                extra_evidence=extra_evidence,
             )
         )
 
@@ -196,7 +380,7 @@ def build_candidates(
             "clarity": CLARITY_MEDIUM,
             "position": None,
         }
-        if not item["stock"]:
+        if not item["stock"] or _is_st_candidate({**item, "stock_name": pool_item.get("name"), "code": pool_item.get("code")}):
             continue
         if _seen_candidate(item, seen):
             continue
@@ -224,7 +408,11 @@ def build_candidates(
             "clarity": history_item.get("clarity") or CLARITY_MEDIUM,
             "position": history_item.get("position"),
         }
-        if not item["stock"] or not item["sector"]:
+        if not item["stock"] or not item["sector"] or _is_st_candidate({
+            **item,
+            "stock_name": history_item.get("stock_name"),
+            "stock_code": history_item.get("stock_code"),
+        }):
             continue
         if _seen_candidate(item, seen):
             continue
@@ -236,6 +424,35 @@ def build_candidates(
                 history_keys=history_keys,
                 notes=notes,
                 evidence_text="来自历史最票跟踪，需用户确认是否仍属当日最票",
+            )
+        )
+
+    for item in _market_flow_items(prefill):
+        if _is_st_candidate(item):
+            continue
+        if _seen_candidate(item, seen):
+            continue
+        _mark_seen(item, seen)
+        pct_stock = item.pop("_pct_change_stock", None)
+        pct_sector = item.pop("_pct_change", None)
+        rank = item.pop("_rank", None)
+        source_label = item.pop("_flow_source", "盘后资金流")
+        net_amount = item.pop("_net_amount_yi", None)
+        detail = f"来自{source_label}候选，{item['sector']} 净流入 {net_amount} 亿"
+        if rank is not None:
+            detail += f"，榜单排名 {rank}"
+        if pct_stock is not None:
+            detail += f"，领涨股涨幅 {pct_stock}%"
+        elif pct_sector is not None:
+            detail += f"，板块涨幅 {pct_sector}%"
+        detail += "，需 LLM 与人工复核"
+        candidates.append(
+            _with_common_fields(
+                item,
+                score=65,
+                history_keys=history_keys,
+                notes=notes,
+                evidence_text=detail,
             )
         )
 

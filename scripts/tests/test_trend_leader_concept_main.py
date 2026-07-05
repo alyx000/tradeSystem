@@ -1,7 +1,8 @@
 """趋势主升 概念分支主线（GAP B）单测：申万二级 ∪ 同花顺概念 Top-M。
 
-鞠磊「主线或其分支」——分支=同花顺概念（资金净流入 Top-M）。默认 main_line="l2"（仅二级，
-现状），main_line="l2+concept" 时主线门放宽为 sw_l2∈主线二级 OR 个股概念∩主线概念。
+鞠磊「主线或其分支」——分支=同花顺概念（资金净流入 Top-M）。默认 main_line="hybrid" 时
+主线门放宽为 sw_l2∈主线二级 OR 个股概念∩主线概念，并可由 LLM 过滤明显非窄分支概念；
+main_line="l2" 保留纯二级口径，main_line="l2+concept" 保留不经 LLM 的机械概念分支口径。
 概念成员极噪（通用概念遍地），靠资金热度 Top-M 自然滤垃圾概念；mock 隔离外网。
 """
 from __future__ import annotations
@@ -31,8 +32,10 @@ class FakeRegistry:
         self._mc = market_changes or []
         self._cf = concept_flow if concept_flow is not None else []
         self._tm = ths_member if ths_member is not None else []
+        self.calls = []
 
-    def call(self, name, *args):
+    def call(self, name, *args, **kwargs):
+        self.calls.append((name, args, kwargs))
         if name == "get_limit_up_list":
             return _R({"stocks": self._lu})
         if name == "get_stock_sw_industry_map":
@@ -158,6 +161,41 @@ def _branch_reg(sw_l2_of_target):
     )
 
 
+def test_default_hybrid_enters_concept_branch(conn):
+    """默认 hybrid：不指定 main_line 也启用同花顺概念分支；无 LLM runner 时退化为确定性 l2+concept。"""
+    _seed_concentration(conn, "2026-06-09", ["半导体"])
+    reg = _branch_reg("其他电子Ⅱ")
+    summary = scanner.run_daily(conn, reg, "2026-06-09", top_concepts=5)
+    assert summary["main_line"] == "hybrid"
+    assert "301628" in summary["entered"]
+
+
+def test_concept_mode_fetches_only_ranked_concept_window(conn, monkeypatch):
+    """trend-leader 只按资金流前排概念查询成员，不再触发 provider 全量 ths_member 扫描。"""
+    monkeypatch.setattr(C, "CONCEPT_PREFETCH_MIN", 2)
+    monkeypatch.setattr(C, "CONCEPT_PREFETCH_MULTIPLIER", 1)
+    _seed_concentration(conn, "2026-06-09", ["半导体"])
+    reg = FakeRegistry(
+        limit_stocks=[{"code": "301628.SZ", "name": "强达电路", "pct_chg": 20.0}],
+        sw_map={"301628.SZ": {"name": "强达电路", "sw_l2": "其他电子Ⅱ"}},
+        bars_by_code={"301628": _leader_bars()},
+        concept_flow=[
+            {"name": "PCB概念", "net_amount": 200.0},
+            {"name": "液冷服务器", "net_amount": 100.0},
+            {"name": "低位概念", "net_amount": 50.0},
+        ],
+        ths_member=[{"con_code": "301628.SZ", "index_name": "PCB概念"}],
+    )
+
+    summary = scanner.run_daily(conn, reg, "2026-06-09", main_line="l2+concept", top_concepts=1)
+
+    ths_calls = [c for c in reg.calls if c[0] == "get_ths_member"]
+    assert ths_calls == [
+        ("get_ths_member", ("2026-06-09",), {"concept_names": ["PCB概念", "液冷服务器"]})
+    ]
+    assert "301628" in summary["entered"]
+
+
 def test_concept_mode_enters_branch_stock(conn):
     """sw_l2 不在主线二级，但概念∈主线概念 → l2+concept 入候选并入池。"""
     _seed_concentration(conn, "2026-06-09", ["半导体"])     # 主线二级=半导体
@@ -166,6 +204,69 @@ def test_concept_mode_enters_branch_stock(conn):
     assert summary["candidates"] == 1
     assert "301628" in summary["entered"]
     assert pool.get_active(conn, "301628") is not None
+
+
+def test_hybrid_llm_filters_defensive_concept_without_denying_l2(conn):
+    """LLM 只过滤概念分支，不否决申万 Top-K：防御篮子分支被挡，二级主线票仍入池。"""
+    _seed_concentration(conn, "2026-06-09", ["半导体"])
+    reg = FakeRegistry(
+        limit_stocks=[
+            {"code": "301628.SZ", "name": "强达电路", "pct_chg": 20.0},
+            {"code": "301999.SZ", "name": "防御篮子票", "pct_chg": 20.0},
+            {"code": "688512.SH", "name": "慧智微", "pct_chg": 20.0},
+        ],
+        sw_map={
+            "301628.SZ": {"name": "强达电路", "sw_l2": "其他电子Ⅱ"},
+            "301999.SZ": {"name": "防御篮子票", "sw_l2": "其他电子Ⅱ"},
+            "688512.SH": {"name": "慧智微", "sw_l2": "半导体"},
+        },
+        bars_by_code={
+            "301628": _leader_bars(),
+            "301999": _leader_bars(),
+            "688512": _leader_bars(),
+        },
+        concept_flow=[
+            {"name": "PCB概念", "net_amount": 200.0},
+            {"name": "高股息精选", "net_amount": 150.0},
+        ],
+        ths_member=[
+            {"con_code": "301628.SZ", "index_name": "PCB概念"},
+            {"con_code": "301999.SZ", "index_name": "高股息精选"},
+        ],
+    )
+
+    def llm_runner(prompt, payload):
+        assert "只筛选主线概念" in prompt
+        assert set(payload["main_concepts"]) == {"PCB概念", "高股息精选"}
+        return {
+            "accepted_concepts": ["PCB概念"],
+            "rejected": [{"name": "高股息精选", "reason": "防御篮子"}],
+        }
+
+    summary = scanner.run_daily(
+        conn, reg, "2026-06-09", main_line="hybrid", top_concepts=5,
+        mainline_llm_runner=llm_runner)
+    assert "301628" in summary["entered"]      # LLM 接受的概念分支
+    assert "301999" not in summary["entered"]  # LLM 过滤的防御篮子分支
+    assert "688512" in summary["entered"]      # 申万二级 Top-K 不被 LLM 否决
+    assert summary["main_concepts"] == ["PCB概念"]
+    assert summary["mainline_llm"]["status"] == "ok"
+
+
+def test_hybrid_llm_bad_output_falls_back_to_mechanical_concepts(conn):
+    """LLM 不可用/解析失败时降级到确定性 l2+concept，不中断扫描。"""
+    _seed_concentration(conn, "2026-06-09", ["半导体"])
+    reg = _branch_reg("其他电子Ⅱ")
+
+    def bad_runner(prompt, payload):
+        return {"accepted_concepts": ["输入外概念"]}
+
+    summary = scanner.run_daily(
+        conn, reg, "2026-06-09", main_line="hybrid", top_concepts=5,
+        mainline_llm_runner=bad_runner)
+    assert "301628" in summary["entered"]
+    assert summary["mainline_llm"]["status"] == "fallback"
+    assert "mainline_llm" in summary["source_errors"]
 
 
 def test_l2_mode_ignores_concept_branch(conn):
@@ -220,10 +321,10 @@ def test_concept_mode_enters_branch_when_sw_map_down(conn):
     _seed_concentration(conn, "2026-06-09", ["半导体"])
 
     class SwDownReg(FakeRegistry):
-        def call(self, name, *a):
+        def call(self, name, *a, **k):
             if name == "get_stock_sw_industry_map":
                 return _R(None, success=False)
-            return super().call(name, *a)
+            return super().call(name, *a, **k)
 
     reg = SwDownReg(
         limit_stocks=[{"code": "301628.SZ", "name": "强达电路", "pct_chg": 20.0}],
@@ -244,10 +345,10 @@ def test_l2_mode_sw_down_still_blocks(conn):
     _seed_concentration(conn, "2026-06-09", ["半导体"])
 
     class SwDownReg(FakeRegistry):
-        def call(self, name, *a):
+        def call(self, name, *a, **k):
             if name == "get_stock_sw_industry_map":
                 return _R(None, success=False)
-            return super().call(name, *a)
+            return super().call(name, *a, **k)
 
     reg = SwDownReg(limit_stocks=[{"code": "301628.SZ", "name": "强达电路", "pct_chg": 20.0}],
                     bars_by_code={"301628": _leader_bars()})
@@ -317,10 +418,10 @@ def test_concept_source_failure_degrades(conn):
     _seed_concentration(conn, "2026-06-09", ["玻璃玻纤"])
 
     class PartialReg(FakeRegistry):
-        def call(self, name, *a):
+        def call(self, name, *a, **k):
             if name == "get_concept_moneyflow_ths":
                 return _R(None, success=False)
-            return super().call(name, *a)
+            return super().call(name, *a, **k)
 
     reg = PartialReg(
         limit_stocks=[{"code": "600552.SH", "name": "凯盛科技", "pct_chg": 10.0}],

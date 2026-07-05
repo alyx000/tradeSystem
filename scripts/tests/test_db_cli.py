@@ -181,6 +181,74 @@ class TestQueryNotes:
         assert "未找到" in result.stdout
 
 
+class TestUpdateNote:
+    def test_update_structured_fields(self, tmp_db):
+        add = _run_cli(
+            "add-note", "--teacher", "测试老师",
+            "--date", "2026-04-01", "--title", "旧标题",
+            "--core-view", "旧观点",
+            "--key-points", '["旧要点A","旧要点B"]',
+            tmp_db=tmp_db,
+        )
+        assert add.returncode == 0
+        conn = get_connection(tmp_db)
+        note_id = conn.execute(
+            "SELECT id FROM teacher_notes WHERE title = ?", ("旧标题",)
+        ).fetchone()[0]
+        conn.close()
+
+        result = _run_cli(
+            "update-note", "--id", str(note_id),
+            "--title", "新标题",
+            "--core-view", "新观点",
+            "--key-points", '["新要点A","新要点B","新要点C"]',
+            "--sectors", '["AI","半导体"]',
+            "--input-by", "codex_automation",
+            tmp_db=tmp_db,
+        )
+        assert result.returncode == 0
+        assert "已更新老师笔记" in result.stdout
+
+        conn = get_connection(tmp_db)
+        row = conn.execute(
+            "SELECT title, core_view, key_points, sectors, input_by FROM teacher_notes WHERE id = ?",
+            (note_id,),
+        ).fetchone()
+        conn.close()
+        assert row["title"] == "新标题"
+        assert row["core_view"] == "新观点"
+        assert json.loads(row["key_points"]) == ["新要点A", "新要点B", "新要点C"]
+        assert json.loads(row["sectors"]) == ["AI", "半导体"]
+        assert row["input_by"] == "codex_automation"
+
+    def test_delete_requires_yes(self, tmp_db):
+        add = _run_cli(
+            "add-note", "--teacher", "测试老师",
+            "--date", "2026-04-01", "--title", "待删",
+            tmp_db=tmp_db,
+        )
+        assert add.returncode == 0
+        conn = get_connection(tmp_db)
+        note_id = conn.execute("SELECT id FROM teacher_notes WHERE title = ?", ("待删",)).fetchone()[0]
+        conn.close()
+
+        result = _run_cli(
+            "delete-note", "--id", str(note_id), "--input-by", "codex_automation",
+            tmp_db=tmp_db,
+        )
+        assert result.returncode != 0
+
+        result = _run_cli(
+            "delete-note", "--id", str(note_id), "--input-by", "codex_automation", "--yes",
+            tmp_db=tmp_db,
+        )
+        assert result.returncode == 0
+        conn = get_connection(tmp_db)
+        row = conn.execute("SELECT id FROM teacher_notes WHERE id = ?", (note_id,)).fetchone()
+        conn.close()
+        assert row is None
+
+
 # ── 行业 / 宏观 ───────────────────────────────────────────────────
 
 class TestAddIndustry:
@@ -222,6 +290,78 @@ class TestAddIndustry:
     def test_missing_required(self, tmp_db):
         result = _run_cli("add-industry", "--sector", "AI", tmp_db=tmp_db)
         assert result.returncode != 0
+
+
+class TestUpdateIndustry:
+    def test_update_structured_fields(self, tmp_db):
+        add = _run_cli(
+            "add-industry", "--sector", "AI算力",
+            "--date", "2026-04-01",
+            "--content", "旧内容",
+            "--input-by", "cursor",
+            tmp_db=tmp_db,
+        )
+        assert add.returncode == 0
+        conn = get_connection(tmp_db)
+        info_id = conn.execute(
+            "SELECT id FROM industry_info WHERE sector_name = ?", ("AI算力",)
+        ).fetchone()[0]
+        conn.close()
+
+        result = _run_cli(
+            "update-industry", "--id", str(info_id),
+            "--sector", "半导体设备",
+            "--content", "新内容",
+            "--info-type", "订单",
+            "--confidence", "中",
+            "--tags", '["半导体","订单"]',
+            "--input-by", "codex_automation",
+            tmp_db=tmp_db,
+        )
+        assert result.returncode == 0
+        assert "已更新行业信息" in result.stdout
+
+        conn = get_connection(tmp_db)
+        row = conn.execute(
+            "SELECT sector_name, content, info_type, confidence, tags, input_by FROM industry_info WHERE id = ?",
+            (info_id,),
+        ).fetchone()
+        conn.close()
+        assert row["sector_name"] == "半导体设备"
+        assert row["content"] == "新内容"
+        assert row["info_type"] == "订单"
+        assert row["confidence"] == "中"
+        assert json.loads(row["tags"]) == ["半导体", "订单"]
+        assert row["input_by"] == "codex_automation"
+
+    def test_delete_requires_yes(self, tmp_db):
+        add = _run_cli(
+            "add-industry", "--sector", "AI算力",
+            "--date", "2026-04-01",
+            "--content", "待删内容",
+            "--input-by", "cursor",
+            tmp_db=tmp_db,
+        )
+        assert add.returncode == 0
+        conn = get_connection(tmp_db)
+        info_id = conn.execute("SELECT id FROM industry_info WHERE sector_name = ?", ("AI算力",)).fetchone()[0]
+        conn.close()
+
+        result = _run_cli(
+            "delete-industry", "--id", str(info_id), "--input-by", "codex_automation",
+            tmp_db=tmp_db,
+        )
+        assert result.returncode != 0
+
+        result = _run_cli(
+            "delete-industry", "--id", str(info_id), "--input-by", "codex_automation", "--yes",
+            tmp_db=tmp_db,
+        )
+        assert result.returncode == 0
+        conn = get_connection(tmp_db)
+        row = conn.execute("SELECT id FROM industry_info WHERE id = ?", (info_id,)).fetchone()
+        conn.close()
+        assert row is None
 
 
 class TestAddMacro:

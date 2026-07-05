@@ -17,9 +17,17 @@ def render_markdown(proposal: dict[str, Any]) -> str:
         f"# 每日最票候选确认稿 · {date}",
         "",
         "> 风险提示：以下内容仅用于复盘确认与资料整理，不构成买卖建议，不提供价格目标或仓位建议；是否录入由用户人工确认。",
-        "",
-        "## 候选条目",
     ]
+    llm_status = proposal.get("llm_status") if isinstance(proposal.get("llm_status"), dict) else {}
+    if llm_status and not llm_status.get("ok"):
+        reason = _text(llm_status.get("reason")).strip() or "unknown"
+        lines.extend(
+            [
+                "",
+                f"> LLM裁判未生效：[判断] {reason}；当前排序仅为数据候选层，请勿按 LLM 结果确认。",
+            ]
+        )
+    lines.extend(["", "## 候选条目"])
 
     if not leaders:
         lines.append("")
@@ -35,6 +43,9 @@ def render_markdown(proposal: dict[str, Any]) -> str:
         is_new = "是" if item.get("is_new") else "否"
         teacher_alignment = _text(item.get("teacher_alignment")).strip() or "未提及"
         llm_reason = _text(item.get("llm_reason")).strip()
+        llm_rank = _text(item.get("llm_rank")).strip()
+        llm_role = _text(item.get("llm_role")).strip()
+        risk_flags = item.get("risk_flags") or []
 
         lines.extend(
             [
@@ -47,6 +58,12 @@ def render_markdown(proposal: dict[str, Any]) -> str:
                 f"- 老师观点对照：{teacher_alignment}",
             ]
         )
+        if llm_rank or llm_role:
+            lines.append(f"- LLM裁判：[判断] 排序 {llm_rank or '-'} / 角色 {llm_role or '-'}")
+        if risk_flags:
+            flags = "、".join(_text(flag).strip() for flag in risk_flags if _text(flag).strip())
+            if flags:
+                lines.append(f"- 风险标签：[判断] {flags}")
         if llm_reason:
             lines.append(f"- LLM 辅助理由：[判断] {llm_reason}")
 

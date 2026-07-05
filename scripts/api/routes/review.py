@@ -767,9 +767,7 @@ def _pick_sector_leaders(
 
     def capacity_gate(record: dict[str, Any]) -> bool:
         return bool(record["strong_sources"]) or (
-            bool(record["weak_sources"]) and (
-                isinstance(record.get("top_volume_rank"), int) or bool(record.get("limit_up"))
-            )
+            bool(record["weak_sources"]) and isinstance(record.get("top_volume_rank"), int)
         )
 
     def pick_best(gate) -> str | None:

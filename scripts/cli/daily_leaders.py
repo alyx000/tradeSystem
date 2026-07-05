@@ -43,12 +43,13 @@ def handle_command(config: dict, args: argparse.Namespace) -> None:
 
 def _handle_propose(args: argparse.Namespace) -> None:
     from api.routes.review import get_prefill
+    from api.deps import get_provider_registry
 
     date = args.date or datetime.date.today().isoformat()
     conn = get_connection()
     try:
         prefill = get_prefill(date, conn=conn)
-        proposal = service.propose(conn, date, prefill, no_llm=args.no_llm)
+        proposal = service.propose(conn, date, prefill, no_llm=args.no_llm, registry=get_provider_registry())
     finally:
         conn.close()
 

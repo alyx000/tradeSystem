@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 from pathlib import Path
 from typing import Any
@@ -27,13 +28,84 @@ def _trend_pool(conn) -> list[dict[str, Any]]:
         return []
 
 
+def _amount_to_yi(value: Any) -> float | None:
+    try:
+        amount = float(value)
+    except (TypeError, ValueError):
+        return None
+    if abs(amount) >= 1_000_000:
+        return round(amount / 1e5, 2)
+    return round(amount, 2)
+
+
+def attach_market_quotes(
+    prefill: dict[str, Any],
+    date: str,
+    registry: Any | None,
+) -> dict[str, Any]:
+    """Attach all-market daily quote rows for LLM candidate evidence.
+
+    Tushare `daily.amount` is in thousand yuan, so amount / 1e5 = 亿元.
+    This is best-effort: provider failures are recorded in market.stock_quotes.error.
+    """
+    out = copy.deepcopy(prefill)
+    market = out.get("market")
+    if not isinstance(market, dict):
+        market = {}
+        out["market"] = market
+    if registry is None:
+        return out
+    initializer = getattr(registry, "initialize_all", None)
+    if callable(initializer):
+        initializer()
+    try:
+        result = registry.call("get_market_daily_quotes", date)
+    except Exception as exc:  # noqa: BLE001 - quote enrichment is non-critical evidence.
+        market["stock_quotes"] = {"data": [], "error": str(exc)}
+        return out
+    if not getattr(result, "success", False):
+        market["stock_quotes"] = {"data": [], "error": str(getattr(result, "error", "") or "quote_fetch_failed")}
+        return out
+    name_by_code: dict[str, str] = {}
+    try:
+        basic_result = registry.call("get_stock_basic_list", date)
+        if getattr(basic_result, "success", False):
+            for row in getattr(basic_result, "data", None) or []:
+                if not isinstance(row, dict):
+                    continue
+                code = str(row.get("ts_code") or row.get("code") or "").strip().upper()
+                name = str(row.get("name") or row.get("stock_name") or "").strip()
+                if code and name:
+                    name_by_code[code] = name
+    except Exception:
+        name_by_code = {}
+    rows = []
+    for row in getattr(result, "data", None) or []:
+        if not isinstance(row, dict):
+            continue
+        code = str(row.get("ts_code") or row.get("code") or "").strip()
+        name = str(row.get("name") or row.get("stock_name") or name_by_code.get(code.upper(), "")).strip()
+        if not name and not code:
+            continue
+        rows.append({
+            "code": code,
+            "name": name,
+            "pct_chg": row.get("pct_chg"),
+            "amount_yi": _amount_to_yi(row.get("amount")),
+        })
+    market["stock_quotes"] = {"data": rows}
+    return out
+
+
 def propose(
     conn,
     date: str,
     prefill: dict[str, Any],
     no_llm: bool = False,
     output_root: str | Path | None = None,
+    registry: Any | None = None,
 ) -> dict[str, Any]:
+    prefill = attach_market_quotes(prefill, date, registry)
     proposal = build_candidates(
         prefill=prefill,
         trend_pool=_trend_pool(conn),

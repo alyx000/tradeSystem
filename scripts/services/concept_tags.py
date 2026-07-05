@@ -19,13 +19,19 @@ def _clean_code(raw) -> str | None:
     return s if s and s.lower() != "nan" else None
 
 
-def build_stock_concept_map(registry, date: str) -> tuple[dict, dict, bool]:
+def build_stock_concept_map(registry, date: str,
+                            concept_names: list[str] | set[str] | tuple[str, ...] | None = None
+                            ) -> tuple[dict, dict, bool]:
     """个股 → 同花顺概念 反向映射 {裸码: set(概念名)} + 概念成员数 {概念名: 去重个股数}。
 
     成员数供容器概念过滤。返回 (map, member_count, ok)；失败 → ({}, {}, False) 由上层记 source_errors。
     含美股/全球成员（con_code 如 CAT.N），裸码归一后 A 股候选查不到则不命中,无害。
     """
-    r = registry.call("get_ths_member", date)
+    if concept_names is None:
+        r = registry.call("get_ths_member", date)
+    else:
+        names = list(concept_names)
+        r = registry.call("get_ths_member", date, concept_names=names)
     if not (getattr(r, "success", False) and isinstance(r.data, list)):
         return {}, {}, False
     out: dict[str, set] = {}
@@ -42,6 +48,53 @@ def build_stock_concept_map(registry, date: str) -> tuple[dict, dict, bool]:
                 s.add(concept)
                 member_count[concept] = member_count.get(concept, 0) + 1
     return out, member_count, True
+
+
+def ranked_concept_moneyflow(registry, date: str) -> tuple[list[str], bool]:
+    """按同花顺概念资金净流入降序返回概念名；取数失败返回 ([], False)。"""
+    r = registry.call("get_concept_moneyflow_ths", date)
+    if not (getattr(r, "success", False) and isinstance(r.data, list)):
+        return [], False
+    parsed = []
+    for row in r.data:
+        if not isinstance(row, dict):
+            continue
+        name = row.get("name")
+        if not name:
+            continue
+        try:
+            amt = float(row.get("net_amount"))
+        except (TypeError, ValueError):
+            continue
+        parsed.append((str(name), amt))
+    parsed.sort(key=lambda x: x[1], reverse=True)
+
+    out: list[str] = []
+    seen = set()
+    for name, _ in parsed:
+        if name not in seen:
+            seen.add(name)
+            out.append(name)
+    return out, True
+
+
+def filter_hot_concepts(ranked_names: list[str], top_m: int, member_count: dict,
+                        max_members: int | None = None) -> tuple[set, bool]:
+    """用成员数闸从已排序概念里筛 Top-M 窄分支；返回 (热概念集合, coverage_ok)。"""
+    cap = CONTAINER_MAX_MEMBERS if max_members is None else max_members
+    kept: list[str] = []
+    coverage_ok = True
+    for name in ranked_names:
+        mc = member_count.get(name, 0)
+        if mc > cap:
+            continue
+        if mc == 0:
+            coverage_ok = False
+            continue
+        kept.append(name)
+        if len(kept) >= top_m:
+            break
+    return set(kept), coverage_ok
 
 
 def stock_real_concepts(bare_code: str, concept_map: dict, member_count: dict,
@@ -63,32 +116,8 @@ def hot_concepts(registry, date: str, top_m: int, member_count: dict,
     max_members=None 时取 CONTAINER_MAX_MEMBERS(哨兵在调用时取值,避免默认参数 import 期绑定致 monkeypatch 失效)。
     """
     cap = CONTAINER_MAX_MEMBERS if max_members is None else max_members
-    r = registry.call("get_concept_moneyflow_ths", date)
-    if not (getattr(r, "success", False) and isinstance(r.data, list)):
+    ranked, ok = ranked_concept_moneyflow(registry, date)
+    if not ok:
         return set(), False, True
-    parsed = []
-    for row in r.data:
-        if not isinstance(row, dict):
-            continue
-        name = row.get("name")
-        if not name:
-            continue
-        try:                                            # 身份过后再解析数值(提前短路垃圾行)
-            amt = float(row.get("net_amount"))
-        except (TypeError, ValueError):
-            continue
-        parsed.append((str(name), amt))
-    parsed.sort(key=lambda x: x[1], reverse=True)
-    kept: list[str] = []
-    coverage_ok = True
-    for name, _ in parsed:                              # 净流入降序逐个判,填满 top_m 即停
-        mc = member_count.get(name, 0)
-        if mc > cap:                                    # 容器概念,正常剔除(非覆盖缺失)
-            continue
-        if mc == 0:                                     # 排在入选窗口内却无成员 → 疑似部分覆盖缺失
-            coverage_ok = False
-            continue
-        kept.append(name)
-        if len(kept) >= top_m:
-            break
-    return set(kept), True, coverage_ok
+    hot, coverage_ok = filter_hot_concepts(ranked, top_m, member_count, max_members=cap)
+    return hot, True, coverage_ok

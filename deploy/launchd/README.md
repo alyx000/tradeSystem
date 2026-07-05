@@ -20,6 +20,8 @@
 - `com.alyx.tradesystem.cognition-digest-monthly.plist` — 每月 1 号 09:00 触发（认知沉淀月汇总；同一日志 `/tmp/tradesystem-cognition-digest.log`）
 - `board-break-runner.sh` — 包装脚本：cd 仓库根 → source `scripts/.env`(TUSHARE_TOKEN) + `~/.config/tradeSystem.env`(钉钉/ANTIGRAVITY) → 调 `python3 main.py board-break daily`
 - `com.alyx.tradesystem.board-break.plist` — 工作日 21:20 触发（断板反包盘后扫描：昨日连板≥2 断板→八维度加权打分+LLM两两PK→双排序观察清单；日志 `/tmp/tradesystem-board-break.log`）
+- `ma-breakout-runner.sh` — 包装脚本：cd 仓库根 → source `scripts/.env`(TUSHARE_TOKEN) + `~/.config/tradeSystem.env`(钉钉) → 调 `python3 main.py ma-breakout daily`
+- `com.alyx.tradesystem.ma-breakout.plist` — 中国时间工作日 21:35 触发（Pacific 本机 05:35/06:35 双触发 + runner 时间窗守卫；4日均线二波观察池；日志 `/tmp/tradesystem-ma-breakout.log`）
 - `daily-leaders-runner.sh` — 包装脚本：cd 仓库根 → source `~/.config/tradeSystem.env`(钉钉/LLM) → 调 `/usr/bin/python3 scripts/main.py daily-leaders propose --push`
 - `com.alyx.tradesystem.daily-leaders.plist` — 工作日 22:30 触发（每日最票候选确认稿；stdout `/tmp/tradesystem-daily-leaders.out.log`，stderr `/tmp/tradesystem-daily-leaders.err.log`）
 
@@ -217,6 +219,41 @@ rm ~/Library/LaunchAgents/com.alyx.tradesystem.sector-correlation.plist
 
 **时段**：21:15 在 volume-watch(21:00)与 four-trading-day-review(22:30)之间,无冲突。
 
+## 4日均线二波观察池（中国时间工作日 21:35）
+
+近 60 自然日历史龙头/最票宇宙 → 近 10 个有效行情日 → MA4 重新拐头向上（今日 MA4 上行，且上拐前至少两根 MA4 连续下行）+ 今日成交额同时突破 5/10 日成交额均线 + 当日未涨停 → 只读二波观察清单 + 钉钉。
+runner source `scripts/.env`(TUSHARE_TOKEN)+`~/.config/tradeSystem.env`(钉钉);非交易日任务内自动跳过,不推送。
+
+```bash
+# 1. 包装脚本可执行
+chmod +x deploy/launchd/ma-breakout-runner.sh
+
+# 2. 复制 plist
+cp deploy/launchd/com.alyx.tradesystem.ma-breakout.plist ~/Library/LaunchAgents/
+
+# 3. 加载
+launchctl load ~/Library/LaunchAgents/com.alyx.tradesystem.ma-breakout.plist
+
+# 4. 验证
+launchctl list | grep tradesystem.ma-breakout
+
+# 5. launchd 链路测试（窗口外会被 runner 时间窗守卫跳过）
+launchctl start com.alyx.tradesystem.ma-breakout
+tail -f /tmp/tradesystem-ma-breakout.log
+
+# 6. 手工验证真实扫描链路（绕过时间窗守卫；--dry-run 不推送）
+MA_BREAKOUT_FORCE=1 deploy/launchd/ma-breakout-runner.sh --dry-run
+```
+
+卸载：
+
+```bash
+launchctl unload ~/Library/LaunchAgents/com.alyx.tradesystem.ma-breakout.plist
+rm ~/Library/LaunchAgents/com.alyx.tradesystem.ma-breakout.plist
+```
+
+**时段**：目标业务时间为中国时间 21:35，在 trend-leader(21:30) 与 market-timing(21:40) 之间,无冲突。macOS launchd 本身按机器本地时区触发；当前 Pacific 主机用 05:35/06:35 双触发覆盖 PDT/PST，runner 只允许中国时间 21:20-22:05 继续执行，另一个季节性触发会自动跳过。
+
 ## 每日最票候选确认稿（工作日 22:30）
 
 汇总复盘预填、趋势池、历史最票、老师观点与认知证据 → 生成复盘第 5 步「龙头 / 最票」候选确认稿 → 落本地 Markdown/JSON → 推送钉钉 Markdown。v1 只支持钉钉草稿 + Codex/CLI 确认；钉钉按钮 callback / 直接写回 deferred 到 v2。
@@ -250,43 +287,18 @@ rm ~/Library/LaunchAgents/com.alyx.tradesystem.daily-leaders.plist
 
 **时段**：22:30 在 `board-break`(21:20)、`trend-leader`(21:30)、`ma-breakout`(21:35)、`market-timing`(21:40) 等盘后派生任务之后，供用户在 Codex 中确认后执行 `python3 main.py daily-leaders confirm --date YYYY-MM-DD --input-by codex`。本任务不自动写复盘、不写交易计划、不提供买卖建议或价位目标。
 
-## 研报速读（每天 22:00，A 股交易日/交易日前一天执行）
+## 研报速读（已迁移到 Codex 自动化）
 
-launchd 每天 22:00 触发一次，runner 先按 A 股交易日历判断：当天是 A 股交易日或次日是 A 股交易日才继续执行，其它日期只写 skip 日志。A股取最近交易日研报评级(巨潮 cninfo,鞠磊「首次覆盖」加权),
-美股按美东窗口拉 yfinance 评级方向变动(init/up/down/reinit),可选慧博热点研报候选预筛 + Antigravity 每篇独立 reader 深读 + 独立聚合/ranker,最多推荐 2 篇 → MD 落盘 `data/reports/research-digest/` + 推钉钉。
-runner source `scripts/.env`(TUSHARE_TOKEN)+`~/.config/tradeSystem.env`(钉钉/ANTIGRAVITY);
-非交易日 / 窗口内无评级变动时,任务内显式标注「无符合条件」,不报错、不冒充。
+研报速读不再使用 macOS launchd。生产定时入口是 Codex 自动化「每日慧博研报速读（Computer Use）」：每天 22:00 触发，自动化先按 A 股交易日/交易日前一天判断是否继续，然后必须通过 Computer Use 操作慧博终端进入「热点研报追踪」、获取当前 HotReport URL、按预筛候选在慧博终端下载 PDF 到本地目录，再运行 JS workflow 读取这些本地 PDF 并发布。正式自动化不使用旧 `HUIBO_HOT_REPORT_URL` 兜底，也不走裸 URL 直连下载 PDF。
 
-慧博增强默认 `HUIBO_MODE=desktop_terminal`。如使用终端快照/URL,在 env 中配置 `HUIBO_HOT_REPORT_JSON` 或 `HUIBO_HOT_REPORT_URL`; URL 源只用于调用慧博页面背后的 `/redian/HotReport/GetList` 获取候选列表,HTML 解析只做回退。PDF 默认必须来自慧博终端实际下载/导出的本地文件: 候选 `PDF路径`、payload `pdfs/report_pdfs`,或 `HUIBO_REPORT_PDF_DIR` 指向的终端下载目录; JS workflow 默认使用 `~/Downloads`,如慧博终端另设目录则用 env 覆盖。workflow 会复制到 raw 目录归档/去重。默认禁止 Python 裸 URL 直连下载 PDF,仅排障兼容时可显式设置 `HUIBO_ALLOW_DIRECT_PDF_DOWNLOAD=1`。可选 `HUIBO_REPORT_TEXT_DIR` 补充本地预览文本。如后续接官方 API,配置 `HUIBO_MODE=official_api` + `HUIBO_API_BASE_URL`/`HUIBO_API_TOKEN`。reader 优先让 Antigravity CLI 通过 `@PDF路径` 并发读取 raw PDF,默认 `HUIBO_READER_CONCURRENCY=4`,如需一篇 PDF 一个 Antigravity 同时读,将并发数设为 reader cap; 预览文本只做预筛/兜底; 用户已授权本项目把慧博 raw PDF 交给外部 Antigravity 阅读,默认启用 PDF reader,需关闭时配置 `HUIBO_ALLOW_EXTERNAL_PDF_LLM=0`; `LLM_MODEL` 不设时由 Antigravity CLI 使用默认/自动模型。正式任务结束会清理慧博本地存储: raw PDF 默认 30 天、summary 默认 180 天; 可手动用 `python3 main.py research-digest daily --huibo-cleanup-only --dry-run` 预览清理对象。
-
-launchd 包装脚本已使用 JS workflow: `node scripts/workflows/research-digest-workflow.mjs daily --reader-cap 20 --reader-concurrency 20 --reader-max-attempts 2 --preflight --resume --publish --include-base-digest`。产物落 `data/runs/research-digest/YYYY-MM-DD/`,包含 `state.json`、`events.jsonl`、`reader/*.json`、`summary.json`、`report.md`、`run_report.md`、`published.json`; `--publish` 会同步 `report.md` 到 `data/reports/research-digest/YYYY-MM-DD.md` 并推钉钉。正式 PDF 仍在 raw 目录归档/去重,read 阶段会复制单篇 PDF 到 `HUIBO_LLM_INPUT_DIR` 或 `--llm-input-dir` 指定 base 下的 `YYYY-MM-DD/` 子目录后再传给 Antigravity; resume 会重建缺失副本,正常 cleanup 只删除带 marker 的本次临时输入子目录。`--preflight` 会先做 Antigravity 健康探针；quota/auth/startup 全局不可用会停止后续 LLM 并在正文、summary、published 与 events 中显式标记。reader 失败会在同一次 read 阶段自动重试到 `--reader-max-attempts` 上限; 已达到上限的失败项后续可用 `--retry-failed --reader-max-attempts 4` 继续追加尝试。
-
-```bash
-# 1. 包装脚本可执行
-chmod +x deploy/launchd/research-digest-runner.sh
-
-# 2. 复制 plist
-cp deploy/launchd/com.alyx.tradesystem.research-digest.plist ~/Library/LaunchAgents/
-
-# 3. 加载
-launchctl load ~/Library/LaunchAgents/com.alyx.tradesystem.research-digest.plist
-
-# 4. 验证
-launchctl list | grep tradesystem.research-digest
-
-# 5. 真触发立即测试（非交易日仅验 launchd 链路 + 凭据注入；先 dry-run 验产物再真推）
-launchctl start com.alyx.tradesystem.research-digest
-tail -f /tmp/tradesystem-research-digest.log   # 看 [env] DINGTALK/ANTIGRAVITY =set + 运行结果
-```
-
-卸载：
+旧 `com.alyx.tradesystem.research-digest` launchd 已停用；仓库中的 plist/runner 仅保留为历史排障参考，不再安装。若本机仍残留旧任务，按以下方式卸载：
 
 ```bash
 launchctl unload ~/Library/LaunchAgents/com.alyx.tradesystem.research-digest.plist
 rm ~/Library/LaunchAgents/com.alyx.tradesystem.research-digest.plist
 ```
 
-**时段**：22:00 晚间执行，覆盖 A 股交易日当天和下一交易日前一晚；研报错过可接受(非交易决策),不配 pmset 唤醒。**调度唯一入口=launchd per-task plist**,不进 `main.py schedule`/APScheduler(避免双触发)。
+排障时可以手工运行 JS workflow，但必须显式提供当天通过 Computer Use 获取的 HotReport URL，并把 `HUIBO_REPORT_PDF_DIR` 指向慧博终端实际下载的 PDF 目录；正式排障也应保持 `HUIBO_ALLOW_DIRECT_PDF_DOWNLOAD=0`，只有定位 404/token 问题时才临时打开直连下载。
 
 ## 交易认知沉淀汇总（recent3d 工作日 18:30 / weekly 周日 20:00 / monthly 每月1号 09:00）
 

@@ -4,8 +4,11 @@ from __future__ import annotations
 import json
 import threading
 import time
+from argparse import Namespace
 from datetime import datetime, timedelta
 from pathlib import Path
+
+import pytest
 
 from services.research_digest import huibo
 
@@ -48,6 +51,30 @@ def test_report_id_disambiguates_same_title_without_urls():
 
     assert len(out) == 2
     assert out[0].report_id != out[1].report_id
+
+
+def test_report_id_ignores_changing_terminal_tokens_for_same_doc():
+    title = "方正证券-电新行业新技术系列报告：玻璃基板专题-260621"
+    rows = [
+        {
+            "报告名称": title,
+            "时间": "2026-06-21",
+            "分类": "行业分析",
+            "阅读链接": "https://sys.hibor.com.cn/hiborClientDownload/Download/Index?abc=AAA&def=OLD&vidd=3&keyy=K1&xyz=X1&did=oldMi",
+            "raw": {"DId": 5131866, "DocName": "202606210826522290.pdf", "didMi": "oldMi", "DocType": 2},
+        },
+        {
+            "报告名称": title,
+            "时间": "2026-06-21",
+            "分类": "行业分析",
+            "阅读链接": "https://sys.hibor.com.cn/hiborClientDownload/Download/Index?abc=BBB&def=NEW&vidd=3&keyy=K2&xyz=X2&did=newMi",
+            "raw": {"DId": 5131866, "DocName": "202606210826522290.pdf", "didMi": "newMi", "DocType": 2},
+        },
+    ]
+
+    out = huibo.parse_hot_report_rows(rows)
+
+    assert out[0].report_id == out[1].report_id
 
 
 def test_prescreen_prioritizes_first_coverage_and_strong_hints():
@@ -269,6 +296,7 @@ def test_url_source_prefers_terminal_app_url_when_enabled(tmp_path, monkeypatch)
 
     monkeypatch.delenv("HUIBO_HOT_REPORT_JSON", raising=False)
     monkeypatch.setenv("HUIBO_HOT_REPORT_URL", stale_url)
+    monkeypatch.setenv("HUIBO_REFRESH_URL_FROM_APP", "1")
     monkeypatch.setenv("HUIBO_RAW_DIR", str(tmp_path / "raw"))
     monkeypatch.setattr(huibo, "_hot_report_url_from_terminal_app", lambda: huibo._normalize_huibo_hot_report_url(current_url))
     monkeypatch.setattr(huibo, "_post_json", post_json)
@@ -283,6 +311,49 @@ def test_url_source_prefers_terminal_app_url_when_enabled(tmp_path, monkeypatch)
     assert fetched_payloads[0]["def"] == "DEF"
     assert any("abc=ABC" in url for url in fetched_urls)
     assert all("STALE" not in url for url in fetched_urls)
+
+
+def test_url_source_does_not_fallback_to_stale_url_when_terminal_refresh_fails(tmp_path, monkeypatch):
+    stale_url = (
+        "https://sys.hibor.com.cn/redian/HotReport?"
+        "abc=STALE&def=STALE&vidd=3&keyy=STALE&xyz=STALE&op=0"
+    )
+
+    def fail_post_json(*_args, **_kwargs):
+        raise AssertionError("stale HUIBO_HOT_REPORT_URL should not be used when terminal refresh is required")
+
+    monkeypatch.delenv("HUIBO_HOT_REPORT_JSON", raising=False)
+    monkeypatch.setenv("HUIBO_HOT_REPORT_URL", stale_url)
+    monkeypatch.setenv("HUIBO_REFRESH_URL_FROM_APP", "1")
+    monkeypatch.setenv("HUIBO_RAW_DIR", str(tmp_path / "raw"))
+    monkeypatch.setattr(huibo, "_hot_report_url_from_terminal_app", lambda: "")
+    monkeypatch.setattr(huibo, "_post_json", fail_post_json)
+
+    with pytest.raises(huibo.HuiboTerminalUrlUnavailable):
+        huibo.build_source_from_env("desktop_terminal")(None, "2026-06-06", 5)
+
+
+def test_collect_reports_blocked_when_terminal_refresh_fails(tmp_path, monkeypatch):
+    from workflows import huibo_helper
+
+    monkeypatch.setenv("HUIBO_REFRESH_URL_FROM_APP", "1")
+    monkeypatch.setattr(huibo, "_hot_report_url_from_terminal_app", lambda: "")
+
+    out = tmp_path / "candidates.json"
+    texts_out = tmp_path / "texts.json"
+    result = huibo_helper._cmd_collect(Namespace(
+        date="2026-06-06",
+        window_days=5,
+        mode="desktop_terminal",
+        out=str(out),
+        texts_out=str(texts_out),
+    ))
+
+    assert result["status"] == "blocked"
+    assert result["reason"] == "huibo_terminal_url_unavailable"
+    assert result["candidate_count"] == 0
+    assert json.loads(out.read_text(encoding="utf-8")) == []
+    assert json.loads(texts_out.read_text(encoding="utf-8")) == {}
 
 
 def test_snapshot_source_attaches_pdf_from_dir_and_copies_to_raw(tmp_path, monkeypatch):
@@ -1002,12 +1073,12 @@ def test_research_digest_runner_path_includes_user_local_bin():
     runner = (repo_root / "deploy/launchd/research-digest-runner.sh").read_text(encoding="utf-8")
     assert 'export PATH="$HOME/.local/bin:' in runner
     assert 'export HUIBO_REFRESH_URL_FROM_APP="${HUIBO_REFRESH_URL_FROM_APP:-1}"' in runner
-    assert 'export HUIBO_ALLOW_DIRECT_PDF_DOWNLOAD="${HUIBO_ALLOW_DIRECT_PDF_DOWNLOAD:-1}"' in runner
+    assert 'export HUIBO_ALLOW_DIRECT_PDF_DOWNLOAD="${HUIBO_ALLOW_DIRECT_PDF_DOWNLOAD:-0}"' in runner
 
 
 def test_js_workflow_defaults_to_huibo_terminal_pdf_download():
     repo_root = Path(__file__).resolve().parents[2]
     workflow = (repo_root / "scripts/workflows/research-digest-workflow.mjs").read_text(encoding="utf-8")
     assert 'HUIBO_REFRESH_URL_FROM_APP: process.env.HUIBO_REFRESH_URL_FROM_APP || "1"' in workflow
-    assert 'HUIBO_ALLOW_DIRECT_PDF_DOWNLOAD: process.env.HUIBO_ALLOW_DIRECT_PDF_DOWNLOAD || "1"' in workflow
+    assert 'HUIBO_ALLOW_DIRECT_PDF_DOWNLOAD: process.env.HUIBO_ALLOW_DIRECT_PDF_DOWNLOAD || "0"' in workflow
     assert "huiboAllowDirectPdfDownload: helperEnvOverrides.HUIBO_ALLOW_DIRECT_PDF_DOWNLOAD" in workflow

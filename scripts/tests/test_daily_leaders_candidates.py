@@ -129,6 +129,133 @@ def test_build_candidates_skips_blank_stock_or_sector():
     assert result["top_leaders"][1]["sector"] == "未分类"
 
 
+def test_build_candidates_filters_st_stocks_from_all_sources():
+    prefill = {
+        "step5_leaders": {
+            "top_leaders": [
+                {"stock": "ST长方", "sector": "光学光电子", "attribute_type": "走势引领"},
+                {"stock": "海光信息", "sector": "半导体", "attribute_type": "走势引领"},
+            ]
+        },
+        "teacher_notes": [],
+        "cognitions_by_step": {},
+    }
+    trend_pool = [
+        {"code": "300301", "name": "ST长方", "sw_l2": "光学光电子"},
+        {"code": "688041", "name": "海光信息", "sw_l2": "半导体"},
+    ]
+    history = [
+        {"stock_code": "300301", "stock_name": "ST长方", "sector": "光学光电子"},
+        {"stock_code": "601138", "stock_name": "工业富联", "sector": "算力"},
+    ]
+
+    result = build_candidates(prefill=prefill, trend_pool=trend_pool, history=history)
+
+    stocks = [item["stock"] for item in result["top_leaders"]]
+    assert "ST长方" not in " ".join(stocks)
+    assert stocks == ["海光信息", "601138 工业富联"]
+
+
+def test_build_candidates_adds_market_flow_leaders_to_llm_pool():
+    prefill = {
+        "step5_leaders": None,
+        "teacher_notes": [],
+        "cognitions_by_step": {},
+        "market": {
+            "concept_moneyflow_ths": {
+                "data": [
+                    {
+                        "name": "同花顺新质50",
+                        "lead_stock": "绿的谐波",
+                        "net_amount_yi": 91.0,
+                        "pct_change_stock": 18.15,
+                    },
+                    {
+                        "name": "ST板块",
+                        "lead_stock": "ST臻镭",
+                        "net_amount_yi": 120.0,
+                        "pct_change_stock": 5.0,
+                    },
+                ]
+            },
+            "concept_moneyflow_dc": {
+                "data": [
+                    {
+                        "name": "机器视觉",
+                        "buy_sm_amount_stock": "埃斯顿",
+                        "net_amount_yi": 19.08,
+                        "pct_change": 2.44,
+                        "rank": 2,
+                    }
+                ]
+            },
+        },
+    }
+
+    result = build_candidates(prefill=prefill, trend_pool=[], history=[])
+    by_stock = {item["stock"]: item for item in result["top_leaders"]}
+
+    assert "绿的谐波" in by_stock
+    assert by_stock["绿的谐波"]["sector"] == "同花顺新质50"
+    assert "净流入 91.0 亿" in by_stock["绿的谐波"]["evidence"][0]["text"]
+    assert "埃斯顿" in by_stock
+    assert by_stock["埃斯顿"]["sector"] == "机器视觉"
+    assert "榜单排名 2" in by_stock["埃斯顿"]["evidence"][0]["text"]
+    assert "ST臻镭" not in by_stock
+
+
+def test_teacher_supported_prefill_candidate_gets_market_strength_evidence_for_llm():
+    prefill = {
+        "step5_leaders": {
+            "top_leaders": [
+                {"stock": "有研硅", "sector": "中芯国际概念", "attribute_type": "走势引领"}
+            ]
+        },
+        "teacher_notes": [
+            {
+                "id": 244,
+                "date": "2026-06-29",
+                "teacher_name": "小鲍",
+                "title": "芯片主线与长鑫存储鱼尾风险",
+                "sectors": '["中芯国际概念", "半导体"]',
+                "core_view": "硬科技仍是绝对主线，芯片强于科技硬件。",
+            }
+        ],
+        "market": {
+            "stock_quotes": {
+                "data": [
+                    {
+                        "name": "有研硅",
+                        "code": "688432",
+                        "pct_chg": 12.34,
+                        "amount_yi": 18.8,
+                    }
+                ]
+            },
+            "concept_moneyflow_ths": {
+                "data": [
+                    {
+                        "name": "中芯国际概念",
+                        "lead_stock": "有研硅",
+                        "net_amount_yi": 36.0,
+                        "pct_change_stock": 12.34,
+                    }
+                ]
+            },
+        },
+    }
+
+    result = build_candidates(prefill=prefill, trend_pool=[], history=[])
+
+    item = result["top_leaders"][0]
+    evidence = "；".join(e["text"] for e in item["evidence"])
+    assert item["teacher_alignment"] == "支持"
+    assert "老师明确支持主线预填票" in evidence
+    assert "个股涨幅 12.34%" in evidence
+    assert "成交额 18.8 亿" in evidence
+    assert "板块资金净流入 36.0 亿" in evidence
+
+
 def test_candidate_payload_is_json_serializable_and_lightweight():
     prefill = {
         "step5_leaders": {
