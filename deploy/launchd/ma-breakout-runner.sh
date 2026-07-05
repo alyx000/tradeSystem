@@ -1,7 +1,7 @@
 #!/bin/bash
 # 4日均线二波观察池定时入口（launchd 调用）。
 #
-# 中国时间工作日 21:35 触发：近端历史龙头池内 MA4 拐头 + 成交额突破 5/10 日均额线 → 只读观察清单 + 钉钉。
+# 中国时间工作日 + 周日 21:35 触发：近端历史龙头池内 MA4 拐头 + 成交额突破 5/10 日均额线 → 只读观察清单 + 钉钉。
 set -e
 
 export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"

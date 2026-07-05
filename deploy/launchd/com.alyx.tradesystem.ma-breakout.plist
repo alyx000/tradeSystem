@@ -14,15 +14,17 @@
     <!--
       launchd 按 Mac 本机时区触发；本机为 Pacific 时区时，中国 21:35 = PDT 06:35 / PST 05:35。
       这里双触发覆盖夏令时/冬令时，runner 再用 Asia/Shanghai 时间窗守卫，避免错误时段执行。
-      Weekday: 1=周一 ... 5=周五。
+      Weekday: 0=周日, 1=周一 ... 5=周五。
     -->
     <key>StartCalendarInterval</key>
     <array>
+        <dict><key>Weekday</key><integer>0</integer><key>Hour</key><integer>5</integer><key>Minute</key><integer>35</integer></dict>
         <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>5</integer><key>Minute</key><integer>35</integer></dict>
         <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>5</integer><key>Minute</key><integer>35</integer></dict>
         <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>5</integer><key>Minute</key><integer>35</integer></dict>
         <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>5</integer><key>Minute</key><integer>35</integer></dict>
         <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>5</integer><key>Minute</key><integer>35</integer></dict>
+        <dict><key>Weekday</key><integer>0</integer><key>Hour</key><integer>6</integer><key>Minute</key><integer>35</integer></dict>
         <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>6</integer><key>Minute</key><integer>35</integer></dict>
         <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>6</integer><key>Minute</key><integer>35</integer></dict>
         <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>6</integer><key>Minute</key><integer>35</integer></dict>

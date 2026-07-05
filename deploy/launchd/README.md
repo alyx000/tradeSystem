@@ -23,7 +23,7 @@
 - `board-break-runner.sh` — 包装脚本：cd 仓库根 → source `scripts/.env`(TUSHARE_TOKEN) + `~/.config/tradeSystem.env`(钉钉/ANTIGRAVITY) → 调 `python3 main.py board-break daily`
 - `com.alyx.tradesystem.board-break.plist` — 工作日 21:20 触发（断板反包盘后扫描：昨日连板≥2 断板→八维度加权打分+LLM两两PK→双排序观察清单；日志 `/tmp/tradesystem-board-break.log`）
 - `ma-breakout-runner.sh` — 包装脚本：cd 仓库根 → source `scripts/.env`(TUSHARE_TOKEN) + `~/.config/tradeSystem.env`(钉钉) → 调 `python3 main.py ma-breakout daily`
-- `com.alyx.tradesystem.ma-breakout.plist` — 中国时间工作日 21:35 触发（Pacific 本机 05:35/06:35 双触发 + runner 时间窗守卫；4日均线二波观察池；日志 `/tmp/tradesystem-ma-breakout.log`）
+- `com.alyx.tradesystem.ma-breakout.plist` — 中国时间工作日+周日 21:35 触发（Pacific 本机 05:35/06:35 双触发 + runner 时间窗守卫；周日自动回退到最近已完成交易日；4日均线二波观察池；日志 `/tmp/tradesystem-ma-breakout.log`）
 - `daily-leaders-runner.sh` — 包装脚本：cd 仓库根 → source `~/.config/tradeSystem.env`(钉钉/LLM) → 调 `/usr/bin/python3 scripts/main.py daily-leaders propose --push`
 - `com.alyx.tradesystem.daily-leaders.plist` — 工作日 22:30 触发（每日最票候选确认稿；stdout `/tmp/tradesystem-daily-leaders.out.log`，stderr `/tmp/tradesystem-daily-leaders.err.log`）
 
@@ -252,9 +252,9 @@ rm ~/Library/LaunchAgents/com.alyx.tradesystem.string-yang.plist
 
 **时段**：21:50 在 market-timing(21:40)之后、research-digest/earnings-digest(22:00)之前，避免与主线板块和趋势扫描高峰并发。
 
-## 4日均线二波观察池（中国时间工作日 21:35）
+## 4日均线二波观察池（中国时间工作日 + 周日 21:35）
 
-近 60 自然日历史龙头/最票宇宙 → 近 10 个有效行情日 → MA4 重新拐头向上（今日 MA4 上行，且上拐前至少两根 MA4 连续下行）+ 今日成交额同时突破 5/10 日成交额均线 + 当日未涨停 → 只读二波观察清单落 `data/reports/ma-breakout/YYYY-MM-DD.{md,json}` + 钉钉。
+近 60 自然日历史龙头/最票宇宙 → 近 10 个有效行情日 → MA4 重新拐头向上（今日 MA4 上行，且上拐前至少两根 MA4 连续下行）+ 今日成交额同时突破 5/10 日成交额均线 + 当日未涨停 → 只读二波观察清单落 `data/reports/ma-breakout/YYYY-MM-DD.{md,json}` + 钉钉。周日等交易日前一天触发时，默认目标日自动回退到最近已完成交易日。
 runner source `scripts/.env`(TUSHARE_TOKEN)+`~/.config/tradeSystem.env`(钉钉);非交易日任务内自动跳过,不推送。
 
 ```bash
@@ -285,7 +285,7 @@ launchctl unload ~/Library/LaunchAgents/com.alyx.tradesystem.ma-breakout.plist
 rm ~/Library/LaunchAgents/com.alyx.tradesystem.ma-breakout.plist
 ```
 
-**时段**：目标业务时间为中国时间 21:35，在 trend-leader(21:30) 与 market-timing(21:40) 之间,无冲突。macOS launchd 本身按机器本地时区触发；当前 Pacific 主机用 05:35/06:35 双触发覆盖 PDT/PST，runner 只允许中国时间 21:20-22:05 继续执行，另一个季节性触发会自动跳过。
+**时段**：目标业务时间为中国时间 21:35，在 trend-leader(21:30) 与 market-timing(21:40) 之间,无冲突；周日无 trend-leader 依赖，复用最近已完成交易日数据。macOS launchd 本身按机器本地时区触发；当前 Pacific 主机用 05:35/06:35 双触发覆盖 PDT/PST，runner 只允许中国时间 21:20-22:05 继续执行，另一个季节性触发会自动跳过。
 
 ## 每日最票候选确认稿（工作日 22:30）
 

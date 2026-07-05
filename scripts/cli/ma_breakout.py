@@ -65,6 +65,30 @@ def _today() -> str:
     return datetime.date.today().isoformat()
 
 
+def _next_calendar_day(date: str) -> str:
+    current = datetime.datetime.strptime(date, "%Y-%m-%d").date()
+    return (current + datetime.timedelta(days=1)).isoformat()
+
+
+def _resolve_effective_date(conn, registry, date: str, *, explicit_date: bool) -> tuple[str, dict]:
+    """自动任务在交易日前一天运行时，回退到最近已完成交易日。"""
+    if explicit_date:
+        return date, {}
+    from utils.trade_date import get_prev_trade_date, is_trade_day
+
+    if is_trade_day(date, conn=conn, registry=registry) is not False:
+        return date, {}
+    next_date = _next_calendar_day(date)
+    if is_trade_day(next_date, conn=conn, registry=registry) is not True:
+        return date, {}
+    target_date = get_prev_trade_date(registry, date)
+    return target_date, {
+        "run_date": date,
+        "auto_resolved_from": "pre_trade_day",
+        "next_trade_date": next_date,
+    }
+
+
 def _run_daily(config: dict, args: argparse.Namespace) -> None:
     from main import setup_providers
 
@@ -74,8 +98,10 @@ def _run_daily(config: dict, args: argparse.Namespace) -> None:
 
     former_leaders = {}
     leader_stats = {}
+    auto_meta = {}
     conn = get_connection()
     try:
+        date, auto_meta = _resolve_effective_date(conn, registry, date, explicit_date=bool(args.date))
         if args.json or not args.dry_run:
             from utils.trade_date import is_non_trading_day
             if is_non_trading_day(conn, registry, date):
@@ -124,6 +150,7 @@ def _run_daily(config: dict, args: argparse.Namespace) -> None:
         )
         summary["leader_lookback_days"] = args.leader_lookback_days
         summary["leader_unresolved_count"] = leader_stats.get("unresolved_leader_tracking", 0)
+    summary.update(auto_meta)
     if args.json:
         print(json.dumps(summary, ensure_ascii=False, indent=2))
         return
