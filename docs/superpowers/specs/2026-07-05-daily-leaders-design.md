@@ -296,7 +296,7 @@ python3 scripts/main.py daily-leaders show --date YYYY-MM-DD [--json]
 | 与复盘本地草稿冲突 | Web 页面已有 localStorage 草稿 | confirm 后提示用户以服务端为准检查页面 | 从候选 JSON 重新 confirm |
 | 钉钉按钮误触或鉴权不足 | v2 做按钮回写时 | v1 不做按钮回写；v2 必须加签名、过期时间、二次确认和幂等键 | 禁用按钮入口，回到 Codex 确认 |
 
-## 待确认问题
+## 已确认决策
 
-1. 第一版是否按“钉钉 Markdown 通知 + Codex 自然语言确认 + CLI 写入”实现？
-2. 钉钉按钮回写是否作为 v2 单独做？
+1. v1 按“钉钉 Markdown 通知 + Codex 自然语言确认 + CLI 写入”实现。
+2. 钉钉按钮回写作为 v2 单独设计和实现，不进入 v1。
