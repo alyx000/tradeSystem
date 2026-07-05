@@ -162,7 +162,10 @@ python3 main.py trend-leader daily
 python3 main.py trend-leader daily --date 2026-06-12 --dry-run    # 内存副本跑：不落池、不推送（历史校准用）
 python3 main.py trend-leader daily --no-push                       # 落池但仅打印，不推送（软上线/排障）
 python3 main.py trend-leader daily --sectors '["半导体","玻璃玻纤"]' --top-k 8  # 手工主线 ∪ 自动 Top-K（top-k 须正整数）
-python3 main.py trend-leader daily --main-line l2+concept --top-concepts 8       # 主线再 ∪ 同花顺概念分支（默认 l2 仅二级）
+python3 main.py trend-leader daily --main-line hybrid --top-concepts 8           # 默认：申万二级 ∪ 同花顺概念，LLM 过滤概念分支
+python3 main.py trend-leader daily --main-line hybrid --no-llm                   # 禁用 LLM，降级为确定性 l2+concept
+python3 main.py trend-leader daily --main-line l2                                # 仅申万二级 Top-K（旧口径）
+python3 main.py trend-leader daily --main-line l2+concept --top-concepts 8       # 机械 ∪ 同花顺概念分支（不经 LLM）
 
 # 只读看池（在池天数 / 信号标记 / 退出原因）
 python3 main.py trend-leader pool --status active
@@ -171,7 +174,7 @@ python3 main.py trend-leader pool --status exited --json
 
 - **漏斗**：候选 = 当日涨停（`get_limit_up_list`）∪ 双创(20cm)涨幅≥15% 加速（`get_market_daily_changes`）→ 映射申万二级（`get_stock_sw_industry_map`）→ ∩ 主线池 → 拉区间 OHLCV（`get_stock_daily_range`）→ 检测器判定 → 入池/维护/退池（落 `trend_leader_pool` 状态机）。
 - **board-aware 加速（GAP A，对齐鞠磊「主板涨停 / 20cm 涨15%+」）**：主板加速=涨停≈9.8%，双创(300/301/688/689)加速=15%（不必全 20% 涨停）；候选源因此并入双创 15-19.9% 的首次加速票，入池表「触发」列区分`涨停`/`双创15%加速`，「首次加速日」为 board-aware 口径。
-- **主线口径 `--main-line`（GAP B，对齐鞠磊「主线或其分支」）**：默认 `l2`=仅申万二级 Top-K（零行为变化）；`l2+concept`=再 ∪ 同花顺概念**资金净流入 Top-M**（`--top-concepts`，默认 8）。概念分支 = 同花顺概念（CPO/PCB/液冷服务器…），**非申万一级**（一级太宽混杂已被全月验证否定）。个股命中`二级∈主线` **或** `概念∩主线概念` 即入候选；经概念分支入池的票在报告标「申万二级·分支:概念名」。**成员数闸 `CONCEPT_MAX_MEMBERS=300`**：净流入排序前先剔容器概念（融资融券/深股通/华为概念等几千成员的资格类标签，聚合净流入霸榜但非窄分支），全月 27 天验证零容器、~88% 真分支。降级可观测：`source_errors` 含 `concept_flow`/`ths_member`/`concept_coverage`（取数成功却热概念无成员=ths_member 部分截断）。**默认仍 `l2`，翻默认前须补弱市防御篮子收紧 + sw_l2 回填**（见代码注释 defer）。
+- **主线口径 `--main-line`（GAP B，对齐鞠磊「主线或其分支」）**：默认 `hybrid`=申万二级 Top-K ∪ 同花顺概念资金净流入 Top-M，并用 LLM 只过滤概念分支；LLM 不允许新增概念/个股/事实，不否决申万二级 Top-K，不给买卖建议，输出异常或命中红线时降级为确定性 `l2+concept`。`--no-llm` 可显式关闭 LLM；`l2`=仅申万二级 Top-K（旧口径）；`l2+concept`=机械 ∪ 同花顺概念分支（不经 LLM）。概念分支 = 同花顺概念（CPO/PCB/液冷服务器…），**非申万一级**（一级太宽混杂已被全月验证否定）。trend-leader 先按 `get_concept_moneyflow_ths` 排序，再只查资金流前排有限窗口的 `get_ths_member` 成员（默认 `max(40, Top-M*5)`，provider 进程内缓存重复概念），避免历史回放全量扫同花顺概念。个股命中`二级∈主线` **或** `概念∩主线概念` 即入候选；经概念分支入池的票在报告标「申万二级·分支:概念名」。**成员数闸 `CONCEPT_MAX_MEMBERS=300`**：净流入排序前先剔容器概念（融资融券/深股通/华为概念等几千成员的资格类标签，聚合净流入霸榜但非窄分支）。降级可观测：`source_errors` 含 `concept_flow`/`ths_member`/`concept_coverage`/`mainline_llm`（LLM 输出不可用但已回退）。
 - **入池门槛**：首次加速（board-aware，近 60 日除今日外无同级加速）+ 主线缓涨（不含贴MA5——加速日必远离 MA5，贴MA5 是入池后回踩信号）。**退出只在客观趋势破坏**（收盘跌破 MA10 / 连续 2 日跌破 MA5 且跌幅扩大）；远离 MA5 只打「乖离过大」标记，不退池。
 - **三档运行**：裸 `daily`（落池+推）/ `--no-push`（落池+仅打印）/ `--dry-run`（内存副本跑，不落池不推送，历史校准安全）。
 - **池内唯一身份=裸代码**：Tushare `600552.SH` 与 AkShare `600552` 归一，避免重复 active 行。同日重跑/推送失败重试：已 active 票归 `refreshed`，报告仍合并展示在「今日新入池」不丢。

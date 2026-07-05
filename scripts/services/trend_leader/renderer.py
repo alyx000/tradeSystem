@@ -44,11 +44,16 @@ def render_daily(conn: sqlite3.Connection, summary: dict) -> str:
     lines += [
         "## 漏斗概览",
         f"- 当日涨停：{summary.get('limit_up', 0)}",
-        f"- 主线板块（Top-K∪手工）{degraded}：{'、'.join(main_sectors) or '（无）'}",
+        f"- 主线口径：{summary.get('main_line') or 'l2'}",
+        f"- 主线板块（申万二级 Top-K∪手工）{degraded}：{'、'.join(main_sectors) or '（无）'}",
+        f"- 主线分支（同花顺概念）：{'、'.join(summary.get('main_concepts') or []) or '（无）'}",
         f"- 加速∩主线候选（涨停∪双创15%）：{summary.get('candidates', 0)}",
         f"- 今日新入池：{len(todays)} · 在池退出：{len(summary.get('exited') or [])}",
-        "",
     ]
+    llm_meta = summary.get("mainline_llm") or {}
+    if llm_meta.get("enabled"):
+        lines.append(f"- LLM主线过滤：{llm_meta.get('status')}")
+    lines.append("")
 
     # 今日新入池
     lines += ["## 今日新入池（首次加速 + 主线缓涨）[判断]"]

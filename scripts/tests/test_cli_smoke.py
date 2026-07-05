@@ -333,6 +333,7 @@ ARCHITECTURE_COMMANDS = [
     ["trend-leader", "daily", "--top-k", "8"],
     ["trend-leader", "daily", "--date", "2026-06-12", "--sectors", '["半导体"]',
      "--top-k", "8", "--no-push", "--dry-run"],
+    ["trend-leader", "daily", "--main-line", "hybrid", "--no-llm"],
     ["trend-leader", "daily", "--main-line", "l2+concept"],
     ["trend-leader", "daily", "--main-line", "l2", "--top-concepts", "10"],
     ["trend-leader", "daily", "--date", "2026-06-12", "--main-line", "l2+concept",

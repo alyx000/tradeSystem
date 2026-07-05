@@ -30,6 +30,8 @@ MIN_BARS_FOR_SIGNAL = 10
 RANGE_LOOKBACK_DAYS = 90        # 拉区间日线的自然日跨度（保证 ≥60 交易日供首次涨停/缓涨判定）
 DEFAULT_TOP_K_SECTORS = 5       # 主线池默认取成交额集中度 Top-K 申万二级
 DEFAULT_TOP_CONCEPTS = 8        # 概念分支(main_line=l2+concept)取资金净流入 Top-M；初值待月度验证校准
+CONCEPT_PREFETCH_MIN = 40       # trend-leader 只查资金流靠前概念成员，避免 ths_member 全量扫
+CONCEPT_PREFETCH_MULTIPLIER = 5 # 预取窗口= max(40, Top-M*5)，给容器/缺成员概念留过滤余量
 # 概念分支成员数上限：净流入排序前先剔除「容器概念」（融资融券3845/深股通1738/华为概念1009 等遍地标签，
 # 聚合净流入天然霸榜但非鞠磊式窄分支）。0522 真实数据验证 cap=300 能干净分离——窄主题分支
 # (CPO 195 / PCB 216 / 液冷服务器 214 / 存储芯片 192) 全部 <300，容器(>600) 全部出局。
