@@ -54,6 +54,47 @@ def test_trend_pool_candidate_added_when_not_in_prefill():
     assert item["clarity"] == "中"
 
 
+def test_active_history_candidate_added_when_not_in_prefill_or_trend_pool():
+    prefill = {"step5_leaders": None, "teacher_notes": [], "cognitions_by_step": {}}
+    history = [
+        {
+            "stock_code": "601138",
+            "stock_name": "工业富联",
+            "sector": "算力",
+            "attribute_type": "容量最大",
+            "attribute": "连续两日最票",
+            "clarity": "高",
+        }
+    ]
+
+    result = build_candidates(prefill=prefill, trend_pool=[], history=history)
+
+    item = result["top_leaders"][0]
+    assert item["stock"] == "601138 工业富联"
+    assert item["sector"] == "算力"
+    assert item["attribute_type"] == "容量最大"
+    assert item["is_new"] is False
+    assert item["evidence"] == [{"label": "[判断]", "text": "来自历史最票跟踪，需用户确认是否仍属当日最票"}]
+
+
+def test_history_candidate_deduplicates_prefill_with_different_stock_display():
+    prefill = {
+        "step5_leaders": {
+            "top_leaders": [
+                {"stock": "工业富联", "sector": "算力", "attribute_type": "容量最大"}
+            ]
+        },
+        "teacher_notes": [],
+        "cognitions_by_step": {},
+    }
+    history = [{"stock_code": "601138", "stock_name": "工业富联", "sector": "算力"}]
+
+    result = build_candidates(prefill=prefill, trend_pool=[], history=history)
+
+    assert [item["stock"] for item in result["top_leaders"]] == ["工业富联"]
+    assert result["top_leaders"][0]["is_new"] is False
+
+
 def test_teacher_alignment_support_conflict_and_unmentioned():
     notes = [
         {"teacher_name": "鞠磊", "sectors": '["半导体"]', "core_view": "半导体主线继续观察海光信息"},

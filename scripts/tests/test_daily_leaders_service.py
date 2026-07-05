@@ -143,6 +143,46 @@ def test_confirm_rejects_date_mismatch_without_writing(conn, tmp_path):
     assert Q.get_active_leaders(conn) == []
 
 
+def test_confirm_rejects_invalid_cli_date_without_writing(conn, tmp_path):
+    leaders_file = tmp_path / "leaders.json"
+    leaders_file.write_text(
+        json.dumps(
+            {
+                "date": "2026-99-99",
+                "top_leaders": [{"stock": "海光信息", "sector": "半导体"}],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError):
+        service.confirm(conn, "2026-99-99", "codex", leaders_file=leaders_file)
+
+    assert Q.get_daily_review(conn, "2026-99-99") is None
+    assert Q.get_active_leaders(conn) == []
+
+
+def test_confirm_rejects_invalid_source_date_without_writing(conn, tmp_path):
+    leaders_file = tmp_path / "leaders.json"
+    leaders_file.write_text(
+        json.dumps(
+            {
+                "date": "2026-99-99",
+                "top_leaders": [{"stock": "海光信息", "sector": "半导体"}],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError):
+        service.confirm(conn, "2026-07-03", "codex", leaders_file=leaders_file)
+
+    assert Q.get_daily_review(conn, "2026-07-03") is None
+    assert Q.get_active_leaders(conn) == []
+
+
 def test_confirm_requires_top_leaders_list_without_writing(conn, tmp_path):
     leaders_file = tmp_path / "leaders.json"
     leaders_file.write_text(

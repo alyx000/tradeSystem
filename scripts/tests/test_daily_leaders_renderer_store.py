@@ -81,6 +81,17 @@ def test_llm_enrichment_uses_runner_mapping():
     assert out["top_leaders"][0]["llm_reason"] == "走势引领清晰，老师观点支持，仍需人工确认。"
 
 
+def test_llm_enrichment_drops_redline_reason():
+    proposal = _proposal()
+    out = enrich_with_llm_reason(
+        proposal,
+        enabled=True,
+        runner=lambda prompt: {"688041 海光信息|半导体": "建议买入，目标价上看，仍需人工确认。"},
+    )
+
+    assert "llm_reason" not in out["top_leaders"][0] or not out["top_leaders"][0]["llm_reason"]
+
+
 def test_llm_fail_closed_when_runner_raises():
     proposal = _proposal()
 

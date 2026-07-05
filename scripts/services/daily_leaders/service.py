@@ -7,7 +7,7 @@ from typing import Any
 from db import queries as Q
 from services.daily_leaders.candidates import build_candidates
 from services.daily_leaders.llm import enrich_with_llm_reason
-from services.daily_leaders.store import read_proposal, write_proposal
+from services.daily_leaders.store import _safe_date, read_proposal, write_proposal
 from services.review_leaders import build_review_with_step5, sync_leader_tracking_from_step5
 
 
@@ -52,6 +52,8 @@ def show(date: str, output_root: str | Path | None = None) -> dict[str, Any]:
 
 def _confirmed_step5_leaders(source: dict[str, Any], date: str) -> list[dict[str, Any]]:
     source_date = str(source.get("date") or "").strip()
+    if source_date:
+        source_date = _safe_date(source_date)
     if source_date and source_date != date:
         raise ValueError(f"leaders source date {source_date} does not match CLI date {date}")
 
@@ -93,6 +95,7 @@ def confirm(
     actor = str(input_by or "").strip()
     if not actor:
         raise ValueError("--input-by is required")
+    date = _safe_date(date)
 
     if leaders_file:
         source = json.loads(Path(leaders_file).read_text(encoding="utf-8"))

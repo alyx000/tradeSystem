@@ -6,6 +6,8 @@ import re
 import subprocess
 from typing import Any, Callable, Optional
 
+from services.recommend.formatter import REDLINE_KEYWORDS
+
 
 Runner = Callable[[str], Optional[dict[str, str]]]
 
@@ -61,6 +63,13 @@ def _run_llm(prompt: str) -> dict[str, str] | None:
     return _parse_json_object(result.stdout)
 
 
+def _scan_redline(text: str) -> str | None:
+    for keyword in REDLINE_KEYWORDS:
+        if keyword in (text or ""):
+            return keyword
+    return None
+
+
 def enrich_with_llm_reason(
     proposal: dict[str, Any],
     *,
@@ -80,7 +89,7 @@ def enrich_with_llm_reason(
         for item in enriched.get("top_leaders") or []:
             key = f"{item.get('stock', '')}|{item.get('sector', '')}"
             reason = mapping.get(key)
-            if reason:
+            if reason and not _scan_redline(reason):
                 item["llm_reason"] = reason
         return enriched
     except Exception:
