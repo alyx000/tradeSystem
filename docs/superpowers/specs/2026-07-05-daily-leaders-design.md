@@ -157,6 +157,26 @@ python3 scripts/main.py daily-leaders show --date YYYY-MM-DD [--json]
 | `confirm` | 写 `daily_reviews.step5_leaders` | 需要 `--input-by`，确认结果进入复盘和 `leader_tracking` |
 | `show` | 只读 | 查看最近候选稿，便于用户修改前核对 |
 
+### 定时策略
+
+每日最票候选任务放在交易日 `22:30` 触发，晚于 `trend-leader`、`ma-breakout`、`market-timing` 和研报速读等盘后派生任务，确保候选生成时能读取更完整的当日派生信号与老师观点。
+
+### 确认方式
+
+第一版采用“钉钉通知 + Codex 自然语言确认”的半自动方式：
+
+1. `22:30` 定时任务执行 `daily-leaders propose --push`，钉钉只发送 Markdown 候选稿和本地候选稿路径。
+2. 用户在当前 Codex/聊天线程回复自然语言确认，例如：
+   - `确认，全部录入`
+   - `确认录入半导体和算力，剔除机器人`
+   - `半导体最票改成 A，容量中军保留 B`
+3. Agent 根据用户回复生成确认 payload，展示最终写入摘要。
+4. 用户确认后，Agent 执行 `daily-leaders confirm --date YYYY-MM-DD --input-by codex --leaders-file <payload>` 写入复盘第 5 步。
+
+不要求用户手工编辑 JSON/Markdown。`--leaders-file` 只是 Agent 内部用于把用户确认结果传给 CLI 的结构化文件。
+
+钉钉交互按钮作为 v2 能力：现有自定义机器人可发送带跳转按钮的 `actionCard` 类消息，但按钮点击本身不等于业务确认回调；若要“一点按钮就写入系统”，需要额外部署可公网访问或钉钉可访问的确认页面/API，并处理鉴权、幂等、误触撤销和审计。因此第一版不做真正的钉钉按钮回写。
+
 ### 候选生成规则
 
 | 来源 | 用途 | 证据标签 |
@@ -190,7 +210,7 @@ python3 scripts/main.py daily-leaders show --date YYYY-MM-DD [--json]
 
 ## API 设计
 
-本次默认不新增 Web API。确认写入通过 CLI 调用现有复盘保存语义，后续如需页面按钮再补：
+本次默认不新增 Web API。确认写入通过 CLI 调用现有复盘保存语义；钉钉按钮回写或 Web 页面确认属于 v2，届时再补：
 
 | 项 | 内容 |
 | -- | ---- |
@@ -233,7 +253,7 @@ python3 scripts/main.py daily-leaders show --date YYYY-MM-DD [--json]
 | -- | ---- |
 | 兼容旧逻辑 | 不改 `trend-leader`、不改复盘页保存字段；只新增候选生成入口 |
 | 数据迁移 | 不新增业务表；候选稿先落 `data/reports/daily-leaders/` 文件 |
-| 默认值处理 | `propose` 默认不推送，定时任务可显式 `--push`；`confirm` 必须显式 `--input-by` |
+| 默认值处理 | `propose` 默认不推送，定时任务显式 `--push`；`confirm` 必须显式 `--input-by`；用户无需手工编辑 JSON/Markdown |
 | 回滚方式 | 删除新增 CLI/service/test/docs；已确认写入的复盘最票可通过复盘页或 `PUT /api/review/{date}` 修改 |
 
 ## 实施计划
@@ -274,9 +294,9 @@ python3 scripts/main.py daily-leaders show --date YYYY-MM-DD [--json]
 | 重复写入最票 | 同日多次 confirm | 复用复盘 upsert，按日期覆盖第 5 步；`leader_tracking` upsert | 重新 confirm 修正版 |
 | 推送失败 | 钉钉环境变量缺失或网络失败 | 本地 Markdown/JSON 始终落盘 | 手动查看 `show` 或重跑 `--push` |
 | 与复盘本地草稿冲突 | Web 页面已有 localStorage 草稿 | confirm 后提示用户以服务端为准检查页面 | 从候选 JSON 重新 confirm |
+| 钉钉按钮误触或鉴权不足 | v2 做按钮回写时 | v1 不做按钮回写；v2 必须加签名、过期时间、二次确认和幂等键 | 禁用按钮入口，回到 Codex 确认 |
 
 ## 待确认问题
 
-1. 定时触发时间建议放在 `trend-leader` 后，例如交易日 21:45；是否接受？
-2. 第一版是否只做钉钉 Markdown 确认，不做钉钉交互按钮？
-3. 用户确认格式第一版建议用“修改候选 JSON/Markdown 后执行 `confirm`”，后续再做自然语言确认解析；是否接受？
+1. 第一版是否按“钉钉 Markdown 通知 + Codex 自然语言确认 + CLI 写入”实现？
+2. 钉钉按钮回写是否作为 v2 单独做？
