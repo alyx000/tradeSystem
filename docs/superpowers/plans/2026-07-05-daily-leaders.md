@@ -316,6 +316,19 @@ def test_teacher_alignment_support_conflict_and_unmentioned():
     assert teacher_alignment("海光信息", "半导体", notes)["status"] == "支持"
     assert teacher_alignment("机器人A", "机器人", notes)["status"] == "冲突"
     assert teacher_alignment("其它股", "券商", notes)["status"] == "未提及"
+
+
+def test_teacher_alignment_conflict_words_must_be_near_matched_term():
+    notes = [
+        {
+            "teacher_name": "鞠磊",
+            "sectors": '["半导体", "机器人"]',
+            "core_view": "半导体继续观察海光信息，机器人退潮",
+        }
+    ]
+
+    assert teacher_alignment("海光信息", "半导体", notes)["status"] == "支持"
+    assert teacher_alignment("机器人A", "机器人", notes)["status"] == "冲突"
 ```
 
 - [ ] **Step 2: Run tests and verify RED**
@@ -380,6 +393,7 @@ def _history_key(row: dict[str, Any]) -> tuple[str, str]:
 def teacher_alignment(stock: str, sector: str, notes: list[dict[str, Any]]) -> dict[str, Any]:
     stock_text = str(stock or "")
     sector_text = str(sector or "")
+    conflict_words = ("退潮", "走弱", "回避")
     for note in notes:
         haystack = " ".join(
             str(note.get(k) or "") for k in ("title", "core_view", "key_points", "raw_content")
@@ -387,11 +401,25 @@ def teacher_alignment(stock: str, sector: str, notes: list[dict[str, Any]]) -> d
         sectors = [str(x) for x in _loads_list(note.get("sectors"))]
         sector_hit = sector_text and (sector_text in haystack or sector_text in sectors)
         stock_hit = stock_text and stock_text in haystack
-        if sector_hit and ("退潮" in haystack or "走弱" in haystack or "回避" in haystack):
+        matched_terms = [term for term in (stock_text, sector_text) if term and term in haystack]
+        if sector_hit and _has_nearby_conflict(haystack, matched_terms, conflict_words):
             return {"status": M.TEACHER_CONFLICT, "note": note}
         if sector_hit or stock_hit:
             return {"status": M.TEACHER_SUPPORT, "note": note}
     return {"status": M.TEACHER_UNMENTIONED, "note": None}
+
+
+def _has_nearby_conflict(haystack: str, terms: list[str], conflict_words: tuple[str, ...]) -> bool:
+    window = 4
+    for term in terms:
+        start = haystack.find(term)
+        while start != -1:
+            end = start + len(term)
+            nearby = haystack[max(0, start - window): min(len(haystack), end + window)]
+            if any(word in nearby for word in conflict_words):
+                return True
+            start = haystack.find(term, start + 1)
+    return False
 
 
 def _candidate_from_prefill(item: dict[str, Any], notes: list[dict[str, Any]], history_keys: set[tuple[str, str]]) -> dict[str, Any]:
