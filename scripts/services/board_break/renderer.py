@@ -4,10 +4,11 @@
 ① 头部（日期+prev_trade_date+用户规则转述+红线声明）
 ② 候选表（双排名：加权分排名[判断] + PK 胜场排名[判断]，PK 无效显 `—`，
    分歧标注仅在 PK `status=="ok"` 时按 `abs(rank_score-rank_pk)>=3` 计算）
-③ 每票打分依据明细（八维度 `维度|得分|依据` 全列，含 0 分维度，`evidence.detail` 原样使用）
+③ 每票打分依据明细（八维度 `维度|得分|依据` 全列，含 0 分维度，`evidence.detail` 原样使用；
+   末行附「长周期乖离」[事实] 展示项——不计分，文案由 scorer 拼好同"原样使用"契约）
 ④ PK 理由段（红线过滤后的 reason；熔断/未跑/未运行分别标注原因）
-⑤ 脚注（剔除统计逐项 + 数据完整性：三源状态/prev_trade_date/维度缺失统计/主线 degraded/
-   PK invalid+attempted/total+熔断状态/excluded 未进池）
+⑤ 脚注（剔除统计逐项 + 数据完整性：三源状态/prev_trade_date/维度缺失统计/长周期乖离缺失计数/
+   主线 degraded/PK invalid+attempted/total+熔断状态/excluded 未进池）
 
 全部打分/PK 结论标 [判断]；筛选/取数标 [事实]；6% 参考位显式声明为机械换算，非价格预测。
 `render_source_failed` 对应 `scanner.run_daily` 的 `source_failed` 状态，不产出正常候选清单。
@@ -215,7 +216,7 @@ def render_daily(result: dict, scored: list, pk_result: dict | None) -> str:
         lines.append("")
 
     # —— ③ 每票打分依据明细 ——
-    lines.append("## 打分依据明细（[判断]，0 分维度亦列出处）")
+    lines.append("## 打分依据明细（[判断]，0 分维度亦列出处；末行长周期乖离为 [事实] 展示项不计分）")
     if not scored:
         lines += _blank_wrapped("（无候选，无需展示打分依据）")
     for c in scored:
@@ -225,6 +226,9 @@ def render_daily(result: dict, scored: list, pk_result: dict | None) -> str:
         for ev in c.get("evidences") or []:
             dim_label = _DIMENSION_LABELS.get(ev.get("dimension"), ev.get("dimension", "?"))
             lines.append(f"| {dim_label} | {ev.get('score', 0.0):+.1f} | {_cell(ev.get('detail', ''))} |")
+        # 长周期乖离：[事实] 展示行不计分（得分列恒 "—"）；文案由 scorer 拼好，
+        # 与 evidences.detail 同"原样使用"契约
+        lines.append(f"| 长周期乖离[事实] | — | {_cell(c.get('bias_detail', ''))} |")
         lines.append("")
 
     # —— ④ PK 理由段 ——
@@ -253,6 +257,16 @@ def render_daily(result: dict, scored: list, pk_result: dict | None) -> str:
             lines.append(f"- 维度缺失/源失败：{_DIMENSION_LABELS.get(dim, dim)} × {n} 只")
     else:
         lines.append("- 维度缺失/源失败：无")
+    # 长周期乖离是展示项（不入 evidences），缺失率不会进上面的维度统计——单列两行，
+    # 让它与八维度处在同一可观测水位（次新股批量短样本/qfq 大面积失败时脚注可见）。
+    # "单窗口缺失"用异或做全划分：正常契约下只有长窗口样本不足一种（bias60 缺 ⟹ bias120 必缺），
+    # 但若上游契约破坏出现反向组合，也不会静默漏出统计。
+    bias_all_missing = sum(1 for c in scored if c.get("bias60") is None and c.get("bias120") is None)
+    bias_partial = sum(1 for c in scored if (c.get("bias60") is None) != (c.get("bias120") is None))
+    if bias_all_missing:
+        lines.append(f"- 长周期乖离（展示项）整体缺失 × {bias_all_missing} 只")
+    if bias_partial:
+        lines.append(f"- 长周期乖离（展示项）单窗口缺失 × {bias_partial} 只（通常为次新股长窗口样本不足）")
     if pk_result is not None:
         lines.append(
             f"- PK：状态={pk_result.get('status')}，无效场={pk_result.get('invalid', 0)}，"

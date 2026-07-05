@@ -80,6 +80,21 @@ def gain_10d(closes: list[float]) -> float | None:
     return result if math.isfinite(result) else None
 
 
+def ma_bias(closes: list[float], n: int) -> float | None:
+    """close_T 相对末 n 根均线的乖离率（%）；样本不足 / 均线非正 / 溢出 → None。
+
+    [事实] 展示项不入模计分（constants.BIAS_MA_* 注释有回看依据）；
+    输入应为前复权 close（apply_qfq 产物，已保证有限正数），此处守卫为纯函数容错契约。
+    """
+    if len(closes) < n:
+        return None
+    ma = sum(closes[-n:]) / n
+    if not math.isfinite(ma) or ma <= 0:
+        return None
+    result = (closes[-1] / ma - 1) * 100
+    return result if math.isfinite(result) else None
+
+
 def position_250d(bars: list[dict]) -> dict:
     """250日区间分位：`(close_T - min(low)) / (max(high) - min(low))`（末250根）。"""
     n = len(bars)

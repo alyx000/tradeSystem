@@ -380,6 +380,52 @@ class TestBuildFactCard:
         assert all(len(t) <= C.FACT_CARD_ANN_CHARS for t in card["ann_titles"])
 
 
+    def test_bias_fields_present_with_sufficient_bars(self):
+        """长周期乖离展示项：样本充足（130根同值）→ bias60/bias120 = 0%。"""
+        bars = self._bars_ok()
+        card = scorer.build_fact_card(
+            {"code": "600002", "name": "x", "limit_times": 2, "industry": "计算机",
+             "close": 10.0, "pct_chg": 3.0, "bars": bars, "date": "2026-07-04"},
+            main_sectors=set(), ann_result=None, holder_result=None,
+            earnings_rows=[], adj_factors=self._factors_for(bars))
+        assert card["bias60"] == pytest.approx(0.0)
+        assert card["bias120"] == pytest.approx(0.0)
+        # 成品文案在 scorer 层拼好（渲染层原样使用契约）
+        assert card["bias_detail"] == (
+            "vs 60日线(≈13周) +0.0% / vs 120日线(≈24周) +0.0%；展示项不计分")
+
+    def test_bias_none_when_qfq_fails(self):
+        card = scorer.build_fact_card(
+            {"code": "600002", "name": "x", "limit_times": 2, "industry": "计算机",
+             "close": 10.0, "pct_chg": 3.0, "bars": [], "date": "2026-07-04"},
+            main_sectors=set(), ann_result=None, holder_result=None,
+            earnings_rows=[], adj_factors=None)
+        assert card["bias60"] is None and card["bias120"] is None
+        assert card["bias_detail"] == "缺失（前复权失败/样本不足/末根非T日）；展示项不计分"
+
+    def test_bias_partial_long_window_missing(self):
+        """次新股真实可达路径：60<=样本<120 → 短窗口有值、长窗口标"样本不足"（角B-2 补测）。"""
+        bars = self._bars_ok(n=80)
+        card = scorer.build_fact_card(
+            {"code": "600002", "name": "x", "limit_times": 2, "industry": "计算机",
+             "close": 10.0, "pct_chg": 3.0, "bars": bars, "date": "2026-07-04"},
+            main_sectors=set(), ann_result=None, holder_result=None,
+            earnings_rows=[], adj_factors=self._factors_for(bars))
+        assert card["bias60"] == pytest.approx(0.0)
+        assert card["bias120"] is None
+        assert "vs 120日线(≈24周) —（样本不足）" in card["bias_detail"]
+
+    def test_bias_none_when_last_bar_not_t(self):
+        """末根非 T 日 → 与 dif 同口径整体缺失（现价口径不可信，不硬算）。"""
+        bars = self._bars_ok()
+        card = scorer.build_fact_card(
+            {"code": "600002", "name": "x", "limit_times": 2, "industry": "计算机",
+             "close": 10.0, "pct_chg": 3.0, "bars": bars, "date": "2026-07-05"},
+            main_sectors=set(), ann_result=None, holder_result=None,
+            earnings_rows=[], adj_factors=self._factors_for(bars))
+        assert card["bias60"] is None and card["bias120"] is None
+
+
 class TestScoreAll:
     def test_sorted_desc_with_rank(self):
         cards = [_card(code="600001", gain10=0.0), _card(code="600002", gain10=45.0)]
