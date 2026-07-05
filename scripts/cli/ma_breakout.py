@@ -5,6 +5,7 @@ import argparse
 import datetime
 import json
 import logging
+from pathlib import Path
 import sys
 
 from db.connection import get_connection
@@ -46,8 +47,8 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
                        help=f"最多展示数量（默认 {C.DEFAULT_TOP_N}）")
     daily.add_argument("--leader-lookback-days", type=_positive_int, default=C.DEFAULT_LEADER_LOOKBACK_DAYS,
                        help=f"历史龙头回看自然日数（默认 {C.DEFAULT_LEADER_LOOKBACK_DAYS}，用于二波）")
-    daily.add_argument("--dry-run", action="store_true", help="仅打印，不推送")
-    daily.add_argument("--no-push", action="store_true", help="仅打印，不推送")
+    daily.add_argument("--dry-run", action="store_true", help="仅打印，不落盘不推送")
+    daily.add_argument("--no-push", action="store_true", help="落盘但不推送")
     daily.add_argument("--json", action="store_true", help="输出 JSON（不推送）")
 
 
@@ -128,13 +129,31 @@ def _run_daily(config: dict, args: argparse.Namespace) -> None:
         return
     md = renderer.render_daily(summary)
     print(md)
-    if args.dry_run or args.no_push:
-        logger.info("[ma-breakout daily] 仅打印，未推送")
+    report_paths = None
+    if not args.dry_run:
+        report_paths = _write_reports(date, md, summary)
+        print(f"report_md: {report_paths['md']}")
+        print(f"report_json: {report_paths['json']}")
+    if args.dry_run:
+        logger.info("[ma-breakout daily] dry-run 仅打印，未落盘未推送")
+        return
+    if args.no_push:
+        logger.info("[ma-breakout daily] 已落盘，未推送")
         return
     if summary.get("status") == "source_failed":
         logger.error("[ma-breakout daily] 行情源失败，跳过推送")
         return
     _push_to_dingtalk(f"4日均线模式观察池 · {date}", md)
+
+
+def _write_reports(date: str, markdown: str, summary: dict) -> dict[str, str]:
+    report_dir = Path("data/reports/ma-breakout")
+    report_dir.mkdir(parents=True, exist_ok=True)
+    md_path = report_dir / f"{date}.md"
+    json_path = report_dir / f"{date}.json"
+    md_path.write_text(markdown, encoding="utf-8")
+    json_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return {"md": str(md_path), "json": str(json_path)}
 
 
 def _push_to_dingtalk(title: str, markdown: str) -> None:
