@@ -252,6 +252,11 @@ python3 main.py research-digest daily --huibo-mode desktop_terminal --huibo-wind
 python3 main.py research-digest daily --huibo-mode off --dry-run
 python3 main.py research-digest daily --huibo-cleanup-only --dry-run
 
+# 研报覆盖·申万一级行业趋势（机构定价视角：覆盖热度流向哪些板块；只读渲染，复盘「2.板块」可引用）
+python3 main.py research-digest trend                    # 近5有效日 vs 前5有效日 占比Δpp
+python3 main.py research-digest trend --backfill 30      # 先回补最近30个交易日缺失日（逐日 cninfo，失败跳过）
+python3 main.py research-digest trend --recent-n 10 --top 15 --json
+
 # 慧博深读生产 workflow（Codex 自动化使用：Computer Use 先取得当前 HotReport URL，并在慧博终端下载候选 PDF）
 HUIBO_HOT_REPORT_URL='<Computer Use 取得的当前 URL>' HUIBO_REPORT_PDF_DIR='/Users/alyx/tradeSystem/data/reports/huibo/terminal-downloads/2026-06-06' HUIBO_REFRESH_URL_FROM_APP=0 HUIBO_ALLOW_DIRECT_PDF_DOWNLOAD=0 node scripts/workflows/research-digest-workflow.mjs daily --date 2026-06-06 --reader-cap 20 --reader-concurrency 20 --reader-max-attempts 2 --preflight --publish --include-base-digest
 node scripts/workflows/research-digest-workflow.mjs daily --date 2026-06-06 --retry-failed --reader-max-attempts 4
@@ -265,6 +270,7 @@ node scripts/workflows/research-digest-workflow.mjs daily --date 2026-06-06 --ll
 - **Top3** ← `ranker.pick_top3`：A股 / 美股各软保证 ≥1，某侧空则全给另一侧（不编造）；美股侧 `init`（首次覆盖）优先。
 - **LLM 叙事（受控）**：仅对**已拉到的真实条目**补 `theme/one_liner` 两软字段（Antigravity，独立 `build_antigravity_runner`，超时/缺失/解析失败自动降级纯结构化）。**A股默认不叙事**（`cn_narrate=False`），美股默认叙事；事实为主键，LLM 不得新增/改 ticker/code/firm（三级 fallback 防幻觉）。
 - **守红线**：红线只扫 LLM 生成的 `theme/one_liner`（含中英目标价/买入等关键词 + `neutralize_rating` 把"买入/Buy"中性化为"偏多档"）；**用户/源侧事实层（评级原文、目标价区间）不扫**——红线约束 AI 生成、不约束取数。
+- **行业覆盖趋势（trend）** ← 数据底座 = `raw_interface_payloads.research_report_list`（随 `cmd_post` post_extended 每日落库，`enabled_by_default=True` + `preserve_nonempty_on_empty=True`[非空 payload 不被瞬时空窗抹掉；真空日首写 `empty` 与迟到回填 `empty`→非空 均不受影响]；历史缺口 `--backfill N` 手动回补：幂等完成态=**非空 success**（`empty` 日每轮重采——cninfo 迟到回填是常态，empty 不是最终态，重采安全性由 preserve 守卫保证）、按返回 `status` 计数[provider 失败不抛异常]、日历缺口显式告警）。口径：**占比（share of voice）而非绝对篇数**（cninfo 月末批量脉冲免疫）+ **有效日窗口**（cninfo 存在合法真空日，`status='empty'` 不进分母；空日判定读 `raw_interface_payloads.status/row_count`，有效日不足 2×recent-n 自动扩容重读一次并告警）。输出全 [事实] 计数，趋势解读由消费方标 [判断]，不构成买卖建议。
 - **慧博本地存储清理**：raw 目录默认 `data/reports/huibo/raw`（`HUIBO_RAW_DIR` 可覆盖，保存/复制原始 PDF）保留 30 天，summary 目录默认 `data/reports/huibo/summaries`（`HUIBO_SUMMARY_DIR` 可覆盖）保留 180 天；正式任务结束后自动清理，`--huibo-cleanup-only` 只清理，配合 `--dry-run` 只展示将清理对象、不删除。
 - 依赖 env：`DINGTALK_WEBHOOK_TOKEN/SECRET`（`~/.config/tradeSystem.env`，推送）、可选 `ANTIGRAVITY_BIN`/`LLM_MODEL`/`LLM_TIMEOUT_SECONDS`（默认 180，launchd 下 LLM 启动慢；`LLM_MODEL` 不设时由 Antigravity CLI 使用默认/自动模型）、`RESEARCH_DIGEST_US_TICKERS`（美股池，不设走内置）、慧博可选 `HUIBO_MODE`/`HUIBO_HOT_REPORT_JSON`/`HUIBO_HOT_REPORT_URL`/`HUIBO_REPORT_TEXT_DIR`/`HUIBO_REPORT_PDF_DIR`（慧博终端下载目录）/`HUIBO_READER_CONCURRENCY`/`HUIBO_ALLOW_EXTERNAL_PDF_LLM`/`HUIBO_ALLOW_DIRECT_PDF_DOWNLOAD`（默认关闭，仅兼容旧 URL 下载）/`HUIBO_API_BASE_URL`/`HUIBO_API_TOKEN`。A股 cninfo 免 key、yfinance 免 key；`--dry-run` 对齐现有语义，不调 Antigravity。
 

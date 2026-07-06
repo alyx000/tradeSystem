@@ -336,6 +336,72 @@ def get_latest_raw_interface_rows(
     return _extract_raw_payload_rows(row["payload_json"])
 
 
+def list_raw_interface_daily_payloads(
+    conn: sqlite3.Connection,
+    *,
+    interface_name: str,
+    limit: int,
+) -> list[dict]:
+    """按日返回某接口最近 limit **天**的 payload 快照（biz_date 新→旧）：
+    [{biz_date, status, row_count, rows}]。
+
+    与 list_raw_interface_rows（跨日 flatten、只留 success/partial）不同，本函数保留
+    逐日粒度与 status/row_count——供「真空日鉴别」类消费方（如研报覆盖行业趋势）区分
+    合法 empty 日与有效日。limit 语义=天数：同一 biz_date 多行（不同 dedupe_key）时按
+    inserted_at DESC, id DESC 取最新一份（不能用 MAX(id)——upsert 走 ON CONFLICT DO
+    UPDATE 只刷新 inserted_at 不换 id，重采后低 id 的 canonical 行才是最新快照），
+    且不让同日多行吃掉天数配额。rows 仅在 status='success' 时解析（不叠 row_count
+    条件——row_count 为 NULL/0 的 success 行交给 payload 内容说话，规避 falsy-0
+    误杀）；解析失败/空返 []，消费方可据 status+row_count 与空 rows 的组合识别脏 payload。
+    """
+    fetched = conn.execute(
+        """
+        SELECT biz_date, status, row_count, payload_json
+        FROM raw_interface_payloads
+        WHERE id IN (
+            SELECT id FROM (
+                SELECT id, biz_date,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY biz_date
+                           ORDER BY inserted_at DESC, id DESC
+                       ) AS rn
+                FROM raw_interface_payloads
+                WHERE interface_name = ?
+            )
+            WHERE rn = 1
+            ORDER BY biz_date DESC
+            LIMIT ?
+        )
+        ORDER BY biz_date DESC
+        """,
+        (interface_name, limit),
+    ).fetchall()
+    out: list[dict] = []
+    for row in fetched:
+        status = row["status"]
+        rows = _extract_raw_payload_rows(row["payload_json"]) if status == "success" else []
+        out.append({"biz_date": row["biz_date"], "status": status,
+                    "row_count": row["row_count"], "rows": rows})
+    return out
+
+
+def raw_interface_biz_dates(
+    conn: sqlite3.Connection,
+    *,
+    interface_name: str,
+    since: str,
+) -> set[str]:
+    """某接口自 since（含）以来已有 payload 的 biz_date 集合。
+
+    注意：这里只回答「该日是否落过 payload」，不判断可用性；「该日数据是否可用」
+    须走 list_raw_interface_daily_payloads（最新快照 + 可解析行），两个口径不要混用——
+    回补类消费方若拿本函数当完成态，坏 payload/最新为 empty 的日将永远不被重采。
+    """
+    sql = ("SELECT DISTINCT biz_date FROM raw_interface_payloads "
+           "WHERE interface_name = ? AND biz_date >= ?")
+    return {row[0] for row in conn.execute(sql, (interface_name, since))}
+
+
 # ──────────────────────────────────────────────────────────────
 # Holdings
 # ──────────────────────────────────────────────────────────────

@@ -260,6 +260,26 @@ UNCLASSIFIED = "未分类"      # 缺申万成分（次新/北交所）或映射
 INDUSTRY_DISPLAY_CAP = 8     # 行业热度条/钉钉段展示上限（超出由各渲染层折叠）
 
 
+def load_sw_map(registry) -> dict:
+    """取申万行业映射并解包（接口失败/空返 {}），label_industry 与 trend 共用同一解包约定。"""
+    res = registry.call("get_stock_sw_industry_map")
+    return res.data if (getattr(res, "success", False) and res.data) else {}
+
+
+def sw_prefix_index(sw_map: dict) -> dict:
+    """sw_map（{ts_code: entry}）→ {6位裸码: entry} 反查索引，label_industry 与 trend 共用。
+
+    A股 6 位裸码与交易所一一对应（60x→SH / 00x,30x→SZ / 8x,4x,920→BJ），同一前缀不会跨两所，
+    故反查无歧义；`not in` 仅作"未来跨市场扩展"的理论兜底（首个胜出），当前不会触发。
+    """
+    by_prefix: dict[str, dict] = {}
+    for ts_code, entry in (sw_map or {}).items():
+        prefix = str(ts_code)[:6]
+        if prefix and prefix not in by_prefix:
+            by_prefix[prefix] = entry
+    return by_prefix
+
+
 def label_industry(items: list[dict], registry) -> list[dict]:
     """给研报覆盖 items 附申万一级行业，返回新列表（不改原入参）。三级降级：
 
@@ -270,15 +290,7 @@ def label_industry(items: list[dict], registry) -> list[dict]:
     join：sw_map 以 ts_code（600519.SH）为键，研报源是 6 位裸码（600519）；
     建 {ts_code[:6]: entry} 反查索引，避免逐条拼 .SH/.SZ/.BJ 后缀的边界遗漏。
     """
-    sw_result = registry.call("get_stock_sw_industry_map")
-    sw_map = sw_result.data if (getattr(sw_result, "success", False) and sw_result.data) else {}
-    by_prefix: dict[str, dict] = {}
-    for ts_code, entry in sw_map.items():
-        prefix = str(ts_code)[:6]
-        # A股 6 位裸码与交易所一一对应（60x→SH / 00x,30x→SZ / 8x,4x,920→BJ），同一前缀不会跨两所，
-        # 故反查无歧义；`not in` 仅作"未来跨市场扩展"的理论兜底（首个胜出），当前不会触发。
-        if prefix and prefix not in by_prefix:
-            by_prefix[prefix] = entry
+    by_prefix = sw_prefix_index(load_sw_map(registry))
     out: list[dict] = []
     for it in items:
         code6 = str(it.get("stock_code") or "").strip()[:6]

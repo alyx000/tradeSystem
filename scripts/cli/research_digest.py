@@ -81,13 +81,26 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
     daily.add_argument("--huibo-cleanup-only", action="store_true",
                        help="只执行慧博本地存储清理，不采集/不推送")
 
+    trend = sub.add_parser("trend", help="研报覆盖·申万一级行业趋势（占比多窗口对比，只读渲染）")
+    trend.add_argument("--days", type=_positive_int, default=None,
+                       help="读库最近 N 份日 payload（默认 recent-n×4，留空日余量）")
+    trend.add_argument("--recent-n", type=_positive_int, default=5,
+                       help="趋势窗口=近 N 个有效日 vs 前 N 个有效日（默认 5）")
+    trend.add_argument("--top", type=_positive_int, default=10, help="行业展示条数上限（默认 10）")
+    trend.add_argument("--backfill", type=_positive_int, default=None,
+                       help="先回补最近 N 个交易日中库内缺失的日（逐日 cninfo，单日失败跳过不中断）")
+    trend.add_argument("--json", action="store_true", help="输出 JSON（默认 markdown 表）")
+
 
 def handle_command(config: dict, args: argparse.Namespace) -> None:
     sub = getattr(args, "research_digest_command", None)
     if sub == "daily":
         _run_daily(config, args)
+    elif sub == "trend":
+        _run_trend(config, args)
     else:
-        print("用法：python main.py research-digest daily [--date YYYY-MM-DD] [--dry-run] [--no-llm]",
+        print("用法：python main.py research-digest daily [--date YYYY-MM-DD] [--dry-run] [--no-llm]\n"
+              "     python main.py research-digest trend [--days N] [--recent-n N] [--backfill N] [--json]",
               file=sys.stderr)
         sys.exit(2)
 
@@ -161,6 +174,35 @@ def _run_daily(config: dict, args: argparse.Namespace) -> None:
     else:
         logger.info("[research-digest] 慧博清理完成 raw=%d summary=%d",
                     len(cleanup.raw_files), len(cleanup.summary_files))
+
+
+def _run_trend(config: dict, args: argparse.Namespace) -> None:
+    """研报覆盖·行业趋势：CLI 只做 wiring（provider/conn/参数）+ 打印；
+    回补与聚合编排在 services.research_digest.trend（与 earnings-digest 的 service 分层对齐）。
+    """
+    import json as json_lib
+
+    from main import setup_providers
+    from db.connection import get_connection
+    from services.research_digest import trend as trend_mod
+
+    registry = setup_providers(config)
+    registry.initialize_all()
+    conn = get_connection()
+
+    if args.backfill:
+        stats = trend_mod.backfill_missing_payloads(conn, registry, args.backfill)
+        print(f"[research-digest trend] 回补完成：新采 {stats['done']} / 已有跳过 {stats['skipped']}"
+              f" / 失败 {stats['failed']}（目标 {stats['scanned']} 个交易日）")
+        if stats["scanned"] < args.backfill:
+            print(f"[research-digest trend] ⚠ 交易日历仅覆盖 {stats['scanned']}/{args.backfill} 个"
+                  "目标交易日（日历缺失时先跑一次盘后采集或检查数据源），未覆盖日期未回补")
+
+    result = trend_mod.run_trend_report(conn, registry, days=args.days, recent_n=args.recent_n)
+    if args.json:
+        print(json_lib.dumps(result, ensure_ascii=False, indent=1))
+    else:
+        print(trend_mod.render_trend_md(result, top_cap=args.top))
 
 
 def _push_to_dingtalk(title: str, markdown: str) -> None:

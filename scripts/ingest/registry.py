@@ -350,8 +350,14 @@ INTERFACE_REGISTRY: dict[str, InterfaceConfig] = {
         "params_policy": "trade_date",
         "dedupe_keys": ["trade_date"],
         "raw_table": "raw_research_report_list",
-        "enabled_by_default": False,
-        "notes": "全市场研报列表，用于覆盖统计。",
+        # True：随 cmd_post 的 post_extended 阶段每日落库（研报覆盖·行业趋势数据底座，
+        # research-digest trend 消费）。preserve_nonempty_on_empty=True：研报与业绩公告同性质
+        # （某日已有研报不会合法缩回为零），瞬时空窗不得抹掉已落的非空 payload；而 cninfo
+        # 合法真空日（实测 2026-06-15/17/23 工作日返 0 篇）是首写 empty，不受此守卫影响，
+        # 迟到回填（empty→非空，实测存在）也照常覆盖。
+        "enabled_by_default": True,
+        "preserve_nonempty_on_empty": True,
+        "notes": "全市场研报列表，用于覆盖统计与行业覆盖趋势（research-digest trend）。",
     },
     "macro_china_indicators": {
         "interface_name": "macro_china_indicators",
