@@ -34,6 +34,7 @@ version: "1.1"
 - CLI 命令组 `knowledge cognition-* / instance-* / review-*`（`scripts/main.py`），含 **`review-list`**
 - **只读 Web 看板 `/cognition`**（`web/src/pages/CognitionWorkbench.tsx` + `scripts/api/routes/cognition.py`，5 个 GET 端点）
 - Schema 三张表 + 触发器维护 `instance_count` / `validated_count` / `invalidated_count` / `confidence`
+- `cognition_instances` 已补 `viewpoint_claims_json` / `factor_snapshot_json` / `hypothesis_json` / `feedback_action` / `feedback_detail_json`，支持“老师观点 → 认知因子/假设 → 证伪结果 → 交易系统反馈”闭环；`viewpoint_claims_json.label` 统一归一为 `fact` / `judgement` / `opinion` / `rumor`，CLI 也接受 `[事实]` / `[判断]` / `[观点]` / `[传闻]`
 - `UNIQUE(cognition_id, observed_date, source_type, source_note_id)` NULL 漏洞的 service 层 existence check
 - `outcome_fact_source` 格式正则校验（`<table>[:<sub>]:<YYYY-MM-DD>`）
 - `--input-by` 非空校验
@@ -165,10 +166,21 @@ python3 main.py knowledge instance-add \
   --action-bias low_absorb \
   --position-cap 0.6 \
   --consensus-key market:repair_then_pullback:low_absorb \
+  --viewpoint-claims-json '[{"label":"[事实]","text":"两市成交额较昨日放大"},{"label":"[判断]","text":"资金回流同一主线低位分支"}]' \
+  --factor-snapshot-json '{"factor":"theme_internal_rotation","direction":"low_branch_absorption"}' \
+  --hypothesis-json '{"statement":"高位分支退潮但主线未破坏时，低位分支更容易承接回流","invalidation":["核心中军同步破位","主线成交额明显衰减"],"validation_window":"next_3_trading_days"}' \
   --regime-tags-json '{"emotion_phase":"分歧"}' \
   --teacher-original-text "原文片段..." \
   --input-by cursor
 ```
+
+实例新增字段语义：
+
+| 字段 | 作用 | 约束 |
+|---|---|---|
+| `viewpoint_claims_json` | 把老师原观点拆成原子命题，显式区分事实、判断、观点、传闻 | JSON 数组；每项至少 `label` + `text`；label 入库归一为 `fact/judgement/opinion/rumor` |
+| `factor_snapshot_json` | 记录本次观点对应的认知因子/变量快照 | JSON 对象，例如 `{factor,direction,threshold}` |
+| `hypothesis_json` | 记录可证伪假设、验证窗口与失效条件 | JSON 对象，建议含 `statement` / `invalidation` / `validation_window` |
 
 同一次提炼产生多条时批量写入：
 
@@ -198,6 +210,8 @@ python3 main.py knowledge validate \
   --outcome validated \
   --outcome-fact-source "daily_market:2026-04-15" \
   --outcome-detail "4/15 高开 +0.8%，盘中最高 4010，符合惯性冲高判断" \
+  --feedback-action keep \
+  --feedback-detail-json '{"reason":"验证通过，保留该认知边界"}' \
   --input-by cursor
 ```
 
@@ -209,6 +223,7 @@ python3 main.py knowledge validate \
 ```
 
 5. 方法论类认知（`not_applicable` 策略）直接写实例时标记，不走逐实例验证
+6. `--feedback-action` 记录验证后对交易系统的反馈动作：`keep` / `watch` / `refine` / `promote` / `deprecate` / `merge` / `none`。不传时 service 按 outcome 保守推导：`validated→keep`、`invalidated→refine`、`partial/not_applicable→watch`。具体原因或后续动作写入 `--feedback-detail-json`，不要塞进 `outcome_detail` 伪装成事实。
 
 ### 步骤 5：周期复盘
 
@@ -255,6 +270,8 @@ python3 main.py knowledge review-confirm \
 ```
 
 > **Phase 1b 降级**：`review-generate` 当前把 `--from` / `--to` 直接当字符串区间落入 `period_start` / `period_end`，**未接入 `scripts/utils/trade_date.py` 交易日历**，因此 `trading_day_count` 暂不填充、周期边界非交易日时需使用方自行对齐。Phase 3 复盘引擎会补齐交易日序列聚合。
+>
+> `review-generate` 会把期内实例的 `feedback_action` 聚合到 `evolving_views_json`：`by_feedback_action` 给出动作计数，`items` 保留 `instance_id/cognition_id/source_note_id/outcome/lesson/outcome_detail/feedback_detail_json`，用于后续反向判断哪些认知应保留、精炼、升 active、弃用或合并。
 
 ## 关键约束
 
@@ -265,6 +282,8 @@ python3 main.py knowledge review-confirm \
 - **认知状态流转**：`cognition-add` 仅允许 `candidate` / `active` 初始状态；`deprecated` 必须走 `cognition-deprecate`；`merged` **仅允许通过 merge 流程达成（Phase 1b `cognition-merge` CLI 未实现，当前不可用）**
 - **`outcome_fact_source` 校验**：`<table>[:<sub>]:<YYYY-MM-DD>` 格式；表名必须 ∈ 白名单 `{daily_market, market_fact_snapshots, fact_entities}`；service 层会真实查表（按对应日期字段）确认记录存在。三项任一失败均抛 `ValueError` 并保持 `outcome=pending`
 - **多事实源必填 `outcome_fact_refs_json`**：验证同时依赖成交量、汇率、融资数据、板块快照等多个锚点时，必须写完整事实引用数组；`outcome_fact_source` 仅保留主引用
+- **事实/判断拆分**：`viewpoint_claims_json` 是原观点结构化入口；`fact` 只放可由事实源或原文直接支撑的陈述，Agent 自身分析和老师主观判断必须标为 `judgement` / `opinion`，禁止把 `[判断]` 写成 `fact`
+- **反馈动作不等于事实验证**：`outcome/outcome_fact_source/outcome_detail` 记录证伪结果；`feedback_action/feedback_detail_json` 记录交易系统下一步怎么处理该认知，两者必须分开
 - **`conflict_group` 冲突告警 (Phase 2)**：`cognition-add` / `cognition-refine` 命中同组 `active` 认知时的 service 层 warning **Phase 1b 未实现**；字段已落库，需手工 `cognition-list --conflict-group <label>` 排查
 - **老师别名归一 (Phase 2)**：`teacher_aliases` / `topic_aliases` 在 `config/cognition_taxonomy.yaml` 已备，但 **Phase 1b service 层未调用归一**；`source_type=teacher_note` 时 `teacher_id` / `teacher_name_snapshot` 由调用方显式传入，**service 层不会自动从 `teacher_notes` 回填**
 - **实例唯一性 NULL 漏洞 + 重复写入行为**：`UNIQUE(cognition_id, observed_date, source_type, source_note_id)` 在 `source_note_id=NULL` 时 SQLite 约束失效，service 层 `add_instance` 写入前做 existence check。**命中重复组合时抛 `ValueError`**，CLI 返回 `status=validation_error` + `message` 含 `instance_exists: <已有 instance_id>` 提示；调用方需自行决定是否使用已有 `instance_id` 还是放弃写入（**不是静默去重**）
@@ -282,6 +301,7 @@ python3 main.py knowledge review-confirm \
 - **禁止**对同一 `(cognition_id, observed_date, source_type, source_note_id)` 重复写实例凑数量；重复写会被 service 层拒绝并抛 `instance_exists`，**不是静默去重**
 - **禁止**在 `review-generate` 时绕过将来接入的交易日历手工拼凑日期（Phase 1b 虽只校验字符串区间，仍应使用实际交易日边界）
 - **禁止**把主观判断伪装成 `outcome_detail` 里的「已验证事实」（原文证据必须来自 `teacher_original_text` / `outcome_fact_refs_json`）
+- **禁止**把 `feedback_action=promote/deprecate/merge` 当作自动执行状态流转；它只是复盘建议，真正升 active / 弃用 / 合并仍需用户确认后走相应 CLI
 
 ## 最小验证
 
@@ -291,6 +311,7 @@ python3 main.py knowledge review-confirm \
 - `python3 main.py knowledge instance-add ...` 返回 `instance_id`；重复写入同一 `(cognition_id, observed_date, source_type, source_note_id)` 组合时 **返回 `status=validation_error` + `message` 含 `instance_exists`**，且已有实例的 `instance_id` 会附带在 message 中
 - 写入后 `python3 main.py knowledge cognition-show --id <id> --json` 的 `instance_count` 应 +1（触发器已维护）
 - `python3 main.py knowledge validate ...` 成功后，对应认知的 `validated_count` / `invalidated_count` / `confidence` 应相应刷新
+- `python3 main.py knowledge review-generate ... --json` 的 `review.evolving_views_json` 应含 `by_feedback_action` 与 `items`，能反查本期需要保留/精炼/弃用/观察的认知实例
 - 周期复盘生成后，`python3 main.py knowledge review-show --id <id> --json` 能读到 `status=draft` 且 `active_cognitions_json` / `validation_stats_json` 等快照字段已填
 - 若本轮用户先要求“提取候选”再确认写入：候选展示里应能清楚看到 `title / description / pattern / 适用边界 / 失效边界 / why_keep` 六项，不应只剩标题和一句话描述
 
@@ -299,7 +320,7 @@ python3 main.py knowledge review-confirm \
 Phase 1b + 增量交付了只读 Web 看板，路径：`http://localhost:5173/cognition`（`web/src/pages/CognitionWorkbench.tsx`）。看板用三个 tab 展示：
 
 - **认知库**：按 `category` / `status` / `conflict_group` / `keyword` 过滤，点击行展开详情（`pattern` / `conditions_json` / `invalidation_conditions_json` / `tags`）；**同 `conflict_group` 多条会高亮红底**（`conflict_group` Phase 2 自动告警的临时替代）
-- **实例**：按 `cognition_id` / `outcome` / `date_from/to` 过滤；`outcome` 用颜色 badge（pending 黄 / validated 绿 / invalidated 红）；点击行展开 `context_summary` / `teacher_original_text` / `outcome_detail` / `lesson`
+- **实例**：按 `cognition_id` / `outcome` / `date_from/to` 过滤；`outcome` 用颜色 badge（pending 黄 / validated 绿 / invalidated 红）；点击行展开 `context_summary` / `viewpoint_claims_json` / `factor_snapshot_json` / `hypothesis_json` / `teacher_original_text` / `outcome_detail` / `lesson` / `feedback_action`
 - **复盘**：按 `period_type` / `status` / 日期区间过滤；点击行展开 `validation_stats_json` / `key_lessons_json` / `user_reflection` / `action_items_json`
 
 ### 对应 API（只读）
@@ -348,6 +369,7 @@ make dev-web   # vite dev
 - 新建 candidate 认知：X 条（待用户确认是否升 active）
 - 批量写入：created K 条 / failed F 条（含 instance_exists 去重提示）
 - 验证结果：validated Y / invalidated Z / partial P / pending Q（缺事实源）
+- 交易系统反馈：keep/refine/deprecate/promote/watch/merge 各 N 条（来自 `evolving_views_json`）
 - 本轮复盘：<review_id>（若触发了 review-generate）
 - conflict_group 手工排查：<列表>（若有；Phase 1b 自动告警未实现）
 - 待确认项：<升 active / 弃用的候选清单；merge 流程 Phase 2 交付>

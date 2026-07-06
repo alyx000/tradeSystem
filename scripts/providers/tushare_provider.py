@@ -65,6 +65,7 @@ class TushareProvider(DataProvider):
         self.pro = None
         self._sw_l2_codes: set | None = None
         self._ths_concept_map: dict | None = None
+        self._ths_member_cache: dict[str, list[dict]] = {}
         self._sw_member_map: dict | None = None
 
     def initialize(self) -> bool:
@@ -684,27 +685,49 @@ class TushareProvider(DataProvider):
         except Exception as e:
             return DataResult(data=None, source=self.name, error=str(e))
 
-    def get_ths_member(self, _date: str) -> DataResult:
-        """获取同花顺概念板块成分。按概念板块(type=N)循环拉取，适合低频刷新。"""
+    def get_ths_member(self, _date: str, concept_names: list[str] | None = None) -> DataResult:
+        """获取同花顺概念板块成分。
+
+        concept_names 为空时保持历史全量行为；传入概念名时只拉这些概念的成分，供 trend-leader
+        历史回放避免全量 ths_member 串行请求。
+        """
         try:
+            name_filter = None
+            if concept_names is not None:
+                name_filter = {str(n).strip() for n in concept_names if str(n).strip()}
+                if not name_filter:
+                    return DataResult(data=[], source="tushare:ths_member")
             index_df = self.pro.ths_index(type="N")
             if index_df is None or index_df.empty:
                 return DataResult(data=[], source="tushare:ths_member")
+            cache = getattr(self, "_ths_member_cache", None)
+            if cache is None:
+                cache = {}
+                self._ths_member_cache = cache
             records: list[dict] = []
             for _, index_row in index_df.iterrows():
+                index_name = str(index_row.get("name", "") or "")
+                if name_filter is not None and index_name not in name_filter:
+                    continue
                 ts_code = str(index_row.get("ts_code", "") or "")
                 if not ts_code:
+                    continue
+                if ts_code in cache:
+                    records.extend(dict(item) for item in cache[ts_code])
                     continue
                 try:
                     member_df = self.pro.ths_member(ts_code=ts_code)
                 except Exception as exc:
                     logger.debug("ths_member %s 获取失败: %s", ts_code, exc)
                     continue
+                member_records: list[dict] = []
                 for item in self._df_to_records(member_df):
                     item.setdefault("ts_code", ts_code)
-                    item["index_name"] = str(index_row.get("name", "") or "")
+                    item["index_name"] = index_name
                     item["index_type"] = str(index_row.get("type", "") or "")
-                    records.append(item)
+                    member_records.append(item)
+                cache[ts_code] = [dict(item) for item in member_records]
+                records.extend(member_records)
             return DataResult(data=records, source="tushare:ths_member")
         except Exception as e:
             return DataResult(data=None, source=self.name, error=str(e))
@@ -1520,7 +1543,10 @@ class TushareProvider(DataProvider):
         """
         try:
             d = self._date_fmt(date)
-            df = self.pro.daily(trade_date=d, fields="ts_code,open,high,low,close,pre_close")
+            df = self.pro.daily(
+                trade_date=d,
+                fields="ts_code,trade_date,open,high,low,close,pre_close,pct_chg,vol,amount",
+            )
             if df is None or df.empty:
                 return DataResult(data=[], source="tushare:daily")
             records = self._df_to_records(df)

@@ -356,6 +356,17 @@ def test_get_ths_member_uses_concept_index_scope():
     assert result.data[0]["index_type"] == "N"
 
 
+def test_get_ths_member_filters_by_concept_names():
+    provider = _provider()
+
+    result = provider.get_ths_member("2026-04-03", concept_names=["机器人"])
+
+    assert result.success
+    assert provider.pro.ths_index_calls == [{"type": "N"}]
+    assert provider.pro.ths_member_calls == [{"ts_code": "885002.TI"}]
+    assert result.data[0]["index_name"] == "机器人"
+
+
 def test_get_stock_daily_normalizes_plain_code():
     provider = _provider()
 

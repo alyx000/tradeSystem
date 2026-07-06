@@ -211,6 +211,37 @@ def test_list_instances_filter_source_type(api_client):
     assert body["instances"][0]["source_type"] == "plan_review"
 
 
+def test_list_instances_parses_structured_viewpoint_feedback_fields(api_client):
+    client, db_path = api_client
+    svc = _svc(db_path)
+    cog = svc.add_cognition(
+        category="signal", title="T", description="D", input_by="pytest",
+    )
+    cog_id = cog["cognition_id"]
+    inst = svc.add_instance(
+        cognition_id=cog_id,
+        observed_date="2026-04-10",
+        source_type="teacher_note",
+        viewpoint_claims_json=[
+            {"label": "[事实]", "text": "成交额放大"},
+            {"label": "[判断]", "text": "低位分支承接"},
+        ],
+        factor_snapshot_json={"factor": "theme_rotation"},
+        hypothesis_json={"statement": "主线内部轮动"},
+        feedback_detail_json={"next_step": "观察失效边界"},
+        input_by="pytest",
+    )
+    r = client.get(f"/api/cognition/instances?cognition_id={cog_id}")
+    assert r.status_code == 200
+    body = r.json()
+    row = next(x for x in body["instances"] if x["instance_id"] == inst["instance_id"])
+    assert row["viewpoint_claims_json"][0]["label"] == "fact"
+    assert row["viewpoint_claims_json"][1]["label"] == "judgement"
+    assert row["factor_snapshot_json"]["factor"] == "theme_rotation"
+    assert row["hypothesis_json"]["statement"] == "主线内部轮动"
+    assert row["feedback_detail_json"]["next_step"] == "观察失效边界"
+
+
 # ──────────────────────────────────────────────────────────────
 # /reviews
 # ──────────────────────────────────────────────────────────────

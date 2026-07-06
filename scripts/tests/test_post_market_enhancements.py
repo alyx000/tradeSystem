@@ -2109,10 +2109,11 @@ class TestPostMarketSlimming:
 
 class TestConsecutiveBoardExcludeST:
     def test_limit_step_ladder_excludes_st(self):
-        """连板天梯过滤 ST：ST 连板不进榜，正常股保留。"""
+        """连板天梯过滤 ST / 退市股：风险股不进榜，正常股保留。"""
         raw = {"limit_step": {"data": [
             {"name": "*ST闻泰", "nums": "9"},
             {"name": "ST海王", "nums": "7"},
+            {"name": "国华退", "nums": "6"},
             {"name": "真龙头", "nums": "5"},
             {"name": "正常二板", "nums": "2"},
         ]}}
@@ -2122,12 +2123,14 @@ class TestConsecutiveBoardExcludeST:
         assert "正常二板" in md
         assert "*ST闻泰" not in md
         assert "ST海王" not in md
+        assert "国华退" not in md
 
-    def test_limit_step_all_st_no_ladder_table(self):
-        """连板天梯全为 ST 且无其它增强数据时：既不渲染子表，也不留空的章节标题。"""
+    def test_limit_step_all_st_or_delisted_no_ladder_table(self):
+        """连板天梯全为 ST / 退市股且无其它增强数据时：既不渲染子表，也不留空的章节标题。"""
         raw = {"limit_step": {"data": [
             {"name": "*ST闻泰", "nums": "9"},
             {"name": "ST海王", "nums": "7"},
+            {"name": "国华退", "nums": "6"},
         ]}}
         md = _render_p0(raw)
         assert "连板天梯" not in md

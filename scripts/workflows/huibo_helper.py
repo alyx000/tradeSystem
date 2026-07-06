@@ -240,7 +240,19 @@ def _prev_weekday(today: str) -> str:
 
 def _cmd_collect(args: argparse.Namespace) -> dict[str, Any]:
     source = huibo.build_source_from_env(args.mode)
-    candidates, texts = source(None, args.date, args.window_days) if source else ([], {})
+    try:
+        candidates, texts = source(None, args.date, args.window_days) if source else ([], {})
+    except huibo.HuiboTerminalUrlUnavailable as exc:
+        _write_json(args.out, [])
+        _write_json(args.texts_out, {})
+        return {
+            "status": "blocked",
+            "reason": "huibo_terminal_url_unavailable",
+            "message": str(exc),
+            "candidate_count": 0,
+            "out": args.out,
+            "texts_out": args.texts_out,
+        }
     rows = [_candidate_json(c) for c in candidates]
     _write_json(args.out, rows)
     _write_json(args.texts_out, texts)
@@ -269,6 +281,7 @@ def _cmd_download(args: argparse.Namespace) -> dict[str, Any]:
             score=item.score,
             reasons=item.reasons,
             topic_key=item.topic_key,
+            pdf_download=download_diag,
         )
         if candidate.pdf_path and Path(candidate.pdf_path).exists():
             downloaded += 1
@@ -280,9 +293,7 @@ def _cmd_download(args: argparse.Namespace) -> dict[str, Any]:
                 "title": candidate.title,
                 "diagnostics": download_diag,
             })
-        row = _prescreened_json(item)
-        row["pdf_download"] = download_diag
-        out.append(row)
+        out.append(_prescreened_json(item))
     _write_json(args.out, out)
     result = {"status": "ok", "downloaded_count": downloaded, "missing_pdf_count": missing, "out": args.out}
     if items and downloaded == 0 and missing == len(items) and set(missing_reasons) == {"hibor_mb404"}:
@@ -875,6 +886,7 @@ def _prescreened_json(item: huibo.PrescreenedCandidate) -> dict[str, Any]:
         "score": item.score,
         "reasons": item.reasons,
         "topic_key": item.topic_key,
+        "pdf_download": item.pdf_download,
     }
 
 
@@ -884,6 +896,7 @@ def _prescreened_from_json(row: dict[str, Any]) -> huibo.PrescreenedCandidate:
         score=float(row.get("score") or 0),
         reasons=list(row.get("reasons") or []),
         topic_key=str(row.get("topic_key") or ""),
+        pdf_download=row.get("pdf_download") if isinstance(row.get("pdf_download"), dict) else {},
     )
 
 

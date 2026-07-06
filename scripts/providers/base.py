@@ -158,7 +158,7 @@ class DataProvider(ABC):
     def get_ths_index(self, date: str) -> DataResult:
         return DataResult(data=None, source=self.name, error="not implemented")
 
-    def get_ths_member(self, date: str) -> DataResult:
+    def get_ths_member(self, date: str, concept_names: list[str] | None = None) -> DataResult:
         return DataResult(data=None, source=self.name, error="not implemented")
 
     def get_index_classify(self, date: str) -> DataResult:

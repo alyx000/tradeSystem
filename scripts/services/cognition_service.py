@@ -35,6 +35,15 @@ _ALLOWED_INSTANCE_OUTCOMES = frozenset(
     {"pending", "validated", "invalidated", "partial", "not_applicable"}
 )
 _VALIDATE_OUTCOMES = frozenset({"validated", "invalidated", "partial", "not_applicable"})
+_ALLOWED_FEEDBACK_ACTIONS = frozenset(
+    {"none", "keep", "watch", "refine", "promote", "deprecate", "merge"}
+)
+_DEFAULT_FEEDBACK_BY_OUTCOME = {
+    "validated": "keep",
+    "invalidated": "refine",
+    "partial": "watch",
+    "not_applicable": "watch",
+}
 _ALLOWED_PERIOD_TYPES = frozenset({"weekly", "monthly", "quarterly", "yearly"})
 _ALLOWED_REVIEW_SCOPES = frozenset({"calendar_period", "event_window", "regime_window"})
 
@@ -59,6 +68,22 @@ _FACT_SOURCE_DATE_COLUMN: dict[str, str] = {
     "daily_market": "date",
     "market_fact_snapshots": "biz_date",
     "fact_entities": "biz_date",
+}
+
+_CLAIM_LABEL_ALIASES = {
+    "fact": "fact",
+    "事实": "fact",
+    "[事实]": "fact",
+    "judgement": "judgement",
+    "judgment": "judgement",
+    "判断": "judgement",
+    "[判断]": "judgement",
+    "opinion": "opinion",
+    "观点": "opinion",
+    "[观点]": "opinion",
+    "rumor": "rumor",
+    "传闻": "rumor",
+    "[传闻]": "rumor",
 }
 
 _BASE_DIR = Path(__file__).resolve().parent.parent.parent
@@ -120,6 +145,66 @@ def _ensure_valid_json_str(value: Any, field_name: str) -> str | None:
     raise ValueError(
         f"{field_name} 需 JSON 字符串 / dict / list / None，收到 {type(value).__name__}"
     )
+
+
+def _ensure_json_type(value: Any, field_name: str, expected_type: type | tuple[type, ...]) -> str | None:
+    """校验 JSON 入参的根节点类型并返回字符串。"""
+    s = _ensure_valid_json_str(value, field_name)
+    if s is None:
+        return None
+    parsed = json.loads(s)
+    if not isinstance(parsed, expected_type):
+        if isinstance(expected_type, tuple):
+            expected = "/".join(t.__name__ for t in expected_type)
+        else:
+            expected = expected_type.__name__
+        raise ValueError(f"{field_name} 根节点须为 {expected}")
+    return json.dumps(parsed, ensure_ascii=False)
+
+
+def _normalize_viewpoint_claims(value: Any) -> str | None:
+    """结构化老师观点原子命题，并显式区分 fact/judgement/opinion/rumor。
+
+    入参为 JSON 数组，每项至少包含 label + text。label 可用英文或中文标签，
+    入库统一归一成英文，避免后续把 [判断] 当 [事实] 统计。
+    """
+    s = _ensure_json_type(value, "viewpoint_claims_json", list)
+    if s is None:
+        return None
+    parsed = json.loads(s)
+    if not parsed:
+        raise ValueError("viewpoint_claims_json 至少包含 1 条命题")
+    normalized: list[dict[str, Any]] = []
+    for idx, item in enumerate(parsed):
+        if not isinstance(item, dict):
+            raise ValueError(f"viewpoint_claims_json[{idx}] 须为 object")
+        raw_label = str(item.get("label") or "").strip()
+        label = _CLAIM_LABEL_ALIASES.get(raw_label)
+        if label is None:
+            raise ValueError(
+                "viewpoint_claims_json label 非法，需为 fact/judgement/opinion/rumor "
+                "或 [事实]/[判断]/[观点]/[传闻]"
+            )
+        text = str(item.get("text") or "").strip()
+        if not text:
+            raise ValueError(f"viewpoint_claims_json[{idx}].text 不能为空")
+        copied = dict(item)
+        copied["label"] = label
+        copied["text"] = text
+        normalized.append(copied)
+    return json.dumps(normalized, ensure_ascii=False)
+
+
+def _validate_feedback_action(value: str | None, *, outcome: str | None = None) -> str:
+    action = (value or "").strip()
+    if not action:
+        action = _DEFAULT_FEEDBACK_BY_OUTCOME.get(outcome or "", "none")
+    if action not in _ALLOWED_FEEDBACK_ACTIONS:
+        raise ValueError(
+            f"feedback_action 非法，需为 {sorted(_ALLOWED_FEEDBACK_ACTIONS)} 之一；"
+            f"收到: {value!r}"
+        )
+    return action
 
 
 def _normalize_tags(value: Any) -> str | None:
@@ -554,6 +639,9 @@ class CognitionService:
         cross_market_anchor: str | None = None,
         consensus_key: str | None = None,
         parameters_json: Any = None,
+        viewpoint_claims_json: Any = None,
+        factor_snapshot_json: Any = None,
+        hypothesis_json: Any = None,
         teacher_original_text: str | None = None,
         outcome: str = "pending",
         outcome_detail: str | None = None,
@@ -561,6 +649,8 @@ class CognitionService:
         outcome_fact_refs_json: Any = None,
         outcome_date: str | None = None,
         lesson: str | None = None,
+        feedback_action: str | None = None,
+        feedback_detail_json: Any = None,
         input_by: str = "manual",
     ) -> dict[str, Any]:
         _validate_input_by(input_by)
@@ -591,7 +681,14 @@ class CognitionService:
 
         regime_s = _ensure_valid_json_str(regime_tags_json, "regime_tags_json")
         params_s = _ensure_valid_json_str(parameters_json, "parameters_json")
+        claims_s = _normalize_viewpoint_claims(viewpoint_claims_json)
+        factor_s = _ensure_json_type(factor_snapshot_json, "factor_snapshot_json", dict)
+        hypothesis_s = _ensure_json_type(hypothesis_json, "hypothesis_json", dict)
         refs_s = _ensure_valid_json_str(outcome_fact_refs_json, "outcome_fact_refs_json")
+        feedback_action_s = _validate_feedback_action(feedback_action, outcome=outcome)
+        feedback_detail_s = _ensure_json_type(
+            feedback_detail_json, "feedback_detail_json", (dict, list)
+        )
 
         instance_id = f"inst_{uuid4().hex[:8]}"
         with get_db(self.db_path) as conn:
@@ -632,11 +729,12 @@ class CognitionService:
                  teacher_id, teacher_name_snapshot, source_plan_review_id,
                  source_daily_review_date, trade_id, context_summary, regime_tags_json,
                  time_horizon, action_bias, position_cap, avoid_action, market_regime,
-                 cross_market_anchor, consensus_key, parameters_json, teacher_original_text,
+                 cross_market_anchor, consensus_key, parameters_json, viewpoint_claims_json,
+                 factor_snapshot_json, hypothesis_json, teacher_original_text,
                  outcome, outcome_detail, outcome_fact_source, outcome_fact_refs_json,
-                 outcome_date, lesson)
+                 outcome_date, lesson, feedback_action, feedback_detail_json)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                        ?, ?, ?, ?, ?, ?)
+                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     instance_id,
@@ -659,6 +757,9 @@ class CognitionService:
                     cross_market_anchor,
                     consensus_key,
                     params_s,
+                    claims_s,
+                    factor_s,
+                    hypothesis_s,
                     teacher_original_text,
                     outcome,
                     outcome_detail,
@@ -666,6 +767,8 @@ class CognitionService:
                     refs_s,
                     outcome_date,
                     lesson,
+                    feedback_action_s,
+                    feedback_detail_s,
                 ),
             )
         return self._get_instance(instance_id)
@@ -736,6 +839,8 @@ class CognitionService:
         outcome_fact_refs_json: Any = None,
         outcome_date: str | None = None,
         lesson: str | None = None,
+        feedback_action: str | None = None,
+        feedback_detail_json: Any = None,
         input_by: str = "manual",
     ) -> dict[str, Any]:
         _validate_input_by(input_by)
@@ -746,6 +851,10 @@ class CognitionService:
         fact_source = _validate_fact_source(outcome_fact_source)
         refs_s = _ensure_valid_json_str(outcome_fact_refs_json, "outcome_fact_refs_json")
         od = _validate_iso_date("outcome_date", outcome_date) if outcome_date else _today_iso()
+        feedback_action_s = _validate_feedback_action(feedback_action, outcome=outcome)
+        feedback_detail_s = _ensure_json_type(
+            feedback_detail_json, "feedback_detail_json", (dict, list)
+        )
 
         instance = self._get_instance(instance_id)
 
@@ -758,7 +867,8 @@ class CognitionService:
                 """
                 UPDATE cognition_instances
                 SET outcome = ?, outcome_detail = ?, outcome_fact_source = ?,
-                    outcome_fact_refs_json = ?, outcome_date = ?, lesson = ?
+                    outcome_fact_refs_json = ?, outcome_date = ?, lesson = ?,
+                    feedback_action = ?, feedback_detail_json = ?
                 WHERE instance_id = ?
                 """,
                 (
@@ -768,6 +878,8 @@ class CognitionService:
                     refs_s,
                     od,
                     lesson,
+                    feedback_action_s,
+                    feedback_detail_s,
                     instance_id,
                 ),
             )
@@ -900,7 +1012,9 @@ class CognitionService:
             # 期内实例聚合
             instance_rows = conn.execute(
                 """
-                SELECT cognition_id, outcome, teacher_id, teacher_name_snapshot
+                SELECT instance_id, cognition_id, source_note_id, outcome,
+                       teacher_id, teacher_name_snapshot, context_summary,
+                       feedback_action, feedback_detail_json, lesson, outcome_detail
                 FROM cognition_instances
                 WHERE observed_date >= ? AND observed_date <= ?
                 """,
@@ -913,6 +1027,8 @@ class CognitionService:
             teacher_counts: dict[int, int] = {}
             teacher_names: dict[int, str] = {}
             anon_teacher_names: set[str] = set()
+            feedback_bucket: dict[str, int] = {}
+            feedback_items: list[dict[str, Any]] = []
             total = 0
             for r in instance_rows:
                 cog_id = r["cognition_id"]
@@ -928,6 +1044,20 @@ class CognitionService:
                         teacher_names[int(tid)] = str(r["teacher_name_snapshot"])
                 elif r["teacher_name_snapshot"]:
                     anon_teacher_names.add(str(r["teacher_name_snapshot"]))
+                feedback_action = (r["feedback_action"] or "none")
+                if feedback_action != "none":
+                    feedback_bucket[feedback_action] = feedback_bucket.get(feedback_action, 0) + 1
+                    feedback_items.append({
+                        "instance_id": r["instance_id"],
+                        "cognition_id": cog_id,
+                        "source_note_id": r["source_note_id"],
+                        "outcome": r["outcome"],
+                        "feedback_action": feedback_action,
+                        "context_summary": r["context_summary"],
+                        "lesson": r["lesson"],
+                        "outcome_detail": r["outcome_detail"],
+                        "feedback_detail_json": r["feedback_detail_json"],
+                    })
 
             by_teacher = [
                 {"teacher_id": tid, "count": cnt, "name": teacher_names.get(tid)}
@@ -937,6 +1067,10 @@ class CognitionService:
 
             validation_stats = {"total": total, "by_outcome": outcome_bucket}
             teacher_participation = {"by_teacher": by_teacher, "teachers": all_names}
+            evolving_views = {
+                "by_feedback_action": feedback_bucket,
+                "items": feedback_items,
+            }
 
             conn.execute(
                 """
@@ -944,8 +1078,8 @@ class CognitionService:
                 (review_id, period_type, review_scope, regime_label,
                  period_start, period_end,
                  active_cognitions_json, validation_stats_json, teacher_participation_json,
-                 status)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft')
+                 evolving_views_json, status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft')
                 """,
                 (
                     review_id,
@@ -957,6 +1091,7 @@ class CognitionService:
                     json.dumps(active_cognitions, ensure_ascii=False),
                     json.dumps(validation_stats, ensure_ascii=False),
                     json.dumps(teacher_participation, ensure_ascii=False),
+                    json.dumps(evolving_views, ensure_ascii=False),
                 ),
             )
         return self.get_review(review_id)

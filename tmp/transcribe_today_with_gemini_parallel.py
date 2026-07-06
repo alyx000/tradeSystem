@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 
-DATE = "2026-06-23"
+DATE = os.environ.get("TRADENOTE_DATE", "2026-06-23")
 AUDIO_DIR = Path("/Users/alyx/tradeNote") / DATE
 OUT_DIR = Path("/Users/alyx/tradeSystem/tmp/audio_transcripts") / DATE
 MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash").strip()

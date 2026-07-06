@@ -38,6 +38,8 @@ class TestIsStStock:
         ("宁德时代", False),
         ("平安银行", False),
         ("特锐德", False),
+        ("国华退", True),
+        ("退市园城", True),
         ("", False),
         ("  ST前空格", True),
     ])

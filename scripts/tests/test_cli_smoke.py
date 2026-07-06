@@ -61,6 +61,11 @@ RECORD_NOTES_COMMANDS = [
     # add-note 用户确认入池后：同步 mentioned_stocks 到关注池
     ["db", "add-note", "--teacher", "小鲍", "--date", "2026-04-01", "--title", "T",
      "--stocks", '[{"code":"300750","name":"宁德时代"}]', "--sync-watchlist-from-stocks"],
+    # update-note 结构化修订
+    ["db", "update-note", "--id", "1", "--title", "T2",
+     "--key-points", '["要点A","要点B"]', "--input-by", "codex_automation"],
+    # delete-note 受控删除
+    ["db", "delete-note", "--id", "1", "--input-by", "codex_automation", "--yes"],
     # add-industry 最简
     ["db", "add-industry", "--sector", "AI算力", "--date", "2026-04-01", "--content", "C",
      "--input-by", "cursor"],
@@ -68,6 +73,11 @@ RECORD_NOTES_COMMANDS = [
     ["db", "add-industry", "--sector", "锂电", "--date", "2026-04-01", "--content", "C",
      "--info-type", "研报", "--source", "华泰", "--confidence", "高",
      "--tags", '["锂电","储能"]', "--input-by", "cursor"],
+    # update-industry 结构化修订
+    ["db", "update-industry", "--id", "1", "--sector", "半导体", "--content", "C2",
+     "--tags", '["半导体"]', "--input-by", "codex_automation"],
+    # delete-industry 受控删除
+    ["db", "delete-industry", "--id", "1", "--input-by", "codex_automation", "--yes"],
     # add-macro 最简
     ["db", "add-macro", "--category", "货币政策", "--date", "2026-04-01",
      "--title", "降准", "--content", "C", "--input-by", "cursor"],
@@ -338,6 +348,7 @@ ARCHITECTURE_COMMANDS = [
     ["trend-leader", "daily", "--top-k", "8"],
     ["trend-leader", "daily", "--date", "2026-06-12", "--sectors", '["半导体"]',
      "--top-k", "8", "--no-push", "--dry-run"],
+    ["trend-leader", "daily", "--main-line", "hybrid", "--no-llm"],
     ["trend-leader", "daily", "--main-line", "l2+concept"],
     ["trend-leader", "daily", "--main-line", "l2", "--top-concepts", "10"],
     ["trend-leader", "daily", "--date", "2026-06-12", "--main-line", "l2+concept",
@@ -355,6 +366,20 @@ ARCHITECTURE_COMMANDS = [
     ["string-yang", "daily", "--dry-run"],
     ["string-yang", "daily", "--no-push"],
     ["string-yang", "daily", "--date", "2026-06-12", "--top-k", "8", "--top-concepts", "6", "--no-llm", "--dry-run"],
+    # daily-leaders (每日最票候选:预填+趋势池+老师观点→候选稿→确认写入复盘第5步)
+    ["daily-leaders", "propose"],
+    ["daily-leaders", "propose", "--date", "2026-07-03", "--no-llm"],
+    ["daily-leaders", "propose", "--date", "2026-07-03", "--push"],
+    ["daily-leaders", "show", "--date", "2026-07-03", "--json"],
+    ["daily-leaders", "confirm", "--date", "2026-07-03", "--input-by", "codex"],
+    # ma-breakout (4日均线拐头 + 成交额突破双均量线;只读观察清单)
+    ["ma-breakout", "daily"],
+    ["ma-breakout", "daily", "--date", "2026-06-12"],
+    ["ma-breakout", "daily", "--windows", "5,10", "--top-n", "30"],
+    ["ma-breakout", "daily", "--leader-lookback-days", "60"],
+    ["ma-breakout", "daily", "--dry-run"],
+    ["ma-breakout", "daily", "--no-push"],
+    ["ma-breakout", "daily", "--json"],
     # board-break (断板反包:昨日连板>=2断板<=6%未跌停主板 → 双打分观察清单;无状态不建池)
     ["board-break", "daily"],
     ["board-break", "daily", "--date", "2026-07-04"],
@@ -454,7 +479,9 @@ def test_all_skill_subcommands_registered() -> None:
     """验证 INDEX.md 中列出的所有子命令名称都已在 argparse 中注册。"""
     expected_subcommands = {
         # record-notes
-        "add-note", "add-industry", "add-macro",
+        "add-note", "update-note", "delete-note",
+        "add-industry", "update-industry", "delete-industry",
+        "add-macro",
         # portfolio-manager
         "stock-resolve",
         "holdings-add", "holdings-remove", "holdings-list",

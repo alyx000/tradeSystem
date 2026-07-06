@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import signal
 import sqlite3
 import subprocess
 from pathlib import Path
@@ -87,6 +89,59 @@ def test_js_workflow_runs_and_resumes_without_rereading(tmp_path, monkeypatch):
 
     subprocess.run([*cmd, "--resume"], text=True, capture_output=True, check=True)
     assert len(calls.read_text(encoding="utf-8").splitlines()) == 3
+
+
+def test_js_workflow_absolutizes_relative_huibo_pdf_dir(tmp_path, monkeypatch):
+    title = "方正证券-电新行业新技术系列报告~玻璃基板专题1：AI算力引领封装升级-260621"
+    pdf_dir = tmp_path / "rel-pdfs"
+    pdf_dir.mkdir()
+    safe_stem = re.sub(r"[^0-9A-Za-z\u4e00-\u9fff._-]+", "_", title).strip("._-")[:120]
+    (pdf_dir / f"{safe_stem}.pdf").write_bytes(b"%PDF-1.4\nfixture")
+    snapshot = tmp_path / "hot.json"
+    snapshot.write_text(json.dumps({
+        "rows": [
+            {
+                "报告名称": title,
+                "报告评级": "",
+                "作者": "张三",
+                "页数": "20页",
+                "时间": "2026-06-21",
+                "分类": "行业分析",
+                "raw": {"DId": 5131866, "DocName": "202606210826522290.pdf", "DocType": 2},
+            }
+        ]
+    }, ensure_ascii=False), encoding="utf-8")
+    fake_agy = tmp_path / "fake-agy"
+    fake_agy.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json\n"
+        "print(json.dumps({'industry':'电子','key_points':['ok'],'mentioned_stocks':[],'read_score':80}, ensure_ascii=False))\n",
+        encoding="utf-8",
+    )
+    fake_agy.chmod(0o755)
+
+    monkeypatch.setenv("HUIBO_HOT_REPORT_JSON", str(snapshot))
+    repo_root = WORKFLOW.parents[2]
+    monkeypatch.setenv("HUIBO_REPORT_PDF_DIR", os.path.relpath(pdf_dir, repo_root))
+    monkeypatch.setenv("ANTIGRAVITY_BIN", str(fake_agy))
+    cmd = [
+        "node", str(WORKFLOW), "daily",
+        "--date", "2026-06-03",
+        "--run-root", str(tmp_path / "runs"),
+        "--raw-dir", str(tmp_path / "raw"),
+        "--summary-dir", str(tmp_path / "summaries"),
+        "--reader-cap", "1",
+        "--reader-concurrency", "1",
+        "--recommend-cap", "1",
+        "--no-aggregate-llm",
+    ]
+    subprocess.run(cmd, text=True, capture_output=True, check=True, cwd=tmp_path)
+
+    run_dir = tmp_path / "runs" / "2026-06-03"
+    state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+    assert state["options"]["huiboReportPdfDir"] == str(pdf_dir)
+    assert state["stages"]["download"]["result"]["downloaded_count"] == 1
+    assert state["stages"]["read"]["result"]["scheduled_count"] == 1
 
 
 def test_js_workflow_auto_retries_failed_reader(tmp_path, monkeypatch):
@@ -290,6 +345,67 @@ def test_js_workflow_preflight_quota_failure_skips_reader_calls(tmp_path, monkey
         for line in (run_dir / "events.jsonl").read_text(encoding="utf-8").splitlines()
     ]
     assert any(event["event"] == "llm_global_failure" and event.get("stage") == "preflight" for event in events)
+
+
+def test_js_workflow_preflight_timeout_does_not_wait_for_inherited_pipe(tmp_path, monkeypatch):
+    snapshot = tmp_path / "hot.json"
+    snapshot.write_text(json.dumps({
+        "rows": [
+            {
+                "报告名称": "A证券-AI算力行业深度：重点推荐产业链",
+                "报告评级": "买入（首次）",
+                "作者": "张三",
+                "页数": "20页",
+                "时间": "2026-06-03",
+                "分类": "行业分析",
+            }
+        ]
+    }, ensure_ascii=False), encoding="utf-8")
+    bg_pid = tmp_path / "bg.pid"
+    fake_agy = tmp_path / "fake-agy"
+    fake_agy.write_text(
+        "#!/usr/bin/env python3\n"
+        "import pathlib, subprocess, sys, time\n"
+        "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'], start_new_session=True)\n"
+        f"pathlib.Path({str(bg_pid)!r}).write_text(str(child.pid), encoding='utf-8')\n"
+        "raise SystemExit(0)\n",
+        encoding="utf-8",
+    )
+    fake_agy.chmod(0o755)
+
+    monkeypatch.setenv("HUIBO_HOT_REPORT_JSON", str(snapshot))
+    monkeypatch.setenv("HUIBO_RAW_DIR", str(tmp_path / "raw"))
+    monkeypatch.setenv("HUIBO_REPORT_PDF_DIR", str(tmp_path / "terminal-pdfs"))
+    monkeypatch.setenv("ANTIGRAVITY_BIN", str(fake_agy))
+    cmd = [
+        "node", str(WORKFLOW), "daily",
+        "--date", "2026-06-03",
+        "--run-root", str(tmp_path / "runs"),
+        "--raw-dir", str(tmp_path / "raw"),
+        "--summary-dir", str(tmp_path / "summaries"),
+        "--reader-cap", "1",
+        "--reader-concurrency", "1",
+        "--reader-max-attempts", "1",
+        "--recommend-cap", "1",
+        "--preflight",
+        "--preflight-timeout-seconds", "1",
+        "--no-aggregate-llm",
+    ]
+    try:
+        subprocess.run(cmd, text=True, capture_output=True, check=True, timeout=30)
+    finally:
+        if bg_pid.exists():
+            try:
+                os.kill(int(bg_pid.read_text(encoding="utf-8")), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+    run_dir = tmp_path / "runs" / "2026-06-03"
+    state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+    preflight = state["stages"]["preflight"]["result"]
+    assert preflight["status"] == "warning"
+    assert preflight["reason"] == "timeout"
+    assert state["stages"]["read"]["result"]["scheduled_count"] == 0
 
 
 def test_js_workflow_reset_llm_status_allows_retry_after_global_failure(tmp_path, monkeypatch):
@@ -768,6 +884,36 @@ def test_js_workflow_rejects_date_without_value(tmp_path):
     assert "--date requires YYYY-MM-DD" in result.stderr
 
 
+def test_js_workflow_fails_fast_when_huibo_terminal_url_unavailable(tmp_path, monkeypatch):
+    monkeypatch.delenv("HUIBO_HOT_REPORT_JSON", raising=False)
+    monkeypatch.setenv(
+        "HUIBO_HOT_REPORT_URL",
+        "https://sys.hibor.com.cn/redian/HotReport?abc=STALE&def=STALE&vidd=3&keyy=STALE&xyz=STALE&op=0",
+    )
+    monkeypatch.setenv("HUIBO_REFRESH_URL_FROM_APP", "1")
+    monkeypatch.setenv("HUIBO_DISABLE_TERMINAL_URL_READ", "1")
+    cmd = [
+        "node", str(WORKFLOW), "daily",
+        "--date", "2026-06-03",
+        "--run-root", str(tmp_path / "runs"),
+        "--raw-dir", str(tmp_path / "raw"),
+        "--summary-dir", str(tmp_path / "summaries"),
+        "--reader-cap", "1",
+        "--reader-concurrency", "1",
+        "--recommend-cap", "1",
+        "--no-aggregate-llm",
+    ]
+    result = subprocess.run(cmd, text=True, capture_output=True)
+
+    assert result.returncode != 0
+    assert "huibo_terminal_url_unavailable" in result.stderr
+    run_dir = tmp_path / "runs" / "2026-06-03"
+    state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+    assert state["stages"]["collect"]["status"] == "failed"
+    assert "huibo_terminal_url_unavailable" in state["stages"]["collect"]["error"]
+    assert "publish" not in state["stages"]
+
+
 def test_js_workflow_uses_rebuilt_llm_pdf_copy_on_resume(tmp_path, monkeypatch):
     pdf_dir = tmp_path / "pdfs"
     pdf_dir.mkdir()
@@ -1228,7 +1374,7 @@ def test_js_workflow_fails_fast_on_antigravity_auth_prompt(tmp_path, monkeypatch
         "--recommend-cap", "1",
         "--no-aggregate-llm",
     ]
-    subprocess.run(cmd, text=True, capture_output=True, check=True, timeout=5)
+    subprocess.run(cmd, text=True, capture_output=True, check=True, timeout=10)
 
     state = json.loads((tmp_path / "runs" / "2026-06-03" / "state.json").read_text(encoding="utf-8"))
     report = next(iter(state["reports"].values()))

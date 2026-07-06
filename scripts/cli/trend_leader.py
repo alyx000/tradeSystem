@@ -1,7 +1,7 @@
 """CLI: 趋势主升漏斗扫描（盘后 EOD 只读观察清单 + 持久化观察池）。
 
   trend-leader daily [--date YYYY-MM-DD] [--sectors '["半导体",...]'] [--top-k N]
-                     [--dry-run] [--no-push]
+                     [--main-line hybrid|l2|l2+concept] [--no-llm] [--dry-run] [--no-push]
   trend-leader pool  [--status active|exited] [--json]
 
 daily：涨停∩主线 → 首次涨停加速+缓涨 → 入池/维护/退池 → 渲染 → 推钉钉。
@@ -49,10 +49,13 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
                        help='手工主线板块 JSON 数组，∪ 自动 Top-K（如 \'["半导体","玻璃玻纤"]\'）')
     daily.add_argument("--top-k", type=_positive_int, default=C.DEFAULT_TOP_K_SECTORS,
                        help=f"自动主线取成交额集中度 Top-K 申万二级（正整数，默认 {C.DEFAULT_TOP_K_SECTORS}）")
-    daily.add_argument("--main-line", default="l2", choices=["l2", "l2+concept"],
-                       help="主线口径：l2=仅申万二级（默认）；l2+concept=∪同花顺概念资金净流入 Top-M 分支")
+    daily.add_argument("--main-line", default="hybrid", choices=["hybrid", "l2", "l2+concept"],
+                       help=("主线口径：hybrid=申万二级∪同花顺概念并用LLM过滤概念（默认）；"
+                             "l2=仅申万二级；l2+concept=机械∪同花顺概念资金净流入 Top-M 分支"))
     daily.add_argument("--top-concepts", type=_positive_int, default=C.DEFAULT_TOP_CONCEPTS,
-                       help=f"概念分支取资金净流入 Top-M（正整数，默认 {C.DEFAULT_TOP_CONCEPTS}，仅 l2+concept 生效）")
+                       help=f"概念分支取资金净流入 Top-M（正整数，默认 {C.DEFAULT_TOP_CONCEPTS}，hybrid/l2+concept 生效）")
+    daily.add_argument("--no-llm", action="store_true",
+                       help="hybrid 模式下禁用 LLM 概念过滤，降级为确定性 l2+concept")
     daily.add_argument("--dry-run", action="store_true",
                        help="内存副本跑，不落池/不推送（历史校准用）")
     daily.add_argument("--no-push", action="store_true", help="落池但仅打印，不推送")
@@ -97,6 +100,7 @@ def _run_daily(config: dict, args: argparse.Namespace) -> None:
 
     date = args.date or _today()
     sectors = _parse_sectors(args.sectors)
+    mainline_llm_runner = _mainline_llm_runner(args)
     registry = setup_providers(config)
     registry.initialize_all()  # register 不自动初始化，漏了所有 provider 调用返 provider_not_initialized
 
@@ -114,7 +118,8 @@ def _run_daily(config: dict, args: argparse.Namespace) -> None:
             real_conn.backup(mem)
             try:
                 summary = scanner.run_daily(mem, registry, date, sectors=sectors, top_k=args.top_k,
-                                        main_line=args.main_line, top_concepts=args.top_concepts)
+                                        main_line=args.main_line, top_concepts=args.top_concepts,
+                                        mainline_llm_runner=mainline_llm_runner)
                 md = renderer.render_daily(mem, summary)
             finally:
                 mem.close()
@@ -129,7 +134,8 @@ def _run_daily(config: dict, args: argparse.Namespace) -> None:
                 logger.warning("⚠️ %s 为非交易日（周末/法定假日），跳过趋势主升扫描（不落池、不推送）", date)
                 return
             summary = scanner.run_daily(real_conn, registry, date, sectors=sectors, top_k=args.top_k,
-                                        main_line=args.main_line, top_concepts=args.top_concepts)
+                                        main_line=args.main_line, top_concepts=args.top_concepts,
+                                        mainline_llm_runner=mainline_llm_runner)
             md = renderer.render_daily(real_conn, summary)
     finally:
         real_conn.close()
@@ -142,6 +148,18 @@ def _run_daily(config: dict, args: argparse.Namespace) -> None:
         logger.info("[trend-leader daily] --no-push：已落池，未推送")
         return
     _push_to_dingtalk(f"趋势主升观察清单 · {date}", md)
+
+
+def _mainline_llm_runner(args: argparse.Namespace):
+    """Build optional Antigravity runner for hybrid mainline filtering."""
+    if getattr(args, "no_llm", False) or getattr(args, "main_line", "hybrid") != "hybrid":
+        return None
+    try:
+        from services.research_digest.narrator import build_antigravity_runner
+        return build_antigravity_runner()
+    except Exception as exc:  # noqa: BLE001 - trend-leader must degrade if LLM wiring is unavailable.
+        logger.warning("[trend-leader] mainline LLM runner 初始化失败，降级确定性概念主线: %s", exc)
+        return None
 
 
 def _run_pool(config: dict, args: argparse.Namespace) -> None:
@@ -167,3 +185,14 @@ def _push_to_dingtalk(title: str, markdown: str) -> None:
         return
     ok = pusher.send_markdown(title=title, content=markdown)
     logger.info("[trend-leader] 推送 %s", "成功" if ok else "失败")
+
+
+def _mainline_llm_runner(args: argparse.Namespace):
+    if getattr(args, "main_line", "hybrid") != "hybrid" or getattr(args, "no_llm", False):
+        return None
+    try:
+        from services.research_digest.narrator import build_antigravity_runner
+        return build_antigravity_runner()
+    except Exception as exc:  # noqa: BLE001 - LLM unavailable degrades to deterministic concepts.
+        logger.warning("[trend-leader] mainline LLM runner unavailable: %s", exc)
+        return None

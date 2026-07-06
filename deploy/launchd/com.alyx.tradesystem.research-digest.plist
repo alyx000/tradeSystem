@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- Sleep policy: 研报速读错过可接受（非交易决策任务）；macOS 休眠期间不触发，可接受，不配 pmset 唤醒。
-     每天 22:00 触发一次，runner 内部按 A 股交易日/交易日前一天过滤。 -->
+<!-- Deprecated: 研报速读生产定时已迁移到 Codex 自动化「每日慧博研报速读（Computer Use）」。
+     不再安装本 launchd plist；保留文件仅用于历史排障参考。 -->
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>

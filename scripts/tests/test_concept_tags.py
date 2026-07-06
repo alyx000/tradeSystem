@@ -15,8 +15,10 @@ from services import concept_tags
 class _FakeRegistry:
     def __init__(self, resp):
         self.resp = resp
+        self.calls = []
 
     def call(self, method, *a, **k):
+        self.calls.append((method, a, k))
         return self.resp
 
 
@@ -43,6 +45,16 @@ def test_build_stock_concept_map_reverse():
     assert m["688498"] == {"共封装光学(CPO)"}
     assert mc["共封装光学(CPO)"] == 2                       # 去重成员数
     assert mc["光纤概念"] == 1
+
+
+def test_build_stock_concept_map_passes_concept_names():
+    reg = _FakeRegistry(DataResult(data=[], source="tushare:ths_member"))
+
+    concept_tags.build_stock_concept_map(reg, "2026-06-15", concept_names=["PCB概念", "CPO"])
+
+    assert reg.calls == [
+        ("get_ths_member", ("2026-06-15",), {"concept_names": ["PCB概念", "CPO"]})
+    ]
 
 
 def test_build_stock_concept_map_failure():
