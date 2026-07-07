@@ -10,6 +10,8 @@
 - **市场投票方向**改用「次日收盘涨跌」`close-pre_close` 的符号：收盘价才是市场对这份
   预告投出的真实一票，开盘那一下多为情绪脉冲、盘中常被回补/反转（实测高开低走收绿的
   票若按开盘跳空会被误标「超预期确认」，按收盘则正确翻为「利好不及预期」）。
+- 正面公告向上跳空但收盘明显回落时，不硬标「超预期确认」；保留为正反馈，但标注
+  「利好兑现·高开回落」以呈现承接弱化。
 - 严格缺口 / 一字板是「开盘跳空」结构属性，按开盘方向标注（与收盘投票方向数学上恒同向）。
 
 已知简化：极少数盘前早间公告（首反应是当日）按主流盘后发布口径归入次日验证。
@@ -19,6 +21,8 @@ from __future__ import annotations
 from .normalize import NEGATIVE_TYPES, POSITIVE_TYPES, _to_float, normalize_forecast
 
 DEFAULT_GAP_THRESHOLD_PCT = 2.0
+PULLBACK_MIN_DROP_PCT = 2.0
+PULLBACK_MAX_RETAIN_RATIO = 0.70
 
 # 市场投票 2×2：公告方向 × 收盘涨跌方向（投票口径＝收盘，非开盘跳空）
 VOTE_LABELS = {
@@ -27,6 +31,7 @@ VOTE_LABELS = {
     ("negative", "up"): "💡利空出尽",
     ("negative", "down"): "❌暴雷确认",
 }
+PULLBACK_LABEL = "⚠️利好兑现·高开回落"
 
 
 def _direction_of_type(type_text: str) -> str | None:
@@ -114,6 +119,14 @@ def check_gaps(
         else:
             vote_direction = "up" if close_pct > 0 else "down"
             vote_label = VOTE_LABELS[(direction, vote_direction)]
+            if (
+                direction == "positive"
+                and open_gap_pct > 0
+                and close_pct > 0
+                and open_gap_pct - close_pct >= PULLBACK_MIN_DROP_PCT
+                and close_pct <= open_gap_pct * PULLBACK_MAX_RETAIN_RATIO
+            ):
+                vote_label = PULLBACK_LABEL
 
         # 严格缺口 / 一字板是「开盘跳空」结构属性 → 按开盘方向判定（与收盘投票方向恒同向：
         # 一旦今低 > 昨高，则 close ≥ 今低 > 昨高 ≥ 昨收 ⟹ 收盘必为 up，反向同理，无矛盾）。

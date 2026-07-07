@@ -292,6 +292,17 @@ def test_gap_vote_uses_close_direction(type_, open_px, close, pre_close, expecte
     assert hit["close_pct"] == round((close - pre_close) / pre_close * 100, 2)
 
 
+def test_gap_positive_open_up_but_large_pullback_is_not_confirmed_beat():
+    """预增高开后明显回落但仍收红 → 标为利好兑现，不硬标「超预期确认」。"""
+    hits = _gap_case("预增", 11.06, 10.0, close=10.56)
+    assert len(hits) == 1
+    hit = hits[0]
+    assert hit["vote_label"] == "⚠️利好兑现·高开回落"
+    assert hit["gap_direction"] == "up"
+    assert hit["gap_pct"] == 10.6
+    assert hit["close_pct"] == 5.6
+
+
 def test_gap_below_threshold_not_hit():
     hits = _gap_case("预增", 10.1, 10.0)  # 开盘 +1% < 2%
     assert hits == []
