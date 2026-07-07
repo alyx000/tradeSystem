@@ -27,7 +27,52 @@ def render_markdown(proposal: dict[str, Any]) -> str:
                 f"> LLM裁判未生效：[判断] {reason}；当前排序仅为数据候选层，请勿按 LLM 结果确认。",
             ]
         )
+    candidate_filters = proposal.get("candidate_filters") if isinstance(proposal.get("candidate_filters"), dict) else {}
+    min_amount_yi = candidate_filters.get("min_amount_yi")
+    try:
+        min_amount_yi_float = float(min_amount_yi)
+    except (TypeError, ValueError):
+        min_amount_yi_float = None
+    if min_amount_yi_float is not None:
+        lines.extend(
+            [
+                "",
+                f"> 候选过滤：[判断] 已过滤成交额低于 {min_amount_yi_float:.1f} 亿或缺少可验证成交额的个股。",
+            ]
+        )
+    candidate_limit = proposal.get("candidate_limit") if isinstance(proposal.get("candidate_limit"), dict) else {}
+    trimmed_count = candidate_limit.get("trimmed_count")
+    try:
+        trimmed_count_int = int(trimmed_count)
+    except (TypeError, ValueError):
+        trimmed_count_int = 0
+    if trimmed_count_int > 0:
+        max_candidates = _text(candidate_limit.get("max_candidates")).strip() or str(len(leaders))
+        original_count = _text(candidate_limit.get("original_count")).strip() or str(len(leaders))
+        deduped_count = _text(candidate_limit.get("deduped_count")).strip()
+        if deduped_count:
+            summary = (
+                f"> 候选收敛：[判断] 原始候选 {original_count} 条，按股票去重后 {deduped_count} 条，"
+                f"展示前 {max_candidates} 条，已折叠 {trimmed_count_int} 条。"
+            )
+        else:
+            summary = f"> 候选收敛：[判断] 展示前 {max_candidates} 条，原始候选 {original_count} 条，已折叠 {trimmed_count_int} 条。"
+        lines.extend(
+            [
+                "",
+                summary,
+            ]
+        )
     lines.extend(["", "## 候选条目"])
+
+    skipped = proposal.get("skipped") if isinstance(proposal.get("skipped"), dict) else {}
+    if skipped:
+        reason = _text(skipped.get("reason")).strip() or "unknown"
+        prev_trade_date = _text(skipped.get("prev_trade_date")).strip()
+        lines.append("")
+        lines.append(f"- 跳过原因：[判断] {reason}")
+        if prev_trade_date:
+            lines.append(f"- 上一交易日：{prev_trade_date}")
 
     if not leaders:
         lines.append("")
@@ -59,7 +104,7 @@ def render_markdown(proposal: dict[str, Any]) -> str:
             ]
         )
         if llm_rank or llm_role:
-            lines.append(f"- LLM裁判：[判断] 排序 {llm_rank or '-'} / 角色 {llm_role or '-'}")
+            lines.append(f"- LLM裁判：[判断] 排序 {llm_rank or '-'} / 最票属性 {llm_role or '-'}")
         if risk_flags:
             flags = "、".join(_text(flag).strip() for flag in risk_flags if _text(flag).strip())
             if flags:

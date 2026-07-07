@@ -17,6 +17,7 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
     propose.add_argument("--date", default=None, help="交易日 YYYY-MM-DD（默认今天）")
     propose.add_argument("--push", action="store_true", help="生成后推送钉钉")
     propose.add_argument("--no-llm", action="store_true", help="跳过 LLM 辅助理由")
+    propose.add_argument("--max-candidates", type=int, default=30, help="确认稿最多保留候选数（默认 30）")
 
     confirm = sub.add_parser("confirm", help="确认写入复盘第5步并同步最票跟踪")
     confirm.add_argument("--date", required=True, help="交易日 YYYY-MM-DD")
@@ -49,7 +50,14 @@ def _handle_propose(args: argparse.Namespace) -> None:
     conn = get_connection()
     try:
         prefill = get_prefill(date, conn=conn)
-        proposal = service.propose(conn, date, prefill, no_llm=args.no_llm, registry=get_provider_registry())
+        proposal = service.propose(
+            conn,
+            date,
+            prefill,
+            no_llm=args.no_llm,
+            registry=get_provider_registry(),
+            max_candidates=args.max_candidates,
+        )
     finally:
         conn.close()
 

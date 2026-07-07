@@ -33,16 +33,51 @@ def _proposal():
 def test_render_markdown_contains_labels_and_confirmation_instruction():
     proposal = _proposal()
     proposal["top_leaders"][0]["llm_rank"] = 1
-    proposal["top_leaders"][0]["llm_role"] = "走势引领"
+    proposal["top_leaders"][0]["llm_role"] = "趋势中军"
     proposal["top_leaders"][0]["risk_flags"] = ["容量需复核"]
     md = render_markdown(proposal)
     assert "每日最票候选确认稿 · 2026-07-03" in md
     assert "[事实]" in md
     assert "[判断]" in md
     assert "老师观点对照：支持" in md
-    assert "LLM裁判：[判断] 排序 1 / 角色 走势引领" in md
+    assert "LLM裁判：[判断] 排序 1 / 最票属性 趋势中军" in md
     assert "风险标签：[判断] 容量需复核" in md
     assert "可回复：确认，全部录入" in md
+
+
+def test_render_markdown_shows_skip_reason():
+    md = render_markdown({
+        "date": "2026-07-05",
+        "top_leaders": [],
+        "skipped": {"reason": "non_trading_day", "prev_trade_date": "2026-07-03"},
+    })
+
+    assert "跳过原因：[判断] non_trading_day" in md
+    assert "上一交易日：2026-07-03" in md
+
+
+def test_render_markdown_shows_candidate_limit_summary():
+    proposal = _proposal()
+    proposal["candidate_limit"] = {
+        "max_candidates": 30,
+        "original_count": 148,
+        "deduped_count": 92,
+        "duplicate_trimmed_count": 56,
+        "trimmed_count": 118,
+    }
+
+    md = render_markdown(proposal)
+
+    assert "候选收敛：[判断] 原始候选 148 条，按股票去重后 92 条，展示前 30 条，已折叠 118 条。" in md
+
+
+def test_render_markdown_shows_min_amount_filter_summary():
+    proposal = _proposal()
+    proposal["candidate_filters"] = {"min_amount_yi": 20.0}
+
+    md = render_markdown(proposal)
+
+    assert "候选过滤：[判断] 已过滤成交额低于 20.0 亿或缺少可验证成交额的个股。" in md
 
 
 def test_store_round_trip(tmp_path):
@@ -109,7 +144,7 @@ def test_llm_judgement_reorders_and_labels_candidates():
             },
             "绿的谐波|同花顺新质50": {
                 "rank": 1,
-                "role": "走势引领",
+                "role": "20cm",
                 "reason": "新质生产力与机器人分支共振，领涨幅度更强，仍需人工确认。",
                 "risk_flags": ["容量需复核"],
             },
@@ -118,9 +153,31 @@ def test_llm_judgement_reorders_and_labels_candidates():
 
     assert [item["stock"] for item in out["top_leaders"]] == ["绿的谐波", "拓普集团"]
     assert out["top_leaders"][0]["llm_rank"] == 1
-    assert out["top_leaders"][0]["llm_role"] == "走势引领"
+    assert out["top_leaders"][0]["llm_role"] == "20cm"
     assert out["top_leaders"][0]["risk_flags"] == ["容量需复核"]
     assert out["top_leaders"][1]["llm_rank"] == 2
+
+
+def test_llm_judgement_rejects_old_role_names_and_prompt_lists_new_attributes():
+    proposal = _proposal()
+
+    def runner(prompt):
+        assert "趋势中军|小票弹性（连板）|20cm|30cm|10cm|备选|剔除" in prompt
+        assert "排序优先级依次为：涨停/涨幅强度、成交额、板块主线审美" in prompt
+        assert "概念资金流和老师观点只作为辅助证据" in prompt
+        assert "走势引领|容量中军|分支核心" not in prompt
+        return {
+            "688041 海光信息|半导体": {
+                "rank": 1,
+                "role": "走势引领",
+                "reason": "旧角色名应被忽略，仍需人工确认。",
+            }
+        }
+
+    out = enrich_with_llm_reason(proposal, enabled=True, runner=runner)
+
+    assert out["top_leaders"][0]["llm_rank"] == 1
+    assert "llm_role" not in out["top_leaders"][0]
 
 
 def test_llm_enrichment_drops_redline_reason():

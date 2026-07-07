@@ -33,28 +33,36 @@ def test_build_candidates_merges_prefill_and_marks_new_leader():
     assert any(e["label"] == "[判断]" for e in result["top_leaders"][0]["evidence"])
 
 
-def test_trend_pool_candidate_added_when_not_in_prefill():
-    prefill = {"step5_leaders": None, "teacher_notes": [], "cognitions_by_step": {}}
+def test_build_candidates_ignores_trend_pool_source():
+    prefill = {
+        "step5_leaders": None,
+        "teacher_notes": [],
+        "cognitions_by_step": {},
+        "market": {
+            "stock_quotes": {
+                "data": [
+                    {"code": "688041.SH", "name": "海光信息", "pct_chg": 6.8, "amount_yi": 42.0}
+                ]
+            }
+        },
+    }
     trend_pool = [
         {
             "code": "688041",
             "name": "海光信息",
             "sw_l2": "半导体",
             "entered_date": "2026-07-03",
+            "last_seen_date": "2026-07-03",
             "last_signal": {"entry_trigger": "涨停"},
         }
     ]
 
-    result = build_candidates(prefill=prefill, trend_pool=trend_pool, history=[])
+    result = build_candidates(prefill=prefill, trend_pool=trend_pool, history=[], date="2026-07-03")
 
-    item = result["top_leaders"][0]
-    assert item["stock"] == "688041 海光信息"
-    assert item["sector"] == "半导体"
-    assert item["attribute_type"] == "走势引领"
-    assert item["clarity"] == "中"
+    assert result["top_leaders"] == []
 
 
-def test_active_history_candidate_added_when_not_in_prefill_or_trend_pool():
+def test_active_history_candidate_added_when_not_in_prefill():
     prefill = {"step5_leaders": None, "teacher_notes": [], "cognitions_by_step": {}}
     history = [
         {
@@ -125,11 +133,10 @@ def test_build_candidates_skips_blank_stock_or_sector():
 
     result = build_candidates(prefill=prefill, trend_pool=trend_pool, history=[])
 
-    assert [item["stock"] for item in result["top_leaders"]] == ["工业富联", "688041"]
-    assert result["top_leaders"][1]["sector"] == "未分类"
+    assert [item["stock"] for item in result["top_leaders"]] == ["工业富联"]
 
 
-def test_build_candidates_filters_st_stocks_from_all_sources():
+def test_build_candidates_filters_st_stocks_from_non_trend_sources():
     prefill = {
         "step5_leaders": {
             "top_leaders": [
@@ -204,6 +211,101 @@ def test_build_candidates_adds_market_flow_leaders_to_llm_pool():
     assert "ST臻镭" not in by_stock
 
 
+def test_build_candidates_prioritizes_intraday_strength_over_flow_amount():
+    prefill = {
+        "step5_leaders": None,
+        "teacher_notes": [],
+        "cognitions_by_step": {},
+        "market": {
+            "stock_quotes": {
+                "data": [
+                    {
+                        "code": "301269.SZ",
+                        "name": "华大九天",
+                        "pct_chg": 14.05,
+                        "amount_yi": 39.0,
+                    },
+                    {
+                        "code": "688206.SH",
+                        "name": "概伦电子",
+                        "pct_chg": 20.01,
+                        "amount_yi": 11.52,
+                    },
+                ]
+            },
+            "concept_moneyflow_dc": {
+                "data": [
+                    {
+                        "name": "EDA概念",
+                        "buy_sm_amount_stock": "华大九天",
+                        "net_amount_yi": 1.92,
+                        "pct_change": 2.88,
+                        "rank": 7,
+                    }
+                ]
+            },
+        },
+    }
+
+    result = build_candidates(prefill=prefill, trend_pool=[], history=[])
+
+    stocks = [item["stock"] for item in result["top_leaders"][:2]]
+    by_stock = {item["stock"]: item for item in result["top_leaders"]}
+    assert stocks == ["概伦电子", "华大九天"]
+    assert by_stock["概伦电子"]["attribute_type"] == "20cm"
+    assert "个股涨幅 20.01%" in by_stock["概伦电子"]["evidence"][0]["text"]
+    assert "成交额 11.52 亿" in by_stock["概伦电子"]["evidence"][0]["text"]
+
+
+def test_quote_strength_normalizes_mislabelled_amount_yi():
+    prefill = {
+        "step5_leaders": None,
+        "teacher_notes": [],
+        "market": {
+            "stock_quotes": {
+                "data": [
+                    {
+                        "code": "688039.SH",
+                        "name": "当虹科技",
+                        "pct_chg": 20.0,
+                        "amount_yi": 335890.03,
+                    }
+                ]
+            }
+        },
+    }
+
+    result = build_candidates(prefill=prefill, trend_pool=[], history=[])
+
+    item = result["top_leaders"][0]
+    assert item["attribute"] == "日内涨幅 20.0% / 成交额 3.36 亿"
+    assert "成交额 3.36 亿" in item["evidence"][0]["text"]
+
+
+def test_quote_strength_uses_amount_after_limit_strength_bucket():
+    prefill = {
+        "step5_leaders": None,
+        "teacher_notes": [],
+        "market": {
+            "stock_quotes": {
+                "data": [
+                    {"code": "688206.SH", "name": "概伦电子", "pct_chg": 20.0098, "amount_yi": 11.52},
+                    {"code": "300502.SZ", "name": "中石科技", "pct_chg": 19.9968, "amount_yi": 33.57},
+                    {"code": "688039.SH", "name": "当虹科技", "pct_chg": 20.0, "amount_yi": 3.36},
+                ]
+            }
+        },
+    }
+
+    result = build_candidates(prefill=prefill, trend_pool=[], history=[])
+
+    assert [item["stock"] for item in result["top_leaders"][:3]] == [
+        "中石科技",
+        "概伦电子",
+        "当虹科技",
+    ]
+
+
 def test_teacher_supported_prefill_candidate_gets_market_strength_evidence_for_llm():
     prefill = {
         "step5_leaders": {
@@ -254,6 +356,55 @@ def test_teacher_supported_prefill_candidate_gets_market_strength_evidence_for_l
     assert "个股涨幅 12.34%" in evidence
     assert "成交额 18.8 亿" in evidence
     assert "板块资金净流入 36.0 亿" in evidence
+
+
+def test_build_candidates_filters_below_min_amount_for_confirmation_pool():
+    prefill = {
+        "step5_leaders": {
+            "top_leaders": [
+                {"stock": "容量达标", "sector": "半导体", "attribute_type": "趋势中军"},
+                {"stock": "低额预填", "sector": "半导体", "attribute_type": "趋势中军"},
+            ]
+        },
+        "teacher_notes": [],
+        "market": {
+            "stock_quotes": {
+                "data": [
+                    {"code": "688001.SH", "name": "容量达标", "pct_chg": 10.01, "amount_yi": 20.0},
+                    {"code": "688002.SH", "name": "低额预填", "pct_chg": 10.01, "amount_yi": 19.99},
+                    {"code": "688003.SH", "name": "低额涨停", "pct_chg": 20.0, "amount_yi": 11.52},
+                    {"code": "688004.SH", "name": "高额涨停", "pct_chg": 20.0, "amount_yi": 33.57},
+                    {"code": "688005.SH", "name": "低额资金", "pct_chg": 8.0, "amount_yi": 18.8},
+                    {"code": "688006.SH", "name": "高额资金", "pct_chg": 8.0, "amount_yi": 22.0},
+                ]
+            },
+            "concept_moneyflow_ths": {
+                "data": [
+                    {"name": "芯片", "lead_stock": "低额资金", "net_amount_yi": 90.0, "pct_change_stock": 8.0},
+                    {"name": "芯片", "lead_stock": "高额资金", "net_amount_yi": 80.0, "pct_change_stock": 8.0},
+                ]
+            },
+        },
+    }
+    history = [
+        {"stock_name": "低额历史", "sector": "算力"},
+        {"stock_name": "高额历史", "sector": "算力"},
+    ]
+    prefill["market"]["stock_quotes"]["data"].extend(
+        [
+            {"code": "601001.SH", "name": "低额历史", "pct_chg": 3.0, "amount_yi": 12.0},
+            {"code": "601002.SH", "name": "高额历史", "pct_chg": 3.0, "amount_yi": 25.0},
+        ]
+    )
+
+    result = build_candidates(prefill=prefill, trend_pool=[], history=history, min_amount_yi=20.0)
+
+    assert [item["stock"] for item in result["top_leaders"]] == [
+        "高额涨停",
+        "容量达标",
+        "高额资金",
+        "高额历史",
+    ]
 
 
 def test_candidate_payload_is_json_serializable_and_lightweight():

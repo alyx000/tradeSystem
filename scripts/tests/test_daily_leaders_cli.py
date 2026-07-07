@@ -14,12 +14,22 @@ def _parser():
 
 
 def test_parse_propose():
-    args = _parser().parse_args(["daily-leaders", "propose", "--date", "2026-07-03", "--push", "--no-llm"])
+    args = _parser().parse_args([
+        "daily-leaders",
+        "propose",
+        "--date",
+        "2026-07-03",
+        "--push",
+        "--no-llm",
+        "--max-candidates",
+        "12",
+    ])
     assert args.command == "daily-leaders"
     assert args.daily_leaders_command == "propose"
     assert args.date == "2026-07-03"
     assert args.push is True
     assert args.no_llm is True
+    assert args.max_candidates == 12
 
 
 def test_parse_confirm_requires_input_by():

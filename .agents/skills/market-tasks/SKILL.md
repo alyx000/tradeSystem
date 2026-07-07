@@ -244,12 +244,12 @@ python3 main.py ma-breakout daily --json
 
 ```bash
 python3 main.py daily-leaders propose --push
-python3 main.py daily-leaders propose --date 2026-07-03 --no-llm
+python3 main.py daily-leaders propose --date 2026-07-03 --no-llm --max-candidates 30
 python3 main.py daily-leaders show --date 2026-07-03
 python3 main.py daily-leaders confirm --date 2026-07-03 --input-by codex
 ```
 
-- **口径**：汇总复盘预填候选、趋势池、历史最票、老师观点与认知证据，输出候选确认稿；全部标注事实/判断边界，不出价位、不给买卖建议。
+- **口径**：汇总复盘预填候选、历史最票、当日行情强度、资金流、老师观点与认知证据，先过滤成交额低于 20 亿或缺少可验证成交额的个股，再输出候选确认稿；`--max-candidates` 控制确认稿保留候选数（默认 30）；全部标注事实/判断边界，不出价位、不给买卖建议。
 - **确认流**：v1 是钉钉 Markdown 草稿 + Codex/CLI 确认；用户确认后再执行 `confirm` 写入复盘第 5 步并同步 `leader_tracking`。钉钉按钮 callback / 直接写回属于 v2，不要当成已实现能力。
 - **调度**：`daily-leaders propose --push` 是 per-task launchd，工作日 22:30，接在 `board-break` / `trend-leader` / `ma-breakout` / `market-timing` 等盘后派生任务之后；不进 `main.py schedule`/APScheduler。
 

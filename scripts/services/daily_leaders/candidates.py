@@ -103,6 +103,8 @@ def _find_stock_strength(prefill: dict[str, Any], item: dict[str, Any]) -> dict[
                 raw_amount = next((_to_float(row.get(key)) for key in raw_amount_keys if _to_float(row.get(key)) is not None), None)
                 if raw_amount is not None and abs(raw_amount) >= 1_000_000:
                     amount_yi = round(raw_amount / 1e8, 2)
+            if amount_yi is not None:
+                amount_yi = _normalize_quote_amount_yi(amount_yi)
             return {"pct": pct, "amount_yi": amount_yi}
     return {"pct": None, "amount_yi": None}
 
@@ -248,6 +250,19 @@ def _mark_seen(item: dict[str, Any], seen: set[tuple[str, str]]) -> None:
     seen.update(_candidate_keys(item))
 
 
+def _stock_already_candidate(item: dict[str, Any], candidates: list[dict[str, Any]]) -> bool:
+    aliases = {_normalize_key(alias) for alias in _stock_aliases(item)}
+    aliases.discard("")
+    if not aliases:
+        return False
+    for candidate in candidates:
+        candidate_aliases = {_normalize_key(alias) for alias in _stock_aliases(candidate)}
+        candidate_aliases.discard("")
+        if aliases & candidate_aliases:
+            return True
+    return False
+
+
 def _market_flow_items(prefill: dict[str, Any], limit: int = 120) -> list[dict[str, Any]]:
     market = prefill.get("market") or {}
     if not isinstance(market, dict):
@@ -295,6 +310,87 @@ def _market_flow_items(prefill: dict[str, Any], limit: int = 120) -> list[dict[s
     return [item for _, item in raw_items[:limit]]
 
 
+def _board_attribute(code: str, pct_chg: float) -> str:
+    normalized = (code or "").upper()
+    if normalized.endswith(".BJ") or normalized.startswith(("8", "9")):
+        return "30cm"
+    if normalized.startswith(("300", "301", "688", "689")):
+        return "20cm"
+    if pct_chg >= 9.7:
+        return "10cm"
+    return "走势引领"
+
+
+def _normalize_quote_amount_yi(value: float | None) -> float | None:
+    if value is None:
+        return None
+    if value > 10_000:
+        return round(value / 100_000, 2)
+    return value
+
+
+def _candidate_amount_yi(prefill: dict[str, Any], item: dict[str, Any]) -> float | None:
+    amount_yi = _to_float(item.get("amount_yi") if item.get("amount_yi") is not None else item.get("_amount_yi"))
+    if amount_yi is not None:
+        return _normalize_quote_amount_yi(amount_yi)
+    return _find_stock_strength(prefill, item).get("amount_yi")
+
+
+def _passes_min_amount_yi(prefill: dict[str, Any], item: dict[str, Any], min_amount_yi: float | None) -> bool:
+    if min_amount_yi is None:
+        return True
+    amount_yi = _candidate_amount_yi(prefill, item)
+    return amount_yi is not None and amount_yi >= min_amount_yi
+
+
+def _quote_strength_score(attribute_type: str, pct_chg: float, amount_yi: float | None) -> float:
+    rounded_pct_bucket = round(pct_chg, 1)
+    amount_component = min(amount_yi or 0.0, 500.0)
+    board_component = 500.0 if attribute_type in {"20cm", "30cm"} else 0.0
+    return board_component + rounded_pct_bucket * 10_000.0 + amount_component
+
+
+def _quote_strength_items(prefill: dict[str, Any], limit: int = 80) -> list[dict[str, Any]]:
+    market = prefill.get("market") or {}
+    if not isinstance(market, dict):
+        return []
+
+    raw_items: list[tuple[float, dict[str, Any]]] = []
+    for row in _rows_from_section(market.get("stock_quotes")):
+        stock = _text(row.get("name") or row.get("stock_name")).strip()
+        code = _text(row.get("code") or row.get("ts_code")).strip()
+        pct_chg = _to_float(row.get("pct_chg") if row.get("pct_chg") is not None else row.get("pct_change"))
+        amount_yi = _to_float(row.get("amount_yi") if row.get("amount_yi") is not None else row.get("amount_billion"))
+        if amount_yi is None:
+            raw_amount = _to_float(row.get("amount"))
+            if raw_amount is not None and abs(raw_amount) >= 1_000_000:
+                amount_yi = round(raw_amount / 1e5, 2)
+        amount_yi = _normalize_quote_amount_yi(amount_yi)
+        if not stock or pct_chg is None:
+            continue
+        if pct_chg < 9.7:
+            continue
+        attribute_type = _board_attribute(code, pct_chg)
+        score = _quote_strength_score(attribute_type, pct_chg, amount_yi)
+        raw_items.append((
+            score,
+            {
+                "stock": stock,
+                "sector": "日内强势",
+                "attribute_type": attribute_type,
+                "attribute": f"日内涨幅 {pct_chg}% / 成交额 {_fmt_num(amount_yi) or '-'} 亿",
+                "clarity": CLARITY_MEDIUM,
+                "position": None,
+                "_pct_chg": pct_chg,
+                "_amount_yi": amount_yi,
+                "_quote_score": score,
+            },
+        ))
+
+    raw_items.sort(key=lambda pair: -pair[0])
+    return [item for _, item in raw_items[:limit]]
+
+
 def _with_common_fields(
     item: dict[str, Any],
     *,
@@ -329,6 +425,7 @@ def build_candidates(
     trend_pool: list[dict[str, Any]],
     history: list[dict[str, Any]],
     date: str = "",
+    min_amount_yi: float | None = None,
 ) -> dict[str, Any]:
     notes = prefill.get("teacher_notes") or []
     history_keys = _history_keys(history)
@@ -347,6 +444,8 @@ def build_candidates(
         }
         if not item["stock"] or not item["sector"] or _is_st_candidate(item):
             continue
+        if not _passes_min_amount_yi(prefill, item, min_amount_yi):
+            continue
         if _seen_candidate(item, seen):
             continue
         _mark_seen(item, seen)
@@ -364,34 +463,6 @@ def build_candidates(
                 notes=notes,
                 evidence_text="来自复盘预填候选，需用户确认",
                 extra_evidence=extra_evidence,
-            )
-        )
-
-    for pool_item in trend_pool or []:
-        stock = f"{_text(pool_item.get('code')).strip()} {_text(pool_item.get('name')).strip()}".strip()
-        sector = _text(pool_item.get("sw_l2") or "未分类").strip()
-        signal = pool_item.get("last_signal") or {}
-        entry_trigger = _text(signal.get("entry_trigger") or "趋势信号").strip()
-        item = {
-            "stock": stock,
-            "sector": sector,
-            "attribute_type": "走势引领",
-            "attribute": f"趋势主升池触发：{entry_trigger}",
-            "clarity": CLARITY_MEDIUM,
-            "position": None,
-        }
-        if not item["stock"] or _is_st_candidate({**item, "stock_name": pool_item.get("name"), "code": pool_item.get("code")}):
-            continue
-        if _seen_candidate(item, seen):
-            continue
-        _mark_seen(item, seen)
-        candidates.append(
-            _with_common_fields(
-                item,
-                score=70,
-                history_keys=history_keys,
-                notes=notes,
-                evidence_text="来自趋势主升观察池，需用户确认",
             )
         )
 
@@ -414,6 +485,8 @@ def build_candidates(
             "stock_code": history_item.get("stock_code"),
         }):
             continue
+        if not _passes_min_amount_yi(prefill, item, min_amount_yi):
+            continue
         if _seen_candidate(item, seen):
             continue
         _mark_seen(item, seen)
@@ -427,8 +500,37 @@ def build_candidates(
             )
         )
 
+    for item in _quote_strength_items(prefill):
+        if _is_st_candidate(item):
+            continue
+        if not _passes_min_amount_yi(prefill, item, min_amount_yi):
+            continue
+        if _stock_already_candidate(item, candidates):
+            continue
+        if _seen_candidate(item, seen):
+            continue
+        _mark_seen(item, seen)
+        pct_chg = item.pop("_pct_chg", None)
+        amount_yi = item.pop("_amount_yi", None)
+        quote_score = item.pop("_quote_score", 0.0)
+        detail = f"来自日内涨幅强度候选，个股涨幅 {_fmt_num(pct_chg)}%"
+        if amount_yi is not None:
+            detail += f"，成交额 {_fmt_num(amount_yi)} 亿"
+        detail += "，涨停/涨幅强度与成交额优先于单一概念资金流，需 LLM 与人工复核"
+        candidates.append(
+            _with_common_fields(
+                item,
+                score=int(90 + quote_score),
+                history_keys=history_keys,
+                notes=notes,
+                evidence_text=detail,
+            )
+        )
+
     for item in _market_flow_items(prefill):
         if _is_st_candidate(item):
+            continue
+        if not _passes_min_amount_yi(prefill, item, min_amount_yi):
             continue
         if _seen_candidate(item, seen):
             continue
