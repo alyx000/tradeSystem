@@ -149,6 +149,79 @@ def test_divergence_zero_start_balance_not_evaluable():
     assert out[5]["diverged"] is False
 
 
+# ── summarize_divergence_risk：把多窗口/多指数背离汇总成预警等级 ──
+def test_divergence_risk_high_when_short_and_medium_windows_diverge():
+    divergence = {
+        "total:000001.SH": {
+            "5": {"index_cum": -1.2, "margin_cum": 1.1, "diverged": True,
+                  "type": "跌指两融升", "magnitude": 2.3},
+            "20": {"index_cum": -3.4, "margin_cum": 2.0, "diverged": True,
+                   "type": "跌指两融升", "magnitude": 5.4},
+        },
+        "total:399300.SZ": {
+            "5": {"index_cum": -0.8, "margin_cum": 1.0, "diverged": True,
+                  "type": "跌指两融升", "magnitude": 1.8},
+        },
+    }
+    indices = [
+        {"pair_key": "total:000001.SH", "index_name": "上证指数", "margin_key": "total"},
+        {"pair_key": "total:399300.SZ", "index_name": "沪深300", "margin_key": "total"},
+    ]
+    out = agg.summarize_divergence_risk(divergence, indices=indices)
+    assert out["level"] == "high"
+    assert out["score"] >= 7
+    assert "5日+20日" in out["headline"]
+    assert any("跌指两融升" in reason for reason in out["reasons"])
+
+
+def test_divergence_risk_low_for_single_mild_opposite_direction():
+    divergence = {
+        "total:000001.SH": {
+            "5": {"index_cum": 1.1, "margin_cum": -0.6, "diverged": True,
+                  "type": "涨指两融降", "magnitude": 1.7},
+        },
+    }
+    indices = [{"pair_key": "total:000001.SH", "index_name": "上证指数", "margin_key": "total"}]
+    out = agg.summarize_divergence_risk(divergence, indices=indices)
+    assert out["level"] == "low"
+    assert out["score"] > 0
+    assert out["hit_count"] == 1
+
+
+def test_divergence_risk_dedupes_same_index_window_from_cross_pair():
+    divergence = {
+        "total:000001.SH": {
+            "5": {"index_cum": -1.2, "margin_cum": 1.1, "diverged": True,
+                  "type": "跌指两融升", "magnitude": 2.3},
+        },
+        "sse:000001.SH": {
+            "5": {"index_cum": -1.2, "margin_cum": 1.0, "diverged": True,
+                  "type": "跌指两融升", "magnitude": 2.2},
+        },
+    }
+    indices = [
+        {"pair_key": "total:000001.SH", "index_name": "上证指数", "margin_key": "total"},
+        {"pair_key": "sse:000001.SH", "index_name": "上证指数", "margin_key": "sse",
+         "margin_label": "沪市两融"},
+    ]
+    out = agg.summarize_divergence_risk(divergence, indices=indices)
+    assert out["level"] == "medium"
+    assert out["hit_count"] == 1
+
+
+def test_divergence_risk_unevaluated_when_only_gaps():
+    divergence = {
+        "total:000001.SH": {
+            "5": {"index_cum": None, "margin_cum": None, "diverged": False,
+                  "type": "日期缺口", "magnitude": None},
+        },
+    }
+    out = agg.summarize_divergence_risk(divergence, indices=[])
+    assert out["level"] == "unevaluated"
+    assert out["score"] == 0
+    assert out["unevaluated_count"] == 1
+
+
 # ── sync_correlation：复用 sector align_panel/raw_correlation ──
 def test_sync_correlation_positive():
     rng = np.random.RandomState(2)

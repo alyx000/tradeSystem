@@ -127,6 +127,7 @@ def build_record(
         return None
 
     balance_levels = {k: aggregator.balance_levels(v) for k, v in balances.items()}
+    risk_alert = aggregator.summarize_divergence_risk(div_out, indices=covered)
 
     return {
         "date": date,
@@ -137,6 +138,7 @@ def build_record(
         "lag": lag_out,
         "sync_corr": sync_out,
         "divergence": div_out,
+        "risk_alert": risk_alert,
         "balance": balance_levels,
         "sample_days": {str(w): int(len(balances["total"].tail(w))) for w in windows},
         "meta": {

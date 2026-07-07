@@ -166,6 +166,115 @@ def detect_divergence(
     return out
 
 
+_UNEVALUATED_TYPES = {"日期缺口", "样本不足", "无法评估"}
+
+
+def summarize_divergence_risk(divergence: dict, *, indices: list[dict] | None = None) -> dict:
+    """把多口径背离明细汇总为盘后风险预警等级。
+
+    这是报告层的派生 [判断]：不新增事实，不替代交易决策。评分只用于排序提示：
+    - `跌指两融升`：指数走弱但杠杆仍逆势上升，权重更高；
+    - 5 日和 20 日同时命中：短中窗口共振，额外加权；
+    - 多指数/多口径同时命中：说明不是单一指数噪声，额外加权。
+    """
+    index_map = {p.get("pair_key"): p for p in (indices or [])}
+    hits: list[dict] = []
+    unevaluated_count = 0
+    evaluated_count = 0
+    score = 0
+    seen_hit_signatures: set[tuple[str, str, str]] = set()
+
+    for pair_key, by_win in (divergence or {}).items():
+        p = index_map.get(pair_key, {})
+        index_name = p.get("index_name", pair_key)
+        margin_key = p.get("margin_key", pair_key.split(":", 1)[0])
+        margin_label = p.get("margin_label", "两融合计" if margin_key == "total" else margin_key)
+        for win_raw, d in (by_win or {}).items():
+            typ = d.get("type")
+            if typ in _UNEVALUATED_TYPES:
+                unevaluated_count += 1
+                continue
+            evaluated_count += 1
+            if not d.get("diverged"):
+                continue
+
+            try:
+                win = int(win_raw)
+            except (TypeError, ValueError):
+                win = 0
+            signature = (str(index_name), str(win_raw), str(typ))
+            if signature in seen_hit_signatures:
+                continue
+            seen_hit_signatures.add(signature)
+
+            weight = 1
+            if win <= 5:
+                weight += 1
+            elif win >= 20:
+                weight += 1
+            if typ == "跌指两融升":
+                weight += 2
+            if margin_key == "total":
+                weight += 1
+            score += weight
+            hits.append({
+                "pair_key": pair_key,
+                "window": str(win_raw),
+                "type": typ,
+                "index_name": index_name,
+                "margin_label": margin_label,
+                "index_cum": d.get("index_cum"),
+                "margin_cum": d.get("margin_cum"),
+                "magnitude": d.get("magnitude"),
+                "weight": weight,
+            })
+
+    windows_by_pair: dict[str, set[str]] = {}
+    for h in hits:
+        windows_by_pair.setdefault(h["pair_key"], set()).add(h["window"])
+    paired_windows = any({"5", "20"}.issubset(ws) for ws in windows_by_pair.values())
+    if paired_windows:
+        score += 2
+    if len(windows_by_pair) >= 2:
+        score += 1
+
+    if hits:
+        if score >= 7:
+            level = "high"
+            level_text = "高风险"
+        elif score >= 4:
+            level = "medium"
+            level_text = "中风险"
+        else:
+            level = "low"
+            level_text = "低风险"
+        headline_parts = [f"{level_text}：两融与指数反向"]
+        if paired_windows:
+            headline_parts.append("5日+20日共振")
+        if len(windows_by_pair) >= 2:
+            headline_parts.append(f"{len(windows_by_pair)}组口径命中")
+        headline = "，".join(headline_parts)
+    elif evaluated_count:
+        level = "none"
+        headline = "未触发两融×指数反向风险"
+    else:
+        level = "unevaluated"
+        headline = "数据不足，暂不评估两融×指数反向风险"
+
+    reasons = [
+        f"{h['margin_label']}×{h['index_name']} {h['window']}日 {h['type']}"
+        for h in sorted(hits, key=lambda x: (-x["weight"], x["pair_key"], x["window"]))[:6]
+    ]
+    return {
+        "level": level,
+        "score": int(score),
+        "headline": headline,
+        "reasons": reasons,
+        "hit_count": len(hits),
+        "unevaluated_count": unevaluated_count,
+    }
+
+
 def balance_levels(balances: pd.Series) -> dict:
     """两融余额绝对水位 + 趋势：latest/日环比/近20日分位/连增连降/MA20 偏离。"""
     s = balances.astype(float).dropna()

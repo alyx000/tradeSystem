@@ -5,6 +5,8 @@
 """
 from __future__ import annotations
 
+from . import aggregator
+
 
 def _fmt_pct(v) -> str:
     return "—" if v is None else f"{v:+.2f}%"
@@ -27,7 +29,7 @@ def _format_divergence(record: dict, pmap: dict) -> list[str]:
 
     未评估状态绝不能渲染成「未见背离」——那是把数据缺口伪装成无风险（codex round2 #2）。
     """
-    lines = ["## ⚠️ 一、两融×指数背离预警 [判断]"]
+    lines = ["## ⚠️ 二、两融×指数背离明细 [判断]"]
     hits: list[str] = []
     gaps: list[str] = []
     evaluated_no_div = 0
@@ -57,8 +59,39 @@ def _format_divergence(record: dict, pmap: dict) -> list[str]:
     return lines
 
 
+def _risk_alert(record: dict) -> dict:
+    return record.get("risk_alert") or aggregator.summarize_divergence_risk(
+        record.get("divergence", {}),
+        indices=record.get("indices", []),
+    )
+
+
+def _format_risk_alert(record: dict) -> list[str]:
+    alert = _risk_alert(record)
+    lines = ["## 🚨 一、两融×指数反向风险预警 [判断]"]
+    level = alert.get("level")
+    if level == "none":
+        lines.append(f"- {alert.get('headline', '未触发两融×指数反向风险')} [判断]")
+    elif level == "unevaluated":
+        lines.append(f"- ⚠️ {alert.get('headline', '数据不足，暂不评估')} [判断]")
+    else:
+        lines.append(
+            f"- **{alert.get('headline', '两融与指数反向风险')}**"
+            f"｜score {alert.get('score', 0)}｜命中 {alert.get('hit_count', 0)} 处 [判断]"
+        )
+        for reason in alert.get("reasons", [])[:4]:
+            lines.append(f"  - 触发：{reason} [判断]")
+    if alert.get("unevaluated_count"):
+        lines.append(f"- 数据提示：另有 {alert['unevaluated_count']} 个窗口未评估（不等于无风险）。")
+    return lines
+
+
+def _risk_level_text(level: str | None) -> str | None:
+    return {"low": "低风险", "medium": "中风险", "high": "高风险"}.get(level or "")
+
+
 def _format_balance(record: dict) -> list[str]:
-    lines = ["## 二、两融余额水位 + 趋势 [判断]"]
+    lines = ["## 三、两融余额水位 + 趋势 [判断]"]
     label = {"total": "两融合计", "sse": "沪市两融", "szse": "深市两融"}
     for key in ("total", "sse", "szse"):
         b = record.get("balance", {}).get(key)
@@ -79,7 +112,7 @@ def _format_balance(record: dict) -> list[str]:
 
 
 def _format_lag(record: dict, pmap: dict) -> list[str]:
-    lines = ["## 三、两融对指数的领先/滞后 [判断]"]
+    lines = ["## 四、两融对指数的领先/滞后 [判断]"]
     for pair_key, lag in record.get("lag", {}).items():
         p = pmap.get(pair_key, {})
         name = p.get("index_name", pair_key)
@@ -96,7 +129,7 @@ def _format_lag(record: dict, pmap: dict) -> list[str]:
 
 
 def _format_sync(record: dict, pmap: dict) -> list[str]:
-    lines = ["## 四、同步相关系数（多窗） [判断]"]
+    lines = ["## 五、同步相关系数（多窗） [判断]"]
     for pair_key, by_win in record.get("sync_corr", {}).items():
         p = pmap.get(pair_key, {})
         name = p.get("index_name", pair_key)
@@ -123,6 +156,7 @@ def format_daily_report(record: dict) -> str:
 
     blocks = [
         head,
+        _format_risk_alert(record),
         _format_divergence(record, pmap),
         _format_balance(record),
         _format_lag(record, pmap),
@@ -163,10 +197,13 @@ def format_signals(records: list[dict]) -> str:
             tag = "—"
         if gaps:
             tag += f"｜⚠️未评估:{'｜'.join(gaps)}"
+        alert = _risk_alert(r)
+        risk = _risk_level_text(alert.get("level"))
+        risk_tag = f"｜{risk}" if risk else ""
         total = r.get("balance", {}).get("total", {})
         lines.append(
             f"- **{r['date']}**：合计两融 {total.get('latest_yi', '—')} 亿"
-            f"（日环比 {_fmt_pct(total.get('dod_pct'))}）｜{tag} [判断]"
+            f"（日环比 {_fmt_pct(total.get('dod_pct'))}）{risk_tag}｜{tag} [判断]"
         )
     lines.append("\n> [判断]，不构成买卖建议。")
     return "\n".join(lines)

@@ -50,6 +50,22 @@ def test_headline_is_divergence():
     assert "涨指两融降" in md
 
 
+def test_risk_alert_summary_renders_before_divergence_details():
+    rec = _record(diverged=True)
+    rec["risk_alert"] = {
+        "level": "medium",
+        "score": 4,
+        "headline": "中风险：多口径两融与指数反向",
+        "reasons": ["两融合计×上证指数 5日 涨指两融降"],
+        "hit_count": 1,
+        "unevaluated_count": 0,
+    }
+    md = formatter.format_daily_report(rec)
+    assert "风险预警" in md
+    assert "中风险" in md
+    assert md.index("风险预警") < md.index("背离明细")
+
+
 def test_all_sections_present():
     md = formatter.format_daily_report(_record())
     for kw in ["背离", "余额水位", "领先", "同步相关"]:
@@ -96,6 +112,21 @@ def test_signals_unevaluated_not_masked_as_no_divergence():
     # 该行不得以「无背离」收尾误导
     line = [ln for ln in md.splitlines() if rec["date"] in ln][0]
     assert "未评估" in line
+
+
+def test_signals_show_risk_alert_level_when_available():
+    rec = _record(diverged=True)
+    rec["risk_alert"] = {
+        "level": "high",
+        "score": 8,
+        "headline": "高风险：两融与指数反向，5日+20日共振",
+        "reasons": [],
+        "hit_count": 3,
+        "unevaluated_count": 0,
+    }
+    md = formatter.format_signals([rec])
+    line = [ln for ln in md.splitlines() if rec["date"] in ln][0]
+    assert "高风险" in line
 
 
 def test_all_unevaluated_no_false_calm():

@@ -78,6 +78,8 @@ def test_build_record_full_structure():
     assert rec["data_trade_date"] == _margin_series()[-1]["trade_date"]
     # 四维都在
     assert rec["lag"] and rec["sync_corr"] and rec["divergence"] and rec["balance"]
+    assert "risk_alert" in rec
+    assert rec["risk_alert"]["level"] in {"none", "low", "medium", "high", "unevaluated"}
     # 水位三口径
     assert set(rec["balance"]) == {"total", "sse", "szse"}
     assert rec["balance"]["total"]["latest_yi"] > 0
