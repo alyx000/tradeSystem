@@ -254,8 +254,8 @@ rm ~/Library/LaunchAgents/com.alyx.tradesystem.string-yang.plist
 
 ## 4日均线二波观察池（中国时间工作日 + 周日 21:35）
 
-近 60 自然日历史龙头/最票宇宙 → 近 10 个有效行情日 → MA4 重新拐头向上（今日 MA4 上行，且上拐前至少两根 MA4 连续下行）+ 今日成交额同时突破 5/10 日成交额均线 + 当日未涨停 → 只读二波观察清单落 `data/reports/ma-breakout/YYYY-MM-DD.{md,json}` + 钉钉。周日等交易日前一天触发时，默认目标日自动回退到最近已完成交易日。
-runner source `scripts/.env`(TUSHARE_TOKEN)+`~/.config/tradeSystem.env`(钉钉);非交易日任务内自动跳过,不推送。
+近 60 自然日历史龙头/最票宇宙 → 近 10 个有效行情日 → MA4 重新拐头向上（今日 MA4 上行，且上拐前至少两根 MA4 连续下行）+ 今日成交额同时突破 5/10 日成交额均线 + 当日未涨停 → 只读二波观察清单落 `data/reports/ma-breakout/YYYY-MM-DD.{md,json}` + 钉钉。未显式指定日期时，当前交易日尚未收盘（上海时间 15:30 前）或周日等交易日前一天触发，默认目标日自动回退到最近已完成交易日。
+runner source `scripts/.env`(TUSHARE_TOKEN)+`~/.config/tradeSystem.env`(钉钉);非交易日任务内自动跳过,不推送。plist 同时列出 Asia/Shanghai 本机时区 21:35 与 Pacific 05:35/06:35，runner 再用中国时间窗口守卫过滤错误触发。
 
 ```bash
 # 1. 包装脚本可执行
