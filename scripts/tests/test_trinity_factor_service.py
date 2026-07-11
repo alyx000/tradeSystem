@@ -1,7 +1,7 @@
 import pytest
 
 from services import trinity_factor
-from services.trinity_factor.constants import FACTOR_CODES
+from services.trinity_factor.constants import FACTOR_CODES, FACTOR_WEIGHTS, SECTOR_WEIGHTS
 from services.trinity_factor.scoring import score_factor, score_sector
 from services.trinity_factor.selection import select_dominant_factors
 
@@ -98,6 +98,31 @@ def test_score_factor_requires_boolean_critical_missing():
             evidence_quality=3,
             critical_missing="no",
         )
+
+
+@pytest.mark.parametrize(
+    ("scorer", "kwargs"),
+    [
+        (
+            score_factor,
+            {
+                "factor_code": "market_node",
+                "dimension_scores": list(FACTOR_WEIGHTS),
+                "evidence_quality": 3,
+            },
+        ),
+        (
+            score_sector,
+            {
+                "sector_key": "sw2:test",
+                "dimension_scores": list(SECTOR_WEIGHTS),
+            },
+        ),
+    ],
+)
+def test_public_scorers_reject_non_mapping_dimension_scores(scorer, kwargs):
+    with pytest.raises(ValueError, match="mapping"):
+        scorer(**kwargs)
 
 
 def test_score_sector_recomputes_total_applies_cap_and_assigns_tier():
@@ -272,3 +297,30 @@ def test_critical_missing_downgrades_established_primary_from_high_to_medium():
 
     assert result["primary"]["factor_code"] == "market_node"
     assert result["confidence"] == "medium"
+
+
+def test_selection_rejects_duplicate_factor_codes():
+    duplicate = _scored_factor("market_node", 80)
+
+    with pytest.raises(ValueError, match="duplicate"):
+        select_dominant_factors([duplicate, dict(duplicate)])
+
+
+@pytest.mark.parametrize(
+    "malformed",
+    [
+        None,
+        [{"factor_code": "market_node"}],
+        [{
+            **_scored_factor("market_node", 80),
+            "normalized_scores": [],
+        }],
+        [{
+            **_scored_factor("market_node", 80),
+            "factor_code": [],
+        }],
+    ],
+)
+def test_selection_rejects_malformed_inputs_with_value_error(malformed):
+    with pytest.raises(ValueError):
+        select_dominant_factors(malformed)

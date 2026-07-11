@@ -2,8 +2,54 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from numbers import Real
 
 from .constants import FACTOR_CODES
+
+_SELECTION_SCORE_FIELDS = (
+    "current_dominance",
+    "rhythm_clarity",
+    "counterevidence",
+)
+
+
+def _is_number(value: object) -> bool:
+    return isinstance(value, Real) and not isinstance(value, bool)
+
+
+def _validate_scored_factors(scored_factors: object) -> list[Mapping]:
+    if isinstance(scored_factors, (str, bytes)) or not isinstance(scored_factors, Sequence):
+        raise ValueError("scored_factors must be a sequence")
+
+    validated: list[Mapping] = []
+    seen_codes: set[str] = set()
+    for index, item in enumerate(scored_factors):
+        if not isinstance(item, Mapping):
+            raise ValueError(f"scored_factors[{index}] must be a mapping")
+        factor_code = item.get("factor_code")
+        if not isinstance(factor_code, str) or factor_code not in FACTOR_CODES:
+            raise ValueError(f"scored_factors[{index}] has an unknown factor_code")
+        if factor_code in seen_codes:
+            raise ValueError(f"duplicate factor_code: {factor_code}")
+        seen_codes.add(factor_code)
+
+        if not _is_number(item.get("total_score")):
+            raise ValueError(f"scored_factors[{index}].total_score must be numeric")
+        if not _is_number(item.get("evidence_quality")):
+            raise ValueError(f"scored_factors[{index}].evidence_quality must be numeric")
+        if not isinstance(item.get("critical_missing", False), bool):
+            raise ValueError(f"scored_factors[{index}].critical_missing must be a bool")
+
+        scores = item.get("normalized_scores")
+        if not isinstance(scores, Mapping):
+            raise ValueError(f"scored_factors[{index}].normalized_scores must be a mapping")
+        for field in _SELECTION_SCORE_FIELDS:
+            if not _is_number(scores.get(field)):
+                raise ValueError(
+                    f"scored_factors[{index}].normalized_scores.{field} must be numeric"
+                )
+        validated.append(item)
+    return validated
 
 
 def _base_eligible(item: Mapping) -> bool:
@@ -53,14 +99,11 @@ def select_dominant_factors(
         raise ValueError("primary_category_lock must be market_node or None")
 
     ranked = sorted(
-        scored_factors,
+        _validate_scored_factors(scored_factors),
         key=lambda item: (-item["total_score"], item["factor_code"]),
     )
     if not ranked:
         return _empty("undetermined_missing_data")
-    if any(item["factor_code"] not in FACTOR_CODES for item in ranked):
-        raise ValueError("scored_factors contain an unknown factor_code")
-
     if primary_category_lock:
         primary = next(
             (item for item in ranked if item["factor_code"] == primary_category_lock),

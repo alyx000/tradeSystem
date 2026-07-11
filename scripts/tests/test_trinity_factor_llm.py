@@ -144,6 +144,13 @@ def test_factor_model_scores_must_be_zero_to_five_integers(invalid_score):
         parse_factor_response(_factor_payload([row]), [_factor_candidate()])
 
 
+def test_factor_parser_wraps_non_mapping_dimension_scores_as_validation_error():
+    row = _factor_row(dimension_scores=list(_factor_row()["dimension_scores"]))
+
+    with pytest.raises(TrinityValidationError):
+        parse_factor_response(_factor_payload([row]), [_factor_candidate()])
+
+
 @pytest.mark.parametrize(
     "reason",
     [
@@ -355,6 +362,13 @@ def test_unknown_sector_references_fail_the_whole_batch(field, unknown):
 def test_sector_model_scores_must_be_zero_to_five_integers(invalid_score):
     row = _sector_row()
     row["dimension_scores"]["leader_clarity"] = invalid_score
+
+    with pytest.raises(TrinityValidationError):
+        parse_sector_response(_sector_payload([row]), [_sector_candidate()])
+
+
+def test_sector_parser_wraps_non_mapping_dimension_scores_as_validation_error():
+    row = _sector_row(dimension_scores=list(_sector_row()["dimension_scores"]))
 
     with pytest.raises(TrinityValidationError):
         parse_sector_response(_sector_payload([row]), [_sector_candidate()])

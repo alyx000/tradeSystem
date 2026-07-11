@@ -26,6 +26,8 @@ def score_factor(
     """按固定权重重算单个因子总分，并同时保留模型原分与规则封顶分。"""
     if factor_code not in FACTOR_CODES:
         raise ValueError(f"unknown factor_code: {factor_code}")
+    if not isinstance(dimension_scores, Mapping):
+        raise ValueError("dimension_scores must be a mapping")
     if set(dimension_scores) != set(FACTOR_WEIGHTS):
         raise ValueError("dimension_scores must contain exactly the factor dimensions")
     if any(not _is_score(value, integer_only=True) for value in dimension_scores.values()):
@@ -71,6 +73,8 @@ def score_sector(
     """按固定权重重算单个板块总分并给出程序分档。"""
     if not isinstance(sector_key, str) or not sector_key:
         raise ValueError("sector_key must be a non-empty string")
+    if not isinstance(dimension_scores, Mapping):
+        raise ValueError("dimension_scores must be a mapping")
     if set(dimension_scores) != set(SECTOR_WEIGHTS):
         raise ValueError("dimension_scores must contain exactly the sector dimensions")
     if any(not _is_score(value, integer_only=True) for value in dimension_scores.values()):
