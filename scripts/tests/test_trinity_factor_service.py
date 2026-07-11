@@ -35,6 +35,9 @@ def test_package_exports_the_reusable_pure_logic_api():
     assert callable(trinity_factor.parse_factor_response)
     assert callable(trinity_factor.parse_sector_response)
     assert issubclass(trinity_factor.TrinityValidationError, ValueError)
+    assert callable(trinity_factor.AntigravityStructuredRunner)
+    assert trinity_factor.FACTOR_PROMPT_VERSION == "trinity_factor_score_v1"
+    assert trinity_factor.SECTOR_PROMPT_VERSION == "trinity_sector_score_v1"
 
 
 def test_factor_whitelist_is_exact():

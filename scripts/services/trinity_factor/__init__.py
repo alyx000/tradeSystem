@@ -1,6 +1,14 @@
 """三位一体双层评分的纯逻辑核心。"""
 
 from .scoring import score_factor, score_sector
+from .runner import (
+    FACTOR_PROMPT,
+    FACTOR_PROMPT_VERSION,
+    SECTOR_PROMPT,
+    SECTOR_PROMPT_VERSION,
+    AntigravityStructuredRunner,
+    StructuredRunResult,
+)
 from .selection import select_dominant_factors
 from .validation import (
     TrinityValidationError,
@@ -10,6 +18,12 @@ from .validation import (
 
 __all__ = [
     "TrinityValidationError",
+    "AntigravityStructuredRunner",
+    "StructuredRunResult",
+    "FACTOR_PROMPT",
+    "FACTOR_PROMPT_VERSION",
+    "SECTOR_PROMPT",
+    "SECTOR_PROMPT_VERSION",
     "parse_factor_response",
     "parse_sector_response",
     "score_factor",
