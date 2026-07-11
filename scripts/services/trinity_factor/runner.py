@@ -27,13 +27,13 @@ from utils.llm_cli import LlmCliConfig, build_prompt_command, resolve_config
 FACTOR_PROMPT_VERSION = "trinity_factor_score_v1"
 SECTOR_PROMPT_VERSION = "trinity_sector_score_v1"
 
-FACTOR_PROMPT = """你是三位一体复盘中的受控因子评分器。只评价输入白名单中的因子，不能新增、删除、合并或改名；不能新增事实、板块或交易动作。current_dominance、cross_layer_alignment、rhythm_clarity、next_stage_relevance、counterevidence 只能输出 0 到 5 的整数，evidence_quality 由程序计算，不得输出，也不得输出总分。所有 evidence_refs、counter_evidence_refs、t1_check_ids 必须逐字引用各因子输入白名单。reason 必须以 [判断] 开头且不超过 240 字。
+FACTOR_PROMPT = """你是三位一体复盘中的受控因子评分器。只评价输入白名单中的因子，不能新增、删除、合并或改名；不能新增事实、板块或交易动作。current_dominance、cross_layer_alignment、rhythm_clarity、next_stage_relevance、counterevidence 只能输出 0 到 5 的整数，evidence_quality 由程序计算，不得输出，也不得输出总分。白名单存在正向证据时，evidence_refs 至少引用 1 个正向证据 ID；若正向证据白名单为空，则 evidence_refs 必须为空且四个正向维度全部为 0。每行 t1_check_ids 至少引用 1 个检查 ID，且所有引用必须逐字来自该因子输入白名单。counterevidence 大于 0 时必须引用 counter_evidence_refs；引用反证时 counterevidence 必须大于 0。reason 必须以 [判断] 开头且不超过 240 字。
 严格输出一个 JSON 对象，不要 Markdown、解释或额外文本，且只能使用以下字段：
-{"schema_version":"trinity_factor_score_v1","factors":[{"factor_code":"<输入 factor_code>","dimension_scores":{"current_dominance":0,"cross_layer_alignment":0,"rhythm_clarity":0,"next_stage_relevance":0,"counterevidence":0},"evidence_refs":[],"counter_evidence_refs":[],"t1_check_ids":[],"reason":"[判断]..."}]}"""
+{"schema_version":"trinity_factor_score_v1","factors":[{"factor_code":"<输入 factor_code>","dimension_scores":{"current_dominance":0,"cross_layer_alignment":0,"rhythm_clarity":0,"next_stage_relevance":0,"counterevidence":0},"evidence_refs":["<输入正向 evidence_id>"],"counter_evidence_refs":[],"t1_check_ids":["<输入 t1_check_id>"],"reason":"[判断]..."}]}"""
 
-SECTOR_PROMPT = """你是三位一体复盘中的受控核心板块评分器。只围绕输入给定的主导因子，评价输入白名单中的 core 板块，不能新增、删除、合并、改名或改变候选层级；不能新增事实或交易动作。primary_factor_alignment、stage_connection、market_linkage、leader_clarity、logic_aesthetic、expectation_gap、fully_priced_penalty 只能输出 0 到 5 的整数，不得输出总分。所有 evidence_refs、counter_evidence_refs、t1_check_ids 必须逐字引用各板块输入白名单。reason 必须以 [判断] 开头且不超过 240 字。
+SECTOR_PROMPT = """你是三位一体复盘中的受控核心板块评分器。只围绕输入给定的主导因子证据卡，评价输入白名单中的 core 板块，不能新增、删除、合并、改名或改变候选层级；不能新增事实或交易动作。primary_factor_alignment、stage_connection、market_linkage、leader_clarity、logic_aesthetic、expectation_gap、fully_priced_penalty 只能输出 0 到 5 的整数，不得输出总分。白名单存在正向证据时，evidence_refs 至少引用 1 个正向证据 ID；若正向证据白名单为空，则 evidence_refs 必须为空且六个正向维度全部为 0。每行 t1_check_ids 至少引用 1 个检查 ID，且所有引用必须逐字来自该板块输入白名单。fully_priced_penalty 大于 0 时必须引用 counter_evidence_refs；引用反证时 fully_priced_penalty 必须大于 0。reason 必须以 [判断] 开头且不超过 240 字。
 严格输出一个 JSON 对象，不要 Markdown、解释或额外文本，且只能使用以下字段：
-{"schema_version":"trinity_sector_score_v1","sectors":[{"sector_key":"<输入 sector_key>","dimension_scores":{"primary_factor_alignment":0,"stage_connection":0,"market_linkage":0,"leader_clarity":0,"logic_aesthetic":0,"expectation_gap":0,"fully_priced_penalty":0},"evidence_refs":[],"counter_evidence_refs":[],"t1_check_ids":[],"reason":"[判断]..."}]}"""
+{"schema_version":"trinity_sector_score_v1","sectors":[{"sector_key":"<输入 sector_key>","dimension_scores":{"primary_factor_alignment":0,"stage_connection":0,"market_linkage":0,"leader_clarity":0,"logic_aesthetic":0,"expectation_gap":0,"fully_priced_penalty":0},"evidence_refs":["<输入正向 evidence_id>"],"counter_evidence_refs":[],"t1_check_ids":["<输入 t1_check_id>"],"reason":"[判断]..."}]}"""
 
 _ID_KEYS = ("factor_code", "sector_key", "evidence_id", "t1_check_id", "id")
 _SECRET_PATTERNS = (

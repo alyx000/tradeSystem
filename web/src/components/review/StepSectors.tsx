@@ -85,14 +85,20 @@ function sortRhythm(items: SectorRhythmItem[], key: RhythmSortKey): SectorRhythm
   })
 }
 
-function RhythmSortedBlock({ sectorRhythm }: { sectorRhythm: SectorRhythmItem[] }) {
+function RhythmSortedBlock({
+  sectorRhythm,
+  title = '行业节奏信号（当日前列）',
+}: {
+  sectorRhythm: SectorRhythmItem[]
+  title?: string
+}) {
   const [sortKey, setSortKey] = useState<RhythmSortKey>('change_today')
   const sorted = sortRhythm(sectorRhythm, sortKey).slice(0, 10)
 
   return (
     <>
       <div className="flex items-center justify-between mb-2">
-        <span className="text-xs font-medium text-gray-600">行业节奏信号（当日前列）</span>
+        <span className="text-xs font-medium text-gray-600">{title}</span>
         <div className="flex gap-1">
           {RHYTHM_SORT_OPTIONS.map(opt => (
             <button
@@ -252,7 +258,7 @@ interface UnusualSectorItem {
   key_stocks: string[]
 }
 
-export default function StepSectors({ data, onChange, prefill }: StepProps) {
+export default function StepSectors({ data, onChange, prefill, factorScore }: StepProps) {
   const d = data || {}
   const themes: MainThemeItem[] = prefill?.main_themes || []
   const firstTheme = themes[0]
@@ -267,9 +273,24 @@ export default function StepSectors({ data, onChange, prefill }: StepProps) {
   const date = prefill?.date as string | undefined
   const sectorIndustry: SectorIndustryPrefill | undefined = prefill?.market?.sector_industry
   const sectorRhythm: SectorRhythmItem[] | undefined = prefill?.market?.sector_rhythm_industry
+  const conceptRhythm: SectorRhythmItem[] | undefined = prefill?.market?.sector_rhythm_concept
   const industryInfoList: IndustryInfoItem[] = prefill?.industry_info || []
   const sectorSignals = prefill?.review_signals?.sectors
   const projectionCandidates: ReviewProjectionCandidate[] = sectorSignals?.projection_candidates || []
+  const candidateByKey = new Map(
+    projectionCandidates
+      .filter(candidate => candidate.sector_key)
+      .map(candidate => [candidate.sector_key as string, candidate]),
+  )
+  const sectorScores = factorScore?.sector_scores || []
+  const sectorFallback = factorScore?.system_recommendation?.sector_fallback || []
+  const showSectorScores = factorScore?.status === 'success' && sectorScores.length > 0
+  const showSectorFallback = factorScore?.status === 'sector_failed' && sectorFallback.length > 0
+  const sectorName = (sectorKey: string) => (
+    candidateByKey.get(sectorKey)?.sector_name
+    || sectorKey.split(':').slice(1).join(':')
+    || sectorKey
+  )
 
   const g = <T = string,>(p: string, fb?: T) => {
     const fallback = (fb ?? '') as T
@@ -302,13 +323,18 @@ export default function StepSectors({ data, onChange, prefill }: StepProps) {
   const fmtPct = (v: number | null | undefined) => (v != null ? `${v >= 0 ? '+' : ''}${v.toFixed(2)}%` : '-')
 
   const addProjectionFromCandidate = (candidate: ReviewProjectionCandidate) => {
-    const exists = projections.some((item) => item.sector_name === candidate.sector_name)
+    const exists = projections.some((item) => (
+      candidate.sector_key
+        ? item.sector_key === candidate.sector_key
+        : item.sector_name === candidate.sector_name
+    ))
     if (exists) return
     onChange({
       ...d,
       projections: [
         ...projections,
         {
+          sector_key: candidate.sector_key,
           sector_name: candidate.sector_name,
           sector_type: '',
           big_cycle_stage: mapPhaseHintToBigCycleStage(candidate.facts?.phase_hint),
@@ -460,6 +486,15 @@ export default function StepSectors({ data, onChange, prefill }: StepProps) {
         </PrefillBanner>
       )}
 
+      {conceptRhythm && conceptRhythm.length > 0 && (
+        <PrefillBanner>
+          <RhythmSortedBlock
+            sectorRhythm={conceptRhythm}
+            title="概念节奏信号（当日前列）"
+          />
+        </PrefillBanner>
+      )}
+
       {((sectorSignals?.industry_moneyflow_rows?.length ?? 0) > 0 || (sectorSignals?.concept_moneyflow_rows?.length ?? 0) > 0) && (
         <PrefillBanner>
           <div className="text-xs font-medium text-gray-600 mb-2">板块资金确认</div>
@@ -510,6 +545,50 @@ export default function StepSectors({ data, onChange, prefill }: StepProps) {
         </PrefillBanner>
       )}
 
+      {factorScore && (showSectorScores || showSectorFallback) && (
+        <Section title="核心板块条件化评分">
+          <div className="rounded-lg border border-indigo-200 bg-indigo-50 p-4 space-y-3">
+            <div className="text-xs text-indigo-700">LLM 相对重要度评分，非胜率 · 仅供板块推演与人工确认</div>
+            {showSectorScores ? (
+              <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                {sectorScores.map(score => (
+                  <div key={score.sector_key} className="rounded border border-indigo-100 bg-white p-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-sm font-medium text-gray-800">
+                        {sectorName(score.sector_key)} · {score.total_score} 分
+                      </span>
+                      <span className={`rounded px-2 py-0.5 text-xs font-medium ${
+                        score.tier === 'priority'
+                          ? 'bg-green-50 text-green-700'
+                          : score.tier === 'watch'
+                            ? 'bg-amber-50 text-amber-700'
+                            : 'bg-gray-100 text-gray-600'
+                      }`}>
+                        {score.tier === 'priority'
+                          ? '优先跟踪'
+                          : score.tier === 'watch'
+                            ? '仅观察'
+                            : '暂不看'}
+                      </span>
+                    </div>
+                    {score.reason && <div className="mt-1 text-xs text-gray-500">{score.reason}</div>}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div>
+                <div className="mb-2 text-xs font-medium text-gray-700">板块 LLM 失败，恢复确定性 core 排序</div>
+                <ol className="space-y-1 text-sm text-gray-700">
+                  {sectorFallback.map((sectorKey, index) => (
+                    <li key={sectorKey}>{index + 1}. {sectorName(sectorKey)}</li>
+                  ))}
+                </ol>
+              </div>
+            )}
+          </div>
+        </Section>
+      )}
+
       {projectionCandidates.length > 0 && (
         <Section title="系统预填候选">
           <PrefillBanner>
@@ -518,11 +597,22 @@ export default function StepSectors({ data, onChange, prefill }: StepProps) {
             </div>
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
               {(showAllCandidates ? projectionCandidates : projectionCandidates.slice(0, 6)).map((candidate) => (
-                <div key={candidate.sector_name} className="rounded-lg border border-amber-200 bg-white p-3">
+                <div key={candidate.sector_key || `${candidate.sector_type || 'legacy'}:${candidate.sector_name}`} className="rounded-lg border border-amber-200 bg-white p-3">
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <div className="text-sm font-semibold text-gray-800">{candidate.sector_name}</div>
                       <div className="mt-1 flex flex-wrap gap-1">
+                        {candidate.candidate_tier && (
+                          <span className={`rounded px-1.5 py-0.5 text-xs font-medium ${
+                            candidate.candidate_tier === 'core'
+                              ? 'bg-green-50 text-green-700'
+                              : candidate.candidate_tier === 'watch'
+                                ? 'bg-yellow-50 text-yellow-700'
+                                : 'bg-gray-100 text-gray-600'
+                          }`}>
+                            {candidate.candidate_tier}
+                          </span>
+                        )}
                         {(candidate.source_tags || []).map((tag) => (
                           <span
                             key={`${candidate.sector_name}-${tag}`}
@@ -541,6 +631,12 @@ export default function StepSectors({ data, onChange, prefill }: StepProps) {
                       加入推演卡
                     </button>
                   </div>
+                  {(candidate.rank_reason || candidate.data_status) && (
+                    <div className="mt-2 text-xs text-gray-500">
+                      {candidate.rank_reason || '未提供排序原因'}
+                      {candidate.data_status ? ` · 数据状态 ${candidate.data_status}` : ''}
+                    </div>
+                  )}
                   <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-gray-600">
                     <div>阶段提示：{candidate.facts?.phase_hint || '-'}</div>
                     <div>持续天数：{candidate.facts?.duration_days ?? '-'}</div>

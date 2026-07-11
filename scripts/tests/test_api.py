@@ -154,6 +154,29 @@ class TestReview:
         assert data["prev_market"] is None
         assert data["avg_5d_amount"] is None
         assert data["avg_20d_amount"] is None
+        assert data["review_signals"]["sectors"]["data_status"] == "missing"
+
+    def test_prefill_sector_source_failed_status(self, client, db_path):
+        conn = get_connection(db_path)
+        Q.upsert_daily_market(conn, {
+            "date": "2026-06-18",
+            "sh_index_close": 3200.0,
+            "raw_data": {
+                "sector_moneyflow_ths": {
+                    "status": "source_failed",
+                    "error": "provider unavailable",
+                    "data": [],
+                },
+            },
+        })
+        conn.commit()
+        conn.close()
+
+        r = client.get("/api/review/2026-06-18/prefill")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["review_signals"]["sectors"]["data_status"] == "source_failed"
+        assert data["review_signals"]["sectors"]["projection_candidates"] == []
 
     def test_prefill_holdings_from_post_envelope_raw_data(self, client, db_path):
         """当日 daily_market.raw_data 信封含 holdings_data 时，补全预填现价与盈亏（不依赖 DB current_price）。"""
@@ -3185,16 +3208,33 @@ def test_market_timing_history_to_date_excludes_future(client, db_path):
 # 三位一体因子评分 / 人工确认 / 严格 T+1
 # ──────────────────────────────────────────────────────────────
 
-def _seed_factor_score_run(db_path, *, run_id="api-run-1", trade_date="2026-07-10"):
-    from services.trinity_factor.repository import insert_score_run
-
+def _seed_factor_trade_date(db_path, trade_date="2026-07-10"):
     conn = get_connection(db_path)
+    Q.upsert_trade_calendar(conn, [{"date": trade_date, "is_open": 1}])
+    conn.commit()
+    conn.close()
+
+
+def _seed_factor_score_run(db_path, *, run_id="api-run-1", trade_date="2026-07-10"):
+    from api.routes.review import build_review_prefill
+    from services.trinity_factor.review_input import normalize_review_steps
+    from services.trinity_factor.repository import insert_score_run
+    from services.trinity_factor.service import build_score_input_digest
+
+    _seed_factor_trade_date(db_path, trade_date)
+    conn = get_connection(db_path)
+    current_review = Q.get_daily_review(conn, trade_date) or {}
+    input_digest = build_score_input_digest(
+        trade_date=trade_date,
+        prefill=build_review_prefill(conn, trade_date),
+        review_steps=normalize_review_steps(current_review),
+    )
     insert_score_run(conn, {
         "score_run_id": run_id,
         "trade_date": trade_date,
         "retry_of_run_id": None,
         "cache_key": f"cache-{run_id}",
-        "input_digest": f"digest-{run_id}",
+        "input_digest": input_digest,
         "is_cacheable": True,
         "provider": "rules",
         "requested_model": "disabled",
@@ -3225,9 +3265,11 @@ def _seed_factor_score_run(db_path, *, run_id="api-run-1", trade_date="2026-07-1
     conn.close()
 
 
-def test_review_factor_score_no_llm_and_cache(client):
+def test_review_factor_score_no_llm_and_cache(client, db_path):
+    _seed_factor_trade_date(db_path)
     body = {
         "no_llm": True,
+        "input_by": "web",
         "steps": {
             "step1_market": {"notes": "大盘结构待确认"},
             "step6_nodes": {"systemic_risk": True},
@@ -3246,6 +3288,16 @@ def test_review_factor_score_no_llm_and_cache(client):
     assert client.post(
         "/api/review-factors/2026-07-10/score", json={"no_llm": "yes"}
     ).status_code == 422
+
+
+def test_review_factor_score_requires_explicit_input_by(client, db_path):
+    _seed_factor_trade_date(db_path)
+    response = client.post("/api/review-factors/2026-07-10/score", json={
+        "no_llm": True,
+    })
+
+    assert response.status_code == 422
+    assert "input_by" in response.text
 
 
 def test_review_factor_score_rejects_invalid_calendar_date(client):
@@ -3280,10 +3332,42 @@ def test_review_put_validates_factor_decision_and_syncs_legacy(client, db_path):
     assert step8["secondary_factors"] == ["sector_rhythm"]
     assert step8["summary"] == {"one_sentence": "保留字段"}
 
+    unrelated = client.put("/api/review/2026-07-10", json={
+        "step7_positions": {"notes": "只更新持仓复盘"},
+    })
+    assert unrelated.status_code == 200
+    preserved_step8 = json.loads(client.get("/api/review/2026-07-10").json()["step8_plan"])
+    assert preserved_step8["factor_decision"]["score_run_id"] == "api-run-1"
+
+    changed = client.put("/api/review/2026-07-10", json={
+        "step1_market": {"notes": "确认后修改评分输入"},
+    })
+    assert changed.status_code == 200
+    changed_step8 = json.loads(client.get("/api/review/2026-07-10").json()["step8_plan"])
+    assert changed_step8["factor_decision"] is None
+    assert changed_step8["key_factor"] == ""
+    assert changed_step8["secondary_factors"] == []
+
+    cleared = client.put("/api/review/2026-07-10", json={
+        "step8_plan": {
+            "summary": {"one_sentence": "证据变化后保留其他字段"},
+            "factor_decision": None,
+            "key_factor": "",
+            "secondary_factors": [],
+        }
+    })
+    assert cleared.status_code == 200
+    cleared_step8 = json.loads(client.get("/api/review/2026-07-10").json()["step8_plan"])
+    assert cleared_step8["factor_decision"] is None
+    assert cleared_step8["key_factor"] == ""
+    assert cleared_step8["secondary_factors"] == []
+    assert cleared_step8["summary"] == {"one_sentence": "证据变化后保留其他字段"}
+
+    _seed_factor_score_run(db_path, run_id="api-run-2")
     invalid = client.put("/api/review/2026-07-10", json={
         "step8_plan": {
             "factor_decision": {
-                "score_run_id": "api-run-1",
+                "score_run_id": "api-run-2",
                 "status": "overridden",
                 "primary_factor": "style_regime",
                 "input_by": "web",
@@ -3294,6 +3378,79 @@ def test_review_put_validates_factor_decision_and_syncs_legacy(client, db_path):
     assert "override_reason" in invalid.text
 
 
+def test_review_put_rejects_factor_decision_when_score_input_changed(client, db_path):
+    _seed_factor_score_run(db_path, run_id="stale-run")
+
+    response = client.put("/api/review/2026-07-10", json={
+        "step1_market": {"notes": "评分后修改了大盘事实判断"},
+        "step8_plan": {
+            "factor_decision": {
+                "score_run_id": "stale-run",
+                "status": "accepted",
+                "input_by": "web",
+            },
+        },
+    })
+
+    assert response.status_code == 422
+    assert "score input has changed" in response.text
+
+
+def test_review_factor_score_and_confirm_share_summary_input_normalization(client, db_path):
+    _seed_factor_trade_date(db_path)
+    steps = {"step1_market": {"judgement": "结构偏弱"}}
+    scored = client.post("/api/review-factors/2026-07-10/score", json={
+        "steps": steps,
+        "no_llm": True,
+        "input_by": "web",
+    })
+    assert scored.status_code == 200
+
+    saved = client.put("/api/review/2026-07-10", json={
+        **steps,
+        "step8_plan": {
+            "factor_decision": {
+                "score_run_id": scored.json()["score_run_id"],
+                "status": "overridden",
+                "primary_factor": "market_node",
+                "supporting_factors": [],
+                "override_reason": "人工确认大盘节点约束更强",
+                "input_by": "web",
+            },
+        },
+    })
+
+    assert saved.status_code == 200
+
+
+def test_review_factor_confirmation_checks_digest_inside_write_transaction(
+    client, db_path, monkeypatch
+):
+    import api.routes.review as review_route
+
+    _seed_factor_score_run(db_path, run_id="atomic-run")
+    original = review_route.build_review_prefill
+    observed = {"in_transaction": False}
+
+    def checked_prefill(conn, date):
+        observed["in_transaction"] = conn.in_transaction
+        return original(conn, date)
+
+    monkeypatch.setattr(review_route, "build_review_prefill", checked_prefill)
+    response = client.put("/api/review/2026-07-10", json={
+        "step8_plan": {
+            "factor_decision": {
+                "score_run_id": "atomic-run",
+                "status": "accepted",
+                "input_by": "web",
+            },
+        },
+    })
+
+    assert response.status_code == 200
+    assert observed["in_transaction"] is True
+
+
 def test_review_factor_evaluation_is_strict_and_confirmable(client, db_path):
     _seed_factor_score_run(db_path)
     conn = get_connection(db_path)
@@ -3302,6 +3459,7 @@ def test_review_factor_evaluation_is_strict_and_confirmable(client, db_path):
         {"date": "2026-07-11", "is_open": 0},
         {"date": "2026-07-13", "is_open": 1},
     ])
+    conn.commit()
     conn.close()
 
     suggestion = client.get(
@@ -3327,7 +3485,7 @@ def test_review_factor_evaluation_is_strict_and_confirmable(client, db_path):
         params={"source_date": "2026-07-10", "score_run_id": "api-run-1"},
     )
     assert wrong_day.status_code == 422
-    assert "strict next trade date" in wrong_day.text
+    assert "evaluation_trade_date must be an open trade date" in wrong_day.text
 
 
 def test_review_factor_metrics_endpoint(client, db_path):
@@ -3339,3 +3497,56 @@ def test_review_factor_metrics_endpoint(client, db_path):
     assert response.json()["runs"] == 1
     assert response.json()["days"] == 20
     assert client.get("/api/review-factors/metrics", params={"days": 0}).status_code == 422
+
+
+def test_factor_score_confirm_and_evaluate_never_write_trade_drafts_or_plans(
+    client, db_path
+):
+    conn = get_connection(db_path)
+    Q.upsert_trade_calendar(conn, [
+        {"date": "2026-07-10", "is_open": 1},
+        {"date": "2026-07-13", "is_open": 1},
+    ])
+    before = {
+        "drafts": conn.execute("SELECT COUNT(*) FROM trade_drafts").fetchone()[0],
+        "plans": conn.execute("SELECT COUNT(*) FROM trade_plans").fetchone()[0],
+    }
+    conn.commit()
+    conn.close()
+
+    steps = {"step6_nodes": {"systemic_risk": True}}
+    scored = client.post("/api/review-factors/2026-07-10/score", json={
+        "steps": steps,
+        "no_llm": True,
+        "input_by": "web",
+    })
+    assert scored.status_code == 200
+    confirmed = client.put("/api/review/2026-07-10", json={
+        **steps,
+        "step8_plan": {
+            "factor_decision": {
+                "score_run_id": scored.json()["score_run_id"],
+                "status": "undetermined",
+                "input_by": "web",
+            },
+        },
+    })
+    assert confirmed.status_code == 200
+    assert client.put("/api/review/2026-07-13", json={
+        "step1_market": {"notes": "完成 T+1 复盘"},
+    }).status_code == 200
+    evaluated = client.put("/api/review-factors/2026-07-13/evaluation", json={
+        "source_date": "2026-07-10",
+        "score_run_id": scored.json()["score_run_id"],
+        "confirmed_outcome": "missing_data",
+        "input_by": "web",
+    })
+    assert evaluated.status_code == 200
+
+    conn = get_connection(db_path)
+    after = {
+        "drafts": conn.execute("SELECT COUNT(*) FROM trade_drafts").fetchone()[0],
+        "plans": conn.execute("SELECT COUNT(*) FROM trade_plans").fetchone()[0],
+    }
+    conn.close()
+    assert after == before

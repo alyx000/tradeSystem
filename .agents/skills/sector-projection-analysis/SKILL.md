@@ -53,7 +53,7 @@ python3 main.py review factor-metrics [--days 20] [--json]
    - `main_themes`
    - `teacher_notes`
    - `industry_info`
-3. 20 日影子期可追加三位一体双层评分作**对照**：第 1 层固定比较 `market_node / sector_rhythm / style_regime / leader_signal`，程序确认主因子后才进入第 2 层，对确定性排序中的最多 6 个 `core` 板块评分；`watch/context` 不得升格。规则门、证据质量、封顶和规则排序不喂给 LLM，LLM 分只代表相对重要度，不代表胜率。
+3. 20 日影子期可追加三位一体双层评分作**对照**：第 1 层固定比较 `market_node / sector_rhythm / style_regime / leader_signal`，程序确认主因子后把该因子的受控证据卡传入第 2 层，对确定性排序中的最多 6 个 `core` 板块评分；`watch/context` 不得升格，非客观 leader context 不得伪装为事实。规则门、证据质量、封顶和规则排序不喂给 LLM，LLM 分只代表相对重要度，不代表胜率。人工确认会在原子事务内重建当前预填与第 1～6 步证据摘要；证据变化必须先重跑评分，旧 run 不得继续确认；确认后实际改写第 1～6 步会自动清除旧决定。
 4. 对每个候选板块至少给出 6 个结论：
    - 大级别阶段：`将成龙 / 主升 / 震荡 / 二波 / 衰退`
    - 连接点判断：`加强 / 减弱 / 不清楚`

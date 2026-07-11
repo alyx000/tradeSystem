@@ -9,6 +9,8 @@ import uuid
 from collections.abc import Mapping
 from typing import Any
 
+from db import queries as Q
+
 from .constants import FACTOR_SCHEMA_VERSION, SECTOR_SCHEMA_VERSION
 from .evidence import (
     RULESET_VERSION,
@@ -20,6 +22,7 @@ from .evidence import (
 from .repository import (
     find_cached_score_run,
     get_score_run,
+    insert_score_request,
     insert_score_run,
 )
 from .runner import (
@@ -52,10 +55,15 @@ class TrinityFactorService:
         retry_of_run_id: str | None = None,
         input_by: str | None = None,
     ) -> dict[str, Any]:
+        actor = str(input_by or "").strip()
+        if not actor:
+            raise ValueError("input_by is required")
         if conn.in_transaction:
             raise RuntimeError(
                 "trinity scoring cannot start inside an active write transaction"
             )
+        if Q.is_trade_day_from_db(conn, trade_date) is not True:
+            raise ValueError("trade_date must be an open trade date")
         snapshot = build_evidence_snapshot(trade_date, prefill, review_steps)
         input_digest = _json_digest(snapshot)
         requested_model = "disabled" if no_llm else str(os.getenv("LLM_MODEL") or "").strip()
@@ -82,6 +90,19 @@ class TrinityFactorService:
         if retry_of_run_id is None:
             cached = find_cached_score_run(conn, cache_key)
             if cached:
+                try:
+                    _insert_request_audit(
+                        conn,
+                        trade_date=trade_date,
+                        input_by=actor,
+                        cache_hit=True,
+                        resolved_run_id=cached["score_run_id"],
+                        cache_key=cache_key,
+                    )
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+                    raise
                 return _public_run(cached, cache_hit=True)
         else:
             parent = get_score_run(conn, retry_of_run_id)
@@ -99,7 +120,7 @@ class TrinityFactorService:
         valid_raw: dict[str, Any] = {}
         raw_hashes: dict[str, str] = {}
         diagnostics: dict[str, Any] = {
-            "request": {"input_by": str(input_by or "system").strip()[:120] or "system"}
+            "request": {"input_by": actor}
         }
 
         if no_llm:
@@ -224,9 +245,40 @@ class TrinityFactorService:
             "attempt_count": sum(result.attempt_count for result in run_results),
             "duration_ms": sum(result.duration_ms for result in run_results),
         }
-        insert_score_run(conn, record)
-        conn.commit()
+        try:
+            insert_score_run(conn, record)
+            _insert_request_audit(
+                conn,
+                trade_date=trade_date,
+                input_by=actor,
+                cache_hit=False,
+                resolved_run_id=record["score_run_id"],
+                cache_key=cache_key,
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
         return _public_run(record, cache_hit=False)
+
+
+def _insert_request_audit(
+    conn: sqlite3.Connection,
+    *,
+    trade_date: str,
+    input_by: str,
+    cache_hit: bool,
+    resolved_run_id: str,
+    cache_key: str,
+) -> str:
+    return insert_score_request(conn, {
+        "request_id": f"factor-request-{uuid.uuid4().hex}",
+        "trade_date": trade_date,
+        "input_by": input_by,
+        "cache_hit": cache_hit,
+        "resolved_run_id": resolved_run_id,
+        "cache_key": cache_key,
+    })
 
 
 def _rule_fallback_recommendation(
@@ -305,3 +357,13 @@ def _json_digest(value: Any) -> str:
     )
     import hashlib
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def build_score_input_digest(
+    *,
+    trade_date: str,
+    prefill: Mapping[str, Any] | None,
+    review_steps: Mapping[str, Any] | None,
+) -> str:
+    """重建与 score run 相同的证据快照摘要，供确认边界做 freshness 校验。"""
+    return _json_digest(build_evidence_snapshot(trade_date, prefill, review_steps))

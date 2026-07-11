@@ -17,7 +17,7 @@ from db.migrate import (
     migrate,
 )
 from db import queries as Q
-from db.schema import _SQL_TEACHER_NOTES_FTS_TRIGGERS
+from db.schema import _SQL_TEACHER_NOTES_FTS_TRIGGERS, init_schema
 
 
 @pytest.fixture
@@ -722,7 +722,7 @@ def test_migrate_healthy_db_preserves_caller_transaction(tmp_path):
     conn.close()
 
 
-def test_v39_migration_creates_factor_score_run_and_evaluation_tables(tmp_path):
+def test_v39_migration_creates_factor_score_run_request_and_evaluation_tables(tmp_path):
     conn = get_connection(tmp_path / "v38_factor_scores.db")
     conn.execute("PRAGMA user_version = 38")
     conn.commit()
@@ -739,8 +739,26 @@ def test_v39_migration_creates_factor_score_run_and_evaluation_tables(tmp_path):
     }
     assert {
         "daily_review_factor_score_runs",
+        "daily_review_factor_score_requests",
         "daily_review_factor_evaluations",
     } <= tables
+    conn.close()
+
+
+def test_migrate_repairs_unreleased_v39_missing_factor_score_request_audit(tmp_path):
+    conn = get_connection(tmp_path / "early_v39_factor_scores.db")
+    init_schema(conn)
+    conn.execute("DROP TABLE daily_review_factor_score_requests")
+    conn.execute("PRAGMA user_version = 39")
+    conn.commit()
+
+    migrate(conn)
+
+    assert get_schema_version(conn) == 39
+    assert conn.execute(
+        "SELECT 1 FROM sqlite_master "
+        "WHERE type = 'table' AND name = 'daily_review_factor_score_requests'"
+    ).fetchone()
     conn.close()
 
 
@@ -775,6 +793,16 @@ def test_fresh_v39_factor_score_schema_has_columns_indexes_and_append_only_trigg
         "confirmed_outcome", "actual_evidence_json", "evaluation_note",
         "input_by", "created_at", "updated_at",
     }
+    request_columns = {
+        row["name"]
+        for row in conn.execute(
+            "PRAGMA table_info(daily_review_factor_score_requests)"
+        ).fetchall()
+    }
+    assert request_columns == {
+        "request_id", "trade_date", "input_by", "cache_hit",
+        "resolved_run_id", "cache_key", "created_at",
+    }
 
     indexes = {
         row["name"]
@@ -786,6 +814,9 @@ def test_fresh_v39_factor_score_schema_has_columns_indexes_and_append_only_trigg
         "idx_factor_score_runs_cache",
         "idx_factor_score_runs_trade_date",
         "idx_factor_score_runs_retry",
+        "idx_factor_score_requests_trade_date",
+        "idx_factor_score_requests_run",
+        "idx_factor_score_requests_cache",
     } <= indexes
     triggers = {
         row["name"]
@@ -796,4 +827,6 @@ def test_fresh_v39_factor_score_schema_has_columns_indexes_and_append_only_trigg
     assert {
         "trg_factor_score_runs_no_update",
         "trg_factor_score_runs_no_delete",
+        "trg_factor_score_requests_no_update",
+        "trg_factor_score_requests_no_delete",
     } <= triggers

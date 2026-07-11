@@ -293,6 +293,20 @@ def test_attach_market_quotes_adds_stock_quotes_without_mutating_source():
 
 
 def test_confirm_writes_step5_and_syncs_leader_tracking(conn, tmp_path):
+    Q.upsert_daily_review(conn, "2026-07-03", {
+        "step8_plan": {
+            "factor_decision": {
+                "score_run_id": "old-factor-run",
+                "status": "accepted",
+                "primary_factor": "sector_rhythm",
+                "supporting_factors": ["leader_signal"],
+                "input_by": "web",
+            },
+            "key_factor": "sector_rhythm",
+            "secondary_factors": ["leader_signal"],
+        },
+    })
+    conn.commit()
     leaders_file = tmp_path / "leaders.json"
     leaders_file.write_text(
         json.dumps(
@@ -320,6 +334,7 @@ def test_confirm_writes_step5_and_syncs_leader_tracking(conn, tmp_path):
 
     review = Q.get_daily_review(conn, "2026-07-03")
     step5 = json.loads(review["step5_leaders"])
+    step8 = json.loads(review["step8_plan"])
     leaders = Q.get_active_leaders(conn)
     assert result["ok"] is True
     assert result["synced_leader_tracking"] == 1
@@ -335,6 +350,9 @@ def test_confirm_writes_step5_and_syncs_leader_tracking(conn, tmp_path):
             "is_new": True,
         }
     ]
+    assert step8["factor_decision"] is None
+    assert step8["key_factor"] == ""
+    assert step8["secondary_factors"] == []
     assert leaders[0]["stock_code"] == "海光信息"
     assert leaders[0]["sector"] == "半导体"
 

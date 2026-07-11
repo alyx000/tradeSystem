@@ -226,6 +226,33 @@ def _validate_references(row: Mapping, spec: Mapping, context: str) -> dict[str,
     return validated
 
 
+def _validate_reference_contract(
+    references: Mapping[str, list[str]],
+    *,
+    positive_evidence_available: bool,
+    positive_score: int,
+    counter_score: int,
+    context: str,
+) -> None:
+    if positive_evidence_available and not references["evidence_refs"]:
+        raise TrinityValidationError(f"{context}.evidence_refs requires at least one ID")
+    if not positive_evidence_available and positive_score > 0:
+        raise TrinityValidationError(
+            f"{context} positive dimensions must score zero without positive evidence"
+        )
+    if not references["t1_check_ids"]:
+        raise TrinityValidationError(f"{context}.t1_check_ids requires at least one ID")
+    counter_refs = references["counter_evidence_refs"]
+    if counter_score > 0 and not counter_refs:
+        raise TrinityValidationError(
+            f"{context}.counter_evidence_refs is required when counter score is positive"
+        )
+    if counter_refs and counter_score == 0:
+        raise TrinityValidationError(
+            f"{context} counter score must be positive when counter evidence is cited"
+        )
+
+
 def _validate_reason(value: object, context: str) -> str:
     if not isinstance(value, str):
         raise TrinityValidationError(f"{context} must start with [判断]")
@@ -286,7 +313,22 @@ def parse_factor_response(raw: str | Mapping, candidates: Sequence[Mapping]) -> 
                 caps=spec.get("caps"),
                 critical_missing=spec.get("critical_missing", False),
             )
-            scored.update(_validate_references(row, spec, f"factor {row['factor_code']}"))
+            context = f"factor {row['factor_code']}"
+            references = _validate_references(row, spec, context)
+            _validate_reference_contract(
+                references,
+                positive_evidence_available=bool(spec["allowed_evidence_ids"]),
+                positive_score=sum(
+                    scored["model_scores"][key]
+                    for key in (
+                        "current_dominance", "cross_layer_alignment",
+                        "rhythm_clarity", "next_stage_relevance",
+                    )
+                ),
+                counter_score=scored["model_scores"]["counterevidence"],
+                context=context,
+            )
+            scored.update(references)
             scored["reason"] = _validate_reason(
                 row["reason"], f"factor {row['factor_code']}.reason"
             )
@@ -325,7 +367,23 @@ def parse_sector_response(raw: str | Mapping, candidates: Sequence[Mapping]) -> 
                 caps=spec.get("caps"),
             )
             scored["candidate_tier"] = spec["candidate_tier"]
-            scored.update(_validate_references(row, spec, f"sector {row['sector_key']}"))
+            context = f"sector {row['sector_key']}"
+            references = _validate_references(row, spec, context)
+            _validate_reference_contract(
+                references,
+                positive_evidence_available=bool(spec["allowed_evidence_ids"]),
+                positive_score=sum(
+                    scored["model_scores"][key]
+                    for key in (
+                        "primary_factor_alignment", "stage_connection",
+                        "market_linkage", "leader_clarity", "logic_aesthetic",
+                        "expectation_gap",
+                    )
+                ),
+                counter_score=scored["model_scores"]["fully_priced_penalty"],
+                context=context,
+            )
+            scored.update(references)
             scored["reason"] = _validate_reason(
                 row["reason"], f"sector {row['sector_key']}.reason"
             )

@@ -4,20 +4,24 @@ import { MemoryRouter } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import StepSectors from '../components/review/StepSectors'
 import { api } from '../lib/api'
-import type { ReviewPrefillData, ReviewStepValue } from '../lib/types'
+import type { ReviewPrefillData, ReviewStepValue, TrinityFactorScoreRun } from '../lib/types'
 
 // prefill 带 date → 内嵌 SectorGainRanking 会发请求；mock 成空壳避免真实 fetch 噪声。
 vi.spyOn(api, 'getSectorGainRanking').mockResolvedValue({
   date: '2026-04-03', rankings: { '5d': [], '10d': [], '20d': [] },
 })
 
-function renderStep(data: ReviewStepValue = {}, prefill?: ReviewPrefillData) {
+function renderStep(
+  data: ReviewStepValue = {},
+  prefill?: ReviewPrefillData,
+  factorScore?: TrinityFactorScoreRun,
+) {
   const onChange = vi.fn()
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   render(
     <QueryClientProvider client={qc}>
       <MemoryRouter>
-        <StepSectors data={data} onChange={onChange} prefill={prefill} />
+        <StepSectors data={data} onChange={onChange} prefill={prefill} factorScore={factorScore} />
       </MemoryRouter>
     </QueryClientProvider>
   )
@@ -267,5 +271,147 @@ describe('StepSectors', () => {
         }),
       ],
     }))
+  })
+
+  it('shows conditional sector scores', () => {
+    const score: TrinityFactorScoreRun = {
+      score_run_id: 'run-sector',
+      trade_date: '2026-04-03',
+      status: 'success',
+      cache_hit: false,
+      is_cacheable: true,
+      factor_scores: [],
+      sector_scores: [{
+        sector_key: 'industry:AI算力',
+        total_score: 81,
+        tier: 'priority',
+        reason: '[判断]与主导因子形成清晰连接。',
+      }],
+      system_recommendation: {
+        primary: { factor_code: 'sector_rhythm' },
+        supporting: [],
+        sector_scores: [],
+        sector_fallback: [],
+        notice: 'LLM 相对重要度评分，非胜率',
+        recommendation_source: 'llm_program_recompute',
+      },
+      rule_gate: {},
+      diagnostics: {},
+      provider: 'antigravity',
+      requested_model: 'model-x',
+      prompt_versions: {},
+      schema_version: 'v1',
+      ruleset_version: 'v1',
+    }
+    const scoredPrefill = {
+      ...prefill,
+      review_signals: {
+        ...prefill.review_signals!,
+        sectors: {
+          ...prefill.review_signals!.sectors,
+          projection_candidates: [{
+            ...prefill.review_signals!.sectors.projection_candidates![0],
+            sector_key: 'industry:AI算力',
+            sector_type: 'industry',
+            candidate_tier: 'core',
+            data_status: 'ok',
+            rank_reason: '高置信节奏',
+            evidence_items: [],
+          }],
+        },
+      },
+    } satisfies ReviewPrefillData
+
+    renderStep({}, scoredPrefill, score)
+    expect(screen.getByText('核心板块条件化评分')).toBeInTheDocument()
+    expect(screen.getByText(/AI算力.*81/)).toBeInTheDocument()
+    expect(screen.getByText('优先跟踪')).toBeInTheDocument()
+  })
+
+  it('falls back to deterministic core order when sector scoring fails', () => {
+    const fallbackPrefill = {
+      ...prefill,
+      review_signals: {
+        ...prefill.review_signals!,
+        sectors: {
+          ...prefill.review_signals!.sectors,
+          projection_candidates: [{
+            ...prefill.review_signals!.sectors.projection_candidates![0],
+            sector_key: 'industry:AI算力',
+            sector_type: 'industry',
+            candidate_tier: 'core',
+            data_status: 'ok',
+            rank_reason: '高置信节奏',
+            evidence_items: [],
+          }],
+        },
+      },
+    } satisfies ReviewPrefillData
+    const failedScore: TrinityFactorScoreRun = {
+      score_run_id: 'run-sector-failed',
+      trade_date: '2026-04-03',
+      status: 'sector_failed',
+      cache_hit: false,
+      is_cacheable: true,
+      factor_scores: [],
+      sector_scores: null,
+      system_recommendation: {
+        primary: { factor_code: 'sector_rhythm' },
+        supporting: [],
+        confidence: 'medium',
+        recommendation_source: 'llm_program_recompute',
+        failure_reason: 'schema_invalid',
+        sector_scores: null,
+        sector_fallback: ['industry:AI算力'],
+        notice: 'LLM 相对重要度评分，非胜率',
+      },
+      rule_gate: {},
+      diagnostics: {},
+      provider: 'antigravity',
+      requested_model: 'model-x',
+      prompt_versions: {},
+      schema_version: 'v1',
+      ruleset_version: 'v1',
+    }
+
+    renderStep({}, fallbackPrefill, failedScore)
+
+    expect(screen.getByText('板块 LLM 失败，恢复确定性 core 排序')).toBeInTheDocument()
+    expect(screen.getByText('1. AI算力')).toBeInTheDocument()
+  })
+
+  it('does not mislabel rule-only fallback as a sector LLM failure', () => {
+    const ruleOnly: TrinityFactorScoreRun = {
+      score_run_id: 'run-rule-only',
+      trade_date: '2026-04-03',
+      status: 'rule_only',
+      cache_hit: false,
+      is_cacheable: true,
+      factor_scores: null,
+      sector_scores: null,
+      system_recommendation: {
+        primary: null,
+        supporting: [],
+        confidence: null,
+        undetermined_reason: 'undetermined_weak',
+        recommendation_source: 'rule_fallback',
+        failure_reason: 'llm_disabled',
+        sector_scores: null,
+        sector_fallback: ['industry:AI算力'],
+        notice: '规则降级建议',
+      },
+      rule_gate: {},
+      diagnostics: {},
+      provider: 'rules',
+      requested_model: 'disabled',
+      prompt_versions: {},
+      schema_version: 'v1',
+      ruleset_version: 'v1',
+    }
+
+    renderStep({}, prefill, ruleOnly)
+
+    expect(screen.queryByText('核心板块条件化评分')).not.toBeInTheDocument()
+    expect(screen.queryByText('板块 LLM 失败，恢复确定性 core 排序')).not.toBeInTheDocument()
   })
 })

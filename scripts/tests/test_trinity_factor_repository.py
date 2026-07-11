@@ -51,6 +51,19 @@ def _run(score_run_id: str = "run-1", **overrides) -> dict:
     return record
 
 
+def _request(request_id: str = "request-1", **overrides) -> dict:
+    record = {
+        "request_id": request_id,
+        "trade_date": "2026-07-10",
+        "input_by": "alice",
+        "cache_hit": False,
+        "resolved_run_id": "run-1",
+        "cache_key": "cache:2026-07-10:v1",
+    }
+    record.update(overrides)
+    return record
+
+
 def test_insert_and_get_score_run_round_trips_json(conn):
     record = _run()
 
@@ -61,6 +74,55 @@ def test_insert_and_get_score_run_round_trips_json(conn):
     for key, value in record.items():
         assert loaded[key] == value
     assert loaded["created_at"]
+
+
+def test_insert_and_list_score_requests_round_trip_request_audit(conn):
+    R.insert_score_run(conn, _run())
+    R.insert_score_request(conn, _request())
+
+    rows = R.list_score_requests(
+        conn,
+        trade_date="2026-07-10",
+        resolved_run_id="run-1",
+    )
+
+    assert len(rows) == 1
+    assert rows[0] == {
+        **_request(),
+        "created_at": rows[0]["created_at"],
+    }
+    assert rows[0]["created_at"]
+    assert rows[0]["cache_hit"] is False
+
+
+def test_score_requests_are_append_only_and_enforce_audit_constraints(conn):
+    R.insert_score_run(conn, _run())
+    R.insert_score_request(conn, _request())
+
+    with pytest.raises(sqlite3.IntegrityError):
+        R.insert_score_request(conn, _request(input_by="bob"))
+    with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+        conn.execute(
+            "UPDATE daily_review_factor_score_requests "
+            "SET input_by = ? WHERE request_id = ?",
+            ("bob", "request-1"),
+        )
+    with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+        conn.execute(
+            "DELETE FROM daily_review_factor_score_requests WHERE request_id = ?",
+            ("request-1",),
+        )
+    with pytest.raises(sqlite3.IntegrityError, match="CHECK"):
+        R.insert_score_request(conn, _request("request-blank", input_by="  "))
+    with pytest.raises(sqlite3.IntegrityError, match="FOREIGN KEY"):
+        R.insert_score_request(
+            conn,
+            _request("request-missing", resolved_run_id="missing"),
+        )
+
+    assert [row["request_id"] for row in R.list_score_requests(conn)] == [
+        "request-1"
+    ]
 
 
 def _evaluation(evaluation_id: str = "eval-1", **overrides) -> dict:

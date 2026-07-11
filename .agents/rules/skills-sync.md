@@ -99,7 +99,7 @@ python3 -m pytest scripts/tests/test_cli_smoke.py -v
 | `main.py` 的 `knowledge add-note/list/draft-*` | `knowledge-to-plan/SKILL.md` |
 | `main.py` 的 `knowledge cognition-* / instance-* / review-*` | `cognition-evolution/SKILL.md`（若涉及观点结构化字段、`feedback_action` 或 `evolving_views_json` 聚合，也同步 `INDEX.md` 中 cognition-evolution / `/api/cognition/instances` 说明） |
 | `main.py` 的 `executions import / list / audit-export` | `portfolio-manager/SKILL.md`（券商成交流水事实层，与 `db add-trade` 复盘维度分离） |
-| `main.py` / `scripts/cli/review_factors.py` 的 `review factor-*`，或 `scripts/services/trinity_factor/` | `daily-review/SKILL.md`、`sector-projection-analysis/SKILL.md`、`INDEX.md` 与 `AGENTS.md`；必须保留 `factor-score` / 人工确认 / 回验写入都带 `--input-by`（评分请求者写 diagnostics 且不参与 cache key，API/Web 分别记 `api` / `web`）、严格 T+1、默认 20 日影子观察、append-only retry 与“不进入 TradeDraft/TradePlan”边界 |
+| `main.py` / `scripts/cli/review_factors.py` 的 `review factor-*`，或 `scripts/services/trinity_factor/` | `daily-review/SKILL.md`、`sector-projection-analysis/SKILL.md`、`INDEX.md` 与 `AGENTS.md`；必须保留评分/确认/回验仅接受开放交易日、每次 score（含 cache hit）追加 request audit 且 `input_by` 不进 cache key、主因子受控证据卡进入第 2 层、确认原子重建证据摘要并拒绝陈旧 run、后续评分输入写入自动清除旧决定、来源感知严格 T+1、canonical run 指标、append-only retry 与“不进入 TradeDraft/TradePlan”边界 |
 | `scripts/cli/executions.py` 任意改动 | `portfolio-manager/SKILL.md` + `INDEX.md` 中 `executions ...` 行 |
 | `scripts/services/broker_executions/` 任意改动 | `portfolio-manager/SKILL.md`（若行为契约变更）；任何 schema 字段/UNIQUE 调整还需同步 `INDEX.md` |
 | `scripts/services/trade_thesis/` 或 `scripts/db/schema.py` 中 `trade_mode` 语义/枚举调整 | `portfolio-manager/SKILL.md` + `INDEX.md` 中 `thesis-*` 行 |

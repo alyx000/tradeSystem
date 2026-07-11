@@ -10,7 +10,7 @@ from services.trinity_factor.evidence import (
     build_factor_llm_input,
     build_sector_llm_input,
 )
-from services.trinity_factor.repository import list_score_runs
+from services.trinity_factor.repository import list_score_requests, list_score_runs
 from services.trinity_factor.runner import StructuredRunResult
 from services.trinity_factor.scoring import score_factor
 from services.trinity_factor.service import TrinityFactorService
@@ -21,6 +21,12 @@ from services.trinity_factor import service as service_module
 def conn(tmp_path):
     connection = get_connection(tmp_path / "trinity-service.db")
     migrate(connection)
+    from db import queries as Q
+    Q.upsert_trade_calendar(connection, [
+        {"date": "2026-07-10", "is_open": 1},
+        {"date": "2026-07-11", "is_open": 0},
+    ])
+    connection.commit()
     yield connection
     connection.close()
 
@@ -216,6 +222,75 @@ def test_llm_inputs_sort_ids_and_hide_rule_quality_caps_and_ranking() -> None:
         assert forbidden not in sector_text
 
 
+@pytest.mark.parametrize(
+    "primary_factor_code",
+    ["market_node", "sector_rhythm", "style_regime", "leader_signal"],
+)
+def test_sector_llm_input_includes_selected_primary_factor_controlled_card(
+    primary_factor_code: str,
+) -> None:
+    snapshot = build_evidence_snapshot("2026-07-10", _prefill(), _steps())
+    source = next(
+        row
+        for row in snapshot["factor_candidates"]
+        if row["factor_code"] == primary_factor_code
+    )
+
+    sector_input = build_sector_llm_input(
+        snapshot,
+        primary_factor_code=primary_factor_code,
+    )
+
+    assert sector_input["primary_factor"] == {
+        "factor_code": primary_factor_code,
+        "evidence_items": source["evidence_items"],
+        "allowed_evidence_ids": source["allowed_evidence_ids"],
+        "allowed_counter_evidence_ids": source["allowed_counter_evidence_ids"],
+        "allowed_t1_check_ids": source["allowed_t1_check_ids"],
+        "t1_checks": source["t1_checks"],
+    }
+    controlled_text = repr(sector_input["primary_factor"])
+    for forbidden in (
+        "evidence_quality", "critical_missing", "caps", "objective_source_count",
+        "total_score", "rule_rank", "rank_reason",
+    ):
+        assert forbidden not in controlled_text
+
+
+def test_non_objective_leader_detection_does_not_create_objective_leader_fact() -> None:
+    candidate = _candidate(1)
+    candidate["evidence_items"] = [{
+        "evidence_id": "2026-07-10:industry:板块1:leader:1",
+        "trade_date": "2026-07-10",
+        "source": "leader_detection",
+        "category": "leader",
+        "polarity": "context",
+        "objective": False,
+        "text": "模型识别龙头1",
+    }]
+    candidate["facts"] = {"lead_stock": "龙头1"}
+    prefill = _prefill([candidate])
+    prefill["review_signals"]["emotion"] = {}
+
+    snapshot = build_evidence_snapshot("2026-07-10", prefill, {})
+
+    leader = next(
+        row
+        for row in snapshot["factor_candidates"]
+        if row["factor_code"] == "leader_signal"
+    )
+    assert not [item for item in leader["evidence_items"] if item.get("kind") == "fact"]
+    assert leader["objective_source_count"] == 0
+    assert leader["evidence_quality"] == 0
+    assert leader["critical_missing"] is True
+    assert leader["caps"] == {
+        "current_dominance": 2,
+        "cross_layer_alignment": 2,
+        "rhythm_clarity": 2,
+        "next_stage_relevance": 2,
+    }
+
+
 def test_context_only_factor_is_critical_missing_and_capped() -> None:
     prefill = _prefill([])
     prefill["market"] = None
@@ -285,6 +360,7 @@ def test_no_llm_uses_unique_rule_fallback_without_numeric_llm_scores(
         prefill=_prefill(),
         review_steps=_steps(),
         no_llm=True,
+        input_by="test",
     )
 
     assert result["status"] == "rule_only"
@@ -320,6 +396,7 @@ def test_factor_success_calls_sector_layer_and_program_selection(conn, monkeypat
         trade_date="2026-07-10",
         prefill=_prefill(),
         review_steps=_steps(),
+        input_by="test",
     )
 
     assert result["status"] == "success"
@@ -337,6 +414,7 @@ def test_factor_failure_never_exposes_numeric_scores_and_skips_sector(conn, monk
         trade_date="2026-07-10",
         prefill=_prefill(),
         review_steps=_steps(),
+        input_by="test",
     )
 
     assert result["status"] == "factor_failed"
@@ -358,6 +436,7 @@ def test_sector_failure_preserves_primary_and_uses_deterministic_core_order(
         trade_date="2026-07-10",
         prefill=_prefill([_candidate(2), _candidate(1)]),
         review_steps=_steps(),
+        input_by="test",
     )
 
     assert result["status"] == "sector_failed"
@@ -384,17 +463,85 @@ def test_identical_cache_key_returns_existing_run_without_calling_llm(
         trade_date="2026-07-10",
         prefill=_prefill(),
         review_steps=_steps(),
+        input_by="test",
     )
     second = service.score(
         conn,
         trade_date="2026-07-10",
         prefill=_prefill(),
         review_steps=_steps(),
+        input_by="test",
     )
 
     assert first["score_run_id"] == second["score_run_id"]
     assert second["cache_hit"] is True
     assert len(runner.calls) == 2
+
+
+def test_cache_hit_appends_request_audit_without_mutating_resolved_run(
+    conn, monkeypatch
+) -> None:
+    monkeypatch.setenv("LLM_MODEL", "model-a")
+    runner = FakeRunner([
+        _run_result(status="success", parsed_output=_factor_scores(), raw={"factor": []}),
+        _run_result(status="success", parsed_output=[], raw={"sectors": []}),
+    ])
+    service = TrinityFactorService(runner=runner)
+
+    first = service.score(
+        conn,
+        trade_date="2026-07-10",
+        prefill=_prefill(),
+        review_steps=_steps(),
+        input_by="Alice",
+    )
+    before = dict(conn.execute(
+        "SELECT * FROM daily_review_factor_score_runs WHERE score_run_id = ?",
+        (first["score_run_id"],),
+    ).fetchone())
+
+    second = service.score(
+        conn,
+        trade_date="2026-07-10",
+        prefill=_prefill(),
+        review_steps=_steps(),
+        input_by="Bob",
+    )
+    after = dict(conn.execute(
+        "SELECT * FROM daily_review_factor_score_runs WHERE score_run_id = ?",
+        (first["score_run_id"],),
+    ).fetchone())
+    requests = list_score_requests(conn, resolved_run_id=first["score_run_id"])
+
+    assert second["score_run_id"] == first["score_run_id"]
+    assert second["cache_hit"] is True
+    assert before == after
+    assert conn.execute(
+        "SELECT COUNT(*) FROM daily_review_factor_score_runs"
+    ).fetchone()[0] == 1
+    assert [row["input_by"] for row in requests] == ["Bob", "Alice"]
+    assert [row["cache_hit"] for row in requests] == [True, False]
+    assert len({row["request_id"] for row in requests}) == 2
+    assert {row["cache_key"] for row in requests} == {before["cache_key"]}
+
+
+@pytest.mark.parametrize("input_by", [None, "", "  \t"])
+def test_service_rejects_blank_input_by_before_scoring(conn, input_by) -> None:
+    runner = FakeRunner([])
+
+    with pytest.raises(ValueError, match="input_by"):
+        TrinityFactorService(runner=runner).score(
+            conn,
+            trade_date="2026-07-10",
+            prefill=_prefill(),
+            review_steps=_steps(),
+            no_llm=True,
+            input_by=input_by,
+        )
+
+    assert runner.calls == []
+    assert list_score_runs(conn) == []
+    assert list_score_requests(conn) == []
 
 
 def test_model_or_input_change_invalidates_cache(conn, monkeypatch) -> None:
@@ -411,6 +558,7 @@ def test_model_or_input_change_invalidates_cache(conn, monkeypatch) -> None:
         trade_date="2026-07-10",
         prefill=_prefill(),
         review_steps=_steps(),
+        input_by="test",
     )
     monkeypatch.setenv("LLM_MODEL", "model-b")
     model_changed = service.score(
@@ -418,12 +566,14 @@ def test_model_or_input_change_invalidates_cache(conn, monkeypatch) -> None:
         trade_date="2026-07-10",
         prefill=_prefill(),
         review_steps=_steps(),
+        input_by="test",
     )
     input_changed = service.score(
         conn,
         trade_date="2026-07-10",
         prefill=_prefill(),
         review_steps=_steps(step6_nodes={"market_node": "风险释放"}),
+        input_by="test",
     )
 
     assert len({
@@ -445,6 +595,7 @@ def test_prompt_or_ruleset_change_invalidates_cache(conn, monkeypatch) -> None:
         trade_date="2026-07-10",
         prefill=_prefill(),
         review_steps=_steps(),
+        input_by="test",
     )
     monkeypatch.setattr(service_module, "FACTOR_PROMPT", service_module.FACTOR_PROMPT + "\nv2")
     prompt_changed = service.score(
@@ -452,6 +603,7 @@ def test_prompt_or_ruleset_change_invalidates_cache(conn, monkeypatch) -> None:
         trade_date="2026-07-10",
         prefill=_prefill(),
         review_steps=_steps(),
+        input_by="test",
     )
     monkeypatch.setattr(service_module, "RULESET_VERSION", "trinity_ruleset_v2")
     rules_changed = service.score(
@@ -459,6 +611,7 @@ def test_prompt_or_ruleset_change_invalidates_cache(conn, monkeypatch) -> None:
         trade_date="2026-07-10",
         prefill=_prefill(),
         review_steps=_steps(),
+        input_by="test",
     )
 
     assert len({
@@ -482,6 +635,7 @@ def test_explicit_retry_creates_child_and_requires_identical_cache_input(
         trade_date="2026-07-10",
         prefill=_prefill(),
         review_steps=_steps(),
+        input_by="test",
     )
 
     retry = service.score(
@@ -490,6 +644,7 @@ def test_explicit_retry_creates_child_and_requires_identical_cache_input(
         prefill=_prefill(),
         review_steps=_steps(),
         retry_of_run_id=first["score_run_id"],
+        input_by="test",
     )
 
     assert retry["score_run_id"] != first["score_run_id"]
@@ -502,6 +657,7 @@ def test_explicit_retry_creates_child_and_requires_identical_cache_input(
             prefill=_prefill(),
             review_steps=_steps(step6_nodes={"market_node": "不同输入"}),
             retry_of_run_id=first["score_run_id"],
+            input_by="test",
         )
 
 
@@ -519,12 +675,14 @@ def test_sector_failed_is_cached_but_explicit_retry_creates_child(conn, monkeypa
         trade_date="2026-07-10",
         prefill=_prefill(),
         review_steps=_steps(),
+        input_by="test",
     )
     cached = service.score(
         conn,
         trade_date="2026-07-10",
         prefill=_prefill(),
         review_steps=_steps(),
+        input_by="test",
     )
     retry = service.score(
         conn,
@@ -532,6 +690,7 @@ def test_sector_failed_is_cached_but_explicit_retry_creates_child(conn, monkeypa
         prefill=_prefill(),
         review_steps=_steps(),
         retry_of_run_id=first["score_run_id"],
+        input_by="test",
     )
 
     assert first["status"] == "sector_failed"
@@ -555,8 +714,26 @@ def test_service_rejects_preexisting_write_transaction_before_llm(conn, monkeypa
             trade_date="2026-07-10",
             prefill=_prefill(),
             review_steps=_steps(),
+            input_by="test",
         )
 
     assert runner.calls == []
     assert conn.in_transaction is True
     conn.rollback()
+
+
+def test_service_rejects_closed_or_missing_trade_date_before_llm(conn) -> None:
+    runner = FakeRunner([])
+
+    for trade_date in ("2026-07-11", "2026-07-12"):
+        with pytest.raises(ValueError, match="trade_date must be an open trade date"):
+            TrinityFactorService(runner=runner).score(
+                conn,
+                trade_date=trade_date,
+                prefill=_prefill(),
+                review_steps=_steps(),
+                no_llm=True,
+                input_by="test",
+            )
+
+    assert runner.calls == []

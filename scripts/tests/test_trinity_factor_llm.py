@@ -37,7 +37,7 @@ def _factor_row(factor_code="market_node", **overrides):
             "counterevidence": 0,
         },
         "evidence_refs": [f"ev:{factor_code}"],
-        "counter_evidence_refs": [f"counter:{factor_code}"],
+        "counter_evidence_refs": [],
         "t1_check_ids": [f"t1:{factor_code}"],
         "reason": "[判断] 证据链完整",
     }
@@ -74,7 +74,7 @@ def test_parse_factor_response_validates_and_recomputes_program_score():
                 "counterevidence": 0,
             },
             "evidence_refs": ["ev-1"],
-            "counter_evidence_refs": ["counter-1"],
+            "counter_evidence_refs": [],
             "t1_check_ids": ["t1-1"],
             "reason": "[判断] 节点主导明确",
         }],
@@ -131,6 +131,63 @@ def test_model_cannot_supply_program_owned_factor_fields(forbidden):
 def test_unknown_factor_references_fail_the_whole_batch(field, unknown):
     row = _factor_row()
     row[field] = [unknown]
+
+    with pytest.raises(TrinityValidationError):
+        parse_factor_response(_factor_payload([row]), [_factor_candidate()])
+
+
+@pytest.mark.parametrize("required_field", ["evidence_refs", "t1_check_ids"])
+def test_factor_high_scores_require_positive_evidence_and_t1_reference(required_field):
+    row = _factor_row()
+    row[required_field] = []
+
+    with pytest.raises(TrinityValidationError):
+        parse_factor_response(_factor_payload([row]), [_factor_candidate()])
+
+
+def test_factor_without_positive_evidence_must_score_zero_but_can_remain_in_batch():
+    candidate = _factor_candidate(
+        allowed_evidence_ids=set(),
+        evidence_quality=0,
+        critical_missing=True,
+    )
+    row = _factor_row(evidence_refs=[])
+    row["dimension_scores"] = {
+        "current_dominance": 0,
+        "cross_layer_alignment": 0,
+        "rhythm_clarity": 0,
+        "next_stage_relevance": 0,
+        "counterevidence": 0,
+    }
+
+    parsed = parse_factor_response(_factor_payload([row]), [candidate])
+
+    assert parsed[0]["total_score"] == 0
+
+
+def test_factor_without_positive_evidence_rejects_nonzero_positive_scores():
+    candidate = _factor_candidate(
+        allowed_evidence_ids=set(),
+        evidence_quality=0,
+        critical_missing=True,
+    )
+    row = _factor_row(evidence_refs=[])
+
+    with pytest.raises(TrinityValidationError, match="must score zero"):
+        parse_factor_response(_factor_payload([row]), [candidate])
+
+
+@pytest.mark.parametrize(
+    ("counterevidence", "counter_refs"),
+    [(1, []), (0, ["counter:market_node"])],
+    ids=["score_without_ref", "ref_without_score"],
+)
+def test_factor_counter_score_and_reference_must_be_consistent(
+    counterevidence,
+    counter_refs,
+):
+    row = _factor_row(counter_evidence_refs=counter_refs)
+    row["dimension_scores"]["counterevidence"] = counterevidence
 
     with pytest.raises(TrinityValidationError):
         parse_factor_response(_factor_payload([row]), [_factor_candidate()])
@@ -307,7 +364,7 @@ def test_parse_sector_response_validates_recomputes_and_assigns_tier():
                 "fully_priced_penalty": 0,
             },
             "evidence_refs": ["ev:sector"],
-            "counter_evidence_refs": ["counter:sector"],
+            "counter_evidence_refs": [],
             "t1_check_ids": ["t1:sector"],
             "reason": "[判断] 板块与主导因子同向",
         }],
@@ -347,7 +404,7 @@ def _sector_row(sector_key="sector:a", **overrides):
             "fully_priced_penalty": 0,
         },
         "evidence_refs": [f"ev:{sector_key}"],
-        "counter_evidence_refs": [f"counter:{sector_key}"],
+        "counter_evidence_refs": [],
         "t1_check_ids": [f"t1:{sector_key}"],
         "reason": "[判断] 板块证据链完整",
     }
@@ -437,6 +494,28 @@ def test_unknown_sector_references_fail_the_whole_batch(field, unknown):
         parse_sector_response(_sector_payload([row]), [_sector_candidate()])
 
 
+@pytest.mark.parametrize("required_field", ["evidence_refs", "t1_check_ids"])
+def test_sector_high_scores_require_positive_evidence_and_t1_reference(required_field):
+    row = _sector_row()
+    row[required_field] = []
+
+    with pytest.raises(TrinityValidationError):
+        parse_sector_response(_sector_payload([row]), [_sector_candidate()])
+
+
+@pytest.mark.parametrize(
+    ("penalty", "counter_refs"),
+    [(1, []), (0, ["counter:sector:a"])],
+    ids=["score_without_ref", "ref_without_score"],
+)
+def test_sector_counter_score_and_reference_must_be_consistent(penalty, counter_refs):
+    row = _sector_row(counter_evidence_refs=counter_refs)
+    row["dimension_scores"]["fully_priced_penalty"] = penalty
+
+    with pytest.raises(TrinityValidationError):
+        parse_sector_response(_sector_payload([row]), [_sector_candidate()])
+
+
 @pytest.mark.parametrize("invalid_score", [True, 2.5, -1, 6])
 def test_sector_model_scores_must_be_zero_to_five_integers(invalid_score):
     row = _sector_row()
@@ -479,7 +558,7 @@ def test_sector_output_is_stable_by_total_desc_then_id_asc_and_keeps_caps():
         _sector_row("sector:c", dimension_scores={
             **_sector_row("sector:c")["dimension_scores"],
             "fully_priced_penalty": 5,
-        }),
+        }, counter_evidence_refs=["counter:sector:c"]),
         _sector_row("sector:b"),
         _sector_row("sector:a"),
     ]
@@ -494,7 +573,7 @@ def test_sector_output_is_stable_by_total_desc_then_id_asc_and_keeps_caps():
         _sector_payload([_sector_row(dimension_scores={
             **_sector_row()["dimension_scores"],
             "fully_priced_penalty": 5,
-        })]),
+        }, counter_evidence_refs=["counter:sector:a"])]),
         [_sector_candidate(caps={"fully_priced_penalty": 2})],
     )[0]
     assert capped["model_scores"]["fully_priced_penalty"] == 5

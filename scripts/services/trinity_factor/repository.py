@@ -28,6 +28,10 @@ _OPTIONAL_RUN_COLUMNS = frozenset({
     "sector_scores_json", "system_recommendation_json", "valid_raw_json",
     "raw_output_sha256_json",
 })
+_REQUEST_COLUMNS = (
+    "request_id", "trade_date", "input_by", "cache_hit",
+    "resolved_run_id", "cache_key",
+)
 _EVALUATION_COLUMNS = (
     "evaluation_id", "score_run_id", "source_review_date",
     "evaluation_trade_date", "rule_top_code", "llm_top_code",
@@ -170,6 +174,67 @@ def list_score_runs(
     sql += " ORDER BY trade_date DESC, created_at DESC, rowid DESC LIMIT ?"
     params.append(_validate_limit(limit))
     return [_row_to_score_run(row) for row in conn.execute(sql, params).fetchall()]
+
+
+def insert_score_request(
+    conn: sqlite3.Connection,
+    record: Mapping[str, Any],
+) -> str:
+    """追加一次评分请求审计；缓存命中也必须写一行。"""
+    _require_record(record, _REQUEST_COLUMNS, frozenset())
+    values = []
+    for column in _REQUEST_COLUMNS:
+        value = record.get(column)
+        if column == "cache_hit":
+            if isinstance(value, bool):
+                value = int(value)
+            elif not isinstance(value, int) or value not in (0, 1):
+                raise ValueError("cache_hit must be a boolean")
+        values.append(value)
+    placeholders = ",".join("?" for _ in _REQUEST_COLUMNS)
+    conn.execute(
+        f"INSERT INTO daily_review_factor_score_requests "
+        f"({','.join(_REQUEST_COLUMNS)}) VALUES ({placeholders})",
+        values,
+    )
+    return str(record["request_id"])
+
+
+def _row_to_score_request(row: sqlite3.Row) -> dict[str, Any]:
+    result = dict(row)
+    result["cache_hit"] = bool(result["cache_hit"])
+    return result
+
+
+def list_score_requests(
+    conn: sqlite3.Connection,
+    *,
+    trade_date: str | None = None,
+    resolved_run_id: str | None = None,
+    cache_key: str | None = None,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    """按日期、命中 run 或缓存键查询请求审计，最新记录优先。"""
+    filters = (
+        ("trade_date", trade_date),
+        ("resolved_run_id", resolved_run_id),
+        ("cache_key", cache_key),
+    )
+    clauses: list[str] = []
+    params: list[Any] = []
+    for column, value in filters:
+        if value is not None:
+            clauses.append(f"{column} = ?")
+            params.append(value)
+    sql = "SELECT * FROM daily_review_factor_score_requests"
+    if clauses:
+        sql += " WHERE " + " AND ".join(clauses)
+    sql += " ORDER BY created_at DESC, rowid DESC LIMIT ?"
+    params.append(_validate_limit(limit))
+    return [
+        _row_to_score_request(row)
+        for row in conn.execute(sql, params).fetchall()
+    ]
 
 
 def _row_to_evaluation(row: sqlite3.Row) -> dict[str, Any]:

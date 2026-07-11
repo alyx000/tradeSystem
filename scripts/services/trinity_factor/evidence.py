@@ -113,6 +113,7 @@ def build_evidence_snapshot(
             "rule_fallback_code": fallback_code,
             "deterministic_sector_order": deterministic_sector_order,
             "core_sector_count": len(sector_candidates),
+            "sector_source_status": _sector_source_status(prefill),
         },
     }
 
@@ -123,16 +124,7 @@ def build_factor_llm_input(snapshot: Mapping[str, Any]) -> dict[str, Any]:
     for candidate in snapshot.get("factor_candidates") or []:
         if not isinstance(candidate, Mapping):
             continue
-        rows.append({
-            "factor_code": candidate["factor_code"],
-            "evidence_items": candidate.get("evidence_items") or [],
-            "allowed_evidence_ids": candidate.get("allowed_evidence_ids") or [],
-            "allowed_counter_evidence_ids": (
-                candidate.get("allowed_counter_evidence_ids") or []
-            ),
-            "allowed_t1_check_ids": candidate.get("allowed_t1_check_ids") or [],
-            "t1_checks": candidate.get("t1_checks") or [],
-        })
+        rows.append(_factor_llm_card(candidate))
     return {
         "trade_date": snapshot.get("trade_date"),
         "factors": sorted(rows, key=lambda row: row["factor_code"]),
@@ -145,6 +137,17 @@ def build_sector_llm_input(
     primary_factor_code: str,
 ) -> dict[str, Any]:
     """生成条件化板块层输入，候选按稳定 sector_key 排序。"""
+    primary_candidates = [
+        candidate
+        for candidate in snapshot.get("factor_candidates") or []
+        if (
+            isinstance(candidate, Mapping)
+            and candidate.get("factor_code") == primary_factor_code
+        )
+    ]
+    if len(primary_candidates) != 1:
+        raise ValueError("primary_factor_code must match exactly one factor candidate")
+
     rows = []
     for candidate in snapshot.get("sector_candidates") or []:
         if not isinstance(candidate, Mapping):
@@ -166,7 +169,22 @@ def build_sector_llm_input(
     return {
         "trade_date": snapshot.get("trade_date"),
         "primary_factor_code": primary_factor_code,
+        "primary_factor": _factor_llm_card(primary_candidates[0]),
         "sectors": sorted(rows, key=lambda row: row["sector_key"]),
+    }
+
+
+def _factor_llm_card(candidate: Mapping[str, Any]) -> dict[str, Any]:
+    """只暴露 LLM 可引用的因子证据，隐藏程序规则与评分元数据。"""
+    return {
+        "factor_code": candidate["factor_code"],
+        "evidence_items": candidate.get("evidence_items") or [],
+        "allowed_evidence_ids": candidate.get("allowed_evidence_ids") or [],
+        "allowed_counter_evidence_ids": (
+            candidate.get("allowed_counter_evidence_ids") or []
+        ),
+        "allowed_t1_check_ids": candidate.get("allowed_t1_check_ids") or [],
+        "t1_checks": candidate.get("t1_checks") or [],
     }
 
 
@@ -222,6 +240,23 @@ def _prepare_sector_candidates(
             }],
         })
     return prepared
+
+
+def _sector_source_status(prefill: Mapping[str, Any]) -> str:
+    signals = prefill.get("review_signals")
+    sectors = signals.get("sectors") if isinstance(signals, Mapping) else None
+    if isinstance(sectors, Mapping):
+        explicit = str(
+            sectors.get("data_status") or sectors.get("source_status") or ""
+        ).strip()
+        if explicit:
+            return explicit
+        candidates = sectors.get("projection_candidates")
+        if isinstance(candidates, list):
+            market = prefill.get("market")
+            if isinstance(market, Mapping):
+                return "ok" if candidates else "source_ok_empty"
+    return "missing"
 
 
 def _factor_objective_items(
@@ -280,21 +315,20 @@ def _factor_objective_items(
 
     for candidate in sector_candidates:
         for item in candidate.get("evidence_items") or []:
-            if not isinstance(item, Mapping) or not item.get("objective"):
+            if not isinstance(item, Mapping) or item.get("objective") is not True:
                 continue
             copied = dict(_json_safe_value(item))
             copied["kind"] = "fact"
             copied["layer"] = "sector"
             copied.setdefault("source_status", candidate.get("data_status") or "ok")
             out["sector_rhythm"].append(copied)
-        lead_stock = (candidate.get("facts") or {}).get("lead_stock")
-        if lead_stock:
-            out["leader_signal"].append(_fact_item(
-                f"{trade_date}:leader_signal:{candidate['sector_key']}",
-                "sector_leader",
-                "stock",
-                {"sector_key": candidate["sector_key"], "lead_stock": lead_stock},
-            ))
+            if (
+                item.get("category") == "leader"
+                or item.get("source") == "leader_detection"
+            ):
+                leader_item = dict(copied)
+                leader_item["layer"] = "stock"
+                out["leader_signal"].append(leader_item)
     return out
 
 

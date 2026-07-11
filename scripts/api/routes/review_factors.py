@@ -17,6 +17,7 @@ from services.trinity_factor.cycle import (
 )
 from services.trinity_factor.service import TrinityFactorService
 from services.trinity_factor.review_input import (
+    normalize_review_payload_for_display,
     normalize_review_steps,
     validate_trade_date,
 )
@@ -35,7 +36,7 @@ def _review_steps(
     supplied: Any,
 ) -> dict[str, Any]:
     source = supplied if isinstance(supplied, Mapping) else Q.get_daily_review(conn, trade_date) or {}
-    return normalize_review_steps(source)
+    return normalize_review_steps(normalize_review_payload_for_display(source))
 
 
 @router.post("/{date}/score")
@@ -48,10 +49,9 @@ def score_review_factors(
     payload = body or {}
     if not isinstance(payload.get("no_llm", False), bool):
         raise HTTPException(422, "no_llm must be a boolean")
-    if "input_by" in payload and (
-        not isinstance(payload["input_by"], str) or not payload["input_by"].strip()
-    ):
+    if not isinstance(payload.get("input_by"), str) or not payload["input_by"].strip():
         raise HTTPException(422, "input_by must be a non-empty string")
+    input_by = payload["input_by"].strip()
     try:
         prefill = build_review_prefill(conn, trade_date)
         return TrinityFactorService().score(
@@ -65,7 +65,7 @@ def score_review_factors(
                 if payload.get("retry_of_run_id")
                 else None
             ),
-            input_by=str(payload.get("input_by") or "api"),
+            input_by=input_by,
         )
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc

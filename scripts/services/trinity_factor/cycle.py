@@ -31,21 +31,32 @@ def confirm_factor_decision(
     score_run_id: str,
     decision: Mapping[str, Any],
     input_by: str,
+    current_input_digest: str,
 ) -> dict[str, Any]:
     """人工接受、改选或标记看不懂，并镜像旧 key_factor 字段。"""
-    confirmed = _prepare_factor_decision(
-        conn,
-        trade_date=trade_date,
-        score_run_id=score_run_id,
-        decision=decision,
-        input_by=input_by,
-    )
-    review = Q.get_daily_review(conn, trade_date) or {}
-    step8 = _parse_json_object(review.get("step8_plan"))
-    step8 = _apply_confirmed_decision(step8, confirmed)
-    Q.upsert_daily_review(conn, trade_date, {"step8_plan": step8})
-    conn.commit()
-    return confirmed
+    owns_transaction = not conn.in_transaction
+    if owns_transaction:
+        conn.execute("BEGIN IMMEDIATE")
+    try:
+        confirmed = _prepare_factor_decision(
+            conn,
+            trade_date=trade_date,
+            score_run_id=score_run_id,
+            decision=decision,
+            input_by=input_by,
+            current_input_digest=current_input_digest,
+        )
+        review = Q.get_daily_review(conn, trade_date) or {}
+        step8 = _parse_json_object(review.get("step8_plan"))
+        step8 = _apply_confirmed_decision(step8, confirmed)
+        Q.upsert_daily_review(conn, trade_date, {"step8_plan": step8})
+        if owns_transaction:
+            conn.commit()
+        return confirmed
+    except Exception:
+        if owns_transaction:
+            conn.rollback()
+        raise
 
 
 def normalize_step8_factor_decision(
@@ -53,6 +64,7 @@ def normalize_step8_factor_decision(
     *,
     trade_date: str,
     step8: Mapping[str, Any],
+    current_input_digest: str,
 ) -> dict[str, Any]:
     """供 PUT /review 共用：校验 factor_decision 并同步 legacy 镜像。"""
     normalized = dict(step8)
@@ -65,6 +77,7 @@ def normalize_step8_factor_decision(
         score_run_id=str(decision.get("score_run_id") or ""),
         decision=decision,
         input_by=str(decision.get("input_by") or ""),
+        current_input_digest=current_input_digest,
     )
     return _apply_confirmed_decision(normalized, confirmed)
 
@@ -76,14 +89,18 @@ def _prepare_factor_decision(
     score_run_id: str,
     decision: Mapping[str, Any],
     input_by: str,
+    current_input_digest: str,
 ) -> dict[str, Any]:
     if not str(input_by or "").strip():
         raise ValueError("input_by is required")
+    _require_open_trade_date(conn, trade_date, "trade_date")
     run = get_score_run(conn, score_run_id)
     if not run:
         raise ValueError("score_run_id does not exist")
     if run["trade_date"] != trade_date:
         raise ValueError("score_run_id belongs to a different trade_date")
+    if run.get("input_digest") != current_input_digest:
+        raise ValueError("score input has changed; rerun scoring before confirmation")
     if not isinstance(decision, Mapping):
         raise ValueError("decision must be an object")
     status = str(decision.get("status") or "").strip()
@@ -138,6 +155,273 @@ def _apply_confirmed_decision(
     return out
 
 
+def invalidate_factor_decision(step8: Any) -> tuple[dict[str, Any], bool]:
+    """清除旧人工因子决定及其兼容镜像，保留第 8 步其他内容。"""
+    out = _parse_json_object(step8)
+    if not isinstance(out.get("factor_decision"), Mapping):
+        return out, False
+    out["factor_decision"] = None
+    out["key_factor"] = ""
+    out["secondary_factors"] = []
+    return out, True
+
+
+def invalidate_stale_factor_decision(
+    conn: sqlite3.Connection,
+    *,
+    trade_date: str,
+    step8: Any,
+    current_input_digest: str,
+) -> tuple[dict[str, Any], bool]:
+    """当前证据与已确认 run 不一致时，令人工决定失效。"""
+    parsed = _parse_json_object(step8)
+    decision = parsed.get("factor_decision")
+    if not isinstance(decision, Mapping):
+        return parsed, False
+    run_id = str(decision.get("score_run_id") or "")
+    run = get_score_run(conn, run_id) if run_id else None
+    if (
+        run
+        and run.get("trade_date") == trade_date
+        and run.get("input_digest") == current_input_digest
+    ):
+        return parsed, False
+    return invalidate_factor_decision(parsed)
+
+
+def _require_open_trade_date(
+    conn: sqlite3.Connection,
+    trade_date: str,
+    field: str,
+) -> None:
+    if Q.is_trade_day_from_db(conn, trade_date) is not True:
+        raise ValueError(f"{field} must be an open trade date")
+
+
+def _snapshot_factor(snapshot: Any, factor_code: str) -> dict[str, Any] | None:
+    if not isinstance(snapshot, Mapping):
+        return None
+    matches = [
+        dict(row)
+        for row in snapshot.get("factor_candidates") or []
+        if isinstance(row, Mapping) and row.get("factor_code") == factor_code
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _objective_fact_items(factor: Any) -> list[dict[str, Any]]:
+    if not isinstance(factor, Mapping):
+        return []
+    return [
+        dict(item)
+        for item in factor.get("evidence_items") or []
+        if isinstance(item, Mapping) and item.get("kind") == "fact"
+    ]
+
+
+def _fact_content(factor: Any, source: str) -> Any:
+    for item in _objective_fact_items(factor):
+        if item.get("source") == source:
+            return item.get("content")
+    return None
+
+
+def _sign(value: float) -> int:
+    return 1 if value > 0 else -1 if value < 0 else 0
+
+
+def _market_direction(factor: Any) -> tuple[int | None, list[int]]:
+    content = _fact_content(factor, "daily_market")
+    if not isinstance(content, Mapping):
+        return None, []
+    votes: list[int] = []
+    for key in ("sh_index_change", "sz_index_change"):
+        try:
+            votes.append(_sign(float(content[key])))
+        except (KeyError, TypeError, ValueError):
+            continue
+    for positive_key, negative_key in (
+        ("up_count", "down_count"),
+        ("limit_up_count", "limit_down_count"),
+    ):
+        try:
+            votes.append(
+                _sign(float(content[positive_key]) - float(content[negative_key]))
+            )
+        except (KeyError, TypeError, ValueError):
+            continue
+    if not votes:
+        return None, []
+    return _sign(sum(votes)), votes
+
+
+def _style_signature(factor: Any) -> dict[str, str]:
+    content = _fact_content(factor, "style_factors")
+    if not isinstance(content, Mapping):
+        return {}
+    signature: dict[str, str] = {}
+    cap = content.get("cap_preference")
+    board = content.get("board_preference")
+    premium = content.get("premium_trend")
+    if isinstance(cap, Mapping) and cap.get("relative"):
+        signature["cap_preference"] = str(cap["relative"])
+    if isinstance(board, Mapping) and board.get("dominant_type"):
+        signature["board_preference"] = str(board["dominant_type"])
+    if isinstance(premium, Mapping) and premium.get("direction"):
+        signature["premium_trend"] = str(premium["direction"])
+    return signature
+
+
+def _stable_fact_signatures(factor: Any) -> set[str]:
+    signatures: set[str] = set()
+    for item in _objective_fact_items(factor):
+        signatures.add(json.dumps(
+            {
+                "source": item.get("source"),
+                "content": item.get("content"),
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ))
+    return signatures
+
+
+def _sector_keys(snapshot: Any) -> set[str]:
+    if not isinstance(snapshot, Mapping):
+        return set()
+    return {
+        str(row["sector_key"])
+        for row in snapshot.get("sector_candidates") or []
+        if isinstance(row, Mapping) and row.get("sector_key")
+    }
+
+
+def _sector_source_status(snapshot: Any) -> str:
+    if not isinstance(snapshot, Mapping):
+        return "missing"
+    rule_gate = snapshot.get("rule_gate")
+    status = (
+        rule_gate.get("sector_source_status")
+        if isinstance(rule_gate, Mapping)
+        else None
+    )
+    if status:
+        return str(status)
+    return "ok" if _sector_keys(snapshot) else "missing"
+
+
+def _compare_sets(
+    source_values: set[str],
+    actual_values: set[str],
+) -> tuple[str, int]:
+    overlap = len(source_values & actual_values)
+    if overlap == len(source_values) and source_values:
+        return "hit", overlap
+    if overlap:
+        return "partial", overlap
+    return "miss", 0
+
+
+def _compare_t1_factor(
+    factor_code: str,
+    *,
+    source_snapshot: Any,
+    source_factor: Any,
+    actual_snapshot: Any,
+    actual_factor: Any,
+    actual_prefill: Any,
+) -> tuple[str, dict[str, Any]]:
+    if not isinstance(source_factor, Mapping):
+        return "missing_data", {"reason": "source_factor_missing"}
+
+    if factor_code == "market_node":
+        source_direction, source_votes = _market_direction(source_factor)
+        actual_direction, actual_votes = _market_direction(actual_factor)
+        comparison = {
+            "comparator": "market_direction",
+            "source_direction": source_direction,
+            "actual_direction": actual_direction,
+            "source_votes": source_votes,
+            "actual_votes": actual_votes,
+        }
+        if source_direction is None or actual_direction is None:
+            return "missing_data", comparison
+        if source_direction == actual_direction:
+            return "hit", comparison
+        if source_direction == 0 or actual_direction == 0:
+            return "partial", comparison
+        return "miss", comparison
+
+    if factor_code == "style_regime":
+        source_signature = _style_signature(source_factor)
+        actual_signature = _style_signature(actual_factor)
+        common = sorted(set(source_signature) & set(actual_signature))
+        matched = sum(
+            source_signature[key] == actual_signature[key] for key in common
+        )
+        comparison = {
+            "comparator": "style_dimensions",
+            "source_signature": source_signature,
+            "actual_signature": actual_signature,
+            "comparable_dimensions": len(common),
+            "matched_dimensions": matched,
+        }
+        if not common:
+            return "missing_data", comparison
+        if matched == len(common):
+            return "hit", comparison
+        if matched:
+            return "partial", comparison
+        return "miss", comparison
+
+    if factor_code == "sector_rhythm":
+        source_keys = _sector_keys(source_snapshot)
+        actual_keys = _sector_keys(actual_snapshot)
+        source_source_status = _sector_source_status(source_snapshot)
+        actual_source_status = _sector_source_status(actual_snapshot)
+        comparison = {
+            "comparator": "core_sector_continuity",
+            "source_sector_keys": sorted(source_keys),
+            "actual_sector_keys": sorted(actual_keys),
+            "source_source_status": source_source_status,
+            "actual_source_status": actual_source_status,
+            "observed_empty": actual_source_status in {
+                "ok",
+                "source_ok_empty",
+                "rule_filtered_empty",
+            } and not actual_keys,
+        }
+        if (
+            source_source_status in {"missing", "source_failed"}
+            or actual_source_status in {"missing", "source_failed"}
+        ):
+            return "missing_data", comparison
+        if not source_keys:
+            return "missing_data", comparison
+        if not actual_keys and not comparison["observed_empty"]:
+            return "missing_data", comparison
+        outcome, overlap = _compare_sets(source_keys, actual_keys)
+        comparison["overlap_count"] = overlap
+        return outcome, comparison
+
+    if factor_code == "leader_signal":
+        source_signatures = _stable_fact_signatures(source_factor)
+        actual_signatures = _stable_fact_signatures(actual_factor)
+        comparison = {
+            "comparator": "leader_fact_continuity",
+            "source_fact_count": len(source_signatures),
+            "actual_fact_count": len(actual_signatures),
+        }
+        if not source_signatures or not actual_signatures:
+            return "missing_data", comparison
+        outcome, overlap = _compare_sets(source_signatures, actual_signatures)
+        comparison["overlap_count"] = overlap
+        return outcome, comparison
+
+    return "missing_data", {"reason": "unknown_factor"}
+
+
 def suggest_t1_evaluation(
     conn: sqlite3.Connection,
     *,
@@ -152,6 +436,8 @@ def suggest_t1_evaluation(
     )
     if not source_date:
         raise ValueError("strict previous trade date is unavailable")
+    _require_open_trade_date(conn, source_date, "source_review_date")
+    _require_open_trade_date(conn, evaluation_trade_date, "evaluation_trade_date")
     strict_next = Q.get_next_trade_date(conn, source_date)
     if strict_next != evaluation_trade_date:
         raise ValueError("evaluation_trade_date is not the strict next trade date")
@@ -174,6 +460,8 @@ def suggest_t1_evaluation(
     elif not primary_code:
         system_outcome = "missing_data"
     else:
+        source_snapshot = run.get("evidence_snapshot_json") or {}
+        source_factor = _snapshot_factor(source_snapshot, primary_code)
         actual_snapshot = build_evidence_snapshot(
             evaluation_trade_date,
             prefill,
@@ -187,41 +475,37 @@ def suggest_t1_evaluation(
             ),
             None,
         )
-        if actual_factor is None or actual_factor.get("critical_missing"):
-            system_outcome = "missing_data"
-        else:
-            fact_items = [
-                item
-                for item in actual_factor.get("evidence_items") or []
-                if item.get("kind") == "fact"
-            ]
-            support_items = [
-                item for item in fact_items if item.get("polarity") != "counter"
-            ]
-            counter_items = [
-                item for item in fact_items if item.get("polarity") == "counter"
-            ]
-            support_sources = {str(item.get("source") or "") for item in support_items}
-            counter_sources = {str(item.get("source") or "") for item in counter_items}
-            actual_evidence = {
-                "primary_factor": primary_code,
-                "evidence_quality": actual_factor.get("evidence_quality"),
-                "objective_source_count": len(support_sources),
-                "counter_source_count": len(counter_sources),
-                "support_evidence_ids": [item["evidence_id"] for item in support_items],
-                "counter_evidence_ids": [item["evidence_id"] for item in counter_items],
-                "core_sector_keys": [
-                    row["sector_key"] for row in actual_snapshot["sector_candidates"]
-                ],
-            }
-            if len(support_sources) >= 2 and not counter_sources:
-                system_outcome = "hit"
-            elif support_sources:
-                system_outcome = "partial"
-            elif counter_sources:
-                system_outcome = "miss"
-            else:
-                system_outcome = "missing_data"
+        fact_items = _objective_fact_items(actual_factor)
+        support_items = [
+            item for item in fact_items if item.get("polarity") != "counter"
+        ]
+        counter_items = [
+            item for item in fact_items if item.get("polarity") == "counter"
+        ]
+        support_sources = {str(item.get("source") or "") for item in support_items}
+        counter_sources = {str(item.get("source") or "") for item in counter_items}
+        system_outcome, comparison = _compare_t1_factor(
+            primary_code,
+            source_snapshot=source_snapshot,
+            source_factor=source_factor,
+            actual_snapshot=actual_snapshot,
+            actual_factor=actual_factor,
+            actual_prefill=prefill,
+        )
+        actual_evidence = {
+            "primary_factor": primary_code,
+            "evidence_quality": (
+                actual_factor.get("evidence_quality") if actual_factor else None
+            ),
+            "objective_source_count": len(support_sources),
+            "counter_source_count": len(counter_sources),
+            "support_evidence_ids": [item["evidence_id"] for item in support_items],
+            "counter_evidence_ids": [item["evidence_id"] for item in counter_items],
+            "core_sector_keys": [
+                row["sector_key"] for row in actual_snapshot["sector_candidates"]
+            ],
+            "comparison": comparison,
+        }
 
     evaluation_id = _evaluation_id(source_date, evaluation_trade_date, run["score_run_id"])
     return {
@@ -260,7 +544,11 @@ def confirm_t1_evaluation(
     )
     if not isinstance(suggestion, Mapping) or any(key not in suggestion for key in required):
         raise ValueError("evaluation suggestion is incomplete")
-    strict_next = Q.get_next_trade_date(conn, str(suggestion["source_review_date"]))
+    source_date = str(suggestion["source_review_date"])
+    evaluation_date = str(suggestion["evaluation_trade_date"])
+    _require_open_trade_date(conn, source_date, "source_review_date")
+    _require_open_trade_date(conn, evaluation_date, "evaluation_trade_date")
+    strict_next = Q.get_next_trade_date(conn, source_date)
     if strict_next != suggestion["evaluation_trade_date"]:
         raise ValueError("evaluation is not for the strict next trade date")
 
@@ -288,15 +576,42 @@ def build_factor_metrics(conn: sqlite3.Connection, *, days: int = 20) -> dict[st
     if isinstance(days, bool) or not isinstance(days, int) or days <= 0:
         raise ValueError("days must be a positive integer")
     all_runs = list_score_runs(conn, limit=max(100, days * 20))
-    selected: list[dict[str, Any]] = []
-    seen_dates: set[str] = set()
+    runs_by_date: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    date_order: list[str] = []
     for run in all_runs:
-        if run["trade_date"] in seen_dates:
+        trade_date = str(run["trade_date"])
+        if Q.is_trade_day_from_db(conn, trade_date) is not True:
             continue
-        seen_dates.add(run["trade_date"])
-        selected.append(run)
-        if len(seen_dates) >= days:
-            break
+        if trade_date not in runs_by_date:
+            if len(date_order) >= days:
+                break
+            date_order.append(trade_date)
+        runs_by_date[trade_date].append(run)
+
+    selected: list[dict[str, Any]] = []
+    for trade_date in date_order[:days]:
+        rows = runs_by_date[trade_date]
+        review = Q.get_daily_review(conn, trade_date)
+        decision = _factor_decision_from_review(review)
+        selected_run = None
+        if decision and decision.get("score_run_id"):
+            decision_run_id = str(decision["score_run_id"])
+            selected_run = next(
+                (row for row in rows if row["score_run_id"] == decision_run_id),
+                None,
+            ) or get_score_run(conn, decision_run_id)
+            if selected_run and selected_run.get("trade_date") != trade_date:
+                selected_run = None
+        if selected_run is None:
+            selected_run = next(
+                (
+                    row for row in rows
+                    if row.get("status") in {"success", "sector_failed", "rule_only"}
+                    and row.get("is_cacheable")
+                ),
+                rows[0],
+            )
+        selected.append(selected_run)
 
     evaluations = list_evaluations(conn, limit=max(100, days * 10))
     evaluation_by_run = {row["score_run_id"]: row for row in evaluations}

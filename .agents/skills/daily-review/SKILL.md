@@ -70,7 +70,7 @@ python3 main.py review factor-metrics [--days 20] [--json]
 这是复盘内的**影子观察层**，不是交易计划生成器：
 
 1. `factor-score` 从当日复盘第 1～6 步与 `prefill` 生成四张固定因子证据卡：`market_node / sector_rhythm / style_regime / leader_signal`。规则门、证据质量、封顶与总分由程序控制，不喂给 LLM；主观 context 可供解释，但不能抬高客观门槛。
-2. 第 1 层 LLM 只给四因子相对重要度，程序重算后选主因子；只有主因子成立且存在候选时，才进入第 2 层，对确定性排序中的最多 6 个 `candidate_tier=core` 板块评分。`watch/context` 不得升格。所有分数是相对重要度，**不是胜率或买卖建议**。
+2. 第 1 层 LLM 只给四因子相对重要度，程序重算后选主因子；只有主因子成立且存在候选时，才把该主因子的受控证据卡传入第 2 层，对确定性排序中的最多 6 个 `candidate_tier=core` 板块评分。`watch/context` 不得升格，非客观 leader context 不得提升证据质量。每行必须引用至少一条正向证据和一个 T+1 check；所有分数是相对重要度，**不是胜率或买卖建议**。
 3. 因子层失败时不展示数字 LLM 分，只允许唯一规则降级或“不确定”；板块层失败时保留已成立的主因子，并回退到确定性 `core` 排序。`sector_failed` 是完整可展示的部分降级结果，可命中缓存；需要重跑时显式传 `--retry-of-run-id`，新建 append-only 子 run，不覆盖旧 run。
 4. 展示系统建议后，必须让用户三选一：`accepted`（接受）、`overridden`（改选，必须写 `override_reason`）或 `undetermined`（看不懂/不确认）。CLI 入口：
 
@@ -89,11 +89,11 @@ python3 main.py review factor-confirm --date YYYY-MM-DD --run-id RUN_ID --decisi
 {"status":"undetermined","override_reason":"看不懂，继续观察"}
 ```
 
-`factor-score` 只追加审计 score run，但仍必须带 `--input-by`：请求者落在 `diagnostics.request.input_by`，不参与 cache key；API 未传时记为 `api`，Web 显式传 `web`。人工确认与回验写入也必须显式标注 `--input-by` / `input_by`。确认只写 `daily_reviews.step8_plan.factor_decision`，并镜像兼容字段 `key_factor / secondary_factors`；其他第 8 步内容必须保留。未确认前不得写入 `factor_decision`。`to-draft` 只读取第 1、2 步，不读取第 8 步或上述兼容镜像；CLI/API/Web 都不得因此创建或更新 `TradeDraft` / `TradePlan`。
+`factor-score` 只追加审计 score run，但仍必须带 `--input-by`：每次有效请求都追加 `daily_review_factor_score_requests`，缓存命中也记录当前请求者与 resolved run；请求者不参与 cache key，旧 run 的 `diagnostics.request.input_by` 保留首次请求信息。API 未传时记为 `api`，Web 显式传 `web`。评分、人工确认与回验仅接受完整交易日历中的开放日，写入必须显式标注 `--input-by` / `input_by`。确认时服务端必须在同一写事务内用当前预填与第 1～6 步重建证据摘要；摘要与 score run 不一致时拒绝确认并要求重跑。CLI `factor-confirm` 读取数据库已保存步骤，因此通过 `--steps-file` 评分的内容必须先保存到同日复盘，再基于当前内容重跑评分。确认只写 `daily_reviews.step8_plan.factor_decision`，并镜像兼容字段 `key_factor / secondary_factors`；其他第 8 步内容必须保留。确认后，Web/API 或 `daily-leaders confirm` 实际改写第 1～6 步时必须同步清除旧决定及兼容镜像，防止回验消费陈旧结论。未确认前不得写入 `factor_decision`。`to-draft` 只读取第 1、2 步，不读取第 8 步或上述兼容镜像；CLI/API/Web 都不得因此创建或更新 `TradeDraft` / `TradePlan`。
 
 ### 严格 T+1 与 20 日指标
 
-- 回验日必须是来源复盘日的**严格下一交易日**。程序先只读生成客观建议，人工再确认 `hit / partial / miss / missing_data / not_applicable`；`missing_data` 和 `not_applicable` 不进入表现样本分母。
+- 来源日与回验日都必须是完整交易日历中的开放日，且回验日必须是来源复盘日的**严格下一交易日**。程序按主因子比较来源 run 证据快照与次日客观事实：大盘比较方向，风格比较可比维度，板块比较 core 连续性，龙头比较客观梯队事实；不可比才返回 `missing_data`。人工再确认 `hit / partial / miss / missing_data / not_applicable`。
 - CLI `factor-evaluate` 会合并“生成建议 + 人工确认”两步；`--run-id` 不传时优先取来源日已确认 run，否则取最新可用 run：
 
 ```bash
@@ -101,7 +101,7 @@ python3 main.py review factor-evaluate --date T_PLUS_1 --source-date SOURCE_DATE
 python3 main.py review factor-metrics [--days 20] [--json]
 ```
 
-- “20 日影子模式”是连续积累 20 个有效交易日的评分、人工决定和严格 T+1 回验，再用 `factor-metrics --days 20` 比较成功率、降级率、覆盖率、接受/改选与分组表现；它不是自动定时器或放行开关。影子期内外都禁止把该结果直接送入 `TradeDraft`。
+- “20 日影子模式”只统计开放交易日；同日存在 retry 时优先采用人工决定引用的 canonical run，无确认时再取最新可缓存有效 run，避免失败 retry 覆盖已确认父 run。用 `factor-metrics --days 20` 比较成功率、降级率、覆盖率、接受/改选与分组表现；它不是自动定时器或放行开关。
 - API 对应为 `POST /api/review-factors/{date}/score`、`GET/PUT /api/review-factors/{date}/evaluation`、`GET /api/review-factors/metrics?days=20`。评分 body 可带 `input_by`，API 缺省为 `api`，Web 必须传 `web`；因子人工确认没有单独的 `review-factors` endpoint，Web/API 走 `PUT /api/review/{date}` 的 `step8_plan.factor_decision`，同样必须带 `score_run_id / status / input_by`。
 
 ## 保存字段契约

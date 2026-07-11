@@ -614,6 +614,103 @@ export type ReviewStepKey =
 export type ReviewStepValue = Record<string, unknown>
 export type ReviewFormData = Partial<Record<ReviewStepKey, ReviewStepValue>>
 
+export type TrinityFactorCode =
+  | 'market_node'
+  | 'sector_rhythm'
+  | 'style_regime'
+  | 'leader_signal'
+
+export interface TrinityFactorScore {
+  factor_code: TrinityFactorCode
+  model_scores?: Record<string, number>
+  normalized_scores?: Record<string, number>
+  evidence_quality?: number
+  critical_missing?: boolean
+  total_score?: number
+  evidence_refs?: string[]
+  counter_evidence_refs?: string[]
+  t1_check_ids?: string[]
+  reason?: string
+}
+
+export interface TrinitySectorScore {
+  sector_key: string
+  model_scores?: Record<string, number>
+  normalized_scores?: Record<string, number>
+  total_score: number
+  tier: 'priority' | 'watch' | 'deprioritized'
+  candidate_tier?: 'core'
+  evidence_refs?: string[]
+  counter_evidence_refs?: string[]
+  t1_check_ids?: string[]
+  reason?: string
+}
+
+export interface TrinitySystemRecommendation {
+  primary: TrinityFactorScore | null
+  supporting: TrinityFactorScore[]
+  confidence?: 'high' | 'medium' | 'rule_only' | null
+  undetermined_reason?: string | null
+  recommendation_source: 'llm_program_recompute' | 'rule_fallback'
+  failure_reason?: string | null
+  sector_scores?: TrinitySectorScore[] | null
+  sector_fallback?: string[]
+  notice: string
+  judgement_label?: '[判断]'
+}
+
+export interface TrinityFactorScoreRun {
+  score_run_id: string
+  trade_date: string
+  retry_of_run_id?: string | null
+  status: string
+  cache_hit: boolean
+  is_cacheable: boolean
+  factor_scores: TrinityFactorScore[] | null
+  sector_scores: TrinitySectorScore[] | null
+  system_recommendation: TrinitySystemRecommendation
+  rule_gate: Record<string, unknown>
+  diagnostics: Record<string, unknown>
+  provider: string
+  requested_model: string
+  prompt_versions: Record<string, string>
+  schema_version: string
+  ruleset_version: string
+  created_at?: string | null
+}
+
+export interface ReviewFactorDecision {
+  score_run_id: string
+  status: 'accepted' | 'overridden' | 'undetermined'
+  primary_factor?: TrinityFactorCode | null
+  supporting_factors?: TrinityFactorCode[]
+  override_reason?: string | null
+  confirmed_at?: string
+  input_by: string
+}
+
+export interface ReviewFactorEvaluation {
+  evaluation_id: string
+  score_run_id: string
+  source_review_date: string
+  evaluation_trade_date: string
+  rule_top_code?: TrinityFactorCode | null
+  llm_top_code?: TrinityFactorCode | null
+  system_top_code?: TrinityFactorCode | null
+  human_top_code?: TrinityFactorCode | null
+  system_outcome: 'hit' | 'partial' | 'miss' | 'missing_data' | 'not_applicable'
+  confirmed_outcome?: 'hit' | 'partial' | 'miss' | 'missing_data' | 'not_applicable' | null
+  actual_evidence_json: Record<string, unknown>
+  evaluation_note?: string | null
+  input_by?: string
+}
+
+export interface ReviewFactorMetrics {
+  days: number
+  runs: number
+  [key: string]: unknown
+}
+
 export interface ReviewEmotionCycle {
   phase?: string | null
   sub_cycle?: number | null
@@ -936,6 +1033,7 @@ export interface ReviewPrefillMarket extends Omit<MarketFullData, 'sector_indust
   style_factors?: ReviewStyleFactors
   sector_industry?: SectorIndustryPrefill
   sector_rhythm_industry?: SectorRhythmItem[]
+  sector_rhythm_concept?: SectorRhythmItem[]
 }
 
 export interface ResearchCoverageRow {
@@ -999,7 +1097,12 @@ export interface ReviewSectorSignals {
 }
 
 export interface ReviewProjectionCandidate {
+  sector_key?: string
   sector_name: string
+  sector_type?: 'industry' | 'concept'
+  candidate_tier?: 'core' | 'watch' | 'context'
+  data_status?: 'ok' | 'source_ok_empty' | 'missing' | 'source_failed' | 'rule_filtered_empty'
+  rank_reason?: string
   source_tags: string[]
   facts: {
     phase_hint?: string | null
@@ -1020,9 +1123,23 @@ export interface ReviewProjectionCandidate {
   }
   key_stocks?: string[]
   evidence_text?: string | null
+  evidence_items?: Array<{
+    evidence_id: string
+    trade_date?: string
+    source?: string
+    source_status?: string
+    category?: string
+    objective?: boolean
+    text?: string
+    layer?: string
+    kind?: 'fact' | 'judgement' | 'context' | string
+    polarity?: 'support' | 'counter' | 'context' | string
+    content?: unknown
+  }>
 }
 
 export interface ReviewSectorProjection {
+  sector_key?: string
   sector_name?: string
   sector_type?: string
   big_cycle_stage?: string

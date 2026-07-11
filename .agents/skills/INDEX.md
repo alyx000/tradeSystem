@@ -57,10 +57,10 @@
 | `daily-review` | `db query-notes` | 搜索老师笔记（用于复盘预填充） |
 | `sector-projection-analysis` | `db query-notes` | 搜索老师笔记，补充板块逻辑与老师视角 |
 | `daily-review` | `db db-search` | 跨表关键词搜索 |
-| `daily-review` / `sector-projection-analysis` | `python main.py review factor-score --date YYYY-MM-DD --input-by USER [--steps-file PATH] [--no-llm] [--retry-of-run-id RUN_ID] [--json]` | 三位一体双层影子评分：第 1 层固定四因子，程序选出主因子后才对最多 6 个 `core` 板块做第 2 层评分；规则门/证据质量/总分由程序控制，LLM 分仅表示相对重要度。请求者写入 `diagnostics.request.input_by` 且不参与 cache key；默认同 cache key 复用完整或 `sector_failed` 部分降级结果，显式 retry 追加子 run、不覆盖旧 run；不生成 `TradeDraft` / `TradePlan` |
-| `daily-review` | `python main.py review factor-confirm --date YYYY-MM-DD --run-id RUN_ID --decision-file PATH --input-by USER [--json]` | 人工确认系统建议：`accepted` / `overridden`（必须 `override_reason`，辅助因子最多 2 个）/ `undetermined`；写 `daily_reviews.step8_plan.factor_decision` 并镜像 `key_factor / secondary_factors`，保留第 8 步其余字段；不写计划层 |
-| `daily-review` | `python main.py review factor-evaluate --date T_PLUS_1 --source-date SOURCE_DATE [--run-id RUN_ID] --outcome hit\|partial\|miss\|missing_data\|not_applicable --input-by USER [--note TEXT] [--json]` | 对来源日 run 做严格下一交易日 T+1 回验；程序建议只看客观预填，人工确认后写 evaluation；`missing_data` / `not_applicable` 不进入表现样本分母 |
-| `daily-review` / `sector-projection-analysis` | `python main.py review factor-metrics [--days 20] [--json]` | 影子期指标：按最近 N 个有效交易日汇总成功/非法输出/规则降级/覆盖、人工接受与改选、T+1 结果及 model/prompt/factor/score bucket 分组；默认 20 日，不是自动定时或放行开关 |
+| `daily-review` / `sector-projection-analysis` | `python main.py review factor-score --date YYYY-MM-DD --input-by USER [--steps-file PATH] [--no-llm] [--retry-of-run-id RUN_ID] [--json]` | 三位一体双层影子评分：第 1 层固定四因子，程序选出主因子后把该因子的受控证据卡传给最多 6 个 `core` 板块做第 2 层评分；规则门/证据质量/总分由程序控制，LLM 分仅表示相对重要度。只接受开放交易日；每次请求追加 `daily_review_factor_score_requests`，cache hit 也记录当前 `input_by`，但请求者不参与 cache key、旧 run diagnostics 不改；显式 retry 追加子 run；不生成 `TradeDraft` / `TradePlan` |
+| `daily-review` | `python main.py review factor-confirm --date YYYY-MM-DD --run-id RUN_ID --decision-file PATH --input-by USER [--json]` | 人工确认系统建议：`accepted` / `overridden`（必须 `override_reason`，辅助因子最多 2 个）/ `undetermined`；在原子事务内按数据库当前预填与第 1～6 步重建证据摘要，若与 run 不同则必须先保存步骤并重跑评分；写 `daily_reviews.step8_plan.factor_decision` 并镜像 `key_factor / secondary_factors`，保留第 8 步其余字段；后续实际改写第 1～6 步会自动清除旧决定；不写计划层 |
+| `daily-review` | `python main.py review factor-evaluate --date T_PLUS_1 --source-date SOURCE_DATE [--run-id RUN_ID] --outcome hit\|partial\|miss\|missing_data\|not_applicable --input-by USER [--note TEXT] [--json]` | 对来源日 run 做严格下一开放交易日 T+1 回验；程序按主因子用来源证据快照与次日客观事实做确定性方向/连续性比较，人工确认后写 evaluation；`missing_data` / `not_applicable` 不进入表现样本分母 |
+| `daily-review` / `sector-projection-analysis` | `python main.py review factor-metrics [--days 20] [--json]` | 影子期指标：只统计开放交易日，每日优先人工决定引用的 canonical run（避免失败 retry 覆盖已确认父 run），汇总成功/非法输出/规则降级/覆盖、人工接受与改选、T+1 结果及分组；默认 20 日 |
 | `market-tasks` | `python main.py pre --date` | 盘前任务采集 |
 | `market-tasks` | `python main.py post --date` | 盘后任务采集 |
 | `market-tasks` | `python main.py recommend daily [--lookback-days N] [--top-k K] [--dry-run]` | 行业推荐日报（聚合 teacher_notes + industry_info，可选 Antigravity 点评，钉钉推送） |
@@ -119,7 +119,7 @@
 | `daily-review` | `/api/review/{date}` | GET | 读取已保存的复盘内容 |
 | `daily-review` | `/api/review/{date}` | PUT | 提交复盘主观判断；兼容摘要式 `facts` / `judgement` / `plan` / `holdings` 并轻量映射到页面可见字段 |
 | `daily-review` / `plan-workbench` | `/api/review/{date}/to-draft` | POST | 将既有复盘事实/判断转成 `review` observation 与次日 `TradeDraft`；当前转换只消费 `step1_market` / `step2_sectors`，忽略 `step8_plan` 及 `key_factor / secondary_factors` 兼容镜像，三位一体 factor score / decision / evaluation / metrics 明确不复制进 draft |
-| `daily-review` / `sector-projection-analysis` | `/api/review-factors/{date}/score` | POST | 执行双层影子评分；body 可含 `steps` / `no_llm` / `retry_of_run_id` / `input_by`，API 缺省审计为 `api`、Web 显式传 `web`；结果落 append-only score run，不写 `TradeDraft` / `TradePlan` |
+| `daily-review` / `sector-projection-analysis` | `/api/review-factors/{date}/score` | POST | 执行双层影子评分；body 可含 `steps` / `no_llm` / `retry_of_run_id` / `input_by`，API 缺省审计为 `api`、Web 显式传 `web`；结果落 append-only score run，每次请求另落 append-only request audit（含 cache hit）；不写 `TradeDraft` / `TradePlan` |
 | `daily-review` | `/api/review-factors/{date}/evaluation` | GET | 只读生成严格 T+1 客观回验建议；query 可含 `source_date` / `score_run_id`，不写库 |
 | `daily-review` | `/api/review-factors/{date}/evaluation` | PUT | 重新生成严格 T+1 建议并人工确认；body 含 `confirmed_outcome / input_by`，可选 `source_date / score_run_id / evaluation_note` |
 | `daily-review` / `sector-projection-analysis` | `/api/review-factors/metrics?days=20` | GET | 查看最近 N 个有效交易日影子指标；`days` 取 1～250，默认 20 |
@@ -170,7 +170,7 @@
 |------|------|------|
 | GET | `/api/review/{date}` ★ | 读取指定日期复盘（含 exists 标志） |
 | GET | `/api/review/{date}/prefill` ★ | 预填充数据（行情+笔记+持仓+日历+ v1.4+ `cognitions_by_step`） |
-| PUT | `/api/review/{date}` ★ | 保存/更新复盘主观判断；保存时轻量标准化常见摘要字段到 Web 表单可见字段；若含 `step8_plan.factor_decision`，校验人工确认并镜像 `key_factor / secondary_factors`，但不进入 `TradeDraft` |
+| PUT | `/api/review/{date}` ★ | 保存/更新复盘主观判断；保存时轻量标准化常见摘要字段到 Web 表单可见字段；若含 `step8_plan.factor_decision`，在同一写事务内用本次第 1～6 步与当前预填校验 score run 证据摘要，输入变化返回 422、要求重跑评分；未提交新决定但当前证据已变化时自动清除旧决定及兼容镜像；不进入 `TradeDraft` |
 | POST | `/api/review/{date}/to-draft` ★ | 将已保存复盘转换为 `review` observation / `TradeDraft`；只消费第 1、2 步，不复制第 8 步 factor decision 或兼容镜像 |
 
 ### 复盘因子评分（`routes/review_factors.py`，前缀 `/api/review-factors`）

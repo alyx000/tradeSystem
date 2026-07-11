@@ -11,6 +11,7 @@ from db.connection import get_connection
 from db.migrate import migrate
 from api.routes.review import build_review_prefill
 from services.trinity_factor.review_input import (
+    normalize_review_payload_for_display,
     normalize_review_steps,
     validate_trade_date,
 )
@@ -91,7 +92,9 @@ def _factor_score(args: argparse.Namespace) -> dict[str, Any]:
             conn,
             trade_date=trade_date,
             prefill=build_review_prefill(conn, trade_date),
-            review_steps=normalize_review_steps(steps),
+            review_steps=normalize_review_steps(
+                normalize_review_payload_for_display(steps)
+            ),
             no_llm=args.no_llm,
             retry_of_run_id=args.retry_of_run_id,
             input_by=args.input_by,
@@ -101,7 +104,9 @@ def _factor_score(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def _factor_confirm(args: argparse.Namespace) -> dict[str, Any]:
+    from db import queries as Q
     from services.trinity_factor.cycle import confirm_factor_decision
+    from services.trinity_factor.service import build_score_input_digest
 
     trade_date = validate_trade_date(args.date)
     decision = _read_json_file(args.decision_file)
@@ -109,13 +114,29 @@ def _factor_confirm(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("decision-file must contain a JSON object")
     conn = _connection()
     try:
-        return confirm_factor_decision(
+        if conn.in_transaction:
+            raise RuntimeError("factor confirmation requires a clean transaction boundary")
+        conn.execute("BEGIN IMMEDIATE")
+        current_review = Q.get_daily_review(conn, trade_date) or {}
+        confirmed = confirm_factor_decision(
             conn,
             trade_date=trade_date,
             score_run_id=args.run_id,
             decision=decision,
             input_by=args.input_by,
+            current_input_digest=build_score_input_digest(
+                trade_date=trade_date,
+                prefill=build_review_prefill(conn, trade_date),
+                review_steps=normalize_review_steps(
+                    normalize_review_payload_for_display(current_review)
+                ),
+            ),
         )
+        conn.commit()
+        return confirmed
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 

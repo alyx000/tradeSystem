@@ -173,6 +173,17 @@ def _ensure_cognition_instance_feedback_columns(conn: sqlite3.Connection) -> Non
         conn.commit()
 
 
+def _ensure_factor_score_request_audit(conn: sqlite3.Connection) -> None:
+    """v39 开发期兜底：已标 v39 的早期库也要补逐请求审计表。"""
+    exists = conn.execute(
+        "SELECT 1 FROM sqlite_master "
+        "WHERE type = 'table' AND name = 'daily_review_factor_score_requests'"
+    ).fetchone()
+    if exists:
+        return
+    init_schema(conn)
+
+
 def _rebuild_trade_thesis_trade_mode_check(conn: sqlite3.Connection) -> None:
     """v27: SQLite CHECK 不能 ALTER,需重建 trade_thesis 以加入 sentiment_relay."""
     row = conn.execute(
@@ -708,7 +719,9 @@ def migrate(conn: sqlite3.Connection) -> None:
         conn.commit()
 
     if version < 39:
-        logger.info("Applying schema v39: daily review factor score runs + evaluations")
+        logger.info(
+            "Applying schema v39: daily review factor score runs + request audit + evaluations"
+        )
         init_schema(conn)
         set_schema_version(conn, 39)
         conn.commit()
@@ -722,6 +735,7 @@ def migrate(conn: sqlite3.Connection) -> None:
     _ensure_broker_executions_columns(conn)
     _ensure_margin_index_correlation_daily(conn)
     _ensure_cognition_instance_feedback_columns(conn)
+    _ensure_factor_score_request_audit(conn)
 
 # ──────────────────────────────────────────────────────────────
 # YAML 数据导入
