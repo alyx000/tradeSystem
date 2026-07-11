@@ -18,6 +18,10 @@ def _is_bounded_number(value: object, upper: float) -> bool:
     )
 
 
+def _as_builtin_number(value: Real) -> int | float:
+    return int(value) if isinstance(value, int) else float(value)
+
+
 def _validate_scored_factors(scored_factors: object) -> list[Mapping]:
     if isinstance(scored_factors, (str, bytes)) or not isinstance(scored_factors, Sequence):
         raise ValueError("scored_factors must be a sequence")
@@ -53,7 +57,12 @@ def _validate_scored_factors(scored_factors: object) -> list[Mapping]:
                 raise ValueError(
                     f"scored_factors[{index}].normalized_scores.{field} must be from 0 to 5"
                 )
-        canonical_total = calculate_factor_total(scores, item["evidence_quality"])
+        normalized_scores = {
+            field: _as_builtin_number(scores[field])
+            for field in FACTOR_WEIGHTS
+        }
+        evidence_quality = _as_builtin_number(item["evidence_quality"])
+        canonical_total = calculate_factor_total(normalized_scores, evidence_quality)
         if not isclose(
             item["total_score"],
             canonical_total,
@@ -63,7 +72,11 @@ def _validate_scored_factors(scored_factors: object) -> list[Mapping]:
             raise ValueError(
                 f"scored_factors[{index}].total_score does not match canonical total"
             )
-        validated.append(item)
+        normalized_item = dict(item)
+        normalized_item["total_score"] = canonical_total
+        normalized_item["evidence_quality"] = evidence_quality
+        normalized_item["normalized_scores"] = normalized_scores
+        validated.append(normalized_item)
     return validated
 
 

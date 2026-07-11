@@ -207,6 +207,22 @@ def test_safe_reason_is_nfkc_normalized_and_control_characters_are_removed():
     assert result[0]["reason"] == "[判断] 节奏清晰"
 
 
+@pytest.mark.parametrize("reason", ["[判断] 买\uFE0F入", "[判断] 建\u034F仓", "[判断] 建🚀仓"])
+@pytest.mark.parametrize("layer", ["factor", "sector"])
+def test_redline_scan_blocks_unicode_marks_and_symbols(layer, reason):
+    with pytest.raises(TrinityValidationError):
+        if layer == "factor":
+            parse_factor_response(
+                _factor_payload([_factor_row(reason=reason)]),
+                [_factor_candidate()],
+            )
+        else:
+            parse_sector_response(
+                _sector_payload([_sector_row(reason=reason)]),
+                [_sector_candidate()],
+            )
+
+
 def test_factor_output_is_stable_by_factor_id_not_input_order():
     candidates = [_factor_candidate("sector_rhythm"), _factor_candidate("market_node")]
     rows = [_factor_row("sector_rhythm"), _factor_row("market_node")]
@@ -224,6 +240,41 @@ def test_duplicate_candidate_specs_fail_closed():
             _factor_payload([_factor_row()]),
             [_factor_candidate(), _factor_candidate()],
         )
+
+
+@pytest.mark.parametrize("factor_code", [[], {}, None, ""])
+def test_factor_candidate_code_type_errors_are_wrapped(factor_code):
+    with pytest.raises(TrinityValidationError):
+        parse_factor_response(
+            _factor_payload([_factor_row()]),
+            [_factor_candidate(factor_code)],
+        )
+
+
+@pytest.mark.parametrize("duplicate_location", ["top", "item", "dimensions"])
+def test_raw_factor_json_rejects_duplicate_object_keys_at_any_depth(duplicate_location):
+    raw = json.dumps(_factor_payload([_factor_row()]), ensure_ascii=False)
+    if duplicate_location == "top":
+        raw = raw.replace(
+            '"schema_version":',
+            '"schema_version":"trinity_factor_score_v1","schema_version":',
+            1,
+        )
+    elif duplicate_location == "item":
+        raw = raw.replace(
+            '"factor_code":',
+            '"factor_code":"market_node","factor_code":',
+            1,
+        )
+    else:
+        raw = raw.replace(
+            '"current_dominance":',
+            '"current_dominance":5,"current_dominance":',
+            1,
+        )
+
+    with pytest.raises(TrinityValidationError):
+        parse_factor_response(raw, [_factor_candidate()])
 
 
 def test_wrapped_or_trailing_text_is_not_accepted_as_strict_json():

@@ -24,9 +24,24 @@ class TrinityValidationError(ValueError):
     """LLM 评分响应未通过 schema 或业务白名单校验。"""
 
 
+def _reject_duplicate_object_pairs(pairs: list[tuple[str, object]]) -> dict:
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise TrinityValidationError(f"duplicate JSON object key: {key}")
+        result[key] = value
+    return result
+
+
 def _load_json(raw: str | Mapping) -> Mapping:
     try:
-        payload = json.loads(raw) if isinstance(raw, str) else raw
+        payload = (
+            json.loads(raw, object_pairs_hook=_reject_duplicate_object_pairs)
+            if isinstance(raw, str)
+            else raw
+        )
+    except TrinityValidationError:
+        raise
     except (TypeError, json.JSONDecodeError) as exc:
         raise TrinityValidationError("response is not valid JSON") from exc
     if not isinstance(payload, Mapping):
@@ -104,7 +119,7 @@ def _prepare_factor_specs(candidates: Sequence[Mapping]) -> dict[str, dict]:
         if not isinstance(raw_spec, Mapping):
             raise TrinityValidationError(f"factor candidate {index} must be an object")
         factor_code = raw_spec.get("factor_code")
-        if factor_code not in FACTOR_CODES:
+        if not isinstance(factor_code, str) or not factor_code or factor_code not in FACTOR_CODES:
             raise TrinityValidationError(f"unknown factor candidate: {factor_code}")
         if factor_code in specs:
             raise TrinityValidationError(f"duplicate factor candidate: {factor_code}")
@@ -225,7 +240,9 @@ def _validate_reason(value: object, context: str) -> str:
         raise TrinityValidationError(f"{context} exceeds {MAX_REASON_LENGTH} characters")
     compact = "".join(
         char for char in normalized
-        if not char.isspace() and not unicodedata.category(char).startswith("P")
+        if not char.isspace()
+        and unicodedata.category(char) not in {"Cf", "Cc"}
+        and not unicodedata.category(char).startswith(("M", "P", "S"))
     )
     for keyword in REDLINE_KEYWORDS:
         normalized_keyword = unicodedata.normalize("NFKC", keyword)
@@ -233,7 +250,7 @@ def _validate_reason(value: object, context: str) -> str:
             char for char in normalized_keyword
             if unicodedata.category(char) not in {"Cf", "Cc"}
             and not char.isspace()
-            and not unicodedata.category(char).startswith("P")
+            and not unicodedata.category(char).startswith(("M", "P", "S"))
         )
         if compact_keyword in compact:
             raise TrinityValidationError(f"{context} contains redline keyword: {keyword}")

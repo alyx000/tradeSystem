@@ -56,7 +56,7 @@ def score_factor(
     critical_missing: bool = False,
 ) -> dict:
     """按固定权重重算单个因子总分，并同时保留模型原分与规则封顶分。"""
-    if factor_code not in FACTOR_CODES:
+    if not isinstance(factor_code, str) or not factor_code or factor_code not in FACTOR_CODES:
         raise ValueError(f"unknown factor_code: {factor_code}")
     if not isinstance(dimension_scores, Mapping):
         raise ValueError("dimension_scores must be a mapping")

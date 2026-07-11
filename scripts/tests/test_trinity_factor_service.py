@@ -445,3 +445,84 @@ def test_scorers_normalize_fraction_program_values_for_json_serialization():
     assert isinstance(factor["evidence_quality"], (int, float))
     assert isinstance(factor["normalized_scores"]["cross_layer_alignment"], (int, float))
     assert isinstance(sector["normalized_scores"]["market_linkage"], (int, float))
+
+
+@pytest.mark.parametrize("factor_code", [[], {}, None, ""])
+def test_score_factor_rejects_non_string_or_empty_factor_code(factor_code):
+    with pytest.raises(ValueError):
+        score_factor(
+            factor_code=factor_code,
+            dimension_scores=FACTOR_DIMENSIONS,
+            evidence_quality=3,
+        )
+
+
+def test_selection_returns_canonical_70_for_tolerated_supporting_total():
+    primary = _scored_factor("market_node", 82)
+    supporting = _scored_factor("sector_rhythm", 70)
+    supporting["total_score"] = 69.99995
+
+    result = select_dominant_factors([primary, supporting])
+
+    assert result["supporting"][0]["total_score"] == 70.0
+
+
+def test_selection_uses_canonical_75_at_single_candidate_threshold():
+    item = _scored_factor("market_node", 75)
+    item["total_score"] = 74.99995
+
+    result = select_dominant_factors([item])
+
+    assert result["primary"]["total_score"] == 75.0
+
+
+def test_selection_uses_canonical_82_at_high_confidence_threshold():
+    item = _scored_factor("market_node", 82)
+    item["total_score"] = 81.99995
+
+    result = select_dominant_factors([item])
+
+    assert result["primary"]["total_score"] == 82.0
+    assert result["confidence"] == "high"
+
+
+def test_selection_uses_canonical_totals_at_eight_point_lead_threshold():
+    primary = _scored_factor("market_node", 80)
+    competitor = _scored_factor("sector_rhythm", 72)
+    primary["total_score"] = 79.99995
+    competitor["total_score"] = 72.00005
+
+    result = select_dominant_factors([primary, competitor])
+
+    assert result["primary"]["factor_code"] == "market_node"
+
+
+def test_selection_uses_canonical_totals_at_fifteen_point_high_threshold():
+    primary = _scored_factor("market_node", 90)
+    competitor = _scored_factor("sector_rhythm", 75)
+    primary["total_score"] = 89.99995
+    competitor["total_score"] = 75.00005
+
+    result = select_dominant_factors([primary, competitor])
+
+    assert result["confidence"] == "high"
+
+
+def test_selection_normalizes_fraction_inputs_for_json_serialization():
+    item = _scored_factor("market_node", 82)
+    item["total_score"] = Fraction(82, 1)
+    item["evidence_quality"] = Fraction(item["evidence_quality"], 1)
+    item["normalized_scores"] = {
+        name: Fraction(str(value))
+        for name, value in item["normalized_scores"].items()
+    }
+
+    result = select_dominant_factors([item])
+
+    json.dumps(result)
+    assert isinstance(result["primary"]["total_score"], (int, float))
+    assert isinstance(result["primary"]["evidence_quality"], (int, float))
+    assert all(
+        isinstance(value, (int, float))
+        for value in result["primary"]["normalized_scores"].values()
+    )
