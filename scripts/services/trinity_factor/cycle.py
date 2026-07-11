@@ -1,0 +1,523 @@
+"""人工因子确认、严格 T+1 回验与 20 日影子指标。"""
+from __future__ import annotations
+
+import hashlib
+import json
+import sqlite3
+from collections import Counter, defaultdict
+from collections.abc import Mapping
+from datetime import datetime, timezone
+from typing import Any
+
+from db import queries as Q
+
+from .constants import FACTOR_CODES
+from .evidence import build_evidence_snapshot
+from .repository import (
+    get_score_run,
+    list_evaluations,
+    list_score_runs,
+    upsert_evaluation,
+)
+
+_DECISION_STATUSES = frozenset({"accepted", "overridden", "undetermined"})
+_OUTCOMES = frozenset({"hit", "partial", "miss", "missing_data", "not_applicable"})
+
+
+def confirm_factor_decision(
+    conn: sqlite3.Connection,
+    *,
+    trade_date: str,
+    score_run_id: str,
+    decision: Mapping[str, Any],
+    input_by: str,
+) -> dict[str, Any]:
+    """人工接受、改选或标记看不懂，并镜像旧 key_factor 字段。"""
+    confirmed = _prepare_factor_decision(
+        conn,
+        trade_date=trade_date,
+        score_run_id=score_run_id,
+        decision=decision,
+        input_by=input_by,
+    )
+    review = Q.get_daily_review(conn, trade_date) or {}
+    step8 = _parse_json_object(review.get("step8_plan"))
+    step8 = _apply_confirmed_decision(step8, confirmed)
+    Q.upsert_daily_review(conn, trade_date, {"step8_plan": step8})
+    conn.commit()
+    return confirmed
+
+
+def normalize_step8_factor_decision(
+    conn: sqlite3.Connection,
+    *,
+    trade_date: str,
+    step8: Mapping[str, Any],
+) -> dict[str, Any]:
+    """供 PUT /review 共用：校验 factor_decision 并同步 legacy 镜像。"""
+    normalized = dict(step8)
+    decision = normalized.get("factor_decision")
+    if not isinstance(decision, Mapping):
+        return normalized
+    confirmed = _prepare_factor_decision(
+        conn,
+        trade_date=trade_date,
+        score_run_id=str(decision.get("score_run_id") or ""),
+        decision=decision,
+        input_by=str(decision.get("input_by") or ""),
+    )
+    return _apply_confirmed_decision(normalized, confirmed)
+
+
+def _prepare_factor_decision(
+    conn: sqlite3.Connection,
+    *,
+    trade_date: str,
+    score_run_id: str,
+    decision: Mapping[str, Any],
+    input_by: str,
+) -> dict[str, Any]:
+    if not str(input_by or "").strip():
+        raise ValueError("input_by is required")
+    run = get_score_run(conn, score_run_id)
+    if not run:
+        raise ValueError("score_run_id does not exist")
+    if run["trade_date"] != trade_date:
+        raise ValueError("score_run_id belongs to a different trade_date")
+    if not isinstance(decision, Mapping):
+        raise ValueError("decision must be an object")
+    status = str(decision.get("status") or "").strip()
+    if status not in _DECISION_STATUSES:
+        raise ValueError("decision status must be accepted, overridden or undetermined")
+
+    recommendation = run.get("system_recommendation_json") or {}
+    system_primary = _factor_code((recommendation.get("primary") or {}).get("factor_code"))
+    system_supporting = _supporting_codes(recommendation.get("supporting") or [])
+    override_reason = str(decision.get("override_reason") or "").strip()
+
+    if status == "accepted":
+        if not system_primary:
+            raise ValueError("accepted decision requires a system primary factor")
+        primary = system_primary
+        supporting = system_supporting
+    elif status == "overridden":
+        primary = _factor_code(decision.get("primary_factor"), required=True)
+        supporting = _validate_supporting(
+            decision.get("supporting_factors") or [], primary=primary
+        )
+        if not override_reason:
+            raise ValueError("override_reason is required for overridden decision")
+    else:
+        primary = None
+        supporting = []
+
+    return {
+        "score_run_id": score_run_id,
+        "status": status,
+        "primary_factor": primary,
+        "supporting_factors": supporting,
+        "override_reason": override_reason or None,
+        "confirmed_at": (
+            str(decision.get("confirmed_at") or "").strip()
+            or datetime.now(timezone.utc).isoformat()
+        ),
+        "input_by": str(input_by).strip(),
+    }
+
+
+def _apply_confirmed_decision(
+    step8: Mapping[str, Any],
+    confirmed: Mapping[str, Any],
+) -> dict[str, Any]:
+    out = dict(step8)
+    primary = confirmed.get("primary_factor")
+    supporting = list(confirmed.get("supporting_factors") or [])
+    out["factor_decision"] = dict(confirmed)
+    out["key_factor"] = primary or ""
+    out["secondary_factors"] = supporting
+    return out
+
+
+def suggest_t1_evaluation(
+    conn: sqlite3.Connection,
+    *,
+    evaluation_trade_date: str,
+    prefill: Mapping[str, Any] | None,
+    source_review_date: str | None = None,
+    score_run_id: str | None = None,
+) -> dict[str, Any]:
+    """按严格上一/下一交易日生成程序事实建议；不调用 LLM、不写库。"""
+    source_date = source_review_date or Q.get_prev_trade_date_from_db(
+        conn, evaluation_trade_date
+    )
+    if not source_date:
+        raise ValueError("strict previous trade date is unavailable")
+    strict_next = Q.get_next_trade_date(conn, source_date)
+    if strict_next != evaluation_trade_date:
+        raise ValueError("evaluation_trade_date is not the strict next trade date")
+
+    run = _resolve_source_run(conn, source_date, score_run_id)
+    recommendation = run.get("system_recommendation_json") or {}
+    primary_code = _factor_code((recommendation.get("primary") or {}).get("factor_code"))
+    target_review = Q.get_daily_review(conn, evaluation_trade_date)
+    source_review = Q.get_daily_review(conn, source_date)
+    human_decision = _factor_decision_from_review(source_review)
+
+    actual_evidence: dict[str, Any] = {
+        "primary_factor": primary_code,
+        "objective_source_count": 0,
+        "support_evidence_ids": [],
+        "counter_evidence_ids": [],
+    }
+    if not target_review:
+        system_outcome = "not_applicable"
+    elif not primary_code:
+        system_outcome = "missing_data"
+    else:
+        actual_snapshot = build_evidence_snapshot(
+            evaluation_trade_date,
+            prefill,
+            {},  # T+1 系统判卷只看客观预填，不消费当日人工判断。
+        )
+        actual_factor = next(
+            (
+                row
+                for row in actual_snapshot["factor_candidates"]
+                if row["factor_code"] == primary_code
+            ),
+            None,
+        )
+        if actual_factor is None or actual_factor.get("critical_missing"):
+            system_outcome = "missing_data"
+        else:
+            fact_items = [
+                item
+                for item in actual_factor.get("evidence_items") or []
+                if item.get("kind") == "fact"
+            ]
+            support_items = [
+                item for item in fact_items if item.get("polarity") != "counter"
+            ]
+            counter_items = [
+                item for item in fact_items if item.get("polarity") == "counter"
+            ]
+            support_sources = {str(item.get("source") or "") for item in support_items}
+            counter_sources = {str(item.get("source") or "") for item in counter_items}
+            actual_evidence = {
+                "primary_factor": primary_code,
+                "evidence_quality": actual_factor.get("evidence_quality"),
+                "objective_source_count": len(support_sources),
+                "counter_source_count": len(counter_sources),
+                "support_evidence_ids": [item["evidence_id"] for item in support_items],
+                "counter_evidence_ids": [item["evidence_id"] for item in counter_items],
+                "core_sector_keys": [
+                    row["sector_key"] for row in actual_snapshot["sector_candidates"]
+                ],
+            }
+            if len(support_sources) >= 2 and not counter_sources:
+                system_outcome = "hit"
+            elif support_sources:
+                system_outcome = "partial"
+            elif counter_sources:
+                system_outcome = "miss"
+            else:
+                system_outcome = "missing_data"
+
+    evaluation_id = _evaluation_id(source_date, evaluation_trade_date, run["score_run_id"])
+    return {
+        "evaluation_id": evaluation_id,
+        "score_run_id": run["score_run_id"],
+        "source_review_date": source_date,
+        "evaluation_trade_date": evaluation_trade_date,
+        "rule_top_code": (run.get("rule_gate_json") or {}).get("rule_fallback_code"),
+        "llm_top_code": _llm_top_code(run.get("factor_scores_json")),
+        "system_top_code": primary_code,
+        "human_top_code": _factor_code(
+            human_decision.get("primary_factor") if human_decision else None
+        ),
+        "system_outcome": system_outcome,
+        "confirmed_outcome": None,
+        "actual_evidence_json": actual_evidence,
+        "evaluation_note": None,
+    }
+
+
+def confirm_t1_evaluation(
+    conn: sqlite3.Connection,
+    *,
+    suggestion: Mapping[str, Any],
+    confirmed_outcome: str,
+    input_by: str,
+    evaluation_note: str | None = None,
+) -> dict[str, Any]:
+    if confirmed_outcome not in _OUTCOMES:
+        raise ValueError("confirmed_outcome is invalid")
+    if not str(input_by or "").strip():
+        raise ValueError("input_by is required")
+    required = (
+        "evaluation_id", "score_run_id", "source_review_date",
+        "evaluation_trade_date", "actual_evidence_json", "system_outcome",
+    )
+    if not isinstance(suggestion, Mapping) or any(key not in suggestion for key in required):
+        raise ValueError("evaluation suggestion is incomplete")
+    strict_next = Q.get_next_trade_date(conn, str(suggestion["source_review_date"]))
+    if strict_next != suggestion["evaluation_trade_date"]:
+        raise ValueError("evaluation is not for the strict next trade date")
+
+    record = {
+        "evaluation_id": suggestion["evaluation_id"],
+        "score_run_id": suggestion["score_run_id"],
+        "source_review_date": suggestion["source_review_date"],
+        "evaluation_trade_date": suggestion["evaluation_trade_date"],
+        "rule_top_code": suggestion.get("rule_top_code"),
+        "llm_top_code": suggestion.get("llm_top_code"),
+        "system_top_code": suggestion.get("system_top_code"),
+        "human_top_code": suggestion.get("human_top_code"),
+        "system_outcome": suggestion["system_outcome"],
+        "confirmed_outcome": confirmed_outcome,
+        "actual_evidence_json": suggestion["actual_evidence_json"],
+        "evaluation_note": str(evaluation_note or "").strip() or None,
+        "input_by": str(input_by).strip(),
+    }
+    evaluation_id = upsert_evaluation(conn, record)
+    conn.commit()
+    return {**record, "evaluation_id": evaluation_id}
+
+
+def build_factor_metrics(conn: sqlite3.Connection, *, days: int = 20) -> dict[str, Any]:
+    if isinstance(days, bool) or not isinstance(days, int) or days <= 0:
+        raise ValueError("days must be a positive integer")
+    all_runs = list_score_runs(conn, limit=max(100, days * 20))
+    selected: list[dict[str, Any]] = []
+    seen_dates: set[str] = set()
+    for run in all_runs:
+        if run["trade_date"] in seen_dates:
+            continue
+        seen_dates.add(run["trade_date"])
+        selected.append(run)
+        if len(seen_dates) >= days:
+            break
+
+    evaluations = list_evaluations(conn, limit=max(100, days * 10))
+    evaluation_by_run = {row["score_run_id"]: row for row in evaluations}
+    outcomes = Counter({"hit": 0, "partial": 0, "miss": 0})
+    data_quality = Counter({"missing_data": 0, "not_applicable": 0})
+    accept_count = 0
+    override_count = 0
+    undetermined_decision_count = 0
+    grouped: dict[str, dict[str, dict[str, int]]] = {
+        "model": defaultdict(lambda: _group_bucket()),
+        "prompt": defaultdict(lambda: _group_bucket()),
+        "factor": defaultdict(lambda: _group_bucket()),
+        "score_bucket": defaultdict(lambda: _group_bucket()),
+    }
+
+    success_count = 0
+    invalid_output_count = 0
+    fallback_count = 0
+    coverage_count = 0
+    undetermined_count = 0
+    for run in selected:
+        if run["status"] == "success":
+            success_count += 1
+        diagnostics_text = json.dumps(run.get("diagnostics_json") or {}, ensure_ascii=False)
+        if "schema_invalid" in diagnostics_text:
+            invalid_output_count += 1
+        recommendation = run.get("system_recommendation_json") or {}
+        primary = (recommendation.get("primary") or {}).get("factor_code")
+        if primary:
+            coverage_count += 1
+        else:
+            undetermined_count += 1
+        if recommendation.get("recommendation_source") == "rule_fallback" or run["status"] == "rule_only":
+            fallback_count += 1
+
+        review = Q.get_daily_review(conn, run["trade_date"])
+        decision = _factor_decision_from_review(review)
+        if decision and decision.get("score_run_id") == run["score_run_id"]:
+            if decision.get("status") == "accepted":
+                accept_count += 1
+            elif decision.get("status") == "overridden":
+                override_count += 1
+            elif decision.get("status") == "undetermined":
+                undetermined_decision_count += 1
+
+        evaluation = evaluation_by_run.get(run["score_run_id"])
+        outcome = None
+        if evaluation:
+            outcome = evaluation.get("confirmed_outcome") or evaluation.get("system_outcome")
+            if outcome in outcomes:
+                outcomes[outcome] += 1
+            elif outcome in data_quality:
+                data_quality[outcome] += 1
+
+        score = _primary_score(run.get("factor_scores_json"), primary)
+        group_values = {
+            "model": str(run.get("requested_model") or "unknown"),
+            "prompt": json.dumps(
+                run.get("prompt_versions_json") or {},
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
+            "factor": str(primary or "undetermined"),
+            "score_bucket": _score_bucket(score),
+        }
+        for group_name, group_value in group_values.items():
+            bucket = grouped[group_name][group_value]
+            bucket["runs"] += 1
+            if outcome in outcomes:
+                bucket[outcome] += 1
+
+    performance_samples = sum(outcomes.values())
+    runs = len(selected)
+    decisions = accept_count + override_count + undetermined_decision_count
+    return {
+        "days": days,
+        "trade_dates": [run["trade_date"] for run in selected],
+        "runs": runs,
+        "success_rate": _rate(success_count, runs),
+        "invalid_output_rate": _rate(invalid_output_count, runs),
+        "rule_fallback_rate": _rate(fallback_count, runs),
+        "recommendation_coverage_rate": _rate(coverage_count, runs),
+        "undetermined_rate": _rate(undetermined_count, runs),
+        "accept_count": accept_count,
+        "override_count": override_count,
+        "undetermined_decision_count": undetermined_decision_count,
+        "accept_rate": _rate(accept_count, decisions),
+        "override_rate": _rate(override_count, decisions),
+        "performance_samples": performance_samples,
+        "outcomes": dict(outcomes),
+        "data_quality": dict(data_quality),
+        "groups": {
+            name: {key: dict(value) for key, value in values.items()}
+            for name, values in grouped.items()
+        },
+    }
+
+
+def _resolve_source_run(
+    conn: sqlite3.Connection,
+    source_date: str,
+    score_run_id: str | None,
+) -> dict[str, Any]:
+    if score_run_id:
+        run = get_score_run(conn, score_run_id)
+        if not run or run["trade_date"] != source_date:
+            raise ValueError("score_run_id does not belong to source_review_date")
+        return run
+    review = Q.get_daily_review(conn, source_date)
+    decision = _factor_decision_from_review(review)
+    if decision and decision.get("score_run_id"):
+        run = get_score_run(conn, str(decision["score_run_id"]))
+        if run and run["trade_date"] == source_date:
+            return run
+    runs = list_score_runs(conn, trade_date=source_date, limit=50)
+    for run in runs:
+        if run.get("system_recommendation_json"):
+            return run
+    raise ValueError("no score run exists for strict source review date")
+
+
+def _factor_code(value: Any, *, required: bool = False) -> str | None:
+    if value in (None, "") and not required:
+        return None
+    if not isinstance(value, str) or value not in FACTOR_CODES:
+        raise ValueError(f"unknown factor code: {value}")
+    return value
+
+
+def _supporting_codes(items: Any) -> list[str]:
+    values = []
+    for item in items if isinstance(items, list) else []:
+        value = item.get("factor_code") if isinstance(item, Mapping) else item
+        code = _factor_code(value)
+        if code and code not in values:
+            values.append(code)
+    return values[:2]
+
+
+def _validate_supporting(items: Any, *, primary: str) -> list[str]:
+    if not isinstance(items, list):
+        raise ValueError("supporting_factors must be a list")
+    if len(items) > 2:
+        raise ValueError("supporting_factors can contain at most two factors")
+    codes = [_factor_code(item, required=True) for item in items]
+    if len(codes) != len(set(codes)) or primary in codes:
+        raise ValueError("supporting_factors must be unique and exclude primary")
+    return [str(code) for code in codes]
+
+
+def _parse_json_object(value: Any) -> dict[str, Any]:
+    if isinstance(value, Mapping):
+        return dict(value)
+    if not isinstance(value, str) or not value.strip():
+        return {}
+    try:
+        parsed = json.loads(value)
+    except (TypeError, json.JSONDecodeError):
+        return {"notes": value}
+    return dict(parsed) if isinstance(parsed, Mapping) else {}
+
+
+def _factor_decision_from_review(review: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    if not review:
+        return None
+    step8 = _parse_json_object(review.get("step8_plan"))
+    decision = step8.get("factor_decision")
+    return dict(decision) if isinstance(decision, Mapping) else None
+
+
+def _llm_top_code(scores: Any) -> str | None:
+    if not isinstance(scores, list) or not scores:
+        return None
+    rows = [row for row in scores if isinstance(row, Mapping)]
+    if not rows:
+        return None
+    top = sorted(
+        rows,
+        key=lambda row: (-float(row.get("total_score") or 0), str(row.get("factor_code") or "")),
+    )[0]
+    return _factor_code(top.get("factor_code"))
+
+
+def _evaluation_id(source_date: str, evaluation_date: str, run_id: str) -> str:
+    digest = hashlib.sha256(
+        f"{source_date}|{evaluation_date}|{run_id}".encode("utf-8")
+    ).hexdigest()[:24]
+    return f"factor-eval-{digest}"
+
+
+def _group_bucket() -> dict[str, int]:
+    return {"runs": 0, "hit": 0, "partial": 0, "miss": 0}
+
+
+def _primary_score(scores: Any, primary_code: str | None) -> float | None:
+    if not primary_code or not isinstance(scores, list):
+        return None
+    row = next(
+        (
+            item for item in scores
+            if isinstance(item, Mapping) and item.get("factor_code") == primary_code
+        ),
+        None,
+    )
+    try:
+        return float(row.get("total_score")) if row else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _score_bucket(score: float | None) -> str:
+    if score is None:
+        return "undetermined"
+    if score >= 82:
+        return "82-100"
+    if score >= 70:
+        return "70-81"
+    if score >= 60:
+        return "60-69"
+    return "0-59"
+
+
+def _rate(numerator: int, denominator: int) -> float:
+    return round(numerator / denominator, 4) if denominator else 0.0

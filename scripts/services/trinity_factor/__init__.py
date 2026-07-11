@@ -8,6 +8,7 @@ from .runner import (
     SECTOR_PROMPT_VERSION,
     AntigravityStructuredRunner,
     StructuredRunResult,
+    prompt_template_sha256,
 )
 from .selection import select_dominant_factors
 from .validation import (
@@ -24,6 +25,7 @@ __all__ = [
     "FACTOR_PROMPT_VERSION",
     "SECTOR_PROMPT",
     "SECTOR_PROMPT_VERSION",
+    "prompt_template_sha256",
     "parse_factor_response",
     "parse_sector_response",
     "score_factor",

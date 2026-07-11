@@ -201,6 +201,29 @@ def test_valid_raw_json_is_only_accepted_for_success(conn):
         R.insert_score_run(conn, _run(valid_raw_json=None))
 
 
+def test_partial_valid_layer_and_rule_only_results_can_be_cached(conn):
+    R.insert_score_run(conn, _run(
+        "run-sector-failed",
+        status="sector_failed",
+        valid_raw_json={"factor": {"schema_version": "factor-v1"}},
+    ))
+    R.insert_score_run(conn, _run(
+        "run-rule-only",
+        cache_key="cache:rule-only",
+        status="rule_only",
+        valid_raw_json=None,
+        factor_scores_json=None,
+        sector_scores_json=None,
+    ))
+
+    assert R.find_cached_score_run(
+        conn, "cache:2026-07-10:v1"
+    )["score_run_id"] == "run-sector-failed"
+    assert R.find_cached_score_run(
+        conn, "cache:rule-only"
+    )["score_run_id"] == "run-rule-only"
+
+
 @pytest.mark.parametrize("trade_date", ["20260710", "not-a-date"])
 def test_score_run_date_check_rejects_invalid_format(conn, trade_date):
     with pytest.raises(sqlite3.IntegrityError, match="CHECK"):

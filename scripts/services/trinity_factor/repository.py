@@ -83,8 +83,10 @@ def insert_score_run(conn: sqlite3.Connection, record: Mapping[str, Any]) -> str
     valid_raw = record.get("valid_raw_json")
     if status == "success" and valid_raw is None:
         raise ValueError("valid_raw_json is required when status is success")
-    if status != "success" and valid_raw is not None:
-        raise ValueError("valid_raw_json is only allowed when status is success")
+    if status not in {"success", "sector_failed"} and valid_raw is not None:
+        raise ValueError(
+            "valid_raw_json is only allowed for successful validated layers"
+        )
 
     values = []
     for column in _RUN_COLUMNS:
@@ -127,11 +129,12 @@ def find_cached_score_run(
     conn: sqlite3.Connection,
     cache_key: str,
 ) -> dict[str, Any] | None:
-    """返回同一缓存键下最新、可缓存且带有效原始输出的成功记录。"""
+    """返回同一缓存键下最新的完整、部分降级或确定性规则结果。"""
     row = conn.execute(
         "SELECT * FROM daily_review_factor_score_runs "
-        "WHERE cache_key = ? AND is_cacheable = 1 AND status = 'success' "
-        "AND valid_raw_json IS NOT NULL "
+        "WHERE cache_key = ? AND is_cacheable = 1 "
+        "AND status IN ('success', 'sector_failed', 'rule_only') "
+        "AND (status = 'rule_only' OR valid_raw_json IS NOT NULL) "
         "ORDER BY created_at DESC, rowid DESC LIMIT 1",
         (cache_key,),
     ).fetchone()

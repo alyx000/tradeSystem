@@ -722,15 +722,15 @@ def test_migrate_healthy_db_preserves_caller_transaction(tmp_path):
     conn.close()
 
 
-def test_v38_migration_creates_factor_score_run_and_evaluation_tables(tmp_path):
-    conn = get_connection(tmp_path / "v37_factor_scores.db")
-    conn.execute("PRAGMA user_version = 37")
+def test_v39_migration_creates_factor_score_run_and_evaluation_tables(tmp_path):
+    conn = get_connection(tmp_path / "v38_factor_scores.db")
+    conn.execute("PRAGMA user_version = 38")
     conn.commit()
 
     migrate(conn)
 
-    assert CURRENT_SCHEMA_VERSION == 38
-    assert get_schema_version(conn) == 38
+    assert CURRENT_SCHEMA_VERSION == 39
+    assert get_schema_version(conn) == 39
     tables = {
         row["name"]
         for row in conn.execute(
@@ -744,7 +744,7 @@ def test_v38_migration_creates_factor_score_run_and_evaluation_tables(tmp_path):
     conn.close()
 
 
-def test_fresh_v38_factor_score_schema_has_columns_indexes_and_append_only_triggers(conn):
+def test_fresh_v39_factor_score_schema_has_columns_indexes_and_append_only_triggers(conn):
     run_columns = {
         row["name"]
         for row in conn.execute(

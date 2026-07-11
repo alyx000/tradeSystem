@@ -19,7 +19,7 @@ PROJECT_ROOT = SCRIPTS_DIR.parent
 
 # 与 migrate() 中「当前最新」一步一致；新增迁移时递增本常量，并把上一步的
 # set_schema_version(conn, CURRENT_SCHEMA_VERSION) 改为字面量 N（保留历史链）。
-CURRENT_SCHEMA_VERSION = 38
+CURRENT_SCHEMA_VERSION = 39
 
 
 def get_schema_version(conn: sqlite3.Connection) -> int:
@@ -707,10 +707,10 @@ def migrate(conn: sqlite3.Connection) -> None:
         set_schema_version(conn, 37)
         conn.commit()
 
-    if version < 38:
-        logger.info("Applying schema v38: daily review factor score runs + evaluations")
+    if version < 39:
+        logger.info("Applying schema v39: daily review factor score runs + evaluations")
         init_schema(conn)
-        set_schema_version(conn, 38)
+        set_schema_version(conn, 39)
         conn.commit()
 
     # 版本无关兜底:DB 已标记到最新版但 market_timing_signal 缺失/缺列(异常半迁移态/历史遗留)时,
