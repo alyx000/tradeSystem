@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from services.recommend.formatter import REDLINE_KEYWORDS
-from utils.antigravity_diagnostics import build_diagnostics
+from utils.antigravity_diagnostics import read_text_if_exists
 from utils.llm_cli import LlmCliConfig, build_prompt_command, resolve_config
 
 FACTOR_PROMPT_VERSION = "trinity_factor_score_v1"
@@ -100,8 +100,7 @@ class AntigravityStructuredRunner:
             stable_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
         )
         input_digest = _sha256(canonical_input)
-        prompt_template = _compose_prompt(prompt_version, prompt, "{CANONICAL_INPUT}")
-        prompt_sha256 = _sha256(prompt_template)
+        prompt_sha256 = prompt_template_sha256(prompt_version, prompt)
         runtime_version = f"python-{platform.python_version()}"
 
         missing_config = [
@@ -202,14 +201,11 @@ class AntigravityStructuredRunner:
                 stdout = str(getattr(completed, "stdout", "") or "")
                 stderr = str(getattr(completed, "stderr", "") or "")
                 returncode = int(getattr(completed, "returncode", 0) or 0)
-                diagnostics = build_diagnostics(
-                    stdout="",
+                terminal_failure = _detect_terminal_failure(
+                    stdout=stdout,
                     stderr=stderr,
-                    log_file=log_file,
-                    reason="antigravity_failed",
-                    returncode=returncode,
+                    log_text=read_text_if_exists(log_file),
                 )
-                global_reason = _terminal_reason(diagnostics)
                 last_sha = _sha256(stdout) if stdout else None
                 validation_error: ValueError | TypeError | json.JSONDecodeError | None = None
                 if returncode == 0 and stdout.strip():
@@ -239,10 +235,11 @@ class AntigravityStructuredRunner:
                             diagnostics=None,
                         )
 
-                if global_reason in {"quota_exhausted", "auth_required", "timeout"}:
+                if terminal_failure is not None:
+                    terminal_reason, terminal_message = terminal_failure
                     return self._result(
                         started=started,
-                        status=global_reason,
+                        status=terminal_reason,
                         requested_model=requested_model,
                         cli_version=cli_version,
                         prompt_version=prompt_version,
@@ -253,7 +250,14 @@ class AntigravityStructuredRunner:
                         attempt_count=attempt,
                         runtime_version=runtime_version,
                         raw_output_sha256=last_sha,
-                        diagnostics=_safe_diagnostics(diagnostics, log_file),
+                        diagnostics=_safe_diagnostics(
+                            {
+                                "reason": terminal_reason,
+                                "message": terminal_message,
+                                "returncode": returncode,
+                            },
+                            log_file,
+                        ),
                     )
                 if returncode != 0:
                     return self._result(
@@ -269,7 +273,14 @@ class AntigravityStructuredRunner:
                         attempt_count=attempt,
                         runtime_version=runtime_version,
                         raw_output_sha256=last_sha,
-                        diagnostics=_safe_diagnostics(diagnostics, log_file),
+                        diagnostics=_safe_diagnostics(
+                            {
+                                "reason": "runtime_failed",
+                                "message": f"Antigravity exited with returncode {returncode}",
+                                "returncode": returncode,
+                            },
+                            log_file,
+                        ),
                     )
 
                 if not stdout.strip():
@@ -390,6 +401,11 @@ def _compose_prompt(prompt_version: str, prompt: str, canonical_input: str) -> s
     )
 
 
+def prompt_template_sha256(prompt_version: str, prompt: str) -> str:
+    """返回不含本次输入、但覆盖完整安全封装的 Prompt 模板摘要。"""
+    return _sha256(_compose_prompt(prompt_version, prompt, "{CANONICAL_INPUT}"))
+
+
 def _stable_normalize(value: Any) -> Any:
     if isinstance(value, Mapping):
         return {
@@ -435,19 +451,195 @@ def _safe_diagnostics(value: Mapping[str, Any], log_file: Path | None) -> dict[s
     return out
 
 
-def _terminal_reason(diagnostics: Mapping[str, Any]) -> str:
-    reason = str(diagnostics.get("reason") or "")
-    if reason != "timeout":
-        return reason
-    message = str(diagnostics.get("message") or "").lower()
-    benign_markers = (
-        "configured timeout",
-        "print timeout",
-        "print-timeout",
-        "timeout setting",
-        "timeout_seconds",
+_TERMINAL_PATTERNS = (
+    (
+        "quota_exhausted",
+        re.compile(
+            r"^(?:resource_?exhausted\b|http(?:/\S+)?\s+429\b|code\s*=?\s*429\b|"
+            r"code\s*=\s*resource_?exhausted\b|"
+            r"quota\s+(?:reached|exceeded|exhausted)\b|individual\s+quota\b)",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "auth_required",
+        re.compile(
+            r"^(?:not\s+logged\s+in\b|not\s+authenticated\b|unauthenticated\b|"
+            r"code\s*=\s*unauthenticated\b|http(?:/\S+)?\s+401\b|"
+            r"code\s*=?\s*401\b|401\s+unauthorized\b|"
+            r"error\s+getting\s+token\s+source:.*"
+            r"not\s+logged\s+(?:in|into)\b|"
+            r"opening\s+authentication\s+page\b|authorization\s+code\b)",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "timeout",
+        re.compile(
+            r"^(?:internal\s+timeout\b|request\s+timeout\b|model\s+timeout\b|"
+            r"command\s+timeout\b|process\s+(?:timeout|timed\s+out)\b|timed\s+out\b|"
+            r"(?:request|command|operation)\s+timed\s+out\b|timeout\s+after\b|"
+            r"code\s*=\s*deadline_?exceeded\b|(?:context\s+)?deadline\s+exceeded\b)",
+            re.IGNORECASE,
+        ),
+    ),
+)
+
+
+def _detect_terminal_failure(
+    *,
+    stdout: str,
+    stderr: str,
+    log_text: str,
+) -> tuple[str, str] | None:
+    """只识别明确 CLI 错误壳；不让业务文本或 Prompt 回显控制重试策略。"""
+    stdout_segments = _stdout_error_segments(stdout)
+    other_text = f"{stderr}\n{log_text}"
+    other_segments = _explicit_error_segments(other_text)
+    matches: list[tuple[str, str, str]] = []
+    for source, segments in (("stdout", stdout_segments), ("log", other_segments)):
+        for segment in segments:
+            normalized = _strip_log_prefix(segment)
+            for reason, pattern in _TERMINAL_PATTERNS:
+                if pattern.search(normalized):
+                    matches.append((reason, segment.strip(), source))
+                    break
+
+    for preferred in ("quota_exhausted", "auth_required", "timeout"):
+        preferred_matches = [item for item in matches if item[0] == preferred]
+        if preferred == "auth_required":
+            stdout_match = next(
+                (item for item in preferred_matches if item[2] == "stdout"), None
+            )
+            if stdout_match:
+                return stdout_match[0], stdout_match[1]
+            unrecovered = _last_unrecovered_auth_error(other_text)
+            if unrecovered:
+                return preferred, unrecovered
+            continue
+        if preferred_matches:
+            return preferred_matches[0][0], preferred_matches[0][1]
+    return None
+
+
+def _last_unrecovered_auth_error(text: str) -> str | None:
+    """按日志顺序追踪认证状态，只让错误之后的恢复事件消除旧错误。"""
+    auth_pattern = next(
+        pattern for reason, pattern in _TERMINAL_PATTERNS if reason == "auth_required"
     )
-    return "" if any(marker in message for marker in benign_markers) else reason
+    active_error: str | None = None
+    for line in text.splitlines():
+        for part in line.split(";"):
+            normalized = _strip_log_prefix(part)
+            if _is_auth_recovery_event(normalized):
+                active_error = None
+            elif auth_pattern.search(normalized):
+                active_error = part.strip()
+    return active_error
+
+
+def _is_auth_recovery_event(value: str) -> bool:
+    normalized = value.strip()
+    return bool(
+        re.match(
+            r"^(?:(?:trace|debug|info|warn|warning)(?:\s*[:\-]\s*|\s+))?(?:"
+            r"auth\s+succeeded\b|applyauthresult\s*:|"
+            r"experiments\s+refreshed\s+after\s+login\b)",
+            normalized,
+            flags=re.I,
+        )
+    )
+
+
+def _stdout_error_segments(stdout: str) -> list[str]:
+    if not stdout.strip():
+        return []
+    try:
+        payload = json.loads(stdout)
+    except (TypeError, json.JSONDecodeError):
+        return _explicit_error_segments(stdout)
+    if not isinstance(payload, Mapping):
+        return []
+    status = str(payload.get("status") or "").strip().lower()
+    error_value = payload.get("error") if "error" in payload else payload.get("errors")
+    if error_value is None and status not in {"error", "failed", "failure"}:
+        code = payload.get("code")
+        if not (isinstance(code, int) and code >= 400 and "message" in payload):
+            return []
+        error_value = payload
+    elif error_value is None:
+        error_value = payload
+    return _explicit_error_segments("\n".join(_flatten_error_values(error_value)))
+
+
+def _flatten_error_values(value: Any, *, key: str = "") -> list[str]:
+    if isinstance(value, Mapping):
+        out: list[str] = []
+        for child_key, child in value.items():
+            out.extend(_flatten_error_values(child, key=str(child_key)))
+        return out
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        out = []
+        for child in value:
+            out.extend(_flatten_error_values(child, key=key))
+        return out
+    if key.lower() == "code" and str(value) in {"401", "429"}:
+        return [f"code {value}"]
+    return [str(value)]
+
+
+def _explicit_error_segments(text: str) -> list[str]:
+    if not text:
+        return []
+    segments: list[str] = []
+    for line in text.splitlines():
+        for part in line.split(";"):
+            normalized = _strip_log_prefix(part)
+            if any(pattern.search(normalized) for _, pattern in _TERMINAL_PATTERNS):
+                segments.append(part.strip())
+    return segments
+
+
+def _strip_log_prefix(value: str) -> str:
+    text = value.strip()
+    previous = None
+    while text != previous:
+        previous = text
+        text = re.sub(
+            r"^\d{4}-\d{2}-\d{2}[T\s]\d{2}:\d{2}:\d{2}"
+            r"(?:[.,]\d+)?(?:Z|[+\-]\d{2}:?\d{2})?\s*",
+            "",
+            text,
+        )
+        bracket_chain = re.match(r"^(?P<prefix>(?:\[[^\]]+\]\s*)+)", text)
+        if bracket_chain:
+            prefix_tokens = re.findall(r"\[([^\]]+)\]", bracket_chain.group("prefix"))
+            low_level = next(
+                (
+                    token
+                    for token in prefix_tokens
+                    if token.strip().lower() in {"trace", "debug", "info", "warn", "warning"}
+                ),
+                None,
+            )
+            remainder = text[bracket_chain.end() :].lstrip(": \t")
+            if low_level:
+                return f"{low_level.strip().lower()} {remainder}"
+            text = remainder
+        text = re.sub(
+            r"^(?:(?:error|fatal)(?:\s*[:\-]\s*|"
+            r"\s+(?=(?:agy|antigravity|rpc\s+error)\b)))+",
+            "",
+            text,
+            flags=re.I,
+        )
+        text = re.sub(
+            r"^(?:(?:rpc\s+error|agy|antigravity)\s*[:\-]?\s*)+",
+            "",
+            text,
+            flags=re.I,
+        )
+    return text
 
 
 def _sanitize_message(value: str) -> str:

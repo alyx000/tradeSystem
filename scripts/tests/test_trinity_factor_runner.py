@@ -10,6 +10,7 @@ import pytest
 from services.trinity_factor.runner import (
     FACTOR_PROMPT_VERSION,
     AntigravityStructuredRunner,
+    prompt_template_sha256,
 )
 from services.trinity_factor.validation import TrinityValidationError
 
@@ -100,6 +101,9 @@ def test_runner_success_is_sandboxed_versioned_and_auditable(
     assert result.schema_version == _SCHEMA_VERSION
     assert result.ruleset_version == _RULESET_VERSION
     assert len(result.prompt_sha256) == 64
+    assert result.prompt_sha256 == prompt_template_sha256(
+        FACTOR_PROMPT_VERSION, "instructions"
+    )
     assert result.prompt_sha256 != hashlib.sha256(b"instructions").hexdigest()
     assert len(result.input_digest) == 64
     assert result.attempt_count == 1
@@ -298,6 +302,35 @@ def test_generic_nonzero_runtime_failure_does_not_retry(monkeypatch: pytest.Monk
         ("RESOURCE_EXHAUSTED quota exceeded", "quota_exhausted"),
         ("not authenticated; authorization code required", "auth_required"),
         ("internal timeout while waiting for model", "timeout"),
+        (
+            "configured timeout: 180s\ninternal timeout while waiting for model",
+            "timeout",
+        ),
+        (
+            "configured timeout: 180s; internal timeout while waiting for model",
+            "timeout",
+        ),
+        ("process timed out after 240000ms", "timeout"),
+        ("HTTP 429 Too Many Requests", "quota_exhausted"),
+        (
+            "rpc error: code = ResourceExhausted desc = quota reached",
+            "quota_exhausted",
+        ),
+        ("agy: internal timeout while waiting for model", "timeout"),
+        (
+            "2026-07-11 21:03:12,123 ERROR agy: internal timeout while waiting",
+            "timeout",
+        ),
+        ("rpc error: code = DeadlineExceeded desc = model stalled", "timeout"),
+        ("rpc error: code = Unauthenticated desc = login required", "auth_required"),
+        ("HTTP/1.1 401 Unauthorized", "auth_required"),
+        ("request timed out after 180s", "timeout"),
+        ("command timed out after 180s", "timeout"),
+        ("operation timed out after 180s", "timeout"),
+        (
+            "error getting token source: You are not logged into Antigravity",
+            "auth_required",
+        ),
     ],
 )
 def test_zero_exit_global_failure_with_empty_stdout_does_not_retry(
@@ -322,6 +355,357 @@ def test_zero_exit_global_failure_with_empty_stdout_does_not_retry(
     )
 
     assert result.status == expected_status
+    assert result.attempt_count == 1
+    assert attempts == 1
+
+
+def test_terminal_signature_in_invalid_stdout_does_not_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _config(monkeypatch)
+    attempts = 0
+
+    def fake_run(command, **kwargs):
+        nonlocal attempts
+        if command[-1] == "--version":
+            return subprocess.CompletedProcess(command, 0, stdout="1.0", stderr="")
+        attempts += 1
+        return subprocess.CompletedProcess(
+            command, 0, stdout="internal timeout while waiting for model", stderr=""
+        )
+
+    result = _run(
+        AntigravityStructuredRunner(run_command=fake_run),
+        prompt_version=FACTOR_PROMPT_VERSION,
+        prompt="instructions",
+        input_payload={},
+        validator=_validate,
+    )
+
+    assert result.status == "timeout"
+    assert result.attempt_count == 1
+    assert result.valid_raw_json is None
+    assert result.diagnostics["reason"] == "timeout"
+    assert attempts == 1
+
+
+def test_parseable_schema_invalid_business_text_does_not_fake_terminal_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _config(monkeypatch)
+    attempts = 0
+
+    def fake_run(command, **kwargs):
+        nonlocal attempts
+        if command[-1] == "--version":
+            return subprocess.CompletedProcess(command, 0, stdout="1.0", stderr="")
+        attempts += 1
+        stdout = (
+            '{"schema_version":"bad","note":"timeout is a risk; not authenticated"}'
+            if attempts == 1
+            else '{"schema_version":"ok","items":[]}'
+        )
+        return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
+
+    result = _run(
+        AntigravityStructuredRunner(run_command=fake_run),
+        prompt_version=FACTOR_PROMPT_VERSION,
+        prompt="instructions",
+        input_payload={},
+        validator=_validate,
+    )
+
+    assert result.status == "success"
+    assert result.attempt_count == 2
+    assert attempts == 2
+
+
+def test_non_json_business_explanation_does_not_fake_terminal_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _config(monkeypatch)
+    attempts = 0
+
+    def fake_run(command, **kwargs):
+        nonlocal attempts
+        if command[-1] == "--version":
+            return subprocess.CompletedProcess(command, 0, stdout="1.0", stderr="")
+        attempts += 1
+        stdout = (
+            "模型解释：timeout 只是业务风险因子，不是调用故障"
+            if attempts == 1
+            else '{"schema_version":"ok","items":[]}'
+        )
+        return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
+
+    result = _run(
+        AntigravityStructuredRunner(run_command=fake_run),
+        prompt_version=FACTOR_PROMPT_VERSION,
+        prompt="instructions",
+        input_payload={},
+        validator=_validate,
+    )
+
+    assert result.status == "success"
+    assert result.attempt_count == 2
+    assert attempts == 2
+
+
+def test_echoed_business_text_in_stderr_does_not_control_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _config(monkeypatch)
+    attempts = 0
+
+    def fake_run(command, **kwargs):
+        nonlocal attempts
+        if command[-1] == "--version":
+            return subprocess.CompletedProcess(command, 0, stdout="1.0", stderr="")
+        attempts += 1
+        stdout = "" if attempts == 1 else '{"schema_version":"ok","items":[]}'
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=stdout,
+            stderr="prompt evidence says timeout is a business risk",
+        )
+
+    result = _run(
+        AntigravityStructuredRunner(run_command=fake_run),
+        prompt_version=FACTOR_PROMPT_VERSION,
+        prompt="instructions",
+        input_payload={},
+        validator=_validate,
+    )
+
+    assert result.status == "success"
+    assert result.attempt_count == 2
+    assert attempts == 2
+
+
+@pytest.mark.parametrize(
+    "stderr",
+    [
+        "INFO: request timeout is a business factor",
+        "DEBUG: quota exceeded is quoted from teacher notes",
+    ],
+)
+def test_non_error_log_levels_never_promote_business_echo_to_terminal(
+    monkeypatch: pytest.MonkeyPatch, stderr: str
+) -> None:
+    _config(monkeypatch)
+    attempts = 0
+
+    def fake_run(command, **kwargs):
+        nonlocal attempts
+        if command[-1] == "--version":
+            return subprocess.CompletedProcess(command, 0, stdout="1.0", stderr="")
+        attempts += 1
+        stdout = "" if attempts == 1 else '{"schema_version":"ok","items":[]}'
+        return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr=stderr)
+
+    result = _run(
+        AntigravityStructuredRunner(run_command=fake_run),
+        prompt_version=FACTOR_PROMPT_VERSION,
+        prompt="instructions",
+        input_payload={},
+        validator=_validate,
+    )
+
+    assert result.status == "success"
+    assert result.attempt_count == 2
+    assert attempts == 2
+
+
+@pytest.mark.parametrize(
+    "recovery_line",
+    ["Auth succeeded", "INFO: Auth succeeded", "INFO - Auth succeeded"],
+)
+def test_recovered_auth_log_does_not_block_retry(
+    monkeypatch: pytest.MonkeyPatch, recovery_line: str
+) -> None:
+    _config(monkeypatch)
+    attempts = 0
+
+    def fake_run(command, **kwargs):
+        nonlocal attempts
+        if command[-1] == "--version":
+            return subprocess.CompletedProcess(command, 0, stdout="1.0", stderr="")
+        attempts += 1
+        stdout = "" if attempts == 1 else '{"schema_version":"ok","items":[]}'
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=stdout,
+            stderr=f"ERROR: not authenticated\n{recovery_line}",
+        )
+
+    result = _run(
+        AntigravityStructuredRunner(run_command=fake_run),
+        prompt_version=FACTOR_PROMPT_VERSION,
+        prompt="instructions",
+        input_payload={},
+        validator=_validate,
+    )
+
+    assert result.status == "success"
+    assert attempts == 2
+
+
+def test_explicit_json_error_envelope_is_terminal_and_diagnostics_match(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _config(monkeypatch)
+    attempts = 0
+
+    def fake_run(command, **kwargs):
+        nonlocal attempts
+        if command[-1] == "--version":
+            return subprocess.CompletedProcess(command, 0, stdout="1.0", stderr="")
+        attempts += 1
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout='{"error":{"code":429,"message":"quota exceeded"}}',
+            stderr="",
+        )
+
+    result = _run(
+        AntigravityStructuredRunner(run_command=fake_run),
+        prompt_version=FACTOR_PROMPT_VERSION,
+        prompt="instructions",
+        input_payload={},
+        validator=_validate,
+    )
+
+    assert result.status == "quota_exhausted"
+    assert result.diagnostics["reason"] == "quota_exhausted"
+    assert result.attempt_count == 1
+    assert attempts == 1
+
+
+def test_explicit_json_401_error_envelope_is_terminal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _config(monkeypatch)
+    attempts = 0
+
+    def fake_run(command, **kwargs):
+        nonlocal attempts
+        if command[-1] == "--version":
+            return subprocess.CompletedProcess(command, 0, stdout="1.0", stderr="")
+        attempts += 1
+        stdout = (
+            '{"error":{"code":401,"message":"Unauthorized"}}'
+            if attempts == 1
+            else '{"schema_version":"ok","items":[]}'
+        )
+        return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
+
+    result = _run(
+        AntigravityStructuredRunner(run_command=fake_run),
+        prompt_version=FACTOR_PROMPT_VERSION,
+        prompt="instructions",
+        input_payload={},
+        validator=_validate,
+    )
+
+    assert result.status == "auth_required"
+    assert result.attempt_count == 1
+    assert attempts == 1
+
+
+def test_low_level_log_in_prefixed_chain_never_becomes_terminal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _config(monkeypatch)
+    attempts = 0
+
+    def fake_run(command, **kwargs):
+        nonlocal attempts
+        if command[-1] == "--version":
+            return subprocess.CompletedProcess(command, 0, stdout="1.0", stderr="")
+        attempts += 1
+        stdout = "" if attempts == 1 else '{"schema_version":"ok","items":[]}'
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=stdout,
+            stderr="[thread-1] [INFO] request timeout is a business factor",
+        )
+
+    result = _run(
+        AntigravityStructuredRunner(run_command=fake_run),
+        prompt_version=FACTOR_PROMPT_VERSION,
+        prompt="instructions",
+        input_payload={},
+        validator=_validate,
+    )
+
+    assert result.status == "success"
+    assert result.attempt_count == 2
+    assert attempts == 2
+
+
+def test_auth_recovery_before_later_error_does_not_hide_terminal_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _config(monkeypatch)
+    attempts = 0
+
+    def fake_run(command, **kwargs):
+        nonlocal attempts
+        if command[-1] == "--version":
+            return subprocess.CompletedProcess(command, 0, stdout="1.0", stderr="")
+        attempts += 1
+        stdout = "" if attempts == 1 else '{"schema_version":"ok","items":[]}'
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=stdout,
+            stderr="Auth succeeded\nERROR: not authenticated",
+        )
+
+    result = _run(
+        AntigravityStructuredRunner(run_command=fake_run),
+        prompt_version=FACTOR_PROMPT_VERSION,
+        prompt="instructions",
+        input_payload={},
+        validator=_validate,
+    )
+
+    assert result.status == "auth_required"
+    assert result.attempt_count == 1
+    assert attempts == 1
+
+
+def test_stdout_auth_envelope_is_not_hidden_by_recovery_log(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _config(monkeypatch)
+    attempts = 0
+
+    def fake_run(command, **kwargs):
+        nonlocal attempts
+        if command[-1] == "--version":
+            return subprocess.CompletedProcess(command, 0, stdout="1.0", stderr="")
+        attempts += 1
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout='{"error":{"code":401,"message":"Unauthorized"}}',
+            stderr="Auth succeeded",
+        )
+
+    result = _run(
+        AntigravityStructuredRunner(run_command=fake_run),
+        prompt_version=FACTOR_PROMPT_VERSION,
+        prompt="instructions",
+        input_payload={},
+        validator=_validate,
+    )
+
+    assert result.status == "auth_required"
     assert result.attempt_count == 1
     assert attempts == 1
 
