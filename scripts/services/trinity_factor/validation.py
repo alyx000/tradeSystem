@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 from collections.abc import Iterable, Mapping, Sequence
 from numbers import Real
+import unicodedata
 
 from services.recommend.formatter import REDLINE_KEYWORDS
 
@@ -211,14 +212,32 @@ def _validate_references(row: Mapping, spec: Mapping, context: str) -> dict[str,
 
 
 def _validate_reason(value: object, context: str) -> str:
-    if not isinstance(value, str) or not value.startswith("[判断]"):
+    if not isinstance(value, str):
         raise TrinityValidationError(f"{context} must start with [判断]")
-    if len(value) > MAX_REASON_LENGTH:
+    normalized = unicodedata.normalize("NFKC", value)
+    normalized = "".join(
+        char for char in normalized
+        if unicodedata.category(char) not in {"Cf", "Cc"}
+    )
+    if not normalized.startswith("[判断]"):
+        raise TrinityValidationError(f"{context} must start with [判断]")
+    if len(normalized) > MAX_REASON_LENGTH:
         raise TrinityValidationError(f"{context} exceeds {MAX_REASON_LENGTH} characters")
+    compact = "".join(
+        char for char in normalized
+        if not char.isspace() and not unicodedata.category(char).startswith("P")
+    )
     for keyword in REDLINE_KEYWORDS:
-        if keyword in value:
+        normalized_keyword = unicodedata.normalize("NFKC", keyword)
+        compact_keyword = "".join(
+            char for char in normalized_keyword
+            if unicodedata.category(char) not in {"Cf", "Cc"}
+            and not char.isspace()
+            and not unicodedata.category(char).startswith("P")
+        )
+        if compact_keyword in compact:
             raise TrinityValidationError(f"{context} contains redline keyword: {keyword}")
-    return value
+    return normalized
 
 
 def parse_factor_response(raw: str | Mapping, candidates: Sequence[Mapping]) -> list[dict]:

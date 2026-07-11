@@ -1,4 +1,5 @@
 import json
+from fractions import Fraction
 
 import pytest
 
@@ -177,6 +178,33 @@ def test_factor_reason_at_length_limit_is_accepted():
     )
 
     assert result[0]["reason"] == reason
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "[判断] 建\u200b仓风险上升",
+        "[判断] 满\u200b仓风险上升",
+        "[判断] 建　仓风险上升",
+        "[判断] 满 仓风险上升",
+        "[判断] 买，入风险上升",
+    ],
+)
+def test_factor_reason_redline_scan_blocks_obfuscated_variants(reason):
+    with pytest.raises(TrinityValidationError):
+        parse_factor_response(
+            _factor_payload([_factor_row(reason=reason)]),
+            [_factor_candidate()],
+        )
+
+
+def test_safe_reason_is_nfkc_normalized_and_control_characters_are_removed():
+    result = parse_factor_response(
+        _factor_payload([_factor_row(reason="［判断］ 节奏\u200b清晰")]),
+        [_factor_candidate()],
+    )
+
+    assert result[0]["reason"] == "[判断] 节奏清晰"
 
 
 def test_factor_output_is_stable_by_factor_id_not_input_order():
@@ -425,3 +453,19 @@ def test_sector_output_is_stable_by_total_desc_then_id_asc_and_keeps_caps():
 
 def test_empty_sector_candidate_set_is_valid():
     assert parse_sector_response(_sector_payload([]), []) == []
+
+
+def test_parsers_normalize_fraction_program_values_for_json_serialization():
+    factor = parse_factor_response(
+        _factor_payload([_factor_row()]),
+        [_factor_candidate(
+            evidence_quality=Fraction(7, 2),
+            caps={"cross_layer_alignment": Fraction(5, 2)},
+        )],
+    )
+    sector = parse_sector_response(
+        _sector_payload([_sector_row()]),
+        [_sector_candidate(caps={"market_linkage": Fraction(3, 2)})],
+    )
+
+    json.dumps({"factor": factor, "sector": sector})

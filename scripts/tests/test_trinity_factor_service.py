@@ -1,3 +1,6 @@
+from fractions import Fraction
+import json
+
 import pytest
 
 from services import trinity_factor
@@ -185,20 +188,30 @@ def _scored_factor(
     factor_code,
     total_score,
     *,
-    current_dominance=4,
-    rhythm_clarity=3,
+    current_dominance=5,
+    rhythm_clarity=5,
     counterevidence=1,
     evidence_quality=4,
     critical_missing=False,
 ):
+    fixed_score = (
+        6 * current_dominance
+        + 4 * rhythm_clarity
+        - 4 * counterevidence
+        + 2 * evidence_quality
+    )
+    flexible_score = total_score - fixed_score
+    assert 0 <= flexible_score <= 40
+    cross_layer_alignment = min(5, flexible_score / 5)
+    next_stage_relevance = (flexible_score - 5 * cross_layer_alignment) / 3
     return {
         "factor_code": factor_code,
         "total_score": total_score,
         "normalized_scores": {
             "current_dominance": current_dominance,
-            "cross_layer_alignment": 4,
+            "cross_layer_alignment": cross_layer_alignment,
             "rhythm_clarity": rhythm_clarity,
-            "next_stage_relevance": 4,
+            "next_stage_relevance": next_stage_relevance,
             "counterevidence": counterevidence,
         },
         "evidence_quality": evidence_quality,
@@ -289,6 +302,16 @@ def test_market_node_lock_never_falls_through_to_another_factor():
     assert result["undetermined_reason"] == "undetermined_weak"
 
 
+def test_market_node_lock_without_market_node_is_missing_data():
+    result = select_dominant_factors(
+        [_scored_factor("sector_rhythm", 90)],
+        primary_category_lock="market_node",
+    )
+
+    assert result["primary"] is None
+    assert result["undetermined_reason"] == "undetermined_missing_data"
+
+
 def test_critical_missing_downgrades_established_primary_from_high_to_medium():
     result = select_dominant_factors([
         _scored_factor("market_node", 88, critical_missing=True),
@@ -356,3 +379,69 @@ def test_selection_requires_exact_normalized_score_dimensions(mutation):
 
     with pytest.raises(ValueError):
         select_dominant_factors([item])
+
+
+def test_selection_rejects_total_that_does_not_match_canonical_formula():
+    tampered = _scored_factor("market_node", 72)
+    tampered["total_score"] = 100
+
+    with pytest.raises(ValueError, match="canonical"):
+        select_dominant_factors([tampered])
+
+
+def test_score_factor_output_flows_into_selection_without_total_drift():
+    scored = score_factor(
+        factor_code="market_node",
+        dimension_scores={
+            "current_dominance": 5,
+            "cross_layer_alignment": 5,
+            "rhythm_clarity": 5,
+            "next_stage_relevance": 5,
+            "counterevidence": 0,
+        },
+        evidence_quality=5,
+    )
+
+    result = select_dominant_factors([scored])
+
+    assert result["primary"]["factor_code"] == "market_node"
+    assert result["primary"]["total_score"] == 100.0
+
+
+@pytest.mark.parametrize("invalid_caps", [False, [], (), "", 0, [("current_dominance", 3)]])
+@pytest.mark.parametrize("scorer", [score_factor, score_sector])
+def test_public_scorers_reject_non_mapping_caps(scorer, invalid_caps):
+    kwargs = (
+        {
+            "factor_code": "market_node",
+            "dimension_scores": FACTOR_DIMENSIONS,
+            "evidence_quality": 3,
+        }
+        if scorer is score_factor
+        else {
+            "sector_key": "sw2:test",
+            "dimension_scores": SECTOR_DIMENSIONS,
+        }
+    )
+
+    with pytest.raises(ValueError, match="caps"):
+        scorer(**kwargs, caps=invalid_caps)
+
+
+def test_scorers_normalize_fraction_program_values_for_json_serialization():
+    factor = score_factor(
+        factor_code="market_node",
+        dimension_scores=FACTOR_DIMENSIONS,
+        evidence_quality=Fraction(7, 2),
+        caps={"cross_layer_alignment": Fraction(5, 2)},
+    )
+    sector = score_sector(
+        sector_key="sw2:test",
+        dimension_scores=SECTOR_DIMENSIONS,
+        caps={"market_linkage": Fraction(3, 2)},
+    )
+
+    json.dumps({"factor": factor, "sector": sector})
+    assert isinstance(factor["evidence_quality"], (int, float))
+    assert isinstance(factor["normalized_scores"]["cross_layer_alignment"], (int, float))
+    assert isinstance(sector["normalized_scores"]["market_linkage"], (int, float))

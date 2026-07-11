@@ -15,6 +15,38 @@ def _is_score(value: object, *, integer_only: bool) -> bool:
     return 0 <= value <= 5
 
 
+def _as_builtin_number(value: Real) -> int | float:
+    return int(value) if isinstance(value, int) else float(value)
+
+
+def _normalize_caps(
+    caps: Mapping[str, Real] | None,
+    dimensions: Mapping[str, int],
+) -> dict[str, int | float]:
+    if caps is None:
+        return {}
+    if not isinstance(caps, Mapping):
+        raise ValueError("caps must be a mapping or None")
+    if not set(caps).issubset(dimensions):
+        raise ValueError("caps contain an unknown dimension")
+    if any(not _is_score(value, integer_only=False) for value in caps.values()):
+        raise ValueError("caps must be numbers from 0 to 5")
+    return {name: _as_builtin_number(value) for name, value in caps.items()}
+
+
+def calculate_factor_total(
+    normalized_scores: Mapping[str, Real],
+    evidence_quality: Real,
+) -> float:
+    """使用唯一权重公式计算、裁剪并按四位小数规范化因子总分。"""
+    total = sum(
+        FACTOR_WEIGHTS[name] * normalized_scores[name] / 5
+        for name in FACTOR_WEIGHTS
+    )
+    total += 10 * evidence_quality / 5
+    return round(max(0.0, min(100.0, float(total))), 4)
+
+
 def score_factor(
     *,
     factor_code: str,
@@ -37,30 +69,23 @@ def score_factor(
     if not isinstance(critical_missing, bool):
         raise ValueError("critical_missing must be a bool")
 
-    caps = dict(caps or {})
-    if not set(caps).issubset(FACTOR_WEIGHTS):
-        raise ValueError("caps contain an unknown factor dimension")
-    if any(not _is_score(value, integer_only=False) for value in caps.values()):
-        raise ValueError("caps must be numbers from 0 to 5")
+    caps = _normalize_caps(caps, FACTOR_WEIGHTS)
+    normalized_evidence_quality = _as_builtin_number(evidence_quality)
 
     raw_scores = dict(dimension_scores)
     normalized_scores = {
         name: min(value, caps.get(name, value))
         for name, value in raw_scores.items()
     }
-    total = sum(
-        FACTOR_WEIGHTS[name] * normalized_scores[name] / 5
-        for name in FACTOR_WEIGHTS
-    )
-    total += 10 * evidence_quality / 5
+    total_score = calculate_factor_total(normalized_scores, normalized_evidence_quality)
 
     return {
         "factor_code": factor_code,
         "model_scores": raw_scores,
         "normalized_scores": normalized_scores,
-        "evidence_quality": evidence_quality,
+        "evidence_quality": normalized_evidence_quality,
         "critical_missing": critical_missing,
-        "total_score": round(max(0.0, min(100.0, float(total))), 4),
+        "total_score": total_score,
     }
 
 
@@ -80,11 +105,7 @@ def score_sector(
     if any(not _is_score(value, integer_only=True) for value in dimension_scores.values()):
         raise ValueError("sector dimension scores must be integers from 0 to 5")
 
-    caps = dict(caps or {})
-    if not set(caps).issubset(SECTOR_WEIGHTS):
-        raise ValueError("caps contain an unknown sector dimension")
-    if any(not _is_score(value, integer_only=False) for value in caps.values()):
-        raise ValueError("caps must be numbers from 0 to 5")
+    caps = _normalize_caps(caps, SECTOR_WEIGHTS)
 
     raw_scores = dict(dimension_scores)
     normalized_scores = {

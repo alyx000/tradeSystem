@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from math import isfinite
+from math import isclose, isfinite
 from numbers import Real
 
 from .constants import FACTOR_CODES, FACTOR_WEIGHTS
+from .scoring import calculate_factor_total
 
 
 def _is_bounded_number(value: object, upper: float) -> bool:
@@ -52,6 +53,16 @@ def _validate_scored_factors(scored_factors: object) -> list[Mapping]:
                 raise ValueError(
                     f"scored_factors[{index}].normalized_scores.{field} must be from 0 to 5"
                 )
+        canonical_total = calculate_factor_total(scores, item["evidence_quality"])
+        if not isclose(
+            item["total_score"],
+            canonical_total,
+            rel_tol=0.0,
+            abs_tol=0.0001,
+        ):
+            raise ValueError(
+                f"scored_factors[{index}].total_score does not match canonical total"
+            )
         validated.append(item)
     return validated
 
@@ -107,6 +118,10 @@ def select_dominant_factors(
         key=lambda item: (-item["total_score"], item["factor_code"]),
     )
     if not ranked:
+        return _empty("undetermined_missing_data")
+    if primary_category_lock and not any(
+        item["factor_code"] == primary_category_lock for item in ranked
+    ):
         return _empty("undetermined_missing_data")
     if primary_category_lock:
         primary = next(
