@@ -1,7 +1,7 @@
 ---
 name: daily-review
 description: 协助用户完成每日「八步复盘法」，自动拉取客观数据、引导填写主观判断，并将复盘写入数据库
-version: "1.5"
+version: "1.6"
 ---
 
 # Skill: 每日复盘（八步复盘法）
@@ -16,6 +16,7 @@ version: "1.5"
 - 「帮我复盘」
 - 「打开复盘工作台」
 - 「看一下今天的复盘预填充」
+- 「做三位一体因子评分 / 看 20 日影子指标」
 
 时激活此 skill。
 
@@ -28,6 +29,8 @@ make review-open DATE=YYYY-MM-DD
 make review-prefill DATE=YYYY-MM-DD
 make notes-search KEYWORD=主线 FROM=YYYY-MM-DD TO=YYYY-MM-DD
 make db-search KEYWORD=情绪 FROM=YYYY-MM-DD TO=YYYY-MM-DD
+python3 main.py review factor-score --date YYYY-MM-DD --input-by USER [--json]
+python3 main.py review factor-metrics [--days 20] [--json]
 ```
 
 需要调试时再使用 API：
@@ -36,6 +39,10 @@ make db-search KEYWORD=情绪 FROM=YYYY-MM-DD TO=YYYY-MM-DD
 - `GET /api/review/{date}`
 - `PUT /api/review/{date}`
 - `POST /api/review/{date}/to-draft`
+- `POST /api/review-factors/{date}/score`
+- `GET /api/review-factors/{date}/evaluation`
+- `PUT /api/review-factors/{date}/evaluation`
+- `GET /api/review-factors/metrics?days=20`
 
 ## 核心流程
 
@@ -55,7 +62,47 @@ make db-search KEYWORD=情绪 FROM=YYYY-MM-DD TO=YYYY-MM-DD
    - 次日计划
    - 每日 22:30 会由 `python3 main.py daily-leaders propose --push` 生成第 5 步「龙头 / 最票」候选确认稿并推送钉钉 Markdown；v1 只作为确认草稿，用户在 Codex 中确认后再由 Agent 执行 `python3 main.py daily-leaders confirm --date YYYY-MM-DD --input-by codex` 写入复盘第 5 步并同步 `leader_tracking`，不要描述为钉钉按钮回调已可写回。
 5. 保存前先给用户一版结构化复盘摘要，用户确认后再写入。
-6. 若用户要把复盘直接衔接到次日计划，保存后调用 `POST /api/review/{date}/to-draft`，只生成 observation / draft，不确认正式计划。
+6. 若处于三位一体 20 日影子期，保存后按下文「三位一体因子影子评分」执行评分与专属人工确认；系统建议不能代替用户确认。
+7. 若用户要把复盘直接衔接到次日计划，保存后调用 `POST /api/review/{date}/to-draft`，只生成 observation / draft，不确认正式计划；当前转换实现只读取 `step1_market` 与 `step2_sectors`，忽略 `step8_plan` 及其 `key_factor / secondary_factors` 兼容镜像，**不得把 factor 评分、确认或回验结果手工补进 `TradeDraft`**。
+
+## 三位一体因子影子评分（20 个有效交易日）
+
+这是复盘内的**影子观察层**，不是交易计划生成器：
+
+1. `factor-score` 从当日复盘第 1～6 步与 `prefill` 生成四张固定因子证据卡：`market_node / sector_rhythm / style_regime / leader_signal`。规则门、证据质量、封顶与总分由程序控制，不喂给 LLM；主观 context 可供解释，但不能抬高客观门槛。
+2. 第 1 层 LLM 只给四因子相对重要度，程序重算后选主因子；只有主因子成立且存在候选时，才进入第 2 层，对确定性排序中的最多 6 个 `candidate_tier=core` 板块评分。`watch/context` 不得升格。所有分数是相对重要度，**不是胜率或买卖建议**。
+3. 因子层失败时不展示数字 LLM 分，只允许唯一规则降级或“不确定”；板块层失败时保留已成立的主因子，并回退到确定性 `core` 排序。`sector_failed` 是完整可展示的部分降级结果，可命中缓存；需要重跑时显式传 `--retry-of-run-id`，新建 append-only 子 run，不覆盖旧 run。
+4. 展示系统建议后，必须让用户三选一：`accepted`（接受）、`overridden`（改选，必须写 `override_reason`）或 `undetermined`（看不懂/不确认）。CLI 入口：
+
+```bash
+python3 main.py review factor-score --date YYYY-MM-DD --input-by USER [--steps-file steps.json] [--no-llm] [--retry-of-run-id RUN_ID] [--json]
+python3 main.py review factor-confirm --date YYYY-MM-DD --run-id RUN_ID --decision-file decision.json --input-by USER [--json]
+```
+
+不带 `--no-llm` 时必须显式配置非空 `LLM_MODEL`；系统不会偷偷选默认模型。`--no-llm` 只跑规则门并产出 `rule_only` 影子建议。
+
+`decision.json` 示例：
+
+```json
+{"status":"accepted"}
+{"status":"overridden","primary_factor":"style_regime","supporting_factors":["market_node"],"override_reason":"人工看到不同连接"}
+{"status":"undetermined","override_reason":"看不懂，继续观察"}
+```
+
+`factor-score` 只追加审计 score run，但仍必须带 `--input-by`：请求者落在 `diagnostics.request.input_by`，不参与 cache key；API 未传时记为 `api`，Web 显式传 `web`。人工确认与回验写入也必须显式标注 `--input-by` / `input_by`。确认只写 `daily_reviews.step8_plan.factor_decision`，并镜像兼容字段 `key_factor / secondary_factors`；其他第 8 步内容必须保留。未确认前不得写入 `factor_decision`。`to-draft` 只读取第 1、2 步，不读取第 8 步或上述兼容镜像；CLI/API/Web 都不得因此创建或更新 `TradeDraft` / `TradePlan`。
+
+### 严格 T+1 与 20 日指标
+
+- 回验日必须是来源复盘日的**严格下一交易日**。程序先只读生成客观建议，人工再确认 `hit / partial / miss / missing_data / not_applicable`；`missing_data` 和 `not_applicable` 不进入表现样本分母。
+- CLI `factor-evaluate` 会合并“生成建议 + 人工确认”两步；`--run-id` 不传时优先取来源日已确认 run，否则取最新可用 run：
+
+```bash
+python3 main.py review factor-evaluate --date T_PLUS_1 --source-date SOURCE_DATE [--run-id RUN_ID] --outcome hit|partial|miss|missing_data|not_applicable --input-by USER [--note TEXT] [--json]
+python3 main.py review factor-metrics [--days 20] [--json]
+```
+
+- “20 日影子模式”是连续积累 20 个有效交易日的评分、人工决定和严格 T+1 回验，再用 `factor-metrics --days 20` 比较成功率、降级率、覆盖率、接受/改选与分组表现；它不是自动定时器或放行开关。影子期内外都禁止把该结果直接送入 `TradeDraft`。
+- API 对应为 `POST /api/review-factors/{date}/score`、`GET/PUT /api/review-factors/{date}/evaluation`、`GET /api/review-factors/metrics?days=20`。评分 body 可带 `input_by`，API 缺省为 `api`，Web 必须传 `web`；因子人工确认没有单独的 `review-factors` endpoint，Web/API 走 `PUT /api/review/{date}` 的 `step8_plan.factor_decision`，同样必须带 `score_run_id / status / input_by`。
 
 ## 保存字段契约
 
@@ -70,6 +117,7 @@ make db-search KEYWORD=情绪 FROM=YYYY-MM-DD TO=YYYY-MM-DD
 - `step7_positions.positions[].action_plan`
   - 涉及"建仓周期"复盘时,可调 `db thesis-review --id N --executed-as-planned {0,1,2} --input-by U [--lessons --discipline-score --exit-trigger]` 写到 `thesis_review` 表(plan precious-crunching-ocean v24)
 - `step8_plan.key_factor / watch_directions / risks / discipline / summary`
+- `step8_plan.factor_decision`（三位一体人工确认：`score_run_id / status / primary_factor / supporting_factors / override_reason / confirmed_at / input_by`；同时镜像 `key_factor / secondary_factors`，但不进入 `TradeDraft`）
 
 `PUT /api/review/{date}` 会兼容摘要式 `facts / judgement / plan / holdings` 写入并轻量映射到页面可见字段，但这只是兜底；正式复盘稿仍应按上面的表单字段组织，避免“API 保存成功但页面看不到重点内容”。
 
@@ -135,6 +183,8 @@ make db-search KEYWORD=情绪 FROM=YYYY-MM-DD TO=YYYY-MM-DD
 - 不要把 `[判断]` 写成 `[事实]`。
 - 不要在用户未确认前直接提交 `PUT /api/review/{date}`。
 - 不要把复盘工作台任务误当成 `TradePlan` 确认流程。
+- 不要把 factor 系统建议自动视为用户决定；必须人工 `accepted / overridden / undetermined` 后才写 `factor_decision`。
+- 不要把 factor score run、`factor_decision`、T+1 回验或 20 日指标写入/转换为 `TradeDraft`、`TradePlan` 或交易池。
 - 不要在用户否定最票推荐后反复质疑——用户拍板即以用户结论为准。
 - **不要在复盘对话里调用 `instance-add` / `validate` / `cognition-refine` 等认知写操作**（见上文「认知联动 · 边界」），需求切到 `cognition-evolution`。
 - 不要把 `cognitions_by_step` 的认知标题或 pattern **当作客观事实**引用——它们是过往沉淀的**判断体系**，需和当日事实对照后再决定是否采纳。

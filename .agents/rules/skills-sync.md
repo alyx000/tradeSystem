@@ -3,6 +3,8 @@ description: 当修改 CLI 或 API 文件时，提醒同步更新 skills 文档
 globs:
   - scripts/db/cli.py
   - scripts/main.py
+  - scripts/cli/review_factors.py
+  - scripts/services/trinity_factor/*.py
   - scripts/api/routes/*.py
   - .agents/skills/**/*.md
   - .cursor/skills/**/*.md
@@ -16,6 +18,7 @@ globs:
 
 - `scripts/db/cli.py` — CLI 子命令定义
 - `scripts/main.py` — 顶层命令注册（pre/post/schedule 等）
+- `scripts/cli/review_factors.py` / `scripts/services/trinity_factor/*.py` — 三位一体评分、人工确认、T+1 与影子指标语义
 - `scripts/api/routes/*.py` — API 路由定义
 - `.agents/skills/**/*.md` — skill 文档本身（真源；`.cursor/skills/` 与 `.claude/skills/` 是 symlink 壳）
 
@@ -41,6 +44,7 @@ globs:
 - [ ] 所有删除的命令已从表中移除
 - [ ] 新增 API 端点已添加到 API 依赖表
 - [ ] `main.py` 新增的 `ingest/plan/knowledge` 命令已同步到相关 skill
+- [ ] `review factor-*` 的双层评分、人工确认、严格 T+1、20 日影子指标及“不进入 TradeDraft”边界已同步到 `daily-review` / `sector-projection-analysis`
 - [ ] 若命令已从“骨架”变为真实可执行，移除 `SKILL.md` / `INDEX.md` 中的“规划中/骨架”描述
 
 ### 2. 运行 Smoke 测试
@@ -63,7 +67,7 @@ python3 -m pytest scripts/tests/test_cli_smoke.py -v
 
 ### 2.1 新增顶层 subparser 时必加 ARCHITECTURE_COMMANDS
 
-**`scripts/main.py` 新增任何顶层子命令组**（如 `recommend` / `ingest` / `plan` / `knowledge` / `executions` 等），不仅要在 `INDEX.md` 加依赖行，**还必须**：
+**`scripts/main.py` 新增任何顶层子命令组**（如 `review` / `recommend` / `ingest` / `plan` / `knowledge` / `executions` 等），不仅要在 `INDEX.md` 加依赖行，**还必须**：
 
 1. 在 `scripts/tests/test_cli_smoke.py` 的 `ARCHITECTURE_COMMANDS` 数组里**加参数化用例**，覆盖：
    - 子命令的所有 mode（如 `recommend daily` / `recommend weekly`）
@@ -95,11 +99,13 @@ python3 -m pytest scripts/tests/test_cli_smoke.py -v
 | `main.py` 的 `knowledge add-note/list/draft-*` | `knowledge-to-plan/SKILL.md` |
 | `main.py` 的 `knowledge cognition-* / instance-* / review-*` | `cognition-evolution/SKILL.md`（若涉及观点结构化字段、`feedback_action` 或 `evolving_views_json` 聚合，也同步 `INDEX.md` 中 cognition-evolution / `/api/cognition/instances` 说明） |
 | `main.py` 的 `executions import / list / audit-export` | `portfolio-manager/SKILL.md`（券商成交流水事实层，与 `db add-trade` 复盘维度分离） |
+| `main.py` / `scripts/cli/review_factors.py` 的 `review factor-*`，或 `scripts/services/trinity_factor/` | `daily-review/SKILL.md`、`sector-projection-analysis/SKILL.md`、`INDEX.md` 与 `AGENTS.md`；必须保留 `factor-score` / 人工确认 / 回验写入都带 `--input-by`（评分请求者写 diagnostics 且不参与 cache key，API/Web 分别记 `api` / `web`）、严格 T+1、默认 20 日影子观察、append-only retry 与“不进入 TradeDraft/TradePlan”边界 |
 | `scripts/cli/executions.py` 任意改动 | `portfolio-manager/SKILL.md` + `INDEX.md` 中 `executions ...` 行 |
 | `scripts/services/broker_executions/` 任意改动 | `portfolio-manager/SKILL.md`（若行为契约变更）；任何 schema 字段/UNIQUE 调整还需同步 `INDEX.md` |
 | `scripts/services/trade_thesis/` 或 `scripts/db/schema.py` 中 `trade_mode` 语义/枚举调整 | `portfolio-manager/SKILL.md` + `INDEX.md` 中 `thesis-*` 行 |
 | 仓库维护工作流、CLI/API 对齐、巡检、文档/索引同步 | `repo-maintenance-workflows/SKILL.md` |
 | `api/routes/review.py` | `daily-review/SKILL.md`、`sector-projection-analysis/SKILL.md`（含 `POST /api/review/{date}/to-draft` 时也检查 `plan-workbench/SKILL.md`；若预填字段语义调整，如 `lead_stock` / `emotion_leader` / `capacity_leader`，或保存字段标准化语义调整，同步 Skill 文案） |
+| `api/routes/review_factors.py` | `daily-review/SKILL.md`、`sector-projection-analysis/SKILL.md` 与 `INDEX.md`；评分/回验/metrics 路径必须与 `review factor-*` CLI 共用 service 语义 |
 | `api/routes/planning.py` 中 `/api/plans/*` | `plan-workbench/SKILL.md` |
 | `api/routes/planning.py` 中 `/api/knowledge/*` | `knowledge-to-plan/SKILL.md` |
 
@@ -158,5 +164,5 @@ python3 -m pytest scripts/tests/test_agent_symlinks.py -v
 
 AI Agent（Claude Code / Codex / Cursor）通过 `.agents/skills/` 中的文档了解如何调用 CLI 和 API（`.cursor/skills/` 与 `.claude/skills/` 是 symlink 壳）。
 如果 CLI 签名或 API 接口变更而 skill 文档未更新，Agent 将生成错误的命令，导致数据写入失败。
-尤其是 `scripts/main.py` 中新增的 `ingest`、`plan`、`knowledge` 命令组，以及 `api/routes/planning.py` 中的计划/资料接口，会直接影响 observation / draft / plan / 采集诊断 的协作流。
+尤其是 `scripts/main.py` 中新增的 `review`、`ingest`、`plan`、`knowledge` 命令组，以及 `api/routes/review_factors.py` / `planning.py` 中的复盘评分、计划和资料接口，会直接影响影子评分 / observation / draft / plan / 采集诊断的协作流。
 此规则确保每次底层变更时，skill 文档始终与实际接口保持同步。

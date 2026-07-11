@@ -9,7 +9,7 @@
 
 1. 这是一个 A股/港股短线交易分析系统，AI 负责复盘、分析、整理与执行辅助，**不替代交易决策**。
 2. Agent 写入统一走 CLI 标准入口，**禁止直接写 SQLite、YAML 或手工拼 JSON**。
-3. 所有写入命令必须显式带 `--input-by`；Agent **不得绕过确认直接写 `confirmed` 的 `TradePlan`**。
+3. 所有写入命令必须显式带 `--input-by`；`review factor-score` 也必须记录评分请求者，但该审计字段不参与 cache key。Agent **不得绕过确认直接写 `confirmed` 的 `TradePlan`**。
 4. 所有 AI 输出使用简体中文；涉及技术方案、执行计划、业务逻辑解析时，默认遵循 `.agents/rules/solution-format.md`。
 5. 修改 `scripts/main.py`、`scripts/api/routes/*.py`、`.agents/skills/**/*.md` 后，必须同步更新 `.agents/skills/INDEX.md` 与 `.agents/rules/skills-sync.md`。
 
@@ -49,6 +49,7 @@
 - `python3 main.py plan ...`
 - `python3 main.py knowledge ...`
 - `python3 main.py executions ...`（券商成交流水事实层：`import` / `list` / `audit-export`；`import` 默认严格 thesis 模式 + auto-close 联动）
+- `python3 main.py review factor-score|factor-confirm|factor-evaluate|factor-metrics ...`（八步复盘三位一体影子评分：第 1 层固定四因子、仅在主因子成立时对最多 6 个 `core` 板块做第 2 层评分；LLM 只给相对重要度，规则门与总分由程序控制；`factor-score` 必须带 `--input-by` 并把请求者写入 diagnostics，API 默认记 `api`、Web 显式记 `web`，该字段不进入 cache key；系统建议必须经人工 `accepted / overridden / undetermined` 确认，严格下一交易日做 T+1 回验，默认用 `factor-metrics --days 20` 观察 20 个有效交易日；评分 run 追加写、显式 retry 建子 run，**全链路不生成、不更新 `TradeDraft` / `TradePlan`**）
 - `python3 main.py volume-watch ...`（成交额 Top20 板块集中度：`daily` 采集+落库+渲染+钉钉推送 / `trend` 只读趋势；申万二级口径联动 `get_sector_rankings`，落 `daily_volume_concentration`；`daily` 报告额外含**成交额前50 区间涨幅排名**[独立取前50→`get_stock_daily_range` 算 5/10/20 日涨幅→**申万二级板块榜** + **同花顺概念题材榜**(多标签，复用 `get_ths_member` 反查 + 容器≤300 过滤，concepts 落 `gain_universe_json`)，组按组内涨幅最大个股降序/平手比次大，三档独立榜，全 [事实] 守红线]，经只读 API `/api/market/sector-gain-ranking/{date}`(`rankings`+`concept_rankings`) 在八步复盘「2.板块」双维度展示）
 - `python3 main.py sector-correlation ...`（板块相关性：`daily` 采集+落库+渲染+钉钉 / `matrix` 完整矩阵只读 / `trend` 漂移趋势；Tushare 主源多日活跃选板块[行业成交额 / 概念换手率]+4 指数，多窗 5/20/60 原始相关+剔大盘超额相关+β，落 `sector_correlation_daily`）
 - `python3 main.py market-timing daily|signals ...`（大盘择时观察：6 指数[上证/深成/创业板/科创50/中证2000(微盘股代理)/平均股价(通达信880003 经 pytdx 日线)] 斐波那契时间周期变盘点[双向 swing 拐点起算，命中 5/8/13/21/34/55，多指数同日共振增强] + 底分型生命周期[三K结构 none/forming/confirmed(放量中阳突破前高)/invalid，无状态从 bars 推导抗漏跑] + 市场级客观上下文[两市成交额近20日地量分位/跌停家数/涨跌家数] → 落 `market_timing_signal`[PK(trade_date,index_code) 重跑 refreshed] + MD 只读观察清单 + 钉钉；全标 [判断] 守红线[不预判方向/不出价位/不给买卖建议]；daily 三档=裸[落库+推]/`--no-push`[落库+打印]/`--dry-run`[内存不落不推，历史校准]，`--pivot-index`+`--pivot-date` 手工 swing 覆盖[D3 hybrid，未知指数/非法日期/日期不在窗口 fail-fast]，`signals` 只读看池[`--date`/`--index`/`--json`]；工作日+周日 21:40 per-task launchd[接 trend-leader 21:30 之后]，不进 `schedule`/APScheduler）
