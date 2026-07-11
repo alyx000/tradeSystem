@@ -151,8 +151,10 @@ def _prepare_sector_specs(candidates: Sequence[Mapping]) -> dict[str, dict]:
             raise TrinityValidationError(f"sector candidate {index} has an invalid sector_key")
         if sector_key in specs:
             raise TrinityValidationError(f"duplicate sector candidate: {sector_key}")
-        if raw_spec.get("role") != "core":
-            raise TrinityValidationError(f"sector candidate {sector_key} must have role=core")
+        if raw_spec.get("candidate_tier") != "core":
+            raise TrinityValidationError(
+                f"sector candidate {sector_key} must have candidate_tier=core"
+            )
 
         spec = dict(raw_spec)
         spec["caps"] = _validate_caps(
@@ -286,7 +288,7 @@ def parse_sector_response(raw: str | Mapping, candidates: Sequence[Mapping]) -> 
                 dimension_scores=row["dimension_scores"],
                 caps=spec.get("caps"),
             )
-            scored["role"] = spec["role"]
+            scored["candidate_tier"] = spec["candidate_tier"]
             scored.update(_validate_references(row, spec, f"sector {row['sector_key']}"))
             scored["reason"] = _validate_reason(
                 row["reason"], f"sector {row['sector_key']}.reason"

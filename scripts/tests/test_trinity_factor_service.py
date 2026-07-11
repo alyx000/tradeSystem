@@ -214,6 +214,21 @@ def test_single_eligible_factor_requires_total_at_least_75():
     assert at_threshold["primary"]["factor_code"] == "market_node"
     assert at_threshold["confidence"] == "medium"
 
+    only_scored = select_dominant_factors([
+        _scored_factor("market_node", 75),
+    ])
+    assert only_scored["primary"]["factor_code"] == "market_node"
+
+
+def test_single_eligible_factor_still_requires_eight_point_lead():
+    result = select_dominant_factors([
+        _scored_factor("market_node", 76),
+        _scored_factor("sector_rhythm", 72, evidence_quality=2),
+    ])
+
+    assert result["primary"] is None
+    assert result["undetermined_reason"] == "undetermined_competing"
+
 
 @pytest.mark.parametrize(
     ("factors", "expected_reason"),

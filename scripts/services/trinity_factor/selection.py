@@ -32,12 +32,11 @@ def _undetermined_reason(
     primary: Mapping | None,
     *,
     lead: float,
-    eligible_count: int,
 ) -> str:
     relevant = primary or ranked[0]
     if relevant.get("critical_missing", False) or relevant["evidence_quality"] <= 0:
         return "undetermined_missing_data"
-    if primary is not None and _base_eligible(primary) and eligible_count > 1 and lead < 8:
+    if primary is not None and _base_eligible(primary) and lead < 8:
         return "undetermined_competing"
     if relevant["normalized_scores"]["counterevidence"] > 2:
         return "undetermined_conflicted"
@@ -76,18 +75,17 @@ def select_dominant_factors(
         else float("inf") if not competitors
         else primary["total_score"] - competitors[0]["total_score"]
     )
-    if primary is None or not _base_eligible(primary):
-        established = False
-    elif eligible_count == 1:
-        established = primary["total_score"] >= 75
-    else:
-        established = lead >= 8
+    established = (
+        primary is not None
+        and _base_eligible(primary)
+        and lead >= 8
+        and (eligible_count > 1 or primary["total_score"] >= 75)
+    )
     if not established:
         return _empty(_undetermined_reason(
             ranked,
             primary,
             lead=lead,
-            eligible_count=eligible_count,
         ))
 
     counterevidence = primary["normalized_scores"]["counterevidence"]

@@ -201,7 +201,7 @@ def test_wrapped_or_trailing_text_is_not_accepted_as_strict_json():
 def test_parse_sector_response_validates_recomputes_and_assigns_tier():
     candidates = [{
         "sector_key": "sw2:半导体",
-        "role": "core",
+        "candidate_tier": "core",
         "allowed_evidence_ids": {"ev:sector"},
         "allowed_counter_evidence_ids": {"counter:sector"},
         "allowed_t1_check_ids": {"t1:sector"},
@@ -232,12 +232,13 @@ def test_parse_sector_response_validates_recomputes_and_assigns_tier():
     assert result[0]["sector_key"] == "sw2:半导体"
     assert result[0]["total_score"] == 100.0
     assert result[0]["tier"] == "priority"
+    assert result[0]["candidate_tier"] == "core"
 
 
 def _sector_candidate(sector_key="sector:a", **overrides):
     candidate = {
         "sector_key": sector_key,
-        "role": "core",
+        "candidate_tier": "core",
         "allowed_evidence_ids": {f"ev:{sector_key}"},
         "allowed_counter_evidence_ids": {f"counter:{sector_key}"},
         "allowed_t1_check_ids": {f"t1:{sector_key}"},
@@ -275,13 +276,22 @@ def _sector_payload(rows):
     }
 
 
-@pytest.mark.parametrize("role", ["watch", "context"])
-def test_sector_candidates_must_all_be_core(role):
+@pytest.mark.parametrize("candidate_tier", ["watch", "context"])
+def test_sector_candidates_must_all_be_core(candidate_tier):
     with pytest.raises(TrinityValidationError):
         parse_sector_response(
             _sector_payload([_sector_row()]),
-            [_sector_candidate(role=role)],
+            [_sector_candidate(candidate_tier=candidate_tier)],
         )
+
+
+def test_role_is_not_accepted_as_a_candidate_tier_alias():
+    candidate = _sector_candidate()
+    candidate.pop("candidate_tier")
+    candidate["role"] = "core"
+
+    with pytest.raises(TrinityValidationError):
+        parse_sector_response(_sector_payload([_sector_row()]), [candidate])
 
 
 def test_sector_candidates_are_limited_to_six():
@@ -384,6 +394,7 @@ def test_sector_output_is_stable_by_total_desc_then_id_asc_and_keeps_caps():
     result = parse_sector_response(_sector_payload(rows), candidates)
 
     assert [item["sector_key"] for item in result] == ["sector:a", "sector:b", "sector:c"]
+    assert all(item["candidate_tier"] == "core" for item in result)
     assert result[-1]["total_score"] == 80.0
 
     capped = parse_sector_response(
