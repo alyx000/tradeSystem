@@ -2,19 +2,19 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from math import isfinite
 from numbers import Real
 
-from .constants import FACTOR_CODES
-
-_SELECTION_SCORE_FIELDS = (
-    "current_dominance",
-    "rhythm_clarity",
-    "counterevidence",
-)
+from .constants import FACTOR_CODES, FACTOR_WEIGHTS
 
 
-def _is_number(value: object) -> bool:
-    return isinstance(value, Real) and not isinstance(value, bool)
+def _is_bounded_number(value: object, upper: float) -> bool:
+    return (
+        isinstance(value, Real)
+        and not isinstance(value, bool)
+        and isfinite(value)
+        and 0 <= value <= upper
+    )
 
 
 def _validate_scored_factors(scored_factors: object) -> list[Mapping]:
@@ -33,20 +33,24 @@ def _validate_scored_factors(scored_factors: object) -> list[Mapping]:
             raise ValueError(f"duplicate factor_code: {factor_code}")
         seen_codes.add(factor_code)
 
-        if not _is_number(item.get("total_score")):
-            raise ValueError(f"scored_factors[{index}].total_score must be numeric")
-        if not _is_number(item.get("evidence_quality")):
-            raise ValueError(f"scored_factors[{index}].evidence_quality must be numeric")
+        if not _is_bounded_number(item.get("total_score"), 100):
+            raise ValueError(f"scored_factors[{index}].total_score must be from 0 to 100")
+        if not _is_bounded_number(item.get("evidence_quality"), 5):
+            raise ValueError(f"scored_factors[{index}].evidence_quality must be from 0 to 5")
         if not isinstance(item.get("critical_missing", False), bool):
             raise ValueError(f"scored_factors[{index}].critical_missing must be a bool")
 
         scores = item.get("normalized_scores")
         if not isinstance(scores, Mapping):
             raise ValueError(f"scored_factors[{index}].normalized_scores must be a mapping")
-        for field in _SELECTION_SCORE_FIELDS:
-            if not _is_number(scores.get(field)):
+        if set(scores) != set(FACTOR_WEIGHTS):
+            raise ValueError(
+                f"scored_factors[{index}].normalized_scores must contain exact dimensions"
+            )
+        for field in FACTOR_WEIGHTS:
+            if not _is_bounded_number(scores.get(field), 5):
                 raise ValueError(
-                    f"scored_factors[{index}].normalized_scores.{field} must be numeric"
+                    f"scored_factors[{index}].normalized_scores.{field} must be from 0 to 5"
                 )
         validated.append(item)
     return validated

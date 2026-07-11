@@ -324,3 +324,35 @@ def test_selection_rejects_duplicate_factor_codes():
 def test_selection_rejects_malformed_inputs_with_value_error(malformed):
     with pytest.raises(ValueError):
         select_dominant_factors(malformed)
+
+
+@pytest.mark.parametrize("field", ["total_score", "evidence_quality"])
+@pytest.mark.parametrize("invalid", [float("nan"), float("inf"), -1, 101])
+def test_selection_rejects_nonfinite_or_out_of_range_program_values(field, invalid):
+    item = _scored_factor("market_node", 80)
+    item[field] = invalid if field == "total_score" else (6 if invalid == 101 else invalid)
+
+    with pytest.raises(ValueError):
+        select_dominant_factors([item])
+
+
+@pytest.mark.parametrize("dimension", tuple(FACTOR_WEIGHTS))
+@pytest.mark.parametrize("invalid", [float("nan"), float("inf"), -1, 6])
+def test_selection_rejects_invalid_normalized_score_in_any_dimension(dimension, invalid):
+    item = _scored_factor("market_node", 80)
+    item["normalized_scores"][dimension] = invalid
+
+    with pytest.raises(ValueError):
+        select_dominant_factors([item])
+
+
+@pytest.mark.parametrize("mutation", ["missing", "extra"])
+def test_selection_requires_exact_normalized_score_dimensions(mutation):
+    item = _scored_factor("market_node", 80)
+    if mutation == "missing":
+        item["normalized_scores"].pop("next_stage_relevance")
+    else:
+        item["normalized_scores"]["unexpected"] = 3
+
+    with pytest.raises(ValueError):
+        select_dominant_factors([item])
