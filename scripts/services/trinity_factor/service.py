@@ -50,6 +50,7 @@ class TrinityFactorService:
         review_steps: Mapping[str, Any] | None,
         no_llm: bool = False,
         retry_of_run_id: str | None = None,
+        input_by: str | None = None,
     ) -> dict[str, Any]:
         if conn.in_transaction:
             raise RuntimeError(
@@ -97,7 +98,9 @@ class TrinityFactorService:
         sector_scores: list[dict[str, Any]] | None = None
         valid_raw: dict[str, Any] = {}
         raw_hashes: dict[str, str] = {}
-        diagnostics: dict[str, Any] = {}
+        diagnostics: dict[str, Any] = {
+            "request": {"input_by": str(input_by or "system").strip()[:120] or "system"}
+        }
 
         if no_llm:
             status = "rule_only"

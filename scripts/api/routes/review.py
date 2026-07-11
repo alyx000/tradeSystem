@@ -20,6 +20,7 @@ from db.dual_write import (
 )
 from services.holding_signals import build_holding_signals
 from services.review_leaders import sync_leader_tracking_from_step5
+from services.trinity_factor.review_input import validate_trade_date
 
 router = APIRouter(prefix="/api/review", tags=["review"])
 
@@ -73,7 +74,10 @@ _COGNITION_PER_STEP_LIMIT = 5
 def _validate_date(date: str) -> str:
     if not _DATE_RE.match(date):
         raise HTTPException(422, f"Invalid date format: {date}")
-    return date
+    try:
+        return validate_trade_date(date)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
 
 
 _REVIEW_STEP_KEYS: tuple[str, ...] = (
@@ -1330,6 +1334,11 @@ def get_review(date: str, conn: sqlite3.Connection = Depends(get_db_conn)):
 @router.get("/{date}/prefill")
 def get_prefill(date: str, conn: sqlite3.Connection = Depends(get_db_conn)):
     date = _validate_date(date)
+    return build_review_prefill(conn, date)
+
+
+def build_review_prefill(conn: sqlite3.Connection, date: str) -> dict[str, Any]:
+    """构造复盘预填载荷；调用方负责先校验日期，函数本身不依赖 FastAPI。"""
     market = Q.get_daily_market(conn, date)
     market_for_signals = dict(market) if market else None
     env = parse_post_market_envelope(market.get("raw_data") if market else None)
@@ -1473,6 +1482,24 @@ def review_to_draft(date: str, body: Optional[dict] = None, registry=Depends(get
 def save_review(date: str, body: dict, conn: sqlite3.Connection = Depends(get_db_conn)):
     date = _validate_date(date)
     body = _normalize_review_payload_for_display(body)
+    step8 = body.get("step8_plan")
+    if isinstance(step8, str):
+        try:
+            parsed_step8 = json.loads(step8)
+        except json.JSONDecodeError:
+            parsed_step8 = None
+        if isinstance(parsed_step8, dict):
+            step8 = parsed_step8
+    if isinstance(step8, dict) and isinstance(step8.get("factor_decision"), dict):
+        from services.trinity_factor.cycle import normalize_step8_factor_decision
+        try:
+            body["step8_plan"] = normalize_step8_factor_decision(
+                conn,
+                trade_date=date,
+                step8=step8,
+            )
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
     Q.upsert_daily_review(conn, date, body)
     if "step7_positions" in body:
         tasks = _extract_holding_tasks_from_step7(body.get("step7_positions"))

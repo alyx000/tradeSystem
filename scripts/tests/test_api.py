@@ -3179,3 +3179,163 @@ def test_market_timing_history_to_date_excludes_future(client, db_path):
     conn.close()
     data = client.get("/api/market/timing/history?days=30&to_date=2026-06-11").json()
     assert [p["date"] for p in data["series"]] == ["2026-06-10", "2026-06-11"]  # 不含 06-12
+
+
+# ──────────────────────────────────────────────────────────────
+# 三位一体因子评分 / 人工确认 / 严格 T+1
+# ──────────────────────────────────────────────────────────────
+
+def _seed_factor_score_run(db_path, *, run_id="api-run-1", trade_date="2026-07-10"):
+    from services.trinity_factor.repository import insert_score_run
+
+    conn = get_connection(db_path)
+    insert_score_run(conn, {
+        "score_run_id": run_id,
+        "trade_date": trade_date,
+        "retry_of_run_id": None,
+        "cache_key": f"cache-{run_id}",
+        "input_digest": f"digest-{run_id}",
+        "is_cacheable": True,
+        "provider": "rules",
+        "requested_model": "disabled",
+        "actual_model": None,
+        "cli_version": None,
+        "runtime_version": "python-test",
+        "prompt_versions_json": {"factor": "factor-v1", "sector": "sector-v1"},
+        "prompt_sha256_json": {"factor": "p1", "sector": "p2"},
+        "schema_version": "score-v1",
+        "ruleset_version": "rules-v1",
+        "evidence_snapshot_json": {},
+        "rule_gate_json": {"rule_fallback_code": "market_node"},
+        "factor_scores_json": None,
+        "sector_scores_json": None,
+        "system_recommendation_json": {
+            "primary": {"factor_code": "market_node"},
+            "supporting": [{"factor_code": "sector_rhythm"}],
+            "recommendation_source": "rule_fallback",
+        },
+        "valid_raw_json": None,
+        "raw_output_sha256_json": None,
+        "diagnostics_json": {},
+        "status": "rule_only",
+        "attempt_count": 0,
+        "duration_ms": 0,
+    })
+    conn.commit()
+    conn.close()
+
+
+def test_review_factor_score_no_llm_and_cache(client):
+    body = {
+        "no_llm": True,
+        "steps": {
+            "step1_market": {"notes": "大盘结构待确认"},
+            "step6_nodes": {"systemic_risk": True},
+        },
+    }
+
+    first = client.post("/api/review-factors/2026-07-10/score", json=body)
+    second = client.post("/api/review-factors/2026-07-10/score", json=body)
+
+    assert first.status_code == 200
+    assert first.json()["status"] == "rule_only"
+    assert first.json()["factor_scores"] is None
+    assert second.status_code == 200
+    assert second.json()["score_run_id"] == first.json()["score_run_id"]
+    assert second.json()["cache_hit"] is True
+    assert client.post(
+        "/api/review-factors/2026-07-10/score", json={"no_llm": "yes"}
+    ).status_code == 422
+
+
+def test_review_factor_score_rejects_invalid_calendar_date(client):
+    response = client.post(
+        "/api/review-factors/2026-99-99/score",
+        json={"no_llm": True},
+    )
+
+    assert response.status_code == 422
+    assert "invalid calendar date" in response.text.lower()
+
+
+def test_review_put_validates_factor_decision_and_syncs_legacy(client, db_path):
+    _seed_factor_score_run(db_path)
+
+    response = client.put("/api/review/2026-07-10", json={
+        "step8_plan": {
+            "summary": {"one_sentence": "保留字段"},
+            "factor_decision": {
+                "score_run_id": "api-run-1",
+                "status": "accepted",
+                "input_by": "web",
+            },
+        }
+    })
+
+    assert response.status_code == 200
+    stored = client.get("/api/review/2026-07-10").json()
+    step8 = json.loads(stored["step8_plan"])
+    assert step8["factor_decision"]["primary_factor"] == "market_node"
+    assert step8["key_factor"] == "market_node"
+    assert step8["secondary_factors"] == ["sector_rhythm"]
+    assert step8["summary"] == {"one_sentence": "保留字段"}
+
+    invalid = client.put("/api/review/2026-07-10", json={
+        "step8_plan": {
+            "factor_decision": {
+                "score_run_id": "api-run-1",
+                "status": "overridden",
+                "primary_factor": "style_regime",
+                "input_by": "web",
+            }
+        }
+    })
+    assert invalid.status_code == 422
+    assert "override_reason" in invalid.text
+
+
+def test_review_factor_evaluation_is_strict_and_confirmable(client, db_path):
+    _seed_factor_score_run(db_path)
+    conn = get_connection(db_path)
+    Q.upsert_trade_calendar(conn, [
+        {"date": "2026-07-10", "is_open": 1},
+        {"date": "2026-07-11", "is_open": 0},
+        {"date": "2026-07-13", "is_open": 1},
+    ])
+    conn.close()
+
+    suggestion = client.get(
+        "/api/review-factors/2026-07-13/evaluation",
+        params={"source_date": "2026-07-10", "score_run_id": "api-run-1"},
+    )
+    assert suggestion.status_code == 200
+    assert suggestion.json()["system_outcome"] == "not_applicable"
+    assert suggestion.json()["source_review_date"] == "2026-07-10"
+
+    confirmed = client.put("/api/review-factors/2026-07-13/evaluation", json={
+        "source_date": "2026-07-10",
+        "score_run_id": "api-run-1",
+        "confirmed_outcome": "not_applicable",
+        "evaluation_note": "当日未完成复盘",
+        "input_by": "web",
+    })
+    assert confirmed.status_code == 200
+    assert confirmed.json()["confirmed_outcome"] == "not_applicable"
+
+    wrong_day = client.get(
+        "/api/review-factors/2026-07-11/evaluation",
+        params={"source_date": "2026-07-10", "score_run_id": "api-run-1"},
+    )
+    assert wrong_day.status_code == 422
+    assert "strict next trade date" in wrong_day.text
+
+
+def test_review_factor_metrics_endpoint(client, db_path):
+    _seed_factor_score_run(db_path)
+
+    response = client.get("/api/review-factors/metrics", params={"days": 20})
+
+    assert response.status_code == 200
+    assert response.json()["runs"] == 1
+    assert response.json()["days"] == 20
+    assert client.get("/api/review-factors/metrics", params={"days": 0}).status_code == 422

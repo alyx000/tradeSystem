@@ -1806,6 +1806,10 @@ def build_parser() -> argparse.ArgumentParser:
     from cli.board_break import register_subparser as register_board_break_subparser
     register_board_break_subparser(subparsers)
 
+    # review factor (三位一体双层评分 + 人工确认 + T+1 回验)
+    from cli.review_factors import register_subparser as register_review_factor_subparser
+    register_review_factor_subparser(subparsers)
+
     # db
     from db.cli import register_db_subparser
     register_db_subparser(subparsers)
@@ -1888,6 +1892,9 @@ def main():
     elif args.command == "board-break":
         from cli import board_break as board_break_module
         board_break_module.handle_command(config, args)
+    elif args.command == "review":
+        from cli import review_factors as review_factors_module
+        review_factors_module.handle_command(config, args)
     elif args.command == "db":
         from db.cli import handle_db_command
         handle_db_command(args)
