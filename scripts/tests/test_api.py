@@ -2671,6 +2671,356 @@ class TestEnrichMarketRow:
         assert robot["facts"]["capacity_leader"] is None
         assert robot["facts"]["lead_stock"] is None
 
+    def test_prefill_uses_main_themes_as_of_target_date(self, client, db_path):
+        self._seed(
+            db_path,
+            raw_data={
+                "sector_rhythm_industry": [
+                    {"name": "电池", "phase": "发酵", "confidence": "中", "change_today": 2.0},
+                ],
+            },
+        )
+        conn = get_connection(db_path)
+        Q.upsert_main_theme(
+            conn,
+            {"date": "2026-05-18", "theme_name": "电池", "status": "active"},
+        )
+        Q.upsert_main_theme(
+            conn,
+            {"date": "2026-05-19", "theme_name": "AI", "status": "active"},
+        )
+        Q.upsert_main_theme(
+            conn,
+            {"date": "2026-05-20", "theme_name": "AI", "status": "fading"},
+        )
+        Q.upsert_main_theme(
+            conn,
+            {"date": "2026-05-21", "theme_name": "未来主线", "status": "active"},
+        )
+        conn.commit()
+        conn.close()
+
+        data = client.get("/api/review/2026-05-20/prefill").json()
+
+        assert [(item["theme_name"], item["date"]) for item in data["main_themes"]] == [
+            ("电池", "2026-05-18"),
+        ]
+        candidate_names = {
+            item["sector_name"]
+            for item in data["review_signals"]["sectors"]["projection_candidates"]
+        }
+        assert "AI" not in candidate_names
+        assert "未来主线" not in candidate_names
+
+    def test_projection_candidates_keep_sector_types_and_leaders_separate(self):
+        from api.routes.review import _build_review_signals, _build_sector_projection_candidates
+
+        market = {
+            "sector_industry": {
+                "data": [{"name": "同名板块", "change_pct": 2.1, "top_stock": "行业龙"}],
+            },
+            "sector_concept": {
+                "data": [{"name": "同名板块", "change_pct": 3.2, "top_stock": "概念龙"}],
+            },
+            "sector_rhythm_industry": [
+                {
+                    "name": "同名板块",
+                    "phase": "启动",
+                    "confidence": "高",
+                    "change_today": 2.1,
+                    "top_stock_today": "行业龙",
+                },
+            ],
+            "sector_rhythm_concept": [
+                {
+                    "name": "同名板块",
+                    "phase": "发酵",
+                    "confidence": "中",
+                    "change_today": 3.2,
+                    "top_stock_today": "概念龙",
+                },
+            ],
+            "top_volume_stocks": [
+                {"rank": 1, "name": "共享叙事龙", "code": "000003.SZ", "amount_billion": 200.0},
+                {"rank": 4, "name": "行业龙", "code": "000001.SZ", "amount_billion": 80.0},
+                {"rank": 5, "name": "概念龙", "code": "000002.SZ", "amount_billion": 70.0},
+            ],
+            "limit_up": {
+                "stocks": [
+                    {
+                        "name": "共享叙事龙",
+                        "code": "000003.SZ",
+                        "limit_times": 3,
+                        "amount_billion": 80.0,
+                    },
+                ],
+            },
+        }
+        signals = _build_review_signals(market)
+
+        rows = _build_sector_projection_candidates(
+            trade_date="2026-05-20",
+            market=market,
+            post_market_env={"raw_data": {"limit_up": market["limit_up"]}},
+            main_themes=[
+                {
+                    "date": "2026-05-20",
+                    "theme_name": "同名板块",
+                    "status": "active",
+                    "key_stocks": ["共享叙事龙"],
+                },
+            ],
+            teacher_notes=[],
+            industry_info=[],
+            sector_signals=signals.get("sectors"),
+        )
+
+        by_key = {item["sector_key"]: item for item in rows}
+        assert set(by_key) == {"industry:同名板块", "concept:同名板块"}
+        assert by_key["industry:同名板块"]["sector_type"] == "industry"
+        assert by_key["concept:同名板块"]["sector_type"] == "concept"
+        assert by_key["industry:同名板块"]["facts"]["lead_stock"] == "行业龙"
+        assert by_key["concept:同名板块"]["facts"]["lead_stock"] == "概念龙"
+        assert all(item["candidate_tier"] == "core" for item in by_key.values())
+        assert all(item["data_status"] == "ok" for item in by_key.values())
+        for item in by_key.values():
+            assert {"source_tags", "facts", "key_stocks", "evidence_text"} <= item.keys()
+            assert item["rank_reason"]
+            assert item["evidence_items"]
+            assert all(evidence["trade_date"] == "2026-05-20" for evidence in item["evidence_items"])
+            assert all(
+                evidence["evidence_id"].startswith("2026-05-20:")
+                for evidence in item["evidence_items"]
+            )
+
+    def test_projection_candidate_hard_gates_and_negative_flow_counter_evidence(self):
+        from api.routes.review import _build_review_signals, _build_sector_projection_candidates
+
+        market = {
+            "sector_industry": {
+                "data": [
+                    {"name": "主线确认", "change_pct": 1.2},
+                    {"name": "双证据", "change_pct": 1.5},
+                    {"name": "模糊主线", "change_pct": 1.1},
+                ],
+            },
+            "sector_concept": {
+                "data": [{"name": "模糊主线", "change_pct": 1.3}],
+            },
+            "sector_rhythm_industry": [
+                {"name": "高节奏", "phase": "启动", "confidence": "高", "change_today": 1.0},
+                {"name": "单证据", "phase": "观察", "confidence": "低", "change_today": 0.5},
+            ],
+            "sector_moneyflow_ths": {
+                "data": [
+                    {"name": "双证据", "net_amount": 2.0, "pct_change": 1.5},
+                    {
+                        "name": "负资金流",
+                        "net_amount": -8.0,
+                        "pct_change": -1.0,
+                        "lead_stock": "负流股",
+                    },
+                ],
+            },
+            "limit_cpt_list": {
+                "data": [
+                    {"rank": 2, "name": "最强概念", "up_nums": 5, "pct_chg": 3.0},
+                    {"rank": 0, "name": "零名次", "up_nums": 5, "pct_chg": 3.0},
+                    {"rank": 2.5, "name": "小数名次", "up_nums": 5, "pct_chg": 3.0},
+                ],
+            },
+            "top_volume_stocks": [
+                {"rank": 1, "name": "负流股", "code": "000009.SZ", "amount_billion": 100.0},
+            ],
+        }
+        signals = _build_review_signals(market)
+
+        rows = _build_sector_projection_candidates(
+            trade_date="2026-05-20",
+            market=market,
+            post_market_env={
+                "raw_data": {
+                    "limit_up": {
+                        "stocks": [
+                            {
+                                "name": "负流股",
+                                "code": "000009.SZ",
+                                "limit_times": 2,
+                                "amount_billion": 30.0,
+                            },
+                        ],
+                    },
+                },
+            },
+            main_themes=[
+                {"date": "2026-05-20", "theme_name": "主线确认", "status": "active"},
+                {"date": "2026-05-20", "theme_name": "模糊主线", "status": "active"},
+            ],
+            teacher_notes=[],
+            industry_info=[
+                {"date": "2026-05-20", "sector_name": "只有资料", "content": "只有逻辑叙事"},
+            ],
+            sector_signals=signals.get("sectors"),
+        )
+
+        by_key = {item["sector_key"]: item for item in rows}
+        assert by_key["industry:高节奏"]["candidate_tier"] == "core"
+        assert by_key["concept:最强概念"]["candidate_tier"] == "core"
+        assert by_key["industry:主线确认"]["candidate_tier"] == "core"
+        assert by_key["industry:双证据"]["candidate_tier"] == "core"
+        assert by_key["industry:单证据"]["candidate_tier"] == "watch"
+        assert by_key["industry:只有资料"]["candidate_tier"] == "context"
+        assert by_key["industry:模糊主线"]["candidate_tier"] == "watch"
+        assert by_key["concept:模糊主线"]["candidate_tier"] == "watch"
+        assert by_key["concept:零名次"]["candidate_tier"] != "core"
+        assert by_key["concept:小数名次"]["candidate_tier"] != "core"
+
+        negative = by_key["industry:负资金流"]
+        assert negative["candidate_tier"] != "core"
+        assert not any(item["polarity"] == "support" for item in negative["evidence_items"])
+        assert any(item["polarity"] == "counter" for item in negative["evidence_items"])
+        assert negative["facts"]["emotion_leader"] is None
+        assert negative["facts"]["capacity_leader"] is None
+        assert negative["facts"]["lead_stock"] is None
+
+    def test_projection_candidates_split_legacy_dc_concepts_from_industries(self):
+        from api.routes.review import _build_review_signals, _build_sector_projection_candidates
+
+        market = {
+            "sector_moneyflow_dc": {
+                "data": [
+                    {
+                        "name": "可控核聚变",
+                        "content_type": "概念",
+                        "net_amount": 2.0e8,
+                        "pct_change": 3.0,
+                    },
+                    {
+                        "name": "电力",
+                        "content_type": "行业",
+                        "net_amount": 1.0e8,
+                        "pct_change": 1.5,
+                    },
+                ],
+            },
+        }
+        signals = _build_review_signals(market)
+
+        rows = _build_sector_projection_candidates(
+            trade_date="2026-05-20",
+            market=market,
+            post_market_env=None,
+            main_themes=[],
+            teacher_notes=[],
+            industry_info=[],
+            sector_signals=signals["sectors"],
+        )
+
+        assert {item["sector_key"] for item in rows} == {
+            "concept:可控核聚变",
+            "industry:电力",
+        }
+
+    @pytest.mark.parametrize(
+        ("market", "expected_status"),
+        [
+            (None, "missing"),
+            (
+                {
+                    "sector_industry": {"data": []},
+                    "sector_concept": {"data": []},
+                    "sector_rhythm_industry": [],
+                    "sector_rhythm_concept": [],
+                    "sector_moneyflow_ths": {"data": []},
+                    "concept_moneyflow_ths": {"data": []},
+                    "limit_cpt_list": {"data": []},
+                },
+                "source_ok_empty",
+            ),
+            (
+                {
+                    "sector_rhythm_concept": {
+                        "status": "source_failed",
+                        "error": "provider unavailable",
+                    },
+                },
+                "source_failed",
+            ),
+            (
+                {"sector_rhythm_concept": {"status": "missing"}},
+                "missing",
+            ),
+            (
+                {"sector_rhythm_concept": {"status": "rule_filtered_empty"}},
+                "rule_filtered_empty",
+            ),
+            (
+                {
+                    "limit_cpt_list": {
+                        "data": [{"rank": 4, "name": "叙事板块", "up_nums": 0, "pct_chg": 0}],
+                    },
+                },
+                "rule_filtered_empty",
+            ),
+        ],
+    )
+    def test_projection_candidate_data_status_is_explicit(self, market, expected_status):
+        from api.routes.review import _build_review_signals, _build_sector_projection_candidates
+
+        rows = _build_sector_projection_candidates(
+            trade_date="2026-05-20",
+            market=market,
+            post_market_env=None,
+            main_themes=[
+                {"date": "2026-05-20", "theme_name": "叙事板块", "status": "active"},
+            ],
+            teacher_notes=[],
+            industry_info=[],
+            sector_signals=_build_review_signals(market).get("sectors"),
+        )
+
+        target = next(item for item in rows if item["sector_name"] == "叙事板块")
+        assert target["data_status"] == expected_status
+
+    def test_projection_core_order_is_deterministic_and_directly_sliceable_to_six(self):
+        from api.routes.review import (
+            _build_review_signals,
+            _build_sector_projection_candidates,
+            _take_core_projection_candidates,
+        )
+
+        rhythm_rows = [
+            {"name": f"板块{index}", "phase": "启动", "confidence": "高", "change_today": 1.0}
+            for index in range(7)
+        ]
+
+        def build(rows):
+            market = {"sector_rhythm_industry": rows}
+            return _build_sector_projection_candidates(
+                trade_date="2026-05-20",
+                market=market,
+                post_market_env=None,
+                main_themes=[],
+                teacher_notes=[],
+                industry_info=[],
+                sector_signals=_build_review_signals(market).get("sectors"),
+            )
+
+        forward = build(rhythm_rows)
+        reverse = build(list(reversed(rhythm_rows)))
+        expected = [f"industry:板块{index}" for index in range(6)]
+
+        assert [item["sector_key"] for item in _take_core_projection_candidates(forward)] == expected
+        assert [item["sector_key"] for item in _take_core_projection_candidates(reverse)] == expected
+
+        mixed = build([
+            {"name": "唯一核心", "phase": "启动", "confidence": "高", "change_today": 1.0},
+            {"name": "观察项", "phase": "观察", "confidence": "低", "change_today": 0.5},
+        ])
+        assert [item["sector_key"] for item in _take_core_projection_candidates(mixed)] == [
+            "industry:唯一核心",
+        ]
+
     def test_teacher_note_freeform_sector_text_does_not_create_fake_candidate(self, client, db_path):
         self._seed(db_path)
         conn = get_connection(db_path)

@@ -522,6 +522,19 @@ class TestMainThemes:
         assert len(active) == 1
         assert active[0]["theme_name"] == "AI"
 
+    def test_active_as_of_uses_latest_state_per_theme_and_excludes_future(self, conn):
+        Q.upsert_main_theme(conn, {"date": "2026-04-01", "theme_name": "AI", "status": "active"})
+        Q.upsert_main_theme(conn, {"date": "2026-04-03", "theme_name": "AI", "status": "fading"})
+        Q.upsert_main_theme(conn, {"date": "2026-04-05", "theme_name": "AI", "status": "active"})
+        Q.upsert_main_theme(conn, {"date": "2026-04-02", "theme_name": "电池", "status": "active"})
+        Q.upsert_main_theme(conn, {"date": "2026-04-04", "theme_name": "机器人", "status": "active"})
+
+        active = Q.get_active_themes_as_of(conn, "2026-04-03")
+
+        assert [(row["theme_name"], row["date"]) for row in active] == [
+            ("电池", "2026-04-02"),
+        ]
+
 
 # ──────────────────────────────────────────────────────────────
 # Trades

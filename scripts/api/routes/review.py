@@ -456,7 +456,14 @@ def _build_review_signals(market: dict[str, Any] | None) -> dict[str, Any]:
     ]
 
     ths_rows = _section_rows(market.get("sector_moneyflow_ths"))
-    dc_ind_rows = _section_rows(market.get("sector_moneyflow_dc"))
+    dc_rows = _section_rows(market.get("sector_moneyflow_dc"))
+    dc_concept_rows = [
+        row
+        for row in dc_rows
+        if "概念" in _normalize_sector_name(row.get("content_type"))
+        or _normalize_sector_name(row.get("content_type")).lower() == "concept"
+    ]
+    dc_ind_rows = [row for row in dc_rows if row not in dc_concept_rows]
     ind_rows = ths_rows or dc_ind_rows
 
     def _sort_by_net_yi(rows):
@@ -486,7 +493,7 @@ def _build_review_signals(market: dict[str, Any] | None) -> dict[str, Any]:
 
     concept_ths = _section_rows(market.get("concept_moneyflow_ths"))
     concept_dc = _section_rows(market.get("concept_moneyflow_dc"))
-    concept_rows = concept_ths or concept_dc
+    concept_rows = concept_ths or concept_dc or dc_concept_rows
     signals["sectors"]["concept_moneyflow_rows"] = [
         {
             "name": _pick_row_name(row, "name", "industry", "ts_code"),
@@ -600,6 +607,7 @@ def _stock_code_is_bj(code: str) -> bool:
 def _pick_sector_leaders(
     *,
     sector_name: str,
+    sector_type: str,
     market: dict[str, Any] | None,
     post_market_source: dict[str, Any] | None,
     main_themes: list[dict[str, Any]],
@@ -651,13 +659,17 @@ def _pick_sector_leaders(
             add_candidate(stock_name, "main_theme", "strong")
 
     if market:
-        for item in _section_rows(market.get("sector_industry")):
+        market_section = "sector_industry" if sector_type == "industry" else "sector_concept"
+        rhythm_section = (
+            "sector_rhythm_industry" if sector_type == "industry" else "sector_rhythm_concept"
+        )
+        for item in _section_rows(market.get(market_section)):
             if _normalize_sector_name(item.get("name") or item.get("sector_name")) != normalized_sector_name:
                 continue
             for stock_name in _coerce_stock_names(item.get("top_stock")):
-                add_candidate(stock_name, "sector_industry", "strong")
+                add_candidate(stock_name, market_section, "strong")
 
-        sector_rhythm = market.get("sector_rhythm_industry")
+        sector_rhythm = market.get(rhythm_section)
         if isinstance(sector_rhythm, list):
             for item in sector_rhythm:
                 if not isinstance(item, dict):
@@ -665,32 +677,31 @@ def _pick_sector_leaders(
                 if _normalize_sector_name(item.get("name") or item.get("sector_name")) != normalized_sector_name:
                     continue
                 for stock_name in _coerce_stock_names(item.get("top_stock_today") or item.get("top_stock")):
-                    add_candidate(stock_name, "sector_rhythm", "strong")
+                    add_candidate(stock_name, rhythm_section, "strong")
 
-    strongest_rows = (sector_signals or {}).get("strongest_rows") or []
-    for row in strongest_rows:
+    if sector_type == "concept":
+        strongest_rows = (sector_signals or {}).get("strongest_rows") or []
+        for row in strongest_rows:
+            if not isinstance(row, dict):
+                continue
+            if _normalize_sector_name(row.get("name")) != normalized_sector_name:
+                continue
+            for stock_name in _coerce_stock_names(row.get("lead_stock")):
+                add_candidate(stock_name, "strongest", "strong")
+
+    moneyflow_key = (
+        "industry_moneyflow_rows" if sector_type == "industry" else "concept_moneyflow_rows"
+    )
+    for row in (sector_signals or {}).get(moneyflow_key) or []:
         if not isinstance(row, dict):
             continue
         if _normalize_sector_name(row.get("name")) != normalized_sector_name:
             continue
-        for stock_name in _coerce_stock_names(row.get("lead_stock")):
-            add_candidate(stock_name, "strongest", "strong")
-
-    for row in (sector_signals or {}).get("industry_moneyflow_rows") or []:
-        if not isinstance(row, dict):
-            continue
-        if _normalize_sector_name(row.get("name")) != normalized_sector_name:
+        net_amount = _safe_float(row.get("net_amount_yi"))
+        if net_amount is None or net_amount <= 0:
             continue
         for stock_name in _coerce_stock_names(row.get("lead_stock")):
-            add_candidate(stock_name, "industry_moneyflow", "weak")
-
-    for row in (sector_signals or {}).get("concept_moneyflow_rows") or []:
-        if not isinstance(row, dict):
-            continue
-        if _normalize_sector_name(row.get("name")) != normalized_sector_name:
-            continue
-        for stock_name in _coerce_stock_names(row.get("lead_stock")):
-            add_candidate(stock_name, "concept_moneyflow", "weak")
+            add_candidate(stock_name, moneyflow_key, "weak")
 
     source = post_market_source or {}
     limit_up = source.get("limit_up") if isinstance(source.get("limit_up"), dict) else {}
@@ -794,6 +805,7 @@ def _pick_sector_leaders(
 
 def _build_sector_projection_candidates(
     *,
+    trade_date: str,
     market: dict[str, Any] | None,
     post_market_env: dict[str, Any] | None,
     main_themes: list[dict[str, Any]],
@@ -801,54 +813,69 @@ def _build_sector_projection_candidates(
     industry_info: list[dict[str, Any]],
     sector_signals: dict[str, Any] | None,
 ) -> list[dict[str, Any]]:
-    known_names: set[str] = set()
-    if isinstance(main_themes, list):
-        for theme in main_themes:
-            if isinstance(theme, dict):
-                name = _normalize_sector_name(theme.get("theme_name"))
-                if name:
-                    known_names.add(name)
-
     strongest_rows = (sector_signals or {}).get("strongest_rows") or []
     industry_moneyflow_rows = (sector_signals or {}).get("industry_moneyflow_rows") or []
     concept_moneyflow_rows = (sector_signals or {}).get("concept_moneyflow_rows") or []
-    for rows in (strongest_rows, industry_moneyflow_rows, concept_moneyflow_rows):
-        for row in rows:
-            if isinstance(row, dict):
-                name = _normalize_sector_name(row.get("name"))
-                if name:
-                    known_names.add(name)
-
-    if market:
-        for key in ("sector_industry", "sector_rhythm_industry"):
-            section = market.get(key)
-            rows = _section_rows(section) if key == "sector_industry" else section
-            if isinstance(rows, list):
-                for row in rows:
-                    if isinstance(row, dict):
-                        name = _normalize_sector_name(row.get("name") or row.get("sector_name"))
-                        if name:
-                            known_names.add(name)
-
-    for item in industry_info:
-        if isinstance(item, dict):
-            name = _normalize_sector_name(item.get("sector_name"))
-            if name:
-                known_names.add(name)
     post_market_source = _extract_post_market_source(post_market_env)
 
+    source_keys = (
+        "sector_industry",
+        "sector_concept",
+        "sector_rhythm_industry",
+        "sector_rhythm_concept",
+        "sector_moneyflow_ths",
+        "sector_moneyflow_dc",
+        "concept_moneyflow_ths",
+        "concept_moneyflow_dc",
+        "limit_cpt_list",
+    )
+
+    def source_state() -> str:
+        if not market:
+            return "missing"
+        sections = [market[key] for key in source_keys if key in market]
+        if not sections:
+            return "missing"
+
+        statuses = {
+            str(section.get("status") or "").strip().lower()
+            for section in sections
+            if isinstance(section, dict) and section.get("status")
+        }
+
+        def failed(section: Any) -> bool:
+            if not isinstance(section, dict):
+                return False
+            status = str(section.get("status") or "").strip().lower()
+            return status in {"source_failed", "failed", "error"} or bool(section.get("error"))
+
+        if any(failed(section) for section in sections):
+            return "source_failed"
+        if any(_section_rows(section) for section in sections):
+            return "ok"
+        if "missing" in statuses:
+            return "missing"
+        if "rule_filtered_empty" in statuses:
+            return "rule_filtered_empty"
+        return "source_ok_empty"
+
+    market_source_state = source_state()
     candidates: dict[str, dict[str, Any]] = {}
 
-    def ensure_candidate(sector_name: str) -> dict[str, Any]:
+    def ensure_candidate(sector_type: str, sector_name: str) -> dict[str, Any]:
         name = _normalize_sector_name(sector_name)
-        if not name:
+        if sector_type not in {"industry", "concept"} or not name:
             return {}
-        if name not in candidates:
-            candidates[name] = {
+        sector_key = f"{sector_type}:{name}"
+        if sector_key not in candidates:
+            candidates[sector_key] = {
+                "sector_key": sector_key,
                 "sector_name": name,
+                "sector_type": sector_type,
                 "source_tags": [],
                 "facts": {
                     "phase_hint": None,
+                    "rhythm_confidence": None,
                     "duration_days": None,
                     "pct_chg": None,
                     "limit_up_count": None,
@@ -860,67 +887,148 @@ def _build_sector_projection_candidates(
                 },
                 "key_stocks": [],
                 "evidence_lines": [],
-                "score": 0,
+                "evidence_items": [],
+                "support_categories": set(),
+                "has_counter_evidence": False,
+                "has_filtered_market_evidence": False,
+                "has_main_theme": False,
+                "rhythm_confidence_rank": None,
+                "strongest_qualified": False,
+                "strongest_rank": None,
             }
-        return candidates[name]
+        return candidates[sector_key]
 
-    def add_tag(candidate: dict[str, Any], tag: str, score: int) -> None:
+    def add_tag(candidate: dict[str, Any], tag: str) -> None:
         if tag not in candidate["source_tags"]:
             candidate["source_tags"].append(tag)
-            candidate["score"] += score
 
-    def add_evidence(candidate: dict[str, Any], text: str) -> None:
+    def add_evidence(
+        candidate: dict[str, Any],
+        *,
+        source: str,
+        category: str,
+        polarity: str,
+        objective: bool,
+        text: str,
+    ) -> None:
         normalized = text.strip()
-        if normalized and normalized not in candidate["evidence_lines"]:
+        if not normalized:
+            return
+        signature = (source, category, polarity, normalized)
+        if any(
+            (
+                item["source"],
+                item["category"],
+                item["polarity"],
+                item["text"],
+            ) == signature
+            for item in candidate["evidence_items"]
+        ):
+            return
+        ordinal = len(candidate["evidence_items"]) + 1
+        candidate["evidence_items"].append(
+            {
+                "evidence_id": (
+                    f"{trade_date}:{candidate['sector_key']}:{source}:{ordinal}"
+                ),
+                "trade_date": trade_date,
+                "source": source,
+                "category": category,
+                "polarity": polarity,
+                "objective": objective,
+                "text": normalized,
+            }
+        )
+        if normalized not in candidate["evidence_lines"]:
             candidate["evidence_lines"].append(normalized)
+        if not objective:
+            return
+        if polarity == "support":
+            candidate["support_categories"].add(category)
+        elif polarity == "counter":
+            candidate["has_counter_evidence"] = True
+        else:
+            candidate["has_filtered_market_evidence"] = True
 
     def add_key_stocks(candidate: dict[str, Any], stocks: Any) -> None:
         for stock in _coerce_text_list(stocks):
             if stock not in candidate["key_stocks"]:
                 candidate["key_stocks"].append(stock)
 
-    for theme in main_themes:
-        if not isinstance(theme, dict):
-            continue
-        sector_name = _normalize_sector_name(theme.get("theme_name"))
-        if not sector_name:
-            continue
-        candidate = ensure_candidate(sector_name)
-        add_tag(candidate, "main_theme", 6)
-        phase = _normalize_sector_name(theme.get("phase"))
-        if phase and not candidate["facts"]["phase_hint"]:
-            candidate["facts"]["phase_hint"] = phase
-        duration_days = theme.get("duration_days")
-        if duration_days is not None:
-            candidate["facts"]["duration_days"] = duration_days
-        add_key_stocks(candidate, theme.get("key_stocks"))
-        add_evidence(
-            candidate,
-            f"活跃主线，阶段 {phase or '待判断'}，持续 {duration_days or '-'} 天",
-        )
-
-    sector_rhythm = market.get("sector_rhythm_industry") if market else None
-    if isinstance(sector_rhythm, list):
-        for item in sector_rhythm:
-            if not isinstance(item, dict):
-                continue
-            sector_name = _normalize_sector_name(item.get("name"))
+    for sector_type, section_key in (
+        ("industry", "sector_industry"),
+        ("concept", "sector_concept"),
+    ):
+        rows = _section_rows((market or {}).get(section_key))
+        for item in sorted(rows, key=lambda row: _normalize_sector_name(row.get("name") or row.get("sector_name"))):
+            sector_name = _normalize_sector_name(item.get("name") or item.get("sector_name"))
             if not sector_name:
                 continue
-            candidate = ensure_candidate(sector_name)
-            add_tag(candidate, "rhythm", 5)
+            candidate = ensure_candidate(sector_type, sector_name)
+            add_tag(candidate, "market_performance")
+            pct_chg = _safe_float(
+                item.get("change_pct")
+                if item.get("change_pct") is not None
+                else item.get("change_today")
+            )
+            if pct_chg is not None:
+                candidate["facts"]["pct_chg"] = pct_chg
+            add_key_stocks(candidate, item.get("top_stock"))
+            polarity = "support" if pct_chg is not None and pct_chg > 0 else (
+                "counter" if pct_chg is not None and pct_chg < 0 else "neutral"
+            )
+            add_evidence(
+                candidate,
+                source=section_key,
+                category="market_performance",
+                polarity=polarity,
+                objective=True,
+                text=f"当日涨跌幅 {pct_chg if pct_chg is not None else '-'}%",
+            )
+
+    for sector_type, section_key in (
+        ("industry", "sector_rhythm_industry"),
+        ("concept", "sector_rhythm_concept"),
+    ):
+        rhythm_rows = (market or {}).get(section_key)
+        if not isinstance(rhythm_rows, list):
+            continue
+        for item in sorted(
+            (row for row in rhythm_rows if isinstance(row, dict)),
+            key=lambda row: _normalize_sector_name(row.get("name") or row.get("sector_name")),
+        ):
+            sector_name = _normalize_sector_name(item.get("name") or item.get("sector_name"))
+            if not sector_name:
+                continue
+            candidate = ensure_candidate(sector_type, sector_name)
+            add_tag(candidate, "rhythm")
             phase = _normalize_sector_name(item.get("phase"))
+            confidence = _normalize_sector_name(item.get("confidence"))
+            confidence_key = confidence.lower()
+            confidence_rank = (
+                0 if confidence_key in {"高", "high"}
+                else 1 if confidence_key in {"中", "medium"}
+                else 2
+            )
+            candidate["rhythm_confidence_rank"] = confidence_rank
+            candidate["facts"]["rhythm_confidence"] = confidence or None
             if phase and not candidate["facts"]["phase_hint"]:
                 candidate["facts"]["phase_hint"] = phase
             if item.get("change_today") is not None:
                 candidate["facts"]["pct_chg"] = item.get("change_today")
-            if item.get("cumulative_pct_5d") is not None:
-                candidate["facts"]["cumulative_pct_5d"] = item.get("cumulative_pct_5d")
-            if item.get("cumulative_pct_10d") is not None:
-                candidate["facts"]["cumulative_pct_10d"] = item.get("cumulative_pct_10d")
+            for field in ("cumulative_pct_5d", "cumulative_pct_10d"):
+                if item.get(field) is not None:
+                    candidate["facts"][field] = item.get(field)
             add_evidence(
                 candidate,
-                f"节奏信号 {phase or '待判断'}，当日涨跌幅 {item.get('change_today') if item.get('change_today') is not None else '-'}%",
+                source=section_key,
+                category="rhythm",
+                polarity="support",
+                objective=True,
+                text=(
+                    f"节奏信号 {phase or '待判断'}，置信度 {confidence or '-'}，"
+                    f"当日涨跌幅 {item.get('change_today') if item.get('change_today') is not None else '-'}%"
+                ),
             )
 
     for row in strongest_rows:
@@ -929,56 +1037,122 @@ def _build_sector_projection_candidates(
         sector_name = _normalize_sector_name(row.get("name"))
         if not sector_name:
             continue
-        candidate = ensure_candidate(sector_name)
-        add_tag(candidate, "strongest", 4)
+        candidate = ensure_candidate("concept", sector_name)
+        add_tag(candidate, "strongest")
+        rank = _safe_float(row.get("rank"))
+        pct_chg = _safe_float(row.get("pct_chg"))
+        breadth = _safe_float(row.get("up_nums"))
+        qualified = bool(
+            rank is not None
+            and rank.is_integer()
+            and 1 <= rank <= 3
+            and pct_chg is not None
+            and pct_chg > 0
+            and breadth is not None
+            and breadth > 0
+        )
+        candidate["strongest_qualified"] = qualified
+        candidate["strongest_rank"] = rank
         if row.get("pct_chg") is not None:
             candidate["facts"]["pct_chg"] = row.get("pct_chg")
         if row.get("up_nums") is not None:
             candidate["facts"]["limit_up_count"] = row.get("up_nums")
         add_evidence(
             candidate,
-            f"最强板块榜单，涨停 {row.get('up_nums') or 0} 家，涨跌幅 {row.get('pct_chg') if row.get('pct_chg') is not None else '-'}%",
+            source="limit_cpt_list",
+            category="strongest",
+            polarity="support" if qualified else "neutral",
+            objective=True,
+            text=(
+                f"最强板块榜第 {int(rank) if rank is not None else '-'} 名，"
+                f"涨停 {row.get('up_nums') or 0} 家，"
+                f"涨跌幅 {row.get('pct_chg') if row.get('pct_chg') is not None else '-'}%"
+            ),
         )
 
-    for row in industry_moneyflow_rows:
-        if not isinstance(row, dict):
-            continue
-        sector_name = _normalize_sector_name(row.get("name"))
-        if not sector_name:
-            continue
-        candidate = ensure_candidate(sector_name)
-        add_tag(candidate, "moneyflow", 3)
-        if row.get("net_amount_yi") is not None:
-            candidate["facts"]["net_amount_yi"] = row.get("net_amount_yi")
-        add_evidence(
-            candidate,
-            f"行业资金流入 {row.get('net_amount_yi') if row.get('net_amount_yi') is not None else '-'} 亿",
-        )
+    for sector_type, source, rows in (
+        ("industry", "industry_moneyflow", industry_moneyflow_rows),
+        ("concept", "concept_moneyflow", concept_moneyflow_rows),
+    ):
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            sector_name = _normalize_sector_name(row.get("name"))
+            if not sector_name:
+                continue
+            candidate = ensure_candidate(sector_type, sector_name)
+            add_tag(candidate, "moneyflow")
+            net_amount = _safe_float(row.get("net_amount_yi"))
+            if net_amount is not None:
+                candidate["facts"]["net_amount_yi"] = net_amount
+            polarity = "support" if net_amount is not None and net_amount > 0 else (
+                "counter" if net_amount is not None and net_amount < 0 else "neutral"
+            )
+            flow_label = "净流入" if polarity == "support" else (
+                "净流出" if polarity == "counter" else "净额中性"
+            )
+            add_evidence(
+                candidate,
+                source=source,
+                category="moneyflow",
+                polarity=polarity,
+                objective=True,
+                text=f"{sector_type} 资金{flow_label} {abs(net_amount) if net_amount is not None else '-'} 亿",
+            )
 
-    for row in concept_moneyflow_rows:
-        if not isinstance(row, dict):
-            continue
-        sector_name = _normalize_sector_name(row.get("name"))
-        if not sector_name:
-            continue
-        candidate = ensure_candidate(sector_name)
-        add_tag(candidate, "moneyflow", 3)
-        if row.get("net_amount_yi") is not None and candidate["facts"]["net_amount_yi"] is None:
-            candidate["facts"]["net_amount_yi"] = row.get("net_amount_yi")
-        add_evidence(
-            candidate,
-            f"概念资金流入 {row.get('net_amount_yi') if row.get('net_amount_yi') is not None else '-'} 亿",
-        )
-
+    # 行业资料先建立 industry 身份，后续无类型的主线名只挂到已知同名身份；
+    # 仅在没有任何客观/资料类型线索时，才把主线作为 concept context 兜底。
     for info in industry_info:
         if not isinstance(info, dict):
             continue
         sector_name = _normalize_sector_name(info.get("sector_name"))
         if not sector_name:
             continue
-        candidate = ensure_candidate(sector_name)
-        add_tag(candidate, "industry_info", 2)
-        add_evidence(candidate, f"行业信息：{str(info.get('content') or '').strip()[:80]}")
+        candidate = ensure_candidate("industry", sector_name)
+        add_tag(candidate, "industry_info")
+        add_evidence(
+            candidate,
+            source="industry_info",
+            category="narrative",
+            polarity="context",
+            objective=False,
+            text=f"行业信息：{str(info.get('content') or '').strip()[:80]}",
+        )
+
+    for theme in main_themes:
+        if not isinstance(theme, dict):
+            continue
+        sector_name = _normalize_sector_name(theme.get("theme_name"))
+        if not sector_name:
+            continue
+        matched = [
+            candidate
+            for candidate in candidates.values()
+            if candidate["sector_name"] == sector_name
+        ]
+        if not matched:
+            matched = [ensure_candidate("concept", sector_name)]
+        has_unambiguous_type = len({candidate["sector_type"] for candidate in matched}) == 1
+        for candidate in matched:
+            # main_themes 无 sector_type；同名行业/概念并存时只作 context，
+            # 不能同时将两个候选通过「主线+市场确认」硬门。
+            candidate["has_main_theme"] = has_unambiguous_type
+            add_tag(candidate, "main_theme")
+            phase = _normalize_sector_name(theme.get("phase"))
+            if phase and not candidate["facts"]["phase_hint"]:
+                candidate["facts"]["phase_hint"] = phase
+            duration_days = theme.get("duration_days")
+            if duration_days is not None:
+                candidate["facts"]["duration_days"] = duration_days
+            add_key_stocks(candidate, theme.get("key_stocks"))
+            add_evidence(
+                candidate,
+                source="main_theme",
+                category="narrative",
+                polarity="context",
+                objective=False,
+                text=f"活跃主线，阶段 {phase or '待判断'}，持续 {duration_days or '-'} 天",
+            )
 
     for note in teacher_notes:
         if not isinstance(note, dict):
@@ -991,32 +1165,47 @@ def _build_sector_projection_candidates(
         ]
         note_text = "\n".join(str(part) for part in raw_parts if part)
         explicit_names = _coerce_text_list(note.get("sectors"))
+        known_names = {candidate["sector_name"] for candidate in candidates.values()}
         matched_names = [name for name in known_names if name and name in note_text]
         explicit_known_names = [name for name in explicit_names if name in known_names]
         targets = explicit_known_names or matched_names
         for sector_name in targets:
-            candidate = ensure_candidate(sector_name)
-            if not candidate:
-                continue
-            add_tag(candidate, "teacher_note", 2)
-            ref = {
-                "note_id": note.get("id"),
-                "teacher_name": note.get("teacher_name"),
-                "title": note.get("title"),
-            }
-            if ref not in candidate["facts"]["teacher_note_refs"]:
-                candidate["facts"]["teacher_note_refs"].append(ref)
-            add_evidence(
-                candidate,
-                f"老师观点 {note.get('teacher_name') or '-'}：{str(note.get('key_points') or note.get('core_view') or note.get('title') or '').strip()[:80]}",
-            )
+            for candidate in candidates.values():
+                if candidate["sector_name"] != sector_name:
+                    continue
+                add_tag(candidate, "teacher_note")
+                ref = {
+                    "note_id": note.get("id"),
+                    "teacher_name": note.get("teacher_name"),
+                    "title": note.get("title"),
+                }
+                if ref not in candidate["facts"]["teacher_note_refs"]:
+                    candidate["facts"]["teacher_note_refs"].append(ref)
+                add_evidence(
+                    candidate,
+                    source="teacher_note",
+                    category="narrative",
+                    polarity="context",
+                    objective=False,
+                    text=(
+                        f"老师观点 {note.get('teacher_name') or '-'}："
+                        f"{str(note.get('key_points') or note.get('core_view') or note.get('title') or '').strip()[:80]}"
+                    ),
+                )
 
-    for sector_name, candidate in candidates.items():
+    for candidate in candidates.values():
+        same_name_count = sum(
+            item["sector_name"] == candidate["sector_name"]
+            for item in candidates.values()
+        )
         leader_info = _pick_sector_leaders(
-            sector_name=sector_name,
+            sector_name=candidate["sector_name"],
+            sector_type=candidate["sector_type"],
             market=market,
             post_market_source=post_market_source,
-            main_themes=main_themes,
+            # main_themes 没有 sector_type；同名行业/概念并存时不用其
+            # key_stocks 做 leader 证据，避免一条无类型叙事串污两个候选。
+            main_themes=main_themes if same_name_count == 1 else [],
             sector_signals=sector_signals,
         )
         candidate["facts"]["emotion_leader"] = leader_info["emotion_leader"]
@@ -1025,27 +1214,108 @@ def _build_sector_projection_candidates(
         if leader_info["emotion_leader"] or leader_info["capacity_leader"]:
             add_evidence(
                 candidate,
-                (
+                source="leader_detection",
+                category="leader",
+                polarity="context",
+                objective=False,
+                text=(
                     f"自动识别 情绪龙头 {leader_info['emotion_leader'] or '-'}，"
                     f"容量中军 {leader_info['capacity_leader'] or '-'}"
                 ),
             )
 
-    rows: list[dict[str, Any]] = []
-    for candidate in sorted(
+    for candidate in candidates.values():
+        support_count = len(candidate["support_categories"])
+        confidence_rank = candidate["rhythm_confidence_rank"]
+        if confidence_rank == 0:
+            candidate["candidate_tier"] = "core"
+            candidate["rank_reason"] = "高置信节奏"
+            candidate["rule_rank"] = 0
+        elif confidence_rank == 1:
+            candidate["candidate_tier"] = "core"
+            candidate["rank_reason"] = "中置信节奏"
+            candidate["rule_rank"] = 1
+        elif candidate["strongest_qualified"]:
+            candidate["candidate_tier"] = "core"
+            candidate["rank_reason"] = "最强榜前三且涨幅与联动广度为正"
+            candidate["rule_rank"] = 2
+        elif candidate["has_main_theme"] and support_count >= 1:
+            candidate["candidate_tier"] = "core"
+            candidate["rank_reason"] = "活跃主线获当日市场确认"
+            candidate["rule_rank"] = 3
+        elif support_count >= 2:
+            candidate["candidate_tier"] = "core"
+            candidate["rank_reason"] = "至少2类独立客观市场证据"
+            candidate["rule_rank"] = 4
+        elif support_count == 1:
+            candidate["candidate_tier"] = "watch"
+            candidate["rank_reason"] = "仅1类当日客观市场证据"
+            candidate["rule_rank"] = 5
+        else:
+            candidate["candidate_tier"] = "context"
+            if candidate["has_counter_evidence"]:
+                candidate["rank_reason"] = "仅反证，未通过客观硬门"
+            elif candidate["has_filtered_market_evidence"]:
+                candidate["rank_reason"] = "客观数据未通过硬门"
+            else:
+                candidate["rank_reason"] = "仅老师观点/行业资料/逻辑叙事"
+            candidate["rule_rank"] = 6
+
+        if support_count or candidate["has_counter_evidence"]:
+            candidate["data_status"] = "ok"
+        elif candidate["has_filtered_market_evidence"]:
+            candidate["data_status"] = "rule_filtered_empty"
+        elif market_source_state in {
+            "missing",
+            "source_ok_empty",
+            "source_failed",
+            "rule_filtered_empty",
+        }:
+            candidate["data_status"] = market_source_state
+        else:
+            candidate["data_status"] = "missing"
+
+    tier_order = {"core": 0, "watch": 1, "context": 2}
+    ranked = sorted(
         candidates.values(),
-        key=lambda item: (-item["score"], item["sector_name"]),
-    ):
+        key=lambda item: (
+            tier_order[item["candidate_tier"]],
+            item["rule_rank"],
+            -len(item["support_categories"]),
+            item["strongest_rank"] if item["strongest_rank"] is not None else 9999,
+            item["sector_key"],
+        ),
+    )
+
+    rows: list[dict[str, Any]] = []
+    for candidate in ranked:
         rows.append(
             {
+                "sector_key": candidate["sector_key"],
                 "sector_name": candidate["sector_name"],
+                "sector_type": candidate["sector_type"],
+                "candidate_tier": candidate["candidate_tier"],
+                "data_status": candidate["data_status"],
+                "rank_reason": candidate["rank_reason"],
                 "source_tags": candidate["source_tags"],
                 "facts": candidate["facts"],
                 "key_stocks": candidate["key_stocks"],
+                "evidence_items": candidate["evidence_items"],
                 "evidence_text": "；".join(candidate["evidence_lines"][:4]),
             }
         )
     return rows
+
+
+def _take_core_projection_candidates(
+    candidates: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """取确定性排序后的 core 候选，供后续评分层直接消费。"""
+    return [
+        candidate
+        for candidate in candidates
+        if candidate.get("candidate_tier") == "core"
+    ][:6]
 
 
 @router.get("/{date}")
@@ -1074,7 +1344,7 @@ def get_prefill(date: str, conn: sqlite3.Connection = Depends(get_db_conn)):
     avg_5d = Q.get_avg_amount(conn, date, 5)
     avg_20d = Q.get_avg_amount(conn, date, 20)
     emotion = Q.get_latest_emotion(conn)
-    themes = Q.get_active_themes(conn)
+    themes = Q.get_active_themes_as_of(conn, date)
     holdings = _enrich_holdings_prefill_from_post_envelope(
         Q.get_holdings(conn, status="active"),
         holdings_quote_map,
@@ -1109,6 +1379,7 @@ def get_prefill(date: str, conn: sqlite3.Connection = Depends(get_db_conn)):
     review_signals["market"]["research_coverage_industry"] = rci if isinstance(rci, list) else []
 
     review_signals["sectors"]["projection_candidates"] = _build_sector_projection_candidates(
+        trade_date=date,
         market=market,
         post_market_env=env,
         main_themes=themes,
