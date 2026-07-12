@@ -211,20 +211,43 @@ def _snapshot_factor(snapshot: Any, factor_code: str) -> dict[str, Any] | None:
     return matches[0] if len(matches) == 1 else None
 
 
+def _has_meaningful_fact_content(value: Any) -> bool:
+    if isinstance(value, Mapping):
+        return any(_has_meaningful_fact_content(item) for item in value.values())
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        return any(_has_meaningful_fact_content(item) for item in value)
+    if isinstance(value, float):
+        return math.isfinite(value)
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    return True
+
+
+def _is_available_t1_fact(item: Mapping[str, Any]) -> bool:
+    source = item.get("source")
+    quality_group = item.get("quality_group") or source
+    return (
+        item.get("kind") == "fact"
+        and ("source_status" not in item or item.get("source_status") == "ok")
+        and _nonempty_string(item.get("evidence_id")) is not None
+        and _nonempty_string(source) is not None
+        and _nonempty_string(quality_group) is not None
+        and (
+            _has_meaningful_fact_content(item.get("content"))
+            or _nonempty_string(item.get("text")) is not None
+        )
+    )
+
+
 def _objective_fact_items(factor: Any) -> list[dict[str, Any]]:
     if not isinstance(factor, Mapping):
         return []
     return [
         dict(item)
         for item in factor.get("evidence_items") or []
-        if (
-            isinstance(item, Mapping)
-            and item.get("kind") == "fact"
-            and (
-                "source_status" not in item
-                or item.get("source_status") == "ok"
-            )
-        )
+        if isinstance(item, Mapping) and _is_available_t1_fact(item)
     ]
 
 
@@ -292,12 +315,13 @@ def _style_signature(factor: Any) -> dict[str, str]:
         (_fact_content(factor, "board_preference"), "dominant_type", "board_preference"),
         (_fact_content(factor, "premium_regime"), "trend_direction", "premium_trend"),
     )
-    if any(isinstance(content, Mapping) for content, _, _ in new_cards):
-        return {
-            dimension: value
-            for content, key, dimension in new_cards
-            if (value := _mapping_string(content, key)) is not None
-        }
+    new_signature = {
+        dimension: value
+        for content, key, dimension in new_cards
+        if (value := _mapping_string(content, key)) is not None
+    }
+    if new_signature:
+        return new_signature
 
     legacy = _fact_content(factor, "style_factors")
     if not isinstance(legacy, Mapping):

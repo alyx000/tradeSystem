@@ -9,6 +9,7 @@ from db.connection import get_connection
 from db.migrate import migrate
 from services.trinity_factor.evidence import build_evidence_snapshot
 from services.trinity_factor.cycle import (
+    _objective_fact_items,
     build_factor_metrics,
     confirm_factor_decision,
     confirm_t1_evaluation,
@@ -375,6 +376,47 @@ def _suggest_for_prefills(
     )
 
 
+def test_t1_objective_facts_require_valid_identity_group_and_content() -> None:
+    def fact(identifier: str, **overrides) -> dict:
+        item = {
+            "evidence_id": identifier,
+            "source": "test_source",
+            "source_status": "ok",
+            "kind": "fact",
+            "polarity": "support",
+            "content": {"value": 1},
+        }
+        item.update(overrides)
+        return item
+
+    missing_id = fact("missing-id")
+    missing_id.pop("evidence_id")
+    missing_source = fact("missing-source")
+    missing_source.pop("source")
+    legacy_valid = fact(
+        "legacy-valid", source="legacy_source", content={"value": 0}
+    )
+    legacy_valid.pop("source_status")
+    factor = {"evidence_items": [
+        missing_id,
+        fact("blank-id", evidence_id=" "),
+        missing_source,
+        fact("blank-source", source=" ", quality_group="valid_group"),
+        fact("blank-group", quality_group=" "),
+        fact("invalid-group", quality_group=42),
+        fact("empty-body", content={"nested": []}, text=" "),
+        fact("nonfinite-body", content=float("nan")),
+        fact("non-ok", source_status="source_failed"),
+        legacy_valid,
+        fact("empty-group-fallback", quality_group="", content={"value": False}),
+        fact("text-valid", quality_group="text_group", content={}, text="客观文本"),
+    ]}
+
+    assert [
+        item.get("evidence_id") for item in _objective_fact_items(factor)
+    ] == ["legacy-valid", "empty-group-fallback", "text-valid"]
+
+
 def test_accept_decision_syncs_legacy_fields_and_preserves_step8(conn) -> None:
     _insert_run(conn)
     Q.upsert_daily_review(conn, "2026-07-10", {
@@ -710,7 +752,21 @@ def test_t1_style_dimensions_are_compared_structurally(
     assert comparison["comparable_dimensions"] == (0 if expected_outcome == "missing_data" else 3)
 
 
-def test_t1_legacy_style_composite_matches_new_style_cards(conn) -> None:
+@pytest.mark.parametrize(
+    ("new_content", "expected_outcome", "expected_matches", "expected_comparable"),
+    [
+        ({"spread": 1.5}, "hit", 3, 3),
+        ({"relative": "偏大盘"}, "miss", 0, 1),
+    ],
+    ids=("empty-new-signature-falls-back", "valid-new-signature-precedes"),
+)
+def test_t1_style_new_signature_fallback_and_precedence(
+    conn,
+    new_content: dict,
+    expected_outcome: str,
+    expected_matches: int,
+    expected_comparable: int,
+) -> None:
     source_snapshot = _legacy_factor_snapshot(
         "style_regime",
         source="style_factors",
@@ -720,6 +776,14 @@ def test_t1_legacy_style_composite_matches_new_style_cards(conn) -> None:
             "premium_trend": {"direction": "走强"},
         },
     )
+    source_snapshot["factor_candidates"][0]["evidence_items"].insert(0, {
+        "evidence_id": "2026-07-10:style_regime:cap_relative_strength",
+        "source": "cap_relative_strength",
+        "source_status": "ok",
+        "kind": "fact",
+        "polarity": "support",
+        "content": new_content,
+    })
     actual_prefill = _style_prefill(
         date="2026-07-13", cap="偏小盘", board="20cm", premium="走强"
     )
@@ -732,8 +796,10 @@ def test_t1_legacy_style_composite_matches_new_style_cards(conn) -> None:
         actual_prefill=actual_prefill,
     )
 
-    assert suggestion["system_outcome"] == "hit"
-    assert suggestion["actual_evidence_json"]["comparison"]["matched_dimensions"] == 3
+    assert suggestion["system_outcome"] == expected_outcome
+    comparison = suggestion["actual_evidence_json"]["comparison"]
+    assert comparison["matched_dimensions"] == expected_matches
+    assert comparison["comparable_dimensions"] == expected_comparable
 
 
 @pytest.mark.parametrize(
