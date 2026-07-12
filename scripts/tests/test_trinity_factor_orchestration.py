@@ -605,25 +605,70 @@ def test_height_only_ladder_does_not_emit_objective_fact() -> None:
     ]
 
 
-def test_objective_leader_detection_never_becomes_leader_fact() -> None:
+def test_mapping_ladder_does_not_restore_count_after_all_names_are_st() -> None:
+    prefill = {
+        "market": {
+            "highest_board": 4,
+            "continuous_board_counts": {
+                "4": {"names": ["*ST风险"], "count": 1},
+            },
+        },
+        "review_signals": {
+            "sectors": {"projection_candidates": []},
+            "emotion": {"ladder_rows": []},
+        },
+    }
+
+    leader = _factor(
+        build_evidence_snapshot("2026-07-10", prefill, {}),
+        "leader_signal",
+    )
+
+    assert not [
+        item for item in _ok_facts(leader)
+        if item["source"] == "ladder_structure"
+    ]
+
+
+def test_objective_leader_detection_is_normalized_to_stored_context_only() -> None:
     candidate = _candidate(1)
+    evidence_id = "2026-07-10:industry:板块1:leader-detection"
     candidate["evidence_items"] = [{
-        "evidence_id": "2026-07-10:industry:板块1:leader-detection",
+        "evidence_id": evidence_id,
         "source": "leader_detection",
         "category": "leader",
         "polarity": "support",
         "objective": True,
     }]
 
-    leader = _factor(
-        build_evidence_snapshot("2026-07-10", _prefill([candidate]), {}),
-        "leader_signal",
+    snapshot = build_evidence_snapshot("2026-07-10", _prefill([candidate]), {})
+    stored_item = snapshot["sector_candidates"][0]["evidence_items"][0]
+    leader = _factor(snapshot, "leader_signal")
+    sector = _factor(snapshot, "sector_rhythm")
+    factor_llm = next(
+        row for row in build_factor_llm_input(snapshot)["factors"]
+        if row["factor_code"] == "sector_rhythm"
     )
+    sector_llm = build_sector_llm_input(
+        snapshot,
+        primary_factor_code="sector_rhythm",
+    )["sectors"][0]
 
+    assert stored_item["objective"] is False
+    assert stored_item["polarity"] == "context"
     assert not [
         item for item in _ok_facts(leader)
         if item.get("source") == "leader_detection"
     ]
+    assert not [
+        item for item in _ok_facts(sector)
+        if item.get("source") == "leader_detection"
+    ]
+    assert evidence_id not in sector["allowed_evidence_ids"]
+    assert evidence_id not in factor_llm["allowed_evidence_ids"]
+    assert evidence_id not in repr(factor_llm)
+    assert evidence_id not in sector_llm["allowed_evidence_ids"]
+    assert evidence_id not in repr(sector_llm)
 
 
 def test_objective_card_strings_are_bounded_before_llm_projection() -> None:

@@ -244,7 +244,10 @@ def _prepare_sector_candidates(
             if not isinstance(item, Mapping) or not isinstance(item.get("evidence_id"), str):
                 continue
             copied = dict(_json_safe_value(item))
-            if copied.get("objective") is True:
+            if copied.get("source") == "leader_detection":
+                copied["objective"] = False
+                copied["polarity"] = "context"
+            elif copied.get("objective") is True:
                 copied.setdefault("source_status", source_status)
             items.append(copied)
         evidence_ids = sorted({
@@ -641,9 +644,14 @@ def _parse_ladder_counts(value: Any) -> tuple[dict[int, int], dict[int, list[str
         names: list[str] = []
         count: int | None = None
         if isinstance(raw_value, Mapping):
-            raw_names = raw_value.get("names") or raw_value.get("stocks") or []
+            names_supplied = "names" in raw_value or "stocks" in raw_value
+            raw_names = (
+                raw_value.get("names")
+                if "names" in raw_value
+                else raw_value.get("stocks")
+            )
             names = _stock_names(raw_names)
-            count = len(names) if names else _to_int(raw_value.get("count"))
+            count = len(names) if names_supplied else _to_int(raw_value.get("count"))
         elif isinstance(raw_value, Sequence) and not isinstance(raw_value, (str, bytes)):
             names = _stock_names(raw_value)
             count = len(names)
@@ -737,7 +745,7 @@ def _is_available_objective_fact(item: Mapping[str, Any]) -> bool:
 
 
 def _is_llm_referenceable(item: Mapping[str, Any]) -> bool:
-    if item.get("kind") == "status":
+    if item.get("kind") == "status" or item.get("source") == "leader_detection":
         return False
     if item.get("kind") == "fact" or item.get("objective") is True:
         return item.get("source_status") == "ok"
