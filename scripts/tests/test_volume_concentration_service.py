@@ -378,7 +378,7 @@ def test_volume_watch_cli_migrates_v33_db_before_save(tmp_path, monkeypatch):
     monkeypatch.setattr("main.setup_providers", lambda config: _gain_registry())
     monkeypatch.setattr(volume_watch, "_push_to_dingtalk", lambda *a, **k: None)
 
-    args = argparse.Namespace(date="2026-05-29", dry_run=False, refetch=False)
+    args = argparse.Namespace(date="2026-05-29", dry_run=False, no_push=False, refetch=False)
     volume_watch._run_daily({}, args)  # v33 老库不应抛 OperationalError(no column gain_universe_json)
 
     conn2 = get_connection(db)

@@ -1,11 +1,16 @@
 #!/bin/bash
 # 4日均线二波观察池定时入口（launchd 调用）。
 #
-# 中国时间工作日 + 周日 21:35 触发：plist 同时覆盖上海本机时区和 Pacific 折算时刻，
-# 本脚本再按中国时间窗口守卫；近端历史龙头池内 MA4 拐头 + 成交额突破 5/10 日均额线 → 只读观察清单 + 钉钉。
+# 工作日 + 周日 21:35 触发（plist 按系统时区 Asia/Shanghai，单触发，与兄弟任务同范式）；
+# 近端历史龙头池内 MA4 拐头 + 成交额突破 5/10 日均额线 → 只读观察清单 + 钉钉。
+# 2026-07-11 修复：移除原「Pacific 折算触发 + 21:20-22:05 时间窗守卫」——休眠错过晚间档后
+# launchd 把补跑合并到晨间折算触发、再被守卫杀掉，曾致 0708/0709 连续两日无产出（详见 plist 注释）。
 set -e
 
 export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+# TZ 钉死 A 股市场时区：保证子进程 date.today()（cli/ma_breakout.py:_today）算出的目标日
+# 不随系统时区漂移（与 market-timing / earnings-digest runner 同派）。此 TZ 与已删除的
+# Pacific 折算触发/时间窗守卫无关——那才是 0708/0709 缺报的根因，TZ 本身无害且必要。
 export TZ="Asia/Shanghai"
 
 REPO_ROOT="/Users/alyx/tradeSystem"
@@ -22,14 +27,5 @@ fi
 
 echo "===== $(date '+%Y-%m-%d %H:%M:%S') ma-breakout daily start ====="
 echo "[env] TUSHARE_TOKEN=${TUSHARE_TOKEN:+set} DINGTALK_WEBHOOK_TOKEN=${DINGTALK_WEBHOOK_TOKEN:+set} DINGTALK_WEBHOOK_SECRET=${DINGTALK_WEBHOOK_SECRET:+set}"
-
-if [ "${MA_BREAKOUT_FORCE:-0}" != "1" ] && [ "$#" -eq 0 ]; then
-    china_hhmm="$(date '+%H%M')"
-    china_hhmm_num=$((10#$china_hhmm))
-    if [ "$china_hhmm_num" -lt 2120 ] || [ "$china_hhmm_num" -gt 2205 ]; then
-        echo "[skip] 当前中国时间 $china_hhmm 不在 ma-breakout 允许窗口 21:20-22:05；用于过滤 Pacific 夏令时/冬令时双触发"
-        exit 0
-    fi
-fi
 
 exec /usr/bin/python3 scripts/main.py ma-breakout daily "$@"

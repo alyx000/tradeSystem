@@ -8,6 +8,10 @@ version: "1.6"
 
 本文件为**速查**；八步中每一步的**详细提问话术、占位示例与附录说明**见 [references/eight-step-prompt-templates.md](references/eight-step-prompt-templates.md)。
 
+> **两种复盘形态**：本 SKILL 主流程是**单 Agent 表单式**复盘（review workbench 预填 + 引导填写 + 写库/钉钉）。
+> 当用户要求「像之前那样出 HTML 复盘」「用多 agent 复盘 YYYY-MM-DD」时，改走 [references/multi-agent-review.md](references/multi-agent-review.md)：
+> 9 路 subagent 并行采集 → 主会话汇总裁决 → 12+2 节只读 HTML 报告（`data/reports/复盘_*.html`），含口径基线（单位换算 / 两市综指口径 399106 / ETF 拆分名单 / 北向禁用 / 红线）与 [HTML 模板](references/html-report-template/README.md)。
+
 ## 使用场景
 
 当用户说：

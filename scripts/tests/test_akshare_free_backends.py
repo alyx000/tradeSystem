@@ -226,8 +226,9 @@ def test_market_volume_today_uses_sina_realtime(ak: AkshareProvider, monkeypatch
     today = "2026-05-29"
     monkeypatch.setattr(ak, "_today_cn", lambda: today)
     ak.ak.stock_zh_index_spot_sina.return_value = pd.DataFrame({
-        "代码": ["sh000001", "sz399001"],
-        "名称": ["上证指数", "深证成指"],
+        # 深市腿=深证综指 399106（全深市口径），与 provider 实现对齐；399001 为口径事故旧腿
+        "代码": ["sh000001", "sz399106"],
+        "名称": ["上证指数", "深证综指"],
         "成交额": [1.532067e12, 1.786965e12],  # 元
     })
     r = ak.get_market_volume(today)
@@ -348,7 +349,7 @@ def test_market_volume_realtime_keyed_on_cn_today(ak: AkshareProvider, monkeypat
     """当日判定按上海时区（_today_cn），而非进程本地时区。"""
     monkeypatch.setattr(ak, "_today_cn", lambda: "2026-05-20", raising=False)
     ak.ak.stock_zh_index_spot_sina.return_value = pd.DataFrame({
-        "代码": ["sh000001", "sz399001"], "名称": ["上证", "深证"],
+        "代码": ["sh000001", "sz399106"], "名称": ["上证", "深证综指"],
         "成交额": [1.0e12, 1.0e12],
     })
     r = ak.get_market_volume("2026-05-20")
@@ -444,7 +445,7 @@ def test_market_volume_realtime_zero_falls_back_to_em(ak: AkshareProvider, monke
     """盘前实时成交额为 0 时不冒充全日，退东财兜底。"""
     monkeypatch.setattr(ak, "_today_cn", lambda: "2026-05-20", raising=False)
     ak.ak.stock_zh_index_spot_sina.return_value = pd.DataFrame({
-        "代码": ["sh000001", "sz399001"], "名称": ["上证", "深证"],
+        "代码": ["sh000001", "sz399106"], "名称": ["上证", "深证综指"],
         "成交额": [0.0, 0.0],
     })
     ak.ak.index_zh_a_hist.side_effect = lambda symbol, **kw: pd.DataFrame([

@@ -17,8 +17,12 @@ SWING_WINDOW = 10
 SWING_MIN_REVERSAL_PCT = 0.05
 
 # ── 底分型 + 放量中阳确认 ──
-# 放量：当日量 ≥ MA5 量 × 此倍数（>1 为放量；区别于缩量）
-FRACTAL_VOLUME_RATIO = 1.5
+# 放量：当日量 ≥ MA5 量 × 此倍数（>1 为放量；区别于缩量）。
+# 2026-07-11 回测校准（2026-01-10~07-10 六指数 176 个底分型，复用生产 evaluate_fractal_status）：
+# 1.5 全窗口 0 次确认（指数量能比个股平滑，confirmed 态形同虚设）；1.3 触发 4 次、
+# T+10 中位 +3.04%、假确认 1/4；1.2 增量 5 次 T+10 均值 -2.14%（净加噪声）→ 定 1.3。
+# 样本小（4 事件），后续按季度复核；回测报告见当期复盘会话 fractal_ratio_backtest.md。
+FRACTAL_VOLUME_RATIO = 1.3
 # 中阳线最小实体：(close - open) / open ≥ 此比例
 MID_YANG_MIN_PCT = 0.01
 
@@ -46,6 +50,9 @@ INDEX_LIST = (
 # 拉区间日线的自然日跨度（保证 ≥60 交易日供 swing/斐波那契/底分型窗口）
 RANGE_LOOKBACK_DAYS = 180
 
-# 两市成交额取数指数（tushare index_daily amount 单位=千元，亿 = 千元 / 1e5）
-MARKET_AMOUNT_INDICES = ("000001.SH", "399001.SZ")
+# 两市成交额取数指数（tushare index_daily amount 单位=千元，亿 = 千元 / 1e5）。
+# 深市腿=399106 深证综指（全深市口径）。2026-07-11 校准：0707-0709 曾用 399001
+# 深证成指（仅约 500 成分股），两市总额被压掉 1/3、amount_pctile 失真三日，故换码；
+# 399106 不在 INDEX_LIST（不产信号行），scanner 会为量能口径单独补拉其日线。
+MARKET_AMOUNT_INDICES = ("000001.SH", "399106.SZ")
 QIANYUAN_PER_YI = 1e5

@@ -94,16 +94,56 @@ def _market_amount(bars_by_code: dict, date: str) -> tuple[float | None, float |
 
 
 def _advance_decline(registry, date: str) -> tuple[int | None, int | None]:
+    """涨跌家数。provider 契约是逐股 list[{pct_chg,...}]（tushare get_market_daily_changes），
+    在此聚合；平盘(pct_chg==0)与 pct_chg 缺失/非数值的行不计入任何一侧。
+    兼容聚合 dict{advance,decline}（防未来 provider 直接返聚合值）。
+    历史教训：旧实现只认 dict，与 provider 的 list 契约反向错配 → 两列恒 None 全周空置。
+
+    勿"优化"成现成的 get_market_breadth（它返回聚合 dict、看似可省这段聚合）：
+    akshare 版走 stock_zh_a_spot_em 实时快照、无视 date 参数，历史日期(--date 回补/
+    校准)会静默返回"今天的涨跌家数"陈旧值；get_market_daily_changes 仅 tushare 声明、
+    date 键控、历史安全，这是本 helper 自己聚合 list 而非复用 breadth 的唯一原因。
+    """
     res = registry.call("get_market_daily_changes", date)
-    if res.success and isinstance(res.data, dict):
-        return res.data.get("advance"), res.data.get("decline")
+    # 空数据返 (None, None)=「未知」而非 (0, 0)——涨跌家数需要成对语义，
+    # 伪造 0/0 会谎称「全场平盘」；与 _limit_down_count 的空 list→0 不同（那里 0 家跌停是真值）。
+    if not res.success or not res.data:
+        return None, None
+    data = res.data
+    if isinstance(data, dict):
+        return data.get("advance"), data.get("decline")
+    if isinstance(data, list):
+        advance = decline = 0
+        for row in data:
+            try:
+                pct = float(row.get("pct_chg"))
+            except (TypeError, ValueError, AttributeError):
+                continue
+            if pct > 0:
+                advance += 1
+            elif pct < 0:
+                decline += 1
+        return advance, decline
     return None, None
 
 
 def _limit_down_count(registry, date: str) -> int | None:
+    """跌停家数。provider 契约是 dict{count,stocks}（tushare/akshare 一致，同
+    collectors/market.py 的消费口径）；兼容 list 兜底取 len。
+    历史教训：旧实现只认 list，与 dict 契约错配 → 此列恒 None。
+    """
     res = registry.call("get_limit_down_list", date)
-    if res.success and isinstance(res.data, list):
-        return len(res.data)
+    if not res.success:
+        return None
+    data = res.data
+    if isinstance(data, dict):
+        count = data.get("count")
+        if isinstance(count, (int, float)) and not isinstance(count, bool):
+            return int(count)
+        stocks = data.get("stocks")
+        return len(stocks) if isinstance(stocks, list) else None
+    if isinstance(data, list):
+        return len(data)
     return None
 
 
@@ -145,6 +185,11 @@ def run_daily(conn: sqlite3.Connection, registry, date: str, *, dry_run: bool = 
                           "close": close, "change_pct": change_pct})
 
     resonance = D.count_resonance(turning_points)
+    # 量能脊柱指数不必在扫描清单内（399106 深证综指只供两市成交额口径、不产信号行），
+    # 缺则单独补拉；否则 _market_amount 的「完整两市日」要求恒不满足 → 量能恒 None。
+    for code in C.MARKET_AMOUNT_INDICES:
+        if code not in bars_by_code:
+            bars_by_code[code], _ = _bars_through(registry, code, date)
     amount_yi, amount_pctile = _market_amount(bars_by_code, date)
     advance, decline = _advance_decline(registry, date)
     limit_down = _limit_down_count(registry, date)

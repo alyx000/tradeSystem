@@ -2,13 +2,31 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 from datetime import datetime, timedelta
 
 from db import queries
 from services import concept_tags
 
+from . import repo
 from .aggregator import UNCLASSIFIED, aggregate_sectors
+
+logger = logging.getLogger(__name__)
+
+# ── 两市成交额合理性守卫（2026-07-11 加装）──
+# 背景:0707-0709 数据源降级后深市腿曾退化为「深证成指」成分股口径,两市总额 3 万亿→2 万亿
+# 静默落库三日。守卫原则:退化值落 None 优于落坏值(消费端 formatter/trend 已容忍 None)。
+# 深/沪比例地板:综指口径下深市腿/沪市腿长期 ≥1(深市股票数与换手均高于沪市,近年常态
+# ≈1.1-1.4);事故实测退化比=8440/11923≈0.71(成指腿),故地板必须 >0.71 才拦得住已知
+# 事故模式——取 0.8:给极端权重行情留余量,同时覆盖成指腿退化。误伤代价=当日量能落
+# None(报告标注缺失),远小于坏值静默落库连坐分位/趋势的代价。
+MARKET_SZ_SH_RATIO_FLOOR = 0.8
+# 绝对地板:历史极端地量(2024 年初)两市合计也在 5000 亿+,3000 亿以下必为数据残缺;
+# 勿抬高此值——曾评估过 1.5 万亿地板,会误杀真实地量日。
+MARKET_TOTAL_FLOOR_BILLION = 3000.0
+# 环比骤降告警阈值:真实地量骤缩与数据退化难以机械区分,只告警留人工复核线索、不拦截。
+MARKET_TOTAL_DROP_WARN_RATIO = 0.45
 
 # 区间涨幅排名(独立于 Top20 集中度):成交额前 50 → 算 5/10/20 日涨幅 → 按板块排名。
 TOP_VOLUME_UNIVERSE_N = 50
@@ -53,12 +71,35 @@ def load_top20(conn, registry, date: str, top_n: int = 20, refetch: bool = False
     return result.data if (result.success and result.data) else []
 
 
-def _fetch_market_total(registry, date: str):
-    """单拉两市成交额(get_market_volume,自带降级);失败返 (None, None) 不阻断。"""
+def _fetch_market_total(conn, registry, date: str):
+    """单拉两市成交额(get_market_volume,自带降级);失败/疑似退化返 (None, None) 不阻断。
+
+    三段守卫(常量见文件头):绝对地板与深/沪比例拦截退化值(落 None),环比骤降仅告警。
+    """
     result = registry.call("get_market_volume", date)
-    if result.success and result.data:
-        return result.data.get("total_billion"), result.source
-    return None, None
+    if not (result.success and result.data):
+        return None, None
+    data = result.data
+    total = data.get("total_billion")
+    if total is None:
+        return None, None
+    if total < MARKET_TOTAL_FLOOR_BILLION:
+        logger.warning("[volume-watch] %s 两市成交额 %.0f 亿低于绝对地板 %.0f 亿,疑数据残缺,不落库(source=%s)",
+                       date, total, MARKET_TOTAL_FLOOR_BILLION, result.source)
+        return None, None
+    sh, sz = data.get("shanghai_billion"), data.get("shenzhen_billion")
+    # 两腿判空对称（fail-safe）：sh 用 `and` 真值短路会在沪腿 None/0 时静默跳过比例守卫、
+    # 放行退化值——与「退化落 None 优于落坏值」意图相反。比例校验需两腿齐全，缺腿时退回
+    # 绝对地板 + 骤降告警兜底（现两 provider 恒填两腿，缺腿仅属未来 malformed 兜底）。
+    if sh is not None and sz is not None and sh > 0 and sz < sh * MARKET_SZ_SH_RATIO_FLOOR:
+        logger.warning("[volume-watch] %s 深市腿 %.0f 亿 < 沪市腿 %.0f 亿×%.1f,疑口径退化(如深证成指腿),不落库(source=%s)",
+                       date, sz, sh, MARKET_SZ_SH_RATIO_FLOOR, result.source)
+        return None, None
+    prev = repo.get_latest_market_total_before(conn, date)
+    if prev and total < prev * (1 - MARKET_TOTAL_DROP_WARN_RATIO):
+        logger.warning("[volume-watch] %s 两市成交额 %.0f 亿较前值 %.0f 亿骤降逾 %.0f%%,请人工复核数据源(仅告警,照常落库)",
+                       date, total, prev, MARKET_TOTAL_DROP_WARN_RATIO * 100)
+    return total, result.source
 
 
 def build_record(conn, registry, date: str, top_n: int = 20, refetch: bool = False) -> dict | None:
@@ -72,7 +113,7 @@ def build_record(conn, registry, date: str, top_n: int = 20, refetch: bool = Fal
         return None
 
     labeled = label_industries(stocks, registry)
-    market_total, market_total_source = _fetch_market_total(registry, date)
+    market_total, market_total_source = _fetch_market_total(conn, registry, date)
     agg = aggregate_sectors(labeled["stocks"])
 
     return {

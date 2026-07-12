@@ -163,6 +163,65 @@ def test_build_record_none_when_no_data():
     assert collector.build_record(conn, registry, "2026-05-29") is None
 
 
+def _mv_result(sh: float, sz: float) -> DataResult:
+    return DataResult(
+        data={"shanghai_billion": sh, "shenzhen_billion": sz,
+              "total_billion": round(sh + sz, 2)},
+        source="tushare:index_daily",
+    )
+
+
+def test_market_total_guard_rejects_degraded_sz_leg():
+    """守卫·比例地板：深市腿退化为成指口径(事故实测 8440/11924≈0.71<0.8) → 落 None 不落坏值。"""
+    conn = _conn()
+    registry = _FakeRegistry({"get_market_volume": _mv_result(11923.6, 8439.9)})
+
+    total, source = collector._fetch_market_total(conn, registry, "2026-07-08")
+
+    assert total is None and source is None
+
+
+def test_market_total_guard_keeps_legal_extreme_low_volume():
+    """守卫·反向用例：真实极端地量(合计仅 6600 亿但两腿比例正常) → 不误伤,照常返回。"""
+    conn = _conn()
+    registry = _FakeRegistry({"get_market_volume": _mv_result(3000.0, 3600.0)})
+
+    total, source = collector._fetch_market_total(conn, registry, "2026-07-08")
+
+    assert total == 6600.0
+    assert source == "tushare:index_daily"
+
+
+def test_market_total_guard_rejects_below_absolute_floor():
+    """守卫·绝对地板：合计 < 3000 亿必为数据残缺 → 落 None。"""
+    conn = _conn()
+    registry = _FakeRegistry({"get_market_volume": _mv_result(1200.0, 1300.0)})
+
+    total, _source = collector._fetch_market_total(conn, registry, "2026-07-08")
+
+    assert total is None
+
+
+def test_market_total_drop_warns_but_keeps(caplog):
+    """守卫·环比骤降：较前值跌逾 45% 仅告警不拦截（真实地量与退化难机械区分）。"""
+    import logging
+
+    conn = _conn()
+    conn.execute(
+        """INSERT INTO daily_volume_concentration
+           (date, top_n, total_amount_billion, market_total_billion, stocks_json, sector_summary_json)
+           VALUES ('2026-07-07', 20, 100.0, 35000.0, '[]', '[]')"""
+    )
+    conn.commit()
+    registry = _FakeRegistry({"get_market_volume": _mv_result(7000.0, 8000.0)})  # -57% 环比
+
+    with caplog.at_level(logging.WARNING):
+        total, _source = collector._fetch_market_total(conn, registry, "2026-07-08")
+
+    assert total == 15000.0  # 保留
+    assert any("骤降" in rec.message for rec in caplog.records)
+
+
 def test_build_record_market_total_none_on_failure():
     """market_total 取数失败 → market_total_billion=None,不阻断(占比报告层略过)。"""
     conn = _conn()

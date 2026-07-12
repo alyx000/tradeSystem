@@ -7,6 +7,17 @@ from typing import Any
 GLOBAL_FAILURE_REASONS = frozenset({"quota_exhausted", "auth_required", "startup_failed"})
 
 
+def diag_reason(runner) -> str | None:
+    """读 runner 最近一次失败诊断的 reason（无 last_diagnostics 属性的注入型 runner 返 None）。
+
+    与 build_diagnostics（写侧）配对的读侧入口。board_break/pk、string_yang/mainline 等
+    调用方按 reason 分流（如 timeout 不重试）；此处收拢 getattr/isinstance 守卫，避免各
+    caller 内联重复该读法（与 runner 构造侧的 4 处同构一并属 invoke_llm_cli 收敛 defer）。
+    """
+    diag = getattr(runner, "last_diagnostics", None)
+    return diag.get("reason") if isinstance(diag, dict) else None
+
+
 def build_diagnostics(
     *,
     stdout: str,

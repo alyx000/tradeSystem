@@ -12,10 +12,21 @@
     </array>
 
     <!--
-      launchd 按 Mac 本机时区触发；本机为 Asia/Shanghai 时，21:35 直接命中。
-      本机为 Pacific 时，中国 21:35 = PDT 06:35 / PST 05:35。
-      这里同时覆盖上海本机时区与 Pacific 夏令时/冬令时，runner 再用 Asia/Shanghai
-      时间窗守卫，避免错误时段执行。
+      launchd 按 Mac【系统时区】解释触发时刻——本机系统时区 = Asia/Shanghai
+      （`readlink /etc/localtime` → .../Asia/Shanghai，这是 launchd 用的口径），
+      故单个 21:35 晚间档即命中中国 21:35，与兄弟任务（board-break 21:20 /
+      string-yang 21:50 / daily-leaders 22:30 均单晚间触发）同范式。
+
+      ⚠ 勿被 shell 里的 `date` 显示误导：若审查/沙箱 shell 设了 TZ=America/Los_Angeles
+      等环境变量，`date '+%Z'` 会显示 PDT/-0700，看似「本机是太平洋时区」——但 TZ
+      env 只改进程 date 显示，【不影响 launchd 的触发调度】（launchd 用系统时区，见上）。
+      2026-07-12 codex 门2 曾据此 shell 假象误判「需恢复 Pacific 折算触发」，实为
+      沙箱 TZ env 误导；核实系统时区以 /etc/localtime 为准，非 shell date。
+
+      2026-07-11 修复：曾额外携带 Pacific 夏/冬令时折算的 05:35/06:35 晨间触发项 +
+      runner 内 21:20-22:05 时间窗守卫——Mac 休眠错过 21:35 后，launchd 把补跑合并
+      (coalesce)到次晨折算触发时执行，再被守卫按「不在窗口」杀掉，导致 0708/0709
+      连续两日无产出。系统时区即上海，折算项与守卫均为多余设计，一并移除。
       Weekday: 0=周日, 1=周一 ... 5=周五。
     -->
     <key>StartCalendarInterval</key>
@@ -26,18 +37,6 @@
         <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>21</integer><key>Minute</key><integer>35</integer></dict>
         <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>21</integer><key>Minute</key><integer>35</integer></dict>
         <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>21</integer><key>Minute</key><integer>35</integer></dict>
-        <dict><key>Weekday</key><integer>0</integer><key>Hour</key><integer>5</integer><key>Minute</key><integer>35</integer></dict>
-        <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>5</integer><key>Minute</key><integer>35</integer></dict>
-        <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>5</integer><key>Minute</key><integer>35</integer></dict>
-        <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>5</integer><key>Minute</key><integer>35</integer></dict>
-        <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>5</integer><key>Minute</key><integer>35</integer></dict>
-        <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>5</integer><key>Minute</key><integer>35</integer></dict>
-        <dict><key>Weekday</key><integer>0</integer><key>Hour</key><integer>6</integer><key>Minute</key><integer>35</integer></dict>
-        <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>6</integer><key>Minute</key><integer>35</integer></dict>
-        <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>6</integer><key>Minute</key><integer>35</integer></dict>
-        <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>6</integer><key>Minute</key><integer>35</integer></dict>
-        <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>6</integer><key>Minute</key><integer>35</integer></dict>
-        <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>6</integer><key>Minute</key><integer>35</integer></dict>
     </array>
 
     <key>StandardOutPath</key>

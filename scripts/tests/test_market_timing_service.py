@@ -204,31 +204,50 @@ def test_today_quote_change_pct_none_without_prior_bar(conn):
 
 def test_market_context_written(conn):
     flat = [(100, 100, 1000, 400000.0)] * 11
-    # 今日成交额最低（地量）：上证+深成各 100000 千元 → 合计 200000 千元 = 2 亿
+    # 今日成交额最低（地量）：上证+深证综指各 100000 千元 → 合计 200000 千元 = 2 亿。
+    # 399106 深证综指只供量能口径、不在扫描清单内 → 走 scanner 的补拉路径（一并覆盖）。
     sh = _bars("2026-06-13", flat + [(100, 100, 1000, 100000.0)])
     sz = _bars("2026-06-13", flat + [(100, 100, 1000, 100000.0)])
     reg = FakeRegistry(
-        {"000001.SH": sh, "399001.SZ": sz},
-        limit_down=[{"code": "a"}, {"code": "b"}, {"code": "c"}],
-        changes={"advance": 4500, "decline": 900},
+        {"000001.SH": sh, "399106.SZ": sz},
+        # provider 真实契约：limit_down=dict{count,stocks}、changes=逐股 list（平盘不计入涨跌）
+        limit_down={"count": 3, "stocks": [{"code": "a"}, {"code": "b"}, {"code": "c"}]},
+        changes=[{"pct_chg": 2.0}, {"pct_chg": 0.5}, {"pct_chg": 3.1},
+                 {"pct_chg": -1.0}, {"pct_chg": -0.2}, {"pct_chg": 0.0}, {"pct_chg": None}],
     )
-    idx = [{"code": "000001.SH", "name": "上证综指"}, {"code": "399001.SZ", "name": "深证成指"}]
+    idx = [{"code": "000001.SH", "name": "上证综指"}]
     r = scanner.run_daily(conn, reg, "2026-06-13", indices=idx)
     sig = r["signals"][0]
     assert sig["market_amount_yi"] == 2.0
     assert sig["amount_pctile_20d"] == pytest.approx(1 / 12, abs=0.01)  # 今日地量→低分位
     assert sig["limit_down_count"] == 3
-    assert sig["advance"] == 4500 and sig["decline"] == 900
+    assert sig["advance"] == 3 and sig["decline"] == 2  # 平盘(0.0)与 pct_chg 缺失不计入
     assert r["resonance_count"] == 0  # 平盘无变盘点命中
+
+
+def test_market_context_legacy_shapes_still_supported(conn):
+    """契约兼容兜底：limit_down 传 list、changes 传聚合 dict 也能消费（防 provider 形态漂移）。"""
+    flat = [(100, 100, 1000, 400000.0)] * 12
+    sh = _bars("2026-06-13", flat)
+    sz = _bars("2026-06-13", flat)
+    reg = FakeRegistry(
+        {"000001.SH": sh, "399106.SZ": sz},
+        limit_down=[{"code": "a"}, {"code": "b"}],
+        changes={"advance": 4500, "decline": 900},
+    )
+    r = scanner.run_daily(conn, reg, "2026-06-13", indices=[{"code": "000001.SH", "name": "上证综指"}])
+    sig = r["signals"][0]
+    assert sig["limit_down_count"] == 2
+    assert sig["advance"] == 4500 and sig["decline"] == 900
 
 
 def test_market_amount_none_when_one_side_missing(conn):
     """单侧指数缺当日数据 → 不把半截成交额当两市总额落库（fail-safe 为 None）。"""
     flat = [(100, 100, 1000, 400000.0)] * 11
     sh = _bars("2026-06-13", flat + [(100, 100, 1000, 100000.0)])
-    sz = _bars("2026-06-10", flat + [(100, 100, 1000, 100000.0)])  # 深成末日 != 目标日 → 当日缺
-    reg = FakeRegistry({"000001.SH": sh, "399001.SZ": sz})
-    idx = [{"code": "000001.SH", "name": "上证综指"}, {"code": "399001.SZ", "name": "深证成指"}]
+    sz = _bars("2026-06-10", flat + [(100, 100, 1000, 100000.0)])  # 深证综指末日 != 目标日 → 当日缺
+    reg = FakeRegistry({"000001.SH": sh, "399106.SZ": sz})
+    idx = [{"code": "000001.SH", "name": "上证综指"}]
     r = scanner.run_daily(conn, reg, "2026-06-13", indices=idx)
     sh_sig = [s for s in r["signals"] if s["index_code"] == "000001.SH"][0]
     assert sh_sig["market_amount_yi"] is None

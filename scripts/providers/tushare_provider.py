@@ -303,12 +303,17 @@ class TushareProvider(DataProvider):
             return DataResult(data=None, source=self.name, error=str(e))
 
     def get_market_volume(self, date: str) -> DataResult:
-        """获取两市总成交额"""
+        """获取两市总成交额（综指口径：上证综指 + 深证综指）。
+
+        深市腿必须用 399106 深证综指（全深市），不能用 399001 深证成指（仅约 500
+        成分股）——2026-07-07~09 深市腿曾退化为成分股口径把两市总额从 3 万亿+压到
+        2 万亿静默落库三日，故此处口径固定为综指并在消费端(collector)加守卫。
+        """
         try:
             d = self._date_fmt(date)
             # 分别获取沪深成交额
             sh = self.pro.index_daily(ts_code="000001.SH", start_date=d, end_date=d)
-            sz = self.pro.index_daily(ts_code="399001.SZ", start_date=d, end_date=d)
+            sz = self.pro.index_daily(ts_code="399106.SZ", start_date=d, end_date=d)
             if sh.empty or sz.empty:
                 return DataResult(data=None, source=self.name, error=f"无成交额数据: {date}")
             sh_amount = float(sh.iloc[0].get("amount", 0)) / 1e5  # 千元 → 亿

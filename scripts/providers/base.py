@@ -128,6 +128,8 @@ class DataProvider(ABC):
         return DataResult(data=None, source=self.name, error="not implemented")
 
     def get_limit_down_list(self, date: str) -> DataResult:
+        """当日跌停清单。契约：data = dict{"count": int, "stocks": list[...]}。
+        消费端按 dict 取 count（market_timing/scanner、collectors/market 等）；勿返裸 list。"""
         return DataResult(data=None, source=self.name, error="not implemented")
 
     def get_stock_limit_prices(self, date: str) -> DataResult:
@@ -240,7 +242,9 @@ class DataProvider(ABC):
         return DataResult(data=None, source=self.name, error="not implemented")
 
     def get_market_daily_changes(self, date: str) -> DataResult:
-        """全市场个股当日涨跌幅（用于监管异动初筛降级路径）。"""
+        """全市场个股当日涨跌幅（用于监管异动初筛降级路径）。
+        契约：data = 逐股 list[{"ts_code","name","pct_chg"}]（非聚合 dict）；消费端自行聚合
+        涨跌家数（market_timing/scanner._advance_decline）。date 键控、历史安全。"""
         return DataResult(data=None, source=self.name, error="not implemented")
 
     def get_stock_daily_range(self, stock_code: str, start_date: str, end_date: str) -> DataResult:

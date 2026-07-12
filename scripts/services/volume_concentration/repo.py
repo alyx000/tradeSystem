@@ -96,6 +96,21 @@ def get_recent_concentration(
     return [_row_to_record(r) for r in reversed(rows)]
 
 
+def get_latest_market_total_before(conn: sqlite3.Connection, date: str) -> float | None:
+    """取 date 之前最近一个非空 market_total_billion(供成交额守卫的环比对照)。
+
+    只取标量列、不经 _row_to_record 解整行 JSON——守卫每日一次,取一个数即可。
+    边界严格 < date(守卫对照的是"历史前值",不含当日)。
+    """
+    row = conn.execute(
+        """SELECT market_total_billion FROM daily_volume_concentration
+           WHERE date < ? AND market_total_billion IS NOT NULL
+           ORDER BY date DESC LIMIT 1""",
+        (date,),
+    ).fetchone()
+    return row[0] if row else None
+
+
 def get_latest_concentration(conn: sqlite3.Connection, days: int) -> list[dict]:
     """取库内**最新 N 天**快照,**按日期正序**返回(供趋势图,不依赖服务端 today/非交易日)。
 

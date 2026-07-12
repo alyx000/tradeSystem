@@ -1200,7 +1200,9 @@ class AkshareProvider(DataProvider):
                 return round(v / 1e8, 2) if v is not None else None
 
             sh = _amt_yi("sh000001")
-            sz = _amt_yi("sz399001")
+            # 深市腿=深证综指 399106（全深市口径），与 tushare 主源 get_market_volume 对齐；
+            # 勿改回 399001 深证成指（成分股口径，曾致两市总额缩水 1/3 静默落库）。
+            sz = _amt_yi("sz399106")
             # 盘前未开盘时实时成交额可能为 0，不可冒充全日；<=0 退东财兜底。
             if sh is None or sz is None or sh <= 0 or sz <= 0:
                 return None
@@ -1224,8 +1226,11 @@ class AkshareProvider(DataProvider):
         try:
             # sina 日线无成交额列，历史成交额必须走东财日线（_index_daily_em），
             # 不能用 get_index_daily（已 sina 优先、amount_billion 为 None）。
+            # 深市腿传 ts-code "399106.SZ"（深证综指，全深市口径）而非命名 key
+            # "shenzhen"——那会经 _INDEX_CODE_MAP 映射到 399001 深证成指（成分股
+            # 口径）；该共享映射供 get_index_weekly 使用，语义正确不得改动。
             sh = self._index_daily_em("shanghai", date)
-            sz = self._index_daily_em("shenzhen", date)
+            sz = self._index_daily_em("399106.SZ", date)
             if not sh.success or not sz.success:
                 err = sh.error if not sh.success else sz.error
                 return DataResult(data=None, source=self.name, error=f"无成交额数据: {date} ({err})")
