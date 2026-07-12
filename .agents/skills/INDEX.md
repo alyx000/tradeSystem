@@ -119,7 +119,7 @@
 | `daily-review` | `/api/review/{date}` | GET | 读取已保存的复盘内容 |
 | `daily-review` | `/api/review/{date}` | PUT | 提交复盘主观判断；兼容摘要式 `facts` / `judgement` / `plan` / `holdings` 并轻量映射到页面可见字段 |
 | `daily-review` / `plan-workbench` | `/api/review/{date}/to-draft` | POST | 将既有复盘事实/判断转成 `review` observation 与次日 `TradeDraft`；当前转换只消费 `step1_market` / `step2_sectors`，忽略 `step8_plan` 及 `key_factor / secondary_factors` 兼容镜像，三位一体 factor score / decision / evaluation / metrics 明确不复制进 draft |
-| `daily-review` / `sector-projection-analysis` | `/api/review-factors/{date}/score` | POST | 执行双层影子评分；body 可含 `steps` / `no_llm` / `retry_of_run_id` / `input_by`，API 缺省审计为 `api`、Web 显式传 `web`；结果落 append-only score run，每次请求另落 append-only request audit（含 cache hit）；不写 `TradeDraft` / `TradePlan` |
+| `daily-review` / `sector-projection-analysis` | `/api/review-factors/{date}/score` | POST | 执行双层影子评分；body 可含 `steps` / `no_llm` / `retry_of_run_id`，`input_by` 运行时必填（缺失、空值或仅空白返回 422），Web 显式传 `web`；`input_by` 不进入 cache key；结果落 append-only score run，每次请求另落 append-only request audit（含 cache hit）；不写 `TradeDraft` / `TradePlan` |
 | `daily-review` | `/api/review-factors/{date}/evaluation` | GET | 只读生成严格 T+1 客观回验建议；query 可含 `source_date` / `score_run_id`，不写库 |
 | `daily-review` | `/api/review-factors/{date}/evaluation` | PUT | 重新生成严格 T+1 建议并人工确认；body 含 `confirmed_outcome / input_by`，可选 `source_date / score_run_id / evaluation_note` |
 | `daily-review` / `sector-projection-analysis` | `/api/review-factors/metrics?days=20` | GET | 查看最近 N 个有效交易日影子指标；`days` 取 1～250，默认 20 |
@@ -177,7 +177,7 @@
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| POST | `/api/review-factors/{date}/score` ★ | 双层影子评分；body=`steps? / no_llm? / retry_of_run_id? / input_by?`，API 缺省记 `api`、Web 显式传 `web`；审计来源不参与 cache key，同 key 默认复用，显式 retry 建 append-only 子 run |
+| POST | `/api/review-factors/{date}/score` ★ | 双层影子评分；body=`steps? / no_llm? / retry_of_run_id? / input_by`，`input_by` 运行时必填（缺失、空值或仅空白返回 422），Web 显式传 `web`；`input_by` 不进入 cache key，同 key 默认复用，显式 retry 建 append-only 子 run |
 | GET | `/api/review-factors/{date}/evaluation` ★ | 只读生成严格 T+1 建议；query=`source_date? / score_run_id?` |
 | PUT | `/api/review-factors/{date}/evaluation` ★ | 人工确认 T+1 结果；body=`confirmed_outcome / input_by` + 可选来源日、run、备注 |
 | GET | `/api/review-factors/metrics` ★ | 影子期汇总，`days` 默认 20、范围 1～250；缺数/不适用与表现样本分开 |

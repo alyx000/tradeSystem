@@ -108,7 +108,7 @@ export const api = {
       steps?: ReviewFormData
       no_llm?: boolean
       retry_of_run_id?: string
-      input_by?: string
+      input_by: string
     },
   ) => request<TrinityFactorScoreRun>(`/review-factors/${date}/score`, {
     method: 'POST',

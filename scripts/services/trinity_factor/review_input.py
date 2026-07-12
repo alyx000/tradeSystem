@@ -53,9 +53,11 @@ def normalize_review_steps(
     for key in step_keys:
         if key not in source:
             continue
-        parsed = parse_review_step(source.get(key))
-        if parsed:
-            normalized[key] = parsed
+        canonical = normalize_review_step_for_display(
+            key, parse_review_step(source.get(key))
+        )
+        if canonical:
+            normalized[key] = canonical
     return normalized
 
 

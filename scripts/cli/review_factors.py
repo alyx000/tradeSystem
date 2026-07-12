@@ -11,7 +11,6 @@ from db.connection import get_connection
 from db.migrate import migrate
 from api.routes.review import build_review_prefill
 from services.trinity_factor.review_input import (
-    normalize_review_payload_for_display,
     normalize_review_steps,
     validate_trade_date,
 )
@@ -92,9 +91,7 @@ def _factor_score(args: argparse.Namespace) -> dict[str, Any]:
             conn,
             trade_date=trade_date,
             prefill=build_review_prefill(conn, trade_date),
-            review_steps=normalize_review_steps(
-                normalize_review_payload_for_display(steps)
-            ),
+            review_steps=normalize_review_steps(steps),
             no_llm=args.no_llm,
             retry_of_run_id=args.retry_of_run_id,
             input_by=args.input_by,
@@ -127,9 +124,7 @@ def _factor_confirm(args: argparse.Namespace) -> dict[str, Any]:
             current_input_digest=build_score_input_digest(
                 trade_date=trade_date,
                 prefill=build_review_prefill(conn, trade_date),
-                review_steps=normalize_review_steps(
-                    normalize_review_payload_for_display(current_review)
-                ),
+                review_steps=normalize_review_steps(current_review),
             ),
         )
         conn.commit()

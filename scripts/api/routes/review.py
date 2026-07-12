@@ -284,6 +284,31 @@ def _pick_row_name(row: dict[str, Any], *keys: str) -> str:
     return "-"
 
 
+def _select_sector_moneyflow_rows(
+    market: dict[str, Any] | None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """按行业/概念复用相同的资金流源降级顺序。"""
+    source = market or {}
+    dc_concept_rows: list[dict[str, Any]] = []
+    dc_industry_rows: list[dict[str, Any]] = []
+    for row in _section_rows(source.get("sector_moneyflow_dc")):
+        content_type = _normalize_sector_name(row.get("content_type"))
+        if "概念" in content_type or content_type.lower() == "concept":
+            dc_concept_rows.append(row)
+        else:
+            dc_industry_rows.append(row)
+
+    industry_rows = (
+        _section_rows(source.get("sector_moneyflow_ths")) or dc_industry_rows
+    )
+    concept_rows = (
+        _section_rows(source.get("concept_moneyflow_ths"))
+        or _section_rows(source.get("concept_moneyflow_dc"))
+        or dc_concept_rows
+    )
+    return industry_rows, concept_rows
+
+
 def _build_review_signals(market: dict[str, Any] | None) -> dict[str, Any]:
     signals = {
         "market": {
@@ -349,16 +374,7 @@ def _build_review_signals(market: dict[str, Any] | None) -> dict[str, Any]:
         )[:5]
     ]
 
-    ths_rows = _section_rows(market.get("sector_moneyflow_ths"))
-    dc_rows = _section_rows(market.get("sector_moneyflow_dc"))
-    dc_concept_rows = [
-        row
-        for row in dc_rows
-        if "概念" in _normalize_sector_name(row.get("content_type"))
-        or _normalize_sector_name(row.get("content_type")).lower() == "concept"
-    ]
-    dc_ind_rows = [row for row in dc_rows if row not in dc_concept_rows]
-    ind_rows = ths_rows or dc_ind_rows
+    ind_rows, concept_rows = _select_sector_moneyflow_rows(market)
 
     def _sort_by_net_yi(rows):
         def _key(item):
@@ -385,9 +401,6 @@ def _build_review_signals(market: dict[str, Any] | None) -> dict[str, Any]:
         for row in _sort_by_net_yi(ind_rows)[:5]
     ]
 
-    concept_ths = _section_rows(market.get("concept_moneyflow_ths"))
-    concept_dc = _section_rows(market.get("concept_moneyflow_dc"))
-    concept_rows = concept_ths or concept_dc or dc_concept_rows
     signals["sectors"]["concept_moneyflow_rows"] = [
         {
             "name": _pick_row_name(row, "name", "industry", "ts_code"),
@@ -1087,6 +1100,36 @@ def _build_sector_projection_candidates(
                         f"{str(note.get('key_points') or note.get('core_view') or note.get('title') or '').strip()[:80]}"
                     ),
                 )
+
+    # 展示层保留 Top5；仅对已由其它证据/上下文建立的候选，从完整原始源
+    # 回查负资金流反证。正流入与未命中候选的行都不能借此创建支持候选。
+    full_industry_rows, full_concept_rows = _select_sector_moneyflow_rows(market)
+    for sector_type, source, rows in (
+        ("industry", "industry_moneyflow", full_industry_rows),
+        ("concept", "concept_moneyflow", full_concept_rows),
+    ):
+        for row in rows:
+            sector_name = _normalize_sector_name(
+                _pick_row_name(row, "name", "industry", "ts_code")
+            )
+            candidate = candidates.get(f"{sector_type}:{sector_name}")
+            if not candidate:
+                continue
+            net_amount = _safe_float(row.get("net_amount_yi"))
+            if net_amount is None:
+                net_amount = _to_amount_yi(row.get("net_amount"))
+            if net_amount is None or net_amount >= 0:
+                continue
+            add_tag(candidate, "moneyflow")
+            candidate["facts"]["net_amount_yi"] = net_amount
+            add_evidence(
+                candidate,
+                source=source,
+                category="moneyflow",
+                polarity="counter",
+                objective=True,
+                text=f"{sector_type} 资金净流出 {abs(net_amount)} 亿",
+            )
 
     for candidate in candidates.values():
         same_name_count = sum(

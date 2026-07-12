@@ -89,7 +89,7 @@ python3 main.py review factor-confirm --date YYYY-MM-DD --run-id RUN_ID --decisi
 {"status":"undetermined","override_reason":"看不懂，继续观察"}
 ```
 
-`factor-score` 只追加审计 score run，但仍必须带 `--input-by`：每次有效请求都追加 `daily_review_factor_score_requests`，缓存命中也记录当前请求者与 resolved run；请求者不参与 cache key，旧 run 的 `diagnostics.request.input_by` 保留首次请求信息。API 未传时记为 `api`，Web 显式传 `web`。评分、人工确认与回验仅接受完整交易日历中的开放日，写入必须显式标注 `--input-by` / `input_by`。确认时服务端必须在同一写事务内用当前预填与第 1～6 步重建证据摘要；摘要与 score run 不一致时拒绝确认并要求重跑。CLI `factor-confirm` 读取数据库已保存步骤，因此通过 `--steps-file` 评分的内容必须先保存到同日复盘，再基于当前内容重跑评分。确认只写 `daily_reviews.step8_plan.factor_decision`，并镜像兼容字段 `key_factor / secondary_factors`；其他第 8 步内容必须保留。确认后，Web/API 或 `daily-leaders confirm` 实际改写第 1～6 步时必须同步清除旧决定及兼容镜像，防止回验消费陈旧结论。未确认前不得写入 `factor_decision`。`to-draft` 只读取第 1、2 步，不读取第 8 步或上述兼容镜像；CLI/API/Web 都不得因此创建或更新 `TradeDraft` / `TradePlan`。
+`factor-score` 只追加审计 score run，但仍必须带 `--input-by`：每次有效请求都追加 `daily_review_factor_score_requests`，缓存命中也记录当前请求者与 resolved run；请求者不参与 cache key，旧 run 的 `diagnostics.request.input_by` 保留首次请求信息。`POST /api/review-factors/{date}/score` 的 `input_by` 同样是运行时必填，缺失、空值或仅空白均返回 422；Web 显式传 `web`，且 `input_by` 不进入 cache key。评分、人工确认与回验仅接受完整交易日历中的开放日，写入必须显式标注 `--input-by` / `input_by`。确认时服务端必须在同一写事务内用当前预填与第 1～6 步重建证据摘要；摘要与 score run 不一致时拒绝确认并要求重跑。CLI `factor-confirm` 读取数据库已保存步骤，因此通过 `--steps-file` 评分的内容必须先保存到同日复盘，再基于当前内容重跑评分。确认只写 `daily_reviews.step8_plan.factor_decision`，并镜像兼容字段 `key_factor / secondary_factors`；其他第 8 步内容必须保留。确认后，Web/API 或 `daily-leaders confirm` 实际改写第 1～6 步时必须同步清除旧决定及兼容镜像，防止回验消费陈旧结论。未确认前不得写入 `factor_decision`。`to-draft` 只读取第 1、2 步，不读取第 8 步或上述兼容镜像；CLI/API/Web 都不得因此创建或更新 `TradeDraft` / `TradePlan`。
 
 ### 严格 T+1 与 20 日指标
 
@@ -102,7 +102,7 @@ python3 main.py review factor-metrics [--days 20] [--json]
 ```
 
 - “20 日影子模式”只统计开放交易日；同日存在 retry 时优先采用人工决定引用的 canonical run，无确认时再取最新可缓存有效 run，避免失败 retry 覆盖已确认父 run。用 `factor-metrics --days 20` 比较成功率、降级率、覆盖率、接受/改选与分组表现；它不是自动定时器或放行开关。
-- API 对应为 `POST /api/review-factors/{date}/score`、`GET/PUT /api/review-factors/{date}/evaluation`、`GET /api/review-factors/metrics?days=20`。评分 body 可带 `input_by`，API 缺省为 `api`，Web 必须传 `web`；因子人工确认没有单独的 `review-factors` endpoint，Web/API 走 `PUT /api/review/{date}` 的 `step8_plan.factor_decision`，同样必须带 `score_run_id / status / input_by`。
+- API 对应为 `POST /api/review-factors/{date}/score`、`GET/PUT /api/review-factors/{date}/evaluation`、`GET /api/review-factors/metrics?days=20`。评分 body 的 `input_by` 运行时必填，缺失、空值或仅空白返回 422；Web 必须显式传 `web`，且 `input_by` 不进入 cache key。因子人工确认没有单独的 `review-factors` endpoint，Web/API 走 `PUT /api/review/{date}` 的 `step8_plan.factor_decision`，同样必须带 `score_run_id / status / input_by`。
 
 ## 保存字段契约
 

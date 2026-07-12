@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, StrictBool, StrictStr, field_validator
 
 from api.deps import get_db_conn
 from api.routes.review import build_review_prefill
@@ -17,12 +18,28 @@ from services.trinity_factor.cycle import (
 )
 from services.trinity_factor.service import TrinityFactorService
 from services.trinity_factor.review_input import (
-    normalize_review_payload_for_display,
     normalize_review_steps,
     validate_trade_date,
 )
 
 router = APIRouter(prefix="/api/review-factors", tags=["review-factors"])
+
+
+class ReviewFactorScoreRequest(BaseModel):
+    input_by: StrictStr
+    no_llm: StrictBool = False
+    steps: Optional[dict[str, Any]] = None
+    retry_of_run_id: Optional[StrictStr] = None
+
+    @field_validator("input_by")
+    @classmethod
+    def normalize_input_by(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("input_by must be a non-empty string")
+        return normalized
+
+
 def _date(value: str) -> str:
     try:
         return validate_trade_date(value)
@@ -36,36 +53,26 @@ def _review_steps(
     supplied: Any,
 ) -> dict[str, Any]:
     source = supplied if isinstance(supplied, Mapping) else Q.get_daily_review(conn, trade_date) or {}
-    return normalize_review_steps(normalize_review_payload_for_display(source))
+    return normalize_review_steps(source)
 
 
 @router.post("/{date}/score")
 def score_review_factors(
     date: str,
-    body: Optional[dict[str, Any]] = None,
+    body: ReviewFactorScoreRequest,
     conn: sqlite3.Connection = Depends(get_db_conn),
 ):
     trade_date = _date(date)
-    payload = body or {}
-    if not isinstance(payload.get("no_llm", False), bool):
-        raise HTTPException(422, "no_llm must be a boolean")
-    if not isinstance(payload.get("input_by"), str) or not payload["input_by"].strip():
-        raise HTTPException(422, "input_by must be a non-empty string")
-    input_by = payload["input_by"].strip()
     try:
         prefill = build_review_prefill(conn, trade_date)
         return TrinityFactorService().score(
             conn,
             trade_date=trade_date,
             prefill=prefill,
-            review_steps=_review_steps(conn, trade_date, payload.get("steps")),
-            no_llm=bool(payload.get("no_llm", False)),
-            retry_of_run_id=(
-                str(payload["retry_of_run_id"])
-                if payload.get("retry_of_run_id")
-                else None
-            ),
-            input_by=input_by,
+            review_steps=_review_steps(conn, trade_date, body.steps),
+            no_llm=body.no_llm,
+            retry_of_run_id=body.retry_of_run_id,
+            input_by=body.input_by,
         )
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc

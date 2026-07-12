@@ -207,14 +207,14 @@ class AntigravityStructuredRunner:
                     log_text=read_text_if_exists(log_file),
                 )
                 last_sha = _sha256(stdout) if stdout else None
-                validation_error: ValueError | TypeError | json.JSONDecodeError | None = None
+                validation_error: ValueError | TypeError | RecursionError | None = None
                 if returncode == 0 and stdout.strip():
                     try:
                         parsed_output = validator(stdout)
                         valid_raw_json = json.loads(stdout)
                         if not isinstance(valid_raw_json, Mapping):
                             raise ValueError("validated output must be a JSON object")
-                    except (ValueError, TypeError, json.JSONDecodeError) as exc:
+                    except (ValueError, TypeError, RecursionError) as exc:
                         validation_error = exc
                     else:
                         return self._result(
@@ -556,7 +556,7 @@ def _stdout_error_segments(stdout: str) -> list[str]:
         return []
     try:
         payload = json.loads(stdout)
-    except (TypeError, json.JSONDecodeError):
+    except (TypeError, json.JSONDecodeError, RecursionError):
         return _explicit_error_segments(stdout)
     if not isinstance(payload, Mapping):
         return []
@@ -573,19 +573,24 @@ def _stdout_error_segments(stdout: str) -> list[str]:
 
 
 def _flatten_error_values(value: Any, *, key: str = "") -> list[str]:
-    if isinstance(value, Mapping):
-        out: list[str] = []
-        for child_key, child in value.items():
-            out.extend(_flatten_error_values(child, key=str(child_key)))
-        return out
-    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
-        out = []
-        for child in value:
-            out.extend(_flatten_error_values(child, key=key))
-        return out
-    if key.lower() == "code" and str(value) in {"401", "429"}:
-        return [f"code {value}"]
-    return [str(value)]
+    out: list[str] = []
+    stack: list[tuple[Any, str]] = [(value, key)]
+    while stack:
+        current, current_key = stack.pop()
+        if isinstance(current, Mapping):
+            stack.extend(
+                (child, str(child_key))
+                for child_key, child in reversed(list(current.items()))
+            )
+            continue
+        if isinstance(current, Sequence) and not isinstance(current, (str, bytes)):
+            stack.extend((child, current_key) for child in reversed(current))
+            continue
+        if current_key.lower() == "code" and str(current) in {"401", "429"}:
+            out.append(f"code {current}")
+        else:
+            out.append(str(current))
+    return out
 
 
 def _explicit_error_segments(text: str) -> list[str]:

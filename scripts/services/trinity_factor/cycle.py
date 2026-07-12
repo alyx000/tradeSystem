@@ -22,6 +22,7 @@ from .repository import (
 
 _DECISION_STATUSES = frozenset({"accepted", "overridden", "undetermined"})
 _OUTCOMES = frozenset({"hit", "partial", "miss", "missing_data", "not_applicable"})
+_CANONICAL_SUCCESS_STATUSES = frozenset({"success", "sector_failed", "rule_only"})
 
 
 def confirm_factor_decision(
@@ -230,26 +231,36 @@ def _sign(value: float) -> int:
     return 1 if value > 0 else -1 if value < 0 else 0
 
 
+def _first_numeric(content: Mapping[str, Any], *keys: str) -> float | None:
+    for key in keys:
+        try:
+            return float(content[key])
+        except (KeyError, TypeError, ValueError):
+            continue
+    return None
+
+
 def _market_direction(factor: Any) -> tuple[int | None, list[int]]:
     content = _fact_content(factor, "daily_market")
     if not isinstance(content, Mapping):
         return None, []
     votes: list[int] = []
-    for key in ("sh_index_change", "sz_index_change"):
-        try:
-            votes.append(_sign(float(content[key])))
-        except (KeyError, TypeError, ValueError):
-            continue
-    for positive_key, negative_key in (
-        ("up_count", "down_count"),
-        ("limit_up_count", "limit_down_count"),
+    for keys in (
+        ("sh_index_change_pct", "sh_index_change"),
+        ("sz_index_change_pct", "sz_index_change"),
     ):
-        try:
-            votes.append(
-                _sign(float(content[positive_key]) - float(content[negative_key]))
-            )
-        except (KeyError, TypeError, ValueError):
+        value = _first_numeric(content, *keys)
+        if value is not None:
+            votes.append(_sign(value))
+    for positive_keys, negative_keys in (
+        (("advance_count", "up_count"), ("decline_count", "down_count")),
+        (("limit_up_count",), ("limit_down_count",)),
+    ):
+        positive = _first_numeric(content, *positive_keys)
+        negative = _first_numeric(content, *negative_keys)
+        if positive is None or negative is None:
             continue
+        votes.append(_sign(positive - negative))
     if not votes:
         return None, []
     return _sign(sum(votes)), votes
@@ -593,25 +604,18 @@ def build_factor_metrics(conn: sqlite3.Connection, *, days: int = 20) -> dict[st
         rows = runs_by_date[trade_date]
         review = Q.get_daily_review(conn, trade_date)
         decision = _factor_decision_from_review(review)
-        selected_run = None
+        decision_run = None
         if decision and decision.get("score_run_id"):
             decision_run_id = str(decision["score_run_id"])
-            selected_run = next(
+            decision_run = next(
                 (row for row in rows if row["score_run_id"] == decision_run_id),
                 None,
             ) or get_score_run(conn, decision_run_id)
-            if selected_run and selected_run.get("trade_date") != trade_date:
-                selected_run = None
-        if selected_run is None:
-            selected_run = next(
-                (
-                    row for row in rows
-                    if row.get("status") in {"success", "sector_failed", "rule_only"}
-                    and row.get("is_cacheable")
-                ),
-                rows[0],
-            )
-        selected.append(selected_run)
+            if decision_run and decision_run.get("trade_date") != trade_date:
+                decision_run = None
+        selected_run = _canonical_score_run(rows, decision_run=decision_run)
+        if selected_run is not None:
+            selected.append(selected_run)
 
     evaluations = list_evaluations(conn, limit=max(100, days * 10))
     evaluation_by_run = {row["score_run_id"]: row for row in evaluations}
@@ -722,15 +726,41 @@ def _resolve_source_run(
         return run
     review = Q.get_daily_review(conn, source_date)
     decision = _factor_decision_from_review(review)
+    decision_run = None
     if decision and decision.get("score_run_id"):
-        run = get_score_run(conn, str(decision["score_run_id"]))
-        if run and run["trade_date"] == source_date:
-            return run
+        candidate = get_score_run(conn, str(decision["score_run_id"]))
+        if candidate and candidate["trade_date"] == source_date:
+            decision_run = candidate
     runs = list_score_runs(conn, trade_date=source_date, limit=50)
-    for run in runs:
-        if run.get("system_recommendation_json"):
-            return run
+    run = _canonical_score_run(runs, decision_run=decision_run)
+    if run is not None:
+        return run
     raise ValueError("no score run exists for strict source review date")
+
+
+def _canonical_score_run(
+    runs: list[dict[str, Any]],
+    *,
+    decision_run: Mapping[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """从最新优先的 runs 中选人工确认、成功类或失败降级的 canonical run。"""
+    if decision_run is not None:
+        return dict(decision_run)
+    successful = next(
+        (
+            run
+            for run in runs
+            if run.get("status") in _CANONICAL_SUCCESS_STATUSES
+            and run.get("is_cacheable")
+        ),
+        None,
+    )
+    if successful is not None:
+        return successful
+    return next(
+        (run for run in runs if run.get("system_recommendation_json")),
+        None,
+    )
 
 
 def _factor_code(value: Any, *, required: bool = False) -> str | None:

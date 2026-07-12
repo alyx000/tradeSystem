@@ -42,7 +42,7 @@ def _load_json(raw: str | Mapping) -> Mapping:
         )
     except TrinityValidationError:
         raise
-    except (TypeError, json.JSONDecodeError) as exc:
+    except (TypeError, json.JSONDecodeError, RecursionError) as exc:
         raise TrinityValidationError("response is not valid JSON") from exc
     if not isinstance(payload, Mapping):
         raise TrinityValidationError("response must be a JSON object")

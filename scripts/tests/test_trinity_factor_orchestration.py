@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import hashlib
+import json
+import subprocess
+
 import pytest
 
 from db.connection import get_connection
@@ -11,7 +15,7 @@ from services.trinity_factor.evidence import (
     build_sector_llm_input,
 )
 from services.trinity_factor.repository import list_score_requests, list_score_runs
-from services.trinity_factor.runner import StructuredRunResult
+from services.trinity_factor.runner import AntigravityStructuredRunner, StructuredRunResult
 from services.trinity_factor.scoring import score_factor
 from services.trinity_factor.service import TrinityFactorService
 from services.trinity_factor import service as service_module
@@ -196,6 +200,34 @@ def test_evidence_snapshot_has_exact_factors_and_only_six_core_sectors() -> None
     assert len(snapshot["sector_candidates"]) == 6
     assert all(row["candidate_tier"] == "core" for row in snapshot["sector_candidates"])
     assert snapshot["ruleset_version"] == RULESET_VERSION
+
+
+def test_evidence_snapshot_keeps_production_daily_market_fields() -> None:
+    prefill = _prefill([])
+    prefill["market"] = {
+        "date": "2026-07-02",
+        "total_amount": 13542.7,
+        "sh_index_change_pct": -1.63,
+        "sz_index_change_pct": -2.22,
+        "advance_count": 863,
+        "decline_count": 4386,
+        "limit_up_count": 42,
+        "limit_down_count": 11,
+    }
+
+    snapshot = build_evidence_snapshot("2026-07-02", prefill, {})
+
+    market_factor = next(
+        row
+        for row in snapshot["factor_candidates"]
+        if row["factor_code"] == "market_node"
+    )
+    daily_market = next(
+        item
+        for item in market_factor["evidence_items"]
+        if item["source"] == "daily_market"
+    )
+    assert daily_market["content"] == prefill["market"]
 
 
 def test_llm_inputs_sort_ids_and_hide_rule_quality_caps_and_ranking() -> None:
@@ -420,6 +452,54 @@ def test_factor_failure_never_exposes_numeric_scores_and_skips_sector(conn, monk
     assert result["status"] == "factor_failed"
     assert result["factor_scores"] is None
     assert len(runner.calls) == 1
+
+
+def test_deep_json_factor_failure_persists_safe_run_and_request_audit(
+    conn, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LLM_MODEL", "model-a")
+    monkeypatch.setenv("ANTIGRAVITY_BIN", "/fake/agy")
+    monkeypatch.setenv("LLM_TIMEOUT_SECONDS", "180")
+    invalid = "[" * 1200 + "]" * 1200
+    attempts = 0
+
+    def fake_run(command, **kwargs):
+        nonlocal attempts
+        if command[-1] == "--version":
+            return subprocess.CompletedProcess(command, 0, stdout="1.0", stderr="")
+        attempts += 1
+        return subprocess.CompletedProcess(command, 0, stdout=invalid, stderr="")
+
+    service = TrinityFactorService(
+        runner=AntigravityStructuredRunner(run_command=fake_run)
+    )
+    result = service.score(
+        conn,
+        trade_date="2026-07-10",
+        prefill=_prefill(),
+        review_steps=_steps(),
+        input_by="test",
+    )
+
+    stored_run = list_score_runs(conn, trade_date="2026-07-10")[0]
+    requests = list_score_requests(conn, resolved_run_id=result["score_run_id"])
+    diagnostics_text = json.dumps(stored_run["diagnostics_json"], ensure_ascii=False)
+
+    assert result["status"] == "factor_failed"
+    assert attempts == 2
+    assert stored_run["status"] == "factor_failed"
+    assert stored_run["attempt_count"] == 2
+    assert stored_run["valid_raw_json"] is None
+    assert stored_run["raw_output_sha256_json"] == {
+        "factor": hashlib.sha256(invalid.encode()).hexdigest()
+    }
+    assert stored_run["diagnostics_json"]["factor"]["diagnostics"]["message"] == (
+        "response is not valid JSON"
+    )
+    assert invalid not in diagnostics_text
+    assert len(requests) == 1
+    assert requests[0]["cache_hit"] is False
+    assert requests[0]["resolved_run_id"] == stored_run["score_run_id"]
 
 
 def test_sector_failure_preserves_primary_and_uses_deterministic_core_order(

@@ -2906,6 +2906,48 @@ class TestEnrichMarketRow:
         assert negative["facts"]["capacity_leader"] is None
         assert negative["facts"]["lead_stock"] is None
 
+    def test_projection_candidate_backfills_hidden_negative_industry_moneyflow(self):
+        from api.routes.review import _build_review_signals, _build_sector_projection_candidates
+
+        market = {
+            "sector_industry": {
+                "data": [{"name": "负流候选", "change_pct": 1.2}],
+            },
+            "sector_moneyflow_ths": {
+                "data": [
+                    {"name": f"正流{i}", "net_amount": 13.0 - i, "pct_change": 1.0}
+                    for i in range(1, 7)
+                ] + [
+                    {"name": "负流候选", "net_amount": -8.0, "pct_change": -1.0},
+                ],
+            },
+        }
+        signals = _build_review_signals(market)
+
+        displayed = signals["sectors"]["industry_moneyflow_rows"]
+        assert len(displayed) == 5
+        assert [row["name"] for row in displayed] == [f"正流{i}" for i in range(1, 6)]
+
+        rows = _build_sector_projection_candidates(
+            trade_date="2026-05-20",
+            market=market,
+            post_market_env=None,
+            main_themes=[],
+            teacher_notes=[],
+            industry_info=[],
+            sector_signals=signals["sectors"],
+        )
+
+        by_key = {item["sector_key"]: item for item in rows}
+        negative = by_key["industry:负流候选"]
+        assert negative["facts"]["net_amount_yi"] == -8.0
+        assert any(
+            item["source"] == "industry_moneyflow"
+            and item["polarity"] == "counter"
+            for item in negative["evidence_items"]
+        )
+        assert "industry:正流6" not in by_key
+
     def test_projection_candidates_split_legacy_dc_concepts_from_industries(self):
         from api.routes.review import _build_review_signals, _build_sector_projection_candidates
 
@@ -3215,7 +3257,14 @@ def _seed_factor_trade_date(db_path, trade_date="2026-07-10"):
     conn.close()
 
 
-def _seed_factor_score_run(db_path, *, run_id="api-run-1", trade_date="2026-07-10"):
+def _seed_factor_score_run(
+    db_path,
+    *,
+    run_id="api-run-1",
+    trade_date="2026-07-10",
+    status="rule_only",
+    retry_of_run_id=None,
+):
     from api.routes.review import build_review_prefill
     from services.trinity_factor.review_input import normalize_review_steps
     from services.trinity_factor.repository import insert_score_run
@@ -3232,10 +3281,10 @@ def _seed_factor_score_run(db_path, *, run_id="api-run-1", trade_date="2026-07-1
     insert_score_run(conn, {
         "score_run_id": run_id,
         "trade_date": trade_date,
-        "retry_of_run_id": None,
+        "retry_of_run_id": retry_of_run_id,
         "cache_key": f"cache-{run_id}",
         "input_digest": input_digest,
-        "is_cacheable": True,
+        "is_cacheable": status in {"success", "sector_failed", "rule_only"},
         "provider": "rules",
         "requested_model": "disabled",
         "actual_model": None,
@@ -3254,10 +3303,14 @@ def _seed_factor_score_run(db_path, *, run_id="api-run-1", trade_date="2026-07-1
             "supporting": [{"factor_code": "sector_rhythm"}],
             "recommendation_source": "rule_fallback",
         },
-        "valid_raw_json": None,
+        "valid_raw_json": (
+            {"factor": {"schema_version": "factor-v1"}}
+            if status in {"success", "sector_failed"}
+            else None
+        ),
         "raw_output_sha256_json": None,
         "diagnostics_json": {},
-        "status": "rule_only",
+        "status": status,
         "attempt_count": 0,
         "duration_ms": 0,
     })
@@ -3286,24 +3339,107 @@ def test_review_factor_score_no_llm_and_cache(client, db_path):
     assert second.json()["score_run_id"] == first.json()["score_run_id"]
     assert second.json()["cache_hit"] is True
     assert client.post(
-        "/api/review-factors/2026-07-10/score", json={"no_llm": "yes"}
+        "/api/review-factors/2026-07-10/score",
+        json={"no_llm": "yes", "input_by": "web"},
     ).status_code == 422
 
 
-def test_review_factor_score_requires_explicit_input_by(client, db_path):
-    _seed_factor_trade_date(db_path)
-    response = client.post("/api/review-factors/2026-07-10/score", json={
-        "no_llm": True,
+def test_review_factor_score_persists_production_market_fields_from_db(
+    client, db_path
+):
+    from services.trinity_factor.repository import list_score_runs
+
+    _seed_factor_trade_date(db_path, trade_date="2026-07-02")
+    conn = get_connection(db_path)
+    Q.upsert_daily_market(conn, {
+        "date": "2026-07-02",
+        "total_amount": 13542.7,
+        "sh_index_change_pct": -2.0314,
+        "sz_index_change_pct": -3.8486,
+        "advance_count": 2219,
+        "decline_count": 3162,
+        "limit_up_count": 42,
+        "limit_down_count": 11,
     })
+    conn.commit()
+    conn.close()
+
+    response = client.post(
+        "/api/review-factors/2026-07-02/score",
+        json={"no_llm": True, "input_by": "web"},
+    )
+
+    assert response.status_code == 200
+    conn = get_connection(db_path)
+    stored_run = list_score_runs(conn, trade_date="2026-07-02")[0]
+    conn.close()
+    market_factor = next(
+        row
+        for row in stored_run["evidence_snapshot_json"]["factor_candidates"]
+        if row["factor_code"] == "market_node"
+    )
+    daily_market = next(
+        item
+        for item in market_factor["evidence_items"]
+        if item["source"] == "daily_market"
+    )
+    assert daily_market["content"] == {
+        "date": "2026-07-02",
+        "total_amount": 13542.7,
+        "sh_index_change_pct": -2.0314,
+        "sz_index_change_pct": -3.8486,
+        "advance_count": 2219,
+        "decline_count": 3162,
+        "limit_up_count": 42,
+        "limit_down_count": 11,
+    }
+
+
+@pytest.mark.parametrize("input_by", [None, "", "  \t"])
+def test_review_factor_score_requires_explicit_input_by(client, db_path, input_by):
+    _seed_factor_trade_date(db_path)
+    body = {"no_llm": True}
+    if input_by is not None:
+        body["input_by"] = input_by
+    response = client.post("/api/review-factors/2026-07-10/score", json=body)
 
     assert response.status_code == 422
     assert "input_by" in response.text
 
 
+@pytest.mark.parametrize(
+    "invalid_field",
+    [
+        {"steps": []},
+        {"retry_of_run_id": 123},
+    ],
+)
+def test_review_factor_score_rejects_non_schema_types(client, db_path, invalid_field):
+    _seed_factor_trade_date(db_path)
+    response = client.post(
+        "/api/review-factors/2026-07-10/score",
+        json={"no_llm": True, "input_by": "web", **invalid_field},
+    )
+
+    assert response.status_code == 422
+
+
+def test_review_factor_score_openapi_requires_body_and_input_by(client):
+    openapi = client.app.openapi()
+    operation = openapi["paths"]["/api/review-factors/{date}/score"]["post"]
+    request_body = operation["requestBody"]
+    assert request_body["required"] is True
+
+    schema_ref = request_body["content"]["application/json"]["schema"]["$ref"]
+    schema_name = schema_ref.rsplit("/", 1)[-1]
+    request_schema = openapi["components"]["schemas"][schema_name]
+    assert "input_by" in request_schema["required"]
+
+
 def test_review_factor_score_rejects_invalid_calendar_date(client):
     response = client.post(
         "/api/review-factors/2026-99-99/score",
-        json={"no_llm": True},
+        json={"no_llm": True, "input_by": "web"},
     )
 
     assert response.status_code == 422
@@ -3423,6 +3559,47 @@ def test_review_factor_score_and_confirm_share_summary_input_normalization(clien
     assert saved.status_code == 200
 
 
+def test_review_factor_partial_confirm_canonicalizes_historical_text_steps(
+    client, db_path
+):
+    _seed_factor_trade_date(db_path)
+    conn = get_connection(db_path)
+    Q.upsert_daily_review(conn, "2026-07-10", {
+        "step1_market": {"judgement": "结构偏弱"},
+    })
+    conn.commit()
+    assert isinstance(Q.get_daily_review(conn, "2026-07-10")["step1_market"], str)
+    conn.close()
+
+    scored = client.post("/api/review-factors/2026-07-10/score", json={
+        "steps": {"step1_market": {"judgement": "结构偏弱"}},
+        "no_llm": True,
+        "input_by": "web",
+    })
+    assert scored.status_code == 200
+
+    confirmed = client.put("/api/review/2026-07-10", json={
+        "step8_plan": {
+            "factor_decision": {
+                "score_run_id": scored.json()["score_run_id"],
+                "status": "overridden",
+                "primary_factor": "market_node",
+                "supporting_factors": [],
+                "override_reason": "人工确认大盘节点约束更强",
+                "input_by": "web",
+            },
+        },
+    })
+    assert confirmed.status_code == 200
+
+    unrelated = client.put("/api/review/2026-07-10", json={
+        "step7_positions": {"notes": "仅更新持仓复盘"},
+    })
+    assert unrelated.status_code == 200
+    step8 = json.loads(client.get("/api/review/2026-07-10").json()["step8_plan"])
+    assert step8["factor_decision"]["score_run_id"] == scored.json()["score_run_id"]
+
+
 def test_review_factor_confirmation_checks_digest_inside_write_transaction(
     client, db_path, monkeypatch
 ):
@@ -3486,6 +3663,33 @@ def test_review_factor_evaluation_is_strict_and_confirmable(client, db_path):
     )
     assert wrong_day.status_code == 422
     assert "evaluation_trade_date must be an open trade date" in wrong_day.text
+
+
+def test_review_factor_evaluation_defaults_to_success_parent_before_failed_retry(
+    client, db_path
+):
+    _seed_factor_score_run(db_path, run_id="api-parent", status="success")
+    _seed_factor_score_run(
+        db_path,
+        run_id="api-failed-retry",
+        status="factor_failed",
+        retry_of_run_id="api-parent",
+    )
+    conn = get_connection(db_path)
+    Q.upsert_trade_calendar(conn, [
+        {"date": "2026-07-10", "is_open": 1},
+        {"date": "2026-07-13", "is_open": 1},
+    ])
+    conn.commit()
+    conn.close()
+
+    response = client.get(
+        "/api/review-factors/2026-07-13/evaluation",
+        params={"source_date": "2026-07-10"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["score_run_id"] == "api-parent"
 
 
 def test_review_factor_metrics_endpoint(client, db_path):

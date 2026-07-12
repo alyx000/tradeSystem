@@ -150,10 +150,7 @@ def test_factor_score_and_confirm_share_summary_input_normalization(
         conn,
         "2026-07-10",
         {
-            "step1_market": {
-                "judgement": "结构偏弱",
-                "notes": "判断：结构偏弱",
-            },
+            "step1_market": {"judgement": "结构偏弱"},
         },
     )
     conn.commit()

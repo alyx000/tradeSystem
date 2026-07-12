@@ -190,6 +190,35 @@ def _directional_prefill(
     }
 
 
+def _production_directional_prefill(
+    *,
+    date: str,
+    sh_change: float,
+    sz_change: float,
+    advance_count: int,
+    decline_count: int,
+    limit_up_count: int,
+    limit_down_count: int,
+) -> dict:
+    return {
+        "market": {
+            "date": date,
+            "total_amount": 15000,
+            "sh_index_change_pct": sh_change,
+            "sz_index_change_pct": sz_change,
+            "advance_count": advance_count,
+            "decline_count": decline_count,
+            "limit_up_count": limit_up_count,
+            "limit_down_count": limit_down_count,
+        },
+        "review_signals": {
+            "market": {"market_structure_rows": [{"name": "沪市A股"}]},
+            "sectors": {"projection_candidates": []},
+            "emotion": {"ladder_rows": []},
+        },
+    }
+
+
 def _style_prefill(*, date: str, cap: str, board: str) -> dict:
     return {
         "market": {
@@ -351,6 +380,56 @@ def test_t1_evaluation_uses_strict_next_trade_date_and_missing_review_semantics(
         )
 
 
+def test_t1_default_prefers_cacheable_success_parent_over_later_failed_retry(conn) -> None:
+    _insert_run(conn, run_id="parent-run", status="success")
+    _insert_run(
+        conn,
+        run_id="failed-retry",
+        status="factor_failed",
+        retry_of_run_id="parent-run",
+    )
+
+    suggestion = suggest_t1_evaluation(
+        conn,
+        evaluation_trade_date="2026-07-13",
+        source_review_date="2026-07-10",
+        score_run_id=None,
+        prefill=_evaluation_prefill(),
+    )
+
+    assert suggestion["score_run_id"] == "parent-run"
+
+
+def test_t1_default_falls_back_to_latest_recommended_failed_run(conn) -> None:
+    _insert_run(conn, run_id="older-failure", status="factor_failed")
+    _insert_run(conn, run_id="latest-failure", status="factor_failed")
+
+    suggestion = suggest_t1_evaluation(
+        conn,
+        evaluation_trade_date="2026-07-13",
+        source_review_date="2026-07-10",
+        score_run_id=None,
+        prefill=_evaluation_prefill(),
+    )
+
+    assert suggestion["score_run_id"] == "latest-failure"
+
+
+def test_t1_explicit_failed_run_id_is_respected(conn) -> None:
+    _insert_run(conn, run_id="successful-run", status="success")
+    _insert_run(conn, run_id="explicit-failure", status="factor_failed")
+
+    suggestion = suggest_t1_evaluation(
+        conn,
+        evaluation_trade_date="2026-07-13",
+        source_review_date="2026-07-10",
+        score_run_id="explicit-failure",
+        prefill=_evaluation_prefill(),
+    )
+
+    assert suggestion["score_run_id"] == "explicit-failure"
+
+
 def test_t1_objective_suggestion_and_manual_confirmation(conn) -> None:
     Q.upsert_trade_calendar(conn, [
         {"date": "2026-07-10", "is_open": 1},
@@ -413,6 +492,49 @@ def test_t1_market_reversal_is_miss_instead_of_counting_available_sources(conn) 
     comparison = suggestion["actual_evidence_json"]["comparison"]
     assert comparison["source_direction"] == 1
     assert comparison["actual_direction"] == -1
+
+
+def test_t1_market_direction_reads_production_daily_market_fields(conn) -> None:
+    source_prefill = _production_directional_prefill(
+        date="2026-07-10",
+        sh_change=2.0,
+        sz_change=2.5,
+        advance_count=4200,
+        decline_count=700,
+        limit_up_count=10,
+        limit_down_count=10,
+    )
+    actual_prefill = _production_directional_prefill(
+        date="2026-07-13",
+        sh_change=-8.8,
+        sz_change=-9.2,
+        advance_count=100,
+        decline_count=5000,
+        limit_up_count=10,
+        limit_down_count=10,
+    )
+    _insert_run(
+        conn,
+        primary="market_node",
+        evidence_snapshot=build_evidence_snapshot("2026-07-10", source_prefill, {}),
+    )
+    Q.upsert_daily_review(conn, "2026-07-13", {"step1_market": {"notes": "已复盘"}})
+    conn.commit()
+
+    suggestion = suggest_t1_evaluation(
+        conn,
+        evaluation_trade_date="2026-07-13",
+        source_review_date="2026-07-10",
+        score_run_id="run-1",
+        prefill=actual_prefill,
+    )
+
+    assert suggestion["system_outcome"] == "miss"
+    comparison = suggestion["actual_evidence_json"]["comparison"]
+    assert comparison["source_direction"] == 1
+    assert comparison["actual_direction"] == -1
+    assert comparison["source_votes"] == [1, 1, 1, 0]
+    assert comparison["actual_votes"] == [-1, -1, -1, 0]
 
 
 def test_t1_style_switch_is_miss(conn) -> None:

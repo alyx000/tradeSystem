@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,7 @@ import pytest
 from services.trinity_factor.runner import (
     FACTOR_PROMPT_VERSION,
     AntigravityStructuredRunner,
+    _flatten_error_values,
     prompt_template_sha256,
 )
 from services.trinity_factor.validation import TrinityValidationError
@@ -221,6 +223,100 @@ def test_invalid_json_or_schema_retries_only_once_and_never_retains_raw_text(
     assert result.raw_output_sha256 == hashlib.sha256(invalid.encode()).hexdigest()
     assert invalid not in json.dumps(result.diagnostics, ensure_ascii=False)
     assert "买入" not in json.dumps(result.to_record(), ensure_ascii=False)
+    assert attempts == 2
+
+
+def test_pathologically_deep_json_retries_once_as_schema_invalid_without_raw_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _config(monkeypatch)
+    invalid = "[" * 1200 + "]" * 1200
+    attempts = 0
+
+    def fake_run(command, **kwargs):
+        nonlocal attempts
+        if command[-1] == "--version":
+            return subprocess.CompletedProcess(command, 0, stdout="1.0", stderr="")
+        attempts += 1
+        return subprocess.CompletedProcess(command, 0, stdout=invalid, stderr="")
+
+    result = _run(
+        AntigravityStructuredRunner(run_command=fake_run),
+        prompt_version=FACTOR_PROMPT_VERSION,
+        prompt="instructions",
+        input_payload={},
+        validator=lambda raw: {"validated": True},
+    )
+
+    assert result.status == "schema_invalid"
+    assert result.attempt_count == 2
+    assert result.valid_raw_json is None
+    assert result.parsed_output is None
+    assert result.raw_output_sha256 == hashlib.sha256(invalid.encode()).hexdigest()
+    assert invalid not in json.dumps(result.diagnostics, ensure_ascii=False)
+    assert invalid not in json.dumps(result.to_record(), ensure_ascii=False)
+    assert attempts == 2
+
+
+def test_flatten_deep_error_object_is_iterative_and_preserves_traversal_order() -> None:
+    depth = 985
+    invalid = (
+        '{"status":"error","error":{"first":"one","nested":'
+        + '{"x":' * depth
+        + '"ordinary schema problem"'
+        + "}" * depth
+        + ',"last":"three"}}'
+    )
+
+    def parse_and_flatten() -> list[str]:
+        payload = json.loads(invalid)
+        assert payload["status"] == "error"
+        return _flatten_error_values(payload["error"])
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        values = executor.submit(parse_and_flatten).result()
+
+    assert values == ["one", "ordinary schema problem", "three"]
+
+
+def test_deep_error_object_retries_once_as_schema_invalid_without_recursion_escape(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _config(monkeypatch)
+    depth = 900
+    invalid = (
+        '{"status":"error","error":'
+        + '{"x":' * depth
+        + '"ordinary schema problem"'
+        + "}" * depth
+        + "}"
+    )
+    attempts = 0
+
+    def fake_run(command, **kwargs):
+        nonlocal attempts
+        if command[-1] == "--version":
+            return subprocess.CompletedProcess(command, 0, stdout="1.0", stderr="")
+        attempts += 1
+        return subprocess.CompletedProcess(command, 0, stdout=invalid, stderr="")
+
+    result = _run(
+        AntigravityStructuredRunner(run_command=fake_run),
+        prompt_version=FACTOR_PROMPT_VERSION,
+        prompt="instructions",
+        input_payload={},
+        validator=lambda raw: (_ for _ in ()).throw(
+            TrinityValidationError("schema mismatch")
+        ),
+    )
+
+    assert result.status == "schema_invalid"
+    assert result.attempt_count == 2
+    assert result.valid_raw_json is None
+    assert result.parsed_output is None
+    assert result.raw_output_sha256 == hashlib.sha256(invalid.encode()).hexdigest()
+    assert invalid not in json.dumps(result.diagnostics, ensure_ascii=False)
+    assert invalid not in json.dumps(result.to_record(), ensure_ascii=False)
     assert attempts == 2
 
 

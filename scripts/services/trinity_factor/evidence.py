@@ -270,8 +270,11 @@ def _factor_objective_items(
         market_fact = _pick_fields(
             market,
             (
-                "date", "total_amount", "sh_index_change", "sz_index_change",
-                "up_count", "down_count", "limit_up_count", "limit_down_count",
+                "date", "total_amount",
+                "sh_index_change_pct", "sz_index_change_pct",
+                "advance_count", "decline_count",
+                "limit_up_count", "limit_down_count",
+                "sh_index_change", "sz_index_change", "up_count", "down_count",
             ),
         )
         if market_fact:
