@@ -1,0 +1,5 @@
+DEFAULT_TOP_N = 10
+DEFAULT_BACKFILL_YEARS = 5
+EPSILON = 1e-8
+UNCLASSIFIED = "未分类"
+REPORT_DIR = "data/reports/new-high"

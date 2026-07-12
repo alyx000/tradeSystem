@@ -92,6 +92,24 @@ def _ensure_margin_index_correlation_daily(conn: sqlite3.Connection) -> None:
     conn.commit()  # 仅在确需修复时才提交
 
 
+def _ensure_new_high_tables(conn: sqlite3.Connection) -> None:
+    """v38 兜底：确保前复权历史新高两张派生表存在（版本无关）。"""
+    names = {
+        row[0]
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' "
+            "AND name IN ('stock_adjusted_high_watermark', 'daily_new_high_stats')"
+        ).fetchall()
+    }
+    if {"stock_adjusted_high_watermark", "daily_new_high_stats"}.issubset(names):
+        return
+    from .schema import _SQL_DAILY_NEW_HIGH_STATS, _SQL_STOCK_ADJUSTED_HIGH_WATERMARK
+
+    conn.executescript(_SQL_STOCK_ADJUSTED_HIGH_WATERMARK)
+    conn.executescript(_SQL_DAILY_NEW_HIGH_STATS)
+    conn.commit()  # 仅在确需修复时才提交
+
+
 def _ensure_market_timing_signal(conn: sqlite3.Connection) -> None:
     """v32 兜底：确保 market_timing_signal 表存在(版本无关)。
 
@@ -718,6 +736,12 @@ def migrate(conn: sqlite3.Connection) -> None:
         set_schema_version(conn, 37)
         conn.commit()
 
+    if version < 38:
+        logger.info("Applying schema v38: adjusted new-high statistics")
+        init_schema(conn)
+        set_schema_version(conn, 38)
+        conn.commit()
+
     if version < 39:
         logger.info(
             "Applying schema v39: daily review factor score runs + request audit + evaluations"
@@ -736,6 +760,7 @@ def migrate(conn: sqlite3.Connection) -> None:
     _ensure_margin_index_correlation_daily(conn)
     _ensure_cognition_instance_feedback_columns(conn)
     _ensure_factor_score_request_audit(conn)
+    _ensure_new_high_tables(conn)
 
 # ──────────────────────────────────────────────────────────────
 # YAML 数据导入

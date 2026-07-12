@@ -67,7 +67,7 @@ python3 -m pytest scripts/tests/test_cli_smoke.py -v
 
 ### 2.1 新增顶层 subparser 时必加 ARCHITECTURE_COMMANDS
 
-**`scripts/main.py` 新增任何顶层子命令组**（如 `review` / `recommend` / `ingest` / `plan` / `knowledge` / `executions` 等），不仅要在 `INDEX.md` 加依赖行，**还必须**：
+**`scripts/main.py` 新增任何顶层子命令组**（如 `review` / `recommend` / `new-high` / `ingest` / `plan` / `knowledge` / `executions` 等），不仅要在 `INDEX.md` 加依赖行，**还必须**：
 
 1. 在 `scripts/tests/test_cli_smoke.py` 的 `ARCHITECTURE_COMMANDS` 数组里**加参数化用例**，覆盖：
    - 子命令的所有 mode（如 `recommend daily` / `recommend weekly`）
@@ -91,6 +91,7 @@ python3 -m pytest scripts/tests/test_cli_smoke.py -v
 | `cli.py` 的 `holdings-*`（含 `--thesis-id` 关联语义）/ `watchlist-*` / `add-trade` / `blacklist-*` | `portfolio-manager/SKILL.md` |
 | `cli.py` 的 `query-notes/db-search` | `daily-review/SKILL.md` |
 | `main.py` 的 `pre/post/schedule` | `market-tasks/SKILL.md` |
+| `scripts/cli/new_high.py` 或 `scripts/services/new_high/` | `market-tasks/SKILL.md` + `INDEX.md` 中 `new-high` 行 |
 | `scripts/cli/trend_leader.py` 或 `scripts/services/trend_leader/` | `market-tasks/SKILL.md` + `INDEX.md` 中 `trend-leader` 行 |
 | `scripts/utils/llm_cli.py` 或 LLM CLI/env 语义调整 | `market-tasks/SKILL.md` + `INDEX.md` 中 recommend/research-digest/cognition-digest 行 |
 | `scripts/workflows/research-digest-workflow.mjs` / `scripts/workflows/huibo_helper.py` / 慧博 Antigravity 诊断语义调整 / `HUIBO_REPORT_PDF_DIR` 下载归档目录约定调整 | `market-tasks/SKILL.md` + `INDEX.md` 中 research-digest workflow 行 |

@@ -1,4 +1,4 @@
-.PHONY: help bootstrap doctor check check-web check-scripts hooks-install dev dev-api dev-web commands-doc commands-check dashboard-open search-open commands-open plan-open knowledge-open ingest-open teachers-open holdings-open watchlist-open calendar-open industry-open db-init db-sync db-reconcile holdings holdings-refresh watchlist notes-search db-search market-open market-json market-envelope review-open review-prefill pre post regulatory ingest-list ingest-run-post ingest-run-interface ingest-inspect ingest-health ingest-reconcile plan-draft plan-show-draft plan-confirm plan-diagnose plan-review knowledge-list knowledge-add-note knowledge-draft-from-asset knowledge-draft-from-teacher-note today-open today-close today-pre today-post today-regulatory today-evening today-watchlist today-obsidian today-ingest-inspect today-ingest-health recommend-daily recommend-daily-dry recommend-weekly recommend-weekly-dry recommend-trace volume-watch-daily volume-watch-daily-dry volume-watch-trend string-yang-daily string-yang-daily-dry research-digest research-digest-dry earnings-digest earnings-digest-dry
+.PHONY: help bootstrap doctor check check-web check-scripts hooks-install dev dev-api dev-web commands-doc commands-check dashboard-open search-open commands-open plan-open knowledge-open ingest-open teachers-open holdings-open watchlist-open calendar-open industry-open db-init db-sync db-reconcile holdings holdings-refresh watchlist notes-search db-search market-open market-json market-envelope review-open review-prefill pre post regulatory ingest-list ingest-run-post ingest-run-interface ingest-inspect ingest-health ingest-reconcile plan-draft plan-show-draft plan-confirm plan-diagnose plan-review knowledge-list knowledge-add-note knowledge-draft-from-asset knowledge-draft-from-teacher-note today-open today-close today-pre today-post today-regulatory today-evening today-watchlist today-obsidian today-ingest-inspect today-ingest-health recommend-daily recommend-daily-dry recommend-weekly recommend-weekly-dry recommend-trace volume-watch-daily volume-watch-daily-dry volume-watch-trend new-high-daily new-high-daily-dry new-high-trend new-high-backfill string-yang-daily string-yang-daily-dry research-digest research-digest-dry earnings-digest earnings-digest-dry
 
 help:
 	@echo "Available targets:"
@@ -68,6 +68,8 @@ help:
 	@echo "  make earnings-digest / earnings-digest-dry  - 业绩预告/快报速报（全市场+缺口验证，钉钉 / 干跑）"
 	@echo "  make recommend-weekly / recommend-weekly-dry - 行业推荐周报（钉钉推送 / 干跑预览）"
 	@echo "  make recommend-trace - 行业推荐日报带 Raindrop 埋点（dry-run，进 Workshop 看 trace）"
+	@echo "  make new-high-daily / new-high-daily-dry - 前复权历史新高统计（落库报告 / 干跑）"
+	@echo "  make new-high-trend / new-high-backfill - 前复权历史新高趋势读取 / 近5年回填"
 	@echo "  make hooks-install - enable repo-local git hooks"
 
 bootstrap:
@@ -211,6 +213,19 @@ volume-watch-daily-dry:
 
 volume-watch-trend:
 	cd scripts && python3 main.py volume-watch trend
+
+# 前复权历史新高统计
+new-high-daily:
+	cd scripts && python3 main.py new-high daily
+
+new-high-daily-dry:
+	cd scripts && python3 main.py new-high daily --dry-run
+
+new-high-trend:
+	cd scripts && python3 main.py new-high trend
+
+new-high-backfill:
+	cd scripts && python3 main.py new-high backfill
 
 # 主线板块串阳首阴股票池
 string-yang-daily:

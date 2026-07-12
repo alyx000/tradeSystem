@@ -397,6 +397,36 @@ CREATE TABLE IF NOT EXISTS daily_volume_concentration (
 );
 """
 
+# ──────────────────────────────────────────────────────────────
+# 5b-2. 前复权历史新高统计（水位 + 每日快照；派生事实层）
+# ──────────────────────────────────────────────────────────────
+_SQL_STOCK_ADJUSTED_HIGH_WATERMARK = """
+CREATE TABLE IF NOT EXISTS stock_adjusted_high_watermark (
+    code TEXT PRIMARY KEY,
+    name TEXT,
+    max_adj_high REAL NOT NULL,
+    max_high_date TEXT NOT NULL CHECK(max_high_date GLOB '????-??-??'),
+    max_raw_high REAL,
+    last_seen_date TEXT NOT NULL CHECK(last_seen_date GLOB '????-??-??'),
+    industry TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT
+);
+"""
+
+_SQL_DAILY_NEW_HIGH_STATS = """
+CREATE TABLE IF NOT EXISTS daily_new_high_stats (
+    date TEXT PRIMARY KEY CHECK(date GLOB '????-??-??'),
+    market_count INTEGER NOT NULL,
+    new_high_count INTEGER NOT NULL,
+    sector_summary_json TEXT NOT NULL DEFAULT '[]',
+    stocks_json TEXT NOT NULL DEFAULT '[]',
+    source_json TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT
+);
+"""
+
 # 趋势主升观察池（派生信号层）：漏斗命中的个股 + 状态机。
 # PK=(code, entered_date)：exited 再命中=新建一行保留历史审计；active 每 code 至多一行。
 _SQL_TREND_LEADER_POOL = """
@@ -1094,6 +1124,8 @@ _SQL_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_cognition_instances_outcome ON cognition_instances(outcome);",
     "CREATE INDEX IF NOT EXISTS idx_periodic_reviews_period ON periodic_reviews(period_type, period_start, period_end);",
     "CREATE INDEX IF NOT EXISTS idx_periodic_reviews_scope_label ON periodic_reviews(review_scope, regime_label);",
+    "CREATE INDEX IF NOT EXISTS idx_new_high_watermark_last_seen ON stock_adjusted_high_watermark(last_seen_date);",
+    "CREATE INDEX IF NOT EXISTS idx_new_high_watermark_industry ON stock_adjusted_high_watermark(industry);",
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_broker_executions_dedupe ON broker_executions(account_id, biz_date, stock_code, direction, shares, price, COALESCE(broker_contract_no, ''), COALESCE(broker_trade_no, ''));",
     "CREATE INDEX IF NOT EXISTS idx_broker_executions_date ON broker_executions(biz_date);",
     "CREATE INDEX IF NOT EXISTS idx_broker_executions_run_id ON broker_executions(import_run_id);",
@@ -1338,6 +1370,8 @@ _ALL_TABLE_SQL = [
     _SQL_MACRO_INFO,
     _SQL_DAILY_MARKET,
     _SQL_DAILY_VOLUME_CONCENTRATION,
+    _SQL_STOCK_ADJUSTED_HIGH_WATERMARK,
+    _SQL_DAILY_NEW_HIGH_STATS,
     _SQL_TREND_LEADER_POOL,
     _SQL_SECTOR_CORRELATION_DAILY,
     _SQL_MARKET_TIMING_SIGNAL,

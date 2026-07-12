@@ -638,6 +638,24 @@ def test_migrate_self_heals_db_missing_market_timing_table(tmp_path):
     conn.close()
 
 
+def test_migrate_self_heals_db_missing_new_high_tables(tmp_path):
+    conn = get_connection(tmp_path / "missing_new_high.db")
+    migrate(conn)
+    conn.execute("DROP TABLE stock_adjusted_high_watermark")
+    conn.execute("DROP TABLE daily_new_high_stats")
+    conn.execute(f"PRAGMA user_version = {CURRENT_SCHEMA_VERSION}")
+    conn.commit()
+
+    migrate(conn)
+
+    for name in ("stock_adjusted_high_watermark", "daily_new_high_stats"):
+        assert conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name=?", (name,)
+        ).fetchone() is not None
+    assert get_schema_version(conn) == CURRENT_SCHEMA_VERSION
+    conn.close()
+
+
 def test_migrate_self_heals_missing_broker_execution_void_columns(tmp_path):
     conn = get_connection(tmp_path / "missing_void_cols.db")
     migrate(conn)
