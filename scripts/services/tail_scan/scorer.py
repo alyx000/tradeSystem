@@ -61,24 +61,32 @@ def _hot_concepts(registry, date: str, top_m: int) -> tuple[dict, str]:
     return by_code, "ok"
 
 
+def _window_start(date: str, days: int) -> str:
+    return (_dt.datetime.strptime(date, "%Y-%m-%d") - _dt.timedelta(days=days)).strftime("%Y-%m-%d")
+
+
 def _teacher_hits(conn, date: str, lookback_days: int) -> list[dict]:
-    """近 N 日老师观点（复用 string_yang.mainline._teacher_notes 同款 SQL）。"""
-    start = (_dt.datetime.strptime(date, "%Y-%m-%d")
-             - _dt.timedelta(days=lookback_days)).strftime("%Y-%m-%d")
-    cur = conn.execute(
-        "SELECT id, date, title, core_view, key_points, sectors "
-        "FROM teacher_notes WHERE date >= ? AND date <= ? ORDER BY date DESC, id DESC LIMIT 50",
-        (start, date))
-    rows = []
-    for r in cur.fetchall():
-        rows.append({"title": r[2] or "", "core_view": r[3] or "",
-                     "key_points": r[4] or "", "sectors": r[5] or ""})
-    return rows
+    """近 N 日老师观点（复用 string_yang.mainline._teacher_notes 同款 SQL）。
+
+    取数失败降级空列表，与 _main_sectors/_index_context 等其他维度同款 try/except 对称。
+    """
+    try:
+        start = _window_start(date, lookback_days)
+        cur = conn.execute(
+            "SELECT id, date, title, core_view, key_points, sectors "
+            "FROM teacher_notes WHERE date >= ? AND date <= ? ORDER BY date DESC, id DESC LIMIT 50",
+            (start, date))
+        rows = []
+        for r in cur.fetchall():
+            rows.append({"title": r[2] or "", "core_view": r[3] or "",
+                         "key_points": r[4] or "", "sectors": r[5] or ""})
+        return rows
+    except Exception:
+        return []
 
 
-def _teacher_mentions(hits: list[dict], name: str, industry: str) -> bool:
+def _teacher_mentions(blob: str, name: str, industry: str) -> bool:
     """老师观点是否提及该票名或所属行业（子串命中）。"""
-    blob = " ".join(f"{h['title']} {h['core_view']} {h['key_points']} {h['sectors']}" for h in hits)
     if name and name in blob:
         return True
     return bool(industry) and industry in blob
@@ -92,7 +100,7 @@ def _index_context(conn) -> tuple[str, str]:
     """
     from services.market_timing import repo as mt_repo
     try:
-        rows = mt_repo.list_signals(conn, limit=6)   # 最近一批（一日约6指数）
+        rows = mt_repo.list_signals(conn, limit=C.MARKET_TIMING_FETCH_LIMIT)   # 最近一批（一日约6指数）
     except Exception:
         return "", "missing"
     if not rows:
@@ -113,9 +121,9 @@ def _index_context(conn) -> tuple[str, str]:
 def _calendar(date: str) -> str:
     d = _dt.datetime.strptime(date, "%Y-%m-%d")
     tags = []
-    if d.day >= 25 or d.day <= 3:
+    if d.day >= C.MONTH_END_START_DAY or d.day <= C.MONTH_START_END_DAY:
         tags.append("月末月初")
-    if d.month in (1, 4, 7, 10):
+    if d.month in C.EARNINGS_SEASON_MONTHS:
         tags.append("财报季窗口")
     return "/".join(tags)
 
@@ -131,6 +139,7 @@ def build_fact_cards(conn, registry, scan_result: dict, *, params: dict) -> list
     main_sectors, ms_degraded = _main_sectors(conn, date, top_k)
     concept_map, concept_status = _hot_concepts(registry, date, top_m)
     teacher = _teacher_hits(conn, date, params.get("teacher_lookback", C.TEACHER_LOOKBACK_DAYS))
+    teacher_blob = " ".join(f"{h['title']} {h['core_view']} {h['key_points']} {h['sectors']}" for h in teacher)
     index_ctx, index_status = _index_context(conn)
     cal = _calendar(date)
 
@@ -143,8 +152,7 @@ def build_fact_cards(conn, registry, scan_result: dict, *, params: dict) -> list
     order = sorted(cands, key=lambda c: -(c.get("pct_chg") or 0))
     rank_of = {c["code"]: i for i, c in enumerate(order, start=1)}
 
-    start = (_dt.datetime.strptime(date, "%Y-%m-%d")
-             - _dt.timedelta(days=C.LOOKBACK_NATURAL_DAYS)).strftime("%Y-%m-%d")
+    start = _window_start(date, C.LOOKBACK_NATURAL_DAYS)
 
     cards = []
     for cand in cands:
@@ -163,6 +171,7 @@ def build_fact_cards(conn, registry, scan_result: dict, *, params: dict) -> list
         # 统一到元：live=amount_yi*1e8，prev=prev_amount*1e3 → vol_ratio=amount_yi*1e5/prev_amount。
         # 注意这是 14:30 半日累计额 vs T-1 全日额，故 vol_ratio≈0.7 已相当于追平昨日全日量能节奏。
         prev_amount = bars[-1].get("amount") if bars else None
+        ud = ind.up_days(bars)
         vol_ratio = None
         if prev_amount:
             try:
@@ -182,22 +191,23 @@ def build_fact_cards(conn, registry, scan_result: dict, *, params: dict) -> list
             "in_hot_concept": bare in concept_map,
             "concept_names": concept_map.get(bare, []),
             "concept_status": concept_status,
-            "teacher_hit": _teacher_mentions(teacher, name, industry),
+            "teacher_hit": _teacher_mentions(teacher_blob, name, industry),
             # —— 三位一体 ——
             "rank_in_pool": rank_of.get(code),
             "index_context": index_ctx, "index_status": index_status,
             # —— 节奏 ——
             "gain5": ind.gain_nd(closes, live, gain_n),
             "ma_above": ind.above_all_ma(live, closes),
-            "up_days": ind.up_days(bars),
-            # 首次放量加速代理：半日额已追平昨日全日节奏(vol_ratio>=0.7) 且非高位连涨(up_days<=1)。
+            "up_days": ud,
+            # 首次放量加速代理：半日额已追平昨日全日节奏(vol_ratio>=FIRST_SURGE_VOL_RATIO_MIN)
+            # 且非高位连涨(up_days<=FIRST_SURGE_UP_DAYS_MAX)。
             # 半日 vs 全日本质不可完全对齐(无分时数据)，vol_ratio 作为 [事实] 一并喂 LLM 自行判读。
-            "first_surge": (vol_ratio is not None and vol_ratio >= 0.7 and ind.up_days(bars) <= 1),
+            "first_surge": (vol_ratio is not None and vol_ratio >= C.FIRST_SURGE_VOL_RATIO_MIN
+                             and ud <= C.FIRST_SURGE_UP_DAYS_MAX),
             "vol_ratio": vol_ratio,
             # —— 节点 ——
             "dist_to_high": ind.dist_to_high(live, highs, high_n),
             "broke_high": ind.broke_prior_high(live, highs, high_n),
-            "market_node": index_ctx,
             "calendar": cal,
         })
     return cards
@@ -212,7 +222,7 @@ def _coarse_score(card: dict) -> float:
     if card.get("teacher_hit"):
         s += C.W_LOGIC_TEACHER
     rank = card.get("rank_in_pool")
-    if rank is not None and rank <= 3:
+    if rank is not None and rank <= C.TRINITY_TOP_RANK:
         s += C.W_TRINITY_TOP
     if card.get("first_surge"):
         s += C.W_RHYTHM_FIRST
@@ -220,7 +230,7 @@ def _coarse_score(card: dict) -> float:
         s += C.W_RHYTHM_MA
     if card.get("broke_high"):
         s += C.W_NODE_BREAK
-    if card.get("is_limit_up") and (card.get("close_pos") or 0) >= 0.9:
+    if card.get("is_limit_up") and (card.get("close_pos") or 0) >= C.TAIL_STRONG_CLOSE_POS_MIN:
         s += C.W_TAIL_STRONG
     return s
 

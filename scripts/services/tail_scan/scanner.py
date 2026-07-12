@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+from services.tail_scan import constants as C
 from utils import is_st_stock
 from utils.price_limit import limit_pct_for
 
@@ -20,7 +21,6 @@ def _is_limit_up(code: str, name: str, price: float, pre_close: float) -> bool:
     pct = limit_pct_for(code, name)
     if pct is None or not pre_close or pre_close <= 0:
         return False
-    from services.tail_scan import constants as C
     up_price = pre_close * (1 + pct / 100)
     return price >= up_price * (1 - C.LIMIT_UP_EPSILON)
 
@@ -66,6 +66,10 @@ def filter_quotes(quotes: list[dict], *, min_pct: float, min_amount_yi: float) -
     return out
 
 
+def _quote_ok(r) -> bool:
+    return getattr(r, "success", False) and isinstance(r.data, list)
+
+
 def _all_codes(registry, date: str) -> list[str]:
     r = registry.call("get_stock_basic_list", date)
     if not getattr(r, "success", False) or not isinstance(r.data, list):
@@ -83,9 +87,9 @@ def scan(registry, date: str, *, min_pct: float, min_amount_yi: float) -> dict:
     # sina _fetch_raw 任一分片失败即整批 error（~7 片，单点脆弱）。14:30 单次触发下补一次重试，
     # 仍失败才 source_failed（launchd 单次触发无二次机会，重试是最低成本兜底）。
     r = registry.call("get_realtime_quotes", codes)
-    if not getattr(r, "success", False) or not isinstance(r.data, list):
+    if not _quote_ok(r):
         r = registry.call("get_realtime_quotes", codes)  # 重试一次
-    if not getattr(r, "success", False) or not isinstance(r.data, list):
+    if not _quote_ok(r):
         return {"status": "source_failed", "quote_date": date, "quote_time": "",
                 "candidates": [], "scanned": len(codes), "matched": 0,
                 "error": f"实时行情获取失败（含重试）：{getattr(r, 'error', '未知')}"}

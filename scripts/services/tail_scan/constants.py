@@ -29,3 +29,17 @@ W_TAIL_STRONG = 1.0          # 收在日内高位 + 已涨停
 # —— PK 强池 ——
 PK_POOL_MAX = 12
 PK_REASON_MAX_CHARS = 80
+
+# —— 打分/事实卡阈值 ——
+FIRST_SURGE_VOL_RATIO_MIN = 0.7   # 首次放量加速：半日额/昨日全日额 下限
+FIRST_SURGE_UP_DAYS_MAX = 1       # 首次放量加速：连涨天数上限（非高位连涨）
+TRINITY_TOP_RANK = 3              # 候选集内相对强弱：涨幅排名前 N 视为强
+TAIL_STRONG_CLOSE_POS_MIN = 0.9   # 收在日内高位：close_pos 下限
+
+# —— 日历标记 ——
+MONTH_END_START_DAY = 25          # 月末窗口起始日
+MONTH_START_END_DAY = 3           # 月初窗口结束日
+EARNINGS_SEASON_MONTHS = (1, 4, 7, 10)  # 财报季窗口月份
+
+# —— 大势信号读取 ——
+MARKET_TIMING_FETCH_LIMIT = 20    # market_timing_signal 最近一批读取上限（余量覆盖~6指数，防截断）
