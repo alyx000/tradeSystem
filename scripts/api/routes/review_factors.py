@@ -3,10 +3,10 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Mapping
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, StrictBool, StrictStr, field_validator
+from pydantic import BaseModel, ConfigDict, StrictBool, StrictStr, field_validator
 
 from api.deps import get_db_conn
 from api.routes.review import build_review_prefill
@@ -26,10 +26,36 @@ router = APIRouter(prefix="/api/review-factors", tags=["review-factors"])
 
 
 class ReviewFactorScoreRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     input_by: StrictStr
     no_llm: StrictBool = False
     steps: Optional[dict[str, Any]] = None
     retry_of_run_id: Optional[StrictStr] = None
+
+    @field_validator("input_by")
+    @classmethod
+    def normalize_input_by(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("input_by must be a non-empty string")
+        return normalized
+
+
+class ReviewFactorEvaluationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source_date: Optional[StrictStr] = None
+    score_run_id: Optional[StrictStr] = None
+    confirmed_outcome: Literal[
+        "hit",
+        "partial",
+        "miss",
+        "missing_data",
+        "not_applicable",
+    ]
+    evaluation_note: Optional[StrictStr] = None
+    input_by: StrictStr
 
     @field_validator("input_by")
     @classmethod
@@ -105,29 +131,27 @@ def get_factor_evaluation(
 @router.put("/{date}/evaluation")
 def put_factor_evaluation(
     date: str,
-    body: dict[str, Any],
+    body: ReviewFactorEvaluationRequest,
     conn: sqlite3.Connection = Depends(get_db_conn),
 ):
     evaluation_date = _date(date)
-    source_date = body.get("source_date")
+    source_date = body.source_date
     if source_date:
-        source_date = _date(str(source_date))
+        source_date = _date(source_date)
     try:
         suggestion = suggest_t1_evaluation(
             conn,
             evaluation_trade_date=evaluation_date,
             source_review_date=source_date,
-            score_run_id=(str(body["score_run_id"]) if body.get("score_run_id") else None),
+            score_run_id=body.score_run_id or None,
             prefill=build_review_prefill(conn, evaluation_date),
         )
         return confirm_t1_evaluation(
             conn,
             suggestion=suggestion,
-            confirmed_outcome=str(body.get("confirmed_outcome") or ""),
-            evaluation_note=(
-                str(body["evaluation_note"]) if body.get("evaluation_note") else None
-            ),
-            input_by=str(body.get("input_by") or ""),
+            confirmed_outcome=body.confirmed_outcome,
+            evaluation_note=body.evaluation_note or None,
+            input_by=body.input_by,
         )
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc

@@ -207,15 +207,14 @@ class AntigravityStructuredRunner:
                     log_text=read_text_if_exists(log_file),
                 )
                 last_sha = _sha256(stdout) if stdout else None
-                validation_error: ValueError | TypeError | RecursionError | None = None
                 if returncode == 0 and stdout.strip():
                     try:
                         parsed_output = validator(stdout)
                         valid_raw_json = json.loads(stdout)
                         if not isinstance(valid_raw_json, Mapping):
                             raise ValueError("validated output must be a JSON object")
-                    except (ValueError, TypeError, RecursionError) as exc:
-                        validation_error = exc
+                    except (ValueError, TypeError, RecursionError):
+                        pass
                     else:
                         return self._result(
                             started=started,
@@ -309,7 +308,7 @@ class AntigravityStructuredRunner:
                 last_diagnostics = _safe_diagnostics(
                     {
                         "reason": "schema_invalid",
-                        "message": str(validation_error or "schema validation failed"),
+                        "message": "structured output failed schema validation",
                     },
                     log_file,
                 )

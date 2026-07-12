@@ -226,6 +226,47 @@ def test_invalid_json_or_schema_retries_only_once_and_never_retains_raw_text(
     assert attempts == 2
 
 
+def test_schema_validation_exception_text_never_enters_result_diagnostics(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _config(monkeypatch)
+    monkeypatch.setenv("ANTIGRAVITY_LOG_DIR", str(tmp_path / "logs"))
+    marker = "INVALID_SCHEMA_MARKER_8d33a1"
+    invalid = json.dumps({"unexpected": marker})
+    attempts = 0
+
+    def fake_run(command, **kwargs):
+        nonlocal attempts
+        if command[-1] == "--version":
+            return subprocess.CompletedProcess(command, 0, stdout="1.0", stderr="")
+        attempts += 1
+        return subprocess.CompletedProcess(command, 0, stdout=invalid, stderr="")
+
+    def reject_with_raw_marker(raw: str) -> dict:
+        assert marker in raw
+        raise TrinityValidationError(f"unknown field contains {marker}")
+
+    result = _run(
+        AntigravityStructuredRunner(run_command=fake_run),
+        prompt_version=FACTOR_PROMPT_VERSION,
+        prompt="instructions",
+        input_payload={},
+        validator=reject_with_raw_marker,
+    )
+
+    serialized = json.dumps(result.to_record(), ensure_ascii=False)
+    assert result.status == "schema_invalid"
+    assert result.attempt_count == 2
+    assert result.valid_raw_json is None
+    assert result.parsed_output is None
+    assert result.raw_output_sha256 == hashlib.sha256(invalid.encode()).hexdigest()
+    assert result.diagnostics["reason"] == "schema_invalid"
+    assert result.diagnostics["message"] == "structured output failed schema validation"
+    assert set(result.diagnostics) == {"reason", "message", "log_file"}
+    assert marker not in serialized
+    assert attempts == 2
+
+
 def test_pathologically_deep_json_retries_once_as_schema_invalid_without_raw_text(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

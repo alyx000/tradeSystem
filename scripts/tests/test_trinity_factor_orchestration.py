@@ -1516,12 +1516,64 @@ def test_deep_json_factor_failure_persists_safe_run_and_request_audit(
         "factor": hashlib.sha256(invalid.encode()).hexdigest()
     }
     assert stored_run["diagnostics_json"]["factor"]["diagnostics"]["message"] == (
-        "response is not valid JSON"
+        "structured output failed schema validation"
     )
     assert invalid not in diagnostics_text
     assert len(requests) == 1
     assert requests[0]["cache_hit"] is False
     assert requests[0]["resolved_run_id"] == stored_run["score_run_id"]
+
+
+def test_schema_invalid_raw_marker_never_crosses_service_repository_boundary(
+    conn, monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    monkeypatch.setenv("LLM_MODEL", "model-a")
+    monkeypatch.setenv("ANTIGRAVITY_BIN", "/fake/agy")
+    monkeypatch.setenv("LLM_TIMEOUT_SECONDS", "180")
+    monkeypatch.setenv("ANTIGRAVITY_LOG_DIR", str(tmp_path / "logs"))
+    marker = "INVALID_MODEL_MARKER_13f7c9"
+    invalid = json.dumps(
+        {
+            "schema_version": "trinity_factor_score_v1",
+            "factors": [{"factor_code": marker}],
+        },
+        ensure_ascii=False,
+    )
+    attempts = 0
+
+    def fake_run(command, **kwargs):
+        nonlocal attempts
+        if command[-1] == "--version":
+            return subprocess.CompletedProcess(command, 0, stdout="1.0", stderr="")
+        attempts += 1
+        return subprocess.CompletedProcess(command, 0, stdout=invalid, stderr="")
+
+    result = TrinityFactorService(
+        runner=AntigravityStructuredRunner(run_command=fake_run)
+    ).score(
+        conn,
+        trade_date="2026-07-10",
+        prefill=_prefill(),
+        review_steps=_steps(),
+        input_by="test",
+    )
+
+    stored_run = list_score_runs(conn, trade_date="2026-07-10")[0]
+    result_text = json.dumps(result, ensure_ascii=False)
+    stored_text = json.dumps(stored_run, ensure_ascii=False)
+    factor_diagnostics = stored_run["diagnostics_json"]["factor"]["diagnostics"]
+
+    assert result["status"] == "factor_failed"
+    assert attempts == 2
+    assert stored_run["valid_raw_json"] is None
+    assert stored_run["raw_output_sha256_json"] == {
+        "factor": hashlib.sha256(invalid.encode()).hexdigest()
+    }
+    assert factor_diagnostics["reason"] == "schema_invalid"
+    assert factor_diagnostics["message"] == "structured output failed schema validation"
+    assert set(factor_diagnostics) == {"reason", "message", "log_file"}
+    assert marker not in result_text
+    assert marker not in stored_text
 
 
 def test_sector_failure_preserves_primary_and_uses_deterministic_core_order(

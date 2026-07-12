@@ -65,6 +65,7 @@ def _insert_run(
     status: str = "success",
     retry_of_run_id: str | None = None,
     evidence_snapshot: dict | None = None,
+    diagnostics: dict | None = None,
 ) -> None:
     codes = ("market_node", "sector_rhythm", "style_regime", "leader_signal")
     scores = [_factor_score(code, primary=code == primary) for code in codes]
@@ -106,7 +107,7 @@ def _insert_run(
             else None
         ),
         "raw_output_sha256_json": {"factor": "raw"},
-        "diagnostics_json": {},
+        "diagnostics_json": diagnostics or {},
         "status": status,
         "attempt_count": 1,
         "duration_ms": 10,
@@ -1411,6 +1412,50 @@ def test_metrics_prefers_confirmed_parent_over_later_failed_retry(conn) -> None:
     assert metrics["accept_count"] == 1
     assert metrics["performance_samples"] == 1
     assert metrics["outcomes"]["hit"] == 1
+
+
+def test_metrics_counts_only_structured_schema_invalid_layer_status_once_per_run(
+    conn,
+) -> None:
+    _insert_run(
+        conn,
+        run_id="rule-only-marker",
+        trade_date="2026-07-03",
+        status="rule_only",
+        diagnostics={"request": {"input_by": "schema_invalid"}},
+    )
+    _insert_run(
+        conn,
+        run_id="unrelated-message-marker",
+        trade_date="2026-07-09",
+        diagnostics={"message": "schema_invalid is mentioned only as documentation"},
+    )
+    _insert_run(
+        conn,
+        run_id="factor-invalid",
+        trade_date="2026-07-10",
+        diagnostics={"factor": {"status": "schema_invalid"}},
+    )
+    _insert_run(
+        conn,
+        run_id="sector-invalid",
+        trade_date="2026-07-13",
+        diagnostics={"sector": {"status": "schema_invalid"}},
+    )
+    _insert_run(
+        conn,
+        run_id="both-layers-invalid",
+        trade_date="2026-07-14",
+        diagnostics={
+            "factor": {"status": "schema_invalid"},
+            "sector": {"status": "schema_invalid"},
+        },
+    )
+
+    metrics = build_factor_metrics(conn, days=20)
+
+    assert metrics["runs"] == 5
+    assert metrics["invalid_output_rate"] == 0.6
 
 
 def test_metrics_excludes_closed_or_missing_trade_dates(conn) -> None:

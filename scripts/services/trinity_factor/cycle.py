@@ -873,8 +873,11 @@ def build_factor_metrics(conn: sqlite3.Connection, *, days: int = 20) -> dict[st
     for run in selected:
         if run["status"] == "success":
             success_count += 1
-        diagnostics_text = json.dumps(run.get("diagnostics_json") or {}, ensure_ascii=False)
-        if "schema_invalid" in diagnostics_text:
+        diagnostics = run.get("diagnostics_json")
+        if isinstance(diagnostics, Mapping) and any(
+            isinstance(layer, Mapping) and layer.get("status") == "schema_invalid"
+            for layer in (diagnostics.get("factor"), diagnostics.get("sector"))
+        ):
             invalid_output_count += 1
         recommendation = run.get("system_recommendation_json") or {}
         primary = (recommendation.get("primary") or {}).get("factor_code")

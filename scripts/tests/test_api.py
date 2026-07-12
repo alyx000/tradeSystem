@@ -3669,6 +3669,50 @@ def test_review_factor_score_rejects_non_schema_types(client, db_path, invalid_f
     assert response.status_code == 422
 
 
+def test_review_factor_score_rejects_extra_field_before_service_or_audit_write(
+    client, db_path, monkeypatch
+):
+    import api.routes.review_factors as review_factors_route
+
+    _seed_factor_trade_date(db_path)
+    service_calls = 0
+    original_score = review_factors_route.TrinityFactorService.score
+
+    def counted_score(self, *args, **kwargs):
+        nonlocal service_calls
+        service_calls += 1
+        return original_score(self, *args, **kwargs)
+
+    monkeypatch.setattr(
+        review_factors_route.TrinityFactorService,
+        "score",
+        counted_score,
+    )
+
+    response = client.post(
+        "/api/review-factors/2026-07-10/score",
+        json={
+            "no_llm": True,
+            "no_lllm": True,
+            "input_by": "web",
+        },
+    )
+
+    conn = get_connection(db_path)
+    run_count = conn.execute(
+        "SELECT COUNT(*) FROM daily_review_factor_score_runs"
+    ).fetchone()[0]
+    request_count = conn.execute(
+        "SELECT COUNT(*) FROM daily_review_factor_score_requests"
+    ).fetchone()[0]
+    conn.close()
+
+    assert response.status_code == 422
+    assert service_calls == 0
+    assert run_count == 0
+    assert request_count == 0
+
+
 def test_review_factor_score_openapi_requires_body_and_input_by(client):
     openapi = client.app.openapi()
     operation = openapi["paths"]["/api/review-factors/{date}/score"]["post"]
@@ -3679,6 +3723,7 @@ def test_review_factor_score_openapi_requires_body_and_input_by(client):
     schema_name = schema_ref.rsplit("/", 1)[-1]
     request_schema = openapi["components"]["schemas"][schema_name]
     assert "input_by" in request_schema["required"]
+    assert request_schema["additionalProperties"] is False
 
 
 def test_review_factor_score_rejects_invalid_calendar_date(client):
@@ -3875,6 +3920,68 @@ def test_review_factor_confirmation_checks_digest_inside_write_transaction(
 
     assert response.status_code == 200
     assert observed["in_transaction"] is True
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "error_type"),
+    [
+        ("unexpected", "value", "extra_forbidden"),
+        ("input_by", 123, "string_type"),
+        ("confirmed_outcome", "almost_hit", "literal_error"),
+        ("source_date", 20260710, "string_type"),
+        ("score_run_id", ["api-run-1"], "string_type"),
+        ("evaluation_note", False, "string_type"),
+    ],
+)
+def test_review_factor_evaluation_rejects_non_schema_payloads_before_write(
+    client, db_path, field, value, error_type
+):
+    _seed_factor_score_run(db_path)
+    conn = get_connection(db_path)
+    Q.upsert_trade_calendar(conn, [{"date": "2026-07-13", "is_open": 1}])
+    conn.commit()
+    conn.close()
+    body = {
+        "source_date": "2026-07-10",
+        "score_run_id": "api-run-1",
+        "confirmed_outcome": "not_applicable",
+        "evaluation_note": "当日未完成复盘",
+        "input_by": "web",
+        field: value,
+    }
+
+    response = client.put(
+        "/api/review-factors/2026-07-13/evaluation",
+        json=body,
+    )
+
+    conn = get_connection(db_path)
+    evaluation_count = conn.execute(
+        "SELECT COUNT(*) FROM daily_review_factor_evaluations"
+    ).fetchone()[0]
+    conn.close()
+    detail = response.json()["detail"]
+
+    assert response.status_code == 422
+    assert isinstance(detail, list)
+    assert any(
+        error["loc"][-1] == field and error["type"] == error_type
+        for error in detail
+    )
+    assert evaluation_count == 0
+
+
+def test_review_factor_evaluation_openapi_keeps_required_body_fields(client):
+    openapi = client.app.openapi()
+    operation = openapi["paths"]["/api/review-factors/{date}/evaluation"]["put"]
+    request_body = operation["requestBody"]
+    assert request_body["required"] is True
+
+    schema_ref = request_body["content"]["application/json"]["schema"]["$ref"]
+    schema_name = schema_ref.rsplit("/", 1)[-1]
+    request_schema = openapi["components"]["schemas"][schema_name]
+    assert set(request_schema["required"]) == {"confirmed_outcome", "input_by"}
+    assert request_schema["additionalProperties"] is False
 
 
 def test_review_factor_evaluation_is_strict_and_confirmable(client, db_path):
