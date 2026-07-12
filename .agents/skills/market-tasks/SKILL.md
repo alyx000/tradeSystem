@@ -89,6 +89,8 @@ python3 main.py recommend weekly --lookback-days 14
 make volume-watch-daily        # = python3 main.py volume-watch daily（采集+落库+渲染+钉钉推送）
 make volume-watch-daily-dry    # = ... --dry-run（仅打印,不落库不推送,预览用）
 make volume-watch-trend        # = python3 main.py volume-watch trend（只读打印最近 30 日趋势）
+# 历史回补（落库但不重推历史日报到钉钉）：三档裸/--no-push[落库+打印不推]/--dry-run[不落库]
+python3 main.py volume-watch daily --date 2026-07-07 --no-push --refetch
 
 # 指定日期 / 窗口（直接调底层）
 python3 main.py volume-watch daily --date 2026-05-29 --dry-run
@@ -112,6 +114,29 @@ done
   - 两份均**组按组内涨幅最大个股降序、平手比次大**(向量字典序降序)，5/10/20 各一份独立榜。原始集(含 industry + concepts + gains)落 `daily_volume_concentration.gain_universe_json`(v34 增列 + ALTER 兜底；concepts 为 JSON 增键无新列)。纯函数被 Markdown 与 API 共用。健壮性：gains/概念取数失败各自 fail-closed(不拖垮主日报)，降级重跑按覆盖判据保留库内既有榜单不抹(coverage-aware 幂等)。全客观区间涨幅(属 [事实])，守红线不出价位目标/不给买卖建议。经只读 API `GET /api/market/sector-gain-ranking/{date}`(`rankings`+`concept_rankings`) 在八步复盘「2.板块」(`SectorGainRanking` 组件，申万/题材维度切换 + 三档周期 Tab)展示。慧博/同花顺概念依赖 `TUSHARE_TOKEN` 积分(`ths_member`)。
 - 行业口径=**申万二级**（联动 `get_sector_rankings`）；「未分类」（次新等）不计入前3行业集中度，报告标 `industry_coverage`。
 - 依赖 env：`TUSHARE_TOKEN`（`scripts/.env`，`index_member_all` 需积分）、`DINGTALK_WEBHOOK_TOKEN/SECRET`（`~/.config/tradeSystem.env`，daily 推送）。
+
+## 前复权历史新高统计（new-high）
+
+首版**不挂定时、不默认推送**。用于只读统计 A 股全市场创前复权历史新高个股数，按申万二级行业分组，并将完整结果落 SQLite：历史水位表 `stock_adjusted_high_watermark`，每日快照表 `daily_new_high_stats`。报告每个行业默认只展示 Top10，完整明细保留在 SQLite/JSON，方便后续 CLI/API/Web 读取。
+
+```bash
+make new-high-daily          # = python3 main.py new-high daily（落库 + 本地 MD/JSON，不推送）
+make new-high-daily-dry      # = ... --dry-run（只打印，不落库不落报告不推送）
+make new-high-trend          # = python3 main.py new-high trend（只读最近 30 日）
+make new-high-backfill       # = python3 main.py new-high backfill（默认近 5 年建立水位）
+
+python3 main.py new-high daily --date 2026-07-08
+python3 main.py new-high daily --date 2026-07-08 --dry-run
+python3 main.py new-high daily --date 2026-07-08 --push
+python3 main.py new-high trend --date 2026-07-08 --days 30 --json
+python3 main.py new-high backfill --start-date 2021-07-08 --end-date 2026-07-08
+```
+
+- **口径**：当日 `high * adj_factor` 严格大于该股票截至昨日历史最大 `high * adj_factor`，计为创前复权历史新高；首日新股/首次出现股票只初始化水位，不计新高。
+- **回填用途**：`backfill` 不是为了推送历史报告，而是为了先建立“截至昨日”的历史前复权高点基准；未回填直接跑 `daily` 只能初始化水位，不能宣称完整全历史口径。
+- **运行语义**：`daily` 默认落库并写 `data/reports/new-high/YYYY-MM-DD.{md,json}`，不推送；`--push` 才推钉钉；`--dry-run` 不落库、不落报告、不推送；`trend` 只读；`backfill` 永不推送。
+- **守红线**：全 [事实] 统计，不出价位目标、不做买卖建议、不写交易计划层、不入关注池。
+- **依赖 env**：`TUSHARE_TOKEN`（全市场 `daily` + `adj_factor` + 申万行业映射）；钉钉 env 仅在显式 `--push` 时需要。
 
 ## 板块相关性监控（sector-correlation）
 
@@ -235,7 +260,7 @@ python3 main.py ma-breakout daily --json
 
 - **口径**：用于二波，不找当前才冒出来的强票，也不找太久远的老龙头。先从 `leader_tracking`（复盘第 5 步人工确认最票/龙头）取目标日前近端历史龙头宇宙，默认近 60 自然日（可用 `--leader-lookback-days` 调整；若首次出现较早但最近仍被跟踪，也保留）。`trend_leader_pool` 自动趋势主升观察池只说明曾经强势，不作为默认历史龙头来源。再对该宇宙内股票用 `get_market_daily_quotes` 近 10 个有效行情日组装序列；MA4 重新拐头向上 = 今日 MA4 > 昨日 MA4，且昨日 MA4 < 前日 MA4 < 前两日 MA4，要求上拐前至少两根 MA4 连续下行，避免把一日回踩反弹误判为重新拐头；成交额突破 = 今日成交额同时大于两条成交额均线（默认 MA5/MA10，可用 `--windows` 改）；当日涨停的股票剔除，不进入观察池。
 - **输出**：按今日成交额降序渲染盘后只读观察清单，表格展示历史龙头依据与首次出现日期，全部标 `[判断]`；Markdown/JSON 报告落 `data/reports/ma-breakout/YYYY-MM-DD.{md,json}`；不出价位、不做买卖建议、不写交易计划层/关注池。
-- **运行语义**：无状态、不落库；裸 `daily` 落盘、打印并推钉钉；`--no-push` 落盘并打印但不推送；`--dry-run` 仅打印、不落盘不推送；`--json` 输出结构化结果且不落盘不推送。未显式 `--date` 且当天为交易日前一天（如周日）时，自动回退到最近已完成交易日作为目标日；显式 `--date` 仍按指定日期执行，非交易日会跳过。
+- **运行语义**：无状态、不落库；裸 `daily` 落盘、打印并推钉钉；`--no-push` 落盘并打印但不推送；`--dry-run` 仅打印、不落盘不推送；`--json` 输出结构化结果且不落盘不推送。未显式 `--date` 且当前交易日尚未收盘（上海时间 15:30 前）或当天为交易日前一天（如周日）时，自动回退到最近已完成交易日作为目标日；显式 `--date` 仍按指定日期执行，非交易日会跳过。
 - **依赖 env**：`TUSHARE_TOKEN` + 钉钉 `DINGTALK_WEBHOOK_TOKEN/SECRET`。
 
 ## 每日最票候选确认稿（daily-leaders）
