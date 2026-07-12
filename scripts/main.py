@@ -667,6 +667,8 @@ def setup_providers(config: dict):
         registry.register(ak)
 
     # Sina（新浪实时行情，仅 get_realtime_quotes；免费无 token，默认启用）
+    # priority=3 与 config 中 eastmoney 名义同级：eastmoney 从未在此注册，
+    # 无运行期冲突；若未来接回 EastmoneyProvider 再重排
     sina_config = config.get("providers", {}).get("sina", {})
     if sina_config.get("enabled", True):
         sn = SinaProvider(sina_config)
@@ -1769,6 +1771,10 @@ def build_parser() -> argparse.ArgumentParser:
     from cli.volume_watch import register_subparser as register_volume_watch_subparser
     register_volume_watch_subparser(subparsers)
 
+    # new-high (前复权历史新高统计:全市场新高数 + 申万二级分组)
+    from cli.new_high import register_subparser as register_new_high_subparser
+    register_new_high_subparser(subparsers)
+
     # sector-correlation (板块相关性:同向/逆向/跷跷板)
     from cli.sector_correlation import register_subparser as register_sector_correlation_subparser
     register_sector_correlation_subparser(subparsers)
@@ -1862,6 +1868,9 @@ def main():
     elif args.command == "volume-watch":
         from cli import volume_watch as volume_watch_module
         volume_watch_module.handle_command(config, args)
+    elif args.command == "new-high":
+        from cli import new_high as new_high_module
+        new_high_module.handle_command(config, args)
     elif args.command == "sector-correlation":
         from cli import sector_correlation as sector_correlation_module
         sector_correlation_module.handle_command(config, args)

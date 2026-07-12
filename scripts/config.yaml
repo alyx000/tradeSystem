@@ -21,8 +21,6 @@ providers:
     priority: 3
     note: "东方财富网页数据，作为补充"
 
-  # priority=3 与 eastmoney 名义同级：eastmoney 从未在 setup_providers 注册，
-  # 无运行期冲突；若未来接回 EastmoneyProvider 再重排
   sina:
     enabled: true
     priority: 3

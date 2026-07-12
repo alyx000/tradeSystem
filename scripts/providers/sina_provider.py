@@ -33,7 +33,6 @@ _HEADERS = {
 }
 _EXCHANGE_PREFIX = {"SH": "sh", "SZ": "sz", "BJ": "bj"}
 _LINE_PREFIX = "var hq_str_"
-_LINE_PREFIX_LEN = len(_LINE_PREFIX)
 
 
 def _normalize_code(raw: str) -> str:
@@ -68,7 +67,7 @@ def _parse_line(line: str) -> tuple[str, str] | None:
     line = line.strip()
     if not line.startswith(_LINE_PREFIX):
         return None
-    head, sep, rest = line[_LINE_PREFIX_LEN:].partition("=")
+    head, sep, rest = line.removeprefix(_LINE_PREFIX).partition("=")
     if not sep:
         return None
     body = rest.strip().rstrip(";").strip('"')
