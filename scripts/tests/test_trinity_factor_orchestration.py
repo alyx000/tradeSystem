@@ -544,6 +544,114 @@ def test_factor_llm_cards_hide_lineage_raw_rows_and_status_only_entries() -> Non
         assert forbidden not in factor_text
 
 
+def test_sector_llm_input_hides_non_ok_objective_and_internal_lineage() -> None:
+    candidate = _candidate(1)
+    candidate["data_status"] = "source_failed"
+    evidence_id = candidate["evidence_items"][0]["evidence_id"]
+    candidate["evidence_items"][0]["quality_group"] = "internal_sector_lineage"
+
+    snapshot = build_evidence_snapshot("2026-07-10", _prefill([candidate]), {})
+    stored = snapshot["sector_candidates"][0]
+    sector_input = build_sector_llm_input(
+        snapshot,
+        primary_factor_code="sector_rhythm",
+    )["sectors"][0]
+
+    assert stored["evidence_items"][0]["source_status"] == "source_failed"
+    assert evidence_id not in stored["allowed_evidence_ids"]
+    assert sector_input["evidence_items"] == []
+    assert evidence_id not in sector_input["allowed_evidence_ids"]
+    assert "quality_group" not in repr(sector_input)
+
+
+def test_prior_feedback_does_not_match_below_explicit_previous_highest() -> None:
+    prefill = _lineage_prefill()
+    prefill["prev_market"] = {
+        "highest_board": 5,
+        "continuous_board_counts": {"5": 1, "4": ["四板丙"]},
+    }
+
+    leader = _factor(
+        build_evidence_snapshot("2026-07-10", prefill, {}),
+        "leader_signal",
+    )
+    feedback = next(
+        item["content"] for item in _ok_facts(leader)
+        if item["source"] == "prior_core_feedback"
+    )
+
+    assert feedback["cohort_basis"] == "all_consecutive"
+    assert feedback["cohort_count"] == 3
+    assert feedback["names"] == ["二板甲", "四板丙", "四板乙"]
+
+
+def test_height_only_ladder_does_not_emit_objective_fact() -> None:
+    prefill = {
+        "market": {"highest_board": 4, "continuous_board_counts": {}},
+        "review_signals": {
+            "sectors": {"projection_candidates": []},
+            "emotion": {"ladder_rows": [{"name": "*ST孤证", "nums": 4}]},
+        },
+    }
+
+    leader = _factor(
+        build_evidence_snapshot("2026-07-10", prefill, {}),
+        "leader_signal",
+    )
+
+    assert not [
+        item for item in _ok_facts(leader)
+        if item["source"] == "ladder_structure"
+    ]
+
+
+def test_objective_leader_detection_never_becomes_leader_fact() -> None:
+    candidate = _candidate(1)
+    candidate["evidence_items"] = [{
+        "evidence_id": "2026-07-10:industry:板块1:leader-detection",
+        "source": "leader_detection",
+        "category": "leader",
+        "polarity": "support",
+        "objective": True,
+    }]
+
+    leader = _factor(
+        build_evidence_snapshot("2026-07-10", _prefill([candidate]), {}),
+        "leader_signal",
+    )
+
+    assert not [
+        item for item in _ok_facts(leader)
+        if item.get("source") == "leader_detection"
+    ]
+
+
+def test_objective_card_strings_are_bounded_before_llm_projection() -> None:
+    long_text = "超" * 5000
+    prefill = _lineage_prefill()
+    style = prefill["market"]["style_factors"]
+    style["promotion"]["first_to_second"]["promoted_names"] = [long_text]
+    style["popularity"] = [{
+        "code": long_text,
+        "name": long_text,
+        "source": ["consecutive"],
+        "t_open_premium_pct": 1.0,
+        "t_close_change_pct": 2.0,
+        "t_is_limit_up": False,
+        "t_is_limit_down": False,
+    }]
+    prefill["prev_market"]["continuous_board_counts"] = {"4": [long_text]}
+
+    snapshot = build_evidence_snapshot("2026-07-10", prefill, {})
+    leader = _factor(snapshot, "leader_signal")
+    contents = {item["source"]: item["content"] for item in _ok_facts(leader)}
+
+    assert len(contents["promotion_realization"]["first_to_second"]["promoted_names"][0]) <= 200
+    assert len(contents["prior_core_feedback"]["names"][0]) <= 200
+    assert len(contents["prior_core_feedback"]["codes"][0]) <= 200
+    assert long_text not in repr(build_factor_llm_input(snapshot))
+
+
 def test_evidence_snapshot_keeps_production_daily_market_fields() -> None:
     prefill = _prefill([])
     prefill["market"] = {

@@ -12,6 +12,7 @@ from .constants import FACTOR_CODES, SECTOR_CANDIDATE_MAX
 
 RULESET_VERSION = "trinity_ruleset_v2"
 SERVICE_SCHEMA_VERSION = "trinity_dual_score_run_v2"
+_EVIDENCE_STRING_MAX = 200
 
 _FACTOR_STEP_MAP = {
     "market_node": ("step1_market", "step6_nodes"),
@@ -161,17 +162,14 @@ def build_sector_llm_input(
     for candidate in snapshot.get("sector_candidates") or []:
         if not isinstance(candidate, Mapping):
             continue
+        projection = _llm_evidence_projection(candidate)
         rows.append({
             "sector_key": candidate["sector_key"],
             "sector_name": candidate.get("sector_name"),
             "sector_type": candidate.get("sector_type"),
             "candidate_tier": "core",
             "facts": candidate.get("facts") or {},
-            "evidence_items": candidate.get("evidence_items") or [],
-            "allowed_evidence_ids": candidate.get("allowed_evidence_ids") or [],
-            "allowed_counter_evidence_ids": (
-                candidate.get("allowed_counter_evidence_ids") or []
-            ),
+            **projection,
             "allowed_t1_check_ids": candidate.get("allowed_t1_check_ids") or [],
             "t1_checks": candidate.get("t1_checks") or [],
         })
@@ -185,6 +183,15 @@ def build_sector_llm_input(
 
 def _factor_llm_card(candidate: Mapping[str, Any]) -> dict[str, Any]:
     """只暴露 LLM 可引用的因子证据，隐藏程序规则与评分元数据。"""
+    return {
+        "factor_code": candidate["factor_code"],
+        **_llm_evidence_projection(candidate),
+        "allowed_t1_check_ids": candidate.get("allowed_t1_check_ids") or [],
+        "t1_checks": candidate.get("t1_checks") or [],
+    }
+
+
+def _llm_evidence_projection(candidate: Mapping[str, Any]) -> dict[str, Any]:
     evidence_items = [
         {
             str(key): value
@@ -200,7 +207,6 @@ def _factor_llm_card(candidate: Mapping[str, Any]) -> dict[str, Any]:
         if item.get("evidence_id")
     }
     return {
-        "factor_code": candidate["factor_code"],
         "evidence_items": evidence_items,
         "allowed_evidence_ids": sorted({
             str(evidence_id)
@@ -212,8 +218,6 @@ def _factor_llm_card(candidate: Mapping[str, Any]) -> dict[str, Any]:
             for evidence_id in candidate.get("allowed_counter_evidence_ids") or []
             if str(evidence_id) in visible_ids
         }),
-        "allowed_t1_check_ids": candidate.get("allowed_t1_check_ids") or [],
-        "t1_checks": candidate.get("t1_checks") or [],
     }
 
 
@@ -234,20 +238,24 @@ def _prepare_sector_candidates(
         sector_key = raw.get("sector_key")
         if not isinstance(sector_key, str) or not sector_key:
             continue
-        items = [
-            _json_safe_value(item)
-            for item in raw.get("evidence_items") or []
-            if isinstance(item, Mapping) and isinstance(item.get("evidence_id"), str)
-        ]
+        source_status = raw.get("data_status") or "ok"
+        items = []
+        for item in raw.get("evidence_items") or []:
+            if not isinstance(item, Mapping) or not isinstance(item.get("evidence_id"), str):
+                continue
+            copied = dict(_json_safe_value(item))
+            if copied.get("objective") is True:
+                copied.setdefault("source_status", source_status)
+            items.append(copied)
         evidence_ids = sorted({
             item["evidence_id"]
             for item in items
-            if item.get("polarity") != "counter"
+            if _is_llm_referenceable(item) and item.get("polarity") != "counter"
         })
         counter_ids = sorted({
             item["evidence_id"]
             for item in items
-            if item.get("polarity") == "counter"
+            if _is_llm_referenceable(item) and item.get("polarity") == "counter"
         })
         t1_check_id = f"{trade_date}:{sector_key}:t1-continuity"
         prepared.append({
@@ -345,7 +353,7 @@ def _factor_objective_items(
             out["sector_rhythm"].append(copied)
             if (
                 item.get("category") == "leader"
-                or item.get("source") == "leader_detection"
+                and item.get("source") != "leader_detection"
             ):
                 leader_item = dict(copied)
                 leader_item["layer"] = "stock"
@@ -447,11 +455,11 @@ def _ladder_structure_item(
             counts[tier] = len(set(names))
         names_by_tier.setdefault(tier, []).extend(names)
 
-    explicit_highest = _tier_number(market.get("highest_board"))
-    highest_candidates = list(counts) + list(names_by_tier)
-    if explicit_highest is not None and explicit_highest >= 2:
-        highest_candidates.append(explicit_highest)
-    highest_board = max(highest_candidates, default=0)
+    corroborated_tiers = set(counts) | set(names_by_tier)
+    reported_highest = _tier_number(market.get("highest_board"))
+    highest_board = max(corroborated_tiers, default=0)
+    if reported_highest in corroborated_tiers:
+        highest_board = max(highest_board, reported_highest)
     tier_counts = [
         {"tier": tier, "count": counts[tier]}
         for tier in sorted(counts, reverse=True)[:20]
@@ -463,7 +471,7 @@ def _ladder_structure_item(
         "highest_board": highest_board,
         "consecutive_count": sum(row["count"] for row in tier_counts),
     }
-    if highest_board >= 2 or tier_counts:
+    if tier_counts:
         return _lineage_fact(
             trade_date, "leader_signal", "ladder_structure", "stock",
             "limit_event", content,
@@ -529,16 +537,20 @@ def _prior_core_feedback_item(
 
     prev_market = prefill.get("prev_market")
     prev_market = prev_market if isinstance(prev_market, Mapping) else {}
-    _, prev_names_by_tier = _parse_ladder_counts(
+    prev_counts, prev_names_by_tier = _parse_ladder_counts(
         prev_market.get("continuous_board_counts")
     )
-    prev_highest = max(prev_names_by_tier, default=0)
+    prev_tiers = set(prev_counts) | set(prev_names_by_tier)
+    explicit_highest = _tier_number(prev_market.get("highest_board"))
+    if explicit_highest is not None and explicit_highest >= 2:
+        prev_tiers.add(explicit_highest)
+    prev_highest = max(prev_tiers, default=0)
     previous_top_names = set(prev_names_by_tier.get(prev_highest, []))
     matched_rows = [
         row for row in consecutive_rows
         if (
             _clean_stock_name(row.get("name")) in previous_top_names
-            or str(row.get("code") or "").strip() in previous_top_names
+            or _bounded_string(row.get("code")) in previous_top_names
         )
     ]
     if previous_top_names and matched_rows:
@@ -662,7 +674,7 @@ def _clean_stock_name(value: Any) -> str:
     normalized = text.upper().replace(" ", "")
     if normalized.startswith(("ST", "*ST", "S*ST")):
         return ""
-    return text
+    return text[:_EVIDENCE_STRING_MAX]
 
 
 def _tier_number(value: Any) -> int | None:
@@ -677,7 +689,13 @@ def _tier_number(value: Any) -> int | None:
 def _stable_strings(values: Any, *, limit: int = 20) -> list[str]:
     if not isinstance(values, Sequence) or isinstance(values, (str, bytes)):
         return []
-    return sorted({str(value).strip() for value in values if str(value).strip()})[:limit]
+    bounded = {_bounded_string(value) for value in values}
+    bounded.discard("")
+    return sorted(bounded)[:limit]
+
+
+def _bounded_string(value: Any) -> str:
+    return str(value or "").strip()[:_EVIDENCE_STRING_MAX]
 
 
 def _to_number(value: Any) -> float | None:
@@ -721,8 +739,8 @@ def _is_available_objective_fact(item: Mapping[str, Any]) -> bool:
 def _is_llm_referenceable(item: Mapping[str, Any]) -> bool:
     if item.get("kind") == "status":
         return False
-    if item.get("kind") == "fact":
-        return _is_available_objective_fact(item)
+    if item.get("kind") == "fact" or item.get("objective") is True:
+        return item.get("source_status") == "ok"
     return True
 
 
