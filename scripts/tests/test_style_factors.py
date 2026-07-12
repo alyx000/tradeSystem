@@ -301,6 +301,100 @@ class TestStyleAnalyzer:
 
         assert result["popularity"]
         assert result["popularity"][0]["name"] == "连板A"
+        assert "popularity_provenance" not in result
+
+    @pytest.mark.parametrize(
+        (
+            "directory_date", "analyze_date", "premium_backfill",
+            "expected_provenance",
+        ),
+        [
+            (
+                "2026-03-27",
+                "2026-03-28",
+                {"trade_date": "2026-03-28", "prev_date": "2026-03-27"},
+                {
+                    "source_trade_date": "2026-03-27",
+                    "outcome_trade_date": "2026-03-28",
+                },
+            ),
+            (
+                "2026-03-26",
+                "2026-03-28",
+                {"trade_date": "2026-03-28", "prev_date": "2026-03-26"},
+                {
+                    "source_trade_date": "2026-03-26",
+                    "outcome_trade_date": "2026-03-28",
+                },
+            ),
+            ("2026-03-27", "2026-03-28", None, None),
+            (
+                "2026-03-27",
+                "2026-03-28",
+                {"trade_date": "2026-03-27", "prev_date": "2026-03-27"},
+                None,
+            ),
+            (
+                "2026-03-27",
+                "2026-03-28",
+                {"trade_date": "2026-03-28", "prev_date": "2026-03-26"},
+                None,
+            ),
+            (
+                "2026-03-27",
+                "2026-03-28",
+                {"trade_date": "2026-02-30", "prev_date": "2026-03-27"},
+                None,
+            ),
+            ("2026-03-27", "2026-03-28", "broken", None),
+        ],
+        ids=(
+            "same-source",
+            "older-source-directory",
+            "missing-metadata",
+            "wrong-outcome-date",
+            "wrong-source-directory",
+            "invalid-date",
+            "invalid-metadata-type",
+        ),
+    )
+    def test_popularity_provenance_requires_same_yaml_metadata(
+        self,
+        tmp_path,
+        directory_date,
+        analyze_date,
+        premium_backfill,
+        expected_provenance,
+    ):
+        import yaml
+        from analyzers.style_factors import StyleAnalyzer
+
+        day_dir = tmp_path / directory_date
+        day_dir.mkdir()
+        payload = {
+            "popularity_backfill": [{
+                "code": "000003.SZ",
+                "name": "连板A",
+                "source": ["consecutive"],
+                "prev_close": 8.0,
+                "t_open_premium_pct": 3.0,
+                "t_close_change_pct": 10.0,
+                "t_is_limit_up": True,
+                "t_is_limit_down": False,
+            }],
+        }
+        if premium_backfill is not None:
+            payload["premium_backfill"] = premium_backfill
+        (day_dir / "post-market.yaml").write_text(
+            yaml.dump(payload),
+            encoding="utf-8",
+        )
+
+        with patch("analyzers.style_factors.DAILY_DIR", tmp_path):
+            result = StyleAnalyzer().analyze(self._make_raw_data(), analyze_date)
+
+        assert result["popularity"][0]["name"] == "连板A"
+        assert result.get("popularity_provenance") == expected_provenance
 
     def test_popularity_empty_when_absent(self, tmp_path):
         """无 popularity_backfill 时 result['popularity'] 为空列表，不报错"""

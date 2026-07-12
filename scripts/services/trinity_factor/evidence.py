@@ -589,6 +589,9 @@ def _prior_core_feedback_item(
     prefill: Mapping[str, Any],
     style: Mapping[str, Any],
 ) -> dict[str, Any] | None:
+    source_trade_date = _feedback_source_trade_date(trade_date, style)
+    if source_trade_date is None:
+        return None
     popularity = style.get("popularity")
     if (
         not isinstance(popularity, Sequence)
@@ -634,7 +637,7 @@ def _prior_core_feedback_item(
 
     close_changes = _numeric_values(selected, "t_close_change_pct")
     content = {
-        "source_trade_date": _optional_trade_date(prev_market.get("date")),
+        "source_trade_date": source_trade_date,
         "cohort_basis": cohort_basis,
         "cohort_count": len(selected),
         "names": _stable_strings(
@@ -657,6 +660,46 @@ def _prior_core_feedback_item(
         trade_date, "leader_signal", "prior_core_feedback", "stock",
         "leader_outcome", content,
     )
+
+
+def _feedback_source_trade_date(
+    trade_date: str,
+    style: Mapping[str, Any],
+) -> str | None:
+    outcome_trade_date = _optional_trade_date(trade_date)
+    if outcome_trade_date is None:
+        return None
+
+    if "popularity_provenance" in style:
+        provenance = style.get("popularity_provenance")
+        if not isinstance(provenance, Mapping):
+            return None
+        source_trade_date = _optional_trade_date(
+            provenance.get("source_trade_date")
+        )
+        provenance_outcome_date = _optional_trade_date(
+            provenance.get("outcome_trade_date")
+        )
+        if (
+            source_trade_date is not None
+            and provenance_outcome_date == outcome_trade_date
+            and source_trade_date < outcome_trade_date
+        ):
+            return source_trade_date
+        return None
+
+    promotion = style.get("promotion")
+    if not isinstance(promotion, Mapping):
+        return None
+    source_trade_date = _optional_trade_date(promotion.get("prev_date"))
+    promotion_outcome_date = _optional_trade_date(promotion.get("trade_date"))
+    if (
+        source_trade_date is not None
+        and promotion_outcome_date == outcome_trade_date
+        and source_trade_date < outcome_trade_date
+    ):
+        return source_trade_date
+    return None
 
 
 def _optional_trade_date(value: Any) -> str | None:

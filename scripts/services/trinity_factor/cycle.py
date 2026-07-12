@@ -530,6 +530,7 @@ def _compare_t1_factor(
     source_factor: Any,
     actual_snapshot: Any,
     actual_factor: Any,
+    expected_feedback_source_date: str,
 ) -> tuple[str, dict[str, Any]]:
     if not isinstance(source_factor, Mapping):
         return "missing_data", {"reason": "source_factor_missing"}
@@ -607,10 +608,8 @@ def _compare_t1_factor(
     if factor_code == "leader_signal":
         source_structure = _leader_structure_signature(source_factor)
         actual_structure = _leader_structure_signature(actual_factor)
-        expected_feedback_source_date = (
-            _optional_trade_date(source_snapshot.get("trade_date"))
-            if isinstance(source_snapshot, Mapping)
-            else None
+        expected_feedback_source_date = _optional_trade_date(
+            expected_feedback_source_date
         )
         actual_feedback_source_date = _leader_feedback_source_date(actual_factor)
         source_highest = source_structure[0] if source_structure is not None else None
@@ -735,6 +734,7 @@ def suggest_t1_evaluation(
             source_factor=source_factor,
             actual_snapshot=actual_snapshot,
             actual_factor=actual_factor,
+            expected_feedback_source_date=source_date,
         )
         actual_evidence = {
             "primary_factor": primary_code,

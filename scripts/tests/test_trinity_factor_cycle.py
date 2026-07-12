@@ -294,6 +294,11 @@ def _leader_prefill(
             "t_is_limit_up": feedback_limit_up,
             "t_is_limit_down": False,
         }]
+        if feedback_source_date is not None:
+            style_factors["popularity_provenance"] = {
+                "source_trade_date": feedback_source_date,
+                "outcome_trade_date": date,
+            }
         market["style_factors"] = style_factors
     if with_promotion:
         style_factors["promotion"] = {
@@ -911,6 +916,126 @@ def test_t1_leader_feedback_requires_matching_source_date(
     assert comparison["actual_feedback_source_date"] == expected_actual_source_date
     assert comparison["dimension_results"]["feedback"] is expected_feedback
     assert comparison["comparable_dimensions"] == expected_comparable
+
+
+def test_t1_leader_expected_feedback_date_uses_source_run_date(conn) -> None:
+    source_prefill = _leader_prefill(
+        date="2026-07-10", highest_board=4, top_names=["龙头甲"]
+    )
+    source_snapshot = build_evidence_snapshot(
+        "2026-07-10", source_prefill, {}
+    )
+    source_snapshot["trade_date"] = "2026-07-09"
+    actual_prefill = _leader_prefill(
+        date="2026-07-13",
+        highest_board=4,
+        top_names=["龙头乙"],
+        feedback_close_change=2.0,
+        feedback_source_date="2026-07-10",
+        feedback_name="龙头甲",
+    )
+
+    suggestion = _suggest_for_prefills(
+        conn,
+        primary="leader_signal",
+        source_prefill=None,
+        source_snapshot=source_snapshot,
+        actual_prefill=actual_prefill,
+    )
+
+    assert suggestion["system_outcome"] == "hit"
+    comparison = suggestion["actual_evidence_json"]["comparison"]
+    assert comparison["expected_feedback_source_date"] == "2026-07-10"
+    assert comparison["actual_feedback_source_date"] == "2026-07-10"
+    assert comparison["dimension_results"] == {
+        "height": True,
+        "identity": False,
+        "feedback": True,
+    }
+    assert comparison["comparable_dimensions"] == 3
+    assert comparison["positive_dimensions"] == 2
+
+
+def test_t1_style_analyzer_yaml_provenance_overrides_db_prev_market_date(
+    conn,
+    tmp_path,
+) -> None:
+    import yaml
+    from unittest.mock import patch
+
+    from analyzers.style_factors import StyleAnalyzer
+
+    day_dir = tmp_path / "2026-07-09"
+    day_dir.mkdir()
+    (day_dir / "post-market.yaml").write_text(
+        yaml.dump({
+            "premium_backfill": {
+                "trade_date": "2026-07-13",
+                "prev_date": "2026-07-09",
+            },
+            "popularity_backfill": [{
+                "code": "000001.SZ",
+                "name": "龙头甲",
+                "source": ["consecutive"],
+                "prev_close": 10.0,
+                "t_open_premium_pct": 1.0,
+                "t_close_change_pct": 2.0,
+                "t_is_limit_up": False,
+                "t_is_limit_down": False,
+            }],
+        }),
+        encoding="utf-8",
+    )
+    with patch("analyzers.style_factors.DAILY_DIR", tmp_path):
+        style = StyleAnalyzer().analyze(
+            {"limit_up": {}, "indices": {}},
+            "2026-07-13",
+        )
+
+    actual_prefill = {
+        "market": {
+            "date": "2026-07-13",
+            "highest_board": 4,
+            "continuous_board_counts": {"4": ["龙头乙"]},
+            "style_factors": style,
+        },
+        "prev_market": {
+            "date": "2026-07-10",
+            "highest_board": 4,
+            "continuous_board_counts": {"4": ["龙头甲"]},
+        },
+        "review_signals": {
+            "market": {},
+            "sectors": {"projection_candidates": []},
+            "emotion": {"ladder_rows": []},
+        },
+    }
+    source_prefill = _leader_prefill(
+        date="2026-07-10", highest_board=4, top_names=["龙头甲"]
+    )
+
+    suggestion = _suggest_for_prefills(
+        conn,
+        primary="leader_signal",
+        source_prefill=source_prefill,
+        actual_prefill=actual_prefill,
+    )
+
+    assert style["popularity_provenance"] == {
+        "source_trade_date": "2026-07-09",
+        "outcome_trade_date": "2026-07-13",
+    }
+    assert suggestion["system_outcome"] == "partial"
+    comparison = suggestion["actual_evidence_json"]["comparison"]
+    assert comparison["expected_feedback_source_date"] == "2026-07-10"
+    assert comparison["actual_feedback_source_date"] == "2026-07-09"
+    assert comparison["dimension_results"] == {
+        "height": True,
+        "identity": False,
+        "feedback": None,
+    }
+    assert comparison["comparable_dimensions"] == 2
+    assert comparison["positive_dimensions"] == 1
 
 
 @pytest.mark.parametrize(

@@ -196,6 +196,10 @@ def _lineage_prefill(*, promotion_date: str = "2026-07-10") -> dict:
                     99.0, 99.0, limit_up=True,
                 ),
             ],
+            "popularity_provenance": {
+                "source_trade_date": "2026-07-09",
+                "outcome_trade_date": "2026-07-10",
+            },
             "switch_signals": ["不应进入客观卡"],
         },
     })
@@ -436,13 +440,59 @@ def test_leader_signal_emits_three_cards_but_two_lineage_groups() -> None:
     assert "成交额噪声" not in repr(feedback)
 
 
-@pytest.mark.parametrize("raw_date", [None, "2026-02-30", "20260709"])
-def test_prior_feedback_invalid_source_date_is_stored_as_none(raw_date: object) -> None:
+@pytest.mark.parametrize(
+    "provenance",
+    [
+        None,
+        {
+            "source_trade_date": "2026-02-30",
+            "outcome_trade_date": "2026-07-10",
+        },
+        {
+            "source_trade_date": "2026-07-09",
+            "outcome_trade_date": "2026-07-09",
+        },
+        {
+            "source_trade_date": "2026-07-10",
+            "outcome_trade_date": "2026-07-10",
+        },
+    ],
+    ids=(
+        "missing",
+        "invalid-source-date",
+        "wrong-outcome-date",
+        "non-prior-source-date",
+    ),
+)
+def test_prior_feedback_without_reliable_provenance_is_absent(
+    provenance: dict | None,
+) -> None:
     prefill = _lineage_prefill()
-    if raw_date is None:
-        prefill["prev_market"].pop("date")
-    else:
-        prefill["prev_market"]["date"] = raw_date
+    style = prefill["market"]["style_factors"]
+    style.pop("promotion")
+    style.pop("popularity_provenance")
+    if provenance is not None:
+        style["popularity_provenance"] = provenance
+    prefill["prev_market"]["date"] = "2026-07-09"
+
+    leader = _factor(
+        build_evidence_snapshot("2026-07-10", prefill, {}),
+        "leader_signal",
+    )
+
+    assert not [
+        item for item in _ok_facts(leader)
+        if item["source"] == "prior_core_feedback"
+    ]
+
+
+def test_prior_feedback_prefers_popularity_provenance_over_promotion() -> None:
+    prefill = _lineage_prefill()
+    style = prefill["market"]["style_factors"]
+    style["popularity_provenance"] = {
+        "source_trade_date": "2026-07-08",
+        "outcome_trade_date": "2026-07-10",
+    }
 
     leader = _factor(
         build_evidence_snapshot("2026-07-10", prefill, {}),
@@ -453,7 +503,41 @@ def test_prior_feedback_invalid_source_date_is_stored_as_none(raw_date: object) 
         if item["source"] == "prior_core_feedback"
     )
 
-    assert feedback["source_trade_date"] is None
+    assert feedback["source_trade_date"] == "2026-07-08"
+
+
+def test_prior_feedback_falls_back_to_same_style_promotion_metadata() -> None:
+    prefill = _lineage_prefill()
+    prefill["market"]["style_factors"].pop("popularity_provenance")
+    prefill["prev_market"]["date"] = "2026-07-08"
+
+    leader = _factor(
+        build_evidence_snapshot("2026-07-10", prefill, {}),
+        "leader_signal",
+    )
+    feedback = next(
+        item["content"] for item in _ok_facts(leader)
+        if item["source"] == "prior_core_feedback"
+    )
+
+    assert feedback["source_trade_date"] == "2026-07-09"
+
+
+def test_prior_feedback_rejects_non_prior_promotion_source_date() -> None:
+    prefill = _lineage_prefill()
+    style = prefill["market"]["style_factors"]
+    style.pop("popularity_provenance")
+    style["promotion"]["prev_date"] = "2026-07-10"
+
+    leader = _factor(
+        build_evidence_snapshot("2026-07-10", prefill, {}),
+        "leader_signal",
+    )
+
+    assert not [
+        item for item in _ok_facts(leader)
+        if item["source"] == "prior_core_feedback"
+    ]
 
 
 def test_same_quality_group_counts_once_even_when_sources_differ() -> None:
@@ -821,7 +905,13 @@ def test_prior_feedback_reuses_repo_st_filter_before_aggregation() -> None:
         _popularity_row("CASE.SZ", "  sT 空格 ", ["consecutive"], 99.0, 99.0),
     ]
     prefill = {
-        "market": {"style_factors": {"popularity": rows}},
+        "market": {"style_factors": {
+            "popularity": rows,
+            "popularity_provenance": {
+                "source_trade_date": "2026-07-09",
+                "outcome_trade_date": "2026-07-10",
+            },
+        }},
         "review_signals": {
             "sectors": {"projection_candidates": []},
             "emotion": {"ladder_rows": []},
