@@ -3351,6 +3351,7 @@ def test_review_factor_score_persists_production_market_fields_from_db(
 
     _seed_factor_trade_date(db_path, trade_date="2026-07-02")
     conn = get_connection(db_path)
+    Q.upsert_trade_calendar(conn, [{"date": "2026-07-01", "is_open": 1}])
     Q.upsert_daily_market(conn, {
         "date": "2026-07-01",
         "highest_board": 4,
@@ -3500,6 +3501,7 @@ def test_review_factor_score_falls_back_to_promotion_for_legacy_feedback_provena
 
     _seed_factor_trade_date(db_path, trade_date="2026-07-02")
     conn = get_connection(db_path)
+    Q.upsert_trade_calendar(conn, [{"date": "2026-07-01", "is_open": 1}])
     Q.upsert_daily_market(conn, {
         "date": "2026-07-01",
         "highest_board": 3,
@@ -3547,8 +3549,95 @@ def test_review_factor_score_falls_back_to_promotion_for_legacy_feedback_provena
         for item in leader["evidence_items"]
         if item.get("source") == "prior_core_feedback"
     )
+    assert leader["evidence_quality"] == 3
     assert feedback["content"]["source_trade_date"] == "2026-07-01"
     assert feedback["content"]["cohort_basis"] == "previous_highest_tier"
+
+
+@pytest.mark.parametrize(
+    "provenance_mode",
+    ["explicit_misaligned", "legacy_misaligned"],
+)
+def test_review_factor_score_rejects_feedback_not_from_strict_previous_open_day(
+    client, db_path, provenance_mode
+):
+    from services.trinity_factor.repository import list_score_runs
+
+    _seed_factor_trade_date(db_path, trade_date="2026-07-13")
+    conn = get_connection(db_path)
+    Q.upsert_trade_calendar(conn, [
+        {"date": "2026-07-10", "is_open": 1},
+        {"date": "2026-07-13", "is_open": 1},
+    ])
+    Q.upsert_daily_market(conn, {
+        "date": "2026-07-09",
+        "highest_board": 5,
+        "continuous_board_counts": {"5": ["五板旧标"]},
+    })
+    Q.upsert_daily_market(conn, {
+        "date": "2026-07-10",
+        "highest_board": 4,
+        "continuous_board_counts": {"4": ["四板甲"]},
+    })
+    style_factors = {
+        "popularity": [{
+            "code": "000001.SZ",
+            "name": "四板甲",
+            "source": ["consecutive"],
+            "t_open_premium_pct": 1.0,
+            "t_close_change_pct": 3.0,
+            "t_is_limit_up": False,
+            "t_is_limit_down": False,
+        }],
+        # No valid promotion group: it must not independently add leader_outcome.
+        "promotion": {
+            "trade_date": "2026-07-13",
+            "prev_date": (
+                "2026-07-09"
+                if provenance_mode == "legacy_misaligned"
+                else "2026-07-10"
+            ),
+        },
+    }
+    if provenance_mode == "explicit_misaligned":
+        style_factors["popularity_provenance"] = {
+            "source_trade_date": "2026-07-09",
+            "outcome_trade_date": "2026-07-13",
+        }
+    Q.upsert_daily_market(conn, {
+        "date": "2026-07-13",
+        "highest_board": 4,
+        "continuous_board_counts": {"4": ["四板乙"]},
+        "raw_data": {"raw_data": {"style_factors": style_factors}},
+    })
+    conn.commit()
+    conn.close()
+
+    response = client.post(
+        "/api/review-factors/2026-07-13/score",
+        json={"no_llm": True, "input_by": "web"},
+    )
+
+    assert response.status_code == 200
+    conn = get_connection(db_path)
+    stored_run = list_score_runs(conn, trade_date="2026-07-13")[0]
+    conn.close()
+    assert stored_run["evidence_snapshot_json"]["strict_prev_trade_date"] == (
+        "2026-07-10"
+    )
+    leader = next(
+        row
+        for row in stored_run["evidence_snapshot_json"]["factor_candidates"]
+        if row["factor_code"] == "leader_signal"
+    )
+    facts = [
+        item
+        for item in leader["evidence_items"]
+        if item.get("kind") == "fact" and item.get("source_status") == "ok"
+    ]
+    assert [item["source"] for item in facts] == ["ladder_structure"]
+    assert leader["objective_source_count"] == 1
+    assert leader["evidence_quality"] == 2
 
 
 @pytest.mark.parametrize("input_by", [None, "", "  \t"])
@@ -3690,6 +3779,10 @@ def test_review_put_rejects_factor_decision_when_score_input_changed(client, db_
 
 def test_review_factor_score_and_confirm_share_summary_input_normalization(client, db_path):
     _seed_factor_trade_date(db_path)
+    conn = get_connection(db_path)
+    Q.upsert_trade_calendar(conn, [{"date": "2026-07-09", "is_open": 1}])
+    conn.commit()
+    conn.close()
     steps = {"step1_market": {"judgement": "结构偏弱"}}
     scored = client.post("/api/review-factors/2026-07-10/score", json={
         "steps": steps,

@@ -710,6 +710,7 @@ def suggest_t1_evaluation(
             evaluation_trade_date,
             prefill,
             {},  # T+1 系统判卷只看客观预填，不消费当日人工判断。
+            strict_prev_trade_date=source_date,
         )
         actual_factor = next(
             (

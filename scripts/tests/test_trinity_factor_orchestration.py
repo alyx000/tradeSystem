@@ -28,6 +28,7 @@ def conn(tmp_path):
     migrate(connection)
     from db import queries as Q
     Q.upsert_trade_calendar(connection, [
+        {"date": "2026-07-09", "is_open": 1},
         {"date": "2026-07-10", "is_open": 1},
         {"date": "2026-07-11", "is_open": 0},
     ])
@@ -222,6 +223,30 @@ def _lineage_prefill(*, promotion_date: str = "2026-07-10") -> dict:
     return prefill
 
 
+def _strict_feedback_prefill(
+    source_trade_date: str,
+    *,
+    explicit_provenance: bool,
+) -> dict:
+    prefill = _lineage_prefill(promotion_date="2026-07-13")
+    style = prefill["market"]["style_factors"]
+    style["promotion"] = {
+        "trade_date": "2026-07-13",
+        "prev_date": (
+            "2026-07-10" if explicit_provenance else source_trade_date
+        ),
+    }
+    if explicit_provenance:
+        style["popularity_provenance"] = {
+            "source_trade_date": source_trade_date,
+            "outcome_trade_date": "2026-07-13",
+        }
+    else:
+        style.pop("popularity_provenance")
+    prefill["prev_market"]["date"] = "2026-07-10"
+    return prefill
+
+
 def _steps(**overrides) -> dict:
     steps = {
         "step1_market": {"structure": "放量普涨"},
@@ -383,7 +408,12 @@ def test_style_regime_emits_three_independent_lineage_cards() -> None:
 
 
 def test_leader_signal_emits_three_cards_but_two_lineage_groups() -> None:
-    snapshot = build_evidence_snapshot("2026-07-10", _lineage_prefill(), {})
+    snapshot = build_evidence_snapshot(
+        "2026-07-10",
+        _lineage_prefill(),
+        {},
+        strict_prev_trade_date="2026-07-09",
+    )
 
     leader = _factor(snapshot, "leader_signal")
     facts = _ok_facts(leader)
@@ -476,7 +506,12 @@ def test_prior_feedback_without_reliable_provenance_is_absent(
     prefill["prev_market"]["date"] = "2026-07-09"
 
     leader = _factor(
-        build_evidence_snapshot("2026-07-10", prefill, {}),
+        build_evidence_snapshot(
+            "2026-07-10",
+            prefill,
+            {},
+            strict_prev_trade_date="2026-07-09",
+        ),
         "leader_signal",
     )
 
@@ -486,58 +521,116 @@ def test_prior_feedback_without_reliable_provenance_is_absent(
     ]
 
 
-def test_prior_feedback_prefers_popularity_provenance_over_promotion() -> None:
-    prefill = _lineage_prefill()
-    style = prefill["market"]["style_factors"]
-    style["popularity_provenance"] = {
-        "source_trade_date": "2026-07-08",
-        "outcome_trade_date": "2026-07-10",
-    }
+@pytest.mark.parametrize(
+    ("strict_prev_trade_date", "expected_feedback"),
+    [
+        (None, False),
+        ("2026-02-30", False),
+        ("20260710", False),
+        ("2026-07-10", True),
+    ],
+    ids=("missing", "invalid-calendar-date", "compact-date", "valid"),
+)
+def test_prior_feedback_requires_valid_strict_previous_trade_date(
+    strict_prev_trade_date: str | None,
+    expected_feedback: bool,
+) -> None:
+    prefill = _strict_feedback_prefill(
+        "2026-07-10",
+        explicit_provenance=True,
+    )
 
     leader = _factor(
-        build_evidence_snapshot("2026-07-10", prefill, {}),
-        "leader_signal",
-    )
-    feedback = next(
-        item["content"] for item in _ok_facts(leader)
-        if item["source"] == "prior_core_feedback"
-    )
-
-    assert feedback["source_trade_date"] == "2026-07-08"
-
-
-def test_prior_feedback_falls_back_to_same_style_promotion_metadata() -> None:
-    prefill = _lineage_prefill()
-    prefill["market"]["style_factors"].pop("popularity_provenance")
-    prefill["prev_market"]["date"] = "2026-07-08"
-
-    leader = _factor(
-        build_evidence_snapshot("2026-07-10", prefill, {}),
-        "leader_signal",
-    )
-    feedback = next(
-        item["content"] for item in _ok_facts(leader)
-        if item["source"] == "prior_core_feedback"
-    )
-
-    assert feedback["source_trade_date"] == "2026-07-09"
-
-
-def test_prior_feedback_rejects_non_prior_promotion_source_date() -> None:
-    prefill = _lineage_prefill()
-    style = prefill["market"]["style_factors"]
-    style.pop("popularity_provenance")
-    style["promotion"]["prev_date"] = "2026-07-10"
-
-    leader = _factor(
-        build_evidence_snapshot("2026-07-10", prefill, {}),
+        build_evidence_snapshot(
+            "2026-07-13",
+            prefill,
+            {},
+            strict_prev_trade_date=strict_prev_trade_date,
+        ),
         "leader_signal",
     )
 
-    assert not [
+    feedback = [
         item for item in _ok_facts(leader)
         if item["source"] == "prior_core_feedback"
     ]
+    assert bool(feedback) is expected_feedback
+
+
+@pytest.mark.parametrize(
+    ("source_trade_date", "expected_source_count", "expected_quality"),
+    [
+        ("2026-07-09", 1, 2),
+        ("2026-07-10", 2, 3),
+    ],
+    ids=("misaligned", "exact"),
+)
+def test_prior_feedback_explicit_provenance_must_match_strict_previous_open_day(
+    source_trade_date: str,
+    expected_source_count: int,
+    expected_quality: int,
+) -> None:
+    prefill = _strict_feedback_prefill(
+        source_trade_date,
+        explicit_provenance=True,
+    )
+
+    leader = _factor(
+        build_evidence_snapshot(
+            "2026-07-13",
+            prefill,
+            {},
+            strict_prev_trade_date="2026-07-10",
+        ),
+        "leader_signal",
+    )
+
+    facts = _ok_facts(leader)
+    assert [item["source"] for item in facts] == (
+        ["ladder_structure", "prior_core_feedback"]
+        if source_trade_date == "2026-07-10"
+        else ["ladder_structure"]
+    )
+    assert leader["objective_source_count"] == expected_source_count
+    assert leader["evidence_quality"] == expected_quality
+
+
+@pytest.mark.parametrize(
+    ("source_trade_date", "expected_source_count", "expected_quality"),
+    [
+        ("2026-07-09", 1, 2),
+        ("2026-07-10", 2, 3),
+    ],
+    ids=("misaligned", "exact"),
+)
+def test_prior_feedback_legacy_promotion_must_match_strict_previous_open_day(
+    source_trade_date: str,
+    expected_source_count: int,
+    expected_quality: int,
+) -> None:
+    prefill = _strict_feedback_prefill(
+        source_trade_date,
+        explicit_provenance=False,
+    )
+
+    leader = _factor(
+        build_evidence_snapshot(
+            "2026-07-13",
+            prefill,
+            {},
+            strict_prev_trade_date="2026-07-10",
+        ),
+        "leader_signal",
+    )
+
+    facts = _ok_facts(leader)
+    assert [item["source"] for item in facts] == (
+        ["ladder_structure", "prior_core_feedback"]
+        if source_trade_date == "2026-07-10"
+        else ["ladder_structure"]
+    )
+    assert leader["objective_source_count"] == expected_source_count
+    assert leader["evidence_quality"] == expected_quality
 
 
 def test_same_quality_group_counts_once_even_when_sources_differ() -> None:
@@ -605,6 +698,7 @@ def test_stale_promotion_is_not_an_ok_fact_or_referenceable() -> None:
         "2026-07-10",
         _lineage_prefill(promotion_date="2026-07-09"),
         {},
+        strict_prev_trade_date="2026-07-09",
     )
     leader = _factor(snapshot, "leader_signal")
     promotion_id = "2026-07-10:leader_signal:promotion_realization"
@@ -851,7 +945,12 @@ def test_prior_feedback_does_not_match_below_explicit_previous_highest() -> None
     }
 
     leader = _factor(
-        build_evidence_snapshot("2026-07-10", prefill, {}),
+        build_evidence_snapshot(
+            "2026-07-10",
+            prefill,
+            {},
+            strict_prev_trade_date="2026-07-09",
+        ),
         "leader_signal",
     )
     feedback = next(
@@ -885,7 +984,15 @@ def test_malformed_popularity_rows_do_not_create_objective_feedback() -> None:
         },
     }
 
-    leader = _factor(build_evidence_snapshot("2026-07-10", prefill, {}), "leader_signal")
+    leader = _factor(
+        build_evidence_snapshot(
+            "2026-07-10",
+            prefill,
+            {},
+            strict_prev_trade_date="2026-07-09",
+        ),
+        "leader_signal",
+    )
 
     assert leader["objective_source_count"] == 0
     assert leader["evidence_quality"] == 0
@@ -918,7 +1025,15 @@ def test_prior_feedback_reuses_repo_st_filter_before_aggregation() -> None:
         },
     }
 
-    leader = _factor(build_evidence_snapshot("2026-07-10", prefill, {}), "leader_signal")
+    leader = _factor(
+        build_evidence_snapshot(
+            "2026-07-10",
+            prefill,
+            {},
+            strict_prev_trade_date="2026-07-09",
+        ),
+        "leader_signal",
+    )
     feedback = next(
         item["content"] for item in _ok_facts(leader)
         if item["source"] == "prior_core_feedback"
@@ -1095,7 +1210,12 @@ def test_objective_card_strings_are_bounded_before_llm_projection() -> None:
     }]
     prefill["prev_market"]["continuous_board_counts"] = {"4": [long_text]}
 
-    snapshot = build_evidence_snapshot("2026-07-10", prefill, {})
+    snapshot = build_evidence_snapshot(
+        "2026-07-10",
+        prefill,
+        {},
+        strict_prev_trade_date="2026-07-09",
+    )
     leader = _factor(snapshot, "leader_signal")
     contents = {item["source"]: item["content"] for item in _ok_facts(leader)}
 

@@ -64,7 +64,13 @@ class TrinityFactorService:
             )
         if Q.is_trade_day_from_db(conn, trade_date) is not True:
             raise ValueError("trade_date must be an open trade date")
-        snapshot = build_evidence_snapshot(trade_date, prefill, review_steps)
+        strict_prev_trade_date = Q.get_prev_trade_date_from_db(conn, trade_date)
+        snapshot = build_evidence_snapshot(
+            trade_date,
+            prefill,
+            review_steps,
+            strict_prev_trade_date=strict_prev_trade_date,
+        )
         input_digest = _json_digest(snapshot)
         requested_model = "disabled" if no_llm else str(os.getenv("LLM_MODEL") or "").strip()
         prompt_versions = {
@@ -364,6 +370,14 @@ def build_score_input_digest(
     trade_date: str,
     prefill: Mapping[str, Any] | None,
     review_steps: Mapping[str, Any] | None,
+    strict_prev_trade_date: str | None = None,
 ) -> str:
     """重建与 score run 相同的证据快照摘要，供确认边界做 freshness 校验。"""
-    return _json_digest(build_evidence_snapshot(trade_date, prefill, review_steps))
+    return _json_digest(
+        build_evidence_snapshot(
+            trade_date,
+            prefill,
+            review_steps,
+            strict_prev_trade_date=strict_prev_trade_date,
+        )
+    )

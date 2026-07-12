@@ -45,12 +45,22 @@ def build_evidence_snapshot(
     trade_date: str,
     prefill: Mapping[str, Any] | None,
     review_steps: Mapping[str, Any] | None,
+    *,
+    strict_prev_trade_date: str | None = None,
 ) -> dict[str, Any]:
     """构造可审计证据快照；规则元数据保留在快照，不直接展示给 LLM。"""
     prefill = prefill if isinstance(prefill, Mapping) else {}
     review_steps = review_steps if isinstance(review_steps, Mapping) else {}
+    normalized_strict_prev_trade_date = _optional_trade_date(
+        strict_prev_trade_date
+    )
     sector_candidates = _prepare_sector_candidates(trade_date, prefill)
-    factor_items = _factor_objective_items(trade_date, prefill, sector_candidates)
+    factor_items = _factor_objective_items(
+        trade_date,
+        prefill,
+        sector_candidates,
+        strict_prev_trade_date=normalized_strict_prev_trade_date,
+    )
 
     factor_candidates: list[dict[str, Any]] = []
     for factor_code in sorted(FACTOR_CODES):
@@ -127,6 +137,7 @@ def build_evidence_snapshot(
     deterministic_sector_order = [row["sector_key"] for row in sector_candidates]
     return {
         "trade_date": trade_date,
+        "strict_prev_trade_date": normalized_strict_prev_trade_date,
         "ruleset_version": RULESET_VERSION,
         "schema_version": SERVICE_SCHEMA_VERSION,
         "factor_candidates": factor_candidates,
@@ -327,6 +338,8 @@ def _factor_objective_items(
     trade_date: str,
     prefill: Mapping[str, Any],
     sector_candidates: Sequence[Mapping[str, Any]],
+    *,
+    strict_prev_trade_date: str | None,
 ) -> dict[str, list[dict[str, Any]]]:
     out = {factor_code: [] for factor_code in FACTOR_CODES}
     market = prefill.get("market")
@@ -366,7 +379,13 @@ def _factor_objective_items(
                     _json_safe_value(structure_rows),
                 ))
     out["leader_signal"].extend(
-        _leader_objective_items(trade_date, prefill, market, signals)
+        _leader_objective_items(
+            trade_date,
+            prefill,
+            market,
+            signals,
+            strict_prev_trade_date=strict_prev_trade_date,
+        )
     )
 
     for candidate in sector_candidates:
@@ -478,13 +497,20 @@ def _leader_objective_items(
     prefill: Mapping[str, Any],
     market: Mapping[str, Any],
     signals: Any,
+    *,
+    strict_prev_trade_date: str | None,
 ) -> list[dict[str, Any]]:
     style = market.get("style_factors")
     style = style if isinstance(style, Mapping) else {}
     return [item for item in (
         _ladder_structure_item(trade_date, market, signals),
         _promotion_realization_item(trade_date, style),
-        _prior_core_feedback_item(trade_date, prefill, style),
+        _prior_core_feedback_item(
+            trade_date,
+            prefill,
+            style,
+            strict_prev_trade_date=strict_prev_trade_date,
+        ),
     ) if item is not None]
 
 
@@ -588,8 +614,14 @@ def _prior_core_feedback_item(
     trade_date: str,
     prefill: Mapping[str, Any],
     style: Mapping[str, Any],
+    *,
+    strict_prev_trade_date: str | None,
 ) -> dict[str, Any] | None:
-    source_trade_date = _feedback_source_trade_date(trade_date, style)
+    source_trade_date = _feedback_source_trade_date(
+        trade_date,
+        style,
+        strict_prev_trade_date=strict_prev_trade_date,
+    )
     if source_trade_date is None:
         return None
     popularity = style.get("popularity")
@@ -665,9 +697,12 @@ def _prior_core_feedback_item(
 def _feedback_source_trade_date(
     trade_date: str,
     style: Mapping[str, Any],
+    *,
+    strict_prev_trade_date: str | None,
 ) -> str | None:
     outcome_trade_date = _optional_trade_date(trade_date)
-    if outcome_trade_date is None:
+    expected_source_trade_date = _optional_trade_date(strict_prev_trade_date)
+    if outcome_trade_date is None or expected_source_trade_date is None:
         return None
 
     if "popularity_provenance" in style:
@@ -681,7 +716,7 @@ def _feedback_source_trade_date(
             provenance.get("outcome_trade_date")
         )
         if (
-            source_trade_date is not None
+            source_trade_date == expected_source_trade_date
             and provenance_outcome_date == outcome_trade_date
             and source_trade_date < outcome_trade_date
         ):
@@ -694,7 +729,7 @@ def _feedback_source_trade_date(
     source_trade_date = _optional_trade_date(promotion.get("prev_date"))
     promotion_outcome_date = _optional_trade_date(promotion.get("trade_date"))
     if (
-        source_trade_date is not None
+        source_trade_date == expected_source_trade_date
         and promotion_outcome_date == outcome_trade_date
         and source_trade_date < outcome_trade_date
     ):

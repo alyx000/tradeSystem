@@ -25,7 +25,10 @@ def _score_args(**overrides):
 
 
 def _seed_open_trade_date(conn) -> None:
-    Q.upsert_trade_calendar(conn, [{"date": "2026-07-10", "is_open": 1}])
+    Q.upsert_trade_calendar(conn, [
+        {"date": "2026-07-09", "is_open": 1},
+        {"date": "2026-07-10", "is_open": 1},
+    ])
     conn.commit()
 
 

@@ -69,7 +69,7 @@ python3 main.py review factor-metrics [--days 20] [--json]
 
 这是复盘内的**影子观察层**，不是交易计划生成器：
 
-1. `factor-score` 从当日复盘第 1～6 步与 `prefill` 生成四张固定因子证据卡：`market_node / sector_rhythm / style_regime / leader_signal`。`style_regime` 的独立客观来源族是指数相对强弱、10/20/30cm 板型混合、已实现溢价；`leader_signal` 的独立客观来源族是剔除 ST 的连板梯队、晋级实现与前高标回验。`promotion_realization` 当前只保证 `promotion.trade_date` 与评分日一致；`prior_core_feedback` 的日期血缘优先读取显式 `popularity_provenance`，该键存在但类型非法或日期错位时直接拒绝且不得 fallback，只有历史数据完全缺少该键时，才允许用同一 `style_factors.promotion.prev_date / trade_date` 作兼容 fallback。来源日期缺失或错位不得抬高证据质量。规则门、证据质量、封顶与总分由程序控制，不喂给 LLM；主观 context 可供解释，但不能抬高客观门槛。
+1. `factor-score` 从当日复盘第 1～6 步与 `prefill` 生成四张固定因子证据卡：`market_node / sector_rhythm / style_regime / leader_signal`。`style_regime` 的独立客观来源族是指数相对强弱、10/20/30cm 板型混合、已实现溢价；`leader_signal` 的独立客观来源族是剔除 ST 的连板梯队、晋级实现与前高标回验。`promotion_realization` 当前只保证 `promotion.trade_date` 与评分日一致；`prior_core_feedback` 的来源日必须等于 `trade_calendar` 严格上一开放日，不得以 `prefill.prev_market` 的最近行情日替代。日期血缘优先读取显式 `popularity_provenance`，该键存在但类型非法或日期错位时直接拒绝且不得 fallback，只有历史数据完全缺少该键时，才允许用同一 `style_factors.promotion.prev_date / trade_date` 作兼容 fallback。来源日期缺失或错位不得抬高证据质量。规则门、证据质量、封顶与总分由程序控制，不喂给 LLM；主观 context 可供解释，但不能抬高客观门槛。
 2. 第 1 层 LLM 只给四因子相对重要度，程序重算后选主因子；只有主因子成立且存在候选时，才把该主因子的受控证据卡传入第 2 层，对确定性排序中的最多 6 个 `candidate_tier=core` 板块评分。`watch/context` 不得升格；Step 5 人工最票与自动 leader 名称只能作为标注 `[判断]` 的 context，不能伪装成客观来源或提升证据质量。每行必须引用至少一条正向证据和一个 T+1 check；所有分数只表示相对重要度，**不是概率、胜率或买卖建议，也不得进入 `TradeDraft` / `TradePlan`**。
 3. 因子层失败时不展示数字 LLM 分，只允许唯一规则降级或“不确定”；板块层失败时保留已成立的主因子，并回退到确定性 `core` 排序。`sector_failed` 是完整可展示的部分降级结果，可命中缓存；需要重跑时显式传 `--retry-of-run-id`，新建 append-only 子 run，不覆盖旧 run。
 4. 展示系统建议后，必须让用户三选一：`accepted`（接受）、`overridden`（改选，必须写 `override_reason`）或 `undetermined`（看不懂/不确认）。CLI 入口：

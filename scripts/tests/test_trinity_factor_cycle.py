@@ -876,7 +876,7 @@ def test_t1_leader_dimensions_determine_structural_outcome(
         "expected_feedback", "expected_outcome", "expected_comparable",
     ),
     [
-        ("2026-07-09", "2026-07-09", None, "partial", 2),
+        ("2026-07-09", None, None, "partial", 2),
         ("2026-07-10", "2026-07-10", True, "hit", 3),
         (None, None, None, "partial", 2),
         ("2026-02-30", None, None, "partial", 2),
@@ -1028,7 +1028,7 @@ def test_t1_style_analyzer_yaml_provenance_overrides_db_prev_market_date(
     assert suggestion["system_outcome"] == "partial"
     comparison = suggestion["actual_evidence_json"]["comparison"]
     assert comparison["expected_feedback_source_date"] == "2026-07-10"
-    assert comparison["actual_feedback_source_date"] == "2026-07-09"
+    assert comparison["actual_feedback_source_date"] is None
     assert comparison["dimension_results"] == {
         "height": True,
         "identity": False,

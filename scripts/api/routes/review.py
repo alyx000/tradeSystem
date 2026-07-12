@@ -1432,6 +1432,7 @@ def save_review(date: str, body: dict, conn: sqlite3.Connection = Depends(get_db
         trade_date=date,
         prefill=build_review_prefill(conn, date),
         review_steps=normalize_review_steps(current_source),
+        strict_prev_trade_date=Q.get_prev_trade_date_from_db(conn, date),
     )
     step8 = body.get("step8_plan")
     if isinstance(step8, str):

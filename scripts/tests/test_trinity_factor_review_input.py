@@ -30,3 +30,20 @@ def test_summary_step_object_and_json_text_share_canonical_output_and_digest() -
         prefill={},
         review_steps=from_text,
     )
+
+
+def test_score_input_digest_includes_strict_previous_trade_date_context() -> None:
+    earlier = build_score_input_digest(
+        trade_date="2026-07-13",
+        prefill={},
+        review_steps={},
+        strict_prev_trade_date="2026-07-09",
+    )
+    strict_previous = build_score_input_digest(
+        trade_date="2026-07-13",
+        prefill={},
+        review_steps={},
+        strict_prev_trade_date="2026-07-10",
+    )
+
+    assert earlier != strict_previous

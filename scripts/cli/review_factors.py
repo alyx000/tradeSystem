@@ -131,6 +131,10 @@ def _factor_confirm(args: argparse.Namespace) -> dict[str, Any]:
                 trade_date=trade_date,
                 prefill=build_review_prefill(conn, trade_date),
                 review_steps=normalize_review_steps(current_review),
+                strict_prev_trade_date=Q.get_prev_trade_date_from_db(
+                    conn,
+                    trade_date,
+                ),
             ),
         )
         conn.commit()
