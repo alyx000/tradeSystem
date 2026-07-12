@@ -13,6 +13,7 @@ from services.ma_breakout import constants as C
 from services.ma_breakout import renderer, scanner
 
 logger = logging.getLogger(__name__)
+_AFTER_CLOSE_CUTOFF = datetime.time(15, 30)
 
 
 def _positive_int(raw: str) -> int:
@@ -65,18 +66,38 @@ def _today() -> str:
     return datetime.date.today().isoformat()
 
 
+def _now_shanghai() -> datetime.datetime:
+    try:
+        from zoneinfo import ZoneInfo
+
+        return datetime.datetime.now(ZoneInfo("Asia/Shanghai"))
+    except Exception:
+        return datetime.datetime.now()
+
+
 def _next_calendar_day(date: str) -> str:
     current = datetime.datetime.strptime(date, "%Y-%m-%d").date()
     return (current + datetime.timedelta(days=1)).isoformat()
 
 
 def _resolve_effective_date(conn, registry, date: str, *, explicit_date: bool) -> tuple[str, dict]:
-    """自动任务在交易日前一天运行时，回退到最近已完成交易日。"""
+    """隐式自动任务在目标交易日尚未收盘时，回退到最近已完成交易日。"""
     if explicit_date:
         return date, {}
     from utils.trade_date import get_prev_trade_date, is_trade_day
 
-    if is_trade_day(date, conn=conn, registry=registry) is not False:
+    trade_day = is_trade_day(date, conn=conn, registry=registry)
+    if trade_day is True:
+        now = _now_shanghai()
+        if now.date().isoformat() == date and now.time() < _AFTER_CLOSE_CUTOFF:
+            target_date = get_prev_trade_date(registry, date)
+            return target_date, {
+                "run_date": date,
+                "auto_resolved_from": "pre_close_trade_day",
+                "next_trade_date": date,
+            }
+        return date, {}
+    if trade_day is not False:
         return date, {}
     next_date = _next_calendar_day(date)
     if is_trade_day(next_date, conn=conn, registry=registry) is not True:

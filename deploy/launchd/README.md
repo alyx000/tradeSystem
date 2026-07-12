@@ -23,7 +23,7 @@
 - `board-break-runner.sh` — 包装脚本：cd 仓库根 → source `scripts/.env`(TUSHARE_TOKEN) + `~/.config/tradeSystem.env`(钉钉/ANTIGRAVITY) → 调 `python3 main.py board-break daily`
 - `com.alyx.tradesystem.board-break.plist` — 工作日 21:20 触发（断板反包盘后扫描：昨日连板≥2 断板→八维度加权打分+LLM两两PK→双排序观察清单；日志 `/tmp/tradesystem-board-break.log`）
 - `ma-breakout-runner.sh` — 包装脚本：cd 仓库根 → source `scripts/.env`(TUSHARE_TOKEN) + `~/.config/tradeSystem.env`(钉钉) → 调 `python3 main.py ma-breakout daily`
-- `com.alyx.tradesystem.ma-breakout.plist` — 中国时间工作日+周日 21:35 触发（Pacific 本机 05:35/06:35 双触发 + runner 时间窗守卫；周日自动回退到最近已完成交易日；4日均线二波观察池；日志 `/tmp/tradesystem-ma-breakout.log`）
+- `com.alyx.tradesystem.ma-breakout.plist` — 工作日+周日 21:35 触发（系统时区 Asia/Shanghai 单晚间档，与兄弟任务同范式；周日自动回退到最近已完成交易日；4日均线二波观察池；日志 `/tmp/tradesystem-ma-breakout.log`）
 - `daily-leaders-runner.sh` — 包装脚本：cd 仓库根 → source `~/.config/tradeSystem.env`(钉钉/LLM) → 调 `/usr/bin/python3 scripts/main.py daily-leaders propose --push`
 - `com.alyx.tradesystem.daily-leaders.plist` — 工作日 22:30 触发（每日最票候选确认稿；stdout `/tmp/tradesystem-daily-leaders.out.log`，stderr `/tmp/tradesystem-daily-leaders.err.log`）
 
@@ -255,7 +255,7 @@ rm ~/Library/LaunchAgents/com.alyx.tradesystem.string-yang.plist
 ## 4日均线二波观察池（中国时间工作日 + 周日 21:35）
 
 近 60 自然日历史龙头/最票宇宙 → 近 10 个有效行情日 → MA4 重新拐头向上（今日 MA4 上行，且上拐前至少两根 MA4 连续下行）+ 今日成交额同时突破 5/10 日成交额均线 + 当日未涨停 → 只读二波观察清单落 `data/reports/ma-breakout/YYYY-MM-DD.{md,json}` + 钉钉。未显式指定日期时，当前交易日尚未收盘（上海时间 15:30 前）或周日等交易日前一天触发，默认目标日自动回退到最近已完成交易日。
-runner source `scripts/.env`(TUSHARE_TOKEN)+`~/.config/tradeSystem.env`(钉钉);非交易日任务内自动跳过,不推送。plist 同时列出 Asia/Shanghai 本机时区 21:35 与 Pacific 05:35/06:35，runner 再用中国时间窗口守卫过滤错误触发。
+runner source `scripts/.env`(TUSHARE_TOKEN)+`~/.config/tradeSystem.env`(钉钉);非交易日任务内自动跳过,不推送。plist 单列 21:35（launchd 按系统时区 Asia/Shanghai 解释，见 `readlink /etc/localtime`）；2026-07-11 已删除旧的 Pacific 05:35/06:35 折算触发 + runner 时间窗守卫（休眠 coalesce 到晨间触发被守卫误杀，致 0708/0709 缺报）。
 
 ```bash
 # 1. 包装脚本可执行
@@ -270,12 +270,12 @@ launchctl load ~/Library/LaunchAgents/com.alyx.tradesystem.ma-breakout.plist
 # 4. 验证
 launchctl list | grep tradesystem.ma-breakout
 
-# 5. launchd 链路测试（窗口外会被 runner 时间窗守卫跳过）
+# 5. launchd 链路测试（2026-07-11 起无时间窗守卫，任何时刻 start 都真跑；非交易日命中 CLI 守卫即退出）
 launchctl start com.alyx.tradesystem.ma-breakout
 tail -f /tmp/tradesystem-ma-breakout.log
 
-# 6. 手工验证真实扫描链路（绕过时间窗守卫；--dry-run 不推送）
-MA_BREAKOUT_FORCE=1 deploy/launchd/ma-breakout-runner.sh --dry-run
+# 6. 手工验证真实扫描链路（--dry-run 不推送）
+deploy/launchd/ma-breakout-runner.sh --dry-run
 ```
 
 卸载：
@@ -285,7 +285,7 @@ launchctl unload ~/Library/LaunchAgents/com.alyx.tradesystem.ma-breakout.plist
 rm ~/Library/LaunchAgents/com.alyx.tradesystem.ma-breakout.plist
 ```
 
-**时段**：目标业务时间为中国时间 21:35，在 trend-leader(21:30) 与 market-timing(21:40) 之间,无冲突；周日无 trend-leader 依赖，复用最近已完成交易日数据。macOS launchd 本身按机器本地时区触发；当前 Pacific 主机用 05:35/06:35 双触发覆盖 PDT/PST，runner 只允许中国时间 21:20-22:05 继续执行，另一个季节性触发会自动跳过。
+**时段**：目标业务时间为中国时间 21:35，在 trend-leader(21:30) 与 market-timing(21:40) 之间,无冲突；周日无 trend-leader 依赖，复用最近已完成交易日数据。macOS launchd 按【系统时区】触发（本机 `/etc/localtime` = Asia/Shanghai，故 21:35 即命中中国 21:35，与 board-break/string-yang/daily-leaders 单晚间触发同范式）。注意：shell 里 `date` 若显示 PDT，多为沙箱 `TZ=America/Los_Angeles` env 影响进程显示，不改 launchd 调度——核实系统时区以 `/etc/localtime` 为准。
 
 ## 每日最票候选确认稿（工作日 22:30）
 

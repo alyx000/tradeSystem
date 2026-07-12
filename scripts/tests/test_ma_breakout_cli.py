@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import datetime
 import json
 from pathlib import Path
 
@@ -154,6 +155,63 @@ def test_implicit_pre_trade_day_runs_latest_completed_trade_day(monkeypatch, cap
     assert payload["auto_resolved_from"] == "pre_trade_day"
     assert loaded_dates == ["2026-06-12"]
     assert run_dates == ["2026-06-12"]
+    assert conn.closed is True
+
+
+def test_implicit_trade_day_before_close_runs_previous_trade_day(monkeypatch, capsys):
+    monkeypatch.setattr(main_module, "setup_providers", lambda _config: _Registry())
+    conn = _CalendarConn()
+    monkeypatch.setattr(ma_breakout, "get_connection", lambda: conn)
+    monkeypatch.setattr(ma_breakout, "_today", lambda: "2026-07-07")
+    monkeypatch.setattr(
+        ma_breakout,
+        "_now_shanghai",
+        lambda: datetime.datetime(2026, 7, 7, 5, 37),
+    )
+
+    import utils.trade_date as trade_date
+    monkeypatch.setattr(
+        trade_date,
+        "is_trade_day",
+        lambda date, *, conn, registry: {"2026-07-07": True, "2026-07-06": True}.get(date),
+    )
+    monkeypatch.setattr(trade_date, "is_non_trading_day", lambda _conn, _registry, _date: False)
+    monkeypatch.setattr(trade_date, "get_prev_trade_date", lambda _registry, today: "2026-07-06")
+
+    loaded_dates = []
+    run_dates = []
+
+    def fake_load(_conn, date, *, lookback_days, registry, stats):
+        loaded_dates.append(date)
+        return {"688041": {"name": "海光信息"}}
+
+    def fake_run(_registry, date, **_kwargs):
+        run_dates.append(date)
+        return {
+            "status": "ok",
+            "date": date,
+            "windows": [5, 10],
+            "candidates": [],
+            "source_errors": [],
+            "leader_universe_count": 1,
+            "scanned_count": 1,
+            "matched_count": 0,
+            "insufficient_count": 0,
+            "truncated": False,
+        }
+
+    monkeypatch.setattr(ma_breakout.scanner, "load_former_leader_universe", fake_load)
+    monkeypatch.setattr(ma_breakout.scanner, "run_daily", fake_run)
+
+    ma_breakout._run_daily({}, _args(date=None))
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["date"] == "2026-07-06"
+    assert payload["run_date"] == "2026-07-07"
+    assert payload["auto_resolved_from"] == "pre_close_trade_day"
+    assert payload["next_trade_date"] == "2026-07-07"
+    assert loaded_dates == ["2026-07-06"]
+    assert run_dates == ["2026-07-06"]
     assert conn.closed is True
 
 
