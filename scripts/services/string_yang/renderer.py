@@ -17,6 +17,24 @@ def _fmt_pct(v) -> str:
     return f"{float(v):+.2f}%" if v is not None else "-"
 
 
+def _status_label(mainline: dict) -> str:
+    """主线来源文案。llm_fallback 按 source_errors 细分：调用失败（可查
+    ANTIGRAVITY_LOG_DIR 诊断日志）与「LLM 正常返回但判无有效主线」是两类问题，
+    报告里合并会掩盖真实故障（0707-0709 连续降级即因此无从排查）。"""
+    if mainline.get("status") == "llm_fallback":
+        errors = set(mainline.get("source_errors") or [])
+        if "llm_call_failed" in errors:
+            return "LLM调用失败（诊断日志见 ANTIGRAVITY_LOG_DIR），降级成交额集中度"
+        if "llm_error" in errors:
+            return "LLM调用异常，降级成交额集中度"
+        return "LLM判无有效主线，降级成交额集中度"
+    return {
+        "llm": "LLM融合判断",
+        "fallback": "成交额集中度兜底",
+        "disabled": "未启用LLM，使用成交额集中度",
+    }.get(mainline.get("status"), mainline.get("status") or "成交额集中度")
+
+
 def render_daily(result: dict) -> str:
     date = result.get("date", "")
     lines = [f"# 串阳首阴股票池 · {date}  [判断]", "", _REDLINE, ""]
@@ -25,12 +43,7 @@ def render_daily(result: dict) -> str:
     concepts = mainline.get("main_concepts") or []
     degraded = "（当日主线缺失，已回退最近一日）" if result.get("main_sector_degraded") else ""
     candidates = result.get("candidates") or []
-    status_label = {
-        "llm": "LLM融合判断",
-        "llm_fallback": "LLM不可用/无有效主线，降级成交额集中度",
-        "fallback": "成交额集中度兜底",
-        "disabled": "未启用LLM，使用成交额集中度",
-    }.get(mainline.get("status"), mainline.get("status") or "成交额集中度")
+    status_label = _status_label(mainline)
     confidence = mainline.get("confidence")
     confidence_text = f"{float(confidence):.2f}" if confidence is not None else "-"
     lines += [
@@ -44,9 +57,11 @@ def render_daily(result: dict) -> str:
         f"- 主线来源：{status_label}；置信度：{confidence_text}",
         f"- 主线板块{degraded}：{'、'.join(sectors) or '（无）'}",
         f"- 主线概念分支：{'、'.join(concepts) or '（无）'}",
-        f"- 命中数量：{len(candidates)}",
-        "",
     ]
+    if result.get("status") == "source_failed":
+        lines += ["- 扫描状态：数据源失败，未完成扫描", ""]
+    else:
+        lines += [f"- 命中数量：{len(candidates)}", ""]
     evidence = mainline.get("evidence") or []
     watch_only = mainline.get("watch_only") or []
     if evidence or watch_only:
@@ -58,7 +73,12 @@ def render_daily(result: dict) -> str:
         lines.append("")
 
     if result.get("status") == "source_failed":
-        lines += ["## 数据源异常", f"- 失败源：{'、'.join(result.get('source_errors') or [])}", ""]
+        lines += [
+            "## 数据源异常",
+            "- 数据源失败，未完成扫描；不代表已完成筛选后的空池。",
+            f"- 失败源：{'、'.join(result.get('source_errors') or [])}",
+            "",
+        ]
         return "\n".join(lines).rstrip() + "\n"
 
     lines += ["## 首阴确认池（只列已出现第一根阴线）[判断]"]

@@ -17,6 +17,7 @@ from services.concept_tags import build_stock_concept_map
 from services.string_yang import constants as C
 from services.volume_concentration import repo as vc_repo
 from services.volume_concentration.aggregator import UNCLASSIFIED
+from utils.antigravity_diagnostics import diag_reason
 
 logger = logging.getLogger(__name__)
 
@@ -70,14 +71,25 @@ def judge_mainline(
     source_errors: list[str] = []
 
     if use_llm:
-        stock_concept_map, member_count, ok = build_stock_concept_map(registry, date)
-        if not ok:
-            source_errors.append("ths_member")
-        hot_concepts, concept_ok, coverage_ok = _hot_concept_rows(registry, date, top_concepts, member_count)
+        ranked_concepts, concept_ok = _ranked_concept_rows(registry, date)
         if not concept_ok:
             source_errors.append("concept_flow")
-        elif not coverage_ok:
-            source_errors.append("concept_coverage")
+        else:
+            prefetch_names = [row["name"] for row in ranked_concepts[:_concept_prefetch_limit(top_concepts)]]
+            stock_concept_map, member_count, ok = build_stock_concept_map(
+                registry,
+                date,
+                concept_names=prefetch_names,
+            )
+            if not ok:
+                source_errors.append("ths_member")
+            hot_concepts, coverage_ok = _filter_hot_concept_rows(
+                ranked_concepts,
+                top_concepts,
+                member_count,
+            )
+            if ok and not coverage_ok:
+                source_errors.append("concept_coverage")
 
     fallback = MainlineJudgment(
         date=date,
@@ -104,15 +116,29 @@ def judge_mainline(
     }
     try:
         raw = runner(_build_prompt(), payload)
+        if raw is None and diag_reason(runner) != "timeout":
+            # 非超时失败重试 1 次（对齐 board_break/pk 的抗抖动策略）；超时不重试
+            # ——重试大概率再超时，反而拖长盘后任务链。
+            raw = runner(_build_prompt(), payload)
     except Exception as exc:  # noqa: BLE001
         logger.warning("[string-yang] mainline LLM 异常，降级成交额主线: %s", exc)
         fallback.status = "llm_fallback"
         fallback.source_errors.append("llm_error")
         return fallback
 
+    if raw is None:
+        # 调用层失败（超时/启动失败/非零返回码/空输出/不可解析）——与「LLM 判无有效
+        # 主线」是两回事，分别贴标签：本分支曾被误记 llm_mainline_empty，导致连续多日
+        # 降级却查不到真实失败原因（诊断详情已由 runner 落 ANTIGRAVITY_LOG_DIR 日志）。
+        logger.warning("[string-yang] mainline LLM 调用失败，降级成交额主线: %s", diag_reason(runner) or "unknown")
+        fallback.status = "llm_fallback"
+        fallback.source_errors.append("llm_call_failed")
+        return fallback
+
     parsed = _parse_json(raw) if isinstance(raw, str) else raw
     decision = _normalize_llm_decision(parsed, volume_sectors, hot_concepts)
     if not decision["main_sectors"] and not decision["main_concepts"]:
+        # LLM 正常返回但裁决为空/全部无效 → 真「无有效主线」
         fallback.status = "llm_fallback"
         fallback.source_errors.append("llm_mainline_empty")
         return fallback
@@ -164,15 +190,15 @@ def _teacher_notes(conn: sqlite3.Connection, date: str, lookback_days: int) -> l
            FROM teacher_notes
            WHERE date >= ? AND date <= ?
            ORDER BY date DESC, id DESC
-           LIMIT 20""",
-        (start, date),
+           LIMIT ?""",
+        (start, date, C.TEACHER_NOTES_LIMIT),
     ).fetchall()
     out: list[dict[str, Any]] = []
     for row in rows:
         sectors = _json_list(row["sectors"])
         snippets = []
         for key in ("core_view", "key_points", "raw_content"):
-            text = _trim(row[key], 180)
+            text = _trim(row[key], C.TEACHER_SNIPPET_CHARS)
             if text:
                 snippets.append(text)
         out.append({
@@ -185,15 +211,14 @@ def _teacher_notes(conn: sqlite3.Connection, date: str, lookback_days: int) -> l
     return out
 
 
-def _hot_concept_rows(
-    registry,
-    date: str,
-    top_concepts: int,
-    member_count: dict[str, int],
-) -> tuple[list[dict[str, Any]], bool, bool]:
+def _concept_prefetch_limit(top_concepts: int) -> int:
+    return max(C.CONCEPT_PREFETCH_MIN, top_concepts * C.CONCEPT_PREFETCH_MULTIPLIER)
+
+
+def _ranked_concept_rows(registry, date: str) -> tuple[list[dict[str, Any]], bool]:
     r = registry.call("get_concept_moneyflow_ths", date)
     if not (getattr(r, "success", False) and isinstance(r.data, list)):
-        return [], False, True
+        return [], False
     parsed: list[dict[str, Any]] = []
     for row in r.data:
         if not isinstance(row, dict) or not row.get("name"):
@@ -203,11 +228,20 @@ def _hot_concept_rows(
             net_amount = float(row.get("net_amount"))
         except (TypeError, ValueError):
             continue
-        parsed.append({"name": name, "net_amount": net_amount, "member_count": member_count.get(name, 0)})
+        parsed.append({"name": name, "net_amount": net_amount})
     parsed.sort(key=lambda item: float(item["net_amount"]), reverse=True)
+    return parsed, True
+
+
+def _filter_hot_concept_rows(
+    ranked_concepts: list[dict[str, Any]],
+    top_concepts: int,
+    member_count: dict[str, int],
+) -> tuple[list[dict[str, Any]], bool]:
     kept: list[dict[str, Any]] = []
     coverage_ok = True
-    for item in parsed:
+    for item in ranked_concepts:
+        item = {**item, "member_count": member_count.get(str(item.get("name")), 0)}
         mc = int(item.get("member_count") or 0)
         if mc > C.CONCEPT_MAX_MEMBERS:
             continue
@@ -217,7 +251,7 @@ def _hot_concept_rows(
         kept.append(item)
         if len(kept) >= top_concepts:
             break
-    return kept, True, coverage_ok
+    return kept, coverage_ok
 
 
 def _normalize_llm_decision(
@@ -295,26 +329,85 @@ def _build_prompt() -> str:
     )
 
 
+def _string_yang_log_file():
+    """生成本次调用的独立诊断日志路径（ANTIGRAVITY_LOG_DIR，同 board_break/pk 范式）。
+
+    string-yang 每晚只调 1-2 次 LLM，逐调用 mkdir 无 pk 那种 66 场循环赛的开销顾虑，
+    不拆 root/文件名两步。目录创建失败返回 None（诊断降级为无日志，不阻断主流程）。
+    """
+    import os
+    import time
+    from pathlib import Path
+
+    root = Path(os.getenv("ANTIGRAVITY_LOG_DIR", "/private/tmp/tradesystem-antigravity-logs"))
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        logger.warning("[string-yang] antigravity log dir 创建失败(%s): %s", root, exc)
+        return None
+    return root / f"string-yang-{os.getpid()}-{int(time.time() * 1000)}.log"
+
+
 def build_antigravity_runner():
+    """构造主线裁决 LLM runner（对齐 board_break/pk 的诊断范式）。
+
+    失败（超时/启动失败/非零返回码/空输出/输出不可解析）→ 返回 None 并设
+    `runner.last_diagnostics`（含 reason），日志落 ANTIGRAVITY_LOG_DIR 供事后定位
+    ——旧实现不落日志不捕 stderr，连续多日降级却无从排查真实失败原因。
+
+    tech-debt（defer）：本 runner + `_string_yang_log_file` 与 `board_break/pk.py`、
+    `research_digest/narrator.py`、`huibo.py` 的 LLM runner 四处同构（timeout/OSError/
+    returncode/empty_stdout 四分支 + build_diagnostics + 独立日志文件）。收敛到共享
+    `invoke_llm_cli` 的 defer 项见 `board_break/pk.py:_board_break_log_root` 注释所指
+    task-s4-report.md「defer」节；第 5 处出现前应统一回收，勿再复制。
+    """
+    from utils.antigravity_diagnostics import build_diagnostics
     from utils.llm_cli import build_prompt_command, resolve_config
 
     config = resolve_config(default_timeout=180)
+    timeout = config.timeout_seconds
 
     def runner(prompt: str, payload: dict[str, Any]):
+        runner.last_diagnostics = None
         full_prompt = prompt + "\n\n输入证据 JSON：\n" + json.dumps(payload, ensure_ascii=False)
-        cmd = build_prompt_command(config, full_prompt)
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=config.timeout_seconds,
-            stdin=subprocess.DEVNULL,
-        )
-        if result.returncode != 0 or not (result.stdout or "").strip():
-            logger.warning("[string-yang] mainline LLM returncode=%s，降级", result.returncode)
+        log_file = _string_yang_log_file()
+        cmd = build_prompt_command(config, full_prompt, log_file=str(log_file) if log_file else None)
+        try:
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL,
+            )
+        except subprocess.TimeoutExpired:
+            runner.last_diagnostics = build_diagnostics(
+                stdout="", stderr=f"timeout after {timeout}s", log_file=log_file, reason="timeout")
+            logger.warning("[string-yang] mainline LLM 调用超时 %ds", timeout)
             return None
-        return _parse_json(result.stdout)
+        except OSError as e:
+            # CLI 缺失/不可执行等启动级失败；不扩到裸 Exception（那会吞编程错误）
+            runner.last_diagnostics = build_diagnostics(
+                stdout="", stderr=str(e), log_file=log_file, reason="startup_failed")
+            logger.warning("[string-yang] mainline LLM 启动失败(%s)", e)
+            return None
+        stdout = (result.stdout or "")
+        if result.returncode != 0:
+            runner.last_diagnostics = build_diagnostics(
+                stdout=stdout, stderr=result.stderr or "", log_file=log_file, returncode=result.returncode)
+            logger.warning("[string-yang] mainline LLM returncode=%s", result.returncode)
+            return None
+        if not stdout.strip():
+            runner.last_diagnostics = build_diagnostics(
+                stdout=stdout, stderr=result.stderr or "", log_file=log_file, reason="empty_stdout")
+            logger.warning("[string-yang] mainline LLM stdout 为空")
+            return None
+        parsed = _parse_json(stdout)
+        if parsed is None:
+            # returncode==0 且有输出但提不出 JSON：同属调用质量失败（重试可能救回）
+            runner.last_diagnostics = build_diagnostics(
+                stdout=stdout, stderr=result.stderr or "", log_file=log_file, reason="unparseable_output")
+            logger.warning("[string-yang] mainline LLM 输出不可解析为 JSON")
+            return None
+        return parsed
 
+    runner.last_diagnostics = None
     return runner
 
 

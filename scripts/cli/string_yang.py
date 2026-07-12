@@ -88,12 +88,28 @@ def _run_daily(config: dict, args: argparse.Namespace) -> None:
 
     md = renderer.render_daily(result)
     print(md)
+    source_failed = result.get("status") == "source_failed"
     if args.dry_run:
         logger.info("[string-yang daily] dry-run 完成，未落报告/未推送")
+        if source_failed:
+            raise SystemExit(1)
         return
 
-    path = renderer.write_report(md, date)
-    logger.info("[string-yang daily] 报告已写入 %s", path)
+    try:
+        path = renderer.write_report(md, date)
+        logger.info("[string-yang daily] 报告已写入 %s", path)
+    except Exception:  # noqa: BLE001 - source_failed needs alert even if disk write fails.
+        logger.exception("[string-yang daily] 报告落盘失败")
+        if source_failed and not args.no_push:
+            _push_to_dingtalk(f"串阳首阴数据源失败 · {date}", md)
+        raise
+    if source_failed:
+        logger.error("[string-yang daily] %s 数据源失败，未完成扫描", date)
+        if args.no_push:
+            logger.info("[string-yang daily] --no-push：失败报告已落盘，未推送")
+            raise SystemExit(1)
+        _push_to_dingtalk(f"串阳首阴数据源失败 · {date}", md)
+        raise SystemExit(1)
     if args.no_push:
         logger.info("[string-yang daily] --no-push：已落报告，未推送")
         return

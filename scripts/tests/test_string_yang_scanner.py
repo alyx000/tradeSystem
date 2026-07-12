@@ -1,6 +1,7 @@
 """串阳首阴扫描：只推已经出现第一根阴线的主线票。"""
 from __future__ import annotations
 
+import logging
 import sqlite3
 from types import SimpleNamespace
 
@@ -123,7 +124,7 @@ class _Registry:
     def __init__(self, bars_by_code: dict[str, list[dict]]):
         self.bars_by_code = bars_by_code
 
-    def call(self, name: str, *args):
+    def call(self, name: str, *args, **kwargs):
         if name == "get_stock_sw_industry_map":
             return SimpleNamespace(success=True, data={
                 "600001.SH": {"name": "主线首阴A", "sw_l2": "半导体"},
@@ -227,3 +228,18 @@ def test_run_daily_llm_mainline_allows_ths_concept_branch_candidate() -> None:
     assert result["candidates"][0]["branch_concepts"] == ["CPO"]
     assert result["mainline"]["main_concepts"] == ["CPO"]
     assert result["mainline"]["status"] == "llm"
+
+
+def test_run_daily_logs_stock_fetch_progress(caplog) -> None:
+    from services.string_yang import scanner
+
+    registry = _Registry({
+        "600001": _bars_for_first_yin(today_amount=160),
+        "600002": _bars_for_first_yin(today_amount=240),
+    })
+    conn = _conn_with_main_sector()
+    caplog.set_level(logging.INFO, logger="services.string_yang.scanner")
+
+    scanner.run_daily(conn, registry, "2026-06-09", top_k=1)
+
+    assert "[string-yang] 扫描个股 1/2 600001 主线首阴A" in caplog.text

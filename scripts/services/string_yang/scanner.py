@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import sqlite3
+import logging
 from datetime import datetime, timedelta
 
 from services.string_yang import constants as C
@@ -14,6 +15,8 @@ from services.string_yang import mainline
 from services.volume_concentration.aggregator import UNCLASSIFIED
 from utils import is_st_stock
 from utils.price_limit import limit_pct_for
+
+logger = logging.getLogger(__name__)
 
 
 def bare_code(code: str) -> str:
@@ -303,7 +306,16 @@ def run_daily(
     rejects["st_or_delist"] = st_or_delist
     rejects["not_main_sector"] = max(0, len(sw.data) - len(universe) - st_or_delist)
 
-    for item in universe:
+    total_universe = len(universe)
+    logger.info("[string-yang] 候选宇宙 %s 只，开始逐票拉取区间行情", total_universe)
+    for idx, item in enumerate(universe, start=1):
+        logger.info(
+            "[string-yang] 扫描个股 %s/%s %s %s",
+            idx,
+            total_universe,
+            item["code"],
+            item.get("name", ""),
+        )
         bars = _fetch_bars(registry, item["code"], start, date)
         if not bars or bars[-1].get("trade_date") != date:
             rejects["bar_missing"] += 1
