@@ -1,10 +1,11 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { useState } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import ReviewWorkbench from '../pages/ReviewWorkbench'
 import { api } from '../lib/api'
-import type { ReviewPrefillData, ReviewRecord } from '../lib/types'
+import type { ReviewPrefillData, ReviewRecord, TrinityFactorScoreRun } from '../lib/types'
 
 vi.mock('../lib/api', () => ({
   api: {
@@ -12,20 +13,58 @@ vi.mock('../lib/api', () => ({
     getReview: vi.fn(),
     saveReview: vi.fn(),
     reviewToDraft: vi.fn(),
+    scoreReviewFactors: vi.fn(),
   },
 }))
 
 function makeStepMock(name: string) {
-  return {
-    default: ({ data, onChange }: { data: Record<string, unknown>; onChange: (value: Record<string, unknown>) => void }) => (
+  function StepMock({ data, onChange, factorScore, onFactorScore, factorScoreError }: {
+    data: Record<string, unknown>
+    onChange: (value: Record<string, unknown>) => void
+    factorScore?: { score_run_id?: string }
+    onFactorScore?: () => void
+    factorScoreError?: string | null
+  }) {
+    const [localDraft, setLocalDraft] = useState('')
+    return (
       <div>
         <div>{name} mock</div>
         <div data-testid={`${name}-data`}>{JSON.stringify(data || {})}</div>
         <button type="button" onClick={() => onChange({ note: `${name}-filled` })}>
           fill-{name}
         </button>
+        <button type="button" onClick={() => onChange({ note: `${name}-changed` })}>
+          change-{name}
+        </button>
+        <button type="button" onClick={() => setLocalDraft(`${name}-local`)}>
+          local-{name}
+        </button>
+        <div data-testid={`${name}-local`}>{localDraft}</div>
+        {name === 'StepPlan' && (
+          <button type="button" onClick={() => onChange({
+            factor_decision: {
+              score_run_id: factorScore?.score_run_id,
+              status: 'accepted',
+              primary_factor: 'sector_rhythm',
+              supporting_factors: ['leader_signal'],
+              input_by: 'web',
+            },
+            key_factor: 'sector_rhythm',
+            secondary_factors: ['leader_signal'],
+          })}>
+            confirm-factor
+          </button>
+        )}
+        {onFactorScore && (
+          <button type="button" onClick={onFactorScore}>run-factor-score</button>
+        )}
+        {factorScore && <div data-testid={`${name}-factor-score`}>{factorScore.score_run_id}</div>}
+        {factorScoreError && <div data-testid={`${name}-factor-error`}>{factorScoreError}</div>}
       </div>
-    ),
+    )
+  }
+  return {
+    default: StepMock,
   }
 }
 
@@ -40,7 +79,7 @@ vi.mock('../components/review/StepPlan', () => makeStepMock('StepPlan'))
 
 function renderPage(date = '2026-04-03') {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  return render(
+  const view = render(
     <QueryClientProvider client={qc}>
       <MemoryRouter initialEntries={[`/review/${date}`]}>
         <Routes>
@@ -50,6 +89,37 @@ function renderPage(date = '2026-04-03') {
       </MemoryRouter>
     </QueryClientProvider>
   )
+  return { ...view, qc }
+}
+
+function scoreResult(scoreRunId = 'factor-run-web'): TrinityFactorScoreRun {
+  return {
+    score_run_id: scoreRunId,
+    trade_date: '2026-04-03',
+    status: 'success',
+    cache_hit: false,
+    is_cacheable: true,
+    factor_scores: [],
+    sector_scores: [],
+    system_recommendation: {
+      primary: null,
+      supporting: [],
+      confidence: null,
+      undetermined_reason: 'undetermined_weak',
+      recommendation_source: 'llm_program_recompute',
+      failure_reason: null,
+      sector_scores: [],
+      sector_fallback: [],
+      notice: 'LLM 相对重要度评分，非胜率',
+    },
+    rule_gate: {},
+    diagnostics: {},
+    provider: 'antigravity',
+    requested_model: 'model-x',
+    prompt_versions: {},
+    schema_version: 'v1',
+    ruleset_version: 'v1',
+  }
 }
 
 beforeEach(() => {
@@ -74,6 +144,7 @@ beforeEach(() => {
     draft: { draft_id: 'draft_x', trade_date: '2026-04-06' },
     observation: { observation_id: 'obs_x', source_type: 'review' },
   })
+  vi.mocked(api.scoreReviewFactors).mockResolvedValue(scoreResult())
 })
 
 describe('ReviewWorkbench', () => {
@@ -96,6 +167,175 @@ describe('ReviewWorkbench', () => {
     expect(screen.getByText('7.持仓')).toBeInTheDocument()
     expect(screen.getByText('8.计划')).toBeInTheDocument()
     expect(await screen.findByText('StepMarket mock')).toBeInTheDocument()
+  })
+
+  it('scores the current unsaved steps 1-6 and keeps result scoped to the date', async () => {
+    renderPage()
+
+    fireEvent.click(await screen.findByText('1.大盘'))
+    fireEvent.click(await screen.findByRole('button', { name: 'fill-StepMarket' }))
+    fireEvent.click(screen.getByRole('button', { name: /8\.计划/ }))
+    fireEvent.click(await screen.findByRole('button', { name: 'run-factor-score' }))
+
+    await waitFor(() => {
+      expect(api.scoreReviewFactors).toHaveBeenCalledWith('2026-04-03', {
+        input_by: 'web',
+        steps: expect.objectContaining({
+          step1_market: { note: 'StepMarket-filled' },
+        }),
+      })
+    })
+    const body = vi.mocked(api.scoreReviewFactors).mock.calls[0][1]
+    expect(body.steps).not.toHaveProperty('step8_plan')
+    expect(await screen.findByTestId('StepPlan-factor-score')).toHaveTextContent('factor-run-web')
+
+    fireEvent.click(screen.getByRole('button', { name: 'confirm-factor' }))
+    expect(screen.getByTestId('StepPlan-data')).toHaveTextContent('factor_decision')
+
+    fireEvent.click(screen.getByText('1.大盘 ✓'))
+    fireEvent.click(await screen.findByRole('button', { name: 'change-StepMarket' }))
+    fireEvent.click(screen.getByRole('button', { name: /8\.计划/ }))
+    expect(screen.queryByTestId('StepPlan-factor-score')).not.toBeInTheDocument()
+    expect(screen.getByTestId('StepPlan-factor-error')).toHaveTextContent('评分输入已变化')
+    expect(screen.getByTestId('StepPlan-data')).toHaveTextContent('"factor_decision":null')
+    expect(screen.getByTestId('StepPlan-data')).toHaveTextContent('"key_factor":""')
+
+    fireEvent.click(screen.getByRole('button', { name: 'local-StepPlan' }))
+    expect(screen.getByTestId('StepPlan-local')).toHaveTextContent('StepPlan-local')
+
+    fireEvent.change(screen.getByDisplayValue('2026-04-03'), {
+      target: { value: '2026-04-04' },
+    })
+    await waitFor(() => {
+      expect(api.getPrefill).toHaveBeenCalledWith('2026-04-04')
+    })
+    expect(screen.queryByTestId('StepPlan-factor-score')).not.toBeInTheDocument()
+    expect(screen.getByTestId('StepPlan-local')).toBeEmptyDOMElement()
+  })
+
+  it('invalidates a visible score when same-day prefill facts change', async () => {
+    const { qc } = renderPage()
+
+    vi.mocked(api.scoreReviewFactors)
+      .mockResolvedValueOnce(scoreResult('factor-run-r1'))
+      .mockResolvedValueOnce(scoreResult('factor-run-r2'))
+
+    fireEvent.click(await screen.findByRole('button', { name: /8\.计划/ }))
+    fireEvent.click(await screen.findByRole('button', { name: 'run-factor-score' }))
+    expect(await screen.findByTestId('StepPlan-factor-score')).toHaveTextContent('factor-run-r1')
+    fireEvent.click(screen.getByRole('button', { name: 'confirm-factor' }))
+    expect(screen.getByTestId('StepPlan-data')).toHaveTextContent('factor_decision')
+
+    qc.setQueryData(['prefill', '2026-04-03'], {
+      date: '2026-04-03',
+      market: null,
+      prev_market: null,
+      avg_5d_amount: 9999,
+      avg_20d_amount: null,
+      teacher_notes: [],
+      holdings: [],
+      calendar_events: [],
+      main_themes: [],
+    } satisfies ReviewPrefillData)
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('StepPlan-factor-score')).not.toBeInTheDocument()
+    })
+    expect(screen.getByTestId('StepPlan-factor-error')).toHaveTextContent('评分输入已变化')
+    expect(screen.getByTestId('StepPlan-data')).toHaveTextContent('"factor_decision":null')
+    expect(screen.getByTestId('StepPlan-data')).toHaveTextContent('"key_factor":""')
+
+    fireEvent.click(screen.getByRole('button', { name: 'run-factor-score' }))
+    expect(await screen.findByTestId('StepPlan-factor-score')).toHaveTextContent('factor-run-r2')
+    expect(screen.getByTestId('StepPlan-data')).toHaveTextContent('"factor_decision":null')
+
+    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+    await waitFor(() => {
+      expect(api.saveReview).toHaveBeenCalledWith(
+        '2026-04-03',
+        expect.objectContaining({
+          step8_plan: expect.objectContaining({
+            factor_decision: null,
+            key_factor: '',
+            secondary_factors: [],
+          }),
+        }),
+      )
+    })
+  })
+
+  it('does not recreate a local draft after save succeeds', async () => {
+    renderPage()
+
+    fireEvent.click(await screen.findByRole('button', { name: 'fill-StepMarket' }))
+    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+    await waitFor(() => expect(api.saveReview).toHaveBeenCalled())
+
+    await new Promise(resolve => setTimeout(resolve, 2200))
+    expect(localStorage.getItem('review_draft_2026-04-03')).toBeNull()
+  }, 5000)
+
+  it('preserves edits made while a save request is pending', async () => {
+    let resolveSave: ((value: ReviewRecord) => void) | undefined
+    vi.mocked(api.saveReview).mockImplementationOnce(() => new Promise<ReviewRecord>((resolve) => {
+      resolveSave = resolve
+    }))
+    renderPage()
+
+    fireEvent.click(await screen.findByRole('button', { name: 'fill-StepMarket' }))
+    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+    await waitFor(() => expect(api.saveReview).toHaveBeenCalled())
+    fireEvent.click(screen.getByRole('button', { name: 'change-StepMarket' }))
+    expect(screen.getByTestId('StepMarket-data')).toHaveTextContent('StepMarket-changed')
+
+    resolveSave?.({ exists: true, ok: true } satisfies ReviewRecord)
+    expect(await screen.findByText('保存成功')).toBeInTheDocument()
+    await waitFor(() => {
+      expect(screen.getByTestId('StepMarket-data')).toHaveTextContent('StepMarket-changed')
+    })
+  })
+
+  it('shows an actionable message when freshness validation rejects save', async () => {
+    vi.mocked(api.saveReview).mockRejectedValueOnce(
+      new Error('API 422: score input has changed; rerun scoring before confirmation'),
+    )
+    renderPage()
+
+    fireEvent.click(await screen.findByRole('button', { name: '保存' }))
+
+    expect(await screen.findByText(/评分证据已变化，请重新运行 LLM 评分后再确认/)).toBeInTheDocument()
+  })
+
+  it('keeps a factor-decision tombstone when review data arrives after editing', async () => {
+    const resolver: { current: ((value: ReviewRecord) => void) | null } = { current: null }
+    vi.mocked(api.getReview).mockImplementation(() => new Promise<ReviewRecord>((resolve) => {
+      resolver.current = resolve
+    }))
+    renderPage()
+
+    fireEvent.click(await screen.findByRole('button', { name: 'change-StepMarket' }))
+    resolver.current?.({
+      exists: true,
+      step8_plan: JSON.stringify({
+        factor_decision: {
+          score_run_id: 'saved-run',
+          status: 'accepted',
+          primary_factor: 'sector_rhythm',
+          supporting_factors: ['leader_signal'],
+          input_by: 'web',
+        },
+        key_factor: 'sector_rhythm',
+        secondary_factors: ['leader_signal'],
+      }),
+    })
+
+    await waitFor(() => {
+      expect(screen.getByText('8.计划 ✓')).toBeInTheDocument()
+    })
+    fireEvent.click(screen.getByText('8.计划 ✓'))
+    expect(screen.getByTestId('StepPlan-data')).toHaveTextContent('"factor_decision":null')
+    expect(screen.getByTestId('StepPlan-data')).toHaveTextContent('"key_factor":""')
+    expect(screen.getByTestId('StepPlan-data')).toHaveTextContent('"secondary_factors":[]')
   })
 
   it('loads existing review data, updates filled count, and switches steps', async () => {
@@ -300,7 +540,7 @@ describe('ReviewWorkbench', () => {
       expect(api.saveReview).toHaveBeenCalledWith('2026-04-03', {
         step1_market: { note: 'StepMarket-filled' },
       })
-      expect(api.reviewToDraft).toHaveBeenCalledWith('2026-04-03')
+      expect(api.reviewToDraft).toHaveBeenCalledWith('2026-04-03', { input_by: 'web' })
     })
 
     expect(await screen.findByText('PlanWorkbench mock')).toBeInTheDocument()

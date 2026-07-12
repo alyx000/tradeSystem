@@ -1,11 +1,21 @@
-import { lazy, Suspense, useState, useEffect, useCallback, useMemo } from 'react'
+import { lazy, Suspense, useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import type { StepProps } from '../components/review/widgets'
-import type { ReviewFormData, ReviewRecord, ReviewStepKey, ReviewStepValue } from '../lib/types'
+import type {
+  ReviewFormData,
+  ReviewRecord,
+  ReviewStepKey,
+  ReviewStepValue,
+  TrinityFactorScoreRun,
+} from '../lib/types'
 
 type StepComponent = React.ComponentType<StepProps>
+type FactorScoreState = {
+  result: TrinityFactorScoreRun
+  inputKey: string
+}
 
 const StepMarket = lazy(() => import('../components/review/StepMarket'))
 const StepSectors = lazy(() => import('../components/review/StepSectors'))
@@ -28,6 +38,22 @@ const STEPS: { key: ReviewStepKey; label: string; Component: StepComponent }[] =
 ]
 
 const DRAFT_KEY = (date: string) => `review_draft_${date}`
+const FACTOR_SCORING_STEPS: ReviewStepKey[] = [
+  'step1_market',
+  'step2_sectors',
+  'step3_emotion',
+  'step4_style',
+  'step5_leaders',
+  'step6_nodes',
+]
+
+function pickFactorScoringSteps(formData: ReviewFormData): ReviewFormData {
+  const steps: ReviewFormData = {}
+  FACTOR_SCORING_STEPS.forEach(key => {
+    if (formData[key] !== undefined) steps[key] = formData[key]
+  })
+  return steps
+}
 
 function tryParseJSON(v: unknown): ReviewStepValue {
   if (typeof v !== 'string') {
@@ -80,6 +106,14 @@ function mergeStepValue(base: unknown, draft: unknown): ReviewStepValue {
 
   const merged: Record<string, unknown> = { ...base }
   Object.entries(draft).forEach(([key, value]) => {
+    if (
+      key === 'secondary_factors'
+      && draft.factor_decision === null
+      && Array.isArray(value)
+    ) {
+      merged[key] = value
+      return
+    }
     const prev = merged[key]
     merged[key] = mergeFieldValue(prev, value)
   })
@@ -94,6 +128,40 @@ function mergeFormData(base: ReviewFormData, draft: ReviewFormData): ReviewFormD
     }
   })
   return merged
+}
+
+function clearFactorDecision(step8: ReviewStepValue | undefined): ReviewStepValue {
+  const next: ReviewStepValue = isPlainObject(step8) ? { ...step8 } : {}
+  const decision = isPlainObject(next.factor_decision) ? next.factor_decision : null
+  next.factor_decision = null
+  if (decision) {
+    if (next.key_factor === decision.primary_factor) next.key_factor = ''
+    const mirroredSupporting = Array.isArray(decision.supporting_factors)
+      ? decision.supporting_factors
+      : []
+    if (
+      Array.isArray(next.secondary_factors)
+      && JSON.stringify(next.secondary_factors) === JSON.stringify(mirroredSupporting)
+    ) {
+      next.secondary_factors = []
+    }
+  }
+  return next
+}
+
+function factorInputKey(formData: ReviewFormData, prefill: unknown): string {
+  return JSON.stringify({
+    steps: pickFactorScoringSteps(formData),
+    prefill: prefill ?? null,
+  })
+}
+
+function reviewMutationErrorMessage(error: unknown, action: '保存' | '生成草稿'): string {
+  const message = error instanceof Error ? error.message : '未知错误'
+  if (message.includes('score input has changed')) {
+    return '保存失败：评分证据已变化，请重新运行 LLM 评分后再确认。'
+  }
+  return `${action}失败：${message}`
 }
 
 function hydrateReviewFormData(
@@ -124,6 +192,9 @@ export default function ReviewWorkbench() {
   const [formDataByDate, setFormDataByDate] = useState<Record<string, ReviewFormData>>({})
   const [draftRevisionByDate, setDraftRevisionByDate] = useState<Record<string, number>>({})
   const [dismissedDraftWarningByDate, setDismissedDraftWarningByDate] = useState<Record<string, boolean>>({})
+  const [factorScoreByDate, setFactorScoreByDate] = useState<Record<string, FactorScoreState>>({})
+  const [factorInputsEditedByDate, setFactorInputsEditedByDate] = useState<Record<string, boolean>>({})
+  const latestFormDataByDateRef = useRef<Record<string, ReviewFormData>>({})
 
   const { data: prefill } = useQuery({
     queryKey: ['prefill', date],
@@ -151,20 +222,60 @@ export default function ReviewWorkbench() {
   const formData = useMemo(() => {
     if (!date) return {}
     const current = formDataByDate[date]
-    if (!current) return hydratedFormData
-    return mergeFormData(hydratedFormData, current)
-  }, [date, formDataByDate, hydratedFormData])
+    const merged = current
+      ? mergeFormData(hydratedFormData, current)
+      : hydratedFormData
+    const storedScore = factorScoreByDate[date]
+    const scoreInputChanged = Boolean(
+      storedScore && storedScore.inputKey !== factorInputKey(merged, prefill),
+    )
+    const mergedDecision = isPlainObject(merged.step8_plan)
+      && isPlainObject(merged.step8_plan.factor_decision)
+      ? merged.step8_plan.factor_decision
+      : null
+    const decisionRunChanged = Boolean(
+      storedScore
+      && mergedDecision
+      && mergedDecision.score_run_id !== storedScore.result.score_run_id,
+    )
+    const shouldInvalidateDecision = (
+      factorInputsEditedByDate[date] || scoreInputChanged || decisionRunChanged
+    )
+    const step8 = merged.step8_plan
+    if (
+      shouldInvalidateDecision
+      && isPlainObject(step8)
+      && isPlainObject(step8.factor_decision)
+    ) {
+      return {
+        ...merged,
+        step8_plan: clearFactorDecision(step8),
+      }
+    }
+    return merged
+  }, [
+    date,
+    factorInputsEditedByDate,
+    factorScoreByDate,
+    formDataByDate,
+    hydratedFormData,
+    prefill,
+  ])
+
+  useEffect(() => {
+    if (!date) return
+    latestFormDataByDateRef.current[date] = formData
+  }, [date, formData])
 
   useEffect(() => {
     if (!date) return
     const edited = formDataByDate[date]
     if (!edited || Object.keys(edited).length === 0) return
     const timer = setTimeout(() => {
-      localStorage.setItem(DRAFT_KEY(date), JSON.stringify(edited))
-      setDraftRevisionByDate(prev => ({ ...prev, [date]: (prev[date] ?? 0) + 1 }))
+      localStorage.setItem(DRAFT_KEY(date), JSON.stringify(formData))
     }, 2000)
     return () => clearTimeout(timer)
-  }, [formDataByDate, date])
+  }, [date, formData, formDataByDate])
 
   useEffect(() => {
     if (prefill && prefill.is_trading_day === false && prefill.prev_trade_date) {
@@ -172,24 +283,65 @@ export default function ReviewWorkbench() {
     }
   }, [prefill, navigate])
 
+  const finishSubmittedSave = useCallback((
+    saveDate: string,
+    submittedData: ReviewFormData,
+  ) => {
+    const latest = latestFormDataByDateRef.current[saveDate] ?? {}
+    if (JSON.stringify(latest) !== JSON.stringify(submittedData)) {
+      localStorage.setItem(DRAFT_KEY(saveDate), JSON.stringify(latest))
+      return
+    }
+    localStorage.removeItem(DRAFT_KEY(saveDate))
+    setFormDataByDate(prev => {
+      const next = { ...prev }
+      delete next[saveDate]
+      return next
+    })
+  }, [])
+
   const saveMutation = useMutation({
-    mutationFn: () => api.saveReview(date!, formData),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['review', date] })
-      localStorage.removeItem(DRAFT_KEY(date!))
+    mutationFn: ({ saveDate, data }: { saveDate: string; data: ReviewFormData }) => (
+      api.saveReview(saveDate, data)
+    ),
+    onSuccess: (_result, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['review', variables.saveDate] })
+      finishSubmittedSave(variables.saveDate, variables.data)
     },
   })
 
   const draftMutation = useMutation({
-    mutationFn: async () => {
-      await api.saveReview(date!, formData)
-      return api.reviewToDraft(date!)
+    mutationFn: async ({ saveDate, data }: { saveDate: string; data: ReviewFormData }) => {
+      await api.saveReview(saveDate, data)
+      return {
+        saveDate,
+        result: await api.reviewToDraft(saveDate, { input_by: 'web' }),
+      }
     },
-    onSuccess: (result) => {
-      queryClient.invalidateQueries({ queryKey: ['review', date] })
-      queryClient.invalidateQueries({ queryKey: ['prefill', date] })
-      localStorage.removeItem(DRAFT_KEY(date!))
+    onSuccess: ({ saveDate, result }, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['review', saveDate] })
+      queryClient.invalidateQueries({ queryKey: ['prefill', saveDate] })
+      finishSubmittedSave(saveDate, variables.data)
       navigate(`/plans/${result.trade_date}`)
+    },
+  })
+
+  const factorScoreMutation = useMutation({
+    mutationFn: ({ scoreDate, steps }: {
+      scoreDate: string
+      steps: ReviewFormData
+      inputKey: string
+    }) => (
+      api.scoreReviewFactors(scoreDate, { steps, input_by: 'web' })
+    ),
+    onSuccess: (result, variables) => {
+      setFactorScoreByDate(prev => ({
+        ...prev,
+        [variables.scoreDate]: {
+          result,
+          inputKey: variables.inputKey,
+        },
+      }))
     },
   })
 
@@ -212,6 +364,11 @@ export default function ReviewWorkbench() {
       return next
     })
     setDraftRevisionByDate(prev => ({ ...prev, [date]: (prev[date] ?? 0) + 1 }))
+    setFactorInputsEditedByDate(prev => {
+      const next = { ...prev }
+      delete next[date]
+      return next
+    })
   }, [date])
 
   const keepLocalDraft = useCallback(() => {
@@ -221,14 +378,52 @@ export default function ReviewWorkbench() {
 
   const handleChange = useCallback((value: ReviewStepValue) => {
     if (!date) return
-    setFormDataByDate((prev) => ({
-      ...prev,
-      [date]: {
-        ...(prev[date] ?? hydratedFormData),
-        [step.key]: value,
-      },
-    }))
-  }, [date, hydratedFormData, step.key])
+    if (FACTOR_SCORING_STEPS.includes(step.key)) {
+      setFactorInputsEditedByDate(edited => ({ ...edited, [date]: true }))
+    } else if (
+      step.key === 'step8_plan'
+      && isPlainObject(value.factor_decision)
+    ) {
+      setFactorInputsEditedByDate(edited => ({ ...edited, [date]: false }))
+    }
+    const nextForDate: ReviewFormData = {
+      ...formData,
+      [step.key]: value,
+    }
+    latestFormDataByDateRef.current[date] = nextForDate
+    setFormDataByDate(prev => ({ ...prev, [date]: nextForDate }))
+  }, [date, formData, step.key])
+
+  const handleFactorScore = useCallback(() => {
+    if (!date || !prefill) return
+    const steps = pickFactorScoringSteps(formData)
+    factorScoreMutation.mutate({
+      scoreDate: date,
+      steps,
+      inputKey: factorInputKey(formData, prefill),
+    })
+  }, [date, factorScoreMutation, formData, prefill])
+
+  const currentFactorInputKey = factorInputKey(formData, prefill)
+  const storedFactorScore = date ? factorScoreByDate[date] : undefined
+  const factorScoreIsStale = Boolean(
+    storedFactorScore && storedFactorScore.inputKey !== currentFactorInputKey,
+  )
+  const factorScore = factorScoreIsStale ? undefined : storedFactorScore?.result
+  const factorScorePending = (
+    factorScoreMutation.isPending
+    && factorScoreMutation.variables?.scoreDate === date
+  )
+  const factorScoreRequestError = (
+    factorScoreMutation.isError
+    && factorScoreMutation.variables?.scoreDate === date
+  )
+    ? factorScoreMutation.error instanceof Error
+      ? factorScoreMutation.error.message
+      : '未知错误'
+    : null
+  const factorScoreError = factorScoreRequestError
+    || (factorScoreIsStale ? '评分输入已变化，请重新运行 LLM 评分。' : null)
 
   const filledCount = STEPS.filter(s => {
     const v = formData[s.key]
@@ -245,11 +440,11 @@ export default function ReviewWorkbench() {
           <span className="text-xs text-gray-400">{filledCount}/8 已填写</span>
         </div>
         <div className="flex gap-2">
-          <button onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending}
+          <button onClick={() => date && saveMutation.mutate({ saveDate: date, data: formData })} disabled={saveMutation.isPending}
             className="bg-blue-600 text-white px-4 py-2 rounded text-sm hover:bg-blue-700 disabled:opacity-50">
             {saveMutation.isPending ? '保存中...' : '保存'}
           </button>
-          <button onClick={() => draftMutation.mutate()} disabled={draftMutation.isPending}
+          <button onClick={() => date && draftMutation.mutate({ saveDate: date, data: formData })} disabled={draftMutation.isPending}
             className="bg-amber-500 text-white px-4 py-2 rounded text-sm hover:bg-amber-600 disabled:opacity-50">
             {draftMutation.isPending ? '生成中...' : '生成次日计划草稿'}
           </button>
@@ -269,8 +464,15 @@ export default function ReviewWorkbench() {
       {saveMutation.isSuccess && (
         <div className="bg-green-50 text-green-700 px-4 py-2 rounded text-sm">保存成功</div>
       )}
+      {saveMutation.isError && (
+        <div className="bg-red-50 text-red-700 px-4 py-2 rounded text-sm">
+          {reviewMutationErrorMessage(saveMutation.error, '保存')}
+        </div>
+      )}
       {draftMutation.isError && (
-        <div className="bg-red-50 text-red-700 px-4 py-2 rounded text-sm">生成草稿失败，请先检查复盘内容是否已保存。</div>
+        <div className="bg-red-50 text-red-700 px-4 py-2 rounded text-sm">
+          {reviewMutationErrorMessage(draftMutation.error, '生成草稿')}
+        </div>
       )}
 
       {showDraftWarning && (
@@ -319,7 +521,16 @@ export default function ReviewWorkbench() {
 
       <div className="bg-white rounded-lg shadow p-5">
         <Suspense fallback={<StepLoadingFallback label={step.label} />}>
-          <step.Component data={stepData} onChange={handleChange} prefill={prefill} />
+          <step.Component
+            key={`${date}:${step.key}:${step.key === 'step8_plan' ? factorScore?.score_run_id || 'no-score' : ''}`}
+            data={stepData}
+            onChange={handleChange}
+            prefill={prefill}
+            factorScore={factorScore}
+            factorScorePending={factorScorePending}
+            factorScoreError={factorScoreError}
+            onFactorScore={prefill ? handleFactorScore : undefined}
+          />
         </Suspense>
       </div>
 

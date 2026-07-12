@@ -1,10 +1,19 @@
 import { type ReactNode, useState } from 'react'
-import type { ReviewPrefillData, ReviewStepValue, TeacherNote } from '../../lib/types'
+import type {
+  ReviewPrefillData,
+  ReviewStepValue,
+  TeacherNote,
+  TrinityFactorScoreRun,
+} from '../../lib/types'
 
 export interface StepProps {
   data: ReviewStepValue
   onChange: (data: ReviewStepValue) => void
   prefill?: ReviewPrefillData
+  factorScore?: TrinityFactorScoreRun
+  factorScorePending?: boolean
+  factorScoreError?: string | null
+  onFactorScore?: () => void
 }
 
 /* ── Layout ───────────────────────────────────────── */

@@ -7,6 +7,8 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
+from datetime import date as _date
 from pathlib import Path
 
 import yaml
@@ -40,9 +42,12 @@ class StyleAnalyzer:
         # 昨日人气股今日表现（具名）：来自 T-1 yaml 的 popularity_backfill。
         # 渲染文案语义固定为「T-1 高标 → T 日结局」，因此只读紧邻前一交易日，
         # 缺失/空即返回 []，禁止向更早日期回退（否则会把 T-2 旧值伪装成 T-1→T）。
-        result["popularity"] = self._load_prev_field(
-            date, "popularity_backfill", first_only=True
-        ) or []
+        popularity, popularity_provenance = (
+            self._load_popularity_with_provenance(date)
+        )
+        result["popularity"] = popularity or []
+        if popularity and popularity_provenance:
+            result["popularity_provenance"] = popularity_provenance
         # 晋级率（T-1 首板→T 二板等）：与 popularity 同为严格 T-1 时序，禁止回退
         result["promotion"] = self._load_prev_field(
             date, "promotion_backfill", first_only=True
@@ -93,8 +98,14 @@ class StyleAnalyzer:
                     data = yaml.safe_load(f) or {}
             except Exception:
                 continue
-            bf = data.get("premium_backfill") or {}
+            if not isinstance(data, dict):
+                continue
+            bf = data.get("premium_backfill")
+            if not isinstance(bf, dict):
+                continue
             fb = bf.get("first_board", {})
+            if not isinstance(fb, dict):
+                continue
             med = fb.get("premium_median") if fb.get("count") else None
             if med is None:
                 continue
@@ -246,9 +257,11 @@ class StyleAnalyzer:
                 continue
             try:
                 with open(pm, encoding="utf-8") as f:
-                    yield yaml.safe_load(f) or {}
+                    data = yaml.safe_load(f) or {}
             except Exception:
                 continue
+            if isinstance(data, Mapping):
+                yield data
 
     def _load_prev_backfill(self, date: str) -> dict | None:
         """严格读取紧邻前一交易日（_prev_dirs[0]）的 premium_backfill。
@@ -273,8 +286,10 @@ class StyleAnalyzer:
                 data = yaml.safe_load(f) or {}
         except Exception:
             return None
+        if not isinstance(data, dict):
+            return None
         bf = data.get("premium_backfill")
-        if not bf:
+        if not isinstance(bf, dict) or not bf:
             return None
         # 严格要求 backfill 的 trade_date 恰等于当前 date：premium.py 落盘时总会原子写入
         # trade_date（见 collect() result 字典），故缺失/错位都视为「非本日的可信回填」→ None，
@@ -282,6 +297,59 @@ class StyleAnalyzer:
         if bf.get("trade_date") != date:
             return None
         return bf
+
+    @staticmethod
+    def _strict_iso_date(value) -> str | None:
+        if not isinstance(value, str):
+            return None
+        text = value.strip()
+        try:
+            parsed = _date.fromisoformat(text)
+        except ValueError:
+            return None
+        return text if parsed.isoformat() == text else None
+
+    def _load_popularity_with_provenance(
+        self,
+        date: str,
+    ) -> tuple[object | None, dict[str, str] | None]:
+        """从同一次 YAML 读取返回人气股及经回填元数据验证的来源日期。"""
+        dirs = self._prev_dirs(date)
+        if not dirs:
+            return None, None
+        source_dir = dirs[0]
+        pm = source_dir / "post-market.yaml"
+        if not pm.exists():
+            return None, None
+        try:
+            with open(pm, encoding="utf-8") as f:
+                data = yaml.safe_load(f) or {}
+        except Exception:
+            return None, None
+        if not isinstance(data, dict):
+            return None, None
+        popularity = data.get("popularity_backfill")
+        if not popularity:
+            return None, None
+
+        backfill = data.get("premium_backfill")
+        if not isinstance(backfill, dict):
+            return popularity, None
+        source_trade_date = self._strict_iso_date(backfill.get("prev_date"))
+        outcome_trade_date = self._strict_iso_date(backfill.get("trade_date"))
+        directory_date = self._strict_iso_date(source_dir.name)
+        target_date = self._strict_iso_date(date)
+        if (
+            source_trade_date is None
+            or outcome_trade_date is None
+            or source_trade_date != directory_date
+            or outcome_trade_date != target_date
+        ):
+            return popularity, None
+        return popularity, {
+            "source_trade_date": source_trade_date,
+            "outcome_trade_date": outcome_trade_date,
+        }
 
     def _load_prev_field(self, date: str, field: str, first_only: bool = False):
         """读取 date 之前 yaml 的指定 field。
@@ -309,6 +377,8 @@ class StyleAnalyzer:
                 with open(pm, encoding="utf-8") as f:
                     data = yaml.safe_load(f) or {}
             except Exception:
+                return None
+            if not isinstance(data, Mapping):
                 return None
             val = data.get(field)
             return val if val else None

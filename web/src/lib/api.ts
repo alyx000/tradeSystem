@@ -46,8 +46,11 @@ import type {
   PlanDraftUpdateInput,
   PostMarketPayload,
   ReviewFormData,
+  ReviewFactorEvaluation,
+  ReviewFactorMetrics,
   ReviewPrefillData,
   ReviewRecord,
+  TrinityFactorScoreRun,
   ReviewToDraftResult,
   StyleFactorSeriesItem,
   UnifiedSearchResult,
@@ -99,6 +102,45 @@ export const api = {
     request<ReviewRecord>(`/review/${date}`, { method: 'PUT', body: JSON.stringify(data) }),
   reviewToDraft: (date: string, data?: { trade_date?: string; input_by?: string }) =>
     request<ReviewToDraftResult>(`/review/${date}/to-draft`, { method: 'POST', body: JSON.stringify(data || {}) }),
+  scoreReviewFactors: (
+    date: string,
+    data: {
+      steps?: ReviewFormData
+      no_llm?: boolean
+      retry_of_run_id?: string
+      input_by: string
+    },
+  ) => request<TrinityFactorScoreRun>(`/review-factors/${date}/score`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  }),
+  getReviewFactorEvaluation: (
+    date: string,
+    params?: { source_date?: string; score_run_id?: string },
+  ) => {
+    const sp = new URLSearchParams()
+    if (params?.source_date) sp.set('source_date', params.source_date)
+    if (params?.score_run_id) sp.set('score_run_id', params.score_run_id)
+    const query = sp.toString()
+    return request<ReviewFactorEvaluation>(
+      `/review-factors/${date}/evaluation${query ? `?${query}` : ''}`,
+    )
+  },
+  confirmReviewFactorEvaluation: (
+    date: string,
+    data: {
+      source_date?: string
+      score_run_id?: string
+      confirmed_outcome: ReviewFactorEvaluation['system_outcome']
+      evaluation_note?: string
+      input_by: string
+    },
+  ) => request<ReviewFactorEvaluation>(`/review-factors/${date}/evaluation`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  }),
+  getReviewFactorMetrics: (days = 20) =>
+    request<ReviewFactorMetrics>(`/review-factors/metrics?days=${days}`),
 
   // Search
   unifiedSearch: (q: string, params?: Record<string, string>) => {

@@ -1166,6 +1166,33 @@ def get_active_themes(conn: sqlite3.Connection) -> list[dict]:
     )
 
 
+def get_active_themes_as_of(conn: sqlite3.Connection, date: str) -> list[dict]:
+    """返回目标日当时仍为 active 的主线。
+
+    每个 theme 先取 ``date <= 目标日`` 的最新状态，再筛 active，
+    避免历史 active 与未来记录污染历史复盘。
+    """
+    return _rows_to_list(
+        conn.execute(
+            """
+            SELECT theme.*
+            FROM main_themes AS theme
+            JOIN (
+                SELECT theme_name, MAX(date) AS latest_date
+                FROM main_themes
+                WHERE date <= ?
+                GROUP BY theme_name
+            ) AS latest
+              ON latest.theme_name = theme.theme_name
+             AND latest.latest_date = theme.date
+            WHERE theme.status = 'active'
+            ORDER BY theme.date DESC, theme.theme_name ASC
+            """,
+            (date,),
+        ).fetchall()
+    )
+
+
 # ──────────────────────────────────────────────────────────────
 # Trades
 # ──────────────────────────────────────────────────────────────

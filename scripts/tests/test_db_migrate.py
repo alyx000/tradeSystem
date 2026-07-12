@@ -17,7 +17,7 @@ from db.migrate import (
     migrate,
 )
 from db import queries as Q
-from db.schema import _SQL_TEACHER_NOTES_FTS_TRIGGERS
+from db.schema import _SQL_TEACHER_NOTES_FTS_TRIGGERS, init_schema
 
 
 @pytest.fixture
@@ -720,3 +720,113 @@ def test_migrate_healthy_db_preserves_caller_transaction(tmp_path):
     ).fetchone()[0]
     assert cnt == 0      # 回滚后应消失，证明 migrate() 未提交它
     conn.close()
+
+
+def test_v39_migration_creates_factor_score_run_request_and_evaluation_tables(tmp_path):
+    conn = get_connection(tmp_path / "v38_factor_scores.db")
+    conn.execute("PRAGMA user_version = 38")
+    conn.commit()
+
+    migrate(conn)
+
+    assert CURRENT_SCHEMA_VERSION == 39
+    assert get_schema_version(conn) == 39
+    tables = {
+        row["name"]
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    }
+    assert {
+        "daily_review_factor_score_runs",
+        "daily_review_factor_score_requests",
+        "daily_review_factor_evaluations",
+    } <= tables
+    conn.close()
+
+
+def test_migrate_repairs_unreleased_v39_missing_factor_score_request_audit(tmp_path):
+    conn = get_connection(tmp_path / "early_v39_factor_scores.db")
+    init_schema(conn)
+    conn.execute("DROP TABLE daily_review_factor_score_requests")
+    conn.execute("PRAGMA user_version = 39")
+    conn.commit()
+
+    migrate(conn)
+
+    assert get_schema_version(conn) == 39
+    assert conn.execute(
+        "SELECT 1 FROM sqlite_master "
+        "WHERE type = 'table' AND name = 'daily_review_factor_score_requests'"
+    ).fetchone()
+    conn.close()
+
+
+def test_fresh_v39_factor_score_schema_has_columns_indexes_and_append_only_triggers(conn):
+    run_columns = {
+        row["name"]
+        for row in conn.execute(
+            "PRAGMA table_info(daily_review_factor_score_runs)"
+        ).fetchall()
+    }
+    assert run_columns == {
+        "score_run_id", "trade_date", "retry_of_run_id", "cache_key",
+        "input_digest", "is_cacheable", "provider", "requested_model",
+        "actual_model", "cli_version", "runtime_version",
+        "prompt_versions_json", "prompt_sha256_json", "schema_version",
+        "ruleset_version", "evidence_snapshot_json", "rule_gate_json",
+        "factor_scores_json", "sector_scores_json",
+        "system_recommendation_json", "valid_raw_json",
+        "raw_output_sha256_json", "diagnostics_json", "status",
+        "attempt_count", "duration_ms", "created_at",
+    }
+    evaluation_columns = {
+        row["name"]
+        for row in conn.execute(
+            "PRAGMA table_info(daily_review_factor_evaluations)"
+        ).fetchall()
+    }
+    assert evaluation_columns == {
+        "evaluation_id", "score_run_id", "source_review_date",
+        "evaluation_trade_date", "rule_top_code", "llm_top_code",
+        "system_top_code", "human_top_code", "system_outcome",
+        "confirmed_outcome", "actual_evidence_json", "evaluation_note",
+        "input_by", "created_at", "updated_at",
+    }
+    request_columns = {
+        row["name"]
+        for row in conn.execute(
+            "PRAGMA table_info(daily_review_factor_score_requests)"
+        ).fetchall()
+    }
+    assert request_columns == {
+        "request_id", "trade_date", "input_by", "cache_hit",
+        "resolved_run_id", "cache_key", "created_at",
+    }
+
+    indexes = {
+        row["name"]
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='index'"
+        ).fetchall()
+    }
+    assert {
+        "idx_factor_score_runs_cache",
+        "idx_factor_score_runs_trade_date",
+        "idx_factor_score_runs_retry",
+        "idx_factor_score_requests_trade_date",
+        "idx_factor_score_requests_run",
+        "idx_factor_score_requests_cache",
+    } <= indexes
+    triggers = {
+        row["name"]
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='trigger'"
+        ).fetchall()
+    }
+    assert {
+        "trg_factor_score_runs_no_update",
+        "trg_factor_score_runs_no_delete",
+        "trg_factor_score_requests_no_update",
+        "trg_factor_score_requests_no_delete",
+    } <= triggers

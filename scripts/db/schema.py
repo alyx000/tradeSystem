@@ -526,6 +526,106 @@ AFTER UPDATE ON daily_reviews BEGIN
 END;
 """
 
+_SQL_DAILY_REVIEW_FACTOR_SCORE_RUNS = """
+CREATE TABLE IF NOT EXISTS daily_review_factor_score_runs (
+    score_run_id TEXT PRIMARY KEY,
+    trade_date TEXT NOT NULL CHECK(trade_date GLOB '????-??-??'),
+    retry_of_run_id TEXT,
+    cache_key TEXT NOT NULL,
+    input_digest TEXT NOT NULL,
+    is_cacheable INTEGER NOT NULL CHECK(is_cacheable IN (0, 1)),
+    provider TEXT NOT NULL,
+    requested_model TEXT NOT NULL,
+    actual_model TEXT,
+    cli_version TEXT,
+    runtime_version TEXT NOT NULL,
+    prompt_versions_json TEXT NOT NULL,
+    prompt_sha256_json TEXT NOT NULL,
+    schema_version TEXT NOT NULL,
+    ruleset_version TEXT NOT NULL,
+    evidence_snapshot_json TEXT NOT NULL,
+    rule_gate_json TEXT NOT NULL,
+    factor_scores_json TEXT,
+    sector_scores_json TEXT,
+    system_recommendation_json TEXT,
+    valid_raw_json TEXT,
+    raw_output_sha256_json TEXT,
+    diagnostics_json TEXT NOT NULL,
+    status TEXT NOT NULL,
+    attempt_count INTEGER NOT NULL CHECK(attempt_count >= 0),
+    duration_ms INTEGER NOT NULL CHECK(duration_ms >= 0),
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY(retry_of_run_id) REFERENCES daily_review_factor_score_runs(score_run_id)
+);
+"""
+
+_SQL_DAILY_REVIEW_FACTOR_SCORE_REQUESTS = """
+CREATE TABLE IF NOT EXISTS daily_review_factor_score_requests (
+    request_id TEXT PRIMARY KEY,
+    trade_date TEXT NOT NULL CHECK(trade_date GLOB '????-??-??'),
+    input_by TEXT NOT NULL CHECK(length(trim(input_by)) > 0),
+    cache_hit INTEGER NOT NULL CHECK(cache_hit IN (0, 1)),
+    resolved_run_id TEXT NOT NULL,
+    cache_key TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY(resolved_run_id) REFERENCES daily_review_factor_score_runs(score_run_id)
+);
+"""
+
+_SQL_DAILY_REVIEW_FACTOR_EVALUATIONS = """
+CREATE TABLE IF NOT EXISTS daily_review_factor_evaluations (
+    evaluation_id TEXT PRIMARY KEY,
+    score_run_id TEXT NOT NULL,
+    source_review_date TEXT NOT NULL CHECK(source_review_date GLOB '????-??-??'),
+    evaluation_trade_date TEXT NOT NULL CHECK(evaluation_trade_date GLOB '????-??-??'),
+    rule_top_code TEXT,
+    llm_top_code TEXT,
+    system_top_code TEXT,
+    human_top_code TEXT,
+    system_outcome TEXT,
+    confirmed_outcome TEXT,
+    actual_evidence_json TEXT NOT NULL,
+    evaluation_note TEXT,
+    input_by TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY(score_run_id) REFERENCES daily_review_factor_score_runs(score_run_id),
+    UNIQUE(source_review_date, evaluation_trade_date, score_run_id)
+);
+"""
+
+_SQL_FACTOR_SCORE_RUNS_NO_UPDATE_TRIGGER = """
+CREATE TRIGGER IF NOT EXISTS trg_factor_score_runs_no_update
+BEFORE UPDATE ON daily_review_factor_score_runs
+BEGIN
+    SELECT RAISE(ABORT, 'daily_review_factor_score_runs is append-only');
+END;
+"""
+
+_SQL_FACTOR_SCORE_RUNS_NO_DELETE_TRIGGER = """
+CREATE TRIGGER IF NOT EXISTS trg_factor_score_runs_no_delete
+BEFORE DELETE ON daily_review_factor_score_runs
+BEGIN
+    SELECT RAISE(ABORT, 'daily_review_factor_score_runs is append-only');
+END;
+"""
+
+_SQL_FACTOR_SCORE_REQUESTS_NO_UPDATE_TRIGGER = """
+CREATE TRIGGER IF NOT EXISTS trg_factor_score_requests_no_update
+BEFORE UPDATE ON daily_review_factor_score_requests
+BEGIN
+    SELECT RAISE(ABORT, 'daily_review_factor_score_requests is append-only');
+END;
+"""
+
+_SQL_FACTOR_SCORE_REQUESTS_NO_DELETE_TRIGGER = """
+CREATE TRIGGER IF NOT EXISTS trg_factor_score_requests_no_delete
+BEFORE DELETE ON daily_review_factor_score_requests
+BEGIN
+    SELECT RAISE(ABORT, 'daily_review_factor_score_requests is append-only');
+END;
+"""
+
 # ──────────────────────────────────────────────────────────────
 # 7. 情绪周期 / 主线跟踪
 # ──────────────────────────────────────────────────────────────
@@ -1000,6 +1100,20 @@ _SQL_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_be_thesis ON broker_executions(thesis_id);",
     "CREATE INDEX IF NOT EXISTS idx_be_void ON broker_executions(is_void);",
     "CREATE INDEX IF NOT EXISTS idx_thesis_opened_at ON trade_thesis(opened_at DESC);",
+    "CREATE INDEX IF NOT EXISTS idx_factor_score_runs_cache "
+    "ON daily_review_factor_score_runs(cache_key, created_at DESC);",
+    "CREATE INDEX IF NOT EXISTS idx_factor_score_runs_trade_date "
+    "ON daily_review_factor_score_runs(trade_date DESC, created_at DESC);",
+    "CREATE INDEX IF NOT EXISTS idx_factor_score_runs_retry "
+    "ON daily_review_factor_score_runs(retry_of_run_id);",
+    "CREATE INDEX IF NOT EXISTS idx_factor_score_requests_trade_date "
+    "ON daily_review_factor_score_requests(trade_date DESC, created_at DESC);",
+    "CREATE INDEX IF NOT EXISTS idx_factor_score_requests_run "
+    "ON daily_review_factor_score_requests(resolved_run_id, created_at DESC);",
+    "CREATE INDEX IF NOT EXISTS idx_factor_score_requests_cache "
+    "ON daily_review_factor_score_requests(cache_key, created_at DESC);",
+    "CREATE INDEX IF NOT EXISTS idx_factor_evaluations_run "
+    "ON daily_review_factor_evaluations(score_run_id, evaluation_trade_date DESC);",
     # partial unique index: 同账户同票同时只允许 1 个 open thesis(plan Q5 / G 账户隔离不变式)
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_thesis_account_stock_status "
     "ON trade_thesis(account_id, stock_code) WHERE status = 'open';",
@@ -1229,6 +1343,9 @@ _ALL_TABLE_SQL = [
     _SQL_MARKET_TIMING_SIGNAL,
     _SQL_MARGIN_INDEX_CORRELATION_DAILY,
     _SQL_DAILY_REVIEWS,
+    _SQL_DAILY_REVIEW_FACTOR_SCORE_RUNS,
+    _SQL_DAILY_REVIEW_FACTOR_SCORE_REQUESTS,
+    _SQL_DAILY_REVIEW_FACTOR_EVALUATIONS,
     _SQL_EMOTION_CYCLE,
     _SQL_MAIN_THEMES,
     _SQL_TRADES,
@@ -1267,6 +1384,12 @@ _ALL_TRIGGER_SQL = (
     + _SQL_INDUSTRY_INFO_FTS_TRIGGERS
     + _SQL_MACRO_INFO_FTS_TRIGGERS
     + [_SQL_COG_INST_AFTER_INSERT_TRIGGER, _SQL_COG_INST_AFTER_UPDATE_OUTCOME_TRIGGER]
+    + [
+        _SQL_FACTOR_SCORE_RUNS_NO_UPDATE_TRIGGER,
+        _SQL_FACTOR_SCORE_RUNS_NO_DELETE_TRIGGER,
+        _SQL_FACTOR_SCORE_REQUESTS_NO_UPDATE_TRIGGER,
+        _SQL_FACTOR_SCORE_REQUESTS_NO_DELETE_TRIGGER,
+    ]
 )
 
 EXPECTED_TABLES = [
@@ -1276,6 +1399,8 @@ EXPECTED_TABLES = [
     "industry_info", "macro_info",
     "daily_market", "daily_volume_concentration", "trend_leader_pool", "sector_correlation_daily",
     "market_timing_signal", "margin_index_correlation_daily", "daily_reviews",
+    "daily_review_factor_score_runs", "daily_review_factor_score_requests",
+    "daily_review_factor_evaluations",
     "emotion_cycle", "main_themes",
     "trades",
     "trade_thesis",

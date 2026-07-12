@@ -220,6 +220,13 @@ ALL_SKILL_COMMANDS = (
 )
 
 ARCHITECTURE_COMMANDS = [
+    ["review", "factor-score", "--date", "2026-07-10", "--input-by", "alyx", "--json"],
+    ["review", "factor-score", "--date", "2026-07-10", "--steps-file", "/tmp/steps.json", "--no-llm", "--input-by", "alyx", "--json"],
+    ["review", "factor-confirm", "--date", "2026-07-10", "--run-id", "run-1",
+     "--decision-file", "/tmp/decision.json", "--input-by", "alyx"],
+    ["review", "factor-evaluate", "--date", "2026-07-13", "--source-date", "2026-07-10",
+     "--outcome", "partial", "--input-by", "alyx"],
+    ["review", "factor-metrics", "--days", "20", "--json"],
     ["ingest", "run", "--stage", "post_core", "--date", "2026-04-04"],
     ["ingest", "run", "--stage", "post_core", "--date", "2026-04-04", "--input-by", "openclaw"],
     ["ingest", "run-interface", "--name", "block_trade", "--date", "2026-04-04"],

@@ -154,6 +154,29 @@ class TestReview:
         assert data["prev_market"] is None
         assert data["avg_5d_amount"] is None
         assert data["avg_20d_amount"] is None
+        assert data["review_signals"]["sectors"]["data_status"] == "missing"
+
+    def test_prefill_sector_source_failed_status(self, client, db_path):
+        conn = get_connection(db_path)
+        Q.upsert_daily_market(conn, {
+            "date": "2026-06-18",
+            "sh_index_close": 3200.0,
+            "raw_data": {
+                "sector_moneyflow_ths": {
+                    "status": "source_failed",
+                    "error": "provider unavailable",
+                    "data": [],
+                },
+            },
+        })
+        conn.commit()
+        conn.close()
+
+        r = client.get("/api/review/2026-06-18/prefill")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["review_signals"]["sectors"]["data_status"] == "source_failed"
+        assert data["review_signals"]["sectors"]["projection_candidates"] == []
 
     def test_prefill_holdings_from_post_envelope_raw_data(self, client, db_path):
         """当日 daily_market.raw_data 信封含 holdings_data 时，补全预填现价与盈亏（不依赖 DB current_price）。"""
@@ -2671,6 +2694,398 @@ class TestEnrichMarketRow:
         assert robot["facts"]["capacity_leader"] is None
         assert robot["facts"]["lead_stock"] is None
 
+    def test_prefill_uses_main_themes_as_of_target_date(self, client, db_path):
+        self._seed(
+            db_path,
+            raw_data={
+                "sector_rhythm_industry": [
+                    {"name": "电池", "phase": "发酵", "confidence": "中", "change_today": 2.0},
+                ],
+            },
+        )
+        conn = get_connection(db_path)
+        Q.upsert_main_theme(
+            conn,
+            {"date": "2026-05-18", "theme_name": "电池", "status": "active"},
+        )
+        Q.upsert_main_theme(
+            conn,
+            {"date": "2026-05-19", "theme_name": "AI", "status": "active"},
+        )
+        Q.upsert_main_theme(
+            conn,
+            {"date": "2026-05-20", "theme_name": "AI", "status": "fading"},
+        )
+        Q.upsert_main_theme(
+            conn,
+            {"date": "2026-05-21", "theme_name": "未来主线", "status": "active"},
+        )
+        conn.commit()
+        conn.close()
+
+        data = client.get("/api/review/2026-05-20/prefill").json()
+
+        assert [(item["theme_name"], item["date"]) for item in data["main_themes"]] == [
+            ("电池", "2026-05-18"),
+        ]
+        candidate_names = {
+            item["sector_name"]
+            for item in data["review_signals"]["sectors"]["projection_candidates"]
+        }
+        assert "AI" not in candidate_names
+        assert "未来主线" not in candidate_names
+
+    def test_projection_candidates_keep_sector_types_and_leaders_separate(self):
+        from api.routes.review import _build_review_signals, _build_sector_projection_candidates
+
+        market = {
+            "sector_industry": {
+                "data": [{"name": "同名板块", "change_pct": 2.1, "top_stock": "行业龙"}],
+            },
+            "sector_concept": {
+                "data": [{"name": "同名板块", "change_pct": 3.2, "top_stock": "概念龙"}],
+            },
+            "sector_rhythm_industry": [
+                {
+                    "name": "同名板块",
+                    "phase": "启动",
+                    "confidence": "高",
+                    "change_today": 2.1,
+                    "top_stock_today": "行业龙",
+                },
+            ],
+            "sector_rhythm_concept": [
+                {
+                    "name": "同名板块",
+                    "phase": "发酵",
+                    "confidence": "中",
+                    "change_today": 3.2,
+                    "top_stock_today": "概念龙",
+                },
+            ],
+            "top_volume_stocks": [
+                {"rank": 1, "name": "共享叙事龙", "code": "000003.SZ", "amount_billion": 200.0},
+                {"rank": 4, "name": "行业龙", "code": "000001.SZ", "amount_billion": 80.0},
+                {"rank": 5, "name": "概念龙", "code": "000002.SZ", "amount_billion": 70.0},
+            ],
+            "limit_up": {
+                "stocks": [
+                    {
+                        "name": "共享叙事龙",
+                        "code": "000003.SZ",
+                        "limit_times": 3,
+                        "amount_billion": 80.0,
+                    },
+                ],
+            },
+        }
+        signals = _build_review_signals(market)
+
+        rows = _build_sector_projection_candidates(
+            trade_date="2026-05-20",
+            market=market,
+            post_market_env={"raw_data": {"limit_up": market["limit_up"]}},
+            main_themes=[
+                {
+                    "date": "2026-05-20",
+                    "theme_name": "同名板块",
+                    "status": "active",
+                    "key_stocks": ["共享叙事龙"],
+                },
+            ],
+            teacher_notes=[],
+            industry_info=[],
+            sector_signals=signals.get("sectors"),
+        )
+
+        by_key = {item["sector_key"]: item for item in rows}
+        assert set(by_key) == {"industry:同名板块", "concept:同名板块"}
+        assert by_key["industry:同名板块"]["sector_type"] == "industry"
+        assert by_key["concept:同名板块"]["sector_type"] == "concept"
+        assert by_key["industry:同名板块"]["facts"]["lead_stock"] == "行业龙"
+        assert by_key["concept:同名板块"]["facts"]["lead_stock"] == "概念龙"
+        assert all(item["candidate_tier"] == "core" for item in by_key.values())
+        assert all(item["data_status"] == "ok" for item in by_key.values())
+        for item in by_key.values():
+            assert {"source_tags", "facts", "key_stocks", "evidence_text"} <= item.keys()
+            assert item["rank_reason"]
+            assert item["evidence_items"]
+            assert all(evidence["trade_date"] == "2026-05-20" for evidence in item["evidence_items"])
+            assert all(
+                evidence["evidence_id"].startswith("2026-05-20:")
+                for evidence in item["evidence_items"]
+            )
+
+    def test_projection_candidate_hard_gates_and_negative_flow_counter_evidence(self):
+        from api.routes.review import _build_review_signals, _build_sector_projection_candidates
+
+        market = {
+            "sector_industry": {
+                "data": [
+                    {"name": "主线确认", "change_pct": 1.2},
+                    {"name": "双证据", "change_pct": 1.5},
+                    {"name": "模糊主线", "change_pct": 1.1},
+                ],
+            },
+            "sector_concept": {
+                "data": [{"name": "模糊主线", "change_pct": 1.3}],
+            },
+            "sector_rhythm_industry": [
+                {"name": "高节奏", "phase": "启动", "confidence": "高", "change_today": 1.0},
+                {"name": "单证据", "phase": "观察", "confidence": "低", "change_today": 0.5},
+            ],
+            "sector_moneyflow_ths": {
+                "data": [
+                    {"name": "双证据", "net_amount": 2.0, "pct_change": 1.5},
+                    {
+                        "name": "负资金流",
+                        "net_amount": -8.0,
+                        "pct_change": -1.0,
+                        "lead_stock": "负流股",
+                    },
+                ],
+            },
+            "limit_cpt_list": {
+                "data": [
+                    {"rank": 2, "name": "最强概念", "up_nums": 5, "pct_chg": 3.0},
+                    {"rank": 0, "name": "零名次", "up_nums": 5, "pct_chg": 3.0},
+                    {"rank": 2.5, "name": "小数名次", "up_nums": 5, "pct_chg": 3.0},
+                ],
+            },
+            "top_volume_stocks": [
+                {"rank": 1, "name": "负流股", "code": "000009.SZ", "amount_billion": 100.0},
+            ],
+        }
+        signals = _build_review_signals(market)
+
+        rows = _build_sector_projection_candidates(
+            trade_date="2026-05-20",
+            market=market,
+            post_market_env={
+                "raw_data": {
+                    "limit_up": {
+                        "stocks": [
+                            {
+                                "name": "负流股",
+                                "code": "000009.SZ",
+                                "limit_times": 2,
+                                "amount_billion": 30.0,
+                            },
+                        ],
+                    },
+                },
+            },
+            main_themes=[
+                {"date": "2026-05-20", "theme_name": "主线确认", "status": "active"},
+                {"date": "2026-05-20", "theme_name": "模糊主线", "status": "active"},
+            ],
+            teacher_notes=[],
+            industry_info=[
+                {"date": "2026-05-20", "sector_name": "只有资料", "content": "只有逻辑叙事"},
+            ],
+            sector_signals=signals.get("sectors"),
+        )
+
+        by_key = {item["sector_key"]: item for item in rows}
+        assert by_key["industry:高节奏"]["candidate_tier"] == "core"
+        assert by_key["concept:最强概念"]["candidate_tier"] == "core"
+        assert by_key["industry:主线确认"]["candidate_tier"] == "core"
+        assert by_key["industry:双证据"]["candidate_tier"] == "core"
+        assert by_key["industry:单证据"]["candidate_tier"] == "watch"
+        assert by_key["industry:只有资料"]["candidate_tier"] == "context"
+        assert by_key["industry:模糊主线"]["candidate_tier"] == "watch"
+        assert by_key["concept:模糊主线"]["candidate_tier"] == "watch"
+        assert by_key["concept:零名次"]["candidate_tier"] != "core"
+        assert by_key["concept:小数名次"]["candidate_tier"] != "core"
+
+        negative = by_key["industry:负资金流"]
+        assert negative["candidate_tier"] != "core"
+        assert not any(item["polarity"] == "support" for item in negative["evidence_items"])
+        assert any(item["polarity"] == "counter" for item in negative["evidence_items"])
+        assert negative["facts"]["emotion_leader"] is None
+        assert negative["facts"]["capacity_leader"] is None
+        assert negative["facts"]["lead_stock"] is None
+
+    def test_projection_candidate_backfills_hidden_negative_industry_moneyflow(self):
+        from api.routes.review import _build_review_signals, _build_sector_projection_candidates
+
+        market = {
+            "sector_industry": {
+                "data": [{"name": "负流候选", "change_pct": 1.2}],
+            },
+            "sector_moneyflow_ths": {
+                "data": [
+                    {"name": f"正流{i}", "net_amount": 13.0 - i, "pct_change": 1.0}
+                    for i in range(1, 7)
+                ] + [
+                    {"name": "负流候选", "net_amount": -8.0, "pct_change": -1.0},
+                ],
+            },
+        }
+        signals = _build_review_signals(market)
+
+        displayed = signals["sectors"]["industry_moneyflow_rows"]
+        assert len(displayed) == 5
+        assert [row["name"] for row in displayed] == [f"正流{i}" for i in range(1, 6)]
+
+        rows = _build_sector_projection_candidates(
+            trade_date="2026-05-20",
+            market=market,
+            post_market_env=None,
+            main_themes=[],
+            teacher_notes=[],
+            industry_info=[],
+            sector_signals=signals["sectors"],
+        )
+
+        by_key = {item["sector_key"]: item for item in rows}
+        negative = by_key["industry:负流候选"]
+        assert negative["facts"]["net_amount_yi"] == -8.0
+        assert any(
+            item["source"] == "industry_moneyflow"
+            and item["polarity"] == "counter"
+            for item in negative["evidence_items"]
+        )
+        assert "industry:正流6" not in by_key
+
+    def test_projection_candidates_split_legacy_dc_concepts_from_industries(self):
+        from api.routes.review import _build_review_signals, _build_sector_projection_candidates
+
+        market = {
+            "sector_moneyflow_dc": {
+                "data": [
+                    {
+                        "name": "可控核聚变",
+                        "content_type": "概念",
+                        "net_amount": 2.0e8,
+                        "pct_change": 3.0,
+                    },
+                    {
+                        "name": "电力",
+                        "content_type": "行业",
+                        "net_amount": 1.0e8,
+                        "pct_change": 1.5,
+                    },
+                ],
+            },
+        }
+        signals = _build_review_signals(market)
+
+        rows = _build_sector_projection_candidates(
+            trade_date="2026-05-20",
+            market=market,
+            post_market_env=None,
+            main_themes=[],
+            teacher_notes=[],
+            industry_info=[],
+            sector_signals=signals["sectors"],
+        )
+
+        assert {item["sector_key"] for item in rows} == {
+            "concept:可控核聚变",
+            "industry:电力",
+        }
+
+    @pytest.mark.parametrize(
+        ("market", "expected_status"),
+        [
+            (None, "missing"),
+            (
+                {
+                    "sector_industry": {"data": []},
+                    "sector_concept": {"data": []},
+                    "sector_rhythm_industry": [],
+                    "sector_rhythm_concept": [],
+                    "sector_moneyflow_ths": {"data": []},
+                    "concept_moneyflow_ths": {"data": []},
+                    "limit_cpt_list": {"data": []},
+                },
+                "source_ok_empty",
+            ),
+            (
+                {
+                    "sector_rhythm_concept": {
+                        "status": "source_failed",
+                        "error": "provider unavailable",
+                    },
+                },
+                "source_failed",
+            ),
+            (
+                {"sector_rhythm_concept": {"status": "missing"}},
+                "missing",
+            ),
+            (
+                {"sector_rhythm_concept": {"status": "rule_filtered_empty"}},
+                "rule_filtered_empty",
+            ),
+            (
+                {
+                    "limit_cpt_list": {
+                        "data": [{"rank": 4, "name": "叙事板块", "up_nums": 0, "pct_chg": 0}],
+                    },
+                },
+                "rule_filtered_empty",
+            ),
+        ],
+    )
+    def test_projection_candidate_data_status_is_explicit(self, market, expected_status):
+        from api.routes.review import _build_review_signals, _build_sector_projection_candidates
+
+        rows = _build_sector_projection_candidates(
+            trade_date="2026-05-20",
+            market=market,
+            post_market_env=None,
+            main_themes=[
+                {"date": "2026-05-20", "theme_name": "叙事板块", "status": "active"},
+            ],
+            teacher_notes=[],
+            industry_info=[],
+            sector_signals=_build_review_signals(market).get("sectors"),
+        )
+
+        target = next(item for item in rows if item["sector_name"] == "叙事板块")
+        assert target["data_status"] == expected_status
+
+    def test_projection_core_order_is_deterministic_and_directly_sliceable_to_six(self):
+        from api.routes.review import (
+            _build_review_signals,
+            _build_sector_projection_candidates,
+            _take_core_projection_candidates,
+        )
+
+        rhythm_rows = [
+            {"name": f"板块{index}", "phase": "启动", "confidence": "高", "change_today": 1.0}
+            for index in range(7)
+        ]
+
+        def build(rows):
+            market = {"sector_rhythm_industry": rows}
+            return _build_sector_projection_candidates(
+                trade_date="2026-05-20",
+                market=market,
+                post_market_env=None,
+                main_themes=[],
+                teacher_notes=[],
+                industry_info=[],
+                sector_signals=_build_review_signals(market).get("sectors"),
+            )
+
+        forward = build(rhythm_rows)
+        reverse = build(list(reversed(rhythm_rows)))
+        expected = [f"industry:板块{index}" for index in range(6)]
+
+        assert [item["sector_key"] for item in _take_core_projection_candidates(forward)] == expected
+        assert [item["sector_key"] for item in _take_core_projection_candidates(reverse)] == expected
+
+        mixed = build([
+            {"name": "唯一核心", "phase": "启动", "confidence": "高", "change_today": 1.0},
+            {"name": "观察项", "phase": "观察", "confidence": "低", "change_today": 0.5},
+        ])
+        assert [item["sector_key"] for item in _take_core_projection_candidates(mixed)] == [
+            "industry:唯一核心",
+        ]
+
     def test_teacher_note_freeform_sector_text_does_not_create_fake_candidate(self, client, db_path):
         self._seed(db_path)
         conn = get_connection(db_path)
@@ -2829,3 +3244,1089 @@ def test_market_timing_history_to_date_excludes_future(client, db_path):
     conn.close()
     data = client.get("/api/market/timing/history?days=30&to_date=2026-06-11").json()
     assert [p["date"] for p in data["series"]] == ["2026-06-10", "2026-06-11"]  # 不含 06-12
+
+
+# ──────────────────────────────────────────────────────────────
+# 三位一体因子评分 / 人工确认 / 严格 T+1
+# ──────────────────────────────────────────────────────────────
+
+def _seed_factor_trade_date(db_path, trade_date="2026-07-10"):
+    conn = get_connection(db_path)
+    Q.upsert_trade_calendar(conn, [{"date": trade_date, "is_open": 1}])
+    conn.commit()
+    conn.close()
+
+
+def _seed_factor_score_run(
+    db_path,
+    *,
+    run_id="api-run-1",
+    trade_date="2026-07-10",
+    status="rule_only",
+    retry_of_run_id=None,
+):
+    from api.routes.review import build_review_prefill
+    from services.trinity_factor.review_input import normalize_review_steps
+    from services.trinity_factor.repository import insert_score_run
+    from services.trinity_factor.service import build_score_input_digest
+
+    _seed_factor_trade_date(db_path, trade_date)
+    conn = get_connection(db_path)
+    current_review = Q.get_daily_review(conn, trade_date) or {}
+    input_digest = build_score_input_digest(
+        trade_date=trade_date,
+        prefill=build_review_prefill(conn, trade_date),
+        review_steps=normalize_review_steps(current_review),
+    )
+    insert_score_run(conn, {
+        "score_run_id": run_id,
+        "trade_date": trade_date,
+        "retry_of_run_id": retry_of_run_id,
+        "cache_key": f"cache-{run_id}",
+        "input_digest": input_digest,
+        "is_cacheable": status in {"success", "sector_failed", "rule_only"},
+        "provider": "rules",
+        "requested_model": "disabled",
+        "actual_model": None,
+        "cli_version": None,
+        "runtime_version": "python-test",
+        "prompt_versions_json": {"factor": "factor-v1", "sector": "sector-v1"},
+        "prompt_sha256_json": {"factor": "p1", "sector": "p2"},
+        "schema_version": "score-v1",
+        "ruleset_version": "rules-v1",
+        "evidence_snapshot_json": {},
+        "rule_gate_json": {"rule_fallback_code": "market_node"},
+        "factor_scores_json": None,
+        "sector_scores_json": None,
+        "system_recommendation_json": {
+            "primary": {"factor_code": "market_node"},
+            "supporting": [{"factor_code": "sector_rhythm"}],
+            "recommendation_source": "rule_fallback",
+        },
+        "valid_raw_json": (
+            {"factor": {"schema_version": "factor-v1"}}
+            if status in {"success", "sector_failed"}
+            else None
+        ),
+        "raw_output_sha256_json": None,
+        "diagnostics_json": {},
+        "status": status,
+        "attempt_count": 0,
+        "duration_ms": 0,
+    })
+    conn.commit()
+    conn.close()
+
+
+def _factor_persistence_counts(db_path):
+    conn = get_connection(db_path)
+    counts = tuple(
+        conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+        for table in (
+            "daily_review_factor_evaluations",
+            "daily_review_factor_score_runs",
+            "daily_review_factor_score_requests",
+        )
+    )
+    conn.close()
+    return counts
+
+
+def test_review_factor_score_no_llm_and_cache(client, db_path):
+    _seed_factor_trade_date(db_path)
+    body = {
+        "no_llm": True,
+        "input_by": "web",
+        "steps": {
+            "step1_market": {"notes": "大盘结构待确认"},
+            "step6_nodes": {"systemic_risk": True},
+        },
+    }
+
+    first = client.post("/api/review-factors/2026-07-10/score", json=body)
+    second = client.post("/api/review-factors/2026-07-10/score", json=body)
+
+    assert first.status_code == 200
+    assert first.json()["status"] == "rule_only"
+    assert first.json()["factor_scores"] is None
+    assert second.status_code == 200
+    assert second.json()["score_run_id"] == first.json()["score_run_id"]
+    assert second.json()["cache_hit"] is True
+    assert client.post(
+        "/api/review-factors/2026-07-10/score",
+        json={"no_llm": "yes", "input_by": "web"},
+    ).status_code == 422
+
+
+def test_review_factor_score_persists_production_market_fields_from_db(
+    client, db_path
+):
+    from services.trinity_factor.repository import list_score_runs
+
+    _seed_factor_trade_date(db_path, trade_date="2026-07-02")
+    conn = get_connection(db_path)
+    Q.upsert_trade_calendar(conn, [{"date": "2026-07-01", "is_open": 1}])
+    Q.upsert_daily_market(conn, {
+        "date": "2026-07-01",
+        "highest_board": 4,
+        "continuous_board_counts": {
+            "4": ["四板甲"],
+            "3": ["三板甲"],
+            "2": ["二板甲"],
+        },
+    })
+    Q.upsert_daily_market(conn, {
+        "date": "2026-07-02",
+        "total_amount": 13542.7,
+        "sh_index_change_pct": -2.0314,
+        "sz_index_change_pct": -3.8486,
+        "advance_count": 2219,
+        "decline_count": 3162,
+        "limit_up_count": 42,
+        "limit_down_count": 11,
+        "highest_board": 4,
+        "continuous_board_counts": {
+            "4": ["四板甲"],
+            "3": ["三板甲"],
+            "2": ["二板乙", "二板甲"],
+        },
+        "raw_data": {
+            "raw_data": {
+                "style_factors": {
+                    "cap_preference": {
+                        "csi300_chg": -0.4,
+                        "csi1000_chg": 1.1,
+                        "spread": 1.5,
+                        "relative": "偏小盘",
+                    },
+                    "board_preference": {
+                        "dominant_type": "20cm",
+                        "pct_10cm": 20.0,
+                        "pct_20cm": 75.0,
+                        "pct_30cm": 5.0,
+                    },
+                    "premium_snapshot": {
+                        "first_board": {
+                            "count": 40,
+                            "premium_median": 1.2,
+                            "open_up_rate": 0.6,
+                        },
+                    },
+                    "premium_trend": {"direction": "走强"},
+                    "popularity": [{
+                        "code": "000001.SZ",
+                        "name": "四板甲",
+                        "source": ["consecutive"],
+                        "prev_close": 10.0,
+                        "t_open_premium_pct": 2.0,
+                        "t_close_change_pct": 5.0,
+                        "t_is_limit_up": True,
+                        "t_is_limit_down": False,
+                    }],
+                    "popularity_provenance": {
+                        "source_trade_date": "2026-07-01",
+                        "outcome_trade_date": "2026-07-02",
+                    },
+                    "promotion": {
+                        "trade_date": "2026-07-02",
+                        "prev_date": "2026-07-01",
+                        "first_to_second": {
+                            "base": 12,
+                            "promoted": 4,
+                            "rate": 0.333,
+                            "promoted_names": ["乙", "甲"],
+                        },
+                    },
+                },
+            },
+        },
+    })
+    conn.commit()
+    conn.close()
+
+    response = client.post(
+        "/api/review-factors/2026-07-02/score",
+        json={"no_llm": True, "input_by": "web"},
+    )
+
+    assert response.status_code == 200
+    conn = get_connection(db_path)
+    stored_run = list_score_runs(conn, trade_date="2026-07-02")[0]
+    conn.close()
+    factors = {
+        row["factor_code"]: row
+        for row in stored_run["evidence_snapshot_json"]["factor_candidates"]
+    }
+    market_factor = factors["market_node"]
+    daily_market = next(
+        item
+        for item in market_factor["evidence_items"]
+        if item["source"] == "daily_market"
+    )
+    assert daily_market["content"] == {
+        "date": "2026-07-02",
+        "total_amount": 13542.7,
+        "sh_index_change_pct": -2.0314,
+        "sz_index_change_pct": -3.8486,
+        "advance_count": 2219,
+        "decline_count": 3162,
+        "limit_up_count": 42,
+        "limit_down_count": 11,
+    }
+    assert factors["style_regime"]["evidence_quality"] == 4
+    assert factors["leader_signal"]["evidence_quality"] == 3
+    assert {
+        item["source"]
+        for item in factors["style_regime"]["evidence_items"]
+        if item.get("kind") == "fact" and item.get("source_status") == "ok"
+    } == {"cap_relative_strength", "board_preference", "premium_regime"}
+    leader_facts = {
+        item["source"]
+        for item in factors["leader_signal"]["evidence_items"]
+        if item.get("kind") == "fact" and item.get("source_status") == "ok"
+    }
+    assert leader_facts == {
+        "ladder_structure", "promotion_realization", "prior_core_feedback",
+    }
+    prior_core_feedback = next(
+        item
+        for item in factors["leader_signal"]["evidence_items"]
+        if item.get("source") == "prior_core_feedback"
+    )
+    assert prior_core_feedback["content"] == {
+        "source_trade_date": "2026-07-01",
+        "cohort_basis": "previous_highest_tier",
+        "cohort_count": 1,
+        "names": ["四板甲"],
+        "codes": ["000001.SZ"],
+        "median_open_premium_pct": 2.0,
+        "median_close_change_pct": 5.0,
+        "positive_close_count": 1,
+        "limit_up_count": 1,
+        "limit_down_count": 0,
+    }
+    assert stored_run["ruleset_version"] == "trinity_ruleset_v2"
+
+
+def test_review_factor_score_falls_back_to_promotion_for_legacy_feedback_provenance(
+    client, db_path
+):
+    from services.trinity_factor.repository import list_score_runs
+
+    _seed_factor_trade_date(db_path, trade_date="2026-07-02")
+    conn = get_connection(db_path)
+    Q.upsert_trade_calendar(conn, [{"date": "2026-07-01", "is_open": 1}])
+    Q.upsert_daily_market(conn, {
+        "date": "2026-07-01",
+        "highest_board": 3,
+        "continuous_board_counts": {"3": ["三板甲"], "2": ["二板甲"]},
+    })
+    Q.upsert_daily_market(conn, {
+        "date": "2026-07-02",
+        "highest_board": 3,
+        "continuous_board_counts": {"3": ["三板乙"], "2": ["二板乙"]},
+        "raw_data": {"raw_data": {"style_factors": {
+            "popularity": [{
+                "code": "000002.SZ",
+                "name": "三板甲",
+                "source": ["consecutive"],
+                "t_open_premium_pct": 1.0,
+                "t_close_change_pct": 3.0,
+                "t_is_limit_up": False,
+                "t_is_limit_down": False,
+            }],
+            "promotion": {
+                "trade_date": "2026-07-02",
+                "prev_date": "2026-07-01",
+            },
+        }}},
+    })
+    conn.commit()
+    conn.close()
+
+    response = client.post(
+        "/api/review-factors/2026-07-02/score",
+        json={"no_llm": True, "input_by": "web"},
+    )
+
+    assert response.status_code == 200
+    conn = get_connection(db_path)
+    stored_run = list_score_runs(conn, trade_date="2026-07-02")[0]
+    conn.close()
+    leader = next(
+        row
+        for row in stored_run["evidence_snapshot_json"]["factor_candidates"]
+        if row["factor_code"] == "leader_signal"
+    )
+    feedback = next(
+        item
+        for item in leader["evidence_items"]
+        if item.get("source") == "prior_core_feedback"
+    )
+    assert leader["evidence_quality"] == 3
+    assert feedback["content"]["source_trade_date"] == "2026-07-01"
+    assert feedback["content"]["cohort_basis"] == "previous_highest_tier"
+
+
+@pytest.mark.parametrize(
+    "provenance_mode",
+    ["explicit_misaligned", "legacy_misaligned"],
+)
+def test_review_factor_score_rejects_feedback_not_from_strict_previous_open_day(
+    client, db_path, provenance_mode
+):
+    from services.trinity_factor.repository import list_score_runs
+
+    _seed_factor_trade_date(db_path, trade_date="2026-07-13")
+    conn = get_connection(db_path)
+    Q.upsert_trade_calendar(conn, [
+        {"date": "2026-07-10", "is_open": 1},
+        {"date": "2026-07-13", "is_open": 1},
+    ])
+    Q.upsert_daily_market(conn, {
+        "date": "2026-07-09",
+        "highest_board": 5,
+        "continuous_board_counts": {"5": ["五板旧标"]},
+    })
+    Q.upsert_daily_market(conn, {
+        "date": "2026-07-10",
+        "highest_board": 4,
+        "continuous_board_counts": {"4": ["四板甲"]},
+    })
+    style_factors = {
+        "popularity": [{
+            "code": "000001.SZ",
+            "name": "四板甲",
+            "source": ["consecutive"],
+            "t_open_premium_pct": 1.0,
+            "t_close_change_pct": 3.0,
+            "t_is_limit_up": False,
+            "t_is_limit_down": False,
+        }],
+        # No valid promotion group: it must not independently add leader_outcome.
+        "promotion": {
+            "trade_date": "2026-07-13",
+            "prev_date": (
+                "2026-07-09"
+                if provenance_mode == "legacy_misaligned"
+                else "2026-07-10"
+            ),
+        },
+    }
+    if provenance_mode == "explicit_misaligned":
+        style_factors["popularity_provenance"] = {
+            "source_trade_date": "2026-07-09",
+            "outcome_trade_date": "2026-07-13",
+        }
+    Q.upsert_daily_market(conn, {
+        "date": "2026-07-13",
+        "highest_board": 4,
+        "continuous_board_counts": {"4": ["四板乙"]},
+        "raw_data": {"raw_data": {"style_factors": style_factors}},
+    })
+    conn.commit()
+    conn.close()
+
+    response = client.post(
+        "/api/review-factors/2026-07-13/score",
+        json={"no_llm": True, "input_by": "web"},
+    )
+
+    assert response.status_code == 200
+    conn = get_connection(db_path)
+    stored_run = list_score_runs(conn, trade_date="2026-07-13")[0]
+    conn.close()
+    assert stored_run["evidence_snapshot_json"]["strict_prev_trade_date"] == (
+        "2026-07-10"
+    )
+    leader = next(
+        row
+        for row in stored_run["evidence_snapshot_json"]["factor_candidates"]
+        if row["factor_code"] == "leader_signal"
+    )
+    facts = [
+        item
+        for item in leader["evidence_items"]
+        if item.get("kind") == "fact" and item.get("source_status") == "ok"
+    ]
+    assert [item["source"] for item in facts] == ["ladder_structure"]
+    assert leader["objective_source_count"] == 1
+    assert leader["evidence_quality"] == 2
+
+
+@pytest.mark.parametrize("input_by", [None, "", "  \t"])
+def test_review_factor_score_requires_explicit_input_by(client, db_path, input_by):
+    _seed_factor_trade_date(db_path)
+    body = {"no_llm": True}
+    if input_by is not None:
+        body["input_by"] = input_by
+    response = client.post("/api/review-factors/2026-07-10/score", json=body)
+
+    assert response.status_code == 422
+    assert "input_by" in response.text
+
+
+@pytest.mark.parametrize(
+    "invalid_field",
+    [
+        {"steps": []},
+        {"retry_of_run_id": 123},
+    ],
+)
+def test_review_factor_score_rejects_non_schema_types(client, db_path, invalid_field):
+    _seed_factor_trade_date(db_path)
+    response = client.post(
+        "/api/review-factors/2026-07-10/score",
+        json={"no_llm": True, "input_by": "web", **invalid_field},
+    )
+
+    assert response.status_code == 422
+
+
+@pytest.mark.parametrize("retry_of_run_id", ["", "  \t"])
+def test_review_factor_score_rejects_blank_retry_id_before_any_write(
+    client, db_path, retry_of_run_id
+):
+    _seed_factor_trade_date(db_path)
+    before = _factor_persistence_counts(db_path)
+
+    response = client.post(
+        "/api/review-factors/2026-07-10/score",
+        json={
+            "no_llm": True,
+            "input_by": "web",
+            "retry_of_run_id": retry_of_run_id,
+        },
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert isinstance(detail, list)
+    assert any(error["loc"][-1] == "retry_of_run_id" for error in detail)
+    assert _factor_persistence_counts(db_path) == before
+
+
+def test_review_factor_score_strips_retry_id_whitespace(client, db_path):
+    _seed_factor_trade_date(db_path)
+    body = {"no_llm": True, "input_by": "web"}
+    first = client.post("/api/review-factors/2026-07-10/score", json=body)
+    run_id = first.json()["score_run_id"]
+
+    retry = client.post(
+        "/api/review-factors/2026-07-10/score",
+        json={**body, "retry_of_run_id": f"  {run_id}\t"},
+    )
+
+    assert first.status_code == 200
+    assert retry.status_code == 200
+    assert retry.json()["retry_of_run_id"] == run_id
+
+
+def test_review_factor_score_rejects_extra_field_before_service_or_audit_write(
+    client, db_path, monkeypatch
+):
+    import api.routes.review_factors as review_factors_route
+
+    _seed_factor_trade_date(db_path)
+    service_calls = 0
+    original_score = review_factors_route.TrinityFactorService.score
+
+    def counted_score(self, *args, **kwargs):
+        nonlocal service_calls
+        service_calls += 1
+        return original_score(self, *args, **kwargs)
+
+    monkeypatch.setattr(
+        review_factors_route.TrinityFactorService,
+        "score",
+        counted_score,
+    )
+
+    response = client.post(
+        "/api/review-factors/2026-07-10/score",
+        json={
+            "no_llm": True,
+            "no_lllm": True,
+            "input_by": "web",
+        },
+    )
+
+    conn = get_connection(db_path)
+    run_count = conn.execute(
+        "SELECT COUNT(*) FROM daily_review_factor_score_runs"
+    ).fetchone()[0]
+    request_count = conn.execute(
+        "SELECT COUNT(*) FROM daily_review_factor_score_requests"
+    ).fetchone()[0]
+    conn.close()
+
+    assert response.status_code == 422
+    assert service_calls == 0
+    assert run_count == 0
+    assert request_count == 0
+
+
+def test_review_factor_score_rejects_oversized_snapshot_before_runner_or_audit(
+    client, db_path, monkeypatch
+):
+    import api.routes.review_factors as review_factors_route
+    from services.trinity_factor.runner import StructuredRunResult
+    from services.trinity_factor.service import TrinityFactorService
+
+    _seed_factor_trade_date(db_path)
+    calls = []
+
+    class CountingRunner:
+        def run(self, **kwargs):
+            calls.append(kwargs)
+            return StructuredRunResult(
+                status="schema_invalid",
+                provider="antigravity",
+                requested_model="model-a",
+                actual_model=None,
+                cli_version="agy-1",
+                runtime_version="python-3.9",
+                prompt_version="test-prompt",
+                prompt_sha256="p" * 64,
+                input_digest="i" * 64,
+                schema_version="test-schema",
+                ruleset_version="test-rules",
+                attempt_count=2,
+                duration_ms=1,
+                is_cacheable=False,
+                diagnostics={"reason": "schema_invalid"},
+            )
+
+    service = TrinityFactorService(runner=CountingRunner())
+    monkeypatch.setattr(
+        review_factors_route,
+        "TrinityFactorService",
+        lambda: service,
+    )
+    steps = {
+        step_key: {
+            f"field_{index:03d}": "界" * 500
+            for index in range(100)
+        }
+        for step_key in (
+            "step1_market",
+            "step2_sectors",
+            "step3_emotion",
+            "step4_style",
+            "step5_leaders",
+            "step6_nodes",
+        )
+    }
+
+    response = client.post(
+        "/api/review-factors/2026-07-10/score",
+        json={"no_llm": False, "input_by": "web", "steps": steps},
+    )
+
+    conn = get_connection(db_path)
+    run_count = conn.execute(
+        "SELECT COUNT(*) FROM daily_review_factor_score_runs"
+    ).fetchone()[0]
+    request_count = conn.execute(
+        "SELECT COUNT(*) FROM daily_review_factor_score_requests"
+    ).fetchone()[0]
+    conn.close()
+
+    assert response.status_code == 422
+    assert "evidence snapshot exceeds" in response.text
+    assert calls == []
+    assert run_count == 0
+    assert request_count == 0
+
+
+def test_review_factor_score_openapi_requires_body_and_input_by(client):
+    openapi = client.app.openapi()
+    operation = openapi["paths"]["/api/review-factors/{date}/score"]["post"]
+    request_body = operation["requestBody"]
+    assert request_body["required"] is True
+
+    schema_ref = request_body["content"]["application/json"]["schema"]["$ref"]
+    schema_name = schema_ref.rsplit("/", 1)[-1]
+    request_schema = openapi["components"]["schemas"][schema_name]
+    assert "input_by" in request_schema["required"]
+    assert request_schema["additionalProperties"] is False
+
+
+def test_review_factor_score_rejects_invalid_calendar_date(client):
+    response = client.post(
+        "/api/review-factors/2026-99-99/score",
+        json={"no_llm": True, "input_by": "web"},
+    )
+
+    assert response.status_code == 422
+    assert "invalid calendar date" in response.text.lower()
+
+
+def test_review_put_validates_factor_decision_and_syncs_legacy(client, db_path):
+    _seed_factor_score_run(db_path)
+
+    response = client.put("/api/review/2026-07-10", json={
+        "step8_plan": {
+            "summary": {"one_sentence": "保留字段"},
+            "factor_decision": {
+                "score_run_id": "api-run-1",
+                "status": "accepted",
+                "input_by": "web",
+            },
+        }
+    })
+
+    assert response.status_code == 200
+    stored = client.get("/api/review/2026-07-10").json()
+    step8 = json.loads(stored["step8_plan"])
+    assert step8["factor_decision"]["primary_factor"] == "market_node"
+    assert step8["key_factor"] == "market_node"
+    assert step8["secondary_factors"] == ["sector_rhythm"]
+    assert step8["summary"] == {"one_sentence": "保留字段"}
+
+    unrelated = client.put("/api/review/2026-07-10", json={
+        "step7_positions": {"notes": "只更新持仓复盘"},
+    })
+    assert unrelated.status_code == 200
+    preserved_step8 = json.loads(client.get("/api/review/2026-07-10").json()["step8_plan"])
+    assert preserved_step8["factor_decision"]["score_run_id"] == "api-run-1"
+
+    changed = client.put("/api/review/2026-07-10", json={
+        "step1_market": {"notes": "确认后修改评分输入"},
+    })
+    assert changed.status_code == 200
+    changed_step8 = json.loads(client.get("/api/review/2026-07-10").json()["step8_plan"])
+    assert changed_step8["factor_decision"] is None
+    assert changed_step8["key_factor"] == ""
+    assert changed_step8["secondary_factors"] == []
+
+    cleared = client.put("/api/review/2026-07-10", json={
+        "step8_plan": {
+            "summary": {"one_sentence": "证据变化后保留其他字段"},
+            "factor_decision": None,
+            "key_factor": "",
+            "secondary_factors": [],
+        }
+    })
+    assert cleared.status_code == 200
+    cleared_step8 = json.loads(client.get("/api/review/2026-07-10").json()["step8_plan"])
+    assert cleared_step8["factor_decision"] is None
+    assert cleared_step8["key_factor"] == ""
+    assert cleared_step8["secondary_factors"] == []
+    assert cleared_step8["summary"] == {"one_sentence": "证据变化后保留其他字段"}
+
+    _seed_factor_score_run(db_path, run_id="api-run-2")
+    invalid = client.put("/api/review/2026-07-10", json={
+        "step8_plan": {
+            "factor_decision": {
+                "score_run_id": "api-run-2",
+                "status": "overridden",
+                "primary_factor": "style_regime",
+                "input_by": "web",
+            }
+        }
+    })
+    assert invalid.status_code == 422
+    assert "override_reason" in invalid.text
+
+
+def test_review_put_rejects_factor_decision_when_score_input_changed(client, db_path):
+    _seed_factor_score_run(db_path, run_id="stale-run")
+
+    response = client.put("/api/review/2026-07-10", json={
+        "step1_market": {"notes": "评分后修改了大盘事实判断"},
+        "step8_plan": {
+            "factor_decision": {
+                "score_run_id": "stale-run",
+                "status": "accepted",
+                "input_by": "web",
+            },
+        },
+    })
+
+    assert response.status_code == 422
+    assert "score input has changed" in response.text
+
+
+def test_review_factor_score_and_confirm_share_summary_input_normalization(client, db_path):
+    _seed_factor_trade_date(db_path)
+    conn = get_connection(db_path)
+    Q.upsert_trade_calendar(conn, [{"date": "2026-07-09", "is_open": 1}])
+    conn.commit()
+    conn.close()
+    steps = {"step1_market": {"judgement": "结构偏弱"}}
+    scored = client.post("/api/review-factors/2026-07-10/score", json={
+        "steps": steps,
+        "no_llm": True,
+        "input_by": "web",
+    })
+    assert scored.status_code == 200
+
+    saved = client.put("/api/review/2026-07-10", json={
+        **steps,
+        "step8_plan": {
+            "factor_decision": {
+                "score_run_id": scored.json()["score_run_id"],
+                "status": "overridden",
+                "primary_factor": "market_node",
+                "supporting_factors": [],
+                "override_reason": "人工确认大盘节点约束更强",
+                "input_by": "web",
+            },
+        },
+    })
+
+    assert saved.status_code == 200
+
+
+def test_review_factor_partial_confirm_canonicalizes_historical_text_steps(
+    client, db_path
+):
+    _seed_factor_trade_date(db_path)
+    conn = get_connection(db_path)
+    Q.upsert_daily_review(conn, "2026-07-10", {
+        "step1_market": {"judgement": "结构偏弱"},
+    })
+    conn.commit()
+    assert isinstance(Q.get_daily_review(conn, "2026-07-10")["step1_market"], str)
+    conn.close()
+
+    scored = client.post("/api/review-factors/2026-07-10/score", json={
+        "steps": {"step1_market": {"judgement": "结构偏弱"}},
+        "no_llm": True,
+        "input_by": "web",
+    })
+    assert scored.status_code == 200
+
+    confirmed = client.put("/api/review/2026-07-10", json={
+        "step8_plan": {
+            "factor_decision": {
+                "score_run_id": scored.json()["score_run_id"],
+                "status": "overridden",
+                "primary_factor": "market_node",
+                "supporting_factors": [],
+                "override_reason": "人工确认大盘节点约束更强",
+                "input_by": "web",
+            },
+        },
+    })
+    assert confirmed.status_code == 200
+
+    unrelated = client.put("/api/review/2026-07-10", json={
+        "step7_positions": {"notes": "仅更新持仓复盘"},
+    })
+    assert unrelated.status_code == 200
+    step8 = json.loads(client.get("/api/review/2026-07-10").json()["step8_plan"])
+    assert step8["factor_decision"]["score_run_id"] == scored.json()["score_run_id"]
+
+
+def test_review_factor_confirmation_checks_digest_inside_write_transaction(
+    client, db_path, monkeypatch
+):
+    import api.routes.review as review_route
+
+    _seed_factor_score_run(db_path, run_id="atomic-run")
+    original = review_route.build_review_prefill
+    observed = {"in_transaction": False}
+
+    def checked_prefill(conn, date):
+        observed["in_transaction"] = conn.in_transaction
+        return original(conn, date)
+
+    monkeypatch.setattr(review_route, "build_review_prefill", checked_prefill)
+    response = client.put("/api/review/2026-07-10", json={
+        "step8_plan": {
+            "factor_decision": {
+                "score_run_id": "atomic-run",
+                "status": "accepted",
+                "input_by": "web",
+            },
+        },
+    })
+
+    assert response.status_code == 200
+    assert observed["in_transaction"] is True
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "error_type"),
+    [
+        ("unexpected", "value", "extra_forbidden"),
+        ("input_by", 123, "string_type"),
+        ("confirmed_outcome", "almost_hit", "literal_error"),
+        ("source_date", 20260710, "string_type"),
+        ("score_run_id", ["api-run-1"], "string_type"),
+        ("evaluation_note", False, "string_type"),
+    ],
+)
+def test_review_factor_evaluation_rejects_non_schema_payloads_before_write(
+    client, db_path, field, value, error_type
+):
+    _seed_factor_score_run(db_path)
+    conn = get_connection(db_path)
+    Q.upsert_trade_calendar(conn, [{"date": "2026-07-13", "is_open": 1}])
+    conn.commit()
+    conn.close()
+    body = {
+        "source_date": "2026-07-10",
+        "score_run_id": "api-run-1",
+        "confirmed_outcome": "not_applicable",
+        "evaluation_note": "当日未完成复盘",
+        "input_by": "web",
+        field: value,
+    }
+
+    response = client.put(
+        "/api/review-factors/2026-07-13/evaluation",
+        json=body,
+    )
+
+    conn = get_connection(db_path)
+    evaluation_count = conn.execute(
+        "SELECT COUNT(*) FROM daily_review_factor_evaluations"
+    ).fetchone()[0]
+    conn.close()
+    detail = response.json()["detail"]
+
+    assert response.status_code == 422
+    assert isinstance(detail, list)
+    assert any(
+        error["loc"][-1] == field and error["type"] == error_type
+        for error in detail
+    )
+    assert evaluation_count == 0
+
+
+@pytest.mark.parametrize("field", ["source_date", "score_run_id"])
+@pytest.mark.parametrize("blank", ["", "  \t"])
+def test_review_factor_evaluation_put_rejects_explicit_blank_lookup_fields(
+    client, db_path, field, blank
+):
+    _seed_factor_score_run(db_path)
+    conn = get_connection(db_path)
+    Q.upsert_trade_calendar(conn, [{"date": "2026-07-13", "is_open": 1}])
+    conn.commit()
+    conn.close()
+    before = _factor_persistence_counts(db_path)
+    body = {
+        "source_date": "2026-07-10",
+        "score_run_id": "api-run-1",
+        "confirmed_outcome": "not_applicable",
+        "input_by": "web",
+        field: blank,
+    }
+
+    response = client.put(
+        "/api/review-factors/2026-07-13/evaluation",
+        json=body,
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert isinstance(detail, list)
+    assert any(error["loc"][-1] == field for error in detail)
+    assert _factor_persistence_counts(db_path) == before
+
+
+@pytest.mark.parametrize("field", ["source_date", "score_run_id"])
+@pytest.mark.parametrize("blank", ["", "  \t"])
+def test_review_factor_evaluation_get_rejects_explicit_blank_lookup_fields(
+    client, db_path, field, blank
+):
+    _seed_factor_score_run(db_path)
+    conn = get_connection(db_path)
+    Q.upsert_trade_calendar(conn, [{"date": "2026-07-13", "is_open": 1}])
+    conn.commit()
+    conn.close()
+    before = _factor_persistence_counts(db_path)
+    params = {
+        "source_date": "2026-07-10",
+        "score_run_id": "api-run-1",
+        field: blank,
+    }
+
+    response = client.get(
+        "/api/review-factors/2026-07-13/evaluation",
+        params=params,
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert isinstance(detail, list)
+    assert any(error["loc"][-1] == field for error in detail)
+    assert _factor_persistence_counts(db_path) == before
+
+
+def test_review_factor_evaluation_lookup_fields_strip_surrounding_whitespace(
+    client, db_path
+):
+    _seed_factor_score_run(db_path)
+    conn = get_connection(db_path)
+    Q.upsert_trade_calendar(conn, [{"date": "2026-07-13", "is_open": 1}])
+    conn.commit()
+    conn.close()
+
+    suggestion = client.get(
+        "/api/review-factors/2026-07-13/evaluation",
+        params={
+            "source_date": "  2026-07-10\t",
+            "score_run_id": "  api-run-1\t",
+        },
+    )
+    confirmed = client.put(
+        "/api/review-factors/2026-07-13/evaluation",
+        json={
+            "source_date": "  2026-07-10\t",
+            "score_run_id": "  api-run-1\t",
+            "confirmed_outcome": "not_applicable",
+            "input_by": "web",
+        },
+    )
+
+    assert suggestion.status_code == 200
+    assert suggestion.json()["source_review_date"] == "2026-07-10"
+    assert suggestion.json()["score_run_id"] == "api-run-1"
+    assert confirmed.status_code == 200
+    assert confirmed.json()["source_review_date"] == "2026-07-10"
+    assert confirmed.json()["score_run_id"] == "api-run-1"
+
+
+def test_review_factor_evaluation_openapi_keeps_required_body_fields(client):
+    openapi = client.app.openapi()
+    operation = openapi["paths"]["/api/review-factors/{date}/evaluation"]["put"]
+    request_body = operation["requestBody"]
+    assert request_body["required"] is True
+
+    schema_ref = request_body["content"]["application/json"]["schema"]["$ref"]
+    schema_name = schema_ref.rsplit("/", 1)[-1]
+    request_schema = openapi["components"]["schemas"][schema_name]
+    assert set(request_schema["required"]) == {"confirmed_outcome", "input_by"}
+    assert request_schema["additionalProperties"] is False
+
+
+def test_review_factor_evaluation_is_strict_and_confirmable(client, db_path):
+    _seed_factor_score_run(db_path)
+    conn = get_connection(db_path)
+    Q.upsert_trade_calendar(conn, [
+        {"date": "2026-07-10", "is_open": 1},
+        {"date": "2026-07-11", "is_open": 0},
+        {"date": "2026-07-13", "is_open": 1},
+    ])
+    conn.commit()
+    conn.close()
+
+    suggestion = client.get(
+        "/api/review-factors/2026-07-13/evaluation",
+        params={"source_date": "2026-07-10", "score_run_id": "api-run-1"},
+    )
+    assert suggestion.status_code == 200
+    assert suggestion.json()["system_outcome"] == "not_applicable"
+    assert suggestion.json()["source_review_date"] == "2026-07-10"
+
+    confirmed = client.put("/api/review-factors/2026-07-13/evaluation", json={
+        "source_date": "2026-07-10",
+        "score_run_id": "api-run-1",
+        "confirmed_outcome": "not_applicable",
+        "evaluation_note": "当日未完成复盘",
+        "input_by": "web",
+    })
+    assert confirmed.status_code == 200
+    assert confirmed.json()["confirmed_outcome"] == "not_applicable"
+
+    wrong_day = client.get(
+        "/api/review-factors/2026-07-11/evaluation",
+        params={"source_date": "2026-07-10", "score_run_id": "api-run-1"},
+    )
+    assert wrong_day.status_code == 422
+    assert "evaluation_trade_date must be an open trade date" in wrong_day.text
+
+
+def test_review_factor_evaluation_defaults_to_success_parent_before_failed_retry(
+    client, db_path
+):
+    _seed_factor_score_run(db_path, run_id="api-parent", status="success")
+    _seed_factor_score_run(
+        db_path,
+        run_id="api-failed-retry",
+        status="factor_failed",
+        retry_of_run_id="api-parent",
+    )
+    conn = get_connection(db_path)
+    Q.upsert_trade_calendar(conn, [
+        {"date": "2026-07-10", "is_open": 1},
+        {"date": "2026-07-13", "is_open": 1},
+    ])
+    conn.commit()
+    conn.close()
+
+    response = client.get(
+        "/api/review-factors/2026-07-13/evaluation",
+        params={"source_date": "2026-07-10"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["score_run_id"] == "api-parent"
+
+
+def test_review_factor_metrics_endpoint(client, db_path):
+    _seed_factor_score_run(db_path)
+
+    response = client.get("/api/review-factors/metrics", params={"days": 20})
+
+    assert response.status_code == 200
+    assert response.json()["runs"] == 1
+    assert response.json()["days"] == 20
+    assert client.get("/api/review-factors/metrics", params={"days": 0}).status_code == 422
+
+
+def test_factor_score_confirm_and_evaluate_never_write_trade_drafts_or_plans(
+    client, db_path
+):
+    conn = get_connection(db_path)
+    Q.upsert_trade_calendar(conn, [
+        {"date": "2026-07-10", "is_open": 1},
+        {"date": "2026-07-13", "is_open": 1},
+    ])
+    before = {
+        "drafts": conn.execute("SELECT COUNT(*) FROM trade_drafts").fetchone()[0],
+        "plans": conn.execute("SELECT COUNT(*) FROM trade_plans").fetchone()[0],
+    }
+    conn.commit()
+    conn.close()
+
+    steps = {"step6_nodes": {"systemic_risk": True}}
+    scored = client.post("/api/review-factors/2026-07-10/score", json={
+        "steps": steps,
+        "no_llm": True,
+        "input_by": "web",
+    })
+    assert scored.status_code == 200
+    confirmed = client.put("/api/review/2026-07-10", json={
+        **steps,
+        "step8_plan": {
+            "factor_decision": {
+                "score_run_id": scored.json()["score_run_id"],
+                "status": "undetermined",
+                "input_by": "web",
+            },
+        },
+    })
+    assert confirmed.status_code == 200
+    assert client.put("/api/review/2026-07-13", json={
+        "step1_market": {"notes": "完成 T+1 复盘"},
+    }).status_code == 200
+    evaluated = client.put("/api/review-factors/2026-07-13/evaluation", json={
+        "source_date": "2026-07-10",
+        "score_run_id": scored.json()["score_run_id"],
+        "confirmed_outcome": "missing_data",
+        "input_by": "web",
+    })
+    assert evaluated.status_code == 200
+
+    conn = get_connection(db_path)
+    after = {
+        "drafts": conn.execute("SELECT COUNT(*) FROM trade_drafts").fetchone()[0],
+        "plans": conn.execute("SELECT COUNT(*) FROM trade_plans").fetchone()[0],
+    }
+    conn.close()
+    assert after == before

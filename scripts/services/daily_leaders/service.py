@@ -10,6 +10,8 @@ from services.daily_leaders.candidates import build_candidates
 from services.daily_leaders.llm import LEADER_ATTRIBUTE_ROLES, enrich_with_llm_reason
 from services.daily_leaders.store import _safe_date, read_proposal, write_proposal
 from services.review_leaders import build_review_with_step5, sync_leader_tracking_from_step5
+from services.trinity_factor.cycle import invalidate_factor_decision
+from services.trinity_factor.review_input import parse_review_step
 
 
 DEFAULT_MAX_CONFIRMATION_CANDIDATES = 30
@@ -240,11 +242,24 @@ def confirm(
         "top_leaders": step5_leaders,
         "notes": f"daily-leaders confirmed by {actor}",
     }
-    existing = Q.get_daily_review(conn, date) or {}
-    payload = build_review_with_step5(existing, step5)
-    Q.upsert_daily_review(conn, date, payload)
-    synced = sync_leader_tracking_from_step5(conn, date, step5)
-    conn.commit()
+    if conn.in_transaction:
+        raise RuntimeError("daily-leaders confirm requires a clean transaction boundary")
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        existing = Q.get_daily_review(conn, date) or {}
+        payload = build_review_with_step5(existing, step5)
+        if parse_review_step(existing.get("step5_leaders")) != step5:
+            cleared_step8, invalidated = invalidate_factor_decision(
+                existing.get("step8_plan")
+            )
+            if invalidated:
+                payload["step8_plan"] = cleared_step8
+        Q.upsert_daily_review(conn, date, payload)
+        synced = sync_leader_tracking_from_step5(conn, date, step5)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     return {
         "ok": True,
         "date": date,
