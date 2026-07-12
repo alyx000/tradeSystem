@@ -3360,6 +3360,48 @@ def test_review_factor_score_persists_production_market_fields_from_db(
         "decline_count": 3162,
         "limit_up_count": 42,
         "limit_down_count": 11,
+        "highest_board": 4,
+        "continuous_board_counts": {
+            "4": ["四板甲"],
+            "3": ["三板甲"],
+            "2": ["二板乙", "二板甲"],
+        },
+        "raw_data": {
+            "raw_data": {
+                "style_factors": {
+                    "cap_preference": {
+                        "csi300_chg": -0.4,
+                        "csi1000_chg": 1.1,
+                        "spread": 1.5,
+                        "relative": "偏小盘",
+                    },
+                    "board_preference": {
+                        "dominant_type": "20cm",
+                        "pct_10cm": 20.0,
+                        "pct_20cm": 75.0,
+                        "pct_30cm": 5.0,
+                    },
+                    "premium_snapshot": {
+                        "first_board": {
+                            "count": 40,
+                            "premium_median": 1.2,
+                            "open_up_rate": 0.6,
+                        },
+                    },
+                    "premium_trend": {"direction": "走强"},
+                    "promotion": {
+                        "trade_date": "2026-07-02",
+                        "prev_date": "2026-07-01",
+                        "first_to_second": {
+                            "base": 12,
+                            "promoted": 4,
+                            "rate": 0.333,
+                            "promoted_names": ["乙", "甲"],
+                        },
+                    },
+                },
+            },
+        },
     })
     conn.commit()
     conn.close()
@@ -3373,11 +3415,11 @@ def test_review_factor_score_persists_production_market_fields_from_db(
     conn = get_connection(db_path)
     stored_run = list_score_runs(conn, trade_date="2026-07-02")[0]
     conn.close()
-    market_factor = next(
-        row
+    factors = {
+        row["factor_code"]: row
         for row in stored_run["evidence_snapshot_json"]["factor_candidates"]
-        if row["factor_code"] == "market_node"
-    )
+    }
+    market_factor = factors["market_node"]
     daily_market = next(
         item
         for item in market_factor["evidence_items"]
@@ -3393,6 +3435,19 @@ def test_review_factor_score_persists_production_market_fields_from_db(
         "limit_up_count": 42,
         "limit_down_count": 11,
     }
+    assert factors["style_regime"]["evidence_quality"] == 4
+    assert factors["leader_signal"]["evidence_quality"] >= 3
+    assert {
+        item["source"]
+        for item in factors["style_regime"]["evidence_items"]
+        if item.get("kind") == "fact" and item.get("source_status") == "ok"
+    } == {"cap_relative_strength", "board_preference", "premium_regime"}
+    assert {
+        item["source"]
+        for item in factors["leader_signal"]["evidence_items"]
+        if item.get("kind") == "fact" and item.get("source_status") == "ok"
+    } >= {"ladder_structure", "promotion_realization"}
+    assert stored_run["ruleset_version"] == "trinity_ruleset_v2"
 
 
 @pytest.mark.parametrize("input_by", [None, "", "  \t"])
