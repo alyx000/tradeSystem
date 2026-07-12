@@ -200,6 +200,7 @@ def _lineage_prefill(*, promotion_date: str = "2026-07-10") -> dict:
         },
     })
     prefill["prev_market"] = {
+        "date": "2026-07-09",
         "highest_board": 4,
         "continuous_board_counts": json.dumps(
             {"4": ["四板丙", "四板乙"], "3": ["三板甲"]},
@@ -420,6 +421,7 @@ def test_leader_signal_emits_three_cards_but_two_lineage_groups() -> None:
 
     feedback = facts[2]["content"]
     assert feedback == {
+        "source_trade_date": "2026-07-09",
         "cohort_basis": "previous_highest_tier",
         "cohort_count": 2,
         "names": ["四板丙", "四板乙"],
@@ -432,6 +434,26 @@ def test_leader_signal_emits_three_cards_but_two_lineage_groups() -> None:
     }
     assert "二板甲" not in repr(feedback)
     assert "成交额噪声" not in repr(feedback)
+
+
+@pytest.mark.parametrize("raw_date", [None, "2026-02-30", "20260709"])
+def test_prior_feedback_invalid_source_date_is_stored_as_none(raw_date: object) -> None:
+    prefill = _lineage_prefill()
+    if raw_date is None:
+        prefill["prev_market"].pop("date")
+    else:
+        prefill["prev_market"]["date"] = raw_date
+
+    leader = _factor(
+        build_evidence_snapshot("2026-07-10", prefill, {}),
+        "leader_signal",
+    )
+    feedback = next(
+        item["content"] for item in _ok_facts(leader)
+        if item["source"] == "prior_core_feedback"
+    )
+
+    assert feedback["source_trade_date"] is None
 
 
 def test_same_quality_group_counts_once_even_when_sources_differ() -> None:
@@ -739,6 +761,7 @@ def test_promotion_requires_one_valid_tier() -> None:
 def test_prior_feedback_does_not_match_below_explicit_previous_highest() -> None:
     prefill = _lineage_prefill()
     prefill["prev_market"] = {
+        "date": "2026-07-09",
         "highest_board": 5,
         "continuous_board_counts": {"5": 1, "4": ["四板丙"]},
     }

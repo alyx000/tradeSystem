@@ -11,6 +11,7 @@ from typing import Any
 from utils import is_st_stock
 
 from .constants import FACTOR_CODES, SECTOR_CANDIDATE_MAX
+from .review_input import validate_trade_date
 
 RULESET_VERSION = "trinity_ruleset_v2"
 SERVICE_SCHEMA_VERSION = "trinity_dual_score_run_v2"
@@ -633,6 +634,7 @@ def _prior_core_feedback_item(
 
     close_changes = _numeric_values(selected, "t_close_change_pct")
     content = {
+        "source_trade_date": _optional_trade_date(prev_market.get("date")),
         "cohort_basis": cohort_basis,
         "cohort_count": len(selected),
         "names": _stable_strings(
@@ -655,6 +657,13 @@ def _prior_core_feedback_item(
         trade_date, "leader_signal", "prior_core_feedback", "stock",
         "leader_outcome", content,
     )
+
+
+def _optional_trade_date(value: Any) -> str | None:
+    try:
+        return validate_trade_date(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _lineage_fact(

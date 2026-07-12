@@ -270,6 +270,7 @@ def _leader_prefill(
     highest_board: int | None,
     top_names: list[str],
     feedback_close_change: float | None = None,
+    feedback_source_date: str | None = None,
     feedback_limit_up: bool = False,
     feedback_name: str = "龙头甲",
     with_promotion: bool = False,
@@ -319,6 +320,8 @@ def _leader_prefill(
             "highest_board": 4,
             "continuous_board_counts": {"4": [feedback_name]},
         }
+        if feedback_source_date is not None:
+            prefill["prev_market"]["date"] = feedback_source_date
     return prefill
 
 
@@ -832,6 +835,7 @@ def test_t1_leader_dimensions_determine_structural_outcome(
         highest_board=actual_height,
         top_names=actual_names,
         feedback_close_change=feedback_close,
+        feedback_source_date="2026-07-10",
         feedback_limit_up=feedback_limit_up,
     )
 
@@ -861,6 +865,92 @@ def test_t1_leader_dimensions_determine_structural_outcome(
     assert comparison["positive_dimensions"] == expected_positive
 
 
+@pytest.mark.parametrize(
+    (
+        "feedback_source_date", "expected_actual_source_date",
+        "expected_feedback", "expected_outcome", "expected_comparable",
+    ),
+    [
+        ("2026-07-09", "2026-07-09", None, "partial", 2),
+        ("2026-07-10", "2026-07-10", True, "hit", 3),
+        (None, None, None, "partial", 2),
+        ("2026-02-30", None, None, "partial", 2),
+    ],
+    ids=("stale", "matching", "missing", "invalid"),
+)
+def test_t1_leader_feedback_requires_matching_source_date(
+    conn,
+    feedback_source_date: str | None,
+    expected_actual_source_date: str | None,
+    expected_feedback: bool | None,
+    expected_outcome: str,
+    expected_comparable: int,
+) -> None:
+    source_prefill = _leader_prefill(
+        date="2026-07-10", highest_board=4, top_names=["龙头甲"]
+    )
+    actual_prefill = _leader_prefill(
+        date="2026-07-13",
+        highest_board=4,
+        top_names=["龙头乙"],
+        feedback_close_change=2.0,
+        feedback_source_date=feedback_source_date,
+        feedback_name="龙头甲",
+    )
+
+    suggestion = _suggest_for_prefills(
+        conn,
+        primary="leader_signal",
+        source_prefill=source_prefill,
+        actual_prefill=actual_prefill,
+    )
+
+    assert suggestion["system_outcome"] == expected_outcome
+    comparison = suggestion["actual_evidence_json"]["comparison"]
+    assert comparison["expected_feedback_source_date"] == "2026-07-10"
+    assert comparison["actual_feedback_source_date"] == expected_actual_source_date
+    assert comparison["dimension_results"]["feedback"] is expected_feedback
+    assert comparison["comparable_dimensions"] == expected_comparable
+
+
+@pytest.mark.parametrize(
+    ("source", "content"),
+    [
+        (
+            "ladder_structure",
+            {"highest_board": 1, "top_tier_names": ["首板甲"]},
+        ),
+        ("limit_ladder", [{"name": "首板甲", "nums": "1板"}]),
+    ],
+    ids=("new-highest-one", "legacy-one-board"),
+)
+def test_t1_leader_rejects_tier_below_two(
+    conn,
+    source: str,
+    content: object,
+) -> None:
+    source_snapshot = _legacy_factor_snapshot(
+        "leader_signal",
+        source=source,
+        content=content,
+    )
+    actual_prefill = _leader_prefill(
+        date="2026-07-13", highest_board=2, top_names=["首板甲"]
+    )
+
+    suggestion = _suggest_for_prefills(
+        conn,
+        primary="leader_signal",
+        source_prefill=None,
+        source_snapshot=source_snapshot,
+        actual_prefill=actual_prefill,
+    )
+
+    assert suggestion["system_outcome"] == "missing_data"
+    comparison = suggestion["actual_evidence_json"]["comparison"]
+    assert comparison["source_highest_board"] is None
+
+
 def test_t1_leader_missing_actual_ladder_structure_is_missing_data(conn) -> None:
     source_prefill = _leader_prefill(
         date="2026-07-10", highest_board=4, top_names=["龙头甲"]
@@ -870,6 +960,7 @@ def test_t1_leader_missing_actual_ladder_structure_is_missing_data(conn) -> None
         highest_board=None,
         top_names=[],
         feedback_close_change=3.0,
+        feedback_source_date="2026-07-10",
         feedback_name="龙头甲",
     )
 
@@ -945,6 +1036,7 @@ def test_t1_actual_evidence_counts_distinct_quality_groups(conn) -> None:
         highest_board=4,
         top_names=["当日龙头"],
         feedback_close_change=2.0,
+        feedback_source_date="2026-07-10",
         feedback_name="昨日龙头",
         with_promotion=True,
     )

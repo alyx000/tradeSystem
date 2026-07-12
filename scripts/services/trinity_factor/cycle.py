@@ -14,6 +14,7 @@ from db import queries as Q
 
 from .constants import FACTOR_CODES
 from .evidence import build_evidence_snapshot
+from .review_input import validate_trade_date
 from .repository import (
     get_score_run,
     list_evaluations,
@@ -367,7 +368,7 @@ def _tier_number(value: Any, *, allow_text: bool = False) -> int | None:
             normalized = normalized[:-1].strip()
         if normalized and all("0" <= char <= "9" for char in normalized):
             tier = int(normalized)
-    return tier if tier is not None and 1 <= tier <= 30 else None
+    return tier if tier is not None and 2 <= tier <= 30 else None
 
 
 def _string_set(value: Any) -> set[str]:
@@ -446,9 +447,30 @@ def _finite_number(value: Any) -> float | None:
     return normalized if math.isfinite(normalized) else None
 
 
-def _leader_feedback_result(factor: Any) -> bool | None:
+def _optional_trade_date(value: Any) -> str | None:
+    try:
+        return validate_trade_date(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _leader_feedback_source_date(factor: Any) -> str | None:
     content = _fact_content(factor, "prior_core_feedback")
     if not isinstance(content, Mapping):
+        return None
+    return _optional_trade_date(content.get("source_trade_date"))
+
+
+def _leader_feedback_result(
+    factor: Any,
+    *,
+    expected_source_date: str | None,
+) -> bool | None:
+    content = _fact_content(factor, "prior_core_feedback")
+    if not isinstance(content, Mapping):
+        return None
+    actual_source_date = _optional_trade_date(content.get("source_trade_date"))
+    if expected_source_date is None or actual_source_date != expected_source_date:
         return None
     limit_up_count = _finite_integer(content.get("limit_up_count"))
     if limit_up_count is not None and limit_up_count < 0:
@@ -585,6 +607,12 @@ def _compare_t1_factor(
     if factor_code == "leader_signal":
         source_structure = _leader_structure_signature(source_factor)
         actual_structure = _leader_structure_signature(actual_factor)
+        expected_feedback_source_date = (
+            _optional_trade_date(source_snapshot.get("trade_date"))
+            if isinstance(source_snapshot, Mapping)
+            else None
+        )
+        actual_feedback_source_date = _leader_feedback_source_date(actual_factor)
         source_highest = source_structure[0] if source_structure is not None else None
         actual_highest = actual_structure[0] if actual_structure is not None else None
         source_names = source_structure[1] if source_structure is not None else set()
@@ -601,7 +629,10 @@ def _compare_t1_factor(
                 if source_names and actual_structure is not None
                 else None
             ),
-            "feedback": _leader_feedback_result(actual_factor),
+            "feedback": _leader_feedback_result(
+                actual_factor,
+                expected_source_date=expected_feedback_source_date,
+            ),
         }
         comparable_dimensions = sum(
             result is not None for result in dimension_results.values()
@@ -616,6 +647,8 @@ def _compare_t1_factor(
             "source_top_names": sorted(source_names),
             "actual_top_names": sorted(actual_names),
             "identity_overlap": sorted(identity_overlap),
+            "expected_feedback_source_date": expected_feedback_source_date,
+            "actual_feedback_source_date": actual_feedback_source_date,
             "dimension_results": dimension_results,
             "comparable_dimensions": comparable_dimensions,
             "positive_dimensions": positive_dimensions,
