@@ -2,13 +2,16 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping, Sequence
+from math import isfinite
+from statistics import median
 from typing import Any
 
 from .constants import FACTOR_CODES, SECTOR_CANDIDATE_MAX
 
-RULESET_VERSION = "trinity_ruleset_v1"
-SERVICE_SCHEMA_VERSION = "trinity_dual_score_run_v1"
+RULESET_VERSION = "trinity_ruleset_v2"
+SERVICE_SCHEMA_VERSION = "trinity_dual_score_run_v2"
 
 _FACTOR_STEP_MAP = {
     "market_node": ("step1_market", "step6_nodes"),
@@ -52,7 +55,7 @@ def build_evidence_snapshot(
                 })
 
         quality = _evidence_quality(items)
-        critical_missing = not any(item.get("kind") == "fact" for item in items)
+        critical_missing = not any(_is_available_objective_fact(item) for item in items)
         caps: dict[str, int] = {}
         if critical_missing:
             caps = {
@@ -71,12 +74,18 @@ def build_evidence_snapshot(
         evidence_ids = [
             item["evidence_id"]
             for item in items
-            if item.get("polarity") != "counter"
+            if (
+                _is_llm_referenceable(item)
+                and item.get("polarity") != "counter"
+            )
         ]
         counter_ids = [
             item["evidence_id"]
             for item in items
-            if item.get("polarity") == "counter"
+            if (
+                _is_llm_referenceable(item)
+                and item.get("polarity") == "counter"
+            )
         ]
         t1_check_id = f"{trade_date}:{factor_code}:t1"
         factor_candidates.append({
@@ -93,9 +102,9 @@ def build_evidence_snapshot(
                 "description": _FACTOR_T1_LABELS[factor_code],
             }],
             "objective_source_count": len({
-                str(item.get("source") or "")
+                str(item.get("quality_group") or item.get("source") or "")
                 for item in items
-                if item.get("kind") == "fact"
+                if _is_available_objective_fact(item)
             }),
         })
 
@@ -176,13 +185,33 @@ def build_sector_llm_input(
 
 def _factor_llm_card(candidate: Mapping[str, Any]) -> dict[str, Any]:
     """只暴露 LLM 可引用的因子证据，隐藏程序规则与评分元数据。"""
+    evidence_items = [
+        {
+            str(key): value
+            for key, value in item.items()
+            if key != "quality_group"
+        }
+        for item in candidate.get("evidence_items") or []
+        if isinstance(item, Mapping) and _is_llm_referenceable(item)
+    ]
+    visible_ids = {
+        str(item.get("evidence_id"))
+        for item in evidence_items
+        if item.get("evidence_id")
+    }
     return {
         "factor_code": candidate["factor_code"],
-        "evidence_items": candidate.get("evidence_items") or [],
-        "allowed_evidence_ids": candidate.get("allowed_evidence_ids") or [],
-        "allowed_counter_evidence_ids": (
-            candidate.get("allowed_counter_evidence_ids") or []
-        ),
+        "evidence_items": evidence_items,
+        "allowed_evidence_ids": sorted({
+            str(evidence_id)
+            for evidence_id in candidate.get("allowed_evidence_ids") or []
+            if str(evidence_id) in visible_ids
+        }),
+        "allowed_counter_evidence_ids": sorted({
+            str(evidence_id)
+            for evidence_id in candidate.get("allowed_counter_evidence_ids") or []
+            if str(evidence_id) in visible_ids
+        }),
         "allowed_t1_check_ids": candidate.get("allowed_t1_check_ids") or [],
         "t1_checks": candidate.get("t1_checks") or [],
     }
@@ -266,6 +295,7 @@ def _factor_objective_items(
 ) -> dict[str, list[dict[str, Any]]]:
     out = {factor_code: [] for factor_code in FACTOR_CODES}
     market = prefill.get("market")
+    market = market if isinstance(market, Mapping) else {}
     if isinstance(market, Mapping):
         market_fact = _pick_fields(
             market,
@@ -285,13 +315,8 @@ def _factor_objective_items(
                 market_fact,
             ))
         style = market.get("style_factors")
-        if isinstance(style, Mapping) and style:
-            out["style_regime"].append(_fact_item(
-                f"{trade_date}:style_regime:style_factors",
-                "style_factors",
-                "style",
-                _json_safe_value(style),
-            ))
+        style = style if isinstance(style, Mapping) else {}
+        out["style_regime"].extend(_style_objective_items(trade_date, style))
 
     signals = prefill.get("review_signals")
     if isinstance(signals, Mapping):
@@ -305,16 +330,9 @@ def _factor_objective_items(
                     "market",
                     _json_safe_value(structure_rows),
                 ))
-        emotion_signals = signals.get("emotion")
-        if isinstance(emotion_signals, Mapping):
-            ladder_rows = emotion_signals.get("ladder_rows")
-            if _has_content(ladder_rows):
-                out["leader_signal"].append(_fact_item(
-                    f"{trade_date}:leader_signal:ladder",
-                    "limit_ladder",
-                    "stock",
-                    _json_safe_value(ladder_rows),
-                ))
+    out["leader_signal"].extend(
+        _leader_objective_items(trade_date, prefill, market, signals)
+    )
 
     for candidate in sector_candidates:
         for item in candidate.get("evidence_items") or []:
@@ -335,6 +353,241 @@ def _factor_objective_items(
     return out
 
 
+def _style_objective_items(
+    trade_date: str,
+    style: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    cards: list[dict[str, Any]] = []
+    for raw_key, source, quality_group, fields in (
+        ("cap_preference", "cap_relative_strength", "index_relative_strength",
+         ("csi300_chg", "csi1000_chg", "spread", "relative")),
+        ("board_preference", "board_preference", "limit_board_mix",
+         ("dominant_type", "pct_10cm", "pct_20cm", "pct_30cm")),
+    ):
+        raw = style.get(raw_key)
+        content = _pick_fields(raw, fields) if isinstance(raw, Mapping) else {}
+        if content:
+            cards.append(_lineage_fact(
+                trade_date, "style_regime", source, "style", quality_group, content
+            ))
+
+    snapshot = style.get("premium_snapshot")
+    groups: dict[str, Any] = {}
+    has_sample = False
+    if isinstance(snapshot, Mapping):
+        for name in (
+            "first_board", "first_board_10cm", "first_board_20cm",
+            "first_board_30cm", "second_board", "third_board_plus",
+            "capacity_top10",
+        ):
+            raw = snapshot.get(name)
+            if not isinstance(raw, Mapping):
+                continue
+            compact = _pick_fields(raw, ("count", "premium_median", "open_up_rate"))
+            if compact:
+                groups[name] = compact
+                count = _to_number(raw.get("count"))
+                has_sample |= count is None or count > 0
+    if groups and has_sample:
+        premium_trend = style.get("premium_trend")
+        if isinstance(premium_trend, Mapping) and premium_trend.get("direction") is not None:
+            groups["trend_direction"] = _json_safe_value(
+                premium_trend.get("direction")
+            )
+        groups["capacity_proxy"] = True
+        cards.append(_lineage_fact(
+            trade_date, "style_regime", "premium_regime", "style",
+            "premium_realization", groups,
+        ))
+    return cards
+
+
+def _leader_objective_items(
+    trade_date: str,
+    prefill: Mapping[str, Any],
+    market: Mapping[str, Any],
+    signals: Any,
+) -> list[dict[str, Any]]:
+    style = market.get("style_factors")
+    style = style if isinstance(style, Mapping) else {}
+    return [item for item in (
+        _ladder_structure_item(trade_date, market, signals),
+        _promotion_realization_item(trade_date, style),
+        _prior_core_feedback_item(trade_date, prefill, style),
+    ) if item is not None]
+
+
+def _ladder_structure_item(
+    trade_date: str,
+    market: Mapping[str, Any],
+    signals: Any,
+) -> dict[str, Any] | None:
+    counts, names_by_tier = _parse_ladder_counts(
+        market.get("continuous_board_counts")
+    )
+    ladder_rows: Any = None
+    if isinstance(signals, Mapping):
+        emotion = signals.get("emotion")
+        if isinstance(emotion, Mapping):
+            ladder_rows = emotion.get("ladder_rows")
+
+    row_names: dict[int, list[str]] = {}
+    if isinstance(ladder_rows, Sequence) and not isinstance(ladder_rows, (str, bytes)):
+        for row in ladder_rows:
+            if not isinstance(row, Mapping):
+                continue
+            tier = _tier_number(row.get("nums"))
+            name = _clean_stock_name(row.get("name"))
+            if tier is None or tier < 2 or not name:
+                continue
+            row_names.setdefault(tier, []).append(name)
+
+    for tier, names in row_names.items():
+        if counts.get(tier, 0) <= 0:
+            counts[tier] = len(set(names))
+        names_by_tier.setdefault(tier, []).extend(names)
+
+    explicit_highest = _tier_number(market.get("highest_board"))
+    highest_candidates = list(counts) + list(names_by_tier)
+    if explicit_highest is not None and explicit_highest >= 2:
+        highest_candidates.append(explicit_highest)
+    highest_board = max(highest_candidates, default=0)
+    tier_counts = [
+        {"tier": tier, "count": counts[tier]}
+        for tier in sorted(counts, reverse=True)[:20]
+        if tier >= 2 and counts[tier] > 0
+    ]
+    content = {
+        "tier_counts": tier_counts,
+        "top_tier_names": _stable_strings(names_by_tier.get(highest_board, [])),
+        "highest_board": highest_board,
+        "consecutive_count": sum(row["count"] for row in tier_counts),
+    }
+    if highest_board >= 2 or tier_counts:
+        return _lineage_fact(
+            trade_date, "leader_signal", "ladder_structure", "stock",
+            "limit_event", content,
+        )
+    return None
+
+
+def _promotion_realization_item(
+    trade_date: str,
+    style: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    promotion = style.get("promotion")
+    if (
+        not isinstance(promotion, Mapping)
+        or str(promotion.get("trade_date") or "") != trade_date
+    ):
+        return None
+
+    content: dict[str, Any] = {}
+    has_sample = False
+    for group_name in ("first_to_second", "second_to_third"):
+        raw_group = promotion.get(group_name)
+        if not isinstance(raw_group, Mapping):
+            continue
+        base = _to_int(raw_group.get("base"))
+        promoted = _to_int(raw_group.get("promoted"))
+        rate = _to_number(raw_group.get("rate"))
+        content[group_name] = {
+            "base": base,
+            "promoted": promoted,
+            "rate": rate,
+            "promoted_names": _stable_strings(
+                raw_group.get("promoted_names") or [],
+                limit=10,
+            ),
+        }
+        has_sample = has_sample or bool(base and base > 0)
+    if content and has_sample:
+        return _lineage_fact(
+            trade_date, "leader_signal", "promotion_realization", "stock",
+            "leader_outcome", content,
+        )
+    return None
+
+
+def _prior_core_feedback_item(
+    trade_date: str,
+    prefill: Mapping[str, Any],
+    style: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    popularity = style.get("popularity")
+    if (
+        not isinstance(popularity, Sequence)
+        or isinstance(popularity, (str, bytes))
+    ):
+        return None
+    consecutive_rows = [
+        row for row in popularity
+        if isinstance(row, Mapping) and _source_includes(row.get("source"), "consecutive")
+    ]
+    if not consecutive_rows:
+        return None
+
+    prev_market = prefill.get("prev_market")
+    prev_market = prev_market if isinstance(prev_market, Mapping) else {}
+    _, prev_names_by_tier = _parse_ladder_counts(
+        prev_market.get("continuous_board_counts")
+    )
+    prev_highest = max(prev_names_by_tier, default=0)
+    previous_top_names = set(prev_names_by_tier.get(prev_highest, []))
+    matched_rows = [
+        row for row in consecutive_rows
+        if (
+            _clean_stock_name(row.get("name")) in previous_top_names
+            or str(row.get("code") or "").strip() in previous_top_names
+        )
+    ]
+    if previous_top_names and matched_rows:
+        selected = matched_rows
+        cohort_basis = "previous_highest_tier"
+    else:
+        selected = consecutive_rows
+        cohort_basis = "all_consecutive"
+
+    close_changes = _numeric_values(selected, "t_close_change_pct")
+    content = {
+        "cohort_basis": cohort_basis,
+        "cohort_count": len(selected),
+        "names": _stable_strings(
+            [_clean_stock_name(row.get("name")) for row in selected],
+            limit=10,
+        ),
+        "codes": _stable_strings(
+            [str(row.get("code") or "").strip() for row in selected],
+            limit=10,
+        ),
+        "median_open_premium_pct": _median_or_none(
+            _numeric_values(selected, "t_open_premium_pct")
+        ),
+        "median_close_change_pct": _median_or_none(close_changes),
+        "positive_close_count": sum(value > 0 for value in close_changes),
+        "limit_up_count": sum(row.get("t_is_limit_up") is True for row in selected),
+        "limit_down_count": sum(row.get("t_is_limit_down") is True for row in selected),
+    }
+    return _lineage_fact(
+        trade_date, "leader_signal", "prior_core_feedback", "stock",
+        "leader_outcome", content,
+    )
+
+
+def _lineage_fact(
+    trade_date: str,
+    factor_code: str,
+    source: str,
+    layer: str,
+    quality_group: str,
+    content: Any,
+) -> dict[str, Any]:
+    return _fact_item(
+        f"{trade_date}:{factor_code}:{source}", source, layer, content,
+        quality_group=quality_group,
+    )
+
+
 def _fact_item(
     evidence_id: str,
     source: str,
@@ -342,8 +595,9 @@ def _fact_item(
     content: Any,
     *,
     polarity: str = "support",
+    quality_group: str | None = None,
 ) -> dict[str, Any]:
-    return {
+    item = {
         "evidence_id": evidence_id,
         "source": source,
         "source_status": "ok",
@@ -352,14 +606,134 @@ def _fact_item(
         "polarity": polarity,
         "content": content,
     }
+    if quality_group:
+        item["quality_group"] = quality_group
+    return item
+
+
+def _parse_ladder_counts(value: Any) -> tuple[dict[int, int], dict[int, list[str]]]:
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return {}, {}
+    if not isinstance(value, Mapping):
+        return {}, {}
+
+    counts: dict[int, int] = {}
+    names_by_tier: dict[int, list[str]] = {}
+    for raw_tier, raw_value in value.items():
+        tier = _tier_number(raw_tier)
+        if tier is None or tier < 2:
+            continue
+        names: list[str] = []
+        count: int | None = None
+        if isinstance(raw_value, Mapping):
+            raw_names = raw_value.get("names") or raw_value.get("stocks") or []
+            names = _stock_names(raw_names)
+            count = len(names) if names else _to_int(raw_value.get("count"))
+        elif isinstance(raw_value, Sequence) and not isinstance(raw_value, (str, bytes)):
+            names = _stock_names(raw_value)
+            count = len(names)
+        else:
+            count = _to_int(raw_value)
+        if count is not None and count > 0:
+            counts[tier] = count
+        if names:
+            names_by_tier[tier] = names
+    return counts, names_by_tier
+
+
+def _stock_names(values: Any) -> list[str]:
+    if not isinstance(values, Sequence) or isinstance(values, (str, bytes)):
+        return []
+    names = []
+    for value in values:
+        if isinstance(value, Mapping):
+            value = value.get("name") or value.get("stock_name") or value.get("code")
+        name = _clean_stock_name(value)
+        if name:
+            names.append(name)
+    return _stable_strings(names)
+
+
+def _clean_stock_name(value: Any) -> str:
+    text = str(value or "").strip()
+    normalized = text.upper().replace(" ", "")
+    if normalized.startswith(("ST", "*ST", "S*ST")):
+        return ""
+    return text
+
+
+def _tier_number(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return int(value) if float(value).is_integer() else None
+    match = re.search(r"\d+", str(value or ""))
+    return int(match.group()) if match else None
+
+
+def _stable_strings(values: Any, *, limit: int = 20) -> list[str]:
+    if not isinstance(values, Sequence) or isinstance(values, (str, bytes)):
+        return []
+    return sorted({str(value).strip() for value in values if str(value).strip()})[:limit]
+
+
+def _to_number(value: Any) -> float | None:
+    if isinstance(value, bool) or value in (None, ""):
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if isfinite(parsed) else None
+
+
+def _to_int(value: Any) -> int | None:
+    parsed = _to_number(value)
+    if parsed is None or not parsed.is_integer():
+        return None
+    return int(parsed)
+
+
+def _source_includes(value: Any, expected: str) -> bool:
+    if isinstance(value, str):
+        return expected in value
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        return expected in {str(item) for item in value}
+    return False
+
+
+def _numeric_values(rows: Sequence[Mapping[str, Any]], field: str) -> list[float]:
+    values = [_to_number(row.get(field)) for row in rows]
+    return [value for value in values if value is not None]
+
+
+def _median_or_none(values: Sequence[float]) -> float | None:
+    return float(median(values)) if values else None
+
+
+def _is_available_objective_fact(item: Mapping[str, Any]) -> bool:
+    return item.get("kind") == "fact" and item.get("source_status") == "ok"
+
+
+def _is_llm_referenceable(item: Mapping[str, Any]) -> bool:
+    if item.get("kind") == "status":
+        return False
+    if item.get("kind") == "fact":
+        return _is_available_objective_fact(item)
+    return True
 
 
 def _evidence_quality(items: Sequence[Mapping[str, Any]]) -> int:
-    fact_items = [item for item in items if item.get("kind") == "fact"]
-    judgement_items = [item for item in items if item.get("kind") == "judgement"]
+    fact_items = [item for item in items if _is_available_objective_fact(item)]
     if not fact_items:
         return 0
-    sources = {str(item.get("source") or "") for item in fact_items}
+    sources = {
+        str(item.get("quality_group") or item.get("source") or "")
+        for item in fact_items
+    }
     layers = {str(item.get("layer") or "") for item in fact_items}
     if len(sources) == 1:
         return 2

@@ -10,6 +10,7 @@ from db.connection import get_connection
 from db.migrate import migrate
 from services.trinity_factor.evidence import (
     RULESET_VERSION,
+    SERVICE_SCHEMA_VERSION,
     build_evidence_snapshot,
     build_factor_llm_input,
     build_sector_llm_input,
@@ -103,6 +104,119 @@ def _prefill(candidates: list[dict] | None = None) -> dict:
     }
 
 
+def _popularity_row(
+    code: str,
+    name: str,
+    source: list[str],
+    open_premium: float,
+    close_change: float,
+    *,
+    limit_up: bool = False,
+) -> dict:
+    return {
+        "code": code, "name": name, "source": source, "prev_close": 10.0,
+        "t_open_premium_pct": open_premium,
+        "t_close_change_pct": close_change,
+        "t_is_limit_up": limit_up,
+        "t_is_limit_down": False,
+    }
+
+
+def _lineage_prefill(*, promotion_date: str = "2026-07-10") -> dict:
+    prefill = _prefill([])
+    prefill["market"].update({
+        "highest_board": 4,
+        "continuous_board_counts": json.dumps(
+            {
+                "4": ["四板乙"],
+                "3": ["三板甲"],
+                "2": ["二板乙", "二板甲"],
+                "1": ["首板噪声"],
+            },
+            ensure_ascii=False,
+        ),
+        "seal_rate": 81.2,
+        "broken_rate": 18.8,
+        "style_factors": {
+            "cap_preference": {
+                "csi300_chg": -0.4,
+                "csi1000_chg": 1.1,
+                "spread": 1.5,
+                "relative": "偏小盘",
+                "raw_indices": {"unbounded": True},
+            },
+            "board_preference": {
+                "dominant_type": "20cm",
+                "pct_10cm": 20.0,
+                "pct_20cm": 75.0,
+                "pct_30cm": 5.0,
+                "raw_limit_up_rows": ["不应外泄"],
+            },
+            "premium_snapshot": {
+                "first_board": {"count": 40, "premium_median": 1.2, "premium_mean": 1.4, "open_up_rate": 0.6},
+                "first_board_10cm": {"count": 20, "premium_median": 0.8, "open_up_rate": 0.55},
+                "first_board_20cm": {"count": 15, "premium_median": 2.0, "open_up_rate": 0.7},
+                "first_board_30cm": {"count": 5, "premium_median": -0.3, "open_up_rate": 0.4},
+                "second_board": {"count": 8, "premium_median": 2.5, "open_up_rate": 0.75},
+                "third_board_plus": {"count": 3, "premium_median": 3.3, "open_up_rate": 0.67},
+                "capacity_top10": {"count": 10, "premium_median": 1.7, "open_up_rate": 0.7},
+                "yizi_first_open": {"count": 2, "premium_median": -1.0, "open_up_rate": 0.0},
+            },
+            "premium_trend": {
+                "direction": "走强",
+                "first_board_median_5d": [-0.2, 0.3, 1.2],
+            },
+            "promotion": {
+                "trade_date": promotion_date,
+                "prev_date": "2026-07-09",
+                "first_to_second": {
+                    "base": 12,
+                    "promoted": 4,
+                    "rate": 0.333,
+                    "promoted_names": ["乙", "甲"],
+                    "failed_names": ["失败样本A", "失败样本B"],
+                },
+                "second_to_third": {
+                    "base": 4,
+                    "promoted": 1,
+                    "rate": 0.25,
+                    "promoted_names": ["丁"],
+                    "failed_names": ["失败样本C"],
+                },
+            },
+            "popularity": [
+                _popularity_row(
+                    "000004.SZ", "四板乙", ["volume_top10", "consecutive"],
+                    3.0, 10.0, limit_up=True,
+                ),
+                _popularity_row("000003.SZ", "四板丙", ["consecutive"], -1.0, -2.0),
+                _popularity_row("000002.SZ", "二板甲", ["consecutive"], 8.0, 7.0),
+                _popularity_row(
+                    "000001.SZ", "成交额噪声", ["volume_top10"],
+                    99.0, 99.0, limit_up=True,
+                ),
+            ],
+            "switch_signals": ["不应进入客观卡"],
+        },
+    })
+    prefill["prev_market"] = {
+        "highest_board": 4,
+        "continuous_board_counts": json.dumps(
+            {"4": ["四板丙", "四板乙"], "3": ["三板甲"]},
+            ensure_ascii=False,
+        ),
+    }
+    prefill["review_signals"]["emotion"] = {
+        "ladder_rows": [
+            {"name": "二板甲", "nums": 2},
+            {"name": "四板乙", "nums": 4},
+            {"name": "首板噪声", "nums": 1},
+            {"name": "三板甲", "nums": 3},
+        ],
+    }
+    return prefill
+
+
 def _steps(**overrides) -> dict:
     steps = {
         "step1_market": {"structure": "放量普涨"},
@@ -114,6 +228,17 @@ def _steps(**overrides) -> dict:
     }
     steps.update(overrides)
     return steps
+
+
+def _factor(snapshot: dict, code: str) -> dict:
+    return next(row for row in snapshot["factor_candidates"] if row["factor_code"] == code)
+
+
+def _ok_facts(factor: dict) -> list[dict]:
+    return [
+        item for item in factor["evidence_items"]
+        if item.get("kind") == "fact" and item.get("source_status") == "ok"
+    ]
 
 
 def _run_result(*, status: str, parsed_output=None, raw=None, reason: str | None = None):
@@ -199,7 +324,224 @@ def test_evidence_snapshot_has_exact_factors_and_only_six_core_sectors() -> None
     ]
     assert len(snapshot["sector_candidates"]) == 6
     assert all(row["candidate_tier"] == "core" for row in snapshot["sector_candidates"])
-    assert snapshot["ruleset_version"] == RULESET_VERSION
+    assert snapshot["ruleset_version"] == RULESET_VERSION == "trinity_ruleset_v2"
+    assert snapshot["schema_version"] == SERVICE_SCHEMA_VERSION == "trinity_dual_score_run_v2"
+
+
+def test_style_regime_emits_three_independent_lineage_cards() -> None:
+    snapshot = build_evidence_snapshot("2026-07-10", _lineage_prefill(), {})
+
+    style = _factor(snapshot, "style_regime")
+    facts = _ok_facts(style)
+
+    assert [(item["evidence_id"], item["source"]) for item in facts] == [
+        ("2026-07-10:style_regime:cap_relative_strength", "cap_relative_strength"),
+        ("2026-07-10:style_regime:board_preference", "board_preference"),
+        ("2026-07-10:style_regime:premium_regime", "premium_regime"),
+    ]
+    assert [item["quality_group"] for item in facts] == [
+        "index_relative_strength",
+        "limit_board_mix",
+        "premium_realization",
+    ]
+    assert style["objective_source_count"] == 3
+    assert style["evidence_quality"] == 4
+    assert style["critical_missing"] is False
+    assert facts[0]["content"] == {
+        "csi300_chg": -0.4,
+        "csi1000_chg": 1.1,
+        "spread": 1.5,
+        "relative": "偏小盘",
+    }
+    assert facts[1]["content"] == {
+        "dominant_type": "20cm",
+        "pct_10cm": 20.0,
+        "pct_20cm": 75.0,
+        "pct_30cm": 5.0,
+    }
+    premium = facts[2]["content"]
+    assert premium["trend_direction"] == "走强"
+    assert premium["capacity_proxy"] is True
+    assert premium["first_board"] == {
+        "count": 40,
+        "premium_median": 1.2,
+        "open_up_rate": 0.6,
+    }
+    assert set(premium) == {
+        "first_board", "first_board_10cm", "first_board_20cm",
+        "first_board_30cm", "second_board", "third_board_plus",
+        "capacity_top10", "trend_direction", "capacity_proxy",
+    }
+    assert "switch_signals" not in repr(facts)
+    assert "popularity" not in repr(facts)
+    assert "promotion" not in repr(facts)
+
+
+def test_leader_signal_emits_three_cards_but_two_lineage_groups() -> None:
+    snapshot = build_evidence_snapshot("2026-07-10", _lineage_prefill(), {})
+
+    leader = _factor(snapshot, "leader_signal")
+    facts = _ok_facts(leader)
+
+    assert [(item["evidence_id"], item["source"]) for item in facts] == [
+        ("2026-07-10:leader_signal:ladder_structure", "ladder_structure"),
+        ("2026-07-10:leader_signal:promotion_realization", "promotion_realization"),
+        ("2026-07-10:leader_signal:prior_core_feedback", "prior_core_feedback"),
+    ]
+    assert [item["quality_group"] for item in facts] == [
+        "limit_event", "leader_outcome", "leader_outcome",
+    ]
+    assert leader["objective_source_count"] == 2
+    assert leader["evidence_quality"] == 3
+    assert leader["critical_missing"] is False
+
+    ladder = facts[0]["content"]
+    assert ladder == {
+        "tier_counts": [
+            {"tier": 4, "count": 1},
+            {"tier": 3, "count": 1},
+            {"tier": 2, "count": 2},
+        ],
+        "top_tier_names": ["四板乙"],
+        "highest_board": 4,
+        "consecutive_count": 4,
+    }
+    assert "seal_rate" not in repr(ladder)
+    assert "broken_rate" not in repr(ladder)
+
+    promotion = facts[1]["content"]
+    assert promotion["first_to_second"] == {
+        "base": 12,
+        "promoted": 4,
+        "rate": 0.333,
+        "promoted_names": ["乙", "甲"],
+    }
+    assert "failed_names" not in repr(promotion)
+
+    feedback = facts[2]["content"]
+    assert feedback == {
+        "cohort_basis": "previous_highest_tier",
+        "cohort_count": 2,
+        "names": ["四板丙", "四板乙"],
+        "codes": ["000003.SZ", "000004.SZ"],
+        "median_open_premium_pct": 1.0,
+        "median_close_change_pct": 4.0,
+        "positive_close_count": 1,
+        "limit_up_count": 1,
+        "limit_down_count": 0,
+    }
+    assert "二板甲" not in repr(feedback)
+    assert "成交额噪声" not in repr(feedback)
+
+
+def test_same_quality_group_counts_once_even_when_sources_differ() -> None:
+    candidate = _candidate(1)
+    candidate["evidence_items"] = [
+        {
+            "evidence_id": "2026-07-10:industry:板块1:one",
+            "source": "objective_one",
+            "quality_group": "shared_lineage",
+            "polarity": "support",
+            "objective": True,
+        },
+        {
+            "evidence_id": "2026-07-10:industry:板块1:two",
+            "source": "objective_two",
+            "quality_group": "shared_lineage",
+            "polarity": "support",
+            "objective": True,
+        },
+    ]
+
+    snapshot = build_evidence_snapshot("2026-07-10", _prefill([candidate]), {})
+    sector = _factor(snapshot, "sector_rhythm")
+
+    assert sector["objective_source_count"] == 1
+    assert sector["evidence_quality"] == 2
+
+
+@pytest.mark.parametrize(
+    "source_status",
+    ["source_ok_empty", "rule_filtered_empty", "missing", "source_failed"],
+)
+def test_non_ok_objective_cards_do_not_count_or_enter_allowed_ids(
+    source_status: str,
+) -> None:
+    candidate = _candidate(1)
+    candidate["data_status"] = source_status
+    objective_id = "2026-07-10:industry:板块1:unavailable"
+    candidate["evidence_items"] = [{
+        "evidence_id": objective_id,
+        "source": "unavailable_source",
+        "quality_group": "unavailable_lineage",
+        "polarity": "support",
+        "objective": True,
+    }]
+
+    snapshot = build_evidence_snapshot(
+        "2026-07-10",
+        _prefill([candidate]),
+        {"step2_sectors": {"notes": "人工判断仍可作为上下文"}},
+    )
+    sector = _factor(snapshot, "sector_rhythm")
+
+    assert sector["objective_source_count"] == 0
+    assert sector["evidence_quality"] == 0
+    assert sector["critical_missing"] is True
+    assert objective_id not in sector["allowed_evidence_ids"]
+    assert "2026-07-10:sector_rhythm:step2_sectors" in sector["allowed_evidence_ids"]
+
+
+def test_stale_promotion_is_not_an_ok_fact_or_referenceable() -> None:
+    snapshot = build_evidence_snapshot(
+        "2026-07-10",
+        _lineage_prefill(promotion_date="2026-07-09"),
+        {},
+    )
+    leader = _factor(snapshot, "leader_signal")
+    promotion_id = "2026-07-10:leader_signal:promotion_realization"
+    promotion_entries = [
+        item for item in leader["evidence_items"]
+        if item.get("evidence_id") == promotion_id
+    ]
+
+    assert [item["evidence_id"] for item in _ok_facts(leader)] == [
+        "2026-07-10:leader_signal:ladder_structure",
+        "2026-07-10:leader_signal:prior_core_feedback",
+    ]
+    assert not [
+        item for item in promotion_entries
+        if item.get("kind") == "fact" and item.get("source_status") == "ok"
+    ]
+    assert promotion_id not in leader["allowed_evidence_ids"]
+    assert promotion_id not in leader["allowed_counter_evidence_ids"]
+
+
+def test_factor_llm_cards_hide_lineage_raw_rows_and_status_only_entries() -> None:
+    snapshot = build_evidence_snapshot("2026-07-10", _lineage_prefill(), {})
+    leader = _factor(snapshot, "leader_signal")
+    leader["evidence_items"].append({
+        "evidence_id": "2026-07-10:leader_signal:internal_audit",
+        "source_status": "missing",
+        "kind": "status",
+        "content": {"raw_status_detail": "不应进入提示词"},
+    })
+    leader["allowed_evidence_ids"].append(
+        "2026-07-10:leader_signal:internal_audit"
+    )
+
+    factor_input = build_factor_llm_input(snapshot)
+    factor_text = repr(factor_input)
+
+    for forbidden in (
+        "quality_group",
+        "failed_names",
+        "prev_close",
+        "成交额噪声",
+        "raw_status_detail",
+        "2026-07-10:leader_signal:internal_audit",
+    ):
+        assert forbidden not in factor_text
 
 
 def test_evidence_snapshot_keeps_production_daily_market_fields() -> None:
@@ -272,19 +614,18 @@ def test_sector_llm_input_includes_selected_primary_factor_controlled_card(
         snapshot,
         primary_factor_code=primary_factor_code,
     )
+    factor_input = build_factor_llm_input(snapshot)
+    controlled_factor = next(
+        row for row in factor_input["factors"]
+        if row["factor_code"] == primary_factor_code
+    )
 
-    assert sector_input["primary_factor"] == {
-        "factor_code": primary_factor_code,
-        "evidence_items": source["evidence_items"],
-        "allowed_evidence_ids": source["allowed_evidence_ids"],
-        "allowed_counter_evidence_ids": source["allowed_counter_evidence_ids"],
-        "allowed_t1_check_ids": source["allowed_t1_check_ids"],
-        "t1_checks": source["t1_checks"],
-    }
+    assert source["factor_code"] == primary_factor_code
+    assert sector_input["primary_factor"] == controlled_factor
     controlled_text = repr(sector_input["primary_factor"])
     for forbidden in (
         "evidence_quality", "critical_missing", "caps", "objective_source_count",
-        "total_score", "rule_rank", "rank_reason",
+        "total_score", "rule_rank", "rank_reason", "quality_group",
     ):
         assert forbidden not in controlled_text
 
@@ -685,7 +1026,7 @@ def test_prompt_or_ruleset_change_invalidates_cache(conn, monkeypatch) -> None:
         review_steps=_steps(),
         input_by="test",
     )
-    monkeypatch.setattr(service_module, "RULESET_VERSION", "trinity_ruleset_v2")
+    monkeypatch.setattr(service_module, "RULESET_VERSION", "trinity_ruleset_v3")
     rules_changed = service.score(
         conn,
         trade_date="2026-07-10",
