@@ -71,11 +71,14 @@ def test_to_sina_symbol():
     assert _to_sina_symbol("ABCDEF.SH") is None
 
 
-def test_injection_like_code_rejected(prov, monkeypatch):
+def test_unsupported_codes_rejected_into_note(prov, monkeypatch):
+    """CSI 与注入类畸形串同走「拒绝进 note、不发请求」路径（分类逻辑由
+    test_to_sina_symbol 纯函数覆盖，此处只留一个全路径集成冒烟）"""
     monkeypatch.setattr(prov, "_fetch_raw", lambda symbols: [MAOTAI])
-    result = prov.get_realtime_quotes(["600519.SH", "600000,sz000001.SH"])
+    result = prov.get_realtime_quotes(["600519.SH", "932000.CSI", "600000,sz000001.SH"])
     assert result.success
     assert len(result.data) == 1
+    assert "932000.CSI(新浪不支持或代码非法)" in result.note
     assert "600000,SZ000001.SH(新浪不支持或代码非法)" in result.note
 
 
@@ -89,9 +92,9 @@ def test_capabilities_declared(prov):
 def test_base_provider_default_stub():
     from providers.tushare_provider import TushareProvider
 
-    result = TushareProvider().get_realtime_quotes(["600519.SH"])
-    assert not result.success
-    assert not TushareProvider().supports("get_realtime_quotes")
+    p = TushareProvider()
+    assert not p.get_realtime_quotes(["600519.SH"]).success
+    assert not p.supports("get_realtime_quotes")
 
 
 # --- 解析主路径 ---
@@ -125,27 +128,16 @@ def test_bare_code_input_normalized(prov, monkeypatch):
 
 # --- 单码脏值跳过 + note ---
 
-def test_empty_body_skipped_into_note(prov, monkeypatch):
-    dead = 'var hq_str_sz000001="";'
-    monkeypatch.setattr(prov, "_fetch_raw", lambda symbols: [MAOTAI, dead])
+@pytest.mark.parametrize("dirty_line", [
+    pytest.param('var hq_str_sz000001="";', id="empty-body"),
+    pytest.param('var hq_str_sz000001="平安银行,1,2,3";', id="short-fields"),
+    pytest.param(_line("sz000001", "平安银行", "abc", "1.0", "1.0", "1.0", "1.0", "0", "0"),
+                 id="numeric-garbage"),
+])
+def test_dirty_single_code_skipped_into_note(prov, monkeypatch, dirty_line):
+    monkeypatch.setattr(prov, "_fetch_raw", lambda symbols: [MAOTAI, dirty_line])
     result = prov.get_realtime_quotes(["600519.SH", "000001.SZ"])
     assert result.success
-    assert len(result.data) == 1
-    assert "000001.SZ" in result.note
-
-
-def test_short_fields_skipped(prov, monkeypatch):
-    weird = 'var hq_str_sz000001="平安银行,1,2,3";'
-    monkeypatch.setattr(prov, "_fetch_raw", lambda symbols: [MAOTAI, weird])
-    result = prov.get_realtime_quotes(["600519.SH", "000001.SZ"])
-    assert len(result.data) == 1
-    assert "000001.SZ" in result.note
-
-
-def test_numeric_garbage_skipped(prov, monkeypatch):
-    bad = _line("sz000001", "平安银行", "abc", "1.0", "1.0", "1.0", "1.0", "0", "0")
-    monkeypatch.setattr(prov, "_fetch_raw", lambda symbols: [MAOTAI, bad])
-    result = prov.get_realtime_quotes(["600519.SH", "000001.SZ"])
     assert len(result.data) == 1
     assert "000001.SZ" in result.note
 
@@ -180,15 +172,7 @@ def test_pre_close_zero_pct_none(prov, monkeypatch):
     assert result.data[0]["pct_chg"] is None
 
 
-# --- CSI / 非法入参 ---
-
-def test_csi_code_rejected_into_note(prov, monkeypatch):
-    monkeypatch.setattr(prov, "_fetch_raw", lambda symbols: [MAOTAI])
-    result = prov.get_realtime_quotes(["600519.SH", "932000.CSI"])
-    assert result.success
-    assert len(result.data) == 1
-    assert "932000.CSI" in result.note
-
+# --- 非法入参 ---
 
 def test_empty_codes_error(prov):
     result = prov.get_realtime_quotes([])

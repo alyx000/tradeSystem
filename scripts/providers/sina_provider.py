@@ -8,7 +8,9 @@
 800 码/请求，全市场 5609 只（含北交所）串行 6.4s。
 
 频控为已知未处理项：本期无消费方，不实现节流（YAGNI）；
-首个盘中轮询消费方接入时，须在消费侧或此处实现最小间隔（建议 >=3s）。
+首个盘中轮询消费方接入时，须在消费侧或此处实现最小间隔（建议 >=3s），
+并连同 session 跨调用复用一起处理（现在缓存 session 会让长间隔后的
+stale keep-alive 连接触发整体报错，收益却只在轮询场景才存在）。
 """
 from __future__ import annotations
 
@@ -30,6 +32,8 @@ _HEADERS = {
     "Referer": "https://finance.sina.com.cn",
 }
 _EXCHANGE_PREFIX = {"SH": "sh", "SZ": "sz", "BJ": "bj"}
+_LINE_PREFIX = "var hq_str_"
+_LINE_PREFIX_LEN = len(_LINE_PREFIX)
 
 
 def _normalize_code(raw: str) -> str:
@@ -62,9 +66,9 @@ def _to_sina_symbol(ts_code: str) -> str | None:
 def _parse_line(line: str) -> tuple[str, str] | None:
     """解析一行 `var hq_str_sh600519="...";` -> (sina_symbol, body)。非行情行返回 None。"""
     line = line.strip()
-    if not line.startswith("var hq_str_"):
+    if not line.startswith(_LINE_PREFIX):
         return None
-    head, sep, rest = line[len("var hq_str_"):].partition("=")
+    head, sep, rest = line[_LINE_PREFIX_LEN:].partition("=")
     if not sep:
         return None
     body = rest.strip().rstrip(";").strip('"')
