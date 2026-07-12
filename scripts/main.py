@@ -645,7 +645,7 @@ def load_config() -> dict:
 
 def setup_providers(config: dict):
     """初始化数据源注册中心"""
-    from providers import ProviderRegistry, TushareProvider, AkshareProvider, TdxProvider
+    from providers import ProviderRegistry, TushareProvider, AkshareProvider, TdxProvider, SinaProvider
 
     registry = ProviderRegistry()
 
@@ -665,6 +665,13 @@ def setup_providers(config: dict):
         ak = AkshareProvider(ak_config)
         ak.priority = ak_config.get("priority", 2)
         registry.register(ak)
+
+    # Sina（新浪实时行情，仅 get_realtime_quotes；免费无 token，默认启用）
+    sina_config = config.get("providers", {}).get("sina", {})
+    if sina_config.get("enabled", True):
+        sn = SinaProvider(sina_config)
+        sn.priority = sina_config.get("priority", 3)
+        registry.register(sn)
 
     # TDX（通达信，仅服务平均股价 880003，通过 call_specific 直连；默认启用）
     # pytdx 缺失或配置 enabled=false 时跳过，不影响其它数据源。

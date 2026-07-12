@@ -252,6 +252,37 @@ def test_partial_chunk_failure_whole_error(prov, monkeypatch):
     assert result.data is None
 
 
+# --- registry 路由 / 生产注册路径 ---
+
+def test_registry_routes_realtime_quotes(monkeypatch):
+    from providers import ProviderRegistry, SinaProvider as ExportedSina
+
+    registry = ProviderRegistry()
+    p = ExportedSina()
+    p.initialize()
+    monkeypatch.setattr(p, "_fetch_raw", lambda symbols: [MAOTAI])
+    registry.register(p)
+    result = registry.call("get_realtime_quotes", ["600519.SH"])
+    assert result.success
+    assert result.source == "sina"
+
+
+def test_setup_providers_registers_sina():
+    """生产注册路径：漏改 main.py/config 时此测试必须红"""
+    import main as main_module
+
+    registry = main_module.setup_providers({
+        "providers": {
+            "sina": {"enabled": True, "priority": 3},
+            "tdx": {"enabled": False},
+        }
+    })
+    sina = registry.get_provider("sina")
+    assert sina is not None
+    assert sina.priority == 3
+    assert sina.supports("get_realtime_quotes")
+
+
 # --- 真机抽检（SINA_SMOKE=1 时执行；周末返回收盘快照亦可验证布局） ---
 
 @pytest.mark.skipif(not os.getenv("SINA_SMOKE"), reason="真机抽检：SINA_SMOKE=1 pytest -k real_network 显式执行")
