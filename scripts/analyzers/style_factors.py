@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from datetime import date as _date
 from pathlib import Path
 
@@ -256,9 +257,11 @@ class StyleAnalyzer:
                 continue
             try:
                 with open(pm, encoding="utf-8") as f:
-                    yield yaml.safe_load(f) or {}
+                    data = yaml.safe_load(f) or {}
             except Exception:
                 continue
+            if isinstance(data, Mapping):
+                yield data
 
     def _load_prev_backfill(self, date: str) -> dict | None:
         """严格读取紧邻前一交易日（_prev_dirs[0]）的 premium_backfill。
@@ -374,6 +377,8 @@ class StyleAnalyzer:
                 with open(pm, encoding="utf-8") as f:
                     data = yaml.safe_load(f) or {}
             except Exception:
+                return None
+            if not isinstance(data, Mapping):
                 return None
             val = data.get(field)
             return val if val else None

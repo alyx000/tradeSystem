@@ -472,6 +472,71 @@ class TestStyleAnalyzer:
 
         assert result.get("popularity") == [], "T-1 yaml 损坏时不应回退读 T-2 旧人气股"
 
+    @pytest.mark.parametrize(
+        "payload",
+        [[{"unexpected": True}], "unexpected", 7],
+        ids=("list", "string", "number"),
+    )
+    def test_analyze_degrades_non_mapping_top_level_yaml(
+        self,
+        tmp_path,
+        payload,
+    ):
+        """合法 YAML 标量/数组不是对象时，first_only 真实入口应按缺失降级。"""
+        import yaml
+        from analyzers.style_factors import StyleAnalyzer
+
+        day_dir = tmp_path / "2026-03-27"
+        day_dir.mkdir()
+        (day_dir / "post-market.yaml").write_text(
+            yaml.dump(payload),
+            encoding="utf-8",
+        )
+
+        with patch("analyzers.style_factors.DAILY_DIR", tmp_path):
+            result = StyleAnalyzer().analyze(
+                self._make_raw_data(),
+                "2026-03-28",
+            )
+
+        assert result["popularity"] == []
+        assert result["promotion"] is None
+
+    @pytest.mark.parametrize(
+        "payload",
+        [[{"unexpected": True}], "unexpected", 7],
+        ids=("list", "string", "number"),
+    )
+    def test_non_first_loader_skips_non_mapping_top_level_yaml(
+        self,
+        tmp_path,
+        payload,
+    ):
+        """可回退迭代器跳过非对象 YAML，并继续读取更早的合法对象。"""
+        import yaml
+        from analyzers.style_factors import StyleAnalyzer
+
+        older_dir = tmp_path / "2026-03-26"
+        older_dir.mkdir()
+        (older_dir / "post-market.yaml").write_text(
+            yaml.dump({"legacy_field": {"value": "older"}}),
+            encoding="utf-8",
+        )
+        latest_dir = tmp_path / "2026-03-27"
+        latest_dir.mkdir()
+        (latest_dir / "post-market.yaml").write_text(
+            yaml.dump(payload),
+            encoding="utf-8",
+        )
+
+        with patch("analyzers.style_factors.DAILY_DIR", tmp_path):
+            result = StyleAnalyzer()._load_prev_field(
+                "2026-03-28",
+                "legacy_field",
+            )
+
+        assert result == {"value": "older"}
+
     def test_premium_trend(self, tmp_path):
         from analyzers.style_factors import StyleAnalyzer
         sa = StyleAnalyzer()
