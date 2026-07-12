@@ -105,6 +105,9 @@ class DataProvider(ABC):
     def get_stock_ma(self, stock_code: str, date: str, periods: list[int] | None = None) -> DataResult:
         return DataResult(data=None, source=self.name, error="not implemented")
 
+    def get_realtime_quotes(self, codes: list[str]) -> DataResult:
+        return DataResult(data=None, source=self.name, error="not implemented")
+
     def get_daily_basic(self, date: str) -> DataResult:
         return DataResult(data=None, source=self.name, error="not implemented")
 
