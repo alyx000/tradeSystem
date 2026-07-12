@@ -406,6 +406,13 @@ ARCHITECTURE_COMMANDS = [
     ["board-break", "daily", "--no-push"],
     ["board-break", "daily", "--no-llm"],
     ["board-break", "daily", "--date", "2026-07-04", "--no-push", "--no-llm"],
+    # tail-scan (盘中尾盘强势股:实时筛选 → 四维PK观察清单;无状态)
+    ["tail-scan", "daily"],
+    ["tail-scan", "daily", "--date", "2026-07-13"],
+    ["tail-scan", "daily", "--dry-run"],
+    ["tail-scan", "daily", "--no-push"],
+    ["tail-scan", "daily", "--no-llm"],
+    ["tail-scan", "daily", "--min-pct", "7", "--min-amount", "20", "--no-push", "--no-llm"],
 ]
 
 

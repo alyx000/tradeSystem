@@ -1819,6 +1819,10 @@ def build_parser() -> argparse.ArgumentParser:
     from cli.board_break import register_subparser as register_board_break_subparser
     register_board_break_subparser(subparsers)
 
+    # tail-scan (盘中尾盘强势股:14:30实时筛涨幅>7%/非ST/成交额>20亿 → 四维事实卡+LLM两两PK观察清单;无状态)
+    from cli.tail_scan import register_subparser as register_tail_scan_subparser
+    register_tail_scan_subparser(subparsers)
+
     # review factor (三位一体双层评分 + 人工确认 + T+1 回验)
     from cli.review_factors import register_subparser as register_review_factor_subparser
     register_review_factor_subparser(subparsers)
@@ -1908,6 +1912,9 @@ def main():
     elif args.command == "board-break":
         from cli import board_break as board_break_module
         board_break_module.handle_command(config, args)
+    elif args.command == "tail-scan":
+        from cli import tail_scan as tail_scan_module
+        tail_scan_module.handle_command(config, args)
     elif args.command == "review":
         from cli import review_factors as review_factors_module
         review_factors_module.handle_command(config, args)
