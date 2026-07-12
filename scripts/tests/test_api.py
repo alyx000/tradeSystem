@@ -3352,6 +3352,15 @@ def test_review_factor_score_persists_production_market_fields_from_db(
     _seed_factor_trade_date(db_path, trade_date="2026-07-02")
     conn = get_connection(db_path)
     Q.upsert_daily_market(conn, {
+        "date": "2026-07-01",
+        "highest_board": 4,
+        "continuous_board_counts": {
+            "4": ["四板甲"],
+            "3": ["三板甲"],
+            "2": ["二板甲"],
+        },
+    })
+    Q.upsert_daily_market(conn, {
         "date": "2026-07-02",
         "total_amount": 13542.7,
         "sh_index_change_pct": -2.0314,
@@ -3389,6 +3398,20 @@ def test_review_factor_score_persists_production_market_fields_from_db(
                         },
                     },
                     "premium_trend": {"direction": "走强"},
+                    "popularity": [{
+                        "code": "000001.SZ",
+                        "name": "四板甲",
+                        "source": ["consecutive"],
+                        "prev_close": 10.0,
+                        "t_open_premium_pct": 2.0,
+                        "t_close_change_pct": 5.0,
+                        "t_is_limit_up": True,
+                        "t_is_limit_down": False,
+                    }],
+                    "popularity_provenance": {
+                        "source_trade_date": "2026-07-01",
+                        "outcome_trade_date": "2026-07-02",
+                    },
                     "promotion": {
                         "trade_date": "2026-07-02",
                         "prev_date": "2026-07-01",
@@ -3436,18 +3459,96 @@ def test_review_factor_score_persists_production_market_fields_from_db(
         "limit_down_count": 11,
     }
     assert factors["style_regime"]["evidence_quality"] == 4
-    assert factors["leader_signal"]["evidence_quality"] >= 3
+    assert factors["leader_signal"]["evidence_quality"] == 3
     assert {
         item["source"]
         for item in factors["style_regime"]["evidence_items"]
         if item.get("kind") == "fact" and item.get("source_status") == "ok"
     } == {"cap_relative_strength", "board_preference", "premium_regime"}
-    assert {
+    leader_facts = {
         item["source"]
         for item in factors["leader_signal"]["evidence_items"]
         if item.get("kind") == "fact" and item.get("source_status") == "ok"
-    } >= {"ladder_structure", "promotion_realization"}
+    }
+    assert leader_facts == {
+        "ladder_structure", "promotion_realization", "prior_core_feedback",
+    }
+    prior_core_feedback = next(
+        item
+        for item in factors["leader_signal"]["evidence_items"]
+        if item.get("source") == "prior_core_feedback"
+    )
+    assert prior_core_feedback["content"] == {
+        "source_trade_date": "2026-07-01",
+        "cohort_basis": "previous_highest_tier",
+        "cohort_count": 1,
+        "names": ["四板甲"],
+        "codes": ["000001.SZ"],
+        "median_open_premium_pct": 2.0,
+        "median_close_change_pct": 5.0,
+        "positive_close_count": 1,
+        "limit_up_count": 1,
+        "limit_down_count": 0,
+    }
     assert stored_run["ruleset_version"] == "trinity_ruleset_v2"
+
+
+def test_review_factor_score_falls_back_to_promotion_for_legacy_feedback_provenance(
+    client, db_path
+):
+    from services.trinity_factor.repository import list_score_runs
+
+    _seed_factor_trade_date(db_path, trade_date="2026-07-02")
+    conn = get_connection(db_path)
+    Q.upsert_daily_market(conn, {
+        "date": "2026-07-01",
+        "highest_board": 3,
+        "continuous_board_counts": {"3": ["三板甲"], "2": ["二板甲"]},
+    })
+    Q.upsert_daily_market(conn, {
+        "date": "2026-07-02",
+        "highest_board": 3,
+        "continuous_board_counts": {"3": ["三板乙"], "2": ["二板乙"]},
+        "raw_data": {"raw_data": {"style_factors": {
+            "popularity": [{
+                "code": "000002.SZ",
+                "name": "三板甲",
+                "source": ["consecutive"],
+                "t_open_premium_pct": 1.0,
+                "t_close_change_pct": 3.0,
+                "t_is_limit_up": False,
+                "t_is_limit_down": False,
+            }],
+            "promotion": {
+                "trade_date": "2026-07-02",
+                "prev_date": "2026-07-01",
+            },
+        }}},
+    })
+    conn.commit()
+    conn.close()
+
+    response = client.post(
+        "/api/review-factors/2026-07-02/score",
+        json={"no_llm": True, "input_by": "web"},
+    )
+
+    assert response.status_code == 200
+    conn = get_connection(db_path)
+    stored_run = list_score_runs(conn, trade_date="2026-07-02")[0]
+    conn.close()
+    leader = next(
+        row
+        for row in stored_run["evidence_snapshot_json"]["factor_candidates"]
+        if row["factor_code"] == "leader_signal"
+    )
+    feedback = next(
+        item
+        for item in leader["evidence_items"]
+        if item.get("source") == "prior_core_feedback"
+    )
+    assert feedback["content"]["source_trade_date"] == "2026-07-01"
+    assert feedback["content"]["cohort_basis"] == "previous_highest_tier"
 
 
 @pytest.mark.parametrize("input_by", [None, "", "  \t"])

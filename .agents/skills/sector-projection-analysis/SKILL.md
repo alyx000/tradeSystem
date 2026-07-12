@@ -53,7 +53,7 @@ python3 main.py review factor-metrics [--days 20] [--json]
    - `main_themes`
    - `teacher_notes`
    - `industry_info`
-3. 20 日影子期可追加三位一体双层评分作**对照**：第 1 层固定比较 `market_node / sector_rhythm / style_regime / leader_signal`，程序确认主因子后把该因子的受控证据卡传入第 2 层，对确定性排序中的最多 6 个 `core` 板块评分；`watch/context` 不得升格，非客观 leader context 不得伪装为事实。规则门、证据质量、封顶和规则排序不喂给 LLM，LLM 分只代表相对重要度，不代表胜率。人工确认会在原子事务内重建当前预填与第 1～6 步证据摘要；证据变化必须先重跑评分，旧 run 不得继续确认；确认后实际改写第 1～6 步会自动清除旧决定。
+3. 20 日影子期可追加三位一体双层评分作**对照**：第 1 层固定比较 `market_node / sector_rhythm / style_regime / leader_signal`，程序确认主因子后把该因子的受控证据卡传入第 2 层，对确定性排序中的最多 6 个 `core` 板块评分。`style_regime` 只认指数相对强弱、10/20/30cm 板型混合、已实现溢价三类客观来源；`leader_signal` 只认剔 ST 连板梯队、晋级实现与前高标回验，`promotion_realization` 仅保证 outcome `trade_date` 等于评分日，`prior_core_feedback` 优先显式 `popularity_provenance`（存在但非法 / 错位即拒绝），仅 provenance 键缺失的历史数据可用同一 `promotion.prev_date / trade_date` fallback。来源日期缺失或错位、Step 5 人工最票与自动 leader 名称都不得抬高质量，后两者只作 `[判断]` context；`watch/context` 不得升格。规则门、证据质量、封顶和规则排序不喂给 LLM，LLM 分只代表相对重要度，不代表概率、胜率或建议，也不得进入 `TradeDraft` / `TradePlan`。人工确认会在原子事务内重建当前预填与第 1～6 步证据摘要；证据变化必须先重跑评分，旧 run 不得继续确认；确认后实际改写第 1～6 步会自动清除旧决定。
 4. 对每个候选板块至少给出 6 个结论：
    - 大级别阶段：`将成龙 / 主升 / 震荡 / 二波 / 衰退`
    - 连接点判断：`加强 / 减弱 / 不清楚`
