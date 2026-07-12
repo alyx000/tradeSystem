@@ -55,18 +55,36 @@ def _payload(card_a, card_b):
     return {"A": one(card_a), "B": one(card_b)}
 
 
-def _play_match(card_a, card_b, runner):
-    try:
-        text = runner(_PROMPT, _payload(card_a, card_b))
-    except Exception:
-        logger.warning("[tail-scan pk] runner 异常，重试一次", exc_info=True)
+def _safe_call(llm_runner, payload):
+    """runner 守卫（镜像 board_break.pk._safe_call）：调用前清空诊断（防上一场 timeout
+    残留误归属本场），异常收敛为 (None, True)。返回 (text, raised)。"""
+    if hasattr(llm_runner, "last_diagnostics"):
         try:
-            text = runner(_PROMPT, _payload(card_a, card_b))
+            llm_runner.last_diagnostics = None
         except Exception:
-            return None, None
+            pass  # 只读属性等极端情形：放弃清空，退化为旧行为
+    try:
+        return llm_runner(_PROMPT, payload), False
+    except Exception:
+        logger.warning("[tail-scan pk] runner 调用异常，按可重试失败处理", exc_info=True)
+        return None, True
+
+
+def _play_match(card_a, card_b, runner):
+    """单场：失败区分超时（不重试）与其它失败（重试 1 次）。返回 (winner_code, reason)；
+    无效场为 (None, None)。verdict is None 也须重试——`build_llm_runner` 在超时/OSError/
+    非零返回码/空 stdout 时都返回 None 而不是抛异常（镜像 board_break.pk._play_match）。"""
+    payload = _payload(card_a, card_b)
+    text, raised = _safe_call(runner, payload)
     verdict = parse_verdict(text)
     if verdict is None:
-        return None, None
+        diag = getattr(runner, "last_diagnostics", None)
+        if not raised and diag and diag.get("reason") == "timeout":
+            return None, None  # 本场超时（诊断已在调用前清空,归属可信）直接计无效场，不重试
+        text, _ = _safe_call(runner, payload)  # 非超时失败（含异常）：重试 1 次
+        verdict = parse_verdict(text)
+        if verdict is None:
+            return None, None
     winner = card_a["code"] if verdict["winner"] == "A" else card_b["code"]
     return winner, _filter_reason(verdict["reason"])
 
@@ -84,7 +102,7 @@ def _pool(cards, score_map):
     return ranked[: C.PK_POOL_MAX], sorted(ranked[C.PK_POOL_MAX:])
 
 
-def run_pk(fact_cards, scored, llm_runner, *, budget_seconds=180.0, clock=time.monotonic):
+def run_pk(fact_cards, scored, llm_runner, *, budget_seconds=C.PK_BUDGET_SECONDS, clock=time.monotonic):
     card_map = {}
     for c in fact_cards:
         card_map.setdefault(c.get("code"), c)
@@ -103,6 +121,9 @@ def run_pk(fact_cards, scored, llm_runner, *, budget_seconds=180.0, clock=time.m
             melted = True
             break
         winner, reason = _play_match(card_map[a], card_map[b], llm_runner)
+        if clock() - start > budget_seconds:
+            # 场后复查（镜像 board_break.pk.run_pk）：末场/单场跨预算不得落入正常排名
+            melted = True
         if winner is None:
             invalid += 1
             matches.append({"a": a, "b": b, "winner": None, "reason": None, "state": "invalid"})
@@ -112,7 +133,7 @@ def run_pk(fact_cards, scored, llm_runner, *, budget_seconds=180.0, clock=time.m
 
     attempted = len(matches)
     valid_ratio = (attempted - invalid) / attempted if attempted else 0.0
-    if melted or (attempted and invalid / attempted > 0.5):
+    if melted or (attempted and invalid / attempted > C.PK_INVALID_RATIO_MAX):
         return {"status": "melted", "wins": wins, "ranks": None, "matches": matches,
                 "invalid": invalid, "attempted": attempted, "valid_ratio": valid_ratio,
                 "excluded": excluded}

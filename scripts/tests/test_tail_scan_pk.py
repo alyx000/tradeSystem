@@ -31,3 +31,50 @@ def test_reason_redline_filtered():
     res = pk.run_pk(_cards(), _scored(), runner)
     reasons = [m["reason"] for m in res["matches"] if m["state"] == "valid"]
     assert all("买入" not in r for r in reasons)
+
+
+def test_play_match_retries_on_none_then_succeeds():
+    calls = []
+
+    def runner(prompt, payload):
+        calls.append(1)
+        if len(calls) == 1:
+            return None  # 首次返回 None（非异常，模拟 build_llm_runner 的失败语义）
+        return '{"winner": "A", "reason": "x"}'
+
+    runner.last_diagnostics = None
+    winner, reason = pk._play_match(_cards()[0], _cards()[1], runner)
+    assert len(calls) == 2  # 确认发生了重试
+    assert winner == "600001.SH"
+    assert reason == "x"
+
+
+def test_no_retry_on_timeout():
+    calls = []
+
+    def runner(prompt, payload):
+        calls.append(1)
+        runner.last_diagnostics = {"reason": "timeout"}
+        return None
+
+    runner.last_diagnostics = None
+    winner, reason = pk._play_match(_cards()[0], _cards()[1], runner)
+    assert winner is None
+    assert reason is None
+    assert len(calls) == 1  # 超时不重试
+
+
+def test_melted_on_last_match_over_budget():
+    def runner(prompt, payload):
+        return '{"winner": "A", "reason": "x"}'
+
+    # clock() 调用顺序：start=0 → pre-match 预算检查(0)未超 → _play_match 内部不调 clock
+    # → post-match 预算复查(200) 超出 → melted
+    clock_values = iter([0.0, 0.0, 200.0])
+
+    def clock():
+        return next(clock_values)
+
+    cards = _cards()  # 2 支票 → 1 对
+    res = pk.run_pk(cards, _scored(), runner, budget_seconds=180.0, clock=clock)
+    assert res["status"] == "melted"

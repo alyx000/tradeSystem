@@ -29,6 +29,8 @@ W_TAIL_STRONG = 1.0          # 收在日内高位 + 已涨停
 # —— PK 强池 ——
 PK_POOL_MAX = 12
 PK_REASON_MAX_CHARS = 80
+PK_BUDGET_SECONDS = 180.0
+PK_INVALID_RATIO_MAX = 0.5
 
 # —— 打分/事实卡阈值 ——
 FIRST_SURGE_VOL_RATIO_MIN = 0.7   # 首次放量加速：半日额/昨日全日额 下限
