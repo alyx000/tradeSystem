@@ -219,14 +219,41 @@ def _production_directional_prefill(
     }
 
 
-def _style_prefill(*, date: str, cap: str, board: str) -> dict:
+def _style_prefill(
+    *,
+    date: str,
+    cap: str | None,
+    board: str | None,
+    premium: str | None,
+) -> dict:
+    style_factors: dict = {}
+    if cap is not None:
+        style_factors["cap_preference"] = {
+            "csi300_chg": -0.4,
+            "csi1000_chg": 1.1,
+            "spread": 1.5,
+            "relative": cap,
+        }
+    if board is not None:
+        style_factors["board_preference"] = {
+            "dominant_type": board,
+            "pct_10cm": 20.0,
+            "pct_20cm": 75.0,
+            "pct_30cm": 5.0,
+        }
+    if premium is not None:
+        style_factors["premium_snapshot"] = {
+            "first_board": {
+                "count": 20,
+                "premium_median": 1.2,
+                "open_up_rate": 0.6,
+            },
+        }
+        style_factors["premium_trend"] = {"direction": premium}
     return {
         "market": {
             "date": date,
-            "style_factors": {
-                "cap_preference": {"relative": cap},
-                "board_preference": {"dominant_type": board},
-            },
+            "style_factors": style_factors,
         },
         "review_signals": {
             "market": {},
@@ -236,15 +263,116 @@ def _style_prefill(*, date: str, cap: str, board: str) -> dict:
     }
 
 
-def _leader_prefill(*, date: str, ladder_rows: list[dict]) -> dict:
-    return {
-        "market": {"date": date, "total_amount": 15000},
+def _leader_prefill(
+    *,
+    date: str,
+    highest_board: int | None,
+    top_names: list[str],
+    feedback_close_change: float | None = None,
+    feedback_limit_up: bool = False,
+    feedback_name: str = "龙头甲",
+    with_promotion: bool = False,
+) -> dict:
+    market: dict = {"date": date, "total_amount": 15000}
+    if highest_board is not None:
+        market.update({
+            "highest_board": highest_board,
+            "continuous_board_counts": {str(highest_board): top_names},
+        })
+
+    style_factors: dict = {}
+    if feedback_close_change is not None:
+        style_factors["popularity"] = [{
+            "code": "000001.SZ",
+            "name": feedback_name,
+            "source": ["consecutive"],
+            "prev_close": 10.0,
+            "t_open_premium_pct": 1.0,
+            "t_close_change_pct": feedback_close_change,
+            "t_is_limit_up": feedback_limit_up,
+            "t_is_limit_down": False,
+        }]
+        market["style_factors"] = style_factors
+    if with_promotion:
+        style_factors["promotion"] = {
+            "trade_date": date,
+            "first_to_second": {
+                "base": 2,
+                "promoted": 1,
+                "rate": 0.5,
+                "promoted_names": ["晋级甲"],
+            },
+        }
+        market["style_factors"] = style_factors
+
+    prefill = {
+        "market": market,
         "review_signals": {
             "market": {},
             "sectors": {"projection_candidates": []},
-            "emotion": {"ladder_rows": ladder_rows},
+            "emotion": {"ladder_rows": []},
         },
     }
+    if feedback_close_change is not None:
+        prefill["prev_market"] = {
+            "highest_board": 4,
+            "continuous_board_counts": {"4": [feedback_name]},
+        }
+    return prefill
+
+
+def _legacy_factor_snapshot(
+    factor_code: str,
+    *,
+    source: str,
+    content: object,
+    source_status: str | None = None,
+) -> dict:
+    fact = {
+        "evidence_id": f"2026-07-10:{factor_code}:{source}",
+        "source": source,
+        "kind": "fact",
+        "polarity": "support",
+        "content": content,
+    }
+    if source_status is not None:
+        fact["source_status"] = source_status
+    return {
+        "factor_candidates": [{
+            "factor_code": factor_code,
+            "evidence_items": [fact],
+        }],
+        "sector_candidates": [],
+        "rule_gate": {},
+    }
+
+
+def _suggest_for_prefills(
+    conn,
+    *,
+    primary: str,
+    source_prefill: dict | None,
+    actual_prefill: dict,
+    source_snapshot: dict | None = None,
+) -> dict:
+    _insert_run(
+        conn,
+        primary=primary,
+        evidence_snapshot=(
+            source_snapshot
+            if source_snapshot is not None
+            else build_evidence_snapshot("2026-07-10", source_prefill, {})
+        ),
+    )
+    Q.upsert_daily_review(conn, "2026-07-13", {"step1_market": {"notes": "已复盘"}})
+    conn.commit()
+    return suggest_t1_evaluation(
+        conn,
+        evaluation_trade_date="2026-07-13",
+        source_review_date="2026-07-10",
+        score_run_id="run-1",
+        prefill=actual_prefill,
+    )
 
 
 def test_accept_decision_syncs_legacy_fields_and_preserves_step8(conn) -> None:
@@ -369,6 +497,7 @@ def test_t1_evaluation_uses_strict_next_trade_date_and_missing_review_semantics(
         prefill=_evaluation_prefill(),
     )
     assert suggestion["system_outcome"] == "not_applicable"
+    assert suggestion["actual_evidence_json"]["counter_source_count"] == 0
 
     with pytest.raises(ValueError, match="strict next trade date"):
         suggest_t1_evaluation(
@@ -537,53 +666,234 @@ def test_t1_market_direction_reads_production_daily_market_fields(conn) -> None:
     assert comparison["actual_votes"] == [-1, -1, -1, 0]
 
 
-def test_t1_style_switch_is_miss(conn) -> None:
-    source_prefill = _style_prefill(date="2026-07-10", cap="偏小盘", board="20cm")
-    actual_prefill = _style_prefill(date="2026-07-13", cap="偏大盘", board="10cm")
-    _insert_run(
+@pytest.mark.parametrize(
+    ("source_values", "actual_values", "expected_outcome", "expected_matches"),
+    [
+        (("偏小盘", "20cm", "走强"), ("偏大盘", "10cm", "走弱"), "miss", 0),
+        (("偏小盘", "20cm", "走强"), ("偏小盘", "20cm", "走强"), "hit", 3),
+        (("偏小盘", "20cm", "走强"), ("偏小盘", "10cm", "走弱"), "partial", 1),
+        (("偏小盘", "20cm", "走强"), ("偏小盘", "20cm", "走弱"), "partial", 2),
+        (("偏小盘", None, None), (None, "20cm", None), "missing_data", 0),
+    ],
+    ids=("switch", "same", "one-match", "two-matches", "no-common"),
+)
+def test_t1_style_dimensions_are_compared_structurally(
+    conn,
+    source_values: tuple[str | None, str | None, str | None],
+    actual_values: tuple[str | None, str | None, str | None],
+    expected_outcome: str,
+    expected_matches: int,
+) -> None:
+    source_prefill = _style_prefill(
+        date="2026-07-10",
+        cap=source_values[0],
+        board=source_values[1],
+        premium=source_values[2],
+    )
+    actual_prefill = _style_prefill(
+        date="2026-07-13",
+        cap=actual_values[0],
+        board=actual_values[1],
+        premium=actual_values[2],
+    )
+
+    suggestion = _suggest_for_prefills(
         conn,
         primary="style_regime",
-        evidence_snapshot=build_evidence_snapshot("2026-07-10", source_prefill, {}),
+        source_prefill=source_prefill,
+        actual_prefill=actual_prefill,
     )
-    Q.upsert_daily_review(conn, "2026-07-13", {"step1_market": {"notes": "已复盘"}})
-    conn.commit()
 
-    suggestion = suggest_t1_evaluation(
+    assert suggestion["system_outcome"] == expected_outcome
+    comparison = suggestion["actual_evidence_json"]["comparison"]
+    assert comparison["matched_dimensions"] == expected_matches
+    assert comparison["comparable_dimensions"] == (0 if expected_outcome == "missing_data" else 3)
+
+
+def test_t1_legacy_style_composite_matches_new_style_cards(conn) -> None:
+    source_snapshot = _legacy_factor_snapshot(
+        "style_regime",
+        source="style_factors",
+        content={
+            "cap_preference": {"relative": "偏小盘"},
+            "board_preference": {"dominant_type": "20cm"},
+            "premium_trend": {"direction": "走强"},
+        },
+    )
+    actual_prefill = _style_prefill(
+        date="2026-07-13", cap="偏小盘", board="20cm", premium="走强"
+    )
+
+    suggestion = _suggest_for_prefills(
         conn,
-        evaluation_trade_date="2026-07-13",
-        source_review_date="2026-07-10",
-        score_run_id="run-1",
-        prefill=actual_prefill,
+        primary="style_regime",
+        source_prefill=None,
+        source_snapshot=source_snapshot,
+        actual_prefill=actual_prefill,
     )
 
-    assert suggestion["system_outcome"] == "miss"
-    assert suggestion["actual_evidence_json"]["comparison"]["matched_dimensions"] == 0
+    assert suggestion["system_outcome"] == "hit"
+    assert suggestion["actual_evidence_json"]["comparison"]["matched_dimensions"] == 3
 
 
-def test_t1_leader_ladder_change_is_miss(conn) -> None:
+@pytest.mark.parametrize(
+    (
+        "actual_height", "actual_names", "feedback_close", "feedback_limit_up",
+        "expected_outcome", "expected_results", "expected_positive",
+    ),
+    [
+        (5, ["龙头丙", "龙头甲"], -5.0, True, "hit", (True, True, True), 3),
+        (3, ["龙头丙"], 0.5, False, "partial", (False, False, True), 1),
+        (3, ["龙头丙"], -0.5, False, "miss", (False, False, False), 0),
+    ],
+    ids=("hit", "partial", "miss"),
+)
+def test_t1_leader_dimensions_determine_structural_outcome(
+    conn,
+    actual_height: int,
+    actual_names: list[str],
+    feedback_close: float,
+    feedback_limit_up: bool,
+    expected_outcome: str,
+    expected_results: tuple[bool, bool, bool],
+    expected_positive: int,
+) -> None:
     source_prefill = _leader_prefill(
-        date="2026-07-10", ladder_rows=[{"name": "3板", "nums": 4}]
+        date="2026-07-10", highest_board=4, top_names=["龙头乙", "龙头甲"]
     )
     actual_prefill = _leader_prefill(
-        date="2026-07-13", ladder_rows=[{"name": "2板", "nums": 1}]
+        date="2026-07-13",
+        highest_board=actual_height,
+        top_names=actual_names,
+        feedback_close_change=feedback_close,
+        feedback_limit_up=feedback_limit_up,
     )
-    _insert_run(
+
+    suggestion = _suggest_for_prefills(
         conn,
         primary="leader_signal",
-        evidence_snapshot=build_evidence_snapshot("2026-07-10", source_prefill, {}),
+        source_prefill=source_prefill,
+        actual_prefill=actual_prefill,
     )
-    Q.upsert_daily_review(conn, "2026-07-13", {"step1_market": {"notes": "已复盘"}})
-    conn.commit()
 
-    suggestion = suggest_t1_evaluation(
+    assert suggestion["system_outcome"] == expected_outcome
+    comparison = suggestion["actual_evidence_json"]["comparison"]
+    assert comparison["comparator"] == "leader_structure"
+    assert comparison["source_highest_board"] == 4
+    assert comparison["actual_highest_board"] == actual_height
+    assert comparison["source_top_names"] == ["龙头乙", "龙头甲"]
+    assert comparison["actual_top_names"] == sorted(actual_names)
+    assert comparison["identity_overlap"] == (
+        ["龙头甲"] if "龙头甲" in actual_names else []
+    )
+    assert comparison["dimension_results"] == {
+        "height": expected_results[0],
+        "identity": expected_results[1],
+        "feedback": expected_results[2],
+    }
+    assert comparison["comparable_dimensions"] == 3
+    assert comparison["positive_dimensions"] == expected_positive
+
+
+def test_t1_leader_missing_actual_ladder_structure_is_missing_data(conn) -> None:
+    source_prefill = _leader_prefill(
+        date="2026-07-10", highest_board=4, top_names=["龙头甲"]
+    )
+    actual_prefill = _leader_prefill(
+        date="2026-07-13",
+        highest_board=None,
+        top_names=[],
+        feedback_close_change=3.0,
+        feedback_name="龙头甲",
+    )
+
+    suggestion = _suggest_for_prefills(
         conn,
-        evaluation_trade_date="2026-07-13",
-        source_review_date="2026-07-10",
-        score_run_id="run-1",
-        prefill=actual_prefill,
+        primary="leader_signal",
+        source_prefill=source_prefill,
+        actual_prefill=actual_prefill,
     )
 
-    assert suggestion["system_outcome"] == "miss"
+    assert suggestion["system_outcome"] == "missing_data"
+    comparison = suggestion["actual_evidence_json"]["comparison"]
+    assert comparison["source_highest_board"] == 4
+    assert comparison["actual_highest_board"] is None
+
+
+def test_t1_legacy_limit_ladder_matches_new_ladder_structure(conn) -> None:
+    source_snapshot = _legacy_factor_snapshot(
+        "leader_signal",
+        source="limit_ladder",
+        content=[
+            {"name": "龙头甲", "nums": 4},
+            {"name": "龙头乙", "nums": 3},
+        ],
+    )
+    actual_prefill = _leader_prefill(
+        date="2026-07-13", highest_board=4, top_names=["龙头甲"]
+    )
+
+    suggestion = _suggest_for_prefills(
+        conn,
+        primary="leader_signal",
+        source_prefill=None,
+        source_snapshot=source_snapshot,
+        actual_prefill=actual_prefill,
+    )
+
+    assert suggestion["system_outcome"] == "hit"
+    comparison = suggestion["actual_evidence_json"]["comparison"]
+    assert comparison["source_highest_board"] == 4
+    assert comparison["source_top_names"] == ["龙头甲"]
+    assert comparison["positive_dimensions"] == 2
+
+
+def test_t1_explicit_non_ok_source_fact_is_ignored(conn) -> None:
+    source_snapshot = _legacy_factor_snapshot(
+        "leader_signal",
+        source="ladder_structure",
+        source_status="source_failed",
+        content={"highest_board": 4, "top_tier_names": ["龙头甲"]},
+    )
+    actual_prefill = _leader_prefill(
+        date="2026-07-13", highest_board=4, top_names=["龙头甲"]
+    )
+
+    suggestion = _suggest_for_prefills(
+        conn,
+        primary="leader_signal",
+        source_prefill=None,
+        source_snapshot=source_snapshot,
+        actual_prefill=actual_prefill,
+    )
+
+    assert suggestion["system_outcome"] == "missing_data"
+
+
+def test_t1_actual_evidence_counts_distinct_quality_groups(conn) -> None:
+    source_prefill = _leader_prefill(
+        date="2026-07-10", highest_board=4, top_names=["当日龙头"]
+    )
+    actual_prefill = _leader_prefill(
+        date="2026-07-13",
+        highest_board=4,
+        top_names=["当日龙头"],
+        feedback_close_change=2.0,
+        feedback_name="昨日龙头",
+        with_promotion=True,
+    )
+
+    suggestion = _suggest_for_prefills(
+        conn,
+        primary="leader_signal",
+        source_prefill=source_prefill,
+        actual_prefill=actual_prefill,
+    )
+
+    evidence = suggestion["actual_evidence_json"]
+    assert evidence["objective_source_count"] == 2
+    assert evidence["counter_source_count"] == 0
+    assert len(evidence["support_evidence_ids"]) == 3
 
 
 def test_t1_sector_loses_all_core_continuity_is_miss(conn) -> None:

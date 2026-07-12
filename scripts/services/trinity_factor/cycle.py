@@ -3,9 +3,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import sqlite3
 from collections import Counter, defaultdict
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from typing import Any
 
@@ -216,7 +217,14 @@ def _objective_fact_items(factor: Any) -> list[dict[str, Any]]:
     return [
         dict(item)
         for item in factor.get("evidence_items") or []
-        if isinstance(item, Mapping) and item.get("kind") == "fact"
+        if (
+            isinstance(item, Mapping)
+            and item.get("kind") == "fact"
+            and (
+                "source_status" not in item
+                or item.get("source_status") == "ok"
+            )
+        )
     ]
 
 
@@ -225,6 +233,18 @@ def _fact_content(factor: Any, source: str) -> Any:
         if item.get("source") == source:
             return item.get("content")
     return None
+
+
+def _fact_source_groups(items: Sequence[Mapping[str, Any]]) -> set[str]:
+    return {
+        group
+        for item in items
+        if (
+            group := str(
+                item.get("quality_group") or item.get("source") or ""
+            ).strip()
+        )
+    }
 
 
 def _sign(value: float) -> int:
@@ -267,35 +287,158 @@ def _market_direction(factor: Any) -> tuple[int | None, list[int]]:
 
 
 def _style_signature(factor: Any) -> dict[str, str]:
-    content = _fact_content(factor, "style_factors")
-    if not isinstance(content, Mapping):
+    new_cards = (
+        (_fact_content(factor, "cap_relative_strength"), "relative", "cap_preference"),
+        (_fact_content(factor, "board_preference"), "dominant_type", "board_preference"),
+        (_fact_content(factor, "premium_regime"), "trend_direction", "premium_trend"),
+    )
+    if any(isinstance(content, Mapping) for content, _, _ in new_cards):
+        return {
+            dimension: value
+            for content, key, dimension in new_cards
+            if (value := _mapping_string(content, key)) is not None
+        }
+
+    legacy = _fact_content(factor, "style_factors")
+    if not isinstance(legacy, Mapping):
         return {}
-    signature: dict[str, str] = {}
-    cap = content.get("cap_preference")
-    board = content.get("board_preference")
-    premium = content.get("premium_trend")
-    if isinstance(cap, Mapping) and cap.get("relative"):
-        signature["cap_preference"] = str(cap["relative"])
-    if isinstance(board, Mapping) and board.get("dominant_type"):
-        signature["board_preference"] = str(board["dominant_type"])
-    if isinstance(premium, Mapping) and premium.get("direction"):
-        signature["premium_trend"] = str(premium["direction"])
-    return signature
+    legacy_cards = (
+        (legacy.get("cap_preference"), "relative", "cap_preference"),
+        (legacy.get("board_preference"), "dominant_type", "board_preference"),
+        (legacy.get("premium_trend"), "direction", "premium_trend"),
+    )
+    return {
+        dimension: value
+        for content, key, dimension in legacy_cards
+        if (value := _mapping_string(content, key)) is not None
+    }
 
 
-def _stable_fact_signatures(factor: Any) -> set[str]:
-    signatures: set[str] = set()
-    for item in _objective_fact_items(factor):
-        signatures.add(json.dumps(
-            {
-                "source": item.get("source"),
-                "content": item.get("content"),
-            },
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        ))
-    return signatures
+def _nonempty_string(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    return normalized or None
+
+
+def _mapping_string(value: Any, key: str) -> str | None:
+    return _nonempty_string(value.get(key)) if isinstance(value, Mapping) else None
+
+
+def _finite_integer(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and math.isfinite(value) and value.is_integer():
+        return int(value)
+    return None
+
+
+def _tier_number(value: Any, *, allow_text: bool = False) -> int | None:
+    tier = _finite_integer(value)
+    if tier is None and allow_text and isinstance(value, str):
+        normalized = value.strip()
+        if normalized.endswith("板"):
+            normalized = normalized[:-1].strip()
+        if normalized and all("0" <= char <= "9" for char in normalized):
+            tier = int(normalized)
+    return tier if tier is not None and 1 <= tier <= 30 else None
+
+
+def _string_set(value: Any) -> set[str]:
+    if isinstance(value, str):
+        values: Sequence[Any] = (value,)
+    elif isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        values = value
+    else:
+        return set()
+    return {
+        normalized
+        for item in values
+        if (normalized := _nonempty_string(item)) is not None
+    }
+
+
+def _leader_structure_signature(factor: Any) -> tuple[int, set[str]] | None:
+    current = _fact_content(factor, "ladder_structure")
+    if isinstance(current, Mapping):
+        highest_board = _tier_number(current.get("highest_board"))
+        if highest_board is not None:
+            return highest_board, _string_set(current.get("top_tier_names"))
+
+    legacy = _fact_content(factor, "limit_ladder")
+    if isinstance(legacy, Mapping):
+        highest_board = _tier_number(legacy.get("highest_board"))
+        if highest_board is not None:
+            return highest_board, _string_set(legacy.get("top_tier_names"))
+        nested_rows = next(
+            (
+                legacy.get(key)
+                for key in ("ladder_rows", "rows")
+                if isinstance(legacy.get(key), Sequence)
+                and not isinstance(legacy.get(key), (str, bytes))
+            ),
+            None,
+        )
+        if nested_rows is not None:
+            rows: Sequence[Any] = nested_rows
+        elif "nums" in legacy or "tier" in legacy:
+            rows = (legacy,)
+        else:
+            rows = tuple(
+                {"nums": tier, "names": names} for tier, names in legacy.items()
+            )
+    elif isinstance(legacy, Sequence) and not isinstance(legacy, (str, bytes)):
+        rows = legacy
+    else:
+        return None
+
+    names_by_tier: dict[int, set[str]] = {}
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        tier = _tier_number(row.get("nums"), allow_text=True) or _tier_number(
+            row.get("tier"), allow_text=True
+        )
+        if tier is None:
+            continue
+        names = (
+            _string_set(row.get("name"))
+            | _string_set(row.get("names"))
+            | _string_set(row.get("top_tier_names"))
+        )
+        names_by_tier.setdefault(tier, set()).update(names)
+    if not names_by_tier:
+        return None
+    highest_board = max(names_by_tier)
+    return highest_board, names_by_tier[highest_board]
+
+
+def _finite_number(value: Any) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    normalized = float(value)
+    return normalized if math.isfinite(normalized) else None
+
+
+def _leader_feedback_result(factor: Any) -> bool | None:
+    content = _fact_content(factor, "prior_core_feedback")
+    if not isinstance(content, Mapping):
+        return None
+    limit_up_count = _finite_integer(content.get("limit_up_count"))
+    if limit_up_count is not None and limit_up_count < 0:
+        limit_up_count = None
+    median_close_change = _finite_number(content.get("median_close_change_pct"))
+    if limit_up_count is None and median_close_change is None:
+        return None
+    return bool(
+        (limit_up_count is not None and limit_up_count > 0)
+        or (
+            median_close_change is not None
+            and median_close_change >= 0
+        )
+    )
 
 
 def _sector_keys(snapshot: Any) -> set[str]:
@@ -341,7 +484,6 @@ def _compare_t1_factor(
     source_factor: Any,
     actual_snapshot: Any,
     actual_factor: Any,
-    actual_prefill: Any,
 ) -> tuple[str, dict[str, Any]]:
     if not isinstance(source_factor, Mapping):
         return "missing_data", {"reason": "source_factor_missing"}
@@ -417,18 +559,52 @@ def _compare_t1_factor(
         return outcome, comparison
 
     if factor_code == "leader_signal":
-        source_signatures = _stable_fact_signatures(source_factor)
-        actual_signatures = _stable_fact_signatures(actual_factor)
-        comparison = {
-            "comparator": "leader_fact_continuity",
-            "source_fact_count": len(source_signatures),
-            "actual_fact_count": len(actual_signatures),
+        source_structure = _leader_structure_signature(source_factor)
+        actual_structure = _leader_structure_signature(actual_factor)
+        source_highest = source_structure[0] if source_structure is not None else None
+        actual_highest = actual_structure[0] if actual_structure is not None else None
+        source_names = source_structure[1] if source_structure is not None else set()
+        actual_names = actual_structure[1] if actual_structure is not None else set()
+        identity_overlap = source_names & actual_names
+        dimension_results: dict[str, bool | None] = {
+            "height": (
+                actual_highest >= source_highest
+                if source_highest is not None and actual_highest is not None
+                else None
+            ),
+            "identity": (
+                bool(identity_overlap)
+                if source_names and actual_structure is not None
+                else None
+            ),
+            "feedback": _leader_feedback_result(actual_factor),
         }
-        if not source_signatures or not actual_signatures:
+        comparable_dimensions = sum(
+            result is not None for result in dimension_results.values()
+        )
+        positive_dimensions = sum(
+            result is True for result in dimension_results.values()
+        )
+        comparison = {
+            "comparator": "leader_structure",
+            "source_highest_board": source_highest,
+            "actual_highest_board": actual_highest,
+            "source_top_names": sorted(source_names),
+            "actual_top_names": sorted(actual_names),
+            "identity_overlap": sorted(identity_overlap),
+            "dimension_results": dimension_results,
+            "comparable_dimensions": comparable_dimensions,
+            "positive_dimensions": positive_dimensions,
+        }
+        if source_structure is None or actual_structure is None:
             return "missing_data", comparison
-        outcome, overlap = _compare_sets(source_signatures, actual_signatures)
-        comparison["overlap_count"] = overlap
-        return outcome, comparison
+        if not comparable_dimensions:
+            return "missing_data", comparison
+        if positive_dimensions >= 2:
+            return "hit", comparison
+        if positive_dimensions == 1:
+            return "partial", comparison
+        return "miss", comparison
 
     return "missing_data", {"reason": "unknown_factor"}
 
@@ -463,6 +639,7 @@ def suggest_t1_evaluation(
     actual_evidence: dict[str, Any] = {
         "primary_factor": primary_code,
         "objective_source_count": 0,
+        "counter_source_count": 0,
         "support_evidence_ids": [],
         "counter_evidence_ids": [],
     }
@@ -493,15 +670,14 @@ def suggest_t1_evaluation(
         counter_items = [
             item for item in fact_items if item.get("polarity") == "counter"
         ]
-        support_sources = {str(item.get("source") or "") for item in support_items}
-        counter_sources = {str(item.get("source") or "") for item in counter_items}
+        support_sources = _fact_source_groups(support_items)
+        counter_sources = _fact_source_groups(counter_items)
         system_outcome, comparison = _compare_t1_factor(
             primary_code,
             source_snapshot=source_snapshot,
             source_factor=source_factor,
             actual_snapshot=actual_snapshot,
             actual_factor=actual_factor,
-            actual_prefill=prefill,
         )
         actual_evidence = {
             "primary_factor": primary_code,
