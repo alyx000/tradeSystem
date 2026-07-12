@@ -8,11 +8,23 @@ from math import isfinite
 from statistics import median
 from typing import Any
 
+from utils import is_st_stock
+
 from .constants import FACTOR_CODES, SECTOR_CANDIDATE_MAX
 
 RULESET_VERSION = "trinity_ruleset_v2"
 SERVICE_SCHEMA_VERSION = "trinity_dual_score_run_v2"
 _EVIDENCE_STRING_MAX = 200
+_SECTOR_LLM_FACT_FIELDS = (
+    "phase_hint",
+    "rhythm_confidence",
+    "duration_days",
+    "pct_chg",
+    "limit_up_count",
+    "net_amount_yi",
+    "cumulative_pct_5d",
+    "cumulative_pct_10d",
+)
 
 _FACTOR_STEP_MAP = {
     "market_node": ("step1_market", "step6_nodes"),
@@ -168,7 +180,7 @@ def build_sector_llm_input(
             "sector_name": candidate.get("sector_name"),
             "sector_type": candidate.get("sector_type"),
             "candidate_tier": "core",
-            "facts": candidate.get("facts") or {},
+            "facts": _sector_llm_facts(candidate.get("facts")),
             **projection,
             "allowed_t1_check_ids": candidate.get("allowed_t1_check_ids") or [],
             "t1_checks": candidate.get("t1_checks") or [],
@@ -218,6 +230,17 @@ def _llm_evidence_projection(candidate: Mapping[str, Any]) -> dict[str, Any]:
             for evidence_id in candidate.get("allowed_counter_evidence_ids") or []
             if str(evidence_id) in visible_ids
         }),
+    }
+
+
+def _sector_llm_facts(value: Any) -> dict[str, Any]:
+    """只投影无个股名称、无规则身份的板块客观字段。"""
+    if not isinstance(value, Mapping):
+        return {}
+    return {
+        field: value[field]
+        for field in _SECTOR_LLM_FACT_FIELDS
+        if field in value and _has_content(value[field])
     }
 
 
@@ -369,22 +392,51 @@ def _style_objective_items(
     style: Mapping[str, Any],
 ) -> list[dict[str, Any]]:
     cards: list[dict[str, Any]] = []
-    for raw_key, source, quality_group, fields in (
-        ("cap_preference", "cap_relative_strength", "index_relative_strength",
-         ("csi300_chg", "csi1000_chg", "spread", "relative")),
-        ("board_preference", "board_preference", "limit_board_mix",
-         ("dominant_type", "pct_10cm", "pct_20cm", "pct_30cm")),
-    ):
-        raw = style.get(raw_key)
-        content = _pick_fields(raw, fields) if isinstance(raw, Mapping) else {}
-        if content:
+    cap = style.get("cap_preference")
+    if isinstance(cap, Mapping):
+        relative = cap.get("relative")
+        cap_numbers = [
+            _strict_number(cap.get(field))
+            for field in ("csi300_chg", "csi1000_chg", "spread")
+        ]
+        if (
+            all(value is not None for value in cap_numbers)
+            and relative in {"偏小盘", "偏大盘", "均衡"}
+        ):
             cards.append(_lineage_fact(
-                trade_date, "style_regime", source, "style", quality_group, content
+                trade_date, "style_regime", "cap_relative_strength", "style",
+                "index_relative_strength",
+                _pick_fields(
+                    cap,
+                    ("csi300_chg", "csi1000_chg", "spread", "relative"),
+                ),
+            ))
+
+    board = style.get("board_preference")
+    if isinstance(board, Mapping):
+        dominant_type = board.get("dominant_type")
+        board_pcts = [
+            _strict_number(board.get(field))
+            for field in ("pct_10cm", "pct_20cm", "pct_30cm")
+        ]
+        if (
+            dominant_type in {"10cm", "20cm", "30cm"}
+            and all(
+                value is not None and 0 <= value <= 100
+                for value in board_pcts
+            )
+        ):
+            cards.append(_lineage_fact(
+                trade_date, "style_regime", "board_preference", "style",
+                "limit_board_mix",
+                _pick_fields(
+                    board,
+                    ("dominant_type", "pct_10cm", "pct_20cm", "pct_30cm"),
+                ),
             ))
 
     snapshot = style.get("premium_snapshot")
     groups: dict[str, Any] = {}
-    has_sample = False
     if isinstance(snapshot, Mapping):
         for name in (
             "first_board", "first_board_10cm", "first_board_20cm",
@@ -394,12 +446,19 @@ def _style_objective_items(
             raw = snapshot.get(name)
             if not isinstance(raw, Mapping):
                 continue
-            compact = _pick_fields(raw, ("count", "premium_median", "open_up_rate"))
-            if compact:
-                groups[name] = compact
-                count = _to_number(raw.get("count"))
-                has_sample |= count is None or count > 0
-    if groups and has_sample:
+            count = _strict_int(raw.get("count"))
+            premium_median = _strict_number(raw.get("premium_median"))
+            if count is None or count <= 0 or premium_median is None:
+                continue
+            compact = {
+                "count": count,
+                "premium_median": premium_median,
+            }
+            open_up_rate = _strict_number(raw.get("open_up_rate"))
+            if open_up_rate is not None and 0 <= open_up_rate <= 1:
+                compact["open_up_rate"] = open_up_rate
+            groups[name] = compact
+    if groups:
         premium_trend = style.get("premium_trend")
         if isinstance(premium_trend, Mapping) and premium_trend.get("direction") is not None:
             groups["trend_direction"] = _json_safe_value(
@@ -494,14 +553,19 @@ def _promotion_realization_item(
         return None
 
     content: dict[str, Any] = {}
-    has_sample = False
     for group_name in ("first_to_second", "second_to_third"):
         raw_group = promotion.get(group_name)
         if not isinstance(raw_group, Mapping):
             continue
-        base = _to_int(raw_group.get("base"))
-        promoted = _to_int(raw_group.get("promoted"))
-        rate = _to_number(raw_group.get("rate"))
+        base = _strict_int(raw_group.get("base"))
+        promoted = _strict_int(raw_group.get("promoted"))
+        rate = _strict_number(raw_group.get("rate"))
+        if (
+            base is None or base <= 0
+            or promoted is None or not 0 <= promoted <= base
+            or rate is None or not 0 <= rate <= 1
+        ):
+            continue
         content[group_name] = {
             "base": base,
             "promoted": promoted,
@@ -511,8 +575,7 @@ def _promotion_realization_item(
                 limit=10,
             ),
         }
-        has_sample = has_sample or bool(base and base > 0)
-    if content and has_sample:
+    if content:
         return _lineage_fact(
             trade_date, "leader_signal", "promotion_realization", "stock",
             "leader_outcome", content,
@@ -533,7 +596,12 @@ def _prior_core_feedback_item(
         return None
     consecutive_rows = [
         row for row in popularity
-        if isinstance(row, Mapping) and _source_includes(row.get("source"), "consecutive")
+        if (
+            isinstance(row, Mapping)
+            and _source_includes(row.get("source"), "consecutive")
+            and not is_st_stock(row.get("name"))
+            and _has_feedback_outcome(row)
+        )
     ]
     if not consecutive_rows:
         return None
@@ -679,8 +747,7 @@ def _stock_names(values: Any) -> list[str]:
 
 def _clean_stock_name(value: Any) -> str:
     text = str(value or "").strip()
-    normalized = text.upper().replace(" ", "")
-    if normalized.startswith(("ST", "*ST", "S*ST")):
+    if is_st_stock(text):
         return ""
     return text[:_EVIDENCE_STRING_MAX]
 
@@ -689,9 +756,13 @@ def _tier_number(value: Any) -> int | None:
     if isinstance(value, bool):
         return None
     if isinstance(value, (int, float)):
-        return int(value) if float(value).is_integer() else None
-    match = re.search(r"\d+", str(value or ""))
-    return int(match.group()) if match else None
+        tier = _to_int(value) if _strict_number(value) is not None else None
+    elif isinstance(value, str):
+        match = re.fullmatch(r"(\d+)(?:板)?", value.strip())
+        tier = int(match.group(1)) if match else None
+    else:
+        tier = None
+    return tier if tier is not None and 1 <= tier <= 30 else None
 
 
 def _stable_strings(values: Any, *, limit: int = 20) -> list[str]:
@@ -723,6 +794,18 @@ def _to_int(value: Any) -> int | None:
     return int(parsed)
 
 
+def _strict_number(value: Any) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return _to_number(value)
+
+
+def _strict_int(value: Any) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return _to_int(value)
+
+
 def _source_includes(value: Any, expected: str) -> bool:
     if isinstance(value, str):
         return expected in value
@@ -732,8 +815,18 @@ def _source_includes(value: Any, expected: str) -> bool:
 
 
 def _numeric_values(rows: Sequence[Mapping[str, Any]], field: str) -> list[float]:
-    values = [_to_number(row.get(field)) for row in rows]
+    values = [_strict_number(row.get(field)) for row in rows]
     return [value for value in values if value is not None]
+
+
+def _has_feedback_outcome(row: Mapping[str, Any]) -> bool:
+    return any(
+        _strict_number(row.get(field)) is not None
+        for field in ("t_open_premium_pct", "t_close_change_pct")
+    ) or any(
+        isinstance(row.get(field), bool)
+        for field in ("t_is_limit_up", "t_is_limit_down")
+    )
 
 
 def _median_or_none(values: Sequence[float]) -> float | None:
@@ -741,15 +834,32 @@ def _median_or_none(values: Sequence[float]) -> float | None:
 
 
 def _is_available_objective_fact(item: Mapping[str, Any]) -> bool:
-    return item.get("kind") == "fact" and item.get("source_status") == "ok"
+    return item.get("kind") == "fact" and _is_valid_objective_content(item)
 
 
 def _is_llm_referenceable(item: Mapping[str, Any]) -> bool:
     if item.get("kind") == "status" or item.get("source") == "leader_detection":
         return False
     if item.get("kind") == "fact" or item.get("objective") is True:
-        return item.get("source_status") == "ok"
+        return _is_valid_objective_content(item)
     return True
+
+
+def _is_valid_objective_content(item: Mapping[str, Any]) -> bool:
+    evidence_id = item.get("evidence_id")
+    source = item.get("source")
+    quality_group = item.get("quality_group") or source
+    text = item.get("text")
+    return (
+        item.get("source_status") == "ok"
+        and isinstance(evidence_id, str) and bool(evidence_id.strip())
+        and isinstance(source, str) and bool(source.strip())
+        and isinstance(quality_group, str) and bool(quality_group.strip())
+        and (
+            _has_meaningful_content(item.get("content"))
+            or (isinstance(text, str) and bool(text.strip()))
+        )
+    )
 
 
 def _evidence_quality(items: Sequence[Mapping[str, Any]]) -> int:
@@ -833,6 +943,16 @@ def _has_content(value: Any) -> bool:
     if isinstance(value, (Mapping, Sequence)) and not isinstance(value, (str, bytes)):
         return bool(value)
     return True
+
+
+def _has_meaningful_content(value: Any) -> bool:
+    if isinstance(value, Mapping):
+        return any(_has_meaningful_content(item) for item in value.values())
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        return any(_has_meaningful_content(item) for item in value)
+    if isinstance(value, float):
+        return isfinite(value)
+    return _has_content(value)
 
 
 def _json_safe_value(value: Any) -> Any:

@@ -443,6 +443,7 @@ def test_same_quality_group_counts_once_even_when_sources_differ() -> None:
             "quality_group": "shared_lineage",
             "polarity": "support",
             "objective": True,
+            "text": "客观证据一",
         },
         {
             "evidence_id": "2026-07-10:industry:板块1:two",
@@ -450,6 +451,7 @@ def test_same_quality_group_counts_once_even_when_sources_differ() -> None:
             "quality_group": "shared_lineage",
             "polarity": "support",
             "objective": True,
+            "text": "客观证据二",
         },
     ]
 
@@ -564,6 +566,176 @@ def test_sector_llm_input_hides_non_ok_objective_and_internal_lineage() -> None:
     assert "quality_group" not in repr(sector_input)
 
 
+def test_sector_llm_facts_remove_heuristic_leader_side_channel() -> None:
+    candidate = _candidate(1)
+    candidate["facts"].update({
+        "duration_days": "",
+        "limit_up_count": 3,
+        "net_amount_yi": 8.5,
+        "cumulative_pct_5d": 4.0,
+        "cumulative_pct_10d": 7.5,
+        "emotion_leader": "情绪秘密龙头",
+        "capacity_leader": "容量秘密中军",
+        "lead_stock": "聚合秘密标的",
+        "unknown_name_field": "未知秘密标的",
+        "teacher_note_refs": ["老师秘密标的"],
+    })
+
+    sector_input = build_sector_llm_input(
+        build_evidence_snapshot("2026-07-10", _prefill([candidate]), {}),
+        primary_factor_code="sector_rhythm",
+    )
+    facts = sector_input["sectors"][0]["facts"]
+
+    for forbidden in (
+        "emotion_leader", "capacity_leader", "lead_stock",
+        "情绪秘密龙头", "容量秘密中军", "聚合秘密标的",
+        "unknown_name_field", "未知秘密标的",
+        "teacher_note_refs", "老师秘密标的",
+    ):
+        assert forbidden not in repr(sector_input)
+    assert facts == {
+        "phase_hint": "发酵",
+        "rhythm_confidence": "高",
+        "pct_chg": 1.5,
+        "limit_up_count": 3,
+        "net_amount_yi": 8.5,
+        "cumulative_pct_5d": 4.0,
+        "cumulative_pct_10d": 7.5,
+    }
+
+
+def test_empty_objective_sector_cards_are_audit_only() -> None:
+    candidate = _candidate(1)
+    invalid_items = [
+        {"evidence_id": "", "source": "empty_id", "objective": True, "text": "有字"},
+        {"evidence_id": "blank-source", "source": "", "objective": True, "text": "有字"},
+        {"evidence_id": "no-payload", "source": "no_payload", "objective": True},
+        {"evidence_id": "empty-content", "source": "empty_content", "objective": True, "content": {}},
+        {
+            "evidence_id": "placeholder-content",
+            "source": "placeholder_content",
+            "objective": True,
+            "content": {"value": None, "rows": []},
+        },
+        {"evidence_id": "bool-text", "source": "bool_text", "objective": True, "text": True},
+        {"evidence_id": "blank-text", "source": "blank_text", "objective": True, "text": "  "},
+    ]
+    candidate["evidence_items"] = invalid_items
+
+    snapshot = build_evidence_snapshot("2026-07-10", _prefill([candidate]), {})
+    sector = _factor(snapshot, "sector_rhythm")
+    factor_llm = next(
+        row for row in build_factor_llm_input(snapshot)["factors"]
+        if row["factor_code"] == "sector_rhythm"
+    )
+    sector_llm = build_sector_llm_input(
+        snapshot,
+        primary_factor_code="sector_rhythm",
+    )["sectors"][0]
+
+    assert sector["objective_source_count"] == 0
+    assert sector["evidence_quality"] == 0
+    assert sector["critical_missing"] is True
+    assert sector["allowed_evidence_ids"] == []
+    assert factor_llm["evidence_items"] == []
+    assert sector_llm["evidence_items"] == []
+
+
+def test_style_cards_require_complete_typed_objective_content() -> None:
+    prefill = _prefill([])
+    prefill["market"] = {
+        "style_factors": {
+            "cap_preference": {
+                "csi300_chg": True,
+                "csi1000_chg": 1.0,
+                "spread": float("nan"),
+                "relative": "未知",
+            },
+            "board_preference": {
+                "dominant_type": "20cm",
+                "pct_10cm": "20",
+                "pct_20cm": float("inf"),
+                "pct_30cm": 5.0,
+            },
+            "premium_snapshot": {
+                "first_board": {
+                    "count": 2,
+                    "premium_median": 1.2,
+                    "open_up_rate": 1.5,
+                },
+                "second_board": {"count": True, "premium_median": 2.0},
+                "third_board_plus": {"count": "3", "premium_median": 2.0},
+                "capacity_top10": {"count": 3, "premium_median": float("nan")},
+            },
+        },
+    }
+    prefill["review_signals"]["emotion"] = {"ladder_rows": []}
+
+    style = _factor(build_evidence_snapshot("2026-07-10", prefill, {}), "style_regime")
+    facts = _ok_facts(style)
+
+    assert [item["source"] for item in facts] == ["premium_regime"]
+    premium = facts[0]["content"]
+    assert set(premium) == {"first_board", "capacity_proxy"}
+    assert premium["first_board"] == {"count": 2, "premium_median": 1.2}
+    assert style["objective_source_count"] == 1
+    assert style["evidence_quality"] == 2
+
+
+@pytest.mark.parametrize(
+    ("field", "invalid_value"),
+    [
+        ("base", "12"),
+        ("base", True),
+        ("base", 0),
+        ("promoted", "4"),
+        ("promoted", True),
+        ("promoted", -1),
+        ("promoted", 13),
+        ("rate", "0.333"),
+        ("rate", True),
+        ("rate", float("nan")),
+        ("rate", float("inf")),
+        ("rate", -0.01),
+        ("rate", 1.01),
+    ],
+    ids=(
+        "string-base", "bool-base", "zero-base",
+        "string-promoted", "bool-promoted", "negative-promoted",
+        "promoted-over-base", "string-rate", "bool-rate", "nan-rate",
+        "infinite-rate", "negative-rate", "rate-over-one",
+    ),
+)
+def test_promotion_omits_tier_with_invalid_field(
+    field: str,
+    invalid_value: object,
+) -> None:
+    prefill = _lineage_prefill()
+    promotion = prefill["market"]["style_factors"]["promotion"]
+    promotion["first_to_second"][field] = invalid_value
+
+    leader = _factor(build_evidence_snapshot("2026-07-10", prefill, {}), "leader_signal")
+    realization = next(
+        item["content"] for item in _ok_facts(leader)
+        if item["source"] == "promotion_realization"
+    )
+    assert set(realization) == {"second_to_third"}
+
+
+def test_promotion_requires_one_valid_tier() -> None:
+    prefill = _lineage_prefill()
+    promotion = prefill["market"]["style_factors"]["promotion"]
+    promotion["first_to_second"]["base"] = 0
+    promotion["second_to_third"]["promoted"] = 5
+
+    leader = _factor(build_evidence_snapshot("2026-07-10", prefill, {}), "leader_signal")
+    assert not [
+        item for item in _ok_facts(leader)
+        if item["source"] == "promotion_realization"
+    ]
+
+
 def test_prior_feedback_does_not_match_below_explicit_previous_highest() -> None:
     prefill = _lineage_prefill()
     prefill["prev_market"] = {
@@ -583,6 +755,68 @@ def test_prior_feedback_does_not_match_below_explicit_previous_highest() -> None
     assert feedback["cohort_basis"] == "all_consecutive"
     assert feedback["cohort_count"] == 3
     assert feedback["names"] == ["二板甲", "四板丙", "四板乙"]
+
+
+def test_malformed_popularity_rows_do_not_create_objective_feedback() -> None:
+    prefill = {
+        "market": {
+            "style_factors": {
+                "popularity": [{
+                    "code": "BAD.SZ",
+                    "name": "无结果样本",
+                    "source": ["consecutive"],
+                    "t_open_premium_pct": "1.2",
+                    "t_close_change_pct": float("nan"),
+                    "t_is_limit_up": "false",
+                    "t_is_limit_down": None,
+                }],
+            },
+        },
+        "review_signals": {
+            "sectors": {"projection_candidates": []},
+            "emotion": {"ladder_rows": []},
+        },
+    }
+
+    leader = _factor(build_evidence_snapshot("2026-07-10", prefill, {}), "leader_signal")
+
+    assert leader["objective_source_count"] == 0
+    assert leader["evidence_quality"] == 0
+    assert leader["critical_missing"] is True
+    assert not [
+        item for item in _ok_facts(leader)
+        if item["source"] == "prior_core_feedback"
+    ]
+
+
+def test_prior_feedback_reuses_repo_st_filter_before_aggregation() -> None:
+    rows = [
+        _popularity_row("OK.SZ", "正常股", ["consecutive"], 1.0, 2.0),
+        _popularity_row("SST.SZ", "SST风险", ["consecutive"], 99.0, 99.0),
+        _popularity_row("DELIST.SZ", " 退市旧股 ", ["consecutive"], 99.0, 99.0),
+        _popularity_row("TAIL.SZ", "国华退", ["consecutive"], 99.0, 99.0),
+        _popularity_row("CASE.SZ", "  sT 空格 ", ["consecutive"], 99.0, 99.0),
+    ]
+    prefill = {
+        "market": {"style_factors": {"popularity": rows}},
+        "review_signals": {
+            "sectors": {"projection_candidates": []},
+            "emotion": {"ladder_rows": []},
+        },
+    }
+
+    leader = _factor(build_evidence_snapshot("2026-07-10", prefill, {}), "leader_signal")
+    feedback = next(
+        item["content"] for item in _ok_facts(leader)
+        if item["source"] == "prior_core_feedback"
+    )
+
+    assert feedback["cohort_count"] == 1
+    assert feedback["names"] == ["正常股"]
+    assert feedback["median_open_premium_pct"] == 1.0
+    assert feedback["median_close_change_pct"] == 2.0
+    assert leader["objective_source_count"] == 1
+    assert leader["evidence_quality"] == 2
 
 
 def test_height_only_ladder_does_not_emit_objective_fact() -> None:
@@ -610,7 +844,13 @@ def test_mapping_ladder_does_not_restore_count_after_all_names_are_st() -> None:
         "market": {
             "highest_board": 4,
             "continuous_board_counts": {
-                "4": {"names": ["*ST风险"], "count": 1},
+                "4": {
+                    "names": [
+                        "*ST风险", "SST风险", " 退市旧股 ", "国华退",
+                        "  sT 空格 ",
+                    ],
+                    "count": 5,
+                },
             },
         },
         "review_signals": {
@@ -628,6 +868,61 @@ def test_mapping_ladder_does_not_restore_count_after_all_names_are_st() -> None:
         item for item in _ok_facts(leader)
         if item["source"] == "ladder_structure"
     ]
+
+
+def test_malformed_tiers_cannot_create_ladder_fact_or_height() -> None:
+    invalid_tiers = [True, 2.5, "2.5", "20cm", "x2板", "0", "-2", "31", "2板x"]
+    prefill = {
+        "market": {
+            "highest_board": "20cm",
+            "continuous_board_counts": {
+                str(tier): [f"坏层级{index}"]
+                for index, tier in enumerate(invalid_tiers[2:])
+            },
+        },
+        "review_signals": {
+            "sectors": {"projection_candidates": []},
+            "emotion": {
+                "ladder_rows": [
+                    {"name": f"坏行{index}", "nums": tier}
+                    for index, tier in enumerate(invalid_tiers)
+                ],
+            },
+        },
+    }
+
+    leader = _factor(build_evidence_snapshot("2026-07-10", prefill, {}), "leader_signal")
+
+    assert not [
+        item for item in _ok_facts(leader)
+        if item["source"] == "ladder_structure"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("raw_tier", "expected_tier"),
+    [(2.0, 2), ("2板", 2), (30, 30)],
+)
+def test_integer_numeric_and_explicit_board_tiers_are_accepted(
+    raw_tier: object,
+    expected_tier: int,
+) -> None:
+    prefill = {
+        "market": {"continuous_board_counts": {}},
+        "review_signals": {
+            "sectors": {"projection_candidates": []},
+            "emotion": {"ladder_rows": [{"name": "有效标的", "nums": raw_tier}]},
+        },
+    }
+
+    leader = _factor(build_evidence_snapshot("2026-07-10", prefill, {}), "leader_signal")
+    ladder = next(
+        item["content"] for item in _ok_facts(leader)
+        if item["source"] == "ladder_structure"
+    )
+
+    assert ladder["highest_board"] == expected_tier
+    assert ladder["tier_counts"] == [{"tier": expected_tier, "count": 1}]
 
 
 def test_objective_leader_detection_is_normalized_to_stored_context_only() -> None:
