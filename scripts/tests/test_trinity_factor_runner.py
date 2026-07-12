@@ -11,6 +11,7 @@ import pytest
 from services.trinity_factor.runner import (
     FACTOR_PROMPT_VERSION,
     AntigravityStructuredRunner,
+    _compose_prompt,
     _flatten_error_values,
     prompt_template_sha256,
 )
@@ -165,6 +166,90 @@ def test_input_digest_and_prompt_input_are_stable_across_candidate_order(
     assert prompts[0] == prompts[1]
     assert prompts[0].index("market_node") < prompts[0].index("sector_rhythm")
     assert "untrusted_data" in prompts[0]
+
+
+def test_runner_rejects_oversized_multibyte_prompt_without_subprocess(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _config(monkeypatch)
+    marker = "OVERSIZED_PROMPT_MARKER_59ab"
+    payload = {"notes": marker + "界" * 50_000}
+    canonical_input = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    assert len(
+        _compose_prompt(FACTOR_PROMPT_VERSION, "instructions", canonical_input).encode(
+            "utf-8"
+        )
+    ) > 128 * 1024
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        if command[-1] == "--version":
+            return subprocess.CompletedProcess(command, 0, stdout="1.0", stderr="")
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout='{"schema_version":"ok","items":[]}',
+            stderr="",
+        )
+
+    result = _run(
+        AntigravityStructuredRunner(run_command=fake_run),
+        prompt_version=FACTOR_PROMPT_VERSION,
+        prompt="instructions",
+        input_payload=payload,
+        validator=_validate,
+    )
+
+    serialized = json.dumps(result.to_record(), ensure_ascii=False)
+    assert result.status == "input_too_large"
+    assert result.attempt_count == 0
+    assert result.is_cacheable is False
+    assert result.parsed_output is None
+    assert result.valid_raw_json is None
+    assert result.raw_output_sha256 is None
+    assert result.diagnostics == {
+        "reason": "input_too_large",
+        "message": "structured prompt exceeds UTF-8 byte limit",
+    }
+    assert marker not in serialized
+    assert calls == []
+
+
+def test_runner_allows_multibyte_prompt_below_argv_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _config(monkeypatch)
+    payload = {"notes": "界" * 40_000}
+    prompts = []
+
+    def fake_run(command, **kwargs):
+        if command[-1] == "--version":
+            return subprocess.CompletedProcess(command, 0, stdout="1.0", stderr="")
+        prompts.append(command[command.index("--prompt") + 1])
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout='{"schema_version":"ok","items":[]}',
+            stderr="",
+        )
+
+    result = _run(
+        AntigravityStructuredRunner(run_command=fake_run),
+        prompt_version=FACTOR_PROMPT_VERSION,
+        prompt="instructions",
+        input_payload=payload,
+        validator=_validate,
+    )
+
+    assert result.status == "success"
+    assert len(prompts) == 1
+    assert len(prompts[0].encode("utf-8")) < 128 * 1024
 
 
 def test_empty_output_retries_once_then_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -3713,6 +3713,79 @@ def test_review_factor_score_rejects_extra_field_before_service_or_audit_write(
     assert request_count == 0
 
 
+def test_review_factor_score_rejects_oversized_snapshot_before_runner_or_audit(
+    client, db_path, monkeypatch
+):
+    import api.routes.review_factors as review_factors_route
+    from services.trinity_factor.runner import StructuredRunResult
+    from services.trinity_factor.service import TrinityFactorService
+
+    _seed_factor_trade_date(db_path)
+    calls = []
+
+    class CountingRunner:
+        def run(self, **kwargs):
+            calls.append(kwargs)
+            return StructuredRunResult(
+                status="schema_invalid",
+                provider="antigravity",
+                requested_model="model-a",
+                actual_model=None,
+                cli_version="agy-1",
+                runtime_version="python-3.9",
+                prompt_version="test-prompt",
+                prompt_sha256="p" * 64,
+                input_digest="i" * 64,
+                schema_version="test-schema",
+                ruleset_version="test-rules",
+                attempt_count=2,
+                duration_ms=1,
+                is_cacheable=False,
+                diagnostics={"reason": "schema_invalid"},
+            )
+
+    service = TrinityFactorService(runner=CountingRunner())
+    monkeypatch.setattr(
+        review_factors_route,
+        "TrinityFactorService",
+        lambda: service,
+    )
+    steps = {
+        step_key: {
+            f"field_{index:03d}": "界" * 500
+            for index in range(100)
+        }
+        for step_key in (
+            "step1_market",
+            "step2_sectors",
+            "step3_emotion",
+            "step4_style",
+            "step5_leaders",
+            "step6_nodes",
+        )
+    }
+
+    response = client.post(
+        "/api/review-factors/2026-07-10/score",
+        json={"no_llm": False, "input_by": "web", "steps": steps},
+    )
+
+    conn = get_connection(db_path)
+    run_count = conn.execute(
+        "SELECT COUNT(*) FROM daily_review_factor_score_runs"
+    ).fetchone()[0]
+    request_count = conn.execute(
+        "SELECT COUNT(*) FROM daily_review_factor_score_requests"
+    ).fetchone()[0]
+    conn.close()
+
+    assert response.status_code == 422
+    assert "evidence snapshot exceeds" in response.text
+    assert calls == []
+    assert run_count == 0
+    assert request_count == 0
+
+
 def test_review_factor_score_openapi_requires_body_and_input_by(client):
     openapi = client.app.openapi()
     operation = openapi["paths"]["/api/review-factors/{date}/score"]["post"]

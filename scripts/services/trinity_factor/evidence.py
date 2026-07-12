@@ -135,7 +135,7 @@ def build_evidence_snapshot(
     primary_lock = _primary_category_lock(review_steps)
     fallback_code = _rule_fallback_code(factor_candidates, primary_lock)
     deterministic_sector_order = [row["sector_key"] for row in sector_candidates]
-    return {
+    return _bound_json_value({
         "trade_date": trade_date,
         "strict_prev_trade_date": normalized_strict_prev_trade_date,
         "ruleset_version": RULESET_VERSION,
@@ -149,7 +149,7 @@ def build_evidence_snapshot(
             "core_sector_count": len(sector_candidates),
             "sector_source_status": _sector_source_status(prefill),
         },
-    }
+    })
 
 
 def build_factor_llm_input(snapshot: Mapping[str, Any]) -> dict[str, Any]:
@@ -159,10 +159,10 @@ def build_factor_llm_input(snapshot: Mapping[str, Any]) -> dict[str, Any]:
         if not isinstance(candidate, Mapping):
             continue
         rows.append(_factor_llm_card(candidate))
-    return {
+    return _bound_json_value({
         "trade_date": snapshot.get("trade_date"),
         "factors": sorted(rows, key=lambda row: row["factor_code"]),
-    }
+    })
 
 
 def build_sector_llm_input(
@@ -197,12 +197,12 @@ def build_sector_llm_input(
             "allowed_t1_check_ids": candidate.get("allowed_t1_check_ids") or [],
             "t1_checks": candidate.get("t1_checks") or [],
         })
-    return {
+    return _bound_json_value({
         "trade_date": snapshot.get("trade_date"),
         "primary_factor_code": primary_factor_code,
         "primary_factor": _factor_llm_card(primary_candidates[0]),
         "sectors": sorted(rows, key=lambda row: row["sector_key"]),
-    }
+    })
 
 
 def _factor_llm_card(candidate: Mapping[str, Any]) -> dict[str, Any]:
@@ -1057,14 +1057,45 @@ def _json_safe_value(value: Any) -> Any:
         raise ValueError("evidence value is not JSON serializable") from exc
 
 
-def _bound_json_value(value: Any) -> Any:
+def _bound_json_value(value: Any, *, field_name: str | None = None) -> Any:
     if isinstance(value, str):
-        return value[:2000]
+        if _preserve_string_field(field_name):
+            return value
+        return value[:_EVIDENCE_STRING_MAX]
     if isinstance(value, list):
-        return [_bound_json_value(item) for item in value[:100]]
+        return [
+            _bound_json_value(item, field_name=field_name)
+            for item in value[:100]
+        ]
     if isinstance(value, dict):
-        return {
-            str(key): _bound_json_value(item)
-            for key, item in list(value.items())[:100]
-        }
+        bounded = {}
+        for key, item in list(value.items())[:100]:
+            bounded_key = str(key)[:_EVIDENCE_STRING_MAX]
+            bounded[bounded_key] = _bound_json_value(
+                item,
+                field_name=bounded_key,
+            )
+        return bounded
     return value
+
+
+def _preserve_string_field(field_name: str | None) -> bool:
+    if not field_name:
+        return False
+    return (
+        field_name in {
+            "date",
+            "code",
+            "codes",
+            "stock_code",
+            "deterministic_sector_order",
+            "factor_code",
+            "sector_key",
+            "primary_factor_code",
+            "schema_version",
+            "ruleset_version",
+        }
+        or field_name.endswith("_id")
+        or field_name.endswith("_ids")
+        or field_name.endswith("_date")
+    )

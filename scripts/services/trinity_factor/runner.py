@@ -26,6 +26,7 @@ from utils.llm_cli import LlmCliConfig, build_prompt_command, resolve_config
 
 FACTOR_PROMPT_VERSION = "trinity_factor_score_v1"
 SECTOR_PROMPT_VERSION = "trinity_sector_score_v1"
+MAX_STRUCTURED_PROMPT_BYTES = 128 * 1024
 
 FACTOR_PROMPT = """你是三位一体复盘中的受控因子评分器。只评价输入白名单中的因子，不能新增、删除、合并或改名；不能新增事实、板块或交易动作。current_dominance、cross_layer_alignment、rhythm_clarity、next_stage_relevance、counterevidence 只能输出 0 到 5 的整数，evidence_quality 由程序计算，不得输出，也不得输出总分。白名单存在正向证据时，evidence_refs 至少引用 1 个正向证据 ID；若正向证据白名单为空，则 evidence_refs 必须为空且四个正向维度全部为 0。每行 t1_check_ids 至少引用 1 个检查 ID，且所有引用必须逐字来自该因子输入白名单。counterevidence 大于 0 时必须引用 counter_evidence_refs；引用反证时 counterevidence 必须大于 0。reason 必须以 [判断] 开头且不超过 240 字。
 严格输出一个 JSON 对象，不要 Markdown、解释或额外文本，且只能使用以下字段：
@@ -132,6 +133,26 @@ class AntigravityStructuredRunner:
                 },
             )
 
+        full_prompt = _compose_prompt(prompt_version, prompt, canonical_input)
+        if len(full_prompt.encode("utf-8")) > MAX_STRUCTURED_PROMPT_BYTES:
+            return self._result(
+                started=started,
+                status="input_too_large",
+                requested_model=requested_model,
+                cli_version=None,
+                prompt_version=prompt_version,
+                prompt_sha256=prompt_sha256,
+                input_digest=input_digest,
+                schema_version=schema_version,
+                ruleset_version=ruleset_version,
+                attempt_count=0,
+                runtime_version=runtime_version,
+                diagnostics={
+                    "reason": "input_too_large",
+                    "message": "structured prompt exceeds UTF-8 byte limit",
+                },
+            )
+
         resolved = resolve_config(default_timeout=180)
         config = LlmCliConfig(
             bin_path=resolved.bin_path,
@@ -139,7 +160,6 @@ class AntigravityStructuredRunner:
             timeout_seconds=resolved.timeout_seconds,
         )
         cli_version = self._read_cli_version(config)
-        full_prompt = _compose_prompt(prompt_version, prompt, canonical_input)
         last_sha: str | None = None
         last_diagnostics: dict[str, Any] | None = None
 

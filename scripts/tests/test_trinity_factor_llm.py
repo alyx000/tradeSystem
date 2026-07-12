@@ -255,6 +255,94 @@ def test_factor_reason_redline_scan_blocks_obfuscated_variants(reason):
         )
 
 
+@pytest.mark.parametrize(
+    "action",
+    [
+        "追涨",
+        "抄底",
+        "低吸",
+        "高抛",
+        "减仓",
+        "清仓",
+        "止盈",
+        "做多",
+        "做空",
+        "持有",
+        "介入",
+        "上车",
+        "买点",
+        "卖点",
+        "追\u200b涨",
+        "低，吸",
+        "做　空",
+        "卖🚀点",
+    ],
+)
+def test_factor_reason_rejects_trinity_specific_trade_actions(action):
+    rows = [
+        _factor_row("market_node", reason=f"[判断] 建议明日{action}"),
+        _factor_row("sector_rhythm"),
+    ]
+
+    with pytest.raises(TrinityValidationError):
+        parse_factor_response(
+            _factor_payload(rows),
+            [_factor_candidate("market_node"), _factor_candidate("sector_rhythm")],
+        )
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "[判断]预计可到５０元",
+        "[判断]预\u200b期，涨到 20 块",
+        "[判断]看至3,000点",
+        "[判断]看到3200点",
+        "[判断]涨至18.5元",
+        "[判断]涨到 22 元",
+        "[判断]可到１５％",
+        "[判断]目标价：30元",
+        "[判断]目标涨幅…20 %",
+    ],
+)
+def test_sector_reason_rejects_concrete_numeric_price_predictions(reason):
+    rows = [
+        _sector_row("sector:a", reason=reason),
+        _sector_row("sector:b"),
+    ]
+
+    with pytest.raises(TrinityValidationError):
+        parse_sector_response(
+            _sector_payload(rows),
+            [_sector_candidate("sector:a"), _sector_candidate("sector:b")],
+        )
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "[判断]预期差仍待验证",
+        "[判断]目标板块的结构连接增强",
+        "[判断]结构判断偏看多但无交易动作",
+        "[判断]结构判断偏看空,等待事实验证",
+    ],
+)
+@pytest.mark.parametrize("layer", ["factor", "sector"])
+def test_trinity_reason_allows_structural_language_without_action_or_price(layer, reason):
+    if layer == "factor":
+        parsed = parse_factor_response(
+            _factor_payload([_factor_row(reason=reason)]),
+            [_factor_candidate()],
+        )
+    else:
+        parsed = parse_sector_response(
+            _sector_payload([_sector_row(reason=reason)]),
+            [_sector_candidate()],
+        )
+
+    assert parsed[0]["reason"] == reason
+
+
 def test_safe_reason_is_nfkc_normalized_and_control_characters_are_removed():
     result = parse_factor_response(
         _factor_payload([_factor_row(reason="［判断］ 节奏\u200b清晰")]),

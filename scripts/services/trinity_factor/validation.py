@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Iterable, Mapping, Sequence
 from numbers import Real
 import unicodedata
@@ -71,6 +72,26 @@ _REFERENCE_FIELDS = (
     ("evidence_refs", "allowed_evidence_ids"),
     ("counter_evidence_refs", "allowed_counter_evidence_ids"),
     ("t1_check_ids", "allowed_t1_check_ids"),
+)
+_TRINITY_ACTION_REDLINE_KEYWORDS = (
+    "追涨",
+    "抄底",
+    "低吸",
+    "高抛",
+    "减仓",
+    "清仓",
+    "止盈",
+    "做多",
+    "做空",
+    "持有",
+    "介入",
+    "上车",
+    "买点",
+    "卖点",
+)
+_TRINITY_NUMERIC_PREDICTION_RE = re.compile(
+    r"(?:预计|预期(?!差)|看至|看到|涨至|涨到|可到|目标价|目标涨幅)"
+    r"[^0-9]{0,24}[0-9]+(?:元|块|点|%)"
 )
 
 
@@ -265,23 +286,32 @@ def _validate_reason(value: object, context: str) -> str:
         raise TrinityValidationError(f"{context} must start with [判断]")
     if len(normalized) > MAX_REASON_LENGTH:
         raise TrinityValidationError(f"{context} exceeds {MAX_REASON_LENGTH} characters")
-    compact = "".join(
-        char for char in normalized
-        if not char.isspace()
-        and unicodedata.category(char) not in {"Cf", "Cc"}
-        and not unicodedata.category(char).startswith(("M", "P", "S"))
-    )
+    compact = _compact_redline_text(normalized)
     for keyword in REDLINE_KEYWORDS:
-        normalized_keyword = unicodedata.normalize("NFKC", keyword)
-        compact_keyword = "".join(
-            char for char in normalized_keyword
-            if unicodedata.category(char) not in {"Cf", "Cc"}
-            and not char.isspace()
-            and not unicodedata.category(char).startswith(("M", "P", "S"))
-        )
+        compact_keyword = _compact_redline_text(keyword)
         if compact_keyword in compact:
             raise TrinityValidationError(f"{context} contains redline keyword: {keyword}")
+    for keyword in _TRINITY_ACTION_REDLINE_KEYWORDS:
+        if _compact_redline_text(keyword) in compact:
+            raise TrinityValidationError(f"{context} contains trinity trade action")
+    if _TRINITY_NUMERIC_PREDICTION_RE.search(compact):
+        raise TrinityValidationError(f"{context} contains concrete numeric prediction")
     return normalized
+
+
+def _compact_redline_text(value: str) -> str:
+    normalized = unicodedata.normalize("NFKC", value)
+    return "".join(
+        char for char in normalized
+        if (
+            char == "%"
+            or (
+                not char.isspace()
+                and unicodedata.category(char) not in {"Cf", "Cc"}
+                and not unicodedata.category(char).startswith(("M", "P", "S"))
+            )
+        )
+    )
 
 
 def parse_factor_response(raw: str | Mapping, candidates: Sequence[Mapping]) -> list[dict]:

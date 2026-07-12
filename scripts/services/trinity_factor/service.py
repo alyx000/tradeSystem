@@ -1,6 +1,7 @@
 """三位一体双层评分编排：规则门、LLM、程序重算、缓存与审计落库。"""
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import platform
@@ -37,6 +38,8 @@ from .runner import (
 from .selection import select_dominant_factors
 from .validation import parse_factor_response, parse_sector_response
 
+MAX_EVIDENCE_SNAPSHOT_BYTES = 96 * 1024
+
 
 class TrinityFactorService:
     """API/CLI 共用的评分服务；LLM 调用期间不持有 SQLite 写事务。"""
@@ -71,7 +74,7 @@ class TrinityFactorService:
             review_steps,
             strict_prev_trade_date=strict_prev_trade_date,
         )
-        input_digest = _json_digest(snapshot)
+        input_digest = _validated_snapshot_digest(snapshot)
         requested_model = "disabled" if no_llm else str(os.getenv("LLM_MODEL") or "").strip()
         prompt_versions = {
             "factor": FACTOR_PROMPT_VERSION,
@@ -354,15 +357,27 @@ def _public_run(record: Mapping[str, Any], *, cache_hit: bool) -> dict[str, Any]
 
 
 def _json_digest(value: Any) -> str:
-    encoded = json.dumps(
+    encoded = _canonical_json(value)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _canonical_json(value: Any) -> str:
+    return json.dumps(
         value,
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
         allow_nan=False,
     )
-    import hashlib
-    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _validated_snapshot_digest(snapshot: Mapping[str, Any]) -> str:
+    encoded = _canonical_json(snapshot).encode("utf-8")
+    if len(encoded) > MAX_EVIDENCE_SNAPSHOT_BYTES:
+        raise ValueError(
+            f"evidence snapshot exceeds {MAX_EVIDENCE_SNAPSHOT_BYTES} UTF-8 byte limit"
+        )
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def build_score_input_digest(
@@ -373,7 +388,7 @@ def build_score_input_digest(
     strict_prev_trade_date: str | None = None,
 ) -> str:
     """重建与 score run 相同的证据快照摘要，供确认边界做 freshness 校验。"""
-    return _json_digest(
+    return _validated_snapshot_digest(
         build_evidence_snapshot(
             trade_date,
             prefill,
