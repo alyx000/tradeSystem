@@ -18,18 +18,25 @@ def _bare(code: str) -> str:
 
 
 def _main_sectors(conn, date: str, top_k: int) -> tuple[set, bool]:
-    """T-1 主线申万二级 Top-K（当日缺失回退最近一日）。刻意副本，口径同 board_break/trend_leader。"""
-    rec = vc_repo.get_concentration(conn, date)
-    degraded = False
-    if rec is None:
-        degraded = True
-        recent = vc_repo.get_recent_concentration(conn, date, 1)
-        rec = recent[-1] if recent else None
-    auto = []
-    if rec and rec.get("sector_summary"):
-        auto = [s["industry"] for s in rec["sector_summary"]
-                if s.get("industry") != UNCLASSIFIED][:top_k]
-    return set(auto), degraded
+    """T-1 主线申万二级 Top-K（当日缺失回退最近一日）。刻意副本，口径同 board_break/trend_leader。
+
+    取数失败降级不中断整批，与 _index_context 等其他维度同款 try/except 对称。
+    """
+    try:
+        rec = vc_repo.get_concentration(conn, date)
+        degraded = False
+        if rec is None:
+            degraded = True
+            recent = vc_repo.get_recent_concentration(conn, date, 1)
+            rec = recent[-1] if recent else None
+        auto = []
+        if rec and rec.get("sector_summary"):
+            auto = [s["industry"] for s in rec["sector_summary"]
+                    if s.get("industry") != UNCLASSIFIED][:top_k]
+        return set(auto), degraded
+    except Exception:
+        # DB 失败或表缺失，降级空集 + degraded=True（不中断整批）
+        return set(), True
 
 
 def _hot_concepts(registry, date: str, top_m: int) -> tuple[dict, str]:

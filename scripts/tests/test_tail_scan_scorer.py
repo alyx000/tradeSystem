@@ -97,3 +97,16 @@ def test_build_fact_cards_positive_hits(monkeypatch):
     assert c["in_main_sector"] is True
     assert c["in_hot_concept"] is True and c["concept_names"] == ["AI算力"]
     assert c["index_status"] == "ok" and "上证指数" in c["index_context"]
+
+
+def test_main_sectors_degrades_on_db_error(monkeypatch):
+    """vc_repo 取数失败（DB 错/表缺失）不中断整批，_main_sectors 降级空集。"""
+    monkeypatch.setattr(scorer.vc_repo, "get_concentration",
+                       lambda conn, date: (_ for _ in ()).throw(sqlite3.OperationalError("no such table")))
+    monkeypatch.setattr(scorer.vc_repo, "get_recent_concentration",
+                       lambda conn, date, n: (_ for _ in ()).throw(sqlite3.OperationalError("no such table")))
+    cards = scorer.build_fact_cards(_mk_conn(), _Reg(), _scan1(), params={"date": "2026-07-13"})
+    assert len(cards) == 1
+    assert cards[0]["in_main_sector"] is False  # 降级无主线
+    assert cards[0]["main_sector_degraded"] is True  # 标记降级
+    assert cards[0]["main_sector_status"] == "missing"
