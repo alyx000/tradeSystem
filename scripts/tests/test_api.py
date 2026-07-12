@@ -3318,6 +3318,20 @@ def _seed_factor_score_run(
     conn.close()
 
 
+def _factor_persistence_counts(db_path):
+    conn = get_connection(db_path)
+    counts = tuple(
+        conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+        for table in (
+            "daily_review_factor_evaluations",
+            "daily_review_factor_score_runs",
+            "daily_review_factor_score_requests",
+        )
+    )
+    conn.close()
+    return counts
+
+
 def test_review_factor_score_no_llm_and_cache(client, db_path):
     _seed_factor_trade_date(db_path)
     body = {
@@ -3667,6 +3681,45 @@ def test_review_factor_score_rejects_non_schema_types(client, db_path, invalid_f
     )
 
     assert response.status_code == 422
+
+
+@pytest.mark.parametrize("retry_of_run_id", ["", "  \t"])
+def test_review_factor_score_rejects_blank_retry_id_before_any_write(
+    client, db_path, retry_of_run_id
+):
+    _seed_factor_trade_date(db_path)
+    before = _factor_persistence_counts(db_path)
+
+    response = client.post(
+        "/api/review-factors/2026-07-10/score",
+        json={
+            "no_llm": True,
+            "input_by": "web",
+            "retry_of_run_id": retry_of_run_id,
+        },
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert isinstance(detail, list)
+    assert any(error["loc"][-1] == "retry_of_run_id" for error in detail)
+    assert _factor_persistence_counts(db_path) == before
+
+
+def test_review_factor_score_strips_retry_id_whitespace(client, db_path):
+    _seed_factor_trade_date(db_path)
+    body = {"no_llm": True, "input_by": "web"}
+    first = client.post("/api/review-factors/2026-07-10/score", json=body)
+    run_id = first.json()["score_run_id"]
+
+    retry = client.post(
+        "/api/review-factors/2026-07-10/score",
+        json={**body, "retry_of_run_id": f"  {run_id}\t"},
+    )
+
+    assert first.status_code == 200
+    assert retry.status_code == 200
+    assert retry.json()["retry_of_run_id"] == run_id
 
 
 def test_review_factor_score_rejects_extra_field_before_service_or_audit_write(
@@ -4042,6 +4095,100 @@ def test_review_factor_evaluation_rejects_non_schema_payloads_before_write(
         for error in detail
     )
     assert evaluation_count == 0
+
+
+@pytest.mark.parametrize("field", ["source_date", "score_run_id"])
+@pytest.mark.parametrize("blank", ["", "  \t"])
+def test_review_factor_evaluation_put_rejects_explicit_blank_lookup_fields(
+    client, db_path, field, blank
+):
+    _seed_factor_score_run(db_path)
+    conn = get_connection(db_path)
+    Q.upsert_trade_calendar(conn, [{"date": "2026-07-13", "is_open": 1}])
+    conn.commit()
+    conn.close()
+    before = _factor_persistence_counts(db_path)
+    body = {
+        "source_date": "2026-07-10",
+        "score_run_id": "api-run-1",
+        "confirmed_outcome": "not_applicable",
+        "input_by": "web",
+        field: blank,
+    }
+
+    response = client.put(
+        "/api/review-factors/2026-07-13/evaluation",
+        json=body,
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert isinstance(detail, list)
+    assert any(error["loc"][-1] == field for error in detail)
+    assert _factor_persistence_counts(db_path) == before
+
+
+@pytest.mark.parametrize("field", ["source_date", "score_run_id"])
+@pytest.mark.parametrize("blank", ["", "  \t"])
+def test_review_factor_evaluation_get_rejects_explicit_blank_lookup_fields(
+    client, db_path, field, blank
+):
+    _seed_factor_score_run(db_path)
+    conn = get_connection(db_path)
+    Q.upsert_trade_calendar(conn, [{"date": "2026-07-13", "is_open": 1}])
+    conn.commit()
+    conn.close()
+    before = _factor_persistence_counts(db_path)
+    params = {
+        "source_date": "2026-07-10",
+        "score_run_id": "api-run-1",
+        field: blank,
+    }
+
+    response = client.get(
+        "/api/review-factors/2026-07-13/evaluation",
+        params=params,
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert isinstance(detail, list)
+    assert any(error["loc"][-1] == field for error in detail)
+    assert _factor_persistence_counts(db_path) == before
+
+
+def test_review_factor_evaluation_lookup_fields_strip_surrounding_whitespace(
+    client, db_path
+):
+    _seed_factor_score_run(db_path)
+    conn = get_connection(db_path)
+    Q.upsert_trade_calendar(conn, [{"date": "2026-07-13", "is_open": 1}])
+    conn.commit()
+    conn.close()
+
+    suggestion = client.get(
+        "/api/review-factors/2026-07-13/evaluation",
+        params={
+            "source_date": "  2026-07-10\t",
+            "score_run_id": "  api-run-1\t",
+        },
+    )
+    confirmed = client.put(
+        "/api/review-factors/2026-07-13/evaluation",
+        json={
+            "source_date": "  2026-07-10\t",
+            "score_run_id": "  api-run-1\t",
+            "confirmed_outcome": "not_applicable",
+            "input_by": "web",
+        },
+    )
+
+    assert suggestion.status_code == 200
+    assert suggestion.json()["source_review_date"] == "2026-07-10"
+    assert suggestion.json()["score_run_id"] == "api-run-1"
+    assert confirmed.status_code == 200
+    assert confirmed.json()["source_review_date"] == "2026-07-10"
+    assert confirmed.json()["score_run_id"] == "api-run-1"
 
 
 def test_review_factor_evaluation_openapi_keeps_required_body_fields(client):

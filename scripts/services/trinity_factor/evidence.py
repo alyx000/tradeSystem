@@ -16,6 +16,28 @@ from .review_input import validate_trade_date
 RULESET_VERSION = "trinity_ruleset_v2"
 SERVICE_SCHEMA_VERSION = "trinity_dual_score_run_v2"
 _EVIDENCE_STRING_MAX = 200
+_FREE_DATA_SUBTREE_FIELDS = frozenset({"content", "facts", "key_stocks"})
+_STRUCTURAL_STRING_FIELDS = frozenset({
+    "date",
+    "trade_date",
+    "strict_prev_trade_date",
+    "source_trade_date",
+    "outcome_trade_date",
+    "prev_date",
+    "factor_code",
+    "sector_key",
+    "primary_factor_code",
+    "primary_category_lock",
+    "rule_fallback_code",
+    "schema_version",
+    "ruleset_version",
+    "evidence_id",
+    "allowed_evidence_ids",
+    "allowed_counter_evidence_ids",
+    "t1_check_id",
+    "allowed_t1_check_ids",
+    "deterministic_sector_order",
+})
 _SECTOR_LLM_FACT_FIELDS = (
     "phase_hint",
     "rhythm_confidence",
@@ -75,7 +97,10 @@ def build_evidence_snapshot(
                     "layer": "review",
                     "kind": "judgement",
                     "polarity": "context",
-                    "content": _json_safe_value(_strip_rule_metadata(step_value)),
+                    "content": _json_safe_value(
+                        _strip_rule_metadata(step_value),
+                        free_data=True,
+                    ),
                 })
 
         quality = _evidence_quality(items)
@@ -302,8 +327,11 @@ def _prepare_sector_candidates(
             "sector_type": raw.get("sector_type"),
             "candidate_tier": "core",
             "data_status": raw.get("data_status"),
-            "facts": _json_safe_value(raw.get("facts") or {}),
-            "key_stocks": _json_safe_value(raw.get("key_stocks") or []),
+            "facts": _json_safe_value(raw.get("facts") or {}, free_data=True),
+            "key_stocks": _json_safe_value(
+                raw.get("key_stocks") or [],
+                free_data=True,
+            ),
             "evidence_items": items,
             "caps": {},
             "allowed_evidence_ids": evidence_ids,
@@ -1042,7 +1070,7 @@ def _has_meaningful_content(value: Any) -> bool:
     return _has_content(value)
 
 
-def _json_safe_value(value: Any) -> Any:
+def _json_safe_value(value: Any, *, free_data: bool = False) -> Any:
     """生成稳定 JSON 值并拒绝 NaN/自定义对象进入证据快照。"""
     try:
         parsed = json.loads(json.dumps(
@@ -1052,19 +1080,28 @@ def _json_safe_value(value: Any) -> Any:
             allow_nan=False,
             default=str,
         ))
-        return _bound_json_value(parsed)
+        return _bound_json_value(parsed, in_free_data=free_data)
     except (TypeError, ValueError) as exc:
         raise ValueError("evidence value is not JSON serializable") from exc
 
 
-def _bound_json_value(value: Any, *, field_name: str | None = None) -> Any:
+def _bound_json_value(
+    value: Any,
+    *,
+    field_name: str | None = None,
+    in_free_data: bool = False,
+) -> Any:
     if isinstance(value, str):
-        if _preserve_string_field(field_name):
+        if _preserve_string_field(field_name, in_free_data=in_free_data):
             return value
         return value[:_EVIDENCE_STRING_MAX]
     if isinstance(value, list):
         return [
-            _bound_json_value(item, field_name=field_name)
+            _bound_json_value(
+                item,
+                field_name=field_name,
+                in_free_data=in_free_data,
+            )
             for item in value[:100]
         ]
     if isinstance(value, dict):
@@ -1074,28 +1111,22 @@ def _bound_json_value(value: Any, *, field_name: str | None = None) -> Any:
             bounded[bounded_key] = _bound_json_value(
                 item,
                 field_name=bounded_key,
+                in_free_data=(
+                    in_free_data
+                    or bounded_key in _FREE_DATA_SUBTREE_FIELDS
+                ),
             )
         return bounded
     return value
 
 
-def _preserve_string_field(field_name: str | None) -> bool:
-    if not field_name:
-        return False
-    return (
-        field_name in {
-            "date",
-            "code",
-            "codes",
-            "stock_code",
-            "deterministic_sector_order",
-            "factor_code",
-            "sector_key",
-            "primary_factor_code",
-            "schema_version",
-            "ruleset_version",
-        }
-        or field_name.endswith("_id")
-        or field_name.endswith("_ids")
-        or field_name.endswith("_date")
+def _preserve_string_field(
+    field_name: str | None,
+    *,
+    in_free_data: bool,
+) -> bool:
+    return bool(
+        not in_free_data
+        and field_name
+        and field_name in _STRUCTURAL_STRING_FIELDS
     )

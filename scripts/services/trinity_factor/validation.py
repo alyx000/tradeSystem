@@ -89,9 +89,15 @@ _TRINITY_ACTION_REDLINE_KEYWORDS = (
     "买点",
     "卖点",
 )
+_TRINITY_NUMERIC_TOKEN = (
+    r"(?:[0-9]+(?:\.[0-9]+)?|[零〇一二两三四五六七八九十百千万亿]+)"
+)
+_TRINITY_NUMERIC_UNIT = r"(?:个百分点|港元|美元|人民币|元|块|点|%)"
 _TRINITY_NUMERIC_PREDICTION_RE = re.compile(
     r"(?:预计|预期(?!差)|看至|看到|涨至|涨到|可到|目标价|目标涨幅)"
-    r"[^0-9]{0,24}[0-9]+(?:元|块|点|%)"
+    r"[^0-9零〇一二两三四五六七八九十百千万亿]{0,24}"
+    + _TRINITY_NUMERIC_TOKEN
+    + _TRINITY_NUMERIC_UNIT
 )
 
 

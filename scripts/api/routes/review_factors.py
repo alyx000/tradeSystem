@@ -3,10 +3,17 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Mapping
-from typing import Any, Literal, Optional
+from typing import Annotated, Any, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, ConfigDict, StrictBool, StrictStr, field_validator
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    StrictBool,
+    StrictStr,
+    field_validator,
+)
 
 from api.deps import get_db_conn
 from api.routes.review import build_review_prefill
@@ -25,13 +32,26 @@ from services.trinity_factor.review_input import (
 router = APIRouter(prefix="/api/review-factors", tags=["review-factors"])
 
 
+def _normalize_non_empty_string(value: str) -> str:
+    normalized = value.strip()
+    if not normalized:
+        raise ValueError("must be a non-empty string")
+    return normalized
+
+
+_NonEmptyStrictStr = Annotated[
+    StrictStr,
+    AfterValidator(_normalize_non_empty_string),
+]
+
+
 class ReviewFactorScoreRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     input_by: StrictStr
     no_llm: StrictBool = False
     steps: Optional[dict[str, Any]] = None
-    retry_of_run_id: Optional[StrictStr] = None
+    retry_of_run_id: Optional[_NonEmptyStrictStr] = None
 
     @field_validator("input_by")
     @classmethod
@@ -45,8 +65,8 @@ class ReviewFactorScoreRequest(BaseModel):
 class ReviewFactorEvaluationRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    source_date: Optional[StrictStr] = None
-    score_run_id: Optional[StrictStr] = None
+    source_date: Optional[_NonEmptyStrictStr] = None
+    score_run_id: Optional[_NonEmptyStrictStr] = None
     confirmed_outcome: Literal[
         "hit",
         "partial",
@@ -109,12 +129,12 @@ def score_review_factors(
 @router.get("/{date}/evaluation")
 def get_factor_evaluation(
     date: str,
-    source_date: Optional[str] = Query(default=None),
-    score_run_id: Optional[str] = Query(default=None),
+    source_date: Optional[_NonEmptyStrictStr] = Query(default=None),
+    score_run_id: Optional[_NonEmptyStrictStr] = Query(default=None),
     conn: sqlite3.Connection = Depends(get_db_conn),
 ):
     evaluation_date = _date(date)
-    if source_date:
+    if source_date is not None:
         source_date = _date(source_date)
     try:
         return suggest_t1_evaluation(
@@ -136,14 +156,14 @@ def put_factor_evaluation(
 ):
     evaluation_date = _date(date)
     source_date = body.source_date
-    if source_date:
+    if source_date is not None:
         source_date = _date(source_date)
     try:
         suggestion = suggest_t1_evaluation(
             conn,
             evaluation_trade_date=evaluation_date,
             source_review_date=source_date,
-            score_run_id=body.score_run_id or None,
+            score_run_id=body.score_run_id,
             prefill=build_review_prefill(conn, evaluation_date),
         )
         return confirm_t1_evaluation(

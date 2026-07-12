@@ -288,6 +288,18 @@ def _ok_facts(factor: dict) -> list[dict]:
     ]
 
 
+def _assert_all_strings_bounded(value, *, limit: int = 200) -> None:
+    if isinstance(value, str):
+        assert len(value) <= limit
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            assert len(str(key)) <= limit
+            _assert_all_strings_bounded(item, limit=limit)
+    elif isinstance(value, list):
+        for item in value:
+            _assert_all_strings_bounded(item, limit=limit)
+
+
 def _run_result(*, status: str, parsed_output=None, raw=None, reason: str | None = None):
     return StructuredRunResult(
         status=status,
@@ -1246,13 +1258,21 @@ def test_llm_visible_free_strings_are_bounded_without_truncating_ids_or_dates() 
     long_text = "界" * 1000
     sector_key = "industry:" + "K" * 240
     evidence_id = "evidence:" + "E" * 240
-    stock_code = "C" * 240
+    stock_code = "C" * 1000
     candidate = _candidate(1)
     candidate.update({
         "sector_key": sector_key,
         "sector_name": long_text,
         "sector_type": long_text,
-        "facts": {"phase_hint": long_text},
+        "facts": {
+            "phase_hint": long_text,
+            "nested": {
+                "notes_id": long_text,
+                "evidence_id": long_text,
+                "custom_date": long_text,
+                "codes": [stock_code],
+            },
+        },
     })
     candidate["evidence_items"][0].update({
         "evidence_id": evidence_id,
@@ -1262,7 +1282,13 @@ def test_llm_visible_free_strings_are_bounded_without_truncating_ids_or_dates() 
     snapshot = build_evidence_snapshot(
         "2026-07-10",
         _prefill([candidate]),
-        _steps(step2_sectors={"notes": long_text, "codes": [stock_code]}),
+        _steps(step2_sectors={
+            "notes": long_text,
+            "notes_id": long_text,
+            "evidence_id": long_text,
+            "custom_date": long_text,
+            "codes": [stock_code],
+        }),
     )
     factor_input = build_factor_llm_input(snapshot)
     sector_input = build_sector_llm_input(
@@ -1285,15 +1311,24 @@ def test_llm_visible_free_strings_are_bounded_without_truncating_ids_or_dates() 
 
     assert sector["sector_key"] == sector_key
     assert snapshot["rule_gate"]["deterministic_sector_order"] == [sector_key]
-    assert review_item["content"]["codes"] == [stock_code]
+    assert len(review_item["content"]["notes_id"]) <= 200
+    assert len(review_item["content"]["evidence_id"]) <= 200
+    assert len(review_item["content"]["custom_date"]) <= 200
+    assert len(review_item["content"]["codes"][0]) <= 200
     assert sector["evidence_items"][0]["evidence_id"] == evidence_id
     assert sector["evidence_items"][0]["trade_date"] == "2026-07-10"
-    assert sector["allowed_t1_check_ids"][0].endswith(":t1-continuity")
+    assert sector["allowed_t1_check_ids"] == [
+        f"2026-07-10:{sector_key}:t1-continuity"
+    ]
     assert len(sector["sector_name"]) <= 200
     assert len(sector["sector_type"]) <= 200
     assert len(sector["facts"]["phase_hint"]) <= 200
     assert len(sector["evidence_items"][0]["text"]) <= 200
     assert len(factor_item["text"]) <= 200
+    snapshot_sector = snapshot["sector_candidates"][0]
+    _assert_all_strings_bounded(review_item["content"])
+    _assert_all_strings_bounded(snapshot_sector["facts"])
+    _assert_all_strings_bounded(sector["facts"])
 
 
 def test_evidence_snapshot_keeps_production_daily_market_fields() -> None:
@@ -1684,7 +1719,7 @@ def test_trinity_redline_reason_fails_closed_across_runner_service_and_repositor
     monkeypatch.setenv("ANTIGRAVITY_BIN", "/fake/agy")
     monkeypatch.setenv("LLM_TIMEOUT_SECONDS", "180")
     monkeypatch.setenv("ANTIGRAVITY_LOG_DIR", str(tmp_path / "logs"))
-    malicious_reason = "[判断]建议明日追\u200b涨，预计可到５０元"
+    malicious_reason = "[判断]预计可到三千点"
     snapshot = build_evidence_snapshot("2026-07-10", _prefill(), _steps())
     rows = []
     for candidate in snapshot["factor_candidates"]:

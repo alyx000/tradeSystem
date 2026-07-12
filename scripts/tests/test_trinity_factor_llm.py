@@ -295,6 +295,11 @@ def test_factor_reason_rejects_trinity_specific_trade_actions(action):
     "reason",
     [
         "[判断]预计可到５０元",
+        "[判断]预计可到三千点",
+        "[判断]预计涨到30港元",
+        "[判断]预期收益率20个百分点",
+        "[判断]预计可到12.5美元",
+        "[判断]预计可到 30 人民币",
         "[判断]预\u200b期，涨到 20 块",
         "[判断]看至3,000点",
         "[判断]看到3200点",
@@ -305,17 +310,19 @@ def test_factor_reason_rejects_trinity_specific_trade_actions(action):
         "[判断]目标涨幅…20 %",
     ],
 )
-def test_sector_reason_rejects_concrete_numeric_price_predictions(reason):
-    rows = [
-        _sector_row("sector:a", reason=reason),
-        _sector_row("sector:b"),
-    ]
-
+@pytest.mark.parametrize("layer", ["factor", "sector"])
+def test_trinity_reason_rejects_concrete_numeric_predictions(layer, reason):
     with pytest.raises(TrinityValidationError):
-        parse_sector_response(
-            _sector_payload(rows),
-            [_sector_candidate("sector:a"), _sector_candidate("sector:b")],
-        )
+        if layer == "factor":
+            parse_factor_response(
+                _factor_payload([_factor_row(reason=reason)]),
+                [_factor_candidate()],
+            )
+        else:
+            parse_sector_response(
+                _sector_payload([_sector_row(reason=reason)]),
+                [_sector_candidate()],
+            )
 
 
 @pytest.mark.parametrize(
