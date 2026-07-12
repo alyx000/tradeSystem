@@ -36,31 +36,21 @@ def _assert_malformed_steps_file_rejected(
     content: str,
     error: str,
 ) -> None:
-    db_path = tmp_path / "review-factor-cli-malformed.db"
-    conn = get_connection(db_path)
-    migrate(conn)
-    _seed_open_trade_date(conn)
-    conn.close()
     steps_file = tmp_path / "steps.json"
     steps_file.write_text(content, encoding="utf-8")
-    monkeypatch.setattr(review_factors, "_connection", lambda: get_connection(db_path))
-    monkeypatch.setattr(
-        review_factors,
-        "build_review_prefill",
-        lambda _conn, _date: {"date": _date, "review_signals": {"sectors": {}}},
-    )
+    opened = False
+
+    def fail_if_opened():
+        nonlocal opened
+        opened = True
+        raise AssertionError("database must not be opened for a malformed steps file")
+
+    monkeypatch.setattr(review_factors, "_connection", fail_if_opened)
 
     with pytest.raises(ValueError, match=error):
         review_factors._factor_score(_score_args(steps_file=str(steps_file)))
 
-    conn = get_connection(db_path)
-    try:
-        run_count = conn.execute(
-            "SELECT COUNT(*) FROM daily_review_factor_score_runs"
-        ).fetchone()[0]
-    finally:
-        conn.close()
-    assert run_count == 0
+    assert opened is False
 
 
 def test_factor_score_normalizes_stored_review_json_like_api(
@@ -108,6 +98,45 @@ def test_factor_score_rejects_wrapped_non_object_steps(
         content='{"steps": []}',
         error="steps must be a JSON object",
     )
+
+
+def test_factor_score_rejects_top_level_null_steps_file(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _assert_malformed_steps_file_rejected(
+        tmp_path,
+        monkeypatch,
+        content="null",
+        error="steps-file must contain a JSON object",
+    )
+
+
+def test_factor_score_wrapped_null_falls_back_to_stored_review(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db_path = tmp_path / "review-factor-cli-wrapped-null.db"
+    conn = get_connection(db_path)
+    migrate(conn)
+    _seed_open_trade_date(conn)
+    Q.upsert_daily_review(
+        conn,
+        "2026-07-10",
+        {"step6_nodes": {"systemic_risk": True}},
+    )
+    conn.commit()
+    conn.close()
+    steps_file = tmp_path / "steps-null.json"
+    steps_file.write_text('{"steps": null}', encoding="utf-8")
+    monkeypatch.setattr(review_factors, "_connection", lambda: get_connection(db_path))
+    monkeypatch.setattr(
+        review_factors,
+        "build_review_prefill",
+        lambda _conn, _date: {"date": _date, "review_signals": {"sectors": {}}},
+    )
+
+    result = review_factors._factor_score(_score_args(steps_file=str(steps_file)))
+
+    assert result["rule_gate"]["primary_category_lock"] == "market_node"
 
 
 def test_invalid_calendar_date_exits_before_opening_database(

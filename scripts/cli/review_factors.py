@@ -81,17 +81,18 @@ def _factor_score(args: argparse.Namespace) -> dict[str, Any]:
     from services.trinity_factor.service import TrinityFactorService
 
     trade_date = validate_trade_date(args.date)
+    steps = None
+    if args.steps_file is not None:
+        supplied = _read_json_file(args.steps_file)
+        if not isinstance(supplied, dict):
+            raise ValueError("steps-file must contain a JSON object")
+        steps = supplied.get("steps", supplied)
+        if steps is not None and not isinstance(steps, dict):
+            raise ValueError("steps must be a JSON object")
     conn = _connection()
     try:
-        if args.steps_file is None:
+        if steps is None:
             steps = Q.get_daily_review(conn, trade_date) or {}
-        else:
-            supplied = _read_json_file(args.steps_file)
-            if not isinstance(supplied, dict):
-                raise ValueError("steps-file must contain a JSON object")
-            steps = supplied.get("steps", supplied)
-            if not isinstance(steps, dict):
-                raise ValueError("steps must be a JSON object")
         return TrinityFactorService().score(
             conn,
             trade_date=trade_date,
