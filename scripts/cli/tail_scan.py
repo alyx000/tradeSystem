@@ -1,8 +1,8 @@
-"""CLI: 盘中尾盘强势股扫描（无状态只读观察清单 + 四维 PK）。
+"""CLI: 盘中尾盘强势股扫描（实时筛选→四维事实卡+产业逻辑→PK→渲染）。
 
   tail-scan daily [--date] [--min-pct 7] [--min-amount 20] [--dry-run] [--no-push] [--no-llm]
 
-红线：筛选依据（涨幅/成交额/非ST）为 [事实]，渲染清单全标 [判断]，非买卖建议、不出价位。
+红线：筛选依据为 [事实]，排序为 [判断]，主营/催化保留行内边界标签；非买卖建议、不出价位。
 """
 from __future__ import annotations
 
@@ -21,10 +21,10 @@ logger = logging.getLogger(__name__)
 def register_subparser(subparsers: argparse._SubParsersAction) -> None:
     ts = subparsers.add_parser(
         "tail-scan",
-        help=f"盘中尾盘强势股扫描（涨幅>{C.DEFAULT_MIN_PCT:g}%%/非ST/成交额>{C.DEFAULT_MIN_AMOUNT_YI:g}亿 + 四维PK）",
+        help=f"盘中尾盘强势股扫描（涨幅>{C.DEFAULT_MIN_PCT:g}%%/非ST/成交额>{C.DEFAULT_MIN_AMOUNT_YI:g}亿 + 四维事实卡+产业逻辑+PK）",
     )
     sub = ts.add_subparsers(dest="tail_scan_command")
-    daily = sub.add_parser("daily", help="实时筛选→四维事实卡→PK→渲染→推钉钉")
+    daily = sub.add_parser("daily", help="实时筛选→四维事实卡+产业逻辑→PK→渲染")
     daily.add_argument("--date", default=None, help="交易日 YYYY-MM-DD（默认今天）")
     daily.add_argument("--min-pct", type=float, default=C.DEFAULT_MIN_PCT,
                         help=f"涨幅下限%%（默认{C.DEFAULT_MIN_PCT:g}）")
@@ -94,7 +94,14 @@ def _run_daily(config: dict, args: argparse.Namespace) -> None:
     path = renderer.save_report(md, date)
     logger.info("[tail-scan daily] 报告已落盘 %s", path)
     if not args.no_push:
-        _push(f"尾盘强势股观察清单 · {date}", md)
+        push_md = renderer.render_push_summary(
+            scan_result,
+            scored,
+            pk_result,
+            full_md=md,
+            report_path=str(path),
+        )
+        _push(f"尾盘强势股观察清单 · {date}", push_md)
 
 
 def _push(title: str, markdown: str) -> None:

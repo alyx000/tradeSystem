@@ -6,11 +6,152 @@
 from __future__ import annotations
 
 import datetime as _dt
+import logging
+import re
 
 from services.tail_scan import constants as C
 from services.tail_scan import indicators as ind
+from services.tail_scan import industry_logic
 from services.volume_concentration import repo as vc_repo
 from services.volume_concentration.aggregator import UNCLASSIFIED
+
+
+logger = logging.getLogger(__name__)
+
+_BUSINESS_STATUSES = {"ok", "missing", "source_failed"}
+_CATALYST_STATUSES = {"exact", "sector", "none", "source_failed"}
+_CONTAINER_TYPES = (dict, list, tuple, set, frozenset)
+_EVIDENCE_LABELS_BY_KIND = {
+    "teacher_stock": {"老师观点·个股"},
+    "huibo_stock": {"研报观点·个股催化"},
+    "huibo_relation": {"来源陈述·个股关联"},
+    "industry": {"事实·行业催化", "来源陈述·行业催化"},
+}
+_DIRECT_EVIDENCE_KINDS = {"teacher_stock", "huibo_stock", "huibo_relation"}
+
+
+def _logic_text(value) -> tuple[str, bool]:
+    """增强层文本收敛为单行字符串；容器不可被隐式 stringify。"""
+    if value is None:
+        return "", True
+    if isinstance(value, _CONTAINER_TYPES):
+        return "", False
+    return re.sub(r"\s+", " ", str(value)).strip(), True
+
+
+def _mapped_industry(industry_map: dict, code: str) -> str:
+    row = industry_map.get(code)
+    if not isinstance(row, dict):
+        return ""
+    text, valid = _logic_text(row.get("sw_l2"))
+    return text if valid else ""
+
+
+def _normalize_logic_row(row: dict, fallback_industry: str, scan_date: str) -> dict:
+    """把增强模块返回值归一为事实卡稳定契约，所有外部矛盾均 fail-closed。"""
+    business_status = row.get("business_status")
+    if not isinstance(business_status, str) or business_status not in _BUSINESS_STATUSES:
+        business_status = "source_failed"
+
+    business_fields = {"sw_l2": fallback_industry}
+    business_fields_valid = True
+    for key in ("business_summary", "business_source", "industry_position"):
+        text, valid = _logic_text(row.get(key))
+        business_fields[key] = text
+        if not valid:
+            business_fields_valid = False
+
+    raw_products = row.get("product_names")
+    products = []
+    if not isinstance(raw_products, list):
+        business_fields_valid = False
+    else:
+        for item in raw_products:
+            text, valid = _logic_text(item)
+            if not valid:
+                business_fields_valid = False
+                continue
+            if text and text not in products:
+                products.append(text)
+        products = products[: C.INDUSTRY_LOGIC_MAX_PRODUCTS]
+
+    if business_status == "ok" and (
+        not business_fields_valid
+        or not business_fields["business_source"]
+    ):
+        business_status = "source_failed"
+    if business_status != "ok":
+        business_fields["business_summary"] = ""
+        business_fields["business_source"] = ""
+        business_fields["industry_position"] = (
+            f"{fallback_industry}相关企业" if fallback_industry else ""
+        )
+        products = []
+
+    raw_catalyst_status = row.get("catalyst_status")
+    status_valid = (
+        isinstance(raw_catalyst_status, str)
+        and raw_catalyst_status in _CATALYST_STATUSES
+    )
+    catalyst_status = raw_catalyst_status if status_valid else "source_failed"
+    raw_evidence = row.get("catalyst_evidence")
+    evidence = []
+    evidence_valid = isinstance(raw_evidence, list)
+    try:
+        scan_day = _dt.date.fromisoformat(scan_date)
+    except (TypeError, ValueError):
+        scan_day = None
+    if evidence_valid:
+        for item in raw_evidence:
+            if not isinstance(item, dict):
+                evidence_valid = False
+                break
+            normalized = {}
+            for key in ("kind", "label", "date", "source", "text"):
+                text, valid = _logic_text(item.get(key))
+                if not valid or not text:
+                    evidence_valid = False
+                    break
+                normalized[key] = text
+            if not evidence_valid:
+                break
+            kind, label = normalized["kind"], normalized["label"]
+            if label not in _EVIDENCE_LABELS_BY_KIND.get(kind, set()):
+                evidence_valid = False
+                break
+            try:
+                evidence_day = _dt.date.fromisoformat(normalized["date"])
+            except ValueError:
+                evidence_valid = False
+                break
+            if scan_day is None or evidence_day > scan_day:
+                evidence_valid = False
+                break
+            evidence.append(normalized)
+
+    if catalyst_status == "exact":
+        status_evidence_consistent = bool(evidence) and any(
+            item["kind"] in _DIRECT_EVIDENCE_KINDS for item in evidence
+        )
+    elif catalyst_status == "sector":
+        status_evidence_consistent = bool(evidence) and all(
+            item["kind"] == "industry" for item in evidence
+        )
+    else:
+        status_evidence_consistent = not evidence
+    if not status_valid or not evidence_valid or not status_evidence_consistent:
+        catalyst_status = "source_failed"
+        evidence = []
+    else:
+        evidence = evidence[: C.INDUSTRY_LOGIC_MAX_CATALYSTS]
+
+    return {
+        **business_fields,
+        "product_names": products,
+        "business_status": business_status,
+        "catalyst_evidence": evidence,
+        "catalyst_status": catalyst_status,
+    }
 
 
 def _bare(code: str) -> str:
@@ -184,6 +325,35 @@ def build_fact_cards(conn, registry, scan_result: dict, *, params: dict) -> list
     ir = registry.call("get_stock_sw_industry_map")
     industry_map = ir.data if getattr(ir, "success", False) and isinstance(ir.data, dict) else {}
 
+    # 主营和催化证据按候选整批加载一次；任一内部来源异常都不得中断实时扫描主链路。
+    try:
+        built_logic = industry_logic.build_industry_logic_map(
+            conn,
+            registry,
+            cands,
+            scan_date=date,
+            industry_map=industry_map,
+            concept_map=concept_map,
+            lookback_days=params.get(
+                "industry_logic_lookback", C.INDUSTRY_LOGIC_LOOKBACK_DAYS
+            ),
+            huibo_dir=params.get("huibo_summary_dir"),
+        )
+        built_logic = built_logic if isinstance(built_logic, dict) else {}
+    except Exception:
+        logger.warning("[tail-scan] 产业逻辑整批构建失败，按源失败降级", exc_info=True)
+        built_logic = {}
+    industry_by_code = {}
+    logic_map = {}
+    for cand in cands:
+        code = cand.get("code", "")
+        industry = _mapped_industry(industry_map, code)
+        industry_by_code[code] = industry
+        row = built_logic.get(code)
+        logic_map[code] = _normalize_logic_row(
+            row if isinstance(row, dict) else {}, industry, date
+        )
+
     # 候选集内相对强弱：按涨幅降序名次（最票 proxy）
     order = sorted(cands, key=lambda c: -(c.get("pct_chg") or 0))
     rank_of = {c["code"]: i for i, c in enumerate(order, start=1)}
@@ -196,6 +366,7 @@ def build_fact_cards(conn, registry, scan_result: dict, *, params: dict) -> list
     for cand in cands:
         code, name = cand["code"], cand.get("name", "")
         bare = _bare(code)
+        logic = logic_map[code]
         if prev_date is None:
             history_ok, bars = False, []
         else:
@@ -208,7 +379,7 @@ def build_fact_cards(conn, registry, scan_result: dict, *, params: dict) -> list
         live = cand.get("price")
 
         # 申万二级行业（补映射后 main_sector 才真正生效）
-        industry = (industry_map.get(code) or {}).get("sw_l2", "")
+        industry = industry_by_code[code]
 
         # 量能倍数（单位对齐关键）：sina amount_yi=亿元；tushare daily.amount=**千元**。
         # 统一到元：live=amount_yi*1e8，prev=prev_amount*1e3 → vol_ratio=amount_yi*1e5/prev_amount。
@@ -253,6 +424,15 @@ def build_fact_cards(conn, registry, scan_result: dict, *, params: dict) -> list
             "dist_to_high": ind.dist_to_high(live, highs, high_n),
             "broke_high": ind.broke_prior_high(live, highs, high_n),
             "calendar": cal,
+            # —— 产业逻辑（不进入粗分）——
+            "sw_l2": logic.get("sw_l2") or industry,
+            "business_summary": logic.get("business_summary", ""),
+            "product_names": logic.get("product_names") or [],
+            "business_source": logic.get("business_source", ""),
+            "business_status": logic.get("business_status", "source_failed"),
+            "industry_position": logic.get("industry_position", ""),
+            "catalyst_evidence": logic.get("catalyst_evidence") or [],
+            "catalyst_status": logic.get("catalyst_status", "source_failed"),
         })
     return cards
 

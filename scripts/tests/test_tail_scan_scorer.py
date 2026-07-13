@@ -1,6 +1,42 @@
 import sqlite3
 
+import pytest
+
+from services.tail_scan import industry_logic
+from services.tail_scan import pk as tail_pk
 from services.tail_scan import scorer
+
+
+@pytest.fixture
+def industry_logic_stub():
+    return {"calls": [], "result": None, "error": None}
+
+
+@pytest.fixture(autouse=True)
+def _stub_industry_logic(monkeypatch, industry_logic_stub):
+    """所有 scorer 测试隔离主营 provider、本地证据表和慧博文件。"""
+    def fake_builder(conn, registry, candidates, **kwargs):
+        industry_logic_stub["calls"].append({"candidates": candidates, **kwargs})
+        if industry_logic_stub["error"] is not None:
+            raise industry_logic_stub["error"]
+        if industry_logic_stub["result"] is not None:
+            return industry_logic_stub["result"]
+        industry_map = kwargs.get("industry_map") or {}
+        return {
+            row["code"]: {
+                "sw_l2": (industry_map.get(row["code"]) or {}).get("sw_l2", ""),
+                "business_summary": "",
+                "product_names": [],
+                "business_source": "",
+                "business_status": "missing",
+                "industry_position": "",
+                "catalyst_evidence": [],
+                "catalyst_status": "none",
+            }
+            for row in candidates
+        }
+
+    monkeypatch.setattr(industry_logic, "build_industry_logic_map", fake_builder)
 
 
 def _card(**kw):
@@ -97,6 +133,263 @@ def test_build_fact_cards_positive_hits(monkeypatch):
     assert c["in_main_sector"] is True
     assert c["in_hot_concept"] is True and c["concept_names"] == ["AI算力"]
     assert c["index_status"] == "ok" and "上证指数" in c["index_context"]
+
+
+def test_build_fact_cards_wires_industry_logic_once(industry_logic_stub, monkeypatch):
+    monkeypatch.setattr(scorer, "_prev_trade_date", lambda reg, d: "2026-07-10")
+    monkeypatch.setattr(scorer, "_main_sectors", lambda conn, date, k: ({"半导体"}, False))
+    industry_logic_stub["result"] = {
+        "600001.SH": {
+            "sw_l2": "",  # builder 空值须回退已有申万行业映射
+            "business_summary": "晶圆制造设备",
+            "product_names": ["刻蚀机", "薄膜设备"],
+            "business_source": "tushare.stock_company",
+            "business_status": "ok",
+            "industry_position": "半导体产业链企业，核心产品包括刻蚀机、薄膜设备",
+            "catalyst_evidence": [{
+                "kind": "huibo_stock", "label": "研报观点·个股催化",
+                "date": "2026-07-12", "source": "测试研报", "text": "新增产线验证",
+            }],
+            "catalyst_status": "exact",
+        }
+    }
+    cards = scorer.build_fact_cards(
+        _mk_conn(), _RegPos(), _scan1(),
+        params={
+            "date": "2026-07-13", "industry_logic_lookback": 20,
+            "huibo_summary_dir": "/tmp/never-read-by-stub",
+        },
+    )
+    assert len(industry_logic_stub["calls"]) == 1
+    call = industry_logic_stub["calls"][0]
+    assert call["scan_date"] == "2026-07-13"
+    assert call["lookback_days"] == 20
+    assert call["huibo_dir"] == "/tmp/never-read-by-stub"
+    assert call["concept_map"] == {"600001": ["AI算力"]}
+    assert call["industry_map"]["600001.SH"]["sw_l2"] == "半导体"
+    assert cards[0]["business_summary"] == "晶圆制造设备"
+    assert cards[0]["product_names"] == ["刻蚀机", "薄膜设备"]
+    assert cards[0]["sw_l2"] == "半导体"
+    assert cards[0]["catalyst_status"] == "exact"
+
+
+def test_build_fact_cards_industry_logic_failure_keeps_card(industry_logic_stub, monkeypatch):
+    monkeypatch.setattr(scorer, "_prev_trade_date", lambda reg, d: "2026-07-10")
+    monkeypatch.setattr(scorer, "_main_sectors", lambda conn, date, k: ({"半导体"}, False))
+    industry_logic_stub["error"] = RuntimeError("产业逻辑整批失败")
+    cards = scorer.build_fact_cards(_mk_conn(), _RegPos(), _scan1(), params={"date": "2026-07-13"})
+    assert len(cards) == 1
+    assert cards[0]["sw_l2"] == "半导体"
+    assert cards[0]["business_summary"] == ""
+    assert cards[0]["product_names"] == []
+    assert cards[0]["business_status"] == "source_failed"
+    assert cards[0]["catalyst_evidence"] == []
+    assert cards[0]["catalyst_status"] == "source_failed"
+
+
+def test_build_fact_cards_normalizes_malformed_industry_logic_row(industry_logic_stub, monkeypatch):
+    monkeypatch.setattr(scorer, "_prev_trade_date", lambda reg, d: "2026-07-10")
+    monkeypatch.setattr(scorer, "_main_sectors", lambda conn, date, k: ({"半导体"}, False))
+    industry_logic_stub["result"] = {
+        "600001.SH": {
+            "sw_l2": {"伪造": "行业"},
+            "business_summary": ["伪造主营"],
+            "product_names": [{"name": "伪造产品"}, " 合法\n产品 ", 7],
+            "business_source": 123,
+            "business_status": "ready",
+            "industry_position": {"伪造": "位置"},
+            "catalyst_evidence": [
+                {"kind": "huibo_stock", "label": "研报观点·个股催化",
+                 "date": "2026-07-12", "source": "研报", "text": "合法证据"},
+                "畸形证据",
+            ],
+            "catalyst_status": "ready",
+        }
+    }
+    cards = scorer.build_fact_cards(_mk_conn(), _RegPos(), _scan1(), params={"date": "2026-07-13"})
+    card = cards[0]
+    assert card["sw_l2"] == "半导体"
+    assert card["business_summary"] == ""
+    assert card["product_names"] == []
+    assert card["business_source"] == ""
+    assert card["industry_position"] == "半导体相关企业"
+    assert card["business_status"] == "source_failed"
+    assert card["catalyst_evidence"] == []
+    assert card["catalyst_status"] == "source_failed"
+    for key in ("sw_l2", "business_summary", "business_source", "industry_position"):
+        assert isinstance(card[key], str)
+
+
+@pytest.mark.parametrize(
+    "business_status,catalyst_status",
+    [({}, []), ([], set()), (set(), {})],
+)
+def test_normalize_logic_row_rejects_unhashable_statuses_without_raising(
+    business_status, catalyst_status
+):
+    row = {
+        "sw_l2": "半导体", "business_summary": "设备", "product_names": [],
+        "business_source": "资料", "business_status": business_status,
+        "industry_position": "半导体设备企业", "catalyst_evidence": [],
+        "catalyst_status": catalyst_status,
+    }
+    normalized = scorer._normalize_logic_row(row, "半导体", "2026-07-13")
+    assert normalized["business_status"] == "source_failed"
+    assert normalized["catalyst_status"] == "source_failed"
+    assert normalized["catalyst_evidence"] == []
+
+
+def _complete_evidence(**overrides):
+    item = {
+        "kind": "huibo_stock", "label": "研报观点·个股催化",
+        "date": "2026-07-12", "source": "测试研报", "text": "新增产线验证",
+    }
+    item.update(overrides)
+    return item
+
+
+@pytest.mark.parametrize(
+    "status,evidence",
+    [
+        ("exact", []),
+        ("sector", [_complete_evidence(text="")]),
+        ("exact", [_complete_evidence(source="")]),
+        ("none", [_complete_evidence()]),
+        ("source_failed", [_complete_evidence()]),
+    ],
+)
+def test_normalize_logic_row_enforces_catalyst_status_evidence_invariant(status, evidence):
+    row = {
+        "sw_l2": "半导体", "business_summary": "设备", "product_names": [],
+        "business_source": "资料", "business_status": "ok",
+        "industry_position": "半导体设备企业", "catalyst_evidence": evidence,
+        "catalyst_status": status,
+    }
+    normalized = scorer._normalize_logic_row(row, "半导体", "2026-07-13")
+    assert normalized["catalyst_status"] == "source_failed"
+    assert normalized["catalyst_evidence"] == []
+
+
+def test_source_failed_business_payload_cannot_leak_row_claims(industry_logic_stub, monkeypatch):
+    monkeypatch.setattr(scorer, "_prev_trade_date", lambda reg, d: "2026-07-10")
+    monkeypatch.setattr(scorer, "_main_sectors", lambda conn, date, k: ({"半导体"}, False))
+    industry_logic_stub["result"] = {
+        "600001.SH": {
+            "sw_l2": "伪造行业",
+            "business_summary": "恶意主营已兑现",
+            "product_names": ["恶意产品"],
+            "business_source": "恶意来源",
+            "business_status": "source_failed",
+            "industry_position": "行业龙头必然受益",
+            "catalyst_evidence": [],
+            "catalyst_status": "none",
+        }
+    }
+    card = scorer.build_fact_cards(
+        _mk_conn(), _RegPos(), _scan1(), params={"date": "2026-07-13"}
+    )[0]
+    assert card["sw_l2"] == "半导体"
+    assert card["business_summary"] == ""
+    assert card["product_names"] == []
+    assert card["business_source"] == ""
+    assert card["industry_position"] == "半导体相关企业"
+    payload = str(tail_pk._payload(card, card))
+    for leaked in ("伪造行业", "恶意主营", "恶意产品", "恶意来源", "行业龙头"):
+        assert leaked not in payload
+
+
+@pytest.mark.parametrize(
+    "evidence",
+    [
+        [_complete_evidence(kind="industry", label="老师观点·个股", date="not-a-date")],
+        [_complete_evidence(date="2026-07-14")],
+    ],
+)
+def test_normalize_logic_row_rejects_bad_kind_label_pair_or_future_date(evidence):
+    row = {
+        "sw_l2": "伪造行业", "business_summary": "设备", "product_names": [],
+        "business_source": "资料", "business_status": "ok",
+        "industry_position": "半导体设备企业", "catalyst_evidence": evidence,
+        "catalyst_status": "exact",
+    }
+    normalized = scorer._normalize_logic_row(row, "半导体", "2026-07-13")
+    assert normalized["sw_l2"] == "半导体"
+    assert normalized["catalyst_status"] == "source_failed"
+    assert normalized["catalyst_evidence"] == []
+
+
+@pytest.mark.parametrize(
+    "status,evidence",
+    [
+        ("exact", [_complete_evidence(kind="teacher_stock", label="老师观点·个股")]),
+        ("sector", [_complete_evidence(kind="industry", label="事实·行业催化")]),
+    ],
+)
+def test_normalize_logic_row_keeps_valid_exact_and_sector_evidence(status, evidence):
+    row = {
+        "sw_l2": "伪造行业", "business_summary": "设备", "product_names": [],
+        "business_source": "资料", "business_status": "ok",
+        "industry_position": "半导体设备企业", "catalyst_evidence": evidence,
+        "catalyst_status": status,
+    }
+    normalized = scorer._normalize_logic_row(row, "半导体", "2026-07-13")
+    assert normalized["sw_l2"] == "半导体"
+    assert normalized["catalyst_status"] == status
+    assert normalized["catalyst_evidence"] == evidence
+
+
+def test_normalize_logic_row_keeps_ok_empty_display_content_when_source_is_present():
+    row = {
+        "sw_l2": "伪造行业", "business_summary": "", "product_names": [],
+        "business_source": "tushare.stock_company", "business_status": "ok",
+        "industry_position": "", "catalyst_evidence": [], "catalyst_status": "none",
+    }
+    normalized = scorer._normalize_logic_row(row, "半导体", "2026-07-13")
+    assert normalized["business_status"] == "ok"
+    assert normalized["business_summary"] == ""
+    assert normalized["product_names"] == []
+    assert normalized["business_source"] == "tushare.stock_company"
+    assert normalized["sw_l2"] == "半导体"
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"business_source": ""},
+        {"business_summary": {"非法": "容器"}},
+        {"product_names": "非法列表"},
+    ],
+)
+def test_normalize_logic_row_ok_still_fails_closed_for_missing_source_or_bad_types(overrides):
+    row = {
+        "sw_l2": "伪造行业", "business_summary": "设备", "product_names": [],
+        "business_source": "公司资料", "business_status": "ok",
+        "industry_position": "半导体设备企业",
+        "catalyst_evidence": [], "catalyst_status": "none",
+        **overrides,
+    }
+    normalized = scorer._normalize_logic_row(row, "半导体", "2026-07-13")
+    assert normalized["business_status"] == "source_failed"
+    assert normalized["business_summary"] == ""
+    assert normalized["product_names"] == []
+    assert normalized["business_source"] == ""
+    assert normalized["industry_position"] == "半导体相关企业"
+
+
+def test_industry_logic_fields_do_not_change_coarse_score():
+    base = _card(in_main_sector=True, teacher_hit=True, first_surge=True)
+    enriched = {
+        **base,
+        "sw_l2": "半导体",
+        "business_summary": "晶圆制造设备",
+        "product_names": ["刻蚀机"],
+        "business_source": "tushare.stock_company",
+        "business_status": "ok",
+        "industry_position": "半导体产业链企业，核心产品包括刻蚀机",
+        "catalyst_evidence": [{"label": "研报观点·个股催化", "text": "验证"}],
+        "catalyst_status": "exact",
+    }
+    assert scorer._coarse_score(enriched) == scorer._coarse_score(base)
 
 
 def test_main_sectors_degrades_on_db_error(monkeypatch):
