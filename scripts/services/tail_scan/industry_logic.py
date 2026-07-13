@@ -513,7 +513,11 @@ def build_industry_logic_map(
         status = str(profile.get("profile_status") or "source_failed")
         if status not in {"ok", "missing", "source_failed"}:
             status = "source_failed"
-        business = _clip(profile.get("main_business") or profile.get("introduction"))
+        business = _clip(
+            profile.get("main_business")
+            or profile.get("introduction")
+            or profile.get("business_scope")
+        )
         products = []
         for product in profile.get("product_names") or []:
             cleaned = _clip(product, 40)

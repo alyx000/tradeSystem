@@ -10,13 +10,21 @@ from providers.base import DataResult
 from services.tail_scan import industry_logic
 
 
-def _profile(code: str, status: str, *, source: str = "", business: str = "", products=None):
+def _profile(
+    code: str,
+    status: str,
+    *,
+    source: str = "",
+    business: str = "",
+    scope: str = "",
+    products=None,
+):
     return {
         "ts_code": code,
         "profile_status": status,
         "introduction": "",
         "main_business": business,
-        "business_scope": "",
+        "business_scope": scope,
         "product_types": [],
         "product_names": products or [],
         "source": source,
@@ -839,6 +847,7 @@ def test_product_values_are_deduped_bounded_and_business_uses_introduction(conn,
         products=["A" * 50, "A" * 50, "B", "C", "D", "E"],
     )
     row["introduction"] = " 公司\n简介 "
+    row["business_scope"] = "经营范围后备文本"
     result = industry_logic.build_industry_logic_map(
         conn,
         Registry(primary={"688106.SH": row}),
@@ -850,6 +859,60 @@ def test_product_values_are_deduped_bounded_and_business_uses_introduction(conn,
     )["688106.SH"]
     assert result["business_summary"] == "公司 简介"
     assert result["product_names"] == ["A" * 39 + "…", "B", "C", "D"]
+
+
+def test_scope_only_profile_populates_summary_position_and_industry_evidence(
+    conn, tmp_path
+):
+    conn.execute(
+        "INSERT INTO industry_info(id,date,sector_name,content,source) VALUES(?,?,?,?,?)",
+        (1, "2026-07-12", "氢能源设备", "[事实]行业订单增加", "行业笔记"),
+    )
+    row = _profile(
+        "688106.SH",
+        "ok",
+        source="tushare:stock_company",
+        scope="氢能源设备制造与销售",
+    )
+
+    result = industry_logic.build_industry_logic_map(
+        conn,
+        Registry(primary={"688106.SH": row}),
+        [{"code": "688106.SH", "name": "金宏气体"}],
+        scan_date="2026-07-13",
+        industry_map={"688106.SH": {"sw_l2": "专用设备"}},
+        concept_map={},
+        huibo_dir=tmp_path,
+    )["688106.SH"]
+
+    assert result["business_summary"] == "氢能源设备制造与销售"
+    assert result["industry_position"] == "专用设备领域企业，主营氢能源设备制造与销售"
+    assert result["industry_position"] != "专用设备相关企业"
+    assert [item["text"] for item in result["catalyst_evidence"]] == ["行业订单增加"]
+
+
+def test_main_business_keeps_priority_over_introduction_and_scope(conn, tmp_path):
+    row = _profile(
+        "688106.SH",
+        "ok",
+        source="tushare:stock_company",
+        business="主营优先文本",
+        scope="经营范围文本",
+    )
+    row["introduction"] = "公司简介文本"
+
+    result = industry_logic.build_industry_logic_map(
+        conn,
+        Registry(primary={"688106.SH": row}),
+        [{"code": "688106.SH", "name": "金宏气体"}],
+        scan_date="2026-07-13",
+        industry_map={},
+        concept_map={},
+        huibo_dir=tmp_path,
+    )["688106.SH"]
+
+    assert result["business_summary"] == "主营优先文本"
+    assert result["industry_position"] == "主营主营优先文本"
 
 
 def test_empty_candidates_short_circuits_without_registry_db_or_filesystem_calls():
