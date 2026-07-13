@@ -4,10 +4,20 @@ from __future__ import annotations
 import pathlib
 
 _DISCLAIMER = (
-    "> [判断] 盘中 14:30 单次快照观察清单，仅供复盘参考，不构成买卖建议、不含价位。\n"
+    "> [判断] 盘中单次快照观察清单（尾盘前触发），仅供复盘参考，不构成买卖建议、不含价位。\n"
     "> 数据时效：涨幅/成交额/尾盘强度为**实时快照**；逻辑/板块（主线、概念）为 **T-1** 口径；"
     "盘中形态为单次快照代理（无分时数据）。\n"
 )
+
+
+def _fmt(value, nd: int = 2, suffix: str = "") -> str:
+    """数值展示：None → 「—」；否则定点四舍五入（避免 8.1596/30.3661162… 这类长尾小数）。"""
+    if value is None:
+        return "—"
+    try:
+        return f"{float(value):.{nd}f}{suffix}"
+    except (TypeError, ValueError):
+        return "—"
 
 
 def _rank_note(pk_result, code):
@@ -39,8 +49,9 @@ def render_daily(scan_result: dict, scored: list, pk_result: dict | None) -> str
             tags.append("已涨停")
         tag_s = ("｜" + " ".join(tags)) if tags else ""
         lines.append(
-            f"- **{c.get('name','')}**（{c.get('code','')}）涨{c.get('pct_chg')}% "
-            f"成交{c.get('amount_yi')}亿 近5日{c.get('gain5')}% 连涨{c.get('up_days')}天"
+            f"- **{c.get('name','')}**（{c.get('code','')}）涨{_fmt(c.get('pct_chg'), 2, '%')} "
+            f"成交{_fmt(c.get('amount_yi'), 2, '亿')} 近5日{_fmt(c.get('gain5'), 1, '%')} "
+            f"连涨{c.get('up_days')}天"
             f"{tag_s}{_rank_note(pk_result, c.get('code'))}\n")
     return "".join(lines)
 
