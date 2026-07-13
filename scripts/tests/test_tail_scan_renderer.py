@@ -49,3 +49,23 @@ def test_render_rounds_floats_and_handles_none_gain5():
     assert "30.366116" not in md              # 无长尾小数
     assert "近5日—" in md                      # None gain5 → —（不再是 None%）
     assert "None%" not in md
+
+
+def test_render_pk_detail_reasons():
+    """PK 理由渲染进报告：status=ok 时列出每场 A vs B → 胜者 + 理由。"""
+    scored = [{"code": "688072.SH", "name": "拓荆科技", "pct_chg": 7.15, "amount_yi": 117.7,
+               "gain5": 19.2, "up_days": 5, "total": 4.0, "rank_score": 1},
+              {"code": "688802.SH", "name": "沐曦股份", "pct_chg": 10.86, "amount_yi": 21.9,
+               "gain5": 37.9, "up_days": 0, "total": 6.5, "rank_score": 2}]
+    scan = {"status": "ok", "quote_date": "2026-07-13", "quote_time": "10:35",
+            "matched": 2, "scanned": 5000, "candidates": []}
+    pk_result = {"status": "ok", "ranks": {"688072.SH": 1, "688802.SH": 2},
+                 "matches": [{"a": "688072.SH", "b": "688802.SH", "winner": "688072.SH",
+                              "reason": "A百亿放量突破新高，B缩量冲高回落", "state": "valid"}]}
+    md = renderer.render_daily(scan, scored, pk_result)
+    assert "PK 对局明细" in md
+    assert "拓荆科技 vs 沐曦股份 → 胜：**拓荆科技**" in md
+    assert "百亿放量突破新高" in md          # 理由渲染进去
+    # 熔断态不渲染明细
+    md2 = renderer.render_daily(scan, scored, {"status": "melted", "matches": pk_result["matches"]})
+    assert "PK 对局明细" not in md2

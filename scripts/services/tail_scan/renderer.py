@@ -53,7 +53,27 @@ def render_daily(scan_result: dict, scored: list, pk_result: dict | None) -> str
             f"成交{_fmt(c.get('amount_yi'), 2, '亿')} 近5日{_fmt(c.get('gain5'), 1, '%')} "
             f"连涨{c.get('up_days')}天"
             f"{tag_s}{_rank_note(pk_result, c.get('code'))}\n")
+
+    lines.append(_render_pk_detail(pk_result, scored))
     return "".join(lines)
+
+
+def _render_pk_detail(pk_result, scored) -> str:
+    """PK 对局明细：LLM 逐场依据事实判相对强弱（理由已过红线，全 [判断]）。
+    仅在 status==ok 且有有效场时渲染。"""
+    if not pk_result or pk_result.get("status") != "ok":
+        return ""
+    valid = [m for m in pk_result.get("matches", []) if m.get("state") == "valid"]
+    if not valid:
+        return ""
+    names = {c.get("code"): c.get("name", "") for c in scored}
+    out = ["\n## PK 对局明细（LLM 依据事实判相对强弱，全为 [判断]）\n"]
+    for m in valid:
+        a, b, w = m.get("a"), m.get("b"), m.get("winner")
+        out.append(
+            f"- {names.get(a, a)} vs {names.get(b, b)} → 胜：**{names.get(w, w)}**"
+            f" ｜ {m.get('reason', '')}\n")
+    return "".join(out)
 
 
 def render_source_failed(scan_result: dict) -> str:
