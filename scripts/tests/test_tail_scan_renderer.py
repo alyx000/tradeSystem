@@ -1,4 +1,6 @@
 """TDD test for tail-scan renderer (only-read observation list MD)."""
+import pytest
+
 from services.tail_scan import constants as C
 from services.tail_scan import renderer
 
@@ -11,7 +13,11 @@ def _scan():
 
 def _scored():
     return [{"code": "600001.SH", "name": "测试股", "pct_chg": 8.5, "amount_yi": 25.0,
-             "in_main_sector": True, "concept_names": ["AI算力"], "total": 4.0,
+             "in_main_sector": True,
+             "stock_concept_names": ["算力租赁", "AI算力"],
+             "stock_concept_total": 2, "stock_concept_status": "ok",
+             "stock_concept_snapshot_at": "2026-07-14T14:40:00",
+             "concept_names": ["AI算力"], "concept_status": "ok", "total": 4.0,
              "rank_score": 1, "gain5": 20.0, "up_days": 3, "is_limit_up": False}]
 
 
@@ -20,6 +26,249 @@ def test_render_has_disclaimer_and_judgement_tag():
     assert "T-1" in md and "快照" in md          # 数据时效声明
     assert "[判断]" in md
     assert "600001" in md
+
+
+def test_render_concept_layers_show_memberships_and_t1_hot_hits_separately():
+    card = {
+        **_scored()[0],
+        "stock_concept_names": [
+            "天然气", "航运概念", "煤化工概念", "页岩气", "智能物流", "新疆振兴",
+        ],
+        "stock_concept_total": 6,
+        "stock_concept_status": "ok",
+        "stock_concept_snapshot_at": "2026-07-14T00:00:00",
+        "concept_names": ["航运概念"],
+        "concept_status": "ok",
+    }
+
+    md = renderer.render_daily(_scan(), [card], None)
+
+    assert "[事实·归属概念] 天然气 / 航运概念 / 煤化工概念 / 页岩气 / 智能物流（当前快照，共6个）" in md
+    assert "新疆振兴" not in md
+    assert "[事实·T-1热概念命中] 航运概念" in md
+    candidate_head = next(line for line in md.splitlines() if line.startswith("- **"))
+    assert "概念:" not in candidate_head
+
+
+def test_render_concept_limits_t1_hot_hits_to_two():
+    card = {
+        **_scored()[0],
+        "stock_concept_names": ["天然气"],
+        "stock_concept_total": 1,
+        "stock_concept_status": "ok",
+        "concept_names": ["航运概念", "页岩气", "煤化工概念"],
+        "concept_status": "ok",
+    }
+
+    md = "".join(renderer._render_concept_context(card))
+
+    assert "[事实·T-1热概念命中] 航运概念 / 页岩气" in md
+    assert "煤化工概念" not in md
+
+
+def test_render_concept_distinguishes_no_hot_hit_from_each_failure_status():
+    base = {
+        "stock_concept_names": ["天然气"],
+        "stock_concept_total": 1,
+        "stock_concept_status": "ok",
+        "concept_names": [],
+    }
+
+    no_hit = "".join(renderer._render_concept_context({**base, "concept_status": "ok"}))
+    source_failed = "".join(
+        renderer._render_concept_context({**base, "concept_status": "source_failed"})
+    )
+    member_failed = "".join(
+        renderer._render_concept_context({**base, "concept_status": "member_failed"})
+    )
+    coverage_failed = "".join(
+        renderer._render_concept_context({**base, "concept_status": "coverage_failed"})
+    )
+
+    assert "未命中上一交易日资金流前8窄概念" in no_hit
+    assert "无法判断" not in no_hit
+    assert "T-1概念资金流源失败" in source_failed
+    assert "个股概念归属源失败" in member_failed
+    assert "T-1热概念覆盖数据不完整" in coverage_failed
+    assert len({source_failed, member_failed, coverage_failed}) == 3
+
+
+def test_render_concept_distinguishes_membership_missing_from_source_failed():
+    missing = "".join(renderer._render_concept_context({
+        "stock_concept_names": [],
+        "stock_concept_total": 0,
+        "stock_concept_status": "missing",
+        "concept_names": [],
+        "concept_status": "ok",
+    }))
+    failed = "".join(renderer._render_concept_context({
+        "stock_concept_names": [],
+        "stock_concept_total": 0,
+        "stock_concept_status": "source_failed",
+        "concept_names": [],
+        "concept_status": "member_failed",
+    }))
+
+    assert "当前快照暂无可用窄概念" in missing
+    assert "概念归属源失败" not in missing
+    assert "概念归属源失败" in failed
+
+
+@pytest.mark.parametrize("names", ["天然气", (), [], [""], ["天然气", {"name": "航运概念"}]])
+def test_render_concept_ok_with_invalid_membership_names_fails_closed(names):
+    md = "".join(renderer._render_concept_context({
+        "stock_concept_names": names,
+        "stock_concept_total": 2,
+        "stock_concept_status": "ok",
+        "concept_names": [],
+        "concept_status": "ok",
+    }))
+
+    assert "[事实·归属概念]" not in md
+    assert "归属概念数据无效" in md
+
+
+@pytest.mark.parametrize("names", ["航运概念", (), [""], [{"name": "航运概念"}]])
+def test_render_concept_ok_with_invalid_hot_names_fails_closed(names):
+    md = "".join(renderer._render_concept_context({
+        "stock_concept_names": ["天然气"],
+        "stock_concept_total": 1,
+        "stock_concept_status": "ok",
+        "concept_names": names,
+        "concept_status": "ok",
+    }))
+
+    assert "[事实·T-1热概念命中]" not in md
+    assert "T-1热概念命中数据无效" in md
+    assert "无法判断" in md
+
+
+@pytest.mark.parametrize("total", [None, "6", -1, 1, 2.5, True, 99])
+def test_render_concept_normalizes_invalid_or_undersized_membership_total(total):
+    md = "".join(renderer._render_concept_context({
+        "stock_concept_names": ["天然气", "航运概念", "页岩气"],
+        "stock_concept_total": total,
+        "stock_concept_status": "ok",
+        "concept_names": [],
+        "concept_status": "ok",
+    }))
+
+    assert "当前快照，共3个" in md
+
+
+def test_render_concept_names_are_plain_markdown_text():
+    malicious = r"天然气[伪链接](https://example.com)*强调*_斜_<tag>\尾`代码`#标题"
+    md = "".join(renderer._render_concept_context({
+        "stock_concept_names": [malicious],
+        "stock_concept_total": 1,
+        "stock_concept_status": "ok",
+        "concept_names": [malicious],
+        "concept_status": "ok",
+    }))
+    escaped = (
+        r"天然气\[伪链接\]\(https://example.com\)\*强调\*\_斜\_"
+        r"\<tag\>\\尾\`代码\`\#标题"
+    )
+
+    assert md.count(escaped) == 2
+    assert "[伪链接](https://example.com)" not in md
+
+
+def test_render_concept_lines_precede_industry_logic_and_disclaimer_is_explicit():
+    card = {
+        **_scored()[0],
+        "is_limit_up": True,
+        "business_status": "missing",
+        "industry_position": "",
+        "catalyst_status": "none",
+        "catalyst_evidence": [],
+    }
+
+    md = renderer.render_daily(_scan(), [card], None)
+
+    candidate_head = next(line for line in md.splitlines() if line.startswith("- **"))
+    assert "｜主线 已涨停" in candidate_head
+    assert "概念:" not in candidate_head
+    assert md.index("[事实·归属概念]") < md.index("[事实·T-1热概念命中]")
+    assert md.index("[事实·T-1热概念命中]") < md.index("[事实·主营]")
+    assert "归属概念为扫描时当前快照" in md
+    assert "T-1热概念命中为上一交易日资金流口径" in md
+
+
+@pytest.mark.parametrize("hot_status", ["source_failed", "member_failed", "coverage_failed"])
+def test_degradation_note_counts_concept_failures_by_layer(hot_status):
+    failed = {
+        **_scored()[0],
+        "stock_concept_status": "source_failed",
+        "concept_status": hot_status,
+    }
+    note = renderer._degradation_note([failed])
+    assert "归属概念" in note
+    assert "T-1热概念" in note
+
+
+def test_degradation_note_describes_known_missing_dimensions():
+    card = {
+        **_scored()[0],
+        "main_sector_status": "missing",
+        "index_status": "missing",
+    }
+
+    note = renderer._degradation_note([card])
+
+    assert "主线" in note and "大势" in note
+    assert "取数失败、缺失或数据无效" in note
+
+    known_empty = {
+        **_scored()[0],
+        "stock_concept_names": [],
+        "stock_concept_total": 0,
+        "stock_concept_status": "missing",
+        "concept_names": [],
+        "concept_status": "ok",
+    }
+    note = renderer._degradation_note([known_empty])
+    assert "归属概念" not in note
+    assert "T-1热概念" not in note
+
+
+def test_degradation_note_counts_missing_both_concept_status_keys():
+    card = {
+        key: value
+        for key, value in _scored()[0].items()
+        if key not in {"stock_concept_status", "concept_status"}
+    }
+
+    note = renderer._degradation_note([card])
+
+    assert "归属概念" in note
+    assert "T-1热概念" in note
+
+
+def test_degradation_note_counts_only_missing_stock_concept_status_key():
+    card = {
+        key: value
+        for key, value in _scored()[0].items()
+        if key != "stock_concept_status"
+    }
+
+    note = renderer._degradation_note([card])
+
+    assert "归属概念" in note
+    assert "T-1热概念" not in note
+
+
+def test_degradation_note_counts_only_missing_hot_concept_status_key():
+    card = {
+        key: value
+        for key, value in _scored()[0].items()
+        if key != "concept_status"
+    }
+
+    note = renderer._degradation_note([card])
+
+    assert "归属概念" not in note
+    assert "T-1热概念" in note
 
 
 def test_render_no_price_advice_words():
@@ -277,7 +526,10 @@ def test_render_push_summary_caps_utf8_budget_and_keeps_complete_candidate_block
     blocks = candidate_area.split("\n- **")[1:]
     assert len(blocks) == shown
     for block in blocks:
+        assert "[事实·归属概念]" in block
+        assert "[事实·T-1热概念命中]" in block
         assert "[事实·主营]" in block
         assert "[判断·产业链位置]" in block
         assert "[老师观点·个股]" in block
         assert "[研报观点·个股催化]" in block
+        assert block.index("[事实·T-1热概念命中]") < block.index("[事实·主营]")
