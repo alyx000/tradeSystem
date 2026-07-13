@@ -27,6 +27,17 @@ def _rank_note(pk_result, code):
     return f" · PK名次 **{r}**" if r else ""
 
 
+def _display_order(scored, pk_result):
+    """展示顺序：PK status=ok 时按 PK 名次排（履行"按 PK 名次排"契约）；
+    无名次的票（不在强池/被 excluded）用大 key 排后、`sorted` 稳定保留粗分序兜底。
+    melted/skipped/no-llm/None → 保持传入的粗分序。
+    （codex 门2 高危：此前只标注 PK名次却不重排，导致 #2 显示在 #3 之上，自相矛盾。）"""
+    if pk_result and pk_result.get("status") == "ok":
+        ranks = pk_result.get("ranks") or {}
+        return sorted(scored, key=lambda c: ranks.get(c.get("code"), 10 ** 9))
+    return scored
+
+
 def render_daily(scan_result: dict, scored: list, pk_result: dict | None) -> str:
     date = scan_result.get("quote_date", "")
     qt = scan_result.get("quote_time", "")
@@ -39,7 +50,7 @@ def render_daily(scan_result: dict, scored: list, pk_result: dict | None) -> str
         lines.append("\n本次无满足条件个股。\n")
         return "".join(lines)
     lines.append("\n## 候选（按 PK 名次 / 粗分排序，全为 [判断]）\n")
-    for c in scored:
+    for c in _display_order(scored, pk_result):
         tags = []
         if c.get("in_main_sector"):
             tags.append("主线")

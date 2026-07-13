@@ -17,6 +17,16 @@ def _bare(code: str) -> str:
     return str(code or "").split(".")[0].strip()
 
 
+def _prev_trade_date(registry, date: str) -> str:
+    """上一交易日(T-1)；解析失败保守退回 date（不因日历源抖动打崩概念维度）。"""
+    try:
+        from utils.trade_date import get_prev_trade_date
+        prev = get_prev_trade_date(registry, date)
+        return prev or date
+    except Exception:
+        return date
+
+
 def _main_sectors(conn, date: str, top_k: int) -> tuple[set, bool]:
     """T-1 主线申万二级 Top-K（当日缺失回退最近一日）。刻意副本，口径同 board_break/trend_leader。
 
@@ -39,21 +49,29 @@ def _main_sectors(conn, date: str, top_k: int) -> tuple[set, bool]:
         return set(), True
 
 
-def _hot_concepts(registry, date: str, top_m: int) -> tuple[dict, str]:
-    """T-1 概念资金流 Top-M → {概念名: net_amount_yi} + 成分反查 {bare_code: [概念名]}。
+def _hot_concepts(registry, concept_date: str, top_m: int) -> tuple[dict, str]:
+    """概念资金流 Top-M → {概念名: net_amount_yi} + 成分反查 {bare_code: [概念名]}。
 
-    返回 (concept_map_by_code, status)；source_failed 时 concept_map 为空。
+    `concept_date` 由调用方解析为 **上一交易日(T-1)**：`moneyflow_cnt_ths` 是盘后日频，
+    盘中用当日 date 调恒返空(codex 门2 高危：概念维度一直静默为死)，故须传 T-1。
+    返回 (concept_map_by_code, status)：
+      - source_failed：资金流取数失败/空 → concept_map 空
+      - member_failed：资金流成功但 get_ths_member 失败 → 成分未知，不能当"确定无命中"(codex 门2 中)
+      - ok：两步都成功
     """
-    r = registry.call("get_concept_moneyflow_ths", date)
+    r = registry.call("get_concept_moneyflow_ths", concept_date)
     if not getattr(r, "success", False) or not isinstance(r.data, list):
         return {}, "source_failed"
     rows = sorted(r.data, key=lambda x: x.get("net_amount_yi") or x.get("net_amount") or 0,
                   reverse=True)[:top_m]
     names = [row.get("name") for row in rows if row.get("name")]
-    mr = registry.call("get_ths_member", date, names)
-    member_map = mr.data if getattr(mr, "success", False) and isinstance(mr.data, list) else []
+    mr = registry.call("get_ths_member", concept_date, names)
+    if not (getattr(mr, "success", False) and isinstance(mr.data, list)):
+        # 资金流拿到了 Top-M，但成分反查失败：成分归属未知，返回 member_failed，
+        # 让下游知道 in_hot_concept=False 是"未知"而非"确定不在概念内"。
+        return {}, "member_failed"
     by_code: dict[str, list] = {}
-    for m in member_map:
+    for m in mr.data:
         cn = _bare(m.get("con_code") or "")           # 成分股代码字段=con_code（tushare_provider.py:731）
         concept = m.get("index_name")                  # 概念名字段=index_name（非 concept_name/name）
         if cn and concept in names:
@@ -137,7 +155,8 @@ def build_fact_cards(conn, registry, scan_result: dict, *, params: dict) -> list
     high_n = params.get("high_window", C.HIGH_WINDOW)
 
     main_sectors, ms_degraded = _main_sectors(conn, date, top_k)
-    concept_map, concept_status = _hot_concepts(registry, date, top_m)
+    # 概念资金流是盘后日频，须用上一交易日(T-1)；盘中用当日恒返空。解析失败则退回 date（保守）。
+    concept_map, concept_status = _hot_concepts(registry, _prev_trade_date(registry, date), top_m)
     teacher = _teacher_hits(conn, date, params.get("teacher_lookback", C.TEACHER_LOOKBACK_DAYS))
     teacher_blob = " ".join(f"{h['title']} {h['core_view']} {h['key_points']} {h['sectors']}" for h in teacher)
     index_ctx, index_status = _index_context(conn)

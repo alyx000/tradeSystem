@@ -69,3 +69,16 @@ def test_render_pk_detail_reasons():
     # 熔断态不渲染明细
     md2 = renderer.render_daily(scan, scored, {"status": "melted", "matches": pk_result["matches"]})
     assert "PK 对局明细" not in md2
+
+
+def test_render_orders_by_pk_rank_not_coarse():
+    """codex 门2 高危回归：PK ok 时按 PK 名次排列候选，不是粗分序。"""
+    scored = [{"code": "AAA.SH", "name": "甲", "pct_chg": 8.0, "amount_yi": 25.0,
+               "gain5": 10.0, "up_days": 1, "total": 6.0, "rank_score": 1},
+              {"code": "BBB.SH", "name": "乙", "pct_chg": 9.0, "amount_yi": 30.0,
+               "gain5": 20.0, "up_days": 2, "total": 4.0, "rank_score": 2}]
+    scan = {"status": "ok", "quote_date": "d", "quote_time": "t", "matched": 2,
+            "scanned": 100, "candidates": []}
+    pk_result = {"status": "ok", "ranks": {"BBB.SH": 1, "AAA.SH": 2}, "matches": []}
+    md = renderer.render_daily(scan, scored, pk_result)
+    assert md.index("乙") < md.index("甲")   # 乙(PK#1) 在 甲(PK#2) 之前

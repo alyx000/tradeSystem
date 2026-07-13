@@ -110,3 +110,43 @@ def test_main_sectors_degrades_on_db_error(monkeypatch):
     assert cards[0]["in_main_sector"] is False  # 降级无主线
     assert cards[0]["main_sector_degraded"] is True  # 标记降级
     assert cards[0]["main_sector_status"] == "missing"
+
+
+def test_concepts_use_prev_trade_date(monkeypatch):
+    """codex 门2 高危：概念资金流须用 T-1（否则盘中恒空、维度死）。"""
+    monkeypatch.setattr(scorer, "_prev_trade_date", lambda reg, d: "2026-07-10")
+    monkeypatch.setattr(scorer, "_main_sectors", lambda c, d, k: (set(), False))
+    seen = {}
+
+    class _R2:
+        def call(self, cap, *a):
+            if cap == "get_concept_moneyflow_ths":
+                seen["date"] = a[0]
+                return _R([{"name": "AI", "net_amount_yi": 1.0}])
+            if cap == "get_ths_member":
+                return _R([])
+            if cap == "get_stock_sw_industry_map":
+                return _R({})
+            return _R([])
+
+    scorer.build_fact_cards(_mk_conn(), _R2(), _scan1(), params={"date": "2026-07-13"})
+    assert seen["date"] == "2026-07-10"   # T-1，不是 2026-07-13
+
+
+def test_concept_member_failed_status(monkeypatch):
+    """codex 门2 中：资金流成功但成分反查失败 → member_failed（非静默 ok）。"""
+    monkeypatch.setattr(scorer, "_prev_trade_date", lambda reg, d: "2026-07-10")
+    monkeypatch.setattr(scorer, "_main_sectors", lambda c, d, k: (set(), False))
+
+    class _R3:
+        def call(self, cap, *a):
+            if cap == "get_concept_moneyflow_ths":
+                return _R([{"name": "AI", "net_amount_yi": 1.0}])
+            if cap == "get_ths_member":
+                return _R(error="成分失败")
+            if cap == "get_stock_sw_industry_map":
+                return _R({})
+            return _R([])
+
+    cards = scorer.build_fact_cards(_mk_conn(), _R3(), _scan1(), params={"date": "2026-07-13"})
+    assert cards[0]["concept_status"] == "member_failed"

@@ -78,3 +78,12 @@ def test_melted_on_last_match_over_budget():
     cards = _cards()  # 2 支票 → 1 对
     res = pk.run_pk(cards, _scored(), runner, budget_seconds=180.0, clock=clock)
     assert res["status"] == "melted"
+
+
+def test_reason_action_word_filtered():
+    """codex 门2 中：补充仓位动作词(满仓/上车等)也过滤。"""
+    def runner(prompt, payload):
+        return '{"winner": "A", "reason": "建议满仓上车"}'
+    res = pk.run_pk(_cards(), _scored(), runner)
+    reasons = [m["reason"] for m in res["matches"] if m["state"] == "valid"]
+    assert all("满仓" not in r and "上车" not in r for r in reasons)

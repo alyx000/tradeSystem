@@ -33,9 +33,21 @@ _PROMPT = (
 )
 
 
+# tail-scan 补充红线词（codex 门2 中）：REDLINE_KEYWORDS 已含 买入/加仓/建仓 等，但漏了这些
+# 更硬的仓位动作词。补拦之。
+# 反驳(codex 门2)：不拦「介入/参与」——"尾盘介入"是用户原始需求("最支持尾盘买入的个股")的工具
+# 框架本身，工具的产出语义就是"谁相对更支持尾盘介入"。守红线靠三层：① 全标 [判断] ② 不出价位
+# ③ 不出显式买卖指令/仓位。把"介入"也拦掉等于把工具语义本身拦没，非红线本意。
+_TAIL_ACTION_KEYWORDS = ("上车", "梭哈", "满仓", "重仓", "清仓", "加码", "抄底")
+
+
 def _scan_redline(text: str) -> str | None:
+    body = text or ""
     for kw in REDLINE_KEYWORDS:
-        if kw in (text or ""):
+        if kw in body:
+            return kw
+    for kw in _TAIL_ACTION_KEYWORDS:
+        if kw in body:
             return kw
     return None
 
