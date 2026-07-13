@@ -16,6 +16,12 @@ TEACHER_LOOKBACK_DAYS = 7      # 老师观点回看自然日
 CONCEPT_TOP_M = 8              # 概念资金流 Top-M
 MAIN_SECTOR_TOP_K = 8          # 主线申万二级 Top-K（对齐 trend_leader 默认）
 
+# —— 个股产业逻辑增强 ——
+INDUSTRY_LOGIC_LOOKBACK_DAYS = 30
+INDUSTRY_LOGIC_MAX_CATALYSTS = 2
+INDUSTRY_LOGIC_MAX_PRODUCTS = 4
+INDUSTRY_LOGIC_TEXT_MAX_CHARS = 120
+
 # —— 四维粗权重（仅供强池截断排序，不进 PK prompt）——
 W_LOGIC_MAIN = 2.0             # ∈主线
 W_LOGIC_CONCEPT = 1.0          # ∈强概念
