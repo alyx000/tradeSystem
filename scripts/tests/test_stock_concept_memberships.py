@@ -67,7 +67,10 @@ def _catalog(*rows: dict) -> pd.DataFrame:
 
 def _members(*concept_codes: str) -> pd.DataFrame:
     return pd.DataFrame(
-        [{"ts_code": code, "con_code": "605090.SH"} for code in concept_codes]
+        [
+            {"ts_code": code, "con_code": "605090.SH", "is_new": "Y"}
+            for code in concept_codes
+        ]
     )
 
 
@@ -99,10 +102,87 @@ def test_stock_concept_memberships_queries_one_catalog_and_each_stock_once():
     assert result.success
     assert list(result.data["stocks"]) == ["605090.SH", "600428.SH"]
     assert pro.ths_index_calls == [{"type": "N"}]
-    assert pro.ths_member_calls == [
-        {"con_code": "605090.SH"},
-        {"con_code": "600428.SH"},
+    assert [call["con_code"] for call in pro.ths_member_calls] == [
+        "605090.SH",
+        "600428.SH",
     ]
+    assert all(
+        "is_new" in call["fields"].split(",") for call in pro.ths_member_calls
+    )
+
+
+def test_stock_concept_memberships_keeps_only_current_member_rows():
+    pro = _ConceptPro(
+        catalog=_catalog(
+            {
+                "ts_code": "885372.TI",
+                "name": "页岩气",
+                "type": "N",
+                "count": 40,
+            },
+            {
+                "ts_code": "885373.TI",
+                "name": "旧概念",
+                "type": "N",
+                "count": 20,
+            },
+        ),
+        member_frames={
+            "605090.SH": pd.DataFrame(
+                [
+                    {
+                        "ts_code": "885372.TI",
+                        "con_code": "605090.SH",
+                        "is_new": " y ",
+                    },
+                    {
+                        "ts_code": "885373.TI",
+                        "con_code": "605090.SH",
+                        "is_new": "N",
+                    },
+                ]
+            )
+        },
+    )
+
+    result = _provider(pro).get_stock_concept_memberships(["605090.SH"])
+
+    assert result.success
+    assert result.data["stocks"]["605090.SH"] == {
+        "status": "ok",
+        "concepts": [
+            {
+                "concept_code": "885372.TI",
+                "name": "页岩气",
+                "member_count": 40,
+            }
+        ],
+    }
+
+
+@pytest.mark.parametrize(
+    "member_row",
+    [
+        {"ts_code": "885372.TI", "con_code": "605090.SH"},
+        {"ts_code": "885372.TI", "con_code": "605090.SH", "is_new": None},
+        {"ts_code": "885372.TI", "con_code": "605090.SH", "is_new": ""},
+        {"ts_code": "885372.TI", "con_code": "605090.SH", "is_new": "invalid"},
+    ],
+    ids=["missing", "none", "empty", "invalid"],
+)
+def test_stock_concept_memberships_rejects_unknown_current_state(member_row):
+    pro = _ConceptPro(
+        catalog=_catalog(),
+        member_frames={"605090.SH": pd.DataFrame([member_row])},
+    )
+
+    result = _provider(pro).get_stock_concept_memberships(["605090.SH"])
+
+    assert result.success
+    assert result.data["stocks"]["605090.SH"] == {
+        "status": "missing",
+        "concepts": [],
+    }
 
 
 def test_stock_concept_memberships_filters_non_concept_rows_and_maps_count():

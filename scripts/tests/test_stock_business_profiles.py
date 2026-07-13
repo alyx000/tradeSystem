@@ -1,12 +1,16 @@
 """个股主营资料 Provider 契约测试（全 mock，无真实网络）。"""
 from __future__ import annotations
 
+import queue
 import time
 from unittest.mock import MagicMock
 
 import pandas as pd
+import pytest
 
 from providers.akshare_provider import AkshareProvider
+from providers.base import DataProvider, DataResult
+from providers.registry import ProviderRegistry
 from providers.tushare_provider import TushareProvider
 
 
@@ -36,6 +40,108 @@ def _akshare(api=None, *, initialized: bool = True) -> AkshareProvider:
     provider.ak = api
     provider._initialized = initialized
     return provider
+
+
+class _FallbackBusinessProfileProvider(DataProvider):
+    name = "business-profile-fallback"
+    priority = 99
+
+    def __init__(self):
+        super().__init__()
+        self.calls: list[list[str]] = []
+
+    def initialize(self) -> bool:
+        return True
+
+    def get_capabilities(self) -> list[str]:
+        return ["get_stock_business_profiles"]
+
+    def get_stock_business_profiles(self, ts_codes: list[str]) -> DataResult:
+        self.calls.append(list(ts_codes))
+        return DataResult(
+            data={"fallback": list(ts_codes)},
+            source=self.name,
+        )
+
+
+def _business_profile_registry(
+    primary: AkshareProvider,
+) -> tuple[ProviderRegistry, _FallbackBusinessProfileProvider]:
+    fallback = _FallbackBusinessProfileProvider()
+    registry = ProviderRegistry()
+    registry.register(primary)
+    registry.register(fallback)
+    return registry, fallback
+
+
+class _BusinessProfileMessageQueue:
+    def __init__(self, messages):
+        self.messages = list(messages)
+
+    def get(self, **_kwargs):
+        if self.messages:
+            return self.messages.pop(0)
+        raise queue.Empty
+
+    def get_nowait(self):
+        return self.get()
+
+    def cancel_join_thread(self):
+        return None
+
+    def close(self):
+        return None
+
+
+class _DeadBusinessProfileProcess:
+    def start(self):
+        return None
+
+    def is_alive(self):
+        return False
+
+    def join(self, **_kwargs):
+        return None
+
+    def close(self):
+        return None
+
+
+class _BusinessProfileMessageContext:
+    def __init__(self, messages):
+        self.result_queue = _BusinessProfileMessageQueue(messages)
+
+    def Queue(self):
+        return self.result_queue
+
+    def Process(self, **_kwargs):
+        return _DeadBusinessProfileProcess()
+
+
+def _use_business_profile_messages(monkeypatch, *messages) -> None:
+    import providers.akshare_provider as module
+
+    monkeypatch.setattr(
+        module.multiprocessing,
+        "get_context",
+        lambda _method: _BusinessProfileMessageContext(messages),
+    )
+
+
+def _business_profile_message_record(status="ok", **overrides):
+    record = {
+        "ts_code": "600519.SH",
+        "profile_status": status,
+        "introduction": "公司简介",
+        "main_business": "白酒生产",
+        "business_scope": "食品销售",
+        "product_types": ["酒类"],
+        "product_names": ["白酒"],
+        "source": "akshare:stock_zyjs_ths",
+        "error": "",
+    }
+    record.update(overrides)
+    return record
 
 
 def test_capability_is_declared_by_both_providers():
@@ -232,6 +338,22 @@ def test_akshare_one_stock_failure_does_not_affect_other_and_products_are_dedupe
     }
 
 
+def test_akshare_all_source_failures_return_stable_top_level_error_without_details():
+    api = MagicMock()
+    secret_detail = "upstream failed with bearer secret-token"
+    api.stock_zyjs_ths.side_effect = RuntimeError(secret_detail)
+
+    result = _akshare(api).get_stock_business_profiles(["000001.SZ", "600519.SH"])
+
+    assert not result.success
+    assert result.error == "all_profiles_failed: source_error"
+    assert secret_detail not in result.error
+    assert all(
+        profile["profile_status"] == "source_failed"
+        for profile in result.data.values()
+    )
+
+
 def test_akshare_empty_dataframe_is_missing_and_bse_code_is_normalized():
     api = MagicMock()
     api.stock_zyjs_ths.return_value = pd.DataFrame()
@@ -307,7 +429,8 @@ def test_akshare_hard_timeout_terminates_worker_process(monkeypatch):
     elapsed = time.monotonic() - started
 
     assert elapsed < 0.5
-    assert result.success
+    assert not result.success
+    assert result.error == "all_profiles_failed: timeout"
     assert result.data["600519.SH"]["profile_status"] == "source_failed"
     assert result.data["600519.SH"]["error"] == "timeout"
 
@@ -345,7 +468,8 @@ def test_akshare_unexpected_worker_exit_marks_pending_profiles(monkeypatch):
 
     result = _akshare(MagicMock()).get_stock_business_profiles(["600519.SH"])
 
-    assert result.success
+    assert not result.success
+    assert result.error == "all_profiles_failed: worker_process_failed"
     assert result.data["600519.SH"]["profile_status"] == "source_failed"
     assert result.data["600519.SH"]["error"] == "worker_process_failed"
 
@@ -397,7 +521,8 @@ def test_akshare_sigterm_ignoring_worker_is_killed_and_reaped(monkeypatch):
 
     try:
         result = _akshare(MagicMock()).get_stock_business_profiles(["600519.SH"])
-        assert result.success
+        assert not result.success
+        assert result.error == "all_profiles_failed: timeout"
         assert result.data["600519.SH"]["error"] == "timeout"
         assert captured_pids
         assert all(not process.is_alive() for process in captured_processes)
@@ -460,9 +585,116 @@ def test_akshare_broken_result_queue_returns_worker_process_failed(monkeypatch):
 
     result = _akshare(MagicMock()).get_stock_business_profiles(["600519.SH"])
 
-    assert result.success
+    assert not result.success
+    assert result.error == "all_profiles_failed: worker_process_failed"
     assert result.data["600519.SH"]["profile_status"] == "source_failed"
     assert result.data["600519.SH"]["error"] == "worker_process_failed"
+
+
+@pytest.mark.parametrize(
+    "invalid_profile",
+    [
+        None,
+        "not-a-profile",
+        {"ts_code": "600519.SH"},
+        {"ts_code": "600519.SH", "profile_status": "unexpected"},
+        {"ts_code": "000001.SZ", "profile_status": "ok"},
+        _business_profile_message_record(profile_status=[]),
+        _business_profile_message_record(profile_status={}),
+        _business_profile_message_record(error=[]),
+        _business_profile_message_record(error={}),
+        _business_profile_message_record(product_types="酒类"),
+        _business_profile_message_record(product_types=["酒类", 1]),
+        _business_profile_message_record(product_names={"name": "白酒"}),
+        _business_profile_message_record(product_names=["白酒", None]),
+        _business_profile_message_record(introduction=None),
+        _business_profile_message_record(main_business=[]),
+        _business_profile_message_record(business_scope={}),
+        _business_profile_message_record(source=1),
+    ],
+    ids=[
+        "none",
+        "non-dict",
+        "missing-fields",
+        "invalid-status",
+        "wrong-code",
+        "list-status",
+        "dict-status",
+        "list-error",
+        "dict-error",
+        "non-list-product-types",
+        "non-string-product-type",
+        "non-list-product-names",
+        "non-string-product-name",
+        "non-string-introduction",
+        "non-string-main-business",
+        "non-string-business-scope",
+        "non-string-source",
+    ],
+)
+def test_akshare_invalid_worker_profile_message_fails_closed(
+    monkeypatch,
+    invalid_profile,
+):
+    _use_business_profile_messages(
+        monkeypatch,
+        ("profile", "600519.SH", invalid_profile),
+        ("done", "", None),
+    )
+
+    try:
+        result = _akshare(MagicMock()).get_stock_business_profiles(["600519.SH"])
+    except Exception as exc:  # RED 守卫：非法 IPC 消息不得逃逸为 provider 异常
+        pytest.fail(f"invalid worker profile raised {type(exc).__name__}")
+
+    assert not result.success
+    assert result.error == "all_profiles_failed: worker_process_failed"
+    assert result.data["600519.SH"]["profile_status"] == "source_failed"
+    assert result.data["600519.SH"]["error"] == "worker_process_failed"
+
+
+@pytest.mark.parametrize(
+    ("status", "error", "expected_success"),
+    [
+        ("ok", "", True),
+        ("missing", "", True),
+        ("source_failed", "upstream unavailable", False),
+    ],
+)
+def test_akshare_valid_worker_profile_schema_is_accepted(
+    monkeypatch,
+    status,
+    error,
+    expected_success,
+):
+    profile = _business_profile_message_record(status=status, error=error)
+    _use_business_profile_messages(
+        monkeypatch,
+        ("profile", "600519.SH", profile),
+        ("done", "", None),
+    )
+
+    result = _akshare(MagicMock()).get_stock_business_profiles(["600519.SH"])
+
+    assert result.success is expected_success
+    assert result.data["600519.SH"] == profile
+    if status == "source_failed":
+        assert result.error == "all_profiles_failed: source_error"
+
+
+def test_registry_falls_back_when_akshare_worker_profile_message_is_invalid(monkeypatch):
+    _use_business_profile_messages(
+        monkeypatch,
+        ("profile", "600519.SH", None),
+        ("done", "", None),
+    )
+    registry, fallback = _business_profile_registry(_akshare(MagicMock()))
+
+    result = registry.call("get_stock_business_profiles", ["600519.SH"])
+
+    assert result.success
+    assert result.source == fallback.name
+    assert fallback.calls == [["600519.SH"]]
 
 
 def test_akshare_unreapable_worker_returns_clear_top_level_error(monkeypatch):
@@ -535,3 +767,58 @@ def test_akshare_empty_input_does_not_require_initialization():
     result = _akshare(None, initialized=False).get_stock_business_profiles([])
     assert result.success
     assert result.data == {}
+
+
+def test_registry_falls_back_when_akshare_all_profiles_timeout(monkeypatch):
+    import providers.akshare_provider as module
+
+    monkeypatch.setattr(module, "BUSINESS_PROFILE_TIMEOUT_SECONDS", 0.05)
+    api = MagicMock()
+    api.stock_zyjs_ths.side_effect = lambda symbol: time.sleep(1)
+    registry, fallback = _business_profile_registry(_akshare(api))
+
+    result = registry.call("get_stock_business_profiles", ["600519.SH"])
+
+    assert result.success
+    assert result.source == fallback.name
+    assert fallback.calls == [["600519.SH"]]
+
+
+def test_registry_falls_back_when_akshare_worker_process_fails(monkeypatch):
+    import os
+    import providers.akshare_provider as module
+
+    def _crash(_ak, _codes, _queue):
+        os._exit(3)
+
+    monkeypatch.setattr(module, "_akshare_business_profile_worker", _crash)
+    registry, fallback = _business_profile_registry(_akshare(MagicMock()))
+
+    result = registry.call("get_stock_business_profiles", ["600519.SH"])
+
+    assert result.success
+    assert result.source == fallback.name
+    assert fallback.calls == [["600519.SH"]]
+
+
+def test_registry_keeps_akshare_partial_success_without_fallback():
+    api = MagicMock()
+
+    def _fetch(symbol: str):
+        if symbol == "000001":
+            raise RuntimeError("one stock failed")
+        return pd.DataFrame([{"主营业务": "白酒生产"}])
+
+    api.stock_zyjs_ths.side_effect = _fetch
+    registry, fallback = _business_profile_registry(_akshare(api))
+
+    result = registry.call(
+        "get_stock_business_profiles",
+        ["000001.SZ", "600519.SH"],
+    )
+
+    assert result.success
+    assert result.source == "akshare:stock_zyjs_ths"
+    assert result.data["000001.SZ"]["profile_status"] == "source_failed"
+    assert result.data["600519.SH"]["profile_status"] == "ok"
+    assert fallback.calls == []

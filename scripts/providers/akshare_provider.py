@@ -83,6 +83,37 @@ def _akshare_business_profile_record(
     }
 
 
+def _is_valid_akshare_business_profile(profile: Any, expected_code: str) -> bool:
+    """校验 fork worker 回传的完整主营资料记录，拒绝坏类型污染父进程。"""
+    if not isinstance(profile, dict):
+        return False
+
+    ts_code = profile.get("ts_code")
+    status = profile.get("profile_status")
+    if not isinstance(ts_code, str) or ts_code != expected_code:
+        return False
+    if not isinstance(status, str) or status not in {"ok", "missing", "source_failed"}:
+        return False
+
+    text_fields = (
+        "introduction",
+        "main_business",
+        "business_scope",
+        "source",
+        "error",
+    )
+    if any(not isinstance(profile.get(field), str) for field in text_fields):
+        return False
+
+    for field in ("product_types", "product_names"):
+        values = profile.get(field)
+        if not isinstance(values, list) or any(
+            not isinstance(value, str) for value in values
+        ):
+            return False
+    return True
+
+
 def _fetch_akshare_business_profile(ak: Any, ts_code: str) -> dict:
     """子进程线程中的单票调用；所有业务异常收敛成逐票状态。"""
     symbol = ts_code.split(".", 1)[0]
@@ -149,7 +180,14 @@ def _record_business_profile_message(
         logger.warning("AkShare 主营资料 Queue 消息格式非法: %r", message)
         return False, ""
     kind, code, profile = message
-    if kind == "profile" and code in expected_codes:
+    if kind == "profile":
+        if (
+            not isinstance(code, str)
+            or code not in expected_codes
+            or not _is_valid_akshare_business_profile(profile, code)
+        ):
+            logger.warning("AkShare 主营资料 Queue profile 消息契约非法")
+            return False, kind
         profiles[code] = profile
     return True, kind
 
@@ -629,8 +667,28 @@ class AkshareProvider(DataProvider):
                     error=pending_error,
                 )
 
+        ordered_profiles = {code: profiles[code] for code in normalized}
+        # Registry 只看顶层 error 决定是否降级；部分成功仍保留逐票状态。
+        if all(
+            profile.get("profile_status") == "source_failed"
+            for profile in ordered_profiles.values()
+        ):
+            reportable_errors = {"timeout", "worker_process_failed"}
+            safe_failure_kinds = sorted(
+                {
+                    error if error in reportable_errors else "source_error"
+                    for profile in ordered_profiles.values()
+                    for error in [profile.get("error", "")]
+                }
+            )
+            return DataResult(
+                data=ordered_profiles,
+                source=source,
+                error="all_profiles_failed: " + ",".join(safe_failure_kinds),
+            )
+
         return DataResult(
-            data={code: profiles[code] for code in normalized},
+            data=ordered_profiles,
             source=source,
         )
 

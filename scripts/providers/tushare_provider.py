@@ -806,7 +806,10 @@ class TushareProvider(DataProvider):
         stocks: dict[str, dict] = {}
         for code in normalized:
             try:
-                member_df = self.pro.ths_member(con_code=code)
+                member_df = self.pro.ths_member(
+                    con_code=code,
+                    fields="ts_code,con_code,is_new",
+                )
                 if member_df is None:
                     raise RuntimeError("member response is None")
                 member_rows = self._df_to_records(member_df)
@@ -822,6 +825,8 @@ class TushareProvider(DataProvider):
             concepts: list[dict] = []
             seen_concepts: set[str] = set()
             for item in member_rows:
+                if _to_clean_str(item.get("is_new")).upper() != "Y":
+                    continue
                 concept_code = _to_clean_str(item.get("ts_code")).upper()
                 meta = catalog.get(concept_code)
                 if meta is None or concept_code in seen_concepts:
