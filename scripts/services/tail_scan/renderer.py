@@ -65,8 +65,25 @@ def render_daily(scan_result: dict, scored: list, pk_result: dict | None) -> str
             f"连涨{_fmt(c.get('up_days'), 0)}天"
             f"{tag_s}{_rank_note(pk_result, c.get('code'))}\n")
 
+    lines.append(_degradation_note(scored))
     lines.append(_render_pk_detail(pk_result, scored))
     return "".join(lines)
+
+
+def _degradation_note(scored) -> str:
+    """维度降级脚注（codex 门2 round3）：任一维度取数失败/缺失时显式提示，
+    让用户区分"确定不强"与"数据没取到"。"""
+    dims = {
+        "主线": lambda c: c.get("main_sector_status") not in (None, "ok"),
+        "概念": lambda c: c.get("concept_status") not in (None, "ok"),
+        "大势": lambda c: c.get("index_status") not in (None, "ok"),
+        "历史行情": lambda c: c.get("history_status") not in (None, "ok"),
+    }
+    hit = [name for name, fn in dims.items() if any(fn(c) for c in scored)]
+    if not hit:
+        return ""
+    return (f"\n> [判断] 数据降级：**{'/'.join(hit)}** 维度本次取数失败或缺失，"
+            "相关判断已弱化（非「确定不强」），请知悉。\n")
 
 
 def _render_pk_detail(pk_result, scored) -> str:

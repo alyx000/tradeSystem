@@ -17,14 +17,20 @@ def _bare(code: str) -> str:
     return str(code or "").split(".")[0].strip()
 
 
-def _prev_trade_date(registry, date: str) -> str:
-    """上一交易日(T-1)；解析失败保守退回 date（不因日历源抖动打崩概念维度）。"""
+def _prev_trade_date(registry, date: str) -> str | None:
+    """上一交易日(T-1)；解析失败或 prev>=date 时返回 **None**（fail-closed，codex 门2 round3）。
+
+    返回 None 时调用方须把逻辑/板块/大势/历史全部降级为 missing/source_failed，
+    **不得退回 date 兜底**——退回 date 会在盘后重跑/历史回放时读到同日盘后数据（看未来）。
+    """
     try:
         from utils.trade_date import get_prev_trade_date
         prev = get_prev_trade_date(registry, date)
-        return prev or date
     except Exception:
-        return date
+        return None
+    if not prev or prev >= date:
+        return None
+    return prev
 
 
 def _main_sectors(conn, date: str, top_k: int) -> tuple[set, bool]:
@@ -157,15 +163,20 @@ def build_fact_cards(conn, registry, scan_result: dict, *, params: dict) -> list
     gain_n = params.get("gain_window", C.GAIN_WINDOW)
     high_n = params.get("high_window", C.HIGH_WINDOW)
 
-    # T-1 统一上下文（codex 门2）：主线/概念/大势都是盘后日频，须绑 prev_date，否则盘中恒空、
-    # 且 `--date` 历史回放会读到同日/未来数据(看未来排序)。解析失败保守退回 date。
+    # T-1 统一上下文（codex 门2）：主线/概念/大势/历史都是盘后日频，须绑 prev_date，否则盘中恒空、
+    # 且盘后重跑/`--date` 回放会读到同日/未来数据(看未来排序)。prev_date 无法确立 → 全维度降级(fail-closed)。
     prev_date = _prev_trade_date(registry, date)
-    main_sectors, ms_degraded = _main_sectors(conn, prev_date, top_k)
-    concept_map, concept_status = _hot_concepts(registry, prev_date, top_m)
+    if prev_date is None:
+        main_sectors, ms_degraded = set(), True
+        concept_map, concept_status = {}, "source_failed"
+        index_ctx, index_status = "", "missing"
+    else:
+        main_sectors, ms_degraded = _main_sectors(conn, prev_date, top_k)
+        concept_map, concept_status = _hot_concepts(registry, prev_date, top_m)
+        index_ctx, index_status = _index_context(conn, prev_date)
     # 老师观点是本地人工录入(非行情)，按 date 回看窗口，不涉看未来。
     teacher = _teacher_hits(conn, date, params.get("teacher_lookback", C.TEACHER_LOOKBACK_DAYS))
     teacher_blob = " ".join(f"{h['title']} {h['core_view']} {h['key_points']} {h['sectors']}" for h in teacher)
-    index_ctx, index_status = _index_context(conn, prev_date)
     cal = _calendar(date)
 
     # 个股→申万二级映射（修 in_main_sector：scan 候选不带行业，必须补映射才能判主线归属）。
@@ -177,15 +188,21 @@ def build_fact_cards(conn, registry, scan_result: dict, *, params: dict) -> list
     order = sorted(cands, key=lambda c: -(c.get("pct_chg") or 0))
     rank_of = {c["code"]: i for i, c in enumerate(order, start=1)}
 
-    start = _window_start(date, C.LOOKBACK_NATURAL_DAYS)
+    # 历史日线 end_date 绑 prev_date（codex 门2 round3）：用 date 会在盘后重跑/回放时把 T 日全日线
+    # 当成盘中事实（vol_ratio/up_days/gain5/前高看未来）。prev_date 无法确立则跳过历史。
+    hist_start = _window_start(prev_date, C.LOOKBACK_NATURAL_DAYS) if prev_date else None
 
     cards = []
     for cand in cands:
         code, name = cand["code"], cand.get("name", "")
         bare = _bare(code)
-        r = registry.call("get_stock_daily_range", code, start, date)
-        history_ok = getattr(r, "success", False) and isinstance(r.data, list)
-        bars = r.data if history_ok else []          # 失败→空,但用 history_status 区分"没取到"vs"真没数据"
+        if prev_date is None:
+            history_ok, bars = False, []
+        else:
+            r = registry.call("get_stock_daily_range", code, hist_start, prev_date)
+            history_ok = getattr(r, "success", False) and isinstance(r.data, list)
+            # 防御性再校验 max(trade_date)<=prev_date：即便 provider 越界返回 T 日也丢弃
+            bars = [b for b in r.data if (b.get("trade_date") or "") <= prev_date] if history_ok else []
         closes = [b.get("close") for b in bars if b.get("close") is not None]
         highs = [b.get("high") for b in bars if b.get("high") is not None]
         live = cand.get("price")

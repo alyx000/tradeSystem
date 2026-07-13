@@ -23,6 +23,9 @@ _FACT_FIELDS = (
     "rank_in_pool", "index_context",
     "gain5", "ma_above", "up_days", "first_surge", "vol_ratio",
     "dist_to_high", "broke_high", "calendar",
+    # 维度降级状态（codex 门2 round3）：让 LLM 区分"确定不强"与"数据源失败"，
+    # 不把 source_failed/missing 当成确定的负证据。
+    "main_sector_status", "concept_status", "index_status", "history_status",
 )
 
 _PROMPT = (
