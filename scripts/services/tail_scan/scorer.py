@@ -110,24 +110,27 @@ def _teacher_mentions(blob: str, name: str, industry: str) -> bool:
     return bool(industry) and industry in blob
 
 
-def _index_context(conn) -> tuple[str, str]:
-    """大势：market_timing_signal 表最近一批（≤T-1）信号摘要（缺失降级为空串）。
+def _index_context(conn, ref_date: str) -> tuple[str, str]:
+    """大势：market_timing_signal 表中 **≤ ref_date(T-1)** 的最近一批信号摘要（缺失降级空串）。
 
     注意：market-timing **不是 registry capability**（无 provider 注册），必须直接读表。
-    取库内最新一日全指数行，摘要成 "指数名:涨跌% [phase]" 紧凑串供 LLM 参考。
+    绑 ref_date（codex 门2）：不取库内"最新"，而是取 ≤ref_date 的最近一日，避免 `--date`
+    历史回放或同日已落库时读到未来信号。摘要成 "指数名:涨跌% [phase]" 紧凑串供 LLM 参考。
     """
     from services.market_timing import repo as mt_repo
     try:
-        rows = mt_repo.list_signals(conn, limit=C.MARKET_TIMING_FETCH_LIMIT)   # 最近一批（一日约6指数）
+        # 多取几日再按 ref_date 过滤（一日约6指数，×5 足够覆盖到最近一个有信号的交易日）
+        rows = mt_repo.list_signals(conn, limit=C.MARKET_TIMING_FETCH_LIMIT * 5)
     except Exception:
         return "", "missing"
+    rows = [r for r in rows if (r.get("trade_date") or "") <= ref_date]
     if not rows:
         return "", "missing"
-    latest = rows[0].get("trade_date")
+    latest = max(r.get("trade_date") for r in rows)
     parts = []
     for r in rows:
         if r.get("trade_date") != latest:
-            break
+            continue
         name = r.get("index_name") or r.get("index_code") or ""
         chg = r.get("change_pct")
         phase = r.get("bottom_phase") or r.get("phase") or ""
@@ -154,12 +157,15 @@ def build_fact_cards(conn, registry, scan_result: dict, *, params: dict) -> list
     gain_n = params.get("gain_window", C.GAIN_WINDOW)
     high_n = params.get("high_window", C.HIGH_WINDOW)
 
-    main_sectors, ms_degraded = _main_sectors(conn, date, top_k)
-    # 概念资金流是盘后日频，须用上一交易日(T-1)；盘中用当日恒返空。解析失败则退回 date（保守）。
-    concept_map, concept_status = _hot_concepts(registry, _prev_trade_date(registry, date), top_m)
+    # T-1 统一上下文（codex 门2）：主线/概念/大势都是盘后日频，须绑 prev_date，否则盘中恒空、
+    # 且 `--date` 历史回放会读到同日/未来数据(看未来排序)。解析失败保守退回 date。
+    prev_date = _prev_trade_date(registry, date)
+    main_sectors, ms_degraded = _main_sectors(conn, prev_date, top_k)
+    concept_map, concept_status = _hot_concepts(registry, prev_date, top_m)
+    # 老师观点是本地人工录入(非行情)，按 date 回看窗口，不涉看未来。
     teacher = _teacher_hits(conn, date, params.get("teacher_lookback", C.TEACHER_LOOKBACK_DAYS))
     teacher_blob = " ".join(f"{h['title']} {h['core_view']} {h['key_points']} {h['sectors']}" for h in teacher)
-    index_ctx, index_status = _index_context(conn)
+    index_ctx, index_status = _index_context(conn, prev_date)
     cal = _calendar(date)
 
     # 个股→申万二级映射（修 in_main_sector：scan 候选不带行业，必须补映射才能判主线归属）。
@@ -178,7 +184,8 @@ def build_fact_cards(conn, registry, scan_result: dict, *, params: dict) -> list
         code, name = cand["code"], cand.get("name", "")
         bare = _bare(code)
         r = registry.call("get_stock_daily_range", code, start, date)
-        bars = r.data if getattr(r, "success", False) and isinstance(r.data, list) else []
+        history_ok = getattr(r, "success", False) and isinstance(r.data, list)
+        bars = r.data if history_ok else []          # 失败→空,但用 history_status 区分"没取到"vs"真没数据"
         closes = [b.get("close") for b in bars if b.get("close") is not None]
         highs = [b.get("high") for b in bars if b.get("high") is not None]
         live = cand.get("price")
@@ -190,7 +197,7 @@ def build_fact_cards(conn, registry, scan_result: dict, *, params: dict) -> list
         # 统一到元：live=amount_yi*1e8，prev=prev_amount*1e3 → vol_ratio=amount_yi*1e5/prev_amount。
         # 注意这是 14:30 半日累计额 vs T-1 全日额，故 vol_ratio≈0.7 已相当于追平昨日全日量能节奏。
         prev_amount = bars[-1].get("amount") if bars else None
-        ud = ind.up_days(bars)
+        ud = ind.up_days(bars) if bars else None   # 无历史→None(未知)，不伪装成"连涨0天"(codex 门2)
         vol_ratio = None
         if prev_amount:
             try:
@@ -218,11 +225,12 @@ def build_fact_cards(conn, registry, scan_result: dict, *, params: dict) -> list
             "gain5": ind.gain_nd(closes, live, gain_n),
             "ma_above": ind.above_all_ma(live, closes),
             "up_days": ud,
+            "history_status": "ok" if history_ok else "source_failed",
             # 首次放量加速代理：半日额已追平昨日全日节奏(vol_ratio>=FIRST_SURGE_VOL_RATIO_MIN)
-            # 且非高位连涨(up_days<=FIRST_SURGE_UP_DAYS_MAX)。
+            # 且非高位连涨(up_days<=FIRST_SURGE_UP_DAYS_MAX)。ud=None(历史缺失)时不成立。
             # 半日 vs 全日本质不可完全对齐(无分时数据)，vol_ratio 作为 [事实] 一并喂 LLM 自行判读。
             "first_surge": (vol_ratio is not None and vol_ratio >= C.FIRST_SURGE_VOL_RATIO_MIN
-                             and ud <= C.FIRST_SURGE_UP_DAYS_MAX),
+                             and ud is not None and ud <= C.FIRST_SURGE_UP_DAYS_MAX),
             "vol_ratio": vol_ratio,
             # —— 节点 ——
             "dist_to_high": ind.dist_to_high(live, highs, high_n),

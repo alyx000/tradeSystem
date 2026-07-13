@@ -62,7 +62,7 @@ def render_daily(scan_result: dict, scored: list, pk_result: dict | None) -> str
         lines.append(
             f"- **{c.get('name','')}**（{c.get('code','')}）涨{_fmt(c.get('pct_chg'), 2, '%')} "
             f"成交{_fmt(c.get('amount_yi'), 2, '亿')} 近5日{_fmt(c.get('gain5'), 1, '%')} "
-            f"连涨{c.get('up_days')}天"
+            f"连涨{_fmt(c.get('up_days'), 0)}天"
             f"{tag_s}{_rank_note(pk_result, c.get('code'))}\n")
 
     lines.append(_render_pk_detail(pk_result, scored))

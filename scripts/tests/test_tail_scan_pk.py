@@ -87,3 +87,12 @@ def test_reason_action_word_filtered():
     res = pk.run_pk(_cards(), _scored(), runner)
     reasons = [m["reason"] for m in res["matches"] if m["state"] == "valid"]
     assert all("满仓" not in r and "上车" not in r for r in reasons)
+
+
+def test_reason_action_word_intervene_filtered():
+    """codex 门2 round2：'介入'/'参与' 动作话术也过滤（撤销 round1 反驳后）。"""
+    def runner(prompt, payload):
+        return '{"winner": "A", "reason": "A更适合尾盘介入，可参与"}'
+    res = pk.run_pk(_cards(), _scored(), runner)
+    reasons = [m["reason"] for m in res["matches"] if m["state"] == "valid"]
+    assert all("介入" not in r and "参与" not in r for r in reasons)

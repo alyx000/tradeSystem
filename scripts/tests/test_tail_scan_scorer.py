@@ -150,3 +150,41 @@ def test_concept_member_failed_status(monkeypatch):
 
     cards = scorer.build_fact_cards(_mk_conn(), _R3(), _scan1(), params={"date": "2026-07-13"})
     assert cards[0]["concept_status"] == "member_failed"
+
+
+def test_history_source_failed_status_and_none_updays(monkeypatch):
+    """codex 门2 中：历史行情失败 → history_status=source_failed 且 up_days=None（非伪装0）。"""
+    monkeypatch.setattr(scorer, "_prev_trade_date", lambda reg, d: "2026-07-10")
+    monkeypatch.setattr(scorer, "_main_sectors", lambda c, d, k: (set(), False))
+
+    class _Rhist:
+        def call(self, cap, *a):
+            if cap == "get_stock_daily_range":
+                return _R(error="行情源失败")      # 历史失败
+            if cap == "get_stock_sw_industry_map":
+                return _R({})
+            return _R([])
+
+    cards = scorer.build_fact_cards(_mk_conn(), _Rhist(), _scan1(), params={"date": "2026-07-13"})
+    assert cards[0]["history_status"] == "source_failed"
+    assert cards[0]["up_days"] is None            # 不是 0
+    assert cards[0]["first_surge"] is False        # None up_days 不触发
+
+
+def test_index_context_bounded_by_ref_date(monkeypatch):
+    """codex 门2 高危：大势信号须 ≤ T-1，不取未来/同日。"""
+    monkeypatch.setattr(scorer, "_prev_trade_date", lambda reg, d: "2026-07-10")
+    monkeypatch.setattr(scorer, "_main_sectors", lambda c, d, k: (set(), False))
+    conn = _mk_conn()
+    conn.execute("CREATE TABLE market_timing_signal (trade_date TEXT, index_code TEXT, "
+                 "index_name TEXT, change_pct REAL, bottom_phase TEXT)")
+    conn.execute("INSERT INTO market_timing_signal VALUES ('2026-07-13','X','未来指数',9.9,'')")  # 未来
+    conn.execute("INSERT INTO market_timing_signal VALUES ('2026-07-10','Y','T1指数',0.5,'')")   # =prev
+
+    class _Rreg:
+        def call(self, cap, *a):
+            return _R({}) if cap == "get_stock_sw_industry_map" else _R([])
+
+    cards = scorer.build_fact_cards(conn, _Rreg(), _scan1(), params={"date": "2026-07-13"})
+    assert "T1指数" in cards[0]["index_context"]    # 用了 ≤prev 的 07-10
+    assert "未来指数" not in cards[0]["index_context"]  # 未来的 07-13 被排除
