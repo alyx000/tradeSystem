@@ -136,6 +136,24 @@ def test_payload_includes_compact_labeled_industry_logic_without_scores():
     assert len(payload["catalyst_evidence"][0]["text"]) <= 120
 
 
+def test_payload_never_includes_internal_stock_concept_memberships():
+    card = {
+        **_cards()[0],
+        "stock_concept_names": ["页岩气"],
+        "stock_concept_memberships": [{
+            "concept_code": "885372.TI",
+            "name": "内部秘密概念",
+            "member_count": 40,
+        }],
+    }
+
+    payload = pk._payload(card, _cards()[1])["A"]
+
+    assert "stock_concept_memberships" not in payload
+    assert "885372.TI" not in str(payload)
+    assert "内部秘密概念" not in str(payload)
+
+
 def test_prompt_states_industry_logic_evidence_boundaries():
     assert "带边界标签的证据卡" in pk._PROMPT
     assert "公司资料" in pk._PROMPT

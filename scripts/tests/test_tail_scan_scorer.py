@@ -67,9 +67,27 @@ def test_score_all_stable_tiebreak_by_code():
 
 
 class _R:
-    def __init__(self, data=None, error=None):
+    def __init__(self, data=None, error=None, *, source="fake", fetched_at=""):
         self.data, self.error = data, error
         self.success = error is None and data is not None
+        self.source = source
+        self.fetched_at = fetched_at
+
+
+def _membership_result(*concepts, status="ok", source="fake:memberships", fetched_at=""):
+    return _R(
+        {"stocks": {"600001.SH": {"status": status, "concepts": list(concepts)}}},
+        source=source,
+        fetched_at=fetched_at,
+    )
+
+
+def _membership(name, member_count, concept_code):
+    return {
+        "concept_code": concept_code,
+        "name": name,
+        "member_count": member_count,
+    }
 
 
 class _Reg:
@@ -78,7 +96,12 @@ class _Reg:
         if cap == "get_stock_daily_range":
             return _R([{"trade_date": "2026-07-10", "close": 10.0, "high": 10.2,
                         "amount": 1e5, "pct_chg": 3.0}])  # amount 单位=千元
-        return _R(error="源失败")   # concept / sw_industry_map 均降级
+        if cap in {
+            "is_trade_day", "get_concept_moneyflow_ths",
+            "get_stock_concept_memberships", "get_stock_sw_industry_map",
+        }:
+            return _R(error="源失败")
+        raise AssertionError(f"unexpected capability: {cap}")
 
 
 def _mk_conn():
@@ -107,16 +130,28 @@ def test_build_fact_cards_degrades_without_crash():
 class _RegPos:
     """全维度命中 mock：概念(index_name)/申万行业映射/日线齐全。"""
     def call(self, cap, *a):
+        if cap == "is_trade_day":
+            return _R(a[0] == "2026-07-10")
         if cap == "get_concept_moneyflow_ths":
-            return _R([{"name": "AI算力", "net_amount_yi": 5.0}])
-        if cap == "get_ths_member":
-            return _R([{"con_code": "600001", "index_name": "AI算力"}])
+            return _R([
+                {"name": "AI算力", "net_amount_yi": 5.0, "company_num": 100},
+                *[
+                    {"name": f"热概念{i}", "net_amount_yi": 5.0 - i,
+                     "company_num": 20 + i}
+                    for i in range(1, 8)
+                ],
+            ])
+        if cap == "get_stock_concept_memberships":
+            return _membership_result(
+                _membership("AI算力", 100, "885001.TI"),
+                _membership("存储芯片", 180, "885002.TI"),
+            )
         if cap == "get_stock_sw_industry_map":
             return _R({"600001.SH": {"name": "测试股", "sw_l2": "半导体"}})
         if cap == "get_stock_daily_range":
             return _R([{"trade_date": "2026-07-10", "close": 10.0, "high": 10.2,
                         "amount": 1e5, "pct_chg": 3.0}])
-        return _R([])
+        raise AssertionError(f"unexpected capability: {cap}")
 
 
 def test_build_fact_cards_positive_hits(monkeypatch):
@@ -127,11 +162,13 @@ def test_build_fact_cards_positive_hits(monkeypatch):
     conn.execute("CREATE TABLE market_timing_signal (trade_date TEXT, index_code TEXT, "
                  "index_name TEXT, change_pct REAL, bottom_phase TEXT)")
     conn.execute("INSERT INTO market_timing_signal VALUES "
-                 "('2026-07-11','000001.SH','上证指数',0.8,'confirmed')")
+                 "('2026-07-10','000001.SH','上证指数',0.8,'confirmed')")
     cards = scorer.build_fact_cards(conn, _RegPos(), _scan1(), params={"date": "2026-07-13"})
     c = cards[0]
     assert c["in_main_sector"] is True
     assert c["in_hot_concept"] is True and c["concept_names"] == ["AI算力"]
+    assert c["stock_concept_names"] == ["AI算力", "存储芯片"]
+    assert c["stock_concept_total"] == 2
     assert c["index_status"] == "ok" and "上证指数" in c["index_context"]
 
 
@@ -165,12 +202,124 @@ def test_build_fact_cards_wires_industry_logic_once(industry_logic_stub, monkeyp
     assert call["scan_date"] == "2026-07-13"
     assert call["lookback_days"] == 20
     assert call["huibo_dir"] == "/tmp/never-read-by-stub"
-    assert call["concept_map"] == {"600001": ["AI算力"]}
+    assert call["concept_map"] == {"600001": ["AI算力", "存储芯片"]}
     assert call["industry_map"]["600001.SH"]["sw_l2"] == "半导体"
     assert cards[0]["business_summary"] == "晶圆制造设备"
     assert cards[0]["product_names"] == ["刻蚀机", "薄膜设备"]
     assert cards[0]["sw_l2"] == "半导体"
     assert cards[0]["catalyst_status"] == "exact"
+
+
+def test_prev_date_failure_still_fetches_current_memberships(
+    industry_logic_stub, monkeypatch
+):
+    monkeypatch.setattr(scorer, "_prev_trade_date", lambda registry, date: None)
+    calls = []
+
+    class Registry:
+        def call(self, capability, *args):
+            calls.append((capability, args))
+            if capability == "get_stock_concept_memberships":
+                return _membership_result(
+                    _membership("当前归属", 30, "885010.TI"),
+                    source="tushare:ths_member:by_stock",
+                    fetched_at="2026-07-13T14:40:00",
+                )
+            if capability == "get_stock_sw_industry_map":
+                return _R({"600001.SH": {"sw_l2": "半导体"}})
+            raise AssertionError(f"unexpected capability: {capability}")
+
+    card = scorer.build_fact_cards(
+        _mk_conn(), Registry(), _scan1(), params={"date": "2026-07-13"}
+    )[0]
+
+    assert [capability for capability, _args in calls] == [
+        "get_stock_concept_memberships",
+        "get_stock_sw_industry_map",
+    ]
+    assert card["stock_concept_names"] == ["当前归属"]
+    assert card["stock_concept_status"] == "ok"
+    assert card["stock_concept_source"] == "tushare:ths_member:by_stock"
+    assert card["stock_concept_snapshot_at"] == "2026-07-13T14:40:00"
+    assert card["concept_names"] == []
+    assert card["concept_status"] == "source_failed"
+    assert industry_logic_stub["calls"][0]["concept_map"] == {
+        "600001": ["当前归属"]
+    }
+
+
+def test_membership_metadata_survives_industry_lookup_for_reranking_without_leak(
+    industry_logic_stub, monkeypatch
+):
+    monkeypatch.setattr(scorer, "_prev_trade_date", lambda registry, date: "2026-07-10")
+    monkeypatch.setattr(scorer, "_main_sectors", lambda conn, date, top_k: (set(), False))
+    monkeypatch.setattr(scorer, "_index_context", lambda conn, date: ("", "missing"))
+    industry_logic_stub["result"] = {
+        "600001.SH": {
+            "sw_l2": "电子化学品",
+            "business_summary": "狭义气体研发生产",
+            "product_names": ["狭义气体"],
+            "business_source": "tushare:stock_company",
+            "business_status": "ok",
+            "industry_position": "电子化学品产业链企业，核心产品包括狭义气体",
+            "catalyst_evidence": [],
+            "catalyst_status": "none",
+        }
+    }
+    calls = []
+
+    class Registry:
+        def call(self, capability, *args):
+            calls.append((capability, args))
+            if capability == "get_stock_concept_memberships":
+                return _membership_result(
+                    _membership("狭义气体", 200, "885100.TI"),
+                    _membership("宽泛标签", 10, "885200.TI"),
+                    _membership("重复代码别名", 1, "885100.TI"),
+                    _membership("狭义气体", 2, "885300.TI"),
+                    source="tushare:ths_member:by_stock",
+                    fetched_at="2026-07-13T14:40:01",
+                )
+            if capability == "get_concept_moneyflow_ths":
+                return _R([
+                    {"name": "其它热概念", "net_amount_yi": 1,
+                     "company_num": 20}
+                ])
+            if capability == "get_stock_sw_industry_map":
+                return _R({"600001.SH": {"sw_l2": "电子化学品"}})
+            if capability == "get_stock_daily_range":
+                return _R([])
+            raise AssertionError(f"unexpected capability: {capability}")
+
+    card = scorer.build_fact_cards(
+        _mk_conn(), Registry(), _scan1(),
+        params={"date": "2026-07-13", "concept_top_m": 1},
+    )[0]
+
+    assert [capability for capability, _args in calls].count(
+        "get_stock_concept_memberships"
+    ) == 1
+    assert all(capability != "get_ths_member" for capability, _args in calls)
+    assert industry_logic_stub["calls"][0]["concept_map"] == {
+        "600001": ["宽泛标签", "狭义气体"]
+    }
+    assert card["stock_concept_names"] == ["狭义气体", "宽泛标签"]
+    assert card["stock_concept_total"] == 2
+    assert card["stock_concept_source"] == "tushare:ths_member:by_stock"
+    assert card["stock_concept_snapshot_at"] == "2026-07-13T14:40:01"
+    assert "stock_concept_memberships" not in card
+    assert "stock_concept_memberships" not in tail_pk._payload(card, card)["A"]
+
+
+def test_complete_memberships_do_not_change_coarse_score():
+    base = _card(in_hot_concept=False, stock_concept_names=[])
+    enriched = {
+        **base,
+        "stock_concept_names": ["存储芯片", "第三代半导体"],
+        "stock_concept_total": 2,
+        "stock_concept_status": "ok",
+    }
+    assert scorer._coarse_score(base) == scorer._coarse_score(enriched)
 
 
 def test_build_fact_cards_industry_logic_failure_keeps_card(industry_logic_stub, monkeypatch):
@@ -430,33 +579,45 @@ def test_concepts_use_prev_trade_date(monkeypatch):
         def call(self, cap, *a):
             if cap == "get_concept_moneyflow_ths":
                 seen["date"] = a[0]
-                return _R([{"name": "AI", "net_amount_yi": 1.0}])
-            if cap == "get_ths_member":
-                return _R([])
+                return _R([{"name": "AI", "net_amount_yi": 1.0,
+                            "company_num": 20}])
+            if cap == "get_stock_concept_memberships":
+                return _membership_result(status="missing")
             if cap == "get_stock_sw_industry_map":
                 return _R({})
-            return _R([])
+            if cap == "get_stock_daily_range":
+                return _R([])
+            raise AssertionError(f"unexpected capability: {cap}")
 
-    scorer.build_fact_cards(_mk_conn(), _R2(), _scan1(), params={"date": "2026-07-13"})
+    scorer.build_fact_cards(
+        _mk_conn(), _R2(), _scan1(),
+        params={"date": "2026-07-13", "concept_top_m": 1},
+    )
     assert seen["date"] == "2026-07-10"   # T-1，不是 2026-07-13
 
 
 def test_concept_member_failed_status(monkeypatch):
-    """codex 门2 中：资金流成功但成分反查失败 → member_failed（非静默 ok）。"""
+    """资金流成功但当前逐票归属失败 → member_failed（非静默 ok）。"""
     monkeypatch.setattr(scorer, "_prev_trade_date", lambda reg, d: "2026-07-10")
     monkeypatch.setattr(scorer, "_main_sectors", lambda c, d, k: (set(), False))
 
     class _R3:
         def call(self, cap, *a):
             if cap == "get_concept_moneyflow_ths":
-                return _R([{"name": "AI", "net_amount_yi": 1.0}])
-            if cap == "get_ths_member":
-                return _R(error="成分失败")
+                return _R([{"name": "AI", "net_amount_yi": 1.0,
+                            "company_num": 20}])
+            if cap == "get_stock_concept_memberships":
+                return _membership_result(status="source_failed")
             if cap == "get_stock_sw_industry_map":
                 return _R({})
-            return _R([])
+            if cap == "get_stock_daily_range":
+                return _R([])
+            raise AssertionError(f"unexpected capability: {cap}")
 
-    cards = scorer.build_fact_cards(_mk_conn(), _R3(), _scan1(), params={"date": "2026-07-13"})
+    cards = scorer.build_fact_cards(
+        _mk_conn(), _R3(), _scan1(),
+        params={"date": "2026-07-13", "concept_top_m": 1},
+    )
     assert cards[0]["concept_status"] == "member_failed"
 
 
@@ -469,9 +630,13 @@ def test_history_source_failed_status_and_none_updays(monkeypatch):
         def call(self, cap, *a):
             if cap == "get_stock_daily_range":
                 return _R(error="行情源失败")      # 历史失败
+            if cap == "get_stock_concept_memberships":
+                return _membership_result(status="missing")
+            if cap == "get_concept_moneyflow_ths":
+                return _R(error="概念源失败")
             if cap == "get_stock_sw_industry_map":
                 return _R({})
-            return _R([])
+            raise AssertionError(f"unexpected capability: {cap}")
 
     cards = scorer.build_fact_cards(_mk_conn(), _Rhist(), _scan1(), params={"date": "2026-07-13"})
     assert cards[0]["history_status"] == "source_failed"
@@ -491,7 +656,15 @@ def test_index_context_bounded_by_ref_date(monkeypatch):
 
     class _Rreg:
         def call(self, cap, *a):
-            return _R({}) if cap == "get_stock_sw_industry_map" else _R([])
+            if cap == "get_stock_sw_industry_map":
+                return _R({})
+            if cap == "get_stock_concept_memberships":
+                return _membership_result(status="missing")
+            if cap == "get_concept_moneyflow_ths":
+                return _R(error="概念源失败")
+            if cap == "get_stock_daily_range":
+                return _R([])
+            raise AssertionError(f"unexpected capability: {cap}")
 
     cards = scorer.build_fact_cards(conn, _Rreg(), _scan1(), params={"date": "2026-07-13"})
     assert "T1指数" in cards[0]["index_context"]    # 用了 ≤prev 的 07-10

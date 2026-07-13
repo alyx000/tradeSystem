@@ -44,10 +44,13 @@ class Registry:
         self.specific_calls = []
 
     def call(self, capability, codes):
+        assert capability == "get_stock_business_profiles"
         self.calls.append((capability, codes))
         return DataResult(data=self.primary, source=self.primary_source)
 
     def call_specific(self, provider, capability, codes):
+        assert provider == "akshare"
+        assert capability == "get_stock_business_profiles"
         self.specific_calls.append((provider, capability, codes))
         return DataResult(data=self.fallback, source="akshare:stock_zyjs_ths")
 
@@ -625,6 +628,36 @@ def test_industry_explicit_fact_keeps_fact_label(conn):
             "text": "电子特气需求提升",
         }
     ]
+
+
+def test_full_current_concept_map_can_match_industry_evidence_without_hot_hit_or_business(
+    conn, tmp_path
+):
+    conn.execute(
+        "INSERT INTO industry_info(id,date,sector_name,content,source) VALUES(?,?,?,?,?)",
+        (1, "2026-07-12", "页岩气", "[事实]页岩气行业产量更新", "行业笔记"),
+    )
+    registry = Registry(primary={"605090.SH": _profile("605090.SH", "missing")})
+
+    result = industry_logic.build_industry_logic_map(
+        conn,
+        registry,
+        [{"code": "605090.SH", "name": "九丰能源"}],
+        scan_date="2026-07-13",
+        industry_map={},
+        concept_map={"605090": ["页岩气"]},
+        huibo_dir=tmp_path,
+    )["605090.SH"]
+
+    assert result["catalyst_status"] == "sector"
+    assert result["catalyst_evidence"] == [{
+        "kind": "industry",
+        "label": "事实·行业催化",
+        "date": "2026-07-12",
+        "source": "行业笔记",
+        "text": "页岩气行业产量更新",
+    }]
+    assert "concept_names" not in result
 
 
 @pytest.mark.parametrize(

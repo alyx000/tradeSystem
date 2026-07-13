@@ -10,6 +10,7 @@ import logging
 import re
 
 from services.tail_scan import constants as C
+from services.tail_scan import concept_context
 from services.tail_scan import indicators as ind
 from services.tail_scan import industry_logic
 from services.volume_concentration import repo as vc_repo
@@ -197,36 +198,6 @@ def _main_sectors(conn, date: str, top_k: int) -> tuple[set, bool]:
         return set(), True
 
 
-def _hot_concepts(registry, concept_date: str, top_m: int) -> tuple[dict, str]:
-    """概念资金流 Top-M → {概念名: net_amount_yi} + 成分反查 {bare_code: [概念名]}。
-
-    `concept_date` 由调用方解析为 **上一交易日(T-1)**：`moneyflow_cnt_ths` 是盘后日频，
-    盘中用当日 date 调恒返空(codex 门2 高危：概念维度一直静默为死)，故须传 T-1。
-    返回 (concept_map_by_code, status)：
-      - source_failed：资金流取数失败/空 → concept_map 空
-      - member_failed：资金流成功但 get_ths_member 失败 → 成分未知，不能当"确定无命中"(codex 门2 中)
-      - ok：两步都成功
-    """
-    r = registry.call("get_concept_moneyflow_ths", concept_date)
-    if not getattr(r, "success", False) or not isinstance(r.data, list):
-        return {}, "source_failed"
-    rows = sorted(r.data, key=lambda x: x.get("net_amount_yi") or x.get("net_amount") or 0,
-                  reverse=True)[:top_m]
-    names = [row.get("name") for row in rows if row.get("name")]
-    mr = registry.call("get_ths_member", concept_date, names)
-    if not (getattr(mr, "success", False) and isinstance(mr.data, list)):
-        # 资金流拿到了 Top-M，但成分反查失败：成分归属未知，返回 member_failed，
-        # 让下游知道 in_hot_concept=False 是"未知"而非"确定不在概念内"。
-        return {}, "member_failed"
-    by_code: dict[str, list] = {}
-    for m in mr.data:
-        cn = _bare(m.get("con_code") or "")           # 成分股代码字段=con_code（tushare_provider.py:731）
-        concept = m.get("index_name")                  # 概念名字段=index_name（非 concept_name/name）
-        if cn and concept in names:
-            by_code.setdefault(cn, []).append(concept)
-    return by_code, "ok"
-
-
 def _window_start(date: str, days: int) -> str:
     return (_dt.datetime.strptime(date, "%Y-%m-%d") - _dt.timedelta(days=days)).strftime("%Y-%m-%d")
 
@@ -305,17 +276,41 @@ def build_fact_cards(conn, registry, scan_result: dict, *, params: dict) -> list
     gain_n = params.get("gain_window", C.GAIN_WINDOW)
     high_n = params.get("high_window", C.HIGH_WINDOW)
 
-    # T-1 统一上下文（codex 门2）：主线/概念/大势/历史都是盘后日频，须绑 prev_date，否则盘中恒空、
-    # 且盘后重跑/`--date` 回放会读到同日/未来数据(看未来排序)。prev_date 无法确立 → 全维度降级(fail-closed)。
+    # T-1 统一上下文：主线/热概念/大势/历史都是盘后日频，须绑 prev_date。
+    # 当前归属概念是扫描时点静态快照，不依赖 prev_date；即使 T-1 解析失败也照常反查。
     prev_date = _prev_trade_date(registry, date)
     if prev_date is None:
         main_sectors, ms_degraded = set(), True
-        concept_map, concept_status = {}, "source_failed"
         index_ctx, index_status = "", "missing"
     else:
         main_sectors, ms_degraded = _main_sectors(conn, prev_date, top_k)
-        concept_map, concept_status = _hot_concepts(registry, prev_date, top_m)
         index_ctx, index_status = _index_context(conn, prev_date)
+
+    codes = [cand.get("code", "") for cand in cands]
+    try:
+        concept_by_code = concept_context.build_concept_context(
+            registry,
+            codes,
+            concept_date=prev_date,
+            top_m=top_m,
+        )
+        concept_by_code = concept_by_code if isinstance(concept_by_code, dict) else {}
+    except Exception:
+        logger.warning("[tail-scan] 概念上下文整批构建失败，按源失败降级", exc_info=True)
+        concept_by_code = {}
+
+    def default_concept_row() -> dict:
+        return {
+            "stock_concept_names": [],
+            "stock_concept_total": 0,
+            "stock_concept_status": "source_failed",
+            "stock_concept_source": "",
+            "stock_concept_snapshot_at": "",
+            "concept_names": [],
+            "concept_status": "source_failed",
+            "in_hot_concept": False,
+            "stock_concept_memberships": [],
+        }
     # 老师观点是本地人工录入(非行情)，按 date 回看窗口，不涉看未来。
     teacher = _teacher_hits(conn, date, params.get("teacher_lookback", C.TEACHER_LOOKBACK_DAYS))
     teacher_blob = " ".join(f"{h['title']} {h['core_view']} {h['key_points']} {h['sectors']}" for h in teacher)
@@ -326,6 +321,15 @@ def build_fact_cards(conn, registry, scan_result: dict, *, params: dict) -> list
     ir = registry.call("get_stock_sw_industry_map")
     industry_map = ir.data if getattr(ir, "success", False) and isinstance(ir.data, dict) else {}
 
+    # 产业证据使用完整当前归属，而不是只使用 T-1 热概念交集。
+    full_concept_map = {
+        _bare(code): list(
+            (concept_by_code.get(code) or {}).get("stock_concept_names") or []
+        )
+        for code in codes
+        if code
+    }
+
     # 主营和催化证据按候选整批加载一次；任一内部来源异常都不得中断实时扫描主链路。
     try:
         built_logic = industry_logic.build_industry_logic_map(
@@ -334,7 +338,7 @@ def build_fact_cards(conn, registry, scan_result: dict, *, params: dict) -> list
             cands,
             scan_date=date,
             industry_map=industry_map,
-            concept_map=concept_map,
+            concept_map=full_concept_map,
             lookback_days=params.get(
                 "industry_logic_lookback", C.INDUSTRY_LOGIC_LOOKBACK_DAYS
             ),
@@ -355,6 +359,25 @@ def build_fact_cards(conn, registry, scan_result: dict, *, params: dict) -> list
             row if isinstance(row, dict) else {}, industry, date
         )
 
+        # 主营返回后才能完成相关性排序；只传受控的四类语义字段。
+        context_row = concept_by_code.get(code)
+        if not isinstance(context_row, dict):
+            context_row = default_concept_row()
+            concept_by_code[code] = context_row
+        semantic_texts = [
+            logic_map[code].get("sw_l2", ""),
+            logic_map[code].get("business_summary", ""),
+            *(logic_map[code].get("product_names") or []),
+            logic_map[code].get("industry_position", ""),
+        ]
+        reranked = concept_context.rank_stock_concepts(
+            context_row.get("stock_concept_memberships") or [],
+            context_row.get("concept_names") or [],
+            semantic_texts,
+        )
+        context_row["stock_concept_names"] = reranked
+        context_row["stock_concept_total"] = len(reranked)
+
     # 候选集内相对强弱：按涨幅降序名次（最票 proxy）
     order = sorted(cands, key=lambda c: -(c.get("pct_chg") or 0))
     rank_of = {c["code"]: i for i, c in enumerate(order, start=1)}
@@ -366,8 +389,10 @@ def build_fact_cards(conn, registry, scan_result: dict, *, params: dict) -> list
     cards = []
     for cand in cands:
         code, name = cand["code"], cand.get("name", "")
-        bare = _bare(code)
         logic = logic_map[code]
+        concept_row = concept_by_code.get(code)
+        if not isinstance(concept_row, dict):
+            concept_row = default_concept_row()
         if prev_date is None:
             history_ok, bars = False, []
         else:
@@ -403,9 +428,22 @@ def build_fact_cards(conn, registry, scan_result: dict, *, params: dict) -> list
             "in_main_sector": bool(industry) and industry in main_sectors,
             "main_sector_status": "missing" if (ms_degraded and not main_sectors) else "ok",
             "main_sector_degraded": ms_degraded,
-            "in_hot_concept": bare in concept_map,
-            "concept_names": concept_map.get(bare, []),
-            "concept_status": concept_status,
+            "in_hot_concept": bool(concept_row.get("in_hot_concept")),
+            "concept_names": list(concept_row.get("concept_names") or []),
+            "concept_status": concept_row.get("concept_status", "source_failed"),
+            "stock_concept_names": list(
+                concept_row.get("stock_concept_names") or []
+            ),
+            "stock_concept_total": int(
+                concept_row.get("stock_concept_total") or 0
+            ),
+            "stock_concept_status": concept_row.get(
+                "stock_concept_status", "source_failed"
+            ),
+            "stock_concept_source": concept_row.get("stock_concept_source", ""),
+            "stock_concept_snapshot_at": concept_row.get(
+                "stock_concept_snapshot_at", ""
+            ),
             "teacher_hit": _teacher_mentions(teacher_blob, name, industry),
             # —— 三位一体 ——
             "rank_in_pool": rank_of.get(code),
