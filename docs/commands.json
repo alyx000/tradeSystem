@@ -1,0 +1,417 @@
+{
+  "generated_by": "python3 scripts/generate_command_index.py",
+  "summary": "统一入口优先使用仓库根目录的 make 目标；更底层的 python3 main.py ... 与 API/URL 入口保留给调试和细粒度控制。",
+  "daily_quickstart": [
+    {
+      "command": "make bootstrap",
+      "description": "首次安装依赖并启用本地 hooks"
+    },
+    {
+      "command": "make doctor",
+      "description": "检查 Python / Node / .env / hooksPath"
+    },
+    {
+      "command": "make check",
+      "description": "执行命令索引校验 + 前后端完整检查"
+    },
+    {
+      "command": "make dev",
+      "description": "同时启动 FastAPI 与 Vite 开发服务"
+    },
+    {
+      "command": "make today-open",
+      "description": "执行今日盘前流程"
+    },
+    {
+      "command": "make today-close",
+      "description": "执行今日盘后流程"
+    },
+    {
+      "command": "make market-open DATE=YYYY-MM-DD",
+      "description": "打开指定日期市场看板"
+    },
+    {
+      "command": "make review-open DATE=YYYY-MM-DD",
+      "description": "打开指定日期复盘工作台"
+    },
+    {
+      "command": "make plan-open DATE=YYYY-MM-DD",
+      "description": "打开指定日期计划工作台"
+    },
+    {
+      "command": "make today-ingest-inspect",
+      "description": "查看今日采集审计"
+    },
+    {
+      "command": "make today-ingest-health",
+      "description": "查看今日采集健康摘要"
+    }
+  ],
+  "sections": [
+    {
+      "title": "环境与检查",
+      "items": [
+        {
+          "target": "bootstrap",
+          "command": "make bootstrap",
+          "description": "install deps and repo-local hooks"
+        },
+        {
+          "target": "doctor",
+          "command": "make doctor",
+          "description": "print local toolchain and env status"
+        },
+        {
+          "target": "check",
+          "command": "make check",
+          "description": "run web + scripts checks"
+        },
+        {
+          "target": "check-web",
+          "command": "make check-web",
+          "description": "run web checks only"
+        },
+        {
+          "target": "check-scripts",
+          "command": "make check-scripts",
+          "description": "run scripts checks only"
+        },
+        {
+          "target": "hooks-install",
+          "command": "make hooks-install",
+          "description": "enable repo-local git hooks"
+        }
+      ]
+    },
+    {
+      "title": "开发与页面",
+      "items": [
+        {
+          "target": "dev",
+          "command": "make dev",
+          "description": "run api + web dev servers"
+        },
+        {
+          "target": "dev-api",
+          "command": "make dev-api",
+          "description": "run api dev server only"
+        },
+        {
+          "target": "dev-web",
+          "command": "make dev-web",
+          "description": "run web dev server only"
+        },
+        {
+          "target": "dashboard-open",
+          "command": "make dashboard-open",
+          "description": "open dashboard in browser"
+        },
+        {
+          "target": "search-open",
+          "command": "make search-open",
+          "description": "open search center in browser"
+        },
+        {
+          "target": "market-open",
+          "command": "make market-open",
+          "description": "open market overview in browser"
+        },
+        {
+          "target": "review-open",
+          "command": "make review-open",
+          "description": "open review workbench in browser"
+        },
+        {
+          "target": "plan-open",
+          "command": "make plan-open",
+          "description": "open plan workbench in browser"
+        },
+        {
+          "target": "knowledge-open",
+          "command": "make knowledge-open",
+          "description": "open knowledge workbench in browser"
+        },
+        {
+          "target": "ingest-open",
+          "command": "make ingest-open",
+          "description": "open ingest workbench in browser"
+        },
+        {
+          "target": "teachers-open",
+          "command": "make teachers-open",
+          "description": "open teacher notes page in browser"
+        },
+        {
+          "target": "holdings-open",
+          "command": "make holdings-open",
+          "description": "open holdings page in browser"
+        },
+        {
+          "target": "watchlist-open",
+          "command": "make watchlist-open",
+          "description": "open watchlist page in browser"
+        },
+        {
+          "target": "calendar-open",
+          "command": "make calendar-open",
+          "description": "open calendar page in browser"
+        },
+        {
+          "target": "industry-open",
+          "command": "make industry-open",
+          "description": "open industry page in browser"
+        }
+      ]
+    },
+    {
+      "title": "数据与查询",
+      "items": [
+        {
+          "target": "db-init",
+          "command": "make db-init",
+          "description": "initialize sqlite and import history"
+        },
+        {
+          "target": "db-sync",
+          "command": "make db-sync",
+          "description": "retry pending dual writes"
+        },
+        {
+          "target": "db-reconcile",
+          "command": "make db-reconcile",
+          "description": "reconcile YAML and DB"
+        },
+        {
+          "target": "holdings",
+          "command": "make holdings",
+          "description": "list active holdings"
+        },
+        {
+          "target": "watchlist",
+          "command": "make watchlist",
+          "description": "list watchlist items"
+        },
+        {
+          "target": "notes-search",
+          "command": "make notes-search",
+          "description": "search teacher notes (requires KEYWORD)"
+        },
+        {
+          "target": "db-search",
+          "command": "make db-search",
+          "description": "cross-table db search (requires KEYWORD)"
+        },
+        {
+          "target": "market-json",
+          "command": "make market-json",
+          "description": "fetch market summary JSON for a date"
+        },
+        {
+          "target": "market-envelope",
+          "command": "make market-envelope",
+          "description": "fetch post-market envelope JSON for a date"
+        },
+        {
+          "target": "review-prefill",
+          "command": "make review-prefill",
+          "description": "fetch review prefill JSON for a date"
+        }
+      ]
+    },
+    {
+      "title": "采集与计划",
+      "items": [
+        {
+          "target": "ingest-list",
+          "command": "make ingest-list",
+          "description": "list ingest interfaces"
+        },
+        {
+          "target": "ingest-run-post",
+          "command": "make ingest-run-post",
+          "description": "run post_core ingest for today"
+        },
+        {
+          "target": "ingest-run-interface",
+          "command": "make ingest-run-interface",
+          "description": "run one ingest interface (requires NAME)"
+        },
+        {
+          "target": "ingest-inspect",
+          "command": "make ingest-inspect",
+          "description": "inspect ingest audit (DATE optional)"
+        },
+        {
+          "target": "ingest-health",
+          "command": "make ingest-health",
+          "description": "show recent ingest health summary"
+        },
+        {
+          "target": "wechat-teacher-should-run",
+          "command": "make wechat-teacher-should-run",
+          "description": "check strict trading-calendar phase gate (PHASE=)"
+        },
+        {
+          "target": "wechat-teacher-doctor",
+          "command": "make wechat-teacher-doctor",
+          "description": "verify local WeRSS credentials and exact whitelist"
+        },
+        {
+          "target": "wechat-teacher-collect",
+          "command": "make wechat-teacher-collect",
+          "description": "archive one WeRSS phase (PHASE= INPUT_BY=)"
+        },
+        {
+          "target": "wechat-teacher-show",
+          "command": "make wechat-teacher-show",
+          "description": "show unrecorded teacher-note candidates (DATE optional)"
+        },
+        {
+          "target": "plan-draft",
+          "command": "make plan-draft",
+          "description": "create today's minimal trade draft"
+        },
+        {
+          "target": "plan-show-draft",
+          "command": "make plan-show-draft",
+          "description": "show today's draft"
+        },
+        {
+          "target": "plan-confirm",
+          "command": "make plan-confirm",
+          "description": "confirm draft into plan (requires DRAFT_ID)"
+        },
+        {
+          "target": "plan-diagnose",
+          "command": "make plan-diagnose",
+          "description": "example diagnose command (requires PLAN_ID)"
+        },
+        {
+          "target": "plan-review",
+          "command": "make plan-review",
+          "description": "review plan outcome (requires PLAN_ID)"
+        },
+        {
+          "target": "knowledge-list",
+          "command": "make knowledge-list",
+          "description": "list knowledge assets"
+        },
+        {
+          "target": "knowledge-add-note",
+          "command": "make knowledge-add-note",
+          "description": "example add-note command"
+        },
+        {
+          "target": "knowledge-draft-from-asset",
+          "command": "make knowledge-draft-from-asset",
+          "description": "example draft-from-asset command"
+        }
+      ]
+    },
+    {
+      "title": "日常流程",
+      "items": [
+        {
+          "target": "pre",
+          "command": "make pre",
+          "description": "run pre-market report for today"
+        },
+        {
+          "target": "post",
+          "command": "make post",
+          "description": "run post-market report for today"
+        },
+        {
+          "target": "today-open",
+          "command": "make today-open",
+          "description": "alias for today's pre-market flow"
+        },
+        {
+          "target": "today-close",
+          "command": "make today-close",
+          "description": "alias for today's post-market flow"
+        },
+        {
+          "target": "today-pre",
+          "command": "make today-pre",
+          "description": "run today's pre-market flow"
+        },
+        {
+          "target": "today-post",
+          "command": "make today-post",
+          "description": "run today's post-market flow"
+        },
+        {
+          "target": "today-evening",
+          "command": "make today-evening",
+          "description": "run today's evening flow"
+        },
+        {
+          "target": "today-watchlist",
+          "command": "make today-watchlist",
+          "description": "run today's watchlist flow"
+        },
+        {
+          "target": "today-obsidian",
+          "command": "make today-obsidian",
+          "description": "export today's obsidian notes"
+        },
+        {
+          "target": "today-ingest-inspect",
+          "command": "make today-ingest-inspect",
+          "description": "inspect today's ingest runs"
+        },
+        {
+          "target": "today-ingest-health",
+          "command": "make today-ingest-health",
+          "description": "show today's 7-day ingest health summary"
+        }
+      ]
+    },
+    {
+      "title": "未分类",
+      "items": [
+        {
+          "target": "commands-check",
+          "command": "make commands-check",
+          "description": "verify docs/commands.md is up to date"
+        },
+        {
+          "target": "commands-doc",
+          "command": "make commands-doc",
+          "description": "regenerate docs/commands.md from Makefile"
+        },
+        {
+          "target": "commands-open",
+          "command": "make commands-open",
+          "description": "open commands center in browser"
+        },
+        {
+          "target": "holdings-refresh",
+          "command": "make holdings-refresh",
+          "description": "refresh sqlite holding quotes for a date"
+        },
+        {
+          "target": "ingest-reconcile",
+          "command": "make ingest-reconcile",
+          "description": "reconcile stale running ingest records"
+        },
+        {
+          "target": "knowledge-draft-from-teacher-note",
+          "command": "make knowledge-draft-from-teacher-note",
+          "description": "draft from teacher_notes (NOTE_ID=)"
+        },
+        {
+          "target": "recommend-trace",
+          "command": "make recommend-trace",
+          "description": "行业推荐日报带 Raindrop 埋点（dry-run，进 Workshop 看 trace）"
+        },
+        {
+          "target": "today-regulatory",
+          "command": "make today-regulatory",
+          "description": "run today's regulatory monitor ingest"
+        }
+      ]
+    }
+  ]
+}

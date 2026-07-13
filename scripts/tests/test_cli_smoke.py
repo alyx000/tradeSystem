@@ -416,6 +416,12 @@ ARCHITECTURE_COMMANDS = [
     ["tail-scan", "daily", "--no-push"],
     ["tail-scan", "daily", "--no-llm"],
     ["tail-scan", "daily", "--min-pct", "7", "--min-amount", "20", "--no-push", "--no-llm"],
+    # wechat-teacher-feed (本机 WeRSS 白名单采集；确认前仅归档/查看)
+    ["wechat-teacher-feed", "should-run", "--phase", "post-market", "--date", "2026-07-13", "--json"],
+    ["wechat-teacher-feed", "doctor", "--json"],
+    ["wechat-teacher-feed", "collect", "--phase", "pre-trading-eve", "--date", "2026-07-12", "--input-by", "codex_automation", "--json"],
+    ["wechat-teacher-feed", "collect", "--phase", "post-market", "--date", "2026-07-13", "--input-by", "codex_automation", "--dry-run", "--force", "--cached-only", "--json"],
+    ["wechat-teacher-feed", "show", "--date", "2026-07-13", "--json"],
 ]
 
 

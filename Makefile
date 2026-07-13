@@ -1,4 +1,4 @@
-.PHONY: help bootstrap doctor check check-web check-scripts hooks-install dev dev-api dev-web commands-doc commands-check dashboard-open search-open commands-open plan-open knowledge-open ingest-open teachers-open holdings-open watchlist-open calendar-open industry-open db-init db-sync db-reconcile holdings holdings-refresh watchlist notes-search db-search market-open market-json market-envelope review-open review-prefill pre post regulatory ingest-list ingest-run-post ingest-run-interface ingest-inspect ingest-health ingest-reconcile plan-draft plan-show-draft plan-confirm plan-diagnose plan-review knowledge-list knowledge-add-note knowledge-draft-from-asset knowledge-draft-from-teacher-note today-open today-close today-pre today-post today-regulatory today-evening today-watchlist today-obsidian today-ingest-inspect today-ingest-health recommend-daily recommend-daily-dry recommend-weekly recommend-weekly-dry recommend-trace volume-watch-daily volume-watch-daily-dry volume-watch-trend new-high-daily new-high-daily-dry new-high-trend new-high-backfill string-yang-daily string-yang-daily-dry research-digest research-digest-dry earnings-digest earnings-digest-dry
+.PHONY: help bootstrap doctor check check-web check-scripts hooks-install dev dev-api dev-web commands-doc commands-check dashboard-open search-open commands-open plan-open knowledge-open ingest-open teachers-open holdings-open watchlist-open calendar-open industry-open db-init db-sync db-reconcile holdings holdings-refresh watchlist notes-search db-search market-open market-json market-envelope review-open review-prefill pre post regulatory ingest-list ingest-run-post ingest-run-interface ingest-inspect ingest-health ingest-reconcile wechat-teacher-should-run wechat-teacher-doctor wechat-teacher-collect wechat-teacher-show plan-draft plan-show-draft plan-confirm plan-diagnose plan-review knowledge-list knowledge-add-note knowledge-draft-from-asset knowledge-draft-from-teacher-note today-open today-close today-pre today-post today-regulatory today-evening today-watchlist today-obsidian today-ingest-inspect today-ingest-health recommend-daily recommend-daily-dry recommend-weekly recommend-weekly-dry recommend-trace volume-watch-daily volume-watch-daily-dry volume-watch-trend new-high-daily new-high-daily-dry new-high-trend new-high-backfill string-yang-daily string-yang-daily-dry research-digest research-digest-dry earnings-digest earnings-digest-dry
 
 help:
 	@echo "Available targets:"
@@ -44,6 +44,10 @@ help:
 	@echo "  make ingest-inspect - inspect ingest audit (DATE optional)"
 	@echo "  make ingest-health - show recent ingest health summary"
 	@echo "  make ingest-reconcile - reconcile stale running ingest records"
+	@echo "  make wechat-teacher-should-run - check strict trading-calendar phase gate (PHASE=)"
+	@echo "  make wechat-teacher-doctor - verify local WeRSS credentials and exact whitelist"
+	@echo "  make wechat-teacher-collect - archive one WeRSS phase (PHASE= INPUT_BY=)"
+	@echo "  make wechat-teacher-show - show unrecorded teacher-note candidates (DATE optional)"
 	@echo "  make plan-draft    - create today's minimal trade draft"
 	@echo "  make plan-show-draft - show today's draft"
 	@echo "  make plan-confirm  - confirm draft into plan (requires DRAFT_ID)"
@@ -270,6 +274,26 @@ ingest-health:
 
 ingest-reconcile:
 	cd scripts && python3 main.py ingest reconcile --stale-minutes "$${STALE_MINUTES:-5}" --json
+
+wechat-teacher-should-run:
+	@test -n "$$PHASE" || (echo "Usage: make wechat-teacher-should-run PHASE=post-market|pre-trading-eve [DATE=YYYY-MM-DD]" && exit 2)
+	cd scripts && python3 main.py wechat-teacher-feed should-run --phase "$$PHASE" --date "$${DATE:-$$(date +%F)}" --json
+
+wechat-teacher-doctor:
+	cd scripts && python3 main.py wechat-teacher-feed doctor --json
+
+wechat-teacher-collect:
+	@test -n "$$PHASE" || (echo "Usage: make wechat-teacher-collect PHASE=post-market|pre-trading-eve INPUT_BY=codex_automation [DATE=YYYY-MM-DD] [FORCE=1] [CACHED_ONLY=1] [DRY_RUN=1]" && exit 2)
+	@test -n "$$INPUT_BY" || (echo "Usage: make wechat-teacher-collect PHASE=post-market|pre-trading-eve INPUT_BY=codex_automation" && exit 2)
+	@set --; \
+	case "$${FORCE:-}" in ""|0|false|no) ;; 1|true|yes) set -- "$$@" --force ;; *) echo "FORCE must be 0/1/false/true/no/yes" >&2; exit 2 ;; esac; \
+	case "$${CACHED_ONLY:-}" in ""|0|false|no) ;; 1|true|yes) set -- "$$@" --cached-only ;; *) echo "CACHED_ONLY must be 0/1/false/true/no/yes" >&2; exit 2 ;; esac; \
+	case "$${DRY_RUN:-}" in ""|0|false|no) ;; 1|true|yes) set -- "$$@" --dry-run ;; *) echo "DRY_RUN must be 0/1/false/true/no/yes" >&2; exit 2 ;; esac; \
+	cd scripts; \
+	python3 main.py wechat-teacher-feed collect --phase "$$PHASE" --date "$${DATE:-$$(date +%F)}" --input-by "$$INPUT_BY" "$$@" --json
+
+wechat-teacher-show:
+	cd scripts && python3 main.py wechat-teacher-feed show --date "$${DATE:-$$(date +%F)}" $${PHASE:+--phase "$$PHASE"} --json
 
 plan-draft:
 	cd scripts && python3 main.py plan draft --date "$$(date +%F)"

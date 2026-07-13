@@ -1823,6 +1823,10 @@ def build_parser() -> argparse.ArgumentParser:
     from cli.tail_scan import register_subparser as register_tail_scan_subparser
     register_tail_scan_subparser(subparsers)
 
+    # wechat-teacher-feed (本机 WeRSS 白名单采集与老师观点候选查看)
+    from cli.wechat_teacher_feed import register_subparser as register_wechat_teacher_feed_subparser
+    register_wechat_teacher_feed_subparser(subparsers)
+
     # review factor (三位一体双层评分 + 人工确认 + T+1 回验)
     from cli.review_factors import register_subparser as register_review_factor_subparser
     register_review_factor_subparser(subparsers)
@@ -1915,6 +1919,11 @@ def main():
     elif args.command == "tail-scan":
         from cli import tail_scan as tail_scan_module
         tail_scan_module.handle_command(config, args)
+    elif args.command == "wechat-teacher-feed":
+        from cli import wechat_teacher_feed as wechat_teacher_feed_module
+        exit_code = wechat_teacher_feed_module.handle_command(config, args)
+        if exit_code:
+            raise SystemExit(exit_code)
     elif args.command == "review":
         from cli import review_factors as review_factors_module
         review_factors_module.handle_command(config, args)
