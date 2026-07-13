@@ -89,7 +89,11 @@ get_stock_concept_memberships(ts_codes: list[str]) -> DataResult
             ],
         },
         "600001.SH": {"status": "missing", "concepts": []},
-        "600002.SH": {"status": "source_failed", "concepts": []},
+        "600002.SH": {
+            "status": "source_failed",
+            "concepts": [],
+            "error": "member request failed",
+        },
     }
 }
 ```
@@ -97,11 +101,14 @@ get_stock_concept_memberships(ts_codes: list[str]) -> DataResult
 规则：
 
 - 输入代码去空、标准化、去重，保持首次出现顺序。
+- 非空输入先过 provider 初始化守卫；清洗后全空概念目录是批次失败，不得把所有股票伪装为 `missing`。
 - `ths_index(type="N")` 每批只调用一次，建立 `concept_code -> name/count` 目录。
 - 每只股票只调用一次 `ths_member(con_code=<标准代码>)`。
 - 只保留目录中存在的 `type=N` 概念；地域、行业、风格等其它类型不能混入。
 - 单票异常只把该票标 `source_failed`，不丢弃其它成功票。
+- 单票异常保留经清洗的 `error`；`member_df is None` 视为失败，成功返回真空 DataFrame 才视为 `missing`。
 - 概念目录失败时整个 `DataResult` 失败，因为裸概念代码无法安全展示。
+- `count` 只接受有限正数；`None` / 空串 / `NaN` / 无穷大 / 负数归一为 `0`，上下文后续 fail-closed 过滤。
 - `DataResult.fetched_at` 作为当前快照时点；不接收 `date`，避免伪装历史 as-of。
 
 ### 2. 两层概念上下文
@@ -135,15 +142,28 @@ get_stock_concept_memberships(ts_codes: list[str]) -> DataResult
 |  | `member_failed` | 该票归属失败，无法判断是否命中热概念 |
 |  | `coverage_failed` | 热概念宽度字段缺失，不能安全完成容器过滤 |
 
+`build_concept_context` 无论 T-1 日期是否可解析，都调用一次当前归属反查；
+T-1 失败只把热概念标 `source_failed`，不抹掉当前归属。上下文可在内部暂存
+`stock_concept_memberships` 供主营返回后重排，但该元数据不得进入最终事实卡或 PK payload。
+
 热概念必须按以下顺序选择：
 
-1. 解析 `net_amount_yi` / `net_amount` 并按净流入降序稳定排序。
-2. 拒绝缺少有效 `company_num` 的行，并将全局状态标为 `coverage_failed`。
+1. 解析 `net_amount_yi` / `net_amount` 为有限浮点数（负数合法，非法值跳过），按净流入降序稳定排序。
+2. 按排名扫描；只在 Top8 尚未填满时遇到无效 `company_num` 才整体 `coverage_failed`，已填满后的脏尾部不影响结果。
 3. 剔除 `company_num>300` 的容器概念。
 4. 对概念名去重后向后补足 Top8。
 5. 每只股票的 `concept_names` 按资金流名次排序，不按概念母表顺序。
 
-完整归属概念保留所有 `0<member_count<=300` 的 `type=N` 名称。展示顺序优先：T-1 热命中、与主营/产品/申万行业文本重合度、成员数更少、名称稳定顺序；完整列表保留在事实卡，渲染只截前 5 个并显示总数。
+原始资金流空列表是 `source_failed`；非空源最终仍不足 Top8 是 `coverage_failed`。
+
+完整归属概念保留所有 `0<member_count<=CONTAINER_MAX_MEMBERS` 的 `type=N` 名称，
+上限直接复用 `services.concept_tags.CONTAINER_MAX_MEMBERS`。展示顺序优先：T-1 热命中、
+与 `sw_l2/business_summary/product_names/industry_position` 的受控文本重合度、成员数更少、名称稳定顺序；
+匹配至少 2 个中文字符或 3 个字母数字，并过滤宽泛停用词。完整列表保留在事实卡，渲染只截前 5 个并显示总数。
+
+状态优先级为：全局 `source_failed/coverage_failed` 优先；全局 `ok` 时单票归属失败映射为
+`member_failed`，单票 `missing` 或确定无交集均是 `concept_status=ok`。原始归属为 `ok`
+但所有概念均被容器上限过滤后，`stock_concept_status` 收敛为 `missing`。
 
 ### 3. Scorer 与产业逻辑
 
