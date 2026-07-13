@@ -223,7 +223,7 @@ class TestV24AlterBrokerExecutions:
         assert get_schema_version(c) == 23
 
         # migrate 到 v24
-        migrate(c)
+        migrate(c, activate_v40=True)
 
         cols_after = {
             row[1] for row in c.execute("PRAGMA table_info(broker_executions)").fetchall()
@@ -248,7 +248,7 @@ class TestV24AlterHoldings:
         cols_before = {row[1] for row in c.execute("PRAGMA table_info(holdings)").fetchall()}
         assert "thesis_id" not in cols_before, "前置:伪 v23 holdings 不应有 thesis_id"
 
-        migrate(c)
+        migrate(c, activate_v40=True)
         cols_after = {row[1] for row in c.execute("PRAGMA table_info(holdings)").fetchall()}
         assert "thesis_id" in cols_after, "v24 ALTER 兜底应已加 holdings.thesis_id"
         c.close()
@@ -345,7 +345,7 @@ class TestV27TradeModeMigration:
         c.execute("PRAGMA user_version = 26")
         c.commit()
 
-        migrate(c)
+        migrate(c, activate_v40=True)
 
         c.execute(
             """

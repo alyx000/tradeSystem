@@ -358,7 +358,7 @@ class TestHoldingsMigration:
         )
         conn.commit()
 
-        migrate(conn)
+        migrate(conn, activate_v40=True)
 
         active = conn.execute(
             "SELECT stock_code FROM holdings WHERE status = 'active' ORDER BY id"
@@ -398,7 +398,7 @@ def test_migrate_v8_marks_permission_ingest_errors_non_retryable(tmp_path):
     )
     conn.commit()
 
-    migrate(conn)
+    migrate(conn, activate_v40=True)
 
     row = conn.execute(
         "SELECT retryable FROM ingest_errors WHERE run_id = 'run_perm'"
@@ -438,7 +438,7 @@ def test_migrate_v16_repairs_teacher_notes_fts_missing_mentioned_stocks(tmp_path
             conn, teacher_id=tid, date="2026-04-01", title="bad", core_view="c"
         )
 
-    migrate(conn)
+    migrate(conn, activate_v40=True)
     assert get_schema_version(conn) == CURRENT_SCHEMA_VERSION
 
     note_id = Q.insert_teacher_note(
@@ -461,7 +461,7 @@ def test_v32_migration_creates_market_timing_signal(tmp_path):
         "SELECT name FROM sqlite_master WHERE type='table' AND name='market_timing_signal'"
     ).fetchone() is None
 
-    migrate(conn)
+    migrate(conn, activate_v40=True)
     assert get_schema_version(conn) == CURRENT_SCHEMA_VERSION
     assert conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table' AND name='market_timing_signal'"
@@ -481,7 +481,7 @@ def test_v36_migration_creates_margin_index_correlation_daily(tmp_path):
         "SELECT name FROM sqlite_master WHERE type='table' AND name='margin_index_correlation_daily'"
     ).fetchone() is None
 
-    migrate(conn)
+    migrate(conn, activate_v40=True)
     # 迁移写的 user_version 必须 == 声明的 CURRENT_SCHEMA_VERSION（codex 门2 #1：常量漏 bump 的契约破坏）
     assert get_schema_version(conn) == CURRENT_SCHEMA_VERSION
     assert conn.execute(
@@ -514,7 +514,7 @@ def test_v37_migration_adds_cognition_instance_feedback_columns(tmp_path):
     }
     assert "feedback_action" not in before_cols
 
-    migrate(conn)
+    migrate(conn, activate_v40=True)
     assert get_schema_version(conn) == CURRENT_SCHEMA_VERSION
     cols = {
         row["name"]
@@ -571,7 +571,7 @@ def test_v33_backfills_market_timing_quote_columns(tmp_path):
     cols_before = {r[1] for r in conn.execute("PRAGMA table_info(market_timing_signal)").fetchall()}
     assert "close" not in cols_before and "change_pct" not in cols_before
 
-    migrate(conn)
+    migrate(conn, activate_v40=True)
 
     cols_after = {r[1] for r in conn.execute("PRAGMA table_info(market_timing_signal)").fetchall()}
     assert "close" in cols_after and "change_pct" in cols_after
@@ -607,7 +607,7 @@ def test_v34_backfills_volume_concentration_gain_column(tmp_path):
     cols_before = {r[1] for r in conn.execute("PRAGMA table_info(daily_volume_concentration)").fetchall()}
     assert "gain_universe_json" not in cols_before
 
-    migrate(conn)
+    migrate(conn, activate_v40=True)
 
     cols_after = {r[1] for r in conn.execute("PRAGMA table_info(daily_volume_concentration)").fetchall()}
     assert "gain_universe_json" in cols_after
@@ -745,10 +745,10 @@ def test_v39_migration_creates_factor_score_run_request_and_evaluation_tables(tm
     conn.execute("PRAGMA user_version = 38")
     conn.commit()
 
-    migrate(conn)
+    migrate(conn, activate_v40=True)
 
-    assert CURRENT_SCHEMA_VERSION == 39
-    assert get_schema_version(conn) == 39
+    assert CURRENT_SCHEMA_VERSION == 40
+    assert get_schema_version(conn) == CURRENT_SCHEMA_VERSION
     tables = {
         row["name"]
         for row in conn.execute(
@@ -770,9 +770,9 @@ def test_migrate_repairs_unreleased_v39_missing_factor_score_request_audit(tmp_p
     conn.execute("PRAGMA user_version = 39")
     conn.commit()
 
-    migrate(conn)
+    migrate(conn, activate_v40=True)
 
-    assert get_schema_version(conn) == 39
+    assert get_schema_version(conn) == CURRENT_SCHEMA_VERSION
     assert conn.execute(
         "SELECT 1 FROM sqlite_master "
         "WHERE type = 'table' AND name = 'daily_review_factor_score_requests'"

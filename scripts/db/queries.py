@@ -64,11 +64,17 @@ def get_or_create_teacher(conn: sqlite3.Connection, name: str,
     row = conn.execute("SELECT id FROM teachers WHERE name = ?", (name,)).fetchone()
     if row:
         return row["id"]
-    cur = conn.execute(
-        "INSERT INTO teachers (name, platform, schedule) VALUES (?, ?, ?)",
+    conn.execute(
+        """
+        INSERT INTO teachers (name, platform, schedule) VALUES (?, ?, ?)
+        ON CONFLICT(name) DO NOTHING
+        """,
         (name, platform, schedule),
     )
-    return cur.lastrowid  # type: ignore[return-value]
+    row = conn.execute("SELECT id FROM teachers WHERE name = ?", (name,)).fetchone()
+    if row is None:  # pragma: no cover - defensive guard for a corrupted schema
+        raise sqlite3.IntegrityError(f"failed to create or find teacher: {name}")
+    return row["id"]
 
 
 def insert_teacher_note(conn: sqlite3.Connection, *, teacher_id: int, date: str,
@@ -78,7 +84,8 @@ def insert_teacher_note(conn: sqlite3.Connection, *, teacher_id: int, date: str,
     vals: list[Any] = [teacher_id, date, title]
     for k in ("source_type", "input_by", "core_view", "position_advice",
               "obsidian_path", "tags", "key_points", "sectors", "avoid", "raw_content",
-              "mentioned_stocks"):
+              "mentioned_stocks", "source_platform", "source_url", "source_article_id",
+              "published_at", "fetched_at", "content_sha256"):
         if k in kwargs and kwargs[k] is not None:
             cols.append(k)
             v = kwargs[k]
@@ -1304,6 +1311,11 @@ _TEACHER_NOTES_UPDATABLE = frozenset({
     "sectors", "avoid", "raw_content",
 })
 
+_TEACHER_NOTE_PROVENANCE_FIELDS = frozenset({
+    "source_platform", "source_url", "source_article_id",
+    "published_at", "fetched_at", "content_sha256",
+})
+
 _INDUSTRY_INFO_UPDATABLE = frozenset({
     "date", "sector_name", "info_type", "content", "source",
     "input_by", "confidence", "timeliness", "tags",
@@ -1329,6 +1341,14 @@ _TRADES_UPDATABLE = frozenset({
 
 
 def update_teacher_note(conn: sqlite3.Connection, note_id: int, **kw: Any) -> None:
+    if _TEACHER_NOTE_PROVENANCE_FIELDS.intersection(kw):
+        raise ValueError("teacher note source provenance is immutable")
+    if {"date", "raw_content"}.intersection(kw):
+        row = conn.execute(
+            "SELECT content_sha256 FROM teacher_notes WHERE id = ?", (note_id,)
+        ).fetchone()
+        if row is not None and str(row["content_sha256"] or "").strip():
+            raise ValueError("sourced teacher note date/raw_content are immutable")
     _safe_update(conn, "teacher_notes", "id", note_id, _TEACHER_NOTES_UPDATABLE, **kw)
 
 

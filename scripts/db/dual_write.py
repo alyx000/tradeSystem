@@ -55,8 +55,25 @@ def retry_pending(db_path: str | Path | None = None) -> tuple[int, int]:
                 elif table == "teacher_notes":
                     teacher_name = data.get("teacher_name", "unknown")
                     note_data = {k: v for k, v in data.items() if k != "teacher_name"}
-                    tid = Q.get_or_create_teacher(conn, teacher_name)
-                    Q.insert_teacher_note(conn, teacher_id=tid, **note_data)
+                    provenance_fields = (
+                        "source_platform", "source_url", "source_article_id",
+                        "published_at", "fetched_at", "content_sha256",
+                    )
+                    if any(note_data.get(key) is not None for key in provenance_fields):
+                        # Delayed import avoids queries -> dual_write -> service ->
+                        # queries circular initialization.
+                        from services.teacher_note_service import (
+                            create_teacher_note_idempotent,
+                        )
+
+                        create_teacher_note_idempotent(
+                            conn,
+                            teacher_name=teacher_name,
+                            payload=note_data,
+                        )
+                    else:
+                        tid = Q.get_or_create_teacher(conn, teacher_name)
+                        Q.insert_teacher_note(conn, teacher_id=tid, **note_data)
                 elif table == "calendar_events":
                     Q.insert_calendar_event(conn, **data)
                 elif table == "holdings":

@@ -74,7 +74,7 @@ class TestMigrationV14:
         c.commit()
 
         # 重新 migrate 触发 v14
-        migrate(c)
+        migrate(c, activate_v40=True)
         assert get_schema_version(c) >= CURRENT_SCHEMA_VERSION
         tn_cols = {row[1] for row in c.execute("PRAGMA table_info(teacher_notes)").fetchall()}
         wl_cols = {row[1] for row in c.execute("PRAGMA table_info(watchlist)").fetchall()}
@@ -296,6 +296,7 @@ class TestAddNoteWithStocksCLI:
             "add-note", "--teacher", "小鲍",
             "--date", "2026-04-01", "--title", "AI算力主线判断",
             "--stocks", stocks,
+            "--input-by", "manual",
             tmp_db=tmp_db,
         )
         assert result.returncode == 0
@@ -315,6 +316,7 @@ class TestAddNoteWithStocksCLI:
         result = _run_cli(
             "add-note", "--teacher", "小鲍",
             "--date", "2026-04-01", "--title", "无个股笔记",
+            "--input-by", "manual",
             tmp_db=tmp_db,
         )
         assert result.returncode == 0
@@ -329,6 +331,7 @@ class TestAddNoteWithStocksCLI:
             "add-note", "--teacher", "小鲍",
             "--date", "2026-04-01", "--title", "个股测试",
             "--stocks", stocks,
+            "--input-by", "manual",
             tmp_db=tmp_db,
         )
         assert result.returncode == 0
@@ -351,6 +354,7 @@ class TestAddNoteWithStocksCLI:
             "add-note", "--teacher", "小鲍",
             "--date", "2026-04-01", "--title", "去重测试",
             "--stocks", stocks,
+            "--input-by", "manual",
             tmp_db=tmp_db,
         )
         assert result.returncode == 0
@@ -369,6 +373,7 @@ class TestAddNoteWithStocksCLI:
             "add-note", "--teacher", "小鲍",
             "--date", "2026-04-01", "--title", "全跳过测试",
             "--stocks", stocks,
+            "--input-by", "manual",
             tmp_db=tmp_db,
         )
         assert result.returncode == 0
@@ -381,6 +386,7 @@ class TestAddNoteWithStocksCLI:
             "add-note", "--teacher", "小鲍",
             "--date", "2026-04-01", "--title", "默认tier测试",
             "--stocks", stocks,
+            "--input-by", "manual",
             tmp_db=tmp_db,
         )
         assert result.returncode == 0
@@ -397,6 +403,7 @@ class TestAddNoteWithStocksCLI:
             "add-note", "--teacher", "小鲍",
             "--date", "2026-04-01", "--title", "分母测试",
             "--stocks", stocks,
+            "--input-by", "manual",
             tmp_db=tmp_db,
         )
         assert result.returncode == 0
@@ -410,6 +417,7 @@ class TestAddNoteWithStocksCLI:
             "add-note", "--teacher", "小鲍",
             "--date", "2026-04-01", "--title", "全无code",
             "--stocks", stocks,
+            "--input-by", "manual",
             tmp_db=tmp_db,
         )
         assert result.returncode == 0
@@ -424,6 +432,7 @@ class TestAddNoteInvalidStocksCLI:
             "add-note", "--teacher", "小鲍",
             "--date", "2026-04-01", "--title", "坏stocks",
             "--stocks", stocks,
+            "--input-by", "manual",
             tmp_db=tmp_db,
         )
         assert result.returncode != 0
@@ -440,6 +449,7 @@ class TestAddNoteSyncWatchlistFlagCLI:
             "--date", "2026-04-01", "--title", "同步入池",
             "--stocks", stocks,
             "--sync-watchlist-from-stocks",
+            "--input-by", "manual",
             tmp_db=tmp_db,
         )
         assert result.returncode == 0
@@ -466,6 +476,7 @@ class TestAddNoteSyncWatchlistFlagCLI:
             "add-note", "--teacher", "小鲍",
             "--date", "2026-04-01", "--title", "仅笔记",
             "--stocks", stocks,
+            "--input-by", "manual",
             tmp_db=tmp_db,
         )
         assert result.returncode == 0
@@ -486,6 +497,7 @@ class TestWatchlistSyncFromNoteCLI:
             "add-note", "--teacher", "小鲍",
             "--date", "2026-04-02", "--title", "两步笔记",
             "--stocks", stocks,
+            "--input-by", "manual",
             tmp_db=tmp_db,
         )
         assert r1.returncode == 0

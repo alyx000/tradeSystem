@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import sqlite3
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -10,6 +12,8 @@ import pytest
 
 from db.cli import _coerce_holdings_cost, _coerce_holdings_shares
 from db.connection import get_connection
+from db.migrate import migrate
+from services.content_identity import canonical_content_sha256
 
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent
 MAIN_PY = SCRIPTS_DIR / "main.py"
@@ -29,6 +33,92 @@ def tmp_db(tmp_path) -> str:
     return str(tmp_path / "test_cli.db")
 
 
+def _source_note_args(
+    *,
+    raw_content: str = "公众号原文\n",
+    article_id: str = "article-cli-1",
+    source_url: str = "https://mp.weixin.qq.com/s/cli-example",
+) -> list[str]:
+    return [
+        "--teacher", "安静拆主线",
+        "--date", "2026-07-13",
+        "--title", "盘后复盘",
+        "--raw-content", raw_content,
+        "--source-platform", "wechat_mp",
+        "--source-url", source_url,
+        "--source-article-id", article_id,
+        "--published-at", "2026-07-13T20:00:00+08:00",
+        "--fetched-at", "2026-07-13T22:15:00+08:00",
+        "--content-sha256", canonical_content_sha256(raw_content),
+        "--input-by", "codex_automation",
+    ]
+
+
+def _create_versioned_db(path: str, version: int = 39) -> None:
+    conn = get_connection(path)
+    migrate(conn)
+    conn.execute(f"PRAGMA user_version = {version}")
+    conn.commit()
+    conn.close()
+
+
+def _create_legacy_v39_teacher_db(
+    path: str | Path,
+    *,
+    provenance_columns: tuple[str, ...] = (),
+) -> None:
+    extra_columns = "".join(
+        f"            {column} TEXT,\n" for column in provenance_columns
+    )
+    conn = get_connection(path)
+    conn.executescript(
+        f"""
+        CREATE TABLE teachers (
+            id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE,
+            platform TEXT,
+            schedule TEXT
+        );
+        CREATE TABLE teacher_notes (
+            id INTEGER PRIMARY KEY,
+            teacher_id INTEGER REFERENCES teachers(id),
+            date TEXT NOT NULL,
+            title TEXT NOT NULL,
+            source_type TEXT DEFAULT 'text',
+            input_by TEXT,
+            core_view TEXT,
+            position_advice TEXT,
+            obsidian_path TEXT,
+            tags TEXT,
+            key_points TEXT,
+            sectors TEXT,
+            avoid TEXT,
+            raw_content TEXT,
+            mentioned_stocks TEXT,
+{extra_columns}
+            created_at TEXT DEFAULT (datetime('now'))
+        );
+        INSERT INTO teachers (id, name) VALUES (1, '旧老师');
+        INSERT INTO teacher_notes
+            (teacher_id, date, title, core_view, key_points, sectors, avoid, raw_content)
+        VALUES
+            (1, '2026-07-01', '旧笔记', '旧观点', '[]', '[]', '[]', '旧原文');
+        PRAGMA user_version = 39;
+        """
+    )
+    conn.commit()
+    conn.close()
+
+
+def _read_user_version(path: str | Path) -> int:
+    uri = Path(path).resolve().as_uri() + "?mode=ro"
+    conn = sqlite3.connect(uri, uri=True)
+    try:
+        return int(conn.execute("PRAGMA user_version").fetchone()[0])
+    finally:
+        conn.close()
+
+
 # ── 管理命令 ──────────────────────────────────────────────────────
 
 class TestInit:
@@ -46,6 +136,335 @@ class TestSync:
         assert "重试完成" in result.stdout
 
 
+class TestBackupMigrate:
+    def test_backup_requires_input_by(self, tmp_db, tmp_path):
+        _create_versioned_db(tmp_db)
+        result = _run_cli(
+            "backup", "--output", str(tmp_path / "backup.db"),
+            tmp_db=tmp_db,
+        )
+        assert result.returncode != 0
+        assert "--input-by" in result.stderr
+
+    def test_backup_is_exclusive_private_verified_and_read_only_for_source(
+        self, tmp_db, tmp_path
+    ):
+        _create_versioned_db(tmp_db)
+        backup_path = tmp_path / "nested" / "trade-v39.db"
+
+        result = _run_cli(
+            "backup", "--output", str(backup_path),
+            "--input-by", "codex_automation", "--json",
+            tmp_db=tmp_db,
+        )
+
+        assert result.returncode == 0, result.stderr
+        receipt = json.loads(result.stdout)
+        assert backup_path.is_file()
+        assert stat.S_IMODE(backup_path.stat().st_mode) == 0o600
+        assert receipt["backup_path"] == str(backup_path.resolve())
+        assert receipt["source_version"] == 39
+        assert receipt["integrity_check"] == "ok"
+        assert len(receipt["sha256"]) == 64
+        assert receipt["mode"] == "0600"
+        assert _read_user_version(tmp_db) == 39
+        assert _read_user_version(backup_path) == 39
+
+        before = backup_path.read_bytes()
+        repeated = _run_cli(
+            "backup", "--output", str(backup_path),
+            "--input-by", "codex_automation", "--json",
+            tmp_db=tmp_db,
+        )
+        assert repeated.returncode != 0
+        assert backup_path.read_bytes() == before
+
+    @pytest.mark.parametrize("backup_kind", ["missing", "corrupt"])
+    def test_migrate_rejects_unverified_backup_before_writing_source(
+        self, tmp_db, tmp_path, backup_kind
+    ):
+        _create_versioned_db(tmp_db)
+        backup_path = tmp_path / "required-backup.db"
+        if backup_kind == "corrupt":
+            backup_path.write_bytes(b"not sqlite")
+
+        result = _run_cli(
+            "migrate", "--require-backup", str(backup_path),
+            "--input-by", "codex_automation", "--json",
+            tmp_db=tmp_db,
+        )
+
+        assert result.returncode != 0
+        assert _read_user_version(tmp_db) == 39
+
+    def test_migrate_requires_input_by(self, tmp_db, tmp_path):
+        _create_versioned_db(tmp_db)
+        result = _run_cli(
+            "migrate", "--require-backup", str(tmp_path / "backup.db"),
+            tmp_db=tmp_db,
+        )
+        assert result.returncode != 0
+        assert "--input-by" in result.stderr
+
+    def test_migrate_rejects_backup_from_a_different_schema_version(
+        self, tmp_db, tmp_path
+    ):
+        _create_versioned_db(tmp_db, version=39)
+        backup_path = tmp_path / "unrelated-v38.db"
+        _create_versioned_db(str(backup_path), version=38)
+        backup_path.chmod(0o600)
+
+        result = _run_cli(
+            "migrate", "--require-backup", str(backup_path),
+            "--input-by", "codex_automation", "--json",
+            tmp_db=tmp_db,
+        )
+
+        assert result.returncode != 0
+        assert "版本" in result.stderr
+        assert _read_user_version(tmp_db) == 39
+
+    def test_migrate_rejects_backup_from_different_same_version_database(
+        self, tmp_db, tmp_path
+    ):
+        _create_versioned_db(tmp_db, version=39)
+        other_db = tmp_path / "other-v39.db"
+        _create_versioned_db(str(other_db), version=39)
+        conn = get_connection(other_db)
+        conn.execute("INSERT INTO teachers (name) VALUES ('另一个数据库')")
+        conn.commit()
+        conn.close()
+        backup_path = tmp_path / "other-v39-backup.db"
+        backup_result = _run_cli(
+            "backup", "--output", str(backup_path),
+            "--input-by", "codex_automation", "--json",
+            tmp_db=str(other_db),
+        )
+        assert backup_result.returncode == 0, backup_result.stderr
+
+        result = _run_cli(
+            "migrate", "--require-backup", str(backup_path),
+            "--input-by", "codex_automation", "--json",
+            tmp_db=tmp_db,
+        )
+
+        assert result.returncode != 0
+        assert "快照" in result.stderr
+        assert _read_user_version(tmp_db) == 39
+
+    def test_migrate_rejects_source_changed_after_backup(self, tmp_db, tmp_path):
+        _create_versioned_db(tmp_db, version=39)
+        backup_path = tmp_path / "before-change.db"
+        backup_result = _run_cli(
+            "backup", "--output", str(backup_path),
+            "--input-by", "codex_automation", "--json",
+            tmp_db=tmp_db,
+        )
+        assert backup_result.returncode == 0, backup_result.stderr
+        conn = get_connection(tmp_db)
+        conn.execute("INSERT INTO teachers (name) VALUES ('备份后新增')")
+        conn.commit()
+        conn.close()
+
+        result = _run_cli(
+            "migrate", "--require-backup", str(backup_path),
+            "--input-by", "codex_automation", "--json",
+            tmp_db=tmp_db,
+        )
+
+        assert result.returncode != 0
+        assert "快照" in result.stderr
+        assert _read_user_version(tmp_db) == 39
+
+    def test_migrate_rejects_backup_mode_other_than_0600(self, tmp_db, tmp_path):
+        _create_versioned_db(tmp_db, version=39)
+        backup_path = tmp_path / "permissive-backup.db"
+        backup_result = _run_cli(
+            "backup", "--output", str(backup_path),
+            "--input-by", "codex_automation", "--json",
+            tmp_db=tmp_db,
+        )
+        assert backup_result.returncode == 0, backup_result.stderr
+        backup_path.chmod(0o644)
+
+        result = _run_cli(
+            "migrate", "--require-backup", str(backup_path),
+            "--input-by", "codex_automation", "--json",
+            tmp_db=tmp_db,
+        )
+
+        assert result.returncode != 0
+        assert "0600" in result.stderr
+        assert _read_user_version(tmp_db) == 39
+
+    def test_v40_migrate_ignores_unrelated_v39_drift_view(
+        self, tmp_db, tmp_path
+    ):
+        _create_legacy_v39_teacher_db(tmp_db)
+        conn = get_connection(tmp_db)
+        conn.execute(
+            "CREATE VIEW daily_review_factor_score_requests "
+            "AS SELECT 'legacy-view' AS marker"
+        )
+        conn.commit()
+        view_sql = conn.execute(
+            "SELECT sql FROM sqlite_master "
+            "WHERE type='view' AND name='daily_review_factor_score_requests'"
+        ).fetchone()[0]
+        conn.close()
+        backup_path = tmp_path / "v39-with-unrelated-view.db"
+        backup_result = _run_cli(
+            "backup", "--output", str(backup_path),
+            "--input-by", "codex_automation", "--json",
+            tmp_db=tmp_db,
+        )
+        assert backup_result.returncode == 0, backup_result.stderr
+
+        result = _run_cli(
+            "migrate", "--require-backup", str(backup_path),
+            "--input-by", "codex_automation", "--json",
+            tmp_db=tmp_db,
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert _read_user_version(tmp_db) == 40
+        conn = get_connection(tmp_db)
+        try:
+            columns = {
+                row[1] for row in conn.execute("PRAGMA table_info(teacher_notes)")
+            }
+            indexes = {
+                row[1] for row in conn.execute("PRAGMA index_list(teacher_notes)")
+            }
+            after_view = conn.execute(
+                "SELECT sql FROM sqlite_master "
+                "WHERE type='view' AND name='daily_review_factor_score_requests'"
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        assert {
+            "source_platform", "source_url", "source_article_id",
+            "published_at", "fetched_at", "content_sha256",
+        } <= columns
+        assert {
+            "uq_teacher_notes_source_article",
+            "uq_teacher_notes_source_url",
+            "uq_teacher_notes_content_fallback",
+        } <= indexes
+        assert after_view == view_sql
+
+    def test_v40_internal_index_failure_rolls_back_version_columns_and_indexes(
+        self, tmp_db, tmp_path
+    ):
+        _create_legacy_v39_teacher_db(
+            tmp_db,
+            provenance_columns=("source_url",),
+        )
+        conn = get_connection(tmp_db)
+        conn.execute(
+            "UPDATE teacher_notes SET source_url='https://example.test/duplicate'"
+        )
+        conn.execute(
+            """
+            INSERT INTO teacher_notes
+                (teacher_id, date, title, core_view, source_url)
+            VALUES
+                (1, '2026-07-02', '重复来源', '另一条观点',
+                 'https://example.test/duplicate')
+            """
+        )
+        conn.commit()
+        before_columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(teacher_notes)")
+        }
+        conn.close()
+        backup_path = tmp_path / "v39-duplicate-url.db"
+        backup_result = _run_cli(
+            "backup", "--output", str(backup_path),
+            "--input-by", "codex_automation", "--json",
+            tmp_db=tmp_db,
+        )
+        assert backup_result.returncode == 0, backup_result.stderr
+
+        result = _run_cli(
+            "migrate", "--require-backup", str(backup_path),
+            "--input-by", "codex_automation", "--json",
+            tmp_db=tmp_db,
+        )
+
+        assert result.returncode != 0
+        assert _read_user_version(tmp_db) == 39
+        conn = get_connection(tmp_db)
+        try:
+            after_columns = {
+                row[1] for row in conn.execute("PRAGMA table_info(teacher_notes)")
+            }
+            indexes = {
+                row[1] for row in conn.execute("PRAGMA index_list(teacher_notes)")
+            }
+        finally:
+            conn.close()
+        assert after_columns == before_columns
+        assert not {
+            "uq_teacher_notes_source_article",
+            "uq_teacher_notes_source_url",
+            "uq_teacher_notes_content_fallback",
+        } & indexes
+
+    def test_migrate_requires_verified_backup_and_reports_v40(self, tmp_db, tmp_path):
+        _create_versioned_db(tmp_db)
+        backup_path = tmp_path / "trade-v39.db"
+        backup_result = _run_cli(
+            "backup", "--output", str(backup_path),
+            "--input-by", "codex_automation", "--json",
+            tmp_db=tmp_db,
+        )
+        assert backup_result.returncode == 0, backup_result.stderr
+        backup_sha = json.loads(backup_result.stdout)["sha256"]
+
+        result = _run_cli(
+            "migrate", "--require-backup", str(backup_path),
+            "--input-by", "codex_automation", "--json",
+            tmp_db=tmp_db,
+        )
+
+        assert result.returncode == 0, result.stderr
+        receipt = json.loads(result.stdout)
+        assert receipt == {
+            "before_version": 39,
+            "after_version": 40,
+            "changed": True,
+            "backup_path": str(backup_path.resolve()),
+            "backup_sha256": backup_sha,
+            "verified_backup_mode": "0600",
+            "source_snapshot_sha256": backup_sha,
+            "verified_columns": True,
+            "verified_indexes": True,
+            "input_by": "codex_automation",
+        }
+        assert _read_user_version(tmp_db) == 40
+        assert _read_user_version(backup_path) == 39
+
+
+class TestReadOnlyEntryPoints:
+    def test_query_notes_does_not_activate_v40_on_v39_database(self, tmp_db):
+        _create_legacy_v39_teacher_db(tmp_db)
+
+        result = _run_cli("query-notes", "--keyword", "旧观点", tmp_db=tmp_db)
+
+        assert result.returncode == 0, result.stderr
+        assert "旧笔记" in result.stdout
+        assert _read_user_version(tmp_db) == 39
+        conn = get_connection(tmp_db)
+        try:
+            columns = {
+                row[1] for row in conn.execute("PRAGMA table_info(teacher_notes)")
+            }
+        finally:
+            conn.close()
+        assert "source_url" not in columns
+
+
 # ── 老师观点 ──────────────────────────────────────────────────────
 
 class TestAddNote:
@@ -54,6 +473,7 @@ class TestAddNote:
             "add-note", "--teacher", "测试老师",
             "--date", "2026-04-01", "--title", "CLI测试笔记",
             "--core-view", "这是一条测试笔记",
+            "--input-by", "manual",
             tmp_db=tmp_db,
         )
         assert result.returncode == 0
@@ -63,6 +483,7 @@ class TestAddNote:
         result = _run_cli(
             "add-note", "--teacher", "新老师_CLI",
             "--date", "2026-04-01", "--title", "自动创建",
+            "--input-by", "manual",
             tmp_db=tmp_db,
         )
         assert result.returncode == 0
@@ -70,6 +491,76 @@ class TestAddNote:
     def test_missing_required_field(self, tmp_db):
         result = _run_cli("add-note", "--teacher", "test", tmp_db=tmp_db)
         assert result.returncode != 0
+
+    def test_missing_input_by_is_rejected(self, tmp_db):
+        result = _run_cli(
+            "add-note", "--teacher", "测试老师",
+            "--date", "2026-04-01", "--title", "缺审计字段",
+            tmp_db=tmp_db,
+        )
+        assert result.returncode != 0
+        assert "--input-by" in result.stderr
+
+    def test_source_provenance_is_idempotent(self, tmp_db):
+        args = _source_note_args()
+
+        first = _run_cli("add-note", *args, tmp_db=tmp_db)
+        duplicate = _run_cli("add-note", *args, tmp_db=tmp_db)
+
+        assert first.returncode == 0, first.stderr
+        assert "created=true" in first.stdout
+        assert duplicate.returncode == 0, duplicate.stderr
+        assert "created=false" in duplicate.stdout
+        assert "deduplicated_by=source_article_id" in duplicate.stdout
+        conn = get_connection(tmp_db)
+        rows = conn.execute(
+            "SELECT * FROM teacher_notes WHERE source_article_id='article-cli-1'"
+        ).fetchall()
+        conn.close()
+        assert len(rows) == 1
+        assert rows[0]["source_platform"] == "wechat_mp"
+        assert rows[0]["raw_content"] == "公众号原文\n"
+
+    def test_source_duplicate_has_no_attachment_or_watchlist_side_effects(
+        self, tmp_db, tmp_path
+    ):
+        attachment = tmp_path / "dedupe-attachment.txt"
+        attachment.write_text("attachment", encoding="utf-8")
+        stocks = json.dumps([
+            {"code": "688998", "name": "幂等测试", "tier": "tier2_watch"},
+        ])
+        args = [
+            *_source_note_args(article_id="article-cli-side-effect"),
+            "--attachment", str(attachment),
+            "--stocks", stocks,
+            "--sync-watchlist-from-stocks",
+        ]
+
+        first = _run_cli("add-note", *args, tmp_db=tmp_db)
+        duplicate = _run_cli("add-note", *args, tmp_db=tmp_db)
+
+        assert first.returncode == 0, first.stderr
+        assert duplicate.returncode == 0, duplicate.stderr
+        assert "created=false" in duplicate.stdout
+        conn = get_connection(tmp_db)
+        assert conn.execute("SELECT COUNT(*) FROM teacher_notes").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM note_attachments").fetchone()[0] == 1
+        assert conn.execute(
+            "SELECT COUNT(*) FROM watchlist WHERE stock_code='688998'"
+        ).fetchone()[0] == 1
+        conn.close()
+
+    def test_same_source_changed_content_is_nonzero(self, tmp_db):
+        first = _run_cli("add-note", *_source_note_args(), tmp_db=tmp_db)
+        assert first.returncode == 0, first.stderr
+
+        changed = _run_cli(
+            "add-note", *_source_note_args(raw_content="被修改的原文"),
+            tmp_db=tmp_db,
+        )
+
+        assert changed.returncode != 0
+        assert "source_content_changed" in changed.stderr
 
     def test_single_attachment(self, tmp_db, tmp_path):
         img = tmp_path / "note.jpg"
@@ -79,6 +570,7 @@ class TestAddNote:
             "--date", "2026-04-01", "--title", "单附件",
             "--source-type", "image",
             "--attachment", str(img),
+            "--input-by", "manual",
             tmp_db=tmp_db,
         )
         assert result.returncode == 0
@@ -96,6 +588,7 @@ class TestAddNote:
             "--source-type", "mixed",
             "--core-view", "图文并茂",
             "--attachment", *imgs,
+            "--input-by", "manual",
             tmp_db=tmp_db,
         )
         assert result.returncode == 0
@@ -106,6 +599,7 @@ class TestAddNote:
             "add-note", "--teacher", "老师",
             "--date", "2026-04-01", "--title", "不存在附件",
             "--attachment", "/nonexistent/file.jpg",
+            "--input-by", "manual",
             tmp_db=tmp_db,
         )
         assert result.returncode == 0
@@ -118,6 +612,7 @@ class TestAddNote:
             "add-note", "--teacher", "文件老师",
             "--date", "2026-04-01", "--title", "文件原文",
             "--raw-content-file", str(content_file),
+            "--input-by", "manual",
             tmp_db=tmp_db,
         )
         assert result.returncode == 0
@@ -135,6 +630,7 @@ class TestAddNote:
             "add-note", "--teacher", "标准输入老师",
             "--date", "2026-04-01", "--title", "标准输入原文",
             "--raw-content-file", "-",
+            "--input-by", "manual",
             tmp_db=tmp_db,
             input_text="通过 stdin 写入的长文本",
         )
@@ -156,6 +652,7 @@ class TestAddNote:
             "--date", "2026-04-01", "--title", "冲突参数",
             "--raw-content", "直接参数",
             "--raw-content-file", str(content_file),
+            "--input-by", "manual",
             tmp_db=tmp_db,
         )
         assert result.returncode != 0
@@ -169,6 +666,7 @@ class TestQueryNotes:
             "add-note", "--teacher", "搜索测试老师",
             "--date", "2026-04-01", "--title", "锂电板块分析CLI",
             "--core-view", "锂电储能看好",
+            "--input-by", "manual",
             tmp_db=tmp_db,
         )
         result = _run_cli("query-notes", "--keyword", "锂电", tmp_db=tmp_db)
@@ -188,6 +686,7 @@ class TestUpdateNote:
             "--date", "2026-04-01", "--title", "旧标题",
             "--core-view", "旧观点",
             "--key-points", '["旧要点A","旧要点B"]',
+            "--input-by", "manual",
             tmp_db=tmp_db,
         )
         assert add.returncode == 0
@@ -225,6 +724,7 @@ class TestUpdateNote:
         add = _run_cli(
             "add-note", "--teacher", "测试老师",
             "--date", "2026-04-01", "--title", "待删",
+            "--input-by", "manual",
             tmp_db=tmp_db,
         )
         assert add.returncode == 0
@@ -936,6 +1436,7 @@ class TestDbSearch:
             "add-note", "--teacher", "小鲍",
             "--date", "2026-04-01", "--title", "AI算力板块观点",
             "--core-view", "AI算力主线持续",
+            "--input-by", "manual",
             tmp_db=tmp_db,
         )
         _run_cli(

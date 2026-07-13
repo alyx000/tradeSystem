@@ -17,6 +17,7 @@ from db.connection import get_connection
 from db.migrate import migrate
 from db import queries as Q
 from providers.base import DataResult
+from services.content_identity import canonical_content_sha256
 
 
 @pytest.fixture
@@ -33,6 +34,60 @@ def client(db_path, monkeypatch):
     monkeypatch.setattr("db.connection._DEFAULT_DB_PATH", db_path)
     from api.main import app
     return TestClient(app)
+
+
+def test_api_get_db_dependency_does_not_activate_v40_on_v39_database(
+    tmp_path, monkeypatch
+):
+    db_path = tmp_path / "legacy-v39-api.db"
+    conn = get_connection(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE teachers (
+            id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE,
+            platform TEXT,
+            schedule TEXT
+        );
+        CREATE TABLE teacher_notes (
+            id INTEGER PRIMARY KEY,
+            teacher_id INTEGER REFERENCES teachers(id),
+            date TEXT NOT NULL,
+            title TEXT NOT NULL,
+            source_type TEXT DEFAULT 'text',
+            input_by TEXT,
+            core_view TEXT,
+            position_advice TEXT,
+            obsidian_path TEXT,
+            tags TEXT,
+            key_points TEXT,
+            sectors TEXT,
+            avoid TEXT,
+            raw_content TEXT,
+            mentioned_stocks TEXT,
+            created_at TEXT DEFAULT (datetime('now'))
+        );
+        INSERT INTO teachers (id, name) VALUES (1, '旧老师');
+        PRAGMA user_version = 39;
+        """
+    )
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr("db.connection._DEFAULT_DB_PATH", db_path)
+    from api.main import app
+
+    response = TestClient(app).get("/api/teachers")
+
+    assert response.status_code == 200
+    conn = get_connection(db_path)
+    try:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 39
+        columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(teacher_notes)")
+        }
+    finally:
+        conn.close()
+    assert "source_url" not in columns
 
 
 @pytest.fixture
@@ -58,6 +113,27 @@ def seeded_client(client, db_path):
     conn.commit()
     conn.close()
     return client
+
+
+def _api_source_note(
+    *,
+    raw_content: str = "API 公众号原文\n",
+    article_id: str = "api-article-1",
+    source_url: str = "https://mp.weixin.qq.com/s/api-example",
+) -> dict:
+    return {
+        "teacher_name": "安静拆主线",
+        "date": "2026-07-13",
+        "title": "API 盘后复盘",
+        "raw_content": raw_content,
+        "source_platform": "wechat_mp",
+        "source_url": source_url,
+        "source_article_id": article_id,
+        "published_at": "2026-07-13T20:00:00+08:00",
+        "fetched_at": "2026-07-13T22:15:00+08:00",
+        "content_sha256": canonical_content_sha256(raw_content),
+        "input_by": "codex_automation",
+    }
 
 
 # ──────────────────────────────────────────────────────────────
@@ -1553,7 +1629,10 @@ class TestPlanningAndKnowledgeAPI:
             "title": "CRUD测试", "core_view": "测试内容",
         })
         assert r.status_code == 200
-        nid = r.json()["id"]
+        create_payload = r.json()
+        assert create_payload["created"] is True
+        assert create_payload["deduplicated_by"] is None
+        nid = create_payload["id"]
 
         r = client.get(f"/api/teacher-notes/{nid}")
         data = r.json()
@@ -1569,6 +1648,105 @@ class TestPlanningAndKnowledgeAPI:
 
         r = client.get(f"/api/teacher-notes/{nid}")
         assert r.status_code == 404
+
+    def test_source_note_post_is_idempotent_and_reports_identity(self, client, db_path):
+        body = _api_source_note()
+
+        first = client.post("/api/teacher-notes", json=body)
+        duplicate = client.post("/api/teacher-notes", json=body)
+
+        assert first.status_code == 200
+        assert duplicate.status_code == 200
+        assert first.json()["created"] is True
+        assert first.json()["deduplicated_by"] is None
+        assert duplicate.json() == {
+            "id": first.json()["id"],
+            "created": False,
+            "deduplicated_by": "source_article_id",
+        }
+        conn = get_connection(db_path)
+        assert conn.execute(
+            "SELECT COUNT(*) FROM teacher_notes WHERE source_article_id='api-article-1'"
+        ).fetchone()[0] == 1
+        conn.close()
+
+    def test_source_note_partial_bundle_returns_422(self, client):
+        response = client.post(
+            "/api/teacher-notes",
+            json={
+                "teacher_name": "安静拆主线",
+                "date": "2026-07-13",
+                "title": "不完整来源",
+                "source_platform": "wechat_mp",
+                "input_by": "codex_automation",
+            },
+        )
+
+        assert response.status_code == 422
+        assert "complete" in response.json()["detail"]
+
+    def test_same_source_changed_content_returns_409(self, client):
+        first = client.post("/api/teacher-notes", json=_api_source_note())
+        assert first.status_code == 200
+
+        changed = client.post(
+            "/api/teacher-notes",
+            json=_api_source_note(raw_content="被篡改的 API 原文"),
+        )
+
+        assert changed.status_code == 409
+        assert "source_content_changed" in changed.json()["detail"]
+
+    def test_source_duplicate_does_not_repeat_watchlist_sync(self, client, db_path):
+        body = _api_source_note(
+            article_id="api-side-effect",
+            source_url="https://mp.weixin.qq.com/s/api-side-effect",
+        )
+        body.update({
+            "mentioned_stocks": [
+                {"code": "688997", "name": "API幂等", "tier": "tier2_watch"},
+            ],
+            "sync_watchlist_from_mentions": True,
+        })
+
+        first = client.post("/api/teacher-notes", json=body)
+        duplicate = client.post("/api/teacher-notes", json=body)
+
+        assert first.status_code == 200
+        assert first.json()["created"] is True
+        assert len(first.json()["watchlist_sync"]["added"]) == 1
+        assert duplicate.status_code == 200
+        assert duplicate.json()["created"] is False
+        assert "watchlist_sync" not in duplicate.json()
+        conn = get_connection(db_path)
+        assert conn.execute(
+            "SELECT COUNT(*) FROM watchlist WHERE stock_code='688997'"
+        ).fetchone()[0] == 1
+        conn.close()
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("source_url", "https://mp.weixin.qq.com/s/changed"),
+            ("source_article_id", "changed-id"),
+            ("raw_content", "changed body"),
+            ("date", "2026-07-14"),
+        ],
+    )
+    def test_source_note_immutable_fields_return_422(self, client, field, value):
+        body = _api_source_note(
+            article_id=f"api-immutable-{field}",
+            source_url=f"https://mp.weixin.qq.com/s/api-immutable-{field}",
+        )
+        created = client.post("/api/teacher-notes", json=body)
+        assert created.status_code == 200
+
+        response = client.put(
+            f"/api/teacher-notes/{created.json()['id']}",
+            json={field: value},
+        )
+
+        assert response.status_code == 422
 
     def test_create_note_mentioned_stocks_default_no_watchlist_sync(self, client, db_path):
         r = client.post(
@@ -1603,6 +1781,7 @@ class TestPlanningAndKnowledgeAPI:
                     {"code": "688999", "name": "测同步", "tier": "tier2_watch"},
                 ],
                 "sync_watchlist_from_mentions": True,
+                "input_by": "codex_automation",
             },
         )
         assert r.status_code == 200
@@ -1613,9 +1792,10 @@ class TestPlanningAndKnowledgeAPI:
         assert payload["watchlist_sync"]["added"][0]["code"] == "688999"
         conn = get_connection(db_path)
         row = conn.execute(
-            "SELECT source_note_id FROM watchlist WHERE stock_code='688999'"
+            "SELECT source_note_id, input_by FROM watchlist WHERE stock_code='688999'"
         ).fetchone()
         assert row["source_note_id"] == nid
+        assert row["input_by"] == "codex_automation"
         conn.close()
 
     def test_create_note_mentioned_stocks_non_object_rejected(self, client):

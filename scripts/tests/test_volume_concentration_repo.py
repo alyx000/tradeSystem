@@ -176,7 +176,7 @@ def test_migrate_v28_creates_table_on_pre_v28_db():
     conn.execute("PRAGMA user_version = 27")
     conn.commit()
 
-    migrate(conn)  # v28 块应重建表
+    migrate(conn, activate_v40=True)  # v28 块应重建表
 
     tables = {
         r[0] for r in conn.execute(

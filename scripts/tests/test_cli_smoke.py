@@ -41,26 +41,29 @@ def _build_main_parser() -> argparse.ArgumentParser:
 
 RECORD_NOTES_COMMANDS = [
     # add-note 文字场景
-    ["db", "add-note", "--teacher", "小鲍", "--date", "2026-04-01", "--title", "观点标题"],
+    ["db", "add-note", "--teacher", "小鲍", "--date", "2026-04-01", "--title", "观点标题",
+     "--input-by", "manual"],
     # add-note 带核心观点和标签
     ["db", "add-note", "--teacher", "小鲍", "--date", "2026-04-01", "--title", "T",
      "--core-view", "主升结束", "--tags", '["AI","连板"]', "--input-by", "openclaw"],
     # add-note 带结构化要点、板块、仓位建议
     ["db", "add-note", "--teacher", "小鲍", "--date", "2026-04-01", "--title", "T",
      "--key-points", '["要点A","要点B"]', "--sectors", '["AI","锂电"]',
-     "--position-advice", "控制仓位至3成"],
+     "--position-advice", "控制仓位至3成", "--input-by", "manual"],
     # add-note 单附件
     ["db", "add-note", "--teacher", "X", "--date", "2026-04-01", "--title", "T",
-     "--source-type", "image", "--attachment", "/tmp/a.jpg"],
+     "--source-type", "image", "--attachment", "/tmp/a.jpg", "--input-by", "manual"],
     # add-note 多附件
     ["db", "add-note", "--teacher", "X", "--date", "2026-04-01", "--title", "T",
-     "--source-type", "mixed", "--attachment", "/tmp/a.jpg", "/tmp/b.jpg", "/tmp/c.jpg"],
+     "--source-type", "mixed", "--attachment", "/tmp/a.jpg", "/tmp/b.jpg", "/tmp/c.jpg",
+     "--input-by", "manual"],
     # add-note 从文件读取长原文
     ["db", "add-note", "--teacher", "X", "--date", "2026-04-01", "--title", "T",
-     "--raw-content-file", "/tmp/raw.txt"],
+     "--raw-content-file", "/tmp/raw.txt", "--input-by", "manual"],
     # add-note 用户确认入池后：同步 mentioned_stocks 到关注池
     ["db", "add-note", "--teacher", "小鲍", "--date", "2026-04-01", "--title", "T",
-     "--stocks", '[{"code":"300750","name":"宁德时代"}]', "--sync-watchlist-from-stocks"],
+     "--stocks", '[{"code":"300750","name":"宁德时代"}]', "--sync-watchlist-from-stocks",
+     "--input-by", "manual"],
     # update-note 结构化修订
     ["db", "update-note", "--id", "1", "--title", "T2",
      "--key-points", '["要点A","要点B"]', "--input-by", "codex_automation"],
@@ -521,7 +524,7 @@ def test_all_skill_subcommands_registered() -> None:
         "thesis-open", "thesis-close", "thesis-fill",
         "thesis-list", "thesis-suggest", "thesis-review", "thesis-reopen",
         # management
-        "add-calendar", "init", "sync", "reconcile",
+        "add-calendar", "init", "sync", "reconcile", "backup", "migrate",
     }
     parser = _build_db_parser()
     db_subparser = None

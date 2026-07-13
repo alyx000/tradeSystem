@@ -10,7 +10,14 @@ from typing import Any
 import yaml
 
 from .dual_write import _extract_market_row
-from .schema import holding_code_norm_sql, init_schema
+from .schema import (
+    TEACHER_NOTE_PROVENANCE_COLUMNS,
+    ensure_factor_score_request_audit_schema,
+    ensure_teacher_note_provenance_indexes,
+    holding_code_norm_sql,
+    init_schema,
+    teacher_note_provenance_indexes_healthy,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -19,8 +26,16 @@ PROJECT_ROOT = SCRIPTS_DIR.parent
 
 # 与 migrate() 中「当前最新」一步一致；新增迁移时递增本常量，并把上一步的
 # set_schema_version(conn, CURRENT_SCHEMA_VERSION) 改为字面量 N（保留历史链）。
-CURRENT_SCHEMA_VERSION = 39
+CURRENT_SCHEMA_VERSION = 40
 
+_TEACHER_NOTE_PROVENANCE_COLUMN_DDL = (
+    ("source_platform", "TEXT"),
+    ("source_url", "TEXT"),
+    ("source_article_id", "TEXT"),
+    ("published_at", "TEXT"),
+    ("fetched_at", "TEXT"),
+    ("content_sha256", "TEXT"),
+)
 
 def get_schema_version(conn: sqlite3.Connection) -> int:
     return conn.execute("PRAGMA user_version").fetchone()[0]
@@ -28,6 +43,69 @@ def get_schema_version(conn: sqlite3.Connection) -> int:
 
 def set_schema_version(conn: sqlite3.Connection, version: int) -> None:
     conn.execute(f"PRAGMA user_version = {version}")
+
+
+def _repair_teacher_note_provenance(
+    conn: sqlite3.Connection,
+    *,
+    target_version: int | None = None,
+) -> None:
+    """Atomically add v40 provenance columns/indexes without committing callers.
+
+    A healthy v40 database takes the read-only fast path.  Drift repair and the
+    version transition use a SAVEPOINT so an index conflict cannot leave a
+    half-added column or a falsely advanced ``user_version``.
+    """
+    columns = {
+        row[1] for row in conn.execute("PRAGMA table_info(teacher_notes)").fetchall()
+    }
+    current_version = get_schema_version(conn)
+    schema_healthy = (
+        TEACHER_NOTE_PROVENANCE_COLUMNS.issubset(columns)
+        and teacher_note_provenance_indexes_healthy(conn)
+    )
+    version_healthy = target_version is None or current_version >= target_version
+    if schema_healthy and version_healthy:
+        return
+
+    conn.execute("SAVEPOINT schema_v40")
+    try:
+        for column, column_type in _TEACHER_NOTE_PROVENANCE_COLUMN_DDL:
+            if column not in columns:
+                conn.execute(
+                    f"ALTER TABLE teacher_notes ADD COLUMN {column} {column_type}"
+                )
+        if not ensure_teacher_note_provenance_indexes(conn, repair_invalid=True):
+            raise sqlite3.OperationalError(
+                "teacher_notes provenance columns are incomplete after v40 repair"
+            )
+        if target_version is not None and current_version < target_version:
+            set_schema_version(conn, target_version)
+        conn.execute("RELEASE SAVEPOINT schema_v40")
+    except Exception:
+        conn.execute("ROLLBACK TO SAVEPOINT schema_v40")
+        conn.execute("RELEASE SAVEPOINT schema_v40")
+        raise
+
+
+def activate_teacher_note_provenance_v40(conn: sqlite3.Connection) -> None:
+    """Activate or repair only teacher-note provenance schema v40.
+
+    This intentionally runs no historical migration blocks and no
+    version-independent fallback repair.  It does not commit or roll back the
+    caller transaction; the backup-gated CLI owns that transaction boundary.
+    """
+    current_version = get_schema_version(conn)
+    if current_version == 39:
+        _repair_teacher_note_provenance(conn, target_version=40)
+        return
+    if current_version == 40:
+        _repair_teacher_note_provenance(conn)
+        return
+    raise sqlite3.OperationalError(
+        "teacher-note provenance v40 activation requires schema version 39 or 40; "
+        f"current={current_version}"
+    )
 
 
 def _ensure_broker_executions_columns(conn: sqlite3.Connection) -> None:
@@ -199,7 +277,8 @@ def _ensure_factor_score_request_audit(conn: sqlite3.Connection) -> None:
     ).fetchone()
     if exists:
         return
-    init_schema(conn)
+    ensure_factor_score_request_audit_schema(conn)
+    conn.commit()
 
 
 def _rebuild_trade_thesis_trade_mode_check(conn: sqlite3.Connection) -> None:
@@ -308,9 +387,26 @@ def _close_duplicate_active_holdings(conn: sqlite3.Connection) -> int:
     return closed
 
 
-def migrate(conn: sqlite3.Connection) -> None:
-    """自动迁移到最新 schema 版本。"""
+def migrate(conn: sqlite3.Connection, *, activate_v40: bool = False) -> None:
+    """Apply routine migrations without implicitly activating schema v40.
+
+    Existing databases may only cross the v39 -> v40 boundary through the
+    explicit, backup-gated ``db migrate`` command.  A brand-new database is a
+    separate initialization path and is created directly at the current
+    schema.  Existing v40 databases are only validated here; drift repair is
+    likewise reserved for the explicit migration path.
+    """
     version = get_schema_version(conn)
+    application_tables = conn.execute(
+        "SELECT name FROM sqlite_master "
+        "WHERE type = 'table' AND name NOT LIKE 'sqlite_%' LIMIT 1"
+    ).fetchone()
+    if version == 0 and application_tables is not None and not activate_v40:
+        raise sqlite3.OperationalError(
+            "unversioned non-empty database requires explicit `db migrate` with "
+            "a verified backup"
+        )
+    is_fresh_database = version == 0 and application_tables is None
 
     if version < 1:
         logger.info("Applying schema v1: initial tables + FTS + triggers")
@@ -749,6 +845,29 @@ def migrate(conn: sqlite3.Connection) -> None:
         init_schema(conn)
         set_schema_version(conn, 39)
         conn.commit()
+
+    current_version = get_schema_version(conn)
+    if current_version < 40 and (is_fresh_database or activate_v40):
+        logger.info("Applying schema v40: teacher_notes source provenance")
+        _repair_teacher_note_provenance(conn, target_version=40)
+        current_version = get_schema_version(conn)
+
+    if current_version >= 40:
+        if activate_v40:
+            _repair_teacher_note_provenance(conn)
+        else:
+            columns = {
+                row[1]
+                for row in conn.execute("PRAGMA table_info(teacher_notes)").fetchall()
+            }
+            if not (
+                TEACHER_NOTE_PROVENANCE_COLUMNS.issubset(columns)
+                and teacher_note_provenance_indexes_healthy(conn)
+            ):
+                raise sqlite3.OperationalError(
+                    "schema v40 drift detected; run explicit `db migrate` with a "
+                    "verified backup to repair"
+                )
 
     # 版本无关兜底:DB 已标记到最新版但 market_timing_signal 缺失/缺列(异常半迁移态/历史遗留)时,
     # 版本门会跳过迁移块导致表/列永不建,运行期报 no such table/column。仅在确缺时 DDL+commit;

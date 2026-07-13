@@ -15,6 +15,10 @@ from api.deps import get_db_conn
 from api.market_enrich import enrich_daily_market_row
 from db import queries as Q
 from services.holding_signals import build_holding_signals
+from services.teacher_note_service import (
+    TeacherNoteProvenanceConflict,
+    create_teacher_note_idempotent,
+)
 from services.trend_leader import pool as tl_pool
 from services.trend_leader.signals import signal_hits as tl_signal_hits
 from services.volume_concentration import service as vc_service
@@ -211,10 +215,21 @@ def create_note(body: dict, conn: sqlite3.Connection = Depends(get_db_conn)):
             Q.validate_mentioned_stocks_entries(mentioned)
         except ValueError as e:
             raise HTTPException(422, str(e)) from e
-    tid = Q.get_or_create_teacher(conn, teacher_name)
-    note_id = Q.insert_teacher_note(conn, teacher_id=tid, **payload)
+    try:
+        write_result = create_teacher_note_idempotent(
+            conn,
+            teacher_name=teacher_name,
+            payload=payload,
+        )
+    except TeacherNoteProvenanceConflict as e:
+        conn.rollback()
+        raise HTTPException(409, str(e)) from e
+    except (TypeError, ValueError) as e:
+        conn.rollback()
+        raise HTTPException(422, str(e)) from e
+    note_id = write_result.note_id
     wl_result: dict[str, list] | None = None
-    if sync_wl and mentioned:
+    if write_result.created and sync_wl and mentioned:
         stocks_list = mentioned
         if isinstance(stocks_list, str):
             try:
@@ -230,6 +245,7 @@ def create_note(body: dict, conn: sqlite3.Connection = Depends(get_db_conn)):
                     title=str(payload.get("title") or ""),
                     teacher_name=teacher_name,
                     stocks=stocks_list,
+                    input_by=payload.get("input_by"),
                 )
             except ValueError as e:
                 conn.rollback()
@@ -237,8 +253,12 @@ def create_note(body: dict, conn: sqlite3.Connection = Depends(get_db_conn)):
         else:
             wl_result = {"added": [], "skipped": []}
     conn.commit()
-    out: dict[str, Any] = {"id": note_id}
-    if sync_wl:
+    out: dict[str, Any] = {
+        "id": note_id,
+        "created": write_result.created,
+        "deduplicated_by": write_result.matched_by,
+    }
+    if write_result.created and sync_wl:
         out["watchlist_sync"] = wl_result or {"added": [], "skipped": []}
     return out
 

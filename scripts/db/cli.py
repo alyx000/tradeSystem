@@ -2,17 +2,32 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
+import os
 import shutil
+import sqlite3
+import stat
 import sys
+import tempfile
 from pathlib import Path
 
 import yaml
 
 from .connection import get_db
 from .dual_write import reconcile_daily_market, retry_pending
-from .migrate import import_all, migrate
+from .migrate import (
+    CURRENT_SCHEMA_VERSION,
+    activate_teacher_note_provenance_v40,
+    get_schema_version,
+    import_all,
+    migrate,
+)
+from .schema import (
+    TEACHER_NOTE_PROVENANCE_COLUMNS,
+    teacher_note_provenance_indexes_healthy,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +105,90 @@ def _read_raw_content(args: argparse.Namespace) -> str | None:
     return path.read_text(encoding="utf-8")
 
 
+def _configured_db_path() -> Path:
+    """Return the configured database path without opening or migrating it."""
+    raw = os.environ.get("TRADE_DB_PATH")
+    if raw:
+        return Path(raw).expanduser().resolve()
+    return (PROJECT_ROOT / "data" / "trade.db").resolve()
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _open_sqlite_readonly(path: Path) -> sqlite3.Connection:
+    resolved = path.expanduser().resolve()
+    if not resolved.is_file():
+        raise FileNotFoundError(f"SQLite 文件不存在: {resolved}")
+    return sqlite3.connect(resolved.as_uri() + "?mode=ro", uri=True)
+
+
+def _verify_sqlite_file(path: Path) -> dict[str, object]:
+    """Verify a SQLite file through an independent read-only connection."""
+    resolved = path.expanduser().resolve()
+    try:
+        conn = _open_sqlite_readonly(resolved)
+        try:
+            checks = [
+                str(row[0])
+                for row in conn.execute("PRAGMA integrity_check").fetchall()
+            ]
+            version = int(conn.execute("PRAGMA user_version").fetchone()[0])
+        finally:
+            conn.close()
+    except (OSError, sqlite3.Error) as exc:
+        raise ValueError(f"SQLite 备份校验失败: {resolved}: {exc}") from exc
+    if checks != ["ok"]:
+        raise ValueError(f"SQLite 备份 integrity_check 失败: {checks}")
+    return {
+        "path": resolved,
+        "version": version,
+        "integrity_check": "ok",
+        "sha256": _sha256_file(resolved),
+        "mode": stat.S_IMODE(resolved.stat().st_mode),
+    }
+
+
+def _write_normalized_sqlite_snapshot(
+    source_conn: sqlite3.Connection,
+    target_path: Path,
+) -> None:
+    """Write a deterministic, private SQLite backup snapshot.
+
+    Both ``db backup`` and the migration preflight use this exact path so their
+    SHA-256 values describe the same closed, DELETE-journal SQLite image.
+    """
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    target_created = False
+    try:
+        fd = os.open(
+            str(target_path),
+            os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+            0o600,
+        )
+        os.close(fd)
+        target_created = True
+        target_conn = sqlite3.connect(str(target_path))
+        try:
+            source_conn.backup(target_conn)
+            target_conn.execute("PRAGMA journal_mode=DELETE")
+        finally:
+            target_conn.close()
+        os.chmod(target_path, 0o600)
+    except Exception:
+        if target_created:
+            try:
+                target_path.unlink()
+            except OSError:
+                logger.exception("无法清理失败的 SQLite 快照: %s", target_path)
+        raise
+
+
 def register_db_subparser(subparsers: argparse._SubParsersAction) -> None:
     """在 main.py 的 subparsers 中注册 db 子命令。"""
     db_parser = subparsers.add_parser("db", help="数据库管理（查询/写入/迁移/对账）")
@@ -100,6 +199,16 @@ def register_db_subparser(subparsers: argparse._SubParsersAction) -> None:
     db_sub.add_parser("sync", help="重试 pending_writes 中的失败记录")
     db_sub.add_parser("reconcile", help="对账：比对 YAML 与 DB 数据一致性")
 
+    backup = db_sub.add_parser("backup", help="用 SQLite backup API 创建迁移前备份")
+    backup.add_argument("--output", required=True, help="备份输出路径（必须不存在）")
+    backup.add_argument("--input-by", required=True, help="备份请求者")
+    backup.add_argument("--json", action="store_true", help="输出 JSON 回执")
+
+    migrate_db = db_sub.add_parser("migrate", help="验证备份后显式迁移数据库")
+    migrate_db.add_argument("--require-backup", required=True, help="已验证的迁移前 SQLite 备份")
+    migrate_db.add_argument("--input-by", required=True, help="迁移请求者")
+    migrate_db.add_argument("--json", action="store_true", help="输出 JSON 回执")
+
     # ── 老师观点 ──────────────────────────────────────────────────
     add_note = db_sub.add_parser("add-note", help="录入老师观点")
     add_note.add_argument("--teacher", required=True, help="老师名称")
@@ -107,7 +216,16 @@ def register_db_subparser(subparsers: argparse._SubParsersAction) -> None:
     add_note.add_argument("--title", required=True, help="标题")
     add_note.add_argument("--core-view", default=None, help="核心观点")
     add_note.add_argument("--source-type", default="text", help="来源类型: text/image/mixed")
-    add_note.add_argument("--input-by", default="manual", help="录入方: manual/openclaw/copaw/cursor")
+    add_note.add_argument(
+        "--input-by", required=True,
+        help="录入方: manual/openclaw/copaw/cursor/codex_automation",
+    )
+    add_note.add_argument("--source-platform", default=None, help="来源平台，如 wechat_mp")
+    add_note.add_argument("--source-url", default=None, help="来源永久链接")
+    add_note.add_argument("--source-article-id", default=None, help="来源文章 ID")
+    add_note.add_argument("--published-at", default=None, help="来源发布时间（含 UTC offset）")
+    add_note.add_argument("--fetched-at", default=None, help="采集时间（含 UTC offset）")
+    add_note.add_argument("--content-sha256", default=None, help="规范化原文 SHA-256")
     add_note.add_argument("--tags", default=None, help="标签 JSON array")
     add_note.add_argument("--key-points", default=None, help="结构化要点 JSON array，如 '[\"要点1\",\"要点2\"]'")
     add_note.add_argument("--sectors", default=None, help="涉及板块 JSON array，如 '[\"AI\",\"锂电\"]'")
@@ -436,7 +554,7 @@ def handle_db_command(args: argparse.Namespace) -> None:
     """处理 db 子命令。"""
     action = getattr(args, "db_action", None)
     if not action:
-        print("用法: main.py db {init|sync|reconcile|add-note|query-notes|"
+        print("用法: main.py db {init|sync|reconcile|backup|migrate|add-note|query-notes|"
               "add-industry|add-macro|holdings-add|holdings-remove|holdings-list|"
               "holdings-refresh|holdings-import-yaml|"
               "watchlist-add|watchlist-remove|watchlist-update|watchlist-list|"
@@ -448,6 +566,8 @@ def handle_db_command(args: argparse.Namespace) -> None:
         "init": lambda _: _cmd_init(),
         "sync": lambda _: _cmd_sync(),
         "reconcile": lambda _: _cmd_reconcile(),
+        "backup": _cmd_backup,
+        "migrate": _cmd_migrate,
         "add-note": _cmd_add_note,
         "update-note": _cmd_update_note,
         "delete-note": _cmd_delete_note,
@@ -510,101 +630,270 @@ def _cmd_reconcile() -> None:
             print(f"  {d}")
 
 
+def _cmd_backup(args: argparse.Namespace) -> None:
+    """Create a private, integrity-checked backup without migrating the source."""
+    source_path = _configured_db_path()
+    target_path = Path(args.output).expanduser().resolve()
+    target_created = False
+    try:
+        if not source_path.is_file():
+            raise FileNotFoundError(f"源数据库不存在: {source_path}")
+        if source_path == target_path:
+            raise ValueError("备份路径不得与源数据库相同")
+        source_conn = _open_sqlite_readonly(source_path)
+        try:
+            source_version = int(
+                source_conn.execute("PRAGMA user_version").fetchone()[0]
+            )
+            _write_normalized_sqlite_snapshot(source_conn, target_path)
+            target_created = True
+        finally:
+            source_conn.close()
+        verification = _verify_sqlite_file(target_path)
+        if verification["version"] != source_version:
+            raise ValueError(
+                "备份版本与源数据库不一致: "
+                f"source={source_version}, backup={verification['version']}"
+            )
+        if verification["mode"] != 0o600:
+            raise ValueError(
+                "备份权限校验失败: "
+                f"expected=0o600, actual={oct(int(verification['mode']))}"
+            )
+        receipt = {
+            "backup_path": str(target_path),
+            "source_version": source_version,
+            "integrity_check": verification["integrity_check"],
+            "sha256": verification["sha256"],
+            "mode": "0600",
+            "input_by": args.input_by,
+        }
+    except (OSError, sqlite3.Error, ValueError) as exc:
+        if target_created:
+            try:
+                target_path.unlink()
+            except OSError:
+                logger.exception("无法清理失败的备份文件: %s", target_path)
+        print(f"❌ 数据库备份失败: {exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
+
+    if args.json:
+        print(json.dumps(receipt, ensure_ascii=False, indent=2))
+    else:
+        print(
+            f"✅ 数据库备份完成: {receipt['backup_path']} "
+            f"(version={receipt['source_version']}, integrity_check=ok, mode=0600)"
+        )
+
+
+def _cmd_migrate(args: argparse.Namespace) -> None:
+    """Migrate only after independently validating the required backup."""
+    source_path = _configured_db_path()
+    backup_path = Path(args.require_backup).expanduser().resolve()
+    try:
+        if not source_path.is_file():
+            raise FileNotFoundError(f"源数据库不存在: {source_path}")
+        if source_path == backup_path or (
+            backup_path.exists() and os.path.samefile(source_path, backup_path)
+        ):
+            raise ValueError("--require-backup 不得指向源数据库")
+
+        with get_db(source_path) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            before_version = get_schema_version(conn)
+            verification = _verify_sqlite_file(backup_path)
+            if verification["mode"] != 0o600:
+                raise ValueError(
+                    "迁移备份权限必须严格为 0600: "
+                    f"actual={oct(int(verification['mode']))}"
+                )
+            if verification["version"] != before_version:
+                raise ValueError(
+                    "备份版本与源数据库版本不一致: "
+                    f"source={before_version}, backup={verification['version']}"
+                )
+
+            with tempfile.TemporaryDirectory(prefix="trade-db-migrate-") as temp_dir:
+                current_snapshot_path = Path(temp_dir) / "current-source.db"
+                source_conn = _open_sqlite_readonly(source_path)
+                try:
+                    _write_normalized_sqlite_snapshot(
+                        source_conn,
+                        current_snapshot_path,
+                    )
+                finally:
+                    source_conn.close()
+                current_verification = _verify_sqlite_file(current_snapshot_path)
+            if current_verification["sha256"] != verification["sha256"]:
+                raise ValueError(
+                    "备份快照与当前源数据库不一致，拒绝迁移: "
+                    f"source={current_verification['sha256']}, "
+                    f"backup={verification['sha256']}"
+                )
+
+            activate_teacher_note_provenance_v40(conn)
+            after_version = get_schema_version(conn)
+            columns = {
+                row[1] for row in conn.execute("PRAGMA table_info(teacher_notes)").fetchall()
+            }
+            verified_columns = TEACHER_NOTE_PROVENANCE_COLUMNS.issubset(columns)
+            verified_indexes = teacher_note_provenance_indexes_healthy(conn)
+            if (
+                after_version != CURRENT_SCHEMA_VERSION
+                or not verified_columns
+                or not verified_indexes
+            ):
+                raise RuntimeError(
+                    "迁移后回查失败: "
+                    f"version={after_version}, columns={verified_columns}, "
+                    f"indexes={verified_indexes}"
+                )
+        receipt = {
+            "before_version": before_version,
+            "after_version": after_version,
+            "changed": before_version != after_version,
+            "backup_path": str(backup_path),
+            "backup_sha256": verification["sha256"],
+            "verified_backup_mode": "0600",
+            "source_snapshot_sha256": current_verification["sha256"],
+            "verified_columns": verified_columns,
+            "verified_indexes": verified_indexes,
+            "input_by": args.input_by,
+        }
+    except (OSError, sqlite3.Error, RuntimeError, ValueError) as exc:
+        print(f"❌ 数据库迁移失败: {exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
+
+    if args.json:
+        print(json.dumps(receipt, ensure_ascii=False, indent=2))
+    else:
+        print(
+            f"✅ 数据库迁移完成: v{receipt['before_version']} → "
+            f"v{receipt['after_version']} (backup={receipt['backup_path']})"
+        )
+
+
 # ── 老师观点实现 ──────────────────────────────────────────────────
 
 def _cmd_add_note(args: argparse.Namespace) -> None:
     from . import queries as Q
+    from services.teacher_note_service import create_teacher_note_idempotent
 
-    stocks_list: list[dict] = []
-    if args.stocks:
-        stocks_list = json.loads(args.stocks)
-        try:
+    try:
+        stocks_list: list[dict] = []
+        if args.stocks:
+            stocks_list = json.loads(args.stocks)
             Q.validate_mentioned_stocks_entries(stocks_list)
-        except ValueError as err:
-            print(f"❌ {err}", file=sys.stderr)
-            sys.exit(1)
-    raw_content = _read_raw_content(args)
-    sync_from_stocks = getattr(args, "sync_watchlist_from_stocks", False)
+        raw_content = _read_raw_content(args)
+        sync_from_stocks = getattr(args, "sync_watchlist_from_stocks", False)
 
-    with get_db() as conn:
-        migrate(conn)
-        teacher_id = Q.get_or_create_teacher(conn, args.teacher)
-
-        kwargs: dict = {
+        payload: dict = {
             "date": args.date,
             "title": args.title,
             "source_type": args.source_type,
             "input_by": args.input_by,
+            "source_platform": args.source_platform,
+            "source_url": args.source_url,
+            "source_article_id": args.source_article_id,
+            "published_at": args.published_at,
+            "fetched_at": args.fetched_at,
+            "content_sha256": args.content_sha256,
         }
         if args.core_view:
-            kwargs["core_view"] = args.core_view
+            payload["core_view"] = args.core_view
         if raw_content:
-            kwargs["raw_content"] = raw_content
+            payload["raw_content"] = raw_content
         if args.tags:
-            kwargs["tags"] = json.loads(args.tags)
+            payload["tags"] = json.loads(args.tags)
         if args.key_points:
-            kwargs["key_points"] = json.loads(args.key_points)
+            payload["key_points"] = json.loads(args.key_points)
         if args.sectors:
-            kwargs["sectors"] = json.loads(args.sectors)
+            payload["sectors"] = json.loads(args.sectors)
         if args.position_advice:
-            kwargs["position_advice"] = args.position_advice
+            payload["position_advice"] = args.position_advice
         if stocks_list:
-            kwargs["mentioned_stocks"] = stocks_list
+            payload["mentioned_stocks"] = stocks_list
 
-        note_id = Q.insert_teacher_note(conn, teacher_id=teacher_id, **kwargs)
+        with get_db() as conn:
+            migrate(conn)
+            write_result = create_teacher_note_idempotent(
+                conn, teacher_name=args.teacher, payload=payload,
+            )
+            note_id = write_result.note_id
+            att_count = 0
+            candidates: list[dict] = []
+            skipped: list[dict] = []
 
-        att_count = 0
-        if args.attachment:
-            for att_path in args.attachment:
-                src = Path(att_path)
-                if src.exists():
-                    dest_dir = PROJECT_ROOT / "data" / "attachments" / args.date
-                    dest_dir.mkdir(parents=True, exist_ok=True)
-                    dest = dest_dir / src.name
-                    shutil.copy2(src, dest)
-                    rel_path = str(dest.relative_to(PROJECT_ROOT))
-                    Q.insert_attachment(conn, note_id, rel_path)
-                    att_count += 1
-                else:
-                    logger.warning("附件不存在，跳过: %s", att_path)
-
-        candidates: list[dict] = []
-        skipped: list[dict] = []
-        if stocks_list:
-            if sync_from_stocks:
-                sync_result = Q.sync_watchlist_from_mentioned_stocks(
-                    conn,
-                    note_id=note_id,
-                    note_date=args.date,
-                    title=args.title,
-                    teacher_name=args.teacher,
-                    stocks=stocks_list,
-                    input_by=args.input_by,
-                )
-                for a in sync_result["added"]:
-                    candidates.append({
-                        "code": a["code"],
-                        "name": a["name"],
-                        "tier": a["tier"],
-                        "note_id": note_id,
-                        "watchlist_id": a["watchlist_id"],
-                    })
-                for s in sync_result["skipped"]:
-                    skipped.append({"code": s["code"], "name": s["name"]})
-            else:
-                for stock in stocks_list:
-                    code = stock.get("code", "")
-                    name = stock.get("name", "")
-                    tier = Q.normalize_watchlist_tier(stock.get("tier"))
-                    if not code:
-                        continue
-                    if Q.check_watchlist_exists(conn, code):
-                        skipped.append({"code": code, "name": name})
+            if write_result.created and args.attachment:
+                for att_path in args.attachment:
+                    src = Path(att_path)
+                    if src.exists():
+                        dest_dir = PROJECT_ROOT / "data" / "attachments" / args.date
+                        dest_dir.mkdir(parents=True, exist_ok=True)
+                        dest = dest_dir / src.name
+                        shutil.copy2(src, dest)
+                        rel_path = str(dest.relative_to(PROJECT_ROOT))
+                        Q.insert_attachment(conn, note_id, rel_path)
+                        att_count += 1
                     else:
-                        candidates.append({"code": code, "name": name, "tier": tier, "note_id": note_id})
+                        logger.warning("附件不存在，跳过: %s", att_path)
+
+            if write_result.created and stocks_list:
+                if sync_from_stocks:
+                    sync_result = Q.sync_watchlist_from_mentioned_stocks(
+                        conn,
+                        note_id=note_id,
+                        note_date=args.date,
+                        title=args.title,
+                        teacher_name=args.teacher,
+                        stocks=stocks_list,
+                        input_by=args.input_by,
+                    )
+                    for added in sync_result["added"]:
+                        candidates.append({
+                            "code": added["code"],
+                            "name": added["name"],
+                            "tier": added["tier"],
+                            "note_id": note_id,
+                            "watchlist_id": added["watchlist_id"],
+                        })
+                    for skipped_row in sync_result["skipped"]:
+                        skipped.append({
+                            "code": skipped_row["code"],
+                            "name": skipped_row["name"],
+                        })
+                else:
+                    for stock in stocks_list:
+                        code = stock.get("code", "")
+                        name = stock.get("name", "")
+                        tier = Q.normalize_watchlist_tier(stock.get("tier"))
+                        if not code:
+                            continue
+                        if Q.check_watchlist_exists(conn, code):
+                            skipped.append({"code": code, "name": name})
+                        else:
+                            candidates.append({
+                                "code": code,
+                                "name": name,
+                                "tier": tier,
+                                "note_id": note_id,
+                            })
+    except (OSError, ValueError) as exc:
+        print(f"❌ 录入老师观点失败: {exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
+
+    if not write_result.created:
+        print(
+            f"ℹ️ 笔记已存在 (id={note_id}, created=false, "
+            f"deduplicated_by={write_result.matched_by})"
+        )
+        return
 
     att_info = f", 附件 {att_count} 个" if att_count else ""
-    print(f"✅ 已录入笔记 (id={note_id}): {args.teacher} - {args.title}{att_info}")
+    print(
+        f"✅ 已录入笔记 (id={note_id}, created=true): "
+        f"{args.teacher} - {args.title}{att_info}"
+    )
 
     if stocks_list:
         considered = len(candidates) + len(skipped)
@@ -631,11 +920,7 @@ def _cmd_add_note(args: argparse.Namespace) -> None:
                 ]
                 print(f"WATCHLIST_CANDIDATES: {json.dumps(cand_out, ensure_ascii=False)}")
         else:
-            hint = (
-                "关注池同步"
-                if sync_from_stocks
-                else "候选关注池"
-            )
+            hint = "关注池同步" if sync_from_stocks else "候选关注池"
             print(
                 f"📋 {hint}: --stocks 中无有效股票代码（每项需含非空 code），已跳过"
             )

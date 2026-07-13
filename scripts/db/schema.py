@@ -1,6 +1,7 @@
 """SQLite Schema 定义：全部表 + FTS 虚拟表 + 触发器 + 索引。"""
 from __future__ import annotations
 
+import re
 import sqlite3
 
 
@@ -45,6 +46,12 @@ CREATE TABLE IF NOT EXISTS teacher_notes (
     avoid TEXT,
     raw_content TEXT,
     mentioned_stocks TEXT,
+    source_platform TEXT,
+    source_url TEXT,
+    source_article_id TEXT,
+    published_at TEXT,
+    fetched_at TEXT,
+    content_sha256 TEXT,
     created_at TEXT DEFAULT (datetime('now'))
 );
 """
@@ -656,6 +663,24 @@ BEGIN
 END;
 """
 
+_SQL_FACTOR_SCORE_REQUEST_INDEXES = (
+    "CREATE INDEX IF NOT EXISTS idx_factor_score_requests_trade_date "
+    "ON daily_review_factor_score_requests(trade_date DESC, created_at DESC);",
+    "CREATE INDEX IF NOT EXISTS idx_factor_score_requests_run "
+    "ON daily_review_factor_score_requests(resolved_run_id, created_at DESC);",
+    "CREATE INDEX IF NOT EXISTS idx_factor_score_requests_cache "
+    "ON daily_review_factor_score_requests(cache_key, created_at DESC);",
+)
+
+
+def ensure_factor_score_request_audit_schema(conn: sqlite3.Connection) -> None:
+    """Create only the v39 request-audit objects, without newer-schema DDL."""
+    conn.executescript(_SQL_DAILY_REVIEW_FACTOR_SCORE_REQUESTS)
+    conn.executescript(_SQL_FACTOR_SCORE_REQUESTS_NO_UPDATE_TRIGGER)
+    conn.executescript(_SQL_FACTOR_SCORE_REQUESTS_NO_DELETE_TRIGGER)
+    for sql in _SQL_FACTOR_SCORE_REQUEST_INDEXES:
+        conn.execute(sql)
+
 # ──────────────────────────────────────────────────────────────
 # 7. 情绪周期 / 主线跟踪
 # ──────────────────────────────────────────────────────────────
@@ -1138,18 +1163,163 @@ _SQL_INDEXES = [
     "ON daily_review_factor_score_runs(trade_date DESC, created_at DESC);",
     "CREATE INDEX IF NOT EXISTS idx_factor_score_runs_retry "
     "ON daily_review_factor_score_runs(retry_of_run_id);",
-    "CREATE INDEX IF NOT EXISTS idx_factor_score_requests_trade_date "
-    "ON daily_review_factor_score_requests(trade_date DESC, created_at DESC);",
-    "CREATE INDEX IF NOT EXISTS idx_factor_score_requests_run "
-    "ON daily_review_factor_score_requests(resolved_run_id, created_at DESC);",
-    "CREATE INDEX IF NOT EXISTS idx_factor_score_requests_cache "
-    "ON daily_review_factor_score_requests(cache_key, created_at DESC);",
+    *_SQL_FACTOR_SCORE_REQUEST_INDEXES,
     "CREATE INDEX IF NOT EXISTS idx_factor_evaluations_run "
     "ON daily_review_factor_evaluations(score_run_id, evaluation_trade_date DESC);",
     # partial unique index: 同账户同票同时只允许 1 个 open thesis(plan Q5 / G 账户隔离不变式)
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_thesis_account_stock_status "
     "ON trade_thesis(account_id, stock_code) WHERE status = 'open';",
 ]
+
+TEACHER_NOTE_PROVENANCE_COLUMNS = frozenset({
+    "source_platform",
+    "source_url",
+    "source_article_id",
+    "published_at",
+    "fetched_at",
+    "content_sha256",
+})
+
+TEACHER_NOTE_PROVENANCE_INDEX_NAMES = frozenset({
+    "uq_teacher_notes_source_article",
+    "uq_teacher_notes_source_url",
+    "uq_teacher_notes_content_fallback",
+})
+
+_TEACHER_NOTE_PROVENANCE_INDEX_SPECS = {
+    "uq_teacher_notes_source_article": {
+        "columns": ("source_platform", "source_article_id"),
+        "where": (
+            "source_platform IS NOT NULL AND TRIM(source_platform) <> '' "
+            "AND source_article_id IS NOT NULL AND TRIM(source_article_id) <> ''"
+        ),
+        "sql": """
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_teacher_notes_source_article
+            ON teacher_notes(source_platform, source_article_id)
+            WHERE source_platform IS NOT NULL AND TRIM(source_platform) <> ''
+              AND source_article_id IS NOT NULL AND TRIM(source_article_id) <> '';
+        """,
+    },
+    "uq_teacher_notes_source_url": {
+        "columns": ("source_url",),
+        "where": "source_url IS NOT NULL AND TRIM(source_url) <> ''",
+        "sql": """
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_teacher_notes_source_url
+            ON teacher_notes(source_url)
+            WHERE source_url IS NOT NULL AND TRIM(source_url) <> '';
+        """,
+    },
+    "uq_teacher_notes_content_fallback": {
+        "columns": ("teacher_id", "date", "title", "content_sha256"),
+        "where": (
+            "teacher_id IS NOT NULL AND content_sha256 IS NOT NULL "
+            "AND TRIM(content_sha256) <> ''"
+        ),
+        "sql": """
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_teacher_notes_content_fallback
+            ON teacher_notes(teacher_id, date, title, content_sha256)
+            WHERE teacher_id IS NOT NULL
+              AND content_sha256 IS NOT NULL AND TRIM(content_sha256) <> '';
+        """,
+    },
+}
+
+_SQL_TEACHER_NOTE_PROVENANCE_INDEXES = [
+    str(spec["sql"])
+    for spec in _TEACHER_NOTE_PROVENANCE_INDEX_SPECS.values()
+]
+
+
+def _normalize_index_predicate(predicate: str) -> str:
+    return "".join(predicate.rstrip().rstrip(";").split()).casefold()
+
+
+def _teacher_note_provenance_index_statuses(
+    conn: sqlite3.Connection,
+) -> dict[str, tuple[bool, bool]]:
+    """Return ``name -> (exists, structurally_healthy)`` for v40 indexes."""
+    index_rows = {
+        str(row[1]): row
+        for row in conn.execute("PRAGMA index_list(teacher_notes)").fetchall()
+    }
+    index_sql_by_name = {
+        str(row[0]): str(row[1] or "")
+        for row in conn.execute(
+            "SELECT name, sql FROM sqlite_master WHERE type='index'"
+        ).fetchall()
+    }
+    statuses: dict[str, tuple[bool, bool]] = {}
+    for name, spec in _TEACHER_NOTE_PROVENANCE_INDEX_SPECS.items():
+        row = index_rows.get(name)
+        if row is None:
+            # Index names are database-global.  A same-name index attached to
+            # another table is invalid but must still be dropped by an explicit
+            # repair before CREATE INDEX can succeed.
+            statuses[name] = (name in index_sql_by_name, False)
+            continue
+        unique = len(row) > 2 and int(row[2]) == 1
+        partial = len(row) > 4 and int(row[4]) == 1
+        escaped_name = name.replace('"', '""')
+        columns = tuple(
+            str(info[2])
+            for info in conn.execute(
+                f'PRAGMA index_info("{escaped_name}")'
+            ).fetchall()
+        )
+        index_sql = index_sql_by_name.get(name, "")
+        match = re.search(
+            r"\bWHERE\b(?P<predicate>.+?)\s*;?\s*$",
+            index_sql,
+            re.I | re.S,
+        )
+        actual_predicate = match.group("predicate") if match else ""
+        expected_columns = tuple(spec["columns"])
+        expected_predicate = str(spec["where"])
+        healthy = (
+            unique
+            and partial
+            and columns == expected_columns
+            and _normalize_index_predicate(actual_predicate)
+            == _normalize_index_predicate(expected_predicate)
+        )
+        statuses[name] = (True, healthy)
+    return statuses
+
+
+def teacher_note_provenance_indexes_healthy(conn: sqlite3.Connection) -> bool:
+    """Validate unique/partial flags, ordered columns, and WHERE predicates."""
+    statuses = _teacher_note_provenance_index_statuses(conn)
+    return bool(statuses) and all(healthy for _, healthy in statuses.values())
+
+
+def ensure_teacher_note_provenance_indexes(
+    conn: sqlite3.Connection,
+    *,
+    repair_invalid: bool = False,
+) -> bool:
+    """Create v40 indexes only when every referenced column is available.
+
+    ``init_schema`` is called by older migrations against legacy ``teacher_notes``
+    tables.  Keeping these indexes outside ``_SQL_INDEXES`` prevents those calls
+    from failing before v40 has added the provenance columns.
+    """
+    columns = {
+        row[1] for row in conn.execute("PRAGMA table_info(teacher_notes)").fetchall()
+    }
+    if not TEACHER_NOTE_PROVENANCE_COLUMNS.issubset(columns):
+        return False
+    statuses = _teacher_note_provenance_index_statuses(conn)
+    invalid_existing = [
+        name for name, (exists, healthy) in statuses.items() if exists and not healthy
+    ]
+    if invalid_existing and not repair_invalid:
+        return False
+    for name in invalid_existing:
+        escaped_name = name.replace('"', '""')
+        conn.execute(f'DROP INDEX "{escaped_name}"')
+    for sql in _SQL_TEACHER_NOTE_PROVENANCE_INDEXES:
+        conn.execute(sql)
+    return teacher_note_provenance_indexes_healthy(conn)
 
 # ──────────────────────────────────────────────────────────────
 # 12. 最票跟踪
@@ -1465,5 +1635,7 @@ def init_schema(conn: sqlite3.Connection) -> None:
 
     for sql in _SQL_INDEXES:
         conn.execute(sql)
+
+    ensure_teacher_note_provenance_indexes(conn)
 
     conn.commit()
