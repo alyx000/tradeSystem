@@ -2,7 +2,8 @@
 set -e
 
 # 1. 设 PATH（launchd 不继承 shell PATH，agy/python 等都拿不到）
-export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+#    $HOME/.local/bin 必须在前：LLM CLI `agy` 装在此处，缺它 PK 每场启动失败→熔断（board-break runner 同款修复）
+export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
 
 # 2. cd 到仓库根（python import 才能正确解析）
 cd /Users/alyx/tradeSystem
