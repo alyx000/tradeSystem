@@ -184,6 +184,56 @@ class TushareProvider(DataProvider):
             return f"{code}.SH"
         return f"{code}.SZ"
 
+    def _normalize_stock_concept_code(self, raw) -> str | None:
+        """概念归属查询专用的严格股票代码规范化。"""
+        try:
+            text = _to_clean_str(raw).upper()
+        except Exception:
+            return None
+        parts = text.split(".")
+        if len(parts) not in (1, 2):
+            return None
+        bare_code = parts[0]
+        if (
+            len(bare_code) != 6
+            or not bare_code.isascii()
+            or not bare_code.isdigit()
+        ):
+            return None
+        canonical = self._normalize_stock_code(bare_code)
+        if len(parts) == 2 and parts[1] != canonical.rsplit(".", 1)[1]:
+            return None
+        return canonical
+
+    def _parse_stock_concept_member_rows(
+        self,
+        member_df,
+        expected_code: str,
+    ) -> list[dict] | None:
+        """把单票回包一次性收敛为只含安全字符串的中间行。"""
+        try:
+            member_rows = self._df_to_records(member_df)
+            parsed_rows: list[dict] = []
+            for item in member_rows:
+                if not isinstance(item, dict):
+                    return None
+                member_code = self._normalize_stock_concept_code(
+                    item.get("con_code")
+                )
+                if member_code != expected_code:
+                    return None
+                parsed_rows.append(
+                    {
+                        "concept_code": _to_clean_str(
+                            item.get("ts_code")
+                        ).upper(),
+                        "is_new": _to_clean_str(item.get("is_new")).upper(),
+                    }
+                )
+            return parsed_rows
+        except Exception:
+            return None
+
     def _quarter_end_for_date(self, date: str) -> str:
         dt = datetime.strptime(date, "%Y-%m-%d")
         if dt.month <= 3:
@@ -758,7 +808,7 @@ class TushareProvider(DataProvider):
         normalized: list[str] = []
         seen_codes: set[str] = set()
         for raw in ts_codes or []:
-            code = self._normalize_stock_code(_to_clean_str(raw).upper())
+            code = self._normalize_stock_concept_code(raw)
             if not code or code in seen_codes:
                 continue
             seen_codes.add(code)
@@ -812,7 +862,6 @@ class TushareProvider(DataProvider):
                 )
                 if member_df is None:
                     raise RuntimeError("member response is None")
-                member_rows = self._df_to_records(member_df)
             except Exception as exc:
                 error = _to_clean_str(exc) or type(exc).__name__
                 stocks[code] = {
@@ -822,12 +871,24 @@ class TushareProvider(DataProvider):
                 }
                 continue
 
+            member_rows = self._parse_stock_concept_member_rows(
+                member_df,
+                code,
+            )
+            if member_rows is None:
+                stocks[code] = {
+                    "status": "source_failed",
+                    "concepts": [],
+                    "error": "member row contract violation",
+                }
+                continue
+
             concepts: list[dict] = []
             seen_concepts: set[str] = set()
             for item in member_rows:
-                if _to_clean_str(item.get("is_new")).upper() != "Y":
+                if item["is_new"] != "Y":
                     continue
-                concept_code = _to_clean_str(item.get("ts_code")).upper()
+                concept_code = item["concept_code"]
                 meta = catalog.get(concept_code)
                 if meta is None or concept_code in seen_concepts:
                     continue

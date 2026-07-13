@@ -50,6 +50,11 @@ class _CatalogWithBrokenRecords:
         raise RuntimeError("catalog records failed")
 
 
+class _SecretStr:
+    def __str__(self):
+        raise RuntimeError("secret-member-payload")
+
+
 def _catalog(*rows: dict) -> pd.DataFrame:
     if rows:
         return pd.DataFrame(list(rows))
@@ -111,6 +116,33 @@ def test_stock_concept_memberships_queries_one_catalog_and_each_stock_once():
     )
 
 
+@pytest.mark.parametrize(
+    "invalid_input",
+    [
+        pytest.param("not-a-stock-code", id="text"),
+        pytest.param("60509", id="five-digits"),
+        pytest.param("6050900", id="seven-digits"),
+        pytest.param("605090.SZ", id="wrong-sh-suffix"),
+        pytest.param("000001.SH", id="wrong-sz-suffix"),
+        pytest.param("430001.SH", id="wrong-bj-suffix"),
+        pytest.param("605090.XX", id="unknown-suffix"),
+        pytest.param(_SecretStr(), id="str-raises"),
+    ],
+)
+def test_stock_concept_memberships_rejects_noncanonical_input_without_query(
+    invalid_input,
+):
+    pro = _ConceptPro(catalog=_catalog())
+
+    result = _provider(pro).get_stock_concept_memberships([invalid_input])
+
+    assert result.success
+    assert result.data == {"stocks": {}}
+    assert pro.ths_index_calls == []
+    assert pro.ths_member_calls == []
+    assert "secret-member-payload" not in repr(result.data)
+
+
 def test_stock_concept_memberships_keeps_only_current_member_rows():
     pro = _ConceptPro(
         catalog=_catalog(
@@ -158,6 +190,230 @@ def test_stock_concept_memberships_keeps_only_current_member_rows():
             }
         ],
     }
+
+
+@pytest.mark.parametrize(
+    "bad_con_code",
+    [
+        pytest.param("600428.SH", id="other-stock"),
+        pytest.param(None, id="none"),
+        pytest.param("", id="empty"),
+        pytest.param("not-a-stock-code", id="invalid"),
+    ],
+)
+def test_stock_concept_memberships_rejects_member_row_with_invalid_con_code(
+    bad_con_code,
+):
+    pro = _ConceptPro(
+        catalog=_catalog(),
+        member_frames={
+            "605090.SH": pd.DataFrame(
+                [
+                    {
+                        "ts_code": "885372.TI",
+                        "con_code": bad_con_code,
+                        "is_new": "Y",
+                    }
+                ]
+            )
+        },
+    )
+
+    result = _provider(pro).get_stock_concept_memberships(["605090.SH"])
+
+    assert result.success
+    assert result.data["stocks"]["605090.SH"] == {
+        "status": "source_failed",
+        "concepts": [],
+        "error": "member row contract violation",
+    }
+
+
+def test_stock_concept_memberships_rejects_member_row_without_con_code():
+    pro = _ConceptPro(
+        catalog=_catalog(),
+        member_frames={
+            "605090.SH": pd.DataFrame(
+                [{"ts_code": "885372.TI", "is_new": "Y"}]
+            )
+        },
+    )
+
+    result = _provider(pro).get_stock_concept_memberships(["605090.SH"])
+
+    assert result.success
+    assert result.data["stocks"]["605090.SH"] == {
+        "status": "source_failed",
+        "concepts": [],
+        "error": "member row contract violation",
+    }
+
+
+def test_stock_concept_memberships_rejects_entire_stock_when_any_row_has_wrong_con_code():
+    pro = _ConceptPro(
+        catalog=_catalog(),
+        member_frames={
+            "605090.SH": pd.DataFrame(
+                [
+                    {
+                        "ts_code": "885372.TI",
+                        "con_code": "605090.SH",
+                        "is_new": "Y",
+                    },
+                    {
+                        "ts_code": "885373.TI",
+                        "con_code": "600428.SH",
+                        "is_new": "Y",
+                    },
+                ]
+            )
+        },
+    )
+
+    result = _provider(pro).get_stock_concept_memberships(["605090.SH"])
+
+    assert result.success
+    assert result.data["stocks"]["605090.SH"] == {
+        "status": "source_failed",
+        "concepts": [],
+        "error": "member row contract violation",
+    }
+
+
+def test_stock_concept_memberships_validates_con_code_before_is_new_filtering():
+    pro = _ConceptPro(
+        catalog=_catalog(),
+        member_frames={
+            "605090.SH": pd.DataFrame(
+                [
+                    {
+                        "ts_code": "885372.TI",
+                        "con_code": "600428.SH",
+                        "is_new": "N",
+                    }
+                ]
+            )
+        },
+    )
+
+    result = _provider(pro).get_stock_concept_memberships(["605090.SH"])
+
+    assert result.success
+    assert result.data["stocks"]["605090.SH"] == {
+        "status": "source_failed",
+        "concepts": [],
+        "error": "member row contract violation",
+    }
+
+
+def test_stock_concept_memberships_accepts_normalized_bare_member_con_code():
+    pro = _ConceptPro(
+        catalog=_catalog(),
+        member_frames={
+            "605090.SH": pd.DataFrame(
+                [
+                    {
+                        "ts_code": "885372.TI",
+                        "con_code": " 605090 ",
+                        "is_new": " y ",
+                    }
+                ]
+            )
+        },
+    )
+
+    result = _provider(pro).get_stock_concept_memberships(["605090.sh"])
+
+    assert result.success
+    assert result.data["stocks"]["605090.SH"] == {
+        "status": "ok",
+        "concepts": [
+            {
+                "concept_code": "885372.TI",
+                "name": "页岩气",
+                "member_count": 40,
+            }
+        ],
+    }
+
+
+def test_stock_concept_memberships_contains_bad_con_code_scalar_to_one_stock():
+    pro = _ConceptPro(
+        catalog=_catalog(),
+        member_frames={
+            "605090.SH": pd.DataFrame(
+                [
+                    {
+                        "ts_code": "885372.TI",
+                        "con_code": _SecretStr(),
+                        "is_new": "Y",
+                    }
+                ]
+            ),
+            "600428.SH": pd.DataFrame(
+                [
+                    {
+                        "ts_code": "885372.TI",
+                        "con_code": " 600428.sh ",
+                        "is_new": "Y",
+                    }
+                ]
+            ),
+        },
+    )
+
+    result = _provider(pro).get_stock_concept_memberships(
+        ["605090.SH", "600428.SH"]
+    )
+
+    assert result.success
+    assert result.data["stocks"]["605090.SH"] == {
+        "status": "source_failed",
+        "concepts": [],
+        "error": "member row contract violation",
+    }
+    assert result.data["stocks"]["600428.SH"]["status"] == "ok"
+    assert "secret-member-payload" not in repr(result.data)
+
+
+@pytest.mark.parametrize("dirty_field", ["is_new", "ts_code"])
+def test_stock_concept_memberships_contains_bad_member_scalar_to_one_stock(
+    dirty_field,
+):
+    dirty_row = {
+        "ts_code": "885372.TI",
+        "con_code": "605090.SH",
+        "is_new": "Y",
+    }
+    dirty_row[dirty_field] = _SecretStr()
+    pro = _ConceptPro(
+        catalog=_catalog(),
+        member_frames={
+            "605090.SH": pd.DataFrame([dirty_row]),
+            "600428.SH": pd.DataFrame(
+                [
+                    {
+                        "ts_code": "885372.TI",
+                        "con_code": "600428.SH",
+                        "is_new": "Y",
+                    }
+                ]
+            ),
+        },
+    )
+
+    result = _provider(pro).get_stock_concept_memberships(
+        ["605090.SH", "600428.SH"]
+    )
+
+    assert result.success
+    assert result.data["stocks"]["605090.SH"] == {
+        "status": "source_failed",
+        "concepts": [],
+        "error": "member row contract violation",
+    }
+    assert result.data["stocks"]["600428.SH"]["status"] == "ok"
+    assert "secret-member-payload" not in repr(result.data)
 
 
 @pytest.mark.parametrize(
