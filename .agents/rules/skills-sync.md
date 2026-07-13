@@ -4,7 +4,9 @@ globs:
   - scripts/db/cli.py
   - scripts/main.py
   - scripts/cli/review_factors.py
+  - scripts/cli/tail_scan.py
   - scripts/services/trinity_factor/*.py
+  - scripts/services/tail_scan/*.py
   - scripts/api/routes/*.py
   - .agents/skills/**/*.md
   - .cursor/skills/**/*.md
@@ -19,6 +21,7 @@ globs:
 - `scripts/db/cli.py` — CLI 子命令定义
 - `scripts/main.py` — 顶层命令注册（pre/post/schedule 等）
 - `scripts/cli/review_factors.py` / `scripts/services/trinity_factor/*.py` — 三位一体评分、人工确认、T+1 与影子指标语义
+- `scripts/cli/tail_scan.py` / `scripts/services/tail_scan/*.py` — 尾盘实时筛选、逐票产业逻辑、证据边界与报告/推送语义
 - `scripts/api/routes/*.py` — API 路由定义
 - `.agents/skills/**/*.md` — skill 文档本身（真源；`.cursor/skills/` 与 `.claude/skills/` 是 symlink 壳）
 
@@ -93,6 +96,7 @@ python3 -m pytest scripts/tests/test_cli_smoke.py -v
 | `main.py` 的 `pre/post/schedule` | `market-tasks/SKILL.md` |
 | `scripts/cli/new_high.py` 或 `scripts/services/new_high/` | `market-tasks/SKILL.md` + `INDEX.md` 中 `new-high` 行 |
 | `scripts/cli/trend_leader.py` 或 `scripts/services/trend_leader/` | `market-tasks/SKILL.md` + `INDEX.md` 中 `trend-leader` 行 |
+| `scripts/cli/tail_scan.py` 或 `scripts/services/tail_scan/` | `market-tasks/SKILL.md` + `INDEX.md` 中 `tail-scan` 行 + `AGENTS.md` / `CLAUDE.md` |
 | `scripts/utils/llm_cli.py` 或 LLM CLI/env 语义调整 | `market-tasks/SKILL.md` + `INDEX.md` 中 recommend/research-digest/cognition-digest 行 |
 | `scripts/workflows/research-digest-workflow.mjs` / `scripts/workflows/huibo_helper.py` / 慧博 Antigravity 诊断语义调整 / `HUIBO_REPORT_PDF_DIR` 下载归档目录约定调整 | `market-tasks/SKILL.md` + `INDEX.md` 中 research-digest workflow 行 |
 | `main.py` 的 `ingest *` | `ingest-inspector/SKILL.md` |
