@@ -91,6 +91,7 @@ python3 -m pytest scripts/tests/test_cli_smoke.py -v
 | `cli.py` 的 `holdings-*`（含 `--thesis-id` 关联语义）/ `watchlist-*` / `add-trade` / `blacklist-*` | `portfolio-manager/SKILL.md` |
 | `cli.py` 的 `query-notes/db-search` | `daily-review/SKILL.md` |
 | `main.py` 的 `pre/post/schedule` | `market-tasks/SKILL.md` |
+| `main.py` / `scripts/cli/wechat_teacher_feed.py` / `scripts/services/wechat_teacher_feed/` | `market-tasks/SKILL.md`、`record-notes/SKILL.md`、`record-notes/references/ingestion-rules.md`、`INDEX.md` 与 `AGENTS.md`；保持“采集只落 manifest、按 digest 确认后才 add-note、默认不入池”边界 |
 | `scripts/cli/new_high.py` 或 `scripts/services/new_high/` | `market-tasks/SKILL.md` + `INDEX.md` 中 `new-high` 行 |
 | `scripts/cli/trend_leader.py` 或 `scripts/services/trend_leader/` | `market-tasks/SKILL.md` + `INDEX.md` 中 `trend-leader` 行 |
 | `scripts/utils/llm_cli.py` 或 LLM CLI/env 语义调整 | `market-tasks/SKILL.md` + `INDEX.md` 中 recommend/research-digest/cognition-digest 行 |

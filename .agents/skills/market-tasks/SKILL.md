@@ -1,7 +1,7 @@
 ---
 name: market-tasks
-description: 手动触发或自动定时执行盘前/盘后行情采集任务、行业推荐推送、研报速读，并将结果摘要推送回 channel
-version: "1.4"
+description: 手动触发或自动定时执行盘前/盘后行情采集任务、微信公众号白名单归档、行业推荐推送、研报速读，并将结果摘要推送回 channel
+version: "1.5"
 ---
 
 # Skill: 市场数据任务（盘前 / 盘后采集）
@@ -16,6 +16,7 @@ version: "1.4"
 - 「打开市场看板 / 看盘后信封」
 - 「行业推荐定时推送」/「最近值得看的行业」
 - 「今天的研报速读」/「最近哪些股票被首次覆盖 / 评级上调」/「美股机构评级有什么变动」
+- 「采集公众号老师观点」/「检查 WeRSS」/「查看公众号确认候选」
 
 时激活此 skill。
 
@@ -31,6 +32,9 @@ make today-open
 make today-close
 make today-pre DATE=YYYY-MM-DD
 make today-post DATE=YYYY-MM-DD
+make wechat-teacher-should-run PHASE=post-market DATE=YYYY-MM-DD
+make wechat-teacher-doctor
+make wechat-teacher-show DATE=YYYY-MM-DD
 ```
 
 需要底层命令时在 `scripts/` 目录运行：
@@ -39,6 +43,20 @@ make today-post DATE=YYYY-MM-DD
 python3 main.py pre --date YYYY-MM-DD
 python3 main.py post --date YYYY-MM-DD
 ```
+
+## 微信公众号白名单采集（wechat-teacher-feed）
+
+固定白名单为安静拆主线、股痴流沙河、爱在冰川，数据源是只绑定 loopback 的本机 WeRSS，不使用微信 Mac 客户端。`post-market` 仅在 run_date 本身为开放日运行；`pre-trading-eve` 仅在 run_date 的下一自然日为开放日运行；日历表/日期缺失返回 blocked，不做工作日猜测。
+
+```bash
+python3 main.py wechat-teacher-feed should-run --phase post-market --date YYYY-MM-DD --json
+python3 main.py wechat-teacher-feed doctor --json
+python3 main.py wechat-teacher-feed collect --phase post-market --date YYYY-MM-DD \
+  --input-by codex_automation --json
+python3 main.py wechat-teacher-feed show --date YYYY-MM-DD --json
+```
+
+`collect` 只写 `data/runs/wechat-teacher-feed/` 的原文、index 与 manifest，不写 `teacher_notes`、计划层或关注池。`--dry-run` 不写文件且不触发刷新；`--cached-only` 只恢复 journal、重查 pending 并读缓存。WeRSS v1.5.2 无可验证的刷新终态，因此 `refresh_unverified`/`recent_or_inflight` 不能称为 `empty`。真正录入必须切换到 [`record-notes`](../record-notes/SKILL.md) 的结构化确认流程。
 
 ## 行业推荐定时推送
 

@@ -20,6 +20,7 @@
 |-------|-----------|------|
 | `cognition-evolution` | `knowledge cognition-* / instance-* / review-* (含 review-list)` | 认知提炼 / 实例验证 / 周期复盘（手动闭环）；`instance-add` 支持观点 `[事实]/[判断]` 拆分、因子快照、可证伪假设，`validate` 支持 `feedback_action` 回写交易系统反馈；`review-generate` 聚合 `evolving_views_json`（部分降级项见 SKILL.md） |
 | `record-notes` | `db add-note` | 录入老师观点（文字/图片/多附件）；可选 `--sync-watchlist-from-stocks`（用户确认入池后） |
+| `record-notes` | `db add-note --source-platform --source-url --source-article-id --published-at --fetched-at --content-sha256 --input-by` | 经用户确认后录入带来源审计的老师观点；来源包必须完整，幂等重复返回已有 ID，不重复附件/关注池副作用 |
 | `record-notes` | `db update-note` / `db delete-note` | 修订或删除已有老师观点；删除必须显式 `--yes`，用于经确认后的纠错重写 |
 | `record-notes` / `portfolio-manager` | `db stock-resolve` | 通过已配置 Provider 统一做证券简称/代码解析，供 Agent 补码与补名使用 |
 | `record-notes` / `portfolio-manager` | `db watchlist-sync-from-note` | 按笔记 `mentioned_stocks` 写入关注池（两步确认后的第二步） |
@@ -63,6 +64,7 @@
 | `daily-review` / `sector-projection-analysis` | `python main.py review factor-metrics [--days 20] [--json]` | 影子期指标：只统计开放交易日，每日优先人工决定引用的 canonical run（避免失败 retry 覆盖已确认父 run），汇总成功/非法输出/规则降级/覆盖、人工接受与改选、T+1 结果及分组；默认 20 日 |
 | `market-tasks` | `python main.py pre --date` | 盘前任务采集 |
 | `market-tasks` | `python main.py post --date` | 盘后任务采集 |
+| `market-tasks` / `record-notes` | `python main.py wechat-teacher-feed should-run\|doctor\|collect\|show ...` | 本机 WeRSS 微信公众号白名单归档与候选查看；双 phase 严格日历，collect 只落 manifest/原文且须 `--input-by`，确认前不写 teacher_notes、不入池 |
 | `market-tasks` | `python main.py recommend daily [--lookback-days N] [--top-k K] [--dry-run]` | 行业推荐日报（聚合 teacher_notes + industry_info，可选 Antigravity 点评，钉钉推送） |
 | `market-tasks` | `python main.py recommend weekly [--lookback-days N] [--top-k K] [--dry-run]` | 行业推荐周报（深度版，默认 7 日 Top 8） |
 | `market-tasks` | `python main.py volume-watch daily [--date YYYY-MM-DD] [--dry-run] [--no-push] [--refetch]` | 成交额 Top20 板块集中度日报（read-through 采集 + 申万二级打标 + 落库 `daily_volume_concentration` + 钉钉推送；报告含 Top20 个股明细表 + **成交额前50 区间涨幅排名段**[独立取成交额前50 → `get_stock_daily_range` 算 5/10/20 日涨幅 → **申万二级板块榜** + **同花顺概念题材榜**(多标签，复用 `get_ths_member` 反查 + 容器过滤≤300，concepts 落 `gain_universe_json`)，组按组内涨幅最大个股降序/平手比次大，三档独立榜，全 [事实] 守红线不出价位目标]；三档=裸[落库+推]/`--no-push`[落库+打印不推，历史回补避免重推]/`--dry-run`[不落库仅打印]；`--refetch` 强制重拉绕过 `daily_market` 陈旧缓存，回填历史用） |
@@ -327,7 +329,7 @@
 
 ## 自动化检查
 
-`scripts/tests/test_cli_smoke.py` 会验证上表中所有 **`db` 子命令**（`ALL_SKILL_COMMANDS`）与 `main.py` 顶层架构命令（`ARCHITECTURE_COMMANDS`：`review factor-*` / `ingest` / `plan` / `knowledge` / `executions` / `recommend` / `volume-watch` / `new-high` / `sector-correlation` / `market-timing` / `margin-index-correlation` / `research-digest` / `earnings-digest` / `cognition-digest` / `trend-leader` / `string-yang` / `daily-leaders` / `board-break` / `ma-breakout` / `tail-scan`）的 argparse 签名（不启动子进程、不连库）。`main.py pre` / `post` 仍由 `market-tasks` 文档与人工/定时流程保证。
+`scripts/tests/test_cli_smoke.py` 会验证上表中所有 **`db` 子命令**（`ALL_SKILL_COMMANDS`）与 `main.py` 顶层架构命令（`ARCHITECTURE_COMMANDS`：`review factor-*` / `ingest` / `plan` / `knowledge` / `executions` / `recommend` / `volume-watch` / `new-high` / `sector-correlation` / `market-timing` / `margin-index-correlation` / `research-digest` / `earnings-digest` / `cognition-digest` / `trend-leader` / `string-yang` / `daily-leaders` / `board-break` / `ma-breakout` / `tail-scan` / `wechat-teacher-feed`）的 argparse 签名（不启动子进程、不连库）。`main.py pre` / `post` 仍由 `market-tasks` 文档与人工/定时流程保证。
 
 每次 `pytest scripts/tests/test_cli_smoke.py` 都会同步检查：
 - 依赖表所列 `db` 子命令名未被重命名
