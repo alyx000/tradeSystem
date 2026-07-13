@@ -56,6 +56,19 @@ def _to_clean_str(val) -> str:
     return "" if s.lower() in ("nan", "<na>", "none") else s
 
 
+def _normalize_positive_count(value) -> int:
+    """概念成员数只保留有限正整数，脏值归零交由消费端 fail-closed。"""
+    if isinstance(value, bool):
+        return 0
+    try:
+        count = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return 0
+    if not math.isfinite(count) or count <= 0 or not count.is_integer():
+        return 0
+    return int(count)
+
+
 class TushareProvider(DataProvider):
     name = "tushare"
     priority = 1
@@ -113,6 +126,7 @@ class TushareProvider(DataProvider):
             "get_concept_moneyflow_dc",
             "get_ths_index",
             "get_ths_member",
+            "get_stock_concept_memberships",
             "get_index_classify",
             "get_stock_sw_industry_map",
             "get_market_breadth",
@@ -737,6 +751,95 @@ class TushareProvider(DataProvider):
             return DataResult(data=records, source="tushare:ths_member")
         except Exception as e:
             return DataResult(data=None, source=self.name, error=str(e))
+
+    def get_stock_concept_memberships(self, ts_codes: list[str]) -> DataResult:
+        """按候选股票反查当前同花顺 type=N 概念归属。"""
+        source = "tushare:ths_member:by_stock"
+        normalized: list[str] = []
+        seen_codes: set[str] = set()
+        for raw in ts_codes or []:
+            code = self._normalize_stock_code(_to_clean_str(raw).upper())
+            if not code or code in seen_codes:
+                continue
+            seen_codes.add(code)
+            normalized.append(code)
+
+        if not normalized:
+            return DataResult(data={"stocks": {}}, source=source)
+
+        missing = self._ensure_pro("get_stock_concept_memberships")
+        if missing is not None:
+            return missing
+
+        try:
+            catalog_df = self.pro.ths_index(type="N")
+            if catalog_df is None or catalog_df.empty:
+                return DataResult(
+                    data=None,
+                    source=self.name,
+                    error="同花顺概念目录为空",
+                )
+
+            catalog: dict[str, dict] = {}
+            for row in self._df_to_records(catalog_df):
+                index_type = _to_clean_str(row.get("type")).upper()
+                if index_type != "N":
+                    continue
+                concept_code = _to_clean_str(row.get("ts_code")).upper()
+                name = _to_clean_str(row.get("name"))
+                if not concept_code or not name or concept_code in catalog:
+                    continue
+                catalog[concept_code] = {
+                    "name": name,
+                    "member_count": _normalize_positive_count(row.get("count")),
+                }
+            if not catalog:
+                return DataResult(
+                    data=None,
+                    source=self.name,
+                    error="同花顺概念目录清洗后为空",
+                )
+        except Exception as exc:
+            error = _to_clean_str(exc) or type(exc).__name__
+            return DataResult(data=None, source=self.name, error=error)
+
+        stocks: dict[str, dict] = {}
+        for code in normalized:
+            try:
+                member_df = self.pro.ths_member(con_code=code)
+                if member_df is None:
+                    raise RuntimeError("member response is None")
+                member_rows = self._df_to_records(member_df)
+            except Exception as exc:
+                error = _to_clean_str(exc) or type(exc).__name__
+                stocks[code] = {
+                    "status": "source_failed",
+                    "concepts": [],
+                    "error": error,
+                }
+                continue
+
+            concepts: list[dict] = []
+            seen_concepts: set[str] = set()
+            for item in member_rows:
+                concept_code = _to_clean_str(item.get("ts_code")).upper()
+                meta = catalog.get(concept_code)
+                if meta is None or concept_code in seen_concepts:
+                    continue
+                seen_concepts.add(concept_code)
+                concepts.append(
+                    {
+                        "concept_code": concept_code,
+                        "name": meta["name"],
+                        "member_count": meta["member_count"],
+                    }
+                )
+            stocks[code] = {
+                "status": "ok" if concepts else "missing",
+                "concepts": concepts,
+            }
+
+        return DataResult(data={"stocks": stocks}, source=source)
 
     def get_index_classify(self, _date: str) -> DataResult:
         """获取申万行业分类主数据。"""
