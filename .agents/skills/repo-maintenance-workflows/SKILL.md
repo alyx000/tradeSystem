@@ -1,7 +1,7 @@
 ---
 name: repo-maintenance-workflows
 description: 调试 tradeSystem 仓库问题、review 代码改动、对齐 CLI/API/Web/service 语义、执行每日固定巡检，并同步 skills/commands 文档索引
-version: "0.2"
+version: "0.3"
 ---
 
 # Skill: 仓库维护工作流
@@ -31,6 +31,16 @@ make commands-check
 make commands-doc
 python3 -m pytest scripts/tests/test_cli_smoke.py -v
 ```
+
+teacher_notes v40 来源追溯部署必须使用受控入口（先停 API 与所有写者）：
+
+```bash
+cd scripts
+python3 main.py db backup --output ../data/backups/trade-v39-before-v40.db --input-by codex_automation --json
+python3 main.py db migrate --require-backup ../data/backups/trade-v39-before-v40.db --input-by codex_automation --json
+```
+
+备份必须严格为 `0600`，且迁移会重新生成当前源库规范快照并比对完整 SHA-256；源库在备份后变化、备份来自其他同版本数据库或索引修复失败都会拒绝/回滚。普通 `migrate()`、API 请求和查询命令不得隐式把既有 v39 激活为 v40。
 
 ## 核心流程
 

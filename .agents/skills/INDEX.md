@@ -20,7 +20,7 @@
 |-------|-----------|------|
 | `cognition-evolution` | `knowledge cognition-* / instance-* / review-* (含 review-list)` | 认知提炼 / 实例验证 / 周期复盘（手动闭环）；`instance-add` 支持观点 `[事实]/[判断]` 拆分、因子快照、可证伪假设，`validate` 支持 `feedback_action` 回写交易系统反馈；`review-generate` 聚合 `evolving_views_json`（部分降级项见 SKILL.md） |
 | `record-notes` | `db add-note` | 录入老师观点（文字/图片/多附件）；可选 `--sync-watchlist-from-stocks`（用户确认入池后） |
-| `record-notes` | `db add-note --source-platform --source-url --source-article-id --published-at --fetched-at --content-sha256 --input-by` | 经用户确认后录入带来源审计的老师观点；来源包必须完整，幂等重复返回已有 ID，不重复附件/关注池副作用 |
+| `record-notes` | `db add-note --source-platform --source-url --source-article-id --published-at --fetched-at --content-sha256 --raw-content-file --input-by` | 经用户确认后录入带来源审计的老师观点；来源包与受控原文必须完整，幂等重复返回已有 ID，不重复附件/关注池副作用 |
 | `record-notes` | `db update-note` / `db delete-note` | 修订或删除已有老师观点；删除必须显式 `--yes`，用于经确认后的纠错重写 |
 | `record-notes` / `portfolio-manager` | `db stock-resolve` | 通过已配置 Provider 统一做证券简称/代码解析，供 Agent 补码与补名使用 |
 | `record-notes` / `portfolio-manager` | `db watchlist-sync-from-note` | 按笔记 `mentioned_stocks` 写入关注池（两步确认后的第二步） |
@@ -108,6 +108,8 @@
 | `repo-maintenance-workflows` | `python3 -m pytest scripts/tests/test_cli_smoke.py -v` | 快速验证 skills 依赖的 CLI 签名未漂移 |
 | `repo-maintenance-workflows` | `make commands-doc` | 重新生成命令索引 |
 | `repo-maintenance-workflows` | `make commands-check` | 校验命令索引与 Makefile 一致 |
+| `repo-maintenance-workflows` | `db backup --output PATH --input-by USER [--json]` | 用 SQLite backup API 生成 `0600` 完整快照及 SHA-256 回执；v40 生产迁移前必须先停写并执行 |
+| `repo-maintenance-workflows` | `db migrate --require-backup PATH --input-by USER [--json]` | 仅在备份权限、版本及当前源库规范快照 SHA 全部一致时，原子激活/修复 teacher_notes v40 来源列与三组 partial unique 索引；普通 API/CLI 不会隐式跨越 v39→v40 |
 | `instrument-agent` | 无固定业务 CLI | 为任意 agent 接入 Raindrop Workshop tracing；按目标仓库运行时选择 SDK/入口并验证 Workshop 可见性 |
 | `setup-agent-replay` | 无固定业务 CLI | 为已 instrument 的 agent 配置本地 replay server 与 `.raindrop/agents.yaml`，供 Workshop 复放 |
 | `daily-review` | `db add-calendar` | 手动录入投资日历事件（节假日/财经/财报等） |
@@ -195,7 +197,7 @@
 | GET | `/api/teachers` | 列出所有老师 |
 | GET | `/api/teacher-notes` | 查询笔记列表（keyword/teacher/from/to；limit 默认 200、最大 500；offset 分页）。**列表为减负不返回 `raw_content` 全文**，仅给 `has_raw_content` 布尔 + `raw_content_preview`（前 200 字）；需全文走详情端点 |
 | GET | `/api/teacher-notes/{note_id}` | 读取单条笔记（含 `raw_content` 全文） |
-| POST | `/api/teacher-notes` | 新建笔记（含 teacher_name 自动创建老师）；可选 `sync_watchlist_from_mentions: true` 同步关注池（默认不同步） |
+| POST | `/api/teacher-notes` | 新建笔记（含 teacher_name 自动创建老师）；自动来源须传完整六字段 provenance bundle、原文与 `input_by`，按文章 ID / URL / 内容 fallback 幂等返回已有 ID；可选 `sync_watchlist_from_mentions: true` 同步关注池（默认不同步，派生关注项继承同一 `input_by`） |
 | PUT | `/api/teacher-notes/{note_id}` | 更新笔记 |
 | DELETE | `/api/teacher-notes/{note_id}` | 删除笔记 |
 

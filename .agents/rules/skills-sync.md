@@ -2,7 +2,10 @@
 description: 当修改 CLI 或 API 文件时，提醒同步更新 skills 文档
 globs:
   - scripts/db/cli.py
+  - scripts/db/migrate.py
+  - scripts/db/schema.py
   - scripts/main.py
+  - scripts/cli/wechat_teacher_feed.py
   - scripts/cli/review_factors.py
   - scripts/services/trinity_factor/*.py
   - scripts/api/routes/*.py
@@ -17,7 +20,9 @@ globs:
 当你修改以下任何文件时，此规则自动触发：
 
 - `scripts/db/cli.py` — CLI 子命令定义
+- `scripts/db/migrate.py` / `scripts/db/schema.py` — schema 版本、显式迁移门禁与唯一索引契约
 - `scripts/main.py` — 顶层命令注册（pre/post/schedule 等）
+- `scripts/cli/wechat_teacher_feed.py` — 微信公众号白名单 phase、归档、候选过滤与失败语义
 - `scripts/cli/review_factors.py` / `scripts/services/trinity_factor/*.py` — 三位一体评分、人工确认、T+1 与影子指标语义
 - `scripts/api/routes/*.py` — API 路由定义
 - `.agents/skills/**/*.md` — skill 文档本身（真源；`.cursor/skills/` 与 `.claude/skills/` 是 symlink 壳）
@@ -90,6 +95,7 @@ python3 -m pytest scripts/tests/test_cli_smoke.py -v
 | `cli.py` 的 `stock-resolve` | `record-notes/SKILL.md`、`portfolio-manager/SKILL.md` |
 | `cli.py` 的 `holdings-*`（含 `--thesis-id` 关联语义）/ `watchlist-*` / `add-trade` / `blacklist-*` | `portfolio-manager/SKILL.md` |
 | `cli.py` 的 `query-notes/db-search` | `daily-review/SKILL.md` |
+| `cli.py` 的 `db backup/db migrate` 或 `db/migrate.py` / `db/schema.py` 的 teacher_notes provenance | `repo-maintenance-workflows/SKILL.md`、`record-notes/SKILL.md`、`INDEX.md`；保留停写→0600 完整备份→源快照 SHA 绑定→显式原子迁移边界，普通入口不得隐式跨 v39→v40 |
 | `main.py` 的 `pre/post/schedule` | `market-tasks/SKILL.md` |
 | `main.py` / `scripts/cli/wechat_teacher_feed.py` / `scripts/services/wechat_teacher_feed/` | `market-tasks/SKILL.md`、`record-notes/SKILL.md`、`record-notes/references/ingestion-rules.md`、`INDEX.md` 与 `AGENTS.md`；保持“采集只落 manifest、按 digest 确认后才 add-note、默认不入池”边界 |
 | `scripts/cli/new_high.py` 或 `scripts/services/new_high/` | `market-tasks/SKILL.md` + `INDEX.md` 中 `new-high` 行 |

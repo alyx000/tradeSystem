@@ -44,7 +44,7 @@
 
 当前及后续标准命令组：
 
-- `python3 main.py db ...`（含 `db thesis-{open,close,fill,list,suggest,review,reopen}` 交易思路中间层 v24，半自动联动 broker_executions 与复盘）
+- `python3 main.py db ...`（含 `db thesis-{open,close,fill,list,suggest,review,reopen}` 交易思路中间层 v24，半自动联动 broker_executions 与复盘；teacher_notes v40 首次启用必须停写后走 `db backup --output ... --input-by ...` → `db migrate --require-backup ... --input-by ...`，备份须 0600 且与当前源库完整快照 SHA 一致，普通 API/CLI 不隐式跨越 v39→v40）
 - `python3 main.py ingest ...`
 - `python3 main.py plan ...`
 - `python3 main.py knowledge ...`
