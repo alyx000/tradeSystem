@@ -141,6 +141,7 @@ class TushareProvider(DataProvider):
             "get_trade_calendar",
             "get_stock_basic_list",
             "get_stock_basic_batch",
+            "get_stock_business_profiles",
             "get_top_volume_stocks",
             "get_suspend_list",
             "get_suspend_change_reasons",
@@ -1798,3 +1799,122 @@ class TushareProvider(DataProvider):
             return DataResult(data=all_rows, source="tushare:stock_basic")
         except Exception as e:
             return DataResult(data=None, source=self.name, error=str(e))
+
+    def get_stock_business_profiles(self, ts_codes: list[str]) -> DataResult:
+        """按交易所批量查询上市公司主营资料，逐票保留 ok/missing/source_failed。"""
+        source = "tushare:stock_company"
+        if not ts_codes:
+            return DataResult(data={}, source=source)
+
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for raw in ts_codes:
+            code = self._normalize_stock_code(str(raw or "").strip().upper())
+            if not code or code in seen:
+                continue
+            seen.add(code)
+            normalized.append(code)
+
+        if not normalized:
+            return DataResult(data={}, source=source)
+        missing = self._ensure_pro("get_stock_business_profiles")
+        if missing is not None:
+            return missing
+
+        exchange_by_suffix = {"SH": "SSE", "SZ": "SZSE", "BJ": "BSE"}
+        groups: dict[str, list[str]] = {"SSE": [], "SZSE": [], "BSE": []}
+        profiles: dict[str, dict] = {}
+        for code in normalized:
+            suffix = code.rsplit(".", 1)[-1] if "." in code else ""
+            exchange = exchange_by_suffix.get(suffix)
+            if exchange is None:
+                profiles[code] = self._business_profile_record(
+                    code,
+                    status="source_failed",
+                    source=source,
+                    error=f"unsupported_exchange: {suffix or code}",
+                )
+                continue
+            groups[exchange].append(code)
+
+        attempted = 0
+        failures: list[str] = []
+        fields = "ts_code,introduction,main_business,business_scope"
+        for exchange, requested_codes in groups.items():
+            if not requested_codes:
+                continue
+            attempted += 1
+            requested_set = set(requested_codes)
+            try:
+                df = self.pro.stock_company(exchange=exchange, fields=fields)
+                rows_by_code: dict[str, dict] = {}
+                for row in self._df_to_records(df):
+                    row_code = str(row.get("ts_code") or "").strip().upper()
+                    if row_code in requested_set:
+                        rows_by_code[row_code] = row
+                for code in requested_codes:
+                    row = rows_by_code.get(code)
+                    if row is None:
+                        profiles[code] = self._business_profile_record(
+                            code, status="missing", source=source
+                        )
+                        continue
+                    introduction = _to_clean_str(row.get("introduction"))
+                    main_business = _to_clean_str(row.get("main_business"))
+                    business_scope = _to_clean_str(row.get("business_scope"))
+                    profiles[code] = self._business_profile_record(
+                        code,
+                        status=(
+                            "ok"
+                            if any((introduction, main_business, business_scope))
+                            else "missing"
+                        ),
+                        source=source,
+                        introduction=introduction,
+                        main_business=main_business,
+                        business_scope=business_scope,
+                    )
+            except Exception as exc:
+                error = str(exc)
+                failures.append(f"{exchange}: {error}")
+                for code in requested_codes:
+                    profiles[code] = self._business_profile_record(
+                        code,
+                        status="source_failed",
+                        source=source,
+                        error=error,
+                    )
+
+        if attempted and len(failures) == attempted:
+            return DataResult(
+                data=None,
+                source=source,
+                error="all_exchanges_failed: " + "; ".join(failures),
+            )
+        return DataResult(
+            data={code: profiles[code] for code in normalized},
+            source=source,
+        )
+
+    @staticmethod
+    def _business_profile_record(
+        ts_code: str,
+        *,
+        status: str,
+        source: str,
+        introduction: str = "",
+        main_business: str = "",
+        business_scope: str = "",
+        error: str = "",
+    ) -> dict:
+        return {
+            "ts_code": ts_code,
+            "profile_status": status,
+            "introduction": introduction,
+            "main_business": main_business,
+            "business_scope": business_scope,
+            "product_types": [],
+            "product_names": [],
+            "source": source,
+            "error": error,
+        }

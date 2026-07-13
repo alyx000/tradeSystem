@@ -324,6 +324,16 @@ class DataProvider(ABC):
         """按 ts_code 列表批量查询 stock_basic（名称补全）。"""
         return DataResult(data=None, source=self.name, error="not implemented")
 
+    def get_stock_business_profiles(self, ts_codes: list[str]) -> DataResult:
+        """按 ts_code 批量查询主营资料。
+
+        成功时 ``data`` 为规范代码到逐票字典的映射；逐票统一包含 ``ts_code``、
+        ``profile_status``（ok/missing/source_failed）、简介、主营、经营范围、产品列表、
+        来源与错误字段。逐票失败不改变顶层成功语义；仅 Provider 整体不可用等批次级故障
+        返回 ``data=None`` 与顶层 ``error``。
+        """
+        return DataResult(data=None, source=self.name, error="not implemented")
+
     # ---- 成交额排名 ----
     def get_top_volume_stocks(self, date: str, top_n: int = 20) -> DataResult:
         return DataResult(data=None, source=self.name, error="not implemented")
