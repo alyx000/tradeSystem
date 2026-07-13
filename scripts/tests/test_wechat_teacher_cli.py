@@ -246,6 +246,28 @@ def test_should_run_is_read_only_and_calendar_missing_is_blocked(
     assert _sha256_file(db_path) == before_hash
 
 
+def test_should_run_scheduled_returns_zero(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    db_path = tmp_path / "calendar.db"
+    _create_minimal_db(db_path, {RUN_DATE: 1})
+    before_hash = _sha256_file(db_path)
+    monkeypatch.setenv("TRADE_DB_PATH", str(db_path))
+
+    code, payload = _invoke(
+        [
+            "wechat-teacher-feed", "should-run", "--phase", "post-market",
+            "--date", RUN_DATE, "--json",
+        ],
+        capsys,
+    )
+
+    assert code == 0
+    assert payload["status"] == "run"
+    assert payload["reason"] == "scheduled"
+    assert _sha256_file(db_path) == before_hash
+
+
 def test_collect_skip_returns_zero_without_constructing_client(
     tmp_path: Path, monkeypatch, capsys
 ) -> None:
@@ -1171,7 +1193,7 @@ def test_show_exposes_pending_journal_without_recovering_it(
 @pytest.mark.parametrize(
     ("status", "expected"),
     [
-        ("skip", 0), ("empty", 0), ("success", 0), ("ok", 0),
+        ("run", 0), ("skip", 0), ("empty", 0), ("success", 0), ("ok", 0),
         ("partial", 1), ("source_failed", 1), ("source_missing", 1),
         ("content_missing", 1), ("auth_expired", 1), ("blocked", 2),
         ("unknown", 1),

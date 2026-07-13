@@ -36,7 +36,7 @@ EXIT_FAILED = 1
 EXIT_BLOCKED = 2
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _REAL_WERSS_CLIENT = WeRSSClient
-_OK_STATUSES = {"ok", "skip", "empty", "success"}
+_OK_STATUSES = {"ok", "run", "skip", "empty", "success"}
 _BLOCKED_STATUSES = {"blocked"}
 _FATAL_IDENTITY_REASONS = {
     "ambiguous_article_identity",
