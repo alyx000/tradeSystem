@@ -35,7 +35,7 @@
 ### 非目标
 
 - 不建立历史概念成分 as-of 库；历史 `--date` 回放仍明确标注归属概念为运行时当前快照。
-- 不把完整归属概念加入粗分或 PK prompt。
+- 不把完整归属概念，也不把仅由当前归属概念命中的行业证据，加入粗分或 PK prompt。
 - 不为概念生成买卖建议、价格目标或胜率判断。
 - 不在 14:40 扫描全部同花顺概念成分。
 
@@ -183,7 +183,7 @@ T-1 失败只把热概念标 `source_failed`，不抹掉当前归属。上下文
 | `stock_concept_source` | `str` | `""` | 数据源 |
 | `stock_concept_snapshot_at` | `str` | `""` | 当前快照抓取时间 |
 
-`_coarse_score()` 不读取任何 `stock_concept_*` 字段。`industry_logic.build_industry_logic_map()` 接收完整归属概念映射，以减少行业催化漏匹配；PK 继续只接收兼容的热概念字段和产业逻辑摘要。
+`_coarse_score()` 不读取任何 `stock_concept_*` 字段。`industry_logic.build_industry_logic_map()` 接收完整归属概念映射，以减少报告中的行业催化漏匹配；仅由当前概念命中的证据标为 report-only，报告仍可展示，但 PK 在 Top2 限量前排除该证据并重算 `catalyst_status`，避免通过产业证据间接改变排序。
 
 ### 4. 报告格式
 
@@ -225,7 +225,7 @@ T-1 失败只把热概念标 `source_failed`，不抹掉当前归属。上下文
 
 - Provider：一次目录请求、N 次 `con_code` 请求、代码规范化、类型过滤、概念元数据、单票失败隔离、空输入、旧 `get_ths_member` 回归。
 - Concept context：容器先过滤再补足 Top8、资金流顺序、完整归属与热命中分离、宽度缺失、资金流失败、单票归属失败、成员数边界 300/301。
-- Scorer：完整归属传给产业逻辑、兼容热字段保持、完整归属不改变粗分。
+- Scorer / PK：完整归属传给产业逻辑、兼容热字段保持、完整归属不改变粗分，概念-only 行业证据不改变完整 PK payload。
 - Renderer：两层同时展示、最多 5 个及总数、两类失败与真实空值、免责声明、推送字节预算。
 
 ### 验收命令
@@ -248,7 +248,7 @@ make check-scripts
 | 候选较多导致逐票反查变慢 | 只按候选反查，不扫描全概念；provider 复用单批目录 | 关闭完整归属增强，保留原 T-1 热概念 |
 | 当前概念被误当历史概念 | 字段名、免责声明和快照时间均明确 current snapshot | 报告隐藏完整归属行 |
 | 容器宽度缺失导致噪声 | fail-closed 为 `coverage_failed` | 仅展示未过滤状态，不参与热概念判断 |
-| 完整归属改变排序 | 粗分只读兼容热概念字段并加回归测试 | 移除 `stock_concept_*` 消费 |
+| 完整归属直接或经产业证据间接改变排序 | 粗分只读兼容热概念字段；概念-only 证据标 report-only 并在 PK 限量前排除 | 移除 `stock_concept_*` 消费 |
 
 本次无 schema、API、CLI 或调度变更，回滚不涉及数据迁移。
 

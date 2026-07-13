@@ -121,6 +121,14 @@ def _normalize_logic_row(row: dict, fallback_industry: str, scan_date: str) -> d
             if label not in _EVIDENCE_LABELS_BY_KIND.get(kind, set()):
                 evidence_valid = False
                 break
+            if "pk_eligible" in item:
+                marker = item.get("pk_eligible")
+                if not isinstance(marker, bool) or (
+                    marker is False and kind != "industry"
+                ):
+                    evidence_valid = False
+                    break
+                normalized["pk_eligible"] = marker
             try:
                 evidence_day = _dt.date.fromisoformat(normalized["date"])
             except ValueError:
@@ -145,7 +153,8 @@ def _normalize_logic_row(row: dict, fallback_industry: str, scan_date: str) -> d
         catalyst_status = "source_failed"
         evidence = []
     else:
-        evidence = evidence[: C.INDUSTRY_LOGIC_MAX_CATALYSTS]
+        # 聚合层前两条供报告，后续最多再补 PK eligible Top2；统一边界最多 2x。
+        evidence = evidence[: 2 * C.INDUSTRY_LOGIC_MAX_CATALYSTS]
 
     return {
         **business_fields,

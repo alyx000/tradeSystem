@@ -656,8 +656,33 @@ def test_full_current_concept_map_can_match_industry_evidence_without_hot_hit_or
         "date": "2026-07-12",
         "source": "行业笔记",
         "text": "页岩气行业产量更新",
+        "pk_eligible": False,
     }]
     assert "concept_names" not in result
+
+
+def test_industry_match_is_pk_eligible_when_non_concept_evidence_also_matches(conn):
+    conn.execute(
+        "INSERT INTO industry_info(id,date,sector_name,content,source) VALUES(?,?,?,?,?)",
+        (1, "2026-07-12", "页岩气", "[事实]页岩气行业产量更新", "行业笔记"),
+    )
+
+    evidence, ok = industry_logic._read_industry_evidence(
+        conn,
+        "2026-06-13",
+        "2026-07-13",
+        {
+            "605090.SH": {
+                "sw_l2": "页岩气",
+                "business_summary": "",
+                "product_names": [],
+                "concept_names": ["页岩气"],
+            }
+        },
+    )
+
+    assert ok is True
+    assert evidence["605090.SH"][0].get("pk_eligible", True) is True
 
 
 @pytest.mark.parametrize(
@@ -849,6 +874,102 @@ def test_teacher_priority_precedes_newer_huibo_and_dedupes_stably():
         ("teacher_stock", "较早老师观点"),
         ("huibo_stock", "新慧博B"),
     ]
+
+
+def test_mixed_evidence_keeps_report_only_visible_and_pk_eligible_top_two():
+    items = [
+        {
+            "kind": "teacher_stock",
+            "label": "老师观点·个股",
+            "date": "2026-07-10",
+            "source": "老师笔记",
+            "text": "个股直接依据",
+        },
+        {
+            "kind": "industry",
+            "label": "事实·行业催化",
+            "date": "2026-07-13",
+            "source": "概念匹配",
+            "text": "仅由当前概念衍生",
+            "pk_eligible": False,
+        },
+        {
+            "kind": "industry",
+            "label": "事实·行业催化",
+            "date": "2026-07-09",
+            "source": "主营匹配",
+            "text": "主营直接覆盖该行业",
+        },
+    ]
+
+    selected = industry_logic._select_evidence(items)
+
+    assert [item["text"] for item in selected] == [
+        "个股直接依据",
+        "仅由当前概念衍生",
+        "主营直接覆盖该行业",
+    ]
+    assert [
+        item["text"]
+        for item in selected
+        if item.get("pk_eligible", True) is True
+    ][:2] == ["个股直接依据", "主营直接覆盖该行业"]
+
+
+def test_build_logic_mixed_evidence_keeps_concept_only_in_report_view(
+    conn, tmp_path
+):
+    conn.execute(
+        "INSERT INTO teacher_notes(id,date,title,mentioned_stocks) VALUES(1,?,?,?)",
+        (
+            "2026-07-10",
+            "老师笔记",
+            json.dumps(
+                [{"code": "605090.SH", "reason": "个股直接依据"}],
+                ensure_ascii=False,
+            ),
+        ),
+    )
+    conn.executemany(
+        "INSERT INTO industry_info(id,date,sector_name,content,source) VALUES(?,?,?,?,?)",
+        [
+            (1, "2026-07-13", "页岩气", "[事实]仅由当前概念衍生", "概念匹配"),
+            (2, "2026-07-09", "天然气销售", "[事实]主营直接覆盖该行业", "主营匹配"),
+        ],
+    )
+    registry = Registry(
+        primary={
+            "605090.SH": _profile(
+                "605090.SH",
+                "ok",
+                source="tushare:stock_company",
+                business="天然气销售",
+            )
+        }
+    )
+
+    result = industry_logic.build_industry_logic_map(
+        conn,
+        registry,
+        [{"code": "605090.SH", "name": "九丰能源"}],
+        scan_date="2026-07-13",
+        industry_map={"605090.SH": {"sw_l2": "燃气"}},
+        concept_map={"605090": ["页岩气"]},
+        huibo_dir=tmp_path,
+    )["605090.SH"]
+
+    assert [item["text"] for item in result["catalyst_evidence"]] == [
+        "个股直接依据",
+        "仅由当前概念衍生",
+        "主营直接覆盖该行业",
+    ]
+    report = "".join(renderer._render_industry_logic(result))
+    assert "仅由当前概念衍生" in report
+    assert [
+        item["text"]
+        for item in result["catalyst_evidence"]
+        if item.get("pk_eligible", True) is True
+    ][:2] == ["个股直接依据", "主营直接覆盖该行业"]
 
 
 def test_business_fields_are_hidden_unless_profile_is_ok(conn, tmp_path):

@@ -154,6 +154,73 @@ def test_payload_never_includes_internal_stock_concept_memberships():
     assert "内部秘密概念" not in str(payload)
 
 
+def test_payload_excludes_report_only_before_top_two_and_recomputes_status():
+    card = {
+        **_cards()[0],
+        "catalyst_evidence": [
+            {
+                "kind": "industry",
+                "label": "事实·行业催化",
+                "date": "2026-07-13",
+                "source": "概念匹配",
+                "text": "仅由当前概念衍生",
+                "pk_eligible": False,
+            },
+            {
+                "kind": "teacher_stock",
+                "label": "老师观点·个股",
+                "date": "2026-07-12",
+                "source": "老师笔记",
+                "text": "个股直接依据",
+            },
+            {
+                "kind": "industry",
+                "label": "事实·行业催化",
+                "date": "2026-07-11",
+                "source": "主营匹配",
+                "text": "主营直接覆盖该行业",
+            },
+        ],
+        "catalyst_status": "exact",
+    }
+
+    payload = pk._payload(card, _cards()[1])["A"]
+
+    assert [item["text"] for item in payload["catalyst_evidence"]] == [
+        "个股直接依据",
+        "主营直接覆盖该行业",
+    ]
+    assert payload["catalyst_status"] == "exact"
+    assert "pk_eligible" not in str(payload)
+    assert "仅由当前概念衍生" not in str(payload)
+
+
+def test_payload_report_only_evidence_becomes_none_but_source_failure_survives():
+    report_only = {
+        **_cards()[0],
+        "catalyst_evidence": [
+            {
+                "kind": "industry",
+                "label": "事实·行业催化",
+                "date": "2026-07-13",
+                "source": "概念匹配",
+                "text": "仅报告展示",
+                "pk_eligible": False,
+            }
+        ],
+        "catalyst_status": "sector",
+    }
+    failed = {
+        **_cards()[0],
+        "catalyst_evidence": [],
+        "catalyst_status": "source_failed",
+    }
+
+    assert pk._payload(report_only, report_only)["A"]["catalyst_status"] == "none"
+    assert pk._payload(report_only, report_only)["A"]["catalyst_evidence"] == []
+    assert pk._payload(failed, failed)["A"]["catalyst_status"] == "source_failed"
+
+
 def test_prompt_states_industry_logic_evidence_boundaries():
     assert "带边界标签的证据卡" in pk._PROMPT
     assert "公司资料" in pk._PROMPT

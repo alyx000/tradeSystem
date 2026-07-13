@@ -97,10 +97,24 @@ def _evidence(kind: str, label: str, date: str, source, text) -> Optional[dict]:
 
 
 def _select_evidence(items: list[dict]) -> list[dict]:
-    """按来源级别、同级日期倒序稳定去重，最多保留两条。"""
+    """同时保留报告前两条与 PK eligible 前两条，合并后最多四条。
+
+    返回顺序的前两条是报告视图；只要存在 report-only 证据就为它保留一个
+    报告位置。随后追加尚未出现的 PK eligible Top2，供 PK 过滤 marker 后使用。
+    """
+    ordered = sorted(
+        items,
+        key=lambda item: (
+            KIND_PRIORITY.get(item.get("kind"), 99),
+            -int(str(item.get("date") or "0").replace("-", "")),
+            str(item.get("source") or ""),
+            str(item.get("text") or ""),
+            0 if item.get("pk_eligible", True) is True else 1,
+        ),
+    )
     seen = set()
-    deduped = []
-    for item in items:
+    ranked = []
+    for item in ordered:
         key = (
             item.get("kind"),
             item.get("date"),
@@ -110,16 +124,37 @@ def _select_evidence(items: list[dict]) -> list[dict]:
         if key in seen:
             continue
         seen.add(key)
-        deduped.append(item)
-    return sorted(
-        deduped,
-        key=lambda item: (
-            KIND_PRIORITY.get(item.get("kind"), 99),
-            -int(str(item.get("date") or "0").replace("-", "")),
-            str(item.get("source") or ""),
-            str(item.get("text") or ""),
-        ),
-    )[: C.INDUSTRY_LOGIC_MAX_CATALYSTS]
+        ranked.append(item)
+
+    limit = C.INDUSTRY_LOGIC_MAX_CATALYSTS
+    report_items = ranked[:limit]
+    report_only = [
+        item for item in ranked if item.get("pk_eligible", True) is not True
+    ]
+    if report_only and not any(
+        item.get("pk_eligible", True) is not True for item in report_items
+    ):
+        report_items = report_items[: max(0, limit - 1)] + report_only[:1]
+
+    selected = list(report_items)
+    selected_keys = {
+        (item.get("kind"), item.get("date"), item.get("source"), item.get("text"))
+        for item in selected
+    }
+    pk_items = [
+        item for item in ranked if item.get("pk_eligible", True) is True
+    ][:limit]
+    for item in pk_items:
+        key = (
+            item.get("kind"),
+            item.get("date"),
+            item.get("source"),
+            item.get("text"),
+        )
+        if key not in selected_keys:
+            selected.append(item)
+            selected_keys.add(key)
+    return selected
 
 
 def _empty_profile(code: str, status: str) -> dict:
@@ -454,13 +489,15 @@ def _read_industry_evidence(
             if not fact_text:
                 continue
             for code, profile in profiles.items():
-                haystacks = [
+                non_concept_haystacks = [
                     profile.get("sw_l2", ""),
                     profile.get("business_summary", ""),
                     *(profile.get("product_names") or []),
-                    *(profile.get("concept_names") or []),
                 ]
-                if not _tokens_match(tokens, haystacks):
+                concept_haystacks = list(profile.get("concept_names") or [])
+                non_concept_match = _tokens_match(tokens, non_concept_haystacks)
+                concept_match = _tokens_match(tokens, concept_haystacks)
+                if not non_concept_match and not concept_match:
                     continue
                 item = _evidence(
                     "industry",
@@ -470,6 +507,8 @@ def _read_industry_evidence(
                     fact_text,
                 )
                 if item is not None:
+                    if concept_match and not non_concept_match:
+                        item["pk_eligible"] = False
                     output.setdefault(code, []).append(item)
         return output, True
     except Exception:

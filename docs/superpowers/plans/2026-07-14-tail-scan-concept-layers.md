@@ -4,7 +4,7 @@
 
 **Goal:** 让 `tail-scan daily` 同时展示扫描时当前的完整窄概念归属与 T-1 资金流热概念命中，并修正容器概念占位和字段语义混淆。
 
-**Architecture:** 新增 stock-centric provider capability，以一次 `ths_index(type="N")` 目录请求加 N 次 `ths_member(con_code=...)` 反查候选股票概念；新增 `concept_context` 统一完成成员数过滤、Top8 热概念选择和逐票状态。`scorer` 保留原热概念兼容字段并增加 `stock_concept_*` 字段，`industry_logic` 使用完整归属，`renderer` 分两行展示；完整归属不进入粗分或 PK。
+**Architecture:** 新增 stock-centric provider capability，以一次 `ths_index(type="N")` 目录请求加 N 次 `ths_member(con_code=...)` 反查候选股票概念；新增 `concept_context` 统一完成成员数过滤、Top8 热概念选择和逐票状态。`scorer` 保留原热概念兼容字段并增加 `stock_concept_*` 字段，`industry_logic` 使用完整归属，`renderer` 分两行展示；完整归属及仅由其命中的 report-only 产业证据均不进入粗分或 PK。
 
 **Tech Stack:** Python 3、pytest、Tushare `ths_index` / `ths_member` / `moneyflow_cnt_ths`、现有 `ProviderRegistry` / `DataResult`、Markdown / DingTalk。
 
@@ -16,7 +16,7 @@
 - `归属概念` 是运行时当前快照，不得声称历史 as-of。
 - `T-1热概念命中` 绑定严格上一交易日；先剔 `company_num>300`，再补足 Top8。
 - 保留 `concept_names` / `concept_status` / `in_hot_concept` 原语义；只增加 `stock_concept_*` 字段。
-- 完整归属概念只用于报告和行业证据匹配，不进入 `_coarse_score()` 或 PK prompt。
+- 完整归属概念只用于报告和行业证据匹配；仅由它命中的行业证据标记为 report-only，不进入 `_coarse_score()` 或 PK prompt。
 - 不改 CLI 参数、筛选阈值、粗分权重、PK、DB、API、调度和计划层。
 - 外网和密钥在单测中必须隔离；真实运行只用于最终抽检与已授权推送。
 

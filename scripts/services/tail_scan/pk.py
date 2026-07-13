@@ -98,11 +98,19 @@ def _payload(card_a, card_b):
             label = label[1:-1].strip()
         return label if label in _TRUSTED_EVIDENCE_LABELS else _SAFE_EVIDENCE_LABEL
 
-    def compact_evidence(items):
+    def pk_evidence(items):
         output = []
-        for item in (items or [])[: C.INDUSTRY_LOGIC_MAX_CATALYSTS]:
+        for item in items or []:
             if not isinstance(item, dict):
                 continue
+            if item.get("pk_eligible", True) is not True:
+                continue
+            output.append(item)
+        return output[: C.INDUSTRY_LOGIC_MAX_CATALYSTS]
+
+    def compact_evidence(items):
+        output = []
+        for item in items:
             output.append({
                 "label": safe_label(item.get("label")),
                 "date": compact(item.get("date"), 60),
@@ -110,6 +118,18 @@ def _payload(card_a, card_b):
                 "text": compact(item.get("text"), C.INDUSTRY_LOGIC_TEXT_MAX_CHARS),
             })
         return output
+
+    def payload_catalyst_status(card, items):
+        if card.get("catalyst_status") == "source_failed":
+            return "source_failed"
+        if any(
+            item.get("kind") in {"teacher_stock", "huibo_stock", "huibo_relation"}
+            for item in items
+        ):
+            return "exact"
+        if any(item.get("kind") == "industry" for item in items):
+            return "sector"
+        return "none"
 
     def one(c):
         output = {k: c.get(k) for k in _FACT_FIELDS}
@@ -125,7 +145,9 @@ def _payload(card_a, card_b):
         output["industry_position"] = compact(
             c.get("industry_position"), C.INDUSTRY_LOGIC_TEXT_MAX_CHARS
         )
-        output["catalyst_evidence"] = compact_evidence(c.get("catalyst_evidence"))
+        evidence = pk_evidence(c.get("catalyst_evidence"))
+        output["catalyst_evidence"] = compact_evidence(evidence)
+        output["catalyst_status"] = payload_catalyst_status(c, evidence)
         return output
     return {"A": one(card_a), "B": one(card_b)}
 

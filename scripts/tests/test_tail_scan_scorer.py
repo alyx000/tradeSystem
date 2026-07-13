@@ -487,6 +487,158 @@ def test_normalize_logic_row_keeps_valid_exact_and_sector_evidence(status, evide
     assert normalized["catalyst_evidence"] == evidence
 
 
+def test_normalize_logic_row_preserves_report_only_marker():
+    evidence = [
+        _complete_evidence(
+            kind="industry",
+            label="事实·行业催化",
+            pk_eligible=False,
+        )
+    ]
+    row = {
+        "sw_l2": "半导体",
+        "business_summary": "设备",
+        "product_names": [],
+        "business_source": "资料",
+        "business_status": "ok",
+        "industry_position": "半导体设备企业",
+        "catalyst_evidence": evidence,
+        "catalyst_status": "sector",
+    }
+
+    normalized = scorer._normalize_logic_row(row, "半导体", "2026-07-13")
+
+    assert normalized["catalyst_status"] == "sector"
+    assert normalized["catalyst_evidence"] == evidence
+
+
+def test_normalize_logic_row_preserves_bounded_report_and_pk_evidence_union():
+    evidence = [
+        _complete_evidence(kind="teacher_stock", label="老师观点·个股"),
+        _complete_evidence(
+            kind="industry",
+            label="事实·行业催化",
+            text="仅由当前概念衍生",
+            pk_eligible=False,
+        ),
+        _complete_evidence(
+            kind="industry",
+            label="事实·行业催化",
+            text="主营直接覆盖该行业",
+        ),
+    ]
+    row = {
+        "sw_l2": "半导体",
+        "business_summary": "设备",
+        "product_names": [],
+        "business_source": "资料",
+        "business_status": "ok",
+        "industry_position": "半导体设备企业",
+        "catalyst_evidence": evidence,
+        "catalyst_status": "exact",
+    }
+
+    normalized = scorer._normalize_logic_row(row, "半导体", "2026-07-13")
+
+    assert normalized["catalyst_evidence"] == evidence
+
+
+@pytest.mark.parametrize("marker", ["false", 0, None, [], {}])
+def test_normalize_logic_row_rejects_malformed_report_only_marker(marker):
+    row = {
+        "sw_l2": "半导体",
+        "business_summary": "设备",
+        "product_names": [],
+        "business_source": "资料",
+        "business_status": "ok",
+        "industry_position": "半导体设备企业",
+        "catalyst_evidence": [
+            _complete_evidence(
+                kind="industry",
+                label="事实·行业催化",
+                pk_eligible=marker,
+            )
+        ],
+        "catalyst_status": "sector",
+    }
+
+    normalized = scorer._normalize_logic_row(row, "半导体", "2026-07-13")
+
+    assert normalized["catalyst_status"] == "source_failed"
+    assert normalized["catalyst_evidence"] == []
+
+
+def test_normalize_logic_row_rejects_report_only_marker_on_direct_evidence():
+    row = {
+        "sw_l2": "半导体",
+        "business_summary": "设备",
+        "product_names": [],
+        "business_source": "资料",
+        "business_status": "ok",
+        "industry_position": "半导体设备企业",
+        "catalyst_evidence": [
+            _complete_evidence(
+                kind="teacher_stock",
+                label="老师观点·个股",
+                pk_eligible=False,
+            )
+        ],
+        "catalyst_status": "exact",
+    }
+
+    normalized = scorer._normalize_logic_row(row, "半导体", "2026-07-13")
+
+    assert normalized["catalyst_status"] == "source_failed"
+    assert normalized["catalyst_evidence"] == []
+
+
+def test_current_concept_only_evidence_changes_report_but_not_score_or_pk_payload():
+    base_logic = scorer._normalize_logic_row(
+        {
+            "sw_l2": "燃气",
+            "business_summary": "天然气销售",
+            "product_names": [],
+            "business_source": "公司资料",
+            "business_status": "ok",
+            "industry_position": "燃气领域企业，主营天然气销售",
+            "catalyst_evidence": [],
+            "catalyst_status": "none",
+        },
+        "燃气",
+        "2026-07-13",
+    )
+    concept_logic = scorer._normalize_logic_row(
+        {
+            **base_logic,
+            "catalyst_evidence": [
+                {
+                    "kind": "industry",
+                    "label": "事实·行业催化",
+                    "date": "2026-07-12",
+                    "source": "行业笔记",
+                    "text": "页岩气行业产量更新",
+                    "pk_eligible": False,
+                }
+            ],
+            "catalyst_status": "sector",
+        },
+        "燃气",
+        "2026-07-13",
+    )
+    base_card = {**_card(), **base_logic, "stock_concept_names": []}
+    concept_card = {
+        **_card(),
+        **concept_logic,
+        "stock_concept_names": ["页岩气"],
+    }
+
+    assert concept_card["catalyst_evidence"]
+    assert scorer._coarse_score(base_card) == scorer._coarse_score(concept_card)
+    assert tail_pk._payload(base_card, base_card) == tail_pk._payload(
+        concept_card, concept_card
+    )
+
+
 def test_normalize_logic_row_rejects_ok_row_without_business_or_products():
     row = {
         "sw_l2": "伪造行业", "business_summary": "", "product_names": [],
