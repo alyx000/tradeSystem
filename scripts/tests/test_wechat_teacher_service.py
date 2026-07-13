@@ -190,6 +190,69 @@ def test_missing_and_ambiguous_sources_are_explicit_partial_results(tmp_path: Pa
     }
 
 
+def test_pinned_source_account_rejects_same_name_replacement(tmp_path: Path) -> None:
+    initial = FakeClient()
+    first_result = _collect(tmp_path, initial)
+    assert first_result.manifest["status"] == "empty"
+    store = FeedStore(tmp_path / "runs")
+    before = store.load_snapshot()
+    assert before["sources"]["安静拆主线"]["source_account_id"] == "mp-1"
+
+    replacement = FakeClient()
+    replacement.sources[0] = WeRSSSource("mp-replacement", "安静拆主线")
+    result = _collect(tmp_path, replacement)
+
+    by_name = {
+        row["teacher_name"]: row
+        for row in result.manifest["source_results"]
+    }
+    assert result.manifest["status"] == "partial"
+    assert by_name["安静拆主线"]["status"] == "source_failed"
+    assert by_name["安静拆主线"]["reason"] == "source_identity_changed"
+    assert not any(
+        value == "mp-replacement"
+        or isinstance(value, tuple) and value[0] == "mp-replacement"
+        for _, value in replacement.events
+    )
+    assert store.load_snapshot() == before
+
+
+@pytest.mark.parametrize("grace", [float("inf"), float("nan"), 301.0])
+def test_service_rejects_unsafe_refresh_grace_before_client(
+    grace: float, tmp_path: Path
+) -> None:
+    client = FakeClient()
+
+    with pytest.raises(ValueError, match="refresh_grace_seconds"):
+        collect_phase(
+            client,
+            FeedStore(tmp_path / "runs"),
+            _decision(),
+            "codex_automation",
+            refresh_grace_seconds=grace,
+        )
+
+    assert client.events == []
+
+
+@pytest.mark.parametrize("end_page", [True, 0, 21])
+def test_service_rejects_unsafe_refresh_end_page_before_client(
+    end_page, tmp_path: Path
+) -> None:
+    client = FakeClient()
+
+    with pytest.raises(ValueError, match="refresh_end_page"):
+        collect_phase(
+            client,
+            FeedStore(tmp_path / "runs"),
+            _decision(),
+            "codex_automation",
+            refresh_end_page=end_page,
+        )
+
+    assert client.events == []
+
+
 def test_all_missing_is_source_missing_and_mixed_failures_are_source_failed(tmp_path: Path) -> None:
     missing = FakeClient()
     missing.sources = [WeRSSSource("extra", "额外订阅")]

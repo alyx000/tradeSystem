@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import string
 from typing import Any, Callable
 from urllib.parse import urlsplit
 
@@ -7,6 +8,12 @@ import requests
 
 from .constants import DEFAULT_CONNECT_TIMEOUT, DEFAULT_READ_TIMEOUT, DEFAULT_REFRESH_END_PAGE
 from .models import FeedError, RefreshResult, WeRSSArticleMeta, WeRSSSource
+
+
+_PATH_IDENTIFIER_CHARS = frozenset(
+    string.ascii_letters + string.digits + "-._~"
+)
+_MAX_PATH_IDENTIFIER_LENGTH = 256
 
 
 class WeRSSClient:
@@ -101,6 +108,20 @@ class WeRSSClient:
         return data
 
     @staticmethod
+    def _path_identifier(value: Any) -> str:
+        if not isinstance(value, str):
+            raise FeedError("source_failed", "invalid_upstream_identifier")
+        identifier = value.strip()
+        if (
+            not identifier
+            or identifier in {".", ".."}
+            or len(identifier) > _MAX_PATH_IDENTIFIER_LENGTH
+            or any(char not in _PATH_IDENTIFIER_CHARS for char in identifier)
+        ):
+            raise FeedError("source_failed", "invalid_upstream_identifier")
+        return identifier
+
+    @staticmethod
     def _total(data: dict[str, Any]) -> int:
         direct = data.get("total")
         page = data.get("page")
@@ -154,9 +175,11 @@ class WeRSSClient:
 
     def list_sources(self) -> list[WeRSSSource]:
         def map_source(raw: dict[str, Any]) -> WeRSSSource:
-            mp_id = str(raw.get("id") or raw.get("mp_id") or "")
+            mp_id = self._path_identifier(
+                str(raw.get("id") or raw.get("mp_id") or "")
+            )
             mp_name = str(raw.get("mp_name") or "")
-            if not mp_id or not mp_name:
+            if not mp_name:
                 raise FeedError("source_failed", "invalid_source_item")
             try:
                 status = int(raw.get("status", 1))
@@ -169,11 +192,11 @@ class WeRSSClient:
         return self._paginate("/api/v1/wx/mps", params={"status": 1}, mapper=map_source)
 
     def list_articles(self, mp_id: str) -> list[WeRSSArticleMeta]:
+        safe_mp_id = self._path_identifier(mp_id)
+
         def map_article(raw: dict[str, Any]) -> WeRSSArticleMeta:
-            article_id = str(raw.get("id") or "")
-            source_id = str(raw.get("mp_id") or "")
-            if not article_id or not source_id:
-                raise FeedError("source_failed", "invalid_article_metadata")
+            article_id = self._path_identifier(str(raw.get("id") or ""))
+            source_id = self._path_identifier(str(raw.get("mp_id") or ""))
             try:
                 has_content = int(raw.get("has_content", 0) or 0)
             except (TypeError, ValueError):
@@ -191,12 +214,13 @@ class WeRSSClient:
             )
 
         return self._paginate(
-            "/api/v1/wx/articles", params={"mp_id": mp_id}, mapper=map_article
+            "/api/v1/wx/articles", params={"mp_id": safe_mp_id}, mapper=map_article
         )
 
     def get_article_detail(self, article_id: str) -> dict[str, Any]:
+        safe_article_id = self._path_identifier(article_id)
         data = self._request_json(
-            f"/api/v1/wx/articles/{article_id}", params={"content": "true"}
+            f"/api/v1/wx/articles/{safe_article_id}", params={"content": "true"}
         )
         if not isinstance(data, dict):
             raise FeedError("source_failed", "invalid_article_detail")
@@ -209,8 +233,9 @@ class WeRSSClient:
         start_page: int = 0,
         end_page: int = DEFAULT_REFRESH_END_PAGE,
     ) -> RefreshResult:
+        safe_mp_id = self._path_identifier(mp_id)
         code, _ = self._request_envelope(
-            f"/api/v1/wx/mps/update/{mp_id}",
+            f"/api/v1/wx/mps/update/{safe_mp_id}",
             params={"start_page": start_page, "end_page": end_page},
             accepted_codes={40402},
         )

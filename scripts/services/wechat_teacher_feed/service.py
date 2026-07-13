@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import time
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -8,6 +9,8 @@ from typing import Any, Callable, Iterable
 from .constants import (
     DEFAULT_REFRESH_END_PAGE,
     DEFAULT_REFRESH_GRACE_SECONDS,
+    MAX_REFRESH_END_PAGE,
+    MAX_REFRESH_GRACE_SECONDS,
     WHITELIST,
 )
 from .models import (
@@ -368,10 +371,21 @@ def collect_phase(
         )
     if decision.status != "run":
         raise ValueError(f"unsupported decision status: {decision.status}")
-    if refresh_grace_seconds < 0:
-        raise ValueError("refresh_grace_seconds must be non-negative")
-    if not isinstance(refresh_end_page, int) or refresh_end_page <= 0:
-        raise ValueError("refresh_end_page must be a positive integer")
+    if (
+        not isinstance(refresh_grace_seconds, (int, float))
+        or isinstance(refresh_grace_seconds, bool)
+        or not math.isfinite(refresh_grace_seconds)
+        or refresh_grace_seconds < 0
+        or refresh_grace_seconds > MAX_REFRESH_GRACE_SECONDS
+    ):
+        raise ValueError("refresh_grace_seconds must be between 0 and 300")
+    if (
+        not isinstance(refresh_end_page, int)
+        or isinstance(refresh_end_page, bool)
+        or refresh_end_page < 1
+        or refresh_end_page > MAX_REFRESH_END_PAGE
+    ):
+        raise ValueError("refresh_end_page must be between 1 and 20")
 
     if not dry_run:
         store.recover_phase(decision.run_date, decision.phase)
@@ -418,6 +432,25 @@ def collect_phase(
                     source_account_id=None,
                     status="source_failed",
                     reason="ambiguous_source",
+                )
+            )
+            continue
+        pinned_source = (snapshot.get("sources") or {}).get(
+            whitelist_source.teacher_name
+        )
+        pinned_account_id = (
+            str(pinned_source.get("source_account_id") or "")
+            if isinstance(pinned_source, dict)
+            else ""
+        )
+        if pinned_account_id and matches[0].mp_id != pinned_account_id:
+            source_results.append(
+                SourceResult(
+                    teacher_name=whitelist_source.teacher_name,
+                    source_account_id=matches[0].mp_id,
+                    status="source_failed",
+                    reason="source_identity_changed",
+                    listed=False,
                 )
             )
             continue

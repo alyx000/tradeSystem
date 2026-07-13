@@ -15,6 +15,9 @@ from services.wechat_teacher_feed.normalize import (
     normalize_publish_time,
     normalize_wechat_url,
 )
+from services.wechat_teacher_feed.models import PhaseDecision
+from services.wechat_teacher_feed.service import collect_phase
+from services.wechat_teacher_feed.store import FeedStore
 
 
 class FakeResponse:
@@ -253,6 +256,92 @@ def test_client_detail_and_refresh_protocol() -> None:
 
 
 @pytest.mark.parametrize(
+    ("method", "identifier"),
+    [
+        ("detail", "../mps/update/victim"),
+        ("detail", "a/b"),
+        ("detail", r"a\b"),
+        ("detail", "a?b"),
+        ("detail", "a#b"),
+        ("detail", "."),
+        ("detail", ".."),
+        ("detail", "a\nb"),
+        ("detail", "%2e%2e%2fmps%2fupdate%2fvictim"),
+        ("update", "../articles/victim"),
+        ("articles", "../update/victim"),
+    ],
+)
+def test_client_rejects_unsafe_path_identifiers_before_request(
+    method: str, identifier: str
+) -> None:
+    session = FakeSession([])
+    client = WeRSSClient(
+        "http://127.0.0.1:8001", "WK-test", "SK-test", session=session
+    )
+
+    with pytest.raises(FeedError, match="invalid_upstream_identifier"):
+        if method == "detail":
+            client.get_article_detail(identifier)
+        elif method == "update":
+            client.request_update(identifier)
+        else:
+            client.list_articles(identifier)
+
+    assert session.calls == []
+
+
+def test_dry_run_rejects_malicious_article_id_without_update_request(
+    tmp_path,
+) -> None:
+    source = WHITELIST[0]
+    malicious_id = "../mps/update/victim"
+    session = FakeSession(
+        [
+            _ok(
+                {
+                    "list": [
+                        {"id": "mp-1", "mp_name": source.teacher_name, "status": 1}
+                    ],
+                    "total": 1,
+                }
+            ),
+            _ok(
+                {
+                    "list": [
+                        {
+                            "id": malicious_id,
+                            "mp_id": "mp-1",
+                            "title": "恶意元数据",
+                            "url": "https://mp.weixin.qq.com/s/safe",
+                            "publish_time": 1783951200,
+                            "has_content": 1,
+                        }
+                    ],
+                    "total": 1,
+                }
+            ),
+        ]
+    )
+    client = WeRSSClient(
+        "http://127.0.0.1:8001", "WK-test", "SK-test", session=session
+    )
+
+    result = collect_phase(
+        client,
+        FeedStore(tmp_path / "runs"),
+        PhaseDecision("run", "2026-07-13", "post-market", "2026-07-13", "scheduled"),
+        "codex_automation",
+        dry_run=True,
+        sleeper=lambda _: None,
+    )
+
+    first_source = result.manifest["source_results"][0]
+    assert first_source["reason"] == "invalid_upstream_identifier"
+    assert not any("/mps/update/" in url for _, url, _ in session.calls)
+    assert len(session.calls) == 2
+
+
+@pytest.mark.parametrize(
     ("response", "status", "reason"),
     [
         (FakeResponse({"detail": "bad auth"}, status_code=401), "auth_expired", "http_401"),
@@ -293,6 +382,23 @@ def test_pagination_empty_page_before_total_fails_fast() -> None:
     [
         ({"code": True, "data": {"list": [], "total": 0}}, "sources", "invalid_response_code"),
         ({"code": 0, "data": {"list": [], "total": True}}, "sources", "invalid_pagination_total"),
+        (
+            {
+                "code": 0,
+                "data": {
+                    "list": [
+                        {
+                            "id": "../mps/update/victim",
+                            "mp_name": "安静拆主线",
+                            "status": 1,
+                        }
+                    ],
+                    "total": 1,
+                },
+            },
+            "sources",
+            "invalid_upstream_identifier",
+        ),
         (
             {
                 "code": 0,
