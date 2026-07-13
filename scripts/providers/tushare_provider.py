@@ -56,6 +56,19 @@ def _to_clean_str(val) -> str:
     return "" if s.lower() in ("nan", "<na>", "none") else s
 
 
+def _normalize_positive_count(value) -> int:
+    """概念成员数只保留有限正整数，脏值归零交由消费端 fail-closed。"""
+    if isinstance(value, bool):
+        return 0
+    try:
+        count = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return 0
+    if not math.isfinite(count) or count <= 0 or not count.is_integer():
+        return 0
+    return int(count)
+
+
 class TushareProvider(DataProvider):
     name = "tushare"
     priority = 1
@@ -113,6 +126,7 @@ class TushareProvider(DataProvider):
             "get_concept_moneyflow_dc",
             "get_ths_index",
             "get_ths_member",
+            "get_stock_concept_memberships",
             "get_index_classify",
             "get_stock_sw_industry_map",
             "get_market_breadth",
@@ -141,6 +155,7 @@ class TushareProvider(DataProvider):
             "get_trade_calendar",
             "get_stock_basic_list",
             "get_stock_basic_batch",
+            "get_stock_business_profiles",
             "get_top_volume_stocks",
             "get_suspend_list",
             "get_suspend_change_reasons",
@@ -168,6 +183,56 @@ class TushareProvider(DataProvider):
         if code.startswith(("60", "68", "90", "51", "52", "53", "56", "58")):
             return f"{code}.SH"
         return f"{code}.SZ"
+
+    def _normalize_stock_concept_code(self, raw) -> str | None:
+        """概念归属查询专用的严格股票代码规范化。"""
+        try:
+            text = _to_clean_str(raw).upper()
+        except Exception:
+            return None
+        parts = text.split(".")
+        if len(parts) not in (1, 2):
+            return None
+        bare_code = parts[0]
+        if (
+            len(bare_code) != 6
+            or not bare_code.isascii()
+            or not bare_code.isdigit()
+        ):
+            return None
+        canonical = self._normalize_stock_code(bare_code)
+        if len(parts) == 2 and parts[1] != canonical.rsplit(".", 1)[1]:
+            return None
+        return canonical
+
+    def _parse_stock_concept_member_rows(
+        self,
+        member_df,
+        expected_code: str,
+    ) -> list[dict] | None:
+        """把单票回包一次性收敛为只含安全字符串的中间行。"""
+        try:
+            member_rows = self._df_to_records(member_df)
+            parsed_rows: list[dict] = []
+            for item in member_rows:
+                if not isinstance(item, dict):
+                    return None
+                member_code = self._normalize_stock_concept_code(
+                    item.get("con_code")
+                )
+                if member_code != expected_code:
+                    return None
+                parsed_rows.append(
+                    {
+                        "concept_code": _to_clean_str(
+                            item.get("ts_code")
+                        ).upper(),
+                        "is_new": _to_clean_str(item.get("is_new")).upper(),
+                    }
+                )
+            return parsed_rows
+        except Exception:
+            return None
 
     def _quarter_end_for_date(self, date: str) -> str:
         dt = datetime.strptime(date, "%Y-%m-%d")
@@ -736,6 +801,111 @@ class TushareProvider(DataProvider):
             return DataResult(data=records, source="tushare:ths_member")
         except Exception as e:
             return DataResult(data=None, source=self.name, error=str(e))
+
+    def get_stock_concept_memberships(self, ts_codes: list[str]) -> DataResult:
+        """按候选股票反查当前同花顺 type=N 概念归属。"""
+        source = "tushare:ths_member:by_stock"
+        normalized: list[str] = []
+        seen_codes: set[str] = set()
+        for raw in ts_codes or []:
+            code = self._normalize_stock_concept_code(raw)
+            if not code or code in seen_codes:
+                continue
+            seen_codes.add(code)
+            normalized.append(code)
+
+        if not normalized:
+            return DataResult(data={"stocks": {}}, source=source)
+
+        missing = self._ensure_pro("get_stock_concept_memberships")
+        if missing is not None:
+            return missing
+
+        try:
+            catalog_df = self.pro.ths_index(type="N")
+            if catalog_df is None or catalog_df.empty:
+                return DataResult(
+                    data=None,
+                    source=self.name,
+                    error="同花顺概念目录为空",
+                )
+
+            catalog: dict[str, dict] = {}
+            for row in self._df_to_records(catalog_df):
+                index_type = _to_clean_str(row.get("type")).upper()
+                if index_type != "N":
+                    continue
+                concept_code = _to_clean_str(row.get("ts_code")).upper()
+                name = _to_clean_str(row.get("name"))
+                if not concept_code or not name or concept_code in catalog:
+                    continue
+                catalog[concept_code] = {
+                    "name": name,
+                    "member_count": _normalize_positive_count(row.get("count")),
+                }
+            if not catalog:
+                return DataResult(
+                    data=None,
+                    source=self.name,
+                    error="同花顺概念目录清洗后为空",
+                )
+        except Exception as exc:
+            error = _to_clean_str(exc) or type(exc).__name__
+            return DataResult(data=None, source=self.name, error=error)
+
+        stocks: dict[str, dict] = {}
+        for code in normalized:
+            try:
+                member_df = self.pro.ths_member(
+                    con_code=code,
+                    fields="ts_code,con_code,is_new",
+                )
+                if member_df is None:
+                    raise RuntimeError("member response is None")
+            except Exception as exc:
+                error = _to_clean_str(exc) or type(exc).__name__
+                stocks[code] = {
+                    "status": "source_failed",
+                    "concepts": [],
+                    "error": error,
+                }
+                continue
+
+            member_rows = self._parse_stock_concept_member_rows(
+                member_df,
+                code,
+            )
+            if member_rows is None:
+                stocks[code] = {
+                    "status": "source_failed",
+                    "concepts": [],
+                    "error": "member row contract violation",
+                }
+                continue
+
+            concepts: list[dict] = []
+            seen_concepts: set[str] = set()
+            for item in member_rows:
+                if item["is_new"] != "Y":
+                    continue
+                concept_code = item["concept_code"]
+                meta = catalog.get(concept_code)
+                if meta is None or concept_code in seen_concepts:
+                    continue
+                seen_concepts.add(concept_code)
+                concepts.append(
+                    {
+                        "concept_code": concept_code,
+                        "name": meta["name"],
+                        "member_count": meta["member_count"],
+                    }
+                )
+            stocks[code] = {
+                "status": "ok" if concepts else "missing",
+                "concepts": concepts,
+            }
+
+        return DataResult(data={"stocks": stocks}, source=source)
 
     def get_index_classify(self, _date: str) -> DataResult:
         """获取申万行业分类主数据。"""
@@ -1798,3 +1968,122 @@ class TushareProvider(DataProvider):
             return DataResult(data=all_rows, source="tushare:stock_basic")
         except Exception as e:
             return DataResult(data=None, source=self.name, error=str(e))
+
+    def get_stock_business_profiles(self, ts_codes: list[str]) -> DataResult:
+        """按交易所批量查询上市公司主营资料，逐票保留 ok/missing/source_failed。"""
+        source = "tushare:stock_company"
+        if not ts_codes:
+            return DataResult(data={}, source=source)
+
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for raw in ts_codes:
+            code = self._normalize_stock_code(str(raw or "").strip().upper())
+            if not code or code in seen:
+                continue
+            seen.add(code)
+            normalized.append(code)
+
+        if not normalized:
+            return DataResult(data={}, source=source)
+        missing = self._ensure_pro("get_stock_business_profiles")
+        if missing is not None:
+            return missing
+
+        exchange_by_suffix = {"SH": "SSE", "SZ": "SZSE", "BJ": "BSE"}
+        groups: dict[str, list[str]] = {"SSE": [], "SZSE": [], "BSE": []}
+        profiles: dict[str, dict] = {}
+        for code in normalized:
+            suffix = code.rsplit(".", 1)[-1] if "." in code else ""
+            exchange = exchange_by_suffix.get(suffix)
+            if exchange is None:
+                profiles[code] = self._business_profile_record(
+                    code,
+                    status="source_failed",
+                    source=source,
+                    error=f"unsupported_exchange: {suffix or code}",
+                )
+                continue
+            groups[exchange].append(code)
+
+        attempted = 0
+        failures: list[str] = []
+        fields = "ts_code,introduction,main_business,business_scope"
+        for exchange, requested_codes in groups.items():
+            if not requested_codes:
+                continue
+            attempted += 1
+            requested_set = set(requested_codes)
+            try:
+                df = self.pro.stock_company(exchange=exchange, fields=fields)
+                rows_by_code: dict[str, dict] = {}
+                for row in self._df_to_records(df):
+                    row_code = str(row.get("ts_code") or "").strip().upper()
+                    if row_code in requested_set:
+                        rows_by_code[row_code] = row
+                for code in requested_codes:
+                    row = rows_by_code.get(code)
+                    if row is None:
+                        profiles[code] = self._business_profile_record(
+                            code, status="missing", source=source
+                        )
+                        continue
+                    introduction = _to_clean_str(row.get("introduction"))
+                    main_business = _to_clean_str(row.get("main_business"))
+                    business_scope = _to_clean_str(row.get("business_scope"))
+                    profiles[code] = self._business_profile_record(
+                        code,
+                        status=(
+                            "ok"
+                            if any((introduction, main_business, business_scope))
+                            else "missing"
+                        ),
+                        source=source,
+                        introduction=introduction,
+                        main_business=main_business,
+                        business_scope=business_scope,
+                    )
+            except Exception as exc:
+                error = str(exc)
+                failures.append(f"{exchange}: {error}")
+                for code in requested_codes:
+                    profiles[code] = self._business_profile_record(
+                        code,
+                        status="source_failed",
+                        source=source,
+                        error=error,
+                    )
+
+        if attempted and len(failures) == attempted:
+            return DataResult(
+                data=None,
+                source=source,
+                error="all_exchanges_failed: " + "; ".join(failures),
+            )
+        return DataResult(
+            data={code: profiles[code] for code in normalized},
+            source=source,
+        )
+
+    @staticmethod
+    def _business_profile_record(
+        ts_code: str,
+        *,
+        status: str,
+        source: str,
+        introduction: str = "",
+        main_business: str = "",
+        business_scope: str = "",
+        error: str = "",
+    ) -> dict:
+        return {
+            "ts_code": ts_code,
+            "profile_status": status,
+            "introduction": introduction,
+            "main_business": main_business,
+            "business_scope": business_scope,
+            "product_types": [],
+            "product_names": [],
+            "source": source,
+            "error": error,
+        }

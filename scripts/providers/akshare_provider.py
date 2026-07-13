@@ -7,8 +7,12 @@ AkShare 数据提供者（免费，作为 tushare 的补充和降级）
 """
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import logging
+import multiprocessing
+import queue as queue_module
 import re
+import time
 from datetime import datetime
 from typing import Any, Optional
 
@@ -19,6 +23,251 @@ import requests
 from .base import DataProvider, DataResult, DataType, Timeliness
 
 logger = logging.getLogger(__name__)
+
+BUSINESS_PROFILE_MAX_WORKERS = 4
+BUSINESS_PROFILE_TIMEOUT_SECONDS = 20.0
+
+
+def _normalize_akshare_stock_code(raw: str) -> str:
+    """AkShare A 股代码归一为 Tushare 后缀格式，不依赖其他 Provider 私有方法。"""
+    code = str(raw or "").strip().upper()
+    if not code:
+        return ""
+    symbol = code.split(".", 1)[0]
+    if symbol.startswith(("43", "82", "83", "87", "88", "89", "92")):
+        suffix = "BJ"
+    elif symbol.startswith(("60", "68", "90")):
+        suffix = "SH"
+    else:
+        suffix = "SZ"
+    return f"{symbol}.{suffix}"
+
+
+def _split_business_products(raw: Any) -> list[str]:
+    """拆分 AkShare 产品字段并去重保序。"""
+    text = _to_clean_str(raw)
+    if not text:
+        return []
+    result: list[str] = []
+    seen: set[str] = set()
+    for part in re.split(r"[;；,，、/]+", text):
+        item = part.strip()
+        if not item or item in seen:
+            continue
+        seen.add(item)
+        result.append(item)
+    return result
+
+
+def _akshare_business_profile_record(
+    ts_code: str,
+    *,
+    status: str,
+    introduction: str = "",
+    main_business: str = "",
+    business_scope: str = "",
+    product_types: list[str] | None = None,
+    product_names: list[str] | None = None,
+    error: str = "",
+) -> dict:
+    return {
+        "ts_code": ts_code,
+        "profile_status": status,
+        "introduction": introduction,
+        "main_business": main_business,
+        "business_scope": business_scope,
+        "product_types": product_types or [],
+        "product_names": product_names or [],
+        "source": "akshare:stock_zyjs_ths",
+        "error": error,
+    }
+
+
+def _is_valid_akshare_business_profile(profile: Any, expected_code: str) -> bool:
+    """校验 fork worker 回传的完整主营资料记录，拒绝坏类型污染父进程。"""
+    if not isinstance(profile, dict):
+        return False
+
+    ts_code = profile.get("ts_code")
+    status = profile.get("profile_status")
+    if not isinstance(ts_code, str) or ts_code != expected_code:
+        return False
+    if not isinstance(status, str) or status not in {"ok", "missing", "source_failed"}:
+        return False
+
+    text_fields = (
+        "introduction",
+        "main_business",
+        "business_scope",
+        "source",
+        "error",
+    )
+    if any(not isinstance(profile.get(field), str) for field in text_fields):
+        return False
+
+    for field in ("product_types", "product_names"):
+        values = profile.get(field)
+        if not isinstance(values, list) or any(
+            not isinstance(value, str) for value in values
+        ):
+            return False
+    return True
+
+
+def _fetch_akshare_business_profile(ak: Any, ts_code: str) -> dict:
+    """子进程线程中的单票调用；所有业务异常收敛成逐票状态。"""
+    symbol = ts_code.split(".", 1)[0]
+    try:
+        df = ak.stock_zyjs_ths(symbol=symbol)
+        if df is None or df.empty:
+            return _akshare_business_profile_record(ts_code, status="missing")
+        row = df.iloc[0]
+        main_business = _to_clean_str(row.get("主营业务"))
+        business_scope = _to_clean_str(row.get("经营范围"))
+        product_types = _split_business_products(row.get("产品类型"))
+        product_names = _split_business_products(row.get("产品名称"))
+        return _akshare_business_profile_record(
+            ts_code,
+            status=(
+                "ok"
+                if any((main_business, business_scope, product_types, product_names))
+                else "missing"
+            ),
+            main_business=main_business,
+            business_scope=business_scope,
+            product_types=product_types,
+            product_names=product_names,
+        )
+    except Exception as exc:
+        return _akshare_business_profile_record(
+            ts_code,
+            status="source_failed",
+            error=str(exc),
+        )
+
+
+def _akshare_business_profile_worker(ak: Any, ts_codes: list[str], result_queue: Any) -> None:
+    """fork 子进程入口；进程内最多四线程，完成一票即回传一票。"""
+    try:
+        max_workers = min(BUSINESS_PROFILE_MAX_WORKERS, len(ts_codes))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(_fetch_akshare_business_profile, ak, code): code
+                for code in ts_codes
+            }
+            for future in as_completed(futures):
+                code = futures[future]
+                try:
+                    profile = future.result()
+                except Exception as exc:  # 防御：单个 Future 不得打断整批回传
+                    profile = _akshare_business_profile_record(
+                        code,
+                        status="source_failed",
+                        error=str(exc),
+                    )
+                result_queue.put(("profile", code, profile))
+    finally:
+        result_queue.put(("done", "", None))
+
+
+def _record_business_profile_message(
+    message: Any,
+    profiles: dict[str, dict],
+    expected_codes: set[str],
+) -> tuple[bool, Any]:
+    """校验并记录一条 worker 消息，返回 ``(valid, kind)``。"""
+    if not isinstance(message, tuple) or len(message) != 3:
+        logger.warning("AkShare 主营资料 Queue 消息格式非法: %r", message)
+        return False, ""
+    kind, code, profile = message
+    if kind == "profile":
+        if (
+            not isinstance(code, str)
+            or code not in expected_codes
+            or not _is_valid_akshare_business_profile(profile, code)
+        ):
+            logger.warning("AkShare 主营资料 Queue profile 消息契约非法")
+            return False, kind
+        profiles[code] = profile
+    return True, kind
+
+
+def _stop_business_profile_process(process: Any) -> tuple[bool, bool, str]:
+    """停止并回收 worker，必要时从 SIGTERM 升级到 SIGKILL。
+
+    返回 ``(stopped, forced, error)``；``forced`` 表示发送过 terminate/kill，调用方据此
+    避免再依赖可能已损坏的 Queue。只有确认进程退出后才调用 ``close()``。
+    """
+    if process is None:
+        return True, False, ""
+
+    forced = False
+    cleanup_errors: list[str] = []
+
+    def _is_alive() -> bool | None:
+        try:
+            return bool(process.is_alive())
+        except ValueError:
+            # multiprocessing.Process.close() 后会抛 ValueError；这只可能代表已被关闭。
+            return False
+        except Exception as exc:
+            cleanup_errors.append(f"is_alive_failed: {exc}")
+            return None
+
+    alive = _is_alive()
+    if alive is not False:
+        forced = True
+        try:
+            process.terminate()
+        except Exception as exc:
+            cleanup_errors.append(f"terminate_failed: {exc}")
+        try:
+            process.join(timeout=0.2)
+        except Exception as exc:
+            cleanup_errors.append(f"terminate_join_failed: {exc}")
+        alive = _is_alive()
+
+    if alive is not False:
+        try:
+            process.kill()
+        except Exception as exc:
+            cleanup_errors.append(f"kill_failed: {exc}")
+        try:
+            process.join(timeout=0.2)
+        except Exception as exc:
+            cleanup_errors.append(f"kill_join_failed: {exc}")
+        alive = _is_alive()
+
+    if alive is not False:
+        detail = "; ".join(cleanup_errors) or "worker still alive after kill"
+        logger.error("AkShare 主营资料 worker 清理失败: %s", detail)
+        return False, forced, detail
+
+    try:
+        process.close()
+    except Exception as exc:
+        # 已确认进程退出，close 失败不会形成泄漏，但必须留下可诊断日志。
+        logger.warning("AkShare 主营资料 worker close 失败: %s", exc)
+    if cleanup_errors:
+        logger.warning(
+            "AkShare 主营资料 worker 清理期间发生可恢复异常: %s",
+            "; ".join(cleanup_errors),
+        )
+    return True, forced, ""
+
+
+def _cleanup_business_profile_queue(result_queue: Any) -> None:
+    """防御性关闭 Queue；清理异常不得破坏 Provider 的 DataResult 契约。"""
+    if result_queue is None:
+        return
+    try:
+        result_queue.cancel_join_thread()
+    except Exception as exc:
+        logger.warning("AkShare 主营资料 Queue cancel_join_thread 失败: %s", exc)
+    try:
+        result_queue.close()
+    except Exception as exc:
+        logger.warning("AkShare 主营资料 Queue close 失败: %s", exc)
 
 
 def _to_float_pct(val: Any) -> float:
@@ -275,6 +524,7 @@ class AkshareProvider(DataProvider):
             "get_concept_moneyflow_dc",
             "get_stock_news",
             "get_stock_announcements",
+            "get_stock_business_profiles",
             "get_investor_qa",
             "get_research_reports",
             "get_research_report_list",
@@ -289,6 +539,158 @@ class AkshareProvider(DataProvider):
             "get_margin_data",
             "get_margin_series",
         ]
+
+    def get_stock_business_profiles(self, ts_codes: list[str]) -> DataResult:
+        """fork 子进程内并发查询主营资料，超时后硬终止整个工作进程。"""
+        source = "akshare:stock_zyjs_ths"
+        if not ts_codes:
+            return DataResult(data={}, source=source)
+
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for raw in ts_codes:
+            code = _normalize_akshare_stock_code(raw)
+            if not code or code in seen:
+                continue
+            seen.add(code)
+            normalized.append(code)
+        if not normalized:
+            return DataResult(data={}, source=source)
+        if self.ak is None or not self._initialized:
+            return DataResult(
+                data=None,
+                source=self.name,
+                error="provider_not_initialized: get_stock_business_profiles",
+            )
+
+        result_queue = None
+        process = None
+        try:
+            context = multiprocessing.get_context("fork")
+            result_queue = context.Queue()
+            process = context.Process(
+                target=_akshare_business_profile_worker,
+                args=(self.ak, normalized, result_queue),
+            )
+            process.start()
+        except Exception as exc:
+            stopped, _forced, cleanup_error = _stop_business_profile_process(process)
+            _cleanup_business_profile_queue(result_queue)
+            suffix = f"; worker_cleanup_failed: {cleanup_error}" if not stopped else ""
+            return DataResult(
+                data=None,
+                source=source,
+                error=f"fork_unavailable: {exc}{suffix}",
+            )
+
+        profiles: dict[str, dict] = {}
+        # 20 秒是已确认的整批预算而非逐票 SLA：到期时线程中和队列中尚未完成的票
+        # 都统一记 timeout，并硬杀父进程外的 worker。若后续规模/成功率监控显示饥饿再重构。
+        deadline = time.monotonic() + BUSINESS_PROFILE_TIMEOUT_SECONDS
+        timed_out = False
+        queue_broken = False
+        try:
+            while len(profiles) < len(normalized):
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    try:
+                        timed_out = process.is_alive()
+                    except Exception as exc:
+                        logger.warning("AkShare 主营资料 worker 状态读取失败: %s", exc)
+                        queue_broken = True
+                        timed_out = False
+                    break
+                try:
+                    message = result_queue.get(timeout=min(0.01, remaining))
+                except queue_module.Empty:
+                    try:
+                        worker_alive = process.is_alive()
+                    except Exception as exc:
+                        logger.warning("AkShare 主营资料 worker 状态读取失败: %s", exc)
+                        queue_broken = True
+                        break
+                    if not worker_alive:
+                        break
+                    continue
+                except (EOFError, OSError, ValueError) as exc:
+                    logger.warning("AkShare 主营资料 Queue 读取失败: %s", exc)
+                    queue_broken = True
+                    break
+                message_ok, kind = _record_business_profile_message(
+                    message, profiles, seen
+                )
+                if not message_ok:
+                    queue_broken = True
+                    break
+                if kind == "done":
+                    break
+
+            if not timed_out and not queue_broken:
+                try:
+                    process.join(timeout=min(0.1, remaining))
+                except Exception as exc:
+                    logger.warning("AkShare 主营资料 worker join 失败: %s", exc)
+        finally:
+            stopped, forced, cleanup_error = _stop_business_profile_process(process)
+            if stopped and not forced and not queue_broken:
+                while True:
+                    try:
+                        message = result_queue.get_nowait()
+                    except queue_module.Empty:
+                        break
+                    except (EOFError, OSError, ValueError) as exc:
+                        logger.warning("AkShare 主营资料 Queue 排空失败: %s", exc)
+                        queue_broken = True
+                        break
+                    message_ok, _ = _record_business_profile_message(
+                        message, profiles, seen
+                    )
+                    if not message_ok:
+                        queue_broken = True
+                        break
+            _cleanup_business_profile_queue(result_queue)
+
+        if cleanup_error:
+            return DataResult(
+                data=None,
+                source=source,
+                error=f"worker_cleanup_failed: {cleanup_error}",
+            )
+
+        # 整批 deadline 到期后，所有 pending（包括尚未获线程的排队票）均按 timeout 处理。
+        pending_error = "timeout" if timed_out else "worker_process_failed"
+        for code in normalized:
+            if code not in profiles:
+                profiles[code] = _akshare_business_profile_record(
+                    code,
+                    status="source_failed",
+                    error=pending_error,
+                )
+
+        ordered_profiles = {code: profiles[code] for code in normalized}
+        # Registry 只看顶层 error 决定是否降级；部分成功仍保留逐票状态。
+        if all(
+            profile.get("profile_status") == "source_failed"
+            for profile in ordered_profiles.values()
+        ):
+            reportable_errors = {"timeout", "worker_process_failed"}
+            safe_failure_kinds = sorted(
+                {
+                    error if error in reportable_errors else "source_error"
+                    for profile in ordered_profiles.values()
+                    for error in [profile.get("error", "")]
+                }
+            )
+            return DataResult(
+                data=ordered_profiles,
+                source=source,
+                error="all_profiles_failed: " + ",".join(safe_failure_kinds),
+            )
+
+        return DataResult(
+            data=ordered_profiles,
+            source=source,
+        )
 
     # ---- 融资融券汇总（tushare 全失败时的降级源，仅沪深，无北交所） ----
 

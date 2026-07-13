@@ -166,6 +166,10 @@ class DataProvider(ABC):
     def get_ths_member(self, date: str, concept_names: list[str] | None = None) -> DataResult:
         return DataResult(data=None, source=self.name, error="not implemented")
 
+    def get_stock_concept_memberships(self, ts_codes: list[str]) -> DataResult:
+        """按股票代码反查当前同花顺概念归属。"""
+        return DataResult(data=None, source=self.name, error="not implemented")
+
     def get_index_classify(self, date: str) -> DataResult:
         return DataResult(data=None, source=self.name, error="not implemented")
 
@@ -322,6 +326,16 @@ class DataProvider(ABC):
 
     def get_stock_basic_batch(self, ts_codes: list[str]) -> DataResult:
         """按 ts_code 列表批量查询 stock_basic（名称补全）。"""
+        return DataResult(data=None, source=self.name, error="not implemented")
+
+    def get_stock_business_profiles(self, ts_codes: list[str]) -> DataResult:
+        """按 ts_code 批量查询主营资料。
+
+        成功时 ``data`` 为规范代码到逐票字典的映射；逐票统一包含 ``ts_code``、
+        ``profile_status``（ok/missing/source_failed）、简介、主营、经营范围、产品列表、
+        来源与错误字段。部分逐票失败不改变顶层成功语义；全部逐票均失败或
+        Provider 整体不可用等批次级故障必须返回顶层 ``error`` 以允许注册表降级。
+        """
         return DataResult(data=None, source=self.name, error="not implemented")
 
     # ---- 成交额排名 ----

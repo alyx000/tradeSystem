@@ -367,6 +367,12 @@ def test_get_ths_member_filters_by_concept_names():
     assert result.data[0]["index_name"] == "机器人"
 
 
+def test_get_stock_concept_memberships_capability_is_declared():
+    provider = _provider()
+
+    assert "get_stock_concept_memberships" in provider.get_capabilities()
+
+
 def test_get_stock_daily_normalizes_plain_code():
     provider = _provider()
 

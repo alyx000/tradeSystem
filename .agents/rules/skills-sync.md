@@ -7,7 +7,11 @@ globs:
   - scripts/main.py
   - scripts/cli/wechat_teacher_feed.py
   - scripts/cli/review_factors.py
+  - scripts/cli/tail_scan.py
   - scripts/services/trinity_factor/*.py
+  - scripts/services/tail_scan/*.py
+  - scripts/providers/base.py
+  - scripts/providers/tushare_provider.py
   - scripts/api/routes/*.py
   - .agents/skills/**/*.md
   - .cursor/skills/**/*.md
@@ -24,6 +28,8 @@ globs:
 - `scripts/main.py` — 顶层命令注册（pre/post/schedule 等）
 - `scripts/cli/wechat_teacher_feed.py` — 微信公众号白名单 phase、归档、候选过滤与失败语义
 - `scripts/cli/review_factors.py` / `scripts/services/trinity_factor/*.py` — 三位一体评分、人工确认、T+1 与影子指标语义
+- `scripts/cli/tail_scan.py` / `scripts/services/tail_scan/*.py` — 尾盘实时筛选、逐票产业逻辑、证据边界与报告/推送语义
+- `scripts/services/tail_scan/concept_context.py`，或 `scripts/providers/base.py` / `scripts/providers/tushare_provider.py` 中 `get_stock_concept_memberships` capability — 尾盘扫描当前归属与 T-1 热概念分层语义
 - `scripts/api/routes/*.py` — API 路由定义
 - `.agents/skills/**/*.md` — skill 文档本身（真源；`.cursor/skills/` 与 `.claude/skills/` 是 symlink 壳）
 
@@ -100,6 +106,8 @@ python3 -m pytest scripts/tests/test_cli_smoke.py -v
 | `main.py` / `scripts/cli/wechat_teacher_feed.py` / `scripts/services/wechat_teacher_feed/` | `market-tasks/SKILL.md`、`record-notes/SKILL.md`、`record-notes/references/ingestion-rules.md`、`INDEX.md` 与 `AGENTS.md`；保持“采集只落 manifest、按 digest 确认后才 add-note、默认不入池”边界 |
 | `scripts/cli/new_high.py` 或 `scripts/services/new_high/` | `market-tasks/SKILL.md` + `INDEX.md` 中 `new-high` 行 |
 | `scripts/cli/trend_leader.py` 或 `scripts/services/trend_leader/` | `market-tasks/SKILL.md` + `INDEX.md` 中 `trend-leader` 行 |
+| `scripts/cli/tail_scan.py` 或 `scripts/services/tail_scan/` | `market-tasks/SKILL.md` + `INDEX.md` 中 `tail-scan` 行 + `AGENTS.md` / `CLAUDE.md` |
+| `scripts/services/tail_scan/concept_context.py`，或 provider 的 `get_stock_concept_memberships` capability | `market-tasks/SKILL.md` + `INDEX.md` 中 `tail-scan` capability/消费者/字段用途 + `AGENTS.md` / `CLAUDE.md`；必须核对当前 `type=N` 快照（非历史 as-of）与 T-1 热概念分层、共享容器过滤、报告 5 个/2 个上限、完整归属不进粗分/PK、兼容热字段语义，以及 `source_failed` / `coverage_failed` / `member_failed` / `missing` 状态不混淆 |
 | `scripts/utils/llm_cli.py` 或 LLM CLI/env 语义调整 | `market-tasks/SKILL.md` + `INDEX.md` 中 recommend/research-digest/cognition-digest 行 |
 | `scripts/workflows/research-digest-workflow.mjs` / `scripts/workflows/huibo_helper.py` / 慧博 Antigravity 诊断语义调整 / `HUIBO_REPORT_PDF_DIR` 下载归档目录约定调整 | `market-tasks/SKILL.md` + `INDEX.md` 中 research-digest workflow 行 |
 | `main.py` 的 `ingest *` | `ingest-inspector/SKILL.md` |

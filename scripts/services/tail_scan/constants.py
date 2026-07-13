@@ -1,6 +1,8 @@
 """tail-scan 常量：筛选阈值 / 四维粗权重 / 窗口 / PK 池。"""
 from __future__ import annotations
 
+from services.concept_tags import CONTAINER_MAX_MEMBERS
+
 # —— 筛选阈值（默认，可被 CLI --min-pct/--min-amount 覆盖）——
 DEFAULT_MIN_PCT = 7.0          # 涨幅 > 7%
 DEFAULT_MIN_AMOUNT_YI = 20.0   # 成交额 > 20 亿
@@ -15,6 +17,18 @@ HIGH_WINDOW = 20               # 距前高回看交易日数
 TEACHER_LOOKBACK_DAYS = 7      # 老师观点回看自然日
 CONCEPT_TOP_M = 8              # 概念资金流 Top-M
 MAIN_SECTOR_TOP_K = 8          # 主线申万二级 Top-K（对齐 trend_leader 默认）
+
+# —— 两层概念展示 ——
+# 容器上限只引用共享真源，禁止在 tail-scan 内维护第二份独立数值。
+CONCEPT_CONTAINER_MAX_MEMBERS = CONTAINER_MAX_MEMBERS
+CONCEPT_AFFILIATION_DISPLAY_MAX = 5
+CONCEPT_HOT_DISPLAY_MAX = 2
+
+# —— 个股产业逻辑增强 ——
+INDUSTRY_LOGIC_LOOKBACK_DAYS = 30
+INDUSTRY_LOGIC_MAX_CATALYSTS = 2
+INDUSTRY_LOGIC_MAX_PRODUCTS = 4
+INDUSTRY_LOGIC_TEXT_MAX_CHARS = 120
 
 # —— 四维粗权重（仅供强池截断排序，不进 PK prompt）——
 W_LOGIC_MAIN = 2.0             # ∈主线
