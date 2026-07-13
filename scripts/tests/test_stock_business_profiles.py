@@ -243,6 +243,27 @@ def test_akshare_empty_dataframe_is_missing_and_bse_code_is_normalized():
     assert result.data["430047.BJ"]["source"] == "akshare:stock_zyjs_ths"
 
 
+def test_akshare_product_types_only_row_is_a_usable_profile():
+    api = MagicMock()
+    api.stock_zyjs_ths.return_value = pd.DataFrame(
+        [
+            {
+                "主营业务": "",
+                "经营范围": "",
+                "产品类型": "储能系统；变流器",
+                "产品名称": "",
+            }
+        ]
+    )
+
+    result = _akshare(api).get_stock_business_profiles(["300750.SZ"])
+
+    assert result.success
+    assert result.data["300750.SZ"]["profile_status"] == "ok"
+    assert result.data["300750.SZ"]["product_names"] == []
+    assert result.data["300750.SZ"]["product_types"] == ["储能系统", "变流器"]
+
+
 def test_akshare_row_with_all_business_fields_empty_is_missing():
     api = MagicMock()
     api.stock_zyjs_ths.return_value = pd.DataFrame(

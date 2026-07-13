@@ -519,10 +519,14 @@ def build_industry_logic_map(
             or profile.get("business_scope")
         )
         products = []
-        for product in profile.get("product_names") or []:
-            cleaned = _clip(product, 40)
-            if cleaned and cleaned not in products:
-                products.append(cleaned)
+        for field in ("product_names", "product_types"):
+            raw_products = profile.get(field)
+            if not isinstance(raw_products, list):
+                continue
+            for product in raw_products:
+                cleaned = _clip(product, 40)
+                if cleaned and cleaned not in products:
+                    products.append(cleaned)
         products = products[: C.INDUSTRY_LOGIC_MAX_PRODUCTS]
         sw_l2 = _clip((industry_map.get(code) or {}).get("sw_l2"))
         visible_business = business if status == "ok" else ""

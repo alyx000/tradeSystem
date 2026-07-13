@@ -338,18 +338,33 @@ def test_normalize_logic_row_keeps_valid_exact_and_sector_evidence(status, evide
     assert normalized["catalyst_evidence"] == evidence
 
 
-def test_normalize_logic_row_keeps_ok_empty_display_content_when_source_is_present():
+def test_normalize_logic_row_rejects_ok_row_without_business_or_products():
     row = {
         "sw_l2": "伪造行业", "business_summary": "", "product_names": [],
         "business_source": "tushare.stock_company", "business_status": "ok",
         "industry_position": "", "catalyst_evidence": [], "catalyst_status": "none",
     }
     normalized = scorer._normalize_logic_row(row, "半导体", "2026-07-13")
-    assert normalized["business_status"] == "ok"
+    assert normalized["business_status"] == "source_failed"
     assert normalized["business_summary"] == ""
     assert normalized["product_names"] == []
-    assert normalized["business_source"] == "tushare.stock_company"
+    assert normalized["business_source"] == ""
+    assert normalized["industry_position"] == "半导体相关企业"
     assert normalized["sw_l2"] == "半导体"
+
+
+def test_normalize_logic_row_keeps_ok_product_only_content():
+    row = {
+        "sw_l2": "伪造行业", "business_summary": "", "product_names": ["储能系统"],
+        "business_source": "akshare.stock_zyjs_ths", "business_status": "ok",
+        "industry_position": "电池产业链企业，核心产品包括储能系统",
+        "catalyst_evidence": [], "catalyst_status": "none",
+    }
+    normalized = scorer._normalize_logic_row(row, "电池", "2026-07-13")
+    assert normalized["business_status"] == "ok"
+    assert normalized["business_summary"] == ""
+    assert normalized["product_names"] == ["储能系统"]
+    assert normalized["business_source"] == "akshare.stock_zyjs_ths"
 
 
 @pytest.mark.parametrize(

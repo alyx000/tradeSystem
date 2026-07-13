@@ -8,6 +8,8 @@ import pytest
 
 from providers.base import DataResult
 from services.tail_scan import industry_logic
+from services.tail_scan import renderer
+from services.tail_scan import scorer
 
 
 def _profile(
@@ -17,6 +19,7 @@ def _profile(
     source: str = "",
     business: str = "",
     scope: str = "",
+    types=None,
     products=None,
 ):
     return {
@@ -25,7 +28,7 @@ def _profile(
         "introduction": "",
         "main_business": business,
         "business_scope": scope,
-        "product_types": [],
+        "product_types": types or [],
         "product_names": products or [],
         "source": source,
         "error": "",
@@ -889,6 +892,65 @@ def test_scope_only_profile_populates_summary_position_and_industry_evidence(
     assert result["industry_position"] == "专用设备领域企业，主营氢能源设备制造与销售"
     assert result["industry_position"] != "专用设备相关企业"
     assert [item["text"] for item in result["catalyst_evidence"]] == ["行业订单增加"]
+
+
+def test_product_types_only_profile_flows_through_scorer_and_renderer(conn, tmp_path):
+    row = _profile(
+        "300750.SZ",
+        "ok",
+        source="akshare:stock_zyjs_ths",
+        types=[" 储能系统 ", "储能系统", "变流器"],
+    )
+
+    aggregated = industry_logic.build_industry_logic_map(
+        conn,
+        Registry(
+            primary={"300750.SZ": row},
+            primary_source="akshare:stock_zyjs_ths",
+        ),
+        [{"code": "300750.SZ", "name": "宁德时代"}],
+        scan_date="2026-07-13",
+        industry_map={"300750.SZ": {"sw_l2": "电池"}},
+        concept_map={},
+        huibo_dir=tmp_path,
+    )["300750.SZ"]
+
+    assert aggregated["business_summary"] == ""
+    assert aggregated["product_names"] == ["储能系统", "变流器"]
+    assert aggregated["industry_position"] == "电池产业链企业，核心产品包括储能系统、变流器"
+
+    normalized = scorer._normalize_logic_row(aggregated, "电池", "2026-07-13")
+    assert normalized["business_status"] == "ok"
+    lines = "".join(renderer._render_industry_logic(normalized))
+    assert "核心产品：储能系统、变流器" in lines
+    assert "暂无可展示主营摘要" not in lines
+
+
+def test_product_names_precede_types_then_merge_stably_with_one_shared_limit(
+    conn, tmp_path
+):
+    row = _profile(
+        "300750.SZ",
+        "ok",
+        source="akshare:stock_zyjs_ths",
+        products=[" 储能柜 ", "变流器", "储能柜"],
+        types=["电池", "变流器", "氢能\n设备", "光伏", "其他"],
+    )
+
+    result = industry_logic.build_industry_logic_map(
+        conn,
+        Registry(
+            primary={"300750.SZ": row},
+            primary_source="akshare:stock_zyjs_ths",
+        ),
+        [{"code": "300750.SZ", "name": "宁德时代"}],
+        scan_date="2026-07-13",
+        industry_map={},
+        concept_map={},
+        huibo_dir=tmp_path,
+    )["300750.SZ"]
+
+    assert result["product_names"] == ["储能柜", "变流器", "电池", "氢能 设备"]
 
 
 def test_main_business_keeps_priority_over_introduction_and_scope(conn, tmp_path):

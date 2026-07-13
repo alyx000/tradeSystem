@@ -91,15 +91,20 @@ def _render_industry_logic(card: dict) -> list[str]:
     if business_status == "source_failed":
         business_line = "[事实·主营] 主营资料源失败，本次未取得。"
     elif business_status == "ok":
-        business = _plain(card.get("business_summary")) or "暂无可展示主营摘要"
+        business = _plain(card.get("business_summary"))
         products = []
         for item in (card.get("product_names") or [])[: C.INDUSTRY_LOGIC_MAX_PRODUCTS]:
             product = _plain(item, _PRODUCT_TEXT_MAX_CHARS)
             if product:
                 products.append(product)
-        product_text = f"；核心产品：{'、'.join(products)}" if products else ""
+        details = []
+        if business:
+            details.append(business)
+        if products:
+            details.append(f"核心产品：{'、'.join(products)}")
+        detail_text = "；".join(details) or "暂无可展示主营摘要"
         source = _business_source_name(card.get("business_source"))
-        business_line = f"[事实·主营] {business}{product_text}（来源：{source}）"
+        business_line = f"[事实·主营] {detail_text}（来源：{source}）"
     else:
         business_line = "[事实·主营] 暂无可核验主营资料。"
     lines.append(f"  - {business_line}\n")

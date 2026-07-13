@@ -116,6 +116,24 @@ def test_render_industry_logic_success_with_source_date_and_labels():
     assert "排序为 [判断]，主营/催化按行内标签" in md
 
 
+def test_render_product_only_business_shows_products_without_missing_placeholder():
+    card = {
+        **_scored()[0],
+        "business_status": "ok",
+        "business_summary": "",
+        "product_names": ["储能系统", "变流器"],
+        "business_source": "akshare:stock_zyjs_ths",
+        "industry_position": "电池产业链企业，核心产品包括储能系统、变流器",
+        "catalyst_status": "none",
+        "catalyst_evidence": [],
+    }
+
+    lines = "".join(renderer._render_industry_logic(card))
+
+    assert "[事实·主营] 核心产品：储能系统、变流器" in lines
+    assert "暂无可展示主营摘要" not in lines
+
+
 def test_render_distinguishes_missing_from_source_failed():
     missing = {
         **_scored()[0], "code": "600001.SH", "name": "缺资料",

@@ -78,6 +78,7 @@ def _normalize_logic_row(row: dict, fallback_industry: str, scan_date: str) -> d
     if business_status == "ok" and (
         not business_fields_valid
         or not business_fields["business_source"]
+        or (not business_fields["business_summary"] and not products)
     ):
         business_status = "source_failed"
     if business_status != "ok":
