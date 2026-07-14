@@ -29,7 +29,7 @@
 | --- | --- |
 | 本次范围 | `trend-leader` 申万稳定门、LLM 失败收口、launchd PATH、报告可观测性、单元测试和文档同步 |
 | 非目标 | 不预测主线；不新增价格或买卖建议；不修改 `trend_leader_pool` schema；不自动删除或回写历史活跃池；不重构所有任务为统一主线服务 |
-| 成功标准 | 7 月 14 日同口径下 `IT服务Ⅱ` 因最近 3 个快照 Top-K 仅命中 1 次而不进入自动主线；LLM 失败时 `main_concepts=[]`；显式机械模式保持可用；定时环境可解析 `agy` |
+| 成功标准 | 7 月 14 日同口径下 `IT服务Ⅱ` 因最近 3 个有效快照 Top-K 仅命中 1 次而不进入自动主线；空/全未分类快照不占窗口；LLM 失败时 `main_concepts=[]`；显式机械模式保持可用；定时环境可解析 `agy` |
 
 ## 现状与约束
 
@@ -87,26 +87,27 @@ flowchart TB
 
 ### 申万三日稳定门
 
-1. 先确定目标日有效集中度快照：优先精确日期；缺失时沿用现有逻辑，回退到 `<= date` 的最近快照并标记 `degraded_main=true`。
-2. 读取截至该有效快照日期最近最多 3 条集中度记录。
-3. 每条记录只取前 `top_k` 个非“未分类”的申万二级，统计目标日 Top-K 各板块在窗口中的命中次数。
-4. 窗口有 2～3 条记录时，自动板块必须命中至少 2 次；仅有 1 条记录时要求命中 1 次，避免历史不足时全空。
-5. 结果顺序保持目标日成交额排名；`--sectors` 中未重复的手工板块按输入顺序追加，不经过稳定门。
+1. 有效集中度快照必须在 Top-K 中至少包含一个非空且非“未分类”的申万二级；空 `sector_summary` 或全“未分类”记录不参与主线门。
+2. 先确定目标日有效集中度快照：优先精确日期；精确日期缺失或记录无效时，回退到 `<= date` 的最近有效快照并标记 `degraded_main=true`；完全没有有效快照时状态为 `missing`，自动主线为空，只保留手工覆盖。
+3. 读取截至该有效快照日期最近最多 3 条有效集中度记录；无效记录不占窗口，继续向前查找。
+4. 每条记录只取前 `top_k` 个非“未分类”的申万二级，统计目标有效快照 Top-K 各板块在窗口中的命中次数。
+5. 窗口有 2～3 条记录时，自动板块必须命中至少 2 次；仅有 1 条记录时要求命中 1 次，避免历史不足时全空。
+6. 结果顺序保持目标有效快照成交额排名，并按该顺序传入 LLM；`--sectors` 中未重复的手工板块按输入顺序追加，不经过稳定门。
 
 ```mermaid
 flowchart LR
-    Current["目标日 Top-K"] --> Count["最近最多3个快照统计命中次数"]
+    Current["目标有效快照 Top-K"] --> Count["最近最多3个有效快照统计命中次数"]
     Count --> Enough{"窗口记录数 >= 2?"}
     Enough -->|是| Twice["保留命中 >= 2 次"]
     Enough -->|否| Once["保留命中 >= 1 次"]
     Twice --> Merge["追加手工 --sectors"]
     Once --> Merge
-    Merge --> Ordered["按目标日排名输出"]
+    Merge --> Ordered["按目标有效快照排名输出"]
 ```
 
 #### 2026-07-14 示例
 
-| 申万二级 | 当日 Top20 成交额占比 | 当日 Top20 成分数 | 最近 3 个快照 Top5 命中 | 自动主线结果 |
+| 申万二级 | 当日 Top20 成交额占比 | 当日 Top20 成分数 | 最近 3 个有效快照 Top5 命中 | 自动主线结果 |
 | --- | ---: | ---: | ---: | --- |
 | `半导体` | 51.48% | 11 | 3 | 保留 |
 | `通信设备` | 26.58% | 4 | 3 | 保留 |
@@ -141,8 +142,9 @@ export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
 
 ### 报告可观测性
 
-- “主线板块”文案改为“申万二级近 3 日 Top-K 至少 2 次∪手工”。
+- “主线板块”文案改为“申万二级近 3 个有效快照 Top-K 至少 2 次∪手工”。
 - 保持成交额排名顺序，不再对板块名做字典序排序。
+- `exact / fallback / missing` 分别显示目标日可用、实际回退来源日、完全无可用快照；历史不足时显示实际有效快照数。
 - `fallback_l2` 显示为“LLM调用失败，概念分支已关闭（原因：...）”。
 - `disabled` 显示为“人工禁用 LLM，使用机械概念分支”。
 - `ok` 保持显示 LLM 过滤成功；合法空集合显示“LLM 未确认概念分支”，不作为故障。
@@ -169,6 +171,9 @@ export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
 | `main_sectors` | `list[str]` | 是 | `[]` | 按目标日成交额排名输出的稳定申万主线与手工覆盖 |
 | `main_sector_window` | `int` | 是 | `3` | 稳定门最大快照窗口 |
 | `main_sector_required_hits` | `int` | 是 | `2` | 当前窗口实际要求命中次数，历史不足时为 `1` |
+| `main_sector_snapshot_count` | `int` | 是 | `0` | 实际参与稳定门的有效快照数 |
+| `main_sector_source_date` | `str|null` | 否 | `null` | 目标有效快照的实际来源日 |
+| `main_sector_status` | `str` | 是 | `missing` | `exact / fallback / missing`，避免完全缺失被误报为已回退 |
 | `mainline_llm.status` | `str` | 是 | `not_applicable` | `ok / fallback_l2 / disabled / skipped_empty_concepts / not_applicable` |
 | `mainline_llm.reason` | `str|null` | 否 | `null` | 调用失败或输出非法的诊断原因 |
 | `mainline_llm.accepted_concepts` | `list[str]` | 是 | `[]` | 最终允许参与主线门的概念 |
@@ -204,7 +209,7 @@ export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
 
 | 层级 | 验证内容 | 命令 |
 | --- | --- | --- |
-| 业务单元测试 | 三日命中、历史不足、手工覆盖、排名顺序、LLM 合法空/失败/越界输出 | `python3 -m pytest scripts/tests/test_trend_leader_concept_main.py -v` |
+| 业务单元测试 | 三日命中、恰好两条、空/全未分类快照、目标日无效回退、完全缺失、历史不足、手工覆盖、排名顺序、LLM 合法空/失败/红线/越界输出 | `python3 -m pytest scripts/tests/test_trend_leader_concept_main.py -v` |
 | 渲染测试 | `fallback_l2`、`disabled`、稳定门口径文案 | `python3 -m pytest scripts/tests/test_trend_leader_renderer.py -v` |
 | CLI / launchd 测试 | 参数兼容、runner 初始化失败、runner PATH 可解析 `agy` | `python3 -m pytest scripts/tests/test_trend_leader_cli.py scripts/tests/test_trend_leader_launchd.py -v` |
 | CLI smoke | 命令注册和帮助参数无漂移 | `python3 -m pytest scripts/tests/test_cli_smoke.py -v` |
