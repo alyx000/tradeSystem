@@ -1,7 +1,7 @@
 ---
 name: daily-review
 description: 协助用户完成每日「八步复盘法」，自动拉取客观数据、引导填写主观判断，并将复盘写入数据库
-version: "1.7"
+version: "1.8"
 ---
 
 # Skill: 每日复盘（八步复盘法）
@@ -64,7 +64,7 @@ python3 main.py review factor-metrics [--days 20] [--json]
    - 节点判断
    - 持仓检视
    - 次日计划
-   - 每日 22:30 会由 `python3 main.py daily-leaders propose --push` 生成第 5 步「龙头 / 最票」候选确认稿并推送钉钉 Markdown；候选优先按当前申万二级分组，概念仅作来源证据，未映射票统一标「未分类」；以趋势中军/连板核心/前排活跃/弹性前排为语义属性，程序强制同板块同属性仅 1 只、股票全局唯一、最终最多 15 只。LLM 必须完整覆盖受控候选池且不得夹带池外股票，否则按同约束确定性兜底。v1 只作为确认草稿，用户在 Codex 中确认后再由 Agent 执行 `python3 main.py daily-leaders confirm --date YYYY-MM-DD --input-by codex` 写入复盘第 5 步并同步 `leader_tracking`，不要描述为钉钉按钮回调已可写回。
+   - 每日 22:30 会由 `python3 main.py daily-leaders propose --push` 生成第 5 步「龙头 / 最票」候选确认稿并推送钉钉 Markdown；候选优先按当前申万二级分组，概念仅作来源证据，未映射票统一标「未分类」；以趋势中军/连板核心/前排活跃/弹性前排为语义属性，程序强制同板块同属性仅 1 只、股票全局唯一、最终最多 15 只。LLM 必须完整覆盖受控候选池且不得夹带池外股票，否则按同约束确定性兜底。v1 只作为确认草稿，用户在 Codex 中确认后再由 Agent 执行 `python3 main.py daily-leaders confirm --date YYYY-MM-DD --input-by codex` 写入复盘第 5 步并同步 `leader_tracking`；确认入口会在事务前重新校验上述三项硬约束，旧稿不合规则拒绝而不静默裁剪，并将合法股票代码规范为裸 6 位身份供 tracking 使用。不要描述为钉钉按钮回调已可写回。
 5. 保存前先给用户一版结构化复盘摘要，用户确认后再写入。
 6. 若处于三位一体 20 日影子期，保存后按下文「三位一体因子影子评分」执行评分与专属人工确认；系统建议不能代替用户确认。
 7. 若用户要把复盘直接衔接到次日计划，保存后调用 `POST /api/review/{date}/to-draft`，只生成 observation / draft，不确认正式计划；当前转换实现只读取 `step1_market` 与 `step2_sectors`，忽略 `step8_plan` 及其 `key_factor / secondary_factors` 兼容镜像，**不得把 factor 评分、确认或回验结果手工补进 `TradeDraft`**。

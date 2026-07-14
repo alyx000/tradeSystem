@@ -1207,6 +1207,7 @@ export interface ReviewPrefillData extends Omit<PrefillData, 'market' | 'main_th
   step5_leaders?: {
     top_leaders: Array<{
       stock: string
+      stock_code?: string
       sector: string
       attribute_type: string
       attribute: string

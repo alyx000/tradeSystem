@@ -5,6 +5,7 @@ import { get, set } from './formState'
 
 interface TopLeaderItem {
   stock: string
+  stock_code?: string
   sector: string
   attribute_type: string
   attribute: string

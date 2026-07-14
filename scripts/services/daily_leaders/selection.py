@@ -11,6 +11,19 @@ from services.daily_leaders.models import (
 )
 
 
+_CANONICAL_A_SHARE_CODE_RE = re.compile(
+    r"^(\d{6})(?:\.(?:SH|SZ|BJ))?$",
+    re.IGNORECASE,
+)
+
+
+def canonical_stock_code(value: Any) -> str:
+    """Return a bare canonical A-share code, rejecting malformed values."""
+    normalized = "".join(str(value or "").split()).upper()
+    match = _CANONICAL_A_SHARE_CODE_RE.fullmatch(normalized)
+    return match.group(1) if match else ""
+
+
 def normalize_stock_display(value: Any) -> str:
     """Normalize whitespace without collapsing a code/name display pair."""
     tokens = str(value or "").split()

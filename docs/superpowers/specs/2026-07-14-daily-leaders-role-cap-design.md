@@ -26,7 +26,7 @@
 3. 日内强势候选优先使用申万二级行业，资金流概念保留为辅助证据。
 4. LLM 只处理受控候选池，输出角色、排序与理由；程序验证并执行最终约束。
 5. LLM 失败时仍输出结构化、按板块属性收敛的兜底稿，并显示 `timeout`、`nonzero_exit` 等可诊断原因。
-6. `confirm` 继续只在用户确认后写 `daily_reviews.step5_leaders` 并同步 `leader_tracking`。
+6. `confirm` 继续只在用户确认后写 `daily_reviews.step5_leaders` 并同步 `leader_tracking`；写事务开始前重验最多 15 只、股票身份唯一、板块属性唯一。
 
 ### 非目标
 
@@ -135,7 +135,7 @@ Prompt 只发送受控复核池，要求输出：
 | `board_type` | `10cm/20cm/30cm/非涨停` |
 | `selection_basis` | `llm` 或 `deterministic_fallback` |
 
-`confirm` 仍写原有兼容字段；若 `leader_role` 合法，优先写入 `attribute_type`。旧候选稿仍可由 `show` 读取，旧 `llm_role` 只在属于新角色枚举时才参与确认。
+`confirm` 仍写原有兼容字段；若 `leader_role` 合法，优先写入 `attribute_type`。旧候选稿仍可由 `show` 读取，旧 `llm_role` 只在属于新角色枚举时才参与确认。确认写入不对旧稿静默裁剪：超过 15 只、股票身份重复或板块属性重复时显式拒绝。候选中存在合法 `stock_code` / `code` 时规范为裸 6 位代码写入第 5 步，`leader_tracking` 优先按该代码识别；仅旧 payload 缺代码时回退展示名称。
 
 ## 测试设计
 

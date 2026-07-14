@@ -3,7 +3,6 @@ from __future__ import annotations
 import copy
 import json
 import math
-import re
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +18,7 @@ from services.daily_leaders.models import (
 from services.daily_leaders.selection import (
     # Keep this service-level re-export for callers that assemble the funnel in stages.
     assign_fallback_roles,
+    canonical_stock_code,
     prepare_llm_review_pool,
     select_confirmation_candidates,
     stock_identity_key,
@@ -31,8 +31,6 @@ from services.trinity_factor.review_input import parse_review_step
 
 DEFAULT_MAX_CONFIRMATION_CANDIDATES = MAX_CONFIRMATION_CANDIDATES
 DEFAULT_MIN_CONFIRMATION_AMOUNT_YI = 20.0
-
-_A_SHARE_CODE_RE = re.compile(r"^(\d{6})(?:\.(?:SH|SZ|BJ))?$", re.IGNORECASE)
 
 
 def _active_history(conn) -> list[dict[str, Any]]:
@@ -62,12 +60,6 @@ def _code_keys(value: Any) -> tuple[str, ...]:
     return (full,) if bare == full else (full, bare)
 
 
-def _canonical_a_share_code(value: Any) -> str:
-    normalized = "".join(str(value or "").split()).upper()
-    match = _A_SHARE_CODE_RE.fullmatch(normalized)
-    return match.group(1) if match else ""
-
-
 def _name_key(value: Any) -> str:
     return "".join(str(value or "").split()).upper()
 
@@ -86,7 +78,7 @@ def _limit_height_indexes(market: dict[str, Any]) -> tuple[dict[str, int], dict[
     codes_by_name: dict[str, set[str]] = {}
     for row in _section_rows(market.get("limit_step")):
         name = _name_key(row.get("name") or row.get("stock_name"))
-        canonical_code = _canonical_a_share_code(
+        canonical_code = canonical_stock_code(
             row.get("ts_code") or row.get("code")
         )
         if name and canonical_code:
@@ -217,7 +209,7 @@ def attach_market_quotes(
         if not name and not code:
             continue
         sw_l2 = str(industry_entry.get("sw_l2") or "").strip()
-        if _canonical_a_share_code(code):
+        if canonical_stock_code(code):
             limit_heights = [
                 limit_by_code[key] for key in code_keys if key in limit_by_code
             ]
@@ -364,8 +356,15 @@ def _confirmed_step5_leaders(source: dict[str, Any], date: str) -> list[dict[str
     raw_leaders = source.get("top_leaders")
     if not isinstance(raw_leaders, list):
         raise ValueError("top_leaders must be a list")
+    if len(raw_leaders) > MAX_CONFIRMATION_CANDIDATES:
+        raise ValueError(
+            f"top_leaders must contain at most {MAX_CONFIRMATION_CANDIDATES} items"
+        )
 
     step5_leaders = []
+    seen_stock_codes: set[str] = set()
+    seen_stock_displays: set[str] = set()
+    seen_sector_roles: set[tuple[str, str]] = set()
     for index, item in enumerate(raw_leaders, start=1):
         if not isinstance(item, dict):
             raise ValueError(f"top_leaders[{index}] must be an object")
@@ -377,6 +376,29 @@ def _confirmed_step5_leaders(source: dict[str, Any], date: str) -> list[dict[str
         sector = sector_raw.strip()
         if not stock or not sector:
             raise ValueError(f"top_leaders[{index}] stock and sector are required")
+
+        canonical_codes: set[str] = set()
+        stock_tokens = stock.split()
+        if stock_tokens:
+            display_code = canonical_stock_code(stock_tokens[0])
+            if display_code:
+                canonical_codes.add(display_code)
+        for code_field in ("stock_code", "code"):
+            raw_code = item.get(code_field)
+            if raw_code in (None, ""):
+                continue
+            if not isinstance(raw_code, str):
+                raise ValueError(f"top_leaders[{index}] {code_field} must be a string")
+            canonical_code = canonical_stock_code(raw_code)
+            if not canonical_code:
+                raise ValueError(
+                    f"top_leaders[{index}] {code_field} must be a canonical A-share code"
+                )
+            canonical_codes.add(canonical_code)
+        if len(canonical_codes) > 1:
+            raise ValueError(f"top_leaders[{index}] has conflicting stock codes")
+        canonical_code = next(iter(canonical_codes), "")
+
         leader_role = str(item.get("leader_role") or "").strip()
         llm_role = str(item.get("llm_role") or "").strip()
         legacy_attribute = item.get("attribute_type")
@@ -389,7 +411,26 @@ def _confirmed_step5_leaders(source: dict[str, Any], date: str) -> list[dict[str
             attribute_type = None
         else:
             attribute_type = legacy_attribute
-        step5_leaders.append({
+
+        display_key = stock_identity_key({"stock": stock})
+        stock_key = canonical_code or display_key
+        if (
+            canonical_code and canonical_code in seen_stock_codes
+        ) or display_key in seen_stock_displays:
+            raise ValueError(f"top_leaders[{index}] duplicates stock identity {stock_key}")
+        if canonical_code:
+            seen_stock_codes.add(canonical_code)
+        seen_stock_displays.add(display_key)
+
+        role_key = str(attribute_type or "").strip()
+        sector_role = (sector, role_key)
+        if sector_role in seen_sector_roles:
+            raise ValueError(
+                f"top_leaders[{index}] duplicates sector and leader role {sector}/{role_key}"
+            )
+        seen_sector_roles.add(sector_role)
+
+        confirmed = {
             "stock": stock,
             "sector": sector,
             "attribute_type": attribute_type,
@@ -397,7 +438,10 @@ def _confirmed_step5_leaders(source: dict[str, Any], date: str) -> list[dict[str
             "clarity": item.get("clarity"),
             "position": item.get("position"),
             "is_new": item.get("is_new"),
-        })
+        }
+        if canonical_code:
+            confirmed["stock_code"] = canonical_code
+        step5_leaders.append(confirmed)
     return step5_leaders
 
 

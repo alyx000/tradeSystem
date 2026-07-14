@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import math
-import re
 from typing import Any
 
 from services.daily_leaders.models import (
@@ -11,7 +10,10 @@ from services.daily_leaders.models import (
     TEACHER_SUPPORT,
     TEACHER_UNMENTIONED,
 )
-from services.daily_leaders.selection import normalize_stock_display
+from services.daily_leaders.selection import (
+    canonical_stock_code,
+    normalize_stock_display,
+)
 from utils import is_st_stock
 from utils.price_limit import limit_pct_for
 
@@ -68,28 +70,18 @@ def _normalize_key(value: Any) -> str:
     return "".join(_text(value).split()).upper()
 
 
-_CANONICAL_A_SHARE_CODE_RE = re.compile(r"^(\d{6})(?:\.(SH|SZ|BJ))?$", re.IGNORECASE)
-
-
-def _canonical_stock_code(value: Any) -> str:
-    """Return a bare canonical A-share code, rejecting names and malformed values."""
-    normalized = _normalize_key(value)
-    match = _CANONICAL_A_SHARE_CODE_RE.fullmatch(normalized)
-    return match.group(1) if match else ""
-
-
 def _candidate_codes(item: dict[str, Any]) -> set[str]:
     codes = {
         code
         for code in (
-            _canonical_stock_code(item.get("stock_code")),
-            _canonical_stock_code(item.get("code")),
+            canonical_stock_code(item.get("stock_code")),
+            canonical_stock_code(item.get("code")),
         )
         if code
     }
     stock_tokens = normalize_stock_display(item.get("stock")).split()
     if stock_tokens:
-        stock_code = _canonical_stock_code(stock_tokens[0])
+        stock_code = canonical_stock_code(stock_tokens[0])
         if stock_code:
             codes.add(stock_code)
     return codes
@@ -102,9 +94,9 @@ def _candidate_name_keys(item: dict[str, Any]) -> set[str]:
         if not text:
             continue
         tokens = text.split()
-        if tokens and _canonical_stock_code(tokens[0]) and len(tokens) > 1:
+        if tokens and canonical_stock_code(tokens[0]) and len(tokens) > 1:
             text = normalize_stock_display(" ".join(tokens[1:]))
-        if not _canonical_stock_code(text):
+        if not canonical_stock_code(text):
             key = _normalize_key(text)
             if key:
                 names.add(key)
@@ -116,7 +108,7 @@ def _stock_name_text(item: dict[str, Any]) -> str:
         item.get("stock_name") or item.get("name") or item.get("stock")
     )
     tokens = stock_name.split()
-    if tokens and _canonical_stock_code(tokens[0]):
+    if tokens and canonical_stock_code(tokens[0]):
         return normalize_stock_display(" ".join(tokens[1:]))
     return stock_name
 
@@ -141,7 +133,7 @@ class _StockQuoteIndex:
         self.by_code: dict[str, dict[str, Any]] = {}
         by_name: dict[str, dict[str, Any] | None] = {}
         for row in rows:
-            code = _canonical_stock_code(row.get("code") or row.get("ts_code"))
+            code = canonical_stock_code(row.get("code") or row.get("ts_code"))
             if code:
                 self.by_code.setdefault(code, row)
             for key in _candidate_name_keys(row):
@@ -149,7 +141,7 @@ class _StockQuoteIndex:
                 if key not in by_name:
                     by_name[key] = row
                     continue
-                existing_code = _canonical_stock_code(
+                existing_code = canonical_stock_code(
                     (existing or {}).get("code") or (existing or {}).get("ts_code")
                 )
                 if existing is not row and (not code or not existing_code or code != existing_code):
@@ -219,7 +211,7 @@ def _quote_facts(quote_index: _StockQuoteIndex, item: dict[str, Any]) -> dict[st
             "sector_source": "",
         }
     raw_code = _text(row.get("code") or row.get("ts_code")).strip().upper()
-    code = _canonical_stock_code(raw_code)
+    code = canonical_stock_code(raw_code)
     pct_chg = _to_float(
         row.get("pct_chg") if row.get("pct_chg") is not None else row.get("pct_change")
     )
@@ -595,7 +587,7 @@ def _board_attribute(code: str, pct_chg: float) -> str | None:
     if pct_chg < 9.7:
         return "非涨停"
     normalized = (code or "").strip().upper()
-    if not _canonical_stock_code(normalized):
+    if not canonical_stock_code(normalized):
         return None
     board_limit_pct = limit_pct_for(normalized)
     if board_limit_pct == 30.0:
@@ -664,7 +656,7 @@ def _quote_strength_items(
     for row in quote_index.rows:
         stock = normalize_stock_display(row.get("name") or row.get("stock_name"))
         raw_code = _text(row.get("code") or row.get("ts_code")).strip().upper()
-        code = _canonical_stock_code(raw_code)
+        code = canonical_stock_code(raw_code)
         pct_chg = _to_float(row.get("pct_chg") if row.get("pct_chg") is not None else row.get("pct_change"))
         amount_yi = _to_float(row.get("amount_yi") if row.get("amount_yi") is not None else row.get("amount_billion"))
         if amount_yi is None:

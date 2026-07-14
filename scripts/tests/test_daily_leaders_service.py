@@ -1526,6 +1526,130 @@ def test_confirm_requires_top_leaders_list_without_writing(conn, tmp_path):
     assert Q.get_active_leaders(conn) == []
 
 
+def _assert_confirm_rejects_leaders_without_writing(conn, tmp_path, leaders):
+    leaders_file = tmp_path / "leaders.json"
+    leaders_file.write_text(
+        json.dumps(
+            {"date": "2026-07-03", "top_leaders": leaders},
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError):
+        service.confirm(conn, "2026-07-03", "codex", leaders_file=leaders_file)
+
+    assert Q.get_daily_review(conn, "2026-07-03") is None
+    assert Q.get_active_leaders(conn) == []
+
+
+def test_confirm_rejects_more_than_15_leaders_without_writing(conn, tmp_path):
+    leaders = [
+        {
+            "stock": f"候选{i:02d}",
+            "stock_code": f"600{i:03d}.SH",
+            "sector": f"板块{i:02d}",
+            "leader_role": "前排活跃",
+        }
+        for i in range(16)
+    ]
+
+    _assert_confirm_rejects_leaders_without_writing(conn, tmp_path, leaders)
+
+
+def test_confirm_rejects_normalized_stock_identity_duplicate_without_writing(
+    conn, tmp_path
+):
+    leaders = [
+        {
+            "stock": "贵州茅台",
+            "stock_code": "600519.SH",
+            "sector": "白酒",
+            "leader_role": "趋势中军",
+        },
+        {
+            "stock": "茅台",
+            "code": "600519",
+            "sector": "食品饮料",
+            "leader_role": "前排活跃",
+        },
+    ]
+
+    _assert_confirm_rejects_leaders_without_writing(conn, tmp_path, leaders)
+
+
+def test_confirm_rejects_same_display_identity_when_only_one_row_has_code(
+    conn, tmp_path
+):
+    leaders = [
+        {
+            "stock": "贵州茅台",
+            "stock_code": "600519.SH",
+            "sector": "白酒",
+            "leader_role": "趋势中军",
+        },
+        {
+            "stock": "贵州茅台",
+            "sector": "食品饮料",
+            "leader_role": "前排活跃",
+        },
+    ]
+
+    _assert_confirm_rejects_leaders_without_writing(conn, tmp_path, leaders)
+
+
+@pytest.mark.parametrize(
+    "candidate",
+    [
+        {
+            "stock": "贵州茅台",
+            "stock_code": "600519.BAD",
+            "sector": "白酒",
+            "leader_role": "趋势中军",
+        },
+        {
+            "stock": "贵州茅台",
+            "stock_code": "600519.SH",
+            "code": "000001.SZ",
+            "sector": "白酒",
+            "leader_role": "趋势中军",
+        },
+        {
+            "stock": "000001 平安银行",
+            "stock_code": "600519.SH",
+            "sector": "银行",
+            "leader_role": "趋势中军",
+        },
+    ],
+)
+def test_confirm_rejects_invalid_or_conflicting_stock_codes_without_writing(
+    conn, tmp_path, candidate
+):
+    _assert_confirm_rejects_leaders_without_writing(conn, tmp_path, [candidate])
+
+
+@pytest.mark.parametrize("role_field", ["leader_role", "attribute_type"])
+def test_confirm_rejects_duplicate_sector_role_without_writing(
+    conn, tmp_path, role_field
+):
+    leaders = [
+        {
+            "stock": "海光信息",
+            "stock_code": "688041.SH",
+            "sector": "半导体",
+            role_field: "趋势中军",
+        },
+        {
+            "stock": "寒武纪",
+            "stock_code": "688256.SH",
+            "sector": "半导体",
+            role_field: "趋势中军",
+        },
+    ]
+
+    _assert_confirm_rejects_leaders_without_writing(conn, tmp_path, leaders)
+
+
 def test_invalid_limit_step_code_cannot_attach_height_to_valid_quote():
     class Registry:
         def call(self, name, *args):

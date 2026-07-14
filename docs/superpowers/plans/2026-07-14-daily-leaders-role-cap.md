@@ -463,4 +463,11 @@ Re-run focused tests and `make check-scripts` after the final review fix. Report
 - Spec coverage: all five confirmed decisions map to Tasks 1–4.
 - Placeholder scan: no placeholder markers or deferred implementation steps remain.
 - Type consistency: roles, board types, limits, selection exports, and service orchestration signatures match the shared contracts.
-- Scope: no DB migration, API route, Web UI, push, or confirm writeback is included.
+- 范围：不含 DB migration、API route、推送或实际 `confirm` 写回。门2审查后仅补充 `confirm` 事务前校验与 Web 可选 `stock_code` 类型契约；未执行生产写入。
+
+## 门2审查追加修订（2026-07-15）
+
+- [x] RED：`leaders-file` 超过 15 条、规范股票身份重复、同板块同属性重复均会在旧实现中被放行。
+- [x] GREEN：`_confirmed_step5_leaders` 在事务前拒绝上述输入，失败后 `daily_reviews` 与 `leader_tracking` 保持零写入。
+- [x] RED/GREEN：确认转换保留规范裸 6 位 `stock_code`，tracking 优先按代码 upsert；旧 payload 无代码继续回退 `stock`。
+- [x] 契约同步：复盘 Web 类型增加可选 `stock_code`，skills / INDEX / AGENTS / CLAUDE 同步确认护栏语义。

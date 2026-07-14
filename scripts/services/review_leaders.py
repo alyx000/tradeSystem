@@ -7,6 +7,7 @@ import sqlite3
 from typing import Any
 
 from db import queries as Q
+from services.daily_leaders.selection import canonical_stock_code
 
 
 def _coerce_step5(step5: Any) -> dict[str, Any] | None:
@@ -44,9 +45,19 @@ def sync_leader_tracking_from_step5(
         sector = sector_raw.strip()
         if not stock or not sector:
             continue
+        raw_stock_code = item.get("stock_code")
+        if raw_stock_code not in (None, ""):
+            if not isinstance(raw_stock_code, str):
+                continue
+            stock_code = canonical_stock_code(raw_stock_code)
+            if not stock_code:
+                continue
+        else:
+            # Legacy review payloads predate canonical stock identities.
+            stock_code = stock
         Q.upsert_leader_tracking(
             conn,
-            stock_code=stock,
+            stock_code=stock_code,
             stock_name=stock,
             sector=sector,
             attribute_type=item.get("attribute_type") or item.get("attribute") or "",
