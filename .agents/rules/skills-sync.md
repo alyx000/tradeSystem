@@ -91,7 +91,7 @@ python3 -m pytest scripts/tests/test_cli_smoke.py -v
 | `cli.py` 的 `holdings-*`（含 `--thesis-id` 关联语义）/ `watchlist-*` / `add-trade` / `blacklist-*` | `portfolio-manager/SKILL.md` |
 | `cli.py` 的 `query-notes/db-search` | `daily-review/SKILL.md` |
 | `main.py` 的 `pre/post/schedule` | `market-tasks/SKILL.md` |
-| `scripts/cli/new_high.py` 或 `scripts/services/new_high/` | `market-tasks/SKILL.md` + `INDEX.md` 中 `new-high` 行 |
+| `scripts/main.py` 的 `cmd_post` new-high 接线、`scripts/cli/new_high.py`、`scripts/services/new_high/` 或 `scripts/utils/trade_date.py` 的 new-high 日历语义 | `market-tasks/SKILL.md` + `INDEX.md` 中 `new-high` 行；须核对复用 `today-post` 工作日 20:00 单一调度、无独立 launchd/APScheduler、只写两表及目标日报告且不自动推送、schema/基线相等/自然日日历完整、行业源非空、有效行情绝对地板、重复/有效 join/复权宇宙/申万覆盖/相邻日市场数门禁、按开放日动态升序补缺、canonical 只追加、单日同事务、`BEGIN IMMEDIATE` 二次查重 + 尾日 CAS、成功前缀与失败续跑、目标日报告原子替换及 `already_complete` 损坏自愈、手工 `daily` 连续协调/`backfill` 强刷年度日历且拒绝跳过尾日后开放日/历史更正须重建后缀、失败隔离且不阻断 margin 的完整契约 |
 | `scripts/cli/trend_leader.py` 或 `scripts/services/trend_leader/` | `market-tasks/SKILL.md` + `INDEX.md` 中 `trend-leader` 行 |
 | `scripts/utils/llm_cli.py` 或 LLM CLI/env 语义调整 | `market-tasks/SKILL.md` + `INDEX.md` 中 recommend/research-digest/cognition-digest 行 |
 | `scripts/workflows/research-digest-workflow.mjs` / `scripts/workflows/huibo_helper.py` / 慧博 Antigravity 诊断语义调整 / `HUIBO_REPORT_PDF_DIR` 下载归档目录约定调整 | `market-tasks/SKILL.md` + `INDEX.md` 中 research-digest workflow 行 |
