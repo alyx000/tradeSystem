@@ -187,8 +187,6 @@ def select_confirmation_candidates(
     """Apply ranking and hard confirmation constraints in a deterministic order."""
     if type(max_candidates) is not int or not 1 <= max_candidates <= MAX_CONFIRMATION_CANDIDATES:
         raise ValueError("max_candidates must be between 1 and 15")
-    final_limit = max_candidates
-
     original_count = len(items)
     assigned = _ensure_fallback_roles(items)
     sortable: list[tuple[int, int, float, int, dict[str, Any]]] = []
@@ -199,10 +197,7 @@ def select_confirmation_candidates(
         rank_key = llm_rank if llm_rank is not None else 1_000_000_000
         sortable.append((backup_penalty, rank_key, -_selection_score(candidate), index, candidate))
 
-    if llm_ok:
-        ordered = [entry[-1] for entry in sorted(sortable, key=lambda entry: entry[:-1])]
-    else:
-        ordered = [entry[-1] for entry in sorted(sortable, key=lambda entry: (entry[2], entry[3]))]
+    ordered = [entry[-1] for entry in sorted(sortable, key=lambda entry: entry[:-1])]
 
     sector_role_trimmed_count = 0
     seen_sector_roles: set[tuple[str, str]] = set()
@@ -226,7 +221,7 @@ def select_confirmation_candidates(
         seen_stocks.add(stock_key)
         stock_unique.append(item)
 
-    selected = stock_unique[:final_limit]
+    selected = stock_unique[:max_candidates]
     stats = {
         "original_count": original_count,
         "review_pool_count": len(items),

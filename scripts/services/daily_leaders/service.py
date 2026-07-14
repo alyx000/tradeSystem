@@ -17,6 +17,7 @@ from services.daily_leaders.models import (
     STATUS_ROLES,
 )
 from services.daily_leaders.selection import (
+    # Keep this service-level re-export for callers that assemble the funnel in stages.
     assign_fallback_roles,
     prepare_llm_review_pool,
     select_confirmation_candidates,
@@ -243,10 +244,9 @@ def attach_market_quotes(
 def _validate_max_candidates(value: Any) -> int:
     if type(value) is not int:
         raise ValueError("max_candidates must be between 1 and 15")
-    limit = value
-    if not 1 <= limit <= MAX_CONFIRMATION_CANDIDATES:
+    if not 1 <= value <= MAX_CONFIRMATION_CANDIDATES:
         raise ValueError("max_candidates must be between 1 and 15")
-    return limit
+    return value
 
 
 def _without_internal_fields(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -309,9 +309,8 @@ def propose(
     ]
     original_count = len(raw_items)
     deduped_count, duplicate_trimmed_count = _raw_stock_counts(raw_items)
-    assigned_items = assign_fallback_roles(raw_items)
     review_pool = prepare_llm_review_pool(
-        assigned_items,
+        raw_items,
         limit=MAX_LLM_REVIEW_CANDIDATES,
     )
     proposal["top_leaders"] = review_pool
@@ -337,7 +336,7 @@ def propose(
         "duplicate_trimmed_count": duplicate_trimmed_count,
         "trimmed_count": max(0, original_count - final_count),
         "review_pool_count": len(review_pool),
-        "review_pool_trimmed_count": max(0, len(assigned_items) - len(review_pool)),
+        "review_pool_trimmed_count": max(0, len(raw_items) - len(review_pool)),
         "sector_role_trimmed_count": selection_stats.get(
             "sector_role_trimmed_count", 0
         ),

@@ -151,20 +151,12 @@ def _run_llm(prompt: str) -> LlmResult:
     parsed: dict[str, Any] | None = None
     if result.returncode == 0 and stdout:
         try:
-            direct_json = json.loads(stdout)
-        except json.JSONDecodeError:
-            direct_json = None
-        else:
-            if not isinstance(direct_json, dict):
-                return _llm_error("invalid_json", f"log_file={log_file}")
-        try:
             parsed = _parse_json_object(stdout)
         except json.JSONDecodeError:
             parsed = None
         else:
             if parsed is None:
                 return _llm_error("invalid_json", f"log_file={log_file}")
-        if parsed is not None:
             return parsed
 
     try:
