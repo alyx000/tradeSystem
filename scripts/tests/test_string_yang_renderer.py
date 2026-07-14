@@ -18,3 +18,21 @@ def test_source_failed_report_is_explicit_and_does_not_show_zero_hits() -> None:
     assert "失败源：sw_map" in md
     assert "命中数量" not in md
     assert "今日无命中" not in md
+
+
+def test_llm_call_failure_does_not_expose_internal_log_env_name() -> None:
+    from services.string_yang import renderer
+
+    md = renderer.render_daily({
+        "status": "success",
+        "date": "2026-07-14",
+        "main_sectors": ["半导体"],
+        "mainline": {
+            "status": "llm_fallback",
+            "source_errors": ["llm_call_failed"],
+        },
+        "candidates": [],
+    })
+
+    assert "LLM调用失败，降级成交额集中度" in md
+    assert "ANTIGRAVITY_LOG_DIR" not in md

@@ -18,13 +18,11 @@ def _fmt_pct(v) -> str:
 
 
 def _status_label(mainline: dict) -> str:
-    """主线来源文案。llm_fallback 按 source_errors 细分：调用失败（可查
-    ANTIGRAVITY_LOG_DIR 诊断日志）与「LLM 正常返回但判无有效主线」是两类问题，
-    报告里合并会掩盖真实故障（0707-0709 连续降级即因此无从排查）。"""
+    """主线来源文案。llm_fallback 按 source_errors 细分调用失败与有效空裁决。"""
     if mainline.get("status") == "llm_fallback":
         errors = set(mainline.get("source_errors") or [])
         if "llm_call_failed" in errors:
-            return "LLM调用失败（诊断日志见 ANTIGRAVITY_LOG_DIR），降级成交额集中度"
+            return "LLM调用失败，降级成交额集中度"
         if "llm_error" in errors:
             return "LLM调用异常，降级成交额集中度"
         return "LLM判无有效主线，降级成交额集中度"

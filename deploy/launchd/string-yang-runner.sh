@@ -6,7 +6,8 @@
 # → 渲染只读观察清单（标 [判断]）+ 推钉钉。
 set -e
 
-export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+# launchd 默认 PATH 不含 ~/.local/bin；agy 安装在该目录时会启动失败并静默降级。
+export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
 
 REPO_ROOT="/Users/alyx/tradeSystem"
 cd "$REPO_ROOT"
