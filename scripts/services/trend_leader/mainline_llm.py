@@ -108,7 +108,7 @@ def _parse_result(result: Any, universe: set[str]) -> tuple[set[str], list[dict[
         return None
 
     rejected: list[dict[str, str]] = []
-    raw_rejected = result.get("rejected") or []
+    raw_rejected = result.get("rejected", [])
     if not isinstance(raw_rejected, list):
         return None
     for row in raw_rejected:

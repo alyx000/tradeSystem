@@ -441,6 +441,26 @@ def test_hybrid_llm_out_of_universe_rejection_closes_concept_branch(conn):
     assert summary["mainline_llm"]["reason"] == "invalid_output"
 
 
+@pytest.mark.parametrize("bad_rejected", [{}, "", 0, None])
+def test_hybrid_llm_falsey_nonlist_rejection_closes_concept_branch(conn, bad_rejected):
+    _seed_concentration(conn, "2026-06-09", ["半导体"])
+    reg = _branch_reg("其他电子Ⅱ")
+
+    def invalid_rejection_runner(prompt, payload):
+        return {
+            "accepted_concepts": ["PCB概念"],
+            "rejected": bad_rejected,
+        }
+
+    summary = scanner.run_daily(
+        conn, reg, "2026-06-09", main_line="hybrid", top_concepts=5,
+        mainline_llm_runner=invalid_rejection_runner)
+
+    assert "301628" not in summary["entered"]
+    assert summary["mainline_llm"]["status"] == "fallback_l2"
+    assert summary["mainline_llm"]["reason"] == "invalid_output"
+
+
 def test_hybrid_llm_valid_empty_is_not_failure(conn):
     _seed_concentration(conn, "2026-06-09", ["半导体"])
     reg = _branch_reg("其他电子Ⅱ")
