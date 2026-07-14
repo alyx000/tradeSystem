@@ -119,6 +119,10 @@ def _parse_result(result: Any, universe: set[str]) -> tuple[set[str], list[dict[
             return None
         reason = str(row.get("reason") or "").strip()[:40]
         rejected.append({"name": name, "reason": reason})
+
+    rejected_names = {row["name"] for row in rejected}
+    if accepted & rejected_names:
+        return None
     return accepted, rejected
 
 

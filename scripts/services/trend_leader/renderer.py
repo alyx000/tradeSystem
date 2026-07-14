@@ -30,7 +30,10 @@ def _hit(flag) -> str:
 def _llm_status_text(meta: dict) -> str | None:
     status = meta.get("status")
     if status == "fallback_l2":
-        return f"LLM调用失败，概念分支已关闭（原因：{meta.get('reason') or 'unknown'}）"
+        reason = meta.get("reason") or "unknown"
+        if reason in {"invalid_output", "parse_failed"}:
+            return f"LLM输出非法，概念分支已关闭（原因：{reason}）"
+        return f"LLM调用失败，概念分支已关闭（原因：{reason}）"
     if status == "disabled":
         return "人工禁用 LLM，使用机械概念分支"
     if status == "ok" and not (meta.get("accepted_concepts") or []):

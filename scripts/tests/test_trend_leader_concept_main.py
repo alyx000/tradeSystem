@@ -461,6 +461,27 @@ def test_hybrid_llm_falsey_nonlist_rejection_closes_concept_branch(conn, bad_rej
     assert summary["mainline_llm"]["reason"] == "invalid_output"
 
 
+def test_hybrid_llm_conflicting_accept_and_reject_closes_concept_branch(conn):
+    _seed_concentration(conn, "2026-06-09", ["半导体"])
+    reg = _branch_reg("其他电子Ⅱ")
+
+    def conflicting_runner(prompt, payload):
+        return {
+            "accepted_concepts": ["PCB概念"],
+            "rejected": [{"name": "PCB概念", "reason": "非主线"}],
+        }
+
+    summary = scanner.run_daily(
+        conn, reg, "2026-06-09", main_line="hybrid", top_concepts=5,
+        mainline_llm_runner=conflicting_runner)
+
+    assert "301628" not in summary["entered"]
+    assert summary["main_concepts"] == []
+    assert summary["mainline_llm"]["status"] == "fallback_l2"
+    assert summary["mainline_llm"]["reason"] == "invalid_output"
+    assert "mainline_llm" in summary["source_errors"]
+
+
 def test_hybrid_llm_valid_empty_is_not_failure(conn):
     _seed_concentration(conn, "2026-06-09", ["半导体"])
     reg = _branch_reg("其他电子Ⅱ")
