@@ -140,6 +140,7 @@ class TestHolidayCheck:
 class TestPostCommandIngestAudit:
     """盘后主流程触发的 IngestService 审计应归类为 system。"""
 
+    @patch("main._run_new_high_for_post", create=True)
     @patch("services.ingest_service.IngestService")
     @patch("generators.obsidian_export.ObsidianExporter")
     @patch("main.setup_pushers")
@@ -170,6 +171,7 @@ class TestPostCommandIngestAudit:
         mock_setup_pushers,
         mock_obsidian_exporter_cls,
         mock_ingest_service_cls,
+        mock_new_high_for_post,
         caplog,
         tmp_path,
     ):
@@ -247,6 +249,50 @@ class TestPostCommandIngestAudit:
         assert "成功 1 / 空结果 0 / 失败 1" in caplog.text
         # 主采集块 + 内嵌 ingest 块各进入一次代理屏蔽上下文。
         assert proxy_tracker.enter_count >= 2
+        mock_new_high_for_post.assert_called_once_with(
+            {},
+            "2026-04-17",
+            registry,
+        )
+
+
+class TestPostCommandNewHigh:
+    """new-high 复用 cmd_post 单一调度源，并与主流程失败隔离。"""
+
+    def test_helper_calls_new_high_with_initialized_registry(self, monkeypatch):
+        import main
+        from cli import new_high
+
+        registry = MagicMock(name="initialized_registry")
+        new_high_run = MagicMock(return_value={"status": "ok"})
+        monkeypatch.setattr(new_high, "run_for_post", new_high_run, raising=False)
+
+        main._run_new_high_for_post({}, "2026-07-13", registry)
+
+        new_high_run.assert_called_once_with(
+            {},
+            "2026-07-13",
+            registry=registry,
+        )
+
+    def test_helper_logs_warning_and_does_not_propagate_new_high_failure(
+        self,
+        monkeypatch,
+        caplog,
+    ):
+        import main
+        from cli import new_high
+
+        registry = MagicMock(name="initialized_registry")
+        new_high_run = MagicMock()
+        new_high_run.side_effect = RuntimeError("new-high exploded")
+        monkeypatch.setattr(new_high, "run_for_post", new_high_run, raising=False)
+
+        with caplog.at_level(logging.WARNING):
+            main._run_new_high_for_post({}, "2026-07-13", registry)
+
+        assert "new-high" in caplog.text.lower()
+        assert "new-high exploded" in caplog.text
 
 
 # ──────────────────────────────────────────────────────────────
@@ -333,6 +379,29 @@ class TestEnsureTradeCalendar:
         count = ensure_trade_calendar(conn, reg, year=2026)
         assert count == 0
         reg.call.assert_not_called()
+
+    def test_force_refreshes_covered_year_to_repair_calendar_gap(self, tmp_path):
+        from utils.trade_date import ensure_trade_calendar
+
+        conn = _make_test_db(tmp_path)
+        for m in range(1, 13):
+            for d in range(1, 22):
+                conn.execute(
+                    "INSERT OR IGNORE INTO trade_calendar (date, is_open) VALUES (?, 1)",
+                    (f"2026-{m:02d}-{d:02d}",),
+                )
+        conn.commit()
+        reg = _make_registry(
+            cal_data=[{"cal_date": "20260722", "is_open": 1}],
+        )
+
+        count = ensure_trade_calendar(conn, reg, year=2026, force=True)
+
+        assert count == 1
+        assert conn.execute(
+            "SELECT is_open FROM trade_calendar WHERE date = '2026-07-22'"
+        ).fetchone()[0] == 1
+        reg.call.assert_called_once_with("get_trade_calendar", "2026-06-15")
 
 
 class TestPrefillIsTradingDay:

@@ -56,14 +56,20 @@ def is_trade_day(date: str, *, conn: sqlite3.Connection | None = None, registry=
     return dt.weekday() < 5
 
 
-def ensure_trade_calendar(conn: sqlite3.Connection, registry, year: int | None = None) -> int:
-    """确保指定年份的交易日历已导入 DB。已存在则跳过，返回新增条数。"""
+def ensure_trade_calendar(
+    conn: sqlite3.Connection,
+    registry,
+    year: int | None = None,
+    *,
+    force: bool = False,
+) -> int:
+    """确保指定年份的交易日历已导入 DB；force 时强制刷新以修复缺口。"""
     from db import queries as Q
 
     if year is None:
         year = datetime.now().year
 
-    if Q.trade_calendar_year_covered(conn, year):
+    if not force and Q.trade_calendar_year_covered(conn, year):
         return 0
 
     date_str = f"{year}-06-15"

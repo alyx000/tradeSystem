@@ -22,22 +22,33 @@ def render_daily(record: dict, top_n: int = 10) -> str:
         "",
         "> 盘后只读统计 · 前复权口径 · 不构成买卖建议、不含价位目标、不写交易计划层。",
         "",
+    ]
+    source = record.get("source") or {}
+    status = record.get("status")
+    if status not in {None, "ok", "already_complete"}:
+        lines += [
+            "## 数据状态",
+            f"- 统计状态：{status}",
+            f"- 失败环节：{source.get('failed_source') or 'unknown'}",
+            f"- 错误：{source.get('error') or '数据未通过完整性校验'}",
+        ]
+        if status == "source_failed":
+            lines.append(
+                f"- 数据源未返回有效行情：{source.get('failed_source') or 'unknown'}"
+            )
+        violations = source.get("coverage_violations") or []
+        if violations:
+            lines.append(f"- 完整性门禁：{', '.join(violations)}")
+        lines.append("- 未生成正常新高统计。")
+        return "\n".join(lines).rstrip() + "\n"
+
+    lines += [
         "## 概览",
         f"- 当日有效行情股票数：{record.get('market_count', 0)}",
         f"- 创前复权历史新高：{record.get('new_high_count', 0)}",
         f"- 报告展示：每行业 Top {top_n}，完整明细见 JSON/数据库。",
         "",
     ]
-    source = record.get("source") or {}
-    if record.get("status") == "source_failed":
-        lines += [
-            "## 数据状态",
-            f"- 数据源未返回有效行情：{source.get('failed_source') or 'unknown'}",
-            f"- 来源：{source.get('quote_source') or source.get('adj_factor_source') or '—'}",
-            f"- 错误：{source.get('error') or '空数据'}",
-            "- 未生成正常新高统计。",
-        ]
-        return "\n".join(lines).rstrip() + "\n"
 
     if source:
         lines += [

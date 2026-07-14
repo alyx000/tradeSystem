@@ -135,7 +135,7 @@ done
 
 ## 前复权历史新高统计（new-high）
 
-首版**不挂定时、不默认推送**。用于只读统计 A 股全市场创前复权历史新高个股数，按申万二级行业分组，并将完整结果落 SQLite：历史水位表 `stock_adjusted_high_watermark`，每日快照表 `daily_new_high_stats`。报告每个行业默认只展示 Top10，完整明细保留在 SQLite/JSON，方便后续 CLI/API/Web 读取。
+生产入口随 `main.py post` / `cmd_post` 在工作日 20:00 执行，复用 `today-post` 单一调度，不挂独立 launchd、不进 APScheduler，也不自动推送。任务统计 A 股全市场创前复权历史新高个股数，按申万二级行业分组；生产入口只写历史水位表 `stock_adjusted_high_watermark`、每日快照表 `daily_new_high_stats`，以及仓库根 `data/reports/new-high/` 的目标日 MD/JSON。报告每个行业默认只展示 Top10，完整明细保留在 SQLite/JSON，方便后续 CLI/API/Web 读取。
 
 ```bash
 make new-high-daily          # = python3 main.py new-high daily（落库 + 本地 MD/JSON，不推送）
@@ -151,8 +151,11 @@ python3 main.py new-high backfill --start-date 2021-07-08 --end-date 2026-07-08
 ```
 
 - **口径**：当日 `high * adj_factor` 严格大于该股票截至昨日历史最大 `high * adj_factor`，计为创前复权历史新高；首日新股/首次出现股票只初始化水位，不计新高。
-- **回填用途**：`backfill` 不是为了推送历史报告，而是为了先建立“截至昨日”的历史前复权高点基准；未回填直接跑 `daily` 只能初始化水位，不能宣称完整全历史口径。
-- **运行语义**：`daily` 默认落库并写 `data/reports/new-high/YYYY-MM-DD.{md,json}`，不推送；`--push` 才推钉钉；`--dry-run` 不落库、不落报告、不推送；`trend` 只读；`backfill` 永不推送。
+- **回填用途**：`backfill` 不是为了推送历史报告，而是为了先建立“截至昨日”的历史前复权高点基准；空库直接跑持久化 `daily` 会返回 `baseline_missing`，`--dry-run` 也只会在内存中把首次出现股票视为初始化，均不能宣称完整全历史口径。
+- **生产门禁与补缺**：仅当 schema 完整、`daily_new_high_stats` 与 `stock_adjusted_high_watermark` 的尾日基线都存在且相等，并且基线尾日后至目标日的每个自然日都在完整 `trade_calendar` 中时才运行；按开放日升序补缺。申万行业源必须成功且非空；每个候选日必须同时满足：行情/复权代码无重复、有效行情与复权 join 100%、有效行情数≥4000、行情唯一代码/复权宇宙覆盖率≥95%、行情代码/申万二级覆盖率≥99%、相邻 canonical 日市场数比率在 98%～102%；否则返回 `source_failed` 或 `coverage_failed`，两表均不推进。
+- **事务、不可变与续跑**：canonical 日只允许追加，已有日期直接 `already_complete`；每个交易日的两表写入处于同一事务，`BEGIN IMMEDIATE` 后二次查重并复核 stats/watermark 尾日 CAS。采集期间尾日变化则不写、重新规划下一开放日；成功前缀保留，失败日停止，下一次从失败日续跑。watermark 另有 `last_seen_date` 不回退的防御门。
+- **报告与隔离**：生产成功仅写目标日 MD/JSON，不自动推钉钉；两份内容先完成序列化，再各自通过同目录临时文件 + 原子替换落盘。`already_complete` 保留与 canonical 记录一致的有效文件，自动修复缺失、空白、非法 JSON、日期/计数错位或正文不一致的文件。new-high 失败日志保留成功前缀、失败日、失败源与错误摘要，且不影响 `cmd_post` 主流程及后续 margin 任务。
+- **手工运行语义**：持久化 `daily` 复用与生产相同的连续补缺协调器，不允许跨开放日跳写；`backfill` 强制刷新范围内各年份交易日历以修复已有年份缺口，休市日不调用行情源，已有 canonical 日期只跳过，新后缀按开放日升序追加；若请求范围跳过当前尾日后的任一开放日则 `historical_gap` 且不写入，开放日来源失败也立即停止。当前 schema 没有逐日全量水位快照，因此不支持用当前/未来水位原地重算历史日；任意历史更正必须从目标日前可信 checkpoint 重建整个后缀。`daily` 默认落库并写 `data/reports/new-high/YYYY-MM-DD.{md,json}`，显式 `--push` 才推钉钉，`--dry-run` 不落库、不落报告、不推送；`trend` 只读，`backfill` 永不推送。
 - **守红线**：全 [事实] 统计，不出价位目标、不做买卖建议、不写交易计划层、不入关注池。
 - **依赖 env**：`TUSHARE_TOKEN`（全市场 `daily` + `adj_factor` + 申万行业映射）；钉钉 env 仅在显式 `--push` 时需要。
 

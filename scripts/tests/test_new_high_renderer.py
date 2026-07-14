@@ -63,3 +63,27 @@ def test_renderer_source_failed_does_not_claim_zero_new_highs():
 
     assert "数据源未返回有效行情" in md
     assert "当日无创前复权历史新高个股" not in md
+
+
+def test_renderer_coverage_failed_is_an_explicit_failure_not_zero_new_highs():
+    record = {
+        "status": "coverage_failed",
+        "date": "2026-07-08",
+        "market_count": 10,
+        "new_high_count": 0,
+        "sector_summary": [],
+        "stocks": [],
+        "source": {
+            "failed_source": "coverage_guard",
+            "error": "全市场数据完整性门禁未通过",
+            "coverage_violations": ["market_count_below_absolute_minimum"],
+        },
+    }
+
+    md = renderer.render_daily(record, top_n=10)
+
+    assert "统计状态：coverage_failed" in md
+    assert "全市场数据完整性门禁未通过" in md
+    assert "未生成正常新高统计" in md
+    assert "当日有效行情股票数" not in md
+    assert "当日无创前复权历史新高个股" not in md

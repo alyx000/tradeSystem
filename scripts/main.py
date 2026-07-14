@@ -912,6 +912,16 @@ def cmd_pre(config: dict, target_date: str):
         multi.send_report("pre_market", f"盘前简报 {target_date}", md_text)
 
 
+def _run_new_high_for_post(config: dict, target_date: str, registry) -> None:
+    """在 ingest 后运行 new-high 派生任务，异常不影响 cmd_post。"""
+    try:
+        from cli import new_high
+
+        new_high.run_for_post(config, target_date, registry=registry)
+    except Exception as e:
+        logger.warning("new-high 盘后生产失败（不影响主流程）：%s", e)
+
+
 def cmd_post(config: dict, target_date: str):
     """执行盘后报告：先晚间任务（溢价/关注池/复盘 Obsidian），再全日盘后采集与推送。"""
     cmd_evening(config, target_date)
@@ -1060,6 +1070,9 @@ def cmd_post(config: dict, target_date: str):
                 logger.info(f"IngestService {stage} 完成：成功 {ok} / 空结果 {empty} / 失败 {failed}（共 {total}）")
     except Exception as e:
         logger.warning(f"IngestService 快照采集失败（不影响主流程）：{e}")
+
+    # new-high 只维护本地派生事实层与目标日报告，不推送；失败与主盘后流程隔离。
+    _run_new_high_for_post(config, target_date, registry)
 
     # 折进盘后采集：两融余额×指数联动监控（不单独挂 launchd；cmd_post 工作日 20:00 触发，
     # 两融多为 T-1，报告标注 stale）。run_for_post 自带 without_standard_http_proxy + provider
