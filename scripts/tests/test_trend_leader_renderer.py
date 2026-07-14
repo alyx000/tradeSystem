@@ -97,17 +97,18 @@ def test_render_daily_llm_failure_explains_closed_branch(conn):
     assert "LLM调用失败，概念分支已关闭（原因：startup_failed）" in md
 
 
-def test_render_daily_distinguishes_invalid_llm_output(conn):
+@pytest.mark.parametrize("reason", ["invalid_output", "parse_failed"])
+def test_render_daily_distinguishes_invalid_llm_output(conn, reason):
     md = renderer.render_daily(conn, _summary(
         main_line="hybrid",
         mainline_llm={
             "enabled": True,
             "status": "fallback_l2",
-            "reason": "invalid_output",
+            "reason": reason,
             "accepted_concepts": [],
         },
     ))
-    assert "LLM输出非法，概念分支已关闭（原因：invalid_output）" in md
+    assert f"LLM输出非法，概念分支已关闭（原因：{reason}）" in md
     assert "LLM调用失败" not in md
 
 
