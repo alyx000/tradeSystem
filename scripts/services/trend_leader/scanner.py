@@ -1,7 +1,8 @@
 """趋势主升漏斗编排（盘后 EOD 只读扫描 → 持久化观察池）。
 
 数据流：涨停列表(get_limit_up_list) → 映射申万二级(get_stock_sw_industry_map)
-→ ∩ 主线池(daily_volume_concentration Top-K ∪ --sectors) → 拉区间 OHLCV(get_stock_daily_range)
+→ ∩ 主线池(daily_volume_concentration 近 3 个有效快照稳定 Top-K ∪ --sectors)
+→ 拉区间 OHLCV(get_stock_daily_range)
 → 检测器 → 入池/维护/退池(pool)。
 
 两遍：
@@ -35,18 +36,72 @@ def _lookback_start(date: str) -> str:
     return (datetime.strptime(date, "%Y-%m-%d") - timedelta(days=C.RANGE_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
 
 
-def _main_sectors(conn: sqlite3.Connection, date: str, top_k: int, sectors) -> tuple[set, bool]:
-    """主线池 = 当日成交额集中度 Top-K 申万二级 ∪ 手工 --sectors；当日缺失回退最近一日（走 vc_repo）。"""
-    rec = vc_repo.get_concentration(conn, date)
-    degraded = False
-    if rec is None:
-        degraded = True
-        recent = vc_repo.get_recent_concentration(conn, date, 1)  # <= date 的最近一条
-        rec = recent[-1] if recent else None
-    auto = []
-    if rec and rec.get("sector_summary"):
-        auto = [s["industry"] for s in rec["sector_summary"] if s.get("industry") != UNCLASSIFIED][:top_k]
-    return set(auto) | set(sectors or []), degraded
+def _ranked_sectors(record: dict | None, top_k: int) -> list[str]:
+    """从集中度快照按原排名取非空、非未分类且去重的申万二级 Top-K。"""
+    ranked: list[str] = []
+    for row in (record or {}).get("sector_summary") or []:
+        if not isinstance(row, dict):
+            continue
+        industry = row.get("industry")
+        if not industry or industry == UNCLASSIFIED or industry in ranked:
+            continue
+        ranked.append(industry)
+        if len(ranked) >= top_k:
+            break
+    return ranked
+
+
+def _recent_valid_sector_snapshots(
+    conn: sqlite3.Connection, end_date: str, top_k: int, limit: int,
+) -> list[dict]:
+    """向前取最近 limit 条有效集中度快照，最新在前；空/全未分类记录不占窗口。"""
+    cursor = end_date
+    valid: list[dict] = []
+    seen_dates: set[str] = set()
+    while len(valid) < limit:
+        recent = vc_repo.get_recent_concentration(conn, cursor, 1)
+        if not recent:
+            break
+        record = recent[-1]
+        record_date = record.get("date")
+        if not record_date or record_date in seen_dates:
+            break
+        seen_dates.add(record_date)
+        if _ranked_sectors(record, top_k):
+            valid.append(record)
+        try:
+            cursor = (datetime.strptime(record_date, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
+        except (TypeError, ValueError):
+            break
+    return valid
+
+
+def _main_sectors(
+    conn: sqlite3.Connection, date: str, top_k: int, sectors,
+) -> tuple[list[str], dict]:
+    """稳定申万主线 + 手工覆盖，并返回来源/窗口元数据。"""
+    history = _recent_valid_sector_snapshots(
+        conn, date, top_k, C.MAIN_SECTOR_LOOKBACK_RECORDS)
+    source = history[0] if history else None
+    current = _ranked_sectors(source, top_k)
+    required_hits = C.MAIN_SECTOR_MIN_HITS if len(history) >= 2 else 1
+    hit_counts = {
+        name: sum(name in _ranked_sectors(item, top_k) for item in history)
+        for name in current
+    }
+    result = [name for name in current if hit_counts[name] >= required_hits]
+    for name in sectors or []:
+        if name and name not in result:
+            result.append(name)
+
+    source_date = source.get("date") if source else None
+    status = "exact" if source_date == date else "fallback" if source else "missing"
+    return result, {
+        "status": status,
+        "source_date": source_date,
+        "snapshot_count": len(history),
+        "required_hits": required_hits,
+    }
 
 
 def _bars(registry, code: str, start: str, date: str) -> list[dict]:
@@ -101,7 +156,8 @@ def run_daily(conn: sqlite3.Connection, registry, date: str, *,
               sectors=None, top_k: int = C.DEFAULT_TOP_K_SECTORS, range_start: str | None = None,
               main_line: str = "hybrid", top_concepts: int = C.DEFAULT_TOP_CONCEPTS,
               mainline_llm_runner=None) -> dict:
-    main_sectors, degraded = _main_sectors(conn, date, top_k, sectors)
+    main_sector_list, main_sector_meta = _main_sectors(conn, date, top_k, sectors)
+    main_sectors = set(main_sector_list)
     start = range_start or _lookback_start(date)
 
     lu = registry.call("get_limit_up_list", date)
@@ -175,7 +231,7 @@ def run_daily(conn: sqlite3.Connection, registry, date: str, *,
         llm_candidates = _llm_candidate_facts(candidate_map, sw_map, sw_by_bare, concept_map)
         main_concepts, mainline_llm_meta = mainline_llm.filter_concepts(
             date=date,
-            main_sectors=main_sectors,
+            main_sectors=main_sector_list,
             main_concepts=main_concepts,
             candidates=llm_candidates,
             runner=mainline_llm_runner,
@@ -204,10 +260,15 @@ def run_daily(conn: sqlite3.Connection, registry, date: str, *,
         source_errors.append("mainline_llm")
 
     summary = {
-        "date": date, "limit_up": len(limit_stocks), "main_sectors": sorted(main_sectors),
+        "date": date, "limit_up": len(limit_stocks), "main_sectors": main_sector_list,
+        "main_sector_window": C.MAIN_SECTOR_LOOKBACK_RECORDS,
+        "main_sector_required_hits": main_sector_meta["required_hits"],
+        "main_sector_snapshot_count": main_sector_meta["snapshot_count"],
+        "main_sector_source_date": main_sector_meta["source_date"],
+        "main_sector_status": main_sector_meta["status"],
         "main_concepts": sorted(main_concepts), "main_line": main_line,
         "mainline_llm": mainline_llm_meta,
-        "degraded_main": degraded, "candidates": 0,
+        "degraded_main": main_sector_meta["status"] != "exact", "candidates": 0,
         "entered": [], "refreshed": [], "exited": [], "in_pool_signals": [],
         "data_errors": [], "source_errors": source_errors,
     }

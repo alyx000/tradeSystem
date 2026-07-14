@@ -84,6 +84,97 @@ def _seed_concentration(conn, date, industries):
     conn.commit()
 
 
+# ---- 申万二级稳定主线 ----
+
+def test_main_sectors_requires_two_hits_and_preserves_target_order(conn):
+    _seed_concentration(conn, "2026-07-10", ["半导体", "通信设备", "元件", "光学光电子", "电池"])
+    _seed_concentration(conn, "2026-07-13", ["通信设备", "半导体", "光学光电子", "元件", "消费电子"])
+    _seed_concentration(conn, "2026-07-14", ["半导体", "通信设备", "元件", "光学光电子", "IT服务Ⅱ"])
+
+    sectors, meta = scanner._main_sectors(conn, "2026-07-14", top_k=5, sectors=None)
+
+    assert sectors == ["半导体", "通信设备", "元件", "光学光电子"]
+    assert meta == {
+        "status": "exact",
+        "source_date": "2026-07-14",
+        "snapshot_count": 3,
+        "required_hits": 2,
+    }
+
+    overridden, _ = scanner._main_sectors(
+        conn, "2026-07-14", top_k=5, sectors=["IT服务Ⅱ"])
+    assert overridden == ["半导体", "通信设备", "元件", "光学光电子", "IT服务Ⅱ"]
+
+
+def test_main_sectors_exactly_two_snapshots_still_requires_two_hits(conn):
+    _seed_concentration(conn, "2026-07-13", ["半导体", "通信设备"])
+    _seed_concentration(conn, "2026-07-14", ["半导体", "IT服务Ⅱ"])
+
+    sectors, meta = scanner._main_sectors(conn, "2026-07-14", top_k=2, sectors=None)
+
+    assert sectors == ["半导体"]
+    assert meta["snapshot_count"] == 2
+    assert meta["required_hits"] == 2
+
+
+def test_main_sectors_single_snapshot_keeps_rank_and_manual_order(conn):
+    _seed_concentration(conn, "2026-07-14", ["半导体", "IT服务Ⅱ"])
+
+    sectors, meta = scanner._main_sectors(
+        conn, "2026-07-14", top_k=2,
+        sectors=["IT服务Ⅱ", "软件开发", "软件开发"],
+    )
+
+    assert sectors == ["半导体", "IT服务Ⅱ", "软件开发"]
+    assert meta["snapshot_count"] == 1
+    assert meta["required_hits"] == 1
+
+
+def test_main_sectors_skips_empty_and_unclassified_snapshots(conn):
+    _seed_concentration(conn, "2026-07-09", ["半导体", "通信设备"])
+    _seed_concentration(conn, "2026-07-10", ["半导体", "元件"])
+    _seed_concentration(conn, "2026-07-11", [])
+    _seed_concentration(conn, "2026-07-12", [UNCLASSIFIED])
+    _seed_concentration(conn, "2026-07-13", ["半导体", "光学光电子"])
+
+    sectors, meta = scanner._main_sectors(conn, "2026-07-13", top_k=2, sectors=None)
+
+    assert sectors == ["半导体"]
+    assert meta["snapshot_count"] == 3
+    assert meta["source_date"] == "2026-07-13"
+
+
+def test_main_sectors_invalid_target_falls_back_to_latest_valid_snapshot(conn):
+    _seed_concentration(conn, "2026-07-13", ["通信设备", "半导体"])
+    _seed_concentration(conn, "2026-07-14", [UNCLASSIFIED])
+
+    sectors, meta = scanner._main_sectors(conn, "2026-07-14", top_k=2, sectors=None)
+
+    assert sectors == ["通信设备", "半导体"]
+    assert meta == {
+        "status": "fallback",
+        "source_date": "2026-07-13",
+        "snapshot_count": 1,
+        "required_hits": 1,
+    }
+
+
+def test_main_sectors_missing_keeps_only_manual_overrides(conn):
+    _seed_concentration(conn, "2026-07-13", [])
+    _seed_concentration(conn, "2026-07-14", [UNCLASSIFIED])
+
+    sectors, meta = scanner._main_sectors(
+        conn, "2026-07-14", top_k=5, sectors=["IT服务Ⅱ", "IT服务Ⅱ"])
+
+    assert sectors == ["IT服务Ⅱ"]
+    assert meta == {
+        "status": "missing",
+        "source_date": None,
+        "snapshot_count": 0,
+        "required_hits": 1,
+    }
+
+
 # ---- _main_concepts ----
 
 def test_main_concepts_ranks_by_net_amount():

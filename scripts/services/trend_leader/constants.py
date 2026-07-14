@@ -29,6 +29,8 @@ MIN_BARS_FOR_SIGNAL = 10
 # 漏斗扫描参数（scanner）
 RANGE_LOOKBACK_DAYS = 90        # 拉区间日线的自然日跨度（保证 ≥60 交易日供首次涨停/缓涨判定）
 DEFAULT_TOP_K_SECTORS = 5       # 主线池默认取成交额集中度 Top-K 申万二级
+MAIN_SECTOR_LOOKBACK_RECORDS = 3  # 自动申万主线最多观察最近 3 个有效集中度快照
+MAIN_SECTOR_MIN_HITS = 2          # 有 2+ 个有效快照时，目标板块至少命中 2 次
 DEFAULT_TOP_CONCEPTS = 8        # 概念分支(main_line=l2+concept)取资金净流入 Top-M；初值待月度验证校准
 CONCEPT_PREFETCH_MIN = 40       # trend-leader 只查资金流靠前概念成员，避免 ths_member 全量扫
 CONCEPT_PREFETCH_MULTIPLIER = 5 # 预取窗口= max(40, Top-M*5)，给容器/缺成员概念留过滤余量
