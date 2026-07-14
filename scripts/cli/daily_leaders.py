@@ -7,6 +7,19 @@ import sys
 
 from db.connection import get_connection
 from services.daily_leaders import renderer, service
+from services.daily_leaders.models import MAX_CONFIRMATION_CANDIDATES
+
+
+def _candidate_limit(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("--max-candidates 必须是整数") from exc
+    if not 1 <= parsed <= MAX_CONFIRMATION_CANDIDATES:
+        raise argparse.ArgumentTypeError(
+            f"--max-candidates 必须在 1 到 {MAX_CONFIRMATION_CANDIDATES} 之间"
+        )
+    return parsed
 
 
 def register_subparser(subparsers: argparse._SubParsersAction) -> None:
@@ -17,7 +30,12 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
     propose.add_argument("--date", default=None, help="交易日 YYYY-MM-DD（默认今天）")
     propose.add_argument("--push", action="store_true", help="生成后推送钉钉")
     propose.add_argument("--no-llm", action="store_true", help="跳过 LLM 辅助理由")
-    propose.add_argument("--max-candidates", type=int, default=30, help="确认稿最多保留候选数（默认 30）")
+    propose.add_argument(
+        "--max-candidates",
+        type=_candidate_limit,
+        default=MAX_CONFIRMATION_CANDIDATES,
+        help=f"确认稿最多保留候选数（1 到 {MAX_CONFIRMATION_CANDIDATES}，默认 {MAX_CONFIRMATION_CANDIDATES}）",
+    )
 
     confirm = sub.add_parser("confirm", help="确认写入复盘第5步并同步最票跟踪")
     confirm.add_argument("--date", required=True, help="交易日 YYYY-MM-DD")
