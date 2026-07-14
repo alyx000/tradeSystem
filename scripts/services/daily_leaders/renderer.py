@@ -171,7 +171,8 @@ def _has_verified_role_aware_metadata(proposal: dict[str, Any], leaders: Any) ->
 
 def render_markdown(proposal: dict[str, Any]) -> str:
     date = _text(proposal.get("date")).strip() or "未注明日期"
-    leaders = proposal.get("top_leaders") or []
+    raw_leaders = proposal.get("top_leaders")
+    leaders = raw_leaders if isinstance(raw_leaders, list) else []
 
     lines = [
         f"# 每日最票候选确认稿 · {date}",
@@ -182,7 +183,7 @@ def render_markdown(proposal: dict[str, Any]) -> str:
     if llm_status and not llm_status.get("ok"):
         raw_reason = _text(llm_status.get("reason")).strip()
         reason = raw_reason if raw_reason in KNOWN_LLM_FAILURE_REASONS else "unknown_error"
-        verified_metadata = _has_verified_role_aware_metadata(proposal, leaders)
+        verified_metadata = _has_verified_role_aware_metadata(proposal, raw_leaders)
         suffix = (
             "已按确定性板块/属性规则兜底收敛，仍需人工确认。"
             if verified_metadata

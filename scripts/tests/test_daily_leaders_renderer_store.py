@@ -1423,6 +1423,30 @@ def test_render_markdown_claims_fallback_only_for_verified_new_proposal():
     )
 
 
+def test_render_markdown_does_not_normalize_invalid_leader_container_to_empty():
+    proposal = _verified_new_proposal()
+    proposal["top_leaders"] = None
+    proposal["llm_status"] = {"ok": False, "reason": "timeout"}
+    proposal["candidate_limit"].update(
+        {
+            "original_count": 0,
+            "deduped_count": 0,
+            "duplicate_trimmed_count": 0,
+            "trimmed_count": 0,
+            "review_pool_count": 0,
+            "review_pool_trimmed_count": 0,
+            "sector_role_trimmed_count": 0,
+            "stock_duplicate_trimmed_count": 0,
+            "final_count": 0,
+        }
+    )
+
+    md = render_markdown(proposal)
+
+    assert "旧候选稿未验证新收敛规则，需人工复核" in md
+    assert "已按确定性板块/属性规则兜底收敛" not in md
+
+
 def test_render_markdown_claims_fallback_when_verified_board_type_is_missing():
     proposal = _verified_new_proposal()
     proposal["llm_status"] = {"ok": False, "reason": "timeout"}
