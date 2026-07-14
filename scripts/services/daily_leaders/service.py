@@ -2,20 +2,36 @@ from __future__ import annotations
 
 import copy
 import json
+import math
+import re
 from pathlib import Path
 from typing import Any
 
 from db import queries as Q
 from services.daily_leaders.candidates import build_candidates
-from services.daily_leaders.llm import LEADER_ATTRIBUTE_ROLES, enrich_with_llm_reason
+from services.daily_leaders.llm import enrich_with_llm_reason
+from services.daily_leaders.models import (
+    LEADER_ROLES,
+    MAX_CONFIRMATION_CANDIDATES,
+    MAX_LLM_REVIEW_CANDIDATES,
+    STATUS_ROLES,
+)
+from services.daily_leaders.selection import (
+    assign_fallback_roles,
+    prepare_llm_review_pool,
+    select_confirmation_candidates,
+    stock_identity_key,
+)
 from services.daily_leaders.store import _safe_date, read_proposal, write_proposal
 from services.review_leaders import build_review_with_step5, sync_leader_tracking_from_step5
 from services.trinity_factor.cycle import invalidate_factor_decision
 from services.trinity_factor.review_input import parse_review_step
 
 
-DEFAULT_MAX_CONFIRMATION_CANDIDATES = 30
+DEFAULT_MAX_CONFIRMATION_CANDIDATES = MAX_CONFIRMATION_CANDIDATES
 DEFAULT_MIN_CONFIRMATION_AMOUNT_YI = 20.0
+
+_A_SHARE_CODE_RE = re.compile(r"^(\d{6})(?:\.(?:SH|SZ|BJ))?$", re.IGNORECASE)
 
 
 def _active_history(conn) -> list[dict[str, Any]]:
@@ -26,13 +42,77 @@ def _active_history(conn) -> list[dict[str, Any]]:
 
 
 def _amount_to_yi(value: Any) -> float | None:
+    if value is None or value == "" or isinstance(value, bool):
+        return None
     try:
         amount = float(value)
     except (TypeError, ValueError):
         return None
-    if abs(amount) >= 1_000_000:
-        return round(amount / 1e5, 2)
-    return round(amount, 2)
+    if not math.isfinite(amount):
+        return None
+    return round(amount / 1e5, 2)
+
+
+def _code_keys(value: Any) -> tuple[str, ...]:
+    full = "".join(str(value or "").split()).upper()
+    if not full:
+        return ()
+    bare = full.split(".", 1)[0]
+    return (full,) if bare == full else (full, bare)
+
+
+def _canonical_a_share_code(value: Any) -> str:
+    normalized = "".join(str(value or "").split()).upper()
+    match = _A_SHARE_CODE_RE.fullmatch(normalized)
+    return match.group(1) if match else ""
+
+
+def _name_key(value: Any) -> str:
+    return "".join(str(value or "").split()).upper()
+
+
+def _section_rows(value: Any) -> list[dict[str, Any]]:
+    if isinstance(value, dict):
+        value = value.get("data")
+    if not isinstance(value, list):
+        return []
+    return [row for row in value if isinstance(row, dict)]
+
+
+def _limit_height_indexes(market: dict[str, Any]) -> tuple[dict[str, int], dict[str, int]]:
+    by_code: dict[str, int] = {}
+    by_name: dict[str, int] = {}
+    codes_by_name: dict[str, set[str]] = {}
+    for row in _section_rows(market.get("limit_step")):
+        name = _name_key(row.get("name") or row.get("stock_name"))
+        canonical_code = _canonical_a_share_code(
+            row.get("ts_code") or row.get("code")
+        )
+        if name and canonical_code:
+            codes_by_name.setdefault(name, set()).add(canonical_code)
+        raw_height = row.get("nums")
+        if raw_height in (None, "") or isinstance(raw_height, bool):
+            continue
+        try:
+            numeric_height = float(raw_height)
+        except (TypeError, ValueError):
+            continue
+        if (
+            not math.isfinite(numeric_height)
+            or numeric_height < 0
+            or not numeric_height.is_integer()
+        ):
+            continue
+        height = int(numeric_height)
+        if canonical_code:
+            for key in _code_keys(row.get("ts_code") or row.get("code")):
+                by_code[key] = max(by_code.get(key, 0), height)
+        if name:
+            by_name[name] = max(by_name.get(name, 0), height)
+    for name, codes in codes_by_name.items():
+        if len(codes) > 1:
+            by_name.pop(name, None)
+    return by_code, by_name
 
 
 def attach_market_quotes(
@@ -55,86 +135,139 @@ def attach_market_quotes(
     initializer = getattr(registry, "initialize_all", None)
     if callable(initializer):
         initializer()
+    result = None
+    quote_error = ""
     try:
         result = registry.call("get_market_daily_quotes", date)
     except Exception as exc:  # noqa: BLE001 - quote enrichment is non-critical evidence.
-        market["stock_quotes"] = {"data": [], "error": str(exc)}
-        return out
-    if not getattr(result, "success", False):
-        market["stock_quotes"] = {"data": [], "error": str(getattr(result, "error", "") or "quote_fetch_failed")}
-        return out
+        quote_error = str(exc)
+    quote_success = bool(getattr(result, "success", False))
+    if not quote_success:
+        quote_error = quote_error or str(
+            getattr(result, "error", "") or "quote_fetch_failed"
+        )
+        market["stock_quotes"] = {"data": [], "error": quote_error}
     name_by_code: dict[str, str] = {}
+    if quote_success:
+        try:
+            basic_result = registry.call("get_stock_basic_list", date)
+            if getattr(basic_result, "success", False):
+                for row in getattr(basic_result, "data", None) or []:
+                    if not isinstance(row, dict):
+                        continue
+                    code = str(row.get("ts_code") or row.get("code") or "").strip().upper()
+                    name = str(row.get("name") or row.get("stock_name") or "").strip()
+                    if code and name:
+                        for key in _code_keys(code):
+                            name_by_code[key] = name
+        except Exception:
+            name_by_code = {}
+
+    industry_by_code: dict[str, dict[str, Any]] = {}
+    industry_source = ""
+    industry_status = "source_failed"
+    industry_error = ""
     try:
-        basic_result = registry.call("get_stock_basic_list", date)
-        if getattr(basic_result, "success", False):
-            for row in getattr(basic_result, "data", None) or []:
-                if not isinstance(row, dict):
+        industry_result = registry.call("get_stock_sw_industry_map")
+        industry_source = str(
+            getattr(industry_result, "source", "") or "tushare:index_member_all"
+        )
+        if getattr(industry_result, "success", False) and isinstance(
+            getattr(industry_result, "data", None), dict
+        ):
+            for raw_code, entry in industry_result.data.items():
+                if not isinstance(entry, dict):
                     continue
-                code = str(row.get("ts_code") or row.get("code") or "").strip().upper()
-                name = str(row.get("name") or row.get("stock_name") or "").strip()
-                if code and name:
-                    name_by_code[code] = name
-    except Exception:
-        name_by_code = {}
+                for key in _code_keys(raw_code):
+                    industry_by_code[key] = entry
+            industry_status = "success"
+        else:
+            industry_error = str(
+                getattr(industry_result, "error", "") or "industry_map_fetch_failed"
+            )
+    except Exception as exc:  # noqa: BLE001 - industry mapping is best-effort evidence.
+        industry_error = str(exc)
+    market["stock_industry_map"] = {
+        "status": industry_status,
+        "source": industry_source,
+        "error": industry_error,
+    }
+    if not quote_success:
+        return out
+
+    limit_by_code, limit_by_name = _limit_height_indexes(market)
     rows = []
     for row in getattr(result, "data", None) or []:
         if not isinstance(row, dict):
             continue
         code = str(row.get("ts_code") or row.get("code") or "").strip()
-        name = str(row.get("name") or row.get("stock_name") or name_by_code.get(code.upper(), "")).strip()
+        code_keys = _code_keys(code)
+        industry_entry = next(
+            (industry_by_code[key] for key in code_keys if key in industry_by_code),
+            {},
+        )
+        name = str(
+            row.get("name")
+            or row.get("stock_name")
+            or next((name_by_code[key] for key in code_keys if key in name_by_code), "")
+            or industry_entry.get("name")
+            or ""
+        ).strip()
         if not name and not code:
             continue
-        rows.append({
+        sw_l2 = str(industry_entry.get("sw_l2") or "").strip()
+        if _canonical_a_share_code(code):
+            limit_heights = [
+                limit_by_code[key] for key in code_keys if key in limit_by_code
+            ]
+        else:
+            name_key = _name_key(name)
+            limit_heights = (
+                [limit_by_name[name_key]] if name_key in limit_by_name else []
+            )
+        quote_row = {
             "code": code,
             "name": name,
             "pct_chg": row.get("pct_chg"),
             "amount_yi": _amount_to_yi(row.get("amount")),
-        })
+            "sw_l2": sw_l2,
+            "sector_source": industry_source if sw_l2 else "",
+        }
+        if limit_heights:
+            quote_row["limit_height"] = max(limit_heights)
+        rows.append(quote_row)
     market["stock_quotes"] = {"data": rows}
     return out
 
 
-def _limit_confirmation_candidates(
-    proposal: dict[str, Any],
-    max_candidates: int = DEFAULT_MAX_CONFIRMATION_CANDIDATES,
-) -> dict[str, Any]:
-    limit = int(max_candidates)
-    if limit <= 0:
-        raise ValueError("max_candidates must be a positive integer")
-
-    leaders = proposal.get("top_leaders") or []
-    if not isinstance(leaders, list):
-        return proposal
-    original_count = len(leaders)
-    unique_leaders = _dedupe_confirmation_candidates_by_stock(leaders)
-    duplicate_trimmed_count = original_count - len(unique_leaders)
-    proposal["top_leaders"] = unique_leaders[:limit]
-    proposal["candidate_limit"] = {
-        "max_candidates": limit,
-        "original_count": original_count,
-        "deduped_count": len(unique_leaders),
-        "duplicate_trimmed_count": max(0, duplicate_trimmed_count),
-        "trimmed_count": max(0, original_count - len(proposal["top_leaders"])),
-    }
-    return proposal
+def _validate_max_candidates(value: Any) -> int:
+    if type(value) is not int:
+        raise ValueError("max_candidates must be between 1 and 15")
+    limit = value
+    if not 1 <= limit <= MAX_CONFIRMATION_CANDIDATES:
+        raise ValueError("max_candidates must be between 1 and 15")
+    return limit
 
 
-def _confirmation_stock_key(item: dict[str, Any]) -> str:
-    return "".join(str(item.get("stock") or "").split()).upper()
+def _without_internal_fields(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {key: value for key, value in item.items() if not key.startswith("_")}
+        for item in items
+    ]
 
 
-def _dedupe_confirmation_candidates_by_stock(leaders: list[Any]) -> list[dict[str, Any]]:
+def _raw_stock_counts(items: list[dict[str, Any]]) -> tuple[int, int]:
     seen: set[str] = set()
-    out: list[dict[str, Any]] = []
-    for item in [item for item in leaders if isinstance(item, dict)]:
-        key = _confirmation_stock_key(item)
+    duplicate_count = 0
+    for item in items:
+        key = stock_identity_key(item)
         if not key:
             continue
         if key in seen:
-            continue
-        seen.add(key)
-        out.append(item)
-    return out
+            duplicate_count += 1
+        else:
+            seen.add(key)
+    return len(seen), duplicate_count
 
 
 def propose(
@@ -146,6 +279,7 @@ def propose(
     registry: Any | None = None,
     max_candidates: int = DEFAULT_MAX_CONFIRMATION_CANDIDATES,
 ) -> dict[str, Any]:
+    max_candidates = _validate_max_candidates(max_candidates)
     if prefill.get("is_trading_day") is False:
         proposal = {
             "date": date,
@@ -170,8 +304,48 @@ def propose(
     proposal["candidate_filters"] = {
         "min_amount_yi": DEFAULT_MIN_CONFIRMATION_AMOUNT_YI,
     }
-    proposal = enrich_with_llm_reason(proposal, enabled=not no_llm)
-    proposal = _limit_confirmation_candidates(proposal, max_candidates=max_candidates)
+    raw_items = [
+        item for item in proposal.get("top_leaders") or [] if isinstance(item, dict)
+    ]
+    original_count = len(raw_items)
+    deduped_count, duplicate_trimmed_count = _raw_stock_counts(raw_items)
+    assigned_items = assign_fallback_roles(raw_items)
+    review_pool = prepare_llm_review_pool(
+        assigned_items,
+        limit=MAX_LLM_REVIEW_CANDIDATES,
+    )
+    proposal["top_leaders"] = review_pool
+    if no_llm:
+        proposal["llm_status"] = {"ok": False, "reason": "disabled"}
+    else:
+        proposal = enrich_with_llm_reason(proposal, enabled=True)
+        if not isinstance(proposal.get("llm_status"), dict):
+            proposal["llm_status"] = {"ok": False, "reason": "missing_status"}
+
+    llm_ok = bool((proposal.get("llm_status") or {}).get("ok"))
+    selected, selection_stats = select_confirmation_candidates(
+        proposal.get("top_leaders") or [],
+        max_candidates=max_candidates,
+        llm_ok=llm_ok,
+    )
+    final_count = len(selected)
+    proposal["top_leaders"] = _without_internal_fields(selected)
+    proposal["candidate_limit"] = {
+        "max_candidates": max_candidates,
+        "original_count": original_count,
+        "deduped_count": deduped_count,
+        "duplicate_trimmed_count": duplicate_trimmed_count,
+        "trimmed_count": max(0, original_count - final_count),
+        "review_pool_count": len(review_pool),
+        "review_pool_trimmed_count": max(0, len(assigned_items) - len(review_pool)),
+        "sector_role_trimmed_count": selection_stats.get(
+            "sector_role_trimmed_count", 0
+        ),
+        "stock_duplicate_trimmed_count": selection_stats.get(
+            "stock_duplicate_trimmed_count", 0
+        ),
+        "final_count": final_count,
+    }
     paths = write_proposal(proposal, root=output_root)
     proposal["paths"] = {key: str(value) for key, value in paths.items()}
     return proposal
@@ -204,8 +378,18 @@ def _confirmed_step5_leaders(source: dict[str, Any], date: str) -> list[dict[str
         sector = sector_raw.strip()
         if not stock or not sector:
             raise ValueError(f"top_leaders[{index}] stock and sector are required")
+        leader_role = str(item.get("leader_role") or "").strip()
         llm_role = str(item.get("llm_role") or "").strip()
-        attribute_type = llm_role if llm_role in LEADER_ATTRIBUTE_ROLES else item.get("attribute_type")
+        legacy_attribute = item.get("attribute_type")
+        legacy_text = str(legacy_attribute or "").strip()
+        if leader_role in LEADER_ROLES:
+            attribute_type = leader_role
+        elif llm_role in LEADER_ROLES:
+            attribute_type = llm_role
+        elif legacy_text in STATUS_ROLES:
+            attribute_type = None
+        else:
+            attribute_type = legacy_attribute
         step5_leaders.append({
             "stock": stock,
             "sector": sector,
