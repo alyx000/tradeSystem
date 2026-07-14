@@ -65,7 +65,11 @@ def filter_concepts(
         })
         return set(), meta
 
-    parsed = _parse_result(result, concepts)
+    try:
+        parsed = _parse_result(result, concepts)
+    except Exception as exc:  # noqa: BLE001 - runner output is untrusted input.
+        logger.warning("[trend-leader] invalid mainline LLM output, concept branch closed: %s", exc)
+        parsed = None
     if parsed is None:
         meta.update({
             "status": "fallback_l2",

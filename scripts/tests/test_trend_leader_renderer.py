@@ -189,6 +189,18 @@ def test_render_daily_legacy_summary_keeps_legacy_mainline_label(conn):
     assert "已回退最近一日" in md
 
 
+def test_render_daily_legacy_llm_fallback_remains_visible(conn):
+    md = renderer.render_daily(conn, _summary(
+        main_line="hybrid",
+        mainline_llm={
+            "enabled": True,
+            "status": "fallback",
+            "accepted_concepts": ["PCB概念"],
+        },
+    ))
+    assert "LLM不可用，已回退机械概念分支（旧状态）" in md
+
+
 def test_render_daily_entered_section_lists_name_sector(conn):
     _seed(conn)
     md = renderer.render_daily(conn, _summary())

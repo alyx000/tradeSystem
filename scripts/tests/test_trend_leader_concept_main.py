@@ -368,6 +368,28 @@ def test_hybrid_llm_bad_output_closes_concept_branch(conn):
     assert "mainline_llm" in summary["source_errors"]
 
 
+def test_hybrid_llm_unserializable_dict_closes_concept_branch(conn):
+    _seed_concentration(conn, "2026-06-09", ["半导体"])
+    reg = _branch_reg("其他电子Ⅱ")
+
+    def unserializable_runner(prompt, payload):
+        return {
+            "accepted_concepts": ["PCB概念"],
+            "rejected": [],
+            "extra": set(),
+        }
+
+    summary = scanner.run_daily(
+        conn, reg, "2026-06-09", main_line="hybrid", top_concepts=5,
+        mainline_llm_runner=unserializable_runner)
+
+    assert "301628" not in summary["entered"]
+    assert summary["main_concepts"] == []
+    assert summary["mainline_llm"]["status"] == "fallback_l2"
+    assert summary["mainline_llm"]["reason"] == "invalid_output"
+    assert "mainline_llm" in summary["source_errors"]
+
+
 def test_hybrid_llm_exception_closes_concept_branch(conn):
     _seed_concentration(conn, "2026-06-09", ["半导体"])
     reg = _branch_reg("其他电子Ⅱ")
