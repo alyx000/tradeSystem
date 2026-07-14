@@ -391,6 +391,7 @@ ARCHITECTURE_COMMANDS = [
     # daily-leaders (每日最票候选:预填+趋势池+老师观点→候选稿→确认写入复盘第5步)
     ["daily-leaders", "propose"],
     ["daily-leaders", "propose", "--date", "2026-07-03", "--no-llm"],
+    ["daily-leaders", "propose", "--date", "2026-07-03", "--max-candidates", "15"],
     ["daily-leaders", "propose", "--date", "2026-07-03", "--push"],
     ["daily-leaders", "show", "--date", "2026-07-03", "--json"],
     ["daily-leaders", "confirm", "--date", "2026-07-03", "--input-by", "codex"],

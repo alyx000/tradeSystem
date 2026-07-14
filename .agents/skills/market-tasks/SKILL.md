@@ -1,7 +1,7 @@
 ---
 name: market-tasks
 description: 手动触发或自动定时执行盘前/盘后行情采集任务、微信公众号白名单归档、行业推荐推送、研报速读，并将结果摘要推送回 channel
-version: "1.5"
+version: "1.6"
 ---
 
 # Skill: 市场数据任务（盘前 / 盘后采集）
@@ -312,12 +312,13 @@ python3 main.py ma-breakout daily --json
 
 ```bash
 python3 main.py daily-leaders propose --push
-python3 main.py daily-leaders propose --date 2026-07-03 --no-llm --max-candidates 30
+python3 main.py daily-leaders propose --date 2026-07-03 --no-llm --max-candidates 15
 python3 main.py daily-leaders show --date 2026-07-03
 python3 main.py daily-leaders confirm --date 2026-07-03 --input-by codex
 ```
 
-- **口径**：汇总复盘预填候选、历史最票、当日行情强度、资金流、老师观点与认知证据，先过滤成交额低于 20 亿或缺少可验证成交额的个股，再输出候选确认稿；`--max-candidates` 控制确认稿保留候选数（默认 30）；全部标注事实/判断边界，不出价位、不给买卖建议。
+- **口径**：汇总复盘预填候选、历史最票、当日行情强度、资金流、老师观点与认知证据，先过滤成交额低于 20 亿或缺少可验证成交额的个股；个股优先按当前申万二级成分映射归板块（历史回放需注意这是扫描时当前快照），概念/资金流原板块只保留为 `source_sector` 辅助证据，未命中申万二级时统一标为「未分类」，不得把概念伪装成行业。股票身份按合法代码优先、规范名称兜底，重复名称 token 会折叠，代码/名称歧义时 fail-closed 不猜。最票属性固定为「趋势中军 / 连板核心 / 前排活跃 / 弹性前排」，`10cm / 20cm / 30cm` 作为独立板型事实；同一板块同一属性只留综合排序最好的 1 只，同一股票全局只出现一次。
+- **收敛与降级**：LLM 仅复核确定性预收敛后的最多 30 只候选；只有完整覆盖全部池内候选、没有池外股票且字段通过严格校验时才算复核成功，部分覆盖、池外 key、非法角色/排名或不安全文本均整体降级。程序最终硬约束不超过 15 只。`--max-candidates` 默认 15，只接受 `1..15` 的更小上限；LLM timeout / 非法输出 / `--no-llm` 时仍按同一板块属性规则确定性兜底，不得退回 30 条原始候选。全部标注事实/判断边界，不出价位、不给买卖建议。
 - **确认流**：v1 是钉钉 Markdown 草稿 + Codex/CLI 确认；用户确认后再执行 `confirm` 写入复盘第 5 步并同步 `leader_tracking`。钉钉按钮 callback / 直接写回属于 v2，不要当成已实现能力。
 - **调度**：`daily-leaders propose --push` 是 per-task launchd，工作日 22:30，接在 `board-break` / `trend-leader` / `ma-breakout` / `market-timing` 等盘后派生任务之后；不进 `main.py schedule`/APScheduler。
 

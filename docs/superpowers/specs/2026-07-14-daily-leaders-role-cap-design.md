@@ -61,7 +61,7 @@ flowchart LR
 
 - 命中时：`sector=sw_l2`，`sector_source=tushare:index_member_all`。
 - 未命中时：保留原预填/历史板块；纯行情候选使用 `未分类`，不得伪造行业。
-- 资金流候选原有的行业/概念名保存在 `source_sector`，作为证据展示；若能按股票名称或代码匹配申万二级，则统一用申万二级作为 `sector`。
+- 资金流候选原有的行业/概念名保存在 `source_sector`，作为证据展示；若能按股票名称或代码匹配申万二级，则统一用申万二级作为 `sector`，否则 `sector=未分类`，不得把概念名伪装成统一行业口径。
 - 申万成员映射是扫描时当前快照，不伪装成历史 as-of 数据。
 
 ### 股票身份
@@ -117,7 +117,7 @@ Prompt 只发送受控复核池，要求输出：
 }
 ```
 
-程序拒绝输入外股票、非法角色、红线词和无效排序。异常分类至少包含 `timeout`、`nonzero_exit`、`auth_required`、`quota_exhausted`、`empty_output`、`invalid_json`；`llm_status` 保存简短诊断和日志路径，不暴露长日志正文。
+程序要求映射完整覆盖受控候选池且不得出现池外股票，并拒绝非法角色、红线词、不安全 Markdown/证据伪装文本和无效排序；任一候选非法或缺失时整批确定性降级。异常分类至少包含 `timeout`、`nonzero_exit`、`auth_required`、`quota_exhausted`、`empty_output`、`invalid_json`；`llm_status` 保存简短诊断和日志路径，不暴露长日志正文。
 
 失败时报告改为：`LLM 复核未完成：[判断] timeout；已按确定性板块/属性规则兜底收敛，仍需人工确认。` 不再声称当前只是未整理的原始数据层。
 
