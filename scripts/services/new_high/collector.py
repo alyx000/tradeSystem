@@ -23,18 +23,47 @@ def collect_daily_inputs(registry, date: str) -> dict:
         }
 
     sw_res = registry.call("get_stock_sw_industry_map")
-    sw_map = sw_res.data if sw_res.success and sw_res.data else {}
-    adj_map = {
-        (x.get("ts_code") or x.get("code")): x.get("adj_factor")
-        for x in adj_res.data
-        if x.get("ts_code") or x.get("code")
-    }
+    if not sw_res.success or not sw_res.data:
+        return {
+            "status": "source_failed",
+            "failed_source": "get_stock_sw_industry_map",
+            "error": sw_res.error or "empty industry map",
+            "industry_source": sw_res.source,
+        }
+    sw_map = sw_res.data
+    adj_map = {}
+    duplicate_adj_factor_count = 0
+    invalid_adj_factor_code_count = 0
+    for item in adj_res.data:
+        code = item.get("ts_code") or item.get("code")
+        if not code:
+            invalid_adj_factor_code_count += 1
+            continue
+        if code in adj_map:
+            duplicate_adj_factor_count += 1
+            continue
+        adj_map[code] = item.get("adj_factor")
+
+    quote_by_code = {}
+    duplicate_quote_count = 0
+    invalid_quote_code_count = 0
+    for quote in quote_res.data:
+        code = quote.get("code") or quote.get("ts_code")
+        if not code:
+            invalid_quote_code_count += 1
+            continue
+        if code in quote_by_code:
+            duplicate_quote_count += 1
+            continue
+        quote_by_code[code] = quote
 
     rows = []
     adj_missing = 0
-    for q in quote_res.data:
-        code = q.get("code") or q.get("ts_code")
+    industry_mapped_count = 0
+    for code, q in quote_by_code.items():
         entry = sw_map.get(code) or {}
+        if entry.get("sw_l2"):
+            industry_mapped_count += 1
         adj_factor = adj_map.get(code)
         if adj_factor is None:
             adj_missing += 1
@@ -56,7 +85,16 @@ def collect_daily_inputs(registry, date: str) -> dict:
             "adj_factor_source": adj_res.source,
             "industry_source": sw_res.source if sw_res.success else f"sw_failed:{sw_res.error}",
             "quote_count": len(quote_res.data),
+            "quote_raw_count": len(quote_res.data),
+            "quote_unique_count": len(quote_by_code),
+            "duplicate_quote_count": duplicate_quote_count,
+            "invalid_quote_code_count": invalid_quote_code_count,
             "adj_factor_count": len(adj_map),
+            "adj_factor_raw_count": len(adj_res.data),
+            "adj_factor_unique_count": len(adj_map),
+            "duplicate_adj_factor_count": duplicate_adj_factor_count,
+            "invalid_adj_factor_code_count": invalid_adj_factor_code_count,
             "adj_factor_missing": adj_missing,
+            "industry_mapped_count": industry_mapped_count,
         },
     }

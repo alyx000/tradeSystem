@@ -4,6 +4,52 @@ import json
 import sqlite3
 
 
+_REQUIRED_TABLES = (
+    "daily_new_high_stats",
+    "stock_adjusted_high_watermark",
+    "trade_calendar",
+)
+
+
+def get_missing_required_tables(conn: sqlite3.Connection) -> list[str]:
+    """只读返回缺失的生产前置表。"""
+    placeholders = ",".join("?" for _ in _REQUIRED_TABLES)
+    rows = conn.execute(
+        f"SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ({placeholders})",
+        _REQUIRED_TABLES,
+    ).fetchall()
+    existing = {row["name"] for row in rows}
+    return [table for table in _REQUIRED_TABLES if table not in existing]
+
+
+def get_latest_stats_date(conn: sqlite3.Connection) -> str | None:
+    row = conn.execute("SELECT MAX(date) AS max_date FROM daily_new_high_stats").fetchone()
+    return row["max_date"] if row else None
+
+
+def get_latest_watermark_date(conn: sqlite3.Connection) -> str | None:
+    row = conn.execute(
+        "SELECT MAX(last_seen_date) AS max_date FROM stock_adjusted_high_watermark"
+    ).fetchone()
+    return row["max_date"] if row else None
+
+
+def get_trade_calendar_rows(
+    conn: sqlite3.Connection,
+    start_exclusive: str,
+    end_inclusive: str,
+) -> list[sqlite3.Row]:
+    return conn.execute(
+        """
+        SELECT date, is_open
+        FROM trade_calendar
+        WHERE date > ? AND date <= ?
+        ORDER BY date ASC
+        """,
+        (start_exclusive, end_inclusive),
+    ).fetchall()
+
+
 def save_daily_stats(conn: sqlite3.Connection, record: dict) -> None:
     conn.execute(
         """
@@ -11,13 +57,6 @@ def save_daily_stats(conn: sqlite3.Connection, record: dict) -> None:
             date, market_count, new_high_count, sector_summary_json,
             stocks_json, source_json, updated_at
         ) VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
-        ON CONFLICT(date) DO UPDATE SET
-            market_count = excluded.market_count,
-            new_high_count = excluded.new_high_count,
-            sector_summary_json = excluded.sector_summary_json,
-            stocks_json = excluded.stocks_json,
-            source_json = excluded.source_json,
-            updated_at = excluded.updated_at
         """,
         (
             record["date"],
@@ -30,7 +69,6 @@ def save_daily_stats(conn: sqlite3.Connection, record: dict) -> None:
             else None,
         ),
     )
-    conn.commit()
 
 
 def _daily_row_to_record(row: sqlite3.Row) -> dict:
@@ -91,6 +129,7 @@ def upsert_watermarks(conn: sqlite3.Connection, items: list[dict]) -> None:
             last_seen_date = excluded.last_seen_date,
             industry = excluded.industry,
             updated_at = excluded.updated_at
+        WHERE excluded.last_seen_date >= stock_adjusted_high_watermark.last_seen_date
         """,
         [
             (
@@ -105,4 +144,3 @@ def upsert_watermarks(conn: sqlite3.Connection, items: list[dict]) -> None:
             for item in items
         ],
     )
-    conn.commit()

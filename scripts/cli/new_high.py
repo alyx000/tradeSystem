@@ -4,13 +4,31 @@ from __future__ import annotations
 import argparse
 import datetime
 import json
+import logging
+import os
 from pathlib import Path
 import sys
+import tempfile
 
 from db.connection import get_connection
 from db.migrate import migrate
 from services.new_high import constants as C
 from services.new_high import renderer, service
+from utils.network_env import without_standard_http_proxy
+from utils.trade_date import ensure_trade_calendar
+
+
+logger = logging.getLogger(__name__)
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+_REPORT_RECORD_KEYS = (
+    "date",
+    "market_count",
+    "new_high_count",
+    "sector_summary",
+    "stocks",
+    "source",
+)
 
 
 def _positive_int(raw: str) -> int:
@@ -65,14 +83,155 @@ def _today() -> str:
     return datetime.date.today().isoformat()
 
 
-def _write_reports(date: str, markdown: str, record: dict) -> dict[str, str]:
+def _write_reports(
+    date: str,
+    markdown: str,
+    record: dict,
+    *,
+    preserve_matching: bool = False,
+) -> dict:
+    json_text = json.dumps(record, ensure_ascii=False, indent=2) + "\n"
     report_dir = Path(C.REPORT_DIR)
+    if not report_dir.is_absolute():
+        report_dir = REPO_ROOT / report_dir
     report_dir.mkdir(parents=True, exist_ok=True)
     md_path = report_dir / f"{date}.md"
     json_path = report_dir / f"{date}.json"
-    md_path.write_text(markdown, encoding="utf-8")
-    json_path.write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    return {"md": str(md_path), "json": str(json_path)}
+    actions = {"md": "written", "json": "written"}
+
+    write_json = True
+    write_markdown = True
+    if preserve_matching:
+        if _markdown_report_matches(md_path, markdown):
+            write_markdown = False
+            actions["md"] = "preserved"
+        elif md_path.exists():
+            actions["md"] = "repaired"
+
+        if _json_report_matches(json_path, record):
+            write_json = False
+            actions["json"] = "preserved"
+        elif json_path.exists():
+            actions["json"] = "repaired"
+
+    if write_json:
+        _atomic_write_text(json_path, json_text)
+    if write_markdown:
+        _atomic_write_text(md_path, markdown)
+    return {
+        "md": str(md_path),
+        "json": str(json_path),
+        "actions": actions,
+    }
+
+
+def _atomic_write_text(path: Path, content: str) -> None:
+    fd, temp_name = tempfile.mkstemp(
+        dir=path.parent,
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        text=True,
+    )
+    temp_path = Path(temp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_path, path)
+    except BaseException:
+        temp_path.unlink(missing_ok=True)
+        raise
+
+
+def _markdown_report_matches(path: Path, expected: str) -> bool:
+    try:
+        return path.is_file() and path.read_text(encoding="utf-8") == expected
+    except (OSError, UnicodeError):
+        return False
+
+
+def _json_report_matches(path: Path, expected: dict) -> bool:
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return False
+    if not isinstance(loaded, dict):
+        return False
+    return all(loaded.get(key) == expected.get(key) for key in _REPORT_RECORD_KEYS)
+
+
+def run_for_post(
+    config: dict,
+    target_date: str,
+    registry=None,
+) -> dict:
+    """由 ``cmd_post`` 连续推进生产尾日，不写 schema 或交易日历。"""
+    conn = get_connection()
+    try:
+        with without_standard_http_proxy():
+            active_registry = registry
+            if active_registry is None:
+                from main import setup_providers
+
+                active_registry = setup_providers(config)
+                active_registry.initialize_all()
+            summary = service.run_due_dates(
+                conn,
+                active_registry,
+                target_date,
+                top_n=C.DEFAULT_TOP_N,
+            )
+    finally:
+        conn.close()
+
+    status = summary.get("status")
+    if status in {"ok", "already_complete"}:
+        target_record = summary.get("target_record")
+        if target_record is None:
+            logger.warning(
+                "[new-high post] status=%s failed_date=%s target_record 缺失",
+                status,
+                target_date,
+            )
+            return summary
+        markdown = renderer.render_daily(target_record, top_n=C.DEFAULT_TOP_N)
+        paths = _write_reports(
+            target_date,
+            markdown,
+            target_record,
+            preserve_matching=status == "already_complete",
+        )
+        summary = {
+            **summary,
+            "report_paths": {"md": paths["md"], "json": paths["json"]},
+            "report_actions": paths["actions"],
+        }
+        logger.info(
+            "[new-high post] status=%s target_date=%s processed_dates=%s "
+            "report_md=%s report_json=%s report_actions=%s",
+            status,
+            target_date,
+            summary.get("processed_dates"),
+            paths["md"],
+            paths["json"],
+            paths["actions"],
+        )
+    else:
+        failure_detail = summary.get("failure_detail") or {}
+        error = str(failure_detail.get("error") or "")[:500]
+        log = logger.info if status == "non_trading_day" else logger.warning
+        log(
+            "[new-high post] status=%s target_date=%s processed_dates=%s "
+            "failed_date=%s failed_source=%s error=%s",
+            status,
+            target_date,
+            summary.get("processed_dates"),
+            summary.get("failed_date"),
+            failure_detail.get("failed_source"),
+            error,
+        )
+    return summary
 
 
 def _push_to_dingtalk(title: str, markdown: str) -> None:
@@ -94,10 +253,30 @@ def _run_daily(config: dict, args: argparse.Namespace) -> None:
     conn = get_connection()
     try:
         migrate(conn)
-        record = service.run_daily(conn, registry, date, persist=not args.dry_run, top_n=args.top_n)
+        if args.dry_run:
+            record = service.run_daily(
+                conn,
+                registry,
+                date,
+                persist=False,
+                top_n=args.top_n,
+            )
+            run_status = record.get("status")
+        else:
+            summary = service.run_due_dates(
+                conn,
+                registry,
+                date,
+                top_n=args.top_n,
+            )
+            run_status = summary.get("status")
+            record = summary.get("target_record")
     finally:
         conn.close()
 
+    if record is None:
+        print(json.dumps(summary, ensure_ascii=False, indent=2))
+        return
     if args.json:
         print(json.dumps(record, ensure_ascii=False, indent=2))
         return
@@ -105,10 +284,15 @@ def _run_daily(config: dict, args: argparse.Namespace) -> None:
     print(md)
     if args.dry_run:
         return
-    paths = _write_reports(date, md, record)
+    paths = _write_reports(
+        date,
+        md,
+        record,
+        preserve_matching=run_status == "already_complete",
+    )
     print(f"report_md: {paths['md']}")
     print(f"report_json: {paths['json']}")
-    if args.push and record.get("status") == "ok":
+    if args.push and run_status in {"ok", "already_complete"}:
         _push_to_dingtalk(f"前复权历史新高统计 · {date}", md)
 
 
@@ -164,7 +348,9 @@ def _run_backfill(config: dict, args: argparse.Namespace) -> None:
     conn = get_connection()
     try:
         migrate(conn)
-        summary = service.run_backfill(conn, registry, dates, persist=True, top_n=args.top_n)
+        for year in range(int(start[:4]), int(end[:4]) + 1):
+            ensure_trade_calendar(conn, registry, year=year, force=True)
+        summary = service.run_backfill(conn, registry, dates, top_n=args.top_n)
     finally:
         conn.close()
     print(json.dumps(summary, ensure_ascii=False, indent=2))
