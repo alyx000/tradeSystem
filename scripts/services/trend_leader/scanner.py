@@ -223,7 +223,7 @@ def run_daily(conn: sqlite3.Connection, registry, date: str, *,
 
     mainline_llm_meta = {
         "enabled": False,
-        "status": "disabled",
+        "status": "not_applicable",
         "accepted_concepts": sorted(main_concepts),
         "rejected": [],
     }
@@ -256,7 +256,7 @@ def run_daily(conn: sqlite3.Connection, registry, date: str, *,
             # 显式记账，避免「链路部分降级」被误读为「今日无概念候选」（门2 codex M2/M2'）。容器概念被剔
             # 不触发（coverage_ok 不受 >cap 影响），故容器-only 日不误报。
             source_errors.append("concept_coverage")
-    if mainline_llm_meta.get("enabled") and mainline_llm_meta.get("status") == "fallback":
+    if mainline_llm_meta.get("status") == "fallback_l2":
         source_errors.append("mainline_llm")
 
     summary = {

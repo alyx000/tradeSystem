@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Sequence
 from typing import Any, Callable, Optional
 
 from services.recommend.formatter import REDLINE_KEYWORDS
+from utils.antigravity_diagnostics import diag_reason
 
 logger = logging.getLogger(__name__)
 
@@ -21,16 +23,16 @@ Runner = Callable[[str, dict[str, Any]], Optional[dict[str, Any]]]
 def filter_concepts(
     *,
     date: str,
-    main_sectors: set[str],
+    main_sectors: Sequence[str],
     main_concepts: set[str],
     candidates: list[dict[str, Any]],
     runner: Runner | None,
 ) -> tuple[set[str], dict[str, Any]]:
     """Return effective THS concepts plus metadata.
 
-    No runner means deterministic fallback without warning. A runner returning
-    invalid/out-of-universe JSON falls back to the unfiltered deterministic
-    concept set and marks status=fallback.
+    No runner means the caller explicitly keeps deterministic concepts. Once a
+    runner is supplied, any exception or invalid/out-of-universe output closes
+    the concept branch and marks status=fallback_l2.
     """
     concepts = set(main_concepts or set())
     meta: dict[str, Any] = {
@@ -39,28 +41,39 @@ def filter_concepts(
         "accepted_concepts": sorted(concepts),
         "rejected": [],
     }
-    if runner is None or not concepts:
-        if runner is not None:
-            meta["status"] = "skipped_empty_concepts"
+    if runner is None:
+        return concepts, meta
+    if not concepts:
+        meta["status"] = "skipped_empty_concepts"
         return concepts, meta
 
     payload = {
         "date": date,
-        "main_sectors": sorted(main_sectors or set()),
+        "main_sectors": list(dict.fromkeys(main_sectors or [])),
         "main_concepts": sorted(concepts),
         "candidates": candidates,
     }
     try:
         result = runner(_build_prompt(), payload)
     except Exception as exc:  # noqa: BLE001 - LLM failure must degrade, not stop EOD scan.
-        logger.warning("[trend-leader] mainline LLM failed, fallback to deterministic concepts: %s", exc)
-        meta.update({"status": "fallback", "reason": "runner_exception"})
-        return concepts, meta
+        logger.warning("[trend-leader] mainline LLM failed, concept branch closed: %s", exc)
+        meta.update({
+            "status": "fallback_l2",
+            "reason": diag_reason(runner) or "runner_exception",
+            "accepted_concepts": [],
+            "rejected": [],
+        })
+        return set(), meta
 
     parsed = _parse_result(result, concepts)
     if parsed is None:
-        meta.update({"status": "fallback", "reason": "invalid_output"})
-        return concepts, meta
+        meta.update({
+            "status": "fallback_l2",
+            "reason": diag_reason(runner) or "invalid_output",
+            "accepted_concepts": [],
+            "rejected": [],
+        })
+        return set(), meta
 
     accepted, rejected = parsed
     meta.update({

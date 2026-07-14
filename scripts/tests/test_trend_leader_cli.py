@@ -97,7 +97,7 @@ def wired(tmp_db, monkeypatch):
 
 def _daily_args(**over):
     base = dict(date="2026-06-12", sectors=None, top_k=5, dry_run=False, no_push=False,
-                main_line="l2", top_concepts=8)
+                main_line="l2", top_concepts=8, no_llm=False)
     base.update(over)
     return argparse.Namespace(**base)
 
@@ -174,3 +174,27 @@ def test_daily_top_k_rejects_non_positive():
     for bad in ["0", "-1", "abc"]:
         with pytest.raises(SystemExit):
             parser.parse_args(["trend-leader", "daily", "--top-k", bad])
+
+
+def test_mainline_runner_startup_failure_returns_diagnostic_runner(monkeypatch):
+    from services.research_digest import narrator
+
+    def fail():
+        raise RuntimeError("agy missing")
+
+    monkeypatch.setattr(narrator, "build_antigravity_runner", fail)
+    runner = tl._mainline_llm_runner(_daily_args(main_line="hybrid"))
+
+    assert callable(runner)
+    assert runner("prompt", {}) is None
+    assert runner.last_diagnostics == {
+        "reason": "startup_failed",
+        "message": "agy missing",
+    }
+
+
+def test_mainline_runner_explicit_disable_and_non_hybrid_return_none():
+    assert tl._mainline_llm_runner(
+        _daily_args(main_line="hybrid", no_llm=True)) is None
+    assert tl._mainline_llm_runner(
+        _daily_args(main_line="l2+concept", no_llm=False)) is None

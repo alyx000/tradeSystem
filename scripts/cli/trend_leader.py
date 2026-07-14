@@ -158,8 +158,17 @@ def _mainline_llm_runner(args: argparse.Namespace):
         from services.research_digest.narrator import build_antigravity_runner
         return build_antigravity_runner()
     except Exception as exc:  # noqa: BLE001 - trend-leader must degrade if LLM wiring is unavailable.
-        logger.warning("[trend-leader] mainline LLM runner 初始化失败，降级确定性概念主线: %s", exc)
-        return None
+        message = str(exc)
+        logger.warning("[trend-leader] mainline LLM runner 初始化失败: %s", message)
+
+        def unavailable(_prompt, _payload):
+            return None
+
+        unavailable.last_diagnostics = {
+            "reason": "startup_failed",
+            "message": message,
+        }
+        return unavailable
 
 
 def _run_pool(config: dict, args: argparse.Namespace) -> None:
@@ -185,14 +194,3 @@ def _push_to_dingtalk(title: str, markdown: str) -> None:
         return
     ok = pusher.send_markdown(title=title, content=markdown)
     logger.info("[trend-leader] 推送 %s", "成功" if ok else "失败")
-
-
-def _mainline_llm_runner(args: argparse.Namespace):
-    if getattr(args, "main_line", "hybrid") != "hybrid" or getattr(args, "no_llm", False):
-        return None
-    try:
-        from services.research_digest.narrator import build_antigravity_runner
-        return build_antigravity_runner()
-    except Exception as exc:  # noqa: BLE001 - LLM unavailable degrades to deterministic concepts.
-        logger.warning("[trend-leader] mainline LLM runner unavailable: %s", exc)
-        return None
