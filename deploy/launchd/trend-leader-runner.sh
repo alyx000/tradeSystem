@@ -11,7 +11,7 @@
 set -e
 
 # 1. PATH（launchd 默认不含 /opt/homebrew/bin，python/依赖找不到）
-export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
 
 # 2. 仓库根（python import 解析）
 REPO_ROOT="/Users/alyx/tradeSystem"
