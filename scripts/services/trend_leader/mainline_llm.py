@@ -109,15 +109,16 @@ def _parse_result(result: Any, universe: set[str]) -> tuple[set[str], list[dict[
 
     rejected: list[dict[str, str]] = []
     raw_rejected = result.get("rejected") or []
-    if isinstance(raw_rejected, list):
-        for row in raw_rejected:
-            if not isinstance(row, dict):
-                continue
-            name = str(row.get("name") or "").strip()
-            if not name or name not in universe:
-                continue
-            reason = str(row.get("reason") or "").strip()[:40]
-            rejected.append({"name": name, "reason": reason})
+    if not isinstance(raw_rejected, list):
+        return None
+    for row in raw_rejected:
+        if not isinstance(row, dict):
+            return None
+        name = str(row.get("name") or "").strip()
+        if not name or name not in universe:
+            return None
+        reason = str(row.get("reason") or "").strip()[:40]
+        rejected.append({"name": name, "reason": reason})
     return accepted, rejected
 
 
