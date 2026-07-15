@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 
+import pytest
+
 from cli import daily_leaders
 from cli.daily_leaders import register_subparser
 
@@ -30,6 +32,48 @@ def test_parse_propose():
     assert args.push is True
     assert args.no_llm is True
     assert args.max_candidates == 12
+
+
+def test_parse_propose_defaults_to_hard_cap():
+    args = _parser().parse_args(["daily-leaders", "propose"])
+
+    assert args.max_candidates == 15
+
+
+@pytest.mark.parametrize("value", ["1", "15"])
+def test_parse_propose_accepts_candidate_limit_boundaries(value):
+    args = _parser().parse_args([
+        "daily-leaders",
+        "propose",
+        "--max-candidates",
+        value,
+    ])
+
+    assert args.max_candidates == int(value)
+
+
+@pytest.mark.parametrize("value", ["0", "16"])
+def test_parse_propose_rejects_candidate_limit_outside_hard_cap(value):
+    with pytest.raises(SystemExit) as exc_info:
+        _parser().parse_args([
+            "daily-leaders",
+            "propose",
+            "--max-candidates",
+            value,
+        ])
+
+    assert exc_info.value.code == 2
+
+
+def test_parse_propose_help_describes_candidate_limit_range():
+    help_text = _parser().format_help()
+
+    assert "每日最票候选确认稿" in help_text
+    root_subparsers = _parser()._subparsers._group_actions[0]
+    daily_leaders_parser = root_subparsers.choices["daily-leaders"]
+    daily_leaders_subparsers = daily_leaders_parser._subparsers._group_actions[0]
+    propose_help = daily_leaders_subparsers.choices["propose"].format_help()
+    assert "1 到 15" in propose_help
 
 
 def test_parse_confirm_requires_input_by():

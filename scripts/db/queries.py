@@ -1620,15 +1620,24 @@ def upsert_leader_tracking(
     返回记录 id。
     """
     row = conn.execute(
-        "SELECT id, last_seen_date, consecutive_days FROM leader_tracking "
+        "SELECT id, first_seen_date, last_seen_date, consecutive_days, is_active "
+        "FROM leader_tracking "
         "WHERE stock_code = ? AND sector = ? AND attribute_type = ?",
         (stock_code, sector, attribute_type),
     ).fetchone()
     if row:
         record_id = row["id"]
+        old_first = row["first_seen_date"]
         old_last = row["last_seen_date"]
         old_days = row["consecutive_days"] or 1
-        new_days = old_days + 1 if old_last != seen_date else old_days
+        if seen_date < old_last:
+            if seen_date < old_first:
+                conn.execute(
+                    "UPDATE leader_tracking SET first_seen_date = ? WHERE id = ?",
+                    (seen_date, record_id),
+                )
+            return record_id
+        new_days = old_days + 1 if seen_date > old_last else old_days
         sets = ["last_seen_date = ?", "consecutive_days = ?", "is_active = 1", "stock_name = ?"]
         vals: list[Any] = [seen_date, new_days, stock_name]
         if current_phase is not None:
@@ -1671,6 +1680,88 @@ def get_active_leaders(
             (limit,),
         ).fetchall()
     )
+
+
+def get_all_leader_tracking(conn: sqlite3.Connection) -> list[dict]:
+    """Return all tracking rows for global stock-identity reconciliation."""
+    return _rows_to_list(
+        conn.execute("SELECT * FROM leader_tracking ORDER BY id").fetchall()
+    )
+
+
+def merge_leader_tracking_identity(
+    conn: sqlite3.Connection,
+    *,
+    record_ids: list[int],
+    stock_code: str,
+    stock_name: str,
+    sector: str,
+    attribute_type: str,
+) -> int | None:
+    """Coalesce legacy display-key rows into one canonical stock-code row."""
+    unique_ids = list(dict.fromkeys(int(record_id) for record_id in record_ids))
+    if not unique_ids:
+        return None
+    placeholders = ",".join("?" for _ in unique_ids)
+    rows = _rows_to_list(
+        conn.execute(
+            f"SELECT * FROM leader_tracking WHERE id IN ({placeholders})",
+            unique_ids,
+        ).fetchall()
+    )
+    if not rows:
+        return None
+
+    primary = next(
+        (row for row in rows if str(row.get("stock_code") or "") == stock_code),
+        min(rows, key=lambda row: int(row["id"])),
+    )
+    primary_id = int(primary["id"])
+    duplicate_ids = [int(row["id"]) for row in rows if int(row["id"]) != primary_id]
+    first_seen_date = min(str(row["first_seen_date"]) for row in rows)
+    last_seen_date = max(str(row["last_seen_date"]) for row in rows)
+    consecutive_days = max(int(row.get("consecutive_days") or 1) for row in rows)
+    latest_rows = sorted(
+        rows,
+        key=lambda row: (str(row["last_seen_date"]), int(row["id"])),
+        reverse=True,
+    )
+    current_phase = next(
+        (row.get("current_phase") for row in latest_rows if row.get("current_phase")),
+        None,
+    )
+    notes = next(
+        (row.get("notes") for row in latest_rows if row.get("notes")),
+        None,
+    )
+    is_active = max(int(row.get("is_active") or 0) for row in rows)
+
+    if duplicate_ids:
+        duplicate_placeholders = ",".join("?" for _ in duplicate_ids)
+        conn.execute(
+            f"DELETE FROM leader_tracking WHERE id IN ({duplicate_placeholders})",
+            duplicate_ids,
+        )
+    conn.execute(
+        "UPDATE leader_tracking SET stock_code = ?, stock_name = ?, sector = ?, "
+        "attribute_type = ?, "
+        "first_seen_date = ?, last_seen_date = ?, consecutive_days = ?, "
+        "current_phase = ?, is_active = ?, notes = ? WHERE id = ?",
+        (
+            stock_code,
+            stock_name,
+            sector,
+            attribute_type,
+            first_seen_date,
+            last_seen_date,
+            consecutive_days,
+            current_phase,
+            is_active,
+            notes,
+            primary_id,
+        ),
+    )
+    return primary_id
 
 
 def deactivate_stale_leaders(

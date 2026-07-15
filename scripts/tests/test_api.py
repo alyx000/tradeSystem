@@ -4042,6 +4042,81 @@ def test_review_factor_score_rejects_invalid_calendar_date(client):
     assert "invalid calendar date" in response.text.lower()
 
 
+@pytest.mark.parametrize(
+    ("stock", "stock_code", "sector"),
+    [
+        ("600001 同名股票", "600002", "软件开发"),
+        ("600001 同名股票", "600002", ""),
+        ("600001 同名股票", "600002", ["软件开发"]),
+        ("600001.BAD同名股票", "600001", ""),
+        ("600001.BAD同名股票", "600001", ["软件开发"]),
+    ],
+)
+def test_review_put_rejects_invalid_step5_stock_identity_and_rolls_back(
+    client, db_path, stock, stock_code, sector
+):
+    seeded = client.put(
+        "/api/review/2026-07-10",
+        json={"step1_market": {"notes": "原始复盘"}},
+    )
+    assert seeded.status_code == 200
+    conn = get_connection(db_path)
+    Q.replace_holding_tasks(
+        conn,
+        trade_date="2026-07-10",
+        tasks=[
+            {
+                "stock_code": "300750.SZ",
+                "stock_name": "宁德时代",
+                "action_plan": "原始任务",
+                "status": "open",
+            }
+        ],
+    )
+    conn.commit()
+    conn.close()
+
+    rejected = client.put(
+        "/api/review/2026-07-10",
+        json={
+            "step1_market": {"notes": "不应写入"},
+            "step7_positions": {
+                "positions": [
+                    {
+                        "stock": "宁德时代(300750.SZ)",
+                        "action_plan": "不应写入",
+                    }
+                ]
+            },
+            "step5_leaders": {
+                "top_leaders": [
+                    {
+                        "stock": stock,
+                        "stock_code": stock_code,
+                        "sector": sector,
+                        "attribute_type": "趋势中军",
+                    }
+                ]
+            },
+        },
+    )
+
+    assert rejected.status_code == 422
+    stored = client.get("/api/review/2026-07-10").json()
+    assert json.loads(stored["step1_market"])["notes"] == "原始复盘"
+    conn = get_connection(db_path)
+    try:
+        assert Q.get_active_leaders(conn) == []
+        tasks = conn.execute(
+            "SELECT stock_code, action_plan FROM holding_tasks ORDER BY id"
+        ).fetchall()
+        assert [(row["stock_code"], row["action_plan"]) for row in tasks] == [
+            ("300750.SZ", "原始任务")
+        ]
+    finally:
+        conn.close()
+
+
 def test_review_put_validates_factor_decision_and_syncs_legacy(client, db_path):
     _seed_factor_score_run(db_path)
 

@@ -8,8 +8,10 @@ globs:
   - scripts/cli/wechat_teacher_feed.py
   - scripts/cli/review_factors.py
   - scripts/cli/tail_scan.py
+  - scripts/cli/daily_leaders.py
   - scripts/services/trinity_factor/*.py
   - scripts/services/tail_scan/*.py
+  - scripts/services/daily_leaders/*.py
   - scripts/providers/base.py
   - scripts/providers/tushare_provider.py
   - scripts/api/routes/*.py
@@ -29,6 +31,7 @@ globs:
 - `scripts/cli/wechat_teacher_feed.py` — 微信公众号白名单 phase、归档、候选过滤与失败语义
 - `scripts/cli/review_factors.py` / `scripts/services/trinity_factor/*.py` — 三位一体评分、人工确认、T+1 与影子指标语义
 - `scripts/cli/tail_scan.py` / `scripts/services/tail_scan/*.py` — 尾盘实时筛选、逐票产业逻辑、证据边界与报告/推送语义
+- `scripts/cli/daily_leaders.py` / `scripts/services/daily_leaders/*.py` — 每日最票候选的板块口径、属性、收敛上限、LLM 复核与确定性降级语义
 - `scripts/services/tail_scan/concept_context.py`，或 `scripts/providers/base.py` / `scripts/providers/tushare_provider.py` 中 `get_stock_concept_memberships` capability — 尾盘扫描当前归属与 T-1 热概念分层语义
 - `scripts/api/routes/*.py` — API 路由定义
 - `.agents/skills/**/*.md` — skill 文档本身（真源；`.cursor/skills/` 与 `.claude/skills/` 是 symlink 壳）
@@ -107,6 +110,7 @@ python3 -m pytest scripts/tests/test_cli_smoke.py -v
 | `scripts/main.py` 的 `cmd_post` new-high 接线、`scripts/cli/new_high.py`、`scripts/services/new_high/` 或 `scripts/utils/trade_date.py` 的 new-high 日历语义 | `market-tasks/SKILL.md` + `INDEX.md` 中 `new-high` 行；须核对复用 `today-post` 工作日 20:00 单一调度、无独立 launchd/APScheduler、只写两表及目标日报告且不自动推送、schema/基线相等/自然日日历完整、行业源非空、有效行情绝对地板、重复/有效 join/复权宇宙/申万覆盖/相邻日市场数门禁、按开放日动态升序补缺、canonical 只追加、单日同事务、`BEGIN IMMEDIATE` 二次查重 + 尾日 CAS、成功前缀与失败续跑、目标日报告原子替换及 `already_complete` 损坏自愈、手工 `daily` 连续协调/`backfill` 强刷年度日历且拒绝跳过尾日后开放日/历史更正须重建后缀、失败隔离且不阻断 margin 的完整契约 |
 | `scripts/cli/trend_leader.py` 或 `scripts/services/trend_leader/` | `market-tasks/SKILL.md` + `INDEX.md` 中 `trend-leader` 行 |
 | `scripts/cli/tail_scan.py` 或 `scripts/services/tail_scan/` | `market-tasks/SKILL.md` + `INDEX.md` 中 `tail-scan` 行 + `AGENTS.md` / `CLAUDE.md` |
+| `scripts/cli/daily_leaders.py` 或 `scripts/services/daily_leaders/` | `market-tasks/SKILL.md` + `INDEX.md` 中 `daily-leaders` 行 + `AGENTS.md` / `CLAUDE.md`；核对申万二级板块口径、语义属性与板型分离、同板块同属性唯一、最终最多 15、LLM 失败仍按相同硬约束兜底，并保持展示内代码解析、非法后缀及显式代码冲突 fail-closed |
 | `scripts/services/tail_scan/concept_context.py`，或 provider 的 `get_stock_concept_memberships` capability | `market-tasks/SKILL.md` + `INDEX.md` 中 `tail-scan` capability/消费者/字段用途 + `AGENTS.md` / `CLAUDE.md`；必须核对当前 `type=N` 快照（非历史 as-of）与 T-1 热概念分层、共享容器过滤、报告 5 个/2 个上限、完整归属不进粗分/PK、兼容热字段语义，以及 `source_failed` / `coverage_failed` / `member_failed` / `missing` 状态不混淆 |
 | `scripts/utils/llm_cli.py` 或 LLM CLI/env 语义调整 | `market-tasks/SKILL.md` + `INDEX.md` 中 recommend/research-digest/cognition-digest 行 |
 | `scripts/workflows/research-digest-workflow.mjs` / `scripts/workflows/huibo_helper.py` / 慧博 Antigravity 诊断语义调整 / `HUIBO_REPORT_PDF_DIR` 下载归档目录约定调整 | `market-tasks/SKILL.md` + `INDEX.md` 中 research-digest workflow 行 |
@@ -120,7 +124,7 @@ python3 -m pytest scripts/tests/test_cli_smoke.py -v
 | `scripts/services/broker_executions/` 任意改动 | `portfolio-manager/SKILL.md`（若行为契约变更）；任何 schema 字段/UNIQUE 调整还需同步 `INDEX.md` |
 | `scripts/services/trade_thesis/` 或 `scripts/db/schema.py` 中 `trade_mode` 语义/枚举调整 | `portfolio-manager/SKILL.md` + `INDEX.md` 中 `thesis-*` 行 |
 | 仓库维护工作流、CLI/API 对齐、巡检、文档/索引同步 | `repo-maintenance-workflows/SKILL.md` |
-| `api/routes/review.py` | `daily-review/SKILL.md`、`sector-projection-analysis/SKILL.md`（含 `POST /api/review/{date}/to-draft` 时也检查 `plan-workbench/SKILL.md`；若预填字段语义调整，如 `lead_stock` / `emotion_leader` / `capacity_leader`，或保存字段标准化语义调整，同步 Skill 文案） |
+| `api/routes/review.py` | `daily-review/SKILL.md`、`sector-projection-analysis/SKILL.md`（含 `POST /api/review/{date}/to-draft` 时也检查 `plan-workbench/SKILL.md`；若预填字段语义调整，如 `lead_stock` / `emotion_leader` / `capacity_leader`，或保存字段标准化语义调整，同步 Skill 文案；`step5_leaders` 身份校验失败必须返回 422，并原子回滚复盘与 tracking 写入） |
 | `api/routes/review_factors.py` | `daily-review/SKILL.md`、`sector-projection-analysis/SKILL.md` 与 `INDEX.md`；评分/回验/metrics 路径必须与 `review factor-*` CLI 共用 service 语义 |
 | `api/routes/planning.py` 中 `/api/plans/*` | `plan-workbench/SKILL.md` |
 | `api/routes/planning.py` 中 `/api/knowledge/*` | `knowledge-to-plan/SKILL.md` |
