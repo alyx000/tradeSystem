@@ -10,7 +10,8 @@ from db import queries as Q
 from services.daily_leaders.selection import (
     canonical_stock_code,
     normalize_sector_key,
-    normalize_stock_display,
+    parse_stock_display_identity,
+    stock_name_identity,
 )
 
 
@@ -26,16 +27,7 @@ def _coerce_step5(step5: Any) -> dict[str, Any] | None:
 
 
 def _embedded_stock_code(value: Any) -> str:
-    tokens = normalize_stock_display(value).split()
-    return canonical_stock_code(tokens[0]) if tokens else ""
-
-
-def _stock_name_identity(value: Any) -> str:
-    display = normalize_stock_display(value)
-    tokens = display.split()
-    if tokens and canonical_stock_code(tokens[0]):
-        display = normalize_stock_display(" ".join(tokens[1:]))
-    return "".join(display.split()).upper()
+    return parse_stock_display_identity(value)[0]
 
 
 def _reconcile_tracking_identity(
@@ -45,25 +37,31 @@ def _reconcile_tracking_identity(
     stock_name: str,
     sector: str,
     attribute_type: str,
+    name_codes_in_batch: set[str],
 ) -> None:
-    target_name = _stock_name_identity(stock_name)
-    rows = [
+    target_name = stock_name_identity(stock_name)
+    all_rows = Q.get_all_leader_tracking(conn)
+    scoped_rows = [
         row
-        for row in Q.get_leader_tracking_by_attribute_type(
-            conn,
-            attribute_type=attribute_type,
-        )
-        if normalize_sector_key(row.get("sector")) == sector
+        for row in all_rows
+        if row.get("attribute_type") == attribute_type
+        and normalize_sector_key(row.get("sector")) == sector
     ]
-    conflicting_named_code = any(
-        (row_code := _embedded_stock_code(row.get("stock_code")))
-        and row_code != stock_code
+    existing_name_codes = {
+        row_code
+        for row in all_rows
+        if (row_code := _embedded_stock_code(row.get("stock_code")))
         and target_name
-        and target_name == _stock_name_identity(row.get("stock_name"))
-        for row in rows
+        in {
+            stock_name_identity(row.get("stock_code")),
+            stock_name_identity(row.get("stock_name")),
+        }
+    }
+    conflicting_named_code = any(
+        code != stock_code for code in existing_name_codes | name_codes_in_batch
     )
     matching_ids: list[int] = []
-    for row in rows:
+    for row in scoped_rows:
         row_stock_code = row.get("stock_code")
         row_code = _embedded_stock_code(row_stock_code)
         if row_code:
@@ -71,8 +69,8 @@ def _reconcile_tracking_identity(
                 matching_ids.append(int(row["id"]))
             continue
         if not conflicting_named_code and target_name and target_name in {
-            _stock_name_identity(row_stock_code),
-            _stock_name_identity(row.get("stock_name")),
+            stock_name_identity(row_stock_code),
+            stock_name_identity(row.get("stock_name")),
         }:
             matching_ids.append(int(row["id"]))
     if matching_ids:
@@ -98,6 +96,26 @@ def sync_leader_tracking_from_step5(
     leaders = payload.get("top_leaders")
     if not isinstance(leaders, list):
         return 0
+    batch_codes_by_name: dict[str, set[str]] = {}
+    for item in leaders:
+        if not isinstance(item, dict):
+            continue
+        raw_stock = item.get("stock")
+        raw_sector = item.get("sector")
+        raw_stock_code = item.get("stock_code")
+        if not isinstance(raw_stock, str) or not isinstance(raw_sector, str):
+            continue
+        if not raw_stock.strip() or not normalize_sector_key(raw_sector):
+            continue
+        if not isinstance(raw_stock_code, str):
+            continue
+        stock_code = canonical_stock_code(raw_stock_code)
+        display_code = _embedded_stock_code(raw_stock)
+        if stock_code and display_code and stock_code != display_code:
+            raise ValueError("leader stock display and stock_code contain conflicting stock codes")
+        name_key = stock_name_identity(raw_stock)
+        if stock_code and name_key:
+            batch_codes_by_name.setdefault(name_key, set()).add(stock_code)
     synced = 0
     for item in leaders:
         if not isinstance(item, dict):
@@ -128,6 +146,9 @@ def sync_leader_tracking_from_step5(
                 stock_name=stock,
                 sector=sector,
                 attribute_type=attribute_type,
+                name_codes_in_batch=batch_codes_by_name.get(
+                    stock_name_identity(stock), set()
+                ),
             )
         Q.upsert_leader_tracking(
             conn,

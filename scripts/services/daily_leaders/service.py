@@ -20,9 +20,11 @@ from services.daily_leaders.selection import (
     assign_fallback_roles,
     canonical_stock_code,
     normalize_sector_key,
+    parse_stock_display_identity,
     prepare_llm_review_pool,
     select_confirmation_candidates,
     stock_identity_key,
+    stock_name_identity,
 )
 from services.daily_leaders.store import _safe_date, read_proposal, write_proposal
 from services.review_leaders import build_review_with_step5, sync_leader_tracking_from_step5
@@ -364,7 +366,7 @@ def _confirmed_step5_leaders(source: dict[str, Any], date: str) -> list[dict[str
 
     step5_leaders = []
     seen_stock_codes: set[str] = set()
-    seen_stock_displays: dict[str, set[str]] = {}
+    seen_stock_names: dict[str, set[str]] = {}
     seen_sector_roles: set[tuple[str, str]] = set()
     for index, item in enumerate(raw_leaders, start=1):
         if not isinstance(item, dict):
@@ -379,11 +381,9 @@ def _confirmed_step5_leaders(source: dict[str, Any], date: str) -> list[dict[str
             raise ValueError(f"top_leaders[{index}] stock and sector are required")
 
         canonical_codes: set[str] = set()
-        stock_tokens = stock.split()
-        if stock_tokens:
-            display_code = canonical_stock_code(stock_tokens[0])
-            if display_code:
-                canonical_codes.add(display_code)
+        display_code, _ = parse_stock_display_identity(stock)
+        if display_code:
+            canonical_codes.add(display_code)
         for code_field in ("stock_code", "code"):
             raw_code = item.get(code_field)
             if raw_code in (None, ""):
@@ -413,18 +413,19 @@ def _confirmed_step5_leaders(source: dict[str, Any], date: str) -> list[dict[str
         else:
             attribute_type = legacy_attribute
 
-        display_key = stock_identity_key({"stock": stock})
-        stock_key = canonical_code or display_key
-        display_codes = seen_stock_displays.get(display_key, set())
+        name_key = stock_name_identity(stock)
+        stock_key = canonical_code or name_key
+        name_codes = seen_stock_names.get(name_key, set()) if name_key else set()
         if canonical_code and canonical_code in seen_stock_codes:
             raise ValueError(f"top_leaders[{index}] duplicates stock identity {stock_key}")
-        if display_codes and (
-            not canonical_code or "" in display_codes or canonical_code in display_codes
+        if name_codes and (
+            not canonical_code or "" in name_codes or canonical_code in name_codes
         ):
             raise ValueError(f"top_leaders[{index}] duplicates stock identity {stock_key}")
         if canonical_code:
             seen_stock_codes.add(canonical_code)
-        seen_stock_displays.setdefault(display_key, set()).add(canonical_code)
+        if name_key:
+            seen_stock_names.setdefault(name_key, set()).add(canonical_code)
 
         role_key = str(attribute_type or "").strip()
         sector_role = (sector, role_key)

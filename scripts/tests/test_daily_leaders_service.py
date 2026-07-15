@@ -1598,6 +1598,46 @@ def test_confirm_rejects_same_display_identity_when_only_one_row_has_code(
     _assert_confirm_rejects_leaders_without_writing(conn, tmp_path, leaders)
 
 
+def test_confirm_rejects_embedded_code_and_name_only_duplicate_with_unicode_whitespace(
+    conn, tmp_path
+):
+    leaders = [
+        {
+            "stock": "600519\u3000贵州\u00a0茅台",
+            "sector": "白酒",
+            "leader_role": "趋势中军",
+        },
+        {
+            "stock": "贵州茅台",
+            "sector": "食品饮料",
+            "leader_role": "前排活跃",
+        },
+    ]
+
+    _assert_confirm_rejects_leaders_without_writing(conn, tmp_path, leaders)
+
+
+@pytest.mark.parametrize("compact_stock", ["600519贵州茅台", "600519.SH贵州茅台"])
+def test_confirm_rejects_compact_code_name_and_name_only_duplicate(
+    conn, tmp_path, compact_stock
+):
+    leaders = [
+        {
+            "stock": compact_stock,
+            "stock_code": "600519.SH",
+            "sector": "白酒",
+            "leader_role": "趋势中军",
+        },
+        {
+            "stock": "贵州茅台",
+            "sector": "食品饮料",
+            "leader_role": "前排活跃",
+        },
+    ]
+
+    _assert_confirm_rejects_leaders_without_writing(conn, tmp_path, leaders)
+
+
 def test_confirm_allows_same_display_name_for_distinct_canonical_codes():
     source = {
         "date": "2026-07-14",
@@ -1854,6 +1894,62 @@ def test_confirm_rolls_back_legacy_identity_merge_when_tracking_sync_fails(
     assert rows[0]["stock_code"] == "600519 贵州茅台"
     assert rows[0]["first_seen_date"] == "2026-07-13"
     assert rows[0]["last_seen_date"] == "2026-07-13"
+
+
+def test_confirm_rolls_back_deleted_duplicate_rows_when_tracking_sync_fails(
+    conn, tmp_path, monkeypatch
+):
+    Q.upsert_leader_tracking(
+        conn,
+        stock_code="600519 贵州茅台",
+        stock_name="600519 贵州茅台",
+        sector="白酒",
+        attribute_type="趋势中军",
+        seen_date="2026-07-12",
+    )
+    Q.upsert_leader_tracking(
+        conn,
+        stock_code="600519",
+        stock_name="贵州茅台",
+        sector="白酒",
+        attribute_type="趋势中军",
+        seen_date="2026-07-13",
+    )
+    conn.commit()
+    leaders_file = tmp_path / "leaders.json"
+    leaders_file.write_text(
+        json.dumps(
+            {
+                "date": "2026-07-14",
+                "top_leaders": [
+                    {
+                        "stock": "贵州茅台",
+                        "stock_code": "600519",
+                        "sector": "白酒",
+                        "leader_role": "趋势中军",
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        Q,
+        "upsert_leader_tracking",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("sync failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="sync failed"):
+        service.confirm(conn, "2026-07-14", "codex", leaders_file=leaders_file)
+
+    rows = conn.execute(
+        "SELECT * FROM leader_tracking ORDER BY stock_code"
+    ).fetchall()
+    assert Q.get_daily_review(conn, "2026-07-14") is None
+    assert [row["stock_code"] for row in rows] == ["600519", "600519 贵州茅台"]
+    assert [row["first_seen_date"] for row in rows] == ["2026-07-13", "2026-07-12"]
 
 
 def test_invalid_limit_step_code_cannot_attach_height_to_valid_quote():

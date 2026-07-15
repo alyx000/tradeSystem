@@ -1682,17 +1682,10 @@ def get_active_leaders(
     )
 
 
-def get_leader_tracking_by_attribute_type(
-    conn: sqlite3.Connection,
-    *,
-    attribute_type: str,
-) -> list[dict]:
-    """Return active and inactive tracking rows for identity reconciliation."""
+def get_all_leader_tracking(conn: sqlite3.Connection) -> list[dict]:
+    """Return all tracking rows for global stock-identity reconciliation."""
     return _rows_to_list(
-        conn.execute(
-            "SELECT * FROM leader_tracking WHERE attribute_type = ? ORDER BY id",
-            (attribute_type,),
-        ).fetchall()
+        conn.execute("SELECT * FROM leader_tracking ORDER BY id").fetchall()
     )
 
 

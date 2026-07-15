@@ -15,6 +15,7 @@ _CANONICAL_A_SHARE_CODE_RE = re.compile(
     r"^(\d{6})(?:\.(?:SH|SZ|BJ))?$",
     re.IGNORECASE,
 )
+_LEADING_A_SHARE_CODE_RE = re.compile(r"^(\d{6})(.*)$", re.DOTALL)
 
 
 def canonical_stock_code(value: Any) -> str:
@@ -41,6 +42,30 @@ def normalize_stock_display(value: Any) -> str:
         if unit * (len(tokens) // unit_length) == tokens:
             return " ".join(unit)
     return " ".join(tokens)
+
+
+def parse_stock_display_identity(value: Any) -> tuple[str, str]:
+    """Return leading canonical code and normalized name from a stock display."""
+    display = normalize_stock_display(value)
+    match = _LEADING_A_SHARE_CODE_RE.fullmatch(display)
+    if not match:
+        return "", "".join(display.split()).upper()
+    digits, remainder = match.groups()
+    upper_remainder = remainder.upper()
+    if remainder.startswith("."):
+        suffix = upper_remainder[:3]
+        if suffix not in {".SH", ".SZ", ".BJ"}:
+            return "", "".join(display.split()).upper()
+        code = canonical_stock_code(f"{digits}{suffix}")
+        remainder = remainder[3:]
+    else:
+        code = canonical_stock_code(digits)
+    return code, "".join(remainder.split()).upper()
+
+
+def stock_name_identity(value: Any) -> str:
+    """Return a code-free, Unicode-whitespace-insensitive stock name key."""
+    return parse_stock_display_identity(value)[1]
 
 
 def _normalize_stock_code(value: Any) -> str:

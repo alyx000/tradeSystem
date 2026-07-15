@@ -153,6 +153,41 @@ def test_sync_leader_tracking_migrates_legacy_display_identity_to_canonical_row(
     assert rows[0]["consecutive_days"] == 3
 
 
+@pytest.mark.parametrize("legacy_display", ["600519贵州茅台", "600519.SH贵州茅台"])
+def test_sync_leader_tracking_migrates_compact_legacy_display_identity(
+    conn, legacy_display
+):
+    Q.upsert_leader_tracking(
+        conn,
+        stock_code=legacy_display,
+        stock_name=legacy_display,
+        sector="白酒",
+        attribute_type="趋势中军",
+        seen_date="2026-07-13",
+    )
+
+    sync_leader_tracking_from_step5(
+        conn,
+        "2026-07-14",
+        {
+            "top_leaders": [
+                {
+                    "stock": "贵州茅台",
+                    "stock_code": "600519",
+                    "sector": "白酒",
+                    "attribute_type": "趋势中军",
+                }
+            ]
+        },
+    )
+
+    rows = conn.execute("SELECT * FROM leader_tracking ORDER BY id").fetchall()
+    assert len(rows) == 1
+    assert rows[0]["stock_code"] == "600519"
+    assert rows[0]["first_seen_date"] == "2026-07-13"
+    assert rows[0]["last_seen_date"] == "2026-07-14"
+
+
 def test_sync_leader_tracking_coalesces_existing_legacy_and_canonical_rows(conn):
     for day in range(5, 10):
         Q.upsert_leader_tracking(
@@ -272,6 +307,135 @@ def test_sync_leader_tracking_does_not_assign_ambiguous_legacy_name_to_new_code(
     canonical_new = next(row for row in rows if row["stock_code"] == "600002")
     assert canonical_new["first_seen_date"] == "2026-07-14"
     assert canonical_new["consecutive_days"] == 1
+
+
+@pytest.mark.parametrize(
+    ("conflict_sector", "conflict_attribute"),
+    [
+        ("软件开发", "前排活跃"),
+        ("通信设备", "趋势中军"),
+    ],
+)
+def test_sync_leader_tracking_checks_same_name_conflicts_globally(
+    conn, conflict_sector, conflict_attribute
+):
+    Q.upsert_leader_tracking(
+        conn,
+        stock_code="600001",
+        stock_name="同\u3000名股票",
+        sector=conflict_sector,
+        attribute_type=conflict_attribute,
+        seen_date="2026-07-12",
+    )
+    Q.upsert_leader_tracking(
+        conn,
+        stock_code="同名股票",
+        stock_name="同名股票",
+        sector="通信设备",
+        attribute_type="前排活跃",
+        seen_date="2026-07-13",
+    )
+
+    sync_leader_tracking_from_step5(
+        conn,
+        "2026-07-14",
+        {
+            "top_leaders": [
+                {
+                    "stock": "同名股票",
+                    "stock_code": "600002",
+                    "sector": "通信设备",
+                    "attribute_type": "前排活跃",
+                }
+            ]
+        },
+    )
+
+    rows = conn.execute(
+        "SELECT * FROM leader_tracking ORDER BY stock_code"
+    ).fetchall()
+    assert [row["stock_code"] for row in rows] == ["600001", "600002", "同名股票"]
+    legacy = next(row for row in rows if row["stock_code"] == "同名股票")
+    canonical_new = next(row for row in rows if row["stock_code"] == "600002")
+    assert legacy["first_seen_date"] == "2026-07-13"
+    assert canonical_new["first_seen_date"] == "2026-07-14"
+
+
+def test_sync_leader_tracking_checks_same_name_conflicts_across_current_batch(conn):
+    Q.upsert_leader_tracking(
+        conn,
+        stock_code="同名股票",
+        stock_name="同名股票",
+        sector="软件开发",
+        attribute_type="趋势中军",
+        seen_date="2026-07-13",
+    )
+
+    sync_leader_tracking_from_step5(
+        conn,
+        "2026-07-14",
+        {
+            "top_leaders": [
+                {
+                    "stock": "同名股票",
+                    "stock_code": "600001",
+                    "sector": "软件开发",
+                    "attribute_type": "趋势中军",
+                },
+                {
+                    "stock": "同名股票",
+                    "stock_code": "600002",
+                    "sector": "通信设备",
+                    "attribute_type": "前排活跃",
+                },
+            ]
+        },
+    )
+
+    rows = conn.execute(
+        "SELECT * FROM leader_tracking ORDER BY stock_code"
+    ).fetchall()
+    assert [row["stock_code"] for row in rows] == ["600001", "600002", "同名股票"]
+    legacy = next(row for row in rows if row["stock_code"] == "同名股票")
+    assert legacy["first_seen_date"] == "2026-07-13"
+
+
+def test_sync_leader_tracking_rejects_conflicting_display_code_before_any_write(conn):
+    Q.upsert_leader_tracking(
+        conn,
+        stock_code="同名股票",
+        stock_name="同名股票",
+        sector="软件开发",
+        attribute_type="趋势中军",
+        seen_date="2026-07-13",
+    )
+
+    with pytest.raises(ValueError, match="conflicting stock codes"):
+        sync_leader_tracking_from_step5(
+            conn,
+            "2026-07-14",
+            {
+                "top_leaders": [
+                    {
+                        "stock": "正常股票",
+                        "stock_code": "600003",
+                        "sector": "软件开发",
+                        "attribute_type": "前排活跃",
+                    },
+                    {
+                        "stock": "600001 同名股票",
+                        "stock_code": "600002",
+                        "sector": "软件开发",
+                        "attribute_type": "趋势中军",
+                    },
+                ]
+            },
+        )
+
+    rows = conn.execute("SELECT * FROM leader_tracking ORDER BY id").fetchall()
+    assert len(rows) == 1
+    assert rows[0]["stock_code"] == "同名股票"
+    assert rows[0]["first_seen_date"] == "2026-07-13"
 
 
 def test_sync_leader_tracking_merge_keeps_latest_nonempty_phase_and_notes(conn):
