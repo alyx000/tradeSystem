@@ -446,6 +446,43 @@ def test_select_confirmation_candidates_keeps_one_stock_per_sector_role():
     assert stats["stock_duplicate_trimmed_count"] == 0
 
 
+@pytest.mark.parametrize(
+    "first_sector",
+    [
+        " 软件  开发 ",
+        "软件\t开发",
+        "软件\u00a0开发",
+        "软件\u2003开发",
+        "软件\u3000开发",
+    ],
+    ids=["ascii-spaces", "tab", "no-break-space", "em-space", "ideographic-space"],
+)
+def test_select_confirmation_candidates_persists_collapsed_sector_whitespace(
+    first_sector,
+):
+    selection = _selection()
+    items = [
+        {
+            "stock": "第一票",
+            "sector": first_sector,
+            "board_type": "10cm",
+            "_selection_score": 100,
+        },
+        {
+            "stock": "第二票",
+            "sector": "软件 开发",
+            "board_type": "10cm",
+            "_selection_score": 90,
+        },
+    ]
+
+    selected, stats = selection.select_confirmation_candidates(items)
+
+    assert [item["stock"] for item in selected] == ["第一票"]
+    assert selected[0]["sector"] == "软件 开发"
+    assert stats["sector_role_trimmed_count"] == 1
+
+
 def test_select_confirmation_candidates_keeps_stock_globally_unique_across_sectors():
     selection = _selection()
     items = [

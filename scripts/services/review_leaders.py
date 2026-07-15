@@ -7,7 +7,11 @@ import sqlite3
 from typing import Any
 
 from db import queries as Q
-from services.daily_leaders.selection import canonical_stock_code
+from services.daily_leaders.selection import (
+    canonical_stock_code,
+    normalize_sector_key,
+    normalize_stock_display,
+)
 
 
 def _coerce_step5(step5: Any) -> dict[str, Any] | None:
@@ -19,6 +23,67 @@ def _coerce_step5(step5: Any) -> dict[str, Any] | None:
         except (json.JSONDecodeError, TypeError):
             return None
     return step5 if isinstance(step5, dict) else None
+
+
+def _embedded_stock_code(value: Any) -> str:
+    tokens = normalize_stock_display(value).split()
+    return canonical_stock_code(tokens[0]) if tokens else ""
+
+
+def _stock_name_identity(value: Any) -> str:
+    display = normalize_stock_display(value)
+    tokens = display.split()
+    if tokens and canonical_stock_code(tokens[0]):
+        display = normalize_stock_display(" ".join(tokens[1:]))
+    return "".join(display.split()).upper()
+
+
+def _reconcile_tracking_identity(
+    conn: sqlite3.Connection,
+    *,
+    stock_code: str,
+    stock_name: str,
+    sector: str,
+    attribute_type: str,
+) -> None:
+    target_name = _stock_name_identity(stock_name)
+    rows = [
+        row
+        for row in Q.get_leader_tracking_by_attribute_type(
+            conn,
+            attribute_type=attribute_type,
+        )
+        if normalize_sector_key(row.get("sector")) == sector
+    ]
+    conflicting_named_code = any(
+        (row_code := _embedded_stock_code(row.get("stock_code")))
+        and row_code != stock_code
+        and target_name
+        and target_name == _stock_name_identity(row.get("stock_name"))
+        for row in rows
+    )
+    matching_ids: list[int] = []
+    for row in rows:
+        row_stock_code = row.get("stock_code")
+        row_code = _embedded_stock_code(row_stock_code)
+        if row_code:
+            if row_code == stock_code:
+                matching_ids.append(int(row["id"]))
+            continue
+        if not conflicting_named_code and target_name and target_name in {
+            _stock_name_identity(row_stock_code),
+            _stock_name_identity(row.get("stock_name")),
+        }:
+            matching_ids.append(int(row["id"]))
+    if matching_ids:
+        Q.merge_leader_tracking_identity(
+            conn,
+            record_ids=matching_ids,
+            stock_code=stock_code,
+            stock_name=stock_name,
+            sector=sector,
+            attribute_type=attribute_type,
+        )
 
 
 def sync_leader_tracking_from_step5(
@@ -42,7 +107,7 @@ def sync_leader_tracking_from_step5(
         if not isinstance(stock_raw, str) or not isinstance(sector_raw, str):
             continue
         stock = stock_raw.strip()
-        sector = sector_raw.strip()
+        sector = normalize_sector_key(sector_raw)
         if not stock or not sector:
             continue
         raw_stock_code = item.get("stock_code")
@@ -55,12 +120,21 @@ def sync_leader_tracking_from_step5(
         else:
             # Legacy review payloads predate canonical stock identities.
             stock_code = stock
+        attribute_type = item.get("attribute_type") or item.get("attribute") or ""
+        if raw_stock_code not in (None, ""):
+            _reconcile_tracking_identity(
+                conn,
+                stock_code=stock_code,
+                stock_name=stock,
+                sector=sector,
+                attribute_type=attribute_type,
+            )
         Q.upsert_leader_tracking(
             conn,
             stock_code=stock_code,
             stock_name=stock,
             sector=sector,
-            attribute_type=item.get("attribute_type") or item.get("attribute") or "",
+            attribute_type=attribute_type,
             seen_date=review_date,
             current_phase=item.get("position") or None,
         )

@@ -86,6 +86,41 @@ class TestUpsertLeaderTracking:
         leaders = get_active_leaders(conn)
         assert leaders[0]["consecutive_days"] == 1
 
+    def test_older_backfill_preserves_last_seen_count_activity_and_latest_metadata(self, conn):
+        upsert_leader_tracking(
+            conn,
+            stock_code="688041",
+            stock_name="海光信息",
+            sector="AI算力",
+            attribute_type="趋势中军",
+            seen_date="2026-07-15",
+            current_phase="主升",
+            notes="最新说明",
+        )
+        deactivate_stale_leaders(conn, before_date="2026-07-16")
+
+        upsert_leader_tracking(
+            conn,
+            stock_code="688041",
+            stock_name="海光信息旧称",
+            sector="AI算力",
+            attribute_type="趋势中军",
+            seen_date="2026-07-14",
+            current_phase="启动",
+            notes="历史说明",
+        )
+
+        row = conn.execute(
+            "SELECT * FROM leader_tracking WHERE stock_code = '688041'"
+        ).fetchone()
+        assert row["first_seen_date"] == "2026-07-14"
+        assert row["last_seen_date"] == "2026-07-15"
+        assert row["consecutive_days"] == 1
+        assert row["is_active"] == 0
+        assert row["stock_name"] == "海光信息"
+        assert row["current_phase"] == "主升"
+        assert row["notes"] == "最新说明"
+
     def test_different_sector_creates_new(self, conn):
         upsert_leader_tracking(
             conn,

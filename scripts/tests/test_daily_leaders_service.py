@@ -1598,6 +1598,30 @@ def test_confirm_rejects_same_display_identity_when_only_one_row_has_code(
     _assert_confirm_rejects_leaders_without_writing(conn, tmp_path, leaders)
 
 
+def test_confirm_allows_same_display_name_for_distinct_canonical_codes():
+    source = {
+        "date": "2026-07-14",
+        "top_leaders": [
+            {
+                "stock": "同名股票",
+                "stock_code": "600001.SH",
+                "sector": "软件开发",
+                "leader_role": "趋势中军",
+            },
+            {
+                "stock": "同名股票",
+                "stock_code": "600002.SH",
+                "sector": "通信设备",
+                "leader_role": "前排活跃",
+            },
+        ],
+    }
+
+    leaders = service._confirmed_step5_leaders(source, "2026-07-14")
+
+    assert [leader["stock_code"] for leader in leaders] == ["600001", "600002"]
+
+
 @pytest.mark.parametrize(
     "candidate",
     [
@@ -1648,6 +1672,188 @@ def test_confirm_rejects_duplicate_sector_role_without_writing(
     ]
 
     _assert_confirm_rejects_leaders_without_writing(conn, tmp_path, leaders)
+
+
+@pytest.mark.parametrize(
+    "variant_sector",
+    [
+        "软件  开发",
+        "软件\t开发",
+        "软件\u00a0开发",
+        "软件\u2003开发",
+        "软件\u3000开发",
+    ],
+    ids=["ascii-spaces", "tab", "no-break-space", "em-space", "ideographic-space"],
+)
+def test_confirm_rejects_normalized_sector_role_duplicate_before_transaction(
+    conn, tmp_path, variant_sector
+):
+    leaders_file = tmp_path / "leaders.json"
+    leaders_file.write_text(
+        json.dumps(
+            {
+                "date": "2026-07-14",
+                "top_leaders": [
+                    {
+                        "stock": "第一票",
+                        "stock_code": "600001.SH",
+                        "sector": "软件 开发",
+                        "leader_role": "前排活跃",
+                    },
+                    {
+                        "stock": "第二票",
+                        "stock_code": "600002.SH",
+                        "sector": variant_sector,
+                        "leader_role": "前排活跃",
+                    },
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    statements: list[str] = []
+    conn.set_trace_callback(statements.append)
+    caught: Exception | None = None
+    try:
+        service.confirm(conn, "2026-07-14", "codex", leaders_file=leaders_file)
+    except Exception as exc:  # The aggregate assertion below reports every side effect.
+        caught = exc
+    finally:
+        conn.set_trace_callback(None)
+
+    transaction_statements = [
+        statement
+        for statement in statements
+        if statement.lstrip().upper().startswith(("BEGIN", "COMMIT", "ROLLBACK"))
+    ]
+    observed = {
+        "value_error": isinstance(caught, ValueError),
+        "duplicate_error": "duplicates sector and leader role" in str(caught or ""),
+        "transaction_statements": transaction_statements,
+        "daily_review_written": Q.get_daily_review(conn, "2026-07-14") is not None,
+        "leader_tracking_count": len(Q.get_active_leaders(conn)),
+    }
+
+    assert observed == {
+        "value_error": True,
+        "duplicate_error": True,
+        "transaction_statements": [],
+        "daily_review_written": False,
+        "leader_tracking_count": 0,
+    }
+
+
+def test_propose_and_confirm_share_collapsed_sector_value_and_persist_it(
+    conn, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(service, "_active_history", lambda conn: [])
+    monkeypatch.setattr(
+        service,
+        "build_candidates",
+        lambda **kwargs: {
+            "date": kwargs["date"],
+            "top_leaders": [
+                {
+                    "stock": "海光信息",
+                    "stock_code": "688041.SH",
+                    "sector": "  软件\u3000开发\t ",
+                    "board_type": "10cm",
+                    "amount_yi": 100.0,
+                    "_selection_score": 100.0,
+                    "evidence": [],
+                }
+            ],
+        },
+    )
+
+    proposal = service.propose(
+        conn,
+        "2026-07-14",
+        {"teacher_notes": []},
+        no_llm=True,
+        output_root=tmp_path,
+    )
+    leaders_file = tmp_path / "confirm-leaders.json"
+    leaders_file.write_text(
+        json.dumps(
+            {
+                "date": "2026-07-14",
+                "top_leaders": [
+                    {
+                        **proposal["top_leaders"][0],
+                        "sector": "软件\u00a0\u2003开发",
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    confirmed = service.confirm(
+        conn,
+        "2026-07-14",
+        "codex",
+        leaders_file=leaders_file,
+    )
+    review = Q.get_daily_review(conn, "2026-07-14")
+    stored_step5 = json.loads(review["step5_leaders"])
+    active_leaders = Q.get_active_leaders(conn)
+
+    assert [
+        proposal["top_leaders"][0]["sector"],
+        confirmed["step5_leaders"][0]["sector"],
+        stored_step5["top_leaders"][0]["sector"],
+        active_leaders[0]["sector"],
+    ] == ["软件 开发"] * 4
+
+
+def test_confirm_rolls_back_legacy_identity_merge_when_tracking_sync_fails(
+    conn, tmp_path, monkeypatch
+):
+    Q.upsert_leader_tracking(
+        conn,
+        stock_code="600519 贵州茅台",
+        stock_name="600519 贵州茅台",
+        sector="白酒",
+        attribute_type="趋势中军",
+        seen_date="2026-07-13",
+    )
+    conn.commit()
+    leaders_file = tmp_path / "leaders.json"
+    leaders_file.write_text(
+        json.dumps(
+            {
+                "date": "2026-07-14",
+                "top_leaders": [
+                    {
+                        "stock": "贵州茅台",
+                        "stock_code": "600519",
+                        "sector": "白酒",
+                        "leader_role": "趋势中军",
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    def fail_tracking_sync(*args, **kwargs):
+        raise RuntimeError("sync failed")
+
+    monkeypatch.setattr(Q, "upsert_leader_tracking", fail_tracking_sync)
+
+    with pytest.raises(RuntimeError, match="sync failed"):
+        service.confirm(conn, "2026-07-14", "codex", leaders_file=leaders_file)
+
+    rows = conn.execute("SELECT * FROM leader_tracking ORDER BY id").fetchall()
+    assert Q.get_daily_review(conn, "2026-07-14") is None
+    assert len(rows) == 1
+    assert rows[0]["stock_code"] == "600519 贵州茅台"
+    assert rows[0]["first_seen_date"] == "2026-07-13"
+    assert rows[0]["last_seen_date"] == "2026-07-13"
 
 
 def test_invalid_limit_step_code_cannot_attach_height_to_valid_quote():

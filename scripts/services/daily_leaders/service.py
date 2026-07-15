@@ -19,6 +19,7 @@ from services.daily_leaders.selection import (
     # Keep this service-level re-export for callers that assemble the funnel in stages.
     assign_fallback_roles,
     canonical_stock_code,
+    normalize_sector_key,
     prepare_llm_review_pool,
     select_confirmation_candidates,
     stock_identity_key,
@@ -363,7 +364,7 @@ def _confirmed_step5_leaders(source: dict[str, Any], date: str) -> list[dict[str
 
     step5_leaders = []
     seen_stock_codes: set[str] = set()
-    seen_stock_displays: set[str] = set()
+    seen_stock_displays: dict[str, set[str]] = {}
     seen_sector_roles: set[tuple[str, str]] = set()
     for index, item in enumerate(raw_leaders, start=1):
         if not isinstance(item, dict):
@@ -373,7 +374,7 @@ def _confirmed_step5_leaders(source: dict[str, Any], date: str) -> list[dict[str
         if not isinstance(stock_raw, str) or not isinstance(sector_raw, str):
             raise ValueError(f"top_leaders[{index}] stock and sector must be strings")
         stock = stock_raw.strip()
-        sector = sector_raw.strip()
+        sector = normalize_sector_key(sector_raw)
         if not stock or not sector:
             raise ValueError(f"top_leaders[{index}] stock and sector are required")
 
@@ -414,13 +415,16 @@ def _confirmed_step5_leaders(source: dict[str, Any], date: str) -> list[dict[str
 
         display_key = stock_identity_key({"stock": stock})
         stock_key = canonical_code or display_key
-        if (
-            canonical_code and canonical_code in seen_stock_codes
-        ) or display_key in seen_stock_displays:
+        display_codes = seen_stock_displays.get(display_key, set())
+        if canonical_code and canonical_code in seen_stock_codes:
+            raise ValueError(f"top_leaders[{index}] duplicates stock identity {stock_key}")
+        if display_codes and (
+            not canonical_code or "" in display_codes or canonical_code in display_codes
+        ):
             raise ValueError(f"top_leaders[{index}] duplicates stock identity {stock_key}")
         if canonical_code:
             seen_stock_codes.add(canonical_code)
-        seen_stock_displays.add(display_key)
+        seen_stock_displays.setdefault(display_key, set()).add(canonical_code)
 
         role_key = str(attribute_type or "").strip()
         sector_role = (sector, role_key)

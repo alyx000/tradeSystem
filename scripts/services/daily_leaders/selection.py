@@ -24,6 +24,11 @@ def canonical_stock_code(value: Any) -> str:
     return match.group(1) if match else ""
 
 
+def normalize_sector_key(value: Any) -> str:
+    """Collapse all Unicode whitespace for stable sector identity and display."""
+    return " ".join(str(value or "").split())
+
+
 def normalize_stock_display(value: Any) -> str:
     """Normalize whitespace without collapsing a code/name display pair."""
     tokens = str(value or "").split()
@@ -71,10 +76,6 @@ def _is_limit_core(item: dict[str, Any]) -> bool:
     return height is not None and height >= 2
 
 
-def _sector_key(value: Any) -> str:
-    return " ".join(str(value or "").split())
-
-
 def _selection_score(item: dict[str, Any]) -> float:
     return _finite_number(item.get("_selection_score")) or 0.0
 
@@ -82,6 +83,8 @@ def _selection_score(item: dict[str, Any]) -> float:
 def assign_fallback_roles(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Assign deterministic roles on copies of the supplied candidates."""
     assigned = [dict(item) for item in items if isinstance(item, dict)]
+    for item in assigned:
+        item["sector"] = normalize_sector_key(item.get("sector"))
     if assigned and all(item.get("fallback_role") in LEADER_ROLES for item in assigned):
         return assigned
     sector_amount_winners: dict[str, tuple[float, int]] = {}
@@ -90,7 +93,7 @@ def assign_fallback_roles(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         amount_yi = _finite_number(item.get("amount_yi"))
         if amount_yi is None:
             continue
-        sector = _sector_key(item.get("sector"))
+        sector = item["sector"]
         current = sector_amount_winners.get(sector)
         if current is None or amount_yi > current[0]:
             sector_amount_winners[sector] = (amount_yi, index)
@@ -140,7 +143,7 @@ def prepare_llm_review_pool(
         stock_key = stock_identity_key(item)
         if stock_key and stock_key in seen_stocks:
             continue
-        group = (_sector_key(item.get("sector")), item["fallback_role"])
+        group = (item["sector"], item["fallback_role"])
         if group_counts.get(group, 0) >= 2:
             continue
         group_counts[group] = group_counts.get(group, 0) + 1
@@ -216,7 +219,7 @@ def select_confirmation_candidates(
     seen_sector_roles: set[tuple[str, str]] = set()
     sector_role_unique: list[dict[str, Any]] = []
     for item in ordered:
-        sector_role = (_sector_key(item.get("sector")), item["leader_role"])
+        sector_role = (item["sector"], item["leader_role"])
         if sector_role in seen_sector_roles:
             sector_role_trimmed_count += 1
             continue

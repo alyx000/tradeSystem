@@ -471,3 +471,4 @@ Re-run focused tests and `make check-scripts` after the final review fix. Report
 - [x] GREEN：`_confirmed_step5_leaders` 在事务前拒绝上述输入，失败后 `daily_reviews` 与 `leader_tracking` 保持零写入。
 - [x] RED/GREEN：确认转换保留规范裸 6 位 `stock_code`，tracking 优先按代码 upsert；旧 payload 无代码继续回退 `stock`。
 - [x] 契约同步：复盘 Web 类型增加可选 `stock_code`，skills / INDEX / AGENTS / CLAUDE 同步确认护栏语义。
+- [x] 门2第二轮：统一提案/确认/跟踪的 Unicode 空白压缩板块键；旧名称型 tracking 身份在确认事务内迁移，旧键与代码键并存时合并为单行。
