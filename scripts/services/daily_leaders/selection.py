@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 import re
-from typing import Any
+from typing import Any, NamedTuple
 
 from services.daily_leaders.models import (
     LEADER_ROLES,
@@ -16,6 +16,12 @@ _CANONICAL_A_SHARE_CODE_RE = re.compile(
     re.IGNORECASE,
 )
 _LEADING_A_SHARE_CODE_RE = re.compile(r"^(\d{6})(.*)$", re.DOTALL)
+
+
+class StockDisplayIdentity(NamedTuple):
+    code: str
+    name_key: str
+    malformed_code_prefix: bool
 
 
 def canonical_stock_code(value: Any) -> str:
@@ -44,28 +50,33 @@ def normalize_stock_display(value: Any) -> str:
     return " ".join(tokens)
 
 
-def parse_stock_display_identity(value: Any) -> tuple[str, str]:
+def parse_stock_display_identity(value: Any) -> StockDisplayIdentity:
     """Return leading canonical code and normalized name from a stock display."""
     display = normalize_stock_display(value)
     match = _LEADING_A_SHARE_CODE_RE.fullmatch(display)
     if not match:
-        return "", "".join(display.split()).upper()
+        return StockDisplayIdentity("", "".join(display.split()).upper(), False)
     digits, remainder = match.groups()
-    upper_remainder = remainder.upper()
-    if remainder.startswith("."):
+    suffix_remainder = remainder.lstrip()
+    upper_remainder = suffix_remainder.upper()
+    if suffix_remainder.startswith("."):
         suffix = upper_remainder[:3]
         if suffix not in {".SH", ".SZ", ".BJ"}:
-            return "", "".join(display.split()).upper()
+            return StockDisplayIdentity(
+                canonical_stock_code(digits),
+                "".join(display.split()).upper(),
+                True,
+            )
         code = canonical_stock_code(f"{digits}{suffix}")
-        remainder = remainder[3:]
+        remainder = suffix_remainder[3:]
     else:
         code = canonical_stock_code(digits)
-    return code, "".join(remainder.split()).upper()
+    return StockDisplayIdentity(code, "".join(remainder.split()).upper(), False)
 
 
 def stock_name_identity(value: Any) -> str:
     """Return a code-free, Unicode-whitespace-insensitive stock name key."""
-    return parse_stock_display_identity(value)[1]
+    return parse_stock_display_identity(value).name_key
 
 
 def _normalize_stock_code(value: Any) -> str:

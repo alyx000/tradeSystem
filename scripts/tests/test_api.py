@@ -4042,6 +4042,42 @@ def test_review_factor_score_rejects_invalid_calendar_date(client):
     assert "invalid calendar date" in response.text.lower()
 
 
+def test_review_put_rejects_conflicting_step5_stock_codes_and_rolls_back(
+    client, db_path
+):
+    seeded = client.put(
+        "/api/review/2026-07-10",
+        json={"step1_market": {"notes": "原始复盘"}},
+    )
+    assert seeded.status_code == 200
+
+    rejected = client.put(
+        "/api/review/2026-07-10",
+        json={
+            "step1_market": {"notes": "不应写入"},
+            "step5_leaders": {
+                "top_leaders": [
+                    {
+                        "stock": "600001 同名股票",
+                        "stock_code": "600002",
+                        "sector": "软件开发",
+                        "attribute_type": "趋势中军",
+                    }
+                ]
+            },
+        },
+    )
+
+    assert rejected.status_code == 422
+    stored = client.get("/api/review/2026-07-10").json()
+    assert json.loads(stored["step1_market"])["notes"] == "原始复盘"
+    conn = get_connection(db_path)
+    try:
+        assert Q.get_active_leaders(conn) == []
+    finally:
+        conn.close()
+
+
 def test_review_put_validates_factor_decision_and_syncs_legacy(client, db_path):
     _seed_factor_score_run(db_path)
 

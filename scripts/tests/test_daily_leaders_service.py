@@ -1638,6 +1638,36 @@ def test_confirm_rejects_compact_code_name_and_name_only_duplicate(
     _assert_confirm_rejects_leaders_without_writing(conn, tmp_path, leaders)
 
 
+@pytest.mark.parametrize("explicit_code", ["600001", "600002"])
+@pytest.mark.parametrize(
+    "malformed_stock",
+    [
+        "600001.BAD同名股票",
+        "600001 .BAD同名股票",
+        "600001\u3000.BAD同名股票",
+        "600001\u00a0.BAD同名股票",
+    ],
+)
+def test_confirm_rejects_malformed_display_code_suffix(
+    conn, tmp_path, explicit_code, malformed_stock
+):
+    leaders = [
+        {
+            "stock": malformed_stock,
+            "stock_code": explicit_code,
+            "sector": "软件开发",
+            "leader_role": "趋势中军",
+        },
+        {
+            "stock": "同名股票",
+            "sector": "通信设备",
+            "leader_role": "前排活跃",
+        },
+    ]
+
+    _assert_confirm_rejects_leaders_without_writing(conn, tmp_path, leaders)
+
+
 def test_confirm_allows_same_display_name_for_distinct_canonical_codes():
     source = {
         "date": "2026-07-14",

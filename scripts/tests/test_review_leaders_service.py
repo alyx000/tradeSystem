@@ -400,6 +400,54 @@ def test_sync_leader_tracking_checks_same_name_conflicts_across_current_batch(co
     assert legacy["first_seen_date"] == "2026-07-13"
 
 
+@pytest.mark.parametrize("canonical_first", [True, False])
+def test_sync_leader_tracking_mixed_batch_identity_is_order_independent(
+    conn, canonical_first
+):
+    Q.upsert_leader_tracking(
+        conn,
+        stock_code="同名股票",
+        stock_name="同名股票",
+        sector="软件开发",
+        attribute_type="趋势中军",
+        seen_date="2026-07-13",
+    )
+    canonical = {
+        "stock": "同名股票",
+        "stock_code": "600002",
+        "sector": "软件开发",
+        "attribute_type": "趋势中军",
+    }
+    display_only = {
+        "stock": "600001同名股票",
+        "sector": "通信设备",
+        "attribute_type": "前排活跃",
+    }
+    leaders = (
+        [canonical, display_only]
+        if canonical_first
+        else [display_only, canonical]
+    )
+
+    sync_leader_tracking_from_step5(
+        conn,
+        "2026-07-14",
+        {"top_leaders": leaders},
+    )
+
+    rows = conn.execute("SELECT * FROM leader_tracking ORDER BY id").fetchall()
+    assert {row["stock_code"] for row in rows} == {
+        "600001同名股票",
+        "600002",
+        "同名股票",
+    }
+    legacy = next(row for row in rows if row["stock_code"] == "同名股票")
+    canonical_new = next(row for row in rows if row["stock_code"] == "600002")
+    assert legacy["first_seen_date"] == "2026-07-13"
+    assert legacy["last_seen_date"] == "2026-07-13"
+    assert canonical_new["first_seen_date"] == "2026-07-14"
+
+
 def test_sync_leader_tracking_rejects_conflicting_display_code_before_any_write(conn):
     Q.upsert_leader_tracking(
         conn,

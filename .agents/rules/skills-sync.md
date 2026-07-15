@@ -110,7 +110,7 @@ python3 -m pytest scripts/tests/test_cli_smoke.py -v
 | `scripts/cli/new_high.py` 或 `scripts/services/new_high/` | `market-tasks/SKILL.md` + `INDEX.md` 中 `new-high` 行 |
 | `scripts/cli/trend_leader.py` 或 `scripts/services/trend_leader/` | `market-tasks/SKILL.md` + `INDEX.md` 中 `trend-leader` 行 |
 | `scripts/cli/tail_scan.py` 或 `scripts/services/tail_scan/` | `market-tasks/SKILL.md` + `INDEX.md` 中 `tail-scan` 行 + `AGENTS.md` / `CLAUDE.md` |
-| `scripts/cli/daily_leaders.py` 或 `scripts/services/daily_leaders/` | `market-tasks/SKILL.md` + `INDEX.md` 中 `daily-leaders` 行 + `AGENTS.md` / `CLAUDE.md`；核对申万二级板块口径、语义属性与板型分离、同板块同属性唯一、最终最多 15、LLM 失败仍按相同硬约束兜底 |
+| `scripts/cli/daily_leaders.py` 或 `scripts/services/daily_leaders/` | `market-tasks/SKILL.md` + `INDEX.md` 中 `daily-leaders` 行 + `AGENTS.md` / `CLAUDE.md`；核对申万二级板块口径、语义属性与板型分离、同板块同属性唯一、最终最多 15、LLM 失败仍按相同硬约束兜底，并保持展示内代码解析、非法后缀及显式代码冲突 fail-closed |
 | `scripts/services/tail_scan/concept_context.py`，或 provider 的 `get_stock_concept_memberships` capability | `market-tasks/SKILL.md` + `INDEX.md` 中 `tail-scan` capability/消费者/字段用途 + `AGENTS.md` / `CLAUDE.md`；必须核对当前 `type=N` 快照（非历史 as-of）与 T-1 热概念分层、共享容器过滤、报告 5 个/2 个上限、完整归属不进粗分/PK、兼容热字段语义，以及 `source_failed` / `coverage_failed` / `member_failed` / `missing` 状态不混淆 |
 | `scripts/utils/llm_cli.py` 或 LLM CLI/env 语义调整 | `market-tasks/SKILL.md` + `INDEX.md` 中 recommend/research-digest/cognition-digest 行 |
 | `scripts/workflows/research-digest-workflow.mjs` / `scripts/workflows/huibo_helper.py` / 慧博 Antigravity 诊断语义调整 / `HUIBO_REPORT_PDF_DIR` 下载归档目录约定调整 | `market-tasks/SKILL.md` + `INDEX.md` 中 research-digest workflow 行 |
@@ -124,7 +124,7 @@ python3 -m pytest scripts/tests/test_cli_smoke.py -v
 | `scripts/services/broker_executions/` 任意改动 | `portfolio-manager/SKILL.md`（若行为契约变更）；任何 schema 字段/UNIQUE 调整还需同步 `INDEX.md` |
 | `scripts/services/trade_thesis/` 或 `scripts/db/schema.py` 中 `trade_mode` 语义/枚举调整 | `portfolio-manager/SKILL.md` + `INDEX.md` 中 `thesis-*` 行 |
 | 仓库维护工作流、CLI/API 对齐、巡检、文档/索引同步 | `repo-maintenance-workflows/SKILL.md` |
-| `api/routes/review.py` | `daily-review/SKILL.md`、`sector-projection-analysis/SKILL.md`（含 `POST /api/review/{date}/to-draft` 时也检查 `plan-workbench/SKILL.md`；若预填字段语义调整，如 `lead_stock` / `emotion_leader` / `capacity_leader`，或保存字段标准化语义调整，同步 Skill 文案） |
+| `api/routes/review.py` | `daily-review/SKILL.md`、`sector-projection-analysis/SKILL.md`（含 `POST /api/review/{date}/to-draft` 时也检查 `plan-workbench/SKILL.md`；若预填字段语义调整，如 `lead_stock` / `emotion_leader` / `capacity_leader`，或保存字段标准化语义调整，同步 Skill 文案；`step5_leaders` 身份校验失败必须返回 422，并原子回滚复盘与 tracking 写入） |
 | `api/routes/review_factors.py` | `daily-review/SKILL.md`、`sector-projection-analysis/SKILL.md` 与 `INDEX.md`；评分/回验/metrics 路径必须与 `review factor-*` CLI 共用 service 语义 |
 | `api/routes/planning.py` 中 `/api/plans/*` | `plan-workbench/SKILL.md` |
 | `api/routes/planning.py` 中 `/api/knowledge/*` | `knowledge-to-plan/SKILL.md` |

@@ -24,7 +24,6 @@ from services.daily_leaders.selection import (
     prepare_llm_review_pool,
     select_confirmation_candidates,
     stock_identity_key,
-    stock_name_identity,
 )
 from services.daily_leaders.store import _safe_date, read_proposal, write_proposal
 from services.review_leaders import build_review_with_step5, sync_leader_tracking_from_step5
@@ -381,9 +380,13 @@ def _confirmed_step5_leaders(source: dict[str, Any], date: str) -> list[dict[str
             raise ValueError(f"top_leaders[{index}] stock and sector are required")
 
         canonical_codes: set[str] = set()
-        display_code, _ = parse_stock_display_identity(stock)
-        if display_code:
-            canonical_codes.add(display_code)
+        display_identity = parse_stock_display_identity(stock)
+        if display_identity.malformed_code_prefix:
+            raise ValueError(
+                f"top_leaders[{index}] stock contains a malformed stock code suffix"
+            )
+        if display_identity.code:
+            canonical_codes.add(display_identity.code)
         for code_field in ("stock_code", "code"):
             raw_code = item.get(code_field)
             if raw_code in (None, ""):
@@ -413,7 +416,7 @@ def _confirmed_step5_leaders(source: dict[str, Any], date: str) -> list[dict[str
         else:
             attribute_type = legacy_attribute
 
-        name_key = stock_name_identity(stock)
+        name_key = display_identity.name_key
         stock_key = canonical_code or name_key
         name_codes = seen_stock_names.get(name_key, set()) if name_key else set()
         if canonical_code and canonical_code in seen_stock_codes:

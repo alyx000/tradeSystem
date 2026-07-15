@@ -1468,7 +1468,11 @@ def save_review(date: str, body: dict, conn: sqlite3.Connection = Depends(get_db
     if "step7_positions" in body:
         tasks = _extract_holding_tasks_from_step7(body.get("step7_positions"))
         Q.replace_holding_tasks(conn, trade_date=date, tasks=tasks, source="review_step7")
-    sync_leader_tracking_from_step5(conn, date, body.get("step5_leaders"))
+    try:
+        sync_leader_tracking_from_step5(conn, date, body.get("step5_leaders"))
+    except ValueError as exc:
+        conn.rollback()
+        raise HTTPException(422, str(exc)) from exc
     conn.commit()
     return {"ok": True, "date": date}
 

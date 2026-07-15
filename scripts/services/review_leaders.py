@@ -27,7 +27,8 @@ def _coerce_step5(step5: Any) -> dict[str, Any] | None:
 
 
 def _embedded_stock_code(value: Any) -> str:
-    return parse_stock_display_identity(value)[0]
+    identity = parse_stock_display_identity(value)
+    return "" if identity.malformed_code_prefix else identity.code
 
 
 def _reconcile_tracking_identity(
@@ -107,15 +108,25 @@ def sync_leader_tracking_from_step5(
             continue
         if not raw_stock.strip() or not normalize_sector_key(raw_sector):
             continue
-        if not isinstance(raw_stock_code, str):
+        display_identity = parse_stock_display_identity(raw_stock)
+        if display_identity.malformed_code_prefix:
+            raise ValueError("leader stock display contains a malformed stock code suffix")
+        has_explicit_code = raw_stock_code not in (None, "")
+        if has_explicit_code and not isinstance(raw_stock_code, str):
             continue
-        stock_code = canonical_stock_code(raw_stock_code)
-        display_code = _embedded_stock_code(raw_stock)
-        if stock_code and display_code and stock_code != display_code:
+        explicit_code = canonical_stock_code(raw_stock_code)
+        if has_explicit_code and not explicit_code:
+            continue
+        if (
+            explicit_code
+            and display_identity.code
+            and explicit_code != display_identity.code
+        ):
             raise ValueError("leader stock display and stock_code contain conflicting stock codes")
-        name_key = stock_name_identity(raw_stock)
-        if stock_code and name_key:
-            batch_codes_by_name.setdefault(name_key, set()).add(stock_code)
+        effective_code = explicit_code or display_identity.code
+        name_key = display_identity.name_key
+        if effective_code and name_key:
+            batch_codes_by_name.setdefault(name_key, set()).add(effective_code)
     synced = 0
     for item in leaders:
         if not isinstance(item, dict):
