@@ -104,9 +104,7 @@ def sync_leader_tracking_from_step5(
         raw_stock = item.get("stock")
         raw_sector = item.get("sector")
         raw_stock_code = item.get("stock_code")
-        if not isinstance(raw_stock, str) or not isinstance(raw_sector, str):
-            continue
-        if not raw_stock.strip() or not normalize_sector_key(raw_sector):
+        if not isinstance(raw_stock, str) or not raw_stock.strip():
             continue
         display_identity = parse_stock_display_identity(raw_stock)
         if display_identity.malformed_code_prefix:
@@ -123,6 +121,8 @@ def sync_leader_tracking_from_step5(
             and explicit_code != display_identity.code
         ):
             raise ValueError("leader stock display and stock_code contain conflicting stock codes")
+        if not isinstance(raw_sector, str) or not normalize_sector_key(raw_sector):
+            continue
         effective_code = explicit_code or display_identity.code
         name_key = display_identity.name_key
         if effective_code and name_key:
