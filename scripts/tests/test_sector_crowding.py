@@ -1,10 +1,33 @@
-"""sector_crowding 测试：当前覆盖 schema / repo / analyzer（后续阶段扩展 collector/service/formatter）。"""
+"""sector_crowding 测试：覆盖 schema / repo / analyzer / collector（后续阶段扩展 service/formatter）。"""
 import sqlite3
+from unittest.mock import MagicMock
 
 import pytest
 
 from db.schema import init_schema
-from services.sector_crowding import analyzer, repo
+from services.sector_crowding import analyzer, collector, repo
+
+
+def _sw_df(rows):
+    import pandas as pd
+    return pd.DataFrame(rows)
+
+
+def _mk_provider(daily_rows, l1_codes=frozenset({"801080.SI"}), parent_map=None):
+    p = MagicMock()
+    p.pro.sw_daily.return_value = _sw_df(daily_rows)
+    p._ensure_sw_l1_codes.return_value = set(l1_codes)
+    p._ensure_sw_l2_codes.return_value = {"801081.SI"}
+    p._ensure_sw_l1_parent_map.return_value = parent_map or {}
+    return p
+
+
+ROWS = [
+    {"ts_code": "801080.SI", "name": "电子", "close": 5000.0,
+     "amount": 3000.0 * 10000.0, "trade_date": "20260717"},
+    {"ts_code": "801081.SI", "name": "半导体", "close": 8000.0,
+     "amount": 1500.0 * 10000.0, "trade_date": "20260717"},
+]
 
 
 @pytest.fixture()
@@ -91,6 +114,79 @@ class TestRepo:
         for bad in (0, -1):
             with pytest.raises(ValueError):
                 repo.get_recent(conn, "2026-07-17", days=bad)
+
+
+class TestCollector:
+    def test_fetch_sector_daily_native_l1(self):
+        out = collector.fetch_sector_daily(_mk_provider(ROWS), "2026-07-17")
+        levels = {s["code"]: s["level"] for s in out["sectors"]}
+        assert levels == {"801080.SI": "L1", "801081.SI": "L2"}
+        assert out["meta"]["l1_status"] == "native"
+        amounts = {s["code"]: s["amount_billion"] for s in out["sectors"]}
+        assert amounts["801080.SI"] == pytest.approx(3000.0)
+
+    def test_fetch_sector_daily_filters_unknown_levels(self):
+        # sw_daily 含 L3/申万50 等特殊指数,不在 L1/L2 码表内必须过滤(防混级双计)
+        rows = ROWS + [{"ts_code": "801001.SI", "name": "申万50", "close": 1.0,
+                        "amount": 5.0, "trade_date": "20260717"}]
+        out = collector.fetch_sector_daily(_mk_provider(rows), "2026-07-17")
+        assert {s["code"] for s in out["sectors"]} == {"801080.SI", "801081.SI"}
+
+    def test_fetch_sector_daily_l1_missing_no_synthesis(self):
+        # sw_daily 只有 L2 行、parent_map 为空 → 禁止合成,l1_status=missing
+        out = collector.fetch_sector_daily(
+            _mk_provider([ROWS[1]], l1_codes=frozenset(), parent_map={}), "2026-07-17")
+        assert out["meta"]["l1_status"] == "missing"
+        assert all(s["level"] == "L2" for s in out["sectors"])
+
+    def test_fetch_sector_daily_l1_synthesized_when_map_ok(self):
+        out = collector.fetch_sector_daily(
+            _mk_provider([ROWS[1]], l1_codes=frozenset(),
+                         parent_map={"801081.SI": "801080.SI"}), "2026-07-17")
+        assert out["meta"]["l1_status"] == "synthesized"
+        l1 = [s for s in out["sectors"] if s["level"] == "L1"]
+        assert l1 and l1[0]["code"] == "801080.SI" and l1[0]["close"] is None
+        assert l1[0]["amount_billion"] == pytest.approx(1500.0)
+
+    def test_fetch_market_total_guard_floor(self, conn):
+        registry = MagicMock()
+        registry.call.return_value = MagicMock(
+            success=True, data={"total_billion": 1000.0,
+                                "shanghai_billion": 500.0, "shenzhen_billion": 500.0},
+            source="tushare")
+        total, src = collector.fetch_market_total(conn, registry, "2026-07-17")
+        assert total is None  # 低于绝对地板 3000 亿
+
+    def test_fetch_market_total_ratio_guard(self, conn):
+        registry = MagicMock()
+        registry.call.return_value = MagicMock(
+            success=True, data={"total_billion": 20000.0,
+                                "shanghai_billion": 12000.0, "shenzhen_billion": 8000.0},
+            source="tushare")
+        total, _ = collector.fetch_market_total(conn, registry, "2026-07-17")
+        assert total is None  # 深/沪腿比 8/12 < 0.8 疑口径退化
+
+    def test_fetch_proxy_partial_failure(self):
+        registry = MagicMock()
+
+        def _call(cap, *a, **kw):
+            if cap == "get_sector_moneyflow_ths":
+                return MagicMock(success=True, source="tushare:moneyflow_ind_ths",
+                                 data=[{"name": "电子", "net_amount_yi": 55.0}])
+            return MagicMock(success=False, data=None, error="down", source="x")
+
+        registry.call.side_effect = _call
+        out = collector.fetch_proxy(registry, "2026-07-17")
+        assert out["moneyflow"][0]["net_amount_yi"] == 55.0
+        assert out["etf"] is None and out["margin"] is None
+        assert out["errors"]  # 失败路有记录
+
+    def test_normalize_moneyflow_akshare_field_shape(self):
+        # akshare get_sector_fund_flow 源字段为 net_inflow_billion → 归一为 net_amount_yi
+        out = collector._normalize_moneyflow(
+            [{"name": "电子", "net_inflow_billion": 30.5},
+             {"name": "脏值", "net_inflow_billion": "bad"}])
+        assert out == [{"name": "电子", "net_amount_yi": 30.5}]
 
 
 class TestMigrateEnsure:
