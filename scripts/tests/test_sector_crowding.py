@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from db.schema import init_schema
-from services.sector_crowding import analyzer, collector, formatter, repo
+from services.sector_crowding import analyzer, collector, formatter, repo, service
 
 
 def _sw_df(rows):
@@ -249,6 +249,80 @@ class TestFormatter:
             "margin": {"trade_date": "2026-07-16", "total_rzrqye_yi": 19000.0},
             "errors": []}})
         assert "数据日 2026-07-16" in md and "两融" in md
+
+
+def _mk_registry_ok():
+    registry = MagicMock()
+
+    def _call(cap, *a, **kw):
+        if cap == "get_market_volume":
+            return MagicMock(success=True, source="tushare",
+                             data={"total_billion": 15000.0, "shanghai_billion": 7000.0,
+                                   "shenzhen_billion": 8000.0})
+        if cap == "get_sector_moneyflow_ths":
+            return MagicMock(success=True, source="tushare:moneyflow_ind_ths",
+                             data=[{"name": "电子", "net_amount_yi": 55.0}])
+        return MagicMock(success=False, data=None, error="down", source="x")
+
+    registry.call.side_effect = _call
+    return registry
+
+
+class TestService:
+    def test_run_daily_persists_and_renders(self, conn):
+        md = service.run_daily(conn, _mk_registry_ok(), _mk_provider(ROWS), "2026-07-17")
+        assert md is not None and "全行业交易拥挤度" in md
+        snap = repo.get_snapshot(conn, "2026-07-17")
+        assert snap is not None
+        sec = {s["code"]: s for s in snap["sectors"]}
+        assert sec["801080.SI"]["share_pct"] == pytest.approx(20.0)
+        # 派生指标不落库
+        assert "share_pctile" not in sec["801080.SI"]
+        # 报告含代理段(get_snapshot 覆盖当日全量,proxy 不得静默丢失)
+        assert "主力净流入" in md
+
+    def test_run_daily_dry_run_no_persist(self, conn):
+        md = service.run_daily(conn, _mk_registry_ok(), _mk_provider(ROWS),
+                               "2026-07-17", persist=False)
+        assert md is not None
+        assert repo.get_snapshot(conn, "2026-07-17") is None
+
+    def test_run_daily_dry_run_uses_fresh_record_over_stale_row(self, conn):
+        # 库里已有旧行(share_pct=20)时,dry-run 必须展示本次 fresh 采集而非陈旧库行
+        service.run_daily(conn, _mk_registry_ok(), _mk_provider(ROWS), "2026-07-17")
+        rows2 = [dict(ROWS[0], amount=6000.0 * 10000.0), ROWS[1]]
+        md = service.run_daily(conn, _mk_registry_ok(), _mk_provider(rows2),
+                               "2026-07-17", persist=False)
+        assert "40.0%" in md  # 6000/15000,而非旧值 20%
+
+    def test_run_daily_no_sectors_returns_none(self, conn):
+        p = _mk_provider([])
+        p.pro.sw_daily.return_value = _sw_df([])
+        assert service.run_daily(conn, _mk_registry_ok(), p, "2026-07-17") is None
+
+    def test_run_report_missing_date(self, conn):
+        assert "无拥挤度快照" in service.run_report(conn, "2026-01-01")
+
+    def test_run_report_includes_proxy_and_meta(self, conn):
+        # get_recent 精简列契约:report 必须用 get_snapshot 覆盖当日,代理段/meta 不丢
+        service.run_daily(conn, _mk_registry_ok(), _mk_provider(ROWS), "2026-07-17")
+        md = service.run_report(conn, "2026-07-17")
+        assert "主力净流入" in md
+
+    def test_run_daily_non_trading_day_guard(self, conn, monkeypatch):
+        monkeypatch.setattr(service, "is_non_trading_day", lambda *a: True)
+        md = service.run_daily(conn, _mk_registry_ok(), _mk_provider(ROWS), "2026-07-19")
+        assert md is None
+        assert repo.get_snapshot(conn, "2026-07-19") is None
+        # dry-run 豁免守卫（与 sector_correlation 同语义）
+        md2 = service.run_daily(conn, _mk_registry_ok(), _mk_provider(ROWS),
+                                "2026-07-19", persist=False)
+        assert md2 is not None
+
+    def test_run_trend(self, conn):
+        service.run_daily(conn, _mk_registry_ok(), _mk_provider(ROWS), "2026-07-17")
+        md = service.run_trend(conn, "2026-07-17", "801080.SI", days=30)
+        assert "2026-07-17" in md and "20.0%" in md
 
 
 class TestMigrateEnsure:
