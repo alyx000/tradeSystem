@@ -7,7 +7,7 @@
   record-notes     → add-note, add-industry, add-macro
   portfolio-manager → holdings-*, watchlist-*, add-trade, blacklist-add
   daily-review     → query-notes, db-search
-  market-tasks     → (main.py pre/post，不在 db 子命令下，不在此测试)
+  market-tasks     → pre/post/schedule 与各市场任务顶层命令
 """
 from __future__ import annotations
 
@@ -32,7 +32,7 @@ def _build_db_parser() -> argparse.ArgumentParser:
 
 
 def _build_main_parser() -> argparse.ArgumentParser:
-    """构建 main.py 顶层解析器，校验 ingest/plan/knowledge 命令签名。"""
+    """构建 main.py 顶层解析器，校验 INDEX 所列架构命令签名。"""
     from main import build_parser
     return build_parser()
 
@@ -223,6 +223,12 @@ ALL_SKILL_COMMANDS = (
 )
 
 ARCHITECTURE_COMMANDS = [
+    # 基础盘前/盘后与 legacy 常驻调度器
+    ["pre"],
+    ["pre", "--date", "2026-07-13"],
+    ["post"],
+    ["post", "--date", "2026-07-13"],
+    ["schedule"],
     ["review", "factor-score", "--date", "2026-07-10", "--input-by", "alyx", "--json"],
     ["review", "factor-score", "--date", "2026-07-10", "--steps-file", "/tmp/steps.json", "--no-llm", "--input-by", "alyx", "--json"],
     ["review", "factor-confirm", "--date", "2026-07-10", "--run-id", "run-1",
@@ -314,6 +320,13 @@ ARCHITECTURE_COMMANDS = [
     ["sector-correlation", "matrix", "--refetch", "--no-concept"],
     ["sector-correlation", "trend"],
     ["sector-correlation", "trend", "--date", "2026-05-29", "--days", "20"],
+    # sector-crowding (板块拥挤度:交易/斜率/资金流代理)
+    ["sector-crowding", "daily"],
+    ["sector-crowding", "daily", "--date", "2026-07-17", "--dry-run"],
+    ["sector-crowding", "daily", "--date", "2026-07-17", "--push"],
+    ["sector-crowding", "report", "--date", "2026-07-17"],
+    ["sector-crowding", "trend", "--sector", "801080.SI", "--days", "60"],
+    ["sector-crowding", "backfill", "--start", "2019-01-01", "--end", "2026-07-17"],
     # market-timing (大盘择时观察:斐波那契变盘点 + 底分型)
     ["market-timing", "daily"],
     ["market-timing", "daily", "--date", "2026-05-29"],

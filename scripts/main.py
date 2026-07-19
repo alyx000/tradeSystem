@@ -1779,6 +1779,10 @@ def build_parser() -> argparse.ArgumentParser:
     from cli.sector_correlation import register_subparser as register_sector_correlation_subparser
     register_sector_correlation_subparser(subparsers)
 
+    # sector-crowding (板块拥挤度:交易/斜率/资金流代理)
+    from cli.sector_crowding import register_subparser as register_sector_crowding_subparser
+    register_sector_crowding_subparser(subparsers)
+
     # market-timing (大盘择时观察:斐波那契变盘点 + 底分型)
     from cli.market_timing import register_subparser as register_market_timing_subparser
     register_market_timing_subparser(subparsers)
@@ -1886,6 +1890,9 @@ def main():
     elif args.command == "sector-correlation":
         from cli import sector_correlation as sector_correlation_module
         sector_correlation_module.handle_command(config, args)
+    elif args.command == "sector-crowding":
+        from cli import sector_crowding as sector_crowding_module
+        sector_crowding_module.handle_command(config, args)
     elif args.command == "market-timing":
         from cli import market_timing as market_timing_module
         market_timing_module.handle_command(config, args)
