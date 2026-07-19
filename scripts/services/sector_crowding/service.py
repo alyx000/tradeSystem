@@ -87,6 +87,12 @@ def run_backfill(conn: sqlite3.Connection, registry, provider, start: str, end: 
         # 跳过判定恒空集 → 已有 daily 行被回填静默覆盖(门1 review 角度B)
         raise ValueError(f"run_backfill: start/end 须为 YYYY-MM-DD 格式,得到 {start!r}/{end!r}")
     by_date, codes_failed = collector.fetch_history_by_date(provider, start, end)
+    if not by_date:
+        # 空返回型源故障(不抛异常、全码空 DataFrame)会伪装成"成功但 0 写入"(codex 门2 轮2 高):
+        # 分位样本长期不足且难察觉。区间全为非交易日时同样命中,由调用方改用含交易日区间重跑。
+        raise RuntimeError(
+            f"sector-crowding backfill: {start}~{end} 未采到任何行情行,"
+            "疑源整体空返回或区间无交易日,中止(fail-closed)")
     if codes_failed:
         # fail-closed(codex 门2 高):部分码缺失仍落库会留下断链/低偏历史,且日期被
         # existing 集合锁死重跑不自愈。整体中止 → 重跑即重试,自愈语义单一。

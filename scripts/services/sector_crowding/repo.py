@@ -6,7 +6,9 @@ import sqlite3
 
 
 def _dump_opt(value) -> str | None:
-    return None if value is None else json.dumps(value, ensure_ascii=False)
+    # allow_nan=False:NaN/inf 落库会写成非标 JSON token,在写边界炸掉优于毒化存储
+    # (采集层已逐路归一,此处是最后一道防线)
+    return None if value is None else json.dumps(value, ensure_ascii=False, allow_nan=False)
 
 
 def save_snapshot(conn: sqlite3.Connection, record: dict) -> None:
@@ -38,7 +40,7 @@ def save_snapshot(conn: sqlite3.Connection, record: dict) -> None:
         (
             record["date"],
             record.get("market_total_billion"),
-            json.dumps(record["sectors"], ensure_ascii=False),  # 必填列,入口已挡 None
+            json.dumps(record["sectors"], ensure_ascii=False, allow_nan=False),  # 必填列,入口已挡 None
             _dump_opt(record.get("proxy")),
             _dump_opt(record.get("meta")),
         ),

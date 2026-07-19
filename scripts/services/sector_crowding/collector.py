@@ -244,10 +244,22 @@ def _normalize_etf(records: list) -> list[dict]:
 
 
 def _clean_margin(data: dict | None) -> dict | None:
-    """两融代理清洗:渲染主值非有限 → 整体置 None(缺失优于坏值)。"""
+    """两融代理清洗:白名单重建输出,数值字段非有限置 None,主值非有限整体置 None。
+
+    不原样透传外部 dict:嵌套字段(exchanges 等)含 NaN 会随 proxy_json 落成非标 JSON
+    (codex 门2 轮2 中);未消费字段一律不带。"""
     if not isinstance(data, dict) or not _finite_num(data.get("total_rzrqye_yi")):
         return None
-    return data
+    return {
+        "trade_date": data.get("trade_date"),
+        "requested_date": data.get("requested_date"),
+        "market_scope": data.get("market_scope"),
+        "total_rzrqye_yi": data["total_rzrqye_yi"],
+        "total_rzye_yi": data.get("total_rzye_yi")
+        if _finite_num(data.get("total_rzye_yi")) else None,
+        "total_rqye_yi": data.get("total_rqye_yi")
+        if _finite_num(data.get("total_rqye_yi")) else None,
+    }
 
 
 def _try_call(registry, cap: str, date: str, errors: list):

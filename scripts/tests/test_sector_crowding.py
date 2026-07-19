@@ -109,6 +109,13 @@ class TestRepo:
             repo.save_snapshot(conn, _rec("2026-07-17", sectors=[
                 {"code": "801080.SI", "level": " "}]))
 
+    def test_save_snapshot_rejects_nan_at_write_boundary(self, conn):
+        # 最后防线:采集层漏网的 NaN 在写边界炸掉,优于落成非标 JSON 毒化存储
+        with pytest.raises(ValueError):
+            repo.save_snapshot(conn, _rec("2026-07-17", sectors=[
+                {"code": "801080.SI", "name": "电子", "level": "L1",
+                 "close": float("nan"), "amount_billion": 1.0, "share_pct": 1.0}]))
+
     def test_get_recent_rejects_non_positive_days(self, conn):
         repo.save_snapshot(conn, _rec("2026-07-17"))
         for bad in (0, -1):
@@ -241,6 +248,23 @@ class TestCollector:
         assert out["etf"][0]["total_shares_billion"] is None
         assert out["etf"][0]["shares_change_billion"] == 2.0
         assert out["margin"] is None  # 主值 NaN → 整体置 None
+
+    def test_clean_margin_whitelists_and_nulls_nested_nan(self):
+        # 白名单重建:嵌套 NaN 字段置 None、未消费字段(exchanges)不透传
+        out = collector._clean_margin({
+            "trade_date": "2026-07-17", "total_rzrqye_yi": 19000.0,
+            "total_rzye_yi": float("nan"), "total_rqye_yi": 100.0,
+            "exchanges": [{"rzye_yi": float("nan")}]})
+        assert out["total_rzye_yi"] is None
+        assert out["total_rqye_yi"] == 100.0
+        assert "exchanges" not in out
+
+    def test_backfill_empty_fetch_aborts(self, conn):
+        # 空返回型源故障(全码空 DataFrame 不抛异常)不得伪装成"成功 0 写入"
+        p = _mk_provider(ROWS)
+        p.pro.sw_daily.side_effect = lambda **kw: _sw_df([])
+        with pytest.raises(RuntimeError):
+            service.run_backfill(conn, _mk_registry_ok(), p, "2026-07-16", "2026-07-16")
 
     def test_fetch_code_history_skips_malformed_trade_date(self):
         # pandas 缺值整列 int→float64:str() 出 "20200101.0"/"nan" → 畸形日期键必须跳行
