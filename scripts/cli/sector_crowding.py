@@ -21,6 +21,22 @@ from services.sector_crowding import service
 logger = logging.getLogger(__name__)
 
 
+def _iso_date(value: str) -> str:
+    """argparse type 回调:边缘校验日期格式,免 service 层 ValueError 裸 traceback。"""
+    try:
+        datetime.date.fromisoformat(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"日期须为 YYYY-MM-DD 格式: {value!r}")
+    return value
+
+
+def _positive_int(value: str) -> int:
+    iv = int(value)
+    if iv <= 0:
+        raise argparse.ArgumentTypeError(f"须为正整数: {value!r}")
+    return iv
+
+
 def register_subparser(subparsers: argparse._SubParsersAction) -> None:
     sc = subparsers.add_parser("sector-crowding", help="板块拥挤度(交易/斜率/资金流代理)")
     sub = sc.add_subparsers(dest="sector_crowding_command")
@@ -37,12 +53,12 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
     trend.add_argument("--sector", required=True,
                        help="申万行业代码(如 801080.SI,建议用代码;回填历史行无中文名,按名查会缺段)")
     trend.add_argument("--date", default=None, help="截止交易日(默认今天)")
-    trend.add_argument("--days", type=int, default=60, help="窗口天数(默认 60)")
+    trend.add_argument("--days", type=_positive_int, default=60, help="窗口天数(默认 60)")
 
     backfill = sub.add_parser("backfill", help="一次性历史回填(fail-closed,重跑即重试)")
-    backfill.add_argument("--start", default=service.DEFAULT_BACKFILL_START,
+    backfill.add_argument("--start", type=_iso_date, default=service.DEFAULT_BACKFILL_START,
                           help=f"起始日 YYYY-MM-DD(默认 {service.DEFAULT_BACKFILL_START})")
-    backfill.add_argument("--end", default=None, help="截止日 YYYY-MM-DD(默认今天)")
+    backfill.add_argument("--end", type=_iso_date, default=None, help="截止日 YYYY-MM-DD(默认今天)")
 
 
 def handle_command(config: dict, args: argparse.Namespace) -> None:
@@ -108,6 +124,8 @@ def _run_daily(config: dict, args: argparse.Namespace) -> None:
         print(f"{date} 无拥挤度数据或非交易日,跳过。")
         return
     print(md)
+    if args.push and args.dry_run:
+        logger.info("[sector-crowding] dry-run 模式,--push 被忽略,未推送")
     if args.push and not args.dry_run:
         _push_to_dingtalk(f"板块拥挤度 · {date}", md)
 
@@ -123,6 +141,10 @@ def _run_backfill(config: dict, args: argparse.Namespace) -> None:
             if provider is None:
                 return
             stats = service.run_backfill(conn, registry, provider, args.start, end)
+    except RuntimeError as e:
+        # fail-closed 分支(码失败/空返回/截断):消息已含处置指引,友好呈现免裸 traceback
+        print(f"回填中止: {e}", file=sys.stderr)
+        sys.exit(1)
     finally:
         conn.close()
     print(f"回填完成: 写入 {stats['dates_written']} 日 / 跳过已有 {stats['dates_skipped']} 日"

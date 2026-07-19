@@ -11,7 +11,7 @@
         <string>/Users/alyx/tradeSystem/deploy/launchd/sector-crowding-runner.sh</string>
     </array>
 
-    <!-- 工作日 21:30(错开 volume-watch 21:00 / sector-correlation 21:15,降低镜像并发压力)。
+    <!-- 工作日 21:30(前有 volume-watch 21:00/sector-correlation 21:15/board-break 21:20,后有 ma-breakout 21:35;board-break 含 LLM 环节跑长时可能与本任务并发打镜像,排障时注意)。
          Weekday: 1=周一 ... 5=周五。非交易日(节假日)仍会触发,任务内守卫判非交易日自动跳过。 -->
     <key>StartCalendarInterval</key>
     <array>

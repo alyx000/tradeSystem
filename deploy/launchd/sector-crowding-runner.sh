@@ -29,7 +29,7 @@ echo "===== $(date '+%Y-%m-%d %H:%M:%S') sector-crowding daily start ====="
 
 # 5. 凭据存在性诊断(${VAR:+set} 只判存在不打值,规避 /tmp/*.log 泄漏;
 #    默认不推送,钉钉凭据仅 --push 场景需要)
-echo "[env] TUSHARE_TOKEN=${TUSHARE_TOKEN:+set} DINGTALK_WEBHOOK_TOKEN=${DINGTALK_WEBHOOK_TOKEN:+set}"
+echo "[env] TUSHARE_TOKEN=${TUSHARE_TOKEN:+set} DINGTALK_WEBHOOK_TOKEN=${DINGTALK_WEBHOOK_TOKEN:+set} DINGTALK_WEBHOOK_SECRET=${DINGTALK_WEBHOOK_SECRET:+set}"
 
 # /usr/bin/python3 绝对路径：按 launchd-deploy.md 规范保证版本可预测。
 exec /usr/bin/python3 scripts/main.py sector-crowding daily
