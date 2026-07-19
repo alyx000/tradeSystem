@@ -202,11 +202,24 @@ def _fetch_code_history_with_retry(provider, code: str, start: str, end: str) ->
     raise last_exc  # type: ignore[misc]
 
 
+def _sw_name_map(provider) -> dict:
+    """code → 申万行业中文名(index_classify industry_name)。失败返 {}(name 退回 code)。"""
+    m: dict = {}
+    try:
+        for lv in ("L1", "L2"):
+            df = provider.pro.index_classify(level=lv, src="SW2021")
+            if df is not None and not getattr(df, "empty", True) and "industry_name" in df.columns:
+                m.update(dict(zip(df["index_code"], df["industry_name"])))
+    except Exception as e:
+        logger.warning("[sector-crowding backfill] 行业名映射获取失败,name 退回 code: %s", e)
+    return m
+
+
 def fetch_history_by_date(provider, start: str, end: str) -> tuple[dict, list[str]]:
     """回填阶段①（采集层）:码表枚举 → 逐码分片拉取 → 按日期聚合。
 
     单码失败记账继续;截断异常向上抛不吞(疑似截断宁可整体失败也不落半截)。
-    回填行 name 暂存 code(sw_daily 区间接口不保证带 name),report 渲染以当日行为准。"""
+    回填行 name 用 index_classify 中文名(映射失败退回 code——报告/趋势按名渲染依赖它)。"""
     l1 = provider._ensure_sw_l1_codes() or set()
     l2 = provider._ensure_sw_l2_codes() or set()
     if not l1 or not l2:
@@ -214,6 +227,7 @@ def fetch_history_by_date(provider, start: str, end: str) -> tuple[dict, list[st
         # 且这些日期随后被 get_existing_dates 判"已有"锁死,重跑无法自愈 → 整体中止
         raise RuntimeError(
             f"sector-crowding backfill: 申万码表为空(L1={len(l1)}/L2={len(l2)}),疑拉取失败,中止回填")
+    name_map = _sw_name_map(provider)
     by_date: dict = {}
     codes_failed: list[str] = []
     for code, level in [(c, "L1") for c in sorted(l1)] + [(c, "L2") for c in sorted(l2)]:
@@ -228,7 +242,7 @@ def fetch_history_by_date(provider, start: str, end: str) -> tuple[dict, list[st
             continue
         for bar in bars:
             by_date.setdefault(bar["date"], []).append(
-                {"code": code, "name": code, "level": level,
+                {"code": code, "name": name_map.get(code, code), "level": level,
                  "close": bar["close"], "amount_billion": bar["amount_billion"]})
     return by_date, codes_failed
 
