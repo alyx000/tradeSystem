@@ -27,6 +27,66 @@ def _hit(flag) -> str:
     return "✅" if flag else "—"
 
 
+def _llm_status_text(meta: dict) -> str | None:
+    status = meta.get("status")
+    if status == "fallback_l2":
+        reason = meta.get("reason") or "unknown"
+        if reason in {"invalid_output", "parse_failed"}:
+            return f"LLM输出非法，概念分支已关闭（原因：{reason}）"
+        return f"LLM调用失败，概念分支已关闭（原因：{reason}）"
+    if status == "fallback":
+        return "LLM不可用，已回退机械概念分支（旧状态）"
+    if status == "disabled":
+        return "人工禁用 LLM，使用机械概念分支"
+    if status == "ok" and not (meta.get("accepted_concepts") or []):
+        return "LLM未确认概念分支"
+    if status == "ok":
+        return "LLM概念过滤成功"
+    if status == "skipped_empty_concepts":
+        return "无可供 LLM 过滤的机械概念"
+    return None
+
+
+def _main_sector_label(summary: dict) -> str:
+    metadata_keys = {
+        "main_sector_window",
+        "main_sector_required_hits",
+        "main_sector_snapshot_count",
+        "main_sector_source_date",
+        "main_sector_status",
+    }
+    if metadata_keys.isdisjoint(summary):
+        degraded = "（当日主线缺失，已回退最近一日）" if summary.get("degraded_main") else ""
+        return f"申万二级 Top-K∪手工{degraded}"
+
+    window = summary.get("main_sector_window") or 3
+    required = summary.get("main_sector_required_hits") or 1
+    label = f"申万二级近{window}个有效快照 Top-K 至少{required}次∪手工"
+
+    status = summary.get("main_sector_status")
+    if status is None:  # 兼容旧 summary，避免历史调用方立刻失去降级提示。
+        status = "fallback" if summary.get("degraded_main") else "exact"
+    source_date = summary.get("main_sector_source_date")
+    snapshot_count = summary.get("main_sector_snapshot_count")
+    notes = []
+    if status == "exact":
+        notes.append("目标日快照可用")
+    elif status == "fallback":
+        if source_date:
+            notes.append(f"目标日不可用，使用{source_date}快照（已回退）")
+        else:
+            notes.append("目标日不可用，已回退最近有效快照")
+    elif status == "missing":
+        notes.append("无可用集中度快照，仅保留手工板块")
+    if (
+        status != "missing"
+        and isinstance(snapshot_count, int)
+        and snapshot_count < window
+    ):
+        notes.append(f"历史仅{snapshot_count}条有效快照")
+    return f"{label}{''.join(f'（{note}）' for note in notes)}"
+
+
 def render_daily(conn: sqlite3.Connection, summary: dict) -> str:
     """渲染当日趋势主升观察清单。"""
     active = {r["code"]: r for r in pool.list_pool(conn, status="active")}
@@ -40,8 +100,7 @@ def render_daily(conn: sqlite3.Connection, summary: dict) -> str:
     main_concepts = summary.get("main_concepts") or []
     main_line = summary.get("main_line") or "l2"
     llm_meta = summary.get("mainline_llm") or {}
-    llm_status = llm_meta.get("status")
-    degraded = "（当日主线缺失,已回退最近一日）" if summary.get("degraded_main") else ""
+    main_sector_label = _main_sector_label(summary)
     # entered=首见入池；refreshed=同日重跑 / 推送失败重试时同一票再命中（pool 已 active，仍是今日入池）。
     # 概览计数与下方表格统一用合并集，否则重试报告会出现「今日新入池：0」却列出该票的自相矛盾。
     todays = (summary.get("entered") or []) + (summary.get("refreshed") or [])
@@ -49,13 +108,14 @@ def render_daily(conn: sqlite3.Connection, summary: dict) -> str:
         "## 漏斗概览",
         f"- 当日涨停：{summary.get('limit_up', 0)}",
         f"- 主线口径：{main_line}",
-        f"- 主线板块（申万二级 Top-K∪手工）{degraded}：{'、'.join(main_sectors) or '（无）'}",
+        f"- 主线板块（{main_sector_label}）：{'、'.join(main_sectors) or '（无）'}",
         f"- 主线分支（同花顺概念）：{'、'.join(main_concepts) or '（无）'}",
         f"- 加速∩主线候选（涨停∪双创15%）：{summary.get('candidates', 0)}",
         f"- 今日新入池：{len(todays)} · 在池退出：{len(summary.get('exited') or [])}",
     ]
-    if llm_meta.get("enabled"):
-        lines.append(f"- LLM主线过滤：{llm_status or 'unknown'}")
+    llm_status_text = _llm_status_text(llm_meta) if main_line == "hybrid" else None
+    if llm_status_text:
+        lines.append(f"- LLM主线过滤：{llm_status_text}")
     lines.append("")
 
     # 今日新入池

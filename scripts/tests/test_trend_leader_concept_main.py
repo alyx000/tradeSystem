@@ -84,6 +84,97 @@ def _seed_concentration(conn, date, industries):
     conn.commit()
 
 
+# ---- 申万二级稳定主线 ----
+
+def test_main_sectors_requires_two_hits_and_preserves_target_order(conn):
+    _seed_concentration(conn, "2026-07-10", ["半导体", "通信设备", "元件", "光学光电子", "电池"])
+    _seed_concentration(conn, "2026-07-13", ["通信设备", "半导体", "光学光电子", "元件", "消费电子"])
+    _seed_concentration(conn, "2026-07-14", ["半导体", "通信设备", "元件", "光学光电子", "IT服务Ⅱ"])
+
+    sectors, meta = scanner._main_sectors(conn, "2026-07-14", top_k=5, sectors=None)
+
+    assert sectors == ["半导体", "通信设备", "元件", "光学光电子"]
+    assert meta == {
+        "status": "exact",
+        "source_date": "2026-07-14",
+        "snapshot_count": 3,
+        "required_hits": 2,
+    }
+
+    overridden, _ = scanner._main_sectors(
+        conn, "2026-07-14", top_k=5, sectors=["IT服务Ⅱ"])
+    assert overridden == ["半导体", "通信设备", "元件", "光学光电子", "IT服务Ⅱ"]
+
+
+def test_main_sectors_exactly_two_snapshots_still_requires_two_hits(conn):
+    _seed_concentration(conn, "2026-07-13", ["半导体", "通信设备"])
+    _seed_concentration(conn, "2026-07-14", ["半导体", "IT服务Ⅱ"])
+
+    sectors, meta = scanner._main_sectors(conn, "2026-07-14", top_k=2, sectors=None)
+
+    assert sectors == ["半导体"]
+    assert meta["snapshot_count"] == 2
+    assert meta["required_hits"] == 2
+
+
+def test_main_sectors_single_snapshot_keeps_rank_and_manual_order(conn):
+    _seed_concentration(conn, "2026-07-14", ["半导体", "IT服务Ⅱ"])
+
+    sectors, meta = scanner._main_sectors(
+        conn, "2026-07-14", top_k=2,
+        sectors=["IT服务Ⅱ", "软件开发", "软件开发"],
+    )
+
+    assert sectors == ["半导体", "IT服务Ⅱ", "软件开发"]
+    assert meta["snapshot_count"] == 1
+    assert meta["required_hits"] == 1
+
+
+def test_main_sectors_skips_empty_and_unclassified_snapshots(conn):
+    _seed_concentration(conn, "2026-07-09", ["半导体", "通信设备"])
+    _seed_concentration(conn, "2026-07-10", ["半导体", "元件"])
+    _seed_concentration(conn, "2026-07-11", [])
+    _seed_concentration(conn, "2026-07-12", [UNCLASSIFIED])
+    _seed_concentration(conn, "2026-07-13", ["半导体", "光学光电子"])
+
+    sectors, meta = scanner._main_sectors(conn, "2026-07-13", top_k=2, sectors=None)
+
+    assert sectors == ["半导体"]
+    assert meta["snapshot_count"] == 3
+    assert meta["source_date"] == "2026-07-13"
+
+
+def test_main_sectors_invalid_target_falls_back_to_latest_valid_snapshot(conn):
+    _seed_concentration(conn, "2026-07-13", ["通信设备", "半导体"])
+    _seed_concentration(conn, "2026-07-14", [UNCLASSIFIED])
+
+    sectors, meta = scanner._main_sectors(conn, "2026-07-14", top_k=2, sectors=None)
+
+    assert sectors == ["通信设备", "半导体"]
+    assert meta == {
+        "status": "fallback",
+        "source_date": "2026-07-13",
+        "snapshot_count": 1,
+        "required_hits": 1,
+    }
+
+
+def test_main_sectors_missing_keeps_only_manual_overrides(conn):
+    _seed_concentration(conn, "2026-07-13", [])
+    _seed_concentration(conn, "2026-07-14", [UNCLASSIFIED])
+
+    sectors, meta = scanner._main_sectors(
+        conn, "2026-07-14", top_k=5, sectors=["IT服务Ⅱ", "IT服务Ⅱ"])
+
+    assert sectors == ["IT服务Ⅱ"]
+    assert meta == {
+        "status": "missing",
+        "source_date": None,
+        "snapshot_count": 0,
+        "required_hits": 1,
+    }
+
+
 # ---- _main_concepts ----
 
 def test_main_concepts_ranks_by_net_amount():
@@ -168,6 +259,8 @@ def test_default_hybrid_enters_concept_branch(conn):
     summary = scanner.run_daily(conn, reg, "2026-06-09", top_concepts=5)
     assert summary["main_line"] == "hybrid"
     assert "301628" in summary["entered"]
+    assert summary["mainline_llm"]["status"] == "disabled"
+    assert "mainline_llm" not in summary["source_errors"]
 
 
 def test_concept_mode_fetches_only_ranked_concept_window(conn, monkeypatch):
@@ -208,7 +301,9 @@ def test_concept_mode_enters_branch_stock(conn):
 
 def test_hybrid_llm_filters_defensive_concept_without_denying_l2(conn):
     """LLM 只过滤概念分支，不否决申万 Top-K：防御篮子分支被挡，二级主线票仍入池。"""
-    _seed_concentration(conn, "2026-06-09", ["半导体"])
+    _seed_concentration(conn, "2026-06-05", ["通信设备", "半导体"])
+    _seed_concentration(conn, "2026-06-08", ["半导体", "通信设备"])
+    _seed_concentration(conn, "2026-06-09", ["半导体", "通信设备"])
     reg = FakeRegistry(
         limit_stocks=[
             {"code": "301628.SZ", "name": "强达电路", "pct_chg": 20.0},
@@ -237,6 +332,7 @@ def test_hybrid_llm_filters_defensive_concept_without_denying_l2(conn):
 
     def llm_runner(prompt, payload):
         assert "只筛选主线概念" in prompt
+        assert payload["main_sectors"] == ["半导体", "通信设备"]
         assert set(payload["main_concepts"]) == {"PCB概念", "高股息精选"}
         return {
             "accepted_concepts": ["PCB概念"],
@@ -251,10 +347,11 @@ def test_hybrid_llm_filters_defensive_concept_without_denying_l2(conn):
     assert "688512" in summary["entered"]      # 申万二级 Top-K 不被 LLM 否决
     assert summary["main_concepts"] == ["PCB概念"]
     assert summary["mainline_llm"]["status"] == "ok"
+    assert "mainline_llm" not in summary["source_errors"]
 
 
-def test_hybrid_llm_bad_output_falls_back_to_mechanical_concepts(conn):
-    """LLM 不可用/解析失败时降级到确定性 l2+concept，不中断扫描。"""
+def test_hybrid_llm_bad_output_closes_concept_branch(conn):
+    """LLM 越界输出时关闭概念分支，仅保留稳定申万主线。"""
     _seed_concentration(conn, "2026-06-09", ["半导体"])
     reg = _branch_reg("其他电子Ⅱ")
 
@@ -264,9 +361,223 @@ def test_hybrid_llm_bad_output_falls_back_to_mechanical_concepts(conn):
     summary = scanner.run_daily(
         conn, reg, "2026-06-09", main_line="hybrid", top_concepts=5,
         mainline_llm_runner=bad_runner)
-    assert "301628" in summary["entered"]
-    assert summary["mainline_llm"]["status"] == "fallback"
+    assert "301628" not in summary["entered"]
+    assert summary["main_concepts"] == []
+    assert summary["mainline_llm"]["status"] == "fallback_l2"
+    assert summary["mainline_llm"]["reason"] == "invalid_output"
     assert "mainline_llm" in summary["source_errors"]
+
+
+def test_hybrid_llm_unserializable_dict_closes_concept_branch(conn):
+    _seed_concentration(conn, "2026-06-09", ["半导体"])
+    reg = _branch_reg("其他电子Ⅱ")
+
+    def unserializable_runner(prompt, payload):
+        return {
+            "accepted_concepts": ["PCB概念"],
+            "rejected": [],
+            "extra": set(),
+        }
+
+    summary = scanner.run_daily(
+        conn, reg, "2026-06-09", main_line="hybrid", top_concepts=5,
+        mainline_llm_runner=unserializable_runner)
+
+    assert "301628" not in summary["entered"]
+    assert summary["main_concepts"] == []
+    assert summary["mainline_llm"]["status"] == "fallback_l2"
+    assert summary["mainline_llm"]["reason"] == "invalid_output"
+    assert "mainline_llm" in summary["source_errors"]
+
+
+@pytest.mark.parametrize(
+    "invalid_result",
+    [
+        {
+            "accepted_concepts": ["PCB概念", None],
+            "rejected": [],
+        },
+        {
+            "accepted_concepts": ["PCB概念"],
+            "rejected": [],
+            "new_stock": "600000",
+        },
+        {
+            "accepted_concepts": [],
+            "rejected": [{"name": "PCB概念", "reason": "   "}],
+        },
+        {
+            "accepted_concepts": [],
+            "rejected": [{"name": "PCB概念", "reason": "超" * 21}],
+        },
+        {
+            "accepted_concepts": [],
+            "rejected": [{"name": "PCB概念", "reason": None}],
+        },
+        {
+            "accepted_concepts": [],
+            "rejected": [{"name": "PCB概念", "reason": "非主线", "extra": "越界"}],
+        },
+    ],
+    ids=[
+        "non-string-concept",
+        "unexpected-top-level-field",
+        "blank-rejection-reason",
+        "overlong-rejection-reason",
+        "non-string-rejection-reason",
+        "unexpected-rejection-field",
+    ],
+)
+def test_hybrid_llm_schema_violation_closes_concept_branch(conn, invalid_result):
+    """可序列化但不符合受控 schema 的输出也必须 fail-closed。"""
+    _seed_concentration(conn, "2026-06-09", ["半导体"])
+    reg = _branch_reg("其他电子Ⅱ")
+
+    summary = scanner.run_daily(
+        conn,
+        reg,
+        "2026-06-09",
+        main_line="hybrid",
+        top_concepts=5,
+        mainline_llm_runner=lambda prompt, payload: invalid_result,
+    )
+
+    assert "301628" not in summary["entered"]
+    assert summary["main_concepts"] == []
+    assert summary["mainline_llm"]["status"] == "fallback_l2"
+    assert summary["mainline_llm"]["reason"] == "invalid_output"
+    assert "mainline_llm" in summary["source_errors"]
+
+
+def test_hybrid_llm_exception_closes_concept_branch(conn):
+    _seed_concentration(conn, "2026-06-09", ["半导体"])
+    reg = _branch_reg("其他电子Ⅱ")
+
+    def exception_runner(prompt, payload):
+        raise RuntimeError("boom")
+
+    summary = scanner.run_daily(
+        conn, reg, "2026-06-09", main_line="hybrid", top_concepts=5,
+        mainline_llm_runner=exception_runner)
+
+    assert "301628" not in summary["entered"]
+    assert summary["mainline_llm"]["status"] == "fallback_l2"
+    assert summary["mainline_llm"]["reason"] == "runner_exception"
+
+
+def test_hybrid_llm_none_uses_runner_diagnostics(conn):
+    _seed_concentration(conn, "2026-06-09", ["半导体"])
+    reg = _branch_reg("其他电子Ⅱ")
+
+    def timeout_runner(prompt, payload):
+        return None
+
+    timeout_runner.last_diagnostics = {"reason": "timeout"}
+    summary = scanner.run_daily(
+        conn, reg, "2026-06-09", main_line="hybrid", top_concepts=5,
+        mainline_llm_runner=timeout_runner)
+
+    assert summary["main_concepts"] == []
+    assert summary["mainline_llm"]["status"] == "fallback_l2"
+    assert summary["mainline_llm"]["reason"] == "timeout"
+    assert "mainline_llm" in summary["source_errors"]
+
+
+def test_hybrid_llm_redline_output_closes_concept_branch(conn):
+    _seed_concentration(conn, "2026-06-09", ["半导体"])
+    reg = _branch_reg("其他电子Ⅱ")
+
+    def redline_runner(prompt, payload):
+        return {
+            "accepted_concepts": ["PCB概念"],
+            "rejected": [{"name": "PCB概念", "reason": "建议买入"}],
+        }
+
+    summary = scanner.run_daily(
+        conn, reg, "2026-06-09", main_line="hybrid", top_concepts=5,
+        mainline_llm_runner=redline_runner)
+
+    assert "301628" not in summary["entered"]
+    assert summary["mainline_llm"]["status"] == "fallback_l2"
+    assert summary["mainline_llm"]["reason"] == "invalid_output"
+
+
+def test_hybrid_llm_out_of_universe_rejection_closes_concept_branch(conn):
+    _seed_concentration(conn, "2026-06-09", ["半导体"])
+    reg = _branch_reg("其他电子Ⅱ")
+
+    def invalid_rejection_runner(prompt, payload):
+        return {
+            "accepted_concepts": ["PCB概念"],
+            "rejected": [{"name": "输入外概念", "reason": "不在候选集"}],
+        }
+
+    summary = scanner.run_daily(
+        conn, reg, "2026-06-09", main_line="hybrid", top_concepts=5,
+        mainline_llm_runner=invalid_rejection_runner)
+
+    assert "301628" not in summary["entered"]
+    assert summary["main_concepts"] == []
+    assert summary["mainline_llm"]["status"] == "fallback_l2"
+    assert summary["mainline_llm"]["reason"] == "invalid_output"
+
+
+@pytest.mark.parametrize("bad_rejected", [{}, "", 0, None])
+def test_hybrid_llm_falsey_nonlist_rejection_closes_concept_branch(conn, bad_rejected):
+    _seed_concentration(conn, "2026-06-09", ["半导体"])
+    reg = _branch_reg("其他电子Ⅱ")
+
+    def invalid_rejection_runner(prompt, payload):
+        return {
+            "accepted_concepts": ["PCB概念"],
+            "rejected": bad_rejected,
+        }
+
+    summary = scanner.run_daily(
+        conn, reg, "2026-06-09", main_line="hybrid", top_concepts=5,
+        mainline_llm_runner=invalid_rejection_runner)
+
+    assert "301628" not in summary["entered"]
+    assert summary["mainline_llm"]["status"] == "fallback_l2"
+    assert summary["mainline_llm"]["reason"] == "invalid_output"
+
+
+def test_hybrid_llm_conflicting_accept_and_reject_closes_concept_branch(conn):
+    _seed_concentration(conn, "2026-06-09", ["半导体"])
+    reg = _branch_reg("其他电子Ⅱ")
+
+    def conflicting_runner(prompt, payload):
+        return {
+            "accepted_concepts": ["PCB概念"],
+            "rejected": [{"name": "PCB概念", "reason": "非主线"}],
+        }
+
+    summary = scanner.run_daily(
+        conn, reg, "2026-06-09", main_line="hybrid", top_concepts=5,
+        mainline_llm_runner=conflicting_runner)
+
+    assert "301628" not in summary["entered"]
+    assert summary["main_concepts"] == []
+    assert summary["mainline_llm"]["status"] == "fallback_l2"
+    assert summary["mainline_llm"]["reason"] == "invalid_output"
+    assert "mainline_llm" in summary["source_errors"]
+
+
+def test_hybrid_llm_valid_empty_is_not_failure(conn):
+    _seed_concentration(conn, "2026-06-09", ["半导体"])
+    reg = _branch_reg("其他电子Ⅱ")
+
+    def empty_runner(prompt, payload):
+        return {"accepted_concepts": [], "rejected": []}
+
+    summary = scanner.run_daily(
+        conn, reg, "2026-06-09", main_line="hybrid", top_concepts=5,
+        mainline_llm_runner=empty_runner)
+
+    assert "301628" not in summary["entered"]
+    assert summary["main_concepts"] == []
+    assert summary["mainline_llm"]["status"] == "ok"
+    assert "mainline_llm" not in summary["source_errors"]
 
 
 def test_l2_mode_ignores_concept_branch(conn):
@@ -276,6 +587,8 @@ def test_l2_mode_ignores_concept_branch(conn):
     summary = scanner.run_daily(conn, reg, "2026-06-09", main_line="l2")  # 默认口径
     assert summary["candidates"] == 0
     assert pool.get_active(conn, "301628") is None
+    assert summary["mainline_llm"]["status"] == "not_applicable"
+    assert "mainline_llm" not in summary["source_errors"]
 
 
 def test_concept_mode_still_takes_l2_hits(conn):
@@ -284,6 +597,8 @@ def test_concept_mode_still_takes_l2_hits(conn):
     reg = _branch_reg("半导体")                              # 目标二级就在主线
     summary = scanner.run_daily(conn, reg, "2026-06-09", main_line="l2+concept", top_concepts=5)
     assert "301628" in summary["entered"]
+    assert summary["mainline_llm"]["status"] == "not_applicable"
+    assert "mainline_llm" not in summary["source_errors"]
 
 
 def test_concept_branch_records_matched_concept(conn):

@@ -97,7 +97,7 @@ def wired(tmp_db, monkeypatch):
 
 def _daily_args(**over):
     base = dict(date="2026-06-12", sectors=None, top_k=5, dry_run=False, no_push=False,
-                main_line="l2", top_concepts=8)
+                main_line="l2", top_concepts=8, no_llm=False)
     base.update(over)
     return argparse.Namespace(**base)
 
@@ -174,3 +174,41 @@ def test_daily_top_k_rejects_non_positive():
     for bad in ["0", "-1", "abc"]:
         with pytest.raises(SystemExit):
             parser.parse_args(["trend-leader", "daily", "--top-k", bad])
+
+
+def test_daily_help_describes_stable_mainline_gate(capsys):
+    parser = main_module.build_parser()
+
+    with pytest.raises(SystemExit) as exc_info:
+        parser.parse_args(["trend-leader", "daily", "--help"])
+
+    assert exc_info.value.code == 0
+    help_text = capsys.readouterr().out
+    assert "绕过稳定门" in help_text
+    assert f"最近最多{tl.C.MAIN_SECTOR_LOOKBACK_RECORDS}个有效快照" in help_text
+    assert f"至少命中{tl.C.MAIN_SECTOR_MIN_HITS}次" in help_text
+    assert "LLM失败关闭概念分支" in help_text
+
+
+def test_mainline_runner_startup_failure_returns_diagnostic_runner(monkeypatch):
+    from services.research_digest import narrator
+
+    def fail():
+        raise RuntimeError("agy missing")
+
+    monkeypatch.setattr(narrator, "build_antigravity_runner", fail)
+    runner = tl._mainline_llm_runner(_daily_args(main_line="hybrid"))
+
+    assert callable(runner)
+    assert runner("prompt", {}) is None
+    assert runner.last_diagnostics == {
+        "reason": "startup_failed",
+        "message": "agy missing",
+    }
+
+
+def test_mainline_runner_explicit_disable_and_non_hybrid_return_none():
+    assert tl._mainline_llm_runner(
+        _daily_args(main_line="hybrid", no_llm=True)) is None
+    assert tl._mainline_llm_runner(
+        _daily_args(main_line="l2+concept", no_llm=False)) is None

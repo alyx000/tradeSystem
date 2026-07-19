@@ -38,6 +38,10 @@ def _summary(**over):
     base = {
         "date": "2026-06-12", "limit_up": 42,
         "main_sectors": ["半导体", "玻璃玻纤", "电池"], "degraded_main": False,
+        "main_sector_window": 3, "main_sector_required_hits": 2,
+        "main_sector_snapshot_count": 3, "main_sector_source_date": "2026-06-12",
+        "main_sector_status": "exact", "main_line": "l2", "main_concepts": [],
+        "mainline_llm": {"enabled": False, "status": "not_applicable", "accepted_concepts": []},
         "candidates": 3, "entered": ["600552"], "refreshed": [], "exited": ["000001"],
         "in_pool_signals": [{"code": "300750", "shrink_pullback_buy": True,
                              "near_ma5": True, "overheat": False}],
@@ -68,6 +72,133 @@ def test_render_daily_renders_funnel_counts(conn):
     assert "42" in md            # 涨停总数
     assert "3" in md             # candidates(涨停∩主线)
     assert "玻璃玻纤" in md       # 主线板块
+
+
+def test_render_daily_shows_stable_window_and_preserves_sector_order(conn):
+    md = renderer.render_daily(conn, _summary(
+        main_line="hybrid",
+        main_sectors=["半导体", "通信设备", "元件", "光学光电子"],
+    ))
+    assert "申万二级近3个有效快照 Top-K 至少2次∪手工" in md
+    assert "半导体、通信设备、元件、光学光电子" in md
+    assert "目标日快照可用" in md
+
+
+def test_render_daily_llm_failure_explains_closed_branch(conn):
+    md = renderer.render_daily(conn, _summary(
+        main_line="hybrid",
+        mainline_llm={
+            "enabled": True,
+            "status": "fallback_l2",
+            "reason": "startup_failed",
+            "accepted_concepts": [],
+        },
+    ))
+    assert "LLM调用失败，概念分支已关闭（原因：startup_failed）" in md
+
+
+@pytest.mark.parametrize("reason", ["invalid_output", "parse_failed"])
+def test_render_daily_distinguishes_invalid_llm_output(conn, reason):
+    md = renderer.render_daily(conn, _summary(
+        main_line="hybrid",
+        mainline_llm={
+            "enabled": True,
+            "status": "fallback_l2",
+            "reason": reason,
+            "accepted_concepts": [],
+        },
+    ))
+    assert f"LLM输出非法，概念分支已关闭（原因：{reason}）" in md
+    assert "LLM调用失败" not in md
+
+
+def test_render_daily_distinguishes_disabled_and_valid_empty_llm(conn):
+    disabled = renderer.render_daily(conn, _summary(
+        main_line="hybrid",
+        mainline_llm={"enabled": False, "status": "disabled", "accepted_concepts": ["PCB概念"]},
+    ))
+    valid_empty = renderer.render_daily(conn, _summary(
+        main_line="hybrid",
+        mainline_llm={"enabled": True, "status": "ok", "accepted_concepts": []},
+    ))
+    assert "人工禁用 LLM，使用机械概念分支" in disabled
+    assert "LLM未确认概念分支" in valid_empty
+
+
+def test_render_daily_llm_skipped_and_non_hybrid_visibility(conn):
+    skipped = renderer.render_daily(conn, _summary(
+        main_line="hybrid",
+        mainline_llm={
+            "enabled": True,
+            "status": "skipped_empty_concepts",
+            "accepted_concepts": [],
+        },
+    ))
+    l2 = renderer.render_daily(conn, _summary(
+        main_line="l2",
+        mainline_llm={"enabled": True, "status": "fallback_l2", "reason": "timeout"},
+    ))
+    mechanical = renderer.render_daily(conn, _summary(
+        main_line="l2+concept",
+        mainline_llm={"enabled": False, "status": "not_applicable"},
+    ))
+
+    assert "无可供 LLM 过滤的机械概念" in skipped
+    assert "LLM主线过滤" not in l2
+    assert "LLM主线过滤" not in mechanical
+
+
+def test_render_daily_main_sector_source_states_are_truthful(conn):
+    fallback = renderer.render_daily(conn, _summary(
+        main_sector_status="fallback",
+        main_sector_source_date="2026-06-11",
+        main_sector_snapshot_count=1,
+        main_sector_required_hits=1,
+        degraded_main=True,
+    ))
+    missing = renderer.render_daily(conn, _summary(
+        main_sectors=["IT服务Ⅱ"],
+        main_sector_status="missing",
+        main_sector_source_date=None,
+        main_sector_snapshot_count=0,
+        main_sector_required_hits=1,
+        degraded_main=True,
+    ))
+
+    assert "目标日不可用，使用2026-06-11快照" in fallback
+    assert "历史仅1条有效快照" in fallback
+    assert "无可用集中度快照，仅保留手工板块" in missing
+    assert "已回退最近一日" not in missing
+
+
+def test_render_daily_legacy_summary_keeps_legacy_mainline_label(conn):
+    legacy = _summary(degraded_main=True)
+    for key in (
+        "main_sector_window",
+        "main_sector_required_hits",
+        "main_sector_snapshot_count",
+        "main_sector_source_date",
+        "main_sector_status",
+    ):
+        legacy.pop(key)
+
+    md = renderer.render_daily(conn, legacy)
+
+    assert "申万二级 Top-K∪手工" in md
+    assert "近3个有效快照" not in md
+    assert "已回退最近一日" in md
+
+
+def test_render_daily_legacy_llm_fallback_remains_visible(conn):
+    md = renderer.render_daily(conn, _summary(
+        main_line="hybrid",
+        mainline_llm={
+            "enabled": True,
+            "status": "fallback",
+            "accepted_concepts": ["PCB概念"],
+        },
+    ))
+    assert "LLM不可用，已回退机械概念分支（旧状态）" in md
 
 
 def test_render_daily_entered_section_lists_name_sector(conn):
@@ -162,7 +293,11 @@ def test_render_daily_no_buy_sell_action_terms(conn):
 
 def test_render_daily_degraded_main_annotated(conn):
     _seed(conn)
-    md = renderer.render_daily(conn, _summary(degraded_main=True))
+    md = renderer.render_daily(conn, _summary(
+        degraded_main=True,
+        main_sector_status="fallback",
+        main_sector_source_date="2026-06-11",
+    ))
     assert "回退" in md           # 主线当日缺失回退最近一日
 
 
