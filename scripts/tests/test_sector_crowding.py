@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from db.schema import init_schema
-from services.sector_crowding import analyzer, collector, repo
+from services.sector_crowding import analyzer, collector, formatter, repo
 
 
 def _sw_df(rows):
@@ -187,6 +187,68 @@ class TestCollector:
             [{"name": "电子", "net_inflow_billion": 30.5},
              {"name": "脏值", "net_inflow_billion": "bad"}])
         assert out == [{"name": "电子", "net_amount_yi": 30.5}]
+
+
+def _view(double_high=False, l1_status="native"):
+    sec = {"code": "801080.SI", "name": "电子", "level": "L1", "close": 5000.0,
+           "amount_billion": 7050.0, "share_pct": 47.0, "share_pctile": 99.0,
+           "gain_5d": 8.0, "gain_20d": 70.0, "gain_60d": 120.0, "gain_pctile_20d": 99.0}
+    return {"date": "2026-07-17", "market_total_billion": 15000.0,
+            "sectors": [sec], "double_high": [sec] if double_high else [],
+            "meta": {"l1_status": l1_status}}
+
+
+class TestFormatter:
+    def test_report_contains_extreme_marker_and_naming(self):
+        md = formatter.format_report(_view())
+        assert "全行业交易拥挤度" in md
+        assert "🔴" in md            # 47% ≥ 40 极值区
+        assert "电子" in md
+
+    def test_report_double_high_section(self):
+        md = formatter.format_report(_view(double_high=True))
+        assert "双高拥挤" in md and "801080.SI" not in md.split("双高拥挤")[0]
+
+    def test_report_proxy_disclaimer_always_present(self):
+        md = formatter.format_report({**_view(), "proxy": {
+            "moneyflow": [{"name": "电子", "net_amount_yi": 55.0}],
+            "moneyflow_source": "tushare:moneyflow_ind_ths",
+            "etf": None, "margin": None, "errors": []}})
+        assert "非公募持仓真值" in md
+
+    def test_report_l1_missing_no_fake_rows(self):
+        v = _view(l1_status="missing")
+        v["sectors"][0]["level"] = "L2"
+        md = formatter.format_report(v)
+        assert "L1 数据缺失" in md
+
+    def test_report_etf_share_jump_flagged(self):
+        # 单次份额变动超存量 30% → 疑拆分,必须标「勿直读」(spec 事故级用例 6)
+        md = formatter.format_report({**_view(), "proxy": {
+            "moneyflow": None, "moneyflow_source": None,
+            "etf": [{"code": "512480", "name": "半导体ETF",
+                     "total_shares_billion": 100.0, "shares_change_billion": 40.0}],
+            "margin": None, "errors": []}})
+        assert "勿直读" in md
+        md2 = formatter.format_report({**_view(), "proxy": {
+            "moneyflow": None, "moneyflow_source": None,
+            "etf": [{"code": "512480", "name": "半导体ETF",
+                     "total_shares_billion": 100.0, "shares_change_billion": 2.0}],
+            "margin": None, "errors": []}})
+        assert "勿直读" not in md2
+
+    def test_report_market_total_missing_note(self):
+        v = _view()
+        v["market_total_billion"] = None
+        md = formatter.format_report(v)
+        assert "两市总成交额缺失" in md
+
+    def test_report_margin_stale_note(self):
+        md = formatter.format_report({**_view(), "proxy": {
+            "moneyflow": None, "moneyflow_source": None, "etf": None,
+            "margin": {"trade_date": "2026-07-16", "total_rzrqye_yi": 19000.0},
+            "errors": []}})
+        assert "数据日 2026-07-16" in md and "两融" in md
 
 
 class TestMigrateEnsure:
