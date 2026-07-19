@@ -101,7 +101,7 @@
 | plan-workbench | .agents/skills/plan-workbench/SKILL.md | 草稿 / 确认 / 诊断 / 回写 |
 | portfolio-manager | .agents/skills/portfolio-manager/SKILL.md | 持仓 / 关注池 / 黑名单 |
 | record-notes | .agents/skills/record-notes/SKILL.md | 录入老师观点 / 行业 / 宏观 |
-| repo-maintenance-workflows | .agents/skills/repo-maintenance-workflows/SKILL.md | CLI / API 对齐与索引同步 |
+| repo-maintenance-workflows | .agents/skills/repo-maintenance-workflows/SKILL.md | 仓库诊断 / Review / 只读巡检 / CLI、API 对齐 / 索引同步 |
 | sector-projection-analysis | .agents/skills/sector-projection-analysis/SKILL.md | 板块推演 |
 
 CLI / API 依赖对照见 `.agents/skills/INDEX.md`（唯一真源）。Codex CLI / Claude Code 在执行任务前按关键词命中读对应 SKILL.md，再调用 CLI。

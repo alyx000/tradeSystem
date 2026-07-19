@@ -104,7 +104,7 @@ python3 -m pytest scripts/tests/test_cli_smoke.py -v
 | `cli.py` 的 `stock-resolve` | `record-notes/SKILL.md`、`portfolio-manager/SKILL.md` |
 | `cli.py` 的 `holdings-*`（含 `--thesis-id` 关联语义）/ `watchlist-*` / `add-trade` / `blacklist-*` | `portfolio-manager/SKILL.md` |
 | `cli.py` 的 `query-notes/db-search` | `daily-review/SKILL.md` |
-| `cli.py` 的 `db backup/db migrate` 或 `db/migrate.py` / `db/schema.py` 的 teacher_notes provenance | `repo-maintenance-workflows/SKILL.md`、`record-notes/SKILL.md`、`INDEX.md`；保留停写→0600 完整备份→源快照 SHA 绑定→显式原子迁移边界，普通入口不得隐式跨 v39→v40 |
+| `cli.py` 的 `db backup/db migrate` 或 `db/migrate.py` / `db/schema.py` 的 teacher_notes provenance | `repo-maintenance-workflows/references/teacher-notes-v40-migration.md`、`record-notes/SKILL.md`、`INDEX.md`；保留停写→0600 完整备份→源快照 SHA 绑定→显式原子迁移边界，普通入口不得隐式跨 v39→v40 |
 | `main.py` 的 `pre/post/schedule` | `market-tasks/SKILL.md` |
 | `main.py` / `scripts/cli/wechat_teacher_feed.py` / `scripts/services/wechat_teacher_feed/` | `market-tasks/SKILL.md`、`record-notes/SKILL.md`、`record-notes/references/ingestion-rules.md`、`INDEX.md` 与 `AGENTS.md`；保持“采集只落 manifest、按 digest 确认后才 add-note、默认不入池”边界 |
 | `scripts/main.py` 的 `cmd_post` new-high 接线、`scripts/cli/new_high.py`、`scripts/services/new_high/` 或 `scripts/utils/trade_date.py` 的 new-high 日历语义 | `market-tasks/SKILL.md` + `INDEX.md` 中 `new-high` 行；须核对复用 `today-post` 工作日 20:00 单一调度、无独立 launchd/APScheduler、只写两表及目标日报告且不自动推送、schema/基线相等/自然日日历完整、行业源非空、有效行情绝对地板、重复/有效 join/复权宇宙/申万覆盖/相邻日市场数门禁、按开放日动态升序补缺、canonical 只追加、单日同事务、`BEGIN IMMEDIATE` 二次查重 + 尾日 CAS、成功前缀与失败续跑、目标日报告原子替换及 `already_complete` 损坏自愈、手工 `daily` 连续协调/`backfill` 强刷年度日历且拒绝跳过尾日后开放日/历史更正须重建后缀、失败隔离且不阻断 margin 的完整契约 |
@@ -123,7 +123,7 @@ python3 -m pytest scripts/tests/test_cli_smoke.py -v
 | `scripts/cli/executions.py` 任意改动 | `portfolio-manager/SKILL.md` + `INDEX.md` 中 `executions ...` 行 |
 | `scripts/services/broker_executions/` 任意改动 | `portfolio-manager/SKILL.md`（若行为契约变更）；任何 schema 字段/UNIQUE 调整还需同步 `INDEX.md` |
 | `scripts/services/trade_thesis/` 或 `scripts/db/schema.py` 中 `trade_mode` 语义/枚举调整 | `portfolio-manager/SKILL.md` + `INDEX.md` 中 `thesis-*` 行 |
-| 仓库维护工作流、CLI/API 对齐、巡检、文档/索引同步 | `repo-maintenance-workflows/SKILL.md` |
+| 仓库维护工作流、CLI/API 对齐、巡检、文档/索引同步 | `repo-maintenance-workflows/SKILL.md` + `references/maintenance-checklist.md`；诊断、Review 与巡检默认只读，修改须按范围验证 |
 | `api/routes/review.py` | `daily-review/SKILL.md`、`sector-projection-analysis/SKILL.md`（含 `POST /api/review/{date}/to-draft` 时也检查 `plan-workbench/SKILL.md`；若预填字段语义调整，如 `lead_stock` / `emotion_leader` / `capacity_leader`，或保存字段标准化语义调整，同步 Skill 文案；`step5_leaders` 身份校验失败必须返回 422，并原子回滚复盘与 tracking 写入） |
 | `api/routes/review_factors.py` | `daily-review/SKILL.md`、`sector-projection-analysis/SKILL.md` 与 `INDEX.md`；评分/回验/metrics 路径必须与 `review factor-*` CLI 共用 service 语义 |
 | `api/routes/planning.py` 中 `/api/plans/*` | `plan-workbench/SKILL.md` |
