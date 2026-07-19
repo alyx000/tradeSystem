@@ -19,8 +19,10 @@ def save_snapshot(conn: sqlite3.Connection, record: dict) -> None:
     if not isinstance(sectors, list) or not sectors:
         raise ValueError("save_snapshot: sectors 必须为非空 list(数据源失败请勿落库)")
     for s in sectors:
-        if not isinstance(s, dict) or not s.get("code") or not s.get("level"):
-            raise ValueError(f"save_snapshot: sectors 元素缺 code/level: {s!r:.80}")
+        code, level = (s.get("code"), s.get("level")) if isinstance(s, dict) else (None, None)
+        # 身份字段须为非空 str:非 str(如 list)是 unhashable,读取侧 (level,code) 作 dict 键直接炸
+        if not (isinstance(code, str) and code.strip() and isinstance(level, str) and level.strip()):
+            raise ValueError(f"save_snapshot: sectors 元素 code/level 须为非空字符串: {s!r:.80}")
     conn.execute(
         """
         INSERT INTO sector_crowding_daily (

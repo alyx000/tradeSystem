@@ -78,6 +78,13 @@ class TestRepo:
             repo.save_snapshot(conn, _rec("2026-07-17", sectors=["not-a-dict"]))
         with pytest.raises(ValueError):
             repo.save_snapshot(conn, _rec("2026-07-17", sectors=[{"name": "缺code"}]))
+        # 非 str 身份字段(unhashable)会在读取侧 (level,code) dict 键上炸,写入即拒
+        with pytest.raises(ValueError):
+            repo.save_snapshot(conn, _rec("2026-07-17", sectors=[
+                {"code": ["801080.SI"], "level": "L1"}]))
+        with pytest.raises(ValueError):
+            repo.save_snapshot(conn, _rec("2026-07-17", sectors=[
+                {"code": "801080.SI", "level": " "}]))
 
     def test_get_recent_rejects_non_positive_days(self, conn):
         repo.save_snapshot(conn, _rec("2026-07-17"))
