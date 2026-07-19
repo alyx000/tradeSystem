@@ -176,6 +176,20 @@ def test_daily_top_k_rejects_non_positive():
             parser.parse_args(["trend-leader", "daily", "--top-k", bad])
 
 
+def test_daily_help_describes_stable_mainline_gate(capsys):
+    parser = main_module.build_parser()
+
+    with pytest.raises(SystemExit) as exc_info:
+        parser.parse_args(["trend-leader", "daily", "--help"])
+
+    assert exc_info.value.code == 0
+    help_text = capsys.readouterr().out
+    assert "绕过稳定门" in help_text
+    assert f"最近最多{tl.C.MAIN_SECTOR_LOOKBACK_RECORDS}个有效快照" in help_text
+    assert f"至少命中{tl.C.MAIN_SECTOR_MIN_HITS}次" in help_text
+    assert "LLM失败关闭概念分支" in help_text
+
+
 def test_mainline_runner_startup_failure_returns_diagnostic_runner(monkeypatch):
     from services.research_digest import narrator
 

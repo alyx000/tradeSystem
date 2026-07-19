@@ -46,11 +46,14 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
     daily = sub.add_parser("daily", help="涨停∩主线→检测→入池/退池→渲染→推钉钉")
     daily.add_argument("--date", default=None, help="交易日 YYYY-MM-DD（默认今天）")
     daily.add_argument("--sectors", default=None,
-                       help='手工主线板块 JSON 数组，∪ 自动 Top-K（如 \'["半导体","玻璃玻纤"]\'）')
+                       help='手工主线板块 JSON 数组，绕过稳定门后追加（如 \'["半导体","玻璃玻纤"]\'）')
     daily.add_argument("--top-k", type=_positive_int, default=C.DEFAULT_TOP_K_SECTORS,
-                       help=f"自动主线取成交额集中度 Top-K 申万二级（正整数，默认 {C.DEFAULT_TOP_K_SECTORS}）")
+                       help=("自动主线每个快照取成交额集中度 Top-K 申万二级，"
+                             f"最近最多{C.MAIN_SECTOR_LOOKBACK_RECORDS}个有效快照"
+                             f"至少命中{C.MAIN_SECTOR_MIN_HITS}次（仅1条历史时命中1次；"
+                             f"正整数，默认 {C.DEFAULT_TOP_K_SECTORS}）"))
     daily.add_argument("--main-line", default="hybrid", choices=["hybrid", "l2", "l2+concept"],
-                       help=("主线口径：hybrid=申万二级∪同花顺概念并用LLM过滤概念（默认）；"
+                       help=("主线口径：hybrid=稳定申万二级∪LLM受控概念，LLM失败关闭概念分支（默认）；"
                              "l2=仅申万二级；l2+concept=机械∪同花顺概念资金净流入 Top-M 分支"))
     daily.add_argument("--top-concepts", type=_positive_int, default=C.DEFAULT_TOP_CONCEPTS,
                        help=f"概念分支取资金净流入 Top-M（正整数，默认 {C.DEFAULT_TOP_CONCEPTS}，hybrid/l2+concept 生效）")

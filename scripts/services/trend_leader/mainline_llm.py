@@ -102,28 +102,40 @@ def _build_prompt() -> str:
 def _parse_result(result: Any, universe: set[str]) -> tuple[set[str], list[dict[str, str]]] | None:
     if not isinstance(result, dict):
         return None
-    if _scan_redline(json.dumps(result, ensure_ascii=False)):
+    if set(result) != {"accepted_concepts", "rejected"}:
         return None
-    raw_accepted = result.get("accepted_concepts")
-    if not isinstance(raw_accepted, list):
+    raw_accepted = result["accepted_concepts"]
+    if (
+        not isinstance(raw_accepted, list)
+        or any(not isinstance(item, str) or not item.strip() for item in raw_accepted)
+    ):
         return None
-    accepted = {str(x).strip() for x in raw_accepted if str(x or "").strip()}
+    accepted = {item.strip() for item in raw_accepted}
     if not accepted.issubset(universe):
         return None
 
     rejected: list[dict[str, str]] = []
-    raw_rejected = result.get("rejected", [])
+    raw_rejected = result["rejected"]
     if not isinstance(raw_rejected, list):
         return None
     for row in raw_rejected:
-        if not isinstance(row, dict):
+        if (
+            not isinstance(row, dict)
+            or set(row) != {"name", "reason"}
+            or not isinstance(row["name"], str)
+            or not isinstance(row["reason"], str)
+        ):
             return None
-        name = str(row.get("name") or "").strip()
+        name = row["name"].strip()
         if not name or name not in universe:
             return None
-        reason = str(row.get("reason") or "").strip()[:40]
+        reason = row["reason"].strip()
+        if not reason or len(reason) > 20:
+            return None
         rejected.append({"name": name, "reason": reason})
 
+    if _scan_redline(json.dumps(result, ensure_ascii=False)):
+        return None
     rejected_names = {row["name"] for row in rejected}
     if accepted & rejected_names:
         return None

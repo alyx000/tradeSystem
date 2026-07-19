@@ -390,6 +390,65 @@ def test_hybrid_llm_unserializable_dict_closes_concept_branch(conn):
     assert "mainline_llm" in summary["source_errors"]
 
 
+@pytest.mark.parametrize(
+    "invalid_result",
+    [
+        {
+            "accepted_concepts": ["PCB概念", None],
+            "rejected": [],
+        },
+        {
+            "accepted_concepts": ["PCB概念"],
+            "rejected": [],
+            "new_stock": "600000",
+        },
+        {
+            "accepted_concepts": [],
+            "rejected": [{"name": "PCB概念", "reason": "   "}],
+        },
+        {
+            "accepted_concepts": [],
+            "rejected": [{"name": "PCB概念", "reason": "超" * 21}],
+        },
+        {
+            "accepted_concepts": [],
+            "rejected": [{"name": "PCB概念", "reason": None}],
+        },
+        {
+            "accepted_concepts": [],
+            "rejected": [{"name": "PCB概念", "reason": "非主线", "extra": "越界"}],
+        },
+    ],
+    ids=[
+        "non-string-concept",
+        "unexpected-top-level-field",
+        "blank-rejection-reason",
+        "overlong-rejection-reason",
+        "non-string-rejection-reason",
+        "unexpected-rejection-field",
+    ],
+)
+def test_hybrid_llm_schema_violation_closes_concept_branch(conn, invalid_result):
+    """可序列化但不符合受控 schema 的输出也必须 fail-closed。"""
+    _seed_concentration(conn, "2026-06-09", ["半导体"])
+    reg = _branch_reg("其他电子Ⅱ")
+
+    summary = scanner.run_daily(
+        conn,
+        reg,
+        "2026-06-09",
+        main_line="hybrid",
+        top_concepts=5,
+        mainline_llm_runner=lambda prompt, payload: invalid_result,
+    )
+
+    assert "301628" not in summary["entered"]
+    assert summary["main_concepts"] == []
+    assert summary["mainline_llm"]["status"] == "fallback_l2"
+    assert summary["mainline_llm"]["reason"] == "invalid_output"
+    assert "mainline_llm" in summary["source_errors"]
+
+
 def test_hybrid_llm_exception_closes_concept_branch(conn):
     _seed_concentration(conn, "2026-06-09", ["半导体"])
     reg = _branch_reg("其他电子Ⅱ")
