@@ -101,7 +101,7 @@ python3 -m pytest scripts/tests/test_cli_smoke.py -v
 | `cli.py` 的 `stock-resolve` | `record-notes/SKILL.md`、`portfolio-manager/SKILL.md` |
 | `cli.py` 的 `holdings-*`（含 `--thesis-id` 关联语义）/ `watchlist-*` / `add-trade` / `blacklist-*` | `portfolio-manager/SKILL.md` |
 | `cli.py` 的 `query-notes/db-search` | `daily-review/SKILL.md` |
-| `cli.py` 的 `db backup/db migrate` 或 `db/migrate.py` / `db/schema.py` 的 teacher_notes provenance | `repo-maintenance-workflows/SKILL.md`、`record-notes/SKILL.md`、`INDEX.md`；保留停写→0600 完整备份→源快照 SHA 绑定→显式原子迁移边界，普通入口不得隐式跨 v39→v40 |
+| `cli.py` 的 `db backup/db migrate` 或 `db/migrate.py` / `db/schema.py` 的 teacher_notes provenance | `repo-maintenance-workflows/references/teacher-notes-v40-migration.md`、`record-notes/SKILL.md`、`INDEX.md`；保留停写→0600 完整备份→源快照 SHA 绑定→显式原子迁移边界，普通入口不得隐式跨 v39→v40 |
 | `main.py` 的 `pre/post/schedule` | `market-tasks/SKILL.md` |
 | `main.py` / `scripts/cli/wechat_teacher_feed.py` / `scripts/services/wechat_teacher_feed/` | `market-tasks/SKILL.md`、`record-notes/SKILL.md`、`record-notes/references/ingestion-rules.md`、`INDEX.md` 与 `AGENTS.md`；保持“采集只落 manifest、按 digest 确认后才 add-note、默认不入池”边界 |
 | `scripts/cli/new_high.py` 或 `scripts/services/new_high/` | `market-tasks/SKILL.md` + `INDEX.md` 中 `new-high` 行 |
@@ -119,7 +119,7 @@ python3 -m pytest scripts/tests/test_cli_smoke.py -v
 | `scripts/cli/executions.py` 任意改动 | `portfolio-manager/SKILL.md` + `INDEX.md` 中 `executions ...` 行 |
 | `scripts/services/broker_executions/` 任意改动 | `portfolio-manager/SKILL.md`（若行为契约变更）；任何 schema 字段/UNIQUE 调整还需同步 `INDEX.md` |
 | `scripts/services/trade_thesis/` 或 `scripts/db/schema.py` 中 `trade_mode` 语义/枚举调整 | `portfolio-manager/SKILL.md` + `INDEX.md` 中 `thesis-*` 行 |
-| 仓库维护工作流、CLI/API 对齐、巡检、文档/索引同步 | `repo-maintenance-workflows/SKILL.md` |
+| 仓库维护工作流、CLI/API 对齐、巡检、文档/索引同步 | `repo-maintenance-workflows/SKILL.md` + `references/maintenance-checklist.md`；诊断、Review 与巡检默认只读，修改须按范围验证 |
 | `api/routes/review.py` | `daily-review/SKILL.md`、`sector-projection-analysis/SKILL.md`（含 `POST /api/review/{date}/to-draft` 时也检查 `plan-workbench/SKILL.md`；若预填字段语义调整，如 `lead_stock` / `emotion_leader` / `capacity_leader`，或保存字段标准化语义调整，同步 Skill 文案） |
 | `api/routes/review_factors.py` | `daily-review/SKILL.md`、`sector-projection-analysis/SKILL.md` 与 `INDEX.md`；评分/回验/metrics 路径必须与 `review factor-*` CLI 共用 service 语义 |
 | `api/routes/planning.py` 中 `/api/plans/*` | `plan-workbench/SKILL.md` |

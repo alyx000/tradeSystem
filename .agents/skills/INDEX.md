@@ -107,8 +107,8 @@
 | `plan-workbench` | `python main.py plan review --date/--plan-id` | 回写 `PlanReview` |
 | `repo-maintenance-workflows` | `make check-scripts` | 运行脚本层检查，覆盖 skill 同步后的最小回归 |
 | `repo-maintenance-workflows` | `python3 -m pytest scripts/tests/test_cli_smoke.py -v` | 快速验证 skills 依赖的 CLI 签名未漂移 |
-| `repo-maintenance-workflows` | `make commands-doc` | 重新生成命令索引 |
-| `repo-maintenance-workflows` | `make commands-check` | 校验命令索引与 Makefile 一致 |
+| `repo-maintenance-workflows` | `make commands-doc` | 在确认索引需要更新且已获修改授权后，重新生成命令索引 |
+| `repo-maintenance-workflows` | `make commands-check` | 只读校验命令索引与 Makefile 一致；应先于 `commands-doc` 执行 |
 | `repo-maintenance-workflows` | `db backup --output PATH --input-by USER [--json]` | 用 SQLite backup API 生成 `0600` 完整快照及 SHA-256 回执；v40 生产迁移前必须先停写并执行 |
 | `repo-maintenance-workflows` | `db migrate --require-backup PATH --input-by USER [--json]` | 仅在备份权限、版本及当前源库规范快照 SHA 全部一致时，原子激活/修复 teacher_notes v40 来源列与三组 partial unique 索引；普通 API/CLI 不会隐式跨越 v39→v40 |
 | `instrument-agent` | 无固定业务 CLI | 为任意 agent 接入 Raindrop Workshop tracing；按目标仓库运行时选择 SDK/入口并验证 Workshop 可见性 |
@@ -164,9 +164,11 @@
 |-------|------|------|
 | `daily-review` | [daily-review/references/eight-step-prompt-templates.md](daily-review/references/eight-step-prompt-templates.md) | 八步复盘分步提问话术模板（配合 SKILL 速查） |
 | `cognition-evolution` | [cognition-evolution/references/cognition-candidate-rules.md](cognition-evolution/references/cognition-candidate-rules.md) | 强候选最小标准、不建议落库条件、refine 默认动作与自检清单 |
+| `repo-maintenance-workflows` | [repo-maintenance-workflows/references/maintenance-checklist.md](repo-maintenance-workflows/references/maintenance-checklist.md) | 只读诊断、Review、跨入口对齐、每日巡检、同步与验证检查清单 |
+| `repo-maintenance-workflows` | [repo-maintenance-workflows/references/teacher-notes-v40-migration.md](repo-maintenance-workflows/references/teacher-notes-v40-migration.md) | teacher_notes v40 停写、0600 备份、SHA 绑定与显式迁移门禁 |
 | `sector-projection-analysis` | [sector-projection-analysis/references/methodology.md](sector-projection-analysis/references/methodology.md) | 《0524板块推演术》提炼后的板块推演方法论 |
 
-`repo-maintenance-workflows` 不绑定固定业务 API；它会按受影响的 CLI / API / skill / 文档入口就近检查，并在修改 `scripts/main.py`、`scripts/api/routes/*.py`、`.agents/skills/**/*.md` 后强制同步 `INDEX.md` 与 `skills-sync.md`。
+`repo-maintenance-workflows` 不绑定固定业务 API；它会按受影响的 CLI / API / service / workflow / launchd / skill 入口就近检查，并按 `.agents/rules/skills-sync.md` 核对 `INDEX.md`、对应 SKILL/reference 与同步映射。
 
 ## 可用 API 总览（供开发新 Skill 参考）
 
