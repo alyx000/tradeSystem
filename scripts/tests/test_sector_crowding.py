@@ -221,6 +221,27 @@ class TestCollector:
         out = collector.synthesize_l1(l2, pm)
         assert out[0]["amount_billion"] == pytest.approx(100.0)
 
+    def test_fetch_proxy_normalizes_etf_and_margin_nan(self):
+        # ETF/两融代理与 moneyflow 对称归一:NaN 不得落库/渲染(codex 门2 中)
+        registry = MagicMock()
+
+        def _call(cap, *a, **kw):
+            if cap == "get_etf_flow":
+                return MagicMock(success=True, source="tushare:fund_share", data=[
+                    {"code": "512480", "name": "半导体ETF",
+                     "total_shares_billion": float("nan"),
+                     "shares_change_billion": 2.0}])
+            if cap == "get_margin_data":
+                return MagicMock(success=True, source="tushare:margin", data={
+                    "trade_date": "2026-07-17", "total_rzrqye_yi": float("nan")})
+            return MagicMock(success=False, data=None, error="down", source="x")
+
+        registry.call.side_effect = _call
+        out = collector.fetch_proxy(registry, "2026-07-17")
+        assert out["etf"][0]["total_shares_billion"] is None
+        assert out["etf"][0]["shares_change_billion"] == 2.0
+        assert out["margin"] is None  # 主值 NaN → 整体置 None
+
     def test_fetch_code_history_skips_malformed_trade_date(self):
         # pandas 缺值整列 int→float64:str() 出 "20200101.0"/"nan" → 畸形日期键必须跳行
         p = MagicMock()
@@ -464,37 +485,49 @@ class TestBackfill:
             service.run_backfill(conn, _mk_registry_ok(), _mk_provider(ROWS),
                                  "20190101", "2026-07-16")
 
-    def test_backfill_disables_synthesis_when_codes_failed(self, conn):
-        # 部分码失败时合成额只含成功子集 → 低偏样本污染分位历史,宁缺勿假
-        p = _mk_provider([ROWS[1]], l1_codes={"801080.SI"},
-                         parent_map={"801081.SI": "801080.SI"})
-
-        def _sw(ts_code=None, **kw):
-            if ts_code == "801080.SI":
-                raise RuntimeError("boom")  # 唯一 L1 码失败
-            return _sw_df([{**ROWS[1], "trade_date": "20260716"}])
-
-        p.pro.sw_daily.side_effect = _sw
-        stats = service.run_backfill(conn, _mk_registry_ok(), p,
-                                     "2026-07-16", "2026-07-16")
-        assert stats["codes_failed"] == ["801080.SI"]
-        snap = repo.get_snapshot(conn, "2026-07-16")
-        assert snap["meta"]["l1_status"] == "missing"  # 不合成
-        assert all(s["level"] == "L2" for s in snap["sectors"])
-
-    def test_backfill_single_code_failure_continues(self, conn):
+    def test_backfill_code_failure_fails_closed_then_recovers(self, conn):
+        # fail-closed(codex 门2 高):部分码失败 → 整体中止不落库;源恢复后重跑可完整自愈
         p = _mk_provider(ROWS)
 
-        def _sw(ts_code=None, **kw):
+        def _sw_broken(ts_code=None, **kw):
             if ts_code == "801080.SI":
                 raise RuntimeError("boom")
             return _sw_df([{**ROWS[1], "trade_date": "20260716"}])
 
-        p.pro.sw_daily.side_effect = _sw
-        stats = service.run_backfill(conn, _mk_registry_ok(), p,
+        p.pro.sw_daily.side_effect = _sw_broken
+        with pytest.raises(RuntimeError):
+            service.run_backfill(conn, _mk_registry_ok(), p, "2026-07-16", "2026-07-16")
+        assert repo.get_snapshot(conn, "2026-07-16") is None  # 未落半截数据
+
+        p2 = _mk_provider(ROWS)
+
+        def _sw_ok(ts_code=None, **kw):
+            rows = [r for r in ROWS if r["ts_code"] == ts_code]
+            return _sw_df([{**r, "trade_date": "20260716"} for r in rows])
+
+        p2.pro.sw_daily.side_effect = _sw_ok
+        stats = service.run_backfill(conn, _mk_registry_ok(), p2,
                                      "2026-07-16", "2026-07-16")
-        assert stats["codes_failed"] == ["801080.SI"]
         assert stats["dates_written"] == 1
+        snap = repo.get_snapshot(conn, "2026-07-16")
+        assert {s["code"] for s in snap["sectors"]} == {"801080.SI", "801081.SI"}
+
+    def test_backfill_counts_null_market_total(self, conn):
+        # 总额守卫失败日落 NULL 属设计语义,但必须显式计数(消除覆盖率假信心)
+        registry = MagicMock()
+
+        def _call(cap, *a, **kw):
+            return MagicMock(success=False, data=None, error="down", source="x")
+
+        registry.call.side_effect = _call
+        p = _mk_provider(ROWS)
+        p.pro.sw_daily.side_effect = lambda ts_code=None, **kw: _sw_df(
+            [{**r, "trade_date": "20260716"} for r in ROWS if r["ts_code"] == ts_code])
+        stats = service.run_backfill(conn, registry, p, "2026-07-16", "2026-07-16")
+        assert stats["dates_null_total"] == 1
+        snap = repo.get_snapshot(conn, "2026-07-16")
+        assert snap["market_total_billion"] is None
+        assert all(s["share_pct"] is None for s in snap["sectors"])
 
 
 class TestMigrateEnsure:

@@ -87,25 +87,30 @@ def run_backfill(conn: sqlite3.Connection, registry, provider, start: str, end: 
         # 跳过判定恒空集 → 已有 daily 行被回填静默覆盖(门1 review 角度B)
         raise ValueError(f"run_backfill: start/end 须为 YYYY-MM-DD 格式,得到 {start!r}/{end!r}")
     by_date, codes_failed = collector.fetch_history_by_date(provider, start, end)
-    existing = repo.get_existing_dates(conn, start, end)
-    # 任何码采集失败时禁用 L1 合成:合成额只含成功子集会产出低偏 share 样本,
-    # 混入分位历史后让 native 日分位虚高、催生假双高(门1 review 角度B 高)。宁缺勿假。
-    parent_getter = ((lambda: {}) if codes_failed
-                     else provider._ensure_sw_l1_parent_map)
     if codes_failed:
-        logger.warning("[sector-crowding backfill] %d 个码采集失败,本次回填禁用 L1 合成",
-                       len(codes_failed))
-    written = skipped = 0
+        # fail-closed(codex 门2 高):部分码缺失仍落库会留下断链/低偏历史,且日期被
+        # existing 集合锁死重跑不自愈。整体中止 → 重跑即重试,自愈语义单一。
+        raise RuntimeError(
+            f"sector-crowding backfill: {len(codes_failed)} 个码采集失败,中止不落库"
+            f"(重跑即重试): {','.join(codes_failed[:10])}")
+    existing = repo.get_existing_dates(conn, start, end)
+    written = skipped = null_total = 0
     for d in sorted(by_date):
         if d in existing:
             skipped += 1
             continue
         total, _src = collector.fetch_market_total(conn, registry, d)
-        sectors, l1_status = collector.resolve_l1(by_date[d], parent_getter)
+        if total is None:
+            # NULL 是设计语义(spec 严重3:坏源落 NULL 不落假值),该日 share 缺席分位样本
+            # 不产生假值;显式计数消除"覆盖率假信心",完成后由 CLI 呈现给用户抽查
+            null_total += 1
+        sectors, l1_status = collector.resolve_l1(
+            by_date[d], provider._ensure_sw_l1_parent_map)
         for s in sectors:
             s["share_pct"] = analyzer.compute_share_pct(s.get("amount_billion"), total)
         repo.save_snapshot(conn, {
             "date": d, "market_total_billion": total, "sectors": sectors,
             "proxy": None, "meta": {"backfilled": True, "l1_status": l1_status}})
         written += 1
-    return {"dates_written": written, "dates_skipped": skipped, "codes_failed": codes_failed}
+    return {"dates_written": written, "dates_skipped": skipped,
+            "dates_null_total": null_total, "codes_failed": []}

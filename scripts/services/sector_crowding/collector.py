@@ -225,8 +225,29 @@ def fetch_proxy(registry, date: str) -> dict:
     etf_r = _try_call(registry, "get_etf_flow", date, errors)
     margin_r = _try_call(registry, "get_margin_data", date, errors)
     return {"moneyflow": moneyflow, "moneyflow_source": mf_source,
-            "etf": etf_r.data if etf_r else None,
-            "margin": margin_r.data if margin_r else None, "errors": errors}
+            "etf": _normalize_etf(etf_r.data) if etf_r else None,
+            "margin": _clean_margin(margin_r.data) if margin_r else None, "errors": errors}
+
+
+def _normalize_etf(records: list) -> list[dict]:
+    """ETF 代理归一(与 moneyflow 对称):数值字段非有限即置 None,防 NaN 落库/渲染 +nan 亿份。"""
+    out = []
+    for row in records or []:
+        out.append({
+            "code": row.get("code"), "name": row.get("name"),
+            "total_shares_billion": row.get("total_shares_billion")
+            if _finite_num(row.get("total_shares_billion")) else None,
+            "shares_change_billion": row.get("shares_change_billion")
+            if _finite_num(row.get("shares_change_billion")) else None,
+        })
+    return out
+
+
+def _clean_margin(data: dict | None) -> dict | None:
+    """两融代理清洗:渲染主值非有限 → 整体置 None(缺失优于坏值)。"""
+    if not isinstance(data, dict) or not _finite_num(data.get("total_rzrqye_yi")):
+        return None
+    return data
 
 
 def _try_call(registry, cap: str, date: str, errors: list):
