@@ -70,6 +70,21 @@ class TestRepo:
         with pytest.raises(ValueError):
             repo.save_snapshot(conn, {"date": "2026-07-17"})  # 缺 sectors
 
+    def test_empty_or_malformed_sectors_rejected(self, conn):
+        # 空 sectors=数据源全失败,落库会伪装"正常无双高"(codex 门2 高)
+        with pytest.raises(ValueError):
+            repo.save_snapshot(conn, _rec("2026-07-17", sectors=[]))
+        with pytest.raises(ValueError):
+            repo.save_snapshot(conn, _rec("2026-07-17", sectors=["not-a-dict"]))
+        with pytest.raises(ValueError):
+            repo.save_snapshot(conn, _rec("2026-07-17", sectors=[{"name": "缺code"}]))
+
+    def test_get_recent_rejects_non_positive_days(self, conn):
+        repo.save_snapshot(conn, _rec("2026-07-17"))
+        for bad in (0, -1):
+            with pytest.raises(ValueError):
+                repo.get_recent(conn, "2026-07-17", days=bad)
+
 
 class TestMigrateEnsure:
     def test_ensure_rebuilds_missing_table_on_v40_db(self, conn):

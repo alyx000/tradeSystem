@@ -12,6 +12,15 @@ def _dump_opt(value) -> str | None:
 def save_snapshot(conn: sqlite3.Connection, record: dict) -> None:
     if record.get("date") is None or record.get("sectors") is None:
         raise ValueError("save_snapshot: 缺少必填字段 date/sectors")
+    sectors = record["sectors"]
+    # 结构校验(codex 门2 高):空 sectors=数据源全失败,落库会伪装成"正常无双高";
+    # malformed 元素会在读取侧 _dedup_sectors 的 .get 上炸。身份字段只强制 code/level
+    # (回填行 close/share_pct 合法可缺,不做字段级全量校验)。
+    if not isinstance(sectors, list) or not sectors:
+        raise ValueError("save_snapshot: sectors 必须为非空 list(数据源失败请勿落库)")
+    for s in sectors:
+        if not isinstance(s, dict) or not s.get("code") or not s.get("level"):
+            raise ValueError(f"save_snapshot: sectors 元素缺 code/level: {s!r:.80}")
     conn.execute(
         """
         INSERT INTO sector_crowding_daily (
@@ -62,6 +71,9 @@ def get_recent(conn: sqlite3.Connection, end_date: str, days: int) -> list[dict]
 
     精简列读取：历史行的 proxy_json/meta_json 不参与分位计算，跳过解析
     （JSON 解码是该路径主导成本）；当日全量数据用 get_snapshot 单行取。"""
+    if not isinstance(days, int) or days <= 0:
+        # SQLite LIMIT 负数=不限行数:负窗口会静默退化成全表 JSON 解码(codex 门2 中)
+        raise ValueError(f"get_recent: days 必须为正整数,得到 {days!r}")
     rows = conn.execute(
         """SELECT date, market_total_billion, sectors_json
            FROM sector_crowding_daily WHERE date <= ? ORDER BY date DESC LIMIT ?""",
