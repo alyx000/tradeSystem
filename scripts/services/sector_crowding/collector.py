@@ -107,6 +107,44 @@ def fetch_market_total(conn, registry, date: str):
     return total, result.source
 
 
+CHUNK_YEARS = 4  # 回填分片窗口:7.5年≈1820行/码贴近镜像2000行静默截断上限,必须分片
+TRUNCATION_ROW_FLOOR = 2000  # 单片返回行数达到该值=疑似截断(镜像单页上限)
+
+
+class BackfillTruncationError(Exception):
+    """单片返回 ≥2000 行=疑似静默截断,拒绝落库(memory: index_member_all 同坑)。"""
+
+
+def fetch_code_history(provider, code: str, start: str, end: str) -> list[dict]:
+    """按 ≤CHUNK_YEARS 年窗口分片拉单码区间日线，升序返回 {date, close, amount_billion}。"""
+    out = []
+    chunk_start = start
+    while chunk_start <= end:
+        cy = int(chunk_start[:4])
+        chunk_end = min(f"{cy + CHUNK_YEARS - 1}-12-31", end)
+        df = provider.pro.sw_daily(
+            ts_code=code,
+            start_date=chunk_start.replace("-", ""),
+            end_date=chunk_end.replace("-", ""),
+        )
+        if df is not None and len(df) >= TRUNCATION_ROW_FLOOR:
+            raise BackfillTruncationError(
+                f"{code} {chunk_start}~{chunk_end} 返回 {len(df)} 行,疑似截断")
+        if df is not None and not df.empty:
+            for row in df.to_dict("records"):
+                td = str(row.get("trade_date"))
+                amount = row.get("amount")
+                out.append({
+                    "date": f"{td[:4]}-{td[4:6]}-{td[6:]}",
+                    "close": row.get("close"),
+                    "amount_billion": round(amount / AMOUNT_TO_BILLION, 2)
+                    if amount is not None else None,
+                })
+        chunk_start = f"{cy + CHUNK_YEARS}-01-01"
+    out.sort(key=lambda r: r["date"])
+    return out
+
+
 def fetch_proxy(registry, date: str) -> dict:
     """资金流代理三路，各自独立失败不拖垮整体。
 

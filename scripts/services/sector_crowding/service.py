@@ -68,3 +68,51 @@ def run_report(conn: sqlite3.Connection, date: str) -> str:
 
 def run_trend(conn: sqlite3.Connection, date: str, sector: str, days: int = 60) -> str:
     return formatter.format_trend(repo.get_recent(conn, date, days), sector)
+
+
+def run_backfill(conn: sqlite3.Connection, registry, provider, start: str, end: str) -> dict:
+    """两阶段回填:①逐码分片采集,内存按日期聚合;②逐日守卫总额+share_pct,整日一次写。
+
+    已有快照的日期跳过(daily 采的行含 proxy,回填行不含,不可覆盖)。
+    截断异常向上抛不吞(疑似截断的数据宁可整体失败也不落半截)。"""
+    l1 = provider._ensure_sw_l1_codes() or set()
+    l2 = provider._ensure_sw_l2_codes() or set()
+    code_meta = [(c, "L1") for c in sorted(l1)] + [(c, "L2") for c in sorted(l2)]
+    by_date: dict = {}
+    codes_failed: list[str] = []
+    for code, level in code_meta:
+        try:
+            bars = collector.fetch_code_history(provider, code, start, end)
+        except collector.BackfillTruncationError:
+            raise
+        except Exception as e:  # 单码失败记账继续,不拖垮全量
+            logger.warning("[sector-crowding backfill] %s 失败: %s", code, e)
+            codes_failed.append(code)
+            continue
+        for bar in bars:
+            by_date.setdefault(bar["date"], []).append(
+                {"code": code, "name": code, "level": level,
+                 "close": bar["close"], "amount_billion": bar["amount_billion"]})
+    # L1 合成与 daily 同一分支逻辑(Explore review 中1):回填若无 L1 行而 parent_map 可靠,
+    # 逐日合成 L1,否则合成 L1 永无历史序列 → 分位/双高对 L1 长期失效
+    parent_map = {} if l1 else (provider._ensure_sw_l1_parent_map() or {})
+    written = skipped = 0
+    for d in sorted(by_date):
+        if repo.get_snapshot(conn, d) is not None:
+            skipped += 1
+            continue
+        total, _src = collector.fetch_market_total(conn, registry, d)
+        sectors = by_date[d]
+        has_l1 = any(s["level"] == "L1" for s in sectors)
+        if not has_l1 and parent_map:
+            sectors = sectors + collector.synthesize_l1(sectors, parent_map)
+            l1_status = "synthesized"
+        else:
+            l1_status = "native" if has_l1 else "missing"
+        for s in sectors:
+            s["share_pct"] = analyzer.compute_share_pct(s.get("amount_billion"), total)
+        repo.save_snapshot(conn, {
+            "date": d, "market_total_billion": total, "sectors": sectors,
+            "proxy": None, "meta": {"backfilled": True, "l1_status": l1_status}})
+        written += 1
+    return {"dates_written": written, "dates_skipped": skipped, "codes_failed": codes_failed}

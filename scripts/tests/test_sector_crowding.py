@@ -325,6 +325,87 @@ class TestService:
         assert "2026-07-17" in md and "20.0%" in md
 
 
+class TestBackfill:
+    def test_truncation_raises(self):
+        p = MagicMock()
+        p.pro.sw_daily.return_value = _sw_df(
+            [{"trade_date": "20200101", "close": 1.0, "amount": 1.0}] * 2000)
+        with pytest.raises(collector.BackfillTruncationError):
+            collector.fetch_code_history(p, "801080.SI", "2019-01-01", "2026-07-17")
+
+    def test_fetch_code_history_chunks_and_sorts(self):
+        p = MagicMock()
+        calls = []
+
+        def _sw(ts_code=None, start_date=None, end_date=None):
+            calls.append((start_date, end_date))
+            return _sw_df([{"trade_date": start_date, "close": 1.0, "amount": 10000.0}])
+
+        p.pro.sw_daily.side_effect = _sw
+        bars = collector.fetch_code_history(p, "801080.SI", "2019-01-01", "2026-07-17")
+        # 4 年分片:2019-2022 / 2023-2026,无缝无叠
+        assert calls == [("20190101", "20221231"), ("20230101", "20260717")]
+        assert [b["date"] for b in bars] == ["2019-01-01", "2023-01-01"]
+        assert bars[0]["amount_billion"] == pytest.approx(1.0)
+
+    def test_backfill_writes_whole_day_once(self, conn):
+        p = _mk_provider(ROWS)
+
+        def _sw(ts_code=None, start_date=None, end_date=None, trade_date=None):
+            rows = [r for r in ROWS if r["ts_code"] == ts_code]
+            return _sw_df([{**r, "trade_date": "20260716"} for r in rows])
+
+        p.pro.sw_daily.side_effect = _sw
+        stats = service.run_backfill(conn, _mk_registry_ok(), p,
+                                     "2026-07-16", "2026-07-16")
+        assert stats["dates_written"] == 1
+        snap = repo.get_snapshot(conn, "2026-07-16")
+        # 两个码在同一行里 → 没有按码互相覆盖
+        assert {s["code"] for s in snap["sectors"]} == {"801080.SI", "801081.SI"}
+        assert snap["meta"]["backfilled"] is True
+        sec = {s["code"]: s for s in snap["sectors"]}
+        assert sec["801080.SI"]["share_pct"] == pytest.approx(20.0)
+
+    def test_backfill_skips_existing_daily_rows(self, conn):
+        repo.save_snapshot(conn, _rec("2026-07-16"))
+        p = _mk_provider(ROWS)
+        p.pro.sw_daily.side_effect = lambda **kw: _sw_df(
+            [{**ROWS[0], "trade_date": "20260716"}])
+        stats = service.run_backfill(conn, _mk_registry_ok(), p,
+                                     "2026-07-16", "2026-07-16")
+        assert stats["dates_skipped"] == 1
+        # 原行未被覆盖
+        assert repo.get_snapshot(conn, "2026-07-16")["market_total_billion"] == 15000.0
+
+    def test_backfill_synthesizes_l1_when_native_missing(self, conn):
+        # Explore review 中1:L1 缺失且 parent_map 可靠时回填也要合成,否则 L1 永无历史分位
+        p = _mk_provider([ROWS[1]], l1_codes=frozenset(),
+                         parent_map={"801081.SI": "801080.SI"})
+        p.pro.sw_daily.side_effect = lambda **kw: _sw_df(
+            [{**ROWS[1], "trade_date": "20260716"}])
+        stats = service.run_backfill(conn, _mk_registry_ok(), p,
+                                     "2026-07-16", "2026-07-16")
+        assert stats["dates_written"] == 1
+        snap = repo.get_snapshot(conn, "2026-07-16")
+        assert snap["meta"]["l1_status"] == "synthesized"
+        l1 = [s for s in snap["sectors"] if s["level"] == "L1"]
+        assert l1 and l1[0]["code"] == "801080.SI"
+
+    def test_backfill_single_code_failure_continues(self, conn):
+        p = _mk_provider(ROWS)
+
+        def _sw(ts_code=None, **kw):
+            if ts_code == "801080.SI":
+                raise RuntimeError("boom")
+            return _sw_df([{**ROWS[1], "trade_date": "20260716"}])
+
+        p.pro.sw_daily.side_effect = _sw
+        stats = service.run_backfill(conn, _mk_registry_ok(), p,
+                                     "2026-07-16", "2026-07-16")
+        assert stats["codes_failed"] == ["801080.SI"]
+        assert stats["dates_written"] == 1
+
+
 class TestMigrateEnsure:
     def test_ensure_rebuilds_missing_table_on_v40_db(self, conn):
         # 存量库版本门跳过 init_schema → 表缺失;版本无关兜底必须补建(内存库≠真实库)
