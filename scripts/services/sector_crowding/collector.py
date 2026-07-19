@@ -138,6 +138,10 @@ def fetch_market_total(conn, registry, date: str):
 
 
 CHUNK_YEARS = 4  # 回填分片窗口:7.5年≈1820行/码贴近镜像2000行静默截断上限,必须分片
+# 单码瞬时超时重试:~330 次请求里镜像随机掉 1 个(实测两轮各废一整轮 15 分钟),
+# 重试吸收瞬时抖动;重试穷尽仍失败才记 codes_failed 触发 fail-closed(保底语义不变)
+CODE_FETCH_RETRIES = 3
+CODE_FETCH_RETRY_SLEEP_SECONDS = 2.0
 TRUNCATION_ROW_FLOOR = 2000  # 单片返回行数达到该值=疑似截断(镜像单页上限)
 
 
@@ -179,6 +183,25 @@ def fetch_code_history(provider, code: str, start: str, end: str) -> list[dict]:
     return out
 
 
+def _fetch_code_history_with_retry(provider, code: str, start: str, end: str) -> list[dict]:
+    """fetch_code_history 加瞬时故障重试。截断异常不重试(数据问题非网络问题)。"""
+    import time
+
+    last_exc: Exception | None = None
+    for attempt in range(1, CODE_FETCH_RETRIES + 1):
+        try:
+            return fetch_code_history(provider, code, start, end)
+        except BackfillTruncationError:
+            raise
+        except Exception as e:
+            last_exc = e
+            if attempt < CODE_FETCH_RETRIES:
+                logger.info("[sector-crowding backfill] %s 第 %d 次失败(%s),%.0fs 后重试",
+                            code, attempt, e, CODE_FETCH_RETRY_SLEEP_SECONDS)
+                time.sleep(CODE_FETCH_RETRY_SLEEP_SECONDS)
+    raise last_exc  # type: ignore[misc]
+
+
 def fetch_history_by_date(provider, start: str, end: str) -> tuple[dict, list[str]]:
     """回填阶段①（采集层）:码表枚举 → 逐码分片拉取 → 按日期聚合。
 
@@ -195,11 +218,12 @@ def fetch_history_by_date(provider, start: str, end: str) -> tuple[dict, list[st
     codes_failed: list[str] = []
     for code, level in [(c, "L1") for c in sorted(l1)] + [(c, "L2") for c in sorted(l2)]:
         try:
-            bars = fetch_code_history(provider, code, start, end)
+            bars = _fetch_code_history_with_retry(provider, code, start, end)
         except BackfillTruncationError:
             raise
         except Exception as e:
-            logger.warning("[sector-crowding backfill] %s 失败: %s", code, e)
+            logger.warning("[sector-crowding backfill] %s 失败(重试 %d 次后): %s",
+                           code, CODE_FETCH_RETRIES, e)
             codes_failed.append(code)
             continue
         for bar in bars:

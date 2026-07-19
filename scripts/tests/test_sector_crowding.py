@@ -548,6 +548,28 @@ class TestBackfill:
         snap = repo.get_snapshot(conn, "2026-07-16")
         assert {s["code"] for s in snap["sectors"]} == {"801080.SI", "801081.SI"}
 
+    def test_code_fetch_retries_transient_failure(self, monkeypatch):
+        # 瞬时超时重试吸收(330 请求随机掉 1 个曾两轮各废 15 分钟);穷尽才抛
+        monkeypatch.setattr(collector, "CODE_FETCH_RETRY_SLEEP_SECONDS", 0.0)
+        p = MagicMock()
+        calls = {"n": 0}
+
+        def _flaky(**kw):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise TimeoutError("read timed out")
+            return _sw_df([{"trade_date": "20200102", "close": 1.0, "amount": 10000.0}])
+
+        p.pro.sw_daily.side_effect = _flaky
+        bars = collector._fetch_code_history_with_retry(p, "801080.SI",
+                                                        "2020-01-01", "2020-12-31")
+        assert len(bars) == 1 and calls["n"] == 2
+
+        p.pro.sw_daily.side_effect = TimeoutError("always down")
+        with pytest.raises(TimeoutError):
+            collector._fetch_code_history_with_retry(p, "801080.SI",
+                                                     "2020-01-01", "2020-12-31")
+
     def test_backfill_counts_null_market_total(self, conn):
         # 总额守卫失败日落 NULL 属设计语义,但必须显式计数(消除覆盖率假信心)
         registry = MagicMock()
