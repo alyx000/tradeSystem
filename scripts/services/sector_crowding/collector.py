@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import math
 
 # 复用 volume-watch 已实战校准的三段守卫常量（只 import 常量不改其文件）
 from services.volume_concentration.collector import (
@@ -20,6 +21,21 @@ logger = logging.getLogger(__name__)
 AMOUNT_TO_BILLION = 10000.0
 
 
+def _finite_num(v) -> bool:
+    """有限数值守卫:pandas 缺值即 NaN 浮点,is None 挡不住;NaN 落库会写成非标 JSON token。"""
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+
+
+def _amount_billion(amount) -> float | None:
+    """amount(万元)→亿元的单点换算(daily 与 backfill 共用,防口径分叉);非有限值 → None。"""
+    return round(amount / AMOUNT_TO_BILLION, 2) if _finite_num(amount) else None
+
+
+def _clean_close(close) -> float | None:
+    """close 非有限值置 None:NaN 经 json.dumps 会落成非标 token,严格 JSON 消费端直接炸。"""
+    return close if _finite_num(close) else None
+
+
 def fetch_sector_daily(provider, date: str) -> dict | None:
     """当日申万 L1+L2 快照。L1 缺失且 parent_map 可靠才合成（meta 标 synthesized）。
 
@@ -35,17 +51,20 @@ def fetch_sector_daily(provider, date: str) -> dict | None:
         return None
     l1_codes = provider._ensure_sw_l1_codes() or set()
     l2_codes = provider._ensure_sw_l2_codes() or set()
+    if not l1_codes:
+        # 码表拉取失败被惰性缓存为空集(进程内不重试,仓库既有模式):原生 L1 行会被过滤、
+        # 走合成降级(name=code/close 缺席)。留日志便于排障,daily 单次进程影响面小。
+        logger.warning("[sector-crowding] L1 码表为空(拉取失败?),原生 L1 行将被过滤并降级合成")
     sectors = []
     for row in df.to_dict("records"):
         code = row.get("ts_code")
         level = "L1" if code in l1_codes else ("L2" if code in l2_codes else None)
         if level is None:
             continue
-        amount = row.get("amount")
         sectors.append({
             "code": code, "name": row.get("name"), "level": level,
-            "close": row.get("close"),
-            "amount_billion": round(amount / AMOUNT_TO_BILLION, 2) if amount is not None else None,
+            "close": _clean_close(row.get("close")),
+            "amount_billion": _amount_billion(row.get("amount")),
         })
     if not sectors:
         return None
@@ -72,14 +91,16 @@ def synthesize_l1(l2_sectors: list[dict], parent_map: dict) -> list[dict]:
     永无历史序列 → 分位/双高对 L1 长期失效。"""
     agg: dict = {}
     for s in l2_sectors:
-        if s.get("level") != "L2" or s.get("amount_billion") is None:
-            continue
+        if s.get("level") != "L2" or not _finite_num(s.get("amount_billion")):
+            continue  # NaN 参与加总会把整个合成 L1 毒成 NaN(单行脏值放大为整行业缺席)
         parent = parent_map.get(s.get("code"))
         if not parent:
             continue
         ent = agg.setdefault(parent, {"code": parent, "name": parent, "level": "L1",
                                       "close": None, "amount_billion": 0.0})
-        ent["amount_billion"] = round(ent["amount_billion"] + s["amount_billion"], 2)
+        ent["amount_billion"] += s["amount_billion"]
+    for ent in agg.values():
+        ent["amount_billion"] = round(ent["amount_billion"], 2)  # 出循环一次 round,免截断误差累积
     return list(agg.values())
 
 
@@ -93,6 +114,12 @@ def fetch_market_total(conn, registry, date: str):
         return None, None
     data = result.data
     total = data.get("total_billion")
+    # NaN 前置拦截:三段守卫全是 < 比较,NaN 比较恒 False 会穿透全部守卫、绕过
+    # missing_data 标注渲染出 "nan 亿"(memory:降级链"成功但含脏值"事故同型)
+    if total is not None and not _finite_num(total):
+        logger.warning("[sector-crowding] %s 两市成交额为非有限值(%r),落 NULL(source=%s)",
+                       date, total, result.source)
+        return None, None
     if total is None or total < MARKET_TOTAL_FLOOR_BILLION:
         if total is not None:
             logger.warning("[sector-crowding] %s 两市成交额 %.0f 亿低于绝对地板 %.0f 亿,落 NULL(source=%s)",
@@ -136,12 +163,16 @@ def fetch_code_history(provider, code: str, start: str, end: str) -> list[dict]:
         if df is not None and not df.empty:
             for row in df.to_dict("records"):
                 td = str(row.get("trade_date"))
-                amount = row.get("amount")
+                # pandas 列含缺值会整列 int→float64:str() 出 "20200101.0"/"nan",
+                # 直接切片会批量生成畸形日期键落库且永不与 daily 行对齐 → 跳行留日志
+                if len(td) != 8 or not td.isdigit():
+                    logger.warning("[sector-crowding backfill] %s 畸形 trade_date %r,跳过该行",
+                                   code, td)
+                    continue
                 out.append({
                     "date": f"{td[:4]}-{td[4:6]}-{td[6:]}",
-                    "close": row.get("close"),
-                    "amount_billion": round(amount / AMOUNT_TO_BILLION, 2)
-                    if amount is not None else None,
+                    "close": _clean_close(row.get("close")),
+                    "amount_billion": _amount_billion(row.get("amount")),
                 })
         chunk_start = f"{cy + CHUNK_YEARS}-01-01"
     out.sort(key=lambda r: r["date"])
@@ -155,6 +186,11 @@ def fetch_history_by_date(provider, start: str, end: str) -> tuple[dict, list[st
     回填行 name 暂存 code(sw_daily 区间接口不保证带 name),report 渲染以当日行为准。"""
     l1 = provider._ensure_sw_l1_codes() or set()
     l2 = provider._ensure_sw_l2_codes() or set()
+    if not l1 or not l2:
+        # 码表空集=拉取失败(真机实测 L1=31/L2=134 恒非空)。不抛错会静默写出半截历史,
+        # 且这些日期随后被 get_existing_dates 判"已有"锁死,重跑无法自愈 → 整体中止
+        raise RuntimeError(
+            f"sector-crowding backfill: 申万码表为空(L1={len(l1)}/L2={len(l2)}),疑拉取失败,中止回填")
     by_date: dict = {}
     codes_failed: list[str] = []
     for code, level in [(c, "L1") for c in sorted(l1)] + [(c, "L2") for c in sorted(l2)]:
@@ -211,9 +247,11 @@ def _normalize_moneyflow(records: list) -> list[dict]:
         if val is None:
             val = row.get("net_inflow_billion")
         try:
-            val = round(float(val), 2)
+            val = float(val)
         except (TypeError, ValueError):
             continue
+        if not math.isfinite(val):
+            continue  # float("nan")/inf 不抛异常但会毒化排序比较并落成非标 JSON
         if name:
-            out.append({"name": name, "net_amount_yi": val})
+            out.append({"name": name, "net_amount_yi": round(val, 2)})
     return out

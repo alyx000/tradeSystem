@@ -2,12 +2,19 @@
 （行业成交额÷全市场），volume-watch=「Top20 主线集中度」（Top20 内部占比）。"""
 from __future__ import annotations
 
-from .analyzer import ETF_JUMP_RATIO, SHARE_EXTREME_PCT, SHARE_WARN_PCT, SLOPE_PCTILE_WINDOW
+from .analyzer import (
+    ETF_JUMP_RATIO,
+    GAIN_WINDOWS,
+    SHARE_EXTREME_PCT,
+    SHARE_WARN_PCT,
+    SLOPE_PCTILE_WINDOW,
+)
 
 PROXY_DISCLAIMER = "（资金流代理，非公募持仓真值）"
 L2_TOP_N = 10
 
 _SLOPE_KEY = f"gain_pctile_{SLOPE_PCTILE_WINDOW}d"
+_GAIN_LABEL = "/".join(str(n) for n in GAIN_WINDOWS)
 
 
 def _share_cell(s: dict) -> str:
@@ -23,17 +30,20 @@ def _pct(v) -> str:
 
 
 def _sector_line(s: dict) -> str:
-    gains = "/".join(_pct(s.get(f"gain_{n}d")) for n in (5, 20, 60))
+    gains = "/".join(_pct(s.get(f"gain_{n}d")) for n in GAIN_WINDOWS)
     return (f"| {s.get('name')} | {_share_cell(s)} | {_pct(s.get('share_pctile'))} "
             f"| {gains} | {_pct(s.get(_SLOPE_KEY))} |")
 
 
-_TABLE_HEADER = ["| 板块 | 占比 | 占比分位 | 涨幅5/20/60日% | 20日斜率分位 |",
-                 "|---|---|---|---|---|"]
+_TABLE_HEADER = [
+    f"| 板块 | 占比 | 占比分位 | 涨幅{_GAIN_LABEL}日% | {SLOPE_PCTILE_WINDOW}日斜率分位 |",
+    "|---|---|---|---|---|",
+]
 
 
 def format_report(view: dict) -> str:
-    lines = [f"## 全行业交易拥挤度 · {view['date']}", ""]
+    lines = [f"## 全行业交易拥挤度 · {view['date']}", "",
+             "> 行业占比/涨幅/分位为客观取数 [事实];「双高拥挤」为派生信号 [判断],不构成买卖建议。"]
     total = view.get("market_total_billion")
     lines.append(f"两市总成交额:{total:.0f} 亿" if total is not None
                  else "两市总成交额缺失,当日占比不可算")
@@ -49,16 +59,16 @@ def format_report(view: dict) -> str:
     meta = view.get("meta") or {}
     l1 = _by_share(view["sectors"], "L1")
     l2 = _by_share(view["sectors"], "L2")[:L2_TOP_N]
-    lines += ["", "### 申万一级(全量)"]
+    lines += ["", "### 申万一级(全量) [事实]"]
     if l1:
         lines += _TABLE_HEADER + [_sector_line(s) for s in l1]
         if meta.get("l1_status") == "synthesized":
             lines.append("> L1 由 L2 成交额归并合成(close 缺席,斜率维度不可用)")
     else:
         lines.append("L1 数据缺失(映射不可靠,禁止合成)")
-    lines += ["", f"### 申万二级 TOP{L2_TOP_N}"]
+    lines += ["", f"### 申万二级 TOP{L2_TOP_N} [事实]"]
     lines += _TABLE_HEADER + [_sector_line(s) for s in l2]
-    lines += ["", f"### 资金流代理{PROXY_DISCLAIMER}"]
+    lines += ["", f"### 资金流代理 [事实]{PROXY_DISCLAIMER}"]
     lines += _proxy_lines(view.get("proxy"), view["date"])
     return "\n".join(lines)
 
@@ -86,8 +96,12 @@ def _proxy_lines(proxy, date: str) -> list[str]:
                      f"{chg_txt} 亿份{anomaly}{PROXY_DISCLAIMER}")
     m = proxy.get("margin")
     if m:
-        stale = f"(数据日 {m['trade_date']})" if m.get("trade_date") != date else ""
-        lines.append(f"- 全市场两融余额 {m['total_rzrqye_yi']:.0f} 亿{stale}{PROXY_DISCLAIMER}")
+        # proxy 是原样持久化的外部 dict:硬索引遇缺键/None 会让 run_report 该日永炸
+        # (脏数据已落库无法自愈),安全取值缺失即跳行
+        rzrq = m.get("total_rzrqye_yi")
+        if isinstance(rzrq, (int, float)):
+            stale = f"(数据日 {m.get('trade_date')})" if m.get("trade_date") != date else ""
+            lines.append(f"- 全市场两融余额 {rzrq:.0f} 亿{stale}{PROXY_DISCLAIMER}")
     if proxy.get("errors"):
         lines.append(f"- 代理缺口: {'; '.join(proxy['errors'])}")
     return lines

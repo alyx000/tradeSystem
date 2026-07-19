@@ -188,6 +188,49 @@ class TestCollector:
              {"name": "脏值", "net_inflow_billion": "bad"}])
         assert out == [{"name": "电子", "net_amount_yi": 30.5}]
 
+    def test_normalize_moneyflow_rejects_nan_inf(self):
+        # float("nan") 不抛异常但毒化排序比较并落成非标 JSON(门1 review 角度A 高)
+        out = collector._normalize_moneyflow(
+            [{"name": "A", "net_amount_yi": float("nan")},
+             {"name": "B", "net_amount_yi": float("inf")},
+             {"name": "C", "net_amount_yi": 1.0}])
+        assert out == [{"name": "C", "net_amount_yi": 1.0}]
+
+    def test_fetch_market_total_rejects_nan(self, conn):
+        # NaN 的 < 比较恒 False 会穿透三段守卫(降级链"成功但含脏值"事故同型)
+        registry = MagicMock()
+        registry.call.return_value = MagicMock(
+            success=True, data={"total_billion": float("nan"),
+                                "shanghai_billion": 7000.0, "shenzhen_billion": 8000.0},
+            source="tushare")
+        total, _ = collector.fetch_market_total(conn, registry, "2026-07-17")
+        assert total is None
+
+    def test_sector_daily_scrubs_nan_amount_and_close(self):
+        rows = [dict(ROWS[0], amount=float("nan"), close=float("nan")), ROWS[1]]
+        out = collector.fetch_sector_daily(_mk_provider(rows), "2026-07-17")
+        sec = {s["code"]: s for s in out["sectors"]}
+        assert sec["801080.SI"]["amount_billion"] is None
+        assert sec["801080.SI"]["close"] is None
+
+    def test_synthesize_l1_skips_nan_amount(self):
+        # NaN 参与加总会把整个合成 L1 毒成 NaN(单行脏值放大为整行业缺席)
+        l2 = [{"code": "801081.SI", "level": "L2", "amount_billion": float("nan")},
+              {"code": "801082.SI", "level": "L2", "amount_billion": 100.0}]
+        pm = {"801081.SI": "801080.SI", "801082.SI": "801080.SI"}
+        out = collector.synthesize_l1(l2, pm)
+        assert out[0]["amount_billion"] == pytest.approx(100.0)
+
+    def test_fetch_code_history_skips_malformed_trade_date(self):
+        # pandas 缺值整列 int→float64:str() 出 "20200101.0"/"nan" → 畸形日期键必须跳行
+        p = MagicMock()
+        p.pro.sw_daily.return_value = _sw_df(
+            [{"trade_date": "20200101.0", "close": 1.0, "amount": 10000.0},
+             {"trade_date": "nan", "close": 1.0, "amount": 10000.0},
+             {"trade_date": "20200102", "close": 1.0, "amount": 10000.0}])
+        bars = collector.fetch_code_history(p, "801080.SI", "2020-01-01", "2020-12-31")
+        assert [b["date"] for b in bars] == ["2020-01-02"]
+
 
 def _view(double_high=False, l1_status="native"):
     sec = {"code": "801080.SI", "name": "电子", "level": "L1", "close": 5000.0,
@@ -249,6 +292,17 @@ class TestFormatter:
             "margin": {"trade_date": "2026-07-16", "total_rzrqye_yi": 19000.0},
             "errors": []}})
         assert "数据日 2026-07-16" in md and "两融" in md
+
+    def test_report_margin_missing_key_does_not_crash(self):
+        # proxy 原样持久化:缺键脏数据落库后 run_report 不得永炸
+        md = formatter.format_report({**_view(), "proxy": {
+            "moneyflow": None, "moneyflow_source": None, "etf": None,
+            "margin": {"trade_date": "2026-07-16"}, "errors": []}})
+        assert "两融" not in md  # 缺值跳行,不渲染坏行
+
+    def test_report_fact_judgment_labels(self):
+        md = formatter.format_report(_view())
+        assert "[事实]" in md and "[判断]" in md and "不构成买卖建议" in md
 
 
 def _mk_registry_ok():
@@ -378,11 +432,17 @@ class TestBackfill:
         assert repo.get_snapshot(conn, "2026-07-16")["market_total_billion"] == 15000.0
 
     def test_backfill_synthesizes_l1_when_native_missing(self, conn):
-        # Explore review 中1:L1 缺失且 parent_map 可靠时回填也要合成,否则 L1 永无历史分位
-        p = _mk_provider([ROWS[1]], l1_codes=frozenset(),
+        # Explore review 中1:码表有 L1 但 sw_daily 无 L1 行(历史数据缺口)时回填也要合成,
+        # 否则 L1 永无历史分位。注意与"码表为空=拉取失败必须中止"区分。
+        p = _mk_provider([ROWS[1]], l1_codes={"801080.SI"},
                          parent_map={"801081.SI": "801080.SI"})
-        p.pro.sw_daily.side_effect = lambda **kw: _sw_df(
-            [{**ROWS[1], "trade_date": "20260716"}])
+
+        def _sw(ts_code=None, **kw):
+            if ts_code == "801080.SI":
+                return _sw_df([])  # L1 码正常返回但无行情行(非失败)
+            return _sw_df([{**ROWS[1], "trade_date": "20260716"}])
+
+        p.pro.sw_daily.side_effect = _sw
         stats = service.run_backfill(conn, _mk_registry_ok(), p,
                                      "2026-07-16", "2026-07-16")
         assert stats["dates_written"] == 1
@@ -390,6 +450,37 @@ class TestBackfill:
         assert snap["meta"]["l1_status"] == "synthesized"
         l1 = [s for s in snap["sectors"] if s["level"] == "L1"]
         assert l1 and l1[0]["code"] == "801080.SI"
+
+    def test_backfill_empty_code_table_aborts(self, conn):
+        # 码表空集=拉取失败:静默写半截历史会被 existing 集合锁死,必须整体中止
+        p = _mk_provider(ROWS, l1_codes=frozenset())
+        p._ensure_sw_l2_codes.return_value = set()
+        with pytest.raises(RuntimeError):
+            service.run_backfill(conn, _mk_registry_ok(), p, "2026-07-16", "2026-07-16")
+
+    def test_backfill_rejects_non_iso_dates(self, conn):
+        # YYYYMMDD 入参会让 BETWEEN 跳过判定恒空集 → daily 行被静默覆盖
+        with pytest.raises(ValueError):
+            service.run_backfill(conn, _mk_registry_ok(), _mk_provider(ROWS),
+                                 "20190101", "2026-07-16")
+
+    def test_backfill_disables_synthesis_when_codes_failed(self, conn):
+        # 部分码失败时合成额只含成功子集 → 低偏样本污染分位历史,宁缺勿假
+        p = _mk_provider([ROWS[1]], l1_codes={"801080.SI"},
+                         parent_map={"801081.SI": "801080.SI"})
+
+        def _sw(ts_code=None, **kw):
+            if ts_code == "801080.SI":
+                raise RuntimeError("boom")  # 唯一 L1 码失败
+            return _sw_df([{**ROWS[1], "trade_date": "20260716"}])
+
+        p.pro.sw_daily.side_effect = _sw
+        stats = service.run_backfill(conn, _mk_registry_ok(), p,
+                                     "2026-07-16", "2026-07-16")
+        assert stats["codes_failed"] == ["801080.SI"]
+        snap = repo.get_snapshot(conn, "2026-07-16")
+        assert snap["meta"]["l1_status"] == "missing"  # 不合成
+        assert all(s["level"] == "L2" for s in snap["sectors"])
 
     def test_backfill_single_code_failure_continues(self, conn):
         p = _mk_provider(ROWS)

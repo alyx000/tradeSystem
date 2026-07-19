@@ -6,6 +6,7 @@ run_report/run_trend：只读。分位/双高永不落库（spec v2 关键设计
 from __future__ import annotations
 
 import logging
+import re
 import sqlite3
 
 from utils.trade_date import is_non_trading_day
@@ -16,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 HISTORY_DAYS = 1900  # 分位回看窗口（≈2019 起全量交易日数）
 DEFAULT_BACKFILL_START = "2019-01-01"
+_ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 def run_daily(conn: sqlite3.Connection, registry, provider, date: str, *,
@@ -40,7 +42,9 @@ def run_daily(conn: sqlite3.Connection, registry, provider, date: str, *,
               "sectors": fetched["sectors"], "proxy": proxy, "meta": meta}
     if persist:
         repo.save_snapshot(conn, record)
-        # 读回渲染(而非直接用内存 record):顺带校验落库序列化,渲染的即落库的
+        # 读回渲染(而非直接用内存 record):顺带校验落库序列化,渲染的即落库的。
+        # 调用方契约:返回 None 仅表示"未落库未推送"(非交易日/无数据两分支);
+        # save 成功后本路径恒返回 str,若未来 _render 新增可返 None 的分支须重审此契约
         return _render(conn, date, repo.get_snapshot(conn, date))
     return _render(conn, date, record)
 
@@ -75,17 +79,29 @@ def run_backfill(conn: sqlite3.Connection, registry, provider, start: str, end: 
 
     已有快照的日期跳过(daily 采的行含 proxy,回填行不含,不可覆盖);
     跳过判定用日期集合(免 ~1800 次单行 JSON 反序列化)。L1 合成与 daily 走同一
-    collector.resolve_l1 真源(回填不合成会导致合成 L1 永无历史分位)。"""
+    collector.resolve_l1 真源(回填不合成会导致合成 L1 永无历史分位)。
+    注意:回填勿与盘后 daily 任务同时段运行——existing 集合是开跑时快照,期间 daily
+    新落的行会被覆盖(并发窗口,操作约束规避)。"""
+    if not (_ISO_DATE.match(start) and _ISO_DATE.match(end)):
+        # get_existing_dates 的 BETWEEN 与存储列做字符串比较,YYYYMMDD 入参会让
+        # 跳过判定恒空集 → 已有 daily 行被回填静默覆盖(门1 review 角度B)
+        raise ValueError(f"run_backfill: start/end 须为 YYYY-MM-DD 格式,得到 {start!r}/{end!r}")
     by_date, codes_failed = collector.fetch_history_by_date(provider, start, end)
     existing = repo.get_existing_dates(conn, start, end)
+    # 任何码采集失败时禁用 L1 合成:合成额只含成功子集会产出低偏 share 样本,
+    # 混入分位历史后让 native 日分位虚高、催生假双高(门1 review 角度B 高)。宁缺勿假。
+    parent_getter = ((lambda: {}) if codes_failed
+                     else provider._ensure_sw_l1_parent_map)
+    if codes_failed:
+        logger.warning("[sector-crowding backfill] %d 个码采集失败,本次回填禁用 L1 合成",
+                       len(codes_failed))
     written = skipped = 0
     for d in sorted(by_date):
         if d in existing:
             skipped += 1
             continue
         total, _src = collector.fetch_market_total(conn, registry, d)
-        sectors, l1_status = collector.resolve_l1(
-            by_date[d], provider._ensure_sw_l1_parent_map)
+        sectors, l1_status = collector.resolve_l1(by_date[d], parent_getter)
         for s in sectors:
             s["share_pct"] = analyzer.compute_share_pct(s.get("amount_billion"), total)
         repo.save_snapshot(conn, {
