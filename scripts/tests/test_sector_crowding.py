@@ -1,10 +1,10 @@
-"""sector_crowding 全链路测试（schema/repo/analyzer/collector/service/formatter）。"""
-import json
+"""sector_crowding 测试：当前覆盖 schema / repo / analyzer（后续阶段扩展 collector/service/formatter）。"""
 import sqlite3
 
 import pytest
 
 from db.schema import init_schema
+from services.sector_crowding import analyzer, repo
 
 
 @pytest.fixture()
@@ -14,9 +14,6 @@ def conn(tmp_path):
     init_schema(c)
     yield c
     c.close()
-
-
-from services.sector_crowding import analyzer, repo
 
 
 def _rec(date, total=15000.0, sectors=None):

@@ -5,6 +5,10 @@ import json
 import sqlite3
 
 
+def _dump_opt(value) -> str | None:
+    return None if value is None else json.dumps(value, ensure_ascii=False)
+
+
 def save_snapshot(conn: sqlite3.Connection, record: dict) -> None:
     if record.get("date") is None or record.get("sectors") is None:
         raise ValueError("save_snapshot: 缺少必填字段 date/sectors")
@@ -23,9 +27,9 @@ def save_snapshot(conn: sqlite3.Connection, record: dict) -> None:
         (
             record["date"],
             record.get("market_total_billion"),
-            json.dumps(record["sectors"], ensure_ascii=False),
-            json.dumps(record["proxy"], ensure_ascii=False) if record.get("proxy") is not None else None,
-            json.dumps(record["meta"], ensure_ascii=False) if record.get("meta") is not None else None,
+            _dump_opt(record["sectors"]),
+            _dump_opt(record.get("proxy")),
+            _dump_opt(record.get("meta")),
         ),
     )
     conn.commit()
@@ -33,16 +37,16 @@ def save_snapshot(conn: sqlite3.Connection, record: dict) -> None:
 
 def _row_to_record(row: sqlite3.Row) -> dict:
     def _j(col):
-        return json.loads(row[col]) if row[col] else None
+        return json.loads(row[col]) if col in row.keys() and row[col] else None
 
     return {
         "date": row["date"],
         "market_total_billion": row["market_total_billion"],
-        "sectors": _j("sectors_json") or [],
+        "sectors": _j("sectors_json"),
         "proxy": _j("proxy_json"),
         "meta": _j("meta_json"),
-        "created_at": row["created_at"],
-        "updated_at": row["updated_at"],
+        "created_at": row["created_at"] if "created_at" in row.keys() else None,
+        "updated_at": row["updated_at"] if "updated_at" in row.keys() else None,
     }
 
 
@@ -54,16 +58,20 @@ def get_snapshot(conn: sqlite3.Connection, date: str) -> dict | None:
 
 
 def get_recent(conn: sqlite3.Connection, end_date: str, days: int) -> list[dict]:
-    """取 <= end_date 的最近 days 行快照，按日期升序（供分位现算/trend）。"""
+    """取 <= end_date 的最近 days 行快照，按日期升序（供分位现算/trend）。
+
+    精简列读取：历史行的 proxy_json/meta_json 不参与分位计算，跳过解析
+    （JSON 解码是该路径主导成本）；当日全量数据用 get_snapshot 单行取。"""
     rows = conn.execute(
-        "SELECT * FROM sector_crowding_daily WHERE date <= ? ORDER BY date DESC LIMIT ?",
+        """SELECT date, market_total_billion, sectors_json
+           FROM sector_crowding_daily WHERE date <= ? ORDER BY date DESC LIMIT ?""",
         (end_date, days),
     ).fetchall()
     return [_row_to_record(r) for r in reversed(rows)]
 
 
 def get_latest_market_total_before(conn: sqlite3.Connection, date: str) -> float | None:
-    """date 之前最近一个非 NULL 两市总额（骤降告警基准）。"""
+    """date 之前最近一个非 NULL 两市总额（骤降告警基准，阶段B fetch_market_total 消费）。"""
     row = conn.execute(
         """SELECT market_total_billion FROM sector_crowding_daily
            WHERE date < ? AND market_total_billion IS NOT NULL
