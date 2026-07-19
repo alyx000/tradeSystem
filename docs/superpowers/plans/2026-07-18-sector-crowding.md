@@ -1164,10 +1164,10 @@ def run_daily(conn: sqlite3.Connection, registry, provider, date: str, *,
     if persist:
         repo.save_snapshot(conn, record)
         return run_report(conn, date)
-    # dry-run：不落库，用内存 record 拼历史现算
-    history = repo.get_recent(conn, date, HISTORY_DAYS)
-    if not history or history[-1]["date"] != date:
-        history = history + [record]
+    # dry-run：不落库。当日行一律用刚采集的 fresh record 顶替(库里可能有更早跑过的
+    # 陈旧行;get_recent 是精简列,历史行无 proxy/meta——见 repo.get_recent docstring)
+    history = [h for h in repo.get_recent(conn, date, HISTORY_DAYS) if h["date"] != date]
+    history.append(record)
     view = analyzer.build_view(history, date)
     if view is None:
         return None
@@ -1176,11 +1176,16 @@ def run_daily(conn: sqlite3.Connection, registry, provider, date: str, *,
 
 
 def run_report(conn: sqlite3.Connection, date: str) -> str:
+    # 契约:get_recent 为精简列(历史行 proxy/meta 恒 None),当日全量必须 get_snapshot
+    # 单行覆盖,否则报告的代理段/meta 标注段静默消失(门1 review 高优先级)
     history = repo.get_recent(conn, date, HISTORY_DAYS)
+    snap = repo.get_snapshot(conn, date)
+    if history and snap and history[-1]["date"] == date:
+        history[-1] = snap
     view = analyzer.build_view(history, date) if history else None
     if view is None:
         return f"{date} 无拥挤度快照(先跑 sector-crowding daily)。"
-    view["proxy"] = history[-1].get("proxy")
+    view["proxy"] = snap.get("proxy") if snap else None
     return formatter.format_report(view)
 
 
@@ -1749,4 +1754,4 @@ git commit -m "docs(sector-crowding): sync INDEX, market-observability reference
 
 ## 执行记录（实施时追加）
 
-- Task 0 结论：`L1_AVAILABLE=?` `PARENT_MAP_OK=?` `AMOUNT_TO_BILLION=?`（待填）
+- Task 0 结论（2026-07-18 真机实测，trade_date=20260717）：`L1_AVAILABLE=True`（sw_daily 439 行含全部 31 个 L1）；`PARENT_MAP_OK=True`（parent_code 列全非空，降级映射双保险）；`AMOUNT_TO_BILLION=10000`（万元→亿元：L1 总和 265,411,140 万元 ≈ 2.65 万亿，量级吻合）。合成路径预期永不启用，但代码分支保留（数据源行为可能漂移）。注意：sw_daily 含 L3 与"申万50"等特殊指数，L1/L2 码表过滤必须保留。

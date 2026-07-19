@@ -6,7 +6,9 @@ import math
 SHARE_WARN_PCT = 30.0      # 交易拥挤提示线（formatter 参考线）
 SHARE_EXTREME_PCT = 40.0   # 历史极值区（2020-21 白酒 ~42 / 本轮电子 47）
 GAIN_WINDOWS = (5, 20, 60)
-SLOPE_PCTILE_WINDOW = 20   # 双高评分用的斜率窗口（与 GAIN_WINDOWS 中的 20 语义独立,可单独校准）
+# 双高评分用的斜率窗口。可单独校准(独立走 interval_gain,不依赖 GAIN_WINDOWS);
+# 但注意 view 输出键名 gain_pctile_{N}d 随之改变,消费方(formatter/测试)须同步
+SLOPE_PCTILE_WINDOW = 20
 HIGH_PCTILE = 90.0
 MIN_PCTILE_SAMPLES = 60    # 历史样本(含当日)不足 60 个交易日不出分位
 
@@ -45,12 +47,22 @@ def interval_gain(bars: list, n: int, end_date: str) -> float | None:
 def rolling_percentile(history: list, current) -> float | None:
     """current 在 history+current 中的分位(0-100,最大值=100)。样本不足 MIN_PCTILE_SAMPLES → None。
 
-    契约:history 不含 current,且元素已由调用方保证有限（_series_by_code/_gain_history
-    构造时过滤）,此处不再重复过滤。"""
-    if not _finite(current) or len(history) + 1 < MIN_PCTILE_SAMPLES:
+    history 不含 current;非有限元素在单遍计数中剔除(公开 API,不能只靠调用方契约——
+    NaN 混入会静默稀释分位)。零方差序列(全体等值)返 None:恒定死板块的"分位"无区分度,
+    按 100 处理会把零波动板块误判双高(门1 review 高优先级)。"""
+    if not _finite(current):
         return None
-    below = sum(1 for v in history if v <= current) + 1  # +1 计入 current 自身
-    return round(below / (len(history) + 1) * 100, 1)
+    n_valid, below, vmin, vmax = 1, 1, current, current
+    for v in history:
+        if not _finite(v):
+            continue
+        n_valid += 1
+        if v <= current:
+            below += 1
+        vmin, vmax = min(vmin, v), max(vmax, v)
+    if n_valid < MIN_PCTILE_SAMPLES or vmin == vmax:
+        return None
+    return round(below / n_valid * 100, 1)
 
 
 def pctile_of_last(series: list) -> float | None:
@@ -60,12 +72,22 @@ def pctile_of_last(series: list) -> float | None:
     return rolling_percentile(series[:-1], series[-1])
 
 
+def _dedup_sectors(sectors: list) -> list:
+    """同快照内 (level, code) 去重,保留末条(数据源重复行时末条通常为修正值)。
+
+    不去重会张冠李戴:重复键的前条行会拿末条的值当"当日值"算分位,且双高重复计入。"""
+    per_key: dict = {}
+    for s in sectors or []:
+        per_key[(s.get("level"), s.get("code"))] = s
+    return list(per_key.values())
+
+
 def _series_by_code(records: list[dict]) -> dict:
     """{(level, code): {"bars": [(date, close)], "shares": [float], "name": str}}。
     按 (level, code) 键隔离，L1/L2 永不掺混（spec 事故级用例）。"""
     out: dict = {}
     for rec in records:
-        for s in rec.get("sectors") or []:
+        for s in _dedup_sectors(rec.get("sectors")):
             key = (s.get("level"), s.get("code"))
             ent = out.setdefault(key, {"bars": [], "shares": [], "name": s.get("name")})
             if _finite(s.get("close")):
@@ -93,20 +115,22 @@ def build_view(records: list[dict], date: str) -> dict | None:
     series = _series_by_code(records)
     sectors, double_high = [], []
     slope_key = f"gain_pctile_{SLOPE_PCTILE_WINDOW}d"
-    for s in today.get("sectors") or []:
+    for s in _dedup_sectors(today.get("sectors")):
         ent = series[(s.get("level"), s.get("code"))]
         row = dict(s)
         # 当日值有限时恒为序列末元素 → pctile_of_last;无限值则无当日样本,分位无意义
         row["share_pctile"] = pctile_of_last(ent["shares"]) if _finite(s.get("share_pct")) else None
         for n in GAIN_WINDOWS:
             row[f"gain_{n}d"] = interval_gain(ent["bars"], n, date)
-        gain_hist = _gain_history(ent["bars"], SLOPE_PCTILE_WINDOW)
-        row[slope_key] = (pctile_of_last(gain_hist)
-                          if row[f"gain_{SLOPE_PCTILE_WINDOW}d"] is not None else None)
+        # slope 窗口独立计算,不依赖 GAIN_WINDOWS 键(否则改 SLOPE_PCTILE_WINDOW 即 KeyError);
+        # 当日涨幅缺席时跳过整段涨幅史计算(缺 close 日免 O(N) 白算)
+        slope_gain = interval_gain(ent["bars"], SLOPE_PCTILE_WINDOW, date)
+        row[slope_key] = (pctile_of_last(_gain_history(ent["bars"], SLOPE_PCTILE_WINDOW))
+                          if slope_gain is not None else None)
         sectors.append(row)
         if (row["share_pctile"] is not None and row["share_pctile"] >= HIGH_PCTILE
                 and row[slope_key] is not None and row[slope_key] >= HIGH_PCTILE):
-            double_high.append(row)
+            double_high.append(row)  # 与 sectors 共享同一 dict 对象,消费方只读、勿就地改写
     return {
         "date": date,
         "market_total_billion": today.get("market_total_billion"),

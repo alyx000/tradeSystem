@@ -170,6 +170,25 @@ def _ensure_margin_index_correlation_daily(conn: sqlite3.Connection) -> None:
     conn.commit()  # 仅在确需修复时才提交
 
 
+def _ensure_sector_crowding_daily(conn: sqlite3.Connection) -> None:
+    """sector_crowding_daily 兜底：确保板块拥挤度快照表存在（版本无关）。
+
+    该表不占 schema 版本号：CREATE IF NOT EXISTS 只对 fresh 库生效，存量 v40 库的
+    版本门会跳过所有 init_schema 路径导致表永不创建（门1 review 高优先级——pytest
+    tmp_path 全绿掩盖真实库 no such table，正对应 feedback_real_db_vs_in_memory）。
+    不递增 CURRENT_SCHEMA_VERSION：避免触碰 v39→v40 显式迁移门禁，沿用
+    _ensure_market_timing_signal / _ensure_new_high_tables 的版本无关兜底先例。
+    """
+    exists = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='sector_crowding_daily'"
+    ).fetchone()
+    if exists:
+        return
+    from .schema import _SQL_SECTOR_CROWDING_DAILY
+    conn.executescript(_SQL_SECTOR_CROWDING_DAILY)
+    conn.commit()  # 仅在确需修复时才提交
+
+
 def _ensure_new_high_tables(conn: sqlite3.Connection) -> None:
     """v38 兜底：确保前复权历史新高两张派生表存在（版本无关）。"""
     names = {
@@ -880,6 +899,7 @@ def migrate(conn: sqlite3.Connection, *, activate_v40: bool = False) -> None:
     _ensure_cognition_instance_feedback_columns(conn)
     _ensure_factor_score_request_audit(conn)
     _ensure_new_high_tables(conn)
+    _ensure_sector_crowding_daily(conn)
 
 # ──────────────────────────────────────────────────────────────
 # YAML 数据导入

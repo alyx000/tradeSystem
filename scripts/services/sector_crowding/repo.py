@@ -27,7 +27,7 @@ def save_snapshot(conn: sqlite3.Connection, record: dict) -> None:
         (
             record["date"],
             record.get("market_total_billion"),
-            _dump_opt(record["sectors"]),
+            json.dumps(record["sectors"], ensure_ascii=False),  # 必填列,入口已挡 None
             _dump_opt(record.get("proxy")),
             _dump_opt(record.get("meta")),
         ),
@@ -42,7 +42,7 @@ def _row_to_record(row: sqlite3.Row) -> dict:
     return {
         "date": row["date"],
         "market_total_billion": row["market_total_billion"],
-        "sectors": _j("sectors_json"),
+        "sectors": _j("sectors_json") or [],  # 恒 list 契约:防手工/遗留空串行击穿迭代方
         "proxy": _j("proxy_json"),
         "meta": _j("meta_json"),
         "created_at": row["created_at"] if "created_at" in row.keys() else None,

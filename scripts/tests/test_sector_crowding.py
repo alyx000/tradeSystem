@@ -71,6 +71,19 @@ class TestRepo:
             repo.save_snapshot(conn, {"date": "2026-07-17"})  # 缺 sectors
 
 
+class TestMigrateEnsure:
+    def test_ensure_rebuilds_missing_table_on_v40_db(self, conn):
+        # 存量库版本门跳过 init_schema → 表缺失;版本无关兜底必须补建(内存库≠真实库)
+        from db.migrate import _ensure_sector_crowding_daily
+
+        conn.execute("DROP TABLE sector_crowding_daily")
+        _ensure_sector_crowding_daily(conn)
+        assert conn.execute(
+            "SELECT name FROM sqlite_master WHERE name='sector_crowding_daily'"
+        ).fetchone() is not None
+        _ensure_sector_crowding_daily(conn)  # 健康库幂等
+
+
 class TestAnalyzer:
     def test_share_pct_basic_and_none_denominator(self):
         assert analyzer.compute_share_pct(3000.0, 15000.0) == 20.0
@@ -129,3 +142,26 @@ class TestAnalyzer:
         view = analyzer.build_view(recs, recs[-1]["date"])
         l2 = [s for s in view["sectors"] if s["level"] == "L2"][0]
         assert l2["share_pctile"] is None  # 样本 5 < 60
+
+    def test_zero_variance_series_not_double_high(self):
+        # 恒定死板块:share 与涨幅历史全等值 → 分位 None,绝不能按 100 误判双高
+        recs = self._records()  # share 恒 5.0、close 恒 100.0
+        view = analyzer.build_view(recs, recs[-1]["date"])
+        sec = view["sectors"][0]
+        assert sec["share_pctile"] is None
+        assert sec["gain_pctile_20d"] is None
+        assert view["double_high"] == []
+
+    def test_rolling_percentile_skips_non_finite(self):
+        # 公开 API 防线:NaN/None 混入 history 不得崩溃、不得稀释分母
+        hist = [float(i) for i in range(59)] + [float("nan"), None]
+        assert analyzer.rolling_percentile(hist, 100.0) == 100.0
+
+    def test_duplicate_sector_rows_deduped(self):
+        # 同快照同 (level,code) 重复行:保留末条,双高不重复计入
+        recs = self._records(spike_last=True)
+        dup = dict(recs[-1]["sectors"][0])
+        recs[-1]["sectors"] = [dup, recs[-1]["sectors"][0]]
+        view = analyzer.build_view(recs, recs[-1]["date"])
+        assert len([s for s in view["sectors"] if s["code"] == "801080.SI"]) == 1
+        assert len(view["double_high"]) == 1
