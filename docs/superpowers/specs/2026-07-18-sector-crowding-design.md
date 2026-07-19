@@ -84,7 +84,7 @@ flowchart LR
 |---|---|---|---|
 | 交易拥挤度 | `行业当日成交额 ÷ 全市场总成交额` | `sw_daily` amount + `get_market_volume`（**复用 volume_concentration 的三段合理性守卫**；总额缺失/异常时 share 置空 + meta 标 `missing_data`，不落假值） | 占比% + 行业自身历史分位 + 绝对参考线（≥30% 提示、≥40% 历史极值区） |
 | 斜率拥挤度 | 交易日 close 序列 `close[-1]/close[-1-n] - 1`，n∈{5,20,60}；**末根 close 日期必须等于目标交易日**，否则该窗口置空（防节假日/陈旧数据冒充当日） | `sw_daily` close / 自身表内序列 | 三窗口涨幅 + 各自历史分位；20 日分位 ≥90% 标记「高斜率」 |
-| 资金流代理（v1） | 行业主力资金流连续 N 日净流入累计 + 重点行业 ETF 份额 5 日变化 + 全市场两融余额变化 | capability 顺序：`get_sector_moneyflow_ths` → `get_sector_moneyflow_dc` → akshare `get_sector_fund_flow`，collector 内做**统一 normalizer**（归一 `net_amount_yi` / `net_inflow_billion` 等字段形态差异）+ `get_etf_flow` + `pro.margin` | 代理信号列表；**报告每行强制显示「非公募持仓真值」**；不参与双高评分；ETF 份额异常跳变（拆分等）剔除或标注 |
+| 资金流代理（v1） | 行业主力资金流连续 N 日净流入累计 + 重点行业 ETF 份额 5 日变化 + 全市场两融余额变化 | capability 顺序：`get_sector_moneyflow_ths` → `get_sector_moneyflow_dc` → akshare `get_sector_fund_flow`，collector 内做**统一 normalizer**（归一 `net_amount_yi` / `net_inflow_billion` 等字段形态差异）+ `get_etf_flow` + `pro.margin` | 代理信号列表；**报告每行强制显示「非公募持仓真值」**；不参与双高评分；ETF 份额异常跳变（单次变动超存量 30%，疑拆分）标注「勿直读」；v1 ETF 直用 `get_etf_flow` 现有 watchlist 输出（仅 4 只，不另建行业映射——映射价值低于维护成本，v2 季报真值落地时再评估） |
 | 持仓真值（v2） | 公募季报行业配置比例（极值基准 13-15%） | 需新增 provider capability | 季度锚点，复盘时与每日代理并排展示 |
 
 **综合信号（双高拥挤）**：交易拥挤度分位与 20 日斜率分位同时 ≥90% 的板块，report 顶部单列清单（读取时计算，`--push` 时现算后推送），属 `[判断]` 层。资金流代理不参与该评分。
