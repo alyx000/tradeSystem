@@ -84,6 +84,12 @@ def get_recent(conn: sqlite3.Connection, end_date: str, days: int) -> list[dict]
     return [_row_to_record(r) for r in reversed(rows)]
 
 
+def get_existing_dates(conn: sqlite3.Connection, start: str, end: str) -> set:
+    """区间内已有快照的日期集合（backfill 跳过判定，免逐日单行全列读）。"""
+    return {row[0] for row in conn.execute(
+        "SELECT date FROM sector_crowding_daily WHERE date BETWEEN ? AND ?", (start, end))}
+
+
 def get_latest_market_total_before(conn: sqlite3.Connection, date: str) -> float | None:
     """date 之前最近一个非 NULL 两市总额（骤降告警基准，阶段B fetch_market_total 消费）。"""
     row = conn.execute(

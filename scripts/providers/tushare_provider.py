@@ -920,12 +920,19 @@ class TushareProvider(DataProvider):
     # ---- 板块排名 ----
 
     def _ensure_sw_l2_codes(self) -> set:
-        """惰性加载申万二级行业代码表（~134个细分行业，粒度适合短线板块跟踪）"""
+        """惰性加载申万二级行业代码表（~134个细分行业，粒度适合短线板块跟踪）。
+
+        同一次 index_classify(L2) 拉取顺带缓存 L2→L1 parent 映射（同一份分类表，
+        避免 _ensure_sw_l1_parent_map 重复网络调用）。"""
         if self._sw_l2_codes is None:
             try:
                 ic = self.pro.index_classify(level="L2", src="SW2021")
                 if ic is not None and not ic.empty:
                     self._sw_l2_codes = set(ic["index_code"].tolist())
+                    if "parent_code" in ic.columns and not ic["parent_code"].isna().any():
+                        self._sw_l1_parent_map = dict(zip(ic["index_code"], ic["parent_code"]))
+                    else:
+                        self._sw_l1_parent_map = {}
                 else:
                     self._sw_l2_codes = set()
             except Exception as e:
@@ -948,21 +955,14 @@ class TushareProvider(DataProvider):
         return self._sw_l1_codes
 
     def _ensure_sw_l1_parent_map(self) -> dict:
-        """惰性加载 L2 code → 所属 L1 code 映射（index_classify parent_code）。
+        """L2 code → 所属 L1 code 映射（index_classify parent_code，随 L2 码表同次拉取缓存）。
 
-        parent_code 列缺失或含空值 → 返回 {}（调用方按"映射不可靠禁止合成 L1"处理，
+        parent_code 列缺失或含空值 → {}（调用方按"映射不可靠禁止合成 L1"处理，
         sector-crowding spec v2 严重1：合成路径条件启用）。2026-07-18 真机实测
         parent_code 列全非空，此映射仅作 sw_daily 缺 L1 行时的降级双保险。"""
         if self._sw_l1_parent_map is None:
-            try:
-                ic = self.pro.index_classify(level="L2", src="SW2021")
-                if (ic is None or ic.empty or "parent_code" not in ic.columns
-                        or ic["parent_code"].isna().any()):
-                    self._sw_l1_parent_map = {}
-                else:
-                    self._sw_l1_parent_map = dict(zip(ic["index_code"], ic["parent_code"]))
-            except Exception as e:
-                logger.warning(f"获取申万 L2→L1 映射失败: {e}")
+            self._ensure_sw_l2_codes()  # 同一份 L2 分类表,一次拉取双缓存
+            if self._sw_l1_parent_map is None:  # 拉取失败/空表 → 映射不可靠
                 self._sw_l1_parent_map = {}
         return self._sw_l1_parent_map
 

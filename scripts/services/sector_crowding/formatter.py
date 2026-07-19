@@ -2,11 +2,9 @@
 （行业成交额÷全市场），volume-watch=「Top20 主线集中度」（Top20 内部占比）。"""
 from __future__ import annotations
 
-from .analyzer import SHARE_EXTREME_PCT, SHARE_WARN_PCT, SLOPE_PCTILE_WINDOW
+from .analyzer import ETF_JUMP_RATIO, SHARE_EXTREME_PCT, SHARE_WARN_PCT, SLOPE_PCTILE_WINDOW
 
 PROXY_DISCLAIMER = "（资金流代理，非公募持仓真值）"
-# ETF 单次份额变动超存量 30% → 疑拆分/异常,标注勿直读(spec 事故级用例 6)
-ETF_JUMP_RATIO = 0.3
 L2_TOP_N = 10
 
 _SLOPE_KEY = f"gain_pctile_{SLOPE_PCTILE_WINDOW}d"
@@ -49,10 +47,8 @@ def format_report(view: dict) -> str:
     else:
         lines.append("- 无双高拥挤板块")
     meta = view.get("meta") or {}
-    l1 = sorted([s for s in view["sectors"] if s.get("level") == "L1"],
-                key=lambda s: -(s.get("share_pct") or 0))
-    l2 = sorted([s for s in view["sectors"] if s.get("level") == "L2"],
-                key=lambda s: -(s.get("share_pct") or 0))[:L2_TOP_N]
+    l1 = _by_share(view["sectors"], "L1")
+    l2 = _by_share(view["sectors"], "L2")[:L2_TOP_N]
     lines += ["", "### 申万一级(全量)"]
     if l1:
         lines += _TABLE_HEADER + [_sector_line(s) for s in l1]
@@ -65,6 +61,11 @@ def format_report(view: dict) -> str:
     lines += ["", f"### 资金流代理{PROXY_DISCLAIMER}"]
     lines += _proxy_lines(view.get("proxy"), view["date"])
     return "\n".join(lines)
+
+
+def _by_share(sectors: list, level: str) -> list:
+    return sorted((s for s in sectors if s.get("level") == level),
+                  key=lambda s: -(s.get("share_pct") or 0))
 
 
 def _proxy_lines(proxy, date: str) -> list[str]:
@@ -93,11 +94,14 @@ def _proxy_lines(proxy, date: str) -> list[str]:
 
 
 def format_trend(rows: list[dict], sector: str) -> str:
-    lines = [f"## 拥挤度趋势 · {sector}", "", "| 日期 | 占比 | 收盘 |", "|---|---|---|"]
+    data_lines = []
     for rec in rows:
         for s in rec.get("sectors") or []:
             if s.get("code") == sector or s.get("name") == sector:
                 share = f"{s['share_pct']:.1f}%" if s.get("share_pct") is not None else "-"
                 close = f"{s['close']:.1f}" if s.get("close") is not None else "-"
-                lines.append(f"| {rec['date']} | {share} | {close} |")
-    return "\n".join(lines) if len(lines) > 4 else f"{sector} 无历史拥挤度数据。"
+                data_lines.append(f"| {rec['date']} | {share} | {close} |")
+    if not data_lines:
+        return f"{sector} 无历史拥挤度数据。"
+    return "\n".join([f"## 拥挤度趋势 · {sector}", "",
+                      "| 日期 | 占比 | 收盘 |", "|---|---|---|"] + data_lines)

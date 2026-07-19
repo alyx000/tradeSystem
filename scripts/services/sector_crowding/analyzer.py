@@ -11,6 +11,9 @@ GAIN_WINDOWS = (5, 20, 60)
 SLOPE_PCTILE_WINDOW = 20
 HIGH_PCTILE = 90.0
 MIN_PCTILE_SAMPLES = 60    # 历史样本(含当日)不足 60 个交易日不出分位
+# ETF 单次份额变动超存量 30% → 疑拆分/异常,标注勿直读(spec 事故级用例 6;
+# 数据质量阈值与其他阈值同住本模块,formatter 只渲染)
+ETF_JUMP_RATIO = 0.3
 
 
 def _finite(v) -> bool:

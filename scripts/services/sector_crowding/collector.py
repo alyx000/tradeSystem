@@ -35,7 +35,7 @@ def fetch_sector_daily(provider, date: str) -> dict | None:
         return None
     l1_codes = provider._ensure_sw_l1_codes() or set()
     l2_codes = provider._ensure_sw_l2_codes() or set()
-    sectors, has_l1 = [], False
+    sectors = []
     for row in df.to_dict("records"):
         code = row.get("ts_code")
         level = "L1" if code in l1_codes else ("L2" if code in l2_codes else None)
@@ -47,19 +47,22 @@ def fetch_sector_daily(provider, date: str) -> dict | None:
             "close": row.get("close"),
             "amount_billion": round(amount / AMOUNT_TO_BILLION, 2) if amount is not None else None,
         })
-        has_l1 = has_l1 or level == "L1"
     if not sectors:
         return None
-    if has_l1:
-        l1_status = "native"
-    else:
-        parent_map = provider._ensure_sw_l1_parent_map() or {}
-        if parent_map:
-            l1_status = "synthesized"
-            sectors.extend(synthesize_l1(sectors, parent_map))
-        else:
-            l1_status = "missing"  # 映射不可靠禁止合成（spec v2 严重1）
+    sectors, l1_status = resolve_l1(sectors, provider._ensure_sw_l1_parent_map)
     return {"sectors": sectors, "meta": {"l1_status": l1_status, "source": "tushare:sw_daily"}}
+
+
+def resolve_l1(sectors: list[dict], parent_map_getter) -> tuple[list[dict], str]:
+    """L1 状态机单一真源（daily 与 backfill 共用）:native / synthesized / missing。
+
+    映射不可靠(getter 返回空)时禁止合成(spec v2 严重1:合成路径条件启用)。"""
+    if any(s.get("level") == "L1" for s in sectors):
+        return sectors, "native"
+    parent_map = parent_map_getter() or {}
+    if parent_map:
+        return sectors + synthesize_l1(sectors, parent_map), "synthesized"
+    return sectors, "missing"
 
 
 def synthesize_l1(l2_sectors: list[dict], parent_map: dict) -> list[dict]:
@@ -145,6 +148,31 @@ def fetch_code_history(provider, code: str, start: str, end: str) -> list[dict]:
     return out
 
 
+def fetch_history_by_date(provider, start: str, end: str) -> tuple[dict, list[str]]:
+    """回填阶段①（采集层）:码表枚举 → 逐码分片拉取 → 按日期聚合。
+
+    单码失败记账继续;截断异常向上抛不吞(疑似截断宁可整体失败也不落半截)。
+    回填行 name 暂存 code(sw_daily 区间接口不保证带 name),report 渲染以当日行为准。"""
+    l1 = provider._ensure_sw_l1_codes() or set()
+    l2 = provider._ensure_sw_l2_codes() or set()
+    by_date: dict = {}
+    codes_failed: list[str] = []
+    for code, level in [(c, "L1") for c in sorted(l1)] + [(c, "L2") for c in sorted(l2)]:
+        try:
+            bars = fetch_code_history(provider, code, start, end)
+        except BackfillTruncationError:
+            raise
+        except Exception as e:
+            logger.warning("[sector-crowding backfill] %s 失败: %s", code, e)
+            codes_failed.append(code)
+            continue
+        for bar in bars:
+            by_date.setdefault(bar["date"], []).append(
+                {"code": code, "name": code, "level": level,
+                 "close": bar["close"], "amount_billion": bar["amount_billion"]})
+    return by_date, codes_failed
+
+
 def fetch_proxy(registry, date: str) -> dict:
     """资金流代理三路，各自独立失败不拖垮整体。
 
@@ -154,22 +182,22 @@ def fetch_proxy(registry, date: str) -> dict:
     errors: list[str] = []
     moneyflow, mf_source = None, None
     for cap in ("get_sector_moneyflow_ths", "get_sector_moneyflow_dc", "get_sector_fund_flow"):
-        r = registry.call(cap, date)
-        if r.success and r.data:
-            moneyflow = _normalize_moneyflow(r.data)
-            mf_source = r.source
+        r = _try_call(registry, cap, date, errors)
+        if r is not None:
+            moneyflow, mf_source = _normalize_moneyflow(r.data), r.source
             break
-        errors.append(f"{cap}: {getattr(r, 'error', None) or 'no data'}")
-    etf = _safe_call(registry, "get_etf_flow", date, errors)
-    margin = _safe_call(registry, "get_margin_data", date, errors)
+    etf_r = _try_call(registry, "get_etf_flow", date, errors)
+    margin_r = _try_call(registry, "get_margin_data", date, errors)
     return {"moneyflow": moneyflow, "moneyflow_source": mf_source,
-            "etf": etf, "margin": margin, "errors": errors}
+            "etf": etf_r.data if etf_r else None,
+            "margin": margin_r.data if margin_r else None, "errors": errors}
 
 
-def _safe_call(registry, cap: str, date: str, errors: list):
+def _try_call(registry, cap: str, date: str, errors: list):
+    """registry.call 薄封装:成功返 result 对象,失败按统一格式记账返 None。"""
     r = registry.call(cap, date)
     if r.success and r.data:
-        return r.data
+        return r
     errors.append(f"{cap}: {getattr(r, 'error', None) or 'no data'}")
     return None
 
