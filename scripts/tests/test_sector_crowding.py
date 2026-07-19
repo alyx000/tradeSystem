@@ -16,7 +16,7 @@ def conn(tmp_path):
     c.close()
 
 
-from services.sector_crowding import repo
+from services.sector_crowding import analyzer, repo
 
 
 def _rec(date, total=15000.0, sectors=None):
@@ -72,3 +72,63 @@ class TestRepo:
     def test_missing_required_raises(self, conn):
         with pytest.raises(ValueError):
             repo.save_snapshot(conn, {"date": "2026-07-17"})  # 缺 sectors
+
+
+class TestAnalyzer:
+    def test_share_pct_basic_and_none_denominator(self):
+        assert analyzer.compute_share_pct(3000.0, 15000.0) == 20.0
+        assert analyzer.compute_share_pct(3000.0, None) is None
+        assert analyzer.compute_share_pct(3000.0, 0) is None
+
+    def test_interval_gain_requires_last_bar_on_end_date(self):
+        bars = [(f"2026-07-{d:02d}", 100.0 + i) for i, d in enumerate(range(1, 12))]
+        assert analyzer.interval_gain(bars, 5, "2026-07-11") == pytest.approx(
+            (110.0 / 105.0 - 1) * 100, abs=0.01)
+        # 末根不是目标日（陈旧数据）→ None
+        assert analyzer.interval_gain(bars, 5, "2026-07-12") is None
+
+    def test_interval_gain_insufficient_history(self):
+        bars = [("2026-07-10", 100.0), ("2026-07-11", 101.0)]
+        assert analyzer.interval_gain(bars, 5, "2026-07-11") is None
+
+    def test_rolling_percentile_threshold(self):
+        hist = [float(i) for i in range(59)]          # 59 + current = 60 → 达标
+        assert analyzer.rolling_percentile(hist, 100.0) == 100.0
+        assert analyzer.rolling_percentile(hist[:10], 100.0) is None  # 样本不足
+
+    def _records(self, n_days=100, share=5.0, spike_last=False):
+        # n_days=100:20日涨幅历史序列=80个样本 ≥ MIN_PCTILE_SAMPLES=60,分位可算
+        recs = []
+        for i in range(n_days):
+            d = f"2026-{4 + i // 30:02d}-{i % 30 + 1:02d}"
+            s = share if not (spike_last and i == n_days - 1) else 45.0
+            recs.append({
+                "date": d, "market_total_billion": 15000.0,
+                "sectors": [{"code": "801080.SI", "name": "电子", "level": "L1",
+                             # 平走+末日跳涨:历史20日涨幅≈0,末日70% → 斜率分位=100
+                             "close": 170.0 if (spike_last and i == n_days - 1) else 100.0,
+                             "amount_billion": 150.0 * s, "share_pct": s}],
+                "proxy": None, "meta": None,
+            })
+        return recs
+
+    def test_build_view_double_high(self):
+        recs = self._records(spike_last=True)
+        view = analyzer.build_view(recs, recs[-1]["date"])
+        sec = view["sectors"][0]
+        assert sec["share_pctile"] is not None and sec["share_pctile"] >= 90
+        assert [s["code"] for s in view["double_high"]] == ["801080.SI"]
+
+    def test_build_view_rejects_date_mismatch(self):
+        recs = self._records()
+        assert analyzer.build_view(recs, "2026-12-31") is None
+
+    def test_build_view_no_l1_l2_crosstalk(self):
+        # 同名不同 level 的 code 分开算分位：L2 历史不足时 L2 分位为 None，但 L1 正常
+        recs = self._records()
+        for r in recs[-5:]:
+            r["sectors"].append({"code": "801081.SI", "name": "半导体", "level": "L2",
+                                 "close": 50.0, "amount_billion": 300.0, "share_pct": 2.0})
+        view = analyzer.build_view(recs, recs[-1]["date"])
+        l2 = [s for s in view["sectors"] if s["level"] == "L2"][0]
+        assert l2["share_pctile"] is None  # 样本 5 < 60
