@@ -514,6 +514,24 @@ CREATE TABLE IF NOT EXISTS market_timing_signal (
 );
 """
 
+# ──────────────────────────────────────────────────────────────
+# 5e. 板块拥挤度（sector-crowding）：一天一行快照；只存原始事实
+#     (close/amount/share_pct)，历史分位与双高信号读取时滚动计算、
+#     不持久化——避免回填修正历史后落库派生值过期（spec v2 中5）。
+#     market_total_billion nullable：守卫失败落 NULL 优于落假值。
+# ──────────────────────────────────────────────────────────────
+_SQL_SECTOR_CROWDING_DAILY = """
+CREATE TABLE IF NOT EXISTS sector_crowding_daily (
+    date TEXT PRIMARY KEY CHECK(date GLOB '????-??-??'),
+    market_total_billion REAL,
+    sectors_json TEXT NOT NULL,
+    proxy_json TEXT,
+    meta_json TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+);
+"""
+
 # 两融余额与指数联动性（margin-index-correlation daily）：一天一行，JSON 列存按窗口/指数
 # 键的多维结构。date=请求日，data_trade_date=两融真实日（可 < date，stale 标记依据）。
 _SQL_MARGIN_INDEX_CORRELATION_DAILY = """
@@ -1544,6 +1562,7 @@ _ALL_TABLE_SQL = [
     _SQL_DAILY_NEW_HIGH_STATS,
     _SQL_TREND_LEADER_POOL,
     _SQL_SECTOR_CORRELATION_DAILY,
+    _SQL_SECTOR_CROWDING_DAILY,
     _SQL_MARKET_TIMING_SIGNAL,
     _SQL_MARGIN_INDEX_CORRELATION_DAILY,
     _SQL_DAILY_REVIEWS,
@@ -1602,6 +1621,7 @@ EXPECTED_TABLES = [
     "holdings", "holding_tasks", "holding_quote_snapshots", "watchlist", "blacklist",
     "industry_info", "macro_info",
     "daily_market", "daily_volume_concentration", "trend_leader_pool", "sector_correlation_daily",
+    "sector_crowding_daily",
     "market_timing_signal", "margin_index_correlation_daily", "daily_reviews",
     "daily_review_factor_score_runs", "daily_review_factor_score_requests",
     "daily_review_factor_evaluations",
