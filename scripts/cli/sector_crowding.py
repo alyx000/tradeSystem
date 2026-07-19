@@ -16,6 +16,7 @@ import logging
 import sys
 
 from db.connection import get_connection
+from db.migrate import migrate
 from services.sector_crowding import service
 
 logger = logging.getLogger(__name__)
@@ -85,6 +86,9 @@ def _today() -> str:
 def _run_readonly(fn) -> None:
     conn = get_connection()
     try:
+        # 连库即 migrate:全仓库既有约定(volume_watch.py:69),幂等 schema-only;
+        # 存量 v40 库靠 migrate 内版本无关兜底补建 sector_crowding_daily,否则首跑 no such table
+        migrate(conn)
         print(fn(conn))
     finally:
         conn.close()
@@ -111,6 +115,7 @@ def _run_daily(config: dict, args: argparse.Namespace) -> None:
     date = args.date or _today()
     conn = get_connection()
     try:
+        migrate(conn)  # 连库即迁移(全仓库约定):存量库补建表,幂等
         with without_standard_http_proxy():
             registry, provider = _setup(config)
             if provider is None:
@@ -136,6 +141,7 @@ def _run_backfill(config: dict, args: argparse.Namespace) -> None:
     end = args.end or _today()
     conn = get_connection()
     try:
+        migrate(conn)  # 连库即迁移(全仓库约定):存量库补建表,幂等
         with without_standard_http_proxy():
             registry, provider = _setup(config)
             if provider is None:

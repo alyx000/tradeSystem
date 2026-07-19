@@ -11,7 +11,7 @@ def _dump_opt(value) -> str | None:
     return None if value is None else json.dumps(value, ensure_ascii=False, allow_nan=False)
 
 
-def save_snapshot(conn: sqlite3.Connection, record: dict) -> None:
+def _validate_record(record: dict) -> None:
     if record.get("date") is None or record.get("sectors") is None:
         raise ValueError("save_snapshot: 缺少必填字段 date/sectors")
     sectors = record["sectors"]
@@ -25,6 +25,20 @@ def save_snapshot(conn: sqlite3.Connection, record: dict) -> None:
         # 身份字段须为非空 str:非 str(如 list)是 unhashable,读取侧 (level,code) 作 dict 键直接炸
         if not (isinstance(code, str) and code.strip() and isinstance(level, str) and level.strip()):
             raise ValueError(f"save_snapshot: sectors 元素 code/level 须为非空字符串: {s!r:.80}")
+
+
+def _record_params(record: dict) -> tuple:
+    return (
+        record["date"],
+        record.get("market_total_billion"),
+        json.dumps(record["sectors"], ensure_ascii=False, allow_nan=False),  # 必填列,入口已挡 None
+        _dump_opt(record.get("proxy")),
+        _dump_opt(record.get("meta")),
+    )
+
+
+def save_snapshot(conn: sqlite3.Connection, record: dict) -> None:
+    _validate_record(record)
     conn.execute(
         """
         INSERT INTO sector_crowding_daily (
@@ -37,15 +51,28 @@ def save_snapshot(conn: sqlite3.Connection, record: dict) -> None:
             meta_json = excluded.meta_json,
             updated_at = excluded.updated_at
         """,
-        (
-            record["date"],
-            record.get("market_total_billion"),
-            json.dumps(record["sectors"], ensure_ascii=False, allow_nan=False),  # 必填列,入口已挡 None
-            _dump_opt(record.get("proxy")),
-            _dump_opt(record.get("meta")),
-        ),
+        _record_params(record),
     )
     conn.commit()
+
+
+def insert_snapshot_if_absent(conn: sqlite3.Connection, record: dict) -> bool:
+    """仅当日期不存在时插入（ON CONFLICT DO NOTHING）。回填专用写入口。
+
+    机制性防覆盖(codex 收尾门 高):回填开跑时的 existing 快照挡不住运行期间 daily
+    新落的行,UPSERT 会把含 proxy 的 daily 快照覆盖成 proxy=None 的回填行。返回是否写入。"""
+    _validate_record(record)
+    cur = conn.execute(
+        """
+        INSERT INTO sector_crowding_daily (
+            date, market_total_billion, sectors_json, proxy_json, meta_json, updated_at
+        ) VALUES (?, ?, ?, ?, ?, datetime('now'))
+        ON CONFLICT(date) DO NOTHING
+        """,
+        _record_params(record),
+    )
+    conn.commit()
+    return cur.rowcount > 0
 
 
 def _row_to_record(row: sqlite3.Row) -> dict:

@@ -114,9 +114,12 @@ def run_backfill(conn: sqlite3.Connection, registry, provider, start: str, end: 
             by_date[d], provider._ensure_sw_l1_parent_map)
         for s in sectors:
             s["share_pct"] = analyzer.compute_share_pct(s.get("amount_billion"), total)
-        repo.save_snapshot(conn, {
-            "date": d, "market_total_billion": total, "sectors": sectors,
-            "proxy": None, "meta": {"backfilled": True, "l1_status": l1_status}})
-        written += 1
+        # DO NOTHING 写入口:existing 快照挡不住回填期间 daily 新落的行,机制性防覆盖
+        if repo.insert_snapshot_if_absent(conn, {
+                "date": d, "market_total_billion": total, "sectors": sectors,
+                "proxy": None, "meta": {"backfilled": True, "l1_status": l1_status}}):
+            written += 1
+        else:
+            skipped += 1
     return {"dates_written": written, "dates_skipped": skipped,
             "dates_null_total": null_total, "codes_failed": []}

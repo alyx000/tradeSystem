@@ -109,6 +109,18 @@ class TestRepo:
             repo.save_snapshot(conn, _rec("2026-07-17", sectors=[
                 {"code": "801080.SI", "level": " "}]))
 
+    def test_insert_if_absent_never_overwrites(self, conn):
+        # 回填专用写入口:已有行(含 proxy 的 daily 快照)绝不被覆盖(机制性防并发窗口)
+        daily = _rec("2026-07-17")
+        daily["proxy"] = {"moneyflow": [{"name": "电子", "net_amount_yi": 55.0}]}
+        repo.save_snapshot(conn, daily)
+        wrote = repo.insert_snapshot_if_absent(conn, _rec("2026-07-17", total=1.0))
+        assert wrote is False
+        got = repo.get_snapshot(conn, "2026-07-17")
+        assert got["market_total_billion"] == 15000.0  # 原行保持
+        assert got["proxy"] is not None                 # proxy 未丢
+        assert repo.insert_snapshot_if_absent(conn, _rec("2026-07-16")) is True
+
     def test_save_snapshot_rejects_nan_at_write_boundary(self, conn):
         # 最后防线:采集层漏网的 NaN 在写边界炸掉,优于落成非标 JSON 毒化存储
         with pytest.raises(ValueError):
