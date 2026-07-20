@@ -10,7 +10,19 @@ version: "1.9"
 
 > **两种复盘形态**：本 SKILL 主流程是**单 Agent 表单式**复盘（review workbench 预填 + 引导填写 + 写库/钉钉）。
 > 当用户要求「像之前那样出 HTML 复盘」「用多 agent 复盘 YYYY-MM-DD」时，改走 [references/multi-agent-review.md](references/multi-agent-review.md)：
-> 9 路 subagent 并行采集 → 主会话汇总裁决 → 12+2 节只读 HTML 报告（`data/reports/复盘_*.html`），含口径基线（单位换算 / 两市综指口径 399106 / ETF 拆分名单 / 北向禁用 / 红线）与 [HTML 模板](references/html-report-template/README.md)。
+> 9 路 subagent 仍完整采集 → 主会话只筛选变化、冲突、会改变总裁决或影响持仓的内容 → 精简正文 + 可折叠证据的只读 HTML 报告（`data/reports/复盘_*.html`）。每路主输出固定为 1 条裁决、最多 3 条相对上一交易日的增量事实、最多 2 条冲突/缺口、各 1 条 `confirm_if` / `invalidate_if`；完整事实和表格进入证据层。口径基线（单位换算 / 两市综指口径 `000001.SH + 399106.SZ` / ETF 拆分名单 / 北向禁用 / 红线）与 [HTML 模板](references/html-report-template/README.md) 不变。
+
+多 Agent HTML 报告默认每节只显示「1 句裁决 + 最多 3 条证据 + 1 条证伪或缺口」，同一结论只允许在速览短引一次、在唯一归属章节完整解释一次；无新增内容只写一行，不生成空表。组装器对固定 8 chunks、16 anchors、Claim / evidence 结构、正文/附录预算和静态外部依赖做硬校验，超限必须定位责任章节并拒绝生成，不得自动删字。
+
+HTML 默认展示顺序为：`速览 → 三位一体重点因子 → ⓪前日判分 → ①–⑦ → 老师观点 → 行业信息 → 认知对照 → 次日推演 → ⑧次日计划 → 数据缺口`。重点因子仍必须在 9 路完整采集、八步复盘与认知对照综合完成后生成，只是在 HTML 中前置展示，不得因展示顺序提前而跳过后续事实输入。该章节必须用 `data-factor-mode` 区分正式 `factor-score`、`rule_only`、人工影子分析或明确无数据；未运行正式评分时必须使用 `shadow` 并写明“影子口径、不写库”。次日推演消费因子裁决后再衔接次日计划。
+
+多 Agent HTML 中的“容量中军”必须从全市场成交额排名**独立筛选**，不得把 `trend_leader_pool`、`leader_tracking` 或最票身份直接当成容量资格：`core` = 当日全市场成交额排名 ≤30 且归属方向成交额排名 ≤2；`candidate` = 当日全市场成交额排名 31～50 且归属方向成交额排名 ≤2。最近 5 个开放交易日进入 Top50 的次数只展示容量连续性，不能覆盖当日成交额门槛。未达门槛者只能进入“趋势池历史代表”或“辨识度票”分表，禁止使用“旧池中军”标签；⑤必须输出结构化容量表、完整来源下的无合格项声明，或来源不足声明。完整筛选、健康度和 HTML 元数据契约见 [多 Agent 流程](references/multi-agent-review.md#容量中军独立筛选硬契约) 与 [HTML 模板](references/html-report-template/README.md#容量中军元数据硬门)。
+
+容量排名不能由 Agent 自报：主会话选定 1～3 个申万二级方向后，必须运行模板内 `build_capacity_manifest.py`，从只读镜像生成 `capacity_<REPORT_DATE>.json`；官方 `assemble_report.py` 落盘时默认读取该 sidecar，并逐 `ts_code` 对账全部资格行。禁止手写、编辑或复制旧 sidecar；helper 返回失败 sidecar 时，⑤只能使用结构化 `missing-data` 并在数据缺口保持可见，不能绕过 sidecar 发布。
+
+②板块的集中度和“主升方向 × 辨识度个股”不得被精简掉：默认正文固定保留 1 句集中度裁决，折叠证据分别保留唯一集中度表、唯一主升辨识度矩阵及与之成对的主跌辨识度矩阵；无合格项与来源缺失必须使用不同的结构化状态，禁止静默省略。⑥节点同样固定保留 1 句未来事件窗裁决，以及报告日后 7 个自然日的结构化证据或无数据/缺失状态。具体硬门见 [HTML 模板](references/html-report-template/README.md#板块集中度与主升主跌辨识度硬门) 和 [事件窗硬门](references/html-report-template/README.md#未来七日事件窗硬门)。
+
+⑤龙头还必须保留“历史新高结构”：默认正文 1 句前复权滚动 60/120/250 日新高裁决与最多 3 条增量证据，完整双日计数、行业 Top3/CR3、名单延续和代表票进入折叠层。该口径由 `build_new_high_structure_manifest.py` 对最近 251 个开放日的 `daily.high × adj_factor` 只读重算，不能拿 `daily_new_high_stats` 的全历史高水位结果代替；无法完整重算时必须输出结构化 `missing-data` 和可见缺口，不得静默删除。详见 [历史新高结构硬门](references/html-report-template/README.md#历史新高结构硬门)。
 
 ## 使用场景
 

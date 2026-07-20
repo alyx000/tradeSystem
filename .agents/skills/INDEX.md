@@ -163,6 +163,7 @@
 | Skill | 路径 | 说明 |
 |-------|------|------|
 | `daily-review` | [daily-review/references/eight-step-prompt-templates.md](daily-review/references/eight-step-prompt-templates.md) | 八步复盘分步提问话术模板（配合 SKILL 速查） |
+| `daily-review` | [daily-review/references/multi-agent-review.md](daily-review/references/multi-agent-review.md) | 9 路完整采集、精简正文、Claim 唯一归属、容量/板块矩阵/滚动新高/事件窗硬门、折叠证据与 HTML 预算/拒绝生成契约 |
 | `cognition-evolution` | [cognition-evolution/references/cognition-candidate-rules.md](cognition-evolution/references/cognition-candidate-rules.md) | 强候选最小标准、不建议落库条件、refine 默认动作与自检清单 |
 | `repo-maintenance-workflows` | [repo-maintenance-workflows/references/maintenance-checklist.md](repo-maintenance-workflows/references/maintenance-checklist.md) | 只读诊断、Review、跨入口对齐、每日巡检、同步与验证检查清单 |
 | `repo-maintenance-workflows` | [repo-maintenance-workflows/references/teacher-notes-v40-migration.md](repo-maintenance-workflows/references/teacher-notes-v40-migration.md) | teacher_notes v40 停写、0600 备份、SHA 绑定与显式迁移门禁 |
