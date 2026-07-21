@@ -101,6 +101,68 @@ def ensure_trade_calendar(
     return count
 
 
+# 收盘安全线(Asia/Shanghai):A股 15:00 收盘,15:30 起视为"当日已收盘"
+CLOSE_CUTOFF = (15, 30)
+
+
+def resolve_latest_closed_trade_date(conn: sqlite3.Connection, registry,
+                                     now: "datetime | None" = None) -> "str | None":
+    """严格口径的"当前最新已收盘交易日"。返回 None = blocked（调用方必须不推送）。
+
+    与本文件 get_prev_trade_date / is_trade_day 的 fail-open 兜底（回退昨天 / weekday
+    近似）不同：本函数只信 DB trade_calendar 的确定 open-day 集合（先 ensure_trade_calendar
+    拉齐目标年，覆盖不足即 blocked），供 value-watch 等"历史日期绝不推送"的事件闸门使用
+    （spec v8：误用 fail-open 工具会在长假/日历源失败时误推或漏推）。
+
+    - now 统一转 Asia/Shanghai；naive 输入视为上海本地时间。
+    - 当日为确认交易日且 now >= 15:30 → 返回当日；否则返回日历中严格早于当日的最近 open 日。
+    - 1 月初上一交易日可能落在前一年：当年查无更早 open 日时补拉前一年日历再查。
+    """
+    from datetime import datetime as _dt
+    from zoneinfo import ZoneInfo
+
+    from db import queries as Q
+
+    tz = ZoneInfo("Asia/Shanghai")
+    if now is None:
+        now = _dt.now(tz)
+    elif now.tzinfo is None:
+        now = now.replace(tzinfo=tz)
+    else:
+        now = now.astimezone(tz)
+    today = now.date().isoformat()
+    try:
+        ensure_trade_calendar(conn, registry, year=now.year)
+        if not Q.trade_calendar_year_covered(conn, now.year):
+            return None
+        today_open = Q.is_trade_day_from_db(conn, today)
+        if today_open is None:
+            return None
+        if today_open and (now.hour, now.minute) >= CLOSE_CUTOFF:
+            return today
+        row = conn.execute(
+            "SELECT date FROM trade_calendar WHERE is_open = 1 AND date < ? "
+            "ORDER BY date DESC LIMIT 1",
+            (today,),
+        ).fetchone()
+        if row is None and now.month == 1:
+            ensure_trade_calendar(conn, registry, year=now.year - 1)
+            if not Q.trade_calendar_year_covered(conn, now.year - 1):
+                return None
+            row = conn.execute(
+                "SELECT date FROM trade_calendar WHERE is_open = 1 AND date < ? "
+                "ORDER BY date DESC LIMIT 1",
+                (today,),
+            ).fetchone()
+        return row[0] if row else None
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return None
+
+
 def is_non_trading_day(conn: sqlite3.Connection, registry, date: str) -> bool:
     """非交易日（周末/法定假日）守卫判定，供盘后类 CLI（落库/推送）跳过非交易日触发复用。
 
