@@ -142,6 +142,15 @@ def _ensure_thesis_columns(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE holdings ADD COLUMN thesis_id INTEGER")
 
 
+def _ensure_holdings_audit_columns(conn: sqlite3.Connection) -> None:
+    """holdings 写入审计兜底：老库补 input_by 列（spec value-watch v8 审计补齐）。
+
+    CREATE TABLE IF NOT EXISTS 不会动既有表，逐列 PRAGMA 探查 + ALTER。"""
+    hd_cols = {row[1] for row in conn.execute("PRAGMA table_info(holdings)").fetchall()}
+    if hd_cols and "input_by" not in hd_cols:
+        conn.execute("ALTER TABLE holdings ADD COLUMN input_by TEXT")
+
+
 def _ensure_daily_market_premium_columns(conn: sqlite3.Connection) -> None:
     """v30 兜底：为既有 daily_market 补 premium_capacity / premium_first_open 列。
     init_schema 的 CREATE TABLE IF NOT EXISTS 不会给已存在的老表补列
@@ -898,6 +907,7 @@ def migrate(conn: sqlite3.Connection, *, activate_v40: bool = False) -> None:
     _ensure_margin_index_correlation_daily(conn)
     _ensure_cognition_instance_feedback_columns(conn)
     _ensure_factor_score_request_audit(conn)
+    _ensure_holdings_audit_columns(conn)
     _ensure_new_high_tables(conn)
     _ensure_sector_crowding_daily(conn)
 

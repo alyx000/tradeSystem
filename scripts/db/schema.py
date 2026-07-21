@@ -143,7 +143,8 @@ CREATE TABLE IF NOT EXISTS holdings (
     entry_reason TEXT,
     note TEXT,
     updated_at TEXT,
-    thesis_id INTEGER
+    thesis_id INTEGER,
+    input_by TEXT
 );
 """
 
