@@ -18,7 +18,7 @@
 | 路 | 面 | 主要数据源 | 素材文件 |
 |---|---|---|---|
 | 1 | 大盘/择时/期指/两融 | 镜像 index_daily/fut_daily + 库 market_timing_signal / margin_index_correlation_daily | market_YYYY-MM-DD.md |
-| 2 | 板块/集中度/主升主跌辨识度/资金流/研报业绩 | 库 daily_volume_concentration + 镜像 daily/sw_daily/moneyflow_ind_ths + data/reports | sector_*.md |
+| 2 | 板块/集中度/全行业拥挤度/主升主跌辨识度/资金流/研报业绩 | 库 daily_volume_concentration + CLI `sector-crowding report --date <T>`（只读，底表 sector_crowding_daily）+ 镜像 daily/sw_daily/moneyflow_ind_ths + data/reports | sector_*.md |
 | 3 | 情绪/涨跌停/连板梯队 | 镜像 limit_list_d(U/D/Z) + daily；断板反包读 board-break 报告 | emotion_*.md |
 | 4 | 龙虎榜 | 镜像 top_list/top_inst | lhb_*.md |
 | 5 | ETF 份额申赎 | 镜像 fund_share/fund_daily | etf_flow_*.md |
@@ -47,6 +47,7 @@
 | 2 | `sector_concentration_verdict` | 1 句集中度裁决，至少对照当日与上一交易日；即使无法裁决也必须输出结构化状态 |
 | 2 | `sector_concentration_evidence` | 完整集中度事实表；完整无记录与来源不完整必须分别标 `none / missing-data` |
 | 2 | `rising_recognition` / `falling_recognition` | 主升与主跌方向 × 辨识度个股矩阵必须成对采集；任一侧无合格项也保留该侧 `none`，来源不足标 `missing-data`，不得只交付主跌矩阵 |
+| 2 | `sector_crowding_snapshot` | 全行业拥挤度快照（卞老师三维度框架）：跑只读 `python3 main.py sector-crowding report --date <T>`，采集 ① 交易拥挤度（占比 + 历史分位，标注 ≥30%/≥40% 绝对参考线触及情况）② 斜率拥挤度（5/20/60 日涨幅 + 20 日斜率分位，≥90% 标高斜率）③ 双高清单状态（有名单列名单，无双高显式写「无双高拥挤板块」）。资金流代理维度已由其他路承载，不重复采集。CLI 失败或当日无行时标 `missing-data` 记入 conflicts_or_gaps，不得静默省略 |
 | 8 | `new_high_structure_verdict` / `new_high_structure_evidence` | 前复权滚动 60/120/250 日双日计数、60 日行业 Top3/CR3、名单延续与最多 5 个代表票；不同于全历史高水位任务 |
 | 9 | `event_window_verdict` / `event_window_evidence` | 1 句节点裁决 + 报告日后 7 个自然日的事件窗；事件日期须标交易/休市并说明是否影响次日验证 |
 
@@ -168,7 +169,7 @@ python3 .agents/skills/daily-review/references/html-report-template/build_new_hi
 
 | 章节 | 默认可见 | 折叠证据 | 无数据/缺失处理 |
 |---|---|---|---|
-| ②板块 | 唯一 1 句集中度裁决；可计入本节最多 3 条关键证据 | 唯一集中度表；唯一主升辨识度矩阵；唯一主跌辨识度矩阵。主升/主跌必须成对出现，不因结果为空而删侧 | 完整覆盖但无记录用该模块结构化 `none`；来源不完整用 `missing-data`，并在数据缺口章节可见 |
+| ②板块 | 唯一 1 句集中度裁决；可计入本节最多 3 条关键证据 | 唯一集中度表；唯一主升辨识度矩阵；唯一主跌辨识度矩阵。主升/主跌必须成对出现，不因结果为空而删侧。另固定携带全行业拥挤度快照（L1 全量占比/分位 + 斜率分位 + 双高清单状态；文档级要求，非组装器硬校验门），命名用「全行业交易拥挤度」，与 Top20 主线集中度口径严格分表不混排 | 完整覆盖但无记录用该模块结构化 `none`；来源不完整用 `missing-data`，并在数据缺口章节可见（拥挤度快照缺失同样在数据缺口登记） |
 | ⑤龙头 | 1 句容量中军变化（确有变化时）+ 1 句滚动新高结构裁决 | 唯一容量中军健康表；唯一 60/120/250 日滚动新高结构；趋势池历史代表另表 | 容量与新高各自独立三态；任一来源不完整都用本模块 `missing-data` 并在数据缺口可见 |
 | ⑥节点 | 唯一 1 句报告日后 7 个自然日事件窗裁决 | 唯一事件窗表，事件日期标交易/休市及对次日验证的影响 | 无相关事件用 `none`；来源不完整用 `missing-data`，并在数据缺口章节可见 |
 
