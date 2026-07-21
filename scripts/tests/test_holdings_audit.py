@@ -62,6 +62,17 @@ def test_insert_without_input_by_falls_to_system(conn):
     assert row["input_by"] == "system"
 
 
+def test_holdings_add_cli_entry_date_semantics():
+    """--entry-date 缺省语义(spec v5 严重2)：新行未传落 today；更新未传保留原值(返 None=不更新)。"""
+    import datetime
+    from db import cli as db_cli
+
+    today = datetime.date.today().isoformat()
+    assert db_cli.resolve_entry_date_for_upsert(None, existing_entry_date=None) == today
+    assert db_cli.resolve_entry_date_for_upsert(None, existing_entry_date="2026-07-01") is None
+    assert db_cli.resolve_entry_date_for_upsert("2026-06-30", existing_entry_date="2026-07-01") == "2026-06-30"
+
+
 def test_ensure_backfills_input_by_column_on_old_table():
     """ALTER 兜底：老表（无 input_by 列）经 _ensure_holdings_audit_columns 后列存在。"""
     from db.migrate import _ensure_holdings_audit_columns

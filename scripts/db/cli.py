@@ -324,6 +324,9 @@ def register_db_subparser(subparsers: argparse._SubParsersAction) -> None:
     holdings_add.add_argument("--entry-reason", default=None, help="买入原因（开仓逻辑）")
     holdings_add.add_argument("--note", default=None, help="备注（持仓期间调仓记录等）")
     holdings_add.add_argument("--thesis-id", type=int, default=None, help="关联 trade_thesis.id")
+    holdings_add.add_argument("--entry-date", default=None,
+                              help="建仓日期 YYYY-MM-DD（新建持仓未传时落当日；更新已有持仓未传时保留原值）")
+    holdings_add.add_argument("--input-by", required=True, help="录入方: manual/openclaw/copaw/cursor")
 
     holdings_remove = db_sub.add_parser("holdings-remove", help="移除持仓（置 closed）")
     holdings_remove.add_argument("--code", required=True, help="股票代码")
@@ -1103,6 +1106,24 @@ def _cmd_add_macro(args: argparse.Namespace) -> None:
 
 # ── 持仓池实现（DB 路径）─────────────────────────────────────────
 
+def resolve_entry_date_for_upsert(cli_value: "str | None",
+                                  existing_entry_date: "str | None") -> "str | None":
+    """--entry-date 缺省语义（value-watch spec v5 严重2）：
+
+    - 显式传入 → 用传入值；
+    - 未传且无既有 active 行（新建）→ 落当日；
+    - 未传且命中既有 active 行（更新）→ 返回 None（不更新该列，保留原值——若缺省当日，
+      任何补 shares/note 的 holdings-add 都会把旧持仓 entry_date 改成今天，
+      导致 value-watch 阶梯身份键漂移、历史档位重发）。
+    """
+    if cli_value:
+        return cli_value
+    if existing_entry_date is None:
+        import datetime
+        return datetime.date.today().isoformat()
+    return None
+
+
 def _cmd_holdings_add(args: argparse.Namespace) -> None:
     from . import queries as Q
 
@@ -1111,6 +1132,7 @@ def _cmd_holdings_add(args: argparse.Namespace) -> None:
         "stock_name": args.name,
         "market": args.market,
         "status": "active",
+        "input_by": args.input_by,
     }
     if args.shares is not None:
         kwargs["shares"] = args.shares
@@ -1129,6 +1151,11 @@ def _cmd_holdings_add(args: argparse.Namespace) -> None:
 
     with get_db() as conn:
         migrate(conn)
+        existing = Q._active_holdings_by_code(conn, args.code)
+        existing_entry_date = existing[0].get("entry_date") if existing else None
+        entry_date = resolve_entry_date_for_upsert(args.entry_date, existing_entry_date)
+        if entry_date is not None:
+            kwargs["entry_date"] = entry_date
         hid = Q.upsert_holding(conn, **kwargs)
 
     print(f"✅ 已添加持仓 (id={hid}): {args.name} ({args.code})")
@@ -1139,7 +1166,7 @@ def _cmd_holdings_remove(args: argparse.Namespace) -> None:
 
     with get_db() as conn:
         migrate(conn)
-        closed = Q.close_active_holdings_by_code(conn, args.code)
+        closed = Q.close_active_holdings_by_code(conn, args.code, input_by=args.input_by)
         if not closed:
             print(f"⚠️ 未找到持仓: {args.code}")
             return
