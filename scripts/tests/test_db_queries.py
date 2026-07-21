@@ -424,7 +424,7 @@ class TestHoldings:
     def test_close_active_holdings_by_code_matches_suffix_variants(self, conn):
         Q.upsert_holding(conn, stock_code="688041", stock_name="海光A", status="active")
         Q.upsert_holding(conn, stock_code="688041.SH", stock_name="海光B", status="closed")
-        closed = Q.close_active_holdings_by_code(conn, "688041.SH")
+        closed = Q.close_active_holdings_by_code(conn, "688041.SH", input_by="manual")
         active = Q.get_holdings(conn, status="active")
         all_rows = Q.get_holdings(conn, None)
         assert closed == 1

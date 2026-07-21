@@ -484,7 +484,7 @@ def get_holdings(conn: sqlite3.Connection, status: str | None = "active") -> lis
 
 
 def close_active_holdings_by_code(conn: sqlite3.Connection, stock_code: str,
-                                  *, input_by: str = _SYSTEM_INPUT_BY) -> int:
+                                  *, input_by: str) -> int:
     """按归一化代码关闭全部 active 持仓，并记录本次操作方（写入审计）。"""
     rows = _active_holdings_by_code(conn, stock_code)
     for row in rows:

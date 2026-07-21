@@ -76,6 +76,56 @@ def test_exactly_cutoff_counts_as_closed(conn):
     assert resolve_latest_closed_trade_date(conn, _NoCallRegistry(), now=now) == "2026-07-21"
 
 
+def test_january_cross_year_returns_prev_december(tmp_path):
+    """1 月首个交易日前盘中运行：上一 open 日在前一年 12 月(门1 M4 跨年分支)。"""
+    c = get_connection(tmp_path / "jan.db")
+    init_schema(c)
+    import datetime as _dt
+    rows = []
+    for year in (2025, 2026):
+        d = _dt.date(year, 1, 1)
+        while d.year == year:
+            rows.append({"date": d.isoformat(), "is_open": 1 if d.weekday() < 5 else 0})
+            d += _dt.timedelta(days=1)
+    # 2026-01-01(周四)设为休市(元旦),1/2(周五)开市;上一 open 日=2025-12-31(周三)
+    Q.upsert_trade_calendar(c, rows)
+    Q.upsert_trade_calendar(c, [{"date": "2026-01-01", "is_open": 0}])
+    now = datetime(2026, 1, 1, 21, 45, tzinfo=SH)   # 元旦晚,当日休市
+    assert resolve_latest_closed_trade_date(c, _NoCallRegistry(), now=now) == "2025-12-31"
+    c.close()
+
+
+def test_january_prior_year_uncovered_blocked(tmp_path):
+    """1 月且当年 1/1 前无 open 日、前一年日历拉取失败 → blocked(门1 M4)。"""
+    c = get_connection(tmp_path / "jan2.db")
+    init_schema(c)
+    import datetime as _dt
+    rows = []
+    d = _dt.date(2026, 1, 1)
+    while d.year == 2026:
+        rows.append({"date": d.isoformat(), "is_open": 1 if d.weekday() < 5 else 0})
+        d += _dt.timedelta(days=1)
+    Q.upsert_trade_calendar(c, rows)
+    Q.upsert_trade_calendar(c, [{"date": "2026-01-01", "is_open": 0}])
+
+    class _FailRegistry:
+        def call(self, *a, **k):
+            class R:
+                success, data, error = False, None, "down"
+            return R()
+
+    now = datetime(2026, 1, 1, 21, 45, tzinfo=SH)
+    assert resolve_latest_closed_trade_date(c, _FailRegistry(), now=now) is None
+    c.close()
+
+
+def test_year_covered_but_today_row_missing_blocked(conn):
+    """年覆盖(≥200行)但当日恰缺行 → today_open None → blocked(门1 M4)。"""
+    conn.execute("DELETE FROM trade_calendar WHERE date='2026-07-21'")
+    now = datetime(2026, 7, 21, 21, 45, tzinfo=SH)
+    assert resolve_latest_closed_trade_date(conn, _NoCallRegistry(), now=now) is None
+
+
 def test_calendar_unavailable_returns_none(tmp_path):
     """空日历 + provider 失败 → blocked(None)：禁止 weekday/昨天 fallback。"""
     c = get_connection(tmp_path / "empty.db")

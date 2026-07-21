@@ -1981,6 +1981,27 @@ class TestPlanningAndKnowledgeAPI:
     def test_holdings_delete_missing_returns_404(self, client):
         assert client.delete("/api/holdings/999999").status_code == 404
 
+    def test_holdings_repeat_delete_preserves_first_closer(self, client):
+        """重复 DELETE 幂等返回 ok,但不覆盖首次关闭者的 input_by 审计(门1 B-2)。"""
+        hid = client.post("/api/holdings", json={
+            "stock_code": "600900.SH", "stock_name": "长江电力", "status": "active",
+        }).json()["id"]
+        client.delete(f"/api/holdings/{hid}?input_by=cursor")
+        assert client.get(f"/api/holdings/{hid}").json()["input_by"] == "cursor"
+        r = client.delete(f"/api/holdings/{hid}")     # 第二次,缺省 web
+        assert r.json() == {"ok": True}
+        assert client.get(f"/api/holdings/{hid}").json()["input_by"] == "cursor"  # 不被冲掉
+
+    def test_holdings_api_null_input_by_normalized(self, client):
+        """显式传 input_by:null 不得写穿 NULL 或清空既有审计(门1 M2)。"""
+        hid = client.post("/api/holdings", json={
+            "stock_code": "601288.SH", "stock_name": "农业银行",
+            "status": "active", "input_by": None,
+        }).json()["id"]
+        assert client.get(f"/api/holdings/{hid}").json()["input_by"] == "web"
+        client.put(f"/api/holdings/{hid}", json={"note": "x", "input_by": None})
+        assert client.get(f"/api/holdings/{hid}").json()["input_by"] == "web"
+
     def test_holdings_signals_api(self, client, db_path):
         conn = get_connection(db_path)
         Q.upsert_daily_market(conn, {

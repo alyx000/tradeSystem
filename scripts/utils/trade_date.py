@@ -117,6 +117,9 @@ def resolve_latest_closed_trade_date(conn: sqlite3.Connection, registry,
     - now 统一转 Asia/Shanghai；naive 输入视为上海本地时间。
     - 当日为确认交易日且 now >= 15:30 → 返回当日；否则返回日历中严格早于当日的最近 open 日。
     - 1 月初上一交易日可能落在前一年：当年查无更早 open 日时补拉前一年日历再查。
+    - **事务边界**（同 is_non_trading_day）：冷路径 ensure_trade_calendar 会在传入连接上
+      commit 日历行；异常路径会 rollback。调用方须在自身事务边界外调用，且 dry-run
+      （内存副本）模式应自行豁免，避免在真实库写日历缓存。
     """
     from zoneinfo import ZoneInfo
 
@@ -152,7 +155,10 @@ def resolve_latest_closed_trade_date(conn: sqlite3.Connection, registry,
                 return None
             prev = Q.get_prev_trade_date_from_db(conn, today)
         return prev
-    except Exception:
+    except Exception as e:
+        # blocked=不推送是合法终态,但必须留痕:否则"日历源失败"与"代码回归导致永久
+        # blocked"在调用方看来完全一样,静默漏推无从排障(门1 A-2)。
+        logger.warning("resolve_latest_closed_trade_date blocked by exception: %s", e)
         try:
             conn.rollback()
         except Exception:

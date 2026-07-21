@@ -324,7 +324,7 @@ def register_db_subparser(subparsers: argparse._SubParsersAction) -> None:
     holdings_add.add_argument("--entry-reason", default=None, help="买入原因（开仓逻辑）")
     holdings_add.add_argument("--note", default=None, help="备注（持仓期间调仓记录等）")
     holdings_add.add_argument("--thesis-id", type=int, default=None, help="关联 trade_thesis.id")
-    holdings_add.add_argument("--entry-date", default=None,
+    holdings_add.add_argument("--entry-date", default=None, type=_entry_date_arg,
                               help="建仓日期 YYYY-MM-DD（新建持仓未传时落当日；更新已有持仓未传时保留原值）")
     holdings_add.add_argument("--input-by", required=True, help="录入方: manual/openclaw/copaw/cursor")
 
@@ -1107,21 +1107,32 @@ def _cmd_add_macro(args: argparse.Namespace) -> None:
 # ── 持仓池实现（DB 路径）─────────────────────────────────────────
 
 def resolve_entry_date_for_upsert(cli_value: "str | None",
-                                  existing_entry_date: "str | None") -> "str | None":
-    """--entry-date 缺省语义（value-watch spec v5 严重2）：
+                                  has_existing_row: bool) -> "str | None":
+    """--entry-date 缺省语义（value-watch spec v5 严重2 + 门1 M1）：
 
     - 显式传入 → 用传入值；
-    - 未传且无既有 active 行（新建）→ 落当日；
-    - 未传且命中既有 active 行（更新）→ 返回 None（不更新该列，保留原值——若缺省当日，
-      任何补 shares/note 的 holdings-add 都会把旧持仓 entry_date 改成今天，
-      导致 value-watch 阶梯身份键漂移、历史档位重发）。
+    - 未传且无既有 active 行（新建）→ 落当日（Asia/Shanghai，与 value-watch 日历口径一致）；
+    - 未传且命中既有 active 行（更新）→ 返回 None（不更新该列）。**按"是否有既有行"判断，
+      不按 entry_date 是否为 NULL**——存量行（补列前写入）entry_date 全为 NULL，若按 NULL
+      判"新建"会在任意补 shares/note 时打上伪造的今天日期；NULL 保持 NULL（缺数据
+      而非错数据），由 value-watch 报告以 insufficient_identity 显式呈现。
     """
     if cli_value:
         return cli_value
-    if existing_entry_date is None:
+    if not has_existing_row:
         import datetime
-        return datetime.date.today().isoformat()
+        from zoneinfo import ZoneInfo
+        return datetime.datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat()
     return None
+
+
+def _entry_date_arg(value: str) -> str:
+    """argparse type 校验：--entry-date 必须是合法 YYYY-MM-DD（空串/错误格式 fail-fast）。"""
+    import datetime
+    try:
+        return datetime.date.fromisoformat(value).isoformat()
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"非法日期格式（应为 YYYY-MM-DD）: {value!r}")
 
 
 def _cmd_holdings_add(args: argparse.Namespace) -> None:
@@ -1152,8 +1163,7 @@ def _cmd_holdings_add(args: argparse.Namespace) -> None:
     with get_db() as conn:
         migrate(conn)
         existing = Q._active_holdings_by_code(conn, args.code)
-        existing_entry_date = existing[0].get("entry_date") if existing else None
-        entry_date = resolve_entry_date_for_upsert(args.entry_date, existing_entry_date)
+        entry_date = resolve_entry_date_for_upsert(args.entry_date, bool(existing))
         if entry_date is not None:
             kwargs["entry_date"] = entry_date
         hid = Q.upsert_holding(conn, **kwargs)
