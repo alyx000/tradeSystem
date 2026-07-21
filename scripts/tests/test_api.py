@@ -1992,6 +1992,20 @@ class TestPlanningAndKnowledgeAPI:
         assert r.json() == {"ok": True}
         assert client.get(f"/api/holdings/{hid}").json()["input_by"] == "cursor"  # 不被冲掉
 
+    def test_holdings_closed_row_immutable_via_put(self, client):
+        """门2 high-1:PUT 禁改 status(422);closed 行不可修改/复活(409)。"""
+        hid = client.post("/api/holdings", json={
+            "stock_code": "601398.SH", "stock_name": "工商银行",
+            "entry_date": "2026-06-01", "status": "active",
+        }).json()["id"]
+        assert client.put(f"/api/holdings/{hid}", json={"status": "closed"}).status_code == 422
+        client.delete(f"/api/holdings/{hid}")
+        # 复活攻击:PUT {"status":"active"} 必须被拒,旧行 entry_date 不得被复用
+        assert client.put(f"/api/holdings/{hid}", json={"status": "active"}).status_code == 422
+        assert client.put(f"/api/holdings/{hid}", json={"note": "late"}).status_code == 409
+        row = client.get(f"/api/holdings/{hid}").json()
+        assert row["status"] == "closed" and row.get("note") != "late"
+
     def test_holdings_api_null_input_by_normalized(self, client):
         """显式传 input_by:null 不得写穿 NULL 或清空既有审计(门1 M2)。"""
         hid = client.post("/api/holdings", json={

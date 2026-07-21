@@ -109,8 +109,8 @@ PORTFOLIO_COMMANDS = [
     ["db", "holdings-list"],
     ["db", "holdings-refresh", "--date", "2026-04-04"],
     ["db", "holdings-refresh", "--date", "2026-04-04", "--json"],
-    ["db", "holdings-import-yaml"],
-    ["db", "holdings-import-yaml", "--file", "/tmp/h.yaml"],
+    ["db", "holdings-import-yaml", "--input-by", "manual"],
+    ["db", "holdings-import-yaml", "--file", "/tmp/h.yaml", "--input-by", "manual"],
     # watchlist
     ["db", "watchlist-add", "--code", "300750", "--name", "宁德时代", "--tier", "tier1_core",
      "--input-by", "cursor"],

@@ -342,6 +342,16 @@ def create_holding(body: dict, conn: sqlite3.Connection = Depends(get_db_conn)):
 def update_holding_item(hid: int, body: dict, conn: sqlite3.Connection = Depends(get_db_conn)):
     if not body.get("input_by"):
         body["input_by"] = _API_INPUT_BY
+    # 门2 high-1:closed 行不可变——PUT 只允许改 active 行,且禁改 status(DELETE 后
+    # PUT {"status":"active"} 会复活旧行保留旧 entry_date,污染 value-watch 身份键;
+    # 迟到 PUT 也会覆盖关闭者审计)。关仓走 DELETE(soft close),重新开仓 POST 新行。
+    if "status" in body:
+        raise HTTPException(422, "status 不可经 PUT 修改;关仓走 DELETE,重新开仓 POST 新行")
+    row = conn.execute("SELECT status FROM holdings WHERE id = ?", (hid,)).fetchone()
+    if not row:
+        raise HTTPException(404, "Holding not found")
+    if row["status"] == "closed":
+        raise HTTPException(409, "closed 持仓不可修改(身份键与审计保护);重新开仓请 POST 新行")
     try:
         Q.update_holding(conn, hid, **body)
     except ValueError as e:

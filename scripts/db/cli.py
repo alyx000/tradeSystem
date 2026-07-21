@@ -350,6 +350,10 @@ def register_db_subparser(subparsers: argparse._SubParsersAction) -> None:
         default=None,
         help="YAML 路径（默认：仓库 tracking/holdings.yaml）",
     )
+    holdings_import_yaml.add_argument(
+        "--input-by", required=True,
+        help="录入方: manual/openclaw/copaw/cursor（写入审计，随每条 upsert 落库）",
+    )
 
     # ── 关注池 ────────────────────────────────────────────────────
     wl_add = db_sub.add_parser("watchlist-add", help="添加到关注池")
@@ -1162,6 +1166,12 @@ def _cmd_holdings_add(args: argparse.Namespace) -> None:
 
     with get_db() as conn:
         migrate(conn)
+        # 门2 med-1:查 existing 与 upsert 两步间的写锁串行化,防并发连接交错时
+        # 误把他连接刚建的行判为"新建"而覆盖 entry_date(单机 CLI 概率极低,防御性)
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+        except sqlite3.OperationalError:
+            pass  # 已在事务中(migrate 残留)则沿用
         existing = Q._active_holdings_by_code(conn, args.code)
         entry_date = resolve_entry_date_for_upsert(args.entry_date, bool(existing))
         if entry_date is not None:
@@ -1319,6 +1329,7 @@ def _cmd_holdings_import_yaml(args: argparse.Namespace) -> None:
                 entry_reason=entry_reason,
                 note=note_val,
                 status="active",
+                input_by=args.input_by,
             )
             imported += 1
     skipped = sum(skip_reasons.values())

@@ -126,6 +126,66 @@ def test_year_covered_but_today_row_missing_blocked(conn):
     assert resolve_latest_closed_trade_date(conn, _NoCallRegistry(), now=now) is None
 
 
+def _make_full_year_provider_rows(year):
+    import datetime as _dt
+    rows = []
+    d = _dt.date(year, 1, 1)
+    while d.year == year:
+        rows.append({"cal_date": d.strftime("%Y%m%d"), "is_open": 1 if d.weekday() < 5 else 0})
+        d += _dt.timedelta(days=1)
+    return rows
+
+
+def test_incomplete_year_refreshes_from_provider(tmp_path):
+    """门2 high-2:200+ 行但缺关键日期的残缺日历不得直接信任——先 force 刷新再判。"""
+    import datetime as _dt
+    c = get_connection(tmp_path / "gap.db")
+    init_schema(c)
+    rows = []
+    d = _dt.date(2026, 1, 1)
+    while d.year == 2026:
+        if d.isoformat() != "2026-07-17":   # 故意缺 7/17(周五 open 日),仍 >200 行
+            rows.append({"date": d.isoformat(), "is_open": 1 if d.weekday() < 5 else 0})
+        d += _dt.timedelta(days=1)
+    Q.upsert_trade_calendar(c, rows)
+
+    class _GoodRegistry:
+        def call(self, cap, *a, **k):
+            class R:
+                success, error = True, ""
+                data = _make_full_year_provider_rows(2026)
+            return R()
+
+    now = datetime(2026, 7, 19, 12, 0, tzinfo=SH)   # 周日
+    # 残缺时旧实现会直接返回 7/16(过期交易日);正确行为:force 刷新补齐后返回 7/17
+    assert resolve_latest_closed_trade_date(c, _GoodRegistry(), now=now) == "2026-07-17"
+    c.close()
+
+
+def test_incomplete_year_provider_fail_blocked(tmp_path):
+    """门2 high-2:残缺日历 + provider 刷新失败 → blocked,绝不返回过期交易日。"""
+    import datetime as _dt
+    c = get_connection(tmp_path / "gap2.db")
+    init_schema(c)
+    rows = []
+    d = _dt.date(2026, 1, 1)
+    while d.year == 2026:
+        if d.isoformat() != "2026-07-17":
+            rows.append({"date": d.isoformat(), "is_open": 1 if d.weekday() < 5 else 0})
+        d += _dt.timedelta(days=1)
+    Q.upsert_trade_calendar(c, rows)
+
+    class _FailRegistry:
+        def call(self, *a, **k):
+            class R:
+                success, data, error = False, None, "down"
+            return R()
+
+    now = datetime(2026, 7, 19, 12, 0, tzinfo=SH)
+    assert resolve_latest_closed_trade_date(c, _FailRegistry(), now=now) is None
+    c.close()
+
+
 def test_calendar_unavailable_returns_none(tmp_path):
     """空日历 + provider 失败 → blocked(None)：禁止 weekday/昨天 fallback。"""
     c = get_connection(tmp_path / "empty.db")

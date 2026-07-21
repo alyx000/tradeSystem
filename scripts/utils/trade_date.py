@@ -134,15 +134,28 @@ def resolve_latest_closed_trade_date(conn: sqlite3.Connection, registry,
         now = now.astimezone(tz)
     today = now.date().isoformat()
 
-    def _year_covered(year: int) -> bool:
-        # 热路径先查覆盖态,未覆盖才走 ensure(其内部会再查一次,冷路径可接受)
-        if Q.trade_calendar_year_covered(conn, year):
+    def _year_complete(year: int) -> bool:
+        # 门2 high-2:trade_calendar_year_covered 的"≥200 行"只是弱代理——200 行但缺
+        # 目标日附近日期的残缺日历会返回过期交易日而非 blocked。strict 闸门要求
+        # **全年自然日完整**(tushare trade_cal 返回整年含休市日);不完整先 force 刷新,
+        # 仍不完整才 blocked。热路径同样只有一次 COUNT。
+        import calendar as _cal
+
+        expected = 366 if _cal.isleap(year) else 365
+
+        def _cnt() -> int:
+            return conn.execute(
+                "SELECT COUNT(DISTINCT date) FROM trade_calendar WHERE date BETWEEN ? AND ?",
+                (f"{year}-01-01", f"{year}-12-31"),
+            ).fetchone()[0]
+
+        if _cnt() >= expected:
             return True
-        ensure_trade_calendar(conn, registry, year=year)
-        return Q.trade_calendar_year_covered(conn, year)
+        ensure_trade_calendar(conn, registry, year=year, force=True)
+        return _cnt() >= expected
 
     try:
-        if not _year_covered(now.year):
+        if not _year_complete(now.year):
             return None
         today_open = Q.is_trade_day_from_db(conn, today)
         if today_open is None:
@@ -151,7 +164,7 @@ def resolve_latest_closed_trade_date(conn: sqlite3.Connection, registry,
             return today
         prev = Q.get_prev_trade_date_from_db(conn, today)
         if prev is None and now.month == 1:
-            if not _year_covered(now.year - 1):
+            if not _year_complete(now.year - 1):
                 return None
             prev = Q.get_prev_trade_date_from_db(conn, today)
         return prev
