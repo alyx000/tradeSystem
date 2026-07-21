@@ -1953,6 +1953,34 @@ class TestPlanningAndKnowledgeAPI:
         r = client.delete(f"/api/holdings/{hid}")
         assert r.status_code == 200
 
+    def test_holdings_api_audit_and_soft_delete(self, client):
+        """value-watch spec v8:三端点 input_by 缺省 web/显式可传;delete 改 soft close。"""
+        r = client.post("/api/holdings", json={
+            "stock_code": "601939.SH", "stock_name": "建设银行",
+            "entry_price": 9.0, "entry_date": "2026-07-01", "status": "active",
+        })
+        hid = r.json()["id"]
+        row = client.get(f"/api/holdings/{hid}").json()
+        assert row["input_by"] == "web"                      # create 缺省 web
+
+        client.put(f"/api/holdings/{hid}", json={"note": "x", "input_by": "cursor"})
+        assert client.get(f"/api/holdings/{hid}").json()["input_by"] == "cursor"  # 显式传入
+
+        r = client.delete(f"/api/holdings/{hid}")
+        assert r.json() == {"ok": True}
+        row = client.get(f"/api/holdings/{hid}").json()      # soft close:行保留可审计
+        assert row["status"] == "closed"
+        assert row["input_by"] == "web"                      # delete 缺省 web
+
+        # 同代码可重新 add(active 唯一约束只针对 active 行),且不复用旧行
+        r2 = client.post("/api/holdings", json={
+            "stock_code": "601939.SH", "stock_name": "建设银行", "status": "active",
+        })
+        assert r2.json()["id"] != hid
+
+    def test_holdings_delete_missing_returns_404(self, client):
+        assert client.delete("/api/holdings/999999").status_code == 404
+
     def test_holdings_signals_api(self, client, db_path):
         conn = get_connection(db_path)
         Q.upsert_daily_market(conn, {
