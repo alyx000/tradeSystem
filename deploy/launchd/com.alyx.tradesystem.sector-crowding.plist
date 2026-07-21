@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Sleep policy: 拥挤度为复盘辅助数据,错过可接受;macOS 休眠期间不触发,可接受 -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.alyx.tradesystem.sector-crowding</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/alyx/tradeSystem/deploy/launchd/sector-crowding-runner.sh</string>
+    </array>
+
+    <!-- 工作日 21:30(前有 volume-watch 21:00/sector-correlation 21:15/board-break 21:20,后有 ma-breakout 21:35;board-break 含 LLM 环节跑长时可能与本任务并发打镜像,排障时注意)。
+         Weekday: 1=周一 ... 5=周五。非交易日(节假日)仍会触发,任务内守卫判非交易日自动跳过。 -->
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>21</integer><key>Minute</key><integer>30</integer></dict>
+        <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>21</integer><key>Minute</key><integer>30</integer></dict>
+        <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>21</integer><key>Minute</key><integer>30</integer></dict>
+        <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>21</integer><key>Minute</key><integer>30</integer></dict>
+        <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>21</integer><key>Minute</key><integer>30</integer></dict>
+    </array>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/tradesystem-sector-crowding.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/tradesystem-sector-crowding.log</string>
+
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>

@@ -22,6 +22,8 @@
 - `com.alyx.tradesystem.cognition-digest-monthly.plist` — 每月 1 号 09:00 触发（认知沉淀月汇总；同一日志 `/tmp/tradesystem-cognition-digest.log`）
 - `board-break-runner.sh` — 包装脚本：cd 仓库根 → source `scripts/.env`(TUSHARE_TOKEN) + `~/.config/tradeSystem.env`(钉钉/ANTIGRAVITY) → 调 `python3 main.py board-break daily`
 - `com.alyx.tradesystem.board-break.plist` — 工作日 21:20 触发（断板反包盘后扫描：昨日连板≥2 断板→八维度加权打分+LLM两两PK→双排序观察清单；日志 `/tmp/tradesystem-board-break.log`）
+- `sector-crowding-runner.sh` — 包装脚本：cd 仓库根 → source `scripts/.env`(TUSHARE_TOKEN) + `~/.config/tradeSystem.env`(钉钉,仅手动 `--push` 场景需要) → 调 `python3 main.py sector-crowding daily`
+- `com.alyx.tradesystem.sector-crowding.plist` — 工作日 21:30 触发（板块拥挤度采集，默认不推送，复盘时 `sector-crowding report` 查看；非交易日任务内守卫跳过；日志 `/tmp/tradesystem-sector-crowding.log`）
 - `ma-breakout-runner.sh` — 包装脚本：cd 仓库根 → source `scripts/.env`(TUSHARE_TOKEN) + `~/.config/tradeSystem.env`(钉钉) → 调 `python3 main.py ma-breakout daily`
 - `com.alyx.tradesystem.ma-breakout.plist` — 工作日+周日 21:35 触发（系统时区 Asia/Shanghai 单晚间档，与兄弟任务同范式；周日自动回退到最近已完成交易日；4日均线二波观察池；日志 `/tmp/tradesystem-ma-breakout.log`）
 - `daily-leaders-runner.sh` — 包装脚本：cd 仓库根 → source `~/.config/tradeSystem.env`(钉钉/LLM) → 调 `/usr/bin/python3 scripts/main.py daily-leaders propose --push`

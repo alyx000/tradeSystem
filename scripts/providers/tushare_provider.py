@@ -76,6 +76,8 @@ class TushareProvider(DataProvider):
     def __init__(self, config: dict | None = None):
         super().__init__(config)
         self.pro = None
+        self._sw_l1_codes: set | None = None
+        self._sw_l1_parent_map: dict | None = None
         self._sw_l2_codes: set | None = None
         self._ths_concept_map: dict | None = None
         self._ths_member_cache: dict[str, list[dict]] = {}
@@ -918,18 +920,51 @@ class TushareProvider(DataProvider):
     # ---- 板块排名 ----
 
     def _ensure_sw_l2_codes(self) -> set:
-        """惰性加载申万二级行业代码表（~134个细分行业，粒度适合短线板块跟踪）"""
+        """惰性加载申万二级行业代码表（~134个细分行业，粒度适合短线板块跟踪）。
+
+        同一次 index_classify(L2) 拉取顺带缓存 L2→L1 parent 映射（同一份分类表，
+        避免 _ensure_sw_l1_parent_map 重复网络调用）。"""
         if self._sw_l2_codes is None:
             try:
                 ic = self.pro.index_classify(level="L2", src="SW2021")
                 if ic is not None and not ic.empty:
                     self._sw_l2_codes = set(ic["index_code"].tolist())
+                    if "parent_code" in ic.columns and not ic["parent_code"].isna().any():
+                        self._sw_l1_parent_map = dict(zip(ic["index_code"], ic["parent_code"]))
+                    else:
+                        self._sw_l1_parent_map = {}
                 else:
                     self._sw_l2_codes = set()
             except Exception as e:
                 logger.warning(f"获取申万行业分类失败: {e}")
                 self._sw_l2_codes = set()
         return self._sw_l2_codes
+
+    def _ensure_sw_l1_codes(self) -> set:
+        """惰性加载申万一级行业代码表（~31个，拥挤度分蛋糕口径主体）"""
+        if self._sw_l1_codes is None:
+            try:
+                ic = self.pro.index_classify(level="L1", src="SW2021")
+                if ic is not None and not ic.empty:
+                    self._sw_l1_codes = set(ic["index_code"].tolist())
+                else:
+                    self._sw_l1_codes = set()
+            except Exception as e:
+                logger.warning(f"获取申万一级分类失败: {e}")
+                self._sw_l1_codes = set()
+        return self._sw_l1_codes
+
+    def _ensure_sw_l1_parent_map(self) -> dict:
+        """L2 code → 所属 L1 code 映射（index_classify parent_code，随 L2 码表同次拉取缓存）。
+
+        parent_code 列缺失或含空值 → {}（调用方按"映射不可靠禁止合成 L1"处理，
+        sector-crowding spec v2 严重1：合成路径条件启用）。2026-07-18 真机实测
+        parent_code 列全非空，此映射仅作 sw_daily 缺 L1 行时的降级双保险。"""
+        if self._sw_l1_parent_map is None:
+            self._ensure_sw_l2_codes()  # 同一份 L2 分类表,一次拉取双缓存
+            if self._sw_l1_parent_map is None:  # 拉取失败/空表 → 映射不可靠
+                self._sw_l1_parent_map = {}
+        return self._sw_l1_parent_map
 
     def _ensure_ths_concept_map(self) -> dict:
         """惰性加载同花顺概念指数 ts_code → name 映射"""

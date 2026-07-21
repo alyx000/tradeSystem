@@ -1,7 +1,7 @@
 # Skills 依赖索引
 
-本文件记录每个 skill 所依赖的 CLI 命令和 API 端点。
-**修改 `scripts/db/cli.py` 或 `scripts/api/routes/` 后，必须检查此索引。**
+本文件只记录每个 skill 依赖的 CLI / API 签名与简要用途；详细行为按需读取对应 `SKILL.md` 或 reference。
+**修改 CLI、API、service、workflow、launchd 或 skill 行为契约后，必须按 `.agents/rules/skills-sync.md` 判断是否同步此索引。**
 
 ## 统一入口约定
 
@@ -75,6 +75,10 @@
 | `market-tasks` | `python main.py sector-correlation daily [--date] [--windows 5,20,60] [--top-industries 15] [--top-concepts 10] [--activity-days 10] [--indices a,b] [--no-concept] [--dry-run]` | 板块相关性日报（Tushare 主源：多日活跃选板块[行业按成交额 / 概念按换手率] + 4 指数 → 多窗 5/20/60 原始相关 + 剔大盘超额相关 + β → 落 `sector_correlation_daily` + 钉钉；报告含近5日联动榜(短期共振)、板块×大盘同向/逆向、结构联动榜(60日)、反向榜双窗对照(5日/60日)；`--dry-run` 仅打印） |
 | `market-tasks` | `python main.py sector-correlation matrix [--date] [--windows 20,60] [--top-industries N] [--top-concepts N] [--no-concept] [--refetch]` | 打印完整相关矩阵（板块×指数 + 板块×板块 原始/超额，逐窗）；缓存命中纯只读免初始化 Tushare，`--refetch` 强制现算；不推送 |
 | `market-tasks` | `python main.py sector-correlation trend [--date] [--days N]` | 只读打印最近 N 日相关性漂移（板块数 / 样本数 / 强逆向对数演变），不采集不推送 |
+| `market-tasks` | `python main.py sector-crowding daily [--date] [--dry-run] [--push]` | 板块拥挤度日报（申万 L1 全量 + L2 成交额占全市场比 + 资金流代理 → 落 `sector_crowding_daily`；默认不推送，`--push` 才推钉钉；`--dry-run` 不落库不推送并豁免非交易日守卫；派生指标[分位/双高]读取时现算不落库；详见 [market-observability](market-tasks/references/market-observability.md)） |
+| `market-tasks` | `python main.py sector-crowding report [--date]` | 只读：交易/斜率拥挤度 + 历史分位 + 双高拥挤清单（现算，不采集不推送） |
+| `market-tasks` | `python main.py sector-crowding trend --sector CODE [--date] [--days 60]` | 只读单板块拥挤度时间序列（建议用申万代码查询） |
+| `market-tasks` | `python main.py sector-crowding backfill --start [--end]` | 一次性历史回填（fail-closed：任一码失败/空返回整体中止不落库，重跑即重试；单片 ≥2000 行判截断报错；默认 2019-01-01 起） |
 | `market-tasks` | `python main.py market-timing daily [--date] [--pivot-index CODE --pivot-date YYYY-MM-DD] [--no-push] [--dry-run]` | 大盘择时观察：6 指数（上证 `000001.SH`/深成 `399001.SZ`/创业板 `399006.SZ`/科创50 `000688.SH`/中证2000 `932000.CSI` 微盘股代理/平均股价 `avg_price` 通达信880003 经 pytdx 日线）斐波那契时间周期变盘点（双向 swing 拐点起算，命中 5/8/13/21/34/55，多指数同日共振增强）+ 底分型生命周期（none/forming/confirmed/invalid 无状态从 bars 推导）+ 市场级客观上下文（两市成交额近20日地量分位/跌停家数/涨跌家数）→ 落 `market_timing_signal` + MD 观察清单 + 钉钉；全标 [判断] 守红线（不预判方向/不出价位/不给买卖建议）；三档=裸[落库+推]/`--no-push`[落库+打印]/`--dry-run`[内存不落不推]；`--pivot-index`+`--pivot-date` 手工 swing 覆盖须成对+合法+命中窗口（否则 fail-fast 非零退出） |
 | `market-tasks` | `python main.py market-timing signals [--date] [--index CODE] [--limit N] [--json]` | 只读看最近择时信号（`--date` 看当日全部指数 / 无 date 看最近 N 行；`--index` 过滤指数；`--json` 输出 JSON），不采集不推送，供周日复盘回看 |
 | `market-tasks` | `python main.py margin-index-correlation daily [--date] [--windows 5,20,60] [--divergence-windows 5,20] [--divergence-gap 0.5] [--max-lag 3] [--no-push] [--dry-run]` | 两融余额与指数联动性日报：`get_margin_series` 取两融区间序列（Tushare `pro.margin` 主源 / akshare 交易所官网降级，沪深北三市合计+分项），两融余额转日变化率(%)后与指数 `pct_chg` 同口径做四维分析 → ① 背离预警（指数涨两融降/指数跌两融升，近5/20日复利累计、指数交易日脊柱锁窗防稀疏日伪造）② 余额水位+趋势（绝对值/日环比/近20日分位/连增连降/偏离MA20）③ 领先/滞后（lagged corr，lag>0=两融滞后指数）④ 同步相关（5/20/60 窗 Pearson，复用 sector aggregator）；对照 total两融×多宽基(上证/创业板/沪深300/科创50) + 沪市两融×上证 + 深市两融×深成；落 `margin_index_correlation_daily` + 钉钉；全标 [判断] 守红线（不出价位/不给买卖建议/不写计划层）；三档=裸[落库+推]/`--no-push`[落库+打印]/`--dry-run`[内存不落不推]；非交易日守卫（仅 persist 时） |
@@ -111,8 +115,6 @@
 | `repo-maintenance-workflows` | `make commands-check` | 只读校验命令索引与 Makefile 一致；应先于 `commands-doc` 执行 |
 | `repo-maintenance-workflows` | `db backup --output PATH --input-by USER [--json]` | 用 SQLite backup API 生成 `0600` 完整快照及 SHA-256 回执；v40 生产迁移前必须先停写并执行 |
 | `repo-maintenance-workflows` | `db migrate --require-backup PATH --input-by USER [--json]` | 仅在备份权限、版本及当前源库规范快照 SHA 全部一致时，原子激活/修复 teacher_notes v40 来源列与三组 partial unique 索引；普通 API/CLI 不会隐式跨越 v39→v40 |
-| `instrument-agent` | 无固定业务 CLI | 为任意 agent 接入 Raindrop Workshop tracing；按目标仓库运行时选择 SDK/入口并验证 Workshop 可见性 |
-| `setup-agent-replay` | 无固定业务 CLI | 为已 instrument 的 agent 配置本地 replay server 与 `.raindrop/agents.yaml`，供 Workshop 复放 |
 | `daily-review` | `db add-calendar` | 手动录入投资日历事件（节假日/财经/财报等） |
 | *(管理)* | `db init` | 初始化数据库 + 导入历史 YAML |
 | *(管理)* | `db sync` | 重试 pending_writes 中的失败记录 |
@@ -168,13 +170,19 @@
 | `repo-maintenance-workflows` | [repo-maintenance-workflows/references/maintenance-checklist.md](repo-maintenance-workflows/references/maintenance-checklist.md) | 只读诊断、Review、跨入口对齐、每日巡检、同步与验证检查清单 |
 | `repo-maintenance-workflows` | [repo-maintenance-workflows/references/teacher-notes-v40-migration.md](repo-maintenance-workflows/references/teacher-notes-v40-migration.md) | teacher_notes v40 停写、0600 备份、SHA 绑定与显式迁移门禁 |
 | `sector-projection-analysis` | [sector-projection-analysis/references/methodology.md](sector-projection-analysis/references/methodology.md) | 《0524板块推演术》提炼后的板块推演方法论 |
+| `repo-maintenance-workflows` | [repo-maintenance-workflows/references/maintenance-checklist.md](repo-maintenance-workflows/references/maintenance-checklist.md) | 只读诊断、Review、跨入口对齐、每日巡检、同步与验证检查清单 |
+| `repo-maintenance-workflows` | [repo-maintenance-workflows/references/teacher-notes-v40-migration.md](repo-maintenance-workflows/references/teacher-notes-v40-migration.md) | teacher_notes v40 停写、0600 备份、SHA 绑定与显式迁移门禁 |
+| `market-tasks` | [market-tasks/references/base-market-runs.md](market-tasks/references/base-market-runs.md) | 基础盘前/盘后副作用、历史补跑风险与 legacy schedule 查重边界 |
+| `market-tasks` | [market-tasks/references/ingestion-and-feeds.md](market-tasks/references/ingestion-and-feeds.md) | 公众号白名单、行业推荐与相关推送契约 |
+| `market-tasks` | [market-tasks/references/market-observability.md](market-tasks/references/market-observability.md) | 市场统计、历史新高、相关性、择时与两融联动契约 |
+| `market-tasks` | [market-tasks/references/stock-scanners.md](market-tasks/references/stock-scanners.md) | 股票扫描、观察池与候选确认契约 |
+| `market-tasks` | [market-tasks/references/research-and-digests.md](market-tasks/references/research-and-digests.md) | 研报、业绩与认知摘要契约 |
 
 `repo-maintenance-workflows` 不绑定固定业务 API；它会按受影响的 CLI / API / service / workflow / launchd / skill 入口就近检查，并按 `.agents/rules/skills-sync.md` 核对 `INDEX.md`、对应 SKILL/reference 与同步映射。
 
-## 可用 API 总览（供开发新 Skill 参考）
+Raindrop 的 `instrument-agent` / `setup-agent-replay` 是官方 `raindrop-ai/workshop` 随 CLI 分发的通用工具，不作为本仓库团队 skill 发放。新机器需要时安装 Raindrop 后只运行 `raindrop setup --global`，由 `~/.raindrop/bundles/current/skills/` 安装到用户级 `~/.agents/skills/`；**不要在本仓库运行 `raindrop setup --local`**，否则会重新生成项目内重复 skill。截至 2026-07-19，本机 CLI 为 `0.1.12`，已核对的官方 `v0.1.15` 中两份 skill 内容仍一致。仓库 tracing 与 Workshop MCP 由 `Makefile`、`.mcp.json` 和运行时代码维护，不依赖项目内这两个向导。
 
-所有端点由 FastAPI 自动生成文档，启动后可访问 `http://localhost:8000/docs`。
-下表为静态索引，方便离线查阅。标注 `★` 的端点已被现有 skill 引用。
+## 常用 API 总览（按需）
 
 ### 复盘（`routes/review.py`，前缀 `/api/review`）
 
@@ -335,7 +343,7 @@
 
 ## 自动化检查
 
-`scripts/tests/test_cli_smoke.py` 会验证上表中所有 **`db` 子命令**（`ALL_SKILL_COMMANDS`）与 `main.py` 顶层架构命令（`ARCHITECTURE_COMMANDS`：`review factor-*` / `ingest` / `plan` / `knowledge` / `executions` / `recommend` / `volume-watch` / `new-high` / `sector-correlation` / `market-timing` / `margin-index-correlation` / `research-digest` / `earnings-digest` / `cognition-digest` / `trend-leader` / `string-yang` / `daily-leaders` / `board-break` / `ma-breakout` / `tail-scan` / `wechat-teacher-feed`）的 argparse 签名（不启动子进程、不连库）。`main.py pre` / `post` 仍由 `market-tasks` 文档与人工/定时流程保证。
+`scripts/tests/test_cli_smoke.py` 会验证上表中所有 **`db` 子命令**（`ALL_SKILL_COMMANDS`）与 `main.py` 顶层架构命令（`ARCHITECTURE_COMMANDS`：`pre` / `post` / `schedule` / `review factor-*` / `ingest` / `plan` / `knowledge` / `executions` / `recommend` / `volume-watch` / `new-high` / `sector-correlation` / `sector-crowding` / `market-timing` / `margin-index-correlation` / `research-digest` / `earnings-digest` / `cognition-digest` / `trend-leader` / `string-yang` / `daily-leaders` / `board-break` / `ma-breakout` / `tail-scan` / `wechat-teacher-feed`）的 argparse 签名（不启动子进程、不连库）。Makefile 对显式盘前/盘后 `DATE` 的传递另由 `test_makefile_market_targets.py` 验证。
 
 每次 `pytest scripts/tests/test_cli_smoke.py` 都会同步检查：
 - 依赖表所列 `db` 子命令名未被重命名
@@ -347,4 +355,4 @@
 1. 修改 `cli.py` 或 API routes 时，同步更新此 INDEX.md
 2. 优先运行 `make check-scripts`；若仅需检查 CLI 签名，可运行 `python3 -m pytest scripts/tests/test_cli_smoke.py -v`
 3. 若命令参数有不向后兼容的变更，更新对应 SKILL.md 中的示例
-4. 修改 `scripts/main.py` 新增/调整顶层命令（`review factor-*` / `ingest` / `plan` / `knowledge` / `executions` / `recommend` / `volume-watch` / `new-high` / `sector-correlation` / `market-timing` / `margin-index-correlation` / `*-digest` / `trend-leader` / `string-yang` / `daily-leaders` / `board-break` / `ma-breakout` / `tail-scan` 等）时，须在 `test_cli_smoke.py` 的 `ARCHITECTURE_COMMANDS` 加参数化用例，并同步更新相关 SKILL.md 与 AGENTS.md（见 `.agents/rules/skills-sync.md` §2.1）
+4. 修改 `scripts/main.py` 新增/调整顶层命令（`pre` / `post` / `schedule` / `review factor-*` / `ingest` / `plan` / `knowledge` / `executions` / `recommend` / `volume-watch` / `new-high` / `sector-correlation` / `sector-crowding` / `market-timing` / `margin-index-correlation` / `*-digest` / `trend-leader` / `string-yang` / `daily-leaders` / `board-break` / `ma-breakout` / `tail-scan` 等）时，须在 `test_cli_smoke.py` 的 `ARCHITECTURE_COMMANDS` 加参数化用例，并同步更新相关 SKILL.md 与 AGENTS.md（见 `.agents/rules/skills-sync.md` §2.1）
