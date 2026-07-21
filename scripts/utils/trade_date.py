@@ -118,43 +118,40 @@ def resolve_latest_closed_trade_date(conn: sqlite3.Connection, registry,
     - 当日为确认交易日且 now >= 15:30 → 返回当日；否则返回日历中严格早于当日的最近 open 日。
     - 1 月初上一交易日可能落在前一年：当年查无更早 open 日时补拉前一年日历再查。
     """
-    from datetime import datetime as _dt
     from zoneinfo import ZoneInfo
 
     from db import queries as Q
 
     tz = ZoneInfo("Asia/Shanghai")
     if now is None:
-        now = _dt.now(tz)
+        now = datetime.now(tz)
     elif now.tzinfo is None:
         now = now.replace(tzinfo=tz)
     else:
         now = now.astimezone(tz)
     today = now.date().isoformat()
+
+    def _year_covered(year: int) -> bool:
+        # 热路径先查覆盖态,未覆盖才走 ensure(其内部会再查一次,冷路径可接受)
+        if Q.trade_calendar_year_covered(conn, year):
+            return True
+        ensure_trade_calendar(conn, registry, year=year)
+        return Q.trade_calendar_year_covered(conn, year)
+
     try:
-        ensure_trade_calendar(conn, registry, year=now.year)
-        if not Q.trade_calendar_year_covered(conn, now.year):
+        if not _year_covered(now.year):
             return None
         today_open = Q.is_trade_day_from_db(conn, today)
         if today_open is None:
             return None
         if today_open and (now.hour, now.minute) >= CLOSE_CUTOFF:
             return today
-        row = conn.execute(
-            "SELECT date FROM trade_calendar WHERE is_open = 1 AND date < ? "
-            "ORDER BY date DESC LIMIT 1",
-            (today,),
-        ).fetchone()
-        if row is None and now.month == 1:
-            ensure_trade_calendar(conn, registry, year=now.year - 1)
-            if not Q.trade_calendar_year_covered(conn, now.year - 1):
+        prev = Q.get_prev_trade_date_from_db(conn, today)
+        if prev is None and now.month == 1:
+            if not _year_covered(now.year - 1):
                 return None
-            row = conn.execute(
-                "SELECT date FROM trade_calendar WHERE is_open = 1 AND date < ? "
-                "ORDER BY date DESC LIMIT 1",
-                (today,),
-            ).fetchone()
-        return row[0] if row else None
+            prev = Q.get_prev_trade_date_from_db(conn, today)
+        return prev
     except Exception:
         try:
             conn.rollback()

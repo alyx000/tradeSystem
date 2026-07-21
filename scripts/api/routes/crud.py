@@ -282,6 +282,8 @@ def delete_note(note_id: int, conn: sqlite3.Connection = Depends(get_db_conn)):
     return {"ok": True}
 
 
+_API_INPUT_BY = "web"  # API 属人工入口,写入审计缺省(value-watch spec v8)
+
 # ── Holdings ──────────────────────────────────────────────────
 
 @router.get("/holdings")
@@ -328,7 +330,7 @@ def get_holding(hid: int, conn: sqlite3.Connection = Depends(get_db_conn)):
 @router.post("/holdings")
 def create_holding(body: dict, conn: sqlite3.Connection = Depends(get_db_conn)):
     # 写入审计:API 属人工入口,body 可选 input_by、服务端缺省 "web"(value-watch spec v8)
-    body.setdefault("input_by", "web")
+    body.setdefault("input_by", _API_INPUT_BY)
     hid = Q.upsert_holding(conn, **body)
     conn.commit()
     return {"id": hid}
@@ -336,7 +338,7 @@ def create_holding(body: dict, conn: sqlite3.Connection = Depends(get_db_conn)):
 
 @router.put("/holdings/{hid}")
 def update_holding_item(hid: int, body: dict, conn: sqlite3.Connection = Depends(get_db_conn)):
-    body.setdefault("input_by", "web")
+    body.setdefault("input_by", _API_INPUT_BY)
     try:
         Q.update_holding(conn, hid, **body)
     except ValueError as e:
@@ -346,7 +348,7 @@ def update_holding_item(hid: int, body: dict, conn: sqlite3.Connection = Depends
 
 
 @router.delete("/holdings/{hid}")
-def delete_holding_item(hid: int, input_by: str = "web",
+def delete_holding_item(hid: int, input_by: str = _API_INPUT_BY,
                         conn: sqlite3.Connection = Depends(get_db_conn)):
     # spec v8:物理删除改 soft close——对齐 CLI holdings-remove 语义(status='closed'),
     # 行保留使 input_by 审计可落;Q.delete_holding 物理删除降为内部函数不再暴露。

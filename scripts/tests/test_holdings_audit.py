@@ -55,6 +55,16 @@ def test_close_active_holdings_writes_input_by(conn):
     assert row["input_by"] == "web"
 
 
+def test_update_without_input_by_preserves_existing(conn):
+    """update 分支未显式传 input_by 不得改写既有值(内部补账路径防静默覆盖为 system)。"""
+    hid = Q.upsert_holding(conn, stock_code="601288.SH", stock_name="农业银行",
+                           status="active", input_by="manual")
+    Q.upsert_holding(conn, stock_code="601288.SH", stock_name="农业银行",
+                     shares=500, status="active")   # 无 input_by
+    row = conn.execute("SELECT * FROM holdings WHERE id=?", (hid,)).fetchone()
+    assert row["input_by"] == "manual"
+
+
 def test_insert_without_input_by_falls_to_system(conn):
     """query 层缺省 system(列不留 NULL)；审计强制在 CLI/API 边界，内部路径不炸。"""
     hid = Q.upsert_holding(conn, stock_code="600436.SH", stock_name="片仔癀", status="active")

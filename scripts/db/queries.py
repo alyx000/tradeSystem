@@ -444,10 +444,13 @@ def _active_holdings_by_code(conn: sqlite3.Connection, stock_code: str) -> list[
     return _rows_to_list(rows)
 
 
+_SYSTEM_INPUT_BY = "system"
+
+
 def upsert_holding(conn: sqlite3.Connection, **kwargs: Any) -> int:
-    # 写入审计：query 层缺省 "system"(列不留 NULL)；审计强制发生在 CLI(required)/API(缺省 web)
-    # 边界。update 分支仅显式传入时覆盖(payload 过滤 None 天然满足)。
-    kwargs.setdefault("input_by", "system")
+    # 写入审计：insert 缺省 "system"(列不留 NULL)；审计强制发生在 CLI(required)/API(缺省 web)
+    # 边界。缺省只挂 insert 分支——update 分支仅显式传入时覆盖，否则内部补账路径
+    # (dual_write/repair/lifecycle)会把既有行的 manual/web 静默改写成 system。
     code = kwargs.get("stock_code")
     target_status = kwargs.get("status")
     if code and target_status in (None, "active"):
@@ -459,6 +462,7 @@ def upsert_holding(conn: sqlite3.Connection, **kwargs: Any) -> int:
                 update_holding(conn, holding_id, **payload)
             return holding_id
 
+    kwargs.setdefault("input_by", _SYSTEM_INPUT_BY)
     cols, vals = [], []
     for k in _HOLDING_INSERTABLE:
         if k in kwargs and kwargs[k] is not None:
@@ -480,7 +484,7 @@ def get_holdings(conn: sqlite3.Connection, status: str | None = "active") -> lis
 
 
 def close_active_holdings_by_code(conn: sqlite3.Connection, stock_code: str,
-                                  *, input_by: str = "system") -> int:
+                                  *, input_by: str = _SYSTEM_INPUT_BY) -> int:
     """按归一化代码关闭全部 active 持仓，并记录本次操作方（写入审计）。"""
     rows = _active_holdings_by_code(conn, stock_code)
     for row in rows:
