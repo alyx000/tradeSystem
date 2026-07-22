@@ -135,24 +135,25 @@ def resolve_latest_closed_trade_date(conn: sqlite3.Connection, registry,
     today = now.date().isoformat()
 
     def _year_complete(year: int) -> bool:
-        # 门2 high-2:trade_calendar_year_covered 的"≥200 行"只是弱代理——200 行但缺
-        # 目标日附近日期的残缺日历会返回过期交易日而非 blocked。strict 闸门要求
-        # **全年自然日完整**(tushare trade_cal 返回整年含休市日);不完整先 force 刷新,
-        # 仍不完整才 blocked。热路径同样只有一次 COUNT。
-        import calendar as _cal
+        # 门2 high-2(round2 精确化):行数 COUNT 是弱代理——schema 的 GLOB 约束不验真实
+        # 日期,"缺 7/17 + 混入 2026-02-30"计数仍够会穿透闸门。strict 要求库内该年日期
+        # 集合 ⊇ 真实自然日集合(tushare trade_cal 返回整年含休市日);不完整先 force
+        # 刷新,仍不完整才 blocked。集合比较一年 365 个短字符串,成本可忽略。
+        from datetime import date as _date, timedelta as _td
 
-        expected = 366 if _cal.isleap(year) else 365
+        d0, d1 = _date(year, 1, 1), _date(year, 12, 31)
+        expected = {(d0 + _td(days=i)).isoformat() for i in range((d1 - d0).days + 1)}
 
-        def _cnt() -> int:
-            return conn.execute(
-                "SELECT COUNT(DISTINCT date) FROM trade_calendar WHERE date BETWEEN ? AND ?",
+        def _have() -> set:
+            return {r[0] for r in conn.execute(
+                "SELECT date FROM trade_calendar WHERE date BETWEEN ? AND ?",
                 (f"{year}-01-01", f"{year}-12-31"),
-            ).fetchone()[0]
+            ).fetchall()}
 
-        if _cnt() >= expected:
+        if expected.issubset(_have()):
             return True
         ensure_trade_calendar(conn, registry, year=year, force=True)
-        return _cnt() >= expected
+        return expected.issubset(_have())
 
     try:
         if not _year_complete(now.year):

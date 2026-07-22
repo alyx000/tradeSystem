@@ -342,20 +342,21 @@ def create_holding(body: dict, conn: sqlite3.Connection = Depends(get_db_conn)):
 def update_holding_item(hid: int, body: dict, conn: sqlite3.Connection = Depends(get_db_conn)):
     if not body.get("input_by"):
         body["input_by"] = _API_INPUT_BY
-    # 门2 high-1:closed 行不可变——PUT 只允许改 active 行,且禁改 status(DELETE 后
-    # PUT {"status":"active"} 会复活旧行保留旧 entry_date,污染 value-watch 身份键;
-    # 迟到 PUT 也会覆盖关闭者审计)。关仓走 DELETE(soft close),重新开仓 POST 新行。
+    # 门2 high-1(round2 原子化):closed 行不可变——PUT 禁改 status,且用单条条件
+    # UPDATE(WHERE status='active')代替先查后写:并发下"PUT 查到 active → DELETE
+    # 提交 closed → PUT 写入"会绕过应用层检查,篡改 closed 行字段与关闭审计。
+    # 关仓走 DELETE(soft close),重新开仓 POST 新行。
     if "status" in body:
         raise HTTPException(422, "status 不可经 PUT 修改;关仓走 DELETE,重新开仓 POST 新行")
-    row = conn.execute("SELECT status FROM holdings WHERE id = ?", (hid,)).fetchone()
-    if not row:
-        raise HTTPException(404, "Holding not found")
-    if row["status"] == "closed":
-        raise HTTPException(409, "closed 持仓不可修改(身份键与审计保护);重新开仓请 POST 新行")
     try:
-        Q.update_holding(conn, hid, **body)
+        changed = Q.update_holding_if_active(conn, hid, **body)
     except ValueError as e:
         raise HTTPException(422, str(e))
+    if changed == 0:
+        row = conn.execute("SELECT status FROM holdings WHERE id = ?", (hid,)).fetchone()
+        if not row:
+            raise HTTPException(404, "Holding not found")
+        raise HTTPException(409, "closed 持仓不可修改(身份键与审计保护);重新开仓请 POST 新行")
     conn.commit()
     return {"ok": True}
 
@@ -365,12 +366,13 @@ def delete_holding_item(hid: int, input_by: str = _API_INPUT_BY,
                         conn: sqlite3.Connection = Depends(get_db_conn)):
     # spec v8:物理删除改 soft close——对齐 CLI holdings-remove 语义(status='closed'),
     # 行保留使 input_by 审计可落;Q.delete_holding 物理删除降为内部函数不再暴露。
-    row = conn.execute("SELECT id, status FROM holdings WHERE id = ?", (hid,)).fetchone()
-    if not row:
-        raise HTTPException(404, "Holding not found")
-    if row["status"] == "closed":
-        return {"ok": True}  # 幂等:不重复 UPDATE,保留首次关闭者的 input_by 审计(门1 B-2)
-    Q.update_holding(conn, hid, status="closed", input_by=input_by)
+    # 条件 UPDATE 原子化:并发 DELETE 只有第一个生效,后到者 rowcount=0 幂等返回,
+    # 首次关闭者的 input_by 审计不被覆盖(门1 B-2 + 门2 high-1 round2)
+    changed = Q.update_holding_if_active(conn, hid, status="closed", input_by=input_by)
+    if changed == 0:
+        row = conn.execute("SELECT id FROM holdings WHERE id = ?", (hid,)).fetchone()
+        if not row:
+            raise HTTPException(404, "Holding not found")
     conn.commit()
     return {"ok": True}
 

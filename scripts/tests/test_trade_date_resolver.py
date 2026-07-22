@@ -186,6 +186,32 @@ def test_incomplete_year_provider_fail_blocked(tmp_path):
     c.close()
 
 
+def test_polluted_calendar_not_trusted(tmp_path):
+    """门2 high-2 round2:缺真实日期+非法日期(2026-02-30)补足行数,不得穿透闸门——
+    须按真实自然日集合等值校验,provider 刷新失败时 blocked。"""
+    import datetime as _dt
+    c = get_connection(tmp_path / "dirty.db")
+    init_schema(c)
+    rows = []
+    d = _dt.date(2026, 1, 1)
+    while d.year == 2026:
+        if d.isoformat() != "2026-07-17":   # 缺真实 open 日
+            rows.append({"date": d.isoformat(), "is_open": 1 if d.weekday() < 5 else 0})
+        d += _dt.timedelta(days=1)
+    rows.append({"date": "2026-02-30", "is_open": 0})   # 非法日期补位,总数仍 365
+    Q.upsert_trade_calendar(c, rows)
+
+    class _FailRegistry:
+        def call(self, *a, **k):
+            class R:
+                success, data, error = False, None, "down"
+            return R()
+
+    now = datetime(2026, 7, 19, 12, 0, tzinfo=SH)
+    assert resolve_latest_closed_trade_date(c, _FailRegistry(), now=now) is None
+    c.close()
+
+
 def test_calendar_unavailable_returns_none(tmp_path):
     """空日历 + provider 失败 → blocked(None)：禁止 weekday/昨天 fallback。"""
     c = get_connection(tmp_path / "empty.db")

@@ -154,6 +154,20 @@ def test_cmd_holdings_add_wiring(conn, monkeypatch):
     assert row["entry_date"] is None and row["note"] == "补备注"
 
 
+def test_update_holding_if_active_atomic(conn):
+    """门2 high-1 round2:条件 UPDATE 原子语义——active 行 rowcount=1;closed 行/不存在
+    行 rowcount=0 且不落任何修改(先查后写的并发窗口被单条 SQL 消除)。"""
+    hid = Q.upsert_holding(conn, stock_code="600436.SH", stock_name="片仔癀",
+                           status="active", input_by="manual")
+    assert Q.update_holding_if_active(conn, hid, note="x") == 1
+    # 模拟并发 DELETE 已提交 closed
+    Q.update_holding(conn, hid, status="closed", input_by="cursor")
+    assert Q.update_holding_if_active(conn, hid, note="late", input_by="web") == 0
+    row = conn.execute("SELECT * FROM holdings WHERE id=?", (hid,)).fetchone()
+    assert row["note"] == "x" and row["input_by"] == "cursor"   # 晚到写未生效
+    assert Q.update_holding_if_active(conn, 999999, note="y") == 0
+
+
 def test_ensure_backfills_input_by_column_on_old_table():
     """ALTER 兜底：老表（无 input_by 列）经 _ensure_holdings_audit_columns 后列存在。"""
     from db.migrate import _ensure_holdings_audit_columns

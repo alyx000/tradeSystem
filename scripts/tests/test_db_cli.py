@@ -910,7 +910,7 @@ class TestHoldings:
             "--shares", "200",
             "--price", "85.0",
             "--sector", "锂电",
-            tmp_db=tmp_db,
+            "--input-by", "manual", tmp_db=tmp_db,
         )
         assert result.returncode == 0
         assert "已添加持仓" in result.stdout
@@ -920,7 +920,7 @@ class TestHoldings:
         _run_cli(
             "holdings-add", "--code", "000001",
             "--name", "平安银行", "--price", "10.5",
-            tmp_db=tmp_db,
+            "--input-by", "manual", tmp_db=tmp_db,
         )
         result = _run_cli("holdings-list", tmp_db=tmp_db)
         assert result.returncode == 0
@@ -930,7 +930,7 @@ class TestHoldings:
         _run_cli(
             "holdings-add", "--code", "688041",
             "--name", "海光信息", "--shares", "100", "--price", "220.0",
-            tmp_db=tmp_db,
+            "--input-by", "manual", tmp_db=tmp_db,
         )
         result = _run_cli("holdings-remove", "--code", "688041", "--input-by", "cursor", tmp_db=tmp_db)
         assert result.returncode == 0
@@ -958,12 +958,12 @@ class TestHoldings:
         r1 = _run_cli(
             "holdings-add", "--code", "300750",
             "--name", "宁德时代旧", "--shares", "100", "--price", "80.0",
-            tmp_db=tmp_db,
+            "--input-by", "manual", tmp_db=tmp_db,
         )
         r2 = _run_cli(
             "holdings-add", "--code", "300750.SZ",
             "--name", "宁德时代新", "--shares", "200", "--price", "85.0",
-            tmp_db=tmp_db,
+            "--input-by", "manual", tmp_db=tmp_db,
         )
         assert r1.returncode == 0
         assert r2.returncode == 0
@@ -983,7 +983,7 @@ class TestHoldings:
         _run_cli(
             "holdings-add", "--code", "688041.SH",
             "--name", "海光信息", "--shares", "100", "--price", "220.0",
-            tmp_db=tmp_db,
+            "--input-by", "manual", tmp_db=tmp_db,
         )
         result = _run_cli("holdings-remove", "--code", "688041", "--input-by", "cursor", tmp_db=tmp_db)
         assert result.returncode == 0
@@ -1000,7 +1000,7 @@ class TestHoldings:
             "--shares", "100", "--price", "220.0",
             "--entry-reason", "国产AI链龙头，主线初期",
             "--note", "止损参考前低215",
-            tmp_db=tmp_db,
+            "--input-by", "manual", tmp_db=tmp_db,
         )
         assert result.returncode == 0
 
@@ -1023,7 +1023,7 @@ class TestHoldings:
             "holdings-add", "--code", "300750",
             "--name", "宁德时代",
             "--entry-reason", "锂电主线反弹",
-            tmp_db=tmp_db,
+            "--input-by", "manual", tmp_db=tmp_db,
         )
         list_result = _run_cli("holdings-list", tmp_db=tmp_db)
         assert "买入原因" in list_result.stdout
@@ -1037,7 +1037,7 @@ class TestHoldings:
             "--shares", "600",
             "--price", "28.32",
             "--thesis-id", "1",
-            tmp_db=tmp_db,
+            "--input-by", "manual", tmp_db=tmp_db,
         )
         assert result.returncode == 0
 
@@ -1060,19 +1060,20 @@ class TestHoldingsImportYaml:
             '    sector: "锂电"\n',
             encoding="utf-8",
         )
-        result = _run_cli("holdings-import-yaml", "--file", str(yml), tmp_db=tmp_db)
+        result = _run_cli("holdings-import-yaml", "--file", str(yml), "--input-by", "manual", tmp_db=tmp_db)
         assert result.returncode == 0
         assert "导入 1 条" in result.stdout
         assert "跳过" not in result.stdout
 
         with get_connection(tmp_db) as conn:
             row = conn.execute(
-                "SELECT stock_code, stock_name, shares, entry_price, sector, status FROM holdings WHERE status = 'active'"
+                "SELECT stock_code, stock_name, shares, entry_price, sector, status, input_by FROM holdings WHERE status = 'active'"
             ).fetchone()
         assert row is not None
         assert row["stock_code"] == "300750"
         assert row["stock_name"] == "宁德时代"
         assert row["shares"] == 100
+        assert row["input_by"] == "manual"  # required --input-by 随每条 upsert 落库
         assert row["entry_price"] == 80.5
         assert row["sector"] == "锂电"
 
@@ -1098,7 +1099,7 @@ class TestHoldingsImportYaml:
             '    cost: "x"\n',
             encoding="utf-8",
         )
-        result = _run_cli("holdings-import-yaml", "--file", str(yml), tmp_db=tmp_db)
+        result = _run_cli("holdings-import-yaml", "--file", str(yml), "--input-by", "manual", tmp_db=tmp_db)
         assert result.returncode == 0
         assert "导入 1 条" in result.stdout
         assert "跳过 3 条" in result.stdout
@@ -1113,14 +1114,14 @@ class TestHoldingsImportYaml:
     def test_root_not_dict_skips_without_crash(self, tmp_db, tmp_path):
         yml = tmp_path / "root_list.yaml"
         yml.write_text("- a\n- b\n", encoding="utf-8")
-        result = _run_cli("holdings-import-yaml", "--file", str(yml), tmp_db=tmp_db)
+        result = _run_cli("holdings-import-yaml", "--file", str(yml), "--input-by", "manual", tmp_db=tmp_db)
         assert result.returncode == 0
         assert "根须为映射" in result.stdout
 
     def test_holdings_not_list_skips(self, tmp_db, tmp_path):
         yml = tmp_path / "holdings_scalar.yaml"
         yml.write_text('holdings: "oops"\n', encoding="utf-8")
-        result = _run_cli("holdings-import-yaml", "--file", str(yml), tmp_db=tmp_db)
+        result = _run_cli("holdings-import-yaml", "--file", str(yml), "--input-by", "manual", tmp_db=tmp_db)
         assert result.returncode == 0
         assert "holdings 须为序列" in result.stdout
 
@@ -1135,7 +1136,7 @@ class TestHoldingsImportYaml:
             "  - plain_string\n",
             encoding="utf-8",
         )
-        result = _run_cli("holdings-import-yaml", "--file", str(yml), tmp_db=tmp_db)
+        result = _run_cli("holdings-import-yaml", "--file", str(yml), "--input-by", "manual", tmp_db=tmp_db)
         assert result.returncode == 0
         assert "导入 1 条" in result.stdout
         assert "not_mapping" in result.stdout
@@ -1151,7 +1152,7 @@ class TestHoldingsImportYaml:
             "    cost: 80.0\n",
             encoding="utf-8",
         )
-        result = _run_cli("holdings-import-yaml", "--file", str(yml), tmp_db=tmp_db)
+        result = _run_cli("holdings-import-yaml", "--file", str(yml), "--input-by", "manual", tmp_db=tmp_db)
         assert result.returncode == 0
         assert "导入 1 条" in result.stdout
         with get_connection(tmp_db) as conn:
@@ -1175,7 +1176,7 @@ class TestHoldingsImportYaml:
             '    reason: "国产AI链兼容兜底"\n',
             encoding="utf-8",
         )
-        result = _run_cli("holdings-import-yaml", "--file", str(yml), tmp_db=tmp_db)
+        result = _run_cli("holdings-import-yaml", "--file", str(yml), "--input-by", "manual", tmp_db=tmp_db)
         assert result.returncode == 0
         assert "导入 2 条" in result.stdout
 
@@ -1193,14 +1194,14 @@ class TestHoldingsImportYaml:
     def test_yaml_syntax_error_does_not_crash(self, tmp_db, tmp_path):
         yml = tmp_path / "broken.yaml"
         yml.write_text("holdings: [\n", encoding="utf-8")
-        result = _run_cli("holdings-import-yaml", "--file", str(yml), tmp_db=tmp_db)
+        result = _run_cli("holdings-import-yaml", "--file", str(yml), "--input-by", "manual", tmp_db=tmp_db)
         assert result.returncode == 0
         assert "YAML 解析失败" in result.stdout
 
     def test_invalid_utf8_file_does_not_crash(self, tmp_db, tmp_path):
         yml = tmp_path / "bad_enc.yaml"
         yml.write_bytes(b"\xff\xfe\xff\x28")
-        result = _run_cli("holdings-import-yaml", "--file", str(yml), tmp_db=tmp_db)
+        result = _run_cli("holdings-import-yaml", "--file", str(yml), "--input-by", "manual", tmp_db=tmp_db)
         assert result.returncode == 0
         assert "编码损坏" in result.stdout or "非 UTF-8" in result.stdout
 

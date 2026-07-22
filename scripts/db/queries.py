@@ -505,6 +505,27 @@ def update_holding(conn: sqlite3.Connection, holding_id: int, **kwargs: Any) -> 
     conn.execute(f"UPDATE holdings SET {', '.join(sets)} WHERE id = ?", vals)
 
 
+def update_holding_if_active(conn: sqlite3.Connection, holding_id: int, **kwargs: Any) -> int:
+    """仅当行仍为 active 时更新，返回 rowcount（0=行不存在或已 closed）。
+
+    条件写死进同一条 UPDATE（`WHERE id=? AND status='active'`）而非先查后写：并发下
+    "PUT 查到 active → DELETE 提交 closed → PUT 写入"会绕过任何应用层状态检查，
+    让晚到写篡改 closed 行的字段与审计（value-watch 门2 high-1）。"""
+    sets, vals = [], []
+    for k, v in kwargs.items():
+        if k not in _HOLDINGS_UPDATABLE:
+            raise ValueError(f"Invalid column for holdings: {k}")
+        sets.append(f"{k} = ?")
+        vals.append(v)
+    if not sets:
+        return 0
+    vals.append(holding_id)
+    cur = conn.execute(
+        f"UPDATE holdings SET {', '.join(sets)} WHERE id = ? AND status = 'active'", vals,
+    )
+    return cur.rowcount
+
+
 def upsert_holding_quote_snapshot(
     conn: sqlite3.Connection,
     *,

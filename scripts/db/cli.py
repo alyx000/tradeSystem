@@ -1167,11 +1167,12 @@ def _cmd_holdings_add(args: argparse.Namespace) -> None:
     with get_db() as conn:
         migrate(conn)
         # 门2 med-1:查 existing 与 upsert 两步间的写锁串行化,防并发连接交错时
-        # 误把他连接刚建的行判为"新建"而覆盖 entry_date(单机 CLI 概率极低,防御性)
-        try:
-            conn.execute("BEGIN IMMEDIATE")
-        except sqlite3.OperationalError:
-            pass  # 已在事务中(migrate 残留)则沿用
+        # 误把他连接刚建的行判为"新建"而覆盖 entry_date(单机 CLI 概率极低,防御性)。
+        # round2:只容忍"已在事务中"(migrate 残留)这一种失败;database is locked/只读/
+        # IO 错误必须抛出——静默继续会让串行化失去硬保证,把锁错误延迟成后续写失败。
+        if conn.in_transaction:
+            conn.commit()  # 结束 migrate 残留事务,保证下面的 BEGIN IMMEDIATE 无条件生效
+        conn.execute("BEGIN IMMEDIATE")
         existing = Q._active_holdings_by_code(conn, args.code)
         entry_date = resolve_entry_date_for_upsert(args.entry_date, bool(existing))
         if entry_date is not None:
