@@ -90,6 +90,15 @@ def test_append_concurrent_threads_no_lost_keys(tmp_path):
     check.close()
 
 
+def test_upsert_daily_rejects_dirty_transaction(conn):
+    """round3:upsert_daily 同款事务所有权契约——脏事务抛错,marker 可回滚。"""
+    conn.execute("INSERT INTO teachers (name) VALUES ('marker-u')")   # 未提交
+    with pytest.raises(RuntimeError):
+        repo.upsert_daily(conn, "2026-07-21", {}, 1)
+    conn.rollback()
+    assert conn.execute("SELECT 1 FROM teachers WHERE name='marker-u'").fetchone() is None
+
+
 def test_append_rejects_dirty_transaction(conn):
     """round2 high:调用方有未提交写入时 append 必须抛错而非越权 commit——
     否则调用方本想回滚的 marker 会被永久提交。"""

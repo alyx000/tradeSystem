@@ -12,6 +12,12 @@ import sqlite3
 
 
 def upsert_daily(conn: sqlite3.Connection, date: str, payload: dict, logic_version: int) -> None:
+    # 事务所有权契约与 append_sent_events 一致(门2 G2 round3):函数自会 commit,
+    # 调用方有未提交写入时会被越权永久提交 → fail-fast 要求干净边界
+    if conn.in_transaction:
+        raise RuntimeError(
+            "upsert_daily 要求干净事务边界(检测到未提交事务);"
+            "先 commit/rollback 再调用,避免越权提交调用方写入")
     payload_json = json.dumps(payload, ensure_ascii=False, allow_nan=False)
     conn.execute(
         """
