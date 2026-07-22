@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Sleep policy: 条件监控错过可接受——次日运行按事件账本自动补齐(enter 仍有效补推,exit 迟到必补) -->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.alyx.tradesystem.value-watch</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/alyx/tradeSystem/deploy/launchd/value-watch-runner.sh</string>
+    </array>
+    <!-- 工作日 21:45:错开 volume-watch 21:00 / sector-correlation 21:15 / board-break 21:20 /
+         trend-leader 21:30(sector-crowding 同槽) / ma-breakout 21:35 / market-timing 21:40 -->
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>21</integer><key>Minute</key><integer>45</integer></dict>
+        <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>21</integer><key>Minute</key><integer>45</integer></dict>
+        <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>21</integer><key>Minute</key><integer>45</integer></dict>
+        <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>21</integer><key>Minute</key><integer>45</integer></dict>
+        <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>21</integer><key>Minute</key><integer>45</integer></dict>
+    </array>
+    <key>StandardOutPath</key>
+    <string>/tmp/tradesystem-value-watch.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/tradesystem-value-watch.log</string>
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>
