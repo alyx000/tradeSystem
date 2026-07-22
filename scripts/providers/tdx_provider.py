@@ -16,12 +16,15 @@ from .base import DataProvider, DataResult, Confidence, Timeliness
 
 logger = logging.getLogger(__name__)
 
-# 通达信行情主站（多服务器 fallback；首选已实测可连，其余为公开备用节点）
+# 通达信行情主站（多服务器 fallback）。部分节点虽然 TCP 可连，却不再提供 880xxx
+# 板块指数，因此节点选择必须以成功返回 880003 K 线为准，不能只验证 connect()。
 _DEFAULT_SERVERS = [
-    ("123.125.108.14", 7709),
-    ("119.147.212.81", 7709),
-    ("180.153.18.170", 7709),
-    ("114.80.63.12", 7709),
+    ("180.153.18.172", 80),
+    ("202.108.253.139", 80),
+    ("218.75.126.9", 7709),
+    ("60.191.117.167", 7709),
+    ("115.238.90.165", 7709),
+    ("60.12.136.250", 7709),
 ]
 
 _AVG_PRICE_CODE = "880003"  # 通达信「平均股价」
@@ -51,27 +54,35 @@ class TdxProvider(DataProvider):
     def get_capabilities(self) -> list[str]:
         return ["get_index_weekly", "get_index_daily_range"]
 
-    def _connect(self):
-        """按服务器列表逐个尝试连接，返回 (api, "") 或 (None, err)。"""
+    def _connect(self, category: int, count: int):
+        """逐节点连接并验证 880003 K 线，返回 (api, bars, error)。"""
         try:
             from pytdx.hq import TdxHq_API
         except ImportError:
-            return None, "pytdx 未安装（pip install pytdx）"
-        api = TdxHq_API(heartbeat=True)
+            return None, None, "pytdx 未安装（pip install pytdx）"
+        connected = False
         for host, port in self._servers:
+            api = TdxHq_API(heartbeat=True)
+            keep_connection = False
             try:
                 if api.connect(host, port, time_out=self._timeout):
-                    return api, ""
-            except Exception as e:  # 单个服务器连不上不致命，退下一个
-                logger.debug("tdx 连接 %s:%s 失败: %s", host, port, e)
-                continue
-        # 全部失败：pytdx 每次 connect 都创建新 socket，末次失败的 socket 会悬挂；
-        # 显式 disconnect 释放（disconnect 内部 close self.client，未连成也安全）。
-        try:
-            api.disconnect()
-        except Exception as e:
-            logger.debug("tdx 全失败后 disconnect 失败: %s", e)
-        return None, "所有通达信行情服务器连接失败"
+                    connected = True
+                    bars = api.get_index_bars(category, _TDX_MARKET_SH, _AVG_PRICE_CODE, 0, count)
+                    if bars:
+                        keep_connection = True
+                        return api, bars, ""
+                    logger.debug("tdx 节点 %s:%s 可连接但无 880003 数据，尝试下一个", host, port)
+            except Exception as e:  # 单节点连接或取数失败不致命，退到下一个
+                logger.debug("tdx 节点 %s:%s 失败: %s", host, port, e)
+            finally:
+                if not keep_connection:
+                    try:
+                        api.disconnect()
+                    except Exception as e:
+                        logger.debug("tdx 节点 %s:%s disconnect 失败: %s", host, port, e)
+        if connected:
+            return None, None, "所有可连接的通达信行情服务器均无 880003 数据"
+        return None, None, "所有通达信行情服务器连接失败"
 
     def get_index_weekly(self, index_code: str, start_date: str, end_date: str) -> DataResult:
         if index_code != "avg_price":
@@ -79,13 +90,10 @@ class TdxProvider(DataProvider):
                 data=None, source=self.name,
                 error="tdx provider 仅支持 avg_price（通达信 880003 平均股价）",
             )
-        api, err = self._connect()
+        api, bars, err = self._connect(_KLINE_WEEKLY, _WEEKLY_COUNT)
         if api is None:
             return DataResult(data=None, source=self.name, error=err)
         try:
-            bars = api.get_index_bars(_KLINE_WEEKLY, _TDX_MARKET_SH, _AVG_PRICE_CODE, 0, _WEEKLY_COUNT)
-            if not bars:
-                return DataResult(data=None, source=self.name, error="tdx 880003 周线无数据")
             sd = start_date.replace("-", "")
             ed = end_date.replace("-", "")
             rows = []
@@ -129,13 +137,10 @@ class TdxProvider(DataProvider):
                 data=None, source=self.name,
                 error="tdx provider 仅支持 avg_price（通达信 880003 平均股价）",
             )
-        api, err = self._connect()
+        api, bars, err = self._connect(_KLINE_DAILY, _DAILY_COUNT)
         if api is None:
             return DataResult(data=None, source=self.name, error=err)
         try:
-            bars = api.get_index_bars(_KLINE_DAILY, _TDX_MARKET_SH, _AVG_PRICE_CODE, 0, _DAILY_COUNT)
-            if not bars:
-                return DataResult(data=None, source=self.name, error="tdx 880003 日线无数据")
             sd = start_date.replace("-", "")
             ed = end_date.replace("-", "")
             rows = []

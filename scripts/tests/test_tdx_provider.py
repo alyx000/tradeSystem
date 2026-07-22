@@ -4,6 +4,7 @@
   - avg_price 周线归一化（datetime → YYYYMMDD，close float）
   - 非 avg_price 显式拒绝（tdx 只服务平均股价这一伪指数）
   - 多服务器 fallback（首个连不上 → 退到下一个）
+  - TCP 可连但 880003 空数据时继续 fallback
   - 全部服务器失败 → 返回 error 而非抛异常
   - 无论成功失败都 disconnect（不泄漏连接）
 """
@@ -56,25 +57,45 @@ class TestTdxProviderAvgPrice:
         cls.assert_not_called()  # 非目标 code 不该建连
 
     def test_server_fallback(self):
-        api = MagicMock()
+        failed_api = MagicMock()
+        failed_api.connect.return_value = False
+        data_api = MagicMock()
+        data_api.connect.return_value = True
+        data_api.get_index_bars.return_value = WEEKLY
         # 第一个服务器连失败（返回 False），第二个成功
-        api.connect.side_effect = [False, True]
-        api.get_index_bars.return_value = WEEKLY
-        with patch("pytdx.hq.TdxHq_API", return_value=api):
+        with patch("pytdx.hq.TdxHq_API", side_effect=[failed_api, data_api]):
             prov = TdxProvider({"servers": [("1.1.1.1", 7709), ("2.2.2.2", 7709)]})
             r = prov.get_index_weekly("avg_price", "2026-03-30", "2026-05-29")
         assert r.success
-        assert api.connect.call_count == 2
+        failed_api.disconnect.assert_called_once()
+        data_api.disconnect.assert_called_once()
+
+    def test_server_fallback_when_connected_node_has_no_avg_price(self):
+        empty_api = MagicMock()
+        empty_api.connect.return_value = True
+        empty_api.get_index_bars.return_value = []
+        data_api = MagicMock()
+        data_api.connect.return_value = True
+        data_api.get_index_bars.return_value = WEEKLY
+        with patch("pytdx.hq.TdxHq_API", side_effect=[empty_api, data_api]):
+            prov = TdxProvider({"servers": [("1.1.1.1", 7709), ("2.2.2.2", 7709)]})
+            r = prov.get_index_weekly("avg_price", "2026-03-30", "2026-05-29")
+        assert r.success
+        assert r.data[-1]["close"] == 31.28
+        empty_api.disconnect.assert_called_once()
+        data_api.disconnect.assert_called_once()
 
     def test_all_servers_fail_returns_error_not_raise(self):
-        api = MagicMock()
-        api.connect.return_value = False
-        with patch("pytdx.hq.TdxHq_API", return_value=api):
+        apis = [MagicMock(), MagicMock()]
+        for api in apis:
+            api.connect.return_value = False
+        with patch("pytdx.hq.TdxHq_API", side_effect=apis):
             prov = TdxProvider({"servers": [("1.1.1.1", 7709), ("2.2.2.2", 7709)]})
             r = prov.get_index_weekly("avg_price", "2026-03-30", "2026-05-29")
         assert not r.success
         assert r.data is None
-        api.disconnect.assert_called_once()  # 全失败也要释放（pytdx 失败 connect 仍创建 socket）
+        for api in apis:
+            api.disconnect.assert_called_once()  # 失败 connect 仍可能创建 socket
 
     def test_disconnect_on_fetch_exception(self):
         api = MagicMock()
