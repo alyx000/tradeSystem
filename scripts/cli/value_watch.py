@@ -22,19 +22,31 @@ from services.value_watch import service
 logger = logging.getLogger(__name__)
 
 
+def _iso_date(value: str) -> str:
+    """argparse type 回调:边缘校验日期格式,免 service 层 ValueError 裸 traceback
+    (且避免非法日期先白跑完整个采集段,同 sector_crowding gate-1 先例)。"""
+    try:
+        datetime.date.fromisoformat(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"日期须为 YYYY-MM-DD 格式: {value!r}")
+    return value
+
+
 def register_subparser(subparsers: argparse._SubParsersAction) -> None:
     vw = subparsers.add_parser("value-watch", help="价值投资条件监控(红利回撤/卖出阶梯/稀缺周线)")
     sub = vw.add_subparsers(dest="value_watch_command")
 
     daily = sub.add_parser("daily", help="采集 + 重放 + 落库 + 事件推送")
-    daily.add_argument("--date", default=None, help="目标交易日 YYYY-MM-DD(默认今天)")
+    daily.add_argument("--date", default=None, type=_iso_date,
+                       help="目标交易日 YYYY-MM-DD(默认今天)")
     daily.add_argument("--dry-run", action="store_true",
                        help="内存计算,不落库不推送不写账本(历史校准/预览)")
     daily.add_argument("--no-push", action="store_true",
                        help="落库+打印候选事件,不推送钉钉")
 
     report = sub.add_parser("report", help="只读渲染已落库快照")
-    report.add_argument("--date", default=None, help="快照日期 YYYY-MM-DD(默认最新)")
+    report.add_argument("--date", default=None, type=_iso_date,
+                        help="快照日期 YYYY-MM-DD(默认最新)")
 
 
 def handle_command(config: dict, args: argparse.Namespace) -> None:

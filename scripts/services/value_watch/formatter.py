@@ -12,7 +12,9 @@ from .engine import Event
 _FOOTER = (f"\n> 出处：{TEACHER_NOTE_REF}（鞠磊·价值投资年课）。"
            "以上为条件监控事实与框架引用，[判断] 不构成投资建议。")
 
-# 事件键前缀 → 原笔记框架含义（引用区文案，非操作指令）
+# 事件键前缀 → 原笔记框架含义（引用区文案，非操作指令）。
+# 注：prefix 携带尾冒号即天然互斥（":ladder:" 不是 "v1:ladder_pullback:..." 的子串），
+# 列表顺序不承载消歧职责，仅按可读性排列。
 _MEANINGS = [
     ("drawdown:", "原笔记框架：银行板块指数/长电回撤 10%-15% 为红利价值买入观察区间（非操作指令）"),
     ("drawdown_recovered:", "原笔记框架：回撤修复离开观察档位，周期性等待下一轮（非操作指令）"),
@@ -25,13 +27,12 @@ _MEANINGS = [
 
 def _meaning(key: str) -> str:
     for prefix, text in _MEANINGS:
-        if f":{prefix}" in key or key.split(":", 1)[-1].startswith(prefix):
+        if f":{prefix}" in key:
             return text
     return ""
 
 
-def render_push_messages(candidates: list[Event],
-                         payload: dict) -> list[tuple[str, str, list[str]]]:
+def render_push_messages(candidates: list[Event]) -> list[tuple[str, str, list[str]]]:
     """候选事件 → [(title, markdown, keys)]。同标的合并一条；同轮 parent+exit
     （如首跑历史触档且已回落）合并为一条"曾触及且已回落"消息、两键同录。"""
     groups: dict[str, list[Event]] = {}
@@ -87,6 +88,10 @@ def render_report(payload: dict, *, date: str, logic_version: int,
         if p.get("insufficient_identity"):
             lines.append(f"- [事实] {p.get('name')}({p.get('code')}): 缺成本价/建仓日期，"
                          "无法追踪阶梯（用 db holdings-add --entry-date 补录）")
+            continue
+        if p.get("state") == "source_failed":
+            lines.append(f"- {p.get('name')}({p.get('code')}): source_failed"
+                         "（行情源失败，本日不评估，不落假值）")
             continue
         if p.get("state") == "insufficient_data":
             lines.append(f"- [事实] {p.get('name')}: 行情数据不足，本日不评估")

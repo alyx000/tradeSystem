@@ -48,7 +48,7 @@ def run_daily(conn: sqlite3.Connection, registry, provider, date: str, *,
             logger.info("[value-watch] 目标日 %s ≠ 最新已收盘交易日 %s,闸门拦截推送(落库照常)",
                         date, latest_closed)
         else:
-            _push_candidates(conn, date, candidates, payload)
+            _push_candidates(conn, date, candidates)
     return md
 
 
@@ -56,41 +56,49 @@ def _collect_and_replay(conn, registry, provider, date: str):
     """采集(锚定起点)→三引擎重放。单标的失败只降级该标的(source_status 标注),不中断整批。"""
     source_status: dict[str, str] = {}
     all_events: list[engine.Event] = []
+    # 函数级个股行情缓存(F4):600900.SH 同时在 DRAWDOWN_TARGETS 与 LADDER_CODES,
+    # 各段独立拉取会重复请求,且两次一成一败会产生自相矛盾的 source_status
+    stock_cache: dict[str, "list[dict] | None"] = {}
+
+    def _stock(code: str, start: str = HISTORY_ANCHOR_DATE) -> "list[dict] | None":
+        key = (code, start)
+        if key not in stock_cache:
+            series = collector.fetch_stock_series(registry, code, start, date)
+            stock_cache[key] = series
+            source_status[code] = "ok" if series is not None else "source_failed"
+        return stock_cache[key]
 
     drawdown: dict[str, "dict | None"] = {}
     for code, buckets in DRAWDOWN_TARGETS.items():
         if code.endswith(".SI"):
             series = collector.fetch_sw_index_series(provider, code, HISTORY_ANCHOR_DATE, date)
+            source_status[code] = "ok" if series is not None else "source_failed"
         else:
-            series = collector.fetch_stock_series(registry, code, HISTORY_ANCHOR_DATE, date)
+            series = _stock(code)
         if series is None:
-            source_status[code] = "source_failed"
             drawdown[code] = None
             continue
-        source_status[code] = "ok"
         snap, events = engine.drawdown_events(code, _upto(series, date), buckets)
         drawdown[code] = snap
         all_events += events
 
     ladder = []
     positions = collector.load_ladder_positions(conn)
-    stock_cache: dict[str, "list[dict] | None"] = {}
     for pos in positions:
         entry = dict(pos)
         if pos["insufficient_identity"]:
             ladder.append(entry)
             continue
         code = pos["code"]
-        if code not in stock_cache:
-            stock_cache[code] = collector.fetch_stock_series(
-                registry, code, HISTORY_ANCHOR_DATE, date)
-        series = stock_cache[code]
+        # F2:entry_date 早于锚日时扩窗到 entry_date——entry_date 是键组成且不可变,
+        # 固定的更早起点仍满足"重跑同历史→同键";只截锚日会丢锚日前已触档史实,
+        # 违背"上线前已触及档位从历史补算"承诺
+        start = min(HISTORY_ANCHOR_DATE, pos["entry_date"])
+        series = _stock(code, start)
         if series is None:
-            source_status.setdefault(code, "source_failed")
             entry["state"] = "source_failed"
             ladder.append(entry)
             continue
-        source_status.setdefault(code, "ok")
         since_entry = [b for b in _upto(series, date) if b["date"] >= pos["entry_date"]]
         snap, events = engine.ladder_events(pos["position_key"], pos["name"],
                                             pos["entry_price"], since_entry)
@@ -100,12 +108,10 @@ def _collect_and_replay(conn, registry, provider, date: str):
 
     scarcity: dict[str, "dict | None"] = {}
     for code in SCARCITY_CODES:
-        series = collector.fetch_stock_series(registry, code, HISTORY_ANCHOR_DATE, date)
+        series = _stock(code)
         if series is None:
             scarcity[code] = None
-            source_status[code] = "source_failed"
             continue
-        source_status[code] = "ok"
         weeks = aggregate_completed_weeks(
             _upto(series, date), date,
             target_week_has_remaining_open_days=_week_has_remaining_open_days(conn, date))
@@ -148,18 +154,23 @@ def _week_has_remaining_open_days(conn: sqlite3.Connection, date: str) -> bool:
     return any(r[0] for r in rows)
 
 
-def _push_candidates(conn, date: str, candidates, payload) -> None:
+def _push_candidates(conn, date: str, candidates) -> None:
     pusher = DingTalkPusher(config={})
     if not pusher.initialize():
         logger.error("[value-watch] DingTalk pusher 未启用(缺 env),跳过推送;"
                      "事件不落账本,下次运行重试")
         return
-    for title, markdown, keys in formatter.render_push_messages(candidates, payload):
+    for title, markdown, keys in formatter.render_push_messages(candidates):
         ok = pusher.send_markdown(title=title, content=markdown)
-        if ok:
-            repo.append_sent_events(conn, date, keys)   # 成功才记账;失败下次重试
-        else:
+        if not ok:
             logger.warning("[value-watch] 推送失败(不落账本,下次重试): %s", title)
+            continue
+        try:
+            repo.append_sent_events(conn, date, keys)   # 成功才记账;失败下次重试
+        except Exception as e:   # noqa: BLE001
+            # F3:记账失败(如并发写锁超时)不中断剩余消息与报告输出;该消息已发出但
+            # 未入账 → 下轮按 at-least-once 语义重推,与"失败下次重试"一致
+            logger.error("[value-watch] 账本写入失败(该消息下轮会重推): %s / %s", title, e)
 
 
 def run_report(conn: sqlite3.Connection, date: "str | None") -> str:
