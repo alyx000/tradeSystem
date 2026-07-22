@@ -28,23 +28,32 @@ def upsert_daily(conn: sqlite3.Connection, date: str, payload: dict, logic_versi
 
 
 def append_sent_events(conn: sqlite3.Connection, date: str, keys: list[str]) -> None:
-    """把成功发送的事件键合并进当日行（只增不删、去重）。行不存在则静默跳过——
-    调用方总是先 upsert_daily 再 append。"""
+    """把成功发送的事件键合并进当日行（只增不删、去重）。
+
+    读-合并-写包在 BEGIN IMMEDIATE 写事务里（门2 G2 high-2）：两个连接并发追加时
+    非原子读改写会互相覆盖对方的新键——丢键 = 已发送事件下轮重推，破坏账本只增不删。
+    行不存在抛错（调用序契约：必须先 upsert_daily）。"""
     if not keys:
         return
-    row = conn.execute(
-        "SELECT sent_events_json FROM value_watch_daily WHERE date = ?", (date,)
-    ).fetchone()
-    if row is None:
-        return
-    existing = set(json.loads(row[0] or "[]"))
-    merged = sorted(existing | set(keys))
-    conn.execute(
-        "UPDATE value_watch_daily SET sent_events_json = ?, "
-        "updated_at = datetime('now','localtime') WHERE date = ?",
-        (json.dumps(merged, ensure_ascii=False), date),
-    )
-    conn.commit()
+    if conn.in_transaction:
+        conn.commit()   # 结束残留事务，保证 BEGIN IMMEDIATE 无条件生效
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        row = conn.execute(
+            "SELECT sent_events_json FROM value_watch_daily WHERE date = ?", (date,)
+        ).fetchone()
+        if row is None:
+            raise ValueError(f"value_watch_daily 无 {date} 行；须先 upsert_daily 再 append")
+        merged = sorted(set(json.loads(row[0] or "[]")) | set(keys))
+        conn.execute(
+            "UPDATE value_watch_daily SET sent_events_json = ?, "
+            "updated_at = datetime('now','localtime') WHERE date = ?",
+            (json.dumps(merged, ensure_ascii=False), date),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
 
 
 def load_sent_ledger(conn: sqlite3.Connection) -> set[str]:

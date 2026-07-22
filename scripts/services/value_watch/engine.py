@@ -119,9 +119,18 @@ def ladder_events(position_key: str, name: str, entry_price: float,
     "价格涨幅"口径，未含分红未复权——除息日机械压低如实呈现，spec 取舍②）。
 
     enter：各档首触日（持有期事实，永久 active，漏跑从历史补算不丢档）；
-    exit：已触 20 档且当前涨幅 < 20%（每 position_key 至多一次）。
+    exit：曾触 20 档后**曾首次跌破**（历史既成事实，与当前涨幅无关——若按"当前 <20%"
+    判定，回落日推送失败后价格反弹会让事件从全集消失、永久漏发解除提醒，违反
+    "历史扩展不删既成事件"契约；每 position_key 至多一次，键无日期成分）。
+
+    缺数守卫（门2 G2 med）：entry_price 非正或空行情序列 → 返回 insufficient 快照
+    （current_gain_pct=None），不伪造 0% 持平、不抛异常中断整批。
     """
     rungs = rungs or LADDER_RUNGS
+    if not closes_since_entry or not entry_price or entry_price <= 0:
+        return {"position_key": position_key, "name": name, "entry_price": entry_price,
+                "current_gain_pct": None, "max_rung": 0,
+                "state": "insufficient_data"}, []
     gains = [(bar["close"] / entry_price - 1) * 100 for bar in closes_since_entry]
     events: list[Event] = []
     max_rung = 0
@@ -139,24 +148,28 @@ def ladder_events(position_key: str, name: str, entry_price: float,
             facts={"rung": r, "first_touch_date": first_touch,
                    "entry_price": entry_price},
         ))
-    current_gain = gains[-1] if gains else 0.0
+    current_gain = gains[-1]
     top = max(rungs)
-    if max_rung >= top and current_gain < top:
+    if max_rung >= top:
+        # exit 由历史事实决定(曾触顶后曾跌破),与当前涨幅无关(门2 G2 high-1):
+        # 首个回落日即身份日,后续反弹/再回落不改变事件存在性与发生日
         pull_date = None
         seen_top = False
         for i, g in enumerate(gains):
             if g >= top:
                 seen_top = True
-            elif seen_top:   # 首个回落日即身份日(再冲高再回落仍同一键,至多一次)
+            elif seen_top:
                 pull_date = closes_since_entry[i]["date"]
                 break
-        events.append(Event(
-            key=_v(f"ladder_pullback:{position_key}"),
-            kind="exit", parent_key=_v(f"ladder:{position_key}:{top}"),
-            occurred_date=pull_date or closes_since_entry[-1]["date"], active=True,
-            title=f"{name} 冲高回落至 +{top}% 档内",
-            facts={"top_rung": top, "current_gain_pct": round(current_gain, 2)},
-        ))
+        if pull_date is not None:
+            events.append(Event(
+                key=_v(f"ladder_pullback:{position_key}"),
+                kind="exit", parent_key=_v(f"ladder:{position_key}:{top}"),
+                occurred_date=pull_date, active=True,
+                title=f"{name} 冲高回落至 +{top}% 档内",
+                facts={"top_rung": top, "pullback_date": pull_date,
+                       "current_gain_pct": round(current_gain, 2)},
+            ))
     snap = {
         "position_key": position_key, "name": name, "entry_price": entry_price,
         "current_gain_pct": round(current_gain, 2),

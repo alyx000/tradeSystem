@@ -38,12 +38,32 @@ def test_same_day_rerun_keeps_sent_events(conn):
     assert set(snap["sent_events"]) == {"v1:k1", "v1:k2"}
 
 
-def test_append_dedupes_and_ignores_missing_row(conn):
+def test_append_dedupes(conn):
     repo.upsert_daily(conn, "2026-07-21", {}, 1)
     repo.append_sent_events(conn, "2026-07-21", ["v1:k1"])
     repo.append_sent_events(conn, "2026-07-21", ["v1:k1", "v1:k2"])   # k1 重复append 去重
     snap = repo.get_snapshot(conn, "2026-07-21")
     assert sorted(snap["sent_events"]) == ["v1:k1", "v1:k2"]
+
+
+def test_append_missing_row_raises(conn):
+    """行不存在抛错(调用序契约:必须先 upsert_daily)——静默跳过会吞掉丢账本 bug。"""
+    with pytest.raises(ValueError):
+        repo.append_sent_events(conn, "2026-07-21", ["v1:k1"])
+
+
+def test_append_concurrent_connections_no_lost_keys(tmp_path):
+    """门2 G2 high-2:两连接并发追加不同键,BEGIN IMMEDIATE 串行化后两键都在。"""
+    db = tmp_path / "vw_conc.db"
+    c1 = get_connection(db)
+    init_schema(c1)
+    repo.upsert_daily(c1, "2026-07-21", {}, 1)
+    c2 = get_connection(db)
+    repo.append_sent_events(c1, "2026-07-21", ["v1:a"])
+    repo.append_sent_events(c2, "2026-07-21", ["v1:b"])
+    snap = repo.get_snapshot(c1, "2026-07-21")
+    assert sorted(snap["sent_events"]) == ["v1:a", "v1:b"]
+    c1.close(); c2.close()
 
 
 def test_get_snapshot_latest_and_missing(conn):

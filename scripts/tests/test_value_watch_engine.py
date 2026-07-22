@@ -96,6 +96,27 @@ def test_ladder_same_day_multi_rung_distinct_keys():
     assert len({e.key for e in events if e.kind == "enter"}) == 3
 
 
+def test_ladder_pullback_survives_rebound():
+    """门2 G2 high-1:触顶→跌破→重新站上 20%——exit 是历史既成事实,不得从全集消失
+    (否则回落日推送失败后反弹即永久漏发解除提醒)。"""
+    closes = _series(*[9.0, 10.9, 10.5, 11.0])   # +21%→+16.7%→+22.2%
+    snap, events = engine.ladder_events("K", "N", 9.0, closes)
+    exits = [e for e in events if e.kind == "exit"]
+    assert len(exits) == 1
+    assert exits[0].occurred_date == closes[2]["date"]   # 首次跌破日,不随反弹改变
+    assert snap["current_gain_pct"] > 20
+
+
+def test_ladder_insufficient_data_guard():
+    """门2 G2 med:entry_price 无效/空序列 → insufficient_data,不伪造 0%、不抛异常。"""
+    for bad_price in (None, 0, -1):
+        snap, events = engine.ladder_events("K", "N", bad_price, _series(9.0, 9.5))
+        assert snap["state"] == "insufficient_data"
+        assert snap["current_gain_pct"] is None and events == []
+    snap, events = engine.ladder_events("K", "N", 9.0, [])
+    assert snap["state"] == "insufficient_data" and events == []
+
+
 def test_ladder_ex_dividend_raw_close_semantics():
     """除息日跳空:raw close 口径下涨幅被机械压低——数值如实呈现,不复权修正(spec 取舍②)。"""
     closes = _series(*[10.0, 12.1, 11.0])  # 除息前 +21%,除息后价回 11 → 现 +10%
