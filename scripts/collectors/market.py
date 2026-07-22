@@ -8,6 +8,7 @@ import logging
 import math
 from datetime import datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 import yaml
 
 from analyzers.sector_rhythm import SectorRhythmAnalyzer
@@ -341,9 +342,160 @@ class MarketCollector:
         self.registry = registry
         self._rhythm_analyzer = SectorRhythmAnalyzer(BASE_DIR, history_days=20)
 
+    @staticmethod
+    def _checked_snapshot(
+        data: dict,
+        expected_date: str | None,
+        label: str,
+        success_status: str = "ok",
+    ) -> dict:
+        """历史补跑时拒绝把当前静态快照伪装成目标日数据。"""
+        if not isinstance(data, dict):
+            return {
+                "status": "missing_data",
+                "error": f"{label} 数据结构无效",
+                "source_date": None,
+                "expected_date": expected_date,
+            }
+        if data.get("error"):
+            return data
+        source_date = data.get("source_date")
+        if expected_date and source_date != expected_date:
+            return {
+                "status": "historical_not_supported",
+                "error": f"{label} 数据日期 {source_date or '未知'} 与目标日期 {expected_date} 不一致",
+                "source_date": source_date,
+                "expected_date": expected_date,
+                "_source": data.get("_source"),
+                "_source_url": data.get("_source_url"),
+                "_fetched_at": data.get("_fetched_at"),
+            }
+        data["status"] = success_status
+        if expected_date:
+            data["validated_for_date"] = expected_date
+        return data
+
+    @staticmethod
+    def _checked_pre_spot_snapshot(
+        data: dict,
+        target_date: str,
+        *,
+        now: datetime | None = None,
+    ) -> dict:
+        """盘前即期快照门禁：历史补跑按日期校验，当日只接受开盘前的新鲜页面快照。"""
+        shanghai_tz = ZoneInfo("Asia/Shanghai")
+        current = now or datetime.now(shanghai_tz)
+        if current.tzinfo is None:
+            current = current.replace(tzinfo=shanghai_tz)
+        else:
+            current = current.astimezone(shanghai_tz)
+
+        if target_date != current.strftime("%Y-%m-%d"):
+            return MarketCollector._checked_snapshot(
+                data,
+                target_date,
+                "USD/CNY 在岸即期",
+                success_status="latest_available",
+            )
+        if not isinstance(data, dict) or data.get("error"):
+            return data
+
+        cutoff = current.replace(hour=9, minute=30, second=0, microsecond=0)
+        if current >= cutoff:
+            return {
+                **data,
+                "status": "lookahead_not_allowed",
+                "error": "USD/CNY 在岸即期已超过盘前 09:30 截止时间，拒绝写入盘前简报",
+            }
+
+        snapshot_time = data.get("snapshot_time")
+        try:
+            snapshot_at = datetime.strptime(
+                str(snapshot_time), "%Y-%m-%d %H:%M:%S"
+            ).replace(tzinfo=shanghai_tz)
+        except (TypeError, ValueError):
+            return {
+                **data,
+                "status": "invalid_snapshot_time",
+                "error": "USD/CNY 在岸即期页面更新时间无效",
+            }
+        if snapshot_at >= cutoff:
+            return {
+                **data,
+                "status": "lookahead_not_allowed",
+                "error": "USD/CNY 在岸即期页面更新时间不早于盘前 09:30 截止时间",
+            }
+        if snapshot_at > current:
+            return {
+                **data,
+                "status": "invalid_snapshot_time",
+                "error": "USD/CNY 在岸即期页面更新时间晚于采集时间",
+            }
+        if current - snapshot_at > timedelta(minutes=15):
+            return {
+                **data,
+                "status": "stale_snapshot",
+                "error": "USD/CNY 在岸即期页面快照超过 15 分钟，拒绝写入盘前简报",
+            }
+        data["status"] = "latest_available"
+        data["validated_for_date"] = target_date
+        return data
+
+    @staticmethod
+    def _snapshot_payload(result, label: str) -> dict:
+        """把 DataResult 统一成带来源信息的字典，拒绝异常载荷形状。"""
+        provenance = {
+            "_source": result.source,
+            "_source_url": result.source_url,
+            "_fetched_at": result.fetched_at,
+            "_timeliness": result.timeliness.value,
+        }
+        if not result.success:
+            return {"status": "source_failed", "error": result.error, **provenance}
+        if not isinstance(result.data, dict):
+            return {
+                "status": "missing_data",
+                "error": f"{label} 数据结构无效",
+                **provenance,
+            }
+        return {**result.data, **provenance}
+
+    def _collect_fx_snapshot(
+        self,
+        *,
+        pairs: tuple[str, ...],
+        expected_spot_date: str | None,
+        expected_swap_date: str | None,
+        spot_success_status: str = "ok",
+        swap_success_status: str = "ok",
+    ) -> tuple[dict, dict]:
+        forex = {}
+        for pair in pairs:
+            r = self.registry.call("get_forex", pair)
+            data = self._snapshot_payload(r, pair)
+            if pair == "usd_cny":
+                data = self._checked_snapshot(
+                    data,
+                    expected_spot_date,
+                    "USD/CNY 在岸即期",
+                    success_status=spot_success_status,
+                )
+            forex[pair] = data
+
+        fx_swaps = {}
+        swap_r = self.registry.call("get_fx_swap", "usd_cny", "1Y")
+        swap_data = self._snapshot_payload(swap_r, "USD/CNY 1Y C-Swap定盘")
+        fx_swaps["usd_cny_1y"] = self._checked_snapshot(
+            swap_data,
+            expected_swap_date,
+            "USD/CNY 1Y C-Swap定盘",
+            success_status=swap_success_status,
+        )
+        return forex, fx_swaps
+
     def collect_post_market(self, date: str) -> dict:
         """
-        盘后数据采集（15:30 执行）
+        盘后数据采集（20:00 执行）
         返回结构化数据，对应 post-market.yaml 模板
         """
         logger.info(f"开始盘后数据采集: {date}")
@@ -351,6 +503,20 @@ class MarketCollector:
             "date": date,
             "generated_at": datetime.now().isoformat(),
             "generated_by": "openclaw",
+        }
+
+        # 盘后 20:00 可取得当日 16:30 C-Swap 定盘；历史补跑严格校验数据日期。
+        forex, fx_swaps = self._collect_fx_snapshot(
+            pairs=("usd_cny",),
+            expected_spot_date=date,
+            expected_swap_date=date,
+        )
+        result["forex"] = forex
+        result["fx_swaps"] = fx_swaps
+        result["_fx_context"] = {
+            "phase": "post",
+            "spot_expected_date": date,
+            "swap_expected_date": date,
         }
 
         # 1. 指数数据
@@ -1037,15 +1203,32 @@ class MarketCollector:
                 commodities[name] = {"error": r.error}
         result["commodities"] = commodities
 
-        # 汇率（在岸中间价 + 离岸人民币 + 美元指数）
-        forex = {}
-        for pair in ["usd_cny", "usd_cnh", "usd_index"]:
-            r = self.registry.call("get_forex", pair)
-            if r.success:
-                forex[pair] = r.data
-            else:
-                forex[pair] = {"error": r.error}
+        # 07:00 位于在岸外汇闭市窗口（03:00~09:30），只接受开盘前 15 分钟内更新的
+        # “最新可用快照”；同日开盘后重跑和历史日期错配均 fail closed。
+        forex, fx_swaps = self._collect_fx_snapshot(
+            pairs=("usd_cny", "usd_cnh", "usd_index"),
+            expected_spot_date=None,
+            expected_swap_date=prev_trade_date,
+            spot_success_status="latest_available",
+            swap_success_status="latest_available",
+        )
+        forex["usd_cny"] = self._checked_pre_spot_snapshot(
+            forex["usd_cny"],
+            date_str,
+        )
         result["forex"] = forex
+        result["fx_swaps"] = fx_swaps
+        result["_fx_context"] = {
+            "phase": "pre",
+            "spot_expected_date": date_str,
+            "swap_expected_date": prev_trade_date,
+        }
+        if not prev_trade_date:
+            fx_swaps["usd_cny_1y"] = {
+                **fx_swaps["usd_cny_1y"],
+                "status": "missing_expected_date",
+                "error": "缺少上一交易日，无法校验 USD/CNY 1Y C-Swap 定盘日期",
+            }
 
         # 风险指标：VIX + 美债10年期
         risk_indicators = {}
@@ -1098,7 +1281,14 @@ class MarketCollector:
             logger.warning("宏观经济指标获取失败: %s", err)
 
         # 网络/外部源不可达类失败统一文案（yfinance→Yahoo、akshare 瞬断、tushare 不支持国际指数）。
-        for section in ("global_indices", "global_indices_apac", "commodities", "forex", "risk_indicators"):
+        for section in (
+            "global_indices",
+            "global_indices_apac",
+            "commodities",
+            "forex",
+            "fx_swaps",
+            "risk_indicators",
+        ):
             for item in (result.get(section) or {}).values():
                 if isinstance(item, dict) and item.get("error"):
                     item["error"] = _normalize_source_error(item["error"])

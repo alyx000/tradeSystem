@@ -15,6 +15,8 @@ providers:
     enabled: true
     priority: 2
     rate_limit: 60
+    chinamoney_enabled: true  # 中国货币网 USD/CNY 在岸即期与 C-Swap 定盘
+    http_timeout: 15
 
   eastmoney:
     enabled: true

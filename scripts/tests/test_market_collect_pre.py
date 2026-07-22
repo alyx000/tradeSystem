@@ -77,7 +77,24 @@ def test_collect_pre_market_shapes_margin_and_margin_wow(tmp_path, monkeypatch):
         if method == "get_commodity":
             return _ok_commodity(args[0])
         if method == "get_forex":
-            return DataResult(data={"name": args[0], "close": 7.0, "change_pct": 0.0}, source="mock")
+            data = {"name": args[0], "close": 7.0, "change_pct": 0.0}
+            if args[0] == "usd_cny":
+                data["source_date"] = "2026-03-30"
+            return DataResult(data=data, source="mock")
+        if method == "get_fx_swap":
+            return DataResult(
+                data={
+                    "name": "USD/CNY 1Y C-Swap定盘",
+                    "pair": "USD/CNY",
+                    "tenor": "1Y",
+                    "swap_point_pips": -1818.25,
+                    "forward_rate": 6.5918,
+                    "curve_time": "2026-03-27 16:30:00.0",
+                    "source_date": "2026-03-27",
+                    "quote_source": "报价数据",
+                },
+                source="mock",
+            )
         if method == "get_macro_calendar":
             assert args[0] == "2026-03-30"
             return DataResult(data=[], source="mock")
@@ -153,6 +170,22 @@ def test_collect_pre_market_shapes_margin_and_margin_wow(tmp_path, monkeypatch):
     assert "macro_indicators" in out
     assert out["macro_indicators"]["pmi"]["latest"]["period"] == "202505"
     assert any(c[0] == "get_macro_indicators" for c in calls)
+    assert out["fx_swaps"]["usd_cny_1y"]["swap_point_pips"] == -1818.25
+    assert out["fx_swaps"]["usd_cny_1y"]["status"] == "latest_available"
+    assert out["fx_swaps"]["usd_cny_1y"]["_source"] == "mock"
+    assert any(c[0] == "get_fx_swap" for c in calls)
+
+
+def test_checked_snapshot_rejects_wrong_history_date():
+    out = MarketCollector._checked_snapshot(
+        {"source_date": "2026-07-22", "close": 6.77},
+        "2026-06-30",
+        "USD/CNY 在岸即期",
+    )
+    assert "error" in out
+    assert out["status"] == "historical_not_supported"
+    assert out["source_date"] == "2026-07-22"
+    assert out["expected_date"] == "2026-06-30"
 
 
 def test_collect_pre_market_macro_failure_writes_error_not_raise():

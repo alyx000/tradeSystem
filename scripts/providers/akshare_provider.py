@@ -8,6 +8,7 @@ AkShare 数据提供者（免费，作为 tushare 的补充和降级）
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from decimal import Decimal, InvalidOperation
 import logging
 import multiprocessing
 import queue as queue_module
@@ -21,11 +22,19 @@ import pandas as pd
 import requests
 
 from .base import DataProvider, DataResult, DataType, Timeliness
+from utils.fx_validation import (
+    CHINAMONEY_C_SWAP_SOURCES,
+    CHINAMONEY_C_SWAP_URL,
+    CHINAMONEY_SPOT_URL,
+    validate_usd_cny_spot_values,
+    validate_usd_cny_swap_values,
+)
 
 logger = logging.getLogger(__name__)
 
 BUSINESS_PROFILE_MAX_WORKERS = 4
 BUSINESS_PROFILE_TIMEOUT_SECONDS = 20.0
+CHINAMONEY_HEADERS = {"User-Agent": "tradeSystem/1.0"}
 
 
 def _normalize_akshare_stock_code(raw: str) -> str:
@@ -300,6 +309,129 @@ def _to_float_or_none(val: Any) -> float | None:
         return None
 
 
+def _chinamoney_usd_cny_spot(payload: dict) -> dict:
+    """把中国货币网 USD/CNY 双边即期报价归一为系统行情结构。"""
+    head = payload.get("head") if isinstance(payload, dict) else None
+    if not isinstance(head, dict) or str(head.get("rep_code")) != "200":
+        raise ValueError("中国货币网即期报价响应状态无效")
+    records = payload.get("records")
+    if not isinstance(records, list):
+        raise ValueError("中国货币网即期报价缺少 records")
+    matches = [
+        item for item in records if isinstance(item, dict) and item.get("ccyPair") == "USD/CNY"
+    ]
+    if not matches:
+        raise ValueError("中国货币网即期报价未找到 USD/CNY")
+    if len(matches) != 1:
+        raise ValueError("中国货币网即期报价存在重复 USD/CNY")
+    row = matches[0]
+
+    try:
+        bid_decimal = Decimal(str(row.get("bidPrc")))
+        ask_decimal = Decimal(str(row.get("askPrc")))
+    except (InvalidOperation, TypeError, ValueError):
+        raise ValueError("中国货币网 USD/CNY 买卖报价无效") from None
+    if not bid_decimal.is_finite() or not ask_decimal.is_finite():
+        raise ValueError("中国货币网 USD/CNY 买卖报价无效")
+
+    payload_data = payload.get("data")
+    if not isinstance(payload_data, dict):
+        raise ValueError("中国货币网即期报价缺少 data")
+    snapshot_time = payload_data.get("showDateCN", "")
+    try:
+        source_date = datetime.strptime(snapshot_time, "%Y-%m-%d %H:%M:%S").strftime("%Y-%m-%d")
+    except (TypeError, ValueError):
+        raise ValueError("中国货币网 USD/CNY 页面更新时间无效") from None
+    bid = float(bid_decimal)
+    ask = float(ask_decimal)
+    computed_mid = float((bid_decimal + ask_decimal) / Decimal("2"))
+    try:
+        bid, ask, _ = validate_usd_cny_spot_values(bid, ask, computed_mid)
+    except ValueError:
+        raise ValueError("中国货币网 USD/CNY 买卖报价无效")
+    return {
+        "status": "ok",
+        "name": "USD/CNY（在岸即期）",
+        "pair": "USD/CNY",
+        "mid": computed_mid,
+        "close": computed_mid,
+        "bid": bid,
+        "ask": ask,
+        "snapshot_time": snapshot_time,
+        "source_date": source_date,
+        "source_date_kind": "source_page_update_date",
+        "price_kind": "computed_bid_ask_mid",
+        "close_semantics": "computed_bid_ask_mid",
+        "mid_method": "bid_ask_arithmetic_mean",
+    }
+
+
+def _chinamoney_usd_cny_c_swap(payload: dict, tenor: str) -> dict:
+    """提取中国货币网 USD/CNY C-Swap 指定期限定盘点。"""
+    head = payload.get("head") if isinstance(payload, dict) else None
+    if not isinstance(head, dict) or str(head.get("rep_code")) != "200":
+        raise ValueError("中国货币网 C-Swap 响应状态无效")
+    normalized_tenor = str(tenor or "").replace(" ", "").upper()
+    records = payload.get("records")
+    if not isinstance(records, list):
+        raise ValueError("中国货币网 C-Swap 曲线缺少 records")
+    matches = [
+        item
+        for item in records
+        if isinstance(item, dict)
+        and item.get("currencyPair") == "USD.CNY"
+        and str(item.get("tenor", "")).replace(" ", "").upper() == normalized_tenor
+    ]
+    if not matches:
+        raise ValueError(f"中国货币网 C-Swap 曲线未找到期限 {tenor}")
+    if len(matches) != 1:
+        raise ValueError(f"中国货币网 C-Swap 曲线期限 {tenor} 存在重复记录")
+    row = matches[0]
+
+    swap_point = _to_float_or_none(row.get("swapPnt"))
+    forward_rate = _to_float_or_none(row.get("swapAllPrc"))
+    quote_source = str(row.get("dataSource") or "").strip()
+    try:
+        swap_point, forward_rate, _ = validate_usd_cny_swap_values(
+            swap_point, forward_rate
+        )
+    except ValueError:
+        raise ValueError(f"中国货币网 C-Swap {tenor} 定盘数据无效") from None
+    if quote_source not in CHINAMONEY_C_SWAP_SOURCES:
+        raise ValueError(f"中国货币网 C-Swap {tenor} 定盘数据无效")
+
+    payload_data = payload.get("data")
+    if not isinstance(payload_data, dict):
+        raise ValueError("中国货币网 C-Swap 曲线缺少 data")
+    if payload_data.get("currencyPair") != "USD.CNY":
+        raise ValueError("中国货币网 C-Swap 曲线货币对无效")
+    curve_time = str(row.get("curveTime") or "")
+    last_date = str(payload_data.get("lastDate") or "")
+    try:
+        curve_at = datetime.strptime(curve_time[:19], "%Y-%m-%d %H:%M:%S")
+        last_at = datetime.strptime(last_date[:19], "%Y-%m-%d %H:%M:%S")
+    except (TypeError, ValueError):
+        raise ValueError(f"中国货币网 C-Swap {tenor} 曲线时间无效") from None
+    if curve_at != last_at or curve_at.strftime("%H:%M:%S") != "16:30:00":
+        raise ValueError(f"中国货币网 C-Swap {tenor} 定盘时点无效")
+    source_date = curve_at.strftime("%Y-%m-%d")
+    return {
+        "status": "ok",
+        "name": f"USD/CNY {normalized_tenor} C-Swap定盘",
+        "pair": "USD/CNY",
+        "tenor": normalized_tenor,
+        "swap_point_pips": swap_point,
+        "forward_rate": forward_rate,
+        "outright_rate": forward_rate,
+        "curve_time": curve_time,
+        "fixing_at": curve_time,
+        "source_date": source_date,
+        "quote_source": quote_source,
+        "fixing_source": quote_source,
+        "price_kind": "c_swap_fixing",
+    }
+
+
 def _to_clean_str(val: Any) -> str:
     """NaN / None / pd.NA → 空串，其余 str() 去空白。
 
@@ -519,6 +651,7 @@ class AkshareProvider(DataProvider):
             "get_us_tickers_overnight",
             "get_commodity",
             "get_forex",
+            "get_fx_swap",
             "get_market_news",
             "get_sector_moneyflow_dc",
             "get_concept_moneyflow_dc",
@@ -1284,7 +1417,7 @@ class AkshareProvider(DataProvider):
             return DataResult(data=None, source=self.name, error=str(e))
 
     def get_forex(self, pair: str) -> DataResult:
-        """汇率：美元指数来自 index_global_spot_em；USD/CNY 优先 美元人民币中间价（forex_spot_em）。"""
+        """汇率：USD/CNY 使用中国货币网在岸双边即期，其余保留原有来源。"""
         try:
             if pair == "usd_index":
                 row = self._row_global_spot_by_name("美元指数")
@@ -1301,18 +1434,23 @@ class AkshareProvider(DataProvider):
                 return DataResult(data=data, source="akshare:index_global_spot_em")
 
             if pair == "usd_cny":
-                df = self.ak.forex_spot_em()
-                for label in ("美元人民币中间价", "美元兑离岸人民币"):
-                    m = df[df["名称"] == label]
-                    if not m.empty:
-                        row = m.iloc[0]
-                        data = {
-                            "name": label,
-                            "close": _to_float_price(row.get("最新价")),
-                            "change_pct": _to_float_pct(row.get("涨跌幅")),
-                        }
-                        return DataResult(data=data, source="akshare:forex_spot_em")
-                return DataResult(data=None, source=self.name, error="未找到 USD/CNY 汇率")
+                if not self.config.get("chinamoney_enabled", True):
+                    return DataResult(data=None, source=self.name, error="ChinaMoney 数据源已禁用")
+                response = requests.post(
+                    CHINAMONEY_SPOT_URL,
+                    data={"t": str(int(time.time() * 1000))},
+                    headers=CHINAMONEY_HEADERS,
+                    timeout=float(self.config.get("http_timeout", 15)),
+                )
+                response.raise_for_status()
+                data = _chinamoney_usd_cny_spot(response.json())
+                return DataResult(
+                    data=data,
+                    source="chinamoney:rfx-sp-quot",
+                    source_url=CHINAMONEY_SPOT_URL,
+                    timeliness=Timeliness.RECENT,
+                    note="源记录未提供成交时点；snapshot_time 为中国货币网页面更新时间",
+                )
 
             if pair == "usd_cnh":
                 df = self.ak.forex_spot_em()
@@ -1331,6 +1469,31 @@ class AkshareProvider(DataProvider):
                 return DataResult(data=None, source=self.name, error="未找到离岸人民币汇率")
 
             return DataResult(data=None, source=self.name, error=f"不支持: {pair}")
+        except Exception as e:
+            return DataResult(data=None, source=self.name, error=str(e))
+
+    def get_fx_swap(self, pair: str, tenor: str = "1Y") -> DataResult:
+        """USD/CNY C-Swap 定盘曲线；每工作日 17:00 发布当日 16:30 定盘。"""
+        if str(pair or "").lower().replace("/", "_") != "usd_cny":
+            return DataResult(data=None, source=self.name, error=f"不支持外汇掉期货币对: {pair}")
+        if not self.config.get("chinamoney_enabled", True):
+            return DataResult(data=None, source=self.name, error="ChinaMoney 数据源已禁用")
+        try:
+            response = requests.post(
+                CHINAMONEY_C_SWAP_URL,
+                data={"t": str(int(time.time() * 1000))},
+                headers=CHINAMONEY_HEADERS,
+                timeout=float(self.config.get("http_timeout", 15)),
+            )
+            response.raise_for_status()
+            data = _chinamoney_usd_cny_c_swap(response.json(), tenor)
+            return DataResult(
+                data=data,
+                source="chinamoney:fx-c-swap-fixing",
+                source_url=CHINAMONEY_C_SWAP_URL,
+                timeliness=Timeliness.RECENT,
+                note="每工作日17:00发布当日16:30定盘；盘前读取时通常为上一交易日数据",
+            )
         except Exception as e:
             return DataResult(data=None, source=self.name, error=str(e))
 
