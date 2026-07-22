@@ -142,6 +142,18 @@ def _ensure_thesis_columns(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE holdings ADD COLUMN thesis_id INTEGER")
 
 
+def _ensure_value_watch_daily(conn: sqlite3.Connection) -> None:
+    """value-watch 快照表兜底：老库版本门跳过迁移块时补建（同 market_timing_signal 模式）。"""
+    from .schema import _SQL_VALUE_WATCH_DAILY
+
+    row = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='value_watch_daily'"
+    ).fetchone()
+    if row is None:
+        conn.executescript(_SQL_VALUE_WATCH_DAILY)
+        conn.commit()
+
+
 def _ensure_holdings_audit_columns(conn: sqlite3.Connection) -> None:
     """holdings 写入审计兜底：老库补 input_by 列（spec value-watch v8 审计补齐）。
 
@@ -908,6 +920,7 @@ def migrate(conn: sqlite3.Connection, *, activate_v40: bool = False) -> None:
     _ensure_cognition_instance_feedback_columns(conn)
     _ensure_factor_score_request_audit(conn)
     _ensure_holdings_audit_columns(conn)
+    _ensure_value_watch_daily(conn)
     _ensure_new_high_tables(conn)
     _ensure_sector_crowding_daily(conn)
 

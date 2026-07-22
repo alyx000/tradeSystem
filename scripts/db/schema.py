@@ -1385,6 +1385,17 @@ CREATE TABLE IF NOT EXISTS trade_calendar (
 # 13. 交易认知层：trading_cognitions / cognition_instances / periodic_reviews
 #     （方案 §4.1 / §4.2 / §4.3，schema v21 引入）
 # ──────────────────────────────────────────────────────────────
+_SQL_VALUE_WATCH_DAILY = """
+CREATE TABLE IF NOT EXISTS value_watch_daily (
+    date TEXT PRIMARY KEY CHECK(date GLOB '????-??-??'),
+    payload_json TEXT NOT NULL,
+    sent_events_json TEXT NOT NULL DEFAULT '[]',
+    logic_version INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
+"""
+
 _SQL_TRADING_COGNITIONS = """
 CREATE TABLE IF NOT EXISTS trading_cognitions (
     cognition_id TEXT PRIMARY KEY,
@@ -1590,6 +1601,7 @@ _ALL_TABLE_SQL = [
     _SQL_KNOWLEDGE_ASSETS,
     _SQL_LEADER_TRACKING,
     _SQL_TRADE_CALENDAR,
+    _SQL_VALUE_WATCH_DAILY,
     _SQL_TRADING_COGNITIONS,
     _SQL_COGNITION_INSTANCES,
     _SQL_PERIODIC_REVIEWS,
@@ -1623,7 +1635,8 @@ EXPECTED_TABLES = [
     "industry_info", "macro_info",
     "daily_market", "daily_volume_concentration", "trend_leader_pool", "sector_correlation_daily",
     "sector_crowding_daily",
-    "market_timing_signal", "margin_index_correlation_daily", "daily_reviews",
+    "market_timing_signal", "margin_index_correlation_daily", "value_watch_daily",
+    "daily_reviews",
     "daily_review_factor_score_runs", "daily_review_factor_score_requests",
     "daily_review_factor_evaluations",
     "emotion_cycle", "main_themes",
