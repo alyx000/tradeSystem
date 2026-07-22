@@ -329,6 +329,12 @@ ARCHITECTURE_COMMANDS = [
     ["sector-crowding", "report", "--date", "2026-07-17"],
     ["sector-crowding", "trend", "--sector", "801080.SI", "--days", "60"],
     ["sector-crowding", "backfill", "--start", "2019-01-01", "--end", "2026-07-17"],
+    # value-watch (价值投资条件监控:红利回撤/卖出阶梯/稀缺周线)
+    ["value-watch", "daily"],
+    ["value-watch", "daily", "--date", "2026-07-21", "--dry-run"],
+    ["value-watch", "daily", "--date", "2026-07-21", "--no-push"],
+    ["value-watch", "report"],
+    ["value-watch", "report", "--date", "2026-07-21"],
     # market-timing (大盘择时观察:斐波那契变盘点 + 底分型)
     ["market-timing", "daily"],
     ["market-timing", "daily", "--date", "2026-05-29"],

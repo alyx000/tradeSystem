@@ -1784,6 +1784,10 @@ def build_parser() -> argparse.ArgumentParser:
     from cli.volume_watch import register_subparser as register_volume_watch_subparser
     register_volume_watch_subparser(subparsers)
 
+    # value-watch (价值投资条件监控:红利回撤/卖出阶梯/稀缺周线,teacher_notes#391)
+    from cli.value_watch import register_subparser as register_value_watch_subparser
+    register_value_watch_subparser(subparsers)
+
     # new-high (前复权历史新高统计:全市场新高数 + 申万二级分组)
     from cli.new_high import register_subparser as register_new_high_subparser
     register_new_high_subparser(subparsers)
@@ -1897,6 +1901,9 @@ def main():
     elif args.command == "volume-watch":
         from cli import volume_watch as volume_watch_module
         volume_watch_module.handle_command(config, args)
+    elif args.command == "value-watch":
+        from cli import value_watch as value_watch_module
+        value_watch_module.handle_command(config, args)
     elif args.command == "new-high":
         from cli import new_high as new_high_module
         new_high_module.handle_command(config, args)
