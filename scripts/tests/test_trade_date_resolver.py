@@ -212,6 +212,52 @@ def test_polluted_calendar_not_trusted(tmp_path):
     c.close()
 
 
+def test_illegal_open_row_not_returned_as_candidate(tmp_path):
+    """round3 high-1:全年完整+额外非法行(2026-02-30,is_open=1)——非法日期不得被当候选返回。"""
+    import datetime as _dt
+    c = get_connection(tmp_path / "illegal.db")
+    init_schema(c)
+    rows = []
+    d = _dt.date(2026, 1, 1)
+    while d.year == 2026:
+        rows.append({"date": d.isoformat(), "is_open": 1 if d.weekday() < 5 else 0})
+        d += _dt.timedelta(days=1)
+    rows.append({"date": "2026-02-30", "is_open": 1})   # 非法但通过 GLOB 约束
+    Q.upsert_trade_calendar(c, rows)
+    # 3/1(周日)盘中:字符串序 2026-02-30 > 2026-02-27(真实最近 open 五),会被 SELECT 选中
+    now = datetime(2026, 3, 1, 12, 0, tzinfo=SH)
+    got = resolve_latest_closed_trade_date(c, _NoCallRegistry(), now=now)
+    assert got is None   # 非法候选 → blocked(strict:库被污染不猜)
+    c.close()
+
+
+def test_stale_prior_year_single_row_not_trusted(tmp_path):
+    """round3 high-1:年初库里仅有前一年一条陈旧 open 行,provider 失败 → blocked,
+    不得把过期日期当最新收盘日。"""
+    import datetime as _dt
+    c = get_connection(tmp_path / "stale.db")
+    init_schema(c)
+    rows = []
+    d = _dt.date(2026, 1, 1)
+    while d.year == 2026:
+        rows.append({"date": d.isoformat(), "is_open": 1 if d.weekday() < 5 else 0})
+        d += _dt.timedelta(days=1)
+    Q.upsert_trade_calendar(c, rows)
+    Q.upsert_trade_calendar(c, [{"date": "2026-01-01", "is_open": 0},
+                                {"date": "2026-01-02", "is_open": 0},
+                                {"date": "2025-06-30", "is_open": 1}])   # 前一年零星旧行
+
+    class _FailRegistry:
+        def call(self, *a, **k):
+            class R:
+                success, data, error = False, None, "down"
+            return R()
+
+    now = datetime(2026, 1, 2, 21, 45, tzinfo=SH)   # 1/1-1/2 都休市
+    assert resolve_latest_closed_trade_date(c, _FailRegistry(), now=now) is None
+    c.close()
+
+
 def test_calendar_unavailable_returns_none(tmp_path):
     """空日历 + provider 失败 → blocked(None)：禁止 weekday/昨天 fallback。"""
     c = get_connection(tmp_path / "empty.db")

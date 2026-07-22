@@ -195,7 +195,8 @@ def _close_current_state_for_zero_balance(
     cur = conn.execute(
         """
         UPDATE holdings
-           SET shares = 0, status = 'closed', updated_at = datetime('now')
+           SET shares = 0, status = 'closed', input_by = 'system',
+               updated_at = datetime('now')
          WHERE stock_code = ? AND status = 'active'
         """,
         (row["stock_code"],),
@@ -290,6 +291,7 @@ def _upsert_current_holding(
         status="active",
         entry_reason=thesis["entry_reason"],
         thesis_id=thesis["id"],
+        input_by="system",
     )
     report["active_holdings_upserted"] += 1
     report["operations"].append({

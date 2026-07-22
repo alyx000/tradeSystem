@@ -163,11 +163,30 @@ def resolve_latest_closed_trade_date(conn: sqlite3.Connection, registry,
             return None
         if today_open and (now.hour, now.minute) >= CLOSE_CUTOFF:
             return today
+        def _valid_candidate(d: "str | None") -> bool:
+            # round3 high-1:issubset 不排斥"额外"非法行(如 2026-02-30,is_open=1),它们
+            # 可能被 SELECT 为最近 open 日;候选必须是可解析的真实日期才可信
+            if d is None:
+                return False
+            from datetime import date as _date
+            try:
+                _date.fromisoformat(d)
+                return True
+            except ValueError:
+                return False
+
         prev = Q.get_prev_trade_date_from_db(conn, today)
         if prev is None and now.month == 1:
             if not _year_complete(now.year - 1):
                 return None
             prev = Q.get_prev_trade_date_from_db(conn, today)
+        if not _valid_candidate(prev):
+            logger.warning("resolve_latest_closed_trade_date: 非法日历候选 %r,blocked", prev)
+            return None
+        # round3 high-1:跨年候选(如 1 月返回去年 12 月,或当年年初库里只有零星旧行)必须
+        # 先验证候选所在年完整,防前一年仅存一条陈旧 open 行时把过期日期当最新收盘日
+        if prev[:4] != str(now.year) and not _year_complete(int(prev[:4])):
+            return None
         return prev
     except Exception as e:
         # blocked=不推送是合法终态,但必须留痕:否则"日历源失败"与"代码回归导致永久

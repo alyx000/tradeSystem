@@ -451,28 +451,43 @@ def upsert_holding(conn: sqlite3.Connection, **kwargs: Any) -> int:
     # 写入审计：insert 缺省 "system"(列不留 NULL)；审计强制发生在 CLI(required)/API(缺省 web)
     # 边界。缺省只挂 insert 分支——update 分支仅显式传入时覆盖，否则内部补账路径
     # (dual_write/repair/lifecycle)会把既有行的 manual/web 静默改写成 system。
+    # 并发安全(门2 round3 high-2)：update 走条件 UPDATE(WHERE status='active')——先查后写
+    # 的窗口内若另一连接把行 close，无条件按缓存 id 更新会篡改/复活 closed 行；条件更新
+    # rowcount=0 时 fallback 到 insert(重新开仓语义=新建行)。并发 insert 撞 active 唯一
+    # partial index 时重试一次(另一连接刚建了行 → 本次转 update)。
     code = kwargs.get("stock_code")
     target_status = kwargs.get("status")
-    if code and target_status in (None, "active"):
-        active_rows = _active_holdings_by_code(conn, str(code))
-        if active_rows:
-            holding_id = int(active_rows[0]["id"])
-            payload = {k: v for k, v in kwargs.items() if k in _HOLDINGS_UPDATABLE and v is not None}
-            if payload:
-                update_holding(conn, holding_id, **payload)
-            return holding_id
+    for _attempt in (0, 1):
+        if code and target_status in (None, "active"):
+            active_rows = _active_holdings_by_code(conn, str(code))
+            if active_rows:
+                holding_id = int(active_rows[0]["id"])
+                payload = {k: v for k, v in kwargs.items()
+                           if k in _HOLDINGS_UPDATABLE and v is not None}
+                if not payload:
+                    return holding_id
+                if update_holding_if_active(conn, holding_id, **payload):
+                    return holding_id
+                # 行在窗口内被 close：closed 行不可变，走 insert 新建
 
-    kwargs.setdefault("input_by", _SYSTEM_INPUT_BY)
-    cols, vals = [], []
-    for k in _HOLDING_INSERTABLE:
-        if k in kwargs and kwargs[k] is not None:
-            cols.append(k)
-            vals.append(kwargs[k])
-    placeholders = ", ".join("?" * len(cols))
-    cur = conn.execute(
-        f"INSERT INTO holdings ({', '.join(cols)}) VALUES ({placeholders})", vals,
-    )
-    return cur.lastrowid  # type: ignore[return-value]
+        ins = dict(kwargs)
+        ins.setdefault("input_by", _SYSTEM_INPUT_BY)
+        cols, vals = [], []
+        for k in _HOLDING_INSERTABLE:
+            if k in ins and ins[k] is not None:
+                cols.append(k)
+                vals.append(ins[k])
+        placeholders = ", ".join("?" * len(cols))
+        try:
+            cur = conn.execute(
+                f"INSERT INTO holdings ({', '.join(cols)}) VALUES ({placeholders})", vals,
+            )
+            return cur.lastrowid  # type: ignore[return-value]
+        except sqlite3.IntegrityError:
+            if _attempt:
+                raise
+            # 并发 POST/POST：另一连接刚插入同码 active 行，重试转 update 路径
+    raise AssertionError("unreachable")
 
 
 def get_holdings(conn: sqlite3.Connection, status: str | None = "active") -> list[dict]:
@@ -485,11 +500,16 @@ def get_holdings(conn: sqlite3.Connection, status: str | None = "active") -> lis
 
 def close_active_holdings_by_code(conn: sqlite3.Connection, stock_code: str,
                                   *, input_by: str) -> int:
-    """按归一化代码关闭全部 active 持仓，并记录本次操作方（写入审计）。"""
+    """按归一化代码关闭全部 active 持仓，并记录本次操作方（写入审计）。
+
+    逐行条件更新并按真实 rowcount 计数（门2 round3 med）：无条件 update 会在
+    "查到 active → API DELETE 先关闭"的窗口覆盖首次关闭者审计并虚报关闭数。"""
     rows = _active_holdings_by_code(conn, stock_code)
+    closed = 0
     for row in rows:
-        update_holding(conn, int(row["id"]), status="closed", input_by=input_by)
-    return len(rows)
+        closed += update_holding_if_active(conn, int(row["id"]),
+                                           status="closed", input_by=input_by)
+    return closed
 
 
 def update_holding(conn: sqlite3.Connection, holding_id: int, **kwargs: Any) -> None:

@@ -276,6 +276,7 @@ def sync_holdings_from_executions(
                 status="active",
                 entry_reason=thesis[3],
                 thesis_id=thesis_id,
+                input_by="system",
             )
             active += 1
             continue
@@ -283,7 +284,8 @@ def sync_holdings_from_executions(
         cur = conn.execute(
             """
             UPDATE holdings
-               SET shares = 0, status = 'closed', updated_at = datetime('now')
+               SET shares = 0, status = 'closed', input_by = 'system',
+                   updated_at = datetime('now')
              WHERE thesis_id = ? AND status = 'active'
             """,
             (thesis_id,),
@@ -292,7 +294,7 @@ def sync_holdings_from_executions(
             cur = conn.execute(
                 """
                 UPDATE holdings
-                   SET shares = 0, status = 'closed', thesis_id = ?,
+                   SET shares = 0, status = 'closed', thesis_id = ?, input_by = 'system',
                        updated_at = datetime('now')
                  WHERE stock_code = ? AND status = 'active'
                 """,

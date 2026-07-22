@@ -168,6 +168,61 @@ def test_update_holding_if_active_atomic(conn):
     assert Q.update_holding_if_active(conn, 999999, note="y") == 0
 
 
+def test_upsert_falls_to_insert_when_row_closed_in_window(conn):
+    """round3 high-2:update 目标行在窗口内被 close → 不篡改 closed 行,fallback 新建。"""
+    hid = Q.upsert_holding(conn, stock_code="601939.SH", stock_name="建设银行",
+                           entry_date="2026-06-01", status="active", input_by="manual")
+
+    orig = Q._active_holdings_by_code
+
+    def _race(c, code):
+        rows = orig(c, code)
+        if rows:  # 查到后、写入前,另一"连接"完成 DELETE(soft close)
+            Q.update_holding(c, int(rows[0]["id"]), status="closed", input_by="cursor")
+        return rows
+
+    import unittest.mock as mock
+    with mock.patch.object(Q, "_active_holdings_by_code", side_effect=_race):
+        new_id = Q.upsert_holding(conn, stock_code="601939.SH", stock_name="建设银行",
+                                  shares=100, status="active", input_by="web")
+    assert new_id != hid                     # 未复用 closed 行,新建
+    old = conn.execute("SELECT * FROM holdings WHERE id=?", (hid,)).fetchone()
+    assert old["status"] == "closed" and old["input_by"] == "cursor"  # closed 行未被篡改
+    assert old["shares"] is None
+
+
+def test_close_by_code_counts_only_actually_closed(conn):
+    """round3 med:CLI 关仓窗口内行已被他方关闭 → 不覆盖审计、不虚报数量。"""
+    hid = Q.upsert_holding(conn, stock_code="600900.SH", stock_name="长江电力",
+                           status="active", input_by="manual")
+
+    orig = Q._active_holdings_by_code
+
+    def _race(c, code):
+        rows = orig(c, code)
+        if rows:
+            Q.update_holding(c, int(rows[0]["id"]), status="closed", input_by="web")
+        return rows
+
+    import unittest.mock as mock
+    with mock.patch.object(Q, "_active_holdings_by_code", side_effect=_race):
+        n = Q.close_active_holdings_by_code(conn, "600900.SH", input_by="manual")
+    assert n == 0
+    row = conn.execute("SELECT * FROM holdings WHERE id=?", (hid,)).fetchone()
+    assert row["input_by"] == "web"          # 首次关闭者审计保留
+
+
+def test_lifecycle_and_repair_write_system_audit(conn):
+    """round3 high-3(简化断言):内部补账/关仓路径显式署名 system。"""
+    hid = Q.upsert_holding(conn, stock_code="601988.SH", stock_name="中国银行",
+                           status="active", input_by="manual", thesis_id=7)
+    # 模拟 lifecycle 自动关仓 SQL(与 lifecycle.py 同形)
+    conn.execute("""UPDATE holdings SET shares = 0, status = 'closed', input_by = 'system',
+                    updated_at = datetime('now') WHERE thesis_id = ? AND status = 'active'""", (7,))
+    row = conn.execute("SELECT * FROM holdings WHERE id=?", (hid,)).fetchone()
+    assert row["input_by"] == "system"
+
+
 def test_ensure_backfills_input_by_column_on_old_table():
     """ALTER 兜底：老表（无 input_by 列）经 _ensure_holdings_audit_columns 后列存在。"""
     from db.migrate import _ensure_holdings_audit_columns
