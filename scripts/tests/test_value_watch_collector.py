@@ -110,7 +110,8 @@ def test_load_positions_canonical_key_and_identity(conn):
     by_code = {r["code"]: r for r in rows}
     assert set(by_code) == {"600900.SH", "601939.SH"}   # 茅台不在 LADDER_CODES
     cy = by_code["600900.SH"]
-    assert cy["position_key"] == "600900.SH:2026-06-01"   # 无后缀行归一 canonical
+    # 键 = canonical:entry_date:holding_id(id 使同日平仓重开产生新键,不被旧账本压制)
+    assert cy["position_key"] == f"600900.SH:2026-06-01:{cy['holding_id']}"
     assert cy["insufficient_identity"] is False
     assert cy["thesis_id"] == 7
     ccb = by_code["601939.SH"]
@@ -119,7 +120,8 @@ def test_load_positions_canonical_key_and_identity(conn):
 
 
 def test_load_positions_thesis_backfill_does_not_change_key(conn):
-    """spec 回归:补录 thesis_id 不换键不重推(thesis_id 仅报告展示,不进键)。"""
+    """spec 回归:补录 thesis_id 不换键不重推(thesis_id 仅报告展示,不进键;
+    upsert 复用同 active 行 → holding_id 不变 → 键稳定)。"""
     Q.upsert_holding(conn, stock_code="601398.SH", stock_name="工商银行",
                      entry_price=5.0, entry_date="2026-06-01",
                      status="active", input_by="manual")
@@ -127,7 +129,24 @@ def test_load_positions_thesis_backfill_does_not_change_key(conn):
     Q.upsert_holding(conn, stock_code="601398.SH", stock_name="工商银行",
                      status="active", input_by="manual", thesis_id=42)
     k2 = collector.load_ladder_positions(conn)[0]["position_key"]
-    assert k1 == k2 == "601398.SH:2026-06-01"
+    assert k1 == k2 and k1.startswith("601398.SH:2026-06-01:")
+
+
+def test_same_day_close_reopen_gets_new_key(conn):
+    """门2 G3 round2 high:同日平仓再开仓 → 新行新 holding_id → 新键,
+    新持仓的阶梯提醒不被旧持仓账本静默压制。"""
+    Q.upsert_holding(conn, stock_code="601939.SH", stock_name="建设银行",
+                     entry_price=9.0, entry_date="2026-07-22",
+                     status="active", input_by="manual")
+    k1 = collector.load_ladder_positions(conn)[0]["position_key"]
+    Q.close_active_holdings_by_code(conn, "601939.SH", input_by="manual")
+    Q.upsert_holding(conn, stock_code="601939.SH", stock_name="建设银行",
+                     entry_price=9.2, entry_date="2026-07-22",   # 同日重开同 entry_date
+                     status="active", input_by="manual")
+    rows = collector.load_ladder_positions(conn)
+    assert len(rows) == 1   # closed 行不进池
+    k2 = rows[0]["position_key"]
+    assert k1 != k2
 
 
 def test_load_positions_entry_price_change_does_not_change_key(conn):

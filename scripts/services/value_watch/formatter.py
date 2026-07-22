@@ -65,10 +65,19 @@ def render_report(payload: dict, *, date: str, logic_version: int,
              f"- snapshot_date: {date} / holdings_as_of: {payload.get('holdings_as_of')}"
              f" / logic_version: {logic_version}", ""]
 
+    source_status = payload.get("source_status") or {}
+
+    def _degraded_text(code: str) -> str:
+        # stale_source 与 source_failed 必须区分呈现(门2 G3 round2 med):前者=数据
+        # 延迟(源只给到 T-1,守卫拦截),后者=源真实故障;混用会掩盖守卫是否触发
+        if source_status.get(code, "source_failed") == "stale_source":
+            return "stale_source（源数据停在上一交易日，陈旧守卫拦截，本日不评估）"
+        return "source_failed（当日跳过，不落假值）"
+
     lines.append("## ① 红利买入触发（回撤观察）")
     for code, snap in (payload.get("drawdown") or {}).items():
         if snap is None:
-            lines.append(f"- {code}: source_failed（当日跳过，不落假值）")
+            lines.append(f"- {code}: {_degraded_text(code)}")
             continue
         lines.append(
             f"- [事实] {code}: 收盘 {snap.get('current_close')} / "
@@ -90,8 +99,7 @@ def render_report(payload: dict, *, date: str, logic_version: int,
                          "无法追踪阶梯（用 db holdings-add --entry-date 补录）")
             continue
         if p.get("state") == "source_failed":
-            lines.append(f"- {p.get('name')}({p.get('code')}): source_failed"
-                         "（行情源失败，本日不评估，不落假值）")
+            lines.append(f"- {p.get('name')}({p.get('code')}): {_degraded_text(p.get('code'))}")
             continue
         if p.get("state") == "insufficient_data":
             lines.append(f"- [事实] {p.get('name')}: 行情数据不足，本日不评估")
@@ -104,7 +112,7 @@ def render_report(payload: dict, *, date: str, logic_version: int,
     lines.append("## ③ 稀缺价值（周线观察）")
     for code, snap in (payload.get("scarcity") or {}).items():
         if snap is None:
-            lines.append(f"- {code}: source_failed")
+            lines.append(f"- {code}: {_degraded_text(code)}")
             continue
         # 分层红线(门2 G3 med-4):周数/日期是客观数字标[事实],状态是框架解读标[判断]
         lines.append(f"- [事实] {code}: 完成周 {snap.get('completed_weeks')}，"
