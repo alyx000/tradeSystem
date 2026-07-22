@@ -130,14 +130,22 @@ def _upto(series: list[dict], date: str) -> list[dict]:
 
 def _week_has_remaining_open_days(conn: sqlite3.Connection, date: str) -> bool:
     """目标日所在 ISO 周内是否还有严格晚于目标日的 open 日(决定该周是否算完成周)。
-    日历缺失时保守返回 True(当周按未完成处理,少评估一周,不产生伪事件)。"""
+
+    日历缺失时保守返回 True(当周按未完成处理,少评估一周,不产生伪事件)——
+    live contract check 实测:空库无日历行时若直接查 is_open=1 会返回 False,把
+    盘中运行的当周误判为完成周(周三就出'完成周'伪 week_end)。故先判窗口内有无
+    任何日历行:无行=无法确认=保守 True;有行才看其中是否有 open 日。"""
     d = datetime.date.fromisoformat(date)
     week_end_sunday = d + datetime.timedelta(days=6 - d.weekday())
-    row = conn.execute(
-        "SELECT 1 FROM trade_calendar WHERE is_open = 1 AND date > ? AND date <= ? LIMIT 1",
+    if date == week_end_sunday.isoformat():
+        return False   # 周日:当周天然无剩余日
+    rows = conn.execute(
+        "SELECT is_open FROM trade_calendar WHERE date > ? AND date <= ?",
         (date, week_end_sunday.isoformat()),
-    ).fetchone()
-    return row is not None
+    ).fetchall()
+    if not rows:
+        return True    # 日历缺失,无法确认 → 保守当未完成
+    return any(r[0] for r in rows)
 
 
 def _push_candidates(conn, date: str, candidates, payload) -> None:

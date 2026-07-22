@@ -224,6 +224,20 @@ def test_insufficient_identity_reported_not_pushed(conn):
     assert not any("ladder" in k for k in snap["sent_events"])   # 身份不完整不推阶梯
 
 
+def test_week_remaining_open_days_calendar_missing_conservative(tmp_path):
+    """live contract check 回归:空库无日历 → 保守 True(当周未完成),不产伪完成周。"""
+    c = get_connection(tmp_path / "empty_cal.db")
+    init_schema(c)
+    assert service._week_has_remaining_open_days(c, "2026-07-22") is True   # 周三,无日历
+    c.close()
+
+
+def test_week_remaining_open_days_with_calendar(conn):
+    assert service._week_has_remaining_open_days(conn, "2026-07-22") is True   # 周三,周四五开市
+    assert service._week_has_remaining_open_days(conn, "2026-07-17") is False  # 周五,周六日休
+    assert service._week_has_remaining_open_days(conn, "2026-07-19") is False  # 周日天然完成
+
+
 def test_run_report_renders_snapshot_only(conn):
     assert "无快照" in service.run_report(conn, None)
     _run(conn, persist=True, push=False)
