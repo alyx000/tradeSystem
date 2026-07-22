@@ -52,18 +52,55 @@ def test_append_missing_row_raises(conn):
         repo.append_sent_events(conn, "2026-07-21", ["v1:k1"])
 
 
-def test_append_concurrent_connections_no_lost_keys(tmp_path):
-    """门2 G2 high-2:两连接并发追加不同键,BEGIN IMMEDIATE 串行化后两键都在。"""
+def test_append_concurrent_threads_no_lost_keys(tmp_path):
+    """门2 G2 high-2(round2 真交错):两线程两连接各追加 20 个不同键,读改写周期真实
+    重叠(busy_timeout=5s 下 BEGIN IMMEDIATE 串行化);非原子实现在此负载下大概率丢键。"""
+    import threading
+
     db = tmp_path / "vw_conc.db"
-    c1 = get_connection(db)
-    init_schema(c1)
-    repo.upsert_daily(c1, "2026-07-21", {}, 1)
-    c2 = get_connection(db)
-    repo.append_sent_events(c1, "2026-07-21", ["v1:a"])
-    repo.append_sent_events(c2, "2026-07-21", ["v1:b"])
-    snap = repo.get_snapshot(c1, "2026-07-21")
-    assert sorted(snap["sent_events"]) == ["v1:a", "v1:b"]
-    c1.close(); c2.close()
+    c0 = get_connection(db)
+    init_schema(c0)
+    repo.upsert_daily(c0, "2026-07-21", {}, 1)
+    c0.close()
+
+    start = threading.Barrier(2)
+    errors: list[Exception] = []
+
+    def worker(prefix: str):
+        conn = get_connection(db)
+        try:
+            start.wait()
+            for i in range(20):
+                repo.append_sent_events(conn, "2026-07-21", [f"v1:{prefix}:{i}"])
+        except Exception as e:   # noqa: BLE001
+            errors.append(e)
+        finally:
+            conn.close()
+
+    threads = [threading.Thread(target=worker, args=(p,)) for p in ("a", "b")]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert errors == []
+    check = get_connection(db)
+    snap = repo.get_snapshot(check, "2026-07-21")
+    expected = {f"v1:{p}:{i}" for p in ("a", "b") for i in range(20)}
+    assert set(snap["sent_events"]) == expected   # 40 键无一丢失
+    check.close()
+
+
+def test_append_rejects_dirty_transaction(conn):
+    """round2 high:调用方有未提交写入时 append 必须抛错而非越权 commit——
+    否则调用方本想回滚的 marker 会被永久提交。"""
+    repo.upsert_daily(conn, "2026-07-21", {}, 1)
+    conn.execute("INSERT INTO teachers (name) VALUES ('marker-t')")   # 未提交
+    assert conn.in_transaction
+    with pytest.raises(RuntimeError):
+        repo.append_sent_events(conn, "2026-07-21", ["v1:k"])
+    conn.rollback()
+    row = conn.execute("SELECT 1 FROM teachers WHERE name='marker-t'").fetchone()
+    assert row is None   # marker 可回滚,未被越权提交
 
 
 def test_get_snapshot_latest_and_missing(conn):

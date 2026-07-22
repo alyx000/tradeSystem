@@ -32,11 +32,17 @@ def append_sent_events(conn: sqlite3.Connection, date: str, keys: list[str]) -> 
 
     读-合并-写包在 BEGIN IMMEDIATE 写事务里（门2 G2 high-2）：两个连接并发追加时
     非原子读改写会互相覆盖对方的新键——丢键 = 已发送事件下轮重推，破坏账本只增不删。
-    行不存在抛错（调用序契约：必须先 upsert_daily）。"""
+    行不存在抛错（调用序契约：必须先 upsert_daily）。
+
+    事务所有权（门2 G2 round2 high）：要求调用方以干净事务边界进入——若替调用方
+    conn.commit()，其本想回滚的未提交写入会被本函数越权永久提交（部分提交事故）；
+    检测到残留事务直接抛错，责任交回调用方。"""
     if not keys:
         return
     if conn.in_transaction:
-        conn.commit()   # 结束残留事务，保证 BEGIN IMMEDIATE 无条件生效
+        raise RuntimeError(
+            "append_sent_events 要求干净事务边界(检测到未提交事务);"
+            "先 commit/rollback 再调用,避免越权提交调用方写入")
     conn.execute("BEGIN IMMEDIATE")
     try:
         row = conn.execute(
