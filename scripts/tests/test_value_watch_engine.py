@@ -165,6 +165,16 @@ def test_scarcity_signal_fires_and_key_shape():
     assert signals[-1].active
 
 
+def test_scarcity_ma5_flat_does_not_fire():
+    """收尾门 med-3 边界:粘合+MACD>0 但 MA5 走平(不向上) → 不触发(spec v8'粘合再向上'
+    仅约束 MA5;文档已同步声明该条件)。"""
+    # 长横盘:粘合成立、MACD 收敛后微正? 构造:横盘 100 → MA5 恒等,ma5[i]>ma5[i-1] 恒 False
+    weeks = _weeks([100.0] * 50)
+    snap, events = engine.scarcity_replay("600436.SH", weeks)
+    assert [e for e in events if e.kind == "enter"] == []
+    assert snap["state"] == "watching"
+
+
 def test_scarcity_single_week_dip_no_invalidate():
     """signaled 后单周不满足不失效(连续 2 完成周才失效,去抖)。"""
     weeks = _signal_weeks()

@@ -447,6 +447,27 @@ def _active_holdings_by_code(conn: sqlite3.Connection, stock_code: str) -> list[
 _SYSTEM_INPUT_BY = "system"
 
 
+def resolve_entry_date_for_upsert(supplied: "str | None",
+                                  has_existing_row: bool) -> "str | None":
+    """entry_date 统一缺省语义（CLI/API 共用，收尾门 high：两个人工入口默认值必须一致，
+    否则 Web 新建四大行/长电持仓落 NULL → value-watch 标 insufficient_identity 失去
+    卖出阶梯监控，而 CLI 同场景默认当日）：
+
+    - 显式传入 → 用传入值；
+    - 未传且无既有 active 行（新建）→ 落当日（Asia/Shanghai，与 value-watch 日历口径一致）；
+    - 未传且命中既有 active 行（更新）→ 返回 None（不更新该列）。**按"是否有既有行"判断，
+      不按 entry_date 是否为 NULL**——存量行（补列前写入）entry_date 全为 NULL，若按 NULL
+      判"新建"会在任意补字段时打上伪造的今天日期；NULL 保持 NULL（缺数据而非错数据）。
+    """
+    if supplied:
+        return supplied
+    if not has_existing_row:
+        import datetime
+        from zoneinfo import ZoneInfo
+        return datetime.datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat()
+    return None
+
+
 def upsert_holding(conn: sqlite3.Connection, **kwargs: Any) -> int:
     # 写入审计：insert 缺省 "system"(列不留 NULL)；审计强制发生在 CLI(required)/API(缺省 web)
     # 边界。缺省只挂 insert 分支——update 分支仅显式传入时覆盖，否则内部补账路径

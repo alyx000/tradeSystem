@@ -92,12 +92,13 @@ def _canonical_ts_code(raw: str) -> "str | None":
 
 
 def load_ladder_positions(conn: sqlite3.Connection) -> list[dict]:
-    """active 持仓 ∩ LADDER_CODES。身份键 {canonical}:{entry_date}:{holding_id}——
-    holding_id 在同一持仓周期内稳定（upsert 补字段复用同 active 行）、跨周期唯一
-    （soft-close 后重开走 INSERT 新行）：同日平仓再开仓若无 id 成分会生成相同键,
-    旧账本静默压制新持仓提醒（门2 G3 round2 high）。thesis_id/entry_price 不进键
-    （补录 thesis、修正成本不换键不重推）；entry_price/entry_date 任一缺失 →
-    insufficient_identity=True 且 position_key=None（只报告不推送）。"""
+    """active 持仓 ∩ LADDER_CODES。身份键 {canonical}:{holding_id}——holding_id 在
+    同一持仓周期内稳定（upsert 补字段复用同 active 行）、跨周期唯一（soft-close 后
+    重开走 INSERT 新行，同日重开也是新 id 新键，门2 G3 round2 high）。**entry_date/
+    entry_price/thesis_id 均不进键**（收尾门 med：entry_date 经 PUT/CLI 可修正，进键
+    会让日期修正后旧档位事件换键重推；修正只触发档位重算，不重置身份）。
+    entry_price/entry_date 任一缺失 → insufficient_identity=True 且
+    position_key=None（只报告不推送）。"""
     rows = conn.execute(
         "SELECT id, stock_code, stock_name, entry_price, entry_date, thesis_id "
         "FROM holdings WHERE status = 'active'"
@@ -118,6 +119,6 @@ def load_ladder_positions(conn: sqlite3.Connection) -> list[dict]:
             "entry_date": entry_date,
             "thesis_id": r["thesis_id"],
             "insufficient_identity": insufficient,
-            "position_key": None if insufficient else f"{canonical}:{entry_date}:{r['id']}",
+            "position_key": None if insufficient else f"{canonical}:{r['id']}",
         })
     return out

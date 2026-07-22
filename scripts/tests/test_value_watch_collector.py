@@ -110,8 +110,8 @@ def test_load_positions_canonical_key_and_identity(conn):
     by_code = {r["code"]: r for r in rows}
     assert set(by_code) == {"600900.SH", "601939.SH"}   # 茅台不在 LADDER_CODES
     cy = by_code["600900.SH"]
-    # 键 = canonical:entry_date:holding_id(id 使同日平仓重开产生新键,不被旧账本压制)
-    assert cy["position_key"] == f"600900.SH:2026-06-01:{cy['holding_id']}"
+    # 键 = canonical:holding_id(id 周期唯一;entry_date 可修正故不进键,收尾门 med)
+    assert cy["position_key"] == f"600900.SH:{cy['holding_id']}"
     assert cy["insufficient_identity"] is False
     assert cy["thesis_id"] == 7
     ccb = by_code["601939.SH"]
@@ -129,7 +129,19 @@ def test_load_positions_thesis_backfill_does_not_change_key(conn):
     Q.upsert_holding(conn, stock_code="601398.SH", stock_name="工商银行",
                      status="active", input_by="manual", thesis_id=42)
     k2 = collector.load_ladder_positions(conn)[0]["position_key"]
-    assert k1 == k2 and k1.startswith("601398.SH:2026-06-01:")
+    assert k1 == k2 and k1.startswith("601398.SH:")
+
+
+def test_entry_date_correction_does_not_change_key(conn):
+    """收尾门 med:entry_date 经 PUT/CLI 修正 → 键不变(不重推旧档位),仅档位窗口重算。"""
+    Q.upsert_holding(conn, stock_code="601988.SH", stock_name="中国银行",
+                     entry_price=5.0, entry_date="2026-06-01",
+                     status="active", input_by="manual")
+    k1 = collector.load_ladder_positions(conn)[0]["position_key"]
+    Q.upsert_holding(conn, stock_code="601988.SH", stock_name="中国银行",
+                     entry_date="2026-06-02", status="active", input_by="manual")
+    k2 = collector.load_ladder_positions(conn)[0]["position_key"]
+    assert k1 == k2
 
 
 def test_same_day_close_reopen_gets_new_key(conn):

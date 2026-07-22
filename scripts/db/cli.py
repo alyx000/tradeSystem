@@ -16,6 +16,7 @@ from pathlib import Path
 import yaml
 
 from .connection import get_db
+from .queries import resolve_entry_date_for_upsert  # noqa: F401  (CLI/API 共用,亦供既有测试引用)
 from .dual_write import reconcile_daily_market, retry_pending
 from .migrate import (
     CURRENT_SCHEMA_VERSION,
@@ -1110,24 +1111,8 @@ def _cmd_add_macro(args: argparse.Namespace) -> None:
 
 # ── 持仓池实现（DB 路径）─────────────────────────────────────────
 
-def resolve_entry_date_for_upsert(cli_value: "str | None",
-                                  has_existing_row: bool) -> "str | None":
-    """--entry-date 缺省语义（value-watch spec v5 严重2 + 门1 M1）：
-
-    - 显式传入 → 用传入值；
-    - 未传且无既有 active 行（新建）→ 落当日（Asia/Shanghai，与 value-watch 日历口径一致）；
-    - 未传且命中既有 active 行（更新）→ 返回 None（不更新该列）。**按"是否有既有行"判断，
-      不按 entry_date 是否为 NULL**——存量行（补列前写入）entry_date 全为 NULL，若按 NULL
-      判"新建"会在任意补 shares/note 时打上伪造的今天日期；NULL 保持 NULL（缺数据
-      而非错数据），由 value-watch 报告以 insufficient_identity 显式呈现。
-    """
-    if cli_value:
-        return cli_value
-    if not has_existing_row:
-        import datetime
-        from zoneinfo import ZoneInfo
-        return datetime.datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat()
-    return None
+# resolve_entry_date_for_upsert 已下沉到 queries.py 供 CLI/API 共用
+# (收尾门 high:两个人工入口缺省语义必须一致);本模块头部 re-export 保持兼容
 
 
 def _entry_date_arg(value: str) -> str:

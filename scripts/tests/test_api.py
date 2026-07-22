@@ -2006,6 +2006,25 @@ class TestPlanningAndKnowledgeAPI:
         row = client.get(f"/api/holdings/{hid}").json()
         assert row["status"] == "closed" and row.get("note") != "late"
 
+    def test_holdings_api_entry_date_default_aligned_with_cli(self, client):
+        """收尾门 high:API 新建缺省 entry_date 落上海当日(与 CLI 统一),更新保留原值
+        ——否则 Web 建仓落 NULL,value-watch 失去卖出阶梯身份。"""
+        import datetime
+        from zoneinfo import ZoneInfo
+
+        today = datetime.datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat()
+        hid = client.post("/api/holdings", json={
+            "stock_code": "601398.SH", "stock_name": "工商银行",
+            "entry_price": 7.0, "status": "active",
+        }).json()["id"]
+        assert client.get(f"/api/holdings/{hid}").json()["entry_date"] == today
+        # 二次 POST 命中 update:未传 entry_date 保留原值(不被改成新的今天)
+        client.post("/api/holdings", json={
+            "stock_code": "601398.SH", "stock_name": "工商银行",
+            "shares": 100, "status": "active",
+        })
+        assert client.get(f"/api/holdings/{hid}").json()["entry_date"] == today
+
     def test_holdings_api_null_input_by_normalized(self, client):
         """显式传 input_by:null 不得写穿 NULL 或清空既有审计(门1 M2)。"""
         hid = client.post("/api/holdings", json={

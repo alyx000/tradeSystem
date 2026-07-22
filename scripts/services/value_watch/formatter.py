@@ -20,7 +20,7 @@ _MEANINGS = [
     ("drawdown_recovered:", "原笔记框架：回撤修复离开观察档位，周期性等待下一轮（非操作指令）"),
     ("ladder_pullback:", "原笔记框架：冲高回落跌回 +20% 档内对应「全部清仓锁定利润」（非操作指令）"),
     ("ladder:", "原笔记框架：涨幅档位对应「分批减持一半」（非操作指令）"),
-    ("scarcity_signal:", "原笔记框架：周线粘合+MACD 上零轴为稀缺价值波段进入条件（非操作指令）"),
+    ("scarcity_signal:", "原笔记框架：周线粘合且 MA5 向上+MACD 上零轴为稀缺价值波段进入条件（非操作指令）"),
     ("scarcity_invalidated:", "原笔记框架：周线条件失效，回到观察状态（非操作指令）"),
 ]
 
@@ -118,7 +118,7 @@ def render_report(payload: dict, *, date: str, logic_version: int,
         lines.append(f"- [事实] {code}: 完成周 {snap.get('completed_weeks')}，"
                      f"最近周末交易日 {snap.get('last_week_end')}")
         lines.append(f"  - [判断] 状态 {snap.get('state')}（watching=条件未成立/"
-                     "signaled=粘合+MACD 上零轴成立，出处框架口径）")
+                     "signaled=粘合且 MA5 向上+MACD 上零轴成立，出处框架口径）")
 
     if candidates is not None:
         lines.append("")
