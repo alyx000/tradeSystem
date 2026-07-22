@@ -279,6 +279,16 @@ def test_week_remaining_open_days_calendar_missing_conservative(tmp_path):
     c.close()
 
 
+def test_week_partial_calendar_gap_conservative(conn):
+    """门2 G3 round3:窗口内有休市行但缺后续开放日记录 → 保守未完成,不产伪完成周。"""
+    # 2026-07-22(周三):删掉周五 07-24 的记录,留周四 07-23(改为休市)与周末
+    conn.execute("DELETE FROM trade_calendar WHERE date='2026-07-24'")
+    conn.execute("UPDATE trade_calendar SET is_open=0 WHERE date='2026-07-23'")
+    conn.commit()
+    # 窗口 07-23~07-26 应有 4 行,现仅 3 行(缺 07-24) → 无法确认 → True(未完成)
+    assert service._week_has_remaining_open_days(conn, "2026-07-22") is True
+
+
 def test_week_remaining_open_days_with_calendar(conn):
     assert service._week_has_remaining_open_days(conn, "2026-07-22") is True   # 周三,周四五开市
     assert service._week_has_remaining_open_days(conn, "2026-07-17") is False  # 周五,周六日休

@@ -171,12 +171,16 @@ def _week_has_remaining_open_days(conn: sqlite3.Connection, date: str) -> bool:
     week_end_sunday = d + datetime.timedelta(days=6 - d.weekday())
     if date == week_end_sunday.isoformat():
         return False   # 周日:当周天然无剩余日
+    remaining_days = (week_end_sunday - d).days
     rows = conn.execute(
         "SELECT is_open FROM trade_calendar WHERE date > ? AND date <= ?",
         (date, week_end_sunday.isoformat()),
     ).fetchall()
-    if not rows:
-        return True    # 日历缺失,无法确认 → 保守当未完成
+    # 门2 G3 round3:窗口须自然日**完整**才可判定——只有部分行(如有周四休市行但
+    # 缺周五记录)时 any(is_open) 会把缺失的开放日当不存在,把未完成周误判完成、
+    # 产生伪 week_end 信号;任一日缺失保守当未完成
+    if len(rows) < remaining_days:
+        return True
     return any(r[0] for r in rows)
 
 
