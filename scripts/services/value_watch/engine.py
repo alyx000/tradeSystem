@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 
 from .config import (
     BASIS_WINDOW,
+    HYSTERESIS_PP,
     INVALIDATE_WEEKS,
     LADDER_RUNGS,
     LOGIC_VERSION,
@@ -50,7 +51,8 @@ def drawdown_events(code: str, closes: list[dict],
                     basis_window: int = BASIS_WINDOW) -> tuple[dict, list[Event]]:
     """closes：升序 [{"date","close"}]。返回 (状态快照, 事件列表)。
 
-    对每档 B：episode = 从穿越日（dd>=B 且前日 dd<B）到首个 dd<B 日的连续区间。
+    对每档 B：episode = 从穿越日（dd>=B 且前日 dd<B）到首个 **dd < B−HYSTERESIS_PP**
+    日的连续区间（退出迟滞：贴线抖动 [B−2,B) 不算修复，同一轮回撤不拆多次事件）。
     enter 键 = drawdown:{code}:{B}:{crossing_date}，active=episode 至序列末未关闭；
     exit 键 = drawdown_recovered:... 同 crossing_date，episode 至多一次。
     """
@@ -72,6 +74,7 @@ def drawdown_events(code: str, closes: list[dict],
         for i in range(n):
             above = dd[i] >= b
             prev_above = dd[i - 1] >= b if i > 0 else False
+            recovered = dd[i] < b - HYSTERESIS_PP   # 退出迟滞:贴线抖动不算修复
             if above and not prev_above and open_enter is None:
                 crossing = closes[i]["date"]
                 open_enter = Event(
@@ -82,14 +85,14 @@ def drawdown_events(code: str, closes: list[dict],
                     facts={"bucket": b, "crossing_date": crossing},
                 )
                 events.append(open_enter)
-            elif not above and open_enter is not None:
+            elif recovered and open_enter is not None:
                 open_enter.active = False
                 crossing = open_enter.facts["crossing_date"]
                 events.append(Event(
                     key=_v(f"drawdown_recovered:{code}:{b}:{crossing}"),
                     kind="exit", parent_key=open_enter.key,
                     occurred_date=closes[i]["date"], active=True,
-                    title=f"{code} 回撤修复至 {b}% 档内",
+                    title=f"{code} 回撤收窄至 {b - HYSTERESIS_PP}% 内(本轮 {b}% 档结束)",
                     facts={"bucket": b, "crossing_date": crossing,
                            "recovered_date": closes[i]["date"]},
                 ))

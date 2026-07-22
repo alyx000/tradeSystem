@@ -36,14 +36,26 @@ def test_drawdown_crossing_creates_enter_event():
 
 
 def test_drawdown_two_episodes_after_recross():
-    # 16%→12%→8%→11%：修复(8%<10%)后再穿越 → 两个 10 档 episode + 一个 exit
-    closes = _series(*([100] * 3 + [84, 88, 92, 89]))
+    # 16%→12%→7%→11%：修复(7% < 10-2 迟滞线)后再穿越 → 两个 10 档 episode + 一个 exit
+    closes = _series(*([100] * 3 + [84, 88, 93, 89]))
     snap, events = engine.drawdown_events("X", closes, [10])
     enters = [e for e in events if e.kind == "enter"]
     exits = [e for e in events if e.kind == "exit"]
     assert len(enters) == 2 and len(exits) == 1
     assert exits[0].parent_key == enters[0].key
     assert not enters[0].active and enters[1].active   # 第一个已结束,第二个进行中
+
+
+def test_drawdown_hysteresis_no_boundary_chatter():
+    """迟滞 2pp(用户 2026-07-22 采纳):dd 在 [8,10) 抖动不算修复——贴线震荡是同一轮
+    回撤,不得拆成多次事件(回测实证:银行 9→5/长电 15→2)。"""
+    # dd: 0,0,0,11%,9.5%,10.5%,9%,11% —— 全程未低于 8%,应为同一 episode
+    closes = _series(*([100] * 3 + [89, 90.5, 89.5, 91, 89]))
+    _, events = engine.drawdown_events("X", closes, [10])
+    enters = [e for e in events if e.kind == "enter"]
+    exits = [e for e in events if e.kind == "exit"]
+    assert len(enters) == 1 and len(exits) == 0
+    assert enters[0].active
 
 
 def test_drawdown_sliding_basis_no_spurious_event():
@@ -61,7 +73,7 @@ def test_drawdown_same_day_two_buckets():
 
 
 def test_drawdown_exit_occurred_on_recovery_day():
-    closes = _series(*([100] * 3 + [88, 92]))   # 12% → 8% 修复
+    closes = _series(*([100] * 3 + [88, 93]))   # 12% → 7%(低于迟滞线 8%)修复
     _, events = engine.drawdown_events("X", closes, [10])
     ex = [e for e in events if e.kind == "exit"][0]
     assert ex.occurred_date == closes[-1]["date"]

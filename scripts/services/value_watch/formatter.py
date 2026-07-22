@@ -106,16 +106,19 @@ def render_report(payload: dict, *, date: str, logic_version: int,
         if snap is None:
             lines.append(f"- {code}: source_failed")
             continue
-        lines.append(f"- [判断] {code}: 状态 {snap.get('state')}"
-                     f"（完成周 {snap.get('completed_weeks')}，"
-                     f"最近周末交易日 {snap.get('last_week_end')}）")
+        # 分层红线(门2 G3 med-4):周数/日期是客观数字标[事实],状态是框架解读标[判断]
+        lines.append(f"- [事实] {code}: 完成周 {snap.get('completed_weeks')}，"
+                     f"最近周末交易日 {snap.get('last_week_end')}")
+        lines.append(f"  - [判断] 状态 {snap.get('state')}（watching=条件未成立/"
+                     "signaled=粘合+MACD 上零轴成立，出处框架口径）")
 
     if candidates is not None:
         lines.append("")
         lines.append("## 本次候选事件")
         if candidates:
             for ev in candidates:
-                lines.append(f"- {ev.kind}: {ev.title}（{ev.occurred_date}）key={ev.key}")
+                lines.append(f"- [事实] {ev.kind}: {ev.title}（发生日 {ev.occurred_date}，"
+                             f"key={ev.key}）")
         else:
             lines.append("- 无（状态无变化或均已通知）")
 

@@ -7,6 +7,10 @@ LOGIC_VERSION = 1
 
 # ① 红利买入触发（回撤 episode）
 BASIS_WINDOW = 120                      # 波段高点滚动窗口（交易日）
+# episode 退出迟滞（用户 2026-07-22 回测后采纳）：进入 dd>=B、退出须 dd < B-HYSTERESIS_PP。
+# 无迟滞时 dd 贴档位线抖动会把同一轮回撤拆成多次事件（回测实证：银行一年 9→5 次、
+# 长电 15→2 次，砍掉的全是贴线噪音）。发布前口径修订，LOGIC_VERSION 保持 1。
+HYSTERESIS_PP = 2
 BANK_INDEX = "801780.SI"                # 申万一级银行指数
 DRAWDOWN_TARGETS: dict[str, list[int]] = {
     "801780.SI": [10, 15],              # 银行板块指数：10%/15% 两档

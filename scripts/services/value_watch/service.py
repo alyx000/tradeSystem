@@ -33,7 +33,9 @@ def run_daily(conn: sqlite3.Connection, registry, provider, date: str, *,
               persist: bool, push: bool, now=None) -> "str | None":
     payload, all_events = _collect_and_replay(conn, registry, provider, date)
 
-    ledger = repo.load_sent_ledger(conn) if persist else set()
+    # 账本无条件只读加载(门2 G3 med-2):dry-run 若用空账本,已发送事件会重新出现在
+    # 候选预览里,给操作员"会重复提醒"的假象;dry-run 只跳过写入,不跳过读取
+    ledger = repo.load_sent_ledger(conn)
     candidates = notify.select_candidates(all_events, ledger)
 
     if persist:
@@ -60,19 +62,43 @@ def _collect_and_replay(conn, registry, provider, date: str):
     # 各段独立拉取会重复请求,且两次一成一败会产生自相矛盾的 source_status
     stock_cache: dict[str, "list[dict] | None"] = {}
 
+    def _fresh_or_none(code: str, series: "list[dict] | None") -> "list[dict] | None":
+        """陈旧守卫(门2 G3 high):目标日为确认交易日而序列末根早于目标日 → 源只给到
+        T-1(交易所盘后发布滞后/镜像缓存),按当日重放会把昨日已修复/已触发的过期条件
+        当作今日状态推送。标 stale_source 降级该标的。日历无法确认时不强判
+        (非交易日 dry-run 预览端末根<目标日属正常)。"""
+        if series is None:
+            source_status[code] = "source_failed"
+            return None
+        from db import queries as Q
+        if Q.is_trade_day_from_db(conn, date) and series[-1]["date"] < date:
+            logger.warning("[value-watch] %s 数据陈旧(末根 %s < 目标日 %s),降级",
+                           code, series[-1]["date"], date)
+            source_status[code] = "stale_source"
+            return None
+        source_status[code] = "ok"
+        return series
+
     def _stock(code: str, start: str = HISTORY_ANCHOR_DATE) -> "list[dict] | None":
         key = (code, start)
         if key not in stock_cache:
-            series = collector.fetch_stock_series(registry, code, start, date)
-            stock_cache[key] = series
-            source_status[code] = "ok" if series is not None else "source_failed"
+            try:
+                raw = collector.fetch_stock_series(registry, code, start, date)
+            except RuntimeError as e:   # 截断异常不得中断整批(门2 G3 med-3)
+                logger.error("[value-watch] %s 采集异常(降级该标的): %s", code, e)
+                raw = None
+            stock_cache[key] = _fresh_or_none(code, raw)
         return stock_cache[key]
 
     drawdown: dict[str, "dict | None"] = {}
     for code, buckets in DRAWDOWN_TARGETS.items():
         if code.endswith(".SI"):
-            series = collector.fetch_sw_index_series(provider, code, HISTORY_ANCHOR_DATE, date)
-            source_status[code] = "ok" if series is not None else "source_failed"
+            try:
+                raw = collector.fetch_sw_index_series(provider, code, HISTORY_ANCHOR_DATE, date)
+            except RuntimeError as e:   # 恰 2000 行截断 → 单标的降级,不终止其他标的
+                logger.error("[value-watch] %s 采集异常(降级该标的): %s", code, e)
+                raw = None
+            series = _fresh_or_none(code, raw)
         else:
             series = _stock(code)
         if series is None:

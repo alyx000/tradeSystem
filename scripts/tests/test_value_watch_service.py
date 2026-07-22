@@ -224,6 +224,53 @@ def test_insufficient_identity_reported_not_pushed(conn):
     assert not any("ladder" in k for k in snap["sent_events"])   # 身份不完整不推阶梯
 
 
+def test_stale_source_downgraded_not_ok(conn):
+    """门2 G3 high:目标日为交易日而源末根停在 T-1 → stale_source 降级,不按当日重放。"""
+    stale_end = "2026-07-20"   # 目标日 07-21(交易日),源只给到 07-20
+    bank = [(d, c) for d, c in _drawdown_bank() if d <= stale_end]
+    stocks = {c: [r for r in rows if r[0] <= stale_end]
+              for c, rows in _stock_map().items()}
+    sent = []
+    _run(conn, persist=True, push=True, sent=sent, bank=bank, stocks=stocks)
+    snap = repo.get_snapshot(conn, TARGET)
+    assert snap["payload"]["source_status"]["801780.SI"] == "stale_source"
+    assert snap["payload"]["drawdown"]["801780.SI"] is None
+    assert sent == []   # 全部标的陈旧 → 无事件可推
+
+
+def test_truncation_error_isolated_per_code(conn):
+    """门2 G3 med-3:sw_daily 恰 2000 行截断 raise → 该标的降级,其余标的照常完成。"""
+    provider = mock.MagicMock()
+    provider.pro.sw_daily.return_value = pd.DataFrame({
+        "trade_date": [f"2026{i:04d}" for i in range(2000)], "close": [1.0] * 2000})
+    registry = _mk_registry(_stock_map())
+    with mock.patch.object(service, "DingTalkPusher", _pusher_cls([])):
+        md = service.run_daily(conn, registry, provider, TARGET,
+                               persist=True, push=False, now=NOW_EVENING)
+    assert md is not None
+    snap = repo.get_snapshot(conn, TARGET)
+    assert snap["payload"]["source_status"]["801780.SI"] == "source_failed"
+    assert snap["payload"]["source_status"]["600436.SH"] == "ok"
+
+
+def test_dry_run_uses_real_ledger(conn):
+    """门2 G3 med-2:dry-run 只读真实账本——已发送事件不得重新出现在候选预览。"""
+    sent = []
+    _run(conn, persist=True, push=True, sent=sent)          # 先真实发送记账
+    assert len(sent) >= 1
+    md = _run(conn, persist=False, push=False)              # dry-run
+    assert "drawdown:801780.SI:10" not in md.split("## 本次候选事件")[-1]
+
+
+def test_report_fact_judgment_layering(conn):
+    """门2 G3 med-4:③ 段周数/日期标[事实]、状态标[判断];候选区带[事实]。"""
+    _run(conn, persist=True, push=False)
+    md = service.run_report(conn, None)
+    scarcity_seg = md.split("## ③")[-1]
+    assert "[事实] 600436.SH: 完成周" in scarcity_seg
+    assert "[判断] 状态" in scarcity_seg
+
+
 def test_week_remaining_open_days_calendar_missing_conservative(tmp_path):
     """live contract check 回归:空库无日历 → 保守 True(当周未完成),不产伪完成周。"""
     c = get_connection(tmp_path / "empty_cal.db")
