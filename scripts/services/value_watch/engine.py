@@ -8,12 +8,23 @@ spec v8 核心不变量：
   通知层按 "parent enter 已发出" 决定是否推（迟到必补）。
 - 回撤 episode 模型：事件身份 = 穿越日；必须先退出档位再真实再穿越才有新事件，
   基准滑窗只影响 dd 数值（长期阴跌不刷屏）。
+
+**调用方契约（键确定性）**：closes/weeks 历史必须从固定锚日（config.HISTORY_ANCHOR_DATE）
+起取，不得用"目标日往前 N 天"滚动窗口——窗口前移会让头部截断处的 dd/EMA 值漂移，
+episode crossing_date 与 scarcity 临界周随之漂移 → 键变 → 账本去重失效重复推送。
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from .config import INVALIDATE_WEEKS, LOGIC_VERSION, MA_SPREAD_MAX, WARMUP_WEEKS
+from .config import (
+    BASIS_WINDOW,
+    INVALIDATE_WEEKS,
+    LADDER_RUNGS,
+    LOGIC_VERSION,
+    MA_SPREAD_MAX,
+    WARMUP_WEEKS,
+)
 from .weekly import weekly_ma, weekly_macd
 
 
@@ -35,7 +46,8 @@ def _v(suffix: str) -> str:
 # ── ① 红利买入触发：回撤 episode ────────────────────────────────
 
 def drawdown_events(code: str, closes: list[dict],
-                    buckets: list[int], basis_window: int = 120) -> tuple[dict, list[Event]]:
+                    buckets: list[int],
+                    basis_window: int = BASIS_WINDOW) -> tuple[dict, list[Event]]:
     """closes：升序 [{"date","close"}]。返回 (状态快照, 事件列表)。
 
     对每档 B：episode = 从穿越日（dd>=B 且前日 dd<B）到首个 dd<B 日的连续区间。
@@ -54,36 +66,38 @@ def drawdown_events(code: str, closes: list[dict],
         dd[i] = (basis_val[i] - closes[i]["close"]) / basis_val[i] * 100 if basis_val[i] else 0.0
 
     events: list[Event] = []
-    bucket_state: dict[int, dict] = {}
+    bucket_state: dict[str, dict] = {}   # str 键:json round-trip 后 int 键会变字符串,统一 str 消歧
     for b in sorted(buckets):
-        crossing: "str | None" = None
+        open_enter: "Event | None" = None   # 持有对象引用,exit 时直接置位,免全量扫描
         for i in range(n):
             above = dd[i] >= b
             prev_above = dd[i - 1] >= b if i > 0 else False
-            if above and not prev_above and crossing is None:
+            if above and not prev_above and open_enter is None:
                 crossing = closes[i]["date"]
-                events.append(Event(
+                open_enter = Event(
                     key=_v(f"drawdown:{code}:{b}:{crossing}"),
                     kind="enter", parent_key=None, occurred_date=crossing,
                     active=True,   # 先置 True，episode 关闭时改 False
                     title=f"{code} 回撤触及 {b}% 档",
                     facts={"bucket": b, "crossing_date": crossing},
-                ))
-            elif not above and crossing is not None:
-                enter_key = _v(f"drawdown:{code}:{b}:{crossing}")
-                for ev in events:
-                    if ev.key == enter_key:
-                        ev.active = False
+                )
+                events.append(open_enter)
+            elif not above and open_enter is not None:
+                open_enter.active = False
+                crossing = open_enter.facts["crossing_date"]
                 events.append(Event(
                     key=_v(f"drawdown_recovered:{code}:{b}:{crossing}"),
-                    kind="exit", parent_key=enter_key,
+                    kind="exit", parent_key=open_enter.key,
                     occurred_date=closes[i]["date"], active=True,
                     title=f"{code} 回撤修复至 {b}% 档内",
                     facts={"bucket": b, "crossing_date": crossing,
                            "recovered_date": closes[i]["date"]},
                 ))
-                crossing = None
-        bucket_state[b] = {"in_episode": crossing is not None, "crossing_date": crossing}
+                open_enter = None
+        bucket_state[str(b)] = {
+            "in_episode": open_enter is not None,
+            "crossing_date": open_enter.facts["crossing_date"] if open_enter else None,
+        }
 
     snap = {
         "code": code,
@@ -107,7 +121,6 @@ def ladder_events(position_key: str, name: str, entry_price: float,
     enter：各档首触日（持有期事实，永久 active，漏跑从历史补算不丢档）；
     exit：已触 20 档且当前涨幅 < 20%（每 position_key 至多一次）。
     """
-    from .config import LADDER_RUNGS
     rungs = rungs or LADDER_RUNGS
     gains = [(bar["close"] / entry_price - 1) * 100 for bar in closes_since_entry]
     events: list[Event] = []
@@ -134,9 +147,8 @@ def ladder_events(position_key: str, name: str, entry_price: float,
         for i, g in enumerate(gains):
             if g >= top:
                 seen_top = True
-            elif seen_top and g < top:
+            elif seen_top:   # 首个回落日即身份日(再冲高再回落仍同一键,至多一次)
                 pull_date = closes_since_entry[i]["date"]
-                # 取首个回落日后继续扫——若再冲高再回落仍是同一键(至多一次)，首个即可
                 break
         events.append(Event(
             key=_v(f"ladder_pullback:{position_key}"),
@@ -171,35 +183,34 @@ def scarcity_replay(code: str, weeks: list[dict]) -> tuple[dict, list[Event]]:
     ma5, ma10, ma20 = weekly_ma(closes, 5), weekly_ma(closes, 10), weekly_ma(closes, 20)
     dif, dea = weekly_macd(closes)
 
-    def cond(i: int) -> bool:
+    def cond(i: int) -> "tuple[bool, float | None]":
+        """返回 (满足?, spread_pct)——facts 与判定同源,免重复展开表达式。"""
         if ma20[i] is None or ma5[i - 1] is None:
-            return False
+            return False, None
         mas = [ma5[i], ma10[i], ma20[i]]
-        spread_ok = (max(mas) - min(mas)) / min(mas) <= MA_SPREAD_MAX
+        spread = (max(mas) - min(mas)) / min(mas)
         upward = ma5[i] > ma5[i - 1]          # 向上仅约束 MA5(spec 显式声明)
         above_zero = dif[i] > 0 and dea[i] > 0
-        return spread_ok and upward and above_zero
+        return (spread <= MA_SPREAD_MAX and upward and above_zero), round(spread * 100, 2)
 
     state = "watching"
     fail_streak = 0
-    last_signal_key: "str | None" = None
+    open_signal: "Event | None" = None   # 持有对象引用,失效时直接置位
     events: list[Event] = []
     for i in range(WARMUP_WEEKS - 1, len(weeks)):
-        ok = cond(i)
+        ok, spread_pct = cond(i)
         if state == "watching" and ok:
             state = "signaled"
             fail_streak = 0
-            last_signal_key = _v(f"scarcity_signal:{code}:{weeks[i]['week_end']}")
-            events.append(Event(
-                key=last_signal_key, kind="enter", parent_key=None,
+            open_signal = Event(
+                key=_v(f"scarcity_signal:{code}:{weeks[i]['week_end']}"),
+                kind="enter", parent_key=None,
                 occurred_date=weeks[i]["week_end"], active=True,
                 title=f"{code} 周线波段进入条件成立（粘合+MACD 上零轴）",
-                facts={"week_end": weeks[i]["week_end"],
-                       "ma_spread_pct": round((max(ma5[i], ma10[i], ma20[i]) -
-                                               min(ma5[i], ma10[i], ma20[i])) /
-                                              min(ma5[i], ma10[i], ma20[i]) * 100, 2),
+                facts={"week_end": weeks[i]["week_end"], "ma_spread_pct": spread_pct,
                        "dif": round(dif[i], 4), "dea": round(dea[i], 4)},
-            ))
+            )
+            events.append(open_signal)
         elif state == "signaled":
             if ok:
                 fail_streak = 0
@@ -208,17 +219,15 @@ def scarcity_replay(code: str, weeks: list[dict]) -> tuple[dict, list[Event]]:
                 if fail_streak >= INVALIDATE_WEEKS:
                     state = "watching"
                     fail_streak = 0
-                    for ev in events:
-                        if ev.key == last_signal_key:
-                            ev.active = False
+                    open_signal.active = False
                     events.append(Event(
                         key=_v(f"scarcity_invalidated:{code}:{weeks[i]['week_end']}"),
-                        kind="exit", parent_key=last_signal_key,
+                        kind="exit", parent_key=open_signal.key,
                         occurred_date=weeks[i]["week_end"], active=True,
                         title=f"{code} 周线条件失效（连续 {INVALIDATE_WEEKS} 周不满足）",
                         facts={"week_end": weeks[i]["week_end"]},
                     ))
-                    last_signal_key = None
+                    open_signal = None
 
     snap = {"code": code, "state": state, "completed_weeks": len(weeks),
             "last_week_end": weeks[-1]["week_end"]}

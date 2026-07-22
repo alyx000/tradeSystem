@@ -1382,8 +1382,7 @@ CREATE TABLE IF NOT EXISTS trade_calendar (
 """
 
 # ──────────────────────────────────────────────────────────────
-# 13. 交易认知层：trading_cognitions / cognition_instances / periodic_reviews
-#     （方案 §4.1 / §4.2 / §4.3，schema v21 引入）
+# 12b. value-watch：价值投资框架条件监控快照（一天一行 + sent_events 通知账本）
 # ──────────────────────────────────────────────────────────────
 _SQL_VALUE_WATCH_DAILY = """
 CREATE TABLE IF NOT EXISTS value_watch_daily (
@@ -1396,6 +1395,10 @@ CREATE TABLE IF NOT EXISTS value_watch_daily (
 );
 """
 
+# ──────────────────────────────────────────────────────────────
+# 13. 交易认知层：trading_cognitions / cognition_instances / periodic_reviews
+#     （方案 §4.1 / §4.2 / §4.3，schema v21 引入）
+# ──────────────────────────────────────────────────────────────
 _SQL_TRADING_COGNITIONS = """
 CREATE TABLE IF NOT EXISTS trading_cognitions (
     cognition_id TEXT PRIMARY KEY,
