@@ -1,6 +1,6 @@
 # 市场任务：市场统计与联动观察
 
-命中 `volume-watch`、`new-high`、`sector-correlation`、`sector-crowding`、`market-timing` 或 `margin-index-correlation` 时只读本文件。
+命中 `volume-watch`、`new-high`、`sector-correlation`、`sector-crowding`、`market-timing`、`margin-index-correlation` 或 `value-watch` 时只读本文件。
 
 ## 成交额板块集中度监控（volume-watch）
 
@@ -152,3 +152,25 @@ python3 main.py market-timing signals --date YYYY-MM-DD --index 000001.SH --limi
 - 底分型从 bars 无状态推导，生命周期固定为 `none/forming/confirmed/invalid`，避免漏跑造成状态漂移。
 - 信号落 `market_timing_signal`；同日同指数重跑刷新。`signals` 支持 `--date`、`--index`、`--limit` 与 `--json`。工作日与周日 21:40 的 per-task launchd 运行，不进入 `schedule` / APScheduler。
 - 指数范围：上证、深成、创业板、科创50、中证2000与平均股价；报告同时呈现成交额近20日地量分位、跌停家数和涨跌家数。
+
+## 价值投资条件监控（value-watch）
+
+认知出处：`teacher_notes#391`（鞠磊价值投资年课：红利价值 / 稀缺价值）。工作日 21:45 per-task launchd `com.alyx.tradesystem.value-watch`（接 market-timing 21:40 之后），不进 `schedule`/APScheduler。
+
+```bash
+python3 main.py value-watch daily [--date YYYY-MM-DD] [--dry-run | --no-push]
+python3 main.py value-watch report [--date YYYY-MM-DD]
+
+make value-watch-daily        # = value-watch daily（采集+落库+事件推送）
+make value-watch-daily-dry    # = value-watch daily --dry-run（全内存,不落库不推送不写账本）
+make value-watch-report       # = value-watch report（只读已落库快照）
+```
+
+- **三层口径**：
+  - ① **红利买入触发**：银行指数 `801780.SI`（10/15% 两档）与长江电力 `600900.SH`（仅 10% 档）自 120 交易日滚动高点的回撤 episode——进入须回撤 ≥ 档位、退出须回撤 < 档位-2pp（迟滞防贴线抖动把同一轮回撤拆成多次事件）。
+  - ② **卖出阶梯**：active 持仓 ∩ 四大行（工/建/农/中）+ 长电，按 `entry_price` 计算**价格涨幅**（raw close，未含分红），10/15/20% 各档首触与 20 档后回落事件；事件身份键 `canonical:entry_date:holding_id`。
+  - ③ **稀缺价值**：片仔癀 `600436.SH` 周线 MA5/10/20 粘合 ≤3% + 周 MACD(12/26/9) 上零轴**同周成立**；signaled 后连续 2 个完成周不满足才失效（去抖）。
+- **运行语义**：落 `value_watch_daily` 快照（一天一行，同日重跑 UPSERT）；**事件账本 `sent_events` 去重**——同一事件键只推一次，enter 类补推需当前仍成立、exit 类迟到必补；**strict 日历闸门**——目标日 = 最新已收盘交易日才推送，日历 blocked 时一律不推（落库照常）；**陈旧守卫** `stale_source`——源数据停在上一交易日时该标的本日不评估（与 `source_failed` 分开呈现）；单标的失败隔离不中断整批；非交易日守卫（`--dry-run` 豁免）。三档 = 裸 `daily`[落库+推] / `--no-push`[落库+打印候选] / `--dry-run`[全内存不落库不推送不写账本]；历史 `--date` 落库但绝不推；`report` 只读已落库快照。
+- **调度**：工作日 21:45 per-task launchd `com.alyx.tradesystem.value-watch`（接 market-timing 21:40 之后），不进 `schedule`/APScheduler；错过可接受——次日运行按事件账本自动补齐。
+- **守红线**：数字标 `[事实]`、解读标 `[判断]` 并注出处 `#391`；非操作指令、不构成投资建议、不写计划层、不入关注池。
+- 依赖 env：`TUSHARE_TOKEN`（`pro.sw_daily` 直连）+ 钉钉凭据 `DINGTALK_WEBHOOK_TOKEN/SECRET`（推送时）。

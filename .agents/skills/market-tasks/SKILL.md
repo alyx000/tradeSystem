@@ -17,6 +17,7 @@ version: "1.8"
 - 「行业推荐定时推送」/「最近值得看的行业」
 - 「今天的研报速读」/「最近哪些股票被首次覆盖 / 评级上调」/「美股机构评级有什么变动」
 - 「采集公众号老师观点」/「检查 WeRSS」/「查看公众号确认候选」
+- 「价值投资条件监控」/「银行回撤到几档了」/「卖出阶梯 / 稀缺周线怎么样」（命中 `value-watch`，读 [references/market-observability.md](references/market-observability.md)）
 
 时激活此 skill。
 
@@ -132,6 +133,20 @@ done
   - 两份均**组按组内涨幅最大个股降序、平手比次大**(向量字典序降序)，5/10/20 各一份独立榜。原始集(含 industry + concepts + gains)落 `daily_volume_concentration.gain_universe_json`(v34 增列 + ALTER 兜底；concepts 为 JSON 增键无新列)。纯函数被 Markdown 与 API 共用。健壮性：gains/概念取数失败各自 fail-closed(不拖垮主日报)，降级重跑按覆盖判据保留库内既有榜单不抹(coverage-aware 幂等)。全客观区间涨幅(属 [事实])，守红线不出价位目标/不给买卖建议。经只读 API `GET /api/market/sector-gain-ranking/{date}`(`rankings`+`concept_rankings`) 在八步复盘「2.板块」(`SectorGainRanking` 组件，申万/题材维度切换 + 三档周期 Tab)展示。慧博/同花顺概念依赖 `TUSHARE_TOKEN` 积分(`ths_member`)。
 - 行业口径=**申万二级**（联动 `get_sector_rankings`）；「未分类」（次新等）不计入前3行业集中度，报告标 `industry_coverage`。
 - 依赖 env：`TUSHARE_TOKEN`（`scripts/.env`，`index_member_all` 需积分）、`DINGTALK_WEBHOOK_TOKEN/SECRET`（`~/.config/tradeSystem.env`，daily 推送）。
+
+## 价值投资条件监控（value-watch）
+
+工作日 21:45 per-task launchd（`com.alyx.tradesystem.value-watch`，接 market-timing 21:40 之后），不进 `schedule`/APScheduler。命中 `value-watch`（价值投资条件 / 红利回撤 / 卖出阶梯 / 稀缺周线）时**只读 [references/market-observability.md](references/market-observability.md) 的「价值投资条件监控（value-watch）」小节**获取三层口径、事件账本与守红线契约，再执行：
+
+```bash
+make value-watch-daily        # = python3 main.py value-watch daily（采集+落库+事件推送）
+make value-watch-daily-dry    # = ... --dry-run（全内存,不落库不推送不写账本）
+make value-watch-report       # = python3 main.py value-watch report（只读已落库快照）
+
+python3 main.py value-watch daily --date 2026-07-18 --no-push   # 历史补采:落库+打印候选,不推送
+```
+
+要点速记：事件**首发才推钉钉**（`sent_events` 账本去重），历史 `--date` 落库不推；`report` 只读快照不采集；认知出处 `teacher_notes#391`，全标 `[判断]` 守红线（非操作指令、不构成投资建议、不写计划层不入关注池）。依赖 env：`TUSHARE_TOKEN`（`pro.sw_daily` 直连）+ 钉钉凭据（推送时）。
 
 ## 前复权历史新高统计（new-high）
 

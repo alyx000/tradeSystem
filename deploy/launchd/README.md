@@ -26,6 +26,8 @@
 - `com.alyx.tradesystem.sector-crowding.plist` — 工作日 21:30 触发（板块拥挤度采集，默认不推送，复盘时 `sector-crowding report` 查看；非交易日任务内守卫跳过；日志 `/tmp/tradesystem-sector-crowding.log`）
 - `ma-breakout-runner.sh` — 包装脚本：cd 仓库根 → source `scripts/.env`(TUSHARE_TOKEN) + `~/.config/tradeSystem.env`(钉钉) → 调 `python3 main.py ma-breakout daily`
 - `com.alyx.tradesystem.ma-breakout.plist` — 工作日+周日 21:35 触发（系统时区 Asia/Shanghai 单晚间档，与兄弟任务同范式；周日自动回退到最近已完成交易日；4日均线二波观察池；日志 `/tmp/tradesystem-ma-breakout.log`）
+- `value-watch-runner.sh` — 包装脚本：cd 仓库根 → source `~/.config/tradeSystem.env`(钉钉；TUSHARE_TOKEN 由 `scripts/.env` 在 Python 侧加载) → 调 `python3 main.py value-watch daily`
+- `com.alyx.tradesystem.value-watch.plist` — 工作日 21:45 触发（价值投资条件监控：红利回撤/卖出阶梯/稀缺周线，事件首发才推钉钉[sent_events 账本去重]；日志 `/tmp/tradesystem-value-watch.log`；Sleep policy: 错过可接受——次日运行按事件账本自动补齐）
 - `daily-leaders-runner.sh` — 包装脚本：cd 仓库根 → source `~/.config/tradeSystem.env`(钉钉/LLM) → 调 `/usr/bin/python3 scripts/main.py daily-leaders propose --push`
 - `com.alyx.tradesystem.daily-leaders.plist` — 工作日 22:30 触发（每日最票候选确认稿；stdout `/tmp/tradesystem-daily-leaders.out.log`，stderr `/tmp/tradesystem-daily-leaders.err.log`）
 
