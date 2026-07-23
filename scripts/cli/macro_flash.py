@@ -19,12 +19,22 @@ import sys
 from services.macro_flash import service
 
 
+def _iso_date(value: str) -> str:
+    """argparse type 回调:边缘校验日期格式,免 service 层 ValueError 裸 traceback
+    (且避免非法日期先白跑一段;同 value_watch / sector_crowding gate-1 先例)。"""
+    try:
+        datetime.date.fromisoformat(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"日期须为 YYYY-MM-DD 格式: {value!r}")
+    return value
+
+
 def register_subparser(subparsers: argparse._SubParsersAction) -> None:
     mf = subparsers.add_parser("macro-flash", help="宏观快讯采集速读(金十源:归档+钉钉)")
     sub = mf.add_subparsers(dest="macro_flash_command")
 
     run_p = sub.add_parser("run", help="采集→筛选→归档→推送")
-    run_p.add_argument("--date", default=None,
+    run_p.add_argument("--date", default=None, type=_iso_date,
                        help="窗口终点所在日 YYYY-MM-DD(补跑用,终点固定取该日 16:30;"
                             "周日档补跑需配 --lookback-hours 54,终点与实时档 22:00 有 5.5h 差,接受)")
     run_p.add_argument("--lookback-hours", type=int, default=service.DEFAULT_LOOKBACK_HOURS,
@@ -36,7 +46,7 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
     run_p.add_argument("--repush", action="store_true", help="仅重推已有 digest,不重采")
 
     show_p = sub.add_parser("show", help="只读展示既有归档")
-    show_p.add_argument("--date", default=None, help="归档日 YYYY-MM-DD(默认今天)")
+    show_p.add_argument("--date", default=None, type=_iso_date, help="归档日 YYYY-MM-DD(默认今天)")
     show_p.add_argument("--json", action="store_true", help="输出 manifest JSON(含 candidates)")
 
     doc_p = sub.add_parser("doctor", help="live 探测金十可达性与字段")
