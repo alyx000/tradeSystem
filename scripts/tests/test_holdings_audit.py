@@ -95,6 +95,27 @@ def test_entry_date_default_atomic_in_query_layer(conn):
     assert conn.execute("SELECT entry_date FROM holdings WHERE id=?", (hid2,)).fetchone()[0] == "2026-06-30"
 
 
+def test_entry_date_null_and_empty_normalized(conn):
+    """收尾门 round3 high:键存在但值为 None/空串必须视同未提供——
+    insert 走缺省 today,update 不得把历史日期清成 NULL/''。"""
+    import datetime
+    from zoneinfo import ZoneInfo
+
+    today = datetime.datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat()
+    hid = Q.upsert_holding(conn, stock_code="601398.SH", stock_name="工商银行",
+                           entry_date=None, status="active", input_by="manual")
+    assert conn.execute("SELECT entry_date FROM holdings WHERE id=?", (hid,)).fetchone()[0] == today
+    hid2 = Q.upsert_holding(conn, stock_code="601988.SH", stock_name="中国银行",
+                            entry_date="", status="active", input_by="manual")
+    assert conn.execute("SELECT entry_date FROM holdings WHERE id=?", (hid2,)).fetchone()[0] == today
+    # 历史日期 + 空串 update → 保留
+    conn.execute("UPDATE holdings SET entry_date='2020-01-02' WHERE id=?", (hid,))
+    conn.commit()
+    Q.upsert_holding(conn, stock_code="601398.SH", stock_name="工商银行",
+                     entry_date="", shares=50, status="active", input_by="web")
+    assert conn.execute("SELECT entry_date FROM holdings WHERE id=?", (hid,)).fetchone()[0] == "2020-01-02"
+
+
 def test_concurrent_create_does_not_overwrite_historical_entry_date(conn):
     """收尾门 round2 high 交错回归:请求 A(无 entry_date)查无行→B 先创建带历史日期的
     持仓→A insert 撞 active 唯一索引重试转 update——B 的历史日期不得被 A 的缺省覆盖。"""

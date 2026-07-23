@@ -461,6 +461,12 @@ def upsert_holding(conn: sqlite3.Connection, **kwargs: Any) -> int:
     # 的窗口内若另一连接把行 close，无条件按缓存 id 更新会篡改/复活 closed 行；条件更新
     # rowcount=0 时 fallback 到 insert(重新开仓语义=新建行)。并发 insert 撞 active 唯一
     # partial index 时重试一次(另一连接刚建了行 → 本次转 update)。
+    #
+    # entry_date 空值归一(收尾门 round3 high)：API body 直传时键可能存在但值为
+    # null/空串——setdefault 挡不住(键在)、update 的 None 过滤挡不住空串(会把历史
+    # 日期覆盖成 '')。统一 pop 空值：insert 走缺省 today,update 不携带该列。
+    if "entry_date" in kwargs and not kwargs["entry_date"]:
+        kwargs.pop("entry_date")
     code = kwargs.get("stock_code")
     target_status = kwargs.get("status")
     for _attempt in (0, 1):

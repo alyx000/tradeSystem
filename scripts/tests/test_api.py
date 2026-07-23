@@ -2025,6 +2025,29 @@ class TestPlanningAndKnowledgeAPI:
         })
         assert client.get(f"/api/holdings/{hid}").json()["entry_date"] == today
 
+    def test_holdings_api_entry_date_null_empty_and_invalid(self, client):
+        """收尾门 round3:null/空串视同未提供(新建落当日/更新保留);非法格式 422。"""
+        import datetime
+        from zoneinfo import ZoneInfo
+
+        today = datetime.datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat()
+        hid = client.post("/api/holdings", json={
+            "stock_code": "601288.SH", "stock_name": "农业银行",
+            "entry_date": None, "status": "active",
+        }).json()["id"]
+        assert client.get(f"/api/holdings/{hid}").json()["entry_date"] == today
+        # 历史日期 + 空串 PUT → 保留
+        client.put(f"/api/holdings/{hid}", json={"entry_date": "2020-01-02"})
+        client.put(f"/api/holdings/{hid}", json={"entry_date": "", "note": "x"})
+        assert client.get(f"/api/holdings/{hid}").json()["entry_date"] == "2020-01-02"
+        # 非法格式 fail-fast
+        assert client.post("/api/holdings", json={
+            "stock_code": "600900.SH", "stock_name": "长江电力",
+            "entry_date": "2026/07/01", "status": "active",
+        }).status_code == 422
+        assert client.put(f"/api/holdings/{hid}",
+                          json={"entry_date": "not-a-date"}).status_code == 422
+
     def test_holdings_api_null_input_by_normalized(self, client):
         """显式传 input_by:null 不得写穿 NULL 或清空既有审计(门1 M2)。"""
         hid = client.post("/api/holdings", json={

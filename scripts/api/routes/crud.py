@@ -327,12 +327,26 @@ def get_holding(hid: int, conn: sqlite3.Connection = Depends(get_db_conn)):
     return dict(row)
 
 
+def _reject_invalid_entry_date(body: dict) -> None:
+    """非空 entry_date 必须是合法 YYYY-MM-DD(收尾门 round3:非法格式 fail-fast 422,
+    与 CLI --entry-date type 校验对齐);null/空串由 query 层归一为缺省/省略。"""
+    from datetime import date as _d
+
+    v = body.get("entry_date")
+    if v:
+        try:
+            _d.fromisoformat(str(v))
+        except ValueError:
+            raise HTTPException(422, f"entry_date 须为 YYYY-MM-DD 格式: {v!r}")
+
+
 @router.post("/holdings")
 def create_holding(body: dict, conn: sqlite3.Connection = Depends(get_db_conn)):
     # 写入审计:API 属人工入口,body 可选 input_by、服务端缺省 "web"(value-watch spec v8)。
     # 不用 setdefault:显式传 null/空串会绕过缺省,POST 落 NULL、PUT 清空既有审计值(门1 M2)。
     if not body.get("input_by"):
         body["input_by"] = _API_INPUT_BY
+    _reject_invalid_entry_date(body)
     # entry_date 缺省(新建落上海当日/更新保留原值)由 upsert_holding insert 分支原子处理
     # (收尾门 round2 high:入口层先查后写有 TOCTOU,会把解析好的"今天"覆盖并发创建的历史日期)
     hid = Q.upsert_holding(conn, **body)
@@ -350,6 +364,9 @@ def update_holding_item(hid: int, body: dict, conn: sqlite3.Connection = Depends
     # 关仓走 DELETE(soft close),重新开仓 POST 新行。
     if "status" in body:
         raise HTTPException(422, "status 不可经 PUT 修改;关仓走 DELETE,重新开仓 POST 新行")
+    _reject_invalid_entry_date(body)
+    if "entry_date" in body and not body["entry_date"]:
+        body.pop("entry_date")   # null/空串=未提供,不得把历史日期清成空(收尾门 round3)
     try:
         changed = Q.update_holding_if_active(conn, hid, **body)
     except ValueError as e:
