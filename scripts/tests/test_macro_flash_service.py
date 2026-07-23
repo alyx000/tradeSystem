@@ -2,8 +2,6 @@
 import datetime as dt
 import json
 
-import pytest
-
 from services.macro_flash import collector, service
 
 NOW = dt.datetime(2026, 7, 23, 16, 30, tzinfo=service.TZ)
@@ -152,3 +150,24 @@ def test_unexpected_error_writes_run_error_manifest(tmp_path):
     m = json.loads((day / "manifest.json").read_text())
     assert m["source_status"] == "run_error" and "boom" in m["error"]
     assert not (day / ".lock").exists()
+
+
+def test_repush_respects_lock(tmp_path):
+    """repush 与调度 run 互斥同一把 .lock:锁被占用时 repush 必须让路,不静默覆盖 manifest。"""
+    _run(tmp_path, no_push=True)   # 先落一份既有归档
+    day = tmp_path / "2026-07-23"
+    (day / ".lock").touch()        # 模拟调度 run 正持锁进行中
+    push2 = PushSpy()
+    out = _run(tmp_path, repush=True, push_fn=push2)
+    assert out.status == "lock_contention"
+    assert out.exit_code == 7
+    assert push2.calls == []
+
+
+def test_source_failed_plus_push_failed_keeps_exit_3(tmp_path):
+    """source_failed 时 push_failed=8 的抬升不应生效:退出码须保持 3(采集失败为主因)。"""
+    out = _run(tmp_path, collect_fn=_failed_collect, push_fn=PushSpy(ok=False))
+    assert out.exit_code == service.EXIT_CODES[collector.STATUS_FAILED]
+    assert out.exit_code == 3
+    m = json.loads((tmp_path / "2026-07-23" / "manifest.json").read_text())
+    assert m["push_status"] == "failed"

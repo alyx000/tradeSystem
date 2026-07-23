@@ -112,12 +112,27 @@ def run(config: dict, *, date_str: Optional[str] = None,
         if not existing or not digest_path.exists():
             print(f"{run_date} 无既有归档,无法 --repush", file=sys.stderr)
             return RunOutcome(status="repush_missing", exit_code=EXIT_CODES["repush_missing"])
-        digest_md = digest_path.read_text(encoding="utf-8")
-        push_md = formatter.build_push_markdown(digest_md, _rel(digest_path))
-        existing["push_status"] = "success" if push(title, push_md) else "failed"
-        existing["pushed_at"] = _now_iso()
-        _atomic_write(manifest_path, _dumps(existing))
-        return RunOutcome(status="repushed", exit_code=0, manifest=existing, push_md=push_md)
+        # repush 也是 manifest.json 的写入者,必须与调度 run 互斥同一把 .lock,
+        # 否则并发时 repush 的旧读-改-写会静默覆盖 run 刚落地的新 manifest。
+        lock_path = day_dir / ".lock"
+        try:
+            lock_fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            print(f"{run_date} 已有进行中的 run({lock_path});确认为残留锁可删除后重试。",
+                  file=sys.stderr)
+            return RunOutcome(status="lock_contention", exit_code=EXIT_CODES["lock_contention"])
+        try:
+            # 持锁后重读最新落地的 manifest 与 digest,避免用锁外旧快照覆盖
+            latest = read_manifest(run_date, base) or existing
+            digest_md = digest_path.read_text(encoding="utf-8")
+            push_md = formatter.build_push_markdown(digest_md, _rel(digest_path))
+            latest["push_status"] = "success" if push(title, push_md) else "failed"
+            latest["pushed_at"] = _now_iso()
+            _atomic_write(manifest_path, _dumps(latest))
+            return RunOutcome(status="repushed", exit_code=0, manifest=latest, push_md=push_md)
+        finally:
+            os.close(lock_fd)
+            lock_path.unlink(missing_ok=True)
 
     if (existing and existing.get("source_status") == collector.STATUS_COMPLETE
             and not force_refresh):
