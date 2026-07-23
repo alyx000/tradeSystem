@@ -44,6 +44,8 @@ EXIT_CODES = {
     "lock_contention": 7,
     "push_failed": 8,   # 采集 complete 但推送失败:非零让 launchd 日志可见,--repush 补推
     "run_error": 1,     # 编排层意外异常(collector 契约外)
+    "repush_not_complete": 2,   # repush 只支持 complete 归档;非 complete 拒绝(usage error)
+    "archive_corrupt": 9,       # 归档 sha 与 manifest 不符(疑似撕裂写),数据完整性错误
 }
 
 
@@ -152,6 +154,17 @@ def run(config: dict, *, date_str: Optional[str] = None,
                     print(f"{run_date} 无既有归档,无法 --repush", file=sys.stderr)
                     return RunOutcome(status="repush_missing",
                                       exit_code=EXIT_CODES["repush_missing"])
+                if latest.get("source_status") != collector.STATUS_COMPLETE:
+                    print(f"{run_date} 归档状态 {latest.get('source_status')} 非 complete,"
+                          f"不支持 --repush(仅重推完整归档;失败日请 --force-refresh 重采)。",
+                          file=sys.stderr)
+                    return RunOutcome(status="repush_not_complete",
+                                      exit_code=EXIT_CODES["repush_not_complete"], manifest=latest)
+                if not _archive_intact(latest, day_dir):
+                    print(f"{run_date} 归档 sha 校验失败(疑似撕裂写),拒绝 --repush;"
+                          f"请 --force-refresh 重采修复。", file=sys.stderr)
+                    return RunOutcome(status="archive_corrupt",
+                                      exit_code=EXIT_CODES["archive_corrupt"], manifest=latest)
                 digest_md = digest_path.read_text(encoding="utf-8")
                 push_md = formatter.build_push_markdown(digest_md, _rel(digest_path))
                 ok = push(title, push_md)
@@ -169,8 +182,12 @@ def run(config: dict, *, date_str: Optional[str] = None,
 
     if (existing and existing.get("source_status") == collector.STATUS_COMPLETE
             and not force_refresh):
-        print(f"{run_date} 已有 complete 归档,幂等跳过(--force-refresh 重采 / --repush 重推)。")
-        return RunOutcome(status="skipped_existing", exit_code=0, manifest=existing)
+        if _archive_intact(existing, day_dir):
+            print(f"{run_date} 已有 complete 归档,幂等跳过(--force-refresh 重采 / --repush 重推)。")
+            return RunOutcome(status="skipped_existing", exit_code=0, manifest=existing)
+        logger.warning("[macro-flash] %s complete manifest 与归档 sha 不符(疑似撕裂写),重新采集修复",
+                       run_date)
+        # 不 return,继续向下走正式采集重采修复
 
     keywords = flash_filter.load_keyword_config(config)
 
@@ -294,6 +311,19 @@ def _dumps(obj: dict) -> str:
 
 def _sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _archive_intact(manifest: Optional[dict], day_dir: Path) -> bool:
+    """校验归档文件 sha256 与 manifest 记录一致(检出撕裂写:manifest 与内容文件不属同一代)。"""
+    files = (manifest or {}).get("files") or {}
+    for key, default_name in (("flash_raw", "flash_raw.json"), ("digest", "digest.md")):
+        rec = files.get(key) or {}
+        path = day_dir / rec.get("path", default_name)
+        if not path.exists():
+            return False
+        if _sha256(path.read_text(encoding="utf-8")) != rec.get("sha256"):
+            return False
+    return True
 
 
 def _rel(path: Path) -> str:

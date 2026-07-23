@@ -122,6 +122,40 @@ def test_repush_without_archive_errors(tmp_path):
     assert out.exit_code == 2
 
 
+def test_repush_refuses_non_complete_manifest(tmp_path):
+    """repush 只支持 complete 归档:source_failed 日不能被重推误抹成 exit_code=0。"""
+    _run(tmp_path, collect_fn=_failed_collect, no_push=True)
+    push = PushSpy()
+    out = _run(tmp_path, repush=True, push_fn=push)
+    assert out.status == "repush_not_complete"
+    assert out.exit_code == 2
+    assert push.calls == []
+
+
+def test_repush_refuses_on_sha_mismatch(tmp_path):
+    """撕裂写(旧 manifest + 新内容)导致 sha 不符时,repush 必须 fail-closed 拒绝。"""
+    _run(tmp_path, no_push=True)
+    (tmp_path / "2026-07-23" / "digest.md").write_text("TAMPERED", encoding="utf-8")
+    push = PushSpy()
+    out = _run(tmp_path, repush=True, push_fn=push)
+    assert out.status == "archive_corrupt"
+    assert out.exit_code == 9
+    assert push.calls == []
+
+
+def test_skip_recollects_on_sha_mismatch(tmp_path):
+    """撕裂写导致幂等跳过前 sha 校验失败时,必须重采修复而非静默跳过。"""
+    _run(tmp_path, no_push=True)
+    (tmp_path / "2026-07-23" / "digest.md").write_text("TAMPERED", encoding="utf-8")
+    calls = {"n": 0}
+    def counting_collect(a, b):
+        calls["n"] += 1
+        return _ok_collect(a, b)
+    out = _run(tmp_path, collect_fn=counting_collect, no_push=True)
+    assert calls["n"] == 1          # 重采修复,未跳过
+    assert out.status == "complete"
+
+
 def test_lock_contention_exits(tmp_path):
     day = tmp_path / "2026-07-23"
     day.mkdir(parents=True)
