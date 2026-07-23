@@ -1,8 +1,6 @@
 """collector 单测:翻页/触底/停滞/预算/schema 全 mock,不碰外网。"""
 import datetime as dt
 
-import pytest
-
 from services.macro_flash import collector
 
 

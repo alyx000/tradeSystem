@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from dataclasses import dataclass
-from typing import Dict, List
+from typing import List
 
 OTHER_TOPIC = "其他要闻"
 
