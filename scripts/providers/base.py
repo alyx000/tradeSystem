@@ -276,6 +276,10 @@ class DataProvider(ABC):
     def get_forex(self, pair: str) -> DataResult:
         return DataResult(data=None, source=self.name, error="not implemented")
 
+    def get_fx_swap(self, pair: str, tenor: str = "1Y") -> DataResult:
+        """获取指定货币对和期限的外汇掉期点。"""
+        return DataResult(data=None, source=self.name, error="not implemented")
+
     # ---- 新闻 ----
     def get_market_news(self, date: str, limit: int = 10) -> DataResult:
         return DataResult(data=None, source=self.name, error="not implemented")

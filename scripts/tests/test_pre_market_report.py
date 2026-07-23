@@ -7,6 +7,7 @@ import pytest
 import yaml
 
 from generators.report import ReportGenerator, _render_holding_risk_summary, _roman
+from utils.fx_validation import CHINAMONEY_C_SWAP_URL, CHINAMONEY_SPOT_URL
 
 
 def _minimal_market_data() -> dict:
@@ -32,8 +33,47 @@ def _minimal_market_data() -> dict:
             "gold": {"name": "黄金", "close": 2000.0, "change_pct": 0.5},
         },
         "forex": {
-            "usd_cny": {"name": "USD/CNY", "close": 7.2, "change_pct": 0.0},
+            "usd_cny": {
+                "name": "USD/CNY（在岸即期）",
+                "pair": "USD/CNY",
+                "mid": 6.7729,
+                "close": 6.7729,
+                "bid": 6.7725,
+                "ask": 6.7733,
+                "snapshot_time": "2026-03-30 07:00:06",
+                "source_date": "2026-03-30",
+                "validated_for_date": "2026-03-30",
+                "status": "latest_available",
+                "price_kind": "computed_bid_ask_mid",
+                "close_semantics": "computed_bid_ask_mid",
+                "mid_method": "bid_ask_arithmetic_mean",
+                "_source": "chinamoney:rfx-sp-quot",
+                "_source_url": CHINAMONEY_SPOT_URL,
+            },
             "usd_cnh": {"name": "USD/CNH", "close": 7.22, "change_pct": 0.1},
+        },
+        "fx_swaps": {
+            "usd_cny_1y": {
+                "name": "USD/CNY 1Y C-Swap定盘",
+                "pair": "USD/CNY",
+                "tenor": "1Y",
+                "swap_point_pips": -1818.25,
+                "forward_rate": 6.5918,
+                "curve_time": "2026-03-27 16:30:00.0",
+                "source_date": "2026-03-27",
+                "validated_for_date": "2026-03-27",
+                "status": "latest_available",
+                "quote_source": "报价数据",
+                "fixing_source": "报价数据",
+                "price_kind": "c_swap_fixing",
+                "_source": "chinamoney:fx-c-swap-fixing",
+                "_source_url": CHINAMONEY_C_SWAP_URL,
+            }
+        },
+        "_fx_context": {
+            "phase": "pre",
+            "spot_expected_date": "2026-03-30",
+            "swap_expected_date": "2026-03-27",
         },
         "margin_data": {
             "trade_date": "2026-03-27",
@@ -152,6 +192,9 @@ def test_generate_pre_market_sections_and_yaml(tmp_path: Path):
     assert "韩国综指" in md
     assert "## 二、美股中国金龙（隔夜）" in md
     assert "HXC" in md
+    assert "USD/CNY（在岸即期）: 6.7729（系统按买 6.7725 / 卖 6.7733 计算中值，最新可用快照，数据页更新于 2026-03-30 07:00:06" in md
+    assert "USD/CNY 1Y C-Swap定盘: -1818.25 Pips" in md
+    assert "全价汇率 6.5918，报价数据，截至 2026-03-27 16:30:00.0" in md
     assert "## 四、融资融券（上一交易日）" in md
     assert "较 2026-03-26" in md
     assert "五、昨日计划未完成持仓" in md

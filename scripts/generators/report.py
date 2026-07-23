@@ -12,10 +12,204 @@ from pathlib import Path
 import yaml
 
 from utils import is_st_stock
+from utils.fx_validation import (
+    CHINAMONEY_C_SWAP_SOURCES,
+    CHINAMONEY_C_SWAP_URL,
+    CHINAMONEY_SPOT_URL,
+    validate_usd_cny_spot_values,
+    validate_usd_cny_swap_values,
+)
 
 logger = logging.getLogger(__name__)
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
+
+
+def _validate_chinamoney_report_item(
+    info: dict,
+    *,
+    expected_date: str,
+    expected_source: str,
+    expected_url: str,
+    allowed_status: set[str],
+    time_field: str,
+) -> str | None:
+    status = info.get("status")
+    if status not in allowed_status:
+        return f"状态 {status or '缺失'} 未通过采集校验"
+    if info.get("_source") != expected_source:
+        return "中国货币网来源端点不匹配"
+    if info.get("_source_url") != expected_url:
+        return "中国货币网来源 URL 不匹配"
+    if info.get("validated_for_date") != expected_date:
+        return "缺少采集器的目标日期校验标记"
+    try:
+        expected_day = datetime.strptime(expected_date, "%Y-%m-%d").date()
+        source_day = datetime.strptime(str(info.get("source_date")), "%Y-%m-%d").date()
+        observed_at = datetime.strptime(
+            str(info.get(time_field))[:19], "%Y-%m-%d %H:%M:%S"
+        )
+    except (TypeError, ValueError):
+        return "日期或时间字段无效"
+    if source_day != observed_at.date():
+        return "来源日期与时间字段不一致"
+    if source_day != expected_day:
+        return "来源日期与采集器预期日期不一致"
+    return None
+
+
+def _render_forex_and_swaps(
+    lines: list[str],
+    market_data: dict,
+    report_date: str,
+    phase: str,
+) -> None:
+    context = market_data.get("_fx_context")
+    context_error = None
+    expected_spot_date = None
+    expected_swap_date = None
+    if not isinstance(context, dict) or context.get("phase") != phase:
+        context_error = "缺少匹配的汇率采集上下文"
+    else:
+        expected_spot_date = context.get("spot_expected_date")
+        expected_swap_date = context.get("swap_expected_date")
+        try:
+            report_day = datetime.strptime(report_date, "%Y-%m-%d").date()
+            spot_day = datetime.strptime(str(expected_spot_date), "%Y-%m-%d").date()
+            swap_day = datetime.strptime(str(expected_swap_date), "%Y-%m-%d").date()
+        except (TypeError, ValueError):
+            context_error = "汇率采集上下文日期无效"
+        else:
+            if spot_day != report_day:
+                context_error = "即期预期日期与报告日期不一致"
+            elif phase == "post" and swap_day != report_day:
+                context_error = "盘后掉期预期日期与报告日期不一致"
+            elif phase == "pre" and not swap_day < report_day:
+                context_error = "盘前掉期预期日期不是报告日前一交易日"
+
+    allowed_status = {"latest_available"} if phase == "pre" else {"ok"}
+    for key, info in market_data.get("forex", {}).items():
+        if not isinstance(info, dict):
+            lines.append(f"- {key}: 数据获取失败: 数据结构无效")
+            continue
+        if info.get("error"):
+            lines.append(f"- {key}: 数据获取失败: {info['error']}")
+            continue
+        if key == "usd_cny":
+            validation_error = context_error or _validate_chinamoney_report_item(
+                info,
+                expected_date=str(expected_spot_date),
+                expected_source="chinamoney:rfx-sp-quot",
+                expected_url=CHINAMONEY_SPOT_URL,
+                allowed_status=allowed_status,
+                time_field="snapshot_time",
+            )
+            if not validation_error and (
+                info.get("pair") != "USD/CNY"
+                or info.get("mid") is None
+                or info.get("close") is None
+                or info.get("price_kind") != "computed_bid_ask_mid"
+                or info.get("close_semantics") != "computed_bid_ask_mid"
+                or info.get("mid_method") != "bid_ask_arithmetic_mean"
+            ):
+                validation_error = "即期报价字段语义未通过校验"
+            if not validation_error:
+                try:
+                    validate_usd_cny_spot_values(
+                        info.get("bid"), info.get("ask"), info.get("mid")
+                    )
+                    validate_usd_cny_spot_values(
+                        info.get("bid"), info.get("ask"), info.get("close")
+                    )
+                except ValueError:
+                    validation_error = "即期报价数值未通过校验"
+            if not validation_error and phase == "pre":
+                snapshot_at = datetime.strptime(
+                    str(info["snapshot_time"])[:19], "%Y-%m-%d %H:%M:%S"
+                )
+                if snapshot_at.time() >= datetime.strptime("09:30:00", "%H:%M:%S").time():
+                    validation_error = "盘前即期页面更新时间不早于 09:30"
+            if validation_error:
+                lines.append(f"- {key}: 数据可信度校验失败: {validation_error}")
+                continue
+        pct = info.get("change_pct")
+        if pct is None:
+            bid = info.get("bid")
+            ask = info.get("ask")
+            snapshot_time = info.get("snapshot_time")
+            detail = ""
+            if bid is not None and ask is not None:
+                detail = f"（系统按买 {bid} / 卖 {ask} 计算中值"
+                if info.get("status") == "latest_available":
+                    detail += "，最新可用快照"
+                if snapshot_time:
+                    detail += f"，数据页更新于 {snapshot_time}"
+                if str(info.get("_source", "")).startswith("chinamoney:"):
+                    detail += "，来源 中国货币网"
+                detail += "）"
+            lines.append(
+                f"- [事实] {info.get('name', key)}: {info.get('close', 'N/A')}{detail} [★★★]"
+            )
+        else:
+            sign = "+" if pct >= 0 else ""
+            lines.append(
+                f"- [事实] {info.get('name', key)}: {info.get('close', 'N/A')} ({sign}{pct}%) [★★★]"
+            )
+
+    for key, info in market_data.get("fx_swaps", {}).items():
+        if not isinstance(info, dict):
+            lines.append(f"- {key}: 数据获取失败: 数据结构无效")
+            continue
+        if info.get("error"):
+            lines.append(f"- {key}: 数据获取失败: {info['error']}")
+            continue
+        validation_error = context_error or _validate_chinamoney_report_item(
+            info,
+            expected_date=str(expected_swap_date),
+            expected_source="chinamoney:fx-c-swap-fixing",
+            expected_url=CHINAMONEY_C_SWAP_URL,
+            allowed_status=allowed_status,
+            time_field="curve_time",
+        )
+        if not validation_error:
+            curve_at = datetime.strptime(
+                str(info["curve_time"])[:19], "%Y-%m-%d %H:%M:%S"
+            )
+            if (
+                info.get("pair") != "USD/CNY"
+                or info.get("tenor") != "1Y"
+                or info.get("price_kind") != "c_swap_fixing"
+                or info.get("quote_source") not in CHINAMONEY_C_SWAP_SOURCES
+                or info.get("fixing_source") != info.get("quote_source")
+                or curve_at.strftime("%H:%M:%S") != "16:30:00"
+            ):
+                validation_error = "C-Swap 定盘字段语义未通过校验"
+        if not validation_error:
+            try:
+                validate_usd_cny_swap_values(
+                    info.get("swap_point_pips"), info.get("forward_rate")
+                )
+            except ValueError:
+                validation_error = "C-Swap 定盘数值未通过校验"
+        if validation_error:
+            lines.append(f"- {key}: 数据可信度校验失败: {validation_error}")
+            continue
+        curve_time = info.get("curve_time")
+        source = info.get("quote_source")
+        detail_parts = []
+        if info.get("forward_rate") is not None:
+            detail_parts.append(f"全价汇率 {info['forward_rate']}")
+        if source:
+            detail_parts.append(source)
+        if curve_time:
+            detail_parts.append(f"截至 {curve_time}")
+        if str(info.get("_source", "")).startswith("chinamoney:"):
+            detail_parts.append("来源 中国货币网")
+        detail = f"（{'，'.join(detail_parts)}）" if detail_parts else ""
+        lines.append(
+            f"- [事实] {info.get('name', key)}: "
+            f"{info.get('swap_point_pips', 'N/A')} Pips{detail} [★★★]"
+        )
 
 
 class ReportGenerator:
@@ -168,17 +362,18 @@ class ReportGenerator:
                     f"- [事实] {nm}: {info.get('close', 'N/A')} ({sign}{pct}%{as_of_str}) [★★★]"
                 )
 
-        # 三、商品 & 汇率
-        lines.append("\n## 三、大宗商品 & 汇率\n")
-        for section in ["commodities", "forex"]:
-            for key, info in market_data.get(section, {}).items():
-                if "error" in info:
-                    continue
-                pct = info.get("change_pct", 0)
-                sign = "+" if pct >= 0 else ""
-                lines.append(
-                    f"- [事实] {info.get('name', key)}: {info.get('close', 'N/A')} ({sign}{pct}%) [★★★]"
-                )
+        # 三、商品、汇率与外汇掉期
+        lines.append("\n## 三、大宗商品、汇率 & 外汇掉期\n")
+        for key, info in market_data.get("commodities", {}).items():
+            if "error" in info:
+                lines.append(f"- {key}: 数据获取失败: {info['error']}")
+                continue
+            pct = info.get("change_pct", 0)
+            sign = "+" if pct >= 0 else ""
+            lines.append(
+                f"- [事实] {info.get('name', key)}: {info.get('close', 'N/A')} ({sign}{pct}%) [★★★]"
+            )
+        _render_forex_and_swaps(lines, market_data, date, "pre")
 
         # 四、融资融券（上一交易日）
         lines.append("\n## 四、融资融券（上一交易日）\n")
@@ -422,6 +617,11 @@ class ReportGenerator:
                 wk_items.append(f"{idx_label[key]}={sub['ma5w']}({pos})")
         if wk_items:
             lines.append(f"\n5周线: {'　'.join(wk_items)}")
+
+        if raw_data.get("forex") or raw_data.get("fx_swaps"):
+            lines.append(f"\n## {_roman(section_idx)}、汇率与外汇掉期\n")
+            section_idx += 1
+            _render_forex_and_swaps(lines, raw_data, date, "post")
 
         # ---- 涨跌停数据 ----
         lines.append(f"\n## {_roman(section_idx)}、涨跌停数据\n")
