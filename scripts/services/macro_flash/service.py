@@ -138,21 +138,30 @@ def run(config: dict, *, date_str: Optional[str] = None,
     existing = read_manifest(run_date, base)
 
     if repush:
-        if not existing or not digest_path.exists():
+        # repush 也是 manifest.json 的写入者,必须与调度 run 互斥同一把 .lock。
+        # 只有从未跑过(day_dir 都不存在)才是真 missing;目录已存在则先进锁再判,
+        # 避免首次 run 持锁但文件尚未落地时把并发 repush 误判为 missing(应报 lock_contention)。
+        if not day_dir.exists():
             print(f"{run_date} 无既有归档,无法 --repush", file=sys.stderr)
             return RunOutcome(status="repush_missing", exit_code=EXIT_CODES["repush_missing"])
-        # repush 也是 manifest.json 的写入者,必须与调度 run 互斥同一把 .lock,
-        # 否则并发时 repush 的旧读-改-写会静默覆盖 run 刚落地的新 manifest。
         try:
             with _locked(day_dir):
                 # 持锁后重读最新落地的 manifest 与 digest,避免用锁外旧快照覆盖
-                latest = read_manifest(run_date, base) or existing
+                latest = read_manifest(run_date, base)
+                if not latest or not digest_path.exists():
+                    print(f"{run_date} 无既有归档,无法 --repush", file=sys.stderr)
+                    return RunOutcome(status="repush_missing",
+                                      exit_code=EXIT_CODES["repush_missing"])
                 digest_md = digest_path.read_text(encoding="utf-8")
                 push_md = formatter.build_push_markdown(digest_md, _rel(digest_path))
-                latest["push_status"] = "success" if push(title, push_md) else "failed"
+                ok = push(title, push_md)
+                latest["push_status"] = "success" if ok else "failed"
                 latest["pushed_at"] = _now_iso()
+                # 持久化退出码:成功清除可能残留的旧 push_failed=8,失败置 8 让调用方感知
+                latest["exit_code"] = 0 if ok else EXIT_CODES["push_failed"]
                 _atomic_write(manifest_path, _dumps(latest))
-                return RunOutcome(status="repushed", exit_code=0, manifest=latest, push_md=push_md)
+                return RunOutcome(status="repushed", exit_code=latest["exit_code"],
+                                  manifest=latest, push_md=push_md)
         except _LockContention as exc:
             print(f"{run_date} 已有进行中的 run({exc.lock_path});确认为残留锁可删除后重试。",
                   file=sys.stderr)
@@ -192,9 +201,6 @@ def run(config: dict, *, date_str: Optional[str] = None,
                     "window_start": str(window_start), "window_end": str(window_end),
                     "items": result.items,
                 })
-                _atomic_write(day_dir / "flash_raw.json", raw_payload)
-                _atomic_write(digest_path, digest_md)
-
                 manifest = {
                     "schema_version": SCHEMA_VERSION,
                     "run_date": run_date,
@@ -229,6 +235,11 @@ def run(config: dict, *, date_str: Optional[str] = None,
                 if exit_code == 0 and manifest["push_status"] == "failed":
                     exit_code = EXIT_CODES["push_failed"]  # 归档成功推送失败:不静默,同日补推走 --repush
                 manifest["exit_code"] = exit_code
+                # 提交点:所有慢速工作(采集+推送)完成后,三个最终文件连续 os.replace 落地
+                # (内容文件在前、manifest 作为 commit marker 最后写),把撕裂写窗口从"横跨整个
+                # 推送"收窄到三次连续 os.replace 的微秒级;推送中途崩溃则旧一代文件保持完整不被触碰。
+                _atomic_write(day_dir / "flash_raw.json", raw_payload)
+                _atomic_write(digest_path, digest_md)
                 _atomic_write(manifest_path, _dumps(manifest))
                 return RunOutcome(status=result.status, exit_code=exit_code,
                                   manifest=manifest, digest_md=digest_md, push_md=push_md)

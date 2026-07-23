@@ -171,3 +171,69 @@ def test_source_failed_plus_push_failed_keeps_exit_3(tmp_path):
     assert out.exit_code == 3
     m = json.loads((tmp_path / "2026-07-23" / "manifest.json").read_text())
     assert m["push_status"] == "failed"
+
+
+def test_repush_failure_sets_exit_8(tmp_path):
+    """repush 推送失败必须持久化 exit_code=8,不能静默成功。"""
+    _run(tmp_path, no_push=True)   # 先落一份既有归档
+    out = _run(tmp_path, repush=True, push_fn=PushSpy(ok=False))
+    assert out.exit_code == service.EXIT_CODES["push_failed"]
+    m = json.loads((tmp_path / "2026-07-23" / "manifest.json").read_text())
+    assert m["push_status"] == "failed"
+    assert m["exit_code"] == 8
+
+
+def test_repush_success_clears_stale_exit_code(tmp_path):
+    """repush 成功后应清除历史遗留的 push_failed=8,不让旧退出码残留误导后续读者。"""
+    _run(tmp_path, push_fn=PushSpy(ok=False))   # 正常 run 推送失败,manifest.exit_code=8
+    m0 = json.loads((tmp_path / "2026-07-23" / "manifest.json").read_text())
+    assert m0["exit_code"] == 8
+    out = _run(tmp_path, repush=True, push_fn=PushSpy(ok=True))
+    assert out.exit_code == 0
+    m = json.loads((tmp_path / "2026-07-23" / "manifest.json").read_text())
+    assert m["push_status"] == "success"
+    assert m["exit_code"] == 0
+
+
+def test_repush_never_ran_is_missing(tmp_path):
+    """从未跑过(day_dir 都不存在)时 repush 必须报 repush_missing,不进锁。"""
+    push = PushSpy()
+    out = _run(tmp_path, repush=True, push_fn=push)
+    assert out.status == "repush_missing"
+    assert out.exit_code == 2
+    assert push.calls == []
+
+
+def test_repush_during_first_run_lock_is_contention(tmp_path):
+    """day_dir 已存在但 manifest/digest 尚未落地(首次 run 持锁采集中)时,并发
+    repush 必须报 lock_contention 而非 repush_missing —— 目录已存在只代表
+    "有 run 在进行",不代表"从未跑过"。"""
+    day = tmp_path / "2026-07-23"
+    day.mkdir(parents=True)
+    (day / ".lock").touch()   # 模拟首次 run 持锁、尚未写出 manifest/digest
+    push = PushSpy()
+    out = _run(tmp_path, repush=True, push_fn=push)
+    assert out.status == "lock_contention"
+    assert out.exit_code == 7
+    assert push.calls == []
+
+
+def test_files_committed_after_push(tmp_path):
+    """提交点重排验证:推送发生时,最终 flash_raw.json / digest.md 尚未落地
+    (仍在临时文件阶段),推送完成后三文件才连续提交。"""
+    day = tmp_path / "2026-07-23"
+    seen = {}
+
+    def checking_push(title, content):
+        seen["raw_exists_at_push"] = (day / "flash_raw.json").exists()
+        seen["digest_exists_at_push"] = (day / "digest.md").exists()
+        seen["manifest_exists_at_push"] = (day / "manifest.json").exists()
+        return True
+
+    _run(tmp_path, push_fn=checking_push)
+    assert seen["raw_exists_at_push"] is False
+    assert seen["digest_exists_at_push"] is False
+    assert seen["manifest_exists_at_push"] is False
+    assert (day / "flash_raw.json").exists()
+    assert (day / "digest.md").exists()
+    assert (day / "manifest.json").exists()
