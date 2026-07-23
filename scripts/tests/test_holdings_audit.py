@@ -116,6 +116,14 @@ def test_entry_date_null_and_empty_normalized(conn):
     assert conn.execute("SELECT entry_date FROM holdings WHERE id=?", (hid,)).fetchone()[0] == "2020-01-02"
 
 
+def test_is_strict_iso_date_matrix():
+    """round4:正则+解析双重校验——3.11+ fromisoformat 宽格式与非字符串全拒。"""
+    assert Q.is_strict_iso_date("2026-07-01")
+    for bad in ("20260701", "2026-W27-3", "2026/07/01", "2026-13-01", "2026-02-30",
+                "", None, False, 0, 20260701):
+        assert not Q.is_strict_iso_date(bad), f"应拒绝 {bad!r}"
+
+
 def test_concurrent_create_does_not_overwrite_historical_entry_date(conn):
     """收尾门 round2 high 交错回归:请求 A(无 entry_date)查无行→B 先创建带历史日期的
     持仓→A insert 撞 active 唯一索引重试转 update——B 的历史日期不得被 A 的缺省覆盖。"""

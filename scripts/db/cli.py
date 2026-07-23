@@ -1115,12 +1115,12 @@ def _cmd_add_macro(args: argparse.Namespace) -> None:
 
 
 def _entry_date_arg(value: str) -> str:
-    """argparse type 校验：--entry-date 必须是合法 YYYY-MM-DD（空串/错误格式 fail-fast）。"""
-    import datetime
-    try:
-        return datetime.date.fromisoformat(value).isoformat()
-    except ValueError:
+    """argparse type 校验：--entry-date 严格 YYYY-MM-DD（正则+解析双重,与 API 一致;
+    Python 3.11+ fromisoformat 会接受 20260701 等宽格式,收尾门 round4）。"""
+    from .queries import is_strict_iso_date
+    if not is_strict_iso_date(value):
         raise argparse.ArgumentTypeError(f"非法日期格式（应为 YYYY-MM-DD）: {value!r}")
+    return value
 
 
 def _cmd_holdings_add(args: argparse.Namespace) -> None:

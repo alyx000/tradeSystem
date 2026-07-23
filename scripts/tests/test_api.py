@@ -2040,13 +2040,14 @@ class TestPlanningAndKnowledgeAPI:
         client.put(f"/api/holdings/{hid}", json={"entry_date": "2020-01-02"})
         client.put(f"/api/holdings/{hid}", json={"entry_date": "", "note": "x"})
         assert client.get(f"/api/holdings/{hid}").json()["entry_date"] == "2020-01-02"
-        # 非法格式 fail-fast
-        assert client.post("/api/holdings", json={
-            "stock_code": "600900.SH", "stock_name": "长江电力",
-            "entry_date": "2026/07/01", "status": "active",
-        }).status_code == 422
-        assert client.put(f"/api/holdings/{hid}",
-                          json={"entry_date": "not-a-date"}).status_code == 422
+        # 非法格式 fail-fast(round4:含 Python 3.11+ fromisoformat 宽格式与非字符串)
+        for bad in ("2026/07/01", "not-a-date", "20260701", "2026-W27-3", False, 0):
+            assert client.post("/api/holdings", json={
+                "stock_code": "600900.SH", "stock_name": "长江电力",
+                "entry_date": bad, "status": "active",
+            }).status_code == 422, f"POST 应拒绝 {bad!r}"
+            assert client.put(f"/api/holdings/{hid}",
+                              json={"entry_date": bad}).status_code == 422, f"PUT 应拒绝 {bad!r}"
 
     def test_holdings_api_null_input_by_normalized(self, client):
         """显式传 input_by:null 不得写穿 NULL 或清空既有审计(门1 M2)。"""

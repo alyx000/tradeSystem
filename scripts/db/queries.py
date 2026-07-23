@@ -453,6 +453,22 @@ def _shanghai_today() -> str:
     return datetime.datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat()
 
 
+def is_strict_iso_date(v) -> bool:
+    """严格 YYYY-MM-DD 校验（CLI/API 共用）。正则 + 解析双重：Python 3.11+ 的
+    fromisoformat 接受 `20260701`/ISO week 等宽格式,单靠它会把非规范值持久化,
+    下游按字符串比较 entry_date 时静默失配（收尾门 round4）。"""
+    import re
+    from datetime import date as _d
+
+    if not isinstance(v, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", v):
+        return False
+    try:
+        _d.fromisoformat(v)
+        return True
+    except ValueError:
+        return False
+
+
 def upsert_holding(conn: sqlite3.Connection, **kwargs: Any) -> int:
     # 写入审计：insert 缺省 "system"(列不留 NULL)；审计强制发生在 CLI(required)/API(缺省 web)
     # 边界。缺省只挂 insert 分支——update 分支仅显式传入时覆盖，否则内部补账路径
@@ -462,10 +478,12 @@ def upsert_holding(conn: sqlite3.Connection, **kwargs: Any) -> int:
     # rowcount=0 时 fallback 到 insert(重新开仓语义=新建行)。并发 insert 撞 active 唯一
     # partial index 时重试一次(另一连接刚建了行 → 本次转 update)。
     #
-    # entry_date 空值归一(收尾门 round3 high)：API body 直传时键可能存在但值为
+    # entry_date 空值归一(收尾门 round3/4 high)：API body 直传时键可能存在但值为
     # null/空串——setdefault 挡不住(键在)、update 的 None 过滤挡不住空串(会把历史
-    # 日期覆盖成 '')。统一 pop 空值：insert 走缺省 today,update 不携带该列。
-    if "entry_date" in kwargs and not kwargs["entry_date"]:
+    # 日期覆盖成 '')。**精确判断 None/空串**(truthiness 会把 False/0 也吞成缺省)：
+    # 仅这两种视为未提供 pop 掉(insert 走缺省 today,update 不携带);其余非法形态
+    # 由入口层校验拒绝(API 422/CLI argparse),不在此静默转换。
+    if "entry_date" in kwargs and kwargs["entry_date"] in (None, ""):
         kwargs.pop("entry_date")
     code = kwargs.get("stock_code")
     target_status = kwargs.get("status")
