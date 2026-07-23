@@ -10,11 +10,14 @@ import json
 import logging
 import os
 import sys
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Callable, Optional
 from zoneinfo import ZoneInfo
+
+import requests
 
 from services.macro_flash import collector, formatter
 from services.macro_flash import filter as flash_filter
@@ -53,6 +56,33 @@ class RunOutcome:
     push_md: Optional[str] = None
 
 
+class _LockContention(Exception):
+    """目录 .lock 已被占用(另一进程持锁中)。"""
+
+    def __init__(self, lock_path: Path):
+        self.lock_path = lock_path
+        super().__init__(str(lock_path))
+
+
+@contextmanager
+def _locked(day_dir: Path):
+    """获取目录级 .lock(O_CREAT|O_EXCL)防并发;占用时抛 _LockContention。
+
+    repush 与正式采集共用同一把锁(day_dir/.lock),保证 manifest.json 的
+    任何写入者互斥,避免并发覆盖。
+    """
+    lock_path = day_dir / ".lock"
+    try:
+        lock_fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        raise _LockContention(lock_path) from None
+    try:
+        yield
+    finally:
+        os.close(lock_fd)
+        lock_path.unlink(missing_ok=True)
+
+
 def resolve_window(date_str: Optional[str], lookback_hours: int,
                    now: Optional[datetime] = None):
     """窗口终点:--date 指定日取 16:30,否则取当前时刻;均为 naive 上海时间。"""
@@ -71,7 +101,6 @@ def read_manifest(date_str: str, base_dir: Optional[Path] = None) -> Optional[di
 
 def doctor() -> dict:
     """live 探测金十:拉 1 页并校验必需字段。部署验证与日常排障入口。"""
-    import requests
     try:
         page = collector._fetch_page(requests.Session(), "")
     except Exception as exc:  # noqa: BLE001
@@ -114,25 +143,20 @@ def run(config: dict, *, date_str: Optional[str] = None,
             return RunOutcome(status="repush_missing", exit_code=EXIT_CODES["repush_missing"])
         # repush 也是 manifest.json 的写入者,必须与调度 run 互斥同一把 .lock,
         # 否则并发时 repush 的旧读-改-写会静默覆盖 run 刚落地的新 manifest。
-        lock_path = day_dir / ".lock"
         try:
-            lock_fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        except FileExistsError:
-            print(f"{run_date} 已有进行中的 run({lock_path});确认为残留锁可删除后重试。",
+            with _locked(day_dir):
+                # 持锁后重读最新落地的 manifest 与 digest,避免用锁外旧快照覆盖
+                latest = read_manifest(run_date, base) or existing
+                digest_md = digest_path.read_text(encoding="utf-8")
+                push_md = formatter.build_push_markdown(digest_md, _rel(digest_path))
+                latest["push_status"] = "success" if push(title, push_md) else "failed"
+                latest["pushed_at"] = _now_iso()
+                _atomic_write(manifest_path, _dumps(latest))
+                return RunOutcome(status="repushed", exit_code=0, manifest=latest, push_md=push_md)
+        except _LockContention as exc:
+            print(f"{run_date} 已有进行中的 run({exc.lock_path});确认为残留锁可删除后重试。",
                   file=sys.stderr)
             return RunOutcome(status="lock_contention", exit_code=EXIT_CODES["lock_contention"])
-        try:
-            # 持锁后重读最新落地的 manifest 与 digest,避免用锁外旧快照覆盖
-            latest = read_manifest(run_date, base) or existing
-            digest_md = digest_path.read_text(encoding="utf-8")
-            push_md = formatter.build_push_markdown(digest_md, _rel(digest_path))
-            latest["push_status"] = "success" if push(title, push_md) else "failed"
-            latest["pushed_at"] = _now_iso()
-            _atomic_write(manifest_path, _dumps(latest))
-            return RunOutcome(status="repushed", exit_code=0, manifest=latest, push_md=push_md)
-        finally:
-            os.close(lock_fd)
-            lock_path.unlink(missing_ok=True)
 
     if (existing and existing.get("source_status") == collector.STATUS_COMPLETE
             and not force_refresh):
@@ -154,81 +178,77 @@ def run(config: dict, *, date_str: Optional[str] = None,
                           digest_md=digest_md)
 
     day_dir.mkdir(parents=True, exist_ok=True)
-    lock_path = day_dir / ".lock"
     try:
-        lock_fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-    except FileExistsError:
-        print(f"{run_date} 已有进行中的 run({lock_path});确认为残留锁可删除后重试。",
+        with _locked(day_dir):
+            try:
+                result = collect(window_start, window_end)
+                candidates = flash_filter.filter_items(result.items, keywords)
+                digest_md = formatter.build_digest_markdown(
+                    candidates, window_start=window_start, window_end=window_end,
+                    source_status=result.status, raw_count=result.raw_count,
+                    topic_order=list(keywords))
+                raw_payload = _dumps({
+                    "schema_version": SCHEMA_VERSION,
+                    "window_start": str(window_start), "window_end": str(window_end),
+                    "items": result.items,
+                })
+                _atomic_write(day_dir / "flash_raw.json", raw_payload)
+                _atomic_write(digest_path, digest_md)
+
+                manifest = {
+                    "schema_version": SCHEMA_VERSION,
+                    "run_date": run_date,
+                    "window_start": str(window_start),
+                    "window_end": str(window_end),
+                    "lookback_hours": lookback_hours,
+                    "source_status": result.status,
+                    "error": result.error,
+                    "raw_count": result.raw_count,
+                    "dropped_count": result.dropped_count,
+                    "matched_count": len(candidates),
+                    "pages": result.pages,
+                    "files": {
+                        "flash_raw": {"path": "flash_raw.json", "sha256": _sha256(raw_payload)},
+                        "digest": {"path": "digest.md", "sha256": _sha256(digest_md)},
+                    },
+                    "candidates": [_candidate_row(c) for c in candidates],
+                    "push_status": "skipped",
+                    "pushed_at": None,
+                    "generated_at": _now_iso(),
+                }
+                push_md = None
+                if not no_push:
+                    push_md = (formatter.build_status_push(
+                                   result.status, window_start=window_start,
+                                   window_end=window_end, error=result.error)
+                               if result.status == collector.STATUS_FAILED
+                               else formatter.build_push_markdown(digest_md, _rel(digest_path)))
+                    manifest["push_status"] = "success" if push(title, push_md) else "failed"
+                    manifest["pushed_at"] = _now_iso()
+                exit_code = EXIT_CODES.get(result.status, 1)
+                if exit_code == 0 and manifest["push_status"] == "failed":
+                    exit_code = EXIT_CODES["push_failed"]  # 归档成功推送失败:不静默,同日补推走 --repush
+                manifest["exit_code"] = exit_code
+                _atomic_write(manifest_path, _dumps(manifest))
+                return RunOutcome(status=result.status, exit_code=exit_code,
+                                  manifest=manifest, digest_md=digest_md, push_md=push_md)
+            except Exception as exc:  # noqa: BLE001 — 编排层意外异常也落 manifest,兑现"唯一 run receipt"
+                logger.exception("[macro-flash] run 意外异常")
+                err_manifest = {
+                    "schema_version": SCHEMA_VERSION, "run_date": run_date,
+                    "window_start": str(window_start), "window_end": str(window_end),
+                    "lookback_hours": lookback_hours,
+                    "source_status": "run_error", "error": str(exc),
+                    "push_status": "skipped", "pushed_at": None,
+                    "exit_code": EXIT_CODES["run_error"], "generated_at": _now_iso(),
+                }
+                _atomic_write(manifest_path, _dumps(err_manifest))
+                return RunOutcome(status="run_error", exit_code=EXIT_CODES["run_error"],
+                                  manifest=err_manifest)
+    except _LockContention as exc:
+        print(f"{run_date} 已有进行中的 run({exc.lock_path});确认为残留锁可删除后重试。",
               file=sys.stderr)
         return RunOutcome(status="lock_contention", exit_code=EXIT_CODES["lock_contention"])
-    try:
-        result = collect(window_start, window_end)
-        candidates = flash_filter.filter_items(result.items, keywords)
-        digest_md = formatter.build_digest_markdown(
-            candidates, window_start=window_start, window_end=window_end,
-            source_status=result.status, raw_count=result.raw_count,
-            topic_order=list(keywords))
-        raw_payload = _dumps({
-            "schema_version": SCHEMA_VERSION,
-            "window_start": str(window_start), "window_end": str(window_end),
-            "items": result.items,
-        })
-        _atomic_write(day_dir / "flash_raw.json", raw_payload)
-        _atomic_write(digest_path, digest_md)
-
-        manifest = {
-            "schema_version": SCHEMA_VERSION,
-            "run_date": run_date,
-            "window_start": str(window_start),
-            "window_end": str(window_end),
-            "lookback_hours": lookback_hours,
-            "source_status": result.status,
-            "error": result.error,
-            "raw_count": result.raw_count,
-            "dropped_count": result.dropped_count,
-            "matched_count": len(candidates),
-            "pages": result.pages,
-            "files": {
-                "flash_raw": {"path": "flash_raw.json", "sha256": _sha256(raw_payload)},
-                "digest": {"path": "digest.md", "sha256": _sha256(digest_md)},
-            },
-            "candidates": [_candidate_row(c) for c in candidates],
-            "push_status": "skipped",
-            "pushed_at": None,
-            "generated_at": _now_iso(),
-        }
-        push_md = None
-        if not no_push:
-            push_md = (formatter.build_status_push(
-                           result.status, window_start=window_start,
-                           window_end=window_end, error=result.error)
-                       if result.status == collector.STATUS_FAILED
-                       else formatter.build_push_markdown(digest_md, _rel(digest_path)))
-            manifest["push_status"] = "success" if push(title, push_md) else "failed"
-            manifest["pushed_at"] = _now_iso()
-        exit_code = EXIT_CODES.get(result.status, 1)
-        if exit_code == 0 and manifest["push_status"] == "failed":
-            exit_code = EXIT_CODES["push_failed"]  # 归档成功推送失败:不静默,同日补推走 --repush
-        manifest["exit_code"] = exit_code
-        _atomic_write(manifest_path, _dumps(manifest))
-        return RunOutcome(status=result.status, exit_code=exit_code,
-                          manifest=manifest, digest_md=digest_md, push_md=push_md)
-    except Exception as exc:  # noqa: BLE001 — 编排层意外异常也落 manifest,兑现"唯一 run receipt"
-        logger.exception("[macro-flash] run 意外异常")
-        err_manifest = {
-            "schema_version": SCHEMA_VERSION, "run_date": run_date,
-            "window_start": str(window_start), "window_end": str(window_end),
-            "lookback_hours": lookback_hours,
-            "source_status": "run_error", "error": str(exc),
-            "push_status": "skipped", "pushed_at": None,
-            "exit_code": EXIT_CODES["run_error"], "generated_at": _now_iso(),
-        }
-        _atomic_write(manifest_path, _dumps(err_manifest))
-        return RunOutcome(status="run_error", exit_code=EXIT_CODES["run_error"],
-                          manifest=err_manifest)
-    finally:
-        os.close(lock_fd)
-        lock_path.unlink(missing_ok=True)
 
 
 def _candidate_row(cand) -> dict:
