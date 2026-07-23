@@ -14,19 +14,35 @@ from __future__ import annotations
 import argparse
 import datetime
 import json
+import re
 import sys
 
 from services.macro_flash import service
 
 
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
 def _iso_date(value: str) -> str:
-    """argparse type 回调:边缘校验日期格式,免 service 层 ValueError 裸 traceback
-    (且避免非法日期先白跑一段;同 value_watch / sector_crowding gate-1 先例)。"""
-    try:
-        datetime.date.fromisoformat(value)
-    except ValueError:
+    """argparse type 回调:严格校验 YYYY-MM-DD(regex 挡掉 3.11+ 的紧凑/周日期形式),
+    返回规范化 isoformat;免 service 层 ValueError 裸 traceback 与归档路径漂移。"""
+    if not _DATE_RE.match(value):
         raise argparse.ArgumentTypeError(f"日期须为 YYYY-MM-DD 格式: {value!r}")
-    return value
+    try:
+        return datetime.date.fromisoformat(value).isoformat()
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"非法日期: {value!r}")
+
+
+def _positive_int(value: str) -> int:
+    """argparse type 回调:回溯小时数须为正整数,挡掉 0/负数导致的窗口反转。"""
+    try:
+        n = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"须为整数: {value!r}")
+    if n <= 0:
+        raise argparse.ArgumentTypeError(f"回溯小时数须为正: {value!r}")
+    return n
 
 
 def register_subparser(subparsers: argparse._SubParsersAction) -> None:
@@ -37,13 +53,14 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
     run_p.add_argument("--date", default=None, type=_iso_date,
                        help="窗口终点所在日 YYYY-MM-DD(补跑用,终点固定取该日 16:30;"
                             "周日档补跑需配 --lookback-hours 54,终点与实时档 22:00 有 5.5h 差,接受)")
-    run_p.add_argument("--lookback-hours", type=int, default=service.DEFAULT_LOOKBACK_HOURS,
+    run_p.add_argument("--lookback-hours", type=_positive_int, default=service.DEFAULT_LOOKBACK_HOURS,
                        help="回溯小时数(默认 24;周日档 54)")
-    run_p.add_argument("--dry-run", action="store_true", help="不写不推,仅打印速读")
-    run_p.add_argument("--no-push", action="store_true", help="归档不推送(补跑防重推)")
+    mode = run_p.add_mutually_exclusive_group()
+    mode.add_argument("--dry-run", action="store_true", help="不写不推,仅打印速读")
+    mode.add_argument("--no-push", action="store_true", help="归档不推送(补跑防重推)")
+    mode.add_argument("--repush", action="store_true", help="仅重推已有 digest,不重采")
     run_p.add_argument("--force-refresh", action="store_true",
-                       help="忽略已有 complete 归档,强制重采")
-    run_p.add_argument("--repush", action="store_true", help="仅重推已有 digest,不重采")
+                       help="忽略已有 complete 归档,强制重采(不可与 --repush 同用)")
 
     show_p = sub.add_parser("show", help="只读展示既有归档")
     show_p.add_argument("--date", default=None, type=_iso_date, help="归档日 YYYY-MM-DD(默认今天)")
@@ -56,6 +73,9 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
 def handle_command(config: dict, args: argparse.Namespace) -> None:
     sub = getattr(args, "macro_flash_command", None)
     if sub == "run":
+        if args.repush and args.force_refresh:
+            print("--repush 与 --force-refresh 互斥(重推既有 vs 强制重采)", file=sys.stderr)
+            sys.exit(2)
         outcome = service.run(
             config, date_str=args.date, lookback_hours=args.lookback_hours,
             dry_run=args.dry_run, no_push=args.no_push,
@@ -81,10 +101,12 @@ def _show(args: argparse.Namespace) -> None:
     if args.json:
         print(json.dumps(manifest, ensure_ascii=False, indent=2))
         return
-    print(f"状态 {manifest['source_status']}"
-          f" · 窗口 {manifest['window_start']} → {manifest['window_end']}"
-          f" · 原始 {manifest['raw_count']} · 命中 {manifest['matched_count']}"
-          f" · 推送 {manifest['push_status']}")
+    print(f"状态 {manifest.get('source_status')}"
+          f" · 窗口 {manifest.get('window_start')} → {manifest.get('window_end')}"
+          f" · 原始 {manifest.get('raw_count', '-')} · 命中 {manifest.get('matched_count', '-')}"
+          f" · 推送 {manifest.get('push_status')}")
+    if manifest.get("error"):
+        print(f"错误:{manifest['error']}")
     digest = service.BASE_DIR / date_str / "digest.md"
     if digest.exists():
         print()
