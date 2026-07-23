@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import hashlib
 import json
 import re
 import sys
@@ -107,10 +108,21 @@ def _show(args: argparse.Namespace) -> None:
           f" · 推送 {manifest.get('push_status')}")
     if manifest.get("error"):
         print(f"错误:{manifest['error']}")
-    digest = service.BASE_DIR / date_str / "digest.md"
-    if digest.exists():
-        print()
-        print(digest.read_text(encoding="utf-8"))
+    # 仅在 manifest 声明了 digest 且当前文件 sha 匹配时才展示正文:
+    # run_error 只重写 manifest 不动 digest,无此校验会把上一代旧速读当当期展示,
+    # 误导人工/Agent 确认入库;撕裂或篡改的 digest 同样不可信。
+    digest_rec = (manifest.get("files") or {}).get("digest") or {}
+    digest_path = service.BASE_DIR / date_str / "digest.md"
+    if digest_rec.get("sha256") and digest_path.exists():
+        body = digest_path.read_text(encoding="utf-8")
+        if hashlib.sha256(body.encode("utf-8")).hexdigest() == digest_rec["sha256"]:
+            print()
+            print(body)
+        else:
+            print("(digest.md 与 manifest sha 不符,疑似撕裂/篡改,不展示正文;用 --json 查 manifest)",
+                  file=sys.stderr)
+    else:
+        print("(该归档无有效 digest 记录,仅展示状态)", file=sys.stderr)
 
 
 def _doctor(args: argparse.Namespace) -> None:

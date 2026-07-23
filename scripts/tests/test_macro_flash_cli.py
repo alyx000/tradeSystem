@@ -6,10 +6,13 @@
 - --date 严格校验(拒绝 3.11+ 紧凑/周日期形式)
 - --lookback-hours 正整数校验
 - _show 对 run_error manifest(缺 raw_count/matched_count)容错
+- _show 仅在 manifest files.digest.sha256 与当前 digest.md 匹配时才展示正文
+  (run_error 陈旧 digest / sha 篡改 / sha 匹配 三种场景)
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -125,3 +128,81 @@ def test_show_handles_run_error_manifest_without_counts(tmp_path, monkeypatch, c
     assert "run_error" in out
     assert "错误" in out
     assert "boom" in out
+
+
+# ── _show 仅在 manifest sha 与 digest.md 匹配时展示正文(门2 codex round-2)──
+
+def test_show_hides_stale_digest_on_run_error(tmp_path, monkeypatch, capsys) -> None:
+    """run_error 只重写 manifest,不动 digest.md;不能把上一代旧速读当当期展示。"""
+    date_str = "2026-07-23"
+    day_dir = tmp_path / date_str
+    day_dir.mkdir(parents=True)
+    (day_dir / "digest.md").write_text("OLD DIGEST 旧速读", encoding="utf-8")
+    manifest = {
+        "source_status": "run_error",
+        "window_start": "2026-07-22T16:30:00",
+        "window_end": "2026-07-23T16:30:00",
+        "error": "boom",
+        "push_status": "skipped",
+    }
+    (day_dir / "manifest.json").write_text(
+        json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+
+    monkeypatch.setattr(service, "BASE_DIR", tmp_path)
+
+    macro_flash._show(argparse.Namespace(date=date_str, json=False))
+
+    out = capsys.readouterr().out
+    assert "OLD DIGEST" not in out
+    assert "run_error" in out
+    assert "boom" in out
+
+
+def test_show_hides_digest_on_sha_mismatch(tmp_path, monkeypatch, capsys) -> None:
+    """manifest 记录的 sha 与实际 digest.md 内容不符(撕裂/篡改)时不展示正文。"""
+    date_str = "2026-07-23"
+    day_dir = tmp_path / date_str
+    day_dir.mkdir(parents=True)
+    (day_dir / "digest.md").write_text("REAL DIGEST 内容", encoding="utf-8")
+    manifest = {
+        "source_status": "complete",
+        "window_start": "2026-07-22T16:30:00",
+        "window_end": "2026-07-23T16:30:00",
+        "push_status": "sent",
+        "files": {"digest": {"path": "digest.md", "sha256": "deadbeef"}},
+    }
+    (day_dir / "manifest.json").write_text(
+        json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+
+    monkeypatch.setattr(service, "BASE_DIR", tmp_path)
+
+    macro_flash._show(argparse.Namespace(date=date_str, json=False))
+
+    out = capsys.readouterr().out
+    assert "REAL DIGEST" not in out
+
+
+def test_show_prints_digest_when_sha_matches(tmp_path, monkeypatch, capsys) -> None:
+    """manifest 声明的 sha 与当前 digest.md 匹配时正常展示正文。"""
+    date_str = "2026-07-23"
+    day_dir = tmp_path / date_str
+    day_dir.mkdir(parents=True)
+    body = "VALID DIGEST 正文"
+    (day_dir / "digest.md").write_text(body, encoding="utf-8")
+    real_sha = hashlib.sha256(body.encode("utf-8")).hexdigest()
+    manifest = {
+        "source_status": "complete",
+        "window_start": "2026-07-22T16:30:00",
+        "window_end": "2026-07-23T16:30:00",
+        "push_status": "sent",
+        "files": {"digest": {"path": "digest.md", "sha256": real_sha}},
+    }
+    (day_dir / "manifest.json").write_text(
+        json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+
+    monkeypatch.setattr(service, "BASE_DIR", tmp_path)
+
+    macro_flash._show(argparse.Namespace(date=date_str, json=False))
+
+    out = capsys.readouterr().out
+    assert "VALID DIGEST" in out
