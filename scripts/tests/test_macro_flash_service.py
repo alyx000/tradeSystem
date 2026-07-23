@@ -69,6 +69,17 @@ def test_dry_run_no_files_no_push(tmp_path):
     assert push.calls == []
 
 
+def test_dry_run_previews_even_when_complete_exists(tmp_path):
+    # 先落一个当日 complete 归档
+    _run(tmp_path, no_push=True)
+    # 再 dry-run:即使已 complete,也应打印预览而非幂等跳过,且不写文件
+    push = PushSpy()
+    out = _run(tmp_path, dry_run=True, push_fn=push)
+    assert out.status != "skipped_existing"
+    assert out.digest_md is not None      # 预览有产出
+    assert push.calls == []               # dry-run 不推送
+
+
 def test_no_push_archives_only(tmp_path):
     push = PushSpy()
     _run(tmp_path, no_push=True, push_fn=push)

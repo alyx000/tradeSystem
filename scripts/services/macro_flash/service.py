@@ -137,6 +137,22 @@ def run(config: dict, *, date_str: Optional[str] = None,
     digest_path = day_dir / "digest.md"
     title = f"宏观快讯速读 · {run_date}"
 
+    keywords = flash_filter.load_keyword_config(config)
+
+    if dry_run:
+        # dry-run 是纯预览:必须先于 repush/幂等跳过逻辑返回,不受既有归档影响,
+        # 兑现"--dry-run 不写不推,仅打印速读"契约(即使当日已有 complete 归档)。
+        result = collect(window_start, window_end)
+        candidates = flash_filter.filter_items(result.items, keywords)
+        digest_md = formatter.build_digest_markdown(
+            candidates, window_start=window_start, window_end=window_end,
+            source_status=result.status, raw_count=result.raw_count,
+            topic_order=list(keywords))
+        print(digest_md)
+        return RunOutcome(status=result.status,
+                          exit_code=EXIT_CODES.get(result.status, 1),
+                          digest_md=digest_md)
+
     existing = read_manifest(run_date, base)
 
     if repush:
@@ -188,20 +204,6 @@ def run(config: dict, *, date_str: Optional[str] = None,
         logger.warning("[macro-flash] %s complete manifest 与归档 sha 不符(疑似撕裂写),重新采集修复",
                        run_date)
         # 不 return,继续向下走正式采集重采修复
-
-    keywords = flash_filter.load_keyword_config(config)
-
-    if dry_run:
-        result = collect(window_start, window_end)
-        candidates = flash_filter.filter_items(result.items, keywords)
-        digest_md = formatter.build_digest_markdown(
-            candidates, window_start=window_start, window_end=window_end,
-            source_status=result.status, raw_count=result.raw_count,
-            topic_order=list(keywords))
-        print(digest_md)
-        return RunOutcome(status=result.status,
-                          exit_code=EXIT_CODES.get(result.status, 1),
-                          digest_md=digest_md)
 
     day_dir.mkdir(parents=True, exist_ok=True)
     try:
