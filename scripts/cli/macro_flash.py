@@ -18,7 +18,7 @@ import json
 import re
 import sys
 
-from services.macro_flash import service
+from services.macro_flash import collector, service
 
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -108,12 +108,16 @@ def _show(args: argparse.Namespace) -> None:
           f" · 推送 {manifest.get('push_status')}")
     if manifest.get("error"):
         print(f"错误:{manifest['error']}")
-    # 仅在 manifest 声明了 digest 且当前文件 sha 匹配时才展示正文:
-    # run_error 只重写 manifest 不动 digest,无此校验会把上一代旧速读当当期展示,
-    # 误导人工/Agent 确认入库;撕裂或篡改的 digest 同样不可信。
+    source_status = manifest.get("source_status")
     digest_rec = (manifest.get("files") or {}).get("digest") or {}
     digest_path = service.BASE_DIR / date_str / "digest.md"
-    if digest_rec.get("sha256") and digest_path.exists():
+    # 仅 complete 归档的正文可作为当期有效快讯供人工/Agent 确认入库;
+    # 任何非 complete(source_failed/truncated/stalled/drift/run_error)可能是失败伪装成空
+    # 或部分不完整,只给状态+警告,不展示正文,避免误确认。
+    if source_status != collector.STATUS_COMPLETE:
+        print(f"(归档状态 {source_status} 非 complete,正文可能失败伪装成空或不完整,不展示;"
+              f"用 --json 查 manifest,或 macro-flash run --force-refresh 重采)", file=sys.stderr)
+    elif digest_rec.get("sha256") and digest_path.exists():
         body = digest_path.read_text(encoding="utf-8")
         if hashlib.sha256(body.encode("utf-8")).hexdigest() == digest_rec["sha256"]:
             print()

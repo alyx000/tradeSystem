@@ -8,6 +8,8 @@
 - _show 对 run_error manifest(缺 raw_count/matched_count)容错
 - _show 仅在 manifest files.digest.sha256 与当前 digest.md 匹配时才展示正文
   (run_error 陈旧 digest / sha 篡改 / sha 匹配 三种场景)
+- _show 仅在 source_status == complete 时才展示正文(source_failed 的"无命中"空 digest
+  即便 sha 匹配也不能当正常空结果展示,门2 codex round-3)
 """
 from __future__ import annotations
 
@@ -180,6 +182,35 @@ def test_show_hides_digest_on_sha_mismatch(tmp_path, monkeypatch, capsys) -> Non
 
     out = capsys.readouterr().out
     assert "REAL DIGEST" not in out
+
+
+def test_show_hides_digest_on_source_failed(tmp_path, monkeypatch, capsys) -> None:
+    """source_failed 仍会归档"无命中"空 digest 且 sha 有效(formatter 无候选时的合法空正文),
+    但采集本身是失败;不能因 sha 校验通过就把失败展示成正常空结果,误导人工/Agent 确认入库。"""
+    date_str = "2026-07-23"
+    day_dir = tmp_path / date_str
+    day_dir.mkdir(parents=True)
+    body = "窗口内无命中宏观快讯(原始 0 条)。"
+    (day_dir / "digest.md").write_text(body, encoding="utf-8")
+    real_sha = hashlib.sha256(body.encode("utf-8")).hexdigest()
+    manifest = {
+        "source_status": "source_failed",
+        "window_start": "2026-07-22T16:30:00",
+        "window_end": "2026-07-23T16:30:00",
+        "error": "boom",
+        "push_status": "skipped",
+        "files": {"digest": {"path": "digest.md", "sha256": real_sha}},
+    }
+    (day_dir / "manifest.json").write_text(
+        json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+
+    monkeypatch.setattr(service, "BASE_DIR", tmp_path)
+
+    macro_flash._show(argparse.Namespace(date=date_str, json=False))
+
+    out = capsys.readouterr().out
+    assert "窗口内无命中" not in out
+    assert "source_failed" in out
 
 
 def test_show_prints_digest_when_sha_matches(tmp_path, monkeypatch, capsys) -> None:
