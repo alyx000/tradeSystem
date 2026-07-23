@@ -299,6 +299,18 @@ ARCHITECTURE_COMMANDS = [
     ["volume-watch", "trend"],
     ["volume-watch", "trend", "--days", "30"],
     ["volume-watch", "trend", "--date", "2026-05-29", "--days", "10"],
+    # macro-flash (宏观快讯采集速读:金十源,归档 + 钉钉;入库走 record-notes 人工确认)
+    ["macro-flash", "run"],
+    ["macro-flash", "run", "--date", "2026-07-23"],
+    ["macro-flash", "run", "--dry-run"],
+    ["macro-flash", "run", "--no-push"],
+    ["macro-flash", "run", "--lookback-hours", "54"],
+    ["macro-flash", "run", "--force-refresh"],
+    ["macro-flash", "run", "--date", "2026-07-23", "--repush"],
+    ["macro-flash", "show"],
+    ["macro-flash", "show", "--date", "2026-07-23", "--json"],
+    ["macro-flash", "doctor"],
+    ["macro-flash", "doctor", "--json"],
     # new-high (前复权历史新高统计:全市场新高数 + 申万二级分组;默认不推送)
     ["new-high", "daily"],
     ["new-high", "daily", "--date", "2026-07-08"],

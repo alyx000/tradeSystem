@@ -1784,6 +1784,10 @@ def build_parser() -> argparse.ArgumentParser:
     from cli.volume_watch import register_subparser as register_volume_watch_subparser
     register_volume_watch_subparser(subparsers)
 
+    # macro-flash (宏观快讯采集速读)
+    from cli.macro_flash import register_subparser as register_macro_flash_subparser
+    register_macro_flash_subparser(subparsers)
+
     # value-watch (价值投资条件监控:红利回撤/卖出阶梯/稀缺周线,teacher_notes#391)
     from cli.value_watch import register_subparser as register_value_watch_subparser
     register_value_watch_subparser(subparsers)
@@ -1901,6 +1905,9 @@ def main():
     elif args.command == "volume-watch":
         from cli import volume_watch as volume_watch_module
         volume_watch_module.handle_command(config, args)
+    elif args.command == "macro-flash":
+        from cli import macro_flash as macro_flash_module
+        macro_flash_module.handle_command(config, args)
     elif args.command == "value-watch":
         from cli import value_watch as value_watch_module
         value_watch_module.handle_command(config, args)
