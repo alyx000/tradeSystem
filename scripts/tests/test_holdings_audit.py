@@ -72,18 +72,54 @@ def test_insert_without_input_by_falls_to_system(conn):
     assert row["input_by"] == "system"
 
 
-def test_holdings_add_cli_entry_date_semantics():
-    """--entry-date 缺省语义(spec v5 严重2 + 门1 M1)：按"是否有既有行"判断，
-    存量 NULL entry_date 行不得被盖成 today(NULL=缺数据而非错数据)。"""
+def test_entry_date_default_atomic_in_query_layer(conn):
+    """entry_date 缺省原子化(收尾门 round2 high)：只在真正 INSERT 时落上海当日;
+    update 未传保留原值(含存量 NULL 行不被伪造 today);显式传用传入值。"""
     import datetime
     from zoneinfo import ZoneInfo
 
-    from db import cli as db_cli
-
     today = datetime.datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat()
-    assert db_cli.resolve_entry_date_for_upsert(None, has_existing_row=False) == today
-    assert db_cli.resolve_entry_date_for_upsert(None, has_existing_row=True) is None  # 含 NULL 行
-    assert db_cli.resolve_entry_date_for_upsert("2026-06-30", has_existing_row=True) == "2026-06-30"
+    hid = Q.upsert_holding(conn, stock_code="601939.SH", stock_name="建设银行",
+                           status="active", input_by="manual")   # 新建未传
+    row = conn.execute("SELECT * FROM holdings WHERE id=?", (hid,)).fetchone()
+    assert row["entry_date"] == today
+    # 存量 NULL 行(补列前写入):update 补字段不得伪造 today
+    conn.execute("UPDATE holdings SET entry_date=NULL WHERE id=?", (hid,))
+    conn.commit()
+    Q.upsert_holding(conn, stock_code="601939.SH", stock_name="建设银行",
+                     shares=100, status="active", input_by="manual")
+    assert conn.execute("SELECT entry_date FROM holdings WHERE id=?", (hid,)).fetchone()[0] is None
+    # 显式传
+    hid2 = Q.upsert_holding(conn, stock_code="600436.SH", stock_name="片仔癀",
+                            entry_date="2026-06-30", status="active", input_by="manual")
+    assert conn.execute("SELECT entry_date FROM holdings WHERE id=?", (hid2,)).fetchone()[0] == "2026-06-30"
+
+
+def test_concurrent_create_does_not_overwrite_historical_entry_date(conn):
+    """收尾门 round2 high 交错回归:请求 A(无 entry_date)查无行→B 先创建带历史日期的
+    持仓→A insert 撞 active 唯一索引重试转 update——B 的历史日期不得被 A 的缺省覆盖。"""
+    orig = Q._active_holdings_by_code
+    state = {"first": True}
+
+    def _race(c, code):
+        rows = orig(c, code)
+        if state["first"] and not rows:
+            state["first"] = False
+            # B 在 A 查后写前创建历史日期持仓
+            Q.upsert_holding(c, stock_code="600900.SH", stock_name="长江电力",
+                             entry_date="2020-01-02", entry_price=18.0,
+                             status="active", input_by="manual")
+            return rows   # A 仍拿到"无行"快照 → 走 insert → IntegrityError → 重试转 update
+        return rows
+
+    import unittest.mock as mock
+    with mock.patch.object(Q, "_active_holdings_by_code", side_effect=_race):
+        Q.upsert_holding(conn, stock_code="600900.SH", stock_name="长江电力",
+                         shares=200, status="active", input_by="web")   # A:无 entry_date
+    row = conn.execute("SELECT * FROM holdings WHERE stock_code='600900.SH' "
+                       "AND status='active'").fetchone()
+    assert row["entry_date"] == "2020-01-02"   # 历史日期保留
+    assert row["shares"] == 200                # A 的字段经 update 落地
 
 
 def test_entry_date_arg_rejects_bad_format():

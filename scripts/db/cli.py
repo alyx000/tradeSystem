@@ -16,7 +16,6 @@ from pathlib import Path
 import yaml
 
 from .connection import get_db
-from .queries import resolve_entry_date_for_upsert  # noqa: F401  (CLI/API 共用,亦供既有测试引用)
 from .dual_write import reconcile_daily_market, retry_pending
 from .migrate import (
     CURRENT_SCHEMA_VERSION,
@@ -1111,8 +1110,8 @@ def _cmd_add_macro(args: argparse.Namespace) -> None:
 
 # ── 持仓池实现（DB 路径）─────────────────────────────────────────
 
-# resolve_entry_date_for_upsert 已下沉到 queries.py 供 CLI/API 共用
-# (收尾门 high:两个人工入口缺省语义必须一致);本模块头部 re-export 保持兼容
+# entry_date 缺省语义已原子化下沉到 queries.upsert_holding 的 insert 分支
+# (收尾门 round2 high:入口层先查后写有 TOCTOU);CLI/API 只透传显式值
 
 
 def _entry_date_arg(value: str) -> str:
@@ -1149,19 +1148,15 @@ def _cmd_holdings_add(args: argparse.Namespace) -> None:
     if args.thesis_id is not None:
         kwargs["thesis_id"] = args.thesis_id
 
+    if args.entry_date:
+        kwargs["entry_date"] = args.entry_date
+
     with get_db() as conn:
         migrate(conn)
-        # 门2 med-1:查 existing 与 upsert 两步间的写锁串行化,防并发连接交错时
-        # 误把他连接刚建的行判为"新建"而覆盖 entry_date(单机 CLI 概率极低,防御性)。
-        # round2:只容忍"已在事务中"(migrate 残留)这一种失败;database is locked/只读/
-        # IO 错误必须抛出——静默继续会让串行化失去硬保证,把锁错误延迟成后续写失败。
-        if conn.in_transaction:
-            conn.commit()  # 结束 migrate 残留事务,保证下面的 BEGIN IMMEDIATE 无条件生效
-        conn.execute("BEGIN IMMEDIATE")
-        existing = Q._active_holdings_by_code(conn, args.code)
-        entry_date = resolve_entry_date_for_upsert(args.entry_date, bool(existing))
-        if entry_date is not None:
-            kwargs["entry_date"] = entry_date
+        # entry_date 缺省(新建落上海当日/更新保留原值)由 upsert_holding insert 分支
+        # 原子处理(收尾门 round2 high):入口层"先查 active 再解析缺省"存在 TOCTOU,
+        # 查行与写入之间另一连接创建的历史日期行会被解析好的"今天"覆盖;
+        # 原先为此加的 BEGIN IMMEDIATE 串行化随先查后写一并移除。
         hid = Q.upsert_holding(conn, **kwargs)
 
     print(f"✅ 已添加持仓 (id={hid}): {args.name} ({args.code})")

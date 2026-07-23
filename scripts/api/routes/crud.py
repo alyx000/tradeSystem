@@ -333,16 +333,8 @@ def create_holding(body: dict, conn: sqlite3.Connection = Depends(get_db_conn)):
     # 不用 setdefault:显式传 null/空串会绕过缺省,POST 落 NULL、PUT 清空既有审计值(门1 M2)。
     if not body.get("input_by"):
         body["input_by"] = _API_INPUT_BY
-    # entry_date 缺省与 CLI 统一(收尾门 high):新建落上海当日,命中既有 active 行保留原值
-    # ——否则 Web 新建四大行/长电持仓落 NULL,value-watch 标 insufficient_identity
-    # 失去卖出阶梯监控,与 CLI 同场景行为分叉
-    if body.get("stock_code"):
-        existing = Q._active_holdings_by_code(conn, str(body["stock_code"]))
-        entry_date = Q.resolve_entry_date_for_upsert(body.get("entry_date"), bool(existing))
-        if entry_date is not None:
-            body["entry_date"] = entry_date
-        else:
-            body.pop("entry_date", None)
+    # entry_date 缺省(新建落上海当日/更新保留原值)由 upsert_holding insert 分支原子处理
+    # (收尾门 round2 high:入口层先查后写有 TOCTOU,会把解析好的"今天"覆盖并发创建的历史日期)
     hid = Q.upsert_holding(conn, **body)
     conn.commit()
     return {"id": hid}

@@ -447,25 +447,10 @@ def _active_holdings_by_code(conn: sqlite3.Connection, stock_code: str) -> list[
 _SYSTEM_INPUT_BY = "system"
 
 
-def resolve_entry_date_for_upsert(supplied: "str | None",
-                                  has_existing_row: bool) -> "str | None":
-    """entry_date 统一缺省语义（CLI/API 共用，收尾门 high：两个人工入口默认值必须一致，
-    否则 Web 新建四大行/长电持仓落 NULL → value-watch 标 insufficient_identity 失去
-    卖出阶梯监控，而 CLI 同场景默认当日）：
-
-    - 显式传入 → 用传入值；
-    - 未传且无既有 active 行（新建）→ 落当日（Asia/Shanghai，与 value-watch 日历口径一致）；
-    - 未传且命中既有 active 行（更新）→ 返回 None（不更新该列）。**按"是否有既有行"判断，
-      不按 entry_date 是否为 NULL**——存量行（补列前写入）entry_date 全为 NULL，若按 NULL
-      判"新建"会在任意补字段时打上伪造的今天日期；NULL 保持 NULL（缺数据而非错数据）。
-    """
-    if supplied:
-        return supplied
-    if not has_existing_row:
-        import datetime
-        from zoneinfo import ZoneInfo
-        return datetime.datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat()
-    return None
+def _shanghai_today() -> str:
+    import datetime
+    from zoneinfo import ZoneInfo
+    return datetime.datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat()
 
 
 def upsert_holding(conn: sqlite3.Connection, **kwargs: Any) -> int:
@@ -493,6 +478,12 @@ def upsert_holding(conn: sqlite3.Connection, **kwargs: Any) -> int:
 
         ins = dict(kwargs)
         ins.setdefault("input_by", _SYSTEM_INPUT_BY)
+        # entry_date 缺省原子化(收尾门 round2 high):只在真正执行 INSERT 时落上海当日。
+        # 入口层"先查 active 再解析缺省"存在 TOCTOU——查行与写入之间另一连接创建了带
+        # 真实历史日期的持仓,入口会把解析好的"今天"经 update 覆盖历史日期;挂在 insert
+        # 分支则 update 路径永不携带缺省值,历史日期天然不可被缺省请求覆盖。
+        # update 保留原值 = payload 只含显式传入字段,本已成立。
+        ins.setdefault("entry_date", _shanghai_today())
         cols, vals = [], []
         for k in _HOLDING_INSERTABLE:
             if k in ins and ins[k] is not None:
