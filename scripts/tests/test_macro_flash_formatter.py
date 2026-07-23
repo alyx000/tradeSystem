@@ -2,7 +2,7 @@
 import datetime as dt
 
 from services.macro_flash import formatter
-from services.macro_flash.filter import FlashCandidate
+from services.macro_flash.filter import FlashCandidate, OTHER_TOPIC
 
 W_START = dt.datetime(2026, 7, 22, 16, 30)
 W_END = dt.datetime(2026, 7, 23, 16, 30)
@@ -66,3 +66,42 @@ def test_status_push_mentions_status():
     out = formatter.build_status_push("source_failed", window_start=W_START,
                                       window_end=W_END, error="timeout")
     assert "source_failed" in out and "timeout" in out
+
+
+def test_push_retains_complete_earlier_block_drops_later():
+    """整块截断正例:第一个主题块预算内完整保留,第二个超预算整块丢弃(非字节截断)。"""
+    small = [_cand(f"a{i}", "货币政策", f"央行公开市场操作简讯{i}") for i in range(5)]
+    huge = [_cand(f"b{i}", "财政债券", "地方债发行细节说明文本" * 30) for i in range(300)]
+    out = formatter.build_push_markdown(_digest(small + huge), "data/runs/x/digest.md")
+
+    assert len(out.encode("utf-8")) <= formatter.PUSH_BODY_MAX_BYTES
+    # 保留块完整:标题 + 5 条完整条目均在,非半块
+    assert "## 货币政策" in out
+    assert out.count("- **") == 5
+    for i in range(5):
+        assert f"央行公开市场操作简讯{i}" in out
+    # 超预算块整块丢弃,不出现半块残留
+    assert "## 财政债券" not in out
+    # 截断提示与完整版路径均存在
+    assert "完整版见" in out and "data/runs/x/digest.md" in out
+
+
+def test_other_topic_always_last():
+    """OTHER_TOPIC 不在 topic_order 声明中,仍固定排在所有已声明主题之后。"""
+    md = _digest([_cand("a", "货币政策", "央行公开市场操作"),
+                  _cand("b", OTHER_TOPIC, "其他要闻内容")])
+    assert md.index("## " + OTHER_TOPIC) > md.index("## 货币政策")
+
+
+def test_status_push_without_error_shows_doctor_hint():
+    out = formatter.build_status_push("pagination_stalled", window_start=W_START,
+                                      window_end=W_END)
+    assert "macro-flash doctor" in out and "手动补跑" in out
+
+
+def test_html_tags_stripped_broad():
+    """<br> / </b> 等非仅 <b> 的闭合/自闭合标签也须被剥离。"""
+    md = _digest([_cand("a", "货币政策", "<b>央行</b><br>降准<br/>")])
+    assert "<b>" not in md and "</b>" not in md
+    assert "<br>" not in md and "<br/>" not in md
+    assert "央行" in md and "降准" in md
