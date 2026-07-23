@@ -83,3 +83,31 @@ def test_real_config_overseas_central_banks_not_shadowed():
     assert ecb[0].topic == "海外宏观"
     boj = flash_filter.filter_items([_item("b", "日央行加息概率上升")], kw)
     assert boj[0].topic == "海外宏观"
+
+
+def test_real_config_declaration_priority_and_substring_shadow():
+    """回归用例(门2 codex 第3轮指出):"最长匹配全局胜出"矫枉过正,压过了声明顺序契约。
+    央行+地方债/财政部 同时出现时,央行是真实命中(非子串误命中),应按声明顺序归货币政策,
+    不应因「地方债」/「财政部」字面更长就被判给财政债券。"""
+    import pathlib
+
+    import yaml
+
+    cfg_path = pathlib.Path(__file__).resolve().parents[1] / "config.yaml"
+    cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
+    kw = flash_filter.load_keyword_config(cfg)
+
+    mixed = flash_filter.filter_items([_item("a", "央行与财政部讨论地方债支持安排")], kw)
+    assert mixed[0].topic == "货币政策"
+
+    ecb = flash_filter.filter_items([_item("b", "欧央行降息预期升温")], kw)
+    assert ecb[0].topic == "海外宏观"
+
+    boj = flash_filter.filter_items([_item("c", "日央行加息概率上升")], kw)
+    assert boj[0].topic == "海外宏观"
+
+    fed = flash_filter.filter_items([_item("d", "美联储降息预期升温")], kw)
+    assert fed[0].topic == "海外宏观"
+
+    pboc = flash_filter.filter_items([_item("e", "央行宣布降息 0.25 个百分点")], kw)
+    assert pboc[0].topic == "货币政策"

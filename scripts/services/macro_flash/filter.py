@@ -34,17 +34,31 @@ def filter_items(items: List[dict], keywords: "OrderedDict[str, List[str]]") -> 
     for item in items:
         data = item.get("data") or {}
         text = f"{data.get('title') or ''}\n{data.get('content') or ''}"
-        # 最长命中关键词的主题胜出(specific-over-general):解决 央行⊂欧央行/日央行 的子串遮蔽。
-        # 长度相同按声明顺序(严格 > 更新,先声明的主题先遍历即保留)。
-        best_topic = None
-        best_len = 0
-        for topic, words in keywords.items():
-            longest = max((len(w) for w in words if w in text), default=0)
-            if longest > best_len:
-                best_len = longest
-                best_topic = topic
+        # 各主题命中关键词(保留声明顺序)
+        matched = [(topic, [w for w in words if w in text])
+                   for topic, words in keywords.items()]
+        matched = [(t, hits) for t, hits in matched if hits]
+        best_topic = _resolve_topic(matched)
         if best_topic is None and item.get("important"):
             best_topic = OTHER_TOPIC  # 金十标重要但无命中:强制入选兜底
         if best_topic is not None:
             out.append(FlashCandidate(item=item, topic=best_topic))
     return out
+
+
+def _resolve_topic(matched: "List[tuple]"):
+    """默认按声明顺序取首个命中主题;但若某主题的命中词全部只是其他主题更长命中词的
+    子串(如 央行 仅作为 欧央行/日央行 的子串出现),该命中视为子串误命中并跳过,由更
+    具体的主题胜出。既解决子串遮蔽,又保留非子串跨主题共现的声明顺序优先契约。"""
+    if not matched:
+        return None
+    all_hits = [w for _, hits in matched for w in hits]
+    for topic, hits in matched:  # 声明顺序
+        if any(not _subsumed(w, all_hits) for w in hits):
+            return topic
+    return matched[0][0]  # 理论兜底:所有命中互为子串,退回声明序首个
+
+
+def _subsumed(word: str, all_hits: "List[str]") -> bool:
+    """word 是否存在一个「包含它的更长命中词」(可能只是更具体词的子串误命中)。"""
+    return any(other != word and word in other for other in all_hits)
