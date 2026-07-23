@@ -62,6 +62,18 @@ def test_push_over_budget_truncates_whole_blocks():
     assert "## 财政债券" not in out                 # 整块被裁,不出现半块
 
 
+def test_push_budget_holds_with_long_archive_hint():
+    """长 archive_hint 会拉长截断提示;固定预留常量会算少导致越界,
+    预留须按提示真实字节长度算,保证最终输出仍 <= 18KB 硬上限。"""
+    big = [_cand(f"a{i}", "货币政策", "央行公开市场操作详情" * 30) for i in range(200)]
+    big += [_cand(f"b{i}", "财政债券", "地方债发行细节说明文本" * 30) for i in range(200)]
+    md = _digest(big)
+    long_hint = "data/runs/macro-flash/" + "x" * 160 + "/digest.md"
+    out = formatter.build_push_markdown(md, long_hint)
+    assert len(out.encode("utf-8")) <= formatter.PUSH_BODY_MAX_BYTES
+    assert "完整版见" in out and long_hint in out
+
+
 def test_status_push_mentions_status():
     out = formatter.build_status_push("source_failed", window_start=W_START,
                                       window_end=W_END, error="timeout")

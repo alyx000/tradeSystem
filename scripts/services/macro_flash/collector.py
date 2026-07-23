@@ -151,9 +151,11 @@ def collect_window(window_start: datetime, window_end: datetime, *,
 
     if status is None:
         status = STATUS_TRUNCATED  # MAX_PAGES 耗尽仍未触底
-    if (status in (STATUS_COMPLETE, STATUS_TRUNCATED)
+    # 停滞时丢弃率超阈值 = schema 漂移证据(非合法翻页耗尽);合法停滞(有效重复条目)丢弃率≈0,仍保持 STALLED。
+    # source_failed 故意不纳入覆盖集:源请求失败是更硬的故障信号,优先级最高,不应被字段丢弃率掩盖。
+    if (status in (STATUS_COMPLETE, STATUS_TRUNCATED, STATUS_STALLED)
             and raw_count and dropped / raw_count > SCHEMA_DROP_THRESHOLD):
-        status = STATUS_DRIFT  # 字段漂移不静默;但不覆盖 source_failed/stalled(保留更硬的故障信号)
+        status = STATUS_DRIFT  # 字段漂移不静默;但不覆盖 source_failed(保留更硬的故障信号)
     kept.sort(key=lambda i: i["time"], reverse=True)
     if dropped:
         logger.warning("[macro-flash] %d 条必需字段缺失被丢弃(raw %d)", dropped, raw_count)

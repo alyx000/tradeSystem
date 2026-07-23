@@ -53,3 +53,18 @@ def test_important_forced_into_other_topic():
 def test_no_hit_excluded():
     kw = flash_filter.load_keyword_config(KW_CONFIG)
     assert flash_filter.filter_items([_item("a", "某公司发布新手机")], kw) == []
+
+
+def test_real_config_disambiguates_overseas_vs_domestic():
+    """真实 config.yaml:货币政策不再含宽词「降息」,美联储/欧央行降息不再被误分到货币政策。"""
+    import pathlib
+
+    import yaml
+
+    cfg_path = pathlib.Path(__file__).resolve().parents[1] / "config.yaml"
+    cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
+    kw = flash_filter.load_keyword_config(cfg)
+    fed = flash_filter.filter_items([_item("a", "美联储降息预期升温")], kw)
+    assert fed[0].topic == "海外宏观"
+    pboc = flash_filter.filter_items([_item("b", "央行宣布降息 0.25 个百分点")], kw)
+    assert pboc[0].topic == "货币政策"

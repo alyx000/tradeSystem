@@ -105,6 +105,19 @@ def test_required_field_missing_dropped_and_drift():
     assert r.status == collector.STATUS_DRIFT  # 2/4 > 0.2,触底也不给 complete
 
 
+def test_full_schema_drift_reported_as_drift_not_stalled():
+    """非空页但全部条目缺必需字段 → page_oldest 恒 None、new_ids=0,循环判 STALLED,
+    但丢弃率 100% > 阈值,须被 drift 覆盖为 schema_drift(而非误报翻页停滞)。"""
+    p1 = [{"id": "x", "time": "2026-07-23 11:00:00", "data": {}},          # 无 content/title
+          {"id": None, "time": "2026-07-23 10:30:00", "data": {"content": "y"}},  # 无 id
+          {"id": "z", "time": "not-a-time", "data": {"content": "y"}}]     # time 不可解析
+    s = FakeSession({ANCHOR0: p1})
+    r = _collect(s)
+    assert r.status == collector.STATUS_DRIFT
+    assert r.items == []
+    assert r.dropped_count == 3
+
+
 def test_fetch_error_after_retries_is_source_failed():
     s = FakeSession({ANCHOR0: RuntimeError("boom")})
     r = _collect(s)

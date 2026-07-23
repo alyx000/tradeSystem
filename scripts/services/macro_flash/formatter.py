@@ -12,7 +12,6 @@ from typing import List
 from services.macro_flash.filter import OTHER_TOPIC, FlashCandidate
 
 PUSH_BODY_MAX_BYTES = 18_000   # 与 tail_scan/renderer.py 同预算
-TRUNCATE_HINT_RESERVE = 200    # 尾部截断提示预留字节
 ITEM_TEXT_LIMIT = 200          # 单条正文截断字数
 
 
@@ -63,17 +62,23 @@ def build_push_markdown(digest_md: str, archive_hint: str) -> str:
     if len(digest_md.encode("utf-8")) <= PUSH_BODY_MAX_BYTES:
         return digest_md
     blocks = digest_md.split("\n## ")
+
+    def _hint(dropped: int) -> str:
+        return f"\n\n> ⚠️ 超推送预算,截断 {dropped} 个主题块;完整版见 `{archive_hint}`\n"
+
+    # 预留按最坏情况(截断全部块)的提示真实字节长度算,保证最终输出不越过 18KB 硬上限
+    # (固定预留常量在 archive_hint 很长或丢弃计数位数变化时会算少,导致越界)
+    reserve = len(_hint(len(blocks) - 1).encode("utf-8"))
     out = blocks[0]
     kept = 0
     for blk in blocks[1:]:
         candidate = out + "\n## " + blk
-        if len(candidate.encode("utf-8")) > PUSH_BODY_MAX_BYTES - TRUNCATE_HINT_RESERVE:
+        if len(candidate.encode("utf-8")) > PUSH_BODY_MAX_BYTES - reserve:
             break
         out = candidate
         kept += 1
     dropped = len(blocks) - 1 - kept
-    return (out.rstrip() +
-            f"\n\n> ⚠️ 超推送预算,截断 {dropped} 个主题块;完整版见 `{archive_hint}`\n")
+    return out.rstrip() + _hint(dropped)
 
 
 def build_status_push(source_status: str, *, window_start: datetime,
