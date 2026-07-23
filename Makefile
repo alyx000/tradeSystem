@@ -1,4 +1,4 @@
-.PHONY: help bootstrap doctor check check-web check-scripts hooks-install dev dev-api dev-web commands-doc commands-check dashboard-open search-open commands-open plan-open knowledge-open ingest-open teachers-open holdings-open watchlist-open calendar-open industry-open db-init db-sync db-reconcile holdings holdings-refresh watchlist notes-search db-search market-open market-json market-envelope review-open review-prefill pre post regulatory ingest-list ingest-run-post ingest-run-interface ingest-inspect ingest-health ingest-reconcile wechat-teacher-should-run wechat-teacher-doctor wechat-teacher-collect wechat-teacher-show plan-draft plan-show-draft plan-confirm plan-diagnose plan-review knowledge-list knowledge-add-note knowledge-draft-from-asset knowledge-draft-from-teacher-note today-open today-close today-pre today-post today-regulatory today-evening today-watchlist today-obsidian today-ingest-inspect today-ingest-health recommend-daily recommend-daily-dry recommend-weekly recommend-weekly-dry recommend-trace volume-watch-daily volume-watch-daily-dry volume-watch-trend value-watch-daily value-watch-daily-dry value-watch-report new-high-daily new-high-daily-dry new-high-trend new-high-backfill string-yang-daily string-yang-daily-dry research-digest research-digest-dry earnings-digest earnings-digest-dry
+.PHONY: help bootstrap doctor check check-web check-scripts hooks-install dev dev-api dev-web commands-doc commands-check dashboard-open search-open commands-open plan-open knowledge-open ingest-open teachers-open holdings-open watchlist-open calendar-open industry-open db-init db-sync db-reconcile holdings holdings-refresh watchlist notes-search db-search market-open market-json market-envelope review-open review-prefill pre post regulatory ingest-list ingest-run-post ingest-run-interface ingest-inspect ingest-health ingest-reconcile wechat-teacher-should-run wechat-teacher-doctor wechat-teacher-collect wechat-teacher-show plan-draft plan-show-draft plan-confirm plan-diagnose plan-review knowledge-list knowledge-add-note knowledge-draft-from-asset knowledge-draft-from-teacher-note today-open today-close today-pre today-post today-regulatory today-evening today-watchlist today-obsidian today-ingest-inspect today-ingest-health recommend-daily recommend-daily-dry recommend-weekly recommend-weekly-dry recommend-trace volume-watch-daily volume-watch-daily-dry volume-watch-trend macro-flash macro-flash-dry macro-flash-show macro-flash-doctor value-watch-daily value-watch-daily-dry value-watch-report new-high-daily new-high-daily-dry new-high-trend new-high-backfill string-yang-daily string-yang-daily-dry research-digest research-digest-dry earnings-digest earnings-digest-dry
 
 help:
 	@echo "Available targets:"
@@ -218,6 +218,19 @@ volume-watch-daily-dry:
 
 volume-watch-trend:
 	cd scripts && python3 main.py volume-watch trend
+
+# 宏观快讯速读(金十源:归档+钉钉,只归档不入库)
+macro-flash:
+	cd scripts && python3 main.py macro-flash run
+
+macro-flash-dry:
+	cd scripts && python3 main.py macro-flash run --dry-run
+
+macro-flash-show:
+	cd scripts && python3 main.py macro-flash show
+
+macro-flash-doctor:
+	cd scripts && python3 main.py macro-flash doctor
 
 # 价值投资条件监控(红利回撤/卖出阶梯/稀缺周线,teacher_notes#391)
 value-watch-daily:

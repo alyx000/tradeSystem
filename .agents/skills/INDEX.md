@@ -65,6 +65,7 @@
 | `market-tasks` | `python main.py pre --date` | 盘前任务采集 |
 | `market-tasks` | `python main.py post --date` | 盘后任务采集 |
 | `market-tasks` / `record-notes` | `python main.py wechat-teacher-feed should-run\|doctor\|collect\|show ...` | 本机 WeRSS 微信公众号白名单归档与候选查看；双 phase 严格日历，collect 只落 manifest/原文且须 `--input-by`，确认前不写 teacher_notes、不入池 |
+| `market-tasks` | `python main.py macro-flash run\|show\|doctor [--date YYYY-MM-DD] [--lookback-hours N] [--dry-run\|--no-push\|--repush] [--force-refresh] [--json]` | 金十宏观快讯采集速读：关键词筛宏观/政策类，归档 `data/runs/macro-flash/` 的 manifest（唯一 run receipt）+ flash_raw + digest，钉钉推送（18KB 截断）；**只归档不入库**，入库须走 record-notes 确认再 `db add-macro`；独立 launchd（工作日 16:30 / 周日 22:00 回溯 54h），不进 `main.py schedule`；同日 complete 幂等跳过，`show` 仅 complete 且 sha 校验通过才展示正文 |
 | `market-tasks` | `python main.py recommend daily [--lookback-days N] [--top-k K] [--dry-run]` | 行业推荐日报（聚合 teacher_notes + industry_info，可选 Antigravity 点评，钉钉推送） |
 | `market-tasks` | `python main.py recommend weekly [--lookback-days N] [--top-k K] [--dry-run]` | 行业推荐周报（深度版，默认 7 日 Top 8） |
 | `market-tasks` | `python main.py volume-watch daily [--date YYYY-MM-DD] [--dry-run] [--no-push] [--refetch]` | 成交额 Top20 板块集中度日报（read-through 采集 + 申万二级打标 + 落库 `daily_volume_concentration` + 钉钉推送；报告含 Top20 个股明细表 + **成交额前50 区间涨幅排名段**[独立取成交额前50 → `get_stock_daily_range` 算 5/10/20 日涨幅 → **申万二级板块榜** + **同花顺概念题材榜**(多标签，复用 `get_ths_member` 反查 + 容器过滤≤300，concepts 落 `gain_universe_json`)，组按组内涨幅最大个股降序/平手比次大，三档独立榜，全 [事实] 守红线不出价位目标]；三档=裸[落库+推]/`--no-push`[落库+打印不推，历史回补避免重推]/`--dry-run`[不落库仅打印]；`--refetch` 强制重拉绕过 `daily_market` 陈旧缓存，回填历史用） |
@@ -345,7 +346,7 @@ Raindrop 的 `instrument-agent` / `setup-agent-replay` 是官方 `raindrop-ai/wo
 
 ## 自动化检查
 
-`scripts/tests/test_cli_smoke.py` 会验证上表中所有 **`db` 子命令**（`ALL_SKILL_COMMANDS`）与 `main.py` 顶层架构命令（`ARCHITECTURE_COMMANDS`：`pre` / `post` / `schedule` / `review factor-*` / `ingest` / `plan` / `knowledge` / `executions` / `recommend` / `volume-watch` / `new-high` / `sector-correlation` / `sector-crowding` / `market-timing` / `margin-index-correlation` / `research-digest` / `earnings-digest` / `cognition-digest` / `trend-leader` / `string-yang` / `daily-leaders` / `board-break` / `ma-breakout` / `tail-scan` / `wechat-teacher-feed`）的 argparse 签名（不启动子进程、不连库）。Makefile 对显式盘前/盘后 `DATE` 的传递另由 `test_makefile_market_targets.py` 验证。
+`scripts/tests/test_cli_smoke.py` 会验证上表中所有 **`db` 子命令**（`ALL_SKILL_COMMANDS`）与 `main.py` 顶层架构命令（`ARCHITECTURE_COMMANDS`：`pre` / `post` / `schedule` / `review factor-*` / `ingest` / `plan` / `knowledge` / `executions` / `recommend` / `volume-watch` / `new-high` / `sector-correlation` / `sector-crowding` / `market-timing` / `margin-index-correlation` / `research-digest` / `earnings-digest` / `cognition-digest` / `trend-leader` / `string-yang` / `daily-leaders` / `board-break` / `ma-breakout` / `tail-scan` / `wechat-teacher-feed` / `macro-flash`）的 argparse 签名（不启动子进程、不连库）。Makefile 对显式盘前/盘后 `DATE` 的传递另由 `test_makefile_market_targets.py` 验证。
 
 每次 `pytest scripts/tests/test_cli_smoke.py` 都会同步检查：
 - 依赖表所列 `db` 子命令名未被重命名
@@ -357,4 +358,4 @@ Raindrop 的 `instrument-agent` / `setup-agent-replay` 是官方 `raindrop-ai/wo
 1. 修改 `cli.py` 或 API routes 时，同步更新此 INDEX.md
 2. 优先运行 `make check-scripts`；若仅需检查 CLI 签名，可运行 `python3 -m pytest scripts/tests/test_cli_smoke.py -v`
 3. 若命令参数有不向后兼容的变更，更新对应 SKILL.md 中的示例
-4. 修改 `scripts/main.py` 新增/调整顶层命令（`pre` / `post` / `schedule` / `review factor-*` / `ingest` / `plan` / `knowledge` / `executions` / `recommend` / `volume-watch` / `new-high` / `sector-correlation` / `sector-crowding` / `market-timing` / `margin-index-correlation` / `*-digest` / `trend-leader` / `string-yang` / `daily-leaders` / `board-break` / `ma-breakout` / `tail-scan` 等）时，须在 `test_cli_smoke.py` 的 `ARCHITECTURE_COMMANDS` 加参数化用例，并同步更新相关 SKILL.md 与 AGENTS.md（见 `.agents/rules/skills-sync.md` §2.1）
+4. 修改 `scripts/main.py` 新增/调整顶层命令（`pre` / `post` / `schedule` / `review factor-*` / `ingest` / `plan` / `knowledge` / `executions` / `recommend` / `volume-watch` / `new-high` / `sector-correlation` / `sector-crowding` / `market-timing` / `margin-index-correlation` / `*-digest` / `trend-leader` / `string-yang` / `daily-leaders` / `board-break` / `ma-breakout` / `tail-scan` / `macro-flash` 等）时，须在 `test_cli_smoke.py` 的 `ARCHITECTURE_COMMANDS` 加参数化用例，并同步更新相关 SKILL.md 与 AGENTS.md（见 `.agents/rules/skills-sync.md` §2.1）

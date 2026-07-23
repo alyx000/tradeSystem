@@ -1,7 +1,7 @@
 ---
 name: market-tasks
 description: 手动触发或自动定时执行盘前/盘后行情采集任务、微信公众号白名单归档、行业推荐推送、研报速读，并将结果摘要推送回 channel
-version: "1.8"
+version: "1.9"
 ---
 
 # Skill: 市场数据任务（盘前 / 盘后采集）
@@ -16,6 +16,7 @@ version: "1.8"
 - 「打开市场看板 / 看盘后信封」
 - 「行业推荐定时推送」/「最近值得看的行业」
 - 「今天的研报速读」/「最近哪些股票被首次覆盖 / 评级上调」/「美股机构评级有什么变动」
+- 「宏观快讯速读」/「今天有什么宏观新闻」/「查一下 macro-flash 归档」
 - 「采集公众号老师观点」/「检查 WeRSS」/「查看公众号确认候选」
 - 「价值投资条件监控」/「银行回撤到几档了」/「卖出阶梯 / 稀缺周线怎么样」（命中 `value-watch`，读 [references/market-observability.md](references/market-observability.md)）
 
@@ -99,6 +100,29 @@ python3 main.py recommend weekly --lookback-days 14
 | `ANTIGRAVITY_BIN` | `agy` | Antigravity CLI 可执行路径 |
 | `LLM_TIMEOUT_SECONDS` | `90` | LLM 调用超时（硬上限 180s） |
 | `LLM_MODEL` | 空 | 指定模型，留空走 Antigravity 默认 |
+
+## 宏观快讯速读（macro-flash）
+
+金十快讯 API 直采（service 级，不进 provider registry）→ 按 `scripts/config.yaml` 的 `macro_flash.keywords`（货币政策/财政债券/贸易外交/产业监管/海外宏观五类，`important` 条目强制入选）筛宏观/政策类快讯 → 归档 `data/runs/macro-flash/YYYY-MM-DD/`（`manifest.json` 为唯一 run receipt + `flash_raw.json` 全量原文 + `digest.md` 速读正文）→ 推钉钉（18KB 预算整块截断，同 `tail_scan/renderer.py`）。**只归档不入库**：入库须用户阅读速读后走 [`record-notes`](../record-notes/SKILL.md) 确认再执行 `db add-macro`，本命令不直接写 `macro_info`。
+
+```bash
+python3 main.py macro-flash run    [--date YYYY-MM-DD] [--lookback-hours N] [--dry-run|--no-push|--repush] [--force-refresh]
+python3 main.py macro-flash show   [--date YYYY-MM-DD] [--json]
+python3 main.py macro-flash doctor [--json]
+```
+
+CLI 优先用 `make`：
+
+```bash
+make macro-flash-dry            # 等价 python3 main.py macro-flash run --dry-run（不写不推）
+make macro-flash                # 真采集 + 归档 + 推送
+make macro-flash-show           # 只读展示当日归档
+make macro-flash-doctor         # live 探测金十可达性
+```
+
+调度：独立 launchd `com.alyx.tradesystem.macro-flash`（工作日 16:30 回溯 24h + 周日 22:00 回溯 54h 覆盖周末，供进周日复盘），不进 `main.py schedule`；节假日照常归档，无交易日门禁。窗口时间语义 Asia/Shanghai。
+
+失败语义：`source_failed`（源不可达）/ `partial_window_truncated`（推送预算截断）/ `pagination_stalled`（翻页停滞）/ `schema_drift`（字段漂移）/ `push_failed`（归档成功但推送失败，`--repush` 补推）/ `run_error`（编排层意外异常）各有独立退出码；同日已 `complete` 归档默认幂等跳过（`--force-refresh` 覆盖重采）；`show` 仅在归档状态为 `complete` 且 `digest.md` sha256 与 manifest 记录一致时展示正文，否则只给状态与错误提示。
 
 ## 成交额板块集中度监控（volume-watch）
 
