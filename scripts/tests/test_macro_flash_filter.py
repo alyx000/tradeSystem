@@ -1,0 +1,55 @@
+"""filter 单测:关键词归组顺序、important 强制入选、空配置 fail fast。"""
+import pytest
+
+from services.macro_flash import filter as flash_filter
+
+KW_CONFIG = {"macro_flash": {"keywords": {
+    "货币政策": ["央行", "降准"],
+    "财政债券": ["地方债", "国债"],
+}}}
+
+
+def _item(iid, content, important=0, title=""):
+    return {"id": iid, "time": "2026-07-23 10:00:00", "important": important,
+            "data": {"content": content, "title": title}}
+
+
+def test_load_config_ok():
+    kw = flash_filter.load_keyword_config(KW_CONFIG)
+    assert list(kw) == ["货币政策", "财政债券"]  # 保序:归组按声明顺序
+
+
+@pytest.mark.parametrize("bad", [
+    {},                                        # 整段缺失
+    {"macro_flash": {}},                       # keywords 缺失
+    {"macro_flash": {"keywords": {}}},         # 空 dict
+    {"macro_flash": {"keywords": {"a": []}}},  # 词表全空
+])
+def test_load_config_fail_fast(bad):
+    with pytest.raises(ValueError):
+        flash_filter.load_keyword_config(bad)
+
+
+def test_first_topic_wins():
+    """跨主题命中按声明顺序取首个:内容同时含 央行+国债 → 货币政策。"""
+    kw = flash_filter.load_keyword_config(KW_CONFIG)
+    out = flash_filter.filter_items([_item("a", "央行下场买国债")], kw)
+    assert out[0].topic == "货币政策"
+
+
+def test_title_also_matched():
+    kw = flash_filter.load_keyword_config(KW_CONFIG)
+    out = flash_filter.filter_items([_item("a", "正文无词", title="浙江地方债定价调整")], kw)
+    assert out[0].topic == "财政债券"
+
+
+def test_important_forced_into_other_topic():
+    """无关键词命中但 important → 强制入选「其他要闻」。"""
+    kw = flash_filter.load_keyword_config(KW_CONFIG)
+    out = flash_filter.filter_items([_item("a", "特斯拉暴跌", important=1)], kw)
+    assert out[0].topic == flash_filter.OTHER_TOPIC
+
+
+def test_no_hit_excluded():
+    kw = flash_filter.load_keyword_config(KW_CONFIG)
+    assert flash_filter.filter_items([_item("a", "某公司发布新手机")], kw) == []
