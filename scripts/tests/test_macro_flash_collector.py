@@ -133,3 +133,15 @@ def test_mid_pagination_error_keeps_partial():
     r = _collect(s)
     assert r.status == collector.STATUS_FAILED
     assert [i["id"] for i in r.items] == ["a"]
+
+
+def test_non_dict_elements_dropped_not_crash():
+    """schema 漂移:非 dict 元素(裸字符串)、data 非 dict(字符串)、缺 id 混一页 → 不崩溃,全丢弃计入 drift。"""
+    p1 = ["not-a-dict-element",                                             # item 本身非 dict
+          {"id": "x", "time": "2026-07-23 11:00:00", "data": "not-a-dict"},  # data 非 dict
+          {"id": None, "time": "2026-07-23 10:30:00", "data": {"content": "y"}}]  # 无 id
+    s = FakeSession({ANCHOR0: p1})
+    r = _collect(s)
+    assert r.status == collector.STATUS_DRIFT
+    assert r.items == []
+    assert r.dropped_count == 3

@@ -68,3 +68,18 @@ def test_real_config_disambiguates_overseas_vs_domestic():
     assert fed[0].topic == "海外宏观"
     pboc = flash_filter.filter_items([_item("b", "央行宣布降息 0.25 个百分点")], kw)
     assert pboc[0].topic == "货币政策"
+
+
+def test_real_config_overseas_central_banks_not_shadowed():
+    """真实 config.yaml:欧央行/日央行含「央行」子串,最长匹配优先 → 仍归海外宏观,不被货币政策遮蔽。"""
+    import pathlib
+
+    import yaml
+
+    cfg_path = pathlib.Path(__file__).resolve().parents[1] / "config.yaml"
+    cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
+    kw = flash_filter.load_keyword_config(cfg)
+    ecb = flash_filter.filter_items([_item("a", "欧央行降息预期升温")], kw)
+    assert ecb[0].topic == "海外宏观"
+    boj = flash_filter.filter_items([_item("b", "日央行加息概率上升")], kw)
+    assert boj[0].topic == "海外宏观"

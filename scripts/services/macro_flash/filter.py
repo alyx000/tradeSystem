@@ -34,10 +34,17 @@ def filter_items(items: List[dict], keywords: "OrderedDict[str, List[str]]") -> 
     for item in items:
         data = item.get("data") or {}
         text = f"{data.get('title') or ''}\n{data.get('content') or ''}"
-        topic = next((t for t, words in keywords.items()
-                      if any(w in text for w in words)), None)
-        if topic is None and item.get("important"):
-            topic = OTHER_TOPIC  # 金十标重要但未命中词表:强制入选兜底
-        if topic is not None:
-            out.append(FlashCandidate(item=item, topic=topic))
+        # 最长命中关键词的主题胜出(specific-over-general):解决 央行⊂欧央行/日央行 的子串遮蔽。
+        # 长度相同按声明顺序(严格 > 更新,先声明的主题先遍历即保留)。
+        best_topic = None
+        best_len = 0
+        for topic, words in keywords.items():
+            longest = max((len(w) for w in words if w in text), default=0)
+            if longest > best_len:
+                best_len = longest
+                best_topic = topic
+        if best_topic is None and item.get("important"):
+            best_topic = OTHER_TOPIC  # 金十标重要但无命中:强制入选兜底
+        if best_topic is not None:
+            out.append(FlashCandidate(item=item, topic=best_topic))
     return out

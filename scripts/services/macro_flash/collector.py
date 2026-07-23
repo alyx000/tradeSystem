@@ -80,8 +80,16 @@ def _fetch_page(session: requests.Session, max_time: str,
 
 
 def _parse_item(item: dict) -> Optional[datetime]:
-    """校验必需字段(id/time/data.content|title),返回条目时间;不合格返回 None。"""
-    data = item.get("data") or {}
+    """校验必需字段(id/time/data.content|title),返回条目时间;不合格返回 None。
+
+    防御非 dict 元素/非 dict data(金十 schema 漂移时可能返回 str/list),
+    按不合格丢弃计数,不让整轮采集崩溃(保证 schema_drift 状态可观测)。
+    """
+    if not isinstance(item, dict):
+        return None
+    data = item.get("data")
+    if not isinstance(data, dict):
+        data = {}
     if not item.get("id") or not item.get("time"):
         return None
     if not (data.get("content") or data.get("title")):
