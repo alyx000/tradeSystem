@@ -341,3 +341,27 @@ def test_repush_replays_archived_generation_not_current_keywords(tmp_path):
     assert "## 货币政策" in body            # 归档代主题保持
     assert "新主题" not in body             # 未被当前词表重筛
     assert "央行重要公告" in body           # 精选口径不变
+
+
+def test_repush_old_manifest_without_topic_order(tmp_path):
+    """门2第3轮回归:旧 manifest 无 topic_order 快照 + 当前词表已改名主题,
+    repush 须从 candidates 出现序推导主题,不得静默丢归档主题。"""
+    def collect_two(a, b):
+        return collector.CollectResult(
+            status=collector.STATUS_COMPLETE, raw_count=2, pages=1,
+            items=[{"id": "imp", "time": "2026-07-23 10:00:00", "important": 1,
+                    "data": {"content": "央行重要公告", "title": ""}}])
+    _run(tmp_path, collect_fn=collect_two, no_push=True)
+    # 模拟旧版归档:剥掉 topic_order 键(需同步重算 manifest 不含——直接改文件)
+    mp = tmp_path / "2026-07-23" / "manifest.json"
+    m = json.loads(mp.read_text(encoding="utf-8"))
+    del m["topic_order"]
+    mp.write_text(json.dumps(m, ensure_ascii=False, indent=2), encoding="utf-8")
+    # 当前词表已把主题改名,若错误回退当前词表,归档主题「货币政策」会被静默丢弃
+    changed_cfg = {"macro_flash": {"keywords": {"改名后的主题": ["央行"]}}}
+    push = PushSpy()
+    out = service.run(changed_cfg, repush=True, base_dir=tmp_path,
+                      push_fn=push, now=NOW, collect_fn=collect_two)
+    assert out.status == "repushed"
+    body = push.calls[0][1]
+    assert "## 货币政策" in body and "央行重要公告" in body

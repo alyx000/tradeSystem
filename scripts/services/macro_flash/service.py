@@ -202,8 +202,11 @@ def run(config: dict, *, date_str: Optional[str] = None,
                     window_end=datetime.fromisoformat(latest["window_end"]),
                     source_status=latest.get("source_status"),
                     raw_count=latest.get("raw_count", 0),
-                    # 主题顺序同样优先归档快照;旧 manifest 无该键时退回当前词表顺序
-                    topic_order=latest.get("topic_order") or list(keywords),
+                    # 主题顺序优先归档快照;旧 manifest 无该键时从 candidates 按出现序推导
+                    # (不得退回当前词表:主题改名/删除后会静默丢归档主题,codex 门2 第3轮)
+                    topic_order=(latest.get("topic_order")
+                                 or list(dict.fromkeys(
+                                     c.get("topic") for c in latest.get("candidates") or []))),
                     archive_hint=_rel(digest_path))
                 ok = push(title, push_md)
                 latest["push_status"] = "success" if ok else "failed"
