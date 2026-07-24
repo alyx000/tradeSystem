@@ -111,3 +111,23 @@ def test_real_config_declaration_priority_and_substring_shadow():
 
     pboc = flash_filter.filter_items([_item("e", "央行宣布降息 0.25 个百分点")], kw)
     assert pboc[0].topic == "货币政策"
+
+
+def test_real_config_overseas_central_bank_full_names():
+    """海外央行全称(欧洲央行/日本央行/英国央行)须归海外宏观:
+    全称含「央行」子串,靠最长匹配盖过 货币政策 的裸「央行」。"""
+    import pathlib
+
+    import yaml
+
+    cfg_path = pathlib.Path(__file__).resolve().parents[1] / "config.yaml"
+    cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
+    kw = flash_filter.load_keyword_config(cfg)
+    for iid, text in [("a", "欧洲央行考虑提高准备金要求"),
+                      ("b", "日本央行行长植田和男发表讲话"),
+                      ("c", "英国央行维持利率不变")]:
+        got = flash_filter.filter_items([_item(iid, text)], kw)
+        assert got and got[0].topic == "海外宏观", f"{text!r} → {got[0].topic if got else None}"
+    # 国内央行不受影响
+    pboc = flash_filter.filter_items([_item("d", "央行宣布降准0.5个百分点")], kw)
+    assert pboc[0].topic == "货币政策"

@@ -181,8 +181,18 @@ def run(config: dict, *, date_str: Optional[str] = None,
                           f"请 --force-refresh 重采修复。", file=sys.stderr)
                     return RunOutcome(status="archive_corrupt",
                                       exit_code=EXIT_CODES["archive_corrupt"], manifest=latest)
-                digest_md = digest_path.read_text(encoding="utf-8")
-                push_md = formatter.build_push_markdown(digest_md, _rel(digest_path))
+                # 重推与首推同一精选口径(important 每主题限量),不回退全量刷屏:
+                # 从归档 flash_raw 重建候选(上方 _archive_intact 已保证与 manifest 同代)
+                raw_payload = json.loads(
+                    (day_dir / "flash_raw.json").read_text(encoding="utf-8"))
+                cands = flash_filter.filter_items(raw_payload.get("items") or [], keywords)
+                push_md = formatter.build_push_digest(
+                    cands,
+                    window_start=datetime.fromisoformat(latest["window_start"]),
+                    window_end=datetime.fromisoformat(latest["window_end"]),
+                    source_status=latest.get("source_status"),
+                    raw_count=latest.get("raw_count", 0),
+                    topic_order=list(keywords), archive_hint=_rel(digest_path))
                 ok = push(title, push_md)
                 latest["push_status"] = "success" if ok else "failed"
                 latest["pushed_at"] = _now_iso()
@@ -243,11 +253,17 @@ def run(config: dict, *, date_str: Optional[str] = None,
                 }
                 push_md = None
                 if not no_push:
+                    # 推送体用 important 精选(归档 digest.md 恒全量);源失败推降级提示
                     push_md = (formatter.build_status_push(
                                    result.status, window_start=window_start,
                                    window_end=window_end, error=result.error)
                                if result.status == collector.STATUS_FAILED
-                               else formatter.build_push_markdown(digest_md, _rel(digest_path)))
+                               else formatter.build_push_digest(
+                                   candidates, window_start=window_start,
+                                   window_end=window_end, source_status=result.status,
+                                   raw_count=result.raw_count, topic_order=list(keywords),
+                                   archive_hint=_rel(digest_path),
+                                   full_digest_md=digest_md))
                     manifest["push_status"] = "success" if push(title, push_md) else "failed"
                     manifest["pushed_at"] = _now_iso()
                 exit_code = EXIT_CODES.get(result.status, 1)

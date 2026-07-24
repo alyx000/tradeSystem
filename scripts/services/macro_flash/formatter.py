@@ -13,6 +13,11 @@ from services.macro_flash.filter import OTHER_TOPIC, FlashCandidate
 
 PUSH_BODY_MAX_BYTES = 18_000   # 与 tail_scan/renderer.py 同预算
 ITEM_TEXT_LIMIT = 200          # 单条正文截断字数
+# 推送精选(归档 digest.md 恒全量,只精简推送体;用户反馈全量 500+ 条不可读):
+# 仅金十标 important 的条目进推送,每主题各取最新前 N 条;其他要闻(无关键词命中的
+# important 兜底)噪音占比最高,上限更严。
+PUSH_PER_TOPIC_LIMIT = 8
+PUSH_OTHER_TOPIC_LIMIT = 3
 
 
 def _clean_text(text: str) -> str:
@@ -33,14 +38,20 @@ def _item_line(cand: FlashCandidate) -> str:
 def build_digest_markdown(candidates: List[FlashCandidate], *,
                           window_start: datetime, window_end: datetime,
                           source_status: str, raw_count: int,
-                          topic_order: List[str]) -> str:
+                          topic_order: List[str],
+                          extra_note: str = None,
+                          matched_count: int = None) -> str:
+    # matched_count:头部「命中」数默认取传入条目数;推送精选版传全量命中数防误读
+    matched = len(candidates) if matched_count is None else matched_count
     lines = [
         f"# 宏观快讯速读 · {window_end.date().isoformat()}",
         "",
         f"> 窗口 {window_start:%m-%d %H:%M} → {window_end:%m-%d %H:%M}"
-        f" · 原始 {raw_count} 条 · 命中 {len(candidates)} 条 · 状态 {source_status}",
-        "",
+        f" · 原始 {raw_count} 条 · 命中 {matched} 条 · 状态 {source_status}",
     ]
+    if extra_note:
+        lines.append(f"> {extra_note}")  # 紧跟窗口行的第二条引用(推送精选说明等)
+    lines.append("")
     if not candidates:
         lines.append(f"窗口内无命中宏观快讯(原始 {raw_count} 条)。")
         return "\n".join(lines)
@@ -79,6 +90,50 @@ def build_push_markdown(digest_md: str, archive_hint: str) -> str:
         kept += 1
     dropped = len(blocks) - 1 - kept
     return out.rstrip() + _hint(dropped)
+
+
+def _select_important(candidates: List[FlashCandidate]) -> List[FlashCandidate]:
+    """推送精选:仅 important 条目,每主题按原序(collector 已新→旧)取前 N。"""
+    per_topic: dict = {}
+    selected: List[FlashCandidate] = []
+    for c in candidates:
+        if not c.item.get("important"):
+            continue
+        limit = PUSH_OTHER_TOPIC_LIMIT if c.topic == OTHER_TOPIC else PUSH_PER_TOPIC_LIMIT
+        n = per_topic.get(c.topic, 0)
+        if n >= limit:
+            continue
+        per_topic[c.topic] = n + 1
+        selected.append(c)
+    return selected
+
+
+def build_push_digest(candidates: List[FlashCandidate], *,
+                      window_start: datetime, window_end: datetime,
+                      source_status: str, raw_count: int,
+                      topic_order: List[str], archive_hint: str,
+                      full_digest_md: str = None) -> str:
+    """推送体 = important 精选(每主题限量)+ 全量指引;精选为空退回全量截断。
+
+    归档 digest.md 恒为全量(build_digest_markdown),入库确认与回查不受影响;
+    本函数只决定钉钉里那份的密度。full_digest_md:调用方已算好的全量 digest,
+    仅精选为空的回退分支使用,免重复构建。
+    """
+    selected = _select_important(candidates)
+    if not selected:
+        # 窗口内无 important 条目:退回全量(交给 18KB 整块截断),避免推空精选误导
+        full_md = full_digest_md or build_digest_markdown(
+            candidates, window_start=window_start, window_end=window_end,
+            source_status=source_status, raw_count=raw_count, topic_order=topic_order)
+        return build_push_markdown(full_md, archive_hint)
+    note = (f"📌 推送精选 {len(selected)} 条(仅金十标重要,主题内最新优先);"
+            f"全量命中 {len(candidates)} 条见 `{archive_hint}`")
+    md = build_digest_markdown(
+        selected, window_start=window_start, window_end=window_end,
+        source_status=source_status, raw_count=raw_count,
+        topic_order=topic_order, extra_note=note,
+        matched_count=len(candidates))
+    return build_push_markdown(md, archive_hint)
 
 
 def build_status_push(source_status: str, *, window_start: datetime,

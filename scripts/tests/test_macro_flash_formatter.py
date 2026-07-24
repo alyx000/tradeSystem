@@ -117,3 +117,29 @@ def test_html_tags_stripped_broad():
     assert "<b>" not in md and "</b>" not in md
     assert "<br>" not in md and "<br/>" not in md
     assert "央行" in md and "降准" in md
+
+
+def test_push_digest_selects_important_with_caps():
+    """推送精选:仅 important,货币政策上限 8、其他要闻上限 3;头部注明全量命中数。"""
+    from services.macro_flash.filter import OTHER_TOPIC as OT
+    cands = ([_cand(f"m{i}", "货币政策", f"央行重要快讯{i}", important=1) for i in range(12)]
+             + [_cand("x", "货币政策", "央行普通快讯不进推送")]          # 非 important
+             + [_cand(f"o{i}", OT, f"其他要闻{i}", important=1) for i in range(6)])
+    out = formatter.build_push_digest(
+        cands, window_start=W_START, window_end=W_END, source_status="complete",
+        raw_count=1000, topic_order=TOPICS, archive_hint="data/runs/x/digest.md")
+    assert out.count("- **") == 8 + 3                    # 每主题限量
+    assert "央行普通快讯不进推送" not in out               # 非 important 排除
+    assert "推送精选 11 条" in out and "全量命中 19 条" in out
+    assert "命中 19 条" in out                            # 头部命中数取全量非精选数
+    assert "data/runs/x/digest.md" in out
+
+
+def test_push_digest_falls_back_to_full_when_no_important():
+    """窗口内无 important:退回全量截断,不推空精选。"""
+    cands = [_cand("a", "货币政策", "央行普通快讯")]
+    out = formatter.build_push_digest(
+        cands, window_start=W_START, window_end=W_END, source_status="complete",
+        raw_count=10, topic_order=TOPICS, archive_hint="data/runs/x/digest.md")
+    assert "央行普通快讯" in out
+    assert "推送精选" not in out

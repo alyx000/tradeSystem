@@ -282,3 +282,39 @@ def test_files_committed_after_push(tmp_path):
     assert (day / "flash_raw.json").exists()
     assert (day / "digest.md").exists()
     assert (day / "manifest.json").exists()
+
+
+def test_push_body_uses_important_selection(tmp_path):
+    """service 推送体走精选:非 important 不进推送,但归档 digest 恒全量。"""
+    def collect_two(a, b):
+        return collector.CollectResult(
+            status=collector.STATUS_COMPLETE, raw_count=2, pages=1,
+            items=[{"id": "imp", "time": "2026-07-23 10:00:00", "important": 1,
+                    "data": {"content": "央行重要公告", "title": ""}},
+                   {"id": "ord", "time": "2026-07-23 09:00:00", "important": 0,
+                    "data": {"content": "央行普通动态", "title": ""}}])
+    push = PushSpy()
+    _run(tmp_path, collect_fn=collect_two, push_fn=push)
+    body = push.calls[0][1]
+    assert "央行重要公告" in body and "央行普通动态" not in body   # 推送=精选
+    archived = (tmp_path / "2026-07-23" / "digest.md").read_text(encoding="utf-8")
+    assert "央行普通动态" in archived                              # 归档=全量
+
+
+def test_repush_uses_important_selection(tmp_path):
+    """门2回归:repush 须与首推同精选口径,不得回退全量刷屏
+    (从归档 flash_raw 重建候选,important 精选)。"""
+    def collect_two(a, b):
+        return collector.CollectResult(
+            status=collector.STATUS_COMPLETE, raw_count=2, pages=1,
+            items=[{"id": "imp", "time": "2026-07-23 10:00:00", "important": 1,
+                    "data": {"content": "央行重要公告", "title": ""}},
+                   {"id": "ord", "time": "2026-07-23 09:00:00", "important": 0,
+                    "data": {"content": "央行普通动态", "title": ""}}])
+    _run(tmp_path, collect_fn=collect_two, no_push=True)      # 先归档不推
+    push = PushSpy()
+    out = _run(tmp_path, repush=True, push_fn=push)
+    assert out.status == "repushed"
+    body = push.calls[0][1]
+    assert "央行重要公告" in body and "央行普通动态" not in body
+    assert "推送精选" in body                                   # 精选口径生效
