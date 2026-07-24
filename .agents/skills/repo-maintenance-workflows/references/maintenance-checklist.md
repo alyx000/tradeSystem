@@ -90,7 +90,7 @@
 
 1. 运行目标模块的最小有效测试，逻辑改动不得只跑 CLI smoke。
 2. 按影响范围运行 `make check-scripts`、`make check-web` 或 `make check`。
-3. 实质性代码改动按规则完成 `/simplify`、门1 `/code-review` 与门2 adversarial-review；豁免时说明原因。
+3. 实质性代码改动按 `post-dev-review.md` 定档并完成审查（双门时门1 `/code-review` ∥ 门2 adversarial-review 并行，findings 合并处置）；豁免或降档时说明原因。
 4. 运行 `git diff --check`。
 5. 再次运行 `git status --short --branch`，与初始基线对比。
 6. 检查 `data/`、`daily/`、`tracking/` 等运行时路径是否出现非预期修改。

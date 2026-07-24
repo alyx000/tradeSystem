@@ -1,1 +1,0 @@
-../../.agents/rules/code-review-gate.md

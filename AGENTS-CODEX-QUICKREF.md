@@ -18,7 +18,7 @@ node "$COMPANION" adversarial-review --wait "重点:绕过人工确认写 confir
 # 改动已提交在分支上 → 追加 --base main；用户手打等价 /codex:adversarial-review --wait "<聚焦>"
 ```
 
-详见 [`.agents/rules/post-dev-codex-review.md`](/Users/alyx/tradeSystem/.agents/rules/post-dev-codex-review.md)。
+详见 [`.agents/rules/post-dev-review.md`](/Users/alyx/tradeSystem/.agents/rules/post-dev-review.md)。
 
 > **仅当没有 git diff**（审一段贴进来的代码片段 / 设计 prose）才退回 freeform `codex:codex-rescue` + 下面这段文字模板；有 diff 的常规代码 review 一律走上面原生 reviewer。
 >

@@ -1,1 +1,0 @@
-../../.agents/rules/post-dev-codex-review.md
