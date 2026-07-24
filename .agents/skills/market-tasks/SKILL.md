@@ -46,6 +46,26 @@ python3 main.py pre --date YYYY-MM-DD
 python3 main.py post --date YYYY-MM-DD
 ```
 
+## 监管异动盘后采集（regulatory）
+
+`stk_alert` / `stk_shock` / `stk_high_shock` 统一通过 Tushare 的 range 接口按日期区间采集，并全部注册到 `post_extended`。盘后原始事实层采集完成后，再派生 `regulatory_anomaly_overview` 总览快照；该派生任务属于 `cmd_post` 的辅助任务，失败只记录 `failed` 与错误，不阻断其余盘后流程。
+
+```bash
+# 手工采集会写原始事实层与派生快照，必须显式记录请求者
+python3 main.py regulatory --date YYYY-MM-DD --input-by USER
+
+# 仅查旧兼容表，不采集、不写入，因此无需 --input-by
+python3 main.py regulatory --query --date YYYY-MM-DD --type 1 --json
+```
+
+数据边界：
+
+- 原始接口返回空结果时启用 `preserve_nonempty_on_empty` 保护，避免瞬时空窗覆盖同目标日已经存在的非空事实。
+- 总览整体状态为 `complete` / `partial` / `failed`；各来源状态为 `success` / `empty` / `partial` / `failed` / `stale` / `late`，来源失败、陈旧或迟到不能伪装成“无异动”。
+- 监管公告、监控区间和已确认记录属于 `[事实]`；基于行情计算的偏离值、阈值比较和理论触发价属于 `[计算]`，不得混写成监管事实或交易建议。偏离值按交易所/板块规则计算：沪市主板为区间个股收益率减区间上证指数收益率，深市主板/创业板/科创板为每日“个股涨跌幅－对应指数涨跌幅”累加；上市后前 5 个无涨跌幅限制交易日不计入，已确认严重异常波动后的下一开放日起重新起算。重置后若行情缺日则标 `partial`，不凭日线缺口猜测复牌日。
+- `trigger_candidates.today` 用今日以前的 9/29 个有效日和今日指数实际涨跌幅计算今日理论触发涨幅/价格/涨跌停可达性；`next_day` 用包含今日的 9/29 个有效日并假设次日指数涨跌幅为 0 计算，二者都遵守重置边界。
+- 旧只读接口 `GET /api/regulatory-monitor?date=...` 保留兼容；新总览接口为 `GET /api/regulatory-monitor/overview?date=...`。这里仅声明 API 契约，不代表任何前端页面已经完成改造。
+
 ## 微信公众号白名单采集（wechat-teacher-feed）
 
 固定白名单为安静拆主线、股痴流沙河、爱在冰川，数据源是只绑定 loopback 的本机 WeRSS，不使用微信 Mac 客户端。`post-market` 仅在 run_date 本身为开放日运行；`pre-trading-eve` 仅在 run_date 的下一自然日为开放日运行；日历表/日期缺失返回 blocked，不做工作日猜测。

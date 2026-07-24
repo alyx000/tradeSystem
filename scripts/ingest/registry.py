@@ -13,6 +13,9 @@ class InterfaceConfig(TypedDict, total=False):
     dedupe_keys: list[str]
     raw_table: str
     enabled_by_default: bool
+    preserve_nonempty_on_empty: bool
+    lookback_calendar_days: int
+    end_policy: str
     notes: str
 
 
@@ -333,14 +336,48 @@ INTERFACE_REGISTRY: dict[str, InterfaceConfig] = {
     },
     "stk_shock": {
         "interface_name": "stk_shock",
-        "provider_method": "get_stk_shock",
+        "provider_method": "get_stk_shock_range",
         "stage": "post_extended",
         "use_cases": ["post_report", "research", "history_compare"],
-        "params_policy": "trade_date",
-        "dedupe_keys": ["trade_date"],
+        "params_policy": "date_range_snapshot",
+        "lookback_calendar_days": 60,
+        "end_policy": "target",
+        "dedupe_keys": ["ts_code", "trade_date", "period"],
         "raw_table": "raw_stk_shock",
         "enabled_by_default": True,
-        "notes": "交易所公布的个股异常波动（stk_shock，高积分）。",
+        "preserve_nonempty_on_empty": True,
+        "notes": "交易所公布的个股异常波动区间快照（stk_shock，高积分）；"
+                 "查询目标日前 60 自然日至目标日，瞬时空结果不覆盖同日已有非空快照。",
+    },
+    "stk_alert": {
+        "interface_name": "stk_alert",
+        "provider_method": "get_stk_alert_range",
+        "stage": "post_extended",
+        "use_cases": ["post_report", "research", "history_compare"],
+        "params_policy": "date_range_snapshot",
+        "lookback_calendar_days": 90,
+        "end_policy": "next_open",
+        "dedupe_keys": ["ts_code", "start_date", "end_date", "type"],
+        "raw_table": "raw_stk_alert",
+        "enabled_by_default": True,
+        "preserve_nonempty_on_empty": True,
+        "notes": "交易所重点提示证券区间快照（stk_alert，高积分）；"
+                 "查询目标日前 90 自然日至下一开放日，覆盖当前及近期监控期。",
+    },
+    "stk_high_shock": {
+        "interface_name": "stk_high_shock",
+        "provider_method": "get_stk_high_shock_range",
+        "stage": "post_extended",
+        "use_cases": ["post_report", "research", "history_compare"],
+        "params_policy": "date_range_snapshot",
+        "lookback_calendar_days": 120,
+        "end_policy": "target",
+        "dedupe_keys": ["ts_code", "trade_date", "period"],
+        "raw_table": "raw_stk_high_shock",
+        "enabled_by_default": True,
+        "preserve_nonempty_on_empty": True,
+        "notes": "交易所已确认严重异常波动区间快照（stk_high_shock，高积分）；"
+                 "查询目标日前 120 自然日至目标日，供严重异动历史与触发窗口校验。",
     },
     "research_report_list": {
         "interface_name": "research_report_list",

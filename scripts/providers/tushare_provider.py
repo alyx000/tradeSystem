@@ -7,6 +7,7 @@ from __future__ import annotations
 import os
 import logging
 import math
+import re
 from datetime import datetime, timedelta
 from .base import DataProvider, DataResult, DataType, Confidence, Timeliness
 
@@ -162,7 +163,10 @@ class TushareProvider(DataProvider):
             "get_suspend_list",
             "get_suspend_change_reasons",
             "get_stk_shock",
+            "get_stk_shock_range",
             "get_stk_alert",
+            "get_stk_alert_range",
+            "get_stk_high_shock_range",
             "get_market_daily_changes",
             "get_stock_daily_range",
             "get_index_daily_range",
@@ -1744,6 +1748,170 @@ class TushareProvider(DataProvider):
         except Exception as e:
             return DataResult(data=None, source=self.name, error=str(e))
 
+    @staticmethod
+    def _regulatory_date_norm(raw) -> str | None:
+        """监管接口日期统一为 YYYY-MM-DD；原始字段仍保留以兼容既有消费端。"""
+        if raw is None:
+            return None
+        text = _to_clean_str(raw).replace("-", "").replace("/", "")
+        if len(text) < 8 or not text[:8].isdigit():
+            return None
+        value = text[:8]
+        try:
+            datetime.strptime(value, "%Y%m%d")
+        except ValueError:
+            return None
+        return f"{value[:4]}-{value[4:6]}-{value[6:8]}"
+
+    @classmethod
+    def _normalize_regulatory_record(
+        cls,
+        row: dict,
+        *,
+        source: str,
+        date_fields: tuple[str, ...],
+        normalize_period: bool,
+    ) -> dict:
+        """给监管区间接口补充稳定字段，不改写 Tushare 原始字段。"""
+        item = dict(row)
+        code = _to_clean_str(item.get("ts_code") or item.get("code")).upper()
+        if code:
+            item["ts_code"] = code
+            item["code"] = code
+        for field_name in date_fields:
+            normalized = cls._regulatory_date_norm(item.get(field_name))
+            if normalized:
+                item[f"{field_name}_norm"] = normalized
+        if normalize_period:
+            raw_period = _to_clean_str(item.get("period"))
+            dates = re.findall(
+                r"(?:19|20)\d{2}(?:[-/.]?\d{2}){2}",
+                raw_period,
+            )
+            if dates:
+                start = cls._regulatory_date_norm(dates[0])
+                end = cls._regulatory_date_norm(dates[-1])
+                if start and end:
+                    item["period_start"] = start
+                    item["period_end"] = end
+                    item["period_norm"] = f"{start}/{end}"
+        item["source"] = source
+        return item
+
+    def _fetch_regulatory_range_records(
+        self,
+        api_name: str,
+        start_date: str,
+        end_date: str,
+    ) -> list[dict]:
+        """按返回上限递归切分日期区间，避免 1000 行被静默截断。"""
+        api_method = getattr(self.pro, api_name, None)
+        if callable(api_method):
+            frame = api_method(start_date=start_date, end_date=end_date)
+        else:
+            frame = self.pro.query(
+                api_name,
+                start_date=start_date,
+                end_date=end_date,
+            )
+        records = self._df_to_records(frame)
+        if len(records) < 1000:
+            return records
+
+        start_dt = datetime.strptime(start_date, "%Y%m%d")
+        end_dt = datetime.strptime(end_date, "%Y%m%d")
+        if start_dt >= end_dt:
+            raise RuntimeError(
+                f"{api_name} 单日返回达到 1000 行上限，无法确认完整性"
+            )
+        midpoint = start_dt + (end_dt - start_dt) // 2
+        right_start = midpoint + timedelta(days=1)
+        return self._fetch_regulatory_range_records(
+            api_name,
+            start_dt.strftime("%Y%m%d"),
+            midpoint.strftime("%Y%m%d"),
+        ) + self._fetch_regulatory_range_records(
+            api_name,
+            right_start.strftime("%Y%m%d"),
+            end_dt.strftime("%Y%m%d"),
+        )
+
+    def get_stk_alert_range(self, start_date: str, end_date: str) -> DataResult:
+        """重点提示证券区间快照；查询窗口按监控开始日期语义审计。"""
+        source = "tushare:stk_alert"
+        try:
+            start = self._date_fmt(start_date)
+            end = self._date_fmt(end_date)
+            records = self._fetch_regulatory_range_records(
+                "stk_alert",
+                start,
+                end,
+            )
+            normalized = [
+                self._normalize_regulatory_record(
+                    row,
+                    source=source,
+                    date_fields=("start_date", "end_date"),
+                    normalize_period=False,
+                )
+                for row in records
+            ]
+            return DataResult(data=normalized, source=source)
+        except Exception as e:
+            return DataResult(data=None, source=source, error=str(e))
+
+    def get_stk_shock_range(self, start_date: str, end_date: str) -> DataResult:
+        """个股异常波动区间快照（按交易所披露交易日查询）。"""
+        source = "tushare:stk_shock"
+        try:
+            start = self._date_fmt(start_date)
+            end = self._date_fmt(end_date)
+            records = self._fetch_regulatory_range_records(
+                "stk_shock",
+                start,
+                end,
+            )
+            normalized = [
+                self._normalize_regulatory_record(
+                    row,
+                    source=source,
+                    date_fields=("trade_date",),
+                    normalize_period=True,
+                )
+                for row in records
+            ]
+            return DataResult(data=normalized, source=source)
+        except Exception as e:
+            return DataResult(data=None, source=source, error=str(e))
+
+    def get_stk_high_shock_range(
+        self,
+        start_date: str,
+        end_date: str,
+    ) -> DataResult:
+        """已确认严重异常波动区间快照（Tushare stk_high_shock）。"""
+        source = "tushare:stk_high_shock"
+        try:
+            start = self._date_fmt(start_date)
+            end = self._date_fmt(end_date)
+            records = self._fetch_regulatory_range_records(
+                "stk_high_shock",
+                start,
+                end,
+            )
+            normalized = [
+                self._normalize_regulatory_record(
+                    row,
+                    source=source,
+                    date_fields=("trade_date",),
+                    normalize_period=True,
+                )
+                for row in records
+            ]
+            return DataResult(data=normalized, source=source)
+        except Exception as e:
+            return DataResult(data=None, source=source, error=str(e))
+
     def get_market_daily_quotes(self, date: str) -> DataResult:
         """全市场个股当日 OHLC + 昨收（业绩预告次日缺口验证用）。
 
@@ -1953,7 +2121,7 @@ class TushareProvider(DataProvider):
             return DataResult(data=None, source=self.name, error=str(e))
 
     def get_stock_basic_batch(self, ts_codes: list[str]) -> DataResult:
-        """按代码批量拉取简称（逗号分隔 ts_code，拆块避免超长）。"""
+        """按代码批量拉取简称与上市日（逗号分隔 ts_code，拆块避免超长）。"""
         if not ts_codes:
             return DataResult(data=[], source="tushare:stock_basic")
         missing = self._ensure_pro("get_stock_basic_batch")
@@ -1976,7 +2144,7 @@ class TushareProvider(DataProvider):
                 chunk = norm[i : i + chunk_size]
                 df = self.pro.stock_basic(
                     ts_code=",".join(chunk),
-                    fields="ts_code,name,symbol",
+                    fields="ts_code,name,symbol,list_date",
                 )
                 all_rows.extend(self._df_to_records(df))
             got = {
@@ -1988,14 +2156,19 @@ class TushareProvider(DataProvider):
                 if c.upper() in got:
                     continue
                 try:
-                    one = self.pro.stock_basic(ts_code=c, fields="ts_code,name,symbol")
+                    one = self.pro.stock_basic(
+                        ts_code=c,
+                        fields="ts_code,name,symbol,list_date",
+                    )
                     recs = self._df_to_records(one)
                     if recs:
                         all_rows.extend(recs)
                         got.add(c.upper())
                         continue
                     one_d = self.pro.stock_basic(
-                        ts_code=c, list_status="D", fields="ts_code,name,symbol"
+                        ts_code=c,
+                        list_status="D",
+                        fields="ts_code,name,symbol,list_date",
                     )
                     all_rows.extend(self._df_to_records(one_d))
                 except Exception as ex:

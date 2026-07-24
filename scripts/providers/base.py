@@ -241,8 +241,20 @@ class DataProvider(ABC):
     def get_stk_shock(self, date: str) -> DataResult:
         return DataResult(data=None, source=self.name, error="not implemented")
 
+    def get_stk_shock_range(self, start_date: str, end_date: str) -> DataResult:
+        """交易所个股异常波动区间快照。"""
+        return DataResult(data=None, source=self.name, error="not implemented")
+
     def get_stk_alert(self, trade_date: str) -> DataResult:
         """交易所重点提示证券（stk_alert，与 App「重点监控」列表同源类数据）。"""
+        return DataResult(data=None, source=self.name, error="not implemented")
+
+    def get_stk_alert_range(self, start_date: str, end_date: str) -> DataResult:
+        """交易所重点提示证券区间快照（按监控开始日期查询）。"""
+        return DataResult(data=None, source=self.name, error="not implemented")
+
+    def get_stk_high_shock_range(self, start_date: str, end_date: str) -> DataResult:
+        """交易所严重异常波动区间快照。"""
         return DataResult(data=None, source=self.name, error="not implemented")
 
     def get_market_daily_changes(self, date: str) -> DataResult:

@@ -3,12 +3,14 @@ from __future__ import annotations
 
 import re
 import sqlite3
+from datetime import datetime
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from api.deps import get_db_conn
 from db import queries as Q
+from services.regulatory_overview import get_regulatory_overview
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
@@ -18,7 +20,23 @@ router = APIRouter(prefix="/api/regulatory-monitor", tags=["regulatory-monitor"]
 def _parse_date(date: str) -> str:
     if not _DATE_RE.match(date):
         raise HTTPException(422, "date must be YYYY-MM-DD")
+    try:
+        datetime.strptime(date, "%Y-%m-%d")
+    except ValueError as exc:
+        raise HTTPException(422, "date must be a valid calendar date") from exc
     return date
+
+
+@router.get("/overview")
+def read_regulatory_overview(
+    date: str = Query(..., description="业务日期 YYYY-MM-DD"),
+    conn: sqlite3.Connection = Depends(get_db_conn),
+):
+    target_date = _parse_date(date)
+    payload = get_regulatory_overview(conn, target_date)
+    if payload is None:
+        raise HTTPException(404, "regulatory overview not found")
+    return payload
 
 
 @router.get("")

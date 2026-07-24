@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from db.connection import get_connection
 from db.migrate import migrate
 from providers.base import DataResult
@@ -49,6 +51,7 @@ def test_list_interfaces_returns_registry_entries(tmp_path):
     assert "margin_detail" in names
     assert "anns_d" in names
     assert "macro_china_indicators" in names
+    assert {"stk_alert", "stk_shock", "stk_high_shock"} <= names
     assert any(item["enabled_by_default"] is False for item in interfaces)
     daily_basic = next(item for item in interfaces if item["interface_name"] == "daily_basic")
     assert daily_basic["interface_label"] == "盘后核心基础面快照"
@@ -899,6 +902,143 @@ def test_store_payload_empty_preserved_for_optin_interface(tmp_path):
              "raw_table": "raw_demo", "dedupe_keys": [], "preserve_nonempty_on_empty": True}
     row_count, status = _store_then_empty(tmp_path, iface)
     assert row_count == 1 and status == "success"  # opt-in：保留
+
+
+@pytest.mark.parametrize(
+    ("interface_name", "lookback_days", "end_policy"),
+    [
+        ("stk_alert", 90, "next_open"),
+        ("stk_shock", 60, "target"),
+        ("stk_high_shock", 120, "target"),
+    ],
+)
+def test_regulatory_interfaces_use_configured_date_range_snapshot(
+    interface_name, lookback_days, end_policy
+):
+    from ingest.registry import get_interface
+
+    interface = get_interface(interface_name)
+    assert interface is not None
+    assert interface["stage"] == "post_extended"
+    assert interface["enabled_by_default"] is True
+    assert interface["params_policy"] == "date_range_snapshot"
+    assert interface["lookback_calendar_days"] == lookback_days
+    assert interface["end_policy"] == end_policy
+    assert interface["preserve_nonempty_on_empty"] is True
+
+
+@pytest.mark.parametrize(
+    ("interface_name", "expected_start", "expected_end"),
+    [
+        ("stk_alert", "20260424", "20260724"),
+        ("stk_shock", "20260524", "20260723"),
+        ("stk_high_shock", "20260325", "20260723"),
+    ],
+)
+def test_regulatory_date_range_params_are_derived_from_registry_policy(
+    tmp_path, interface_name, expected_start, expected_end
+):
+    from ingest.registry import get_interface
+
+    db_path = tmp_path / "test.db"
+    if interface_name == "stk_alert":
+        conn = get_connection(db_path)
+        migrate(conn)
+        conn.execute(
+            """
+            INSERT INTO trade_calendar (date, is_open)
+            VALUES ('2026-07-24', 1)
+            """
+        )
+        conn.commit()
+        conn.close()
+    service = IngestService(str(db_path))
+    params = service._default_params(get_interface(interface_name), "2026-07-23")
+
+    assert params == {"start_date": expected_start, "end_date": expected_end}
+
+
+def test_regulatory_empty_rerun_keeps_raw_but_records_latest_empty_run(tmp_path):
+    class _SequencedRegistry:
+        def __init__(self):
+            self.providers = [self]
+            self.results = [
+                DataResult(
+                    data=[
+                        {
+                            "ts_code": "600664.SH",
+                            "start_date": "20260724",
+                            "end_date": "20260806",
+                        }
+                    ],
+                    source="tushare:stk_alert",
+                ),
+                DataResult(data=[], source="tushare:stk_alert"),
+            ]
+
+        def supports(self, method_name: str) -> bool:
+            return method_name == "get_stk_alert_range"
+
+        def call(self, method_name: str, *args, **kwargs):
+            assert method_name == "get_stk_alert_range"
+            return self.results.pop(0)
+
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    migrate(conn)
+    conn.execute(
+        "INSERT INTO trade_calendar (date, is_open) VALUES ('2026-07-24', 1)"
+    )
+    conn.commit()
+    conn.close()
+    service = IngestService(str(db_path), registry=_SequencedRegistry())
+
+    first = service.execute_interface(
+        "stk_alert",
+        "2026-07-23",
+        input_by="test",
+    )
+    second = service.execute_interface(
+        "stk_alert",
+        "2026-07-23",
+        input_by="test",
+    )
+
+    assert first["status"] == "success"
+    assert second["status"] == "empty"
+    conn = get_connection(db_path)
+    raw = conn.execute(
+        """
+        SELECT row_count, status, params_json, source_meta_json
+        FROM raw_interface_payloads
+        WHERE interface_name = 'stk_alert'
+        """
+    ).fetchone()
+    runs = conn.execute(
+        """
+        SELECT run_id, status, row_count, params_json
+        FROM ingest_runs
+        WHERE run_id IN (?, ?)
+        """,
+        (first["run"]["run_id"], second["run"]["run_id"]),
+    ).fetchall()
+    conn.close()
+
+    # 瞬时空不抹除最后一次非空原始事实，但本轮 ingest 仍必须忠实记录 empty。
+    assert raw["row_count"] == 1
+    assert raw["status"] == "success"
+    runs_by_id = {row["run_id"]: row for row in runs}
+    assert runs_by_id[first["run"]["run_id"]]["status"] == "success"
+    assert runs_by_id[first["run"]["run_id"]]["row_count"] == 1
+    assert runs_by_id[second["run"]["run_id"]]["status"] == "empty"
+    assert runs_by_id[second["run"]["run_id"]]["row_count"] == 0
+
+    params = json.loads(raw["params_json"])
+    assert params == {"start_date": "20260424", "end_date": "20260724"}
+    source_meta = json.loads(raw["source_meta_json"])
+    assert source_meta["query"]["request"] == params
+    assert source_meta["query"]["snapshot_date"] == "2026-07-23"
+    assert source_meta["query"]["effective_trading_date"] == "2026-07-24"
 
 
 def test_limit_cpt_list_run_creates_sector_snapshot_and_entities(tmp_path):

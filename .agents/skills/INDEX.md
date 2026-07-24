@@ -64,6 +64,7 @@
 | `daily-review` / `sector-projection-analysis` | `python main.py review factor-metrics [--days 20] [--json]` | 影子期指标：只统计开放交易日，每日优先人工决定引用的 canonical run（避免失败 retry 覆盖已确认父 run），汇总成功/非法输出/规则降级/覆盖、人工接受与改选、T+1 结果及分组；默认 20 日 |
 | `market-tasks` | `python main.py pre --date` | 盘前任务采集 |
 | `market-tasks` | `python main.py post --date` | 盘后任务采集 |
+| `market-tasks` | `python main.py regulatory --date YYYY-MM-DD --input-by USER` / `python main.py regulatory --query --date YYYY-MM-DD [--type 1\|2\|3\|all] [--json]` | 监管异动手工采集/只读查询：写入模式必须显式 `--input-by`，采集 `regulatory_suspend` 与 Tushare range 接口 `stk_alert` / `stk_shock` / `stk_high_shock`，再派生 `regulatory_anomaly_overview`；三个 range 接口统一属于 `post_extended`，原始空结果受 `preserve_nonempty_on_empty` 保护；总览整体区分 `complete/partial/failed`，来源区分 `success/empty/partial/failed/stale/late`，辅助派生失败不阻断 `cmd_post`；监管记录标 `[事实]`，行情偏离与理论触发价标 `[计算]`；沪市主板按区间收益率差、深市主板/创业板/科创板按逐日偏离累加，上市后前 5 个无涨跌幅限制日不计入，确认严重异动后从下一开放日重算，缺日保守标 `partial`，`today/next_day` 分别返回理论触发涨幅、价格和涨跌停可达性 |
 | `market-tasks` / `record-notes` | `python main.py wechat-teacher-feed should-run\|doctor\|collect\|show ...` | 本机 WeRSS 微信公众号白名单归档与候选查看；双 phase 严格日历，collect 只落 manifest/原文且须 `--input-by`，确认前不写 teacher_notes、不入池 |
 | `market-tasks` | `python main.py macro-flash run\|show\|doctor [--date YYYY-MM-DD] [--lookback-hours N] [--dry-run\|--no-push\|--repush] [--force-refresh] [--json]` | 金十宏观快讯采集速读：关键词筛宏观/政策类，归档 `data/runs/macro-flash/` 的 manifest（唯一 run receipt）+ flash_raw + digest，钉钉推送（18KB 截断）；**只归档不入库**，入库须走 record-notes 确认再 `db add-macro`；独立 launchd（交易日盘后 20:00 / 周日 22:00 回溯 54h），不进 `main.py schedule`；同日 complete 幂等跳过，`show` 仅 complete 且 sha 校验通过才展示正文 |
 | `market-tasks` | `python main.py recommend daily [--lookback-days N] [--top-k K] [--dry-run]` | 行业推荐日报（聚合 teacher_notes + industry_info，可选 Antigravity 点评，钉钉推送） |
@@ -151,6 +152,8 @@
 | `ingest-inspector` | `/api/ingest/run` | POST | 运行指定 stage 采集 |
 | `ingest-inspector` | `/api/ingest/run-interface` | POST | 运行单接口采集 |
 | `ingest-inspector` | `/api/ingest/retry` | GET | 查看待重试分组摘要 |
+| `market-tasks` | `/api/regulatory-monitor?date=YYYY-MM-DD` | GET | 保留的监管异动兼容查询接口，读取旧结构数据 |
+| `market-tasks` | `/api/regulatory-monitor/overview?date=YYYY-MM-DD` | GET | 读取盘后派生的 `regulatory_anomaly_overview` 总览；返回来源状态及分层的 `[事实]` / `[计算]` 数据，不触发采集或写入 |
 | `knowledge-to-plan` | `/api/knowledge/assets` | POST | 新增资料资产（禁止 `teacher_note` / `course_note`，422） |
 | `knowledge-to-plan` | `/api/knowledge/assets` | GET | 列出资料资产（limit/offset；asset_type 仅 news_note/manual_note；keyword/created_*） |
 | `knowledge-to-plan` | `/api/knowledge/assets/{asset_id}` | DELETE | 删除资料资产 |

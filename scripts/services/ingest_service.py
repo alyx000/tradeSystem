@@ -554,6 +554,32 @@ class IngestService:
             return {"trade_date": target_date.replace("-", "")}
         if policy == "date_range_day":
             return {"start_date": target_date.replace("-", ""), "end_date": target_date.replace("-", "")}
+        if policy == "date_range_snapshot":
+            lookback_days = max(0, int(interface.get("lookback_calendar_days", 0) or 0))
+            end_policy = str(interface.get("end_policy") or "target")
+            target_dt = datetime.strptime(target_date, "%Y-%m-%d")
+            effective_date = target_date
+            if end_policy == "next_open":
+                with get_db(self.db_path) as conn:
+                    migrate(conn)
+                    row = conn.execute(
+                        """
+                        SELECT date
+                        FROM trade_calendar
+                        WHERE date > ? AND is_open = 1
+                        ORDER BY date
+                        LIMIT 1
+                        """,
+                        (target_date,),
+                    ).fetchone()
+                    if row is not None:
+                        effective_date = str(row["date"] if hasattr(row, "keys") else row[0])
+                    else:
+                        effective_date = ""
+            return {
+                "start_date": (target_dt - timedelta(days=lookback_days)).strftime("%Y%m%d"),
+                "end_date": effective_date.replace("-", ""),
+            }
         if policy == "float_date":
             return {"float_date": target_date.replace("-", "")}
         if policy == "quarter_end":
@@ -569,7 +595,7 @@ class IngestService:
         input_by: str | None,
         notes: str,
     ) -> tuple[str, str, dict[str, Any]]:
-        started_at = datetime.now().isoformat(timespec="seconds")
+        started_at = datetime.now().isoformat(timespec="microseconds")
         run_id = f"ingest_{interface['interface_name']}_{uuid4().hex[:12]}"
         params = self._default_params(interface, target_date)
         with get_db(self.db_path) as conn:
@@ -609,7 +635,7 @@ class IngestService:
         notes: str,
         started_at: str,
     ) -> None:
-        finished_at = datetime.now().isoformat(timespec="seconds")
+        finished_at = datetime.now().isoformat(timespec="microseconds")
         duration_ms = max(
             0,
             int(
@@ -711,6 +737,24 @@ class IngestService:
                     payload_hash = excluded.payload_hash,
                     row_count = excluded.row_count,
                     status = excluded.status,"""
+        source_meta = result.to_dict()
+        if interface.get("params_policy") == "date_range_snapshot":
+            effective_raw = str(params.get("end_date") or "").replace("-", "")
+            effective_date = (
+                f"{effective_raw[:4]}-{effective_raw[4:6]}-{effective_raw[6:8]}"
+                if len(effective_raw) == 8
+                else target_date
+            )
+            source_meta["query"] = {
+                "request": {
+                    "start_date": params.get("start_date"),
+                    "end_date": params.get("end_date"),
+                },
+                "snapshot_date": target_date,
+                "effective_trading_date": effective_date,
+            }
+        else:
+            source_meta["query"] = {"request": dict(params), "snapshot_date": target_date}
         with get_db(self.db_path) as conn:
             migrate(conn)
             conn.execute(
@@ -741,7 +785,7 @@ class IngestService:
                     len(rows),
                     "success" if rows else "empty",
                     json.dumps(params, ensure_ascii=False),
-                    json.dumps(result.to_dict(), ensure_ascii=False),
+                    json.dumps(source_meta, ensure_ascii=False),
                 ),
             )
         return dedupe_key, len(rows)
@@ -1027,42 +1071,6 @@ class IngestService:
                     )
                 )
 
-        if interface["interface_name"] == "regulatory_suspend":
-            rows = [row for row in self._normalize_rows(data) if isinstance(row, dict)]
-            if rows:
-                created.append(
-                    self._upsert_market_fact_snapshot(
-                        biz_date=target_date,
-                        fact_type="regulatory_monitor",
-                        subject_type="market",
-                        subject_code="CN",
-                        subject_name="停牌核查",
-                        facts={
-                            "record_count": len(rows),
-                            "suspend_samples": rows[:50],
-                        },
-                        source_interfaces=[interface["interface_name"]],
-                    )
-                )
-
-        if interface["interface_name"] == "stk_shock":
-            rows = [row for row in self._normalize_rows(data) if isinstance(row, dict)]
-            if rows:
-                created.append(
-                    self._upsert_market_fact_snapshot(
-                        biz_date=target_date,
-                        fact_type="regulatory_monitor",
-                        subject_type="market",
-                        subject_code="CN",
-                        subject_name="异常波动个股",
-                        facts={
-                            "record_count": len(rows),
-                            "shock_samples": rows[:50],
-                        },
-                        source_interfaces=[interface["interface_name"]],
-                    )
-                )
-
         return created
 
     def _derive_fact_entities(
@@ -1181,7 +1189,7 @@ class IngestService:
         input_by: str | None,
         notes: str,
     ) -> dict[str, Any]:
-        started_at = datetime.now().isoformat(timespec="seconds")
+        started_at = datetime.now().isoformat(timespec="microseconds")
         run_id = f"ingest_{interface['interface_name']}_{uuid4().hex[:12]}"
         params = self._default_params(interface, target_date)
         with get_db(self.db_path) as conn:
@@ -1224,12 +1232,29 @@ class IngestService:
             "notes": notes,
         }
 
-    def _call_registered_interface(self, interface: dict[str, Any], target_date: str) -> DataResult:
+    def _call_registered_interface(
+        self,
+        interface: dict[str, Any],
+        target_date: str,
+        params: dict[str, Any],
+    ) -> DataResult:
         method_name = interface["provider_method"]
         if self.registry is None:
             return DataResult(data=None, source="ingest_service", error="provider registry 未注入")
         if not any(provider.supports(method_name) for provider in self.registry.providers):
             return DataResult(data=None, source="ingest_service", error=f"当前 provider 未实现 {method_name}")
+        if interface.get("params_policy") == "date_range_snapshot":
+            if not params.get("end_date"):
+                return DataResult(
+                    data=None,
+                    source="calendar:trade_calendar",
+                    error="next open trade date unavailable",
+                )
+            return self.registry.call(
+                method_name,
+                start_date=params["start_date"],
+                end_date=params["end_date"],
+            )
         return self.registry.call(method_name, target_date)
 
     def execute_stage(
@@ -1306,7 +1331,7 @@ class IngestService:
             input_by=input_by,
             notes="Executing ingest interface",
         )
-        result = self._call_registered_interface(interface, target_date)
+        result = self._call_registered_interface(interface, target_date, params)
         provider = result.source or interface["provider_method"]
         if not result.success:
             error_type, retryable = self._classify_provider_error(result.error)

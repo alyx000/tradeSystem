@@ -922,6 +922,37 @@ def _run_new_high_for_post(config: dict, target_date: str, registry) -> None:
         logger.warning("new-high 盘后生产失败（不影响主流程）：%s", e)
 
 
+def _run_regulatory_overview_for_post(
+    config: dict,
+    target_date: str,
+    registry,
+) -> dict:
+    """在监管原始接口采集后生成总览快照；异常不影响 cmd_post。"""
+    del config  # 监管原始接口已统一归入 post_extended，不再由旧 schedule task 控制。
+    try:
+        from services.regulatory_overview import RegulatoryOverviewService
+
+        # build 仍需读取交易日历、ST、个股与指数行情；provider 在调用时读取代理环境。
+        with without_standard_http_proxy():
+            result = RegulatoryOverviewService(registry=registry).build(
+                target_date,
+                persist=True,
+            )
+        logger.info(
+            "监管异动总览完成：status=%s date=%s",
+            result.get("status"),
+            result.get("snapshot_date", target_date),
+        )
+        return result
+    except Exception as e:
+        logger.warning("监管异动总览失败（不影响主流程）：%s", e)
+        return {
+            "status": "failed",
+            "date": target_date,
+            "error": str(e),
+        }
+
+
 def cmd_post(config: dict, target_date: str):
     """执行盘后报告：先晚间任务（溢价/关注池/复盘 Obsidian），再全日盘后采集与推送。"""
     cmd_evening(config, target_date)
@@ -978,16 +1009,6 @@ def cmd_post(config: dict, target_date: str):
             holdings_info = holdings_collector.collect_stock_info(target_date)
         except Exception as e:
             logger.warning(f"持仓盘后信息面采集失败: {e}")
-
-        if _schedule_task_enabled(config, "post_market", "regulatory_monitor"):
-            try:
-                from collectors.regulatory import RegulatoryCollector
-
-                reg = RegulatoryCollector(registry)
-                reg_result = reg.collect(target_date)
-                logger.info(reg.format_report(reg_result))
-            except Exception as e:
-                logger.warning(f"异动监管采集失败: {e}")
 
         watchlist_data = {}
         try:
@@ -1071,6 +1092,10 @@ def cmd_post(config: dict, target_date: str):
     except Exception as e:
         logger.warning(f"IngestService 快照采集失败（不影响主流程）：{e}")
 
+    # 监管原始事实统一由 post_extended 采集；此处仅做派生计算和兼容表回填。
+    # 辅助任务失败不得阻断盘后报告、推送和其他派生任务。
+    _run_regulatory_overview_for_post(config, target_date, registry)
+
     # new-high 只维护本地派生事实层与目标日报告，不推送；失败与主盘后流程隔离。
     _run_new_high_for_post(config, target_date, registry)
 
@@ -1121,7 +1146,7 @@ def _cmd_regulatory_query(target_date: str, *, as_json: bool, type_filter: str) 
 
 
 def cmd_regulatory(config: dict, args) -> None:
-    """异动监管：采集写入 DB；加 --query 时仅查库。"""
+    """异动监管：采集标准事实层并生成总览；加 --query 时仅查库。"""
     target_date = args.date
     if getattr(args, "query", False):
         _cmd_regulatory_query(
@@ -1130,14 +1155,47 @@ def cmd_regulatory(config: dict, args) -> None:
             type_filter=getattr(args, "regulatory_type_filter", "all"),
         )
         return
+    input_by = str(getattr(args, "input_by", "") or "").strip()
+    if not input_by:
+        raise SystemExit("regulatory 采集写入必须显式提供 --input-by")
     with without_standard_http_proxy():
         registry = setup_providers(config)
         registry.initialize_all()
-        from collectors.regulatory import RegulatoryCollector
 
-        col = RegulatoryCollector(registry)
-        result = col.collect(target_date)
-        print(col.format_report(result))
+        from services.ingest_service import IngestService
+        from services.regulatory_overview import RegulatoryOverviewService
+
+        ingest_svc = IngestService(registry=registry)
+        ingest_results = [
+            ingest_svc.execute_interface(
+                name,
+                target_date,
+                triggered_by="cli",
+                input_by=input_by,
+            )
+            for name in (
+                "regulatory_suspend",
+                "stk_alert",
+                "stk_shock",
+                "stk_high_shock",
+            )
+        ]
+        result = RegulatoryOverviewService(registry=registry).build(
+            target_date,
+            persist=True,
+        )
+
+    for item in ingest_results:
+        run = item.get("run") or {}
+        print(
+            f"{item.get('name')}: {item.get('status')} "
+            f"({run.get('row_count', 0)} rows)"
+        )
+    print(
+        "regulatory_anomaly_overview: "
+        f"{result.get('status')} "
+        f"({result.get('snapshot_date', target_date)})"
+    )
 
 
 def cmd_evening(config: dict, target_date: str):
@@ -1400,6 +1458,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--json",
         action="store_true",
         help="与 --query 联用：输出 JSON",
+    )
+    regulatory_parser.add_argument(
+        "--input-by",
+        default=None,
+        help="采集写入审计请求者（使用 --query 时无需提供）",
     )
 
     # evening
