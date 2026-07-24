@@ -8,6 +8,7 @@ from .analyzer import (
     SHARE_EXTREME_PCT,
     SHARE_WARN_PCT,
     SLOPE_PCTILE_WINDOW,
+    sector_label_definitions,
 )
 
 PROXY_DISCLAIMER = "（资金流代理，非公募持仓真值）"
@@ -41,6 +42,81 @@ _TABLE_HEADER = [
 ]
 
 
+def _format_sector_labels(labels: dict | None) -> list[str]:
+    definitions = (labels or {}).get("definitions") or sector_label_definitions()
+    half_year_window = definitions["half_year_ma_window"]
+    year_window = definitions["year_ma_window"]
+    lookback_days = definitions["resonance_lookback_days"]
+    breakout_window = definitions["resonance_breakout_window"]
+    lines = [
+        "",
+        "### 板块趋势标签（申万二级）",
+        f"> 半年线上 [事实]：当日板块指数收盘 > MA{half_year_window}"
+        f"（最近{half_year_window}个交易快照收盘均值）；"
+        f"年线上 [事实]：当日板块指数收盘 > MA{year_window}"
+        f"（最近{year_window}个交易快照收盘均值）；"
+        f"近期价量共振 [判断]：最近{lookback_days}个交易快照日内，"
+        f"指数收盘与成交额同日严格突破此前{breakout_window}个交易快照日高点。",
+    ]
+    if not labels:
+        return lines + ["- 标签数据不足"]
+
+    summary = labels["summary"]
+    if labels.get("status") == "missing_l2":
+        missing_count = summary.get("missing_l2_count", 0)
+        if missing_count:
+            return lines + [
+                f"- ⚠ 当日快照完全缺少申万二级；保留预期板块清单 {missing_count} 个，"
+                "全部标签按数据不足处理"
+            ]
+        return lines + ["- 标签数据不足"]
+    if labels.get("status") not in {"success", "partial"}:
+        return lines + ["- 标签数据不足"]
+    if labels.get("status") == "partial":
+        lines.append(
+            f"- ⚠ 当日申万二级覆盖不完整：缺失 "
+            f"{summary.get('missing_l2_count', 0)} 个板块；"
+            "缺失项保留并按数据不足处理"
+        )
+    lines.append(
+        f"- 汇总：半年线上 {summary['above_half_year_ma']} / "
+        f"年线上 {summary['above_year_ma']} / "
+        f"近期共振 {summary['recent_resonance']} / "
+        f"年线+共振 {summary['year_and_resonance']} / 申万二级 {summary['total_l2']} / "
+        f"半年线数据不足 {summary.get('half_year_ma_insufficient', 0)} / "
+        f"年线数据不足 {summary.get('year_ma_insufficient', 0)} / "
+        f"共振数据不足 {summary.get('resonance_insufficient', 0)}"
+    )
+    tagged = [
+        item for item in labels["items"]
+        if item.get("above_half_year_ma") is True
+        or item.get("above_year_ma") is True
+        or item.get("recent_price_volume_resonance") is True
+    ]
+    if not tagged:
+        half_year_unknown = summary.get("half_year_ma_insufficient", 0)
+        year_unknown = summary.get("year_ma_insufficient", 0)
+        resonance_unknown = summary.get("resonance_insufficient", 0)
+        if half_year_unknown or year_unknown or resonance_unknown:
+            return lines + [
+                "- 暂无已确认命中；"
+                f"半年线数据不足 {half_year_unknown} 个，"
+                f"年线数据不足 {year_unknown} 个，共振数据不足 {resonance_unknown} 个"
+            ]
+        return lines + ["- 无命中标签板块（已完成判定）"]
+    for item in tagged:
+        tags = []
+        if item.get("above_half_year_ma") is True:
+            tags.append("半年线上")
+        if item.get("above_year_ma") is True:
+            tags.append("年线上")
+        if item.get("recent_price_volume_resonance") is True:
+            event = item.get("last_resonance") or {}
+            tags.append(f"最近共振 {event.get('date', '-')}")
+        lines.append(f"- {item['name']}({item['code']})：{' / '.join(tags)}")
+    return lines
+
+
 def format_report(view: dict) -> str:
     lines = [f"## 全行业交易拥挤度 · {view['date']}", "",
              "> 行业占比/涨幅/分位为客观取数 [事实];「双高拥挤」为派生信号 [判断],不构成买卖建议。"]
@@ -56,6 +132,7 @@ def format_report(view: dict) -> str:
                   for s in dh]
     else:
         lines.append("- 无双高拥挤板块")
+    lines += _format_sector_labels(view.get("sector_labels"))
     meta = view.get("meta") or {}
     l1 = _by_share(view["sectors"], "L1")
     l2 = _by_share(view["sectors"], "L2")[:L2_TOP_N]

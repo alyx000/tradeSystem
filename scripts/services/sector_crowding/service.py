@@ -1,7 +1,7 @@
 """sector_crowding 编排层（只编排，不实现）。
 
 run_daily：采集→share_pct→落库→读回历史现算分位→渲染（None=无数据，调用方不推送）。
-run_report/run_trend：只读。分位/双高永不落库（spec v2 关键设计 1）。
+run_report/run_trend：只读。分位/双高/板块标签永不落库（spec v2 关键设计 1）。
 """
 from __future__ import annotations
 
@@ -60,6 +60,24 @@ def _render(conn: sqlite3.Connection, date: str, today_record: dict | None) -> s
     view = analyzer.build_view(history, date) if history else None
     if view is None:
         return None
+    label_history = [
+        record
+        for record in repo.get_recent(
+            conn,
+            date,
+            analyzer.LABEL_HISTORY_DAYS,
+            include_meta=True,
+        )
+        if record["date"] != date
+    ]
+    if today_record is not None:
+        label_history.append(today_record)
+    # dry-run 的目标日尚未落库时，查询会拿满 233 个历史日；追加目标日后裁掉最旧一日，
+    # 保持均线与宇宙兜底都严格限定在 LABEL_HISTORY_DAYS 个交易快照内。
+    view["sector_labels"] = analyzer.build_sector_labels(
+        label_history[-analyzer.LABEL_HISTORY_DAYS:],
+        date,
+    )
     view["proxy"] = today_record.get("proxy") if today_record else None
     return formatter.format_report(view)
 
@@ -67,6 +85,18 @@ def _render(conn: sqlite3.Connection, date: str, today_record: dict | None) -> s
 def run_report(conn: sqlite3.Connection, date: str) -> str:
     md = _render(conn, date, repo.get_snapshot(conn, date))
     return md if md is not None else f"{date} 无拥挤度快照(先跑 sector-crowding daily)。"
+
+
+def build_sector_labels_payload(conn: sqlite3.Connection, date: str) -> dict:
+    """只读构建复盘页板块标签；报告与 API 共用 analyzer 的唯一计算口径。"""
+    records = repo.get_recent(
+        conn,
+        date,
+        analyzer.LABEL_HISTORY_DAYS,
+        include_meta=True,
+    )
+    labels = analyzer.build_sector_labels(records, date)
+    return labels if labels is not None else analyzer.empty_sector_labels(date)
 
 
 def run_trend(conn: sqlite3.Connection, date: str, sector: str, days: int = 60) -> str:
@@ -114,10 +144,22 @@ def run_backfill(conn: sqlite3.Connection, registry, provider, start: str, end: 
             by_date[d], provider._ensure_sw_l1_parent_map)
         for s in sectors:
             s["share_pct"] = analyzer.compute_share_pct(s.get("amount_billion"), total)
+        observed_l2_codes = sorted({
+            sector["code"] for sector in sectors if sector.get("level") == "L2"
+        })
         # DO NOTHING 写入口:existing 快照挡不住回填期间 daily 新落的行,机制性防覆盖
         if repo.insert_snapshot_if_absent(conn, {
                 "date": d, "market_total_billion": total, "sectors": sectors,
-                "proxy": None, "meta": {"backfilled": True, "l1_status": l1_status}}):
+                "proxy": None, "meta": {
+                    "backfilled": True,
+                    "l1_status": l1_status,
+                    # 采集阶段已对有效期内空码/缺日 fail-closed；实际出现的 L2
+                    # 即该历史日可信 as-of 宇宙，允许分类新增、退出和换码。
+                    "l2_expected_codes": observed_l2_codes,
+                    "l2_expected_count": len(observed_l2_codes),
+                    "l2_observed_count": len(observed_l2_codes),
+                    "l2_universe_complete": True,
+                }}):
             written += 1
         else:
             skipped += 1

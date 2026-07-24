@@ -28,6 +28,26 @@ def get_connection(db_path: str | Path | None = None) -> sqlite3.Connection:
     return conn
 
 
+def get_readonly_connection(db_path: str | Path | None = None) -> sqlite3.Connection:
+    """创建 SQLite ``mode=ro`` 连接，不创建文件、不迁移、不提交写入。
+
+    用于承诺请求期只读的 API/任务。不能复用 :func:`get_connection`，因为后者会设置
+    ``journal_mode=WAL``，且调用方通常会紧接着执行迁移。
+    """
+    path = Path(db_path or _DEFAULT_DB_PATH).resolve()
+    conn = sqlite3.connect(
+        f"{path.as_uri()}?mode=ro",
+        uri=True,
+        timeout=10,
+        check_same_thread=False,
+    )
+    conn.execute("PRAGMA query_only=ON")
+    conn.execute("PRAGMA busy_timeout=5000")
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
 @contextmanager
 def get_db(db_path: str | Path | None = None):
     """上下文管理器：自动 commit / rollback / close。CLI 和脚本使用。"""

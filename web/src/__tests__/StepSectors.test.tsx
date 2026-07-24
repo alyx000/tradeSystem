@@ -10,6 +10,31 @@ import type { ReviewPrefillData, ReviewStepValue, TrinityFactorScoreRun } from '
 vi.spyOn(api, 'getSectorGainRanking').mockResolvedValue({
   date: '2026-04-03', rankings: { '5d': [], '10d': [], '20d': [] },
 })
+vi.spyOn(api, 'getSectorLabels').mockResolvedValue({
+  date: '2026-04-03',
+  available: false,
+  status: 'missing_snapshot',
+  definitions: {
+    half_year_ma_window: 144,
+    year_ma_window: 233,
+    resonance_lookback_days: 10,
+    resonance_breakout_window: 20,
+    resonance_rule: 'close_and_amount_strictly_above_prior_window_highs',
+    window_unit: 'trading_snapshot_days',
+  },
+  summary: {
+    total_l2: 0,
+    missing_l2_count: 0,
+    above_half_year_ma: 0,
+    above_year_ma: 0,
+    recent_resonance: 0,
+    year_and_resonance: 0,
+    half_year_ma_insufficient: 0,
+    year_ma_insufficient: 0,
+    resonance_insufficient: 0,
+  },
+  items: [],
+})
 
 function renderStep(
   data: ReviewStepValue = {},

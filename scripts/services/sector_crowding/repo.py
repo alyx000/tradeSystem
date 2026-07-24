@@ -97,17 +97,27 @@ def get_snapshot(conn: sqlite3.Connection, date: str) -> dict | None:
     return _row_to_record(row) if row else None
 
 
-def get_recent(conn: sqlite3.Connection, end_date: str, days: int) -> list[dict]:
+def get_recent(
+    conn: sqlite3.Connection,
+    end_date: str,
+    days: int,
+    *,
+    include_meta: bool = False,
+) -> list[dict]:
     """取 <= end_date 的最近 days 行快照，按日期升序（供分位现算/trend）。
 
-    精简列读取：历史行的 proxy_json/meta_json 不参与分位计算，跳过解析
-    （JSON 解码是该路径主导成本）；当日全量数据用 get_snapshot 单行取。"""
+    默认精简列读取：历史行的 proxy_json/meta_json 不参与分位计算，跳过解析
+    （JSON 解码是该路径主导成本）；当日全量数据用 get_snapshot 单行取。
+    标签窗口需继承最近可信 L2 宇宙时显式 ``include_meta=True``，仍不读取 proxy。
+    """
     if not isinstance(days, int) or days <= 0:
         # SQLite LIMIT 负数=不限行数:负窗口会静默退化成全表 JSON 解码(codex 门2 中)
         raise ValueError(f"get_recent: days 必须为正整数,得到 {days!r}")
+    meta_column = ", meta_json" if include_meta else ""
     rows = conn.execute(
-        """SELECT date, market_total_billion, sectors_json
-           FROM sector_crowding_daily WHERE date <= ? ORDER BY date DESC LIMIT ?""",
+        f"""SELECT date, market_total_billion, sectors_json{meta_column}
+            FROM sector_crowding_daily
+            WHERE date <= ? ORDER BY date DESC LIMIT ?""",
         (end_date, days),
     ).fetchall()
     return [_row_to_record(r) for r in reversed(rows)]

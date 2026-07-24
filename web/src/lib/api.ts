@@ -65,6 +65,7 @@ import type {
   RegulatoryMonitorRecord,
   ConcentrationTrendPayload,
   SectorGainRankingPayload,
+  SectorLabelsPayload,
   ResearchCoverageIndustryRow,
   MarketTimingPayload,
   MarketTimingHistoryPayload,
@@ -220,6 +221,8 @@ export const api = {
     request<ConcentrationTrendPayload>(`/market/concentration/history?days=${days}`),
   getSectorGainRanking: (date: string) =>
     request<SectorGainRankingPayload>(`/market/sector-gain-ranking/${date}`),
+  getSectorLabels: (date: string) =>
+    request<SectorLabelsPayload>(`/market/sector-labels/${date}`),
   getMarginIndexCorrelation: (date: string) =>
     request<MarginIndexCorrelationPayload>(`/market/margin-index-correlation/${date}`),
   getMarketTiming: (date: string) => request<MarketTimingPayload>(`/market/timing/${date}`),

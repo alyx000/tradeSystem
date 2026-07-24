@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { type StepProps, Section, Row, PrefillBanner, SelectField, TextField, NumberField, TagsField, TextareaField, DynamicList, TeacherNotesPanel } from './widgets'
 import CognitionPanel from './CognitionPanel'
 import SectorGainRanking from './SectorGainRanking'
+import SectorLabels from './SectorLabels'
 import { get, set } from './formState'
 import type {
   IndustryInfoItem,
@@ -375,6 +376,7 @@ export default function StepSectors({ data, onChange, prefill, factorScore }: St
       )}
 
       <SectorGainRanking date={date} />
+      <SectorLabels date={date} />
 
       <Section title="主线板块">
         <div className="space-y-4">

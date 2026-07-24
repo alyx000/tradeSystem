@@ -52,7 +52,7 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
 
     trend = sub.add_parser("trend", help="只读:单板块拥挤度时间序列")
     trend.add_argument("--sector", required=True,
-                       help="申万行业代码(如 801080.SI,建议用代码;回填历史行无中文名,按名查会缺段)")
+                       help="申万行业代码(如 801080.SI，建议用代码查询)")
     trend.add_argument("--date", default=None, help="截止交易日(默认今天)")
     trend.add_argument("--days", type=_positive_int, default=60, help="窗口天数(默认 60)")
 

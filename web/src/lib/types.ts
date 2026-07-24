@@ -298,6 +298,56 @@ export interface SectorGainRankingPayload {
   concept_rankings?: SectorGainPeriods   // 同花顺概念题材榜（多标签；旧记录可能缺）
 }
 
+// 申万二级每日趋势标签：读取 sector_crowding_daily 原始事实后按目标日现算。
+export interface SectorResonanceEvidence {
+  date: string
+  close: number
+  prior_close_high: number
+  amount_billion: number
+  prior_amount_high_billion: number
+}
+
+export interface SectorLabelItem {
+  code: string
+  name: string
+  present_on_target: boolean
+  close: number | null
+  amount_billion: number | null
+  half_year_ma: number | null
+  above_half_year_ma: boolean | null
+  year_ma: number | null
+  above_year_ma: boolean | null
+  recent_price_volume_resonance: boolean | null
+  last_resonance: SectorResonanceEvidence | null
+  resonance_age_snapshot_days: number | null
+}
+
+export interface SectorLabelsPayload {
+  date: string
+  available: boolean
+  status: 'success' | 'partial' | 'missing_snapshot' | 'missing_l2'
+  definitions: {
+    half_year_ma_window: number
+    year_ma_window: number
+    resonance_lookback_days: number
+    resonance_breakout_window: number
+    resonance_rule: string
+    window_unit: 'trading_snapshot_days'
+  }
+  summary: {
+    total_l2: number
+    missing_l2_count: number
+    above_half_year_ma: number
+    above_year_ma: number
+    recent_resonance: number
+    year_and_resonance: number
+    half_year_ma_insufficient: number
+    year_ma_insufficient: number
+    resonance_insufficient: number
+  }
+  items: SectorLabelItem[]
+}
+
 // 两融余额与指数联动性（复盘「1.大盘」）：背离/水位趋势/领先滞后/同步相关四维。
 export interface MicPairing {
   pair_key: string

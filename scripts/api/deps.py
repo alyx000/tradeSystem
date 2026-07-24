@@ -1,7 +1,7 @@
 """FastAPI 依赖注入。"""
 from __future__ import annotations
 
-from db.connection import get_connection
+from db.connection import get_connection, get_readonly_connection
 from db.migrate import migrate
 
 
@@ -30,5 +30,14 @@ def get_db_conn():
     except Exception:
         conn.rollback()
         raise
+    finally:
+        conn.close()
+
+
+def get_readonly_db_conn():
+    """请求级强只读连接：SQLite mode=ro，不执行 migrate，不做隐式写入。"""
+    conn = get_readonly_connection()
+    try:
+        yield conn
     finally:
         conn.close()

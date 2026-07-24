@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import math
+from datetime import date as calendar_date, timedelta
 
 # 复用 volume-watch 已实战校准的三段守卫常量（只 import 常量不改其文件）
 from services.volume_concentration.collector import (
@@ -19,6 +20,13 @@ logger = logging.getLogger(__name__)
 # 265,411,140(万元)÷10000 ≈ 2.65 万亿,与当日全市场量级吻合;与 get_sector_rankings
 # 的 amount/10000 口径一致。
 AMOUNT_TO_BILLION = 10000.0
+ACTIVITY_PROBE_START = "1990-01-01"
+# 2026-07-24 真机核对：SW2021 L2 分类表共 134 码，其中 is_pub=1 为 124。
+# 总码表保留退役历史码，正常只增不应缩；低于已验证基线一律视作稳定部分返回。
+SW2021_L2_CATALOG_COUNT_FLOOR = 134
+SW2021_L2_PUBLISHED_COUNT_FLOOR = 120
+_L2_CATALOG_CACHE_KEY = "_sector_crowding_l2_catalog"
+_L2_NAME_CACHE_KEY = "_sector_crowding_l2_names"
 
 
 def _finite_num(v) -> bool:
@@ -36,6 +44,102 @@ def _clean_close(close) -> float | None:
     return close if _finite_num(close) else None
 
 
+def _published_flag(value) -> bool | None:
+    """index_classify.is_pub → bool；未知值不猜测。"""
+    if value == 1 or value == "1":
+        return True
+    if value == 0 or value == "0":
+        return False
+    return None
+
+
+def _l2_catalog(provider) -> dict[str, bool]:
+    """返回申万 L2 全代码及当前发布状态。
+
+    `_ensure_sw_l2_codes()` 当前会包含 `is_pub=0` 的历史退役代码；daily 若把它直接
+    当当前宇宙，会永久误报缺码。优先读取同一官方分类表的 `is_pub`，仅测试桩或旧
+    provider 缺该字段时退回既有代码集，并把退回代码保守视作当前发布。
+    """
+    cached = getattr(provider, "__dict__", {}).get(_L2_CATALOG_CACHE_KEY)
+    if isinstance(cached, dict):
+        return dict(cached)
+
+    fallback_codes = set(provider._ensure_sw_l2_codes() or set())
+    if not fallback_codes:
+        logger.warning("[sector-crowding] L2 既有码表为空,中止分类表校验")
+        return {}
+    if len(fallback_codes) < SW2021_L2_CATALOG_COUNT_FLOOR:
+        logger.warning(
+            "[sector-crowding] L2 既有码表低于已验证完整性基线"
+            "(all=%d/%d),中止",
+            len(fallback_codes),
+            SW2021_L2_CATALOG_COUNT_FLOOR,
+        )
+        return {}
+    try:
+        df = provider.pro.index_classify(level="L2", src="SW2021")
+        columns = set(getattr(df, "columns", []))
+        if df is not None and not getattr(df, "empty", True) and {
+            "index_code", "is_pub"
+        } <= columns:
+            catalog: dict[str, bool] = {}
+            for row in df.to_dict("records"):
+                code = row.get("index_code")
+                published = _published_flag(row.get("is_pub"))
+                if not isinstance(code, str) or not code.strip() or published is None:
+                    raise ValueError("index_classify L2 含非法 index_code/is_pub")
+                code = code.strip()
+                if code in catalog and catalog[code] is not published:
+                    raise ValueError(f"index_classify L2 重复码状态冲突:{code}")
+                catalog[code] = published
+            if catalog:
+                if set(catalog) != fallback_codes:
+                    logger.warning(
+                        "[sector-crowding] index_classify L2 两次读取代码集合不一致"
+                        "(cached=%d,direct=%d),中止",
+                        len(fallback_codes),
+                        len(catalog),
+                    )
+                    return {}
+                published_count = sum(catalog.values())
+                if (
+                    len(catalog) < SW2021_L2_CATALOG_COUNT_FLOOR
+                    or published_count < SW2021_L2_PUBLISHED_COUNT_FLOOR
+                ):
+                    logger.warning(
+                        "[sector-crowding] index_classify L2 低于已验证完整性基线"
+                        "(all=%d/%d,published=%d/%d),中止",
+                        len(catalog),
+                        SW2021_L2_CATALOG_COUNT_FLOOR,
+                        published_count,
+                        SW2021_L2_PUBLISHED_COUNT_FLOOR,
+                    )
+                    return {}
+                provider.__dict__[_L2_CATALOG_CACHE_KEY] = dict(catalog)
+                provider.__dict__[_L2_NAME_CACHE_KEY] = {
+                    str(row.get("index_code")).strip(): str(row.get("industry_name"))
+                    for row in df.to_dict("records")
+                    if isinstance(row.get("index_code"), str)
+                    and row.get("index_code").strip()
+                    and isinstance(row.get("industry_name"), str)
+                    and row.get("industry_name").strip()
+                }
+                return catalog
+    except Exception as e:
+        logger.warning("[sector-crowding] L2 分类发布状态读取失败: %s", e)
+        # 分类表部分返回时不能退回较小集合并标 complete；有独立完整 fallback 时，
+        # 保留其代码范围但把发布状态保守视为 active，使缺码只会 fail-closed。
+    fallback = {code: True for code in fallback_codes}
+    # 降级状态没有 is_pub，不能缓存；同进程下一次调用仍应有机会恢复完整分类表。
+    return fallback
+
+
+def _compact_trade_date(value) -> str | None:
+    """外部 trade_date 归一为 YYYYMMDD；非法值返回 None。"""
+    compact = str(value)
+    return compact if len(compact) == 8 and compact.isdigit() else None
+
+
 def fetch_sector_daily(provider, date: str) -> dict | None:
     """当日申万 L1+L2 快照。L1 缺失且 parent_map 可靠才合成（meta 标 synthesized）。
 
@@ -50,7 +154,13 @@ def fetch_sector_daily(provider, date: str) -> dict | None:
     if df is None or df.empty:
         return None
     l1_codes = provider._ensure_sw_l1_codes() or set()
-    l2_codes = provider._ensure_sw_l2_codes() or set()
+    l2_catalog = _l2_catalog(provider)
+    l2_codes = set(l2_catalog)
+    if not l2_catalog:
+        # L2 是本任务的核心事实宇宙；码表失败时只落 L1 会让标签接口把“无 L2”
+        # 误当正常快照。宁可整日不落，等待下一次重跑。
+        logger.warning("[sector-crowding] L2 码表为空(拉取失败?),中止当日采集")
+        return None
     if not l1_codes:
         # 码表拉取失败被惰性缓存为空集(进程内不重试,仓库既有模式):原生 L1 行会被过滤、
         # 走合成降级(name=code/close 缺席)。留日志便于排障,daily 单次进程影响面小。
@@ -61,6 +171,15 @@ def fetch_sector_daily(provider, date: str) -> dict | None:
         level = "L1" if code in l1_codes else ("L2" if code in l2_codes else None)
         if level is None:
             continue
+        row_date = _compact_trade_date(row.get("trade_date"))
+        if row_date != d:
+            logger.warning(
+                "[sector-crowding] %s sw_daily 返回错日/非法行(code=%s,trade_date=%r),中止落库",
+                date,
+                code,
+                row.get("trade_date"),
+            )
+            return None
         sectors.append({
             "code": code, "name": row.get("name"), "level": level,
             "close": _clean_close(row.get("close")),
@@ -68,8 +187,58 @@ def fetch_sector_daily(provider, date: str) -> dict | None:
         })
     if not sectors:
         return None
+    observed_l2_codes = {
+        sector["code"] for sector in sectors if sector.get("level") == "L2"
+    }
+    missing_expected_l2_codes = []
+    for code, currently_published in l2_catalog.items():
+        if code in observed_l2_codes:
+            continue
+        try:
+            active_but_missing = _code_expected_in_interval(
+                provider,
+                code,
+                date,
+                date,
+                currently_published,
+            )
+        except Exception as e:
+            logger.warning(
+                "[sector-crowding] %s 无法判定 L2 %s 有效期(%s),中止落库",
+                date,
+                code,
+                e,
+            )
+            return None
+        if active_but_missing:
+            missing_expected_l2_codes.append(code)
+    if missing_expected_l2_codes:
+        # sw_daily 非空并不代表完整：部分返回若落库，会把缺失板块静默从每日标签清单
+        # 中删掉。分类状态与历史有效期共同定义本次受控 as-of 宇宙，缺应到码即 fail-closed。
+        logger.warning(
+            "[sector-crowding] %s L2 快照不完整(observed=%d/expected=%d,missing=%s),中止落库",
+            date,
+            len(observed_l2_codes),
+            len(observed_l2_codes) + len(missing_expected_l2_codes),
+            ",".join(missing_expected_l2_codes[:10]),
+        )
+        return None
     sectors, l1_status = resolve_l1(sectors, provider._ensure_sw_l1_parent_map)
-    return {"sectors": sectors, "meta": {"l1_status": l1_status, "source": "tushare:sw_daily"}}
+    expected_l2_codes = sorted(observed_l2_codes)
+    return {
+        "sectors": sectors,
+        "meta": {
+            "l1_status": l1_status,
+            "l2_expected_count": len(expected_l2_codes),
+            "l2_observed_count": len(observed_l2_codes),
+            "l2_expected_codes": expected_l2_codes,
+            "l2_universe_complete": True,
+            "l2_catalog_count": len(l2_catalog),
+            "l2_published_count": sum(l2_catalog.values()),
+            "l2_universe_basis": "index_classify_is_pub+sw_daily_observed_bounds",
+            "source": "tushare:sw_daily",
+        },
+    }
 
 
 def resolve_l1(sectors: list[dict], parent_map_getter) -> tuple[list[dict], str]:
@@ -166,15 +335,26 @@ def fetch_code_history(provider, code: str, start: str, end: str) -> list[dict]:
                 f"{code} {chunk_start}~{chunk_end} 返回 {len(df)} 行,疑似截断")
         if df is not None and not df.empty:
             for row in df.to_dict("records"):
-                td = str(row.get("trade_date"))
+                td = _compact_trade_date(row.get("trade_date"))
                 # pandas 列含缺值会整列 int→float64:str() 出 "20200101.0"/"nan",
                 # 直接切片会批量生成畸形日期键落库且永不与 daily 行对齐 → 跳行留日志
-                if len(td) != 8 or not td.isdigit():
+                if td is None:
                     logger.warning("[sector-crowding backfill] %s 畸形 trade_date %r,跳过该行",
-                                   code, td)
+                                   code, row.get("trade_date"))
                     continue
+                row_date = f"{td[:4]}-{td[4:6]}-{td[6:]}"
+                if not chunk_start <= row_date <= chunk_end:
+                    raise RuntimeError(
+                        f"{code} 返回请求分片外日期 {row_date}"
+                        f"(expected {chunk_start}~{chunk_end})"
+                    )
+                row_code = row.get("ts_code")
+                if row_code != code:
+                    raise RuntimeError(
+                        f"{code} 返回缺失或不匹配代码行 {row_code!r}"
+                    )
                 out.append({
-                    "date": f"{td[:4]}-{td[4:6]}-{td[6:]}",
+                    "date": row_date,
                     "close": _clean_close(row.get("close")),
                     "amount_billion": _amount_billion(row.get("amount")),
                 })
@@ -204,15 +384,191 @@ def _fetch_code_history_with_retry(provider, code: str, start: str, end: str) ->
 
 def _sw_name_map(provider) -> dict:
     """code → 申万行业中文名(index_classify industry_name)。失败返 {}(name 退回 code)。"""
-    m: dict = {}
+    m: dict = dict(
+        getattr(provider, "__dict__", {}).get(_L2_NAME_CACHE_KEY) or {}
+    )
     try:
-        for lv in ("L1", "L2"):
-            df = provider.pro.index_classify(level=lv, src="SW2021")
-            if df is not None and not getattr(df, "empty", True) and "industry_name" in df.columns:
-                m.update(dict(zip(df["index_code"], df["industry_name"])))
+        # L2 已随 _l2_catalog 同次读取并缓存；这里只补 L1，避免第三次拉同一 L2 表。
+        df = provider.pro.index_classify(level="L1", src="SW2021")
+        if df is not None and not getattr(df, "empty", True) and "industry_name" in df.columns:
+            m.update(dict(zip(df["index_code"], df["industry_name"])))
     except Exception as e:
         logger.warning("[sector-crowding backfill] 行业名映射获取失败,name 退回 code: %s", e)
     return m
+
+
+def _probe_history_exists(provider, code: str, start: str, end: str) -> bool:
+    """轻量有效期探针：区间内是否存在至少一根行情，异常重试后向上抛。
+
+    探针只判断“存在”，即便接口命中分页上限也不影响结论；`None` 属未知响应而非
+    合法空表，必须 fail-closed。
+    """
+    if start > end:
+        return False
+    import time
+
+    last_exc: Exception | None = None
+    consecutive_empty = 0
+    for attempt in range(1, CODE_FETCH_RETRIES + 1):
+        try:
+            df = provider.pro.sw_daily(
+                ts_code=code,
+                start_date=start.replace("-", ""),
+                end_date=end.replace("-", ""),
+            )
+            if df is None:
+                raise RuntimeError("sw_daily 返回 None")
+            if df.empty:
+                # empty 也可能是镜像瞬时空响应；该 False 会用于放行生效前/退出后
+                # 空窗，必须连续稳定出现后才能采信。
+                consecutive_empty += 1
+                if consecutive_empty < CODE_FETCH_RETRIES:
+                    continue
+                return False
+            consecutive_empty = 0
+            if "trade_date" not in df.columns:
+                raise RuntimeError("sw_daily 探针响应缺 trade_date")
+            valid_dates = []
+            for raw_date in df["trade_date"].tolist():
+                compact = str(raw_date)
+                if len(compact) == 8 and compact.isdigit():
+                    valid_dates.append(
+                        f"{compact[:4]}-{compact[4:6]}-{compact[6:]}"
+                    )
+            if any(start <= d <= end for d in valid_dates):
+                return True
+            raise RuntimeError(
+                f"sw_daily 探针非空但无区间内有效日期({start}~{end})"
+            )
+        except Exception as e:
+            last_exc = e
+            consecutive_empty = 0
+            if attempt < CODE_FETCH_RETRIES:
+                logger.info(
+                    "[sector-crowding] %s 有效期探针第 %d 次失败(%s),%.0fs 后重试",
+                    code,
+                    attempt,
+                    e,
+                    CODE_FETCH_RETRY_SLEEP_SECONDS,
+                )
+                time.sleep(CODE_FETCH_RETRY_SLEEP_SECONDS)
+    raise last_exc or RuntimeError(
+        f"{code} 有效期探针未取得稳定空响应或正向证据"
+    )
+
+
+def _code_expected_in_interval(
+    provider,
+    code: str,
+    start: str,
+    end: str,
+    currently_published: bool,
+) -> bool:
+    """整段无行情时，该码是否仍应属于区间有效宇宙（True=缺失是错误）。
+
+    行情存在性定义历史有效期。当前发布码先查区间前：已有历史即应到；未有历史再查
+    区间后，仅“未来才首次出现”可排除。当前退役码反向先查区间后：之后再无行情即可
+    排除；若之后有行情，再以区间前是否也有行情判断是否横跨本区间。该顺序让每日最新
+    快照对退役码无需发历史探针。
+    """
+    start_day = calendar_date.fromisoformat(start)
+    end_day = calendar_date.fromisoformat(end)
+    today = calendar_date.today()
+    before_end = (start_day - timedelta(days=1)).isoformat()
+    after_start = (end_day + timedelta(days=1)).isoformat()
+    if currently_published:
+        has_before = _probe_history_exists(
+            provider,
+            code,
+            ACTIVITY_PROBE_START,
+            before_end,
+        )
+        if has_before:
+            return True
+        has_after = _probe_history_exists(
+            provider, code, after_start, today.isoformat()
+        )
+        return not has_after
+
+    has_after = _probe_history_exists(
+        provider, code, after_start, today.isoformat()
+    )
+    if not has_after:
+        return False
+    return _probe_history_exists(
+        provider, code, ACTIVITY_PROBE_START, before_end
+    )
+
+
+def _open_trade_dates(provider, start: str, end: str) -> list[str]:
+    """用上交所权威交易日历建立回填日期脊柱；按自然年分片并校验完整响应。"""
+    start_day = calendar_date.fromisoformat(start)
+    end_day = calendar_date.fromisoformat(end)
+    if start_day > end_day:
+        raise ValueError(f"交易日历区间倒置:{start}~{end}")
+
+    import time
+
+    open_dates: set[str] = set()
+    for year in range(start_day.year, end_day.year + 1):
+        chunk_start = max(start_day, calendar_date(year, 1, 1))
+        chunk_end = min(end_day, calendar_date(year, 12, 31))
+        expected_natural_dates: set[str] = set()
+        cursor = chunk_start
+        while cursor <= chunk_end:
+            expected_natural_dates.add(cursor.isoformat())
+            cursor += timedelta(days=1)
+
+        last_exc: Exception | None = None
+        for attempt in range(1, CODE_FETCH_RETRIES + 1):
+            try:
+                df = provider.pro.trade_cal(
+                    exchange="SSE",
+                    start_date=chunk_start.strftime("%Y%m%d"),
+                    end_date=chunk_end.strftime("%Y%m%d"),
+                )
+                if df is None or df.empty:
+                    raise RuntimeError("trade_cal 返回空")
+                if not {"cal_date", "is_open"} <= set(df.columns):
+                    raise RuntimeError("trade_cal 缺 cal_date/is_open")
+                states: dict[str, bool] = {}
+                for row in df.to_dict("records"):
+                    compact = _compact_trade_date(row.get("cal_date"))
+                    if compact is None:
+                        raise RuntimeError(
+                            f"trade_cal 含非法 cal_date:{row.get('cal_date')!r}"
+                        )
+                    d = f"{compact[:4]}-{compact[4:6]}-{compact[6:]}"
+                    flag = _published_flag(row.get("is_open"))
+                    if d not in expected_natural_dates or flag is None:
+                        raise RuntimeError(
+                            f"trade_cal 含区间外日期或非法 is_open:{d}/{row.get('is_open')!r}"
+                        )
+                    if d in states and states[d] is not flag:
+                        raise RuntimeError(f"trade_cal 日期状态冲突:{d}")
+                    states[d] = flag
+                if set(states) != expected_natural_dates:
+                    raise RuntimeError(
+                        "trade_cal 自然日覆盖不完整"
+                        f"(observed={len(states)},expected={len(expected_natural_dates)})"
+                    )
+                open_dates.update(d for d, is_open in states.items() if is_open)
+                break
+            except Exception as e:
+                last_exc = e
+                if attempt < CODE_FETCH_RETRIES:
+                    logger.info(
+                        "[sector-crowding backfill] 交易日历 %s~%s 第 %d 次失败(%s),%.0fs 后重试",
+                        chunk_start,
+                        chunk_end,
+                        attempt,
+                        e,
+                        CODE_FETCH_RETRY_SLEEP_SECONDS,
+                    )
+                    time.sleep(CODE_FETCH_RETRY_SLEEP_SECONDS)
+        else:
+            raise last_exc  # type: ignore[misc]
+    return sorted(open_dates)
 
 
 def fetch_history_by_date(provider, start: str, end: str) -> tuple[dict, list[str]]:
@@ -221,18 +577,45 @@ def fetch_history_by_date(provider, start: str, end: str) -> tuple[dict, list[st
     单码失败记账继续;截断异常向上抛不吞(疑似截断宁可整体失败也不落半截)。
     回填行 name 用 index_classify 中文名(映射失败退回 code——报告/趋势按名渲染依赖它)。"""
     l1 = provider._ensure_sw_l1_codes() or set()
-    l2 = provider._ensure_sw_l2_codes() or set()
+    l2_catalog = _l2_catalog(provider)
+    l2 = set(l2_catalog)
     if not l1 or not l2:
         # 码表空集=拉取失败(真机实测 L1=31/L2=134 恒非空)。不抛错会静默写出半截历史,
         # 且这些日期随后被 get_existing_dates 判"已有"锁死,重跑无法自愈 → 整体中止
         raise RuntimeError(
             f"sector-crowding backfill: 申万码表为空(L1={len(l1)}/L2={len(l2)}),疑拉取失败,中止回填")
+    open_trade_dates = _open_trade_dates(provider, start, end)
+    open_trade_date_set = set(open_trade_dates)
     name_map = _sw_name_map(provider)
     by_date: dict = {}
     codes_failed: list[str] = []
+    l2_bar_dates: dict[str, set[str]] = {}
     for code, level in [(c, "L1") for c in sorted(l1)] + [(c, "L2") for c in sorted(l2)]:
         try:
             bars = _fetch_code_history_with_retry(provider, code, start, end)
+            off_calendar_dates = {
+                bar["date"] for bar in bars if bar["date"] not in open_trade_date_set
+            }
+            if off_calendar_dates:
+                raise RuntimeError(
+                    f"{code} 返回非开放日行情:{','.join(sorted(off_calendar_dates)[:5])}"
+                )
+            if level == "L2" and not bars:
+                currently_published = l2_catalog[code]
+                if not _code_expected_in_interval(
+                    provider,
+                    code,
+                    start,
+                    end,
+                    currently_published,
+                ):
+                    # 目标区间尚未生效、已经退出，或分类表明确未发布且全历史无行情。
+                    l2_bar_dates[code] = set()
+                    continue
+                raise RuntimeError(
+                    f"{code} 目标区间空且有效期不支持排除"
+                    f"(published={currently_published})"
+                )
         except BackfillTruncationError:
             raise
         except Exception as e:
@@ -240,10 +623,65 @@ def fetch_history_by_date(provider, start: str, end: str) -> tuple[dict, list[st
                            code, CODE_FETCH_RETRIES, e)
             codes_failed.append(code)
             continue
+        if level == "L2":
+            l2_bar_dates[code] = {bar["date"] for bar in bars}
         for bar in bars:
             by_date.setdefault(bar["date"], []).append(
                 {"code": code, "name": name_map.get(code, code), "level": level,
                  "close": bar["close"], "amount_billion": bar["amount_billion"]})
+
+    # 单码非空仍可能缺日：必须以独立交易日历作脊柱，不能用被校验行情的日期并集，
+    # 否则全体 L2 同时漏一天时脊柱会一起收缩、永久漏检。
+    all_snapshot_dates = open_trade_dates
+    for code, dates in l2_bar_dates.items():
+        if not dates:
+            continue
+        first_date, last_date = min(dates), max(dates)
+        currently_published = l2_catalog[code]
+        if all_snapshot_dates and first_date > all_snapshot_dates[0]:
+            has_history_before = _probe_history_exists(
+                provider,
+                code,
+                ACTIVITY_PROBE_START,
+                (calendar_date.fromisoformat(first_date) - timedelta(days=1)).isoformat(),
+            )
+            if has_history_before and code not in codes_failed:
+                logger.warning(
+                    "[sector-crowding backfill] %s 区间首端缺行情,中止回填",
+                    code,
+                )
+                codes_failed.append(code)
+                continue
+        if all_snapshot_dates and last_date < all_snapshot_dates[-1]:
+            # 当前仍发布的码必应覆盖到区间末端，不需要先发结果无用的 after 探针。
+            has_history_after = (
+                True
+                if currently_published
+                else _probe_history_exists(
+                    provider,
+                    code,
+                    (calendar_date.fromisoformat(last_date) + timedelta(days=1)).isoformat(),
+                    calendar_date.today().isoformat(),
+                )
+            )
+            if has_history_after and code not in codes_failed:
+                logger.warning(
+                    "[sector-crowding backfill] %s 区间末端缺行情,中止回填",
+                    code,
+                )
+                codes_failed.append(code)
+                continue
+        expected_active_dates = {
+            d for d in all_snapshot_dates if first_date <= d <= last_date
+        }
+        missing_active_dates = expected_active_dates - dates
+        if missing_active_dates and code not in codes_failed:
+            logger.warning(
+                "[sector-crowding backfill] %s 有效期内缺 %d 个快照日,中止回填",
+                code,
+                len(missing_active_dates),
+            )
+            codes_failed.append(code)
     return by_date, codes_failed
 
 

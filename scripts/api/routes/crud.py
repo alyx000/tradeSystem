@@ -11,7 +11,7 @@ from typing import Any, Optional
 import yaml
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from api.deps import get_db_conn
+from api.deps import get_db_conn, get_readonly_db_conn
 from api.market_enrich import enrich_daily_market_row
 from db import queries as Q
 from services.holding_signals import build_holding_signals
@@ -19,6 +19,7 @@ from services.teacher_note_service import (
     TeacherNoteProvenanceConflict,
     create_teacher_note_idempotent,
 )
+from services.sector_crowding import service as sc_service
 from services.trend_leader import pool as tl_pool
 from services.trend_leader.signals import signal_hits as tl_signal_hits
 from services.volume_concentration import service as vc_service
@@ -720,6 +721,22 @@ def get_sector_gain_ranking(date: str,
     全客观区间涨幅,守红线不出价位目标/不给买卖建议。无记录/旧记录返三档空列表。"""
     payload = vc_service.build_sector_gain_ranking_payload(conn, date)
     return _sanitize_non_finite(payload)  # 脏数据 gain=NaN/Inf 透传会致 JSON 序列化 500(与其它 market 端点一致)
+
+
+@router.get("/market/sector-labels/{date}")
+def get_sector_labels(date: str,
+                      conn: sqlite3.Connection = Depends(get_readonly_db_conn)):
+    """申万二级每日趋势标签：MA144/MA233 位置 + 最近10个交易快照日价量共振。
+
+    只读 `sector_crowding_daily` 原始事实并按目标日现算，不持久化派生标签；无目标日快照
+    返回 `available=false/status=missing_snapshot`。可信目标日 as-of 码表优先；遗留或
+    元数据不可信的快照才继承最近可信宇宙；全程无可信元数据则按窗口内历史观察并集保守兜底。
+    部分缺失返回 `available=true/status=partial`，全缺返回
+    `available=false/status=missing_l2`，两者都保留缺失板块并以 null 标记。路由使用
+    SQLite `mode=ro` 专用连接，请求期不执行迁移。
+    均线位置属 [事实]，价量共振属 [判断]。
+    """
+    return _sanitize_non_finite(sc_service.build_sector_labels_payload(conn, date))
 
 
 @router.get("/market/margin-index-correlation/{date}")
