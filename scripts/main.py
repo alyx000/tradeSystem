@@ -1891,6 +1891,10 @@ def build_parser() -> argparse.ArgumentParser:
     from cli.trend_leader import register_subparser as register_trend_leader_subparser
     register_trend_leader_subparser(subparsers)
 
+    # monthly-pattern (完成月技术确认 + 公告日 as-of 财务校验观察池)
+    from cli.monthly_pattern import register_subparser as register_monthly_pattern_subparser
+    register_monthly_pattern_subparser(subparsers)
+
     # string-yang (主线板块串阳首阴股票池:连续五阳后第一根阴线)
     from cli.string_yang import register_subparser as register_string_yang_subparser
     register_string_yang_subparser(subparsers)
@@ -2001,6 +2005,9 @@ def main():
     elif args.command == "trend-leader":
         from cli import trend_leader as trend_leader_module
         trend_leader_module.handle_command(config, args)
+    elif args.command == "monthly-pattern":
+        from cli import monthly_pattern as monthly_pattern_module
+        monthly_pattern_module.handle_command(config, args)
     elif args.command == "string-yang":
         from cli import string_yang as string_yang_module
         string_yang_module.handle_command(config, args)

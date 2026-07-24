@@ -1,9 +1,11 @@
 """Schema 版本管理 + YAML 历史数据导入。"""
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import sqlite3
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -208,6 +210,207 @@ def _ensure_sector_crowding_daily(conn: sqlite3.Connection) -> None:
     from .schema import _SQL_SECTOR_CROWDING_DAILY
     conn.executescript(_SQL_SECTOR_CROWDING_DAILY)
     conn.commit()  # 仅在确需修复时才提交
+
+
+def _ensure_monthly_pattern_tables(conn: sqlite3.Connection) -> None:
+    """确保月线模式独立表及其索引存在，不跨越 teacher_notes v40 门禁。
+
+    这组表不依赖 v40 的 teacher_notes provenance 字段，因此沿用
+    sector_crowding_daily 等独立能力的版本无关兜底；CURRENT_SCHEMA_VERSION
+    仍保持 40。健康库只读探查后直接返回，不提交调用方事务。
+    """
+    required_tables = {
+        "monthly_pattern_bars",
+        "monthly_pattern_bar_manifests",
+        "monthly_pattern_financial_snapshots",
+        "monthly_pattern_runs",
+        "monthly_pattern_pool",
+    }
+    required_indexes = {
+        "idx_monthly_pattern_bars_stock_month",
+        "idx_monthly_pattern_financial_stock_period",
+        "idx_monthly_pattern_runs_signal_status",
+        "idx_monthly_pattern_pool_open",
+        "idx_monthly_pattern_pool_status_seen",
+    }
+    existing_tables = {
+        row[0]
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' "
+            "AND name LIKE 'monthly_pattern_%'"
+        ).fetchall()
+    }
+    existing_indexes = {
+        row[0]
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='index' "
+            "AND name LIKE 'idx_monthly_pattern_%'"
+        ).fetchall()
+    }
+    run_columns = (
+        {
+            row[1]
+            for row in conn.execute(
+                "PRAGMA table_info(monthly_pattern_runs)"
+            ).fetchall()
+        }
+        if "monthly_pattern_runs" in existing_tables
+        else set()
+    )
+    financial_columns = (
+        {
+            row[1]
+            for row in conn.execute(
+                "PRAGMA table_info(monthly_pattern_financial_snapshots)"
+            ).fetchall()
+        }
+        if "monthly_pattern_financial_snapshots" in existing_tables
+        else set()
+    )
+    needs_input_by = bool(run_columns) and "input_by" not in run_columns
+    needs_financial_revision_history = bool(financial_columns) and not {
+        "version_visible_date",
+        "version_observed_at",
+        "snapshot_hash",
+    }.issubset(financial_columns)
+    if required_tables.issubset(existing_tables) and required_indexes.issubset(
+        existing_indexes
+    ) and not needs_input_by and not needs_financial_revision_history:
+        return
+
+    from .schema import (
+        _SQL_MONTHLY_PATTERN_BAR_MANIFESTS,
+        _SQL_MONTHLY_PATTERN_BARS,
+        _SQL_MONTHLY_PATTERN_FINANCIAL_SNAPSHOTS,
+        _SQL_MONTHLY_PATTERN_INDEXES,
+        _SQL_MONTHLY_PATTERN_POOL,
+        _SQL_MONTHLY_PATTERN_RUNS,
+    )
+
+    if needs_financial_revision_history:
+        legacy_visible_sql = (
+            "version_visible_date"
+            if "version_visible_date" in financial_columns
+            else "NULL"
+        )
+        legacy_observed_sql = (
+            "version_observed_at"
+            if "version_observed_at" in financial_columns
+            else "NULL"
+        )
+        legacy_hash_sql = (
+            "snapshot_hash" if "snapshot_hash" in financial_columns else "NULL"
+        )
+        conn.execute("SAVEPOINT monthly_pattern_financial_v2")
+        try:
+            conn.execute(
+                "ALTER TABLE monthly_pattern_financial_snapshots "
+                "RENAME TO monthly_pattern_financial_snapshots_legacy"
+            )
+            conn.execute(
+                "DROP INDEX IF EXISTS idx_monthly_pattern_financial_stock_period"
+            )
+            conn.execute(_SQL_MONTHLY_PATTERN_FINANCIAL_SNAPSHOTS)
+            legacy_rows = conn.execute(
+                f"""
+                SELECT stock_code, report_period, financial_ann_date,
+                       {legacy_visible_sql} AS legacy_visible_date,
+                       {legacy_observed_sql} AS legacy_observed_at,
+                       {legacy_hash_sql} AS legacy_snapshot_hash,
+                       fina_indicator_json, balancesheet_json, income_json,
+                       source_meta_json, created_at
+                FROM monthly_pattern_financial_snapshots_legacy
+                """
+            ).fetchall()
+            migrated_rows = []
+            for row in legacy_rows:
+                payload = {
+                    "fina_indicator": json.loads(row[6] or "{}"),
+                    "balancesheet": json.loads(row[7] or "{}"),
+                    "income": json.loads(row[8] or "{}"),
+                }
+                revision_sensitive = any(
+                    str(component.get("update_flag") or "").strip() == "1"
+                    or (
+                        name in {"balancesheet", "income"}
+                        and str(component.get("report_type") or "").strip()
+                        in {"4", "4.0"}
+                    )
+                    for name, component in payload.items()
+                    if isinstance(component, dict)
+                )
+                version_visible_date = row[3] or (
+                    max(row[2], date.today().isoformat())
+                    if revision_sensitive else row[2]
+                )
+                version_observed_at = row[4] or (
+                    (
+                        str(row[10]).replace(" ", "T", 1) + "Z"
+                        if row[10]
+                        else ""
+                    )
+                    or datetime.now().astimezone().isoformat(
+                        timespec="microseconds"
+                    )
+                )
+                snapshot_hash = row[5] or hashlib.sha256(
+                    json.dumps(
+                        payload,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode("utf-8")
+                ).hexdigest()
+                migrated_rows.append(
+                    (
+                        row[0],
+                        row[1],
+                        row[2],
+                        version_visible_date,
+                        version_observed_at,
+                        snapshot_hash,
+                        row[6],
+                        row[7],
+                        row[8],
+                        row[9],
+                        row[10],
+                    )
+                )
+            conn.executemany(
+                """
+                INSERT INTO monthly_pattern_financial_snapshots (
+                    stock_code, report_period, financial_ann_date,
+                    version_visible_date, version_observed_at, snapshot_hash,
+                    fina_indicator_json, balancesheet_json, income_json,
+                    source_meta_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                migrated_rows,
+            )
+            conn.execute("DROP TABLE monthly_pattern_financial_snapshots_legacy")
+            conn.execute("RELEASE SAVEPOINT monthly_pattern_financial_v2")
+        except Exception:
+            conn.execute("ROLLBACK TO SAVEPOINT monthly_pattern_financial_v2")
+            conn.execute("RELEASE SAVEPOINT monthly_pattern_financial_v2")
+            raise
+
+    for sql in (
+        _SQL_MONTHLY_PATTERN_BARS,
+        _SQL_MONTHLY_PATTERN_BAR_MANIFESTS,
+        _SQL_MONTHLY_PATTERN_FINANCIAL_SNAPSHOTS,
+        _SQL_MONTHLY_PATTERN_RUNS,
+        _SQL_MONTHLY_PATTERN_POOL,
+    ):
+        conn.executescript(sql)
+    if needs_input_by:
+        conn.execute(
+            "ALTER TABLE monthly_pattern_runs "
+            "ADD COLUMN input_by TEXT NOT NULL DEFAULT 'legacy' "
+            "CHECK(TRIM(input_by) <> '')"
+        )
+    for sql in _SQL_MONTHLY_PATTERN_INDEXES:
+        conn.execute(sql)
+    conn.commit()  # 仅在确需创建表/索引时才提交
 
 
 def _ensure_new_high_tables(conn: sqlite3.Connection) -> None:
@@ -923,6 +1126,7 @@ def migrate(conn: sqlite3.Connection, *, activate_v40: bool = False) -> None:
     _ensure_value_watch_daily(conn)
     _ensure_new_high_tables(conn)
     _ensure_sector_crowding_daily(conn)
+    _ensure_monthly_pattern_tables(conn)
 
 # ──────────────────────────────────────────────────────────────
 # YAML 数据导入

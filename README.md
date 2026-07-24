@@ -172,6 +172,19 @@ make doctor
 完整命令表请直接查看 [commands.md](/Users/alyx/tradeSystem/docs/commands.md)、[commands.json](/Users/alyx/tradeSystem/docs/commands.json) 或执行 `make help`。
 若命令入口继续增加，优先更新 [Makefile](/Users/alyx/tradeSystem/Makefile) 并运行 `make commands-doc`，README 只保留高频摘要。`make check` 现在会自动执行 `make commands-check`。
 
+### 月线模式观察池
+
+`monthly-pattern` 只使用已完成月的前复权月线，并按公告日 as-of 校验当时已经公开的财务数据，维护“基本面月线趋势 / 题材月线进攻 / 月线再加速”三个只读观察策略。每个完成月先用股票基础资料 `L/D/P` 全状态按 `list_date/delist_date` 还原历史 as-of 外部宇宙，覆盖达标后才写 `monthly_pattern_bar_manifests` certified 收据并允许扫描；历史行业映射没有 as-of 能力时，题材策略 fail-closed，不用当前行业结果回填历史：
+
+```bash
+python3 scripts/main.py monthly-pattern daily --input-by codex --dry-run
+python3 scripts/main.py monthly-pattern daily --input-by codex --no-push
+python3 scripts/main.py monthly-pattern pool --status active
+python3 scripts/main.py monthly-pattern backfill --start-month 2024-01 --end-month 2026-06 --input-by codex --dry-run
+```
+
+默认 `daily` 落库、生成 `data/reports/monthly-pattern/YYYY-MM-DD.md` 并推钉钉；`--no-push` 保留落库与报告但不推送；`--dry-run` 在内存副本运行，不落库、不落报告、不推送。财务同公告日修订按内容哈希追加保存，来源不能证明修订独立公开日时，只允许从本机首次观测日起用于 as-of。基本面策略的 `fundamental_verified` 必须在后续严格下一完成月仍满足条件才进入 `active`；`active` 转弱进入 `risk`，`risk` 仅在完成月技术严格重新转强且对应财务/主线资格恢复后回到 `active`。最近两个严格相邻完成月均收于月 MA5 下方后进入 episode 终态 `exited`，后续重新命中另开新 episode。事实与状态落五表：`monthly_pattern_bars`、`monthly_pattern_bar_manifests`、`monthly_pattern_financial_snapshots`、`monthly_pattern_runs`、`monthly_pattern_pool`。`daily` / `backfill` 必须显式带 `--input-by`；扫描日若早于现有 run 或 pool episode 的状态水位会直接拒绝，历史更正须从可信检查点重建后缀，不能在 live pool 上把未来状态回灌旧月份。生产模板每月 2 日 23:10 只运行一次，休眠错过可接受。该观察池不写 `TradeDraft`、`TradePlan` 或关注池，也不提供具体买卖建议。
+
 ## 快速开始
 
 ### 1. 安装依赖

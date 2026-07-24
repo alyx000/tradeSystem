@@ -42,6 +42,47 @@ EARNINGS_PAGE_LIMIT = 5000
 EARNINGS_MAX_PAGES = 50
 _EARNINGS_DEFAULT_LOOKBACK_DAYS = 3
 
+# 全市场三表财务快照分页参数。VIP 接口按 period 拉取，空页是唯一可信终止信号；
+# limit 仅是客户端请求值，镜像可能施加更小的真实单页 cap。
+FINANCIAL_PAGE_LIMIT = 5000
+FINANCIAL_MAX_PAGES = 50
+_FINANCIAL_COMPONENT_SPECS = {
+    "fina_indicator": (
+        "fina_indicator_vip",
+        (
+            "ts_code,ann_date,end_date,update_flag,"
+            "roe,roe_waa,roe_yearly,netprofit_yoy,dt_netprofit_yoy,"
+            "grossprofit_margin,netprofit_margin,or_yoy,op_yoy,"
+            "debt_to_assets,assets_turn,rd_exp,profit_dedt"
+        ),
+    ),
+    "balancesheet": (
+        "balancesheet_vip",
+        (
+            "ts_code,ann_date,f_ann_date,end_date,report_type,comp_type,end_type,update_flag,"
+            "money_cap,accounts_receiv,inventories,contract_liab,goodwill,"
+            "fix_assets,cip,total_assets,total_liab,total_hldr_eqy_exc_min_int"
+        ),
+    ),
+    "income": (
+        "income_vip",
+        (
+            "ts_code,ann_date,f_ann_date,end_date,report_type,comp_type,end_type,update_flag,"
+            "total_revenue,revenue,operate_profit,total_profit,n_income,n_income_attr_p,"
+            "rd_exp,sell_exp,admin_exp,fin_exp,assets_impair_loss,credit_impa_loss"
+        ),
+    ),
+}
+_STANDARD_REPORT_PERIOD_SUFFIXES = ("0331", "0630", "0930", "1231")
+
+# Tushare monthly 官方单页上限为 4500，而当前全市场股票数已超过该上限。
+# 必须显式 offset 翻页，且以空页作为唯一结束信号。
+MARKET_MONTHLY_PAGE_LIMIT = 4500
+MARKET_MONTHLY_MAX_PAGES = 20
+_MARKET_MONTHLY_FIELDS = (
+    "ts_code,trade_date,open,high,low,close,pre_close,change,pct_chg,vol,amount"
+)
+
 
 def _to_clean_str(val) -> str:
     """NaN / None → 空串，其余 str() 去空白；兜底过滤脏值文本。
@@ -148,7 +189,9 @@ class TushareProvider(DataProvider):
             "get_disclosure_dates",
             "get_earnings_forecast",
             "get_earnings_express",
+            "get_financial_snapshots",
             "get_market_daily_quotes",
+            "get_market_monthly_quotes",
             "get_analyst_forecasts",
             "get_income_history",
             "get_share_float",
@@ -157,6 +200,7 @@ class TushareProvider(DataProvider):
             "is_trade_day",
             "get_trade_calendar",
             "get_stock_basic_list",
+            "get_stock_universe_as_of",
             "get_stock_basic_batch",
             "get_stock_business_profiles",
             "get_top_volume_stocks",
@@ -1549,6 +1593,261 @@ class TushareProvider(DataProvider):
         except Exception as e:
             return DataResult(data=None, source=self.name, error=str(e))
 
+    # ---- 全市场财务快照（股票池 as-of 筛选） ----
+
+    def get_financial_snapshots(
+        self,
+        as_of_date: str,
+        report_periods: list[str] | None = None,
+    ) -> DataResult:
+        """批量获取公告日 as-of 的全市场财务快照。
+
+        `fina_indicator_vip` / `balancesheet_vip` / `income_vip` 均按报告期拉取，
+        输出按 `(ts_code, end_date)` 合并。组件缺失会显式标记；任一源失败则整批
+        返回 error，避免调用方把数据源故障误判成财务字段缺失。
+        """
+        guard = self._ensure_pro("get_financial_snapshots")
+        if guard:
+            return guard
+        try:
+            as_of = self._normalize_financial_date(as_of_date, "as_of_date")
+            periods = self._financial_report_periods(as_of, report_periods)
+            selected: dict[str, dict[tuple[str, str], tuple[tuple, dict, str]]] = {
+                component: {} for component in _FINANCIAL_COMPONENT_SPECS
+            }
+
+            for period in periods:
+                for component, (api_name, fields) in _FINANCIAL_COMPONENT_SPECS.items():
+                    records = self._query_financial_period(api_name, period, fields)
+                    for ordinal, item in enumerate(records):
+                        try:
+                            ts_code = _to_clean_str(item.get("ts_code"))
+                            if not ts_code:
+                                raise ValueError("ts_code 为空")
+                            end_date = self._normalize_financial_date(
+                                item.get("end_date"), "end_date",
+                            )
+                            if end_date != period:
+                                raise ValueError(
+                                    f"返回错位 end_date={end_date}（请求 period={period}）"
+                                )
+                            if (
+                                component in ("balancesheet", "income")
+                                and not self._financial_is_consolidated_statement(
+                                    item.get("report_type"),
+                                )
+                            ):
+                                # 财务硬门只接受合并报表；母公司/调整前口径不得 fallback。
+                                continue
+                            visible_ann_date = self._financial_visible_ann_date(item)
+                            if not visible_ann_date:
+                                # 无公告日期无法证明在 as_of 时点可见，按不可见处理。
+                                continue
+                            if visible_ann_date > as_of:
+                                continue
+                            update_rank = self._financial_update_flag_rank(
+                                item.get("update_flag"),
+                            )
+                            report_rank = (
+                                self._financial_report_type_rank(
+                                    item.get("report_type"),
+                                )
+                                if component in ("balancesheet", "income")
+                                else 0
+                            )
+                            version_key = (
+                                update_rank,
+                                report_rank,
+                                visible_ann_date,
+                                ordinal,
+                            )
+                            identity = (ts_code, end_date)
+                            previous = selected[component].get(identity)
+                            if previous is None or version_key > previous[0]:
+                                selected[component][identity] = (
+                                    version_key,
+                                    item,
+                                    visible_ann_date,
+                                )
+                        except Exception as exc:
+                            raise RuntimeError(
+                                f"{api_name} period={period} 数据契约异常: {exc}"
+                            ) from exc
+
+            identities: set[tuple[str, str]] = set()
+            for rows_by_identity in selected.values():
+                identities.update(rows_by_identity)
+
+            snapshots: list[dict] = []
+            for ts_code, end_date in sorted(
+                identities,
+                key=lambda identity: (identity[1], identity[0]),
+                reverse=True,
+            ):
+                components: dict[str, dict] = {}
+                visible_dates: list[str] = []
+                revision_sensitive = False
+                for component in _FINANCIAL_COMPONENT_SPECS:
+                    chosen = selected[component].get((ts_code, end_date))
+                    if chosen is None:
+                        components[component] = {"status": "missing"}
+                        continue
+                    _, source_row, visible_ann_date = chosen
+                    payload = dict(source_row)
+                    payload.setdefault("ann_date", "")
+                    payload.setdefault("f_ann_date", "")
+                    payload.setdefault("update_flag", "")
+                    payload["status"] = "ok"
+                    components[component] = payload
+                    visible_dates.append(visible_ann_date)
+                    revision_sensitive = revision_sensitive or (
+                        self._financial_update_flag_rank(
+                            payload.get("update_flag")
+                        ) == 1
+                        or (
+                            component in ("balancesheet", "income")
+                            and self._financial_report_type_rank(
+                                payload.get("report_type")
+                            ) == 1
+                        )
+                    )
+
+                snapshots.append({
+                    "ts_code": ts_code,
+                    "code": ts_code,
+                    "end_date": end_date,
+                    "report_period": self._financial_iso_date(end_date),
+                    "financial_ann_date": self._financial_iso_date(max(visible_dates)),
+                    "revision_sensitive": revision_sensitive,
+                    **components,
+                })
+
+            return DataResult(
+                data=snapshots,
+                source="tushare:financial_vip",
+                timeliness=Timeliness.HISTORICAL,
+                note=(
+                    f"as_of_date={self._financial_iso_date(as_of)};"
+                    f"report_periods={','.join(periods)}"
+                ),
+            )
+        except Exception as exc:
+            return DataResult(data=None, source=self.name, error=str(exc))
+
+    def _query_financial_period(
+        self,
+        api_name: str,
+        period: str,
+        fields: str,
+    ) -> list[dict]:
+        """分页拉取单个 VIP API / 报告期；空页是唯一完成信号。"""
+        records: list[dict] = []
+        offset = 0
+        previous_first_row: dict | None = None
+        for _page in range(FINANCIAL_MAX_PAGES):
+            try:
+                df = self.pro.query(
+                    api_name,
+                    period=period,
+                    fields=fields,
+                    offset=offset,
+                    limit=FINANCIAL_PAGE_LIMIT,
+                )
+                if df is None:
+                    raise RuntimeError("API 返回 None")
+                page = self._df_to_records(df)
+            except Exception as exc:
+                raise RuntimeError(
+                    f"{api_name} period={period} 查询失败: {exc}"
+                ) from exc
+            if not page:
+                return records
+            if previous_first_row is not None and page[0] == previous_first_row:
+                raise RuntimeError(
+                    f"{api_name} period={period} offset 未生效"
+                    "（连续两页首行相同），疑似镜像不支持分页"
+                )
+            previous_first_row = page[0]
+            records.extend(page)
+            offset += len(page)
+        raise RuntimeError(
+            f"{api_name} period={period} 分页超过 {FINANCIAL_MAX_PAGES} 页上限，疑似异常"
+        )
+
+    def _financial_report_periods(
+        self,
+        as_of: str,
+        report_periods: list[str] | None,
+    ) -> list[str]:
+        """规范报告期；默认只取 as-of 之前最近五个标准季度末。"""
+        if report_periods is None:
+            as_of_year = int(as_of[:4])
+            candidates = [
+                f"{year}{suffix}"
+                for year in range(as_of_year, as_of_year - 3, -1)
+                for suffix in _STANDARD_REPORT_PERIOD_SUFFIXES
+                if f"{year}{suffix}" <= as_of
+            ]
+            return sorted(candidates, reverse=True)[:5]
+
+        normalized: set[str] = set()
+        for raw_period in report_periods:
+            period = self._normalize_financial_date(raw_period, "report_period")
+            if period[4:] not in _STANDARD_REPORT_PERIOD_SUFFIXES:
+                raise ValueError(f"report_period 非标准季度末: {raw_period}")
+            if period > as_of:
+                raise ValueError(
+                    f"report_period {period} 晚于 as_of_date {as_of}"
+                )
+            normalized.add(period)
+        return sorted(normalized, reverse=True)
+
+    def _financial_visible_ann_date(self, item: dict) -> str:
+        """返回该版本真正可见的最晚公告日期，任一未来日期都会阻断 as-of 纳入。"""
+        dates = []
+        for field_name in ("ann_date", "f_ann_date"):
+            raw = _to_clean_str(item.get(field_name))
+            if raw:
+                dates.append(self._normalize_financial_date(raw, field_name))
+        return max(dates) if dates else ""
+
+    @staticmethod
+    def _financial_update_flag_rank(raw_flag) -> int:
+        """相同公告日优先修订版；未知值不高于明确 update_flag=1。"""
+        return 1 if _to_clean_str(raw_flag) == "1" else 0
+
+    @staticmethod
+    def _financial_is_consolidated_statement(raw_report_type) -> bool:
+        """接受普通合并(1)与调整合并(4)，排除调整前(5)和母公司(6)。"""
+        text = _to_clean_str(raw_report_type)
+        try:
+            return float(text) in {1.0, 4.0}
+        except (TypeError, ValueError):
+            return False
+
+    @staticmethod
+    def _financial_report_type_rank(raw_report_type) -> int:
+        """同报告期优先采用调整后的合并口径 4。"""
+        text = _to_clean_str(raw_report_type)
+        try:
+            return 1 if float(text) == 4.0 else 0
+        except (TypeError, ValueError):
+            return 0
+
+    @staticmethod
+    def _normalize_financial_date(raw_date, field_name: str) -> str:
+        text = _to_clean_str(raw_date).replace("-", "")
+        if len(text) != 8 or not text.isdigit():
+            raise ValueError(f"{field_name} 日期格式非法: {raw_date!r}")
+        try:
+            return datetime.strptime(text, "%Y%m%d").strftime("%Y%m%d")
+        except ValueError as exc:
+            raise ValueError(f"{field_name} 日期非法: {raw_date!r}") from exc
+
+    @staticmethod
+    def _financial_iso_date(yyyymmdd: str) -> str:
+        return f"{yyyymmdd[:4]}-{yyyymmdd[4:6]}-{yyyymmdd[6:8]}"
+
     def get_analyst_forecasts(self, ts_code: str, start_date: str, end_date: str) -> DataResult:
         """个股券商盈利预测明细（report_rc，按报告日窗口）。
 
@@ -1912,6 +2211,82 @@ class TushareProvider(DataProvider):
         except Exception as e:
             return DataResult(data=None, source=source, error=str(e))
 
+    def get_market_monthly_quotes(self, month_end: str) -> DataResult:
+        """全市场指定月末月线行情，按官方 4500 行上限显式分页。
+
+        Provider 仅保证完整拉取原始行，不在此处去重；代码唯一性和市场覆盖率由
+        消费层结合股票宇宙校验。
+        """
+        guard = self._ensure_pro("get_market_monthly_quotes")
+        if guard:
+            return guard
+        try:
+            trade_date = self._normalize_financial_date(month_end, "month_end")
+        except Exception as exc:
+            return DataResult(data=None, source=self.name, error=str(exc))
+        records: list[dict] = []
+        offset = 0
+        previous_first_row: dict | None = None
+        try:
+            for _page in range(MARKET_MONTHLY_MAX_PAGES):
+                df = self.pro.query(
+                    "monthly",
+                    trade_date=trade_date,
+                    fields=_MARKET_MONTHLY_FIELDS,
+                    offset=offset,
+                    limit=MARKET_MONTHLY_PAGE_LIMIT,
+                )
+                if df is None:
+                    raise RuntimeError("API 返回 None")
+                page = self._df_to_records(df)
+                if not page:
+                    break
+                for item in page:
+                    returned_date = _to_clean_str(
+                        item.get("trade_date"),
+                    ).replace("-", "")
+                    if returned_date != trade_date:
+                        raise RuntimeError(
+                            f"monthly trade_date 错位: 请求 {trade_date}，"
+                            f"返回 {returned_date or '<missing>'}"
+                        )
+                if previous_first_row is not None and page[0] == previous_first_row:
+                    return DataResult(
+                        data=None,
+                        source=self.name,
+                        error=(
+                            f"monthly trade_date={trade_date} offset 未生效"
+                            "（连续两页首行相同），疑似镜像不支持分页"
+                        ),
+                    )
+                previous_first_row = page[0]
+                records.extend(page)
+                offset += len(page)
+            else:
+                return DataResult(
+                    data=None,
+                    source=self.name,
+                    error=(
+                        f"monthly trade_date={trade_date} 分页超过 "
+                        f"{MARKET_MONTHLY_MAX_PAGES} 页上限，疑似异常"
+                    ),
+                )
+            for item in records:
+                item.setdefault("code", item.get("ts_code"))
+            logger.info("[market_monthly_quotes] %s 返回 %d 行", trade_date, len(records))
+            return DataResult(
+                data=records,
+                source="tushare:monthly",
+                timeliness=Timeliness.HISTORICAL,
+                note=f"trade_date={trade_date}",
+            )
+        except Exception as exc:
+            return DataResult(
+                data=None,
+                source=self.name,
+                error=f"monthly trade_date={trade_date} 查询失败: {exc}",
+            )
+
     def get_market_daily_quotes(self, date: str) -> DataResult:
         """全市场个股当日 OHLC + 昨收（业绩预告次日缺口验证用）。
 
@@ -2117,6 +2492,75 @@ class TushareProvider(DataProvider):
         try:
             df = self.pro.stock_basic(list_status="L")
             return DataResult(data=self._df_to_records(df), source="tushare:stock_basic")
+        except Exception as e:
+            return DataResult(data=None, source=self.name, error=str(e))
+
+    def get_stock_universe_as_of(self, date: str) -> DataResult:
+        """返回目标月份曾上市的 A 股宇宙，历史月份包含后来退市股票。
+
+        月线 API 会返回当月内曾交易、随后月中退市的股票，因此退市日只需不早于
+        当月首日。L/D/P 三份静态历史在 provider 实例内缓存，48 月扫描不会重复
+        发起 144 次 stock_basic 请求。
+        """
+        missing = self._ensure_pro("get_stock_universe_as_of")
+        if missing is not None:
+            return missing
+        try:
+            target = self._normalize_financial_date(date, "date")
+            month_start = f"{target[:6]}01"
+            history = getattr(self, "_stock_universe_history_cache", None)
+            if history is None:
+                all_rows: dict[str, dict] = {}
+                fields = (
+                    "ts_code,symbol,name,area,industry,market,"
+                    "list_date,delist_date,list_status"
+                )
+                for list_status in ("L", "D", "P"):
+                    df = self.pro.stock_basic(
+                        exchange="",
+                        list_status=list_status,
+                        fields=fields,
+                    )
+                    if df is None:
+                        raise RuntimeError(
+                            f"stock_basic list_status={list_status} 返回 None"
+                        )
+                    for row in self._df_to_records(df):
+                        code = _to_clean_str(row.get("ts_code"))
+                        if code:
+                            all_rows.setdefault(code, dict(row))
+                history = list(all_rows.values())
+                self._stock_universe_history_cache = history
+
+            selected: list[dict] = []
+            for row in history:
+                list_date = _to_clean_str(row.get("list_date")).replace("-", "")
+                if len(list_date) != 8 or not list_date.isdigit():
+                    continue
+                delist_date = _to_clean_str(row.get("delist_date")).replace("-", "")
+                if delist_date and (
+                    len(delist_date) != 8 or not delist_date.isdigit()
+                ):
+                    raise RuntimeError(
+                        f"{row.get('ts_code')} delist_date 非法: "
+                        f"{row.get('delist_date')!r}"
+                    )
+                if list_date <= target and (
+                    not delist_date or delist_date >= month_start
+                ):
+                    item = dict(row)
+                    item.setdefault("code", item.get("ts_code"))
+                    selected.append(item)
+
+            return DataResult(
+                data=sorted(
+                    selected,
+                    key=lambda item: _to_clean_str(item.get("ts_code")),
+                ),
+                source="tushare:stock_basic:L+D+P:as_of",
+                timeliness=Timeliness.HISTORICAL,
+                note=f"as_of_month={target[:6]}",
+            )
         except Exception as e:
             return DataResult(data=None, source=self.name, error=str(e))
 

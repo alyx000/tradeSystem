@@ -288,6 +288,36 @@ python3 main.py trend-leader pool --status exited --json
 - **守红线**：盘后只读观察清单，全部标 `[判断]`、不出价位、不给买卖建议、不写交易计划层；临盘买点用户自行判断。信号 label 中性化（缩量回踩/贴MA5/乖离过大），渲染层零业务决策。
 - 依赖 env 同 volume-watch（`TUSHARE_TOKEN` + 钉钉）。架构归位见 [`tradesystem-blueprint`](../../../docs/architecture/tradesystem-blueprint.md)「派生信号层」+「盘后只读监控族」。
 
+## 完成月月线模式观察池（monthly-pattern）
+
+每月 2 日 23:10 由 per-task launchd 模板 `com.alyx.tradesystem.monthly-pattern` 单次触发，避免同一完成月被工作日重复刷新和推送；休眠错过可接受，不做开机补跑。不进 `main.py schedule` / APScheduler。该调度模板只在仓库提供，部署需人工安装。
+
+```bash
+# 增量扫描：默认落库 + 原子落报告 + 推钉钉
+python3 main.py monthly-pattern daily --input-by codex
+python3 main.py monthly-pattern daily --date 2026-06-30 --input-by codex --no-push
+python3 main.py monthly-pattern daily --input-by codex --dry-run
+python3 main.py monthly-pattern daily --months 60 --no-financial --input-by codex --dry-run
+
+# 只读看池
+python3 main.py monthly-pattern pool --status active
+python3 main.py monthly-pattern pool --strategy monthly_reacceleration --json
+
+# 按完成月正序回放
+python3 main.py monthly-pattern backfill --start-month 2024-01 --end-month 2026-06 --input-by codex
+python3 main.py monthly-pattern backfill --start-month 2024-01 --end-month 2026-06 --input-by codex --dry-run
+```
+
+- **完成月与覆盖边界**：只有交易日历确认的该月最后开放日不晚于扫描日时，才把该月纳入；不把仍有后续开放日的月 K 当确认信号。全市场月线来自 `get_market_monthly_quotes`，与 `adj_factor` 合并后统一前复权；历史窗口至少 35 个完成月，默认 48。每月覆盖分母必须来自外部股票基础资料 `L/D/P` 全状态，并按 `list_date/delist_date` 还原该月 as-of 应有宇宙；行情与复权覆盖通过门禁后写 `monthly_pattern_bar_manifests` 的 certified 收据，缓存复用和扫描都必须同时验证该收据，不能只凭已有月线行数猜测完整。
+- **三策略**：`fundamental_monthly_trend`（基本面月线趋势）、`theme_monthly_attack`（题材月线进攻）、`monthly_reacceleration`（月线再加速）。检测证据保留月 K、均线、均量线与 MACD 事实值；策略命中只是观察信号，不等于买卖建议。
+- **财务 as-of**：`get_financial_snapshots(as_of_date, report_periods)` 只选 `ann_date <= scan_date` 且合并报表口径的已公开快照；同一报告期、同一公告日的修订不能覆盖旧值，而要按内容哈希追加保存。来源若不能证明修订的独立公开日，该版本的 `version_visible_date` 只能取本机首次观测日，此前历史 as-of 不可见。批次必须同时覆盖“最近法定已到期报告期”（1～4 月=上年三季报、5～8 月=当年一季报、9～10 月=当年中报、11～12 月=当年三季报）和最近法定年报，三组件各自覆盖不足即整批 fail-closed；service 显式请求必需期及同比期，不依赖 provider 默认最近五期。年报通过硬门后才可标 `fundamental_verified`，中报只作 `pre_screen`，不能冒充年报验证。`--no-financial` 或财务源缺失时保守停在 `technical_candidate`，报告显式标 partial/降级，不把缺数写成不达标。
+- **主线边界**：题材策略的主线只引用最近有效 `daily_volume_concentration` 中申万二级成交额稳定前排，属于 `[判断]` 代理，不宣称行业基本面事实，也不调用 LLM 扩写主线。历史回放若行业归属源不支持 as-of，`theme_monthly_attack` 必须 fail-closed，不能用当前申万行业映射穿越历史。
+- **状态机**：`fundamental_monthly_trend` 的首次财务核验先落 `fundamental_verified`，只有后续严格下一完成月仍满足技术与财务条件才可转 `active`，不能同月直升；题材与二次启动在对应资格门满足时可直接进入 `active`。`active` 出现资格失配或技术转弱进入 `risk`；`risk` 仅在完成月技术出现严格 `reentry`、且基本面/题材所需资格已恢复时可回 `active`。从未进入过 `active` 的基本面 episode 若在 `fundamental_verified` 阶段转 `risk`，恢复时只能回 `fundamental_verified` 并重置确认月，仍须下一严格完成月复核。最近两个严格相邻完成月均收于月 MA5 下方后转 `exited`；`exited` 是 episode 终态，后续重新命中另开新 episode。同一股票+策略只有一个未退出 episode，历史 episode 保留；状态只用于观察，不直接生成交易动作。
+- **五表**：`monthly_pattern_bars`（完成月原始 OHLCV + 复权因子）、`monthly_pattern_bar_manifests`（通过外部 as-of 宇宙覆盖门禁的 certified 月线收据）、`monthly_pattern_financial_snapshots`（公告日 as-of、按内容版本追加的财务事实）、`monthly_pattern_runs`（complete/partial/failed 运行回执）、`monthly_pattern_pool`（策略 episode 与状态）。
+- **三档运行**：裸 `daily`（落库 + `data/reports/monthly-pattern/YYYY-MM-DD.md` + 推钉钉）/ `--no-push`（落库、落报告、不推送）/ `--dry-run`（SQLite 内存副本，不落库、不落报告、不推送）。`backfill` 不推送；`pool` 只读；所有会执行扫描的 `daily` / `backfill` 命令必须显式带 `--input-by`。任何扫描日早于现有 run 或 pool episode 的状态水位时都 fail-closed，禁止在 live pool 上直接历史回放；历史更正须从可信检查点重建后缀，不能把未来状态带入旧月份。
+- **守红线**：只维护派生观察池，不写 `TradeDraft` / `TradePlan` / 关注池，不出目标价，不给具体买卖建议。技术事实、财务事实与主线 `[判断]` 在报告中分层展示。
+- 依赖 env：`scripts/.env` 中 `TUSHARE_TOKEN`；默认推送另需 `~/.config/tradeSystem.env` 中 `DINGTALK_WEBHOOK_TOKEN` / `DINGTALK_WEBHOOK_SECRET`。
+
 ## 串阳首阴股票池（string-yang）
 
 每交易日 21:50 自动跑（launchd `com.alyx.tradesystem.string-yang`，排在 volume-watch 21:00、sector-correlation 21:15、trend-leader 21:30、market-timing 21:40 之后），也可手动：
