@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 import sys
 from datetime import date
 from pathlib import Path
 from types import ModuleType
+
+import pytest
 
 from automations import four_trading_day_review as review
 
@@ -67,6 +70,1246 @@ _EIGHT_DAYS = [
     "2026-05-28",
     "2026-05-29",
 ]
+
+
+def _holding_snapshot(day: str, *members: dict) -> dict[str, dict]:
+    return {
+        day: {
+            "status": "success",
+            "reason": None,
+            "members": {
+                str(member["stock_code"]).split(".", 1)[0]: {
+                    "stock_code": str(member["stock_code"]).split(".", 1)[0],
+                    "stock_name": member.get(
+                        "stock_name",
+                        f"票{str(member['stock_code']).split('.', 1)[0]}",
+                    ),
+                    "shares": member.get("shares", 100),
+                    "change_pct": member.get("change_pct"),
+                    "error": member.get("error", ""),
+                }
+                for member in members
+            },
+        }
+    }
+
+
+def _execution(
+    *,
+    row_id: int,
+    trade_date: str,
+    exec_time: str | None,
+    code: str,
+    direction: str,
+    shares: int = 100,
+    balance_after: int | None = None,
+    broker_contract_no: str | None = None,
+    broker_trade_no: str | None = None,
+    price: float | None = None,
+    amount: float | None = None,
+    import_run_id: str | None = None,
+    source_file: str | None = None,
+    thesis_id: int | None = None,
+) -> dict:
+    return {
+        "id": row_id,
+        "account_id": "default",
+        "biz_date": trade_date,
+        "exec_time": exec_time,
+        "stock_code": code,
+        "stock_name": f"票{code}",
+        "direction": direction,
+        "shares": shares,
+        "balance_after": balance_after,
+        "broker_contract_no": broker_contract_no,
+        "broker_trade_no": broker_trade_no,
+        "price": price,
+        "amount": amount,
+        "import_run_id": import_run_id,
+        "source_file": source_file,
+        "thesis_id": thesis_id,
+    }
+
+
+def test_weak_sell_order_classifies_unique_tied_and_known_weaker():
+    trade_date = "2026-05-27"
+    prior = {trade_date: "2026-05-26"}
+    sell = _execution(
+        row_id=1,
+        trade_date=trade_date,
+        exec_time="10:00:00",
+        code="600001.SH",
+        direction="sell",
+    )
+
+    unique = review._analyze_weak_sell_order(
+        rows=[sell],
+        current_days=[trade_date],
+        prior_day_by_day=prior,
+        snapshots=_holding_snapshot(
+            "2026-05-26",
+            {"stock_code": "600001", "change_pct": -5.0},
+            {"stock_code": "600002", "change_pct": -2.0},
+        ),
+    )
+    tied = review._analyze_weak_sell_order(
+        rows=[sell],
+        current_days=[trade_date],
+        prior_day_by_day=prior,
+        snapshots=_holding_snapshot(
+            "2026-05-26",
+            {"stock_code": "600001", "change_pct": -5.0},
+            {"stock_code": "600002", "change_pct": -5.0},
+        ),
+    )
+    weaker_retained = review._analyze_weak_sell_order(
+        rows=[sell],
+        current_days=[trade_date],
+        prior_day_by_day=prior,
+        snapshots=_holding_snapshot(
+            "2026-05-26",
+            {"stock_code": "600001", "change_pct": -2.0},
+            {"stock_code": "600002", "change_pct": -5.0},
+        ),
+    )
+
+    assert unique[0]["status"] == "sold_weakest"
+    assert unique[0]["rank"] == 1
+    assert tied[0]["status"] == "tied_weakest"
+    assert weaker_retained[0]["status"] == "known_weaker_retained"
+    assert weaker_retained[0]["weaker_retained"] == ["600002 票600002(-5.00%)"]
+
+
+def test_weak_sell_order_replays_partial_sell_before_next_choice():
+    trade_date = "2026-05-27"
+    checks = review._analyze_weak_sell_order(
+        rows=[
+            _execution(
+                row_id=1,
+                trade_date=trade_date,
+                exec_time="10:00:00",
+                code="600001",
+                direction="sell",
+                shares=50,
+            ),
+            _execution(
+                row_id=2,
+                trade_date=trade_date,
+                exec_time="11:00:00",
+                code="600002",
+                direction="sell",
+                shares=100,
+            ),
+        ],
+        current_days=[trade_date],
+        prior_day_by_day={trade_date: "2026-05-26"},
+        snapshots=_holding_snapshot(
+            "2026-05-26",
+            {"stock_code": "600001", "change_pct": -5.0, "shares": 100},
+            {"stock_code": "600002", "change_pct": -3.0, "shares": 100},
+        ),
+    )
+
+    assert [check["status"] for check in checks] == [
+        "sold_weakest",
+        "known_weaker_retained",
+    ]
+    assert checks[0]["exit_scope"] == "部分"
+    assert checks[1]["weaker_retained"] == ["600001 票600001(-5.00%)"]
+
+
+def test_weak_sell_order_merges_only_identified_adjacent_split_sells():
+    trade_date = "2026-05-27"
+    checks = review._analyze_weak_sell_order(
+        rows=[
+            _execution(
+                row_id=1,
+                trade_date=trade_date,
+                exec_time="10:00:00",
+                code="600001",
+                direction="sell",
+                shares=40,
+                broker_contract_no="ORDER-1",
+            ),
+            _execution(
+                row_id=2,
+                trade_date=trade_date,
+                exec_time="10:01:00",
+                code="600001",
+                direction="sell",
+                shares=60,
+                broker_contract_no="ORDER-1",
+            ),
+            _execution(
+                row_id=3,
+                trade_date=trade_date,
+                exec_time="11:00:00",
+                code="600003",
+                direction="buy",
+                shares=100,
+            ),
+        ],
+        current_days=[trade_date],
+        prior_day_by_day={trade_date: "2026-05-26"},
+        snapshots=_holding_snapshot(
+            "2026-05-26",
+            {"stock_code": "600001", "change_pct": -5.0, "shares": 100},
+            {"stock_code": "600002", "change_pct": -2.0, "shares": 100},
+        ),
+    )
+
+    assert len(checks) == 1
+    assert checks[0]["shares"] == 100
+    assert checks[0]["status"] == "sold_weakest"
+
+
+def test_weak_sell_order_keeps_distinct_consecutive_sells_separate():
+    trade_date = "2026-05-27"
+    checks = review._analyze_weak_sell_order(
+        rows=[
+            _execution(
+                row_id=1,
+                trade_date=trade_date,
+                exec_time="10:00:00",
+                code="600001",
+                direction="sell",
+                shares=40,
+                broker_contract_no="ORDER-1",
+            ),
+            _execution(
+                row_id=2,
+                trade_date=trade_date,
+                exec_time="14:00:00",
+                code="600001",
+                direction="sell",
+                shares=60,
+                broker_contract_no="ORDER-2",
+            ),
+        ],
+        current_days=[trade_date],
+        prior_day_by_day={trade_date: "2026-05-26"},
+        snapshots=_holding_snapshot(
+            "2026-05-26",
+            {"stock_code": "600001", "change_pct": -5.0, "shares": 100},
+            {"stock_code": "600002", "change_pct": -2.0, "shares": 100},
+        ),
+    )
+
+    assert len(checks) == 2
+    assert [check["shares"] for check in checks] == [40, 60]
+    assert [check["exit_scope"] for check in checks] == ["部分", "全部"]
+
+
+def test_weak_sell_order_collapses_split_plus_summary_duplicate():
+    trade_date = "2026-07-06"
+    rows = [
+            _execution(
+                row_id=1,
+                trade_date=trade_date,
+                exec_time="13:15:55",
+                code="688772",
+                direction="sell",
+                shares=88,
+                broker_contract_no="ORDER-1",
+                broker_trade_no="0000000057670108",
+                price=18.17,
+                amount=1598.96,
+                import_run_id="DAILY-RUN",
+                source_file="daily.tsv",
+                thesis_id=24,
+            ),
+            _execution(
+                row_id=3,
+                trade_date=trade_date,
+                exec_time="13:15:56",
+                code="688772",
+                direction="sell",
+                shares=712,
+                broker_contract_no="ORDER-1",
+                broker_trade_no="0000000057672610",
+                price=18.17,
+                amount=12937.04,
+                import_run_id="DAILY-RUN",
+                source_file="daily.tsv",
+                thesis_id=24,
+            ),
+            _execution(
+                row_id=2,
+                trade_date=trade_date,
+                exec_time="13:15:56",
+                code="688772",
+                direction="sell",
+                shares=800,
+                balance_after=0,
+                broker_contract_no="SUMMARY-1",
+                broker_trade_no="57670108",
+                price=18.17,
+                amount=14536.0,
+                import_run_id="WEEKLY-RUN",
+                source_file="weekly.tsv",
+            ),
+        ]
+    rows[0].update(net_amount=1593.96, total_fees=5.0)
+    rows[1].update(net_amount=12931.04, total_fees=6.0)
+    canonical = review._collapse_split_plus_summary_rows(rows)
+    conflicted = [dict(row) for row in rows]
+    conflicted[2]["thesis_id"] = 25
+    second_summary = dict(rows[2])
+    second_summary.update(
+        {
+            "id": 4,
+            "broker_contract_no": "SUMMARY-2",
+            "broker_trade_no": "0000000057672610",
+            "import_run_id": "MONTHLY-RUN",
+            "source_file": "monthly.tsv",
+            "net_amount": 14525.000000001,
+            "total_fees": 11.000000001,
+        }
+    )
+    multiple_summaries = review._collapse_split_plus_summary_rows(
+        [*rows, second_summary]
+    )
+    financial_conflict = dict(second_summary)
+    financial_conflict.update(
+        {
+            "id": 5,
+            "broker_contract_no": "SUMMARY-3",
+            "import_run_id": "FINANCIAL-RUN",
+            "source_file": "financial.tsv",
+            "net_amount": 14524.0,
+            "total_fees": 12.0,
+        }
+    )
+    checks = review._analyze_weak_sell_order(
+        rows=rows,
+        current_days=[trade_date],
+        prior_day_by_day={trade_date: "2026-07-03"},
+        snapshots=_holding_snapshot(
+            "2026-07-03",
+            {"stock_code": "688772", "change_pct": -5.0, "shares": 800},
+            {"stock_code": "600002", "change_pct": -2.0, "shares": 100},
+        ),
+    )
+
+    assert canonical[0]["thesis_id"] == 24
+    assert canonical[0]["net_amount"] == pytest.approx(14525.0)
+    assert canonical[0]["total_fees"] == pytest.approx(11.0)
+    assert len(multiple_summaries) == 1
+    assert multiple_summaries[0]["shares"] == 800
+    with pytest.raises(RuntimeError, match="conflict"):
+        review._collapse_split_plus_summary_rows(
+            [*rows, second_summary, financial_conflict]
+        )
+    with pytest.raises(RuntimeError, match="conflicting thesis_id"):
+        review._collapse_split_plus_summary_rows(conflicted)
+    assert len(checks) == 1
+    assert checks[0]["exec_time"] == "13:15:55"
+    assert checks[0]["shares"] == 800
+    assert checks[0]["exit_scope"] == "全部"
+
+
+def test_split_plus_summary_does_not_collapse_same_source_real_orders():
+    trade_date = "2026-07-06"
+    rows = [
+        _execution(
+            row_id=1,
+            trade_date=trade_date,
+            exec_time="13:15:55",
+            code="688772",
+            direction="sell",
+            shares=100,
+            broker_contract_no="ORDER-1",
+            broker_trade_no="TRADE-1",
+            price=18.17,
+            amount=1817.0,
+            import_run_id="SAME-RUN",
+            source_file="same.tsv",
+        ),
+        _execution(
+            row_id=2,
+            trade_date=trade_date,
+            exec_time="13:15:56",
+            code="688772",
+            direction="sell",
+            shares=200,
+            broker_contract_no="ORDER-1",
+            broker_trade_no="TRADE-2",
+            price=18.17,
+            amount=3634.0,
+            import_run_id="SAME-RUN",
+            source_file="same.tsv",
+        ),
+        _execution(
+            row_id=3,
+            trade_date=trade_date,
+            exec_time="13:15:57",
+            code="688772",
+            direction="sell",
+            shares=300,
+            balance_after=0,
+            broker_contract_no="ORDER-2",
+            broker_trade_no="TRADE-3",
+            price=18.17,
+            amount=5451.0,
+            import_run_id="SAME-RUN",
+            source_file="same.tsv",
+        ),
+    ]
+
+    assert len(review._collapse_split_plus_summary_rows(rows)) == 3
+
+
+def test_split_plus_summary_collapses_single_cross_source_duplicate():
+    trade_date = "2026-07-06"
+    rows = [
+        _execution(
+            row_id=1,
+            trade_date=trade_date,
+            exec_time="13:15:55",
+            code="688772",
+            direction="sell",
+            shares=800,
+            broker_contract_no="ORDER-1",
+            broker_trade_no="0000000057670108",
+            price=18.17,
+            amount=14536.0,
+            import_run_id="DAILY-RUN",
+            source_file="daily.tsv",
+            thesis_id=24,
+        ),
+        _execution(
+            row_id=2,
+            trade_date=trade_date,
+            exec_time="13:15:56",
+            code="688772",
+            direction="sell",
+            shares=800,
+            balance_after=0,
+            broker_contract_no="SUMMARY-1",
+            broker_trade_no="57670108",
+            price=18.17,
+            amount=14536.0,
+            import_run_id="WEEKLY-RUN",
+            source_file="weekly.tsv",
+        ),
+    ]
+    rows[0].update(net_amount=14525.0, total_fees=11.0)
+
+    canonical = review._collapse_split_plus_summary_rows(rows)
+
+    assert len(canonical) == 1
+    assert canonical[0]["shares"] == 800
+    assert canonical[0]["thesis_id"] == 24
+    assert canonical[0]["net_amount"] == pytest.approx(14525.0)
+    assert canonical[0]["total_fees"] == pytest.approx(11.0)
+
+    conflicting_summary = dict(rows[1])
+    conflicting_summary.update(net_amount=14524.0, total_fees=12.0)
+    with pytest.raises(RuntimeError, match="cash fields conflict"):
+        review._collapse_split_plus_summary_rows([rows[0], conflicting_summary])
+
+
+def test_weak_sell_order_fail_closed_for_missing_quote_but_keeps_known_negative():
+    trade_date = "2026-05-27"
+    sell = _execution(
+        row_id=1,
+        trade_date=trade_date,
+        exec_time="10:00:00",
+        code="600001",
+        direction="sell",
+    )
+    unknown = review._analyze_weak_sell_order(
+        rows=[sell],
+        current_days=[trade_date],
+        prior_day_by_day={trade_date: "2026-05-26"},
+        snapshots=_holding_snapshot(
+            "2026-05-26",
+            {"stock_code": "600001", "change_pct": -5.0},
+            {"stock_code": "588000", "change_pct": None, "error": "source_failed"},
+        ),
+    )
+    known_negative = review._analyze_weak_sell_order(
+        rows=[sell],
+        current_days=[trade_date],
+        prior_day_by_day={trade_date: "2026-05-26"},
+        snapshots=_holding_snapshot(
+            "2026-05-26",
+            {"stock_code": "600001", "change_pct": -5.0},
+            {"stock_code": "600002", "change_pct": -6.0},
+            {"stock_code": "588000", "change_pct": None, "error": "source_failed"},
+        ),
+    )
+
+    assert unknown[0]["status"] == "unknown_missing_quote"
+    assert unknown[0]["missing_quotes"] == ["588000 票588000(缺行情)"]
+    assert known_negative[0]["status"] == "known_weaker_retained"
+    rendered = review._render_weak_sell_checks(known_negative)
+    assert "2/2（已知）" in rendered
+    assert "更弱：600002 票600002(-6.00%)" in rendered
+    assert "缺行情：588000 票588000(缺行情)" in rendered
+
+
+def test_weak_sell_order_not_applicable_and_ambiguous_order():
+    trade_date = "2026-05-27"
+    only_one = review._analyze_weak_sell_order(
+        rows=[
+            _execution(
+                row_id=1,
+                trade_date=trade_date,
+                exec_time="10:00:00",
+                code="600001",
+                direction="sell",
+            )
+        ],
+        current_days=[trade_date],
+        prior_day_by_day={trade_date: "2026-05-26"},
+        snapshots=_holding_snapshot(
+            "2026-05-26",
+            {"stock_code": "600001", "change_pct": -5.0},
+        ),
+    )
+    ambiguous = review._analyze_weak_sell_order(
+        rows=[
+            _execution(
+                row_id=1,
+                trade_date=trade_date,
+                exec_time="10:00:00",
+                code="600001",
+                direction="sell",
+            ),
+            _execution(
+                row_id=2,
+                trade_date=trade_date,
+                exec_time="10:00:00",
+                code="600002",
+                direction="sell",
+            ),
+        ],
+        current_days=[trade_date],
+        prior_day_by_day={trade_date: "2026-05-26"},
+        snapshots=_holding_snapshot(
+            "2026-05-26",
+            {"stock_code": "600001", "change_pct": -5.0},
+            {"stock_code": "600002", "change_pct": -2.0},
+        ),
+    )
+
+    assert only_one[0]["status"] == "not_applicable"
+    assert {check["status"] for check in ambiguous} == {"unknown_ambiguous_order"}
+
+
+def test_weak_sell_order_only_taints_actions_at_and_after_ambiguous_time():
+    trade_date = "2026-05-27"
+    checks = review._analyze_weak_sell_order(
+        rows=[
+            _execution(
+                row_id=1,
+                trade_date=trade_date,
+                exec_time="09:30:00",
+                code="600001",
+                direction="sell",
+            ),
+            _execution(
+                row_id=2,
+                trade_date=trade_date,
+                exec_time="10:00:00",
+                code="600002",
+                direction="sell",
+            ),
+            _execution(
+                row_id=3,
+                trade_date=trade_date,
+                exec_time="10:00:00",
+                code="600003",
+                direction="sell",
+            ),
+        ],
+        current_days=[trade_date],
+        prior_day_by_day={trade_date: "2026-05-26"},
+        snapshots=_holding_snapshot(
+            "2026-05-26",
+            {"stock_code": "600001", "change_pct": -5.0},
+            {"stock_code": "600002", "change_pct": -3.0},
+            {"stock_code": "600003", "change_pct": -2.0},
+        ),
+    )
+
+    assert checks[0]["status"] == "sold_weakest"
+    assert [check["status"] for check in checks[1:]] == [
+        "unknown_ambiguous_order",
+        "unknown_ambiguous_order",
+    ]
+
+
+def test_weak_sell_order_missing_time_taints_multiple_same_stock_actions():
+    trade_date = "2026-05-27"
+    checks = review._analyze_weak_sell_order(
+        rows=[
+            _execution(
+                row_id=1,
+                trade_date=trade_date,
+                exec_time=None,
+                code="600001",
+                direction="sell",
+                shares=50,
+            ),
+            _execution(
+                row_id=2,
+                trade_date=trade_date,
+                exec_time="10:00:00",
+                code="600001",
+                direction="sell",
+                shares=50,
+            ),
+        ],
+        current_days=[trade_date],
+        prior_day_by_day={trade_date: "2026-05-26"},
+        snapshots=_holding_snapshot(
+            "2026-05-26",
+            {"stock_code": "600001", "change_pct": -5.0, "shares": 100},
+            {"stock_code": "600002", "change_pct": -2.0, "shares": 100},
+        ),
+    )
+
+    assert {check["status"] for check in checks} == {"unknown_ambiguous_order"}
+
+
+def test_weak_sell_order_respects_sell_before_buy_and_buy_before_sell():
+    trade_date = "2026-05-27"
+    snapshot = _holding_snapshot(
+        "2026-05-26",
+        {"stock_code": "600001", "change_pct": -5.0},
+    )
+    sell = _execution(
+        row_id=1,
+        trade_date=trade_date,
+        exec_time="10:00:00",
+        code="600001",
+        direction="sell",
+    )
+    buy = _execution(
+        row_id=2,
+        trade_date=trade_date,
+        exec_time="11:00:00",
+        code="600002",
+        direction="buy",
+    )
+    sell_before_buy = review._analyze_weak_sell_order(
+        rows=[buy, sell],
+        current_days=[trade_date],
+        prior_day_by_day={trade_date: "2026-05-26"},
+        snapshots=snapshot,
+    )
+    buy["id"] = 1
+    buy["exec_time"] = "09:30:00"
+    sell["id"] = 2
+    buy_before_sell = review._analyze_weak_sell_order(
+        rows=[sell, buy],
+        current_days=[trade_date],
+        prior_day_by_day={trade_date: "2026-05-26"},
+        snapshots=snapshot,
+    )
+
+    assert sell_before_buy[0]["status"] == "not_applicable"
+    assert sell_before_buy[0]["position_count"] == 1
+    assert buy_before_sell[0]["status"] == "unknown_missing_quote"
+    assert buy_before_sell[0]["missing_quotes"] == ["600002 票600002(缺行情)"]
+
+
+def test_weak_sell_order_propagates_missing_partial_position():
+    trade_date = "2026-05-27"
+    checks = review._analyze_weak_sell_order(
+        rows=[
+            _execution(
+                row_id=1,
+                trade_date=trade_date,
+                exec_time="10:00:00",
+                code="600003",
+                direction="sell",
+                shares=50,
+                balance_after=50,
+            ),
+            _execution(
+                row_id=2,
+                trade_date=trade_date,
+                exec_time="11:00:00",
+                code="600001",
+                direction="sell",
+            ),
+        ],
+        current_days=[trade_date],
+        prior_day_by_day={trade_date: "2026-05-26"},
+        snapshots=_holding_snapshot(
+            "2026-05-26",
+            {"stock_code": "600001", "change_pct": -5.0},
+            {"stock_code": "600002", "change_pct": -2.0},
+        ),
+    )
+
+    assert checks[0]["status"] == "partial_history"
+    assert checks[1]["status"] == "partial_history"
+    assert all(check["day_balance_conflict"] for check in checks)
+    assert checks[1]["missing_quotes"] == ["600003 票600003(缺行情)"]
+
+
+def test_weak_sell_order_taints_unknown_remaining_shares_after_sell():
+    trade_date = "2026-05-27"
+    checks = review._analyze_weak_sell_order(
+        rows=[
+            _execution(
+                row_id=1,
+                trade_date=trade_date,
+                exec_time="10:00:00",
+                code="600001",
+                direction="sell",
+            ),
+            _execution(
+                row_id=2,
+                trade_date=trade_date,
+                exec_time="11:00:00",
+                code="600002",
+                direction="sell",
+            ),
+        ],
+        current_days=[trade_date],
+        prior_day_by_day={trade_date: "2026-05-26"},
+        snapshots=_holding_snapshot(
+            "2026-05-26",
+            {"stock_code": "600001", "change_pct": -5.0, "shares": None},
+            {"stock_code": "600002", "change_pct": -2.0, "shares": 100},
+        ),
+    )
+
+    assert checks[0]["status"] == "sold_weakest"
+    assert checks[1]["status"] == "partial_history"
+    assert checks[1]["uncertain_positions"] == ["600001 票600001(-5.00%)"]
+
+
+def test_weak_sell_order_fail_closed_on_balance_after_conflict():
+    trade_date = "2026-05-27"
+    checks = review._analyze_weak_sell_order(
+        rows=[
+            _execution(
+                row_id=1,
+                trade_date=trade_date,
+                exec_time="10:00:00",
+                code="600001",
+                direction="sell",
+                shares=50,
+                balance_after=0,
+            ),
+            _execution(
+                row_id=2,
+                trade_date=trade_date,
+                exec_time="11:00:00",
+                code="600002",
+                direction="sell",
+            ),
+        ],
+        current_days=[trade_date],
+        prior_day_by_day={trade_date: "2026-05-26"},
+        snapshots=_holding_snapshot(
+            "2026-05-26",
+            {"stock_code": "600001", "change_pct": -5.0, "shares": 100},
+            {"stock_code": "600002", "change_pct": -2.0, "shares": 100},
+        ),
+    )
+
+    assert [check["status"] for check in checks] == [
+        "partial_history",
+        "partial_history",
+    ]
+    assert checks[0]["balance_conflict"] is True
+    assert checks[0]["exit_scope"] == "未知"
+    assert checks[1]["uncertain_positions"] == ["600001 票600001(-5.00%)"]
+
+
+def test_later_balance_conflict_invalidates_earlier_aligned_sell():
+    trade_date = "2026-05-27"
+    checks = review._analyze_weak_sell_order(
+        rows=[
+            _execution(
+                row_id=1,
+                trade_date=trade_date,
+                exec_time="10:00:00",
+                code="600001",
+                direction="sell",
+                shares=100,
+                balance_after=0,
+            ),
+            _execution(
+                row_id=2,
+                trade_date=trade_date,
+                exec_time="11:00:00",
+                code="600003",
+                direction="sell",
+                shares=100,
+            ),
+        ],
+        current_days=[trade_date],
+        prior_day_by_day={trade_date: "2026-05-26"},
+        snapshots=_holding_snapshot(
+            "2026-05-26",
+            {"stock_code": "600001", "change_pct": -5.0, "shares": 100},
+            {"stock_code": "600002", "change_pct": -2.0, "shares": 100},
+        ),
+    )
+
+    assert len(checks) == 2
+    assert [check["status"] for check in checks] == [
+        "partial_history",
+        "partial_history",
+    ]
+    assert checks[0]["balance_conflict"] is False
+    assert checks[0]["day_balance_conflict"] is True
+    assert checks[1]["balance_conflict"] is True
+    assert "整日回放不可靠" in review._render_weak_sell_checks(checks)
+
+
+def test_weak_sell_order_treats_non_finite_change_as_missing_quote():
+    trade_date = "2026-05-27"
+    checks = review._analyze_weak_sell_order(
+        rows=[
+            _execution(
+                row_id=1,
+                trade_date=trade_date,
+                exec_time="10:00:00",
+                code="600001",
+                direction="sell",
+            )
+        ],
+        current_days=[trade_date],
+        prior_day_by_day={trade_date: "2026-05-26"},
+        snapshots=_holding_snapshot(
+            "2026-05-26",
+            {"stock_code": "600001", "change_pct": float("nan")},
+            {"stock_code": "600002", "change_pct": -2.0},
+        ),
+    )
+
+    assert checks[0]["status"] == "unknown_missing_quote"
+    assert checks[0]["sold_change_pct"] is None
+
+
+def test_weak_sell_order_fail_closed_when_execution_window_is_truncated():
+    trade_date = "2026-05-27"
+    checks = review._analyze_weak_sell_order(
+        rows=[
+            _execution(
+                row_id=1,
+                trade_date=trade_date,
+                exec_time="10:00:00",
+                code="600001",
+                direction="sell",
+            )
+        ],
+        current_days=[trade_date],
+        prior_day_by_day={trade_date: "2026-05-26"},
+        snapshots=_holding_snapshot(
+            "2026-05-26",
+            {"stock_code": "600001", "change_pct": -5.0},
+            {"stock_code": "600002", "change_pct": -2.0},
+        ),
+        history_complete=False,
+    )
+
+    assert checks[0]["status"] == "partial_history"
+    summary = review._summarize_weak_sell_checks(checks, history_complete=False)
+    assert summary["history_complete"] is False
+    assert "无法确认是否存在卖出动作" in review._render_weak_sell_checks(
+        [],
+        history_complete=False,
+    )
+
+
+def test_load_holding_snapshots_keeps_error_members(tmp_path, monkeypatch):
+    db_dir = tmp_path / "data"
+    db_dir.mkdir(parents=True)
+    conn = sqlite3.connect(db_dir / "trade.db")
+    conn.execute("CREATE TABLE daily_market (date TEXT PRIMARY KEY, raw_data TEXT)")
+    conn.execute(
+        "CREATE TABLE broker_executions ("
+        "id INTEGER PRIMARY KEY, account_id TEXT, biz_date TEXT, exec_time TEXT, "
+        "stock_code TEXT, direction TEXT, shares REAL, price REAL, amount REAL, "
+        "balance_after REAL, broker_contract_no TEXT, broker_trade_no TEXT, "
+        "import_run_id TEXT, source_file TEXT, imported_at TEXT, is_void INTEGER, "
+        "void_reason TEXT, total_fees REAL, net_amount REAL, currency TEXT)"
+    )
+    conn.execute(
+        "INSERT INTO daily_market(date, raw_data) VALUES (?, ?)",
+        (
+            "2026-05-26",
+            json.dumps(
+                {
+                    "date": "2026-05-26",
+                    "generated_at": "2026-05-26T20:00:00",
+                    "holdings_data": [
+                        {
+                            "code": "600001.SH",
+                            "name": "正常票",
+                            "shares": 100,
+                            "change_pct": -2.5,
+                        },
+                        {
+                            "code": "588000",
+                            "name": "科创50ETF",
+                            "error": "source_failed",
+                            "change_pct": 9.9,
+                        },
+                    ],
+                },
+                ensure_ascii=False,
+            ),
+        ),
+    )
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(review, "PROJECT_ROOT", tmp_path)
+
+    snapshots = review._load_holding_snapshots({"2026-05-26"})
+
+    assert snapshots["2026-05-26"]["status"] == "success"
+    assert snapshots["2026-05-26"]["members"]["600001"]["change_pct"] == -2.5
+    assert snapshots["2026-05-26"]["members"]["588000"]["change_pct"] is None
+    assert snapshots["2026-05-26"]["members"]["588000"]["error"] == "source_failed"
+
+
+def test_snapshot_stale_uses_first_seen_time_for_exact_replacement(
+    tmp_path, monkeypatch
+):
+    db_dir = tmp_path / "data"
+    db_dir.mkdir(parents=True)
+    conn = sqlite3.connect(db_dir / "trade.db")
+    conn.execute("CREATE TABLE daily_market (date TEXT PRIMARY KEY, raw_data TEXT)")
+    conn.execute(
+        "CREATE TABLE broker_executions ("
+        "id INTEGER PRIMARY KEY, account_id TEXT, biz_date TEXT, exec_time TEXT, "
+        "stock_code TEXT, stock_code_raw TEXT, direction TEXT, shares REAL, "
+        "price REAL, amount REAL, balance_after REAL, broker_contract_no TEXT, "
+        "broker_trade_no TEXT, import_run_id TEXT, source_file TEXT, "
+        "imported_at TEXT, is_void INTEGER, void_reason TEXT, total_fees REAL, "
+        "net_amount REAL, currency TEXT)"
+    )
+    conn.execute(
+        "INSERT INTO daily_market(date, raw_data) VALUES (?, ?)",
+        (
+            "2026-05-27",
+            json.dumps(
+                {
+                    "date": "2026-05-27",
+                    "generated_at": "2026-05-27T20:00:00",
+                    "holdings_data": [
+                        {
+                            "code": "002409",
+                            "name": "替换票",
+                            "shares": 100,
+                            "change_pct": 1.0,
+                        }
+                    ],
+                },
+                ensure_ascii=False,
+            ),
+        ),
+    )
+    common = (
+        "default",
+        "2026-05-27",
+        "09:32:29",
+        "002409",
+        "buy",
+        100,
+        200.66,
+        20066.0,
+        "0102000005015520",
+    )
+    conn.execute(
+        """
+        INSERT INTO broker_executions(
+            id, account_id, biz_date, exec_time, stock_code, direction,
+            shares, price, amount, broker_contract_no, broker_trade_no,
+            import_run_id, source_file, imported_at, is_void, void_reason
+        ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, 'OLD', ?, 'DAY', 'day.tsv',
+                  '2026-05-27 11:00:00', 1, 'semantic_duplicate_exact')
+        """,
+        common,
+    )
+    conn.execute(
+        """
+        INSERT INTO broker_executions(
+            id, account_id, biz_date, exec_time, stock_code, direction,
+            shares, price, amount, balance_after, broker_contract_no,
+            broker_trade_no, import_run_id, source_file, imported_at,
+            is_void, void_reason
+        ) VALUES (2, ?, ?, ?, ?, ?, ?, ?, ?, 100, 'NEW', ?, 'WEEK', 'week.tsv',
+                  '2026-05-28 01:00:00', 0, NULL)
+        """,
+        common,
+    )
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(review, "PROJECT_ROOT", tmp_path)
+
+    snapshots = review._load_holding_snapshots({"2026-05-27"})
+
+    assert snapshots["2026-05-27"]["status"] == "success"
+    assert snapshots["2026-05-27"]["members"]["002409"]["shares"] == 100
+
+
+def test_load_holding_snapshots_rejects_future_generation_and_invalid_member(
+    tmp_path, monkeypatch
+):
+    db_dir = tmp_path / "data"
+    db_dir.mkdir(parents=True)
+    conn = sqlite3.connect(db_dir / "trade.db")
+    conn.execute("CREATE TABLE daily_market (date TEXT PRIMARY KEY, raw_data TEXT)")
+    conn.execute(
+        "CREATE TABLE broker_executions ("
+        "id INTEGER PRIMARY KEY, account_id TEXT, biz_date TEXT, exec_time TEXT, "
+        "stock_code TEXT, direction TEXT, shares REAL, price REAL, amount REAL, "
+        "balance_after REAL, broker_contract_no TEXT, broker_trade_no TEXT, "
+        "import_run_id TEXT, source_file TEXT, imported_at TEXT, is_void INTEGER, "
+        "void_reason TEXT, total_fees REAL, net_amount REAL, currency TEXT)"
+    )
+    conn.executemany(
+        "INSERT INTO daily_market(date, raw_data) VALUES (?, ?)",
+        [
+            (
+                "2026-05-22",
+                json.dumps(
+                    {
+                        "date": "2026-05-22",
+                        "generated_at": "2026-05-22T20:00:00",
+                        "holdings_data": [],
+                    }
+                ),
+            ),
+            (
+                "2026-05-23",
+                json.dumps(
+                    {
+                        "date": "2026-05-23",
+                        "generated_at": "2026-05-23T10:00:00",
+                        "holdings_data": [],
+                    }
+                ),
+            ),
+            (
+                "2026-05-24",
+                json.dumps(
+                    {
+                        "date": "2026-05-24",
+                        "generated_at": "2026-05-24T16:00:00Z",
+                        "holdings_data": [],
+                    }
+                ),
+            ),
+            (
+                "2026-05-25",
+                json.dumps(
+                    {
+                        "date": "2026-05-25",
+                        "generated_at": "2026-05-27T20:00:00",
+                        "holdings_data": [
+                            {"code": "600001", "shares": 100, "change_pct": -5.0}
+                        ],
+                    }
+                ),
+            ),
+            (
+                "2026-05-26",
+                json.dumps(
+                    {
+                        "date": "2026-05-26",
+                        "generated_at": "2026-05-26T20:00:00",
+                        "holdings_data": [
+                            {"code": "600001", "shares": 100, "change_pct": -5.0},
+                            {"name": "缺代码持仓", "error": "source_failed"},
+                            {
+                                "code": "600002",
+                                "shares": "NaN",
+                                "change_pct": -2.0,
+                            },
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+            ),
+        ],
+    )
+    conn.execute(
+        "INSERT INTO broker_executions(account_id, biz_date, imported_at, is_void) "
+        "VALUES ('default', '2026-05-22', '2026-05-22 13:00:00', 0)"
+    )
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(review, "PROJECT_ROOT", tmp_path)
+
+    snapshots = review._load_holding_snapshots(
+        {
+            "2026-05-22",
+            "2026-05-23",
+            "2026-05-24",
+            "2026-05-25",
+            "2026-05-26",
+        }
+    )
+
+    assert snapshots["2026-05-22"]["status"] == "stale"
+    assert snapshots["2026-05-22"]["reason"].startswith("late_execution_import:")
+    assert snapshots["2026-05-23"]["reason"] == "generated_before_market_close:10:00:00"
+    assert snapshots["2026-05-24"]["reason"] == "generated_date_mismatch:2026-05-25"
+    assert snapshots["2026-05-25"]["status"] == "malformed"
+    assert snapshots["2026-05-25"]["reason"] == "generated_date_mismatch:2026-05-27"
+    assert snapshots["2026-05-26"]["status"] == "partial"
+    assert snapshots["2026-05-26"]["reason"] == "invalid_members:2"
+
+
+def test_report_renders_weak_sell_section_and_summary(tmp_path, monkeypatch):
+    rows = [
+        {
+            "id": 1,
+            "account_id": "default",
+            "biz_date": "2026-05-27",
+            "exec_time": "10:00:00",
+            "stock_code": "600001",
+            "stock_name": "弱票",
+            "direction": "sell",
+            "shares": 100,
+            "amount": 900.0,
+            "net_amount": 900.0,
+            "total_fees": 0.0,
+            "thesis_id": None,
+        }
+    ]
+
+    def fake_run_json(cmd: list[str]):
+        if cmd[2:4] == ["db", "thesis-list"]:
+            return []
+        if cmd[2:4] == ["executions", "list"]:
+            return rows
+        raise AssertionError(f"unexpected command: {cmd}")
+
+    monkeypatch.setattr(review, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(review, "_try_get_last_n_trade_days", lambda n, as_of: _EIGHT_DAYS)
+    monkeypatch.setattr(review, "_run_json", fake_run_json)
+    monkeypatch.setattr(
+        review,
+        "_load_holding_snapshots",
+        lambda days: _holding_snapshot(
+            "2026-05-26",
+            {"stock_code": "600001", "stock_name": "弱票", "change_pct": -5.0},
+            {"stock_code": "600002", "stock_name": "强票", "change_pct": 2.0},
+        ),
+    )
+
+    result = review.generate(
+        run_date=date(2026, 5, 29),
+        account="default",
+        limit=10000,
+        push=False,
+    )
+    report_md = Path(result["report_path"]).read_text(encoding="utf-8")
+
+    assert "## 是否优先卖出最弱个股" in report_md
+    assert "前一收盘日弱势代理" in report_md
+    assert "| 2026-05-27 10:00:00 | 600001 弱票 |" in report_md
+    assert "符合：唯一最弱" in report_md
+    assert result["weak_sell_summary"] == {
+        "actions": 1,
+        "comparable": 1,
+        "aligned": 1,
+        "weaker_retained": 0,
+        "not_applicable": 0,
+        "unknown": 0,
+        "history_complete": True,
+    }
+
+
+def test_report_uses_same_canonical_split_summary_rows_for_all_metrics(
+    tmp_path, monkeypatch
+):
+    trade_date = "2026-05-27"
+    rows = [
+        _execution(
+            row_id=1,
+            trade_date=trade_date,
+            exec_time="13:15:55",
+            code="688772",
+            direction="sell",
+            shares=88,
+            broker_contract_no="ORDER-1",
+            broker_trade_no="0000000057670108",
+            price=18.17,
+            amount=1598.96,
+            import_run_id="DAILY-RUN",
+            source_file="daily.tsv",
+            thesis_id=24,
+        ),
+        _execution(
+            row_id=3,
+            trade_date=trade_date,
+            exec_time="13:15:56",
+            code="688772",
+            direction="sell",
+            shares=712,
+            broker_contract_no="ORDER-1",
+            broker_trade_no="0000000057672610",
+            price=18.17,
+            amount=12937.04,
+            import_run_id="DAILY-RUN",
+            source_file="daily.tsv",
+            thesis_id=24,
+        ),
+        _execution(
+            row_id=2,
+            trade_date=trade_date,
+            exec_time="13:15:56",
+            code="688772",
+            direction="sell",
+            shares=800,
+            balance_after=0,
+            broker_contract_no="SUMMARY-1",
+            broker_trade_no="57670108",
+            price=18.17,
+            amount=14536.0,
+            import_run_id="WEEKLY-RUN",
+            source_file="weekly.tsv",
+        ),
+    ]
+
+    def fake_run_json(cmd: list[str]):
+        if cmd[2:4] == ["db", "thesis-list"]:
+            return []
+        if cmd[2:4] == ["executions", "list"]:
+            return rows
+        raise AssertionError(f"unexpected command: {cmd}")
+
+    monkeypatch.setattr(review, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(review, "_try_get_last_n_trade_days", lambda n, as_of: _EIGHT_DAYS)
+    monkeypatch.setattr(review, "_run_json", fake_run_json)
+    monkeypatch.setattr(
+        review,
+        "_load_holding_snapshots",
+        lambda days: _holding_snapshot(
+            "2026-05-26",
+            {"stock_code": "688772", "change_pct": -5.0, "shares": 800},
+            {"stock_code": "600002", "change_pct": -2.0, "shares": 100},
+        ),
+    )
+
+    result = review.generate(
+        run_date=date(2026, 5, 29),
+        account="default",
+        limit=10000,
+        push=False,
+    )
+    report_md = Path(result["report_path"]).read_text(encoding="utf-8")
+
+    assert result["weak_sell_summary"]["actions"] == 1
+    assert "sell 688772 票688772 800@18.17" in report_md
+    assert "14,536.00" in report_md
+    assert "29,072.00" not in report_md
+    assert "缺少 thesis_id" not in report_md
 
 
 def test_open_thesis_appears_in_failure_self_check(tmp_path, monkeypatch):
@@ -309,6 +1552,10 @@ def test_push_summary_includes_failure_discipline_segment(tmp_path, monkeypatch)
     assert "持仓自查 1 项" in markdown
     assert "未复盘 1" in markdown
     assert "偏离/低分 1" in markdown
+    assert "卖出选择 1" in markdown
+    assert "可判 0" in markdown
+    assert "缺数 1" in markdown
+    assert "流水完整" in markdown
     # 摘要仍不得泄漏英文字段名（与既有断言一致）
     assert "failure_condition" not in markdown
     assert "planned_position_pct" not in markdown
