@@ -181,18 +181,30 @@ def run(config: dict, *, date_str: Optional[str] = None,
                           f"请 --force-refresh 重采修复。", file=sys.stderr)
                     return RunOutcome(status="archive_corrupt",
                                       exit_code=EXIT_CODES["archive_corrupt"], manifest=latest)
-                # 重推与首推同一精选口径(important 每主题限量),不回退全量刷屏:
-                # 从归档 flash_raw 重建候选(上方 _archive_intact 已保证与 manifest 同代)
+                # 重推与首推同一精选口径(important 每主题限量),且用「归档代」的选择语义:
+                # 主题取 manifest candidates 快照(生成时定格,不用当前词表重筛——词表改过后
+                # 重筛会产出与归档不一致的内容,违反"重推既有"契约);原文按 id 回联 flash_raw
+                # (上方 _archive_intact 已保证与 manifest 同代)。
                 raw_payload = json.loads(
                     (day_dir / "flash_raw.json").read_text(encoding="utf-8"))
-                cands = flash_filter.filter_items(raw_payload.get("items") or [], keywords)
+                raw_by_id = {i.get("id"): i for i in raw_payload.get("items") or []
+                             if isinstance(i, dict)}
+                cands = [flash_filter.FlashCandidate(
+                             item=raw_by_id.get(c.get("id"))
+                                  or {"id": c.get("id"), "time": c.get("time"),
+                                      "important": c.get("important"),
+                                      "data": {"content": c.get("text") or ""}},
+                             topic=c.get("topic"))
+                         for c in latest.get("candidates") or []]
                 push_md = formatter.build_push_digest(
                     cands,
                     window_start=datetime.fromisoformat(latest["window_start"]),
                     window_end=datetime.fromisoformat(latest["window_end"]),
                     source_status=latest.get("source_status"),
                     raw_count=latest.get("raw_count", 0),
-                    topic_order=list(keywords), archive_hint=_rel(digest_path))
+                    # 主题顺序同样优先归档快照;旧 manifest 无该键时退回当前词表顺序
+                    topic_order=latest.get("topic_order") or list(keywords),
+                    archive_hint=_rel(digest_path))
                 ok = push(title, push_md)
                 latest["push_status"] = "success" if ok else "failed"
                 latest["pushed_at"] = _now_iso()
@@ -247,6 +259,8 @@ def run(config: dict, *, date_str: Optional[str] = None,
                         "digest": {"path": "digest.md", "sha256": _sha256(digest_md)},
                     },
                     "candidates": [_candidate_row(c) for c in candidates],
+                    # 生成时定格主题顺序:repush 用归档代语义重建推送,不受后续词表调整影响
+                    "topic_order": list(keywords),
                     "push_status": "skipped",
                     "pushed_at": None,
                     "generated_at": _now_iso(),

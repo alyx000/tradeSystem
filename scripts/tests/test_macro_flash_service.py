@@ -318,3 +318,26 @@ def test_repush_uses_important_selection(tmp_path):
     body = push.calls[0][1]
     assert "央行重要公告" in body and "央行普通动态" not in body
     assert "推送精选" in body                                   # 精选口径生效
+
+
+def test_repush_replays_archived_generation_not_current_keywords(tmp_path):
+    """门2第2轮回归:repush 是归档代的重放——词表在归档后改动,
+    repush 不得用新词表重筛(主题/条目须与归档时一致)。"""
+    def collect_two(a, b):
+        return collector.CollectResult(
+            status=collector.STATUS_COMPLETE, raw_count=2, pages=1,
+            items=[{"id": "imp", "time": "2026-07-23 10:00:00", "important": 1,
+                    "data": {"content": "央行重要公告", "title": ""}},
+                   {"id": "ord", "time": "2026-07-23 09:00:00", "important": 0,
+                    "data": {"content": "央行普通动态", "title": ""}}])
+    _run(tmp_path, collect_fn=collect_two, no_push=True)   # 归档代:词表={货币政策:[央行]}
+    # 归档后词表大改:若 repush 错误地用当前词表重筛,该条会被归到「新主题」
+    changed_cfg = {"macro_flash": {"keywords": {"新主题": ["公告"]}}}
+    push = PushSpy()
+    out = service.run(changed_cfg, repush=True, base_dir=tmp_path,
+                      push_fn=push, now=NOW, collect_fn=collect_two)
+    assert out.status == "repushed"
+    body = push.calls[0][1]
+    assert "## 货币政策" in body            # 归档代主题保持
+    assert "新主题" not in body             # 未被当前词表重筛
+    assert "央行重要公告" in body           # 精选口径不变
