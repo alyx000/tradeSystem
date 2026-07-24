@@ -64,7 +64,7 @@ alwaysApply: true
 
 - `AGENTS.md` / `CLAUDE.md` / `.cursor/agent-context/`：定义业务边界、写入语义与主题入口。
 - `dev-workflow.md`：定义开发前后验证与测试报告要求。
-- `implementation-plan.md`：定义计划阶段的验证方案与并行分组要求。
+- `implementation-plan.md`：定义计划阶段的范围与测试验证要求，不强制固定 Agent 分组。
 - `test-design.md`：定义重大变更时的分层测试设计。
 
 本规则只解决**行为层**问题：少猜、少做多余事、少误改、强验证闭环。

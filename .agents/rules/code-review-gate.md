@@ -9,7 +9,7 @@ alwaysApply: true
 >
 > 单文件改 / 纯文档改 / 单测试增改 → 两条都不触发。
 
-> **边界声明（务必区分两类用途）**：本规则只替代**开发后代码 diff 审查门**。[`implementation-plan.md`](implementation-plan.md) 的「方案 Review（CreatePlan 后强制）」用 `Task` 启动 Explore subagent 审**方案文档**，那条**不在本规则替代范围内**——`/code-review` 只能审 diff，审不了方案文档。别把方案 review 的 Explore 误当成被本门替代的对象。
+> **边界声明**：本规则只处理**开发后代码 diff 审查门**；[`implementation-plan.md`](implementation-plan.md) 负责计划阶段的范围与验证方案。`/code-review` 只能审 diff，不能审对话中的方案文档。
 
 ## 触发条件
 

@@ -77,11 +77,11 @@
 | `language.md`             | 所有 AI 输出使用简体中文，代码标识符保持英文                                              |
 | `karpathy-behavior.md`    | 行为基线：先校验假设、简洁优先、精准修改、目标驱动验证，减少 Agent 常见失误                            |
 | `dev-workflow.md`         | 开发三阶段流程：设计验证方案 → 实现（含单测）→ 执行验证并报告                                     |
-| `implementation-plan.md`  | 实施计划必须含测试验证方案 + 复杂任务多 Agent 并行分组                                      |
+| `implementation-plan.md`  | 实施计划必须含范围、分层测试、验收命令与完成标准；不强制固定多 Agent 分组                         |
 | `solution-format.md`      | 技术方案 / 执行计划 / 业务逻辑解析默认使用结构化章节、表格与纯 Mermaid 图表输出                       |
 | `test-design.md`          | 分层测试设计：金字塔原则、隔离原则、自底向上执行                                              |
 | `code-review-gate.md` | 每轮实质性代码改动后先 `/simplify` 清理 → `/code-review`（门1，默认 medium，替代旧本地 Explore）；4 条结束条件 + 软上限 2 轮                                  |
-| `post-dev-codex-review.md` | 实质性代码改动后必须跑 codex 原生 adversarial-review 审查（方案级 codex 独立意见才走 codex:codex-rescue freeform；不替代 Explore CreatePlan 门）；6 条二值结束条件 + 3 轮上限防无限循环 |
+| `post-dev-codex-review.md` | 实质性代码改动后必须跑 codex 原生 adversarial-review 审查；方案级独立意见按需触发；6 条二值结束条件 + 3 轮上限防无限循环 |
 | `skills-sync.md`          | CLI / API / Skills 变更后同步 `INDEX.md`、跑 `test_cli_smoke`、检查受影响 SKILL.md；新增顶层 subparser 必加 `ARCHITECTURE_COMMANDS` 参数化 |
 | `launchd-deploy.md`       | macOS launchd 定时任务部署规范：包装脚本必须 set PATH + source env；安装后必须 launchctl start 真触发验证；LLM 任务超时建议 180s+ |
 | `tdd-commit-strategy.md`  | TDD 实施完成后按功能层次切 commit（不每个 R/G 一个、不全 squash）；commit message 标 What/Why/TDD 轮数；`git add` 用具体路径不用 `-A` |
