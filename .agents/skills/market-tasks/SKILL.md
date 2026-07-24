@@ -19,6 +19,7 @@ version: "1.9"
 - 「宏观快讯速读」/「今天有什么宏观新闻」/「查一下 macro-flash 归档」
 - 「采集公众号老师观点」/「检查 WeRSS」/「查看公众号确认候选」
 - 「价值投资条件监控」/「银行回撤到几档了」/「卖出阶梯 / 稀缺周线怎么样」（命中 `value-watch`，读 [references/market-observability.md](references/market-observability.md)）
+- 「板块标签」/「哪些板块在半年线或年线上」/「最近哪些板块价量共振」（命中 `sector-crowding`，读 [references/market-observability.md](references/market-observability.md)）
 
 时激活此 skill。
 

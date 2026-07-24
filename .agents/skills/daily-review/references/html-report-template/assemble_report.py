@@ -151,6 +151,7 @@ CAPACITY_SOURCE_STATUSES = frozenset({"complete", "partial", "failed"})
 CAPACITY_CODE_RE = re.compile(r"^\d{6}\.(?:SH|SZ|BJ)$")
 STRUCTURED_CONTRACT_ATTRIBUTES = (
     "data-sector-concentration",
+    "data-sector-labels",
     "data-rising-recognition",
     "data-falling-recognition",
     "data-new-high-structure",
@@ -158,6 +159,25 @@ STRUCTURED_CONTRACT_ATTRIBUTES = (
 )
 SECTOR_CONCENTRATION_NONE_TEXT = "[事实]本日无可用板块集中度数据"
 SECTOR_CONCENTRATION_MISSING_TEXT = "[事实]板块集中度数据不完整，本日无法判定"
+SECTOR_LABELS_NONE_TEXT = "[事实]本日半年线、年线与近期价量共振标签均无命中板块"
+SECTOR_LABELS_MISSING_TEXT = "[事实]板块趋势标签数据不完整，本日无法判定"
+SECTOR_LABELS_CODE_RE = re.compile(r"^\d{6}\.SI$")
+SECTOR_LABELS_WINDOW_ATTRS = {
+    "data-half-year-window": "144",
+    "data-year-window": "233",
+    "data-resonance-lookback": "10",
+    "data-resonance-breakout-window": "20",
+}
+SECTOR_LABELS_VERDICT_RE = re.compile(
+    r"\A\[事实\]半年线上(?P<half>\d+)、年线上(?P<year>\d+)；"
+    r"\[判断\]近期价量共振(?P<resonance>\d+)，"
+    r"年线\+共振(?P<year_resonance>\d+)"
+    r"(?P<coverage>；(?:当前为)?部分覆盖|；板块趋势标签数据不完整)?[。.;；]?\Z"
+)
+SECTOR_LABELS_MISSING_VERDICT_RE = re.compile(
+    r"\A\[事实\].*(?:半年线|年线).*数据不完整；"
+    r"\[判断\].*近期价量共振.*无法判定[。.;；]?\Z"
+)
 RISING_RECOGNITION_NONE_TEXT = "[事实]本日无符合规则的主升辨识度个股"
 RISING_RECOGNITION_MISSING_TEXT = "[事实]主升辨识度矩阵数据不完整，本日无法判定"
 FALLING_RECOGNITION_NONE_TEXT = "[事实]本日无符合规则的主跌辨识度个股"
@@ -302,6 +322,7 @@ class _CapacityNoData:
 class _StructuredRow:
     attrs: dict[str, str]
     text: list[str] = field(default_factory=list)
+    rendered_text: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -971,6 +992,8 @@ class _ReportParser(HTMLParser):
         structured_row = self._current_structured_row()
         if structured_row:
             structured_row.text.append(data)
+            if not any(frame.explicit_hidden for frame in self.stack):
+                structured_row.rendered_text.append(data)
         structured_contract = self._current_structured_contract()
         if structured_contract:
             structured_contract.text.append(data)
@@ -1366,7 +1389,293 @@ class _ReportParser(HTMLParser):
                 section=section,
             )
 
+    def _validate_sector_labels_contract(self, report_date: date_type) -> None:
+        contracts = self.structured_contracts["data-sector-labels"]
+        verdicts = [item for item in contracts if item.value == "verdict"]
+        data_blocks = [item for item in contracts if item.value != "verdict"]
+        if len(verdicts) != 1 or len(data_blocks) != 1:
+            raise ReportValidationError(
+                "invalid_sector_labels",
+                "s2 必须且只能包含一句板块趋势标签摘要和一份标签数据块",
+                section="s2",
+            )
+
+        verdict = verdicts[0]
+        block = data_blocks[0]
+        verdict_text = re.sub(r"\s+", "", "".join(verdict.rendered_text))
+        if (
+            verdict.tag != "p"
+            or verdict.section != "s2"
+            or verdict.default_hidden
+            or not self._valid_contract_as_of(verdict, report_date)
+            or "[事实]" not in verdict_text
+            or "[判断]" not in verdict_text
+        ):
+            raise ReportValidationError(
+                "invalid_sector_labels",
+                "板块趋势标签摘要必须是 s2 默认可见、来源日有效且区分事实/判断的 p",
+                section="s2",
+            )
+        if (
+            block.section != "s2"
+            or not self._valid_contract_as_of(block, report_date)
+            or block.attrs.get("data-as-of") != verdict.attrs.get("data-as-of")
+            or not block.default_hidden
+            or any(
+                block.attrs.get(key) != value
+                for key, value in SECTOR_LABELS_WINDOW_ATTRS.items()
+            )
+        ):
+            raise ReportValidationError(
+                "invalid_sector_labels",
+                "板块趋势标签必须归属 s2 折叠证据、与摘要同日并固定使用 MA144/MA233 与 10/20 共振窗口",
+                section="s2",
+            )
+
+        source_status = block.attrs.get("data-source-status", "")
+        compact_text = re.sub(
+            r"\s+", "", "".join(block.rendered_text)
+        ).rstrip("。.;；")
+        ops_text = re.sub(r"\s+", "", "".join(self.section_text["ops"]))
+        if block.value == "missing-data":
+            if (
+                block.tag != "p"
+                or source_status not in {"partial", "failed"}
+                or compact_text != SECTOR_LABELS_MISSING_TEXT
+                or "板块趋势标签数据不完整" not in ops_text
+                or not SECTOR_LABELS_MISSING_VERDICT_RE.fullmatch(verdict_text)
+            ):
+                raise ReportValidationError(
+                    "invalid_sector_labels",
+                    "标签缺失态必须显式标记 partial/failed，并在摘要和 ops 披露无法判定",
+                    section="s2",
+                )
+            return
+
+        count_keys = (
+            "data-total-l2",
+            "data-missing-l2-count",
+            "data-half-year-count",
+            "data-year-count",
+            "data-resonance-count",
+            "data-year-resonance-count",
+            "data-half-year-insufficient-count",
+            "data-year-insufficient-count",
+            "data-resonance-insufficient-count",
+        )
+        count_values = {
+            key: block.attrs.get(key, "").strip() for key in count_keys
+        }
+        if any(not value.isdigit() for value in count_values.values()):
+            raise ReportValidationError(
+                "invalid_sector_labels",
+                "板块趋势标签汇总字段必须是非负整数",
+                section="s2",
+            )
+        counts = {key: int(value) for key, value in count_values.items()}
+        total_l2 = counts["data-total-l2"]
+        missing_l2 = counts["data-missing-l2-count"]
+        half_count = counts["data-half-year-count"]
+        year_count = counts["data-year-count"]
+        resonance_count = counts["data-resonance-count"]
+        year_resonance_count = counts["data-year-resonance-count"]
+        half_insufficient = counts["data-half-year-insufficient-count"]
+        year_insufficient = counts["data-year-insufficient-count"]
+        resonance_insufficient = counts["data-resonance-insufficient-count"]
+        insufficiencies = (
+            half_insufficient,
+            year_insufficient,
+            resonance_insufficient,
+        )
+        has_gap = missing_l2 > 0 or any(value > 0 for value in insufficiencies)
+        verdict_match = SECTOR_LABELS_VERDICT_RE.fullmatch(verdict_text)
+        coverage_disclosure = (
+            verdict_match.group("coverage") if verdict_match else None
+        )
+        count_shape_valid = (
+            total_l2 > 0
+            and missing_l2 <= total_l2
+            and all(missing_l2 <= value <= total_l2 for value in insufficiencies)
+            and half_count <= total_l2 - half_insufficient
+            and year_count <= total_l2 - year_insufficient
+            and resonance_count <= total_l2 - resonance_insufficient
+            and year_resonance_count <= min(year_count, resonance_count)
+        )
+        status_valid = (
+            source_status == "complete"
+            and not has_gap
+            and not coverage_disclosure
+        ) or (
+            source_status == "partial"
+            and has_gap
+            and bool(coverage_disclosure)
+            and "板块趋势标签数据不完整" in ops_text
+        )
+        if not count_shape_valid or not status_valid:
+            raise ReportValidationError(
+                "invalid_sector_labels",
+                "标签覆盖数、数据不足数或 complete/partial 状态不一致",
+                section="s2",
+            )
+
+        visible_counts = (
+            tuple(
+                int(verdict_match.group(name))
+                for name in ("half", "year", "resonance", "year_resonance")
+            )
+            if verdict_match
+            else ()
+        )
+        if visible_counts != (
+            half_count,
+            year_count,
+            resonance_count,
+            year_resonance_count,
+        ):
+            raise ReportValidationError(
+                "invalid_sector_labels",
+                "板块趋势标签摘要必须按固定事实/判断句式精确展示表内四项计数",
+                section="s2",
+            )
+
+        if block.value == "none":
+            if (
+                block.tag != "p"
+                or source_status != "complete"
+                or compact_text != SECTOR_LABELS_NONE_TEXT
+                or any(
+                    (
+                        half_count,
+                        year_count,
+                        resonance_count,
+                        year_resonance_count,
+                    )
+                )
+            ):
+                raise ReportValidationError(
+                    "invalid_sector_labels",
+                    "标签 none 态仅允许完整覆盖且四项命中均为零",
+                    section="s2",
+                )
+            return
+
+        if (
+            block.value != "v1"
+            or block.tag != "table"
+            or len(block.rows) < 2
+            or not compact_text
+        ):
+            raise ReportValidationError(
+                "invalid_sector_labels",
+                "标签数据块仅允许非空 v1 表、完整 none 或显式 missing-data",
+                section="s2",
+            )
+
+        seen_codes: set[str] = set()
+        derived_half = 0
+        derived_year = 0
+        derived_resonance = 0
+        derived_year_resonance = 0
+        as_of = date_type.fromisoformat(block.attrs["data-as-of"])
+        for row in block.rows[1:]:
+            code = row.attrs.get("data-code", "").strip().upper()
+            half_value = row.attrs.get("data-above-half-year-ma", "")
+            year_value = row.attrs.get("data-above-year-ma", "")
+            resonance_value = row.attrs.get("data-recent-resonance", "")
+            if (
+                not SECTOR_LABELS_CODE_RE.fullmatch(code)
+                or code in seen_codes
+                or any(
+                    value not in {"true", "false"}
+                    for value in (half_value, year_value, resonance_value)
+                )
+            ):
+                raise ReportValidationError(
+                    "invalid_sector_labels",
+                    "标签命中行必须带唯一申万代码和明确 true/false 三标签",
+                    section="s2",
+                )
+            seen_codes.add(code)
+            half = half_value == "true"
+            year = year_value == "true"
+            resonance = resonance_value == "true"
+            if not any((half, year, resonance)):
+                raise ReportValidationError(
+                    "invalid_sector_labels",
+                    "v1 表只承载命中并集，每行至少命中一个标签",
+                    section="s2",
+                )
+
+            last_resonance = row.attrs.get(
+                "data-last-resonance-date", ""
+            ).strip()
+            valid_resonance_date = (
+                bool(last_resonance)
+                and _valid_date(last_resonance)
+                and date_type.fromisoformat(last_resonance) <= as_of
+            )
+            if (resonance and not valid_resonance_date) or (
+                not resonance and last_resonance
+            ):
+                raise ReportValidationError(
+                    "invalid_sector_labels",
+                    "近期共振命中必须带不晚于来源日的最近事件日期，未命中不得伪造日期",
+                    section="s2",
+                )
+
+            visible = re.sub(r"\s+", "", "".join(row.rendered_text))
+            tokens = visible.split("/")
+            visible_half = any(
+                "半年线上[事实]" in token for token in tokens
+            )
+            visible_year = any(
+                "年线上[事实]" in token and "半年线上[事实]" not in token
+                for token in tokens
+            )
+            visible_resonance = any(
+                "最近共振" in token and "[判断]" in token for token in tokens
+            )
+            if (
+                code not in visible
+                or visible_half != half
+                or visible_year != year
+                or visible_resonance != resonance
+                or (resonance and last_resonance not in visible)
+            ):
+                raise ReportValidationError(
+                    "invalid_sector_labels",
+                    "标签行可见代码、事实标签、判断标签与结构化元数据必须一致",
+                    section="s2",
+                )
+
+            derived_half += int(half)
+            derived_year += int(year)
+            derived_resonance += int(resonance)
+            derived_year_resonance += int(year and resonance)
+
+        if (
+            len(seen_codes) > total_l2 - missing_l2
+            or (
+                derived_half,
+                derived_year,
+                derived_resonance,
+                derived_year_resonance,
+            )
+            != (
+                half_count,
+                year_count,
+                resonance_count,
+                year_resonance_count,
+            )
+        ):
+            raise ReportValidationError(
+                "invalid_sector_labels",
+                "标签命中并集、四项汇总计数与逐行布尔值必须完全对账",
+                section="s2",
+            )
+
     def _validate_sector_contracts(self, report_date: date_type) -> None:
+        self._validate_sector_labels_contract(report_date)
         concentration = self.structured_contracts["data-sector-concentration"]
         verdicts = [item for item in concentration if item.value == "verdict"]
         data_blocks = [item for item in concentration if item.value != "verdict"]

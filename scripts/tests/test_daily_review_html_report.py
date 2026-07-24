@@ -160,6 +160,48 @@ def _sector_concentration_verdict(
     )
 
 
+def _sector_labels_verdict(
+    *,
+    date: str = DATE,
+    text: str = (
+        "[事实] 半年线上 0、年线上 0；"
+        "[判断] 近期价量共振 0，年线+共振 0。"
+    ),
+) -> str:
+    return f'<p data-sector-labels="verdict" data-as-of="{date}">{text}</p>'
+
+
+def _sector_labels_state(
+    *,
+    state: str = "none",
+    date: str = DATE,
+    source_status: str = "complete",
+    text: str | None = None,
+) -> str:
+    texts = {
+        "none": "[事实] 本日半年线、年线与近期价量共振标签均无命中板块",
+        "missing-data": "[事实] 板块趋势标签数据不完整，本日无法判定",
+    }
+    value = text if text is not None else texts[state]
+    attrs = (
+        ' data-half-year-window="144" data-year-window="233"'
+        ' data-resonance-lookback="10" data-resonance-breakout-window="20"'
+    )
+    if state == "none":
+        attrs += (
+            ' data-total-l2="124" data-missing-l2-count="0"'
+            ' data-half-year-count="0" data-year-count="0"'
+            ' data-resonance-count="0" data-year-resonance-count="0"'
+            ' data-half-year-insufficient-count="0"'
+            ' data-year-insufficient-count="0"'
+            ' data-resonance-insufficient-count="0"'
+        )
+    return (
+        f'<p data-sector-labels="{state}" data-as-of="{date}" '
+        f'data-source-status="{source_status}"{attrs}>{value}</p>'
+    )
+
+
 def _event_window_state(
     *,
     state: str = "none",
@@ -764,7 +806,12 @@ def _valid_chunks(date: str = DATE) -> dict[str, str]:
   <p id="claim-sector" data-claim-kind="fact" data-source="sector_flow" data-as-of="{date}">[事实] 主线资金与价格出现分歧。</p>
   <p>[判断] 本节只保留一条归属结论。</p>
   {_sector_concentration_verdict(date=date)}
+  {_sector_labels_verdict(date=date)}
   {_sector_state("sector-concentration", date=date)}
+  <details class="evidence" data-as-of="{date}" data-evidence-kind="sector-labels" data-items="1">
+    <summary>板块趋势标签（1 项）</summary>
+    <div class="evidence-body">{_sector_labels_state(date=date)}</div>
+  </details>
   {_sector_state("rising-recognition", date=date)}
   {_sector_state("falling-recognition", date=date)}
 </section>
@@ -944,6 +991,10 @@ def _sector_contract(html: str, contract: str, fragment: str) -> str:
     return _replace_once(html, marker, fragment)
 
 
+def _sector_labels_contract(html: str, fragment: str) -> str:
+    return _replace_once(html, _sector_labels_state(), fragment)
+
+
 def _event_window(html: str, fragment: str) -> str:
     return _replace_once(html, _event_window_state(), fragment)
 
@@ -975,6 +1026,7 @@ def _sector_ops_notice(
 ) -> str:
     markers = {
         "sector-concentration": "板块集中度数据不完整",
+        "sector-labels": "板块趋势标签数据不完整",
         "rising-recognition": "主升辨识度矩阵数据不完整",
         "falling-recognition": "主跌辨识度矩阵数据不完整",
     }
@@ -1140,6 +1192,74 @@ def _concentration_row(direction: str = "电子", share: str = "12.30") -> str:
     return (
         f'<tr data-direction="{direction}" data-market-share="{share}">'
         f"<td>{direction}</td><td>{share}%</td></tr>"
+    )
+
+
+def _sector_labels_table(
+    *rows: str,
+    date: str = DATE,
+    source_status: str = "complete",
+    total_l2: int = 124,
+    missing_l2: int = 0,
+    half_year_count: int = 0,
+    year_count: int = 0,
+    resonance_count: int = 0,
+    year_resonance_count: int = 0,
+    half_year_insufficient: int = 0,
+    year_insufficient: int = 0,
+    resonance_insufficient: int = 0,
+    half_year_window: int = 144,
+    year_window: int = 233,
+    resonance_lookback: int = 10,
+    resonance_breakout_window: int = 20,
+) -> str:
+    return (
+        f'<table data-sector-labels="v1" data-as-of="{date}" '
+        f'data-source-status="{source_status}" data-total-l2="{total_l2}" '
+        f'data-missing-l2-count="{missing_l2}" '
+        f'data-half-year-count="{half_year_count}" '
+        f'data-year-count="{year_count}" '
+        f'data-resonance-count="{resonance_count}" '
+        f'data-year-resonance-count="{year_resonance_count}" '
+        f'data-half-year-insufficient-count="{half_year_insufficient}" '
+        f'data-year-insufficient-count="{year_insufficient}" '
+        f'data-resonance-insufficient-count="{resonance_insufficient}" '
+        f'data-half-year-window="{half_year_window}" '
+        f'data-year-window="{year_window}" '
+        f'data-resonance-lookback="{resonance_lookback}" '
+        f'data-resonance-breakout-window="{resonance_breakout_window}">'
+        "<thead><tr><th>板块</th><th>每日标签</th></tr></thead>"
+        f"<tbody>{''.join(rows)}</tbody></table>"
+    )
+
+
+def _sector_labels_row(
+    *,
+    code: str = "801156.SI",
+    name: str = "医疗服务",
+    above_half_year: bool = True,
+    above_year: bool = True,
+    recent_resonance: bool = True,
+    last_resonance_date: str | None = "2026-07-15",
+) -> str:
+    tags: list[str] = []
+    if above_half_year:
+        tags.append("半年线上 [事实]")
+    if above_year:
+        tags.append("年线上 [事实]")
+    if recent_resonance:
+        tags.append(f"最近共振 {last_resonance_date} [判断]")
+    date_attr = (
+        f' data-last-resonance-date="{last_resonance_date}"'
+        if last_resonance_date is not None
+        else ""
+    )
+    return (
+        f'<tr data-code="{code}" '
+        f'data-above-half-year-ma="{str(above_half_year).lower()}" '
+        f'data-above-year-ma="{str(above_year).lower()}" '
+        f'data-recent-resonance="{str(recent_resonance).lower()}"'
+        f"{date_attr}><td>{code} {name}</td><td>{' / '.join(tags)}</td></tr>"
     )
 
 
@@ -3494,6 +3614,423 @@ def test_main_fall_matrix_may_coexist_as_a_separate_artifact(assembler, tmp_path
     report = _sector_contract(html, "falling-recognition", falling)
 
     assembler.validate_report(report)
+
+
+def _complete_sector_labels_table(**overrides) -> str:
+    options = {
+        "half_year_count": 1,
+        "year_count": 1,
+        "resonance_count": 2,
+        "year_resonance_count": 1,
+    }
+    options.update(overrides)
+    return _sector_labels_table(
+        _sector_labels_row(),
+        _sector_labels_row(
+            code="801012.SI",
+            name="食品加工",
+            above_half_year=False,
+            above_year=False,
+            recent_resonance=True,
+            last_resonance_date="2026-07-14",
+        ),
+        **options,
+    )
+
+
+def _with_sector_label_counts(
+    html: str,
+    *,
+    half_year: int = 1,
+    year: int = 1,
+    resonance: int = 2,
+    year_resonance: int = 1,
+    suffix: str = "",
+) -> str:
+    return _replace_once(
+        html,
+        _sector_labels_verdict(),
+        _sector_labels_verdict(
+            text=(
+                f"[事实] 半年线上 {half_year}、年线上 {year}；"
+                f"[判断] 近期价量共振 {resonance}，"
+                f"年线+共振 {year_resonance}{suffix}。"
+            )
+        ),
+    )
+
+
+def test_sector_labels_contract_and_visible_verdict_cannot_be_omitted(
+    assembler, tmp_path
+):
+    html, _ = _render_valid(assembler, tmp_path / "chunks")
+
+    for marker in (_sector_labels_state(), _sector_labels_verdict()):
+        error = _assert_report_error(
+            assembler,
+            _replace_once(html, marker, ""),
+            "invalid_sector_labels",
+        )
+        assert error.section == "s2"
+
+
+def test_sector_labels_verdict_must_be_unique_visible_and_labeled(
+    assembler, tmp_path
+):
+    html, _ = _render_valid(assembler, tmp_path / "chunks")
+    verdict = _sector_labels_verdict()
+    variants = (
+        verdict * 2,
+        verdict.replace("<p ", "<p hidden ", 1),
+        verdict.replace("<p ", '<p class="toc" ', 1),
+        _sector_labels_verdict(text="半年线和年线标签已更新。"),
+    )
+
+    for invalid_verdict in variants:
+        _assert_report_error(
+            assembler,
+            _replace_once(html, verdict, invalid_verdict),
+            "invalid_sector_labels",
+        )
+
+
+def test_sector_labels_verdict_binds_exact_counts_to_fact_and_judgment(
+    assembler, tmp_path
+):
+    html, _ = _render_valid(assembler, tmp_path / "chunks")
+    html = _with_sector_label_counts(html)
+    table = _complete_sector_labels_table()
+    correct = _sector_labels_verdict(
+        text=(
+            "[事实] 半年线上 1、年线上 1；"
+            "[判断] 近期价量共振 2，年线+共振 1。"
+        )
+    )
+    variants = (
+        _sector_labels_verdict(
+            text=(
+                "[事实] 半年线上 10、年线上 10；"
+                "[判断] 近期价量共振 20，年线+共振 10。"
+            )
+        ),
+        _sector_labels_verdict(
+            text=(
+                "[判断] 半年线上 1、年线上 1；"
+                "[事实] 近期价量共振 2，年线+共振 1。"
+            )
+        ),
+        _sector_labels_verdict(
+            text=(
+                "[事实] 半年线上 1、年线上 1；"
+                "[判断] 近期价量共振 2，年线+共振 1；"
+                "当前为部分覆盖。"
+            )
+        ),
+    )
+
+    report = _sector_labels_contract(html, table)
+    for verdict in variants:
+        _assert_report_error(
+            assembler,
+            _replace_once(report, correct, verdict),
+            "invalid_sector_labels",
+        )
+
+
+def test_sector_labels_accepts_complete_hit_table_and_rejects_duplicates(
+    assembler, tmp_path
+):
+    html, _ = _render_valid(assembler, tmp_path / "chunks")
+    html = _with_sector_label_counts(html)
+    table = _complete_sector_labels_table()
+
+    assembler.validate_report(_sector_labels_contract(html, table))
+    _assert_report_error(
+        assembler,
+        _sector_labels_contract(html, table * 2),
+        "invalid_sector_labels",
+    )
+    _assert_report_error(
+        assembler,
+        _sector_labels_contract(html, f"{_sector_labels_state()}{table}"),
+        "invalid_sector_labels",
+    )
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        ('data-half-year-window="144"', 'data-half-year-window="145"'),
+        ('data-year-window="233"', 'data-year-window="250"'),
+        ('data-resonance-lookback="10"', 'data-resonance-lookback="9"'),
+        (
+            'data-resonance-breakout-window="20"',
+            'data-resonance-breakout-window="21"',
+        ),
+        ('data-half-year-count="1"', 'data-half-year-count="2"'),
+        ('data-year-count="1"', 'data-year-count="2"'),
+        ('data-resonance-count="2"', 'data-resonance-count="1"'),
+        ('data-year-resonance-count="1"', 'data-year-resonance-count="2"'),
+        ('data-total-l2="124"', 'data-total-l2="1"'),
+        ('data-missing-l2-count="0"', 'data-missing-l2-count="-1"'),
+        ('data-source-status="complete"', 'data-source-status="unknown"'),
+        (f'data-as-of="{DATE}"', 'data-as-of="2026-07-17"'),
+    ],
+)
+def test_sector_labels_table_requires_exact_windows_counts_and_provenance(
+    assembler, tmp_path, old, new
+):
+    html, _ = _render_valid(assembler, tmp_path / "chunks")
+    html = _with_sector_label_counts(html)
+    table = _complete_sector_labels_table().replace(old, new, 1)
+
+    _assert_report_error(
+        assembler,
+        _sector_labels_contract(html, table),
+        "invalid_sector_labels",
+    )
+
+
+def test_sector_labels_rows_require_unique_codes_boolean_tags_and_event_dates(
+    assembler, tmp_path
+):
+    html, _ = _render_valid(assembler, tmp_path / "chunks")
+    html = _with_sector_label_counts(html)
+    valid = _complete_sector_labels_table()
+    invalid_tables = (
+        valid.replace("801156.SI", "000001.SZ"),
+        valid.replace("801012.SI", "801156.SI"),
+        valid.replace('data-above-half-year-ma="true"', 'data-above-half-year-ma="yes"', 1),
+        valid.replace(
+            'data-above-half-year-ma="true" data-above-year-ma="true" '
+            'data-recent-resonance="true"',
+            'data-above-half-year-ma="false" data-above-year-ma="false" '
+            'data-recent-resonance="false"',
+            1,
+        ),
+        valid.replace(' data-last-resonance-date="2026-07-15"', "", 1),
+        valid.replace(
+            'data-last-resonance-date="2026-07-15"',
+            'data-last-resonance-date="2026-07-17"',
+            1,
+        ),
+        valid.replace("年线上 [事实]", "长期线上 [事实]", 1),
+    )
+
+    for table in invalid_tables:
+        _assert_report_error(
+            assembler,
+            _sector_labels_contract(html, table),
+            "invalid_sector_labels",
+        )
+
+
+@pytest.mark.parametrize(
+    "hidden_tag",
+    [
+        '<span hidden>{labels}</span>',
+        '<span class="toc">{labels}</span>',
+    ],
+)
+def test_sector_labels_rows_cannot_hide_visible_labels(
+    assembler, tmp_path, hidden_tag
+):
+    html, _ = _render_valid(assembler, tmp_path / "chunks")
+    html = _with_sector_label_counts(html)
+    labels = (
+        "半年线上 [事实] / 年线上 [事实] / "
+        "最近共振 2026-07-15 [判断]"
+    )
+    table = _complete_sector_labels_table().replace(
+        f"<td>{labels}</td>",
+        f"<td>{hidden_tag.format(labels=labels)}</td>",
+        1,
+    )
+
+    _assert_report_error(
+        assembler,
+        _sector_labels_contract(html, table),
+        "invalid_sector_labels",
+    )
+
+
+def test_sector_labels_partial_table_requires_visible_ops_disclosure(
+    assembler, tmp_path
+):
+    html, _ = _render_valid(assembler, tmp_path / "chunks")
+    html = _replace_once(
+        html,
+        _sector_labels_verdict(),
+        _sector_labels_verdict(
+            text=(
+                "[事实] 半年线上 1、年线上 1；"
+                "[判断] 近期价量共振 2，年线+共振 1；当前为部分覆盖。"
+            )
+        ),
+    )
+    table = _complete_sector_labels_table(
+        source_status="partial",
+        missing_l2=2,
+        half_year_insufficient=2,
+        year_insufficient=2,
+        resonance_insufficient=2,
+    )
+    report = _sector_labels_contract(html, table)
+
+    _assert_report_error(assembler, report, "invalid_sector_labels")
+    _assert_report_error(
+        assembler,
+        _sector_ops_notice(report, "sector-labels", hidden=True),
+        "invalid_sector_labels",
+    )
+    _assert_report_error(
+        assembler,
+        _sector_ops_notice(report, "sector-labels", css_hidden=True),
+        "invalid_sector_labels",
+    )
+    assembler.validate_report(_sector_ops_notice(report, "sector-labels"))
+
+    complete_with_gap = _complete_sector_labels_table(
+        missing_l2=2,
+        half_year_insufficient=2,
+        year_insufficient=2,
+        resonance_insufficient=2,
+    )
+    _assert_report_error(
+        assembler,
+        _sector_labels_contract(html, complete_with_gap),
+        "invalid_sector_labels",
+    )
+    partial_without_gap = _complete_sector_labels_table(source_status="partial")
+    _assert_report_error(
+        assembler,
+        _sector_ops_notice(
+            _sector_labels_contract(html, partial_without_gap),
+            "sector-labels",
+        ),
+        "invalid_sector_labels",
+    )
+
+
+@pytest.mark.parametrize("source_status", ["partial", "failed"])
+def test_sector_labels_supports_explicit_missing_data(
+    assembler, tmp_path, source_status
+):
+    html, _ = _render_valid(assembler, tmp_path / "chunks")
+    html = _replace_once(
+        html,
+        _sector_labels_verdict(),
+        _sector_labels_verdict(
+            text=(
+                "[事实] 半年线与年线标签数据不完整；"
+                "[判断] 近期价量共振本日无法判定。"
+            )
+        ),
+    )
+    state = _sector_labels_state(
+        state="missing-data",
+        source_status=source_status,
+    )
+    report = _sector_labels_contract(html, state)
+
+    _assert_report_error(assembler, report, "invalid_sector_labels")
+    assembler.validate_report(_sector_ops_notice(report, "sector-labels"))
+
+
+def test_sector_labels_complete_none_state_is_strict(assembler, tmp_path):
+    html, _ = _render_valid(assembler, tmp_path / "chunks")
+    assembler.validate_report(html)
+
+    variants = (
+        _sector_labels_state(source_status="partial"),
+        _sector_labels_state(date="2026-07-17"),
+        _sector_labels_state(text="[事实] 本日无新增"),
+        _sector_labels_state().replace(
+            'data-half-year-count="0"',
+            'data-half-year-count="1"',
+            1,
+        ),
+    )
+    for state in variants:
+        _assert_report_error(
+            assembler,
+            _sector_labels_contract(html, state),
+            "invalid_sector_labels",
+        )
+
+
+def test_sector_labels_contract_cannot_be_moved_outside_s2(assembler, tmp_path):
+    html, _ = _render_valid(assembler, tmp_path / "chunks")
+
+    _assert_report_error(
+        assembler,
+        _appendix(html, _complete_sector_labels_table()),
+        "invalid_sector_labels",
+    )
+
+
+def test_sector_labels_data_block_must_remain_in_folded_evidence(
+    assembler, tmp_path
+):
+    html, _ = _render_valid(assembler, tmp_path / "chunks")
+    html = _with_sector_label_counts(html)
+    table = _complete_sector_labels_table()
+    without_folded_state = _replace_once(html, _sector_labels_state(), "")
+    visible_table = _replace_once(
+        without_folded_state,
+        _sector_labels_verdict(
+            text=(
+                "[事实] 半年线上 1、年线上 1；"
+                "[判断] 近期价量共振 2，年线+共振 1。"
+            )
+        ),
+        (
+            _sector_labels_verdict(
+                text=(
+                    "[事实] 半年线上 1、年线上 1；"
+                    "[判断] 近期价量共振 2，年线+共振 1。"
+                )
+            )
+            + table
+        ),
+    )
+
+    _assert_report_error(
+        assembler,
+        visible_table,
+        "invalid_sector_labels",
+    )
+
+
+def test_sector_labels_accepts_previous_trade_date_for_weekend_report(
+    assembler, tmp_path
+):
+    report_date = "2026-07-19"
+    as_of = "2026-07-17"
+    html, _ = _render_valid(
+        assembler,
+        tmp_path / "chunks",
+        date=report_date,
+    )
+    html = _replace_once(
+        html,
+        _sector_labels_verdict(date=report_date),
+        _sector_labels_verdict(
+            date=as_of,
+            text=(
+                "[事实] 半年线上 1、年线上 1；"
+                "[判断] 近期价量共振 2，年线+共振 1。"
+            ),
+        ),
+    )
+    table = _complete_sector_labels_table(date=as_of)
+    html = _replace_once(
+        html,
+        _sector_labels_state(date=report_date),
+        table,
+    )
+
+    assembler.validate_report(html)
 
 
 def test_event_window_contract_and_visible_verdict_cannot_be_omitted(

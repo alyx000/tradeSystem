@@ -79,10 +79,10 @@
 | `market-tasks` | `python main.py sector-correlation daily [--date] [--windows 5,20,60] [--top-industries 15] [--top-concepts 10] [--activity-days 10] [--indices a,b] [--no-concept] [--dry-run]` | 板块相关性日报（Tushare 主源：多日活跃选板块[行业按成交额 / 概念按换手率] + 4 指数 → 多窗 5/20/60 原始相关 + 剔大盘超额相关 + β → 落 `sector_correlation_daily` + 钉钉；报告含近5日联动榜(短期共振)、板块×大盘同向/逆向、结构联动榜(60日)、反向榜双窗对照(5日/60日)；`--dry-run` 仅打印） |
 | `market-tasks` | `python main.py sector-correlation matrix [--date] [--windows 20,60] [--top-industries N] [--top-concepts N] [--no-concept] [--refetch]` | 打印完整相关矩阵（板块×指数 + 板块×板块 原始/超额，逐窗）；缓存命中纯只读免初始化 Tushare，`--refetch` 强制现算；不推送 |
 | `market-tasks` | `python main.py sector-correlation trend [--date] [--days N]` | 只读打印最近 N 日相关性漂移（板块数 / 样本数 / 强逆向对数演变），不采集不推送 |
-| `market-tasks` | `python main.py sector-crowding daily [--date] [--dry-run] [--push]` | 板块拥挤度日报（申万 L1 全量 + L2 成交额占全市场比 + 资金流代理 → 落 `sector_crowding_daily`；默认不推送，`--push` 才推钉钉；`--dry-run` 不落库不推送并豁免非交易日守卫；派生指标[分位/双高]读取时现算不落库；详见 [market-observability](market-tasks/references/market-observability.md)） |
-| `market-tasks` | `python main.py sector-crowding report [--date]` | 只读：交易/斜率拥挤度 + 历史分位 + 双高拥挤清单（现算，不采集不推送） |
+| `market-tasks` | `python main.py sector-crowding daily [--date] [--dry-run] [--push]` | 板块拥挤度日报（申万 L1 全量 + L2 成交额占全市场比 + 资金流代理 → 落 `sector_crowding_daily`；L2 用 `is_pub` + 可观察行情有效期构造目标日 as-of 宇宙，分类表双读一致且须过 134 总码/120 发布码基线，部分返回 fail-closed；默认不推送，`--push` 才推钉钉；`--dry-run` 不落库不推送并豁免非交易日守卫；派生指标[分位/双高/申万L2每日趋势标签]读取时现算不落库；标签=`close>MA144/MA233` 半年线/年线上[事实] + 最近10个交易快照日内 close/amount 同日双创此前20个交易快照日新高的价量共振[判断]；详见 [market-observability](market-tasks/references/market-observability.md)） |
+| `market-tasks` | `python main.py sector-crowding report [--date]` | 只读：交易/斜率拥挤度 + 历史分位 + 双高拥挤 + 半年线/年线上/近期价量共振标签清单（现算，不采集不推送） |
 | `market-tasks` | `python main.py sector-crowding trend --sector CODE [--date] [--days 60]` | 只读单板块拥挤度时间序列（建议用申万代码查询） |
-| `market-tasks` | `python main.py sector-crowding backfill --start [--end]` | 一次性历史回填（fail-closed：任一码失败/空返回整体中止不落库，重跑即重试；单片 ≥2000 行判截断报错；默认 2019-01-01 起） |
+| `market-tasks` | `python main.py sector-crowding backfill --start [--end]` | 一次性历史回填（fail-closed：SSE `trade_cal` 独立开放日脊柱须自然日完整；任一码失败、错码/越界/非开放日、可判定有效期内空返回或首端/内部/末端缺日均整体中止；区间前后行情探针 + `is_pub` 识别生效前/退出后的合法空窗，空响应须连续3次稳定；每个历史日保存按可观察边界得到的 as-of L2 宇宙；重跑即重试；单片 ≥2000 行判截断报错；默认 2019-01-01 起） |
 | `market-tasks` | `python main.py market-timing daily [--date] [--pivot-index CODE --pivot-date YYYY-MM-DD] [--no-push] [--dry-run]` | 大盘择时观察：6 指数（上证 `000001.SH`/深成 `399001.SZ`/创业板 `399006.SZ`/科创50 `000688.SH`/中证2000 `932000.CSI` 微盘股代理/平均股价 `avg_price` 通达信880003 经 pytdx 日线）斐波那契时间周期变盘点（双向 swing 拐点起算，命中 5/8/13/21/34/55，多指数同日共振增强）+ 底分型生命周期（none/forming/confirmed/invalid 无状态从 bars 推导）+ 市场级客观上下文（两市成交额近20日地量分位/跌停家数/涨跌家数）→ 落 `market_timing_signal` + MD 观察清单 + 钉钉；全标 [判断] 守红线（不预判方向/不出价位/不给买卖建议）；三档=裸[落库+推]/`--no-push`[落库+打印]/`--dry-run`[内存不落不推]；`--pivot-index`+`--pivot-date` 手工 swing 覆盖须成对+合法+命中窗口（否则 fail-fast 非零退出） |
 | `market-tasks` | `python main.py market-timing signals [--date] [--index CODE] [--limit N] [--json]` | 只读看最近择时信号（`--date` 看当日全部指数 / 无 date 看最近 N 行；`--index` 过滤指数；`--json` 输出 JSON），不采集不推送，供周日复盘回看 |
 | `market-tasks` | `python main.py margin-index-correlation daily [--date] [--windows 5,20,60] [--divergence-windows 5,20] [--divergence-gap 0.5] [--max-lag 3] [--no-push] [--dry-run]` | 两融余额与指数联动性日报：`get_margin_series` 取两融区间序列（Tushare `pro.margin` 主源 / akshare 交易所官网降级，沪深北三市合计+分项），两融余额转日变化率(%)后与指数 `pct_chg` 同口径做四维分析 → ① 背离预警（指数涨两融降/指数跌两融升，近5/20日复利累计、指数交易日脊柱锁窗防稀疏日伪造）② 余额水位+趋势（绝对值/日环比/近20日分位/连增连降/偏离MA20）③ 领先/滞后（lagged corr，lag>0=两融滞后指数）④ 同步相关（5/20/60 窗 Pearson，复用 sector aggregator）；对照 total两融×多宽基(上证/创业板/沪深300/科创50) + 沪市两融×上证 + 深市两融×深成；落 `margin_index_correlation_daily` + 钉钉；全标 [判断] 守红线（不出价位/不给买卖建议/不写计划层）；三档=裸[落库+推]/`--no-push`[落库+打印]/`--dry-run`[内存不落不推]；非交易日守卫（仅 persist 时） |
@@ -154,6 +154,7 @@
 | `ingest-inspector` | `/api/ingest/retry` | GET | 查看待重试分组摘要 |
 | `market-tasks` | `/api/regulatory-monitor?date=YYYY-MM-DD` | GET | 保留的监管异动兼容查询接口，读取旧结构数据 |
 | `market-tasks` | `/api/regulatory-monitor/overview?date=YYYY-MM-DD` | GET | 读取盘后派生的 `regulatory_anomaly_overview` 总览；返回来源状态及分层的 `[事实]` / `[计算]` 数据，不触发采集或写入 |
+| `market-tasks` | `/api/market/sector-labels/{date}` | GET | 只读申万二级每日趋势标签：`close>MA144/MA233` 半年线/年线上 `[事实]` + 最近10个交易快照日内价量同日双创此前20个交易快照日新高的共振 `[判断]`，含最近事件事实证据与数据不足三态；可信目标日 as-of 宇宙优先，遗留或元数据不可信时继承最近可信宇宙、全程无可信时按窗口内历史观察并集保守兜底；部分缺 L2 为 `status=partial`，全缺为 `status=missing_l2`，均保留缺失项并置 `null`；SQLite `mode=ro`，请求期不迁移、不触发采集或写入 |
 | `knowledge-to-plan` | `/api/knowledge/assets` | POST | 新增资料资产（禁止 `teacher_note` / `course_note`，422） |
 | `knowledge-to-plan` | `/api/knowledge/assets` | GET | 列出资料资产（limit/offset；asset_type 仅 news_note/manual_note；keyword/created_*） |
 | `knowledge-to-plan` | `/api/knowledge/assets/{asset_id}` | DELETE | 删除资料资产 |
@@ -171,7 +172,7 @@
 | Skill | 路径 | 说明 |
 |-------|------|------|
 | `daily-review` | [daily-review/references/eight-step-prompt-templates.md](daily-review/references/eight-step-prompt-templates.md) | 八步复盘分步提问话术模板（配合 SKILL 速查） |
-| `daily-review` | [daily-review/references/multi-agent-review.md](daily-review/references/multi-agent-review.md) | 9 路完整采集、精简正文、Claim 唯一归属、容量/板块矩阵/滚动新高/事件窗硬门、折叠证据与 HTML 预算/拒绝生成契约 |
+| `daily-review` | [daily-review/references/multi-agent-review.md](daily-review/references/multi-agent-review.md) | 9 路完整采集、精简正文、Claim 唯一归属、容量/板块矩阵/申万二级半年线-年线-近期价量共振标签/滚动新高/事件窗硬门、折叠证据与 HTML 预算/拒绝生成契约 |
 | `cognition-evolution` | [cognition-evolution/references/cognition-candidate-rules.md](cognition-evolution/references/cognition-candidate-rules.md) | 强候选最小标准、不建议落库条件、refine 默认动作与自检清单 |
 | `repo-maintenance-workflows` | [repo-maintenance-workflows/references/maintenance-checklist.md](repo-maintenance-workflows/references/maintenance-checklist.md) | 只读诊断、Review、跨入口对齐、每日巡检、同步与验证检查清单 |
 | `repo-maintenance-workflows` | [repo-maintenance-workflows/references/teacher-notes-v40-migration.md](repo-maintenance-workflows/references/teacher-notes-v40-migration.md) | teacher_notes v40 停写、0600 备份、SHA 绑定与显式迁移门禁 |
@@ -292,6 +293,7 @@ Raindrop 的 `instrument-agent` / `setup-agent-replay` 是官方 `raindrop-ai/wo
 | GET | `/api/market/history` | 近 N 日行情摘要（`?days=`，不含 raw_data） |
 | GET | `/api/market/concentration/history` | 成交额 Top20 板块集中度趋势（`?days=`，库内最新 N 日 CR3/头部成交额/占两市/板块占比序列 + 最新日连续在榜/异动快照，供盘面概览图表） |
 | GET | `/api/market/sector-gain-ranking/{date}` | 成交额前50 区间涨幅排名（读 `daily_volume_concentration.gain_universe` → `rankings`=申万二级板块榜 + `concept_rankings`=同花顺概念题材榜[多标签]，5/10/20 日三档，组按组内涨幅最大个股降序/平手比次大，全客观区间涨幅守红线不出价位目标；无记录/旧记录返三档空列表；供八步复盘「2.板块」步骤双维度展示） |
+| GET | `/api/market/sector-labels/{date}` | 申万二级每日趋势标签（读取 `sector_crowding_daily` 现算、不落派生值）：半年线/年线上=`close>MA144/MA233` `[事实]`；近期价量共振=最近10个交易快照日内 close 与 amount 同日严格突破此前20个交易快照日高点 `[判断]`，返回最近事件证据与 `true/false/null` 三态；可信目标日 as-of 宇宙优先，遗留或元数据不可信时继承最近可信宇宙、全程无可信时按窗口内历史观察并集保守兜底；部分缺 L2 为 `status=partial`，全缺为 `status=missing_l2`，均保留缺失项并置 `null`；SQLite `mode=ro` 且请求期不迁移，供八步复盘「2.板块」五档筛选展示 |
 | GET | `/api/market/timing/{date}` | 大盘择时观察某交易日（读 `market_timing_signal`：6 指数斐波那契变盘点 + 底分型状态 + 市场上下文[共振数/成交额地量分位/涨跌家数/跌停]，全 [判断]；无数据 `available:false`，供盘面概览 MarketTimingPanel） |
 | GET | `/api/market/margin-index-correlation/{date}` | 两融余额与指数联动性某交易日（读 `margin_index_correlation_daily` 经 `web_payload.build_daily_payload`：背离预警/余额水位+趋势/领先滞后/同步相关四维，全 [判断] 守红线；无记录 `available:false`，供八步复盘「1.大盘」MarginIndexCorrelation 组件渲染） |
 | GET | `/api/market/timing/history` | 大盘择时市场级序列（`?days=&to_date=`，按日去重的共振指数数 + 成交额近20日地量分位升序序列，供盘面概览趋势图；`to_date` 给定时只取该日及之前，复盘历史日期不带出未来数据[前瞻偏差]） |

@@ -100,6 +100,16 @@ python3 .agents/skills/daily-review/references/html-report-template/assemble_rep
 - 主跌模块同理三选一：携带 `data-as-of` 与 `data-source-status="complete"` 的唯一非空 `<table data-falling-recognition="v1">`；`<p data-falling-recognition="none" data-as-of="YYYY-MM-DD" data-source-status="complete">[事实] 本日无符合规则的主跌辨识度个股</p>`；或 `<p data-falling-recognition="missing-data" data-as-of="YYYY-MM-DD" data-source-status="partial|failed">[事实] 主跌辨识度矩阵数据不完整，本日无法判定</p>`。两侧都必须存在一种状态，禁止只保留主跌、只保留主升或把两侧混成一张表；任一 `missing-data` 都须在数据缺口章节保持可见。
 - 三张证据表或其状态元素必须位于 `section#s2`；同类多张、全部缺失、空表、放在正文默认可见区或用自然语言代替结构化状态，均拒绝生成。
 
+### 板块趋势标签硬门
+
+`section#s2` 每次还必须展示申万二级的半年线、年线与近期价量共振标签，不得用全行业拥挤度表或主升/主跌矩阵代替：
+
+- 默认可见正文必须有且仅有 1 个 `<p data-sector-labels="verdict" data-as-of="YYYY-MM-DD">`。该句同时展示半年线上、年线上、近期价量共振、年线+共振四项命中数；半年线/年线标 `[事实]`，近期共振标 `[判断]`。部分覆盖或无法判定必须在本句显式披露。
+- 证据层全页唯一三选一：有已确认命中时使用 `<table data-sector-labels="v1">`，只列三标签命中并集；完整覆盖且四项均为零时使用 `<p data-sector-labels="none">[事实] 本日半年线、年线与近期价量共振标签均无命中板块</p>`；无法形成任何可信判断时使用 `<p data-sector-labels="missing-data">[事实] 板块趋势标签数据不完整，本日无法判定</p>`。三者的 `data-as-of` 必须与可见摘要一致且不晚于报告日。
+- 三种状态都固定携带 `data-half-year-window="144"`、`data-year-window="233"`、`data-resonance-lookback="10"`、`data-resonance-breakout-window="20"`；`v1 / none` 另须携带 L2 总数、目标日缺失数、四项命中数和三类数据不足数。`complete` 只允许所有缺失/不足数为零；仍有已确认命中但覆盖不完整时使用 `partial` 表，并在摘要与 `section#ops` 可见写明“板块趋势标签数据不完整”。
+- `v1` 每行必须有唯一申万 `.SI` 代码、`data-above-half-year-ma`、`data-above-year-ma`、`data-recent-resonance` 三个明确布尔值，且至少一项为 `true`。半年线/年线命中在可见单元格标 `[事实]`；近期共振命中标 `[判断]` 并携带不晚于来源日的 `data-last-resonance-date`。逐行布尔值必须与四项汇总数完全对账。
+- 来源全缺时 `missing-data` 使用 `data-source-status="partial|failed"`，并在可见摘要和 `section#ops` 登记；不得把缺失或历史不足伪装成 `none / false`。标签只读取已落库的 `sector_crowding_daily` 并现算，不在 HTML 流程重复采集或落派生值。
+
 ### 历史新高结构硬门
 
 `section#s5` 的“历史新高结构”固定使用前复权滚动窗，不得拿 `daily_new_high_stats` 的全历史高水位结果代替：

@@ -10,10 +10,12 @@ globs:
   - scripts/cli/tail_scan.py
   - scripts/cli/daily_leaders.py
   - scripts/cli/value_watch.py
+  - scripts/cli/sector_crowding.py
   - scripts/services/trinity_factor/*.py
   - scripts/services/tail_scan/*.py
   - scripts/services/daily_leaders/*.py
   - scripts/services/value_watch/*.py
+  - scripts/services/sector_crowding/*.py
   - scripts/providers/base.py
   - scripts/providers/tushare_provider.py
   - scripts/api/routes/*.py
@@ -35,6 +37,7 @@ globs:
 - `scripts/cli/tail_scan.py` / `scripts/services/tail_scan/*.py` — 尾盘实时筛选、逐票产业逻辑、证据边界与报告/推送语义
 - `scripts/cli/daily_leaders.py` / `scripts/services/daily_leaders/*.py` — 每日最票候选的板块口径、属性、收敛上限、LLM 复核与确定性降级语义
 - `scripts/cli/value_watch.py` / `scripts/services/value_watch/*.py` — 价值投资条件监控三层口径、事件账本去重、日历闸门与三档运行语义
+- `scripts/cli/sector_crowding.py` / `scripts/services/sector_crowding/*.py` — 板块拥挤度、申万二级半年线/年线位置与近期价量共振标签语义
 - `scripts/services/tail_scan/concept_context.py`，或 `scripts/providers/base.py` / `scripts/providers/tushare_provider.py` 中 `get_stock_concept_memberships` capability — 尾盘扫描当前归属与 T-1 热概念分层语义
 - `scripts/api/routes/*.py` — API 路由定义
 - `.agents/skills/**/*.md` — skill 文档本身（真源；`.cursor/skills/` 与 `.claude/skills/` 是 symlink 壳）
@@ -107,6 +110,7 @@ python3 -m pytest scripts/tests/test_cli_smoke.py -v
 | `cli.py` 的 `stock-resolve` | `record-notes/SKILL.md`、`portfolio-manager/SKILL.md` |
 | `cli.py` 的 `holdings-*`（含 `--thesis-id` 关联语义）/ `watchlist-*` / `add-trade` / `blacklist-*` | `portfolio-manager/SKILL.md` |
 | `cli.py` 的 `query-notes/db-search` | `daily-review/SKILL.md` |
+| `.agents/skills/daily-review/references/html-report-template/assemble_report.py` 或多 Agent HTML `sector-labels` 契约 | `daily-review/SKILL.md`、`daily-review/references/multi-agent-review.md`、`daily-review/references/html-report-template/README.md`、`INDEX.md` 与 `scripts/tests/test_daily_review_html_report.py`；`sector-labels` 核对唯一可见事实/判断汇总、折叠命中并集、MA144/MA233 与 10/20 共振固定口径、命中/不足计数逐行对账、`complete/partial/missing-data` 三态和 ops 可见缺口 |
 | `cli.py` 的 `db backup/db migrate` 或 `db/migrate.py` / `db/schema.py` 的 teacher_notes provenance | `repo-maintenance-workflows/references/teacher-notes-v40-migration.md`、`record-notes/SKILL.md`、`INDEX.md`；保留停写→0600 完整备份→源快照 SHA 绑定→显式原子迁移边界，普通入口不得隐式跨 v39→v40 |
 | `main.py` 的 `pre/post/schedule` | `market-tasks/SKILL.md` |
 | `scripts/main.py` 的 `regulatory` / `cmd_post` 监管接线、`scripts/services/regulatory_overview.py`、`scripts/api/routes/regulatory_monitor.py`，或 provider/registry 的 `stk_alert` / `stk_shock` / `stk_high_shock` 行为 | `market-tasks/SKILL.md` + `INDEX.md` 中 `regulatory` CLI/API 行；必须核对三个 Tushare range 接口统一进入 `post_extended`、盘后派生 `regulatory_anomaly_overview`、原始空结果 `preserve_nonempty_on_empty`、总览状态 `complete/partial/failed`、来源状态 `success/empty/partial/failed/stale/late`、`[事实]` / `[计算]` 分层、沪市主板区间收益率差与深市主板/创业板/科创板逐日偏离累加的分板块口径、上市后前 5 个无涨跌幅限制日排除、确认严重异动后的下一开放日重置与缺日 `partial`、`today/next_day` 理论触发涨幅/价格/涨跌停可达性、旧 `/api/regulatory-monitor` 兼容与新 `/api/regulatory-monitor/overview?date=`、辅助失败不阻断 `cmd_post`，以及手工写入必须显式 `--input-by`；不得仅凭 API 契约宣称前端已完成改造 |
@@ -116,6 +120,7 @@ python3 -m pytest scripts/tests/test_cli_smoke.py -v
 | `scripts/cli/tail_scan.py` 或 `scripts/services/tail_scan/` | `market-tasks/SKILL.md` + `INDEX.md` 中 `tail-scan` 行 + `AGENTS.md` / `CLAUDE.md` |
 | `scripts/cli/daily_leaders.py` 或 `scripts/services/daily_leaders/` | `market-tasks/SKILL.md` + `INDEX.md` 中 `daily-leaders` 行 + `AGENTS.md` / `CLAUDE.md`；核对申万二级板块口径、语义属性与板型分离、同板块同属性唯一、最终最多 15、LLM 失败仍按相同硬约束兜底，并保持展示内代码解析、非法后缀及显式代码冲突 fail-closed |
 | `scripts/cli/value_watch.py` 或 `scripts/services/value_watch/` | `market-tasks/SKILL.md` + `INDEX.md` 中 `value-watch` 行 + `AGENTS.md` / `CLAUDE.md`（reference 详情在 `market-tasks/references/market-observability.md`）；核对三层口径（红利回撤 episode 档位+2pp 迟滞 / 卖出阶梯 `entry_price`+`entry_date` 身份键与 `insufficient_identity` / 稀缺周线粘合+MACD 同周与 2 完成周失效）、`sent_events` 事件账本首发去重（enter 需仍成立、exit 迟到必补）、strict 日历闸门（目标日=最新已收盘交易日才推、blocked 不推）、陈旧守卫 `stale_source`、三档运行（裸/`--no-push`/`--dry-run` 全内存）与 21:45 per-task launchd 单一调度 |
+| `scripts/cli/sector_crowding.py` 或 `scripts/services/sector_crowding/` | `market-tasks/SKILL.md` + `market-tasks/references/market-observability.md` + `INDEX.md` 中 `sector-crowding` CLI/API 行；核对申万 L2-only、当日采集按 `is_pub` + 可观察行情有效期构造目标日 as-of 宇宙，分类表双读一致并过已验证总码/发布码基线、回填使用自然日完整的 SSE 开放日独立脊柱，错码/越界/非开放日、有效期内空码及首端/内部/末端缺日均 fail-closed，空探针须连续3次稳定且合法生效前/退出后空窗不误杀；明确 `index_classify` 无官方生效/退出日导致的首末有效日推断边界；目标日可信 as-of 宇宙优先，遗留或脏元数据快照继承最近可信宇宙、全程无可信时按窗口内历史观察并集保守兜底，部分缺失 `status=partial`/全缺 `status=missing_l2` 且保留缺失项为 `null`、`close>MA144/MA233` 半年线/年线上 `[事实]`、最近10个交易快照日内 close/amount 同日双创此前20个交易快照日新高的价量共振 `[判断]`、最近事件证据、数据不足三态、读取时现算不落派生值、标签 GET 使用 SQLite `mode=ro` 且请求期不迁移，以及 API/Web 对齐 |
 | `scripts/cli/macro_flash.py` 或 `scripts/services/macro_flash/` | `market-tasks/SKILL.md`（宏观快讯速读小节）+ `INDEX.md` 中 `macro-flash` 行；保留"只归档不入库、入库须走 record-notes 确认再 `db add-macro`"边界，以及独立 launchd（交易日盘后 20:00 / 周日 22:00 回溯 54h）不进 `main.py schedule`、同日 complete 幂等跳过、`show` 仅 complete+sha 校验通过才展示正文的语义 |
 | `scripts/services/tail_scan/concept_context.py`，或 provider 的 `get_stock_concept_memberships` capability | `market-tasks/SKILL.md` + `INDEX.md` 中 `tail-scan` capability/消费者/字段用途 + `AGENTS.md` / `CLAUDE.md`；必须核对当前 `type=N` 快照（非历史 as-of）与 T-1 热概念分层、共享容器过滤、报告 5 个/2 个上限、完整归属不进粗分/PK、兼容热字段语义，以及 `source_failed` / `coverage_failed` / `member_failed` / `missing` 状态不混淆 |
 | `scripts/utils/llm_cli.py` 或 LLM CLI/env 语义调整 | `market-tasks/SKILL.md` + `INDEX.md` 中 recommend/research-digest/cognition-digest 行 |
