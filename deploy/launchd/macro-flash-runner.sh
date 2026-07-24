@@ -2,7 +2,7 @@
 # 宏观快讯速读定时入口(launchd 调用)。
 #
 # 由 ~/Library/LaunchAgents/com.alyx.tradesystem.macro-flash.plist 触发
-# (工作日 16:30 回溯 24h + 周日 22:00 回溯 54h 覆盖周末,进周日复盘)。
+# (工作日盘后 20:00 回溯 24h + 周日 22:00 回溯 54h 覆盖周末,进周日复盘)。
 # 金十快讯采集 → 关键词筛宏观政策类 → 归档 data/runs/macro-flash/ + 推钉钉。
 set -e
 

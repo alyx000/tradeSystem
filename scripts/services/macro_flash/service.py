@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 TZ = ZoneInfo("Asia/Shanghai")
 DEFAULT_LOOKBACK_HOURS = 24
-WINDOW_END_TIME = time(16, 30)  # --date 补跑时窗口终点(工作日档);周日档补跑用 --lookback-hours 调整
+WINDOW_END_TIME = time(20, 0)  # --date 补跑时窗口终点(工作日盘后档);周日档补跑用 --lookback-hours 调整
 SCHEMA_VERSION = 1
 CANDIDATE_TEXT_LIMIT = 120
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -87,7 +87,7 @@ def _locked(day_dir: Path):
 
 def resolve_window(date_str: Optional[str], lookback_hours: int,
                    now: Optional[datetime] = None):
-    """窗口终点:--date 指定日取 16:30,否则取当前时刻;均为 naive 上海时间。"""
+    """窗口终点:--date 指定日取 20:00(工作日档),否则取当前时刻;均为 naive 上海时间。"""
     now_sh = (now or datetime.now(TZ)).replace(tzinfo=None)
     end = (datetime.combine(date.fromisoformat(date_str), WINDOW_END_TIME)
            if date_str else now_sh)

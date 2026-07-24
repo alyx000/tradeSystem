@@ -120,7 +120,7 @@ make macro-flash-show           # 只读展示当日归档
 make macro-flash-doctor         # live 探测金十可达性
 ```
 
-调度：独立 launchd `com.alyx.tradesystem.macro-flash`（工作日 16:30 回溯 24h + 周日 22:00 回溯 54h 覆盖周末，供进周日复盘），不进 `main.py schedule`；节假日照常归档，无交易日门禁。窗口时间语义 Asia/Shanghai。
+调度：独立 launchd `com.alyx.tradesystem.macro-flash`（交易日盘后 20:00 回溯 24h + 周日 22:00 回溯 54h 覆盖周末，供进周日复盘），不进 `main.py schedule`；节假日照常归档，无交易日门禁。窗口时间语义 Asia/Shanghai。
 
 失败语义：`source_failed`（源不可达）/ `partial_window_truncated`（推送预算截断）/ `pagination_stalled`（翻页停滞）/ `schema_drift`（字段漂移）/ `push_failed`（归档成功但推送失败，`--repush` 补推）/ `run_error`（编排层意外异常）各有独立退出码；同日已 `complete` 归档默认幂等跳过（`--force-refresh` 覆盖重采）；`show` 仅在归档状态为 `complete` 且 `digest.md` sha256 与 manifest 记录一致时展示正文，否则只给状态与错误提示。
 

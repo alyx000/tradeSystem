@@ -42,7 +42,7 @@ def test_resolve_window_default_24h():
 
 def test_resolve_window_with_date():
     start, end = service.resolve_window("2026-07-20", 24, now=NOW)
-    assert end == dt.datetime(2026, 7, 20, 16, 30)
+    assert end == dt.datetime(2026, 7, 20, 20, 0)   # --date 补跑终点 = 工作日档 20:00
 
 
 def test_normal_run_writes_three_files_and_pushes(tmp_path):

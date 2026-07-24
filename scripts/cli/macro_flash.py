@@ -52,8 +52,8 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
 
     run_p = sub.add_parser("run", help="采集→筛选→归档→推送")
     run_p.add_argument("--date", default=None, type=_iso_date,
-                       help="窗口终点所在日 YYYY-MM-DD(补跑用,终点固定取该日 16:30;"
-                            "周日档补跑需配 --lookback-hours 54,终点与实时档 22:00 有 5.5h 差,接受)")
+                       help="窗口终点所在日 YYYY-MM-DD(补跑用,终点固定取该日 20:00;"
+                            "周日档补跑需配 --lookback-hours 54,终点与实时档 22:00 有 2h 差,接受)")
     run_p.add_argument("--lookback-hours", type=_positive_int, default=service.DEFAULT_LOOKBACK_HOURS,
                        help="回溯小时数(默认 24;周日档 54)")
     mode = run_p.add_mutually_exclusive_group()
