@@ -2,7 +2,7 @@
 
 ## 适用范围
 
-按 [`test-driven-development`](../../../.claude/plugins/cache/claude-plugins-official/superpowers/5.1.0/skills/test-driven-development/SKILL.md) 模式实施完成、准备 commit 时。本规则解决"N 轮 R-G-R 微循环该如何映射成 commit"的问题。
+按 TDD 模式（R-G-R 微循环：先写失败测试 RED → 最小实现 GREEN → 重构 REFACTOR）实施完成、准备 commit 时。本规则解决"N 轮 R-G-R 微循环该如何映射成 commit"的问题。
 
 ## 三种策略对比
 
@@ -81,7 +81,7 @@ T8 窗口上界 + T9 sectors 去重 + T10 snippets 倒序。模块覆盖率 95%�
 
 ## 配套规则
 
-- TDD 流程：`superpowers:test-driven-development`
+- 单元测试覆盖与三阶段验证：`dev-workflow.md`
 - 实施前范围与验证方案：`implementation-plan.md`
 - 实施后代码审查：`post-dev-review.md`（按档跑门1 `/code-review` ∥ 门2 codex，findings 合并处置）
 - 文档同步：`skills-sync.md`
