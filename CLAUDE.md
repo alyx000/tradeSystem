@@ -67,6 +67,9 @@
 
   - `tail-scan` 概念层固定分两层同时展示：`get_stock_concept_memberships` 按候选反查同花顺 `type=N` 的扫描时当前快照（非历史 as-of），复用共享成员数 `<=300` 过滤，报告归属概念最多展示 5 个并保留总数；T-1 热概念严格取上一交易日资金流，先按 `company_num<=300` 剔除容器再补足 Top8，每票最多展示 2 个命中。完整归属仅供报告与产业证据，不进入粗分或 PK；兼容 `concept_names` / `in_hot_concept` 仍表示热命中；`source_failed` / `coverage_failed` / `member_failed` / `missing` 必须分别表达，不得把失败写成未命中。
 
+- `python3 main.py monthly-pattern daily|pool|backfill ...`（完成月月线模式观察池：全市场月线 + `adj_factor` 前复权，只在月末完成后扫描“基本面月线趋势 / 题材月线进攻 / 月线再加速”三策略；每个完成月以股票基础资料 `L/D/P` 全状态按 `list_date/delist_date` 做历史 as-of 外部宇宙覆盖认证，只有带 `monthly_pattern_bar_manifests` certified 收据的月线事实可扫描；供应商新旧证券影子代码重复仅在同交易所、完整且有效的月线九字段与复权因子一致、唯一对应宇宙内 canonical code 且窗口内无角色反转/链式映射时抑制并留版本化 manifest 收据，缓存复用校验九字段摘要并将持久化六字段+复权逐项对照 canonical bar，schema/摘要/计数/事实损坏即 cache miss，否则 fail-closed，不拼接分段行情或迁移旧 episode；`daily` / `backfill` 必须显式带 `--input-by`；财务按公告日 as-of，同公告日修订按内容哈希追加保存，无法证明独立公开日的版本只能从首次观测日起可见；年报可标 `fundamental_verified`、中报只作 `pre_screen`，财务源缺失时保守停在技术候选层；基本面 verified 只有后续严格下一完成月仍满足条件才转 active；active 转弱进入 risk，risk 仅在完成月技术严格重新转强且对应财务/主线资格恢复后回 active；最近两个严格相邻完成月均收于月 MA5 下方后进入 episode 终态 exited，后续重新命中另开新 episode；历史行业映射无 as-of 能力时题材策略 fail-closed，不以当前行业穿越回放；主线仅取申万二级成交额稳定前排并明确标 `[判断]`；落五表[`monthly_pattern_bars` / `monthly_pattern_bar_manifests` / `monthly_pattern_financial_snapshots` / `monthly_pattern_runs` / `monthly_pattern_pool`]与 `data/reports/monthly-pattern/`，默认落库+报告+钉钉，`--no-push` 落库报告不推，`--dry-run` 内存副本不落不推；每月 2 日 23:10 per-task launchd 单次运行，休眠错过可接受，不进 `schedule`/APScheduler；不写 `TradeDraft` / `TradePlan` / 关注池，不给买卖建议）
+  - 历史顺序硬门：扫描日早于现有 `monthly_pattern_runs` 或 pool episode 的最大状态日期时必须 fail-closed；历史更正只能从可信检查点重建完整后缀，禁止在 live pool 上把未来状态回灌旧月份。
+
 ## 规则与模板入口
 
 ### AI 协作规则（真源 `.agents/rules/`）

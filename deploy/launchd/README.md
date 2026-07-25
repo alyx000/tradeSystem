@@ -30,6 +30,8 @@
 - `com.alyx.tradesystem.value-watch.plist` — 工作日 21:45 触发（价值投资条件监控：红利回撤/卖出阶梯/稀缺周线，事件首发才推钉钉[sent_events 账本去重]；日志 `/tmp/tradesystem-value-watch.log`；Sleep policy: 错过可接受——次日运行按事件账本自动补齐）
 - `daily-leaders-runner.sh` — 包装脚本：cd 仓库根 → source `~/.config/tradeSystem.env`(钉钉/LLM) → 调 `/usr/bin/python3 scripts/main.py daily-leaders propose --push`
 - `com.alyx.tradesystem.daily-leaders.plist` — 工作日 22:30 触发（每日最票候选确认稿；stdout `/tmp/tradesystem-daily-leaders.out.log`，stderr `/tmp/tradesystem-daily-leaders.err.log`）
+- `monthly-pattern-runner.sh` — 包装脚本：设置 PATH、cd 仓库根、source `scripts/.env` + `~/.config/tradeSystem.env`、打印脱敏环境诊断 → 调 `/usr/bin/python3 scripts/main.py monthly-pattern daily --input-by launchd`
+- `com.alyx.tradesystem.monthly-pattern.plist` — 每月 2 日 23:10 单次触发（只使用带 certified 覆盖收据的完成月前复权月线 + 公告日 as-of 财务，维护三策略观察池；休眠错过可接受；日志 `/tmp/tradesystem-monthly-pattern.log`）
 
 ## 前置条件
 
@@ -326,6 +328,37 @@ rm ~/Library/LaunchAgents/com.alyx.tradesystem.daily-leaders.plist
 ```
 
 **时段**：22:30 在 `board-break`(21:20)、`trend-leader`(21:30)、`ma-breakout`(21:35)、`market-timing`(21:40) 等盘后派生任务之后，供用户在 Codex 中确认后执行 `python3 main.py daily-leaders confirm --date YYYY-MM-DD --input-by codex`。本任务不自动写复盘、不写交易计划、不提供买卖建议或价位目标。
+
+## 完成月月线模式观察池（每月 2 日 23:10）
+
+全市场完成月月线 + `adj_factor` 前复权 → 外部历史 as-of 宇宙覆盖认证 → 三策略检测 → 公告日 as-of 财务校验 → 维护月线观察状态 → 落 `data/reports/monthly-pattern/YYYY-MM-DD.md` + 钉钉。外部宇宙取股票基础资料 `L/D/P` 全状态并按 `list_date/delist_date` 还原目标月，只有写入 `monthly_pattern_bar_manifests` certified 收据的月线事实才参与扫描；供应商因证券代码迁移同时返回新旧影子代码时，仅在同交易所、完整且有效的月线九字段与复权因子一致、唯一对应宇宙内 canonical code 且窗口内无角色反转/链式映射时抑制重复并留版本化 manifest 收据，缓存复用校验九字段摘要并将持久化六字段+复权逐项对照 canonical bar，schema/摘要/计数/事实损坏即 cache miss，其他情况继续 fail-closed，本层不拼接分段行情或迁移旧 episode；历史行业映射没有 as-of 能力时题材策略 fail-closed。财务同公告日修订按内容哈希追加，无法证明修订独立公开日时从本机首次观测日起才可见；最近法定到期报告期与最近法定年报的三组件必须分别覆盖达标，年报才可形成 verified，中报仅作 pre_screen。基本面 verified 需后续严格下一完成月仍满足条件才可转 active；active 转弱进入 risk，risk 仅在技术严格重新转强且对应财务/主线资格恢复后回 active；从未 active 的基本面 episode 从 risk 恢复时先回 verified 重走下一完成月确认。最近两个严格相邻完成月均收于月 MA5 下方后进入 episode 终态 exited，后续重新命中另开新 episode。扫描日早于既有 run/pool 状态水位时 fail-closed，历史更正须从可信检查点重建完整后缀。共落 `monthly_pattern_bars` / `monthly_pattern_bar_manifests` / `monthly_pattern_financial_snapshots` / `monthly_pattern_runs` / `monthly_pattern_pool` 五表；主线只是申万二级成交额稳定前排 `[判断]`。不写 `TradeDraft` / `TradePlan` / 关注池，不给买卖建议。
+
+仓库只提供以下 launchd 模板，本次代码变更不会自动复制到 `~/Library/LaunchAgents` 或调用 `launchctl`：
+
+```bash
+# 安装前先验证格式与 dry-run 业务链路
+plutil -lint deploy/launchd/com.alyx.tradesystem.monthly-pattern.plist
+python3 scripts/main.py monthly-pattern daily --input-by codex --dry-run
+
+# 确认后人工安装
+chmod +x deploy/launchd/monthly-pattern-runner.sh
+cp deploy/launchd/com.alyx.tradesystem.monthly-pattern.plist ~/Library/LaunchAgents/
+launchctl load ~/Library/LaunchAgents/com.alyx.tradesystem.monthly-pattern.plist
+launchctl list | grep tradesystem.monthly-pattern
+
+# 真触发会执行默认 daily（落库、报告并推钉钉）
+launchctl start com.alyx.tradesystem.monthly-pattern
+tail -f /tmp/tradesystem-monthly-pattern.log
+```
+
+卸载：
+
+```bash
+launchctl unload ~/Library/LaunchAgents/com.alyx.tradesystem.monthly-pattern.plist
+rm ~/Library/LaunchAgents/com.alyx.tradesystem.monthly-pattern.plist
+```
+
+**时段**：每月 2 日 23:10 单次运行，在当月第一个自然日后的晚间处理上一个完成月，避免原工作日频率对同一完成月重复刷新和推送。它是低频观察任务，休眠错过可接受，不配 pmset 唤醒；`RunAtLoad=false`，不做开机补跑。**调度唯一入口=per-task launchd**，不进 `main.py schedule` / APScheduler。
 
 ## 研报速读（已迁移到 Codex 自动化）
 

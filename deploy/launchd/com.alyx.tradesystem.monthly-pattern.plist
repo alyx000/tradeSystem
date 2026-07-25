@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Sleep policy: 月线观察是低频盘后任务，休眠错过可接受；RunAtLoad=false，避免开机补跑和重复推送。 -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.alyx.tradesystem.monthly-pattern</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/alyx/tradeSystem/deploy/launchd/monthly-pattern-runner.sh</string>
+    </array>
+
+    <!-- 每月 2 日 23:10 单次运行；休眠错过可接受，不做开机补跑或当月重复推送。 -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Day</key>
+        <integer>2</integer>
+        <key>Hour</key>
+        <integer>23</integer>
+        <key>Minute</key>
+        <integer>10</integer>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/tradesystem-monthly-pattern.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/tradesystem-monthly-pattern.log</string>
+
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>

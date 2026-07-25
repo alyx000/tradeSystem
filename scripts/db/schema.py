@@ -456,6 +456,118 @@ CREATE TABLE IF NOT EXISTS trend_leader_pool (
 );
 """
 
+# 月线模式事实层：只保存原始月 OHLC 与复权因子，前复权价格由读取方按 as-of
+# 口径派生，避免把会随最新复权基准变化的 qfq 值固化进事实表。
+_SQL_MONTHLY_PATTERN_BARS = """
+CREATE TABLE IF NOT EXISTS monthly_pattern_bars (
+    month_end TEXT NOT NULL CHECK(month_end GLOB '????-??-??'),
+    stock_code TEXT NOT NULL,
+    stock_name TEXT,
+    open REAL NOT NULL,
+    high REAL NOT NULL,
+    low REAL NOT NULL,
+    close REAL NOT NULL,
+    volume REAL NOT NULL,
+    amount REAL NOT NULL,
+    adj_factor REAL NOT NULL CHECK(adj_factor > 0),
+    source TEXT NOT NULL,
+    fetched_at TEXT NOT NULL,
+    PRIMARY KEY (month_end, stock_code)
+);
+"""
+
+# 每月事实页只有通过外部股票宇宙覆盖门后才写 certified manifest。缓存命中必须
+# 同时依赖该收据，不能仅凭月线行数推定“全市场完整”。
+_SQL_MONTHLY_PATTERN_BAR_MANIFESTS = """
+CREATE TABLE IF NOT EXISTS monthly_pattern_bar_manifests (
+    month_end TEXT PRIMARY KEY CHECK(month_end GLOB '????-??-??'),
+    status TEXT NOT NULL CHECK(status = 'certified'),
+    universe_source TEXT NOT NULL CHECK(TRIM(universe_source) <> ''),
+    universe_count INTEGER NOT NULL CHECK(universe_count > 0),
+    quote_count INTEGER NOT NULL CHECK(quote_count >= 0),
+    factor_count INTEGER NOT NULL CHECK(factor_count >= 0),
+    joined_count INTEGER NOT NULL CHECK(joined_count >= 0),
+    quote_coverage REAL NOT NULL CHECK(quote_coverage >= 0 AND quote_coverage <= 1),
+    factor_coverage REAL NOT NULL CHECK(factor_coverage >= 0 AND factor_coverage <= 1),
+    source_meta_json TEXT NOT NULL DEFAULT '{}',
+    fetched_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+"""
+
+# 财务快照按「报告期 + 公告日 + 内容哈希」追加保存。上游修订若沿用原公告日，
+# version_visible_date 取首次观测日，防止未来修订穿越到历史 as-of。
+_SQL_MONTHLY_PATTERN_FINANCIAL_SNAPSHOTS = """
+CREATE TABLE IF NOT EXISTS monthly_pattern_financial_snapshots (
+    stock_code TEXT NOT NULL,
+    report_period TEXT NOT NULL CHECK(report_period GLOB '????-??-??'),
+    financial_ann_date TEXT NOT NULL CHECK(financial_ann_date GLOB '????-??-??'),
+    version_visible_date TEXT NOT NULL CHECK(version_visible_date GLOB '????-??-??'),
+    version_observed_at TEXT NOT NULL CHECK(TRIM(version_observed_at) <> ''),
+    snapshot_hash TEXT NOT NULL CHECK(
+        LENGTH(snapshot_hash) = 64 AND snapshot_hash NOT GLOB '*[^0-9a-f]*'
+    ),
+    fina_indicator_json TEXT NOT NULL DEFAULT '{}',
+    balancesheet_json TEXT NOT NULL DEFAULT '{}',
+    income_json TEXT NOT NULL DEFAULT '{}',
+    source_meta_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (
+        stock_code, report_period, financial_ann_date, snapshot_hash
+    )
+);
+"""
+
+# 一次 scan_date 一行运行收据。complete + matched=0 才表示真空结果；
+# partial/failed 保留来源状态和错误，禁止伪装成空池。
+_SQL_MONTHLY_PATTERN_RUNS = """
+CREATE TABLE IF NOT EXISTS monthly_pattern_runs (
+    scan_date TEXT PRIMARY KEY CHECK(scan_date GLOB '????-??-??'),
+    signal_month TEXT NOT NULL CHECK(signal_month GLOB '????-??'),
+    status TEXT NOT NULL CHECK(status IN ('complete', 'partial', 'failed')),
+    input_by TEXT NOT NULL DEFAULT 'legacy' CHECK(TRIM(input_by) <> ''),
+    source_status_json TEXT NOT NULL DEFAULT '{}',
+    counts_json TEXT NOT NULL DEFAULT '{}',
+    error TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+"""
+
+# 月线模式池按 (stock_code, strategy_type, entered_date) 保存 episode。
+# partial unique index 另行保证同股同策略只存在一个未退出 episode。
+_SQL_MONTHLY_PATTERN_POOL = """
+CREATE TABLE IF NOT EXISTS monthly_pattern_pool (
+    stock_code TEXT NOT NULL,
+    stock_name TEXT NOT NULL,
+    strategy_type TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN (
+        'technical_candidate', 'fundamental_verified', 'active', 'risk', 'exited'
+    )),
+    signal_month TEXT NOT NULL CHECK(signal_month GLOB '????-??'),
+    entered_date TEXT NOT NULL CHECK(entered_date GLOB '????-??-??'),
+    last_seen_date TEXT NOT NULL CHECK(last_seen_date GLOB '????-??-??'),
+    exited_date TEXT CHECK(exited_date IS NULL OR exited_date GLOB '????-??-??'),
+    exit_reason TEXT,
+    report_period TEXT CHECK(report_period IS NULL OR report_period GLOB '????-??-??'),
+    financial_ann_date TEXT CHECK(
+        financial_ann_date IS NULL OR financial_ann_date GLOB '????-??-??'
+    ),
+    technical_evidence_json TEXT NOT NULL DEFAULT '{}',
+    financial_evidence_json TEXT NOT NULL DEFAULT '{}',
+    source_meta_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (stock_code, strategy_type, entered_date),
+    CHECK(last_seen_date >= entered_date),
+    CHECK(exited_date IS NULL OR exited_date >= entered_date),
+    CHECK(
+        (status = 'exited' AND exited_date IS NOT NULL AND exit_reason IS NOT NULL)
+        OR
+        (status <> 'exited' AND exited_date IS NULL AND exit_reason IS NULL)
+    )
+);
+"""
+
 # ──────────────────────────────────────────────────────────────
 # 5c. 板块相关性（一天一行快照；JSON 列存按窗口键的矩阵；双窗 20/60）
 # ──────────────────────────────────────────────────────────────
@@ -1113,10 +1225,26 @@ CREATE TABLE IF NOT EXISTS knowledge_assets (
 # ──────────────────────────────────────────────────────────────
 # 索引
 # ──────────────────────────────────────────────────────────────
+_SQL_MONTHLY_PATTERN_INDEXES = [
+    "CREATE INDEX IF NOT EXISTS idx_monthly_pattern_bars_stock_month "
+    "ON monthly_pattern_bars(stock_code, month_end DESC);",
+    "CREATE INDEX IF NOT EXISTS idx_monthly_pattern_financial_stock_period "
+    "ON monthly_pattern_financial_snapshots("
+    "stock_code, report_period DESC, financial_ann_date DESC, "
+    "version_visible_date DESC, version_observed_at DESC);",
+    "CREATE INDEX IF NOT EXISTS idx_monthly_pattern_runs_signal_status "
+    "ON monthly_pattern_runs(signal_month DESC, status);",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_monthly_pattern_pool_open "
+    "ON monthly_pattern_pool(stock_code, strategy_type) WHERE status <> 'exited';",
+    "CREATE INDEX IF NOT EXISTS idx_monthly_pattern_pool_status_seen "
+    "ON monthly_pattern_pool(status, last_seen_date DESC);",
+]
+
 _SQL_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_teacher_notes_date ON teacher_notes(date);",
     # 趋势主升池：每 code 至多一 active 行（DB 级不变量护栏）
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_trend_leader_active ON trend_leader_pool(code) WHERE status='active';",
+    *_SQL_MONTHLY_PATTERN_INDEXES,
     "CREATE INDEX IF NOT EXISTS idx_teacher_notes_teacher_date ON teacher_notes(teacher_id, date);",
     "CREATE INDEX IF NOT EXISTS idx_calendar_date ON calendar_events(date);",
     "CREATE INDEX IF NOT EXISTS idx_calendar_impact ON calendar_events(impact);",
@@ -1576,6 +1704,11 @@ _ALL_TABLE_SQL = [
     _SQL_STOCK_ADJUSTED_HIGH_WATERMARK,
     _SQL_DAILY_NEW_HIGH_STATS,
     _SQL_TREND_LEADER_POOL,
+    _SQL_MONTHLY_PATTERN_BARS,
+    _SQL_MONTHLY_PATTERN_BAR_MANIFESTS,
+    _SQL_MONTHLY_PATTERN_FINANCIAL_SNAPSHOTS,
+    _SQL_MONTHLY_PATTERN_RUNS,
+    _SQL_MONTHLY_PATTERN_POOL,
     _SQL_SECTOR_CORRELATION_DAILY,
     _SQL_SECTOR_CROWDING_DAILY,
     _SQL_MARKET_TIMING_SIGNAL,
@@ -1637,6 +1770,9 @@ EXPECTED_TABLES = [
     "holdings", "holding_tasks", "holding_quote_snapshots", "watchlist", "blacklist",
     "industry_info", "macro_info",
     "daily_market", "daily_volume_concentration", "trend_leader_pool", "sector_correlation_daily",
+    "monthly_pattern_bars", "monthly_pattern_bar_manifests",
+    "monthly_pattern_financial_snapshots",
+    "monthly_pattern_runs", "monthly_pattern_pool",
     "sector_crowding_daily",
     "market_timing_signal", "margin_index_correlation_daily", "value_watch_daily",
     "daily_reviews",

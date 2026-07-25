@@ -102,6 +102,10 @@ class DataProvider(ABC):
     def get_stock_daily(self, stock_code: str, date: str) -> DataResult:
         return DataResult(data=None, source=self.name, error="not implemented")
 
+    def get_market_monthly_quotes(self, month_end: str) -> DataResult:
+        """全市场指定月末月线行情（批量分页）。"""
+        return DataResult(data=None, source=self.name, error="not implemented")
+
     def get_stock_ma(self, stock_code: str, date: str, periods: list[int] | None = None) -> DataResult:
         return DataResult(data=None, source=self.name, error="not implemented")
 
@@ -221,6 +225,14 @@ class DataProvider(ABC):
         """业绩快报（全市场，按公告日回看窗口）"""
         return DataResult(data=None, source=self.name, error="not implemented")
 
+    def get_financial_snapshots(
+        self,
+        as_of_date: str,
+        report_periods: list[str] | None = None,
+    ) -> DataResult:
+        """全市场财务快照（严格按公告日 as-of，按报告期批量拉取）。"""
+        return DataResult(data=None, source=self.name, error="not implemented")
+
     def get_share_float(self, date: str) -> DataResult:
         return DataResult(data=None, source=self.name, error="not implemented")
 
@@ -338,6 +350,10 @@ class DataProvider(ABC):
         return DataResult(data=None, source=self.name, error="not implemented")
 
     def get_stock_basic_list(self, date: str) -> DataResult:
+        return DataResult(data=None, source=self.name, error="not implemented")
+
+    def get_stock_universe_as_of(self, date: str) -> DataResult:
+        """目标月份曾处于上市状态的 A 股代码宇宙（含后续退市股）。"""
         return DataResult(data=None, source=self.name, error="not implemented")
 
     def get_stock_basic_batch(self, ts_codes: list[str]) -> DataResult:
