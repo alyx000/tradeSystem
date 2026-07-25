@@ -74,6 +74,238 @@ def test_render_daily_labels_observation_facts_and_judgments():
     assert "ROE（加权）=18.60" in md
 
 
+def test_render_push_summary_returns_full_report_within_budget():
+    full = renderer.render_daily(_summary())
+
+    pushed = renderer.render_push_summary(
+        _summary(),
+        full_markdown=full,
+        report_path="data/reports/monthly-pattern/2026-07-01.md",
+    )
+
+    assert pushed == full
+
+
+def test_render_push_summary_prioritizes_focus_statuses_and_keeps_full_path():
+    candidates = [
+        _candidate(
+            stock_code="000001",
+            stock_name="技术候选" + "长" * 300,
+            pool_status="technical_candidate",
+        ),
+        _candidate(
+            stock_code="600001",
+            stock_name="在池观察" + "长" * 300,
+            pool_status="active",
+        ),
+        _candidate(
+            stock_code="600002",
+            stock_name="基本面核验" + "长" * 300,
+            pool_status="fundamental_verified",
+        ),
+    ]
+    for index in range(40):
+        candidates.append(
+            _candidate(
+                stock_code=f"{300000 + index:06d}",
+                stock_name=f"批量候选{index:02d}" + "长" * 300,
+                pool_status="technical_candidate",
+            )
+        )
+    transitions = [
+        {
+            "stock_code": "600001",
+            "strategy_type": "theme_monthly_attack",
+            "from_status": "technical_candidate",
+            "to_status": "active",
+        },
+        {
+            "stock_code": "600002",
+            "strategy_type": "fundamental_monthly_trend",
+            "from_status": "technical_candidate",
+            "to_status": "fundamental_verified",
+        },
+    ]
+    summary = _summary(candidates=candidates, transitions=transitions)
+    full = renderer.render_daily(summary)
+    path = "data/reports/monthly-pattern/2026-07-01.md"
+
+    pushed = renderer.render_push_summary(
+        summary,
+        full_markdown=full,
+        report_path=path,
+    )
+
+    assert len(full.encode("utf-8")) > renderer.PUSH_BODY_MAX_BYTES
+    assert len(pushed.encode("utf-8")) <= renderer.PUSH_BODY_MAX_BYTES
+    assert f"完整报告：`{path}`" in pushed
+    assert "技术候选 → 在池观察" in pushed
+    assert "技术候选 → 基本面已核验" in pushed
+    assert "题材月线进攻｜技术候选 → 在池观察" in pushed
+    assert "基本面月线趋势｜技术候选 → 基本面已核验" in pushed
+    assert "600001" in pushed
+    assert "600002" in pushed
+    assert "000001" not in pushed
+    assert pushed.count("｜行业=") == 2
+    assert "重点候选展示 2/2 只" in pushed
+    assert f"本次命中候选 {len(candidates)} 只" in pushed
+
+
+def test_render_push_summary_uses_full_pool_projection_even_when_report_is_short():
+    summary = _summary(candidates=[])
+    full = renderer.render_daily(summary)
+    focus = [
+        _candidate(
+            stock_code="600001",
+            stock_name="专池存量",
+            pool_status="active",
+            industry=None,
+        )
+    ]
+    focus[0]["source_meta"] = {"industry": "电力"}
+
+    pushed = renderer.render_push_summary(
+        summary,
+        full_markdown=full,
+        report_path="data/reports/monthly-pattern/2026-07-01.md",
+        focus_candidates=focus,
+    )
+
+    assert len(full.encode("utf-8")) <= renderer.PUSH_BODY_MAX_BYTES
+    assert pushed != full
+    assert "600001 专池存量" in pushed
+    assert "行业=电力" in pushed
+    assert "池内重点候选展示 1/1 只" in pushed
+    assert "本次命中候选 0 只" in pushed
+    assert "真实空候选" not in pushed
+
+
+def test_render_push_summary_caps_utf8_without_partial_compact_lines():
+    candidates = [
+        _candidate(
+            stock_code=f"{100000 + index:06d}",
+            stock_name=f"重点股票{index:03d}" + "长" * 100,
+            pool_status="active",
+            industry="申万二级行业" + "业" * 100,
+        )
+        for index in range(500)
+    ]
+    summary = _summary(candidates=candidates)
+    full = renderer.render_daily(summary)
+
+    pushed = renderer.render_push_summary(
+        summary,
+        full_markdown=full,
+        report_path="data/reports/monthly-pattern/2026-07-01.md",
+    )
+
+    assert len(pushed.encode("utf-8")) <= renderer.PUSH_BODY_MAX_BYTES
+    shown = pushed.count("｜行业=")
+    assert 0 < shown < len(candidates)
+    assert f"重点候选展示 {shown}/{len(candidates)} 只" in pushed
+    for line in pushed.splitlines():
+        if "｜行业=" in line:
+            assert line.startswith("- ")
+            assert line.count("｜") == 3
+
+
+def test_render_push_summary_aggregates_many_transitions_without_losing_exit():
+    transitions = [
+        {
+            "stock_code": f"{100000 + index:06d}",
+            "strategy_type": "fundamental_monthly_trend",
+            "from_status": "technical_candidate",
+            "to_status": "fundamental_verified",
+        }
+        for index in range(1000)
+    ]
+    transitions.append(
+        {
+            "stock_code": "600999",
+            "stock_name": "关键退出股",
+            "strategy_type": "theme_monthly_attack",
+            "from_status": "risk",
+            "to_status": "exited",
+            "reason": "完成月趋势资格失效",
+        }
+    )
+    summary = _summary(
+        candidates=[_candidate(stock_code="600001", pool_status="active")],
+        transitions=transitions,
+    )
+    full = renderer.render_daily(summary)
+
+    pushed = renderer.render_push_summary(
+        summary,
+        full_markdown=full,
+        report_path="/Users/alyx/tradeSystem/data/reports/monthly-pattern/2026-07-01.md",
+    )
+
+    assert len(pushed.encode("utf-8")) <= renderer.PUSH_BODY_MAX_BYTES
+    assert "题材月线进攻｜风险观察 → 已移出观察：1 只" in pushed
+    assert "基本面月线趋势｜技术候选 → 基本面已核验：1000 只" in pushed
+    assert "状态变化覆盖 1001/1001 条" in pushed
+    assert "600999 关键退出股｜题材月线进攻｜风险观察 → 已移出观察" in pushed
+    assert "原因=完成月趋势资格失效" in pushed
+    assert "关键风险/退出明细 1/1 条" in pushed
+    assert "600001" in pushed
+
+
+def test_render_push_summary_preserves_failed_status_when_error_is_huge():
+    summary = _summary(
+        status="failed",
+        candidates=[],
+        transitions=[],
+        error="来源故障" * 6000,
+    )
+    full = renderer.render_daily(summary)
+    path = "/Users/alyx/tradeSystem/data/reports/monthly-pattern/2026-07-01.md"
+
+    pushed = renderer.render_push_summary(
+        summary,
+        full_markdown=full,
+        report_path=path,
+    )
+
+    assert len(full.encode("utf-8")) > renderer.PUSH_BODY_MAX_BYTES
+    assert len(pushed.encode("utf-8")) <= renderer.PUSH_BODY_MAX_BYTES
+    assert "运行状态：[事实] 失败" in pushed
+    assert "信号月：2026-06" in pushed
+    assert path in pushed
+
+
+def test_render_push_summary_can_use_full_open_pool_focus_projection():
+    summary = _summary(
+        candidates=[
+            _candidate(
+                stock_code=f"{300000 + index:06d}",
+                stock_name="本月技术候选" + "长" * 300,
+                pool_status="technical_candidate",
+            )
+            for index in range(40)
+        ]
+    )
+    focus = [
+        _candidate(stock_code="600001", pool_status="active"),
+        _candidate(stock_code="600002", pool_status="fundamental_verified"),
+        _candidate(stock_code="600003", pool_status="risk"),
+    ]
+    full = renderer.render_daily(summary)
+
+    pushed = renderer.render_push_summary(
+        summary,
+        full_markdown=full,
+        report_path="/Users/alyx/tradeSystem/data/reports/monthly-pattern/2026-07-01.md",
+        focus_candidates=focus,
+    )
+
+    assert "600001" in pushed
+    assert "600002" in pushed
+    assert "600003" not in pushed
+    assert "池内重点候选展示 2/2 只" in pushed
+    assert "本次命中候选 40 只" in pushed
+
+
 def test_render_daily_failure_is_not_assumed_to_be_only_a_source_failure():
     summary = _summary(
         status="failed",

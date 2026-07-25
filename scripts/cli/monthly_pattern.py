@@ -163,6 +163,8 @@ def _run_daily(config: dict, args: argparse.Namespace) -> None:
     scan_date = args.date or date.today().isoformat()
     registry = _initialized_registry(config)
     conn, real = _working_connection(dry_run=args.dry_run)
+    push_focus_rows: list[dict] | None = None
+    report_path: Path | None = None
     try:
         try:
             summary = service.run_daily(
@@ -176,18 +178,34 @@ def _run_daily(config: dict, args: argparse.Namespace) -> None:
         except service.MonthlyPatternTemporalOrderError as exc:
             print(str(exc), file=sys.stderr)
             raise SystemExit(2) from exc
+
+        markdown = renderer.render_daily(summary)
+        print(markdown)
+        if args.dry_run:
+            logger.info("[monthly-pattern] dry-run：内存副本完成，未落库/报告/推送")
+        else:
+            # 全量归档先于可选的专池摘要查询；后者异常时也不能丢失扫描报告。
+            report_path = _write_report(scan_date, markdown)
+            logger.info("[monthly-pattern] 报告: %s", report_path)
+
+        if not args.dry_run and not args.no_push and summary["status"] != "failed":
+            push_focus_rows = list(pool.list_pool(conn, status="active"))
+            push_focus_rows.extend(
+                pool.list_pool(conn, status="fundamental_verified")
+            )
     finally:
         _close_working(conn, real)
 
-    markdown = renderer.render_daily(summary)
-    print(markdown)
-    if args.dry_run:
-        logger.info("[monthly-pattern] dry-run：内存副本完成，未落库/报告/推送")
-    else:
-        report_path = _write_report(scan_date, markdown)
-        logger.info("[monthly-pattern] 报告: %s", report_path)
-        if not args.no_push:
-            _push(f"月线模式观察池 · {scan_date}", markdown)
+    if not args.dry_run and not args.no_push:
+        if report_path is None:  # pragma: no cover - 防御不变量
+            raise RuntimeError("monthly-pattern 报告未落盘，拒绝推送")
+        push_markdown = renderer.render_push_summary(
+            summary,
+            full_markdown=markdown,
+            report_path=str(report_path),
+            focus_candidates=push_focus_rows,
+        )
+        _push(f"月线模式观察池 · {scan_date}", push_markdown)
     if summary["status"] == "failed":
         raise SystemExit(1)
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import sqlite3
+from pathlib import Path
 
 import pytest
 
@@ -108,6 +109,123 @@ def test_daily_no_push_persists_and_writes_report_without_push(
         "SELECT name FROM sqlite_master WHERE name='persisted_marker'"
     ).fetchone()
     assert reports == [("2026-06-30", "# report")]
+
+
+def test_daily_push_uses_bounded_summary_and_keeps_full_report(
+    tmp_path, monkeypatch
+) -> None:
+    db_path = tmp_path / "trade.db"
+    monkeypatch.setattr(
+        monthly_pattern,
+        "get_connection",
+        lambda: real_get_connection(db_path),
+    )
+    monkeypatch.setattr(monthly_pattern, "_initialized_registry", lambda _config: object())
+    summary = _summary()
+    monkeypatch.setattr(
+        monthly_pattern.service,
+        "run_daily",
+        lambda *_args, **_kwargs: summary,
+    )
+    monkeypatch.setattr(
+        monthly_pattern.renderer,
+        "render_daily",
+        lambda _summary: "# full report",
+    )
+    monkeypatch.setattr(monthly_pattern, "REPORT_DIR", tmp_path)
+    focus_rows = {
+        "active": [{"stock_code": "600001", "status": "active"}],
+        "fundamental_verified": [
+            {"stock_code": "600002", "status": "fundamental_verified"}
+        ],
+    }
+    monkeypatch.setattr(
+        monthly_pattern.pool,
+        "list_pool",
+        lambda _conn, *, status: focus_rows[status],
+    )
+    render_calls = []
+
+    def fake_push_summary(
+        actual_summary,
+        *,
+        full_markdown,
+        report_path,
+        focus_candidates,
+    ):
+        assert Path(report_path).read_text(encoding="utf-8") == full_markdown
+        render_calls.append(
+            (actual_summary, full_markdown, report_path, focus_candidates)
+        )
+        return "# bounded push"
+
+    monkeypatch.setattr(
+        monthly_pattern.renderer,
+        "render_push_summary",
+        fake_push_summary,
+    )
+    pushes = []
+    monkeypatch.setattr(
+        monthly_pattern,
+        "_push",
+        lambda title, markdown: pushes.append((title, markdown)),
+    )
+
+    monthly_pattern._run_daily({}, _args(dry_run=False, no_push=False))
+
+    report_path = tmp_path / "2026-06-30.md"
+    assert report_path.read_text(encoding="utf-8") == "# full report"
+    assert render_calls == [
+        (
+            summary,
+            "# full report",
+            str(report_path),
+            focus_rows["active"] + focus_rows["fundamental_verified"],
+        )
+    ]
+    assert pushes == [("月线模式观察池 · 2026-06-30", "# bounded push")]
+
+
+def test_daily_archives_full_report_before_focus_pool_query_failure(
+    tmp_path, monkeypatch
+) -> None:
+    db_path = tmp_path / "trade.db"
+    monkeypatch.setattr(
+        monthly_pattern,
+        "get_connection",
+        lambda: real_get_connection(db_path),
+    )
+    monkeypatch.setattr(monthly_pattern, "_initialized_registry", lambda _config: object())
+    monkeypatch.setattr(
+        monthly_pattern.service,
+        "run_daily",
+        lambda *_args, **_kwargs: _summary(),
+    )
+    monkeypatch.setattr(
+        monthly_pattern.renderer,
+        "render_daily",
+        lambda _summary: "# full report before focus failure",
+    )
+    monkeypatch.setattr(monthly_pattern, "REPORT_DIR", tmp_path)
+    monkeypatch.setattr(
+        monthly_pattern.pool,
+        "list_pool",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("focus decode failed")
+        ),
+    )
+    monkeypatch.setattr(
+        monthly_pattern,
+        "_push",
+        lambda *_args: pytest.fail("focus 查询失败时不应推送"),
+    )
+
+    with pytest.raises(RuntimeError, match="focus decode failed"):
+        monthly_pattern._run_daily({}, _args(dry_run=False, no_push=False))
+
+    assert (tmp_path / "2026-06-30.md").read_text(
+        encoding="utf-8"
+    ) == "# full report before focus failure"
 
 
 def test_month_range_is_inclusive_and_rejects_reverse_order() -> None:
