@@ -203,6 +203,15 @@ def existing_month_ends(
         if manifest.get("status") != "certified":
             continue
         try:
+            from .market import (
+                SourceCoverageError,
+                validate_code_alias_normalization_receipts,
+            )
+
+            alias_receipts = validate_code_alias_normalization_receipts(manifest)
+        except SourceCoverageError:
+            continue
+        try:
             joined_count = int(manifest.get("joined_count"))
             actual_count = int(manifest.get("actual_count"))
             universe_count = int(manifest.get("universe_count"))
@@ -227,6 +236,69 @@ def existing_month_ends(
         if factor_coverage < min_factor_coverage:
             continue
         if universe_count <= 0 or valid_coverage < min_universe_coverage:
+            continue
+        alias_cache_valid = True
+        for receipt in alias_receipts:
+            cached_rows = conn.execute(
+                """
+                SELECT stock_code, open, high, low, close,
+                       volume, amount, adj_factor
+                FROM monthly_pattern_bars
+                WHERE month_end = ?
+                  AND stock_code IN (?, ?)
+                """,
+                (
+                    manifest["month_end"],
+                    receipt["alias_code"],
+                    receipt["canonical_code"],
+                ),
+            ).fetchall()
+            cached_by_code = {str(row["stock_code"]): row for row in cached_rows}
+            canonical_row = cached_by_code.get(receipt["canonical_code"])
+            if canonical_row is None or receipt["alias_code"] in cached_by_code:
+                alias_cache_valid = False
+                break
+            fingerprint = receipt["quote_fingerprint"]
+            cached_fields = {
+                "open": "open",
+                "high": "high",
+                "low": "low",
+                "close": "close",
+                "vol": "volume",
+                "amount": "amount",
+            }
+            try:
+                cached_factor = float(canonical_row["adj_factor"])
+                receipt_factor = float(receipt["canonical_adj_factor"])
+                cached_values = {
+                    field: float(canonical_row[column])
+                    for field, column in cached_fields.items()
+                }
+                receipt_values = {
+                    field: float(fingerprint[field])
+                    for field in cached_fields
+                }
+            except (KeyError, TypeError, ValueError, OverflowError):
+                alias_cache_valid = False
+                break
+            scalar_values = [
+                cached_factor,
+                receipt_factor,
+                *cached_values.values(),
+                *receipt_values.values(),
+            ]
+            if (
+                cached_factor <= 0
+                or not all(math.isfinite(value) for value in scalar_values)
+                or cached_factor != receipt_factor
+                or any(
+                    cached_values[field] != receipt_values[field]
+                    for field in cached_fields
+                )
+            ):
+                alias_cache_valid = False
+                break
+        if not alias_cache_valid:
             continue
         output.add(str(manifest["month_end"]))
     return output

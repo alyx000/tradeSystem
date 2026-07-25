@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import calendar
+import hashlib
+import json
 import math
 from collections import defaultdict
 from datetime import datetime
@@ -23,6 +25,17 @@ def _date(raw: Any) -> str | None:
         return None
 
 
+def _strict_iso_date(raw: Any) -> str | None:
+    """只接受精确 YYYY-MM-DD，禁止截断带后缀的损坏收据日期。"""
+    if not isinstance(raw, str) or len(raw) != 10:
+        return None
+    try:
+        parsed = datetime.strptime(raw, "%Y-%m-%d")
+    except ValueError:
+        return None
+    return raw if parsed.strftime("%Y-%m-%d") == raw else None
+
+
 def _number(value: Any) -> float | None:
     if isinstance(value, bool):
         return None
@@ -35,6 +48,202 @@ def _number(value: Any) -> float | None:
 
 def _code(row: dict) -> str:
     return str(row.get("ts_code") or row.get("stock_code") or row.get("code") or "").split(".")[0]
+
+
+def _exchange(row: dict) -> str | None:
+    raw = str(
+        row.get("ts_code") or row.get("stock_code") or row.get("code") or ""
+    ).strip()
+    parts = raw.rsplit(".", 1)
+    if len(parts) != 2:
+        return None
+    exchange = parts[1].strip().upper()
+    return exchange or None
+
+
+_CODE_ALIAS_QUOTE_FIELDS = (
+    "open",
+    "high",
+    "low",
+    "close",
+    "pre_close",
+    "change",
+    "pct_chg",
+    "vol",
+    "amount",
+)
+_CODE_ALIAS_EXCHANGES = frozenset({"SH", "SZ", "BJ"})
+_CODE_ALIAS_EVIDENCE = "identical_complete_month_quote_and_adj_factor"
+_CODE_ALIAS_EVIDENCE_SCHEMA_VERSION = 2
+_CODE_ALIAS_RECEIPT_VERSION = 2
+_CODE_ALIAS_CACHE_FIELDS = (
+    "open",
+    "high",
+    "low",
+    "close",
+    "vol",
+    "amount",
+)
+_CODE_ALIAS_RECEIPT_FIELDS = frozenset(
+    {
+        "normalization_type",
+        "evidence_version",
+        "month_end",
+        "alias_code",
+        "canonical_code",
+        "exchange",
+        "quote_fields",
+        "cache_verifiable_quote_fields",
+        "quote_fingerprint",
+        "alias_adj_factor",
+        "canonical_adj_factor",
+        "evidence",
+        "receipt_sha256",
+    }
+)
+
+
+def _code_alias_receipt_sha256(receipt: dict) -> str:
+    payload = {
+        key: value
+        for key, value in receipt.items()
+        if key != "receipt_sha256"
+    }
+    canonical = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _complete_quote_fingerprint(row: dict) -> tuple[float, ...] | None:
+    values = tuple(_number(row.get(field)) for field in _CODE_ALIAS_QUOTE_FIELDS)
+    if any(value is None for value in values):
+        return None
+    return tuple(float(value) for value in values if value is not None)
+
+
+def _validated_quote_ohlcv(
+    row: dict,
+) -> tuple[dict[str, float], float, float] | None:
+    raw_prices = {
+        field: _number(row.get(field))
+        for field in ("open", "high", "low", "close")
+    }
+    if any(value is None or value <= 0 for value in raw_prices.values()):
+        return None
+    prices = {
+        field: float(value)
+        for field, value in raw_prices.items()
+        if value is not None
+    }
+    if not (
+        prices["high"] >= max(prices["open"], prices["close"])
+        and prices["low"] <= min(prices["open"], prices["close"])
+        and prices["high"] >= prices["low"]
+    ):
+        return None
+    volume = _number(row.get("vol") if "vol" in row else row.get("volume"))
+    amount = _number(row.get("amount"))
+    if volume is None or amount is None or volume < 0 or amount < 0:
+        return None
+    return prices, volume, amount
+
+
+def _certify_code_alias_normalizations(
+    quote_map: dict[str, dict],
+    factor_map: dict[str, float],
+    factor_row_map: dict[str, dict],
+    universe_codes: set[str],
+    universe_rows: list[dict],
+    *,
+    month_end: str,
+) -> tuple[set[str], list[dict]]:
+    """识别供应商因证券代码迁移留下的严格重复行。
+
+    这里只认证可证明的重复：同交易所、完整月线字段逐项一致、复权因子一致，
+    且只能唯一对应到外部宇宙内的一个 canonical code。任何缺字段或歧义都
+    不猜测，仍交给外部宇宙门禁 fail-closed。
+    """
+    joined_codes = set(quote_map) & set(factor_map)
+    unexpected_codes = sorted(joined_codes - universe_codes)
+    if not unexpected_codes:
+        return set(), []
+
+    universe_exchanges: dict[str, set[str]] = defaultdict(set)
+    for row in universe_rows:
+        code = _code(row)
+        exchange = _exchange(row)
+        if code in universe_codes and exchange is not None:
+            universe_exchanges[code].add(exchange)
+
+    canonical_codes = sorted(joined_codes & universe_codes)
+    normalized_aliases: set[str] = set()
+    receipts: list[dict] = []
+    for alias_code in unexpected_codes:
+        alias_fingerprint = _complete_quote_fingerprint(quote_map[alias_code])
+        alias_quote_exchange = _exchange(quote_map[alias_code])
+        alias_factor_exchange = _exchange(factor_row_map[alias_code])
+        if (
+            alias_fingerprint is None
+            or _validated_quote_ohlcv(quote_map[alias_code]) is None
+            or alias_quote_exchange is None
+            or alias_quote_exchange != alias_factor_exchange
+        ):
+            continue
+
+        matches: list[str] = []
+        for canonical_code in canonical_codes:
+            canonical_exchange = _exchange(quote_map[canonical_code])
+            canonical_factor_exchange = _exchange(factor_row_map[canonical_code])
+            if (
+                canonical_exchange != alias_quote_exchange
+                or canonical_factor_exchange != alias_quote_exchange
+                or universe_exchanges.get(canonical_code) != {alias_quote_exchange}
+                or _validated_quote_ohlcv(quote_map[canonical_code]) is None
+                or _complete_quote_fingerprint(quote_map[canonical_code])
+                != alias_fingerprint
+                or factor_map[canonical_code] != factor_map[alias_code]
+            ):
+                continue
+            matches.append(canonical_code)
+
+        if len(matches) > 1:
+            raise SourceCoverageError(
+                f"{month_end} 代码迁移归并存在歧义: {alias_code} 同时匹配 "
+                + ",".join(matches[:5])
+            )
+        if len(matches) != 1:
+            continue
+        canonical_code = matches[0]
+        normalized_aliases.add(alias_code)
+        quote_fingerprint = {
+            field: value
+            for field, value in zip(
+                _CODE_ALIAS_QUOTE_FIELDS,
+                alias_fingerprint,
+            )
+        }
+        receipt = {
+            "normalization_type": "vendor_shadow_duplicate",
+            "evidence_version": _CODE_ALIAS_RECEIPT_VERSION,
+            "month_end": month_end,
+            "alias_code": alias_code,
+            "canonical_code": canonical_code,
+            "exchange": alias_quote_exchange,
+            "quote_fields": list(_CODE_ALIAS_QUOTE_FIELDS),
+            "cache_verifiable_quote_fields": list(_CODE_ALIAS_CACHE_FIELDS),
+            "quote_fingerprint": quote_fingerprint,
+            "alias_adj_factor": factor_map[alias_code],
+            "canonical_adj_factor": factor_map[canonical_code],
+            "evidence": _CODE_ALIAS_EVIDENCE,
+        }
+        receipt["receipt_sha256"] = _code_alias_receipt_sha256(receipt)
+        receipts.append(receipt)
+    return normalized_aliases, receipts
 
 
 def _month_index(month: str) -> int:
@@ -175,6 +384,7 @@ def join_month_quotes_and_factors(
             )
 
     factor_map: dict[str, float] = {}
+    factor_row_map: dict[str, dict] = {}
     for row in factors:
         if row.get("trade_date") is not None:
             returned_date = _date(row.get("trade_date"))
@@ -189,19 +399,35 @@ def join_month_quotes_and_factors(
         if code in factor_map:
             raise SourceCoverageError(f"{month_end} 复权因子存在重复股票代码: {code}")
         factor_map[code] = factor
+        factor_row_map[code] = row
 
     joined_code_set = set(quote_map) & set(factor_map)
+    code_alias_normalizations: list[dict] = []
+    normalized_aliases: set[str] = set()
     if universe_codes is not None:
-        unexpected_codes = sorted(joined_code_set - universe_codes)
+        normalized_aliases, code_alias_normalizations = (
+            _certify_code_alias_normalizations(
+                quote_map,
+                factor_map,
+                factor_row_map,
+                universe_codes,
+                universe_rows or [],
+                month_end=normalized_month_end,
+            )
+        )
+        unexpected_codes = sorted(
+            joined_code_set - universe_codes - normalized_aliases
+        )
         if unexpected_codes:
             preview = ",".join(unexpected_codes[:5])
             raise SourceCoverageError(
                 f"{month_end} 行情/复权包含 {len(unexpected_codes)} 个"
                 f"外部股票宇宙之外代码（示例: {preview}）"
             )
+        joined_code_set -= normalized_aliases
         joined_code_set &= universe_codes
     joined_codes = sorted(joined_code_set)
-    denominator = max(len(quote_map), 1)
+    denominator = max(len(quote_map) - len(normalized_aliases), 1)
     factor_coverage = len(joined_codes) / denominator
     if factor_coverage < min_factor_coverage:
         raise SourceCoverageError(
@@ -212,21 +438,10 @@ def join_month_quotes_and_factors(
     output: list[dict] = []
     for code in joined_codes:
         row = quote_map[code]
-        prices = {field: _number(row.get(field)) for field in ("open", "high", "low", "close")}
-        if any(value is None or value <= 0 for value in prices.values()):
+        validated = _validated_quote_ohlcv(row)
+        if validated is None:
             continue
-        if not (
-            prices["high"] >= max(prices["open"], prices["close"])
-            and prices["low"] <= min(prices["open"], prices["close"])
-            and prices["high"] >= prices["low"]
-        ):
-            continue
-        volume = _number(
-            row.get("vol") if "vol" in row else row.get("volume")
-        )
-        amount = _number(row.get("amount"))
-        if volume is None or amount is None or volume < 0 or amount < 0:
-            continue
+        prices, volume, amount = validated
         output.append(
             {
                 "month_end": normalized_month_end,
@@ -269,12 +484,219 @@ def join_month_quotes_and_factors(
         ),
         "factor_coverage": factor_coverage,
         "source_meta": {
+            "code_alias_evidence_schema_version": (
+                _CODE_ALIAS_EVIDENCE_SCHEMA_VERSION
+            ),
             "valid_universe_coverage": valid_universe_coverage,
             "min_universe_coverage": min_universe_coverage,
             "min_factor_coverage": min_factor_coverage,
+            "factor_coverage_denominator": denominator,
+            "raw_joined_code_count": len(set(quote_map) & set(factor_map)),
+            "normalized_joined_code_count": len(joined_codes),
+            "code_alias_normalizations": code_alias_normalizations,
         },
     }
     return output, manifest
+
+
+def _manifest_count(source_meta: dict, field: str, month_end: str) -> int:
+    value = _number(source_meta.get(field))
+    if value is None or value < 0 or not value.is_integer():
+        raise SourceCoverageError(
+            f"{month_end} manifest 代码归并收据 {field} 非法"
+        )
+    return int(value)
+
+
+def validate_code_alias_normalization_receipts(
+    manifest: dict,
+) -> list[dict]:
+    """严格复验 shadow duplicate 收据，供缓存复用与跨月检查共用。"""
+    month_end = _strict_iso_date(manifest.get("month_end"))
+    if month_end is None:
+        raise SourceCoverageError("manifest 代码归并收据 month_end 非法")
+    source_meta = manifest.get("source_meta")
+    if not isinstance(source_meta, dict):
+        raise SourceCoverageError(
+            f"{month_end} manifest 代码归并收据 source_meta 非法"
+        )
+    schema_version = source_meta.get("code_alias_evidence_schema_version")
+    if (
+        isinstance(schema_version, bool)
+        or schema_version != _CODE_ALIAS_EVIDENCE_SCHEMA_VERSION
+    ):
+        raise SourceCoverageError(
+            f"{month_end} manifest 代码归并收据 schema 版本非法"
+        )
+    if "code_alias_normalizations" not in source_meta:
+        raise SourceCoverageError(
+            f"{month_end} manifest 代码归并收据字段缺失"
+        )
+    receipts = source_meta["code_alias_normalizations"]
+    if not isinstance(receipts, list):
+        raise SourceCoverageError(
+            f"{month_end} manifest 代码归并收据格式非法"
+        )
+
+    count_fields = (
+        "factor_coverage_denominator",
+        "raw_joined_code_count",
+        "normalized_joined_code_count",
+    )
+    if not all(field in source_meta for field in count_fields):
+        raise SourceCoverageError(
+            f"{month_end} manifest 代码归并收据缺少归并计数"
+        )
+    denominator = _manifest_count(
+        source_meta,
+        "factor_coverage_denominator",
+        month_end,
+    )
+    raw_count = _manifest_count(
+        source_meta,
+        "raw_joined_code_count",
+        month_end,
+    )
+    normalized_count = _manifest_count(
+        source_meta,
+        "normalized_joined_code_count",
+        month_end,
+    )
+    quote_count = _manifest_count(manifest, "quote_count", month_end)
+    factor_count = _manifest_count(manifest, "factor_count", month_end)
+    joined_count = _manifest_count(manifest, "joined_count", month_end)
+    universe_count = _manifest_count(manifest, "universe_count", month_end)
+    factor_coverage = _number(manifest.get("factor_coverage"))
+    expected_factor_coverage = (
+        normalized_count / denominator if denominator > 0 else None
+    )
+    if (
+        denominator <= 0
+        or denominator != quote_count - len(receipts)
+        or raw_count > min(quote_count, factor_count)
+        or raw_count - normalized_count != len(receipts)
+        or joined_count > normalized_count
+        or normalized_count > universe_count
+        or factor_coverage is None
+        or expected_factor_coverage is None
+        or not math.isclose(
+            factor_coverage,
+            expected_factor_coverage,
+            rel_tol=1e-12,
+            abs_tol=1e-12,
+        )
+    ):
+        raise SourceCoverageError(
+            f"{month_end} manifest 代码归并收据计数不一致"
+        )
+
+    aliases_in_month: set[str] = set()
+    normalized_receipts: list[dict] = []
+    expected_fields = list(_CODE_ALIAS_QUOTE_FIELDS)
+    expected_field_set = set(_CODE_ALIAS_QUOTE_FIELDS)
+    for receipt in receipts:
+        if not isinstance(receipt, dict):
+            raise SourceCoverageError(
+                f"{month_end} manifest 代码归并收据格式非法"
+            )
+        alias_code = str(receipt.get("alias_code") or "").strip()
+        canonical_code = str(receipt.get("canonical_code") or "").strip()
+        exchange = str(receipt.get("exchange") or "").strip().upper()
+        receipt_month = _strict_iso_date(receipt.get("month_end"))
+        evidence_version = receipt.get("evidence_version")
+        quote_fields = receipt.get("quote_fields")
+        cache_fields = receipt.get("cache_verifiable_quote_fields")
+        quote_fingerprint = receipt.get("quote_fingerprint")
+        alias_factor = _number(receipt.get("alias_adj_factor"))
+        canonical_factor = _number(receipt.get("canonical_adj_factor"))
+        receipt_sha256 = receipt.get("receipt_sha256")
+        if (
+            set(receipt) != _CODE_ALIAS_RECEIPT_FIELDS
+            or receipt.get("normalization_type") != "vendor_shadow_duplicate"
+            or isinstance(evidence_version, bool)
+            or evidence_version != _CODE_ALIAS_RECEIPT_VERSION
+            or receipt_month != month_end
+            or receipt.get("evidence") != _CODE_ALIAS_EVIDENCE
+            or len(alias_code) != 6
+            or not alias_code.isdigit()
+            or len(canonical_code) != 6
+            or not canonical_code.isdigit()
+            or alias_code == canonical_code
+            or exchange not in _CODE_ALIAS_EXCHANGES
+            or quote_fields != expected_fields
+            or cache_fields != list(_CODE_ALIAS_CACHE_FIELDS)
+            or not isinstance(quote_fingerprint, dict)
+            or set(quote_fingerprint) != expected_field_set
+            or alias_factor is None
+            or alias_factor <= 0
+            or canonical_factor is None
+            or canonical_factor <= 0
+            or alias_factor != canonical_factor
+            or not isinstance(receipt_sha256, str)
+            or len(receipt_sha256) != 64
+            or any(char not in "0123456789abcdef" for char in receipt_sha256)
+        ):
+            raise SourceCoverageError(
+                f"{month_end} manifest 代码归并收据证据不一致"
+            )
+        fingerprint_values = [
+            _number(quote_fingerprint.get(field))
+            for field in _CODE_ALIAS_QUOTE_FIELDS
+        ]
+        if any(value is None for value in fingerprint_values):
+            raise SourceCoverageError(
+                f"{month_end} manifest 代码归并收据行情指纹非法"
+            )
+        try:
+            expected_receipt_sha256 = _code_alias_receipt_sha256(receipt)
+        except (TypeError, ValueError, OverflowError):
+            raise SourceCoverageError(
+                f"{month_end} manifest 代码归并收据摘要非法"
+            ) from None
+        if receipt_sha256 != expected_receipt_sha256:
+            raise SourceCoverageError(
+                f"{month_end} manifest 代码归并收据摘要不一致"
+            )
+        if alias_code in aliases_in_month:
+            raise SourceCoverageError(
+                f"{month_end} manifest 代码归并收据重复: {alias_code}"
+            )
+        aliases_in_month.add(alias_code)
+        normalized_receipts.append(receipt)
+    return normalized_receipts
+
+
+def _validate_code_alias_normalization_sequence(
+    manifests: list[dict],
+) -> None:
+    targets: dict[str, tuple[str, str, str]] = {}
+    alias_codes: set[str] = set()
+    canonical_codes: set[str] = set()
+    for manifest in manifests:
+        month_end = str(manifest.get("month_end") or "")
+        receipts = validate_code_alias_normalization_receipts(manifest)
+        for receipt in receipts:
+            alias_code = str(receipt.get("alias_code") or "").strip()
+            canonical_code = str(receipt.get("canonical_code") or "").strip()
+            exchange = str(receipt.get("exchange") or "").strip().upper()
+            if (
+                alias_code in canonical_codes
+                or canonical_code in alias_codes
+            ):
+                raise SourceCoverageError(
+                    f"代码归并角色冲突: {alias_code} -> {canonical_code}"
+                )
+            alias_codes.add(alias_code)
+            canonical_codes.add(canonical_code)
+            target = (canonical_code, exchange, month_end)
+            previous = targets.get(alias_code)
+            if previous is not None and previous[:2] != target[:2]:
+                raise SourceCoverageError(
+                    f"代码归并映射漂移: {alias_code} 在 {previous[2]} 指向 "
+                    f"{previous[0]}.{previous[1]}，在 {month_end} 指向 "
+                    f"{canonical_code}.{exchange}"
+                )
+            targets[alias_code] = target
 
 
 def _manifest_effective_coverage(manifest: dict) -> float:
@@ -308,6 +730,7 @@ def validate_month_manifest_sequence(
 ) -> None:
     """按外部宇宙归一后的有效覆盖比较相邻月，拦截单月共同截断/异常缩水。"""
     ordered = sorted(manifests, key=lambda item: str(item.get("month_end") or ""))
+    _validate_code_alias_normalization_sequence(ordered)
     for previous, current in zip(ordered, ordered[1:]):
         previous_month = str(previous.get("month_end") or "")[:7]
         current_month = str(current.get("month_end") or "")[:7]

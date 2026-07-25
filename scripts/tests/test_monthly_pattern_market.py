@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import hashlib
+import json
+
 import pytest
 
 from services.monthly_pattern.market import (
@@ -140,6 +143,270 @@ def test_join_rejects_codes_outside_the_certified_external_universe() -> None:
         )
 
 
+def _alias_quote(ts_code: str, *, close: float = 10.0) -> dict:
+    return {
+        "ts_code": ts_code,
+        "trade_date": "20220729",
+        "open": 10.0,
+        "high": 11.0,
+        "low": 9.0,
+        "close": close,
+        "pre_close": 9.8,
+        "change": close - 9.8,
+        "pct_chg": (close - 9.8) / 9.8 * 100,
+        "vol": 100.0,
+        "amount": 1000.0,
+    }
+
+
+def _alias_receipt(
+    *,
+    alias_code: str = "300114",
+    canonical_code: str = "302132",
+    month_end: str = "2022-07-29",
+) -> dict:
+    quote = _alias_quote("300114.SZ")
+    receipt = {
+        "normalization_type": "vendor_shadow_duplicate",
+        "evidence_version": 2,
+        "month_end": month_end,
+        "alias_code": alias_code,
+        "canonical_code": canonical_code,
+        "exchange": "SZ",
+        "quote_fields": [
+            "open",
+            "high",
+            "low",
+            "close",
+            "pre_close",
+            "change",
+            "pct_chg",
+            "vol",
+            "amount",
+        ],
+        "cache_verifiable_quote_fields": [
+            "open",
+            "high",
+            "low",
+            "close",
+            "vol",
+            "amount",
+        ],
+        "quote_fingerprint": {
+            field: quote[field]
+            for field in (
+                "open",
+                "high",
+                "low",
+                "close",
+                "pre_close",
+                "change",
+                "pct_chg",
+                "vol",
+                "amount",
+            )
+        },
+        "alias_adj_factor": 5.9716,
+        "canonical_adj_factor": 5.9716,
+        "evidence": "identical_complete_month_quote_and_adj_factor",
+    }
+    return _seal_alias_receipt(receipt)
+
+
+def _seal_alias_receipt(receipt: dict) -> dict:
+    sealed = dict(receipt)
+    sealed.pop("receipt_sha256", None)
+    canonical = json.dumps(
+        sealed,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+    sealed["receipt_sha256"] = hashlib.sha256(
+        canonical.encode("utf-8")
+    ).hexdigest()
+    return sealed
+
+
+def _certified_manifest(
+    *,
+    month_end: str,
+    universe_count: int,
+    joined_count: int,
+    receipts: list[dict] | None = None,
+) -> dict:
+    receipt_rows = list(receipts or [])
+    raw_count = joined_count + len(receipt_rows)
+    return {
+        "month_end": month_end,
+        "universe_count": universe_count,
+        "quote_count": raw_count,
+        "factor_count": raw_count,
+        "joined_count": joined_count,
+        "quote_coverage": 1.0,
+        "factor_coverage": 1.0,
+        "source_meta": {
+            "code_alias_evidence_schema_version": 2,
+            "factor_coverage_denominator": joined_count,
+            "raw_joined_code_count": raw_count,
+            "normalized_joined_code_count": joined_count,
+            "code_alias_normalizations": receipt_rows,
+        },
+    }
+
+
+def test_join_collapses_a_unique_vendor_code_migration_duplicate() -> None:
+    quotes = [
+        _alias_quote("300114.SZ"),
+        _alias_quote("302132.SZ"),
+    ]
+    factors = [
+        {"ts_code": "300114.SZ", "trade_date": "20220729", "adj_factor": 5.9716},
+        {"ts_code": "302132.SZ", "trade_date": "20220729", "adj_factor": 5.9716},
+    ]
+
+    joined, manifest = join_month_quotes_and_factors(
+        quotes,
+        factors,
+        month_end="2022-07-29",
+        min_rows=1,
+        universe_rows=[
+            {
+                "ts_code": "302132.SZ",
+                "name": "中航成飞",
+                "list_date": "20100827",
+            }
+        ],
+        return_manifest=True,
+    )
+
+    assert [row["stock_code"] for row in joined] == ["302132"]
+    assert manifest["joined_count"] == 1
+    assert manifest["factor_coverage"] == 1.0
+    assert manifest["source_meta"]["factor_coverage_denominator"] == 1
+    assert manifest["source_meta"]["code_alias_normalizations"] == [
+        _alias_receipt()
+    ]
+
+
+@pytest.mark.parametrize(
+    ("alias_code", "canonical_factor", "alias_factor", "missing_field"),
+    [
+        ("300114.SZ", 5.9716, 5.9717, None),
+        ("300114.SH", 5.9716, 5.9716, None),
+        ("300114.SZ", 5.9716, 5.9716, "pre_close"),
+    ],
+)
+def test_join_does_not_guess_a_code_migration_without_complete_unique_evidence(
+    alias_code: str,
+    canonical_factor: float,
+    alias_factor: float,
+    missing_field: str | None,
+) -> None:
+    canonical_quote = _alias_quote("302132.SZ")
+    alias_quote = _alias_quote(alias_code)
+    if missing_field is not None:
+        alias_quote.pop(missing_field)
+
+    with pytest.raises(SourceCoverageError, match="股票宇宙之外代码"):
+        join_month_quotes_and_factors(
+            [canonical_quote, alias_quote],
+            [
+                {
+                    "ts_code": "302132.SZ",
+                    "trade_date": "20220729",
+                    "adj_factor": canonical_factor,
+                },
+                {
+                    "ts_code": alias_code,
+                    "trade_date": "20220729",
+                    "adj_factor": alias_factor,
+                },
+            ],
+            month_end="2022-07-29",
+            min_rows=1,
+            universe_rows=[
+                {
+                    "ts_code": "302132.SZ",
+                    "name": "中航成飞",
+                    "list_date": "20100827",
+                }
+            ],
+        )
+
+
+def test_join_rejects_an_ambiguous_vendor_code_migration_duplicate() -> None:
+    with pytest.raises(SourceCoverageError, match="代码迁移归并存在歧义"):
+        join_month_quotes_and_factors(
+            [
+                _alias_quote("300114.SZ"),
+                _alias_quote("302132.SZ"),
+                _alias_quote("302133.SZ"),
+            ],
+            [
+                {
+                    "ts_code": code,
+                    "trade_date": "20220729",
+                    "adj_factor": 5.9716,
+                }
+                for code in ("300114.SZ", "302132.SZ", "302133.SZ")
+            ],
+            month_end="2022-07-29",
+            min_rows=1,
+            universe_rows=[
+                {"ts_code": "302132.SZ", "list_date": "20100827"},
+                {"ts_code": "302133.SZ", "list_date": "20100827"},
+            ],
+        )
+
+
+def test_join_does_not_certify_an_invalid_ohlcv_shadow_duplicate() -> None:
+    universe = [
+        {"ts_code": "302132.SZ", "list_date": "20100827"},
+        *[
+            {"ts_code": f"{code:06d}.SZ", "list_date": "20000101"}
+            for code in range(1, 21)
+        ],
+    ]
+    invalid_alias = {**_alias_quote("300114.SZ"), "high": 9.0}
+    invalid_canonical = {**_alias_quote("302132.SZ"), "high": 9.0}
+    filler_quotes = [
+        {
+            "ts_code": f"{code:06d}.SZ",
+            "trade_date": "20220729",
+            "open": 10.0,
+            "high": 11.0,
+            "low": 9.0,
+            "close": 10.0,
+            "vol": 100.0,
+            "amount": 1000.0,
+        }
+        for code in range(1, 21)
+    ]
+    factors = [
+        {
+            "ts_code": code,
+            "trade_date": "20220729",
+            "adj_factor": 1.0,
+        }
+        for code in (
+            "300114.SZ",
+            "302132.SZ",
+            *(f"{item:06d}.SZ" for item in range(1, 21)),
+        )
+    ]
+
+    with pytest.raises(SourceCoverageError, match="股票宇宙之外代码"):
+        join_month_quotes_and_factors(
+            [invalid_alias, invalid_canonical, *filler_quotes],
+            factors,
+            month_end="2022-07-29",
+            min_rows=1,
+            universe_rows=universe,
+        )
+
+
 def test_join_uses_historical_as_of_universe_instead_of_fixed_4000_floor() -> None:
     universe = [
         {"ts_code": "000001.SZ", "list_date": "19910403"},
@@ -245,16 +512,16 @@ def test_join_rejects_invalid_ohlcv_before_certifying_month(
 
 def test_adjacent_manifest_guard_uses_universe_normalized_coverage() -> None:
     manifests = [
-        {
-            "month_end": "2026-05-29",
-            "universe_count": 100,
-            "joined_count": 99,
-        },
-        {
-            "month_end": "2026-06-30",
-            "universe_count": 100,
-            "joined_count": 96,
-        },
+        _certified_manifest(
+            month_end="2026-05-29",
+            universe_count=100,
+            joined_count=99,
+        ),
+        _certified_manifest(
+            month_end="2026-06-30",
+            universe_count=100,
+            joined_count=96,
+        ),
     ]
 
     with pytest.raises(SourceCoverageError, match="相邻月有效覆盖异常"):
@@ -263,6 +530,143 @@ def test_adjacent_manifest_guard_uses_universe_normalized_coverage() -> None:
             min_adjacent_coverage_ratio=0.98,
             max_adjacent_coverage_ratio=1.02,
         )
+
+
+def test_manifest_sequence_rejects_alias_target_drift() -> None:
+    manifests = [
+        _certified_manifest(
+            month_end="2026-05-29",
+            universe_count=100,
+            joined_count=100,
+            receipts=[_alias_receipt(month_end="2026-05-29")],
+        ),
+        _certified_manifest(
+            month_end="2026-06-30",
+            universe_count=100,
+            joined_count=100,
+            receipts=[
+                _alias_receipt(
+                    canonical_code="302133",
+                    month_end="2026-06-30",
+                )
+            ],
+        ),
+    ]
+
+    with pytest.raises(SourceCoverageError, match="代码归并映射漂移"):
+        validate_month_manifest_sequence(manifests)
+
+
+@pytest.mark.parametrize(
+    "second_receipt",
+    [
+        _alias_receipt(
+            alias_code="302132",
+            canonical_code="300114",
+            month_end="2026-06-30",
+        ),
+        _alias_receipt(
+            alias_code="302132",
+            canonical_code="302133",
+            month_end="2026-06-30",
+        ),
+    ],
+)
+def test_manifest_sequence_rejects_alias_role_reversal_or_chain(
+    second_receipt: dict,
+) -> None:
+    manifests = [
+        _certified_manifest(
+            month_end="2026-05-29",
+            universe_count=100,
+            joined_count=100,
+            receipts=[_alias_receipt(month_end="2026-05-29")],
+        ),
+        _certified_manifest(
+            month_end="2026-06-30",
+            universe_count=100,
+            joined_count=100,
+            receipts=[second_receipt],
+        ),
+    ]
+
+    with pytest.raises(SourceCoverageError, match="代码归并角色冲突"):
+        validate_month_manifest_sequence(manifests)
+
+
+def test_manifest_sequence_rejects_a_contradictory_alias_receipt() -> None:
+    receipt = _alias_receipt()
+    receipt["canonical_adj_factor"] = 6.0
+    manifest = _certified_manifest(
+        month_end="2022-07-29",
+        universe_count=1,
+        joined_count=1,
+        receipts=[receipt],
+    )
+
+    with pytest.raises(SourceCoverageError, match="代码归并收据"):
+        validate_month_manifest_sequence([manifest])
+
+
+def test_manifest_sequence_rejects_missing_alias_evidence_schema() -> None:
+    manifest = _certified_manifest(
+        month_end="2022-07-29",
+        universe_count=1,
+        joined_count=1,
+        receipts=[_alias_receipt()],
+    )
+    manifest["source_meta"].pop("code_alias_evidence_schema_version")
+
+    with pytest.raises(SourceCoverageError, match="schema"):
+        validate_month_manifest_sequence([manifest])
+
+
+def test_manifest_sequence_cross_checks_alias_counts_with_top_level() -> None:
+    manifest = _certified_manifest(
+        month_end="2022-07-29",
+        universe_count=1,
+        joined_count=1,
+        receipts=[_alias_receipt()],
+    )
+    manifest["source_meta"].update(
+        {
+            "factor_coverage_denominator": 99,
+            "raw_joined_code_count": 100,
+            "normalized_joined_code_count": 99,
+        }
+    )
+
+    with pytest.raises(SourceCoverageError, match="计数不一致"):
+        validate_month_manifest_sequence([manifest])
+
+
+def test_manifest_sequence_rejects_tampered_nonpersisted_fingerprint() -> None:
+    receipt = _alias_receipt()
+    receipt["quote_fingerprint"]["pre_close"] = 99.0
+    manifest = _certified_manifest(
+        month_end="2022-07-29",
+        universe_count=1,
+        joined_count=1,
+        receipts=[receipt],
+    )
+
+    with pytest.raises(SourceCoverageError, match="摘要不一致"):
+        validate_month_manifest_sequence([manifest])
+
+
+def test_manifest_sequence_rejects_non_exact_receipt_month() -> None:
+    receipt = _alias_receipt()
+    receipt["month_end"] = "2022-07-29-corrupt"
+    receipt = _seal_alias_receipt(receipt)
+    manifest = _certified_manifest(
+        month_end="2022-07-29",
+        universe_count=1,
+        joined_count=1,
+        receipts=[receipt],
+    )
+
+    with pytest.raises(SourceCoverageError, match="证据不一致"):
+        validate_month_manifest_sequence([manifest])
 
 
 @pytest.mark.parametrize(

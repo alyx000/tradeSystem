@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import calendar
+import hashlib
+import json
 import sqlite3
 from datetime import date
 from types import SimpleNamespace
@@ -183,6 +185,37 @@ class _GapRegistry(_Registry):
         return result
 
 
+class _AliasRegistry(_Registry):
+    def __init__(self):
+        super().__init__()
+        self.alias_month = self.month_ends[0]
+
+    def call(self, capability, *args):
+        result = super().call(capability, *args)
+        if capability == "get_market_monthly_quotes" and result.success:
+            month_end = args[0]
+            if month_end != self.alias_month:
+                return result
+            canonical = {
+                **result.data[0],
+                "pre_close": result.data[0]["close"] - 0.1,
+                "change": 0.1,
+                "pct_chg": 1.0,
+            }
+            alias = {**canonical, "ts_code": "699999.SH"}
+            return _R([canonical, alias])
+        if capability == "get_adj_factor" and result.success:
+            month_end = args[0]
+            if month_end == self.alias_month:
+                return _R(
+                    [
+                        *result.data,
+                        {"ts_code": "699999.SH", "adj_factor": 1.0},
+                    ]
+                )
+        return result
+
+
 class _ShortCalendarRegistry(_Registry):
     def __init__(self, count: int):
         super().__init__()
@@ -254,6 +287,217 @@ def test_run_daily_builds_verified_and_theme_pool_from_completed_months(
     run = repository.get_run(conn, "2026-06-30")
     assert run["status"] == "complete"
     assert run["input_by"] == "pytest"
+
+
+def test_run_daily_persists_only_the_canonical_bar_and_alias_receipt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = _conn()
+    registry = _AliasRegistry()
+    monkeypatch.setattr(service, "_is_historical_scan", lambda _scan_date: False)
+
+    summary = service.run_daily(
+        conn,
+        registry,
+        "2026-06-30",
+        input_by="pytest",
+        months=39,
+        min_market_rows=1,
+    )
+
+    assert summary["status"] == "complete"
+    bars = repository.load_month_bars(conn, [registry.alias_month])
+    assert [row["stock_code"] for row in bars] == ["600000"]
+    manifest = repository.load_month_bar_manifests(
+        conn,
+        [registry.alias_month],
+    )[0]
+    expected_receipt = {
+        "normalization_type": "vendor_shadow_duplicate",
+        "evidence_version": 2,
+        "month_end": registry.alias_month,
+        "alias_code": "699999",
+        "canonical_code": "600000",
+        "exchange": "SH",
+        "quote_fields": [
+            "open",
+            "high",
+            "low",
+            "close",
+            "pre_close",
+            "change",
+            "pct_chg",
+            "vol",
+            "amount",
+        ],
+        "cache_verifiable_quote_fields": [
+            "open",
+            "high",
+            "low",
+            "close",
+            "vol",
+            "amount",
+        ],
+        "quote_fingerprint": {
+            "open": bars[0]["open"],
+            "high": bars[0]["high"],
+            "low": bars[0]["low"],
+            "close": bars[0]["close"],
+            "pre_close": bars[0]["close"] - 0.1,
+            "change": 0.1,
+            "pct_chg": 1.0,
+            "vol": bars[0]["volume"],
+            "amount": bars[0]["amount"],
+        },
+        "alias_adj_factor": 1.0,
+        "canonical_adj_factor": 1.0,
+        "evidence": "identical_complete_month_quote_and_adj_factor",
+    }
+    canonical_receipt = json.dumps(
+        expected_receipt,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+    expected_receipt["receipt_sha256"] = hashlib.sha256(
+        canonical_receipt.encode("utf-8")
+    ).hexdigest()
+    assert manifest["source_meta"]["code_alias_evidence_schema_version"] == 2
+    assert manifest["source_meta"]["code_alias_normalizations"] == [
+        expected_receipt
+    ]
+
+    corrupted_meta = manifest["source_meta"]
+    corrupted_meta["code_alias_normalizations"][0][
+        "canonical_adj_factor"
+    ] = 2.0
+    conn.execute(
+        """
+        UPDATE monthly_pattern_bar_manifests
+        SET source_meta_json = ?
+        WHERE month_end = ?
+        """,
+        (
+            json.dumps(corrupted_meta, ensure_ascii=False),
+            registry.alias_month,
+        ),
+    )
+
+    rerun = service.run_daily(
+        conn,
+        registry,
+        "2026-06-30",
+        input_by="pytest",
+        months=39,
+        min_market_rows=1,
+    )
+
+    assert rerun["status"] == "complete"
+    assert rerun["source_status"]["monthly_bars"] == {
+        "status": "success",
+        "fetched": 1,
+        "cached": 38,
+    }
+
+    manifest = repository.load_month_bar_manifests(
+        conn,
+        [registry.alias_month],
+    )[0]
+    stripped_meta = manifest["source_meta"]
+    for field in (
+        "code_alias_evidence_schema_version",
+        "factor_coverage_denominator",
+        "raw_joined_code_count",
+        "normalized_joined_code_count",
+        "code_alias_normalizations",
+    ):
+        stripped_meta.pop(field)
+    conn.execute(
+        """
+        UPDATE monthly_pattern_bar_manifests
+        SET source_meta_json = ?
+        WHERE month_end = ?
+        """,
+        (
+            json.dumps(stripped_meta, ensure_ascii=False),
+            registry.alias_month,
+        ),
+    )
+
+    missing_receipt_rerun = service.run_daily(
+        conn,
+        registry,
+        "2026-06-30",
+        input_by="pytest",
+        months=39,
+        min_market_rows=1,
+    )
+
+    assert missing_receipt_rerun["source_status"]["monthly_bars"] == {
+        "status": "success",
+        "fetched": 1,
+        "cached": 38,
+    }
+
+    manifest = repository.load_month_bar_manifests(
+        conn,
+        [registry.alias_month],
+    )[0]
+    fingerprint_meta = manifest["source_meta"]
+    fingerprint_meta["code_alias_normalizations"][0]["quote_fingerprint"][
+        "pre_close"
+    ] = 99.0
+    conn.execute(
+        """
+        UPDATE monthly_pattern_bar_manifests
+        SET source_meta_json = ?
+        WHERE month_end = ?
+        """,
+        (
+            json.dumps(fingerprint_meta, ensure_ascii=False),
+            registry.alias_month,
+        ),
+    )
+
+    fingerprint_rerun = service.run_daily(
+        conn,
+        registry,
+        "2026-06-30",
+        input_by="pytest",
+        months=39,
+        min_market_rows=1,
+    )
+
+    assert fingerprint_rerun["source_status"]["monthly_bars"] == {
+        "status": "success",
+        "fetched": 1,
+        "cached": 38,
+    }
+
+    conn.execute(
+        """
+        UPDATE monthly_pattern_bars
+        SET close = 'broken'
+        WHERE month_end = ? AND stock_code = '600000'
+        """,
+        (registry.alias_month,),
+    )
+
+    scalar_rerun = service.run_daily(
+        conn,
+        registry,
+        "2026-06-30",
+        input_by="pytest",
+        months=39,
+        min_market_rows=1,
+    )
+
+    assert scalar_rerun["source_status"]["monthly_bars"] == {
+        "status": "success",
+        "fetched": 1,
+        "cached": 38,
+    }
 
 
 def test_fundamental_verified_only_activates_on_strict_next_completed_month() -> None:

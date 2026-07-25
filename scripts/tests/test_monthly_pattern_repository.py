@@ -13,6 +13,23 @@ def _conn() -> sqlite3.Connection:
     return conn
 
 
+def _alias_evidence_meta(
+    *,
+    denominator: int,
+    raw_count: int,
+    normalized_count: int,
+    **extra,
+) -> dict:
+    return {
+        "code_alias_evidence_schema_version": 2,
+        "factor_coverage_denominator": denominator,
+        "raw_joined_code_count": raw_count,
+        "normalized_joined_code_count": normalized_count,
+        "code_alias_normalizations": [],
+        **extra,
+    }
+
+
 def test_month_bars_upsert_is_idempotent_and_keeps_raw_prices() -> None:
     conn = _conn()
     row = {
@@ -52,7 +69,12 @@ def test_month_bars_upsert_is_idempotent_and_keeps_raw_prices() -> None:
             "joined_count": 1,
             "quote_coverage": 1.0,
             "factor_coverage": 1.0,
-            "source_meta": {"min_universe_coverage": 0.95},
+            "source_meta": _alias_evidence_meta(
+                denominator=1,
+                raw_count=1,
+                normalized_count=1,
+                min_universe_coverage=0.95,
+            ),
         },
     )
     assert repository.existing_month_ends(
@@ -72,14 +94,17 @@ def test_month_bars_upsert_is_idempotent_and_keeps_raw_prices() -> None:
             "universe_source": "test:stock_basic",
             "universe_count": 2,
             "quote_count": 2,
-            "factor_count": 1,
+            "factor_count": 2,
             "joined_count": 1,
             "quote_coverage": 1.0,
             "factor_coverage": 1.0,
-            "source_meta": {
-                "valid_universe_coverage": 0.5,
-                "min_universe_coverage": 0.5,
-            },
+            "source_meta": _alias_evidence_meta(
+                denominator=2,
+                raw_count=2,
+                normalized_count=2,
+                valid_universe_coverage=0.5,
+                min_universe_coverage=0.5,
+            ),
         },
     )
     # 旧运行在更低阈值下取得的 manifest，不能绕过当前 95% 有效覆盖门。
