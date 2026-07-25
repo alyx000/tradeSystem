@@ -20,7 +20,7 @@
 | `s1` | `s1`：①大盘 |
 | `s2` | `s2`：②板块 |
 | `s456` | `s3`, `s4`, `s5`, `s6`：③情绪 + ④风格 + ⑤龙头 + ⑥节点 |
-| `s7t` | `s7`, `teachers`, `industry`, `cognition`：⑦持仓 + 🎓老师观点 + 📰行业信息 + 🧠认知对照 |
+| `s7t` | `s7`, `teachers`, `industry`, `cognition`, `exposure`：⑦持仓 + 🎓老师观点 + 📰行业信息 + 🧠认知对照 + 仓位环境与纪律参考（影子） |
 | `proj` | `proj`：🔭次日推演 |
 | `s8ops` | `s8`, `ops`：⑧次日计划 + 🔧数据缺口 + footer |
 
@@ -48,15 +48,37 @@ sidecar 使用其他 helper 输出路径时显式传入；两个参数都只改�
 ```bash
 python3 .agents/skills/daily-review/references/html-report-template/assemble_report.py <scratchpad目录> <REPORT_DATE> \
   --capacity-manifest <容量sidecar路径> \
-  --new-high-manifest <滚动新高sidecar路径> --output <报告路径>
+  --new-high-manifest <滚动新高sidecar路径> \
+  --trade-db data/trade.db --output <报告路径>
 ```
 
-要点（v2 外壳，2026-07-16 期起）：
+要点（`compact-v2` 外壳，17-anchor 期起）：
 
-- 8 个 chunk 必须齐全；16 个锚点 `tldr/factor/s0/s1/s2/s3/s4/s5/s6/s7/teachers/industry/cognition/proj/s8/ops` 必须按此顺序各出现一次。缺失、重复或乱序均拒绝生成。HTML 展示路径固定为“速览 → 三位一体重点因子 → ⓪前日判分 → ①–⑦ → 老师观点 → 行业信息 → 认知对照 → 次日推演 → ⑧次日计划 → 数据缺口”。重点因子仍须在 9 路完整采集、八步复盘与认知对照综合完成后生成，只是展示前置。
-- 旧的 15-anchor `compact-v1` 临时 chunks，以及把 16 个锚点中的 `factor` 留在 `proj` 的过渡 chunks，都必须按新归属重新生成；既有静态 HTML 仍可直接阅读，但不会被当前严格校验器当作新契约报告重新验收。
+- 8 个 chunk 必须齐全；17 个锚点 `tldr/factor/s0/s1/s2/s3/s4/s5/s6/s7/teachers/industry/cognition/exposure/proj/s8/ops` 必须按此顺序各出现一次。缺失、重复或乱序均拒绝生成。HTML 展示路径固定为“速览 → 三位一体重点因子 → ⓪前日判分 → ①–⑦ → 老师观点 → 行业信息 → 认知对照 → 仓位环境与纪律参考（影子） → 次日推演 → ⑧次日计划 → 数据缺口”。重点因子与仓位环境仍须在 9 路完整采集、八步复盘与认知对照综合完成后生成。
+- 旧的 15-anchor 临时 chunks、16-anchor（尚无 `exposure`）chunks，以及把 `factor` 留在 `proj` 的过渡 chunks，都必须按新归属重新生成；既有静态 HTML 仍可直接阅读，但不会被当前严格校验器当作 17-anchor 新契约报告重新验收。
 - 每节默认「1 句裁决 + 最多 3 条证据 + 1 条证伪或缺口」；无新增只写一行，不生成空表。
 - `factor` 默认显示主因子、第一辅助、其余因子变化和切换/失效状态。章节容器必须是默认可见的 `<section class="blk" id="factor">`，并声明 `data-factor-mode="formal|rule_only|shadow|no_data"`：有分析时须有且仅有 1 个默认可见 judgment Claim、1～3 个默认可见 `<li>`、1 个默认可见 `data-factor-role="status"`；Claim / `<li>` 必须各自有可见的 `[事实]/[判断]` 标签和实质正文，正文不得藏进后代 `hidden`。状态节点不得藏入普通 `<details>` / `hidden`，且只接受与 mode 对应的规范模板：`formal=正式 factor-score 已完成`、`rule_only=rule_only 结果`；`shadow` 只能使用“正式评分停在日期 / 本日未运行 / 本日尚未评分 / 完成条件未满足”之一，并同时写明“影子口径、不写库”。唯一 `data-evidence-kind="factor-detail"` 折叠证据须实际含 `market_node / sector_rhythm / style_regime / leader_signal`。`no_data` 只允许标题和唯一 `<p data-factor-role="no-data">[事实] 本日无新增/本日无可判数据</p>`。完整四因子证据卡与切换对账不再归到 `s8`。
+- `exposure` 固定为 `<section class="blk" id="exposure" data-exposure-mode="shadow|fallback|conflicted|no_data" data-exposure-tier="defensive|cautious|neutral|constructive|undetermined" data-exposure-boundary="read-only-environment-rating">`。唯一可见 judgment Claim 严格归属报告日并使用受控短句；中文档位固定为 `防守档 / 谨慎档 / 中性档 / 偏积极档 / 不可判`。`market / cognition / teacher` 三类来源不再默认展开：各自必须与同名 `data-exposure-evidence` 合并成唯一折叠 `<p>`，按此顺序放入报告日唯一 `exposure-detail`。完整市场/老师来源严格等于报告日，老师只认 `teacher_notes.date`；认知分别保留 availability 与真实 lifecycle。真实 `active AND category=sizing` 用于标准 `shadow`，candidate-only 只能触发低置信 `fallback`，不得决定档位方向。
+- `fallback+cautious` 默认可见区必须恰好 4 个业务段落：①短结论；②`confirm-if=full-close-upside-gate` 上行门；③`invalidate-if=full-close-downside-gate` 下行门；④`review-rule` 缺口/复核。禁止重新增加独立 `recommendation / status / portfolio-status / portfolio-evidence` 可见段落，也禁止在可见区复述市场、认知或老师观点。上行门绑定报告日成交额基线、观察指数数量、MA20/MA5、跌停上限和组合对账；下行门绑定广度、MA5 与跌停下限。`review-rule` 带完整连续的 `trade_calendar` 自然日脊柱，并只压缩显示会影响结论的组合缺口和复核/顺延日。
+- 唯一 `exposure-detail` 固定 `data-items="4"`：前三项是合并后的 market/cognition/teacher 来源与证据，第 4 项是 `data-exposure-evidence="portfolio"`。portfolio 状态只接受 `not-read / unreconciled`；未对齐时用结构化属性和规范文本保留 active holdings、未关联 thesis、open thesis、非作废成交及券商最新业务日，未读取时使用类型化 `lookup:portfolio:<报告日>`。四项都必须有类型化记录/查询引用、来源日期、非空正文和边界；details 默认收起，但容器、summary、evidence-body、证据节点及其实质正文都不得再被显式或祖先 `hidden`。
+- 正式验收从只读 `data/trade.db`（或显式 `--trade-db`）加载事实：成交额门槛精确等于 `daily_market.total_amount`，复核日历逐日状态精确等于 `trade_calendar`；任一 mode 的 `unreconciled` 都会触发 context 加载，并把 active holdings、未关联 thesis、open thesis、关联非作废成交及券商最新业务日逐字段对齐 `holdings / trade_thesis / broker_executions`；`fallback+cautious` 已读取组合事实，不允许改报 `not-read`。HTML 内同步改值、自报组合计数或自报周末开放日都会拒绝落盘。`holdings` 仅有当前状态、没有历史快照，因此该项证明的是组装时 canonical 当前组合状态，不得标成报告日收盘持仓快照。其他 `fallback` 的确认/失效条件仍只允许 market-only 枚举；`conflicted/no_data` 固定 `undetermined` 并在数据缺口可见。整个章节（含折叠证据）执行 Unicode 归一化和比例/操作指令护栏；默认可见实质正文只能归属唯一 Claim 或已知 role，任意无 role `<p>/<div>` 都拒绝。
+- `fallback` 的合并 market 来源/证据携带三项受控状态：`data-market-breadth-state="weak|improving|stable"`、`data-market-volume-state="weak|stable|improving"`、`data-market-structure-state="weak|unconfirmed|stable"`。组装器只用这三项纯函数重算档位：广度与结构同时 `weak` 为 `defensive`；广度非 `weak`、量能非 `weak` 且结构为 `stable` 时为 `neutral`；其余合法组合均为 `cautious`。HTML 声明 tier 必须与重算结果一致。
+- `data-exposure-condition` 固定枚举：`fallback+cautious` 只接受 `full-close-upside-gate / full-close-downside-gate`；其他路径的确认条件可选 `market-structure-holds / volume-breadth-improves / risk-signals-ease / sources-remain-aligned`，失效条件可选 `market-structure-weakens / volume-breadth-deteriorates / risk-signals-worsen / source-conflict-emerges`；可见句子必须与组装器按结构化属性重建的规范文本完全一致。
+
+受控条件的键和值：
+
+| role | `data-exposure-condition` | 固定可见文本 |
+|---|---|---|
+| `confirm-if` | `full-close-upside-gate` | `[判断] 上行门（六项全满足）：成交额 ≥ {data-turnover-floor-yiyuan} 亿元、上涨家数占优、至少 {data-ma20-recovery-min} 个核心宽基收回 MA20、{data-index-universe-size} 个观察指数中至少 {data-ma5-hold-min} 个站上 MA5、跌停 ≤ {data-limit-down-max}、组合完成对账。` |
+| `invalidate-if` | `full-close-downside-gate` | `[判断] 下行门（任一成立）：上涨家数不多于下跌家数且跌停 ≥ {data-limit-down-min}，或 {data-index-universe-size} 个观察指数中至少 {data-ma5-break-min} 个收盘低于 MA5。` |
+| `confirm-if` | `market-structure-holds` | `[判断] 上行门：次日指数结构与市场节点维持。` |
+| `confirm-if` | `volume-breadth-improves` | `[判断] 上行门：次日量能与涨跌家数改善。` |
+| `confirm-if` | `risk-signals-ease` | `[判断] 上行门：次日跌停与高位负反馈缓和。` |
+| `confirm-if` | `sources-remain-aligned` | `[判断] 上行门：次日市场事实继续与认知、老师观点一致。` |
+| `invalidate-if` | `market-structure-weakens` | `[判断] 下行门：次日指数结构或市场节点转弱。` |
+| `invalidate-if` | `volume-breadth-deteriorates` | `[判断] 下行门：次日缩量且下跌家数扩散。` |
+| `invalidate-if` | `risk-signals-worsen` | `[判断] 下行门：次日跌停或高位负反馈扩散。` |
+| `invalidate-if` | `source-conflict-emerges` | `[判断] 下行门：次日市场事实与认知、老师观点出现实质冲突。` |
 - Claim owner 使用唯一 `id="claim-*"`；跨节引用使用匹配的 `data-claim-ref="claim-*"`，每个 owner 最多 1 个短引用。悬空引用、重复 owner 或多次引用均拒绝生成。
 - 完整证据使用默认收起的 `<details class="evidence" data-as-of="YYYY-MM-DD" data-items="N"><summary>…</summary>…</details>`；summary 后必须有非空文本、表格或内嵌媒体。搜索命中折叠证据时临时展开，退出搜索后恢复原状态；“展开/收起全部”只控制证据区。
 - 外壳纯静态、无外部依赖；报告正文禁止 `script/style/form/iframe/object/embed`、事件属性和 `javascript:` URL，禁止远程 `src`/样式、CDN、`fetch`、XHR 与 WebSocket；普通来源超链接可以保留。

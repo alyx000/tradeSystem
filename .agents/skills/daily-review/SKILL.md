@@ -1,7 +1,7 @@
 ---
 name: daily-review
 description: 协助用户完成每日「八步复盘法」，自动拉取客观数据、引导填写主观判断，并将复盘写入数据库
-version: "1.10"
+version: "1.12"
 ---
 
 # Skill: 每日复盘（八步复盘法）
@@ -12,9 +12,13 @@ version: "1.10"
 > 当用户要求「像之前那样出 HTML 复盘」「用多 agent 复盘 YYYY-MM-DD」时，改走 [references/multi-agent-review.md](references/multi-agent-review.md)：
 > 9 路 subagent 仍完整采集 → 主会话只筛选变化、冲突、会改变总裁决或影响持仓的内容 → 精简正文 + 可折叠证据的只读 HTML 报告（`data/reports/复盘_*.html`）。每路主输出固定为 1 条裁决、最多 3 条相对上一交易日的增量事实、最多 2 条冲突/缺口、各 1 条 `confirm_if` / `invalidate_if`；完整事实和表格进入证据层。口径基线（单位换算 / 两市综指口径 `000001.SH + 399106.SZ` / ETF 拆分名单 / 北向禁用 / 红线）与 [HTML 模板](references/html-report-template/README.md) 不变。
 
-多 Agent HTML 报告默认每节只显示「1 句裁决 + 最多 3 条证据 + 1 条证伪或缺口」，同一结论只允许在速览短引一次、在唯一归属章节完整解释一次；无新增内容只写一行，不生成空表。组装器对固定 8 chunks、16 anchors、Claim / evidence 结构、正文/附录预算和静态外部依赖做硬校验，超限必须定位责任章节并拒绝生成，不得自动删字。
+多 Agent HTML 报告默认每节只显示「1 句裁决 + 最多 3 条证据 + 1 条证伪或缺口」，同一结论只允许在速览短引一次、在唯一归属章节完整解释一次；无新增内容只写一行，不生成空表。组装器对固定 8 chunks、17 anchors、Claim / evidence 结构、正文/附录预算和静态外部依赖做硬校验，超限必须定位责任章节并拒绝生成，不得自动删字。
 
-HTML 默认展示顺序为：`速览 → 三位一体重点因子 → ⓪前日判分 → ①–⑦ → 老师观点 → 行业信息 → 认知对照 → 次日推演 → ⑧次日计划 → 数据缺口`。重点因子仍必须在 9 路完整采集、八步复盘与认知对照综合完成后生成，只是在 HTML 中前置展示，不得因展示顺序提前而跳过后续事实输入。该章节必须用 `data-factor-mode` 区分正式 `factor-score`、`rule_only`、人工影子分析或明确无数据；未运行正式评分时必须使用 `shadow` 并写明“影子口径、不写库”。次日推演消费因子裁决后再衔接次日计划。
+HTML 默认展示顺序为：`速览 → 三位一体重点因子 → ⓪前日判分 → ①–⑦ → 老师观点 → 行业信息 → 认知对照 → 仓位环境与纪律参考（影子） → 次日推演 → ⑧次日计划 → 数据缺口`。重点因子仍必须在 9 路完整采集、八步复盘与认知对照综合完成后生成，只是在 HTML 中前置展示，不得因展示顺序提前而跳过后续事实输入。该章节必须用 `data-factor-mode` 区分正式 `factor-score`、`rule_only`、人工影子分析或明确无数据；未运行正式评分时必须使用 `shadow` 并写明“影子口径、不写库”。次日推演消费因子裁决后再衔接次日计划。
+
+仓位环境章节只做只读、待人工确认的定性参考：综合当日客观量能与 `market_node`、严格 `teacher_notes.date=报告日` 的老师观点，以及 `category=sizing` 的历史认知，输出 `防守档 / 谨慎档 / 中性档 / 偏积极档 / 不可判`。三源完整且认知为 `active` 时使用 `shadow`；若市场事实完整、仅有 `candidate` sizing 认知、且当日老师观点完整或存在分歧，则必须使用 `fallback` 给出低置信档位，由当日市场事实主导，候选认知只作约束、老师分歧只降低置信度，不得按老师篇数投票或把老师原始仓位话术直接映射为档位。`fallback` 只允许 `防守档 / 谨慎档 / 中性档`，不得输出 `偏积极档`；市场或老师缺失/陈旧、完全没有 sizing 认知时才使用 `no_data`，active 三源发生无法仲裁的实质冲突时使用 `conflicted`。
+
+当 `fallback` 的市场状态机械映射为 `谨慎档` 时，默认可见区固定只保留 4 条：结论、上行门、下行门、缺口/复核；不得再次展开复述市场、认知、老师观点或单列免责声明。`market / cognition / teacher` 三类来源必须与同名证据合并后放入唯一默认收起的 `exposure-detail`，组合事实 `not-read / unreconciled` 与完整 `portfolio-evidence` 对账留痕作为第 4 项折叠证据；折叠容器、summary、证据正文、四项证据及其实质正文都不得再被显式或祖先 `hidden`。可见缺口/复核只保留会影响结论的对账摘要和严格复核日。上行门必须同时绑定报告日成交额基线、涨跌家数、MA20/MA5、跌停家数与组合事实对账；下行门使用受控广度、跌停与 MA5 条件。正式组装必须读取只读 `data/trade.db`（或显式 `--trade-db`），将成交额门槛与 `daily_market.total_amount`、复核逐日状态与 `trade_calendar`、任一 mode 下 `unreconciled` 的 active holdings/未关联 thesis/open thesis/关联非作废成交/券商最新业务日与 `holdings / trade_thesis / broker_executions` 外部逐字段对账；`fallback+cautious` 已强制读取组合事实，不得降级自报为 `not-read`，HTML 同步篡改也不得通过。`holdings` 是当前状态表而非历史快照，因此该项只证明组装时 canonical 当前组合状态，不得冒充报告日收盘持仓快照。命中只记录证据并在复核日重新计算三状态，不自动改变档位或组合；上下行冲突、必需数据不完整或来源资格失效均记为不可判。所有模式都声明 `data-exposure-boundary="read-only-environment-rating"`，不映射百分比，不出现加仓/减仓/增仓/降仓/满仓/空仓、自动升降档或买入/卖出/持有指令；任意无 role 的默认可见正文均拒绝；不写复盘工作台、`TradeDraft`、`TradePlan` 或持仓。
 
 多 Agent HTML 中的“容量中军”必须从全市场成交额排名**独立筛选**，不得把 `trend_leader_pool`、`leader_tracking` 或最票身份直接当成容量资格：`core` = 当日全市场成交额排名 ≤30 且归属方向成交额排名 ≤2；`candidate` = 当日全市场成交额排名 31～50 且归属方向成交额排名 ≤2。最近 5 个开放交易日进入 Top50 的次数只展示容量连续性，不能覆盖当日成交额门槛。未达门槛者只能进入“趋势池历史代表”或“辨识度票”分表，禁止使用“旧池中军”标签；⑤必须输出结构化容量表、完整来源下的无合格项声明，或来源不足声明。完整筛选、健康度和 HTML 元数据契约见 [多 Agent 流程](references/multi-agent-review.md#容量中军独立筛选硬契约) 与 [HTML 模板](references/html-report-template/README.md#容量中军元数据硬门)。
 

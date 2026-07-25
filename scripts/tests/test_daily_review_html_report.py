@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import re
+import sqlite3
 import subprocess
 import sys
 from datetime import date as date_type
@@ -52,10 +53,46 @@ ANCHORS = (
     "teachers",
     "industry",
     "cognition",
+    "exposure",
     "proj",
     "s8",
     "ops",
 )
+FALLBACK_OPS_MARKER = (
+    "仓位建议置信度较低：市场事实主导，候选认知只作约束。"
+)
+
+
+def _exposure_context(
+    *,
+    date: str = DATE,
+    turnover: str = "21953.01",
+    calendar_overrides: dict[str, bool] | None = None,
+    active_holdings: int = 3,
+    unlinked_holdings: int = 3,
+    open_theses: int = 3,
+    linked_executions: int = 0,
+    latest_broker_biz_date: str | None = None,
+):
+    report_day = date_type.fromisoformat(date)
+    calendar = {
+        report_day.isoformat(): True,
+        (report_day + timedelta(days=1)).isoformat(): True,
+        (report_day + timedelta(days=2)).isoformat(): False,
+        (report_day + timedelta(days=3)).isoformat(): False,
+        (report_day + timedelta(days=4)).isoformat(): True,
+    }
+    calendar.update(calendar_overrides or {})
+    return SimpleNamespace(
+        report_date=date,
+        market_turnover_yiyuan=turnover,
+        trade_calendar=calendar,
+        active_holdings=active_holdings,
+        unlinked_holdings=unlinked_holdings,
+        open_theses=open_theses,
+        linked_executions=linked_executions,
+        latest_broker_biz_date=latest_broker_biz_date or date,
+    )
 
 
 def _capacity_no_data(
@@ -746,6 +783,197 @@ def new_high_manifest_builder():
     return _load_new_high_manifest_builder()
 
 
+def _exposure_section(
+    *,
+    date: str = DATE,
+    mode: str = "shadow",
+    tier: str = "neutral",
+    market_status: str = "complete",
+    market_as_of: str | None = None,
+    market_breadth_state: str = "improving",
+    market_volume_state: str = "weak",
+    market_structure_state: str = "unconfirmed",
+    cognition_source_status: str = "complete",
+    cognition_availability: str = "active",
+    cognition_status: str = "active",
+    cognition_category: str = "sizing",
+    cognition_as_of: str | None = None,
+    teacher_status: str = "complete",
+    teacher_as_of: str | None = None,
+    teacher_date_field: str = "date",
+    include_conditions: bool | None = None,
+    include_decision_card: bool | None = None,
+    portfolio_status: str | None = None,
+    review_date: str | None = None,
+    retry_review_date: str | None = None,
+) -> str:
+    tier_labels = {
+        "defensive": "防守档",
+        "cautious": "谨慎档",
+        "neutral": "中性档",
+        "constructive": "偏积极档",
+        "undetermined": "不可判",
+    }
+    market_as_of = market_as_of or date
+    teacher_as_of = teacher_as_of or date
+    cognition_as_of = cognition_as_of or date
+    portfolio_status = portfolio_status or (
+        "unreconciled"
+        if mode == "fallback" and tier == "cautious"
+        else "not-read"
+    )
+    market_state_attrs = (
+        f' data-market-breadth-state="{market_breadth_state}"'
+        f' data-market-volume-state="{market_volume_state}"'
+        f' data-market-structure-state="{market_structure_state}"'
+        if mode == "fallback"
+        else ""
+    )
+    market_metric_attrs = (
+        ' data-market-turnover-yiyuan="21953.01"'
+        if mode == "fallback" and tier == "cautious"
+        else ""
+    )
+    if include_conditions is None:
+        include_conditions = mode in {"shadow", "fallback"}
+    if include_decision_card is None:
+        include_decision_card = mode == "fallback" and tier == "cautious"
+    report_day = date_type.fromisoformat(date)
+    review_date = review_date or (report_day + timedelta(days=1)).isoformat()
+    retry_review_date = retry_review_date or (
+        report_day + timedelta(days=4)
+    ).isoformat()
+    market_label = "[事实]"
+    cognition_label = (
+        "[历史认知]"
+        if cognition_source_status in {"complete", "conflicted"}
+        else "[事实]"
+    )
+    teacher_label = (
+        "[老师观点]"
+        if teacher_status in {"complete", "conflicted"}
+        else "[事实]"
+    )
+    market_evidence_id = (
+        f"lookup:market:{market_as_of}"
+        if market_status == "missing"
+        else f"market_facts:{market_as_of}"
+    )
+    cognition_evidence_id = (
+        f"lookup:trading_cognitions:{cognition_as_of}"
+        if cognition_availability == "none"
+        else "trading_cognitions:cog_a1b2c3d4"
+    )
+    teacher_evidence_id = (
+        f"lookup:teacher_notes:{teacher_as_of}"
+        if teacher_status == "missing"
+        else "teacher_notes:301,302"
+    )
+    if mode == "fallback" and tier == "cautious":
+        conditions = (
+            """
+  <p data-exposure-role="confirm-if" data-exposure-condition="full-close-upside-gate" data-turnover-floor-yiyuan="21953.01" data-index-universe-size="5" data-ma20-recovery-min="1" data-ma5-hold-min="3" data-limit-down-max="2" data-require-portfolio-reconciled="true">[判断] 上行门（六项全满足）：成交额 ≥ 21953.01 亿元、上涨家数占优、至少 1 个核心宽基收回 MA20、5 个观察指数中至少 3 个站上 MA5、跌停 ≤ 2、组合完成对账。</p>
+  <p data-exposure-role="invalidate-if" data-exposure-condition="full-close-downside-gate" data-index-universe-size="5" data-ma5-break-min="3" data-limit-down-min="3">[判断] 下行门（任一成立）：上涨家数不多于下跌家数且跌停 ≥ 3，或 5 个观察指数中至少 3 个收盘低于 MA5。</p>"""
+            if include_conditions
+            else ""
+        )
+    else:
+        conditions = (
+            """
+  <p data-exposure-role="confirm-if" data-exposure-condition="market-structure-holds">[判断] 上行门：次日指数结构与市场节点维持。</p>
+  <p data-exposure-role="invalidate-if" data-exposure-condition="market-structure-weakens">[判断] 下行门：次日指数结构或市场节点转弱。</p>"""
+            if include_conditions
+            else ""
+        )
+    review_day = date_type.fromisoformat(review_date)
+    retry_review_day = date_type.fromisoformat(retry_review_date)
+
+    def _calendar_span(start: date_type, end: date_type) -> str:
+        if end < start:
+            return f"{end.isoformat()}:open"
+        rows = []
+        cursor = start
+        while cursor <= end:
+            status = "open" if cursor == end else "closed"
+            rows.append(f"{cursor.isoformat()}:{status}")
+            cursor += timedelta(days=1)
+        return ",".join(rows)
+
+    review_calendar_span = _calendar_span(
+        report_day + timedelta(days=1),
+        review_day,
+    )
+    retry_calendar_span = _calendar_span(
+        review_day + timedelta(days=1),
+        retry_review_day,
+    )
+    portfolio_evidence_id = (
+        f"portfolio_reconciliation:{date}"
+        if portfolio_status == "unreconciled"
+        else f"lookup:portfolio:{date}"
+    )
+    portfolio_evidence = (
+        f'<p data-exposure-evidence="portfolio" '
+        f'data-evidence-id="{portfolio_evidence_id}" data-as-of="{date}" '
+        f'data-evidence-boundary="仅作组合事实完整性校验，不映射仓位" '
+        f'data-portfolio-evidence-status="unreconciled" '
+        f'data-active-holdings="3" data-unlinked-holdings="3" '
+        f'data-open-theses="3" data-linked-executions="0" '
+        f'data-latest-broker-biz-date="{date}">'
+        f"[事实] 对账留痕：3 条 active holdings 中 3 条未关联 thesis；"
+        f"3 条 open thesis 截至 {date} 关联 0 条非作废券商成交；"
+        f"券商事实层最新业务日为 {date}。</p>"
+        if portfolio_status == "unreconciled"
+        else (
+            f'<p data-exposure-evidence="portfolio" '
+            f'data-evidence-id="{portfolio_evidence_id}" data-as-of="{date}" '
+            'data-evidence-boundary="仅作组合事实完整性校验，不映射仓位" '
+            'data-portfolio-evidence-status="not-read">'
+            "[事实] 对账留痕：本次未读取组合事实层。</p>"
+        )
+    )
+    review_gap = (
+        "3 条 active holdings 中 3 条未关联 thesis，"
+        "3 条 open thesis 关联 0 条非作废券商成交；"
+        f"券商事实至 {date}"
+        if portfolio_status == "unreconciled"
+        else "组合事实未读取"
+    )
+    decision_card = (
+        f"""
+  <p data-exposure-role="review-rule" data-review-date="{review_date}" data-retry-review-date="{retry_review_date}" data-calendar-status="complete" data-calendar-source="trade_calendar" data-calendar-as-of="{date}" data-calendar-span="{review_calendar_span}" data-retry-calendar-span="{retry_calendar_span}">[事实] 缺口/复核：{review_gap}；{review_date} 收盘复核，数据或对账未齐则顺延至 {retry_review_date}；盘中不判。</p>"""
+        if include_decision_card
+        else ""
+    )
+    detail = f"""
+  <details class="evidence" data-as-of="{date}" data-items="4" data-evidence-kind="exposure-detail">
+    <summary>仓位证据与对账留痕 · {date} · 4 项</summary>
+    <div class="evidence-body">
+      <p data-exposure-source="market" data-source-status="{market_status}" data-exposure-evidence="market" data-evidence-id="{market_evidence_id}" data-as-of="{market_as_of}" data-evidence-boundary="只用于报告日市场环境"{market_state_attrs}{market_metric_attrs}>{market_label} 当日量能与 market_node 状态。</p>
+      <p data-exposure-source="cognition" data-source-status="{cognition_source_status}" data-cognition-availability="{cognition_availability}" data-cognition-status="{cognition_status}" data-cognition-category="{cognition_category}" data-exposure-evidence="cognition" data-evidence-id="{cognition_evidence_id}" data-as-of="{cognition_as_of}" data-evidence-boundary="适用条件成立且失效条件未触发">{cognition_label} 仓位纪律认知及其适用、失效边界。</p>
+      <p data-exposure-source="teacher" data-source-status="{teacher_status}" data-teacher-date-field="{teacher_date_field}" data-exposure-evidence="teacher" data-evidence-id="{teacher_evidence_id}" data-as-of="{teacher_as_of}" data-evidence-boundary="仅作严格当日观点背景，不直接映射仓位">{teacher_label} 严格 teacher_notes.date 当日观点，不直接映射老师仓位话术。</p>
+      {portfolio_evidence}
+    </div>
+  </details>"""
+    if mode == "fallback" and tier == "cautious":
+        claim_text = "结论：谨慎档（低置信）；单日修复不足，上行门全过前不升级。"
+    elif mode == "fallback":
+        claim_text = f"结论：{tier_labels[tier]}（低置信）；按收盘验证门复核。"
+    elif mode == "shadow":
+        claim_text = f"结论：{tier_labels[tier]}；按收盘验证门复核。"
+    elif mode == "conflicted":
+        claim_text = "结论：不可判；证据存在冲突。"
+    else:
+        claim_text = "结论：不可判；证据不足。"
+    return f"""
+<section class="blk" id="exposure" data-exposure-mode="{mode}" data-exposure-tier="{tier}" data-exposure-boundary="read-only-environment-rating">
+  <h2>仓位环境与纪律参考（影子）</h2>
+  <p id="claim-exposure" data-claim-kind="judgment" data-source="market+cognition+teacher" data-as-of="{date}">[判断] {claim_text}</p>
+  {conditions}{decision_card}{detail}
+</section>
+"""
+
+
 def _valid_chunks(date: str = DATE) -> dict[str, str]:
     return {
         "head": f"""
@@ -838,7 +1066,7 @@ def _valid_chunks(date: str = DATE) -> dict[str, str]:
   {_event_window_state(date=date)}
 </section>
 """,
-        "s7t": """
+        "s7t": f"""
 <section class="blk" id="s7">
   <h2>⑦ 持仓</h2>
   <p>[事实] active 持仓无变化；失效条件待补。</p>
@@ -855,6 +1083,7 @@ def _valid_chunks(date: str = DATE) -> dict[str, str]:
   <h2>认知对照</h2>
   <p>[事实] 本日无新增或证伪认知。</p>
 </section>
+{_exposure_section(date=date)}
 """,
         "proj": """
 <section class="blk" id="proj">
@@ -1345,12 +1574,15 @@ def _assert_report_error(
     *,
     capacity_manifest: dict | None = None,
     new_high_manifest: dict | None = None,
+    exposure_context=None,
 ):
+    exposure_context = exposure_context or _exposure_context()
     with pytest.raises(assembler.ReportValidationError) as caught:
         assembler.validate_report(
             html,
             capacity_manifest=capacity_manifest,
             new_high_manifest=new_high_manifest,
+            exposure_context=exposure_context,
         )
     error = caught.value
     assert getattr(error, "code", None)
@@ -1366,7 +1598,7 @@ def test_render_validate_and_write_valid_compact_report(assembler, tmp_path):
 
     assert assembler.REQUIRED_ANCHORS == ANCHORS
     assert tuple(anchor for anchor, _ in assembler.NAV) == ANCHORS
-    assert 'data-report-schema="compact-v1"' in html
+    assert 'data-report-schema="compact-v2"' in html
     assert f'data-report-date="{DATE}"' in html
     assert "只读" in html
     assert "北向禁用" in html
@@ -1378,7 +1610,12 @@ def test_render_validate_and_write_valid_compact_report(assembler, tmp_path):
     positions = [html.index(f'id="{anchor}"') for anchor in ANCHORS]
     assert positions == sorted(positions)
     assert html.index('id="tldr"') < html.index('id="factor"') < html.index('id="s0"')
-    assert html.index('id="cognition"') < html.index('id="proj"') < html.index('id="s8"')
+    assert (
+        html.index('id="cognition"')
+        < html.index('id="exposure"')
+        < html.index('id="proj"')
+        < html.index('id="s8"')
+    )
     for aria_label in ("章节导航", "移动章节导航"):
         match = re.search(
             rf'<nav aria-label="{aria_label}"[^>]*>(.*?)</nav>',
@@ -1646,7 +1883,10 @@ def test_factor_analysis_accepts_formal_and_rule_only_modes(
         "[事实] 状态：正式 factor-score 停在 0713；本日仅影子口径，不写库。",
         status,
     )
-    assembler.validate_report(changed)
+    assembler.validate_report(
+        changed,
+        exposure_context=_exposure_context(),
+    )
 
 
 def test_factor_mode_cannot_relabel_shadow_analysis_as_formal(assembler, tmp_path):
@@ -1740,6 +1980,1827 @@ def test_factor_detail_evidence_requires_all_four_factor_keys(assembler, tmp_pat
         "占位证据。",
     )
     _assert_report_error(assembler, invalid, "invalid_factor_contract")
+
+
+@pytest.mark.parametrize(
+    "tier",
+    ["defensive", "cautious", "neutral", "constructive"],
+)
+def test_exposure_shadow_accepts_all_qualitative_tiers(
+    assembler, tmp_path, tier
+):
+    html, _ = _render_valid(assembler, tmp_path / tier)
+    exposure, _ = _extract_section(html, "exposure")
+    valid = _replace_once(
+        html,
+        exposure,
+        _exposure_section(tier=tier),
+    )
+
+    assembler.validate_report(valid)
+
+
+@pytest.mark.parametrize(
+    ("mode", "replacement", "ops_marker"),
+    [
+        (
+            "no_data",
+            _exposure_section(
+                mode="no_data",
+                tier="undetermined",
+                cognition_source_status="missing",
+                cognition_availability="none",
+                cognition_status="none",
+            ),
+            "仓位参考证据不足：未检索到 sizing 认知。",
+        ),
+        (
+            "conflicted",
+            _exposure_section(
+                mode="conflicted",
+                tier="undetermined",
+                teacher_status="conflicted",
+            ),
+            "仓位参考存在冲突：老师观点与其他证据未收敛。",
+        ),
+    ],
+)
+def test_exposure_degraded_modes_are_explicit_and_non_actionable(
+    assembler, tmp_path, mode, replacement, ops_marker
+):
+    html, _ = _render_valid(assembler, tmp_path / mode)
+    exposure, _ = _extract_section(html, "exposure")
+    changed = _replace_once(html, exposure, replacement)
+    changed = _replace_once(
+        changed,
+        "[事实] 仅列会改变结论可信度的缺口。",
+        f"[事实] 仅列会改变结论可信度的缺口。{ops_marker}",
+    )
+
+    assembler.validate_report(
+        changed,
+        exposure_context=_exposure_context(),
+    )
+
+
+@pytest.mark.parametrize("teacher_status", ["complete", "conflicted"])
+def test_exposure_fallback_gives_low_confidence_tier_for_candidate_only(
+    assembler, tmp_path, teacher_status
+):
+    html, _ = _render_valid(assembler, tmp_path / f"fallback-{teacher_status}")
+    exposure, _ = _extract_section(html, "exposure")
+    replacement = _exposure_section(
+        mode="fallback",
+        tier="cautious",
+        cognition_source_status="missing",
+        cognition_availability="candidate_only",
+        cognition_status="candidate",
+        teacher_status=teacher_status,
+    )
+    teacher_note = (
+        "老师观点存在分歧"
+        if teacher_status == "conflicted"
+        else "老师观点只作当日背景"
+    )
+    changed = _replace_once(html, exposure, replacement)
+    changed = _replace_once(
+        changed,
+        "[事实] 仅列会改变结论可信度的缺口。",
+        "[事实] 仅列会改变结论可信度的缺口。"
+        f"{FALLBACK_OPS_MARKER}{teacher_note}。",
+    )
+
+    assembler.validate_report(
+        changed,
+        exposure_context=_exposure_context(),
+    )
+
+
+def test_exposure_fallback_requires_external_validation_context(
+    assembler, tmp_path
+):
+    html, _ = _render_valid(assembler, tmp_path / "fallback-no-context")
+    exposure, _ = _extract_section(html, "exposure")
+    changed = _replace_once(
+        html,
+        exposure,
+        _exposure_section(
+            mode="fallback",
+            tier="cautious",
+            cognition_source_status="missing",
+            cognition_availability="candidate_only",
+            cognition_status="candidate",
+            teacher_status="conflicted",
+        ),
+    )
+    changed = _replace_once(
+        changed,
+        "[事实] 仅列会改变结论可信度的缺口。",
+        f"[事实] 仅列会改变结论可信度的缺口。{FALLBACK_OPS_MARKER}",
+    )
+
+    with pytest.raises(assembler.ReportValidationError) as caught:
+        assembler.validate_report(changed)
+    assert caught.value.code == "invalid_exposure_context"
+    assert caught.value.section == "exposure"
+
+
+def test_exposure_cautious_context_cannot_downgrade_portfolio_to_not_read(
+    assembler, tmp_path
+):
+    html, _ = _render_valid(assembler, tmp_path / "fallback-not-read")
+    exposure, _ = _extract_section(html, "exposure")
+    changed = _replace_once(
+        html,
+        exposure,
+        _exposure_section(
+            mode="fallback",
+            tier="cautious",
+            cognition_source_status="missing",
+            cognition_availability="candidate_only",
+            cognition_status="candidate",
+            teacher_status="conflicted",
+            portfolio_status="not-read",
+        ),
+    )
+    changed = _replace_once(
+        changed,
+        "[事实] 仅列会改变结论可信度的缺口。",
+        f"[事实] 仅列会改变结论可信度的缺口。{FALLBACK_OPS_MARKER}",
+    )
+
+    error = _assert_report_error(
+        assembler,
+        changed,
+        "invalid_exposure_context",
+    )
+    assert error.section == "exposure"
+
+
+def test_exposure_unreconciled_portfolio_requires_context_in_other_modes(
+    assembler, tmp_path
+):
+    html, _ = _render_valid(assembler, tmp_path / "fallback-neutral-context")
+    exposure, _ = _extract_section(html, "exposure")
+    replacement = _exposure_section(
+        mode="fallback",
+        tier="neutral",
+        market_breadth_state="stable",
+        market_volume_state="stable",
+        market_structure_state="stable",
+        cognition_source_status="missing",
+        cognition_availability="candidate_only",
+        cognition_status="candidate",
+        teacher_status="conflicted",
+        portfolio_status="unreconciled",
+    )
+    for old, new in (
+        ('data-active-holdings="3"', 'data-active-holdings="99"'),
+        ('data-unlinked-holdings="3"', 'data-unlinked-holdings="99"'),
+        ('data-open-theses="3"', 'data-open-theses="99"'),
+        (
+            "3 条 active holdings 中 3 条未关联 thesis",
+            "99 条 active holdings 中 99 条未关联 thesis",
+        ),
+        ("3 条 open thesis", "99 条 open thesis"),
+    ):
+        replacement = replacement.replace(old, new)
+    changed = _replace_once(html, exposure, replacement)
+    changed = _replace_once(
+        changed,
+        "[事实] 仅列会改变结论可信度的缺口。",
+        f"[事实] 仅列会改变结论可信度的缺口。{FALLBACK_OPS_MARKER}",
+    )
+
+    with pytest.raises(assembler.ReportValidationError) as caught:
+        assembler.validate_report(changed)
+    assert caught.value.code == "invalid_exposure_context"
+    assert caught.value.section == "exposure"
+
+
+def test_exposure_fallback_rejects_self_reported_fake_open_day(
+    assembler, tmp_path
+):
+    html, _ = _render_valid(assembler, tmp_path / "fallback-fake-calendar")
+    exposure, _ = _extract_section(html, "exposure")
+    replacement = _exposure_section(
+        mode="fallback",
+        tier="cautious",
+        cognition_source_status="missing",
+        cognition_availability="candidate_only",
+        cognition_status="candidate",
+        teacher_status="conflicted",
+        review_date="2026-07-18",
+        retry_review_date="2026-07-20",
+    )
+    invalid = _replace_once(html, exposure, replacement)
+    invalid = _replace_once(
+        invalid,
+        "[事实] 仅列会改变结论可信度的缺口。",
+        f"[事实] 仅列会改变结论可信度的缺口。{FALLBACK_OPS_MARKER}",
+    )
+
+    error = _assert_report_error(
+        assembler,
+        invalid,
+        "invalid_exposure_context",
+    )
+    assert error.section == "exposure"
+
+
+def test_exposure_fallback_rejects_fully_synchronized_fake_turnover(
+    assembler, tmp_path
+):
+    html, _ = _render_valid(assembler, tmp_path / "fallback-fake-turnover")
+    exposure, _ = _extract_section(html, "exposure")
+    replacement = _exposure_section(
+        mode="fallback",
+        tier="cautious",
+        cognition_source_status="missing",
+        cognition_availability="candidate_only",
+        cognition_status="candidate",
+        teacher_status="conflicted",
+    ).replace("21953.01", "1000.00")
+    invalid = _replace_once(html, exposure, replacement)
+    invalid = _replace_once(
+        invalid,
+        "[事实] 仅列会改变结论可信度的缺口。",
+        f"[事实] 仅列会改变结论可信度的缺口。{FALLBACK_OPS_MARKER}",
+    )
+
+    error = _assert_report_error(
+        assembler,
+        invalid,
+        "invalid_exposure_context",
+    )
+    assert error.section == "exposure"
+
+
+def test_exposure_fallback_rejects_fully_synchronized_fake_portfolio(
+    assembler, tmp_path
+):
+    html, _ = _render_valid(assembler, tmp_path / "fallback-fake-portfolio")
+    exposure, _ = _extract_section(html, "exposure")
+    replacement = _exposure_section(
+        mode="fallback",
+        tier="cautious",
+        cognition_source_status="missing",
+        cognition_availability="candidate_only",
+        cognition_status="candidate",
+        teacher_status="conflicted",
+    )
+    for old, new in (
+        ('data-active-holdings="3"', 'data-active-holdings="99"'),
+        ('data-unlinked-holdings="3"', 'data-unlinked-holdings="99"'),
+        ('data-open-theses="3"', 'data-open-theses="99"'),
+        ('data-linked-executions="0"', 'data-linked-executions="99"'),
+        (
+            "3 条 active holdings 中 3 条未关联 thesis",
+            "99 条 active holdings 中 99 条未关联 thesis",
+        ),
+        (
+            "3 条 open thesis",
+            "99 条 open thesis",
+        ),
+        (
+            "关联 0 条非作废券商成交",
+            "关联 99 条非作废券商成交",
+        ),
+    ):
+        replacement = replacement.replace(old, new)
+    invalid = _replace_once(html, exposure, replacement)
+    invalid = _replace_once(
+        invalid,
+        "[事实] 仅列会改变结论可信度的缺口。",
+        f"[事实] 仅列会改变结论可信度的缺口。{FALLBACK_OPS_MARKER}",
+    )
+
+    error = _assert_report_error(
+        assembler,
+        invalid,
+        "invalid_exposure_context",
+    )
+    assert error.section == "exposure"
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("active_holdings", 4),
+        ("unlinked_holdings", 2),
+        ("open_theses", 2),
+        ("linked_executions", 1),
+        ("latest_broker_biz_date", "2026-07-15"),
+    ],
+)
+def test_exposure_fallback_checks_each_external_portfolio_field(
+    assembler, tmp_path, field, value
+):
+    html, _ = _render_valid(
+        assembler,
+        tmp_path / f"fallback-portfolio-context-{field}",
+    )
+    exposure, _ = _extract_section(html, "exposure")
+    invalid = _replace_once(
+        html,
+        exposure,
+        _exposure_section(
+            mode="fallback",
+            tier="cautious",
+            cognition_source_status="missing",
+            cognition_availability="candidate_only",
+            cognition_status="candidate",
+            teacher_status="conflicted",
+        ),
+    )
+    invalid = _replace_once(
+        invalid,
+        "[事实] 仅列会改变结论可信度的缺口。",
+        f"[事实] 仅列会改变结论可信度的缺口。{FALLBACK_OPS_MARKER}",
+    )
+
+    error = _assert_report_error(
+        assembler,
+        invalid,
+        "invalid_exposure_context",
+        exposure_context=_exposure_context(**{field: value}),
+    )
+    assert error.section == "exposure"
+
+
+def test_load_exposure_validation_context_reads_portfolio_snapshot(
+    assembler, tmp_path
+):
+    db_path = tmp_path / "trade.db"
+    connection = sqlite3.connect(db_path)
+    try:
+        connection.executescript(
+            """
+            CREATE TABLE daily_market (date TEXT, total_amount REAL);
+            CREATE TABLE trade_calendar (date TEXT, is_open INTEGER);
+            CREATE TABLE holdings (
+                status TEXT,
+                thesis_id INTEGER,
+                entry_date TEXT
+            );
+            CREATE TABLE trade_thesis (
+                id INTEGER,
+                status TEXT,
+                opened_at TEXT,
+                closed_at TEXT
+            );
+            CREATE TABLE broker_executions (
+                biz_date TEXT,
+                thesis_id INTEGER,
+                is_void INTEGER
+            );
+            """
+        )
+        connection.execute(
+            "INSERT INTO daily_market VALUES (?, ?)",
+            (DATE, 21953.01),
+        )
+        report_day = date_type.fromisoformat(DATE)
+        connection.executemany(
+            "INSERT INTO trade_calendar VALUES (?, ?)",
+            [
+                (
+                    (report_day + timedelta(days=offset)).isoformat(),
+                    int(offset in {0, 1, 4}),
+                )
+                for offset in range(5)
+            ],
+        )
+        connection.executemany(
+            "INSERT INTO holdings VALUES (?, ?, ?)",
+            [
+                ("active", None, "2026-07-01"),
+                ("active", None, "2026-07-02"),
+                ("active", 10, "2026-07-03"),
+                ("closed", None, "2026-06-01"),
+            ],
+        )
+        connection.executemany(
+            "INSERT INTO trade_thesis VALUES (?, ?, ?, ?)",
+            [
+                (10, "open", "2026-07-15", None),
+                (11, "open", DATE, None),
+                (12, "closed", "2026-07-10", "2026-07-15"),
+                (13, "open", "2026-07-17", None),
+            ],
+        )
+        connection.executemany(
+            "INSERT INTO broker_executions VALUES (?, ?, ?)",
+            [
+                ("2026-07-15", 10, 0),
+                (DATE, 10, 1),
+                (DATE, 12, 0),
+                (DATE, None, 0),
+                ("2026-07-17", 11, 0),
+            ],
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    context = assembler.load_exposure_validation_context(db_path, DATE)
+
+    assert context.market_turnover_yiyuan == "21953.01"
+    assert context.active_holdings == 3
+    assert context.unlinked_holdings == 2
+    assert context.open_theses == 2
+    assert context.linked_executions == 1
+    assert context.latest_broker_biz_date == DATE
+
+
+@pytest.mark.parametrize(
+    "attribute",
+    [
+        ' data-claim-kind="judgment"',
+        ' data-exposure-role="confirm-if"',
+        ' data-exposure-role="invalidate-if"',
+        ' data-exposure-role="review-rule"',
+    ],
+)
+def test_exposure_fallback_requires_exact_four_visible_decision_blocks(
+    assembler, tmp_path, attribute
+):
+    html, _ = _render_valid(assembler, tmp_path / "fallback-card")
+    exposure, _ = _extract_section(html, "exposure")
+    replacement = _exposure_section(
+        mode="fallback",
+        tier="cautious",
+        cognition_source_status="missing",
+        cognition_availability="candidate_only",
+        cognition_status="candidate",
+        teacher_status="conflicted",
+    ).replace(attribute, "", 1)
+    invalid = _replace_once(html, exposure, replacement)
+    invalid = _replace_once(
+        invalid,
+        "[事实] 仅列会改变结论可信度的缺口。",
+        f"[事实] 仅列会改变结论可信度的缺口。{FALLBACK_OPS_MARKER}",
+    )
+
+    error = _assert_report_error(
+        assembler, invalid, "invalid_exposure_contract"
+    )
+    assert error.section == "exposure"
+
+
+def test_exposure_cautious_fallback_keeps_only_four_visible_decision_blocks(
+    assembler,
+):
+    exposure = _exposure_section(
+        mode="fallback",
+        tier="cautious",
+        cognition_source_status="missing",
+        cognition_availability="candidate_only",
+        cognition_status="candidate",
+        teacher_status="conflicted",
+    )
+    visible, folded = exposure.split('<details class="evidence"', 1)
+
+    assert visible.count("<p ") == 4
+    assert visible.count('data-claim-kind="judgment"') == 1
+    for role in ("confirm-if", "invalidate-if", "review-rule"):
+        assert visible.count(f'data-exposure-role="{role}"') == 1
+    for legacy_role in (
+        "status",
+        "recommendation",
+        "portfolio-status",
+        "portfolio-evidence",
+    ):
+        assert f'data-exposure-role="{legacy_role}"' not in visible
+    for source in ("market", "cognition", "teacher"):
+        assert f'data-exposure-source="{source}"' not in visible
+        assert folded.count(f'data-exposure-source="{source}"') == 1
+        assert folded.count(f'data-exposure-evidence="{source}"') == 1
+    assert 'data-exposure-evidence="portfolio"' in folded
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        ('data-unlinked-holdings="3"', 'data-unlinked-holdings="2"'),
+        (
+            "3 条 active holdings 中 3 条未关联 thesis",
+            "3 条 active holdings 中 2 条未关联 thesis",
+        ),
+        (
+            'data-latest-broker-biz-date="2026-07-16"',
+            'data-latest-broker-biz-date="2026-07-17"',
+        ),
+    ],
+)
+def test_exposure_portfolio_evidence_uses_controlled_fact_template(
+    assembler, tmp_path, old, new
+):
+    html, _ = _render_valid(assembler, tmp_path / "portfolio-evidence")
+    exposure, _ = _extract_section(html, "exposure")
+    replacement = _exposure_section(
+        mode="fallback",
+        tier="cautious",
+        cognition_source_status="missing",
+        cognition_availability="candidate_only",
+        cognition_status="candidate",
+        teacher_status="conflicted",
+    ).replace(old, new, 1)
+    invalid = _replace_once(html, exposure, replacement)
+    invalid = _replace_once(
+        invalid,
+        "[事实] 仅列会改变结论可信度的缺口。",
+        f"[事实] 仅列会改变结论可信度的缺口。{FALLBACK_OPS_MARKER}",
+    )
+
+    error = _assert_report_error(
+        assembler,
+        invalid,
+        "invalid_exposure_contract",
+    )
+    assert error.section == "exposure"
+
+
+@pytest.mark.parametrize(
+    ("mode", "tier"),
+    [
+        ("shadow", "neutral"),
+        ("fallback", "defensive"),
+        ("fallback", "neutral"),
+        ("conflicted", "undetermined"),
+        ("no_data", "undetermined"),
+    ],
+)
+def test_exposure_concrete_card_is_limited_to_cautious_fallback(
+    assembler, tmp_path, mode, tier
+):
+    html, _ = _render_valid(assembler, tmp_path / f"{mode}-{tier}-card")
+    exposure, _ = _extract_section(html, "exposure")
+    replacement = _exposure_section(
+        mode=mode,
+        tier=tier,
+        cognition_source_status=(
+            "missing" if mode in {"fallback", "no_data"} else "complete"
+        ),
+        cognition_availability=(
+            "candidate_only"
+            if mode == "fallback"
+            else "none" if mode == "no_data" else "active"
+        ),
+        cognition_status=(
+            "candidate"
+            if mode == "fallback"
+            else "none" if mode == "no_data" else "active"
+        ),
+        teacher_status="conflicted" if mode == "conflicted" else "complete",
+        include_decision_card=True,
+        include_conditions=mode in {"shadow", "fallback"},
+    )
+    invalid = _replace_once(html, exposure, replacement)
+
+    error = _assert_report_error(
+        assembler, invalid, "invalid_exposure_contract"
+    )
+    assert error.section == "exposure"
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        ('data-turnover-floor-yiyuan="21953.01"', 'data-turnover-floor-yiyuan="1"'),
+        ("成交额 ≥ 21953.01 亿元", "成交额 ≥ 1 亿元"),
+        ('data-ma5-hold-min="3"', 'data-ma5-hold-min="2"'),
+        ("至少 3 个站上 MA5", "至少 2 个站上 MA5"),
+        ('data-limit-down-min="3"', 'data-limit-down-min="2"'),
+        ("跌停 ≥ 3", "跌停 ≥ 2"),
+    ],
+)
+def test_exposure_fallback_gate_text_must_match_structured_thresholds(
+    assembler, tmp_path, old, new
+):
+    html, _ = _render_valid(assembler, tmp_path / "fallback-gates")
+    exposure, _ = _extract_section(html, "exposure")
+    replacement = _exposure_section(
+        mode="fallback",
+        tier="cautious",
+        cognition_source_status="missing",
+        cognition_availability="candidate_only",
+        cognition_status="candidate",
+        teacher_status="conflicted",
+    ).replace(old, new, 1)
+    invalid = _replace_once(html, exposure, replacement)
+    invalid = _replace_once(
+        invalid,
+        "[事实] 仅列会改变结论可信度的缺口。",
+        f"[事实] 仅列会改变结论可信度的缺口。{FALLBACK_OPS_MARKER}",
+    )
+
+    error = _assert_report_error(
+        assembler, invalid, "invalid_exposure_contract"
+    )
+    assert error.section == "exposure"
+
+
+@pytest.mark.parametrize(
+    "anchor",
+    [
+        'data-turnover-floor-yiyuan="21953.01"',
+        'data-market-turnover-yiyuan="21953.01"',
+    ],
+)
+def test_exposure_fallback_turnover_floor_must_match_report_day_market_fact(
+    assembler, tmp_path, anchor
+):
+    html, _ = _render_valid(assembler, tmp_path / "fallback-turnover-anchor")
+    exposure, _ = _extract_section(html, "exposure")
+    replacement = _exposure_section(
+        mode="fallback",
+        tier="cautious",
+        cognition_source_status="missing",
+        cognition_availability="candidate_only",
+        cognition_status="candidate",
+        teacher_status="conflicted",
+    )
+    assert replacement.count(anchor) == 1
+    replacement = replacement.replace(
+        anchor,
+        anchor.replace("21953.01", "21953.02"),
+        1,
+    )
+    invalid = _replace_once(html, exposure, replacement)
+    invalid = _replace_once(
+        invalid,
+        "[事实] 仅列会改变结论可信度的缺口。",
+        f"[事实] 仅列会改变结论可信度的缺口。{FALLBACK_OPS_MARKER}",
+    )
+
+    error = _assert_report_error(
+        assembler, invalid, "invalid_exposure_contract"
+    )
+    assert error.section == "exposure"
+
+
+@pytest.mark.parametrize(
+    ("review_date", "retry_review_date"),
+    [
+        (DATE, "2026-07-20"),
+        ("2026-07-17", "2026-07-17"),
+        ("2026-07-20", "2026-07-17"),
+    ],
+)
+def test_exposure_fallback_review_dates_must_move_forward(
+    assembler, tmp_path, review_date, retry_review_date
+):
+    html, _ = _render_valid(assembler, tmp_path / "fallback-review-date")
+    exposure, _ = _extract_section(html, "exposure")
+    replacement = _exposure_section(
+        mode="fallback",
+        tier="cautious",
+        cognition_source_status="missing",
+        cognition_availability="candidate_only",
+        cognition_status="candidate",
+        teacher_status="conflicted",
+        review_date=review_date,
+        retry_review_date=retry_review_date,
+    )
+    invalid = _replace_once(html, exposure, replacement)
+    invalid = _replace_once(
+        invalid,
+        "[事实] 仅列会改变结论可信度的缺口。",
+        f"[事实] 仅列会改变结论可信度的缺口。{FALLBACK_OPS_MARKER}",
+    )
+
+    error = _assert_report_error(
+        assembler, invalid, "invalid_exposure_contract"
+    )
+    assert error.section == "exposure"
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        ('data-calendar-status="complete"', 'data-calendar-status="partial"'),
+        ('data-calendar-source="trade_calendar"', 'data-calendar-source="guess"'),
+        (
+            f'data-calendar-as-of="{DATE}"',
+            'data-calendar-as-of="2026-07-15"',
+        ),
+        (
+            'data-calendar-span="2026-07-17:open"',
+            'data-calendar-span="2026-07-18:open"',
+        ),
+        (
+            'data-calendar-span="2026-07-17:open"',
+            'data-calendar-span="2026-13-17:open"',
+        ),
+        (
+            'data-retry-calendar-span="2026-07-18:closed,2026-07-19:closed,2026-07-20:open"',
+            'data-retry-calendar-span="2026-07-18:closed,2026-07-20:open"',
+        ),
+    ],
+)
+def test_exposure_fallback_review_rule_requires_continuous_trade_calendar(
+    assembler, tmp_path, old, new
+):
+    html, _ = _render_valid(assembler, tmp_path / "fallback-calendar")
+    exposure, _ = _extract_section(html, "exposure")
+    replacement = _exposure_section(
+        mode="fallback",
+        tier="cautious",
+        cognition_source_status="missing",
+        cognition_availability="candidate_only",
+        cognition_status="candidate",
+        teacher_status="conflicted",
+    ).replace(old, new, 1)
+    invalid = _replace_once(html, exposure, replacement)
+    invalid = _replace_once(
+        invalid,
+        "[事实] 仅列会改变结论可信度的缺口。",
+        f"[事实] 仅列会改变结论可信度的缺口。{FALLBACK_OPS_MARKER}",
+    )
+
+    error = _assert_report_error(
+        assembler, invalid, "invalid_exposure_contract"
+    )
+    assert error.section == "exposure"
+
+
+@pytest.mark.parametrize(
+    (
+        "tier",
+        "market_breadth_state",
+        "market_volume_state",
+        "market_structure_state",
+    ),
+    [
+        ("defensive", "weak", "weak", "weak"),
+        ("cautious", "improving", "weak", "unconfirmed"),
+        ("neutral", "stable", "stable", "stable"),
+    ],
+)
+def test_exposure_fallback_market_states_determine_tier(
+    assembler,
+    tmp_path,
+    tier,
+    market_breadth_state,
+    market_volume_state,
+    market_structure_state,
+):
+    html, _ = _render_valid(assembler, tmp_path / f"fallback-map-{tier}")
+    exposure, _ = _extract_section(html, "exposure")
+    replacement = _exposure_section(
+        mode="fallback",
+        tier=tier,
+        market_breadth_state=market_breadth_state,
+        market_volume_state=market_volume_state,
+        market_structure_state=market_structure_state,
+        cognition_source_status="missing",
+        cognition_availability="candidate_only",
+        cognition_status="candidate",
+        teacher_status="conflicted",
+    )
+    changed = _replace_once(html, exposure, replacement)
+    changed = _replace_once(
+        changed,
+        "[事实] 仅列会改变结论可信度的缺口。",
+        f"[事实] 仅列会改变结论可信度的缺口。{FALLBACK_OPS_MARKER}",
+    )
+
+    assembler.validate_report(
+        changed,
+        exposure_context=_exposure_context(),
+    )
+
+
+def test_exposure_fallback_rejects_tier_that_disagrees_with_market_states(
+    assembler, tmp_path
+):
+    html, _ = _render_valid(assembler, tmp_path / "fallback-map-mismatch")
+    exposure, _ = _extract_section(html, "exposure")
+    replacement = _exposure_section(
+        mode="fallback",
+        tier="neutral",
+        market_breadth_state="improving",
+        market_volume_state="weak",
+        market_structure_state="unconfirmed",
+        cognition_source_status="missing",
+        cognition_availability="candidate_only",
+        cognition_status="candidate",
+        teacher_status="conflicted",
+    )
+    invalid = _replace_once(html, exposure, replacement)
+    invalid = _replace_once(
+        invalid,
+        "[事实] 仅列会改变结论可信度的缺口。",
+        f"[事实] 仅列会改变结论可信度的缺口。{FALLBACK_OPS_MARKER}",
+    )
+
+    error = _assert_report_error(
+        assembler, invalid, "invalid_exposure_contract"
+    )
+    assert error.section == "exposure"
+
+
+def test_exposure_fallback_market_state_change_must_recompute_tier(
+    assembler, tmp_path
+):
+    html, _ = _render_valid(assembler, tmp_path / "fallback-state-mismatch")
+    exposure, _ = _extract_section(html, "exposure")
+    replacement = _exposure_section(
+        mode="fallback",
+        tier="cautious",
+        cognition_source_status="missing",
+        cognition_availability="candidate_only",
+        cognition_status="candidate",
+        teacher_status="conflicted",
+    )
+    replacement = replacement.replace(
+        'data-market-volume-state="weak"',
+        'data-market-volume-state="stable"',
+        1,
+    ).replace(
+        'data-market-structure-state="unconfirmed"',
+        'data-market-structure-state="stable"',
+        1,
+    )
+    invalid = _replace_once(html, exposure, replacement)
+    invalid = _replace_once(
+        invalid,
+        "[事实] 仅列会改变结论可信度的缺口。",
+        f"[事实] 仅列会改变结论可信度的缺口。{FALLBACK_OPS_MARKER}",
+    )
+
+    error = _assert_report_error(
+        assembler, invalid, "invalid_exposure_contract"
+    )
+    assert error.section == "exposure"
+
+
+@pytest.mark.parametrize(
+    "tier",
+    ["constructive", "undetermined"],
+)
+def test_exposure_fallback_rejects_aggressive_or_undetermined_tier(
+    assembler, tmp_path, tier
+):
+    html, _ = _render_valid(assembler, tmp_path / tier)
+    exposure, _ = _extract_section(html, "exposure")
+    replacement = _exposure_section(
+        mode="fallback",
+        tier=tier,
+        cognition_source_status="missing",
+        cognition_availability="candidate_only",
+        cognition_status="candidate",
+        teacher_status="conflicted",
+    )
+    invalid = _replace_once(html, exposure, replacement)
+    invalid = _replace_once(
+        invalid,
+        "[事实] 仅列会改变结论可信度的缺口。",
+        f"[事实] 仅列会改变结论可信度的缺口。{FALLBACK_OPS_MARKER}",
+    )
+
+    error = _assert_report_error(
+        assembler, invalid, "invalid_exposure_contract"
+    )
+    assert error.section == "exposure"
+
+
+@pytest.mark.parametrize(
+    ("market_status", "market_as_of", "teacher_status", "teacher_as_of"),
+    [
+        ("missing", DATE, "conflicted", DATE),
+        ("stale", "2026-07-15", "conflicted", DATE),
+        ("complete", DATE, "missing", DATE),
+        ("complete", DATE, "stale", "2026-07-15"),
+    ],
+)
+def test_exposure_fallback_requires_current_market_and_teacher_evidence(
+    assembler,
+    tmp_path,
+    market_status,
+    market_as_of,
+    teacher_status,
+    teacher_as_of,
+):
+    html, _ = _render_valid(assembler, tmp_path / f"{market_status}-{teacher_status}")
+    exposure, _ = _extract_section(html, "exposure")
+    replacement = _exposure_section(
+        mode="fallback",
+        tier="cautious",
+        market_status=market_status,
+        market_as_of=market_as_of,
+        cognition_source_status="missing",
+        cognition_availability="candidate_only",
+        cognition_status="candidate",
+        teacher_status=teacher_status,
+        teacher_as_of=teacher_as_of,
+    )
+    invalid = _replace_once(html, exposure, replacement)
+    invalid = _replace_once(
+        invalid,
+        "[事实] 仅列会改变结论可信度的缺口。",
+        f"[事实] 仅列会改变结论可信度的缺口。{FALLBACK_OPS_MARKER}",
+    )
+
+    error = _assert_report_error(
+        assembler, invalid, "invalid_exposure_contract"
+    )
+    assert error.section == "exposure"
+
+
+def test_exposure_fallback_requires_both_controlled_conditions(
+    assembler, tmp_path
+):
+    html, _ = _render_valid(assembler, tmp_path / "fallback-no-conditions")
+    exposure, _ = _extract_section(html, "exposure")
+    replacement = _exposure_section(
+        mode="fallback",
+        tier="cautious",
+        cognition_source_status="missing",
+        cognition_availability="candidate_only",
+        cognition_status="candidate",
+        teacher_status="conflicted",
+        include_conditions=False,
+    )
+    invalid = _replace_once(html, exposure, replacement)
+    invalid = _replace_once(
+        invalid,
+        "[事实] 仅列会改变结论可信度的缺口。",
+        f"[事实] 仅列会改变结论可信度的缺口。{FALLBACK_OPS_MARKER}",
+    )
+
+    error = _assert_report_error(
+        assembler, invalid, "invalid_exposure_contract"
+    )
+    assert error.section == "exposure"
+
+
+@pytest.mark.parametrize(
+    ("old_key", "new_key"),
+    [
+        ("full-close-upside-gate", "sources-remain-aligned"),
+        ("full-close-downside-gate", "source-conflict-emerges"),
+    ],
+)
+def test_exposure_fallback_conditions_must_be_market_only(
+    assembler, tmp_path, old_key, new_key
+):
+    html, _ = _render_valid(assembler, tmp_path / f"fallback-{new_key}")
+    exposure, _ = _extract_section(html, "exposure")
+    replacement = _exposure_section(
+        mode="fallback",
+        tier="cautious",
+        cognition_source_status="missing",
+        cognition_availability="candidate_only",
+        cognition_status="candidate",
+        teacher_status="conflicted",
+    ).replace(old_key, new_key, 1)
+    invalid = _replace_once(html, exposure, replacement)
+    invalid = _replace_once(
+        invalid,
+        "[事实] 仅列会改变结论可信度的缺口。",
+        f"[事实] 仅列会改变结论可信度的缺口。{FALLBACK_OPS_MARKER}",
+    )
+
+    error = _assert_report_error(
+        assembler, invalid, "invalid_exposure_contract"
+    )
+    assert error.section == "exposure"
+
+
+def test_exposure_fallback_claim_must_say_low_confidence(
+    assembler, tmp_path
+):
+    html, _ = _render_valid(assembler, tmp_path / "fallback-claim")
+    exposure, _ = _extract_section(html, "exposure")
+    replacement = _exposure_section(
+        mode="fallback",
+        tier="cautious",
+        cognition_source_status="missing",
+        cognition_availability="candidate_only",
+        cognition_status="candidate",
+        teacher_status="conflicted",
+    ).replace("谨慎档（低置信）", "谨慎档", 1)
+    invalid = _replace_once(html, exposure, replacement)
+    invalid = _replace_once(
+        invalid,
+        "[事实] 仅列会改变结论可信度的缺口。",
+        f"[事实] 仅列会改变结论可信度的缺口。{FALLBACK_OPS_MARKER}",
+    )
+
+    error = _assert_report_error(
+        assembler, invalid, "invalid_exposure_contract"
+    )
+    assert error.section == "exposure"
+
+
+def test_exposure_fallback_requires_candidate_sizing_cognition(
+    assembler, tmp_path
+):
+    html, _ = _render_valid(assembler, tmp_path / "fallback-none")
+    exposure, _ = _extract_section(html, "exposure")
+    replacement = _exposure_section(
+        mode="fallback",
+        tier="cautious",
+        cognition_source_status="missing",
+        cognition_availability="none",
+        cognition_status="none",
+        teacher_status="conflicted",
+    )
+    invalid = _replace_once(html, exposure, replacement)
+    invalid = _replace_once(
+        invalid,
+        "[事实] 仅列会改变结论可信度的缺口。",
+        f"[事实] 仅列会改变结论可信度的缺口。{FALLBACK_OPS_MARKER}",
+    )
+
+    error = _assert_report_error(
+        assembler, invalid, "invalid_exposure_contract"
+    )
+    assert error.section == "exposure"
+
+
+def test_exposure_fallback_requires_visible_low_confidence_receipt(
+    assembler, tmp_path
+):
+    html, _ = _render_valid(assembler, tmp_path / "fallback-receipt")
+    exposure, _ = _extract_section(html, "exposure")
+    replacement = _exposure_section(
+        mode="fallback",
+        tier="cautious",
+        cognition_source_status="missing",
+        cognition_availability="candidate_only",
+        cognition_status="candidate",
+        teacher_status="conflicted",
+    )
+    invalid = _replace_once(html, exposure, replacement)
+
+    error = _assert_report_error(
+        assembler,
+        invalid,
+        "invalid_exposure_contract",
+    )
+    assert error.section == "ops"
+
+
+def test_exposure_no_data_cannot_hide_fallback_eligible_candidate_evidence(
+    assembler, tmp_path
+):
+    html, _ = _render_valid(assembler, tmp_path / "no-data-candidate")
+    exposure, _ = _extract_section(html, "exposure")
+    replacement = _exposure_section(
+        mode="no_data",
+        tier="undetermined",
+        cognition_source_status="missing",
+        cognition_availability="candidate_only",
+        cognition_status="candidate",
+        teacher_status="conflicted",
+    )
+    invalid = _replace_once(html, exposure, replacement)
+    invalid = _replace_once(
+        invalid,
+        "[事实] 仅列会改变结论可信度的缺口。",
+        "[事实] 仅列会改变结论可信度的缺口。仓位参考证据不足。",
+    )
+
+    _assert_report_error(assembler, invalid, "invalid_exposure_contract")
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        (' data-exposure-mode="shadow"', ""),
+        ('data-exposure-mode="shadow"', 'data-exposure-mode="unknown"'),
+        (' data-exposure-tier="neutral"', ' data-exposure-tier="unknown"'),
+        (' data-exposure-boundary="read-only-environment-rating"', ""),
+        (' data-exposure-role="confirm-if"', ""),
+        (' data-exposure-role="invalidate-if"', ""),
+        (' data-evidence-kind="exposure-detail"', ""),
+    ],
+)
+def test_exposure_shadow_requires_mode_tier_status_conditions_and_detail(
+    assembler, tmp_path, old, new
+):
+    html, _ = _render_valid(assembler, tmp_path / "chunks")
+    invalid = _replace_once(html, old, new)
+    error = _assert_report_error(
+        assembler,
+        invalid,
+        "invalid_exposure_contract",
+    )
+    assert error.section == "exposure"
+
+
+@pytest.mark.parametrize(
+    "old,new",
+    [
+        (
+            "结论：中性档；按收盘验证门复核。",
+            "推荐仓位：中性档。",
+        ),
+        (
+            "结论：中性档；按收盘验证门复核。",
+            "当前参考环境档位：中性档，建议仓位 50%。",
+        ),
+        (
+            "结论：中性档；按收盘验证门复核。",
+            "当前参考环境档位：中性档，建议加仓。",
+        ),
+        (
+            "结论：中性档；按收盘验证门复核。",
+            "当前参考环境档位：中性档，维持五成仓。",
+        ),
+        (
+            "结论：中性档；按收盘验证门复核。",
+            "当前参考环境档位：中性档，维持半仓。",
+        ),
+        (
+            "结论：中性档；按收盘验证门复核。",
+            "当前参考环境档位：中性档，维持 1/2 仓位。",
+        ),
+        (
+            "结论：中性档；按收盘验证门复核。",
+            "当前参考环境档位：中性档，维持 0.5 仓位。",
+        ),
+        (
+            "结论：中性档；按收盘验证门复核。",
+            "当前参考环境档位：中性档，应买入标的。",
+        ),
+        (
+            "结论：中性档；按收盘验证门复核。",
+            "当前参考环境档位：中性档，应卖出标的。",
+        ),
+        (
+            "结论：中性档；按收盘验证门复核。",
+            "当前参考环境档位：中性档，继续持有。",
+        ),
+        (
+            "结论：中性档；按收盘验证门复核。",
+            "当前参考环境档位：中性档，按四分之一仓位执行。",
+        ),
+        (
+            "结论：中性档；按收盘验证门复核。",
+            "当前参考环境档位：中性档，实际按防守档执行。",
+        ),
+    ],
+)
+def test_exposure_rejects_recommendation_ratios_and_position_actions(
+    assembler, tmp_path, old, new
+):
+    html, _ = _render_valid(assembler, tmp_path / "chunks")
+    invalid = _replace_once(html, old, new)
+    _assert_report_error(
+        assembler,
+        invalid,
+        "invalid_exposure_contract",
+    )
+
+
+@pytest.mark.parametrize(
+    "instruction",
+    [
+        "建议仓位 50%",
+        "维持半仓",
+        "仓位为 1/2",
+        "仓位 0.5",
+        "仓位四分之一",
+        "上调仓位",
+        "提高风险敞口",
+        "增配",
+        "买进",
+        "仓位一半",
+        "仓位 50％",
+        "加\u200b仓",
+        "建议配置三成",
+        "风险敞口为 1/2",
+        "仓位⅓",
+        "建议加️仓",
+        "建议加͏仓",
+        "提升仓位",
+        "减少头寸",
+        "扩大敞口",
+        "介入标的",
+        "退出标的",
+        "回避所有标的",
+        "仓位对半",
+        "仓位五五开",
+        "½ 仓位",
+        "风险预算目标回落至谨慎档",
+        "确认后风险预算升一档",
+        "触发后风险预算降一档",
+        "风险预算保持不变",
+        "自动调整组合",
+        "条件成立后增仓",
+        "条件成立后降仓",
+        "条件成立后扩仓",
+        "条件成立后缩仓",
+        "条件成立后提仓",
+        "条件成立后控仓",
+    ],
+)
+def test_exposure_guardrail_normalizes_and_rejects_visible_instructions(
+    assembler, tmp_path, instruction
+):
+    html, _ = _render_valid(assembler, tmp_path / "chunks")
+    invalid = _replace_once(
+        html,
+        "[事实] 当日量能与 market_node 状态。",
+        f"[事实] {instruction}。",
+    )
+    _assert_report_error(
+        assembler,
+        invalid,
+        "invalid_exposure_contract",
+    )
+
+
+@pytest.mark.parametrize(
+    "untyped_text",
+    [
+        "[判断] 具体建议：本日单日修复不足以证明风险环境可升级；"
+        "先完成组合事实核对，下一开放日收盘后按验证条件重算。",
+        "[判断] 本日修复不足以证明风险环境升级，"
+        "先核对组合事实，下一开放日收盘复算。",
+        "[判断] 条件成立后提高资金使用率。",
+        "[判断] 条件成立后股票多买一些。",
+        "[判断] 条件成立后抛售一部分股票。",
+    ],
+)
+def test_exposure_rejects_untyped_visible_paragraphs(
+    assembler, tmp_path, untyped_text
+):
+    html, _ = _render_valid(assembler, tmp_path / "untyped-fallback-card")
+    invalid = _replace_once(
+        html,
+        f'<details class="evidence" data-as-of="{DATE}" data-items="4" '
+        'data-evidence-kind="exposure-detail">',
+        f"<p>{untyped_text}</p>"
+        f'<details class="evidence" data-as-of="{DATE}" data-items="4" '
+        'data-evidence-kind="exposure-detail">',
+    )
+
+    _assert_report_error(
+        assembler,
+        invalid,
+        "invalid_exposure_contract",
+    )
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        (
+            "<h2>仓位环境与纪律参考（影子）</h2>",
+            "<h2>条件成立后提高资金使用率</h2>",
+        ),
+        (
+            f"<summary>仓位证据与对账留痕 · {DATE} · 4 项</summary>",
+            "<summary>条件成立后股票多买一些</summary>",
+        ),
+    ],
+)
+def test_exposure_heading_and_summary_are_controlled(
+    assembler, tmp_path, old, new
+):
+    html, _ = _render_valid(assembler, tmp_path / "controlled-display-meta")
+    invalid = _replace_once(html, old, new)
+    _assert_report_error(
+        assembler,
+        invalid,
+        "invalid_exposure_contract",
+    )
+
+
+def test_exposure_guardrail_rejects_position_actions_in_folded_evidence(
+    assembler, tmp_path
+):
+    html, _ = _render_valid(assembler, tmp_path / "evidence-guardrail")
+    invalid = _replace_once(
+        html,
+        "严格 teacher_notes.date 当日观点，不直接映射老师仓位话术。",
+        "老师原文包含七成仓并加仓。",
+    )
+
+    _assert_report_error(
+        assembler,
+        invalid,
+        "invalid_exposure_contract",
+    )
+
+
+def test_exposure_guardrail_rejects_actions_in_folded_evidence_attributes(
+    assembler, tmp_path
+):
+    html, _ = _render_valid(assembler, tmp_path / "evidence-attribute-guardrail")
+    invalid = _replace_once(
+        html,
+        'data-evidence-boundary="仅作严格当日观点背景，不直接映射仓位">',
+        'data-evidence-boundary="仅作严格当日观点背景，不直接映射仓位" '
+        'title="建议加仓">',
+    )
+
+    _assert_report_error(
+        assembler,
+        invalid,
+        "invalid_exposure_contract",
+    )
+
+
+@pytest.mark.parametrize(
+    "fragment",
+    [
+        '<input value="建议仓位50%">',
+        '<input type="submit" value="立即买入">',
+        '<button type="button">维持半仓</button>',
+        '<span style="background-image:url(data:image/svg+xml;base64,PHN2Zz4=)">文字</span>',
+        '<details><summary>其他折叠</summary><p>建议加仓。</p></details>',
+    ],
+)
+def test_exposure_default_visible_content_uses_tag_allowlist(
+    assembler, tmp_path, fragment
+):
+    html, _ = _render_valid(assembler, tmp_path / "chunks")
+    invalid = _replace_once(
+        html,
+        "<h2>仓位环境与纪律参考（影子）</h2>",
+        f"<h2>仓位环境与纪律参考（影子）</h2>{fragment}",
+    )
+    _assert_report_error(
+        assembler,
+        invalid,
+        "invalid_exposure_contract",
+    )
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        (
+            'data-exposure-condition="market-structure-holds"',
+            'data-exposure-condition="free-text"',
+        ),
+        (
+            "[判断] 上行门：次日指数结构与市场节点维持。",
+            "[判断] 上行门：提升仓位。",
+        ),
+        (
+            'data-exposure-condition="market-structure-weakens"',
+            'data-exposure-condition="free-text"',
+        ),
+    ],
+)
+def test_exposure_conditions_use_controlled_market_fact_templates(
+    assembler, tmp_path, old, new
+):
+    html, _ = _render_valid(assembler, tmp_path / "chunks")
+    invalid = _replace_once(html, old, new)
+    _assert_report_error(
+        assembler,
+        invalid,
+        "invalid_exposure_contract",
+    )
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        (
+            ' data-cognition-availability="active"',
+            ' data-cognition-availability="candidate_only"',
+        ),
+        (' data-cognition-status="active"', ' data-cognition-status="candidate"'),
+        (' data-cognition-category="sizing"', ' data-cognition-category="position"'),
+        (' data-teacher-date-field="date"', ' data-teacher-date-field="created_at"'),
+        (
+            f'data-evidence-id="teacher_notes:301,302" data-as-of="{DATE}"',
+            'data-evidence-id="teacher_notes:301,302" data-as-of="2026-07-15"',
+        ),
+    ],
+)
+def test_exposure_rejects_unconfirmed_cognition_and_teacher_date_drift(
+    assembler, tmp_path, old, new
+):
+    html, _ = _render_valid(assembler, tmp_path / "chunks")
+    invalid = _replace_once(html, old, new)
+    _assert_report_error(
+        assembler,
+        invalid,
+        "invalid_exposure_contract",
+    )
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        (
+            f'id="claim-exposure" data-claim-kind="judgment" '
+            f'data-source="market+cognition+teacher" data-as-of="{DATE}"',
+            'id="claim-exposure" data-claim-kind="judgment" '
+            'data-source="market+cognition+teacher" data-as-of="2026-07-15"',
+        ),
+        (
+            f'<details class="evidence" data-as-of="{DATE}" data-items="4" '
+            'data-evidence-kind="exposure-detail">',
+            '<details class="evidence" data-as-of="2026-07-15" data-items="4" '
+            'data-evidence-kind="exposure-detail">',
+        ),
+    ],
+)
+def test_exposure_claim_and_detail_must_belong_to_report_date(
+    assembler, tmp_path, old, new
+):
+    html, _ = _render_valid(assembler, tmp_path / "chunks")
+    invalid = _replace_once(html, old, new)
+    _assert_report_error(
+        assembler,
+        invalid,
+        "invalid_exposure_contract",
+    )
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        (
+            f' data-evidence-id="market_facts:{DATE}"',
+            "",
+        ),
+        (
+            ' data-evidence-boundary="适用条件成立且失效条件未触发"',
+            ' data-evidence-boundary="占位"',
+        ),
+        (
+            f'data-evidence-id="market_facts:{DATE}" data-as-of="{DATE}"',
+            f'data-evidence-id="market_facts:{DATE}" data-as-of="2026-07-15"',
+        ),
+    ],
+)
+def test_exposure_detail_requires_source_id_date_and_boundary(
+    assembler, tmp_path, old, new
+):
+    html, _ = _render_valid(assembler, tmp_path / "chunks")
+    invalid = _replace_once(html, old, new)
+    _assert_report_error(
+        assembler,
+        invalid,
+        "invalid_exposure_contract",
+    )
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        (
+            f'data-evidence-id="market_facts:{DATE}"',
+            'data-evidence-id="x"',
+        ),
+        (
+            f'data-evidence-id="market_facts:{DATE}"',
+            'data-evidence-id="market_facts:fake"',
+        ),
+        (
+            'data-evidence-id="trading_cognitions:cog_a1b2c3d4"',
+            'data-evidence-id="trading_cognitions:201"',
+        ),
+        (
+            'data-evidence-id="trading_cognitions:cog_a1b2c3d4"',
+            'data-evidence-id="trading_cognitions:cog_a1b2c3d4,cog_a1b2c3d4"',
+        ),
+        (
+            'data-evidence-id="teacher_notes:301,302"',
+            'data-evidence-id="teacher_notes:0,0"',
+        ),
+        (
+            'data-evidence-id="teacher_notes:301,302"',
+            'data-evidence-id="teacher_notes:301,301"',
+        ),
+        (
+            'data-evidence-id="teacher_notes:301,302"',
+            f'data-evidence-id="lookup:teacher_notes:{DATE}"',
+        ),
+        (
+            ">[事实] 当日量能与 market_node 状态。</p>",
+            "></p>",
+        ),
+    ],
+)
+def test_exposure_complete_evidence_requires_typed_ids_and_own_text(
+    assembler, tmp_path, old, new
+):
+    html, _ = _render_valid(assembler, tmp_path / "chunks")
+    invalid = _replace_once(html, old, new)
+    _assert_report_error(
+        assembler,
+        invalid,
+        "invalid_exposure_contract",
+    )
+
+
+def test_exposure_teacher_lookup_always_uses_note_date(assembler, tmp_path):
+    html, _ = _render_valid(assembler, tmp_path / "chunks")
+    exposure, _ = _extract_section(html, "exposure")
+    no_data = _exposure_section(
+        mode="no_data",
+        tier="undetermined",
+        teacher_status="missing",
+        teacher_date_field="created_at",
+    )
+    invalid = _replace_once(html, exposure, no_data)
+    invalid = _replace_once(
+        invalid,
+        "[事实] 仅列会改变结论可信度的缺口。",
+        "[事实] 仅列会改变结论可信度的缺口。仓位参考证据不足。",
+    )
+    _assert_report_error(
+        assembler,
+        invalid,
+        "invalid_exposure_contract",
+    )
+
+
+def test_exposure_missing_cognition_lookup_belongs_to_report_date(
+    assembler, tmp_path
+):
+    html, _ = _render_valid(assembler, tmp_path / "chunks")
+    exposure, _ = _extract_section(html, "exposure")
+    no_data = _exposure_section(
+        mode="no_data",
+        tier="undetermined",
+        cognition_source_status="missing",
+        cognition_availability="none",
+        cognition_status="none",
+        cognition_as_of="2026-07-15",
+    )
+    invalid = _replace_once(html, exposure, no_data)
+    invalid = _replace_once(
+        invalid,
+        "[事实] 仅列会改变结论可信度的缺口。",
+        "[事实] 仅列会改变结论可信度的缺口。仓位参考证据不足。",
+    )
+    _assert_report_error(
+        assembler,
+        invalid,
+        "invalid_exposure_contract",
+    )
+
+
+def test_exposure_missing_teacher_requires_lookup_id(assembler, tmp_path):
+    html, _ = _render_valid(assembler, tmp_path / "chunks")
+    exposure, _ = _extract_section(html, "exposure")
+    no_data = _exposure_section(
+        mode="no_data",
+        tier="undetermined",
+        teacher_status="missing",
+    ).replace(
+        f'data-evidence-id="lookup:teacher_notes:{DATE}"',
+        'data-evidence-id="teacher_notes:301"',
+        1,
+    )
+    invalid = _replace_once(html, exposure, no_data)
+    invalid = _replace_once(
+        invalid,
+        "[事实] 仅列会改变结论可信度的缺口。",
+        "[事实] 仅列会改变结论可信度的缺口。仓位参考证据不足。",
+    )
+    _assert_report_error(
+        assembler,
+        invalid,
+        "invalid_exposure_contract",
+    )
+
+
+@pytest.mark.parametrize(
+    ("teacher_status", "teacher_as_of"),
+    [
+        ("missing", "2026-07-15"),
+        ("stale", DATE),
+    ],
+)
+def test_exposure_teacher_missing_and_stale_dates_are_not_interchangeable(
+    assembler, tmp_path, teacher_status, teacher_as_of
+):
+    html, _ = _render_valid(assembler, tmp_path / "chunks")
+    exposure, _ = _extract_section(html, "exposure")
+    no_data = _exposure_section(
+        mode="no_data",
+        tier="undetermined",
+        teacher_status=teacher_status,
+        teacher_as_of=teacher_as_of,
+    )
+    invalid = _replace_once(html, exposure, no_data)
+    invalid = _replace_once(
+        invalid,
+        "[事实] 仅列会改变结论可信度的缺口。",
+        "[事实] 仅列会改变结论可信度的缺口。仓位参考证据不足。",
+    )
+    _assert_report_error(
+        assembler,
+        invalid,
+        "invalid_exposure_contract",
+    )
+
+
+def test_exposure_candidate_only_must_still_be_sizing(assembler, tmp_path):
+    html, _ = _render_valid(assembler, tmp_path / "chunks")
+    exposure, _ = _extract_section(html, "exposure")
+    no_data = _exposure_section(
+        mode="no_data",
+        tier="undetermined",
+        cognition_source_status="missing",
+        cognition_availability="candidate_only",
+        cognition_status="candidate",
+        cognition_category="position",
+    )
+    invalid = _replace_once(html, exposure, no_data)
+    invalid = _replace_once(
+        invalid,
+        "[事实] 仅列会改变结论可信度的缺口。",
+        "[事实] 仅列会改变结论可信度的缺口。仓位参考证据不足。",
+    )
+    _assert_report_error(
+        assembler,
+        invalid,
+        "invalid_exposure_contract",
+    )
+
+
+def test_exposure_stale_teacher_requires_older_typed_evidence(assembler, tmp_path):
+    html, _ = _render_valid(assembler, tmp_path / "chunks")
+    exposure, _ = _extract_section(html, "exposure")
+    no_data = _exposure_section(
+        mode="no_data",
+        tier="undetermined",
+        teacher_status="stale",
+        teacher_as_of="2026-07-15",
+    )
+    changed = _replace_once(html, exposure, no_data)
+    changed = _replace_once(
+        changed,
+        "[事实] 仅列会改变结论可信度的缺口。",
+        "[事实] 仅列会改变结论可信度的缺口。仓位参考证据不足。",
+    )
+
+    assembler.validate_report(changed)
+
+
+def test_exposure_stale_active_cognition_keeps_lifecycle_truth(assembler, tmp_path):
+    html, _ = _render_valid(assembler, tmp_path / "chunks")
+    exposure, _ = _extract_section(html, "exposure")
+    no_data = _exposure_section(
+        mode="no_data",
+        tier="undetermined",
+        cognition_source_status="stale",
+        cognition_availability="active",
+        cognition_status="active",
+    )
+    changed = _replace_once(html, exposure, no_data)
+    changed = _replace_once(
+        changed,
+        "[事实] 仅列会改变结论可信度的缺口。",
+        "[事实] 仅列会改变结论可信度的缺口。仓位参考证据不足。",
+    )
+
+    assembler.validate_report(changed)
+
+
+def test_exposure_stale_cognition_cannot_claim_none_lookup(assembler, tmp_path):
+    html, _ = _render_valid(assembler, tmp_path / "chunks")
+    exposure, _ = _extract_section(html, "exposure")
+    no_data = _exposure_section(
+        mode="no_data",
+        tier="undetermined",
+        cognition_source_status="stale",
+        cognition_availability="none",
+        cognition_status="none",
+    )
+    invalid = _replace_once(html, exposure, no_data)
+    invalid = _replace_once(
+        invalid,
+        "[事实] 仅列会改变结论可信度的缺口。",
+        "[事实] 仅列会改变结论可信度的缺口。仓位参考证据不足。",
+    )
+    _assert_report_error(
+        assembler,
+        invalid,
+        "invalid_exposure_contract",
+    )
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        (' data-exposure-source="market"', ""),
+        ('data-exposure-source="teacher"', 'data-exposure-source="market"'),
+        (' data-exposure-evidence="teacher"', ""),
+        (
+            f'<section class="blk" id="exposure"',
+            f'<section class="blk" id="exposure" hidden',
+        ),
+        (
+            'data-exposure-source="cognition"',
+            'hidden data-exposure-source="cognition"',
+        ),
+        (
+            f'<details class="evidence" data-as-of="{DATE}" data-items="4" '
+            'data-evidence-kind="exposure-detail">',
+            f'<details hidden class="evidence" data-as-of="{DATE}" '
+            'data-items="4" data-evidence-kind="exposure-detail">',
+        ),
+        (
+            f"<summary>仓位证据与对账留痕 · {DATE} · 4 项</summary>\n"
+            '    <div class="evidence-body">',
+            f"<summary>仓位证据与对账留痕 · {DATE} · 4 项</summary>\n"
+            '    <div class="evidence-body" hidden>',
+        ),
+        (
+            'data-exposure-evidence="portfolio"',
+            'hidden data-exposure-evidence="portfolio"',
+        ),
+        (
+            f"<summary>仓位证据与对账留痕 · {DATE} · 4 项</summary>",
+            f"<summary hidden>仓位证据与对账留痕 · {DATE} · 4 项</summary>",
+        ),
+        (
+            "[事实] 当日量能与 market_node 状态。",
+            "<span hidden>[事实] 当日量能与 market_node 状态。</span>",
+        ),
+    ],
+)
+def test_exposure_requires_folded_unique_sources_and_provenance(
+    assembler, tmp_path, old, new
+):
+    html, _ = _render_valid(assembler, tmp_path / "chunks")
+    invalid = _replace_once(html, old, new)
+    _assert_report_error(
+        assembler,
+        invalid,
+        "invalid_exposure_contract",
+    )
+
+
+def test_exposure_no_data_requires_ops_gap_and_cannot_emit_tier(
+    assembler, tmp_path
+):
+    html, _ = _render_valid(assembler, tmp_path / "chunks")
+    exposure, _ = _extract_section(html, "exposure")
+    no_data = _exposure_section(
+        mode="no_data",
+        tier="undetermined",
+        cognition_source_status="missing",
+        cognition_availability="none",
+        cognition_status="none",
+    )
+    missing_ops = _replace_once(html, exposure, no_data)
+    error = _assert_report_error(
+        assembler,
+        missing_ops,
+        "invalid_exposure_contract",
+    )
+    assert error.section == "ops"
+
+    no_data_with_tier = no_data.replace(
+        'data-exposure-tier="undetermined"',
+        'data-exposure-tier="neutral"',
+        1,
+    ).replace(
+        "结论：不可判",
+        "结论：中性档",
+        1,
+    )
+    invalid = _replace_once(html, exposure, no_data_with_tier)
+    _assert_report_error(
+        assembler,
+        invalid,
+        "invalid_exposure_contract",
+    )
+
+
+def test_exposure_conflict_cannot_be_averaged_into_a_tier(
+    assembler, tmp_path
+):
+    html, _ = _render_valid(assembler, tmp_path / "chunks")
+    exposure, _ = _extract_section(html, "exposure")
+    conflicted = _exposure_section(
+        mode="conflicted",
+        tier="neutral",
+        teacher_status="conflicted",
+        include_conditions=False,
+    )
+    invalid = _replace_once(html, exposure, conflicted)
+    _assert_report_error(
+        assembler,
+        invalid,
+        "invalid_exposure_contract",
+    )
+
+
+def test_missing_exposure_anchor_is_rejected(assembler, tmp_path):
+    html, _ = _render_valid(assembler, tmp_path / "chunks")
+    exposure, invalid = _extract_section(html, "exposure")
+    assert exposure
+    error = _assert_report_error(assembler, invalid, "invalid_anchor")
+    assert error.section == "exposure"
 
 
 def test_duplicate_anchor_is_rejected(assembler, tmp_path):
@@ -4528,6 +6589,7 @@ def test_cli_default_output_path_remains_compatible(
         *,
         capacity_manifest=None,
         new_high_manifest=None,
+        exposure_context=None,
     ):
         nonlocal calls
         calls += 1
@@ -4535,6 +6597,7 @@ def test_cli_default_output_path_remains_compatible(
             html,
             capacity_manifest=capacity_manifest,
             new_high_manifest=new_high_manifest,
+            exposure_context=exposure_context,
         )
 
     monkeypatch.setattr(assembler, "validate_report", counted_validate)
@@ -4542,7 +6605,7 @@ def test_cli_default_output_path_remains_compatible(
 
     assert calls == 1
     assert expected.exists()
-    assert 'data-report-schema="compact-v1"' in expected.read_text(encoding="utf-8")
+    assert 'data-report-schema="compact-v2"' in expected.read_text(encoding="utf-8")
     assert str(expected) in capsys.readouterr().out
 
 
@@ -4555,7 +6618,7 @@ def test_cli_accepts_explicit_noncanonical_output(tmp_path):
 
     assert result.returncode == 0, result.stderr or result.stdout
     assert output.exists()
-    assert 'data-report-schema="compact-v1"' in output.read_text(encoding="utf-8")
+    assert 'data-report-schema="compact-v2"' in output.read_text(encoding="utf-8")
     assert str(output) in result.stdout
 
 

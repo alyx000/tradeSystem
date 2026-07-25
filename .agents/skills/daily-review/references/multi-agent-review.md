@@ -25,7 +25,7 @@
 | 6 | 板块相关性 | 库 sector_correlation_daily | sector_corr_*.md |
 | 7 | 历史同类日基率 | 镜像 index_daily 全历史 | analog_days_*.md |
 | 8 | 龙头/趋势池/滚动新高/派生报告 | 库 trend_leader_pool + 镜像 251 个开放日 daily/adj_factor + data/reports 四份派生报告 | trend_*.md |
-| 9 | 老师观点/持仓/行业信息/未来事件窗 | 库 teacher_notes/holdings/broker_executions/trade_thesis/industry_info/calendar_events + 交易日历 | teacher_portfolio_*.md |
+| 9 | 老师观点/持仓/行业信息/未来事件窗/仓位证据 | 库 teacher_notes/holdings/broker_executions/trade_thesis/industry_info/calendar_events + `status=active AND category=sizing` 的 trading_cognitions + 交易日历 | teacher_portfolio_*.md |
 
 ## 单路输出契约（采集完整，主输出精简）
 
@@ -52,6 +52,7 @@
 | 2 | `sector_crowding_snapshot` | 全行业拥挤度快照（卞老师三维度框架）：跑只读 `python3 main.py sector-crowding report --date <T>`，采集 ① 交易拥挤度（占比 + 历史分位，标注 ≥30%/≥40% 绝对参考线触及情况）② 斜率拥挤度（5/20/60 日涨幅 + 20 日斜率分位，≥90% 标高斜率）③ 双高清单状态（有名单列名单，无双高显式写「无双高拥挤板块」）④ 同一输出中的半年线/年线/近期价量共振标签汇总与命中清单。资金流代理维度已由其他路承载，不重复采集。CLI 失败或当日无行时标 `missing-data` 记入 conflicts_or_gaps，不得静默省略 |
 | 8 | `new_high_structure_verdict` / `new_high_structure_evidence` | 前复权滚动 60/120/250 日双日计数、60 日行业 Top3/CR3、名单延续与最多 5 个代表票；不同于全历史高水位任务 |
 | 9 | `event_window_verdict` / `event_window_evidence` | 1 句节点裁决 + 报告日后 7 个自然日的事件窗；事件日期须标交易/休市并说明是否影响次日验证 |
+| 9 | `exposure_inputs` | 引用路 1 已提交的当日客观量能/`market_node`，本路补充严格按 `teacher_notes.date` 的当日老师观点与 `category=sizing` 历史认知；保留来源状态、ID、日期、适用与失效边界，`candidate` 必须如实形成 `candidate_only`，只能触发市场事实主导的低置信降级，不能冒充 active lifecycle |
 
 主会话按优先级取材：
 
@@ -143,6 +144,7 @@ python3 .agents/skills/daily-review/references/html-report-template/build_new_hi
 
 - **北向资金维度一律不采**（用户裁定无效数据）。
 - 输出标 `[事实]`/`[判断]`；不做买卖建议、不预测价格目标、不将 `[判断]` 伪装成 `[事实]`。
+- 仓位环境只给定性档位，不输出百分比，不出现加仓/减仓/满仓/空仓指令；老师仓位话术只作 `[老师观点]` 证据，不直接映射为系统结论。
 - 股通席位仅作单票承接事实，不升格为市场级维度。
 - 只读取数：`sqlite3 "file:<db>?mode=ro"` 纯 SELECT，SQL 禁含 REPLACE 关键词；查表前先 `PRAGMA table_info`。
 - 镜像脚本样板：`load_dotenv('scripts/.env')` 取 TUSHARE_TOKEN；`api=ts.pro_api(token); api._DataApi__http_url='http://tushare.xyz'`。
@@ -152,7 +154,7 @@ python3 .agents/skills/daily-review/references/html-report-template/build_new_hi
 
 ### 固定 chunks 与 anchors
 
-8 个 chunk 与 16 个导航锚点必须全部存在、按下列精确顺序各出现一次：`tldr/factor/s0/s1/s2/s3/s4/s5/s6/s7/teachers/industry/cognition/proj/s8/ops`。无新增的章节也保留锚点，只写“本日无新增”或“本日无可判数据”，不生成空表。
+8 个 chunk 与 17 个导航锚点必须全部存在、按下列精确顺序各出现一次：`tldr/factor/s0/s1/s2/s3/s4/s5/s6/s7/teachers/industry/cognition/exposure/proj/s8/ops`。无新增的章节也保留锚点，只写“本日无新增”或“本日无可判数据”，不生成空表。
 
 | chunk | 固定 anchors | 正文归属 |
 |---|---|---|
@@ -161,11 +163,11 @@ python3 .agents/skills/daily-review/references/html-report-template/build_new_hi
 | `s1` | `s1` | ①大盘 |
 | `s2` | `s2` | ②板块 |
 | `s456` | `s3`, `s4`, `s5`, `s6` | ③情绪、④风格、⑤龙头、⑥节点 |
-| `s7t` | `s7`, `teachers`, `industry`, `cognition` | ⑦持仓、老师观点、行业信息、认知对照 |
+| `s7t` | `s7`, `teachers`, `industry`, `cognition`, `exposure` | ⑦持仓、老师观点、行业信息、认知对照、仓位环境与纪律参考 |
 | `proj` | `proj` | 🔭次日推演 |
 | `s8ops` | `s8`, `ops` | ⑧次日计划、数据缺口 |
 
-每个八步章节默认只有：**1 句裁决 + 最多 3 条关键证据 + 1 条证伪或缺口**。老师观点最多显示 3 个共识、3 个分歧、2 个新增变化；次日推演最多 3 个场景，每个只含优先级、确认和证伪。宽基 ETF 只归大盘，主题 ETF 只归板块；风格不再独立重复 ETF 内容。完整 P1-P5、行情/资金/梯队/持仓/老师原文/认知历史表进入证据层；同义总结、已关闭仓位的重复文字、无变化项目、正常运维状态和每节重复的方法/红线说明不生成。
+每个八步章节默认只有：**1 句裁决 + 最多 3 条关键证据 + 1 条证伪或缺口**。老师观点最多显示 3 个共识、3 个分歧、2 个新增变化；仓位环境的 `fallback+cautious` 固定只显示 4 条：结论、上行门、下行门、缺口/复核，三类来源与完整对账全部折叠；次日推演最多 3 个场景，每个只含优先级、确认和证伪。宽基 ETF 只归大盘，主题 ETF 只归板块；风格不再独立重复 ETF 内容。完整 P1-P5、行情/资金/梯队/持仓/老师原文/认知历史表进入证据层；同义总结、已关闭仓位的重复文字、无变化项目、正常运维状态和每节重复的方法/红线说明不生成。
 
 #### 不可精简保留清单
 
@@ -177,7 +179,15 @@ python3 .agents/skills/daily-review/references/html-report-template/build_new_hi
 
 上述三节即使无新增，也不能套用通用“只写一行、不生成空表”后静默省略模块；必须保留模板规定的结构化状态。⑤中的容量和滚动新高是两个独立模块，不能互相代替。具体 HTML 结构以 [模板硬门](html-report-template/README.md#组装与硬校验) 为准。
 
-正文展示顺序固定为：`速览 → 三位一体重点因子 → ⓪前日判分 → ①–⑦ → 老师观点 → 行业信息 → 认知对照 → 次日推演 → ⑧次日计划 → 数据缺口`。这是展示前置，不是生成前置：重点因子仍必须在 9 路完整采集、八步复盘与认知对照综合完成后生成，再由次日推演消费；不得继续藏在 ⑧ 的折叠证据里。
+正文展示顺序固定为：`速览 → 三位一体重点因子 → ⓪前日判分 → ①–⑦ → 老师观点 → 行业信息 → 认知对照 → 仓位环境与纪律参考（影子） → 次日推演 → ⑧次日计划 → 数据缺口`。这是展示前置，不是生成前置：重点因子与仓位环境仍必须在 9 路完整采集、八步复盘与认知对照综合完成后生成，再由次日推演消费；不得继续藏在 ⑧ 的折叠证据里。
+
+### 仓位环境与纪律参考（影子）
+
+- 固定使用 `section#exposure`，声明 `data-exposure-mode="shadow|fallback|conflicted|no_data"`、定性 `data-exposure-tier="defensive|cautious|neutral|constructive|undetermined"` 与 `data-exposure-boundary="read-only-environment-rating"`。
+- 三类来源按 `market / cognition / teacher` 各一条，并与同名 `data-exposure-evidence` 合并为默认收起的 `<p>`，不得在可见区再复述。市场与老师完整来源严格归属报告日；老师只认 `teacher_notes.date`；认知分别保留 availability 与真实 lifecycle。lifecycle=`active` 且 `category=sizing` 用于标准 `shadow`；candidate-only 只允许触发低置信 `fallback`，不参与档位方向。
+- `shadow` 只在三类来源完整且无实质冲突时给定性档位。`fallback` 只接受“当日 market 完整 + candidate-only sizing + 当日 teacher 完整或冲突”；合并后的 market 来源/证据声明受控广度、量能、结构状态，组装器机械重算 `defensive/cautious/neutral`。`shadow/fallback` 各保留一条受控上行门和下行门；`fallback+cautious` 使用 `full-close-upside-gate / full-close-downside-gate`，绑定报告日成交额、涨跌家数、MA20/MA5、跌停阈值与组合对账。`conflicted/no_data` 固定 `undetermined`。
+- 唯一 Claim 与 `exposure-detail` 严格归属报告日。`fallback+cautious` 默认可见区必须恰好 4 个业务段落：短结论、`confirm-if` 上行门、`invalidate-if` 下行门、`review-rule` 缺口/复核；不再生成独立 `recommendation / status / portfolio-status / portfolio-evidence` 可见段落。`exposure-detail` 固定 4 项：三类合并来源/证据，加 1 项 `portfolio` 对账留痕；后者保留 `not-read / unreconciled`、结构化计数、券商最新业务日及受控事实正文。可见 `review-rule` 只压缩呈现影响结论的对账摘要和复核/顺延日，并与折叠 portfolio 逐字对账。
+- 复核日与顺延日由连续、以首个 `open` 结束的完整 `trade_calendar` 自然日脊柱证明；正式组装用只读 `data/trade.db` 将成交额门槛与 `daily_market.total_amount`、逐日开闭状态与 `trade_calendar` 外部对账；任一 mode 的 `unreconciled` 都触发组合 context，并将 active holdings、未关联 thesis、open thesis、关联非作废成交及券商最新业务日与 `holdings / trade_thesis / broker_executions` 逐字段对账，`fallback+cautious` 不得改报 `not-read`。`holdings` 无历史快照，只能表述组装时 canonical 当前组合状态。默认可见实质正文只允许唯一 Claim 和已知 role，任意无 role `<p>/<div>` 均拒绝；唯一折叠容器、summary、证据正文、四项证据及其实质正文不得显式或祖先 `hidden`；整个章节（含折叠证据）继续执行 Unicode 归一化与比例/操作指令护栏，不写工作台、计划层或持仓。
 
 重点因子章节默认只显示：1 条主因子裁决、最多 3 条证据（第一辅助与其余两因子可合并）、1 条切换/失效或数据状态。未运行正式评分时必须标为 `shadow` 并写明“影子口径、不写库”，不得伪装成正式评分结果；四因子完整对账和切换预埋进入本节证据层，⑧只保留次日核对清单。`data-factor-mode`、可见 Claim、`no_data` 与 `factor-detail` 的具体 HTML 硬契约只以 [HTML 模板“组装与硬校验”](html-report-template/README.md#组装与硬校验) 为准。
 

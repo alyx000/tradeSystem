@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""组装并校验每日多 Agent 盘后复盘 HTML（compact-v1）。
+"""组装并校验每日多 Agent 盘后复盘 HTML（compact-v2）。
 
 用法：
     python3 assemble_report.py <TMP目录> <YYYY-MM-DD> [--output PATH]
@@ -17,17 +17,19 @@ import argparse
 import json
 import os
 import re
+import sqlite3
 import sys
 import tempfile
+import unicodedata
 from dataclasses import dataclass, field
 from datetime import date as date_type, timedelta
 from html import escape
 from html.parser import HTMLParser
 from pathlib import Path
-from typing import Sequence
+from typing import Mapping, Sequence
 
 
-REPORT_SCHEMA = "compact-v1"
+REPORT_SCHEMA = "compact-v2"
 CAPACITY_MANIFEST_SCHEMA = "capacity-health-v1"
 NEW_HIGH_MANIFEST_SCHEMA = "rolling-new-high-structure-v1"
 CAPACITY_MIN_UNIVERSE = 4_000
@@ -41,7 +43,7 @@ ANCHOR_MAP = {
     "s1": ("s1",),
     "s2": ("s2",),
     "s456": ("s3", "s4", "s5", "s6"),
-    "s7t": ("s7", "teachers", "industry", "cognition"),
+    "s7t": ("s7", "teachers", "industry", "cognition", "exposure"),
     "proj": ("proj",),
     "s8ops": ("s8", "ops"),
 }
@@ -59,6 +61,7 @@ NAV_LABELS = {
     "teachers": "老师",
     "industry": "行业",
     "cognition": "认知",
+    "exposure": "仓位",
     "factor": "因子",
     "proj": "推演",
     "s8": "计划",
@@ -101,6 +104,164 @@ FACTOR_DETAIL_KEYS = (
     "sector_rhythm",
     "style_regime",
     "leader_signal",
+)
+EXPOSURE_MODES = frozenset({"shadow", "fallback", "conflicted", "no_data"})
+EXPOSURE_TIERS = {
+    "defensive": "防守档",
+    "cautious": "谨慎档",
+    "neutral": "中性档",
+    "constructive": "偏积极档",
+    "undetermined": "不可判",
+}
+EXPOSURE_SOURCES = ("market", "cognition", "teacher")
+EXPOSURE_EVIDENCE_ITEMS = (*EXPOSURE_SOURCES, "portfolio")
+EXPOSURE_SOURCE_STATUSES = frozenset(
+    {"complete", "conflicted", "missing", "stale"}
+)
+EXPOSURE_BOUNDARY = "read-only-environment-rating"
+EXPOSURE_CONDITION_TEXTS = {
+    "confirm-if": {
+        "market-structure-holds": "[判断]上行门:次日指数结构与市场节点维持。",
+        "volume-breadth-improves": "[判断]上行门:次日量能与涨跌家数改善。",
+        "risk-signals-ease": "[判断]上行门:次日跌停与高位负反馈缓和。",
+        "sources-remain-aligned": (
+            "[判断]上行门:次日市场事实继续与认知、老师观点一致。"
+        ),
+    },
+    "invalidate-if": {
+        "market-structure-weakens": (
+            "[判断]下行门:次日指数结构或市场节点转弱。"
+        ),
+        "volume-breadth-deteriorates": (
+            "[判断]下行门:次日缩量且下跌家数扩散。"
+        ),
+        "risk-signals-worsen": (
+            "[判断]下行门:次日跌停或高位负反馈扩散。"
+        ),
+        "source-conflict-emerges": (
+            "[判断]下行门:次日市场事实与认知、老师观点出现实质冲突。"
+        ),
+    },
+}
+EXPOSURE_PORTFOLIO_EVIDENCE_NOT_READ_TEXT = (
+    "[事实]对账留痕:本次未读取组合事实层。"
+)
+EXPOSURE_REVIEW_DATE_MAX_DAYS = 10
+EXPOSURE_RETRY_REVIEW_DATE_MAX_DAYS = 20
+EXPOSURE_COGNITION_STATUSES = frozenset(
+    {"active", "candidate", "none"}
+)
+EXPOSURE_COGNITION_AVAILABILITY = frozenset(
+    {"active", "candidate_only", "none"}
+)
+EXPOSURE_TIER_TEXTS = frozenset(EXPOSURE_TIERS.values())
+EXPOSURE_FALLBACK_TIERS = frozenset({"defensive", "cautious", "neutral"})
+EXPOSURE_FALLBACK_MARKET_STATE_KEYS = (
+    "data-market-breadth-state",
+    "data-market-volume-state",
+    "data-market-structure-state",
+)
+EXPOSURE_FALLBACK_MARKET_STATES = {
+    "data-market-breadth-state": frozenset({"weak", "improving", "stable"}),
+    "data-market-volume-state": frozenset({"weak", "stable", "improving"}),
+    "data-market-structure-state": frozenset(
+        {"weak", "unconfirmed", "stable"}
+    ),
+}
+EXPOSURE_FALLBACK_GENERIC_CONDITIONS = {
+    "confirm-if": frozenset(
+        {
+            "market-structure-holds",
+            "volume-breadth-improves",
+            "risk-signals-ease",
+        }
+    ),
+    "invalidate-if": frozenset(
+        {
+            "market-structure-weakens",
+            "volume-breadth-deteriorates",
+            "risk-signals-worsen",
+        }
+    ),
+}
+EXPOSURE_VISIBLE_ALLOWED_TAGS = frozenset(
+    {
+        "a",
+        "b",
+        "br",
+        "code",
+        "details",
+        "em",
+        "h2",
+        "i",
+        "li",
+        "p",
+        "section",
+        "span",
+        "strong",
+        "ul",
+    }
+)
+EXPOSURE_FORBIDDEN_TAGS = frozenset(
+    {"button", "form", "input", "option", "select", "textarea"}
+)
+EXPOSURE_EMPTY_EVIDENCE_VALUES = frozenset(
+    {"", "none", "missing", "unknown", "placeholder", "占位"}
+)
+EXPOSURE_EVIDENCE_ID_RES = {
+    "market": re.compile(
+        r"^(?:market_facts|market_timing_signal):\d{4}-\d{2}-\d{2}$"
+    ),
+    "cognition": re.compile(
+        r"^trading_cognitions:cog_[0-9a-f]{8}"
+        r"(?:,cog_[0-9a-f]{8})*$"
+    ),
+    "teacher": re.compile(r"^teacher_notes:[1-9]\d*(?:,[1-9]\d*)*$"),
+    "portfolio": re.compile(r"^portfolio_reconciliation:\d{4}-\d{2}-\d{2}$"),
+}
+EXPOSURE_EVIDENCE_LOOKUP_RES = {
+    "market": re.compile(r"^lookup:market:\d{4}-\d{2}-\d{2}$"),
+    "cognition": re.compile(
+        r"^lookup:trading_cognitions:\d{4}-\d{2}-\d{2}$"
+    ),
+    "teacher": re.compile(r"^lookup:teacher_notes:\d{4}-\d{2}-\d{2}$"),
+    "portfolio": re.compile(r"^lookup:portfolio:\d{4}-\d{2}-\d{2}$"),
+}
+EXPOSURE_DISALLOWED_VISIBLE_RE = re.compile(
+    r"(?:回落至(?:目标|防守档|谨慎档|中性档|偏积极档)|"
+    r"升一档|降一档|保持不变|(?<!不)自动调整|"
+    r"加仓|减仓|增仓|降仓|扩仓|缩仓|提仓|控仓|"
+    r"清仓|建仓|补仓|满仓|空仓|重仓|轻仓|梭哈|"
+    r"买入|卖出|买进|抛出|持有|增持|减持|增配|减配|降配|"
+    r"加码|减码|进场|离场|介入|退出|回避|半仓(?:位)?|"
+    r"(?:上调|下调|调高|调低|提高|降低|提升|增加|减少|扩大|收缩|维持).{0,4}"
+    r"(?:仓位|持仓|头寸|敞口|风险敞口|风险暴露|配置)|"
+    r"(?:仓位|持仓|头寸|敞口|风险敞口|风险暴露|配置).{0,4}"
+    r"(?:上调|下调|调高|调低|提高|降低|提升|增加|减少|扩大|收缩|维持|一半|对半|五五开)|"
+    r"(?:风险预算).{0,10}(?:回落|升一档|降一档|升档|降档|保持不变|对齐|自动调整)|"
+    r"(?:回落|升一档|降一档|升档|降档|保持不变|对齐|自动调整).{0,10}(?:风险预算)|"
+    r"[零一二三四五六七八九十两\d]+成仓|"
+    r"\d{1,3}\s*/\s*\d{1,3}\s*(?:仓|仓位|持仓|头寸|敞口|风险敞口|风险暴露|配置)|"
+    r"(?:0?\.\d+|1\.0+)\s*(?:仓|仓位|持仓|头寸|敞口|风险敞口|风险暴露|配置)|"
+    r"[零一二三四五六七八九十百两]+分之[零一二三四五六七八九十百两]+"
+    r"\s*(?:仓|仓位|持仓|头寸|敞口|风险敞口|风险暴露|配置)|"
+    r"(?:仓位|持仓|头寸|敞口|风险敞口|风险暴露|配置).{0,8}(?:\d{1,3}(?:\.\d+)?\s*%|"
+    r"百分之[零一二三四五六七八九十百两\d]+|[零一二三四五六七八九十两\d]+成|"
+    r"\d{1,3}\s*/\s*\d{1,3}|(?:0?\.\d+|1\.0+)|"
+    r"[零一二三四五六七八九十百两]+分之[零一二三四五六七八九十百两]+)|"
+    r"(?:\d{1,3}(?:\.\d+)?\s*%|百分之[零一二三四五六七八九十百两\d]+|"
+    r"[零一二三四五六七八九十两\d]+成).{0,8}(?:仓位|持仓|头寸|敞口|风险敞口|风险暴露|配置))"
+)
+EXPOSURE_FALLBACK_CARD_VISIBLE_MARKERS = (
+    "[判断]上行门(六项全满足):",
+    "[判断]下行门(任一成立):",
+    "[事实]缺口/复核:",
+)
+EXPOSURE_HEADING_TEXTS = frozenset(
+    {
+        "仓位环境与纪律参考(影子)",
+        "🧭仓位建议与收盘验证门(影子)",
+    }
 )
 
 VOID_TAGS = {
@@ -236,6 +397,20 @@ class ReportMetrics:
         return self.evidence_rows
 
 
+@dataclass(frozen=True)
+class ExposureValidationContext:
+    """来自只读事实库的仓位建议外部校验上下文。"""
+
+    report_date: str
+    market_turnover_yiyuan: str
+    trade_calendar: Mapping[str, bool]
+    active_holdings: int | None = None
+    unlinked_holdings: int | None = None
+    open_theses: int | None = None
+    linked_executions: int | None = None
+    latest_broker_biz_date: str | None = None
+
+
 class ReportValidationError(ValueError):
     """带稳定错误码和责任章节的报告校验异常。"""
 
@@ -263,8 +438,10 @@ class _Evidence:
     as_of: str
     items: str
     kind: str = ""
+    explicit_hidden: bool = False
     summary_count: int = 0
     summary_text: list[str] = field(default_factory=list)
+    summary_visible_text: list[str] = field(default_factory=list)
     first_child_is_summary: bool = True
     child_elements: int = 0
     body_chars: int = 0
@@ -288,6 +465,25 @@ class _Claim:
 @dataclass
 class _FactorItem:
     default_hidden: bool
+    visible_text: list[str] = field(default_factory=list)
+
+
+@dataclass
+class _ExposureSource:
+    source: str
+    attrs: dict[str, str]
+    default_hidden: bool
+    explicit_hidden: bool
+    in_evidence_body: bool
+    text: list[str] = field(default_factory=list)
+    visible_text: list[str] = field(default_factory=list)
+
+
+@dataclass
+class _ExposureEvidence:
+    attrs: dict[str, str]
+    explicit_hidden: bool
+    text: list[str] = field(default_factory=list)
     visible_text: list[str] = field(default_factory=list)
 
 
@@ -350,6 +546,9 @@ class _Frame:
     explicit_hidden: bool = False
     factor_role: str | None = None
     factor_item: _FactorItem | None = None
+    exposure_role: str | None = None
+    exposure_source: _ExposureSource | None = None
+    exposure_evidence: _ExposureEvidence | None = None
     heading_text: list[str] | None = None
     capacity_table: _CapacityTable | None = None
     capacity_row: _CapacityRow | None = None
@@ -362,6 +561,335 @@ class _Frame:
 
 def _compact_char_count(value: str) -> int:
     return sum(1 for char in value if not char.isspace())
+
+
+def _normalize_guardrail_text(value: str) -> str:
+    normalized = (
+        unicodedata.normalize("NFKC", value)
+        .replace("⁄", "/")
+        .replace("∕", "/")
+    )
+    without_format_chars = "".join(
+        char
+        for char in normalized
+        if unicodedata.category(char) not in {"Cf", "Mc", "Me", "Mn"}
+    )
+    return re.sub(r"\s+", "", without_format_chars)
+
+
+def _fallback_tier_from_market_state(attrs: Mapping[str, str]) -> str | None:
+    states = {
+        key: attrs.get(key, "") for key in EXPOSURE_FALLBACK_MARKET_STATE_KEYS
+    }
+    if any(
+        value not in EXPOSURE_FALLBACK_MARKET_STATES[key]
+        for key, value in states.items()
+    ):
+        return None
+    breadth = states["data-market-breadth-state"]
+    volume = states["data-market-volume-state"]
+    structure = states["data-market-structure-state"]
+    if breadth == "weak" and structure == "weak":
+        return "defensive"
+    if breadth != "weak" and volume != "weak" and structure == "stable":
+        return "neutral"
+    return "cautious"
+
+
+def _expected_exposure_claim_text(mode: str, tier: str) -> str:
+    tier_text = EXPOSURE_TIERS.get(tier, "")
+    if not tier_text:
+        return ""
+    if mode == "fallback" and tier == "cautious":
+        return (
+            "[判断]结论:谨慎档(低置信);"
+            "单日修复不足,上行门全过前不升级。"
+        )
+    if mode == "fallback":
+        return f"[判断]结论:{tier_text}(低置信);按收盘验证门复核。"
+    if mode == "shadow":
+        return f"[判断]结论:{tier_text};按收盘验证门复核。"
+    if mode == "conflicted":
+        return "[判断]结论:不可判;证据存在冲突。"
+    if mode == "no_data":
+        return "[判断]结论:不可判;证据不足。"
+    return ""
+
+
+def _bounded_int_attr(
+    attrs: Mapping[str, str],
+    key: str,
+    *,
+    minimum: int,
+    maximum: int,
+) -> int | None:
+    raw_value = attrs.get(key, "")
+    if not re.fullmatch(r"(?:0|[1-9]\d{0,5})", raw_value):
+        return None
+    value = int(raw_value)
+    if value < minimum or value > maximum:
+        return None
+    return value
+
+
+def _expected_exposure_condition_text(
+    role: str,
+    attrs: Mapping[str, str],
+) -> str:
+    condition_key = attrs.get("data-exposure-condition", "")
+    static_text = EXPOSURE_CONDITION_TEXTS.get(role, {}).get(
+        condition_key, ""
+    )
+    if static_text:
+        return static_text
+
+    if role == "confirm-if" and condition_key == "full-close-upside-gate":
+        turnover_floor = attrs.get("data-turnover-floor-yiyuan", "")
+        universe_size = _bounded_int_attr(
+            attrs,
+            "data-index-universe-size",
+            minimum=3,
+            maximum=12,
+        )
+        ma20_recovery_min = _bounded_int_attr(
+            attrs,
+            "data-ma20-recovery-min",
+            minimum=1,
+            maximum=12,
+        )
+        ma5_hold_min = _bounded_int_attr(
+            attrs,
+            "data-ma5-hold-min",
+            minimum=1,
+            maximum=12,
+        )
+        limit_down_max = _bounded_int_attr(
+            attrs,
+            "data-limit-down-max",
+            minimum=0,
+            maximum=100,
+        )
+        if (
+            not re.fullmatch(r"[1-9]\d{3,5}(?:\.\d{1,2})?", turnover_floor)
+            or universe_size is None
+            or ma20_recovery_min is None
+            or ma5_hold_min is None
+            or limit_down_max is None
+            or ma20_recovery_min > universe_size
+            or ma5_hold_min > universe_size
+            or attrs.get("data-require-portfolio-reconciled") != "true"
+        ):
+            return ""
+        return (
+            f"[判断]上行门(六项全满足):成交额≥{turnover_floor}亿元、"
+            "上涨家数占优、"
+            f"至少{ma20_recovery_min}个核心宽基收回MA20、"
+            f"{universe_size}个观察指数中至少{ma5_hold_min}个站上MA5、"
+            f"跌停≤{limit_down_max}、组合完成对账。"
+        )
+
+    if role == "invalidate-if" and condition_key == "full-close-downside-gate":
+        universe_size = _bounded_int_attr(
+            attrs,
+            "data-index-universe-size",
+            minimum=3,
+            maximum=12,
+        )
+        ma5_break_min = _bounded_int_attr(
+            attrs,
+            "data-ma5-break-min",
+            minimum=1,
+            maximum=12,
+        )
+        limit_down_min = _bounded_int_attr(
+            attrs,
+            "data-limit-down-min",
+            minimum=1,
+            maximum=100,
+        )
+        if (
+            universe_size is None
+            or ma5_break_min is None
+            or limit_down_min is None
+            or ma5_break_min > universe_size
+        ):
+            return ""
+        return (
+            "[判断]下行门(任一成立):上涨家数不多于下跌家数且"
+            f"跌停≥{limit_down_min},或{universe_size}个观察指数中"
+            f"至少{ma5_break_min}个收盘低于MA5。"
+        )
+
+    return ""
+
+
+def _expected_exposure_portfolio_evidence_text(
+    attrs: Mapping[str, str],
+    report_date: date_type,
+) -> str:
+    status = attrs.get("data-portfolio-evidence-status", "")
+    if status == "not-read":
+        return EXPOSURE_PORTFOLIO_EVIDENCE_NOT_READ_TEXT
+    if status != "unreconciled":
+        return ""
+    active_holdings = _bounded_int_attr(
+        attrs,
+        "data-active-holdings",
+        minimum=0,
+        maximum=100_000,
+    )
+    unlinked_holdings = _bounded_int_attr(
+        attrs,
+        "data-unlinked-holdings",
+        minimum=0,
+        maximum=100_000,
+    )
+    open_theses = _bounded_int_attr(
+        attrs,
+        "data-open-theses",
+        minimum=0,
+        maximum=100_000,
+    )
+    linked_executions = _bounded_int_attr(
+        attrs,
+        "data-linked-executions",
+        minimum=0,
+        maximum=1_000_000,
+    )
+    latest_biz_date = attrs.get("data-latest-broker-biz-date", "")
+    if (
+        active_holdings is None
+        or unlinked_holdings is None
+        or open_theses is None
+        or linked_executions is None
+        or unlinked_holdings > active_holdings
+        or not _valid_date(latest_biz_date)
+        or date_type.fromisoformat(latest_biz_date) > report_date
+    ):
+        return ""
+    return (
+        f"[事实]对账留痕:{active_holdings}条activeholdings中"
+        f"{unlinked_holdings}条未关联thesis;"
+        f"{open_theses}条openthesis截至{report_date.isoformat()}关联"
+        f"{linked_executions}条非作废券商成交;"
+        f"券商事实层最新业务日为{latest_biz_date}。"
+    )
+
+
+def _strict_next_open_from_calendar_span(
+    value: str,
+    *,
+    start_date: date_type,
+    max_days: int,
+) -> date_type | None:
+    parts = value.split(",")
+    if not parts or len(parts) > max_days:
+        return None
+    expected_date = start_date
+    parsed: list[tuple[date_type, str]] = []
+    for part in parts:
+        match = re.fullmatch(r"(\d{4}-\d{2}-\d{2}):(open|closed)", part)
+        if not match:
+            return None
+        try:
+            current_date = date_type.fromisoformat(match.group(1))
+        except ValueError:
+            return None
+        status = match.group(2)
+        if current_date != expected_date:
+            return None
+        parsed.append((current_date, status))
+        expected_date += timedelta(days=1)
+    if any(status != "closed" for _, status in parsed[:-1]):
+        return None
+    if parsed[-1][1] != "open":
+        return None
+    return parsed[-1][0]
+
+
+def _expected_exposure_review_text(
+    attrs: Mapping[str, str],
+    report_date: date_type,
+    portfolio_attrs: Mapping[str, str],
+) -> str:
+    review_date_raw = attrs.get("data-review-date", "")
+    retry_date_raw = attrs.get("data-retry-review-date", "")
+    if not _valid_date(review_date_raw) or not _valid_date(retry_date_raw):
+        return ""
+    review_date = date_type.fromisoformat(review_date_raw)
+    retry_date = date_type.fromisoformat(retry_date_raw)
+    calendar_review_date = _strict_next_open_from_calendar_span(
+        attrs.get("data-calendar-span", ""),
+        start_date=report_date + timedelta(days=1),
+        max_days=EXPOSURE_REVIEW_DATE_MAX_DAYS,
+    )
+    calendar_retry_date = _strict_next_open_from_calendar_span(
+        attrs.get("data-retry-calendar-span", ""),
+        start_date=review_date + timedelta(days=1),
+        max_days=EXPOSURE_RETRY_REVIEW_DATE_MAX_DAYS,
+    )
+    if (
+        attrs.get("data-calendar-status") != "complete"
+        or attrs.get("data-calendar-source") != "trade_calendar"
+        or attrs.get("data-calendar-as-of") != report_date.isoformat()
+        or calendar_review_date != review_date
+        or calendar_retry_date != retry_date
+    ):
+        return ""
+    portfolio_status = portfolio_attrs.get(
+        "data-portfolio-evidence-status", ""
+    )
+    if portfolio_status == "not-read":
+        gap_text = "组合事实未读取"
+    elif portfolio_status == "unreconciled":
+        active_holdings = _bounded_int_attr(
+            portfolio_attrs,
+            "data-active-holdings",
+            minimum=0,
+            maximum=100_000,
+        )
+        unlinked_holdings = _bounded_int_attr(
+            portfolio_attrs,
+            "data-unlinked-holdings",
+            minimum=0,
+            maximum=100_000,
+        )
+        open_theses = _bounded_int_attr(
+            portfolio_attrs,
+            "data-open-theses",
+            minimum=0,
+            maximum=100_000,
+        )
+        linked_executions = _bounded_int_attr(
+            portfolio_attrs,
+            "data-linked-executions",
+            minimum=0,
+            maximum=1_000_000,
+        )
+        latest_biz_date = portfolio_attrs.get(
+            "data-latest-broker-biz-date", ""
+        )
+        if (
+            active_holdings is None
+            or unlinked_holdings is None
+            or open_theses is None
+            or linked_executions is None
+            or unlinked_holdings > active_holdings
+            or not _valid_date(latest_biz_date)
+            or date_type.fromisoformat(latest_biz_date) > report_date
+        ):
+            return ""
+        gap_text = (
+            f"{active_holdings}条activeholdings中{unlinked_holdings}条"
+            f"未关联thesis,{open_theses}条openthesis关联"
+            f"{linked_executions}条非作废券商成交;券商事实至{latest_biz_date}"
+        )
+    else:
+        return ""
+    return (
+        f"[事实]缺口/复核:{gap_text};{review_date_raw}收盘复核,"
+        f"数据或对账未齐则顺延至{retry_date_raw};盘中不判。"
+    )
 
 
 def _has_labeled_content(parts: Sequence[str]) -> bool:
@@ -468,6 +996,26 @@ class _ReportParser(HTMLParser):
         self.factor_status_text: list[str] = []
         self.factor_no_data_text: list[str] = []
         self.factor_other_text: list[str] = []
+        self.exposure_hosts: list[tuple[str, frozenset[str]]] = []
+        self.exposure_modes: list[str] = []
+        self.exposure_tiers: list[str] = []
+        self.exposure_boundaries: list[str] = []
+        self.exposure_sources: list[_ExposureSource] = []
+        self.exposure_roles: dict[str, list[list[str]]] = {
+            "confirm-if": [],
+            "invalidate-if": [],
+            "review-rule": [],
+        }
+        self.exposure_role_attrs: dict[str, list[dict[str, str]]] = {
+            "confirm-if": [],
+            "invalidate-if": [],
+            "review-rule": [],
+        }
+        self.exposure_evidence_sources: list[_ExposureEvidence] = []
+        self.exposure_heading_text: list[str] = []
+        self.exposure_section_hidden = False
+        self.exposure_hidden_contract_elements = 0
+        self.exposure_all_text: list[str] = []
         self.document_text: list[str] = []
         self.section_text: dict[str, list[str]] = {
             anchor: [] for anchor in REQUIRED_ANCHORS
@@ -536,6 +1084,24 @@ class _ReportParser(HTMLParser):
                 return frame.factor_item
         return None
 
+    def _current_exposure_role(self) -> str | None:
+        for frame in reversed(self.stack):
+            if frame.exposure_role:
+                return frame.exposure_role
+        return None
+
+    def _current_exposure_source(self) -> _ExposureSource | None:
+        for frame in reversed(self.stack):
+            if frame.exposure_source:
+                return frame.exposure_source
+        return None
+
+    def _current_exposure_evidence(self) -> _ExposureEvidence | None:
+        for frame in reversed(self.stack):
+            if frame.exposure_evidence:
+                return frame.exposure_evidence
+        return None
+
     def _current_capacity_table(self) -> _CapacityTable | None:
         for frame in reversed(self.stack):
             if frame.capacity_table:
@@ -590,6 +1156,9 @@ class _ReportParser(HTMLParser):
             or "display:none" in compact_style
             or "visibility:hidden" in compact_style
             or bool(classes & CSS_HIDDEN_CLASSES)
+        )
+        explicit_hidden_path = explicit_hidden or any(
+            frame.explicit_hidden for frame in self.stack
         )
         default_hidden = (
             self._in_default_hidden()
@@ -661,6 +1230,64 @@ class _ReportParser(HTMLParser):
         section_for_element = self._current_section()
         if element_id in REQUIRED_ANCHORS:
             section_for_element = element_id
+        if (
+            section_for_element == "exposure"
+            and tag in EXPOSURE_FORBIDDEN_TAGS
+        ):
+            self._error(
+                "invalid_exposure_contract",
+                f"exposure 不允许交互式 <{tag}> 标签",
+                section="exposure",
+            )
+        if section_for_element == "exposure" and "style" in attrs:
+            self._error(
+                "invalid_exposure_contract",
+                "exposure 内禁止内联 style",
+                section="exposure",
+            )
+        if (
+            section_for_element == "exposure"
+            and tag == "details"
+            and (
+                "evidence" not in classes
+                or attrs.get("data-evidence-kind") != "exposure-detail"
+            )
+        ):
+            self._error(
+                "invalid_exposure_contract",
+                "exposure 只允许唯一 exposure-detail 折叠块",
+                section="exposure",
+            )
+        if (
+            section_for_element == "exposure"
+            and not self._in_evidence_body()
+            and tag not in EXPOSURE_VISIBLE_ALLOWED_TAGS
+        ):
+            self._error(
+                "invalid_exposure_contract",
+                f"exposure 默认可见内容不允许 <{tag}> 标签",
+                section="exposure",
+            )
+        if section_for_element == "exposure":
+            rendered_attrs = "".join(
+                attrs.get(name, "")
+                for name in (
+                    "alt",
+                    "aria-label",
+                    "data-evidence-boundary",
+                    "placeholder",
+                    "title",
+                    "value",
+                )
+            )
+            if EXPOSURE_DISALLOWED_VISIBLE_RE.search(
+                _normalize_guardrail_text(rendered_attrs)
+            ):
+                self._error(
+                    "invalid_exposure_contract",
+                    "exposure 全部属性不得携带仓位比例或操作指令",
+                    section="exposure",
+                )
 
         if self.capacity_heading_pending and section_for_element == "s5":
             if tag == "table" and attrs.get("data-capacity-health") == "v1":
@@ -755,6 +1382,64 @@ class _ReportParser(HTMLParser):
         ):
             factor_item = _FactorItem(default_hidden=default_hidden)
             self.factor_items.append(factor_item)
+        if element_id == "exposure":
+            self.exposure_hosts.append((tag, frozenset(classes)))
+            self.exposure_modes.append(attrs.get("data-exposure-mode", ""))
+            self.exposure_tiers.append(attrs.get("data-exposure-tier", ""))
+            self.exposure_boundaries.append(
+                attrs.get("data-exposure-boundary", "")
+            )
+            self.exposure_section_hidden = default_hidden
+        exposure_role = attrs.get("data-exposure-role") or None
+        exposure_source: _ExposureSource | None = None
+        exposure_source_name = attrs.get("data-exposure-source")
+        if exposure_source_name is not None:
+            current_exposure_evidence = self._current_evidence()
+            if (
+                tag != "p"
+                or self._current_section() != "exposure"
+                or not self._in_evidence_body()
+                or current_exposure_evidence is None
+                or current_exposure_evidence.kind != "exposure-detail"
+                or attrs.get("data-exposure-evidence")
+                != exposure_source_name
+            ):
+                self._error(
+                    "invalid_exposure_contract",
+                    "仓位来源必须与同名 evidence 合并并置于 exposure-detail 正文",
+                    section="exposure",
+                )
+            else:
+                exposure_source = _ExposureSource(
+                    source=exposure_source_name,
+                    attrs=attrs,
+                    default_hidden=default_hidden,
+                    explicit_hidden=explicit_hidden_path,
+                    in_evidence_body=True,
+                )
+                self.exposure_sources.append(exposure_source)
+
+        exposure_evidence: _ExposureEvidence | None = None
+        exposure_evidence_source = attrs.get("data-exposure-evidence")
+        if exposure_evidence_source is not None:
+            current_exposure_evidence = self._current_evidence()
+            if (
+                tag != "p"
+                or self._current_section() != "exposure"
+                or not self._in_evidence_body()
+                or current_exposure_evidence is None
+                or current_exposure_evidence.kind != "exposure-detail"
+            ):
+                self._error(
+                    "invalid_exposure_contract",
+                    "data-exposure-evidence 必须位于 exposure-detail 证据正文",
+                    section="exposure",
+                )
+            exposure_evidence = _ExposureEvidence(
+                attrs=attrs,
+                explicit_hidden=explicit_hidden_path,
+            )
+            self.exposure_evidence_sources.append(exposure_evidence)
 
         current_evidence = self._current_evidence()
         if (
@@ -801,6 +1486,7 @@ class _ReportParser(HTMLParser):
                 as_of=attrs.get("data-as-of", ""),
                 items=attrs.get("data-items", ""),
                 kind=attrs.get("data-evidence-kind", ""),
+                explicit_hidden=explicit_hidden_path,
             )
             self.evidences.append(evidence)
 
@@ -852,6 +1538,9 @@ class _ReportParser(HTMLParser):
             explicit_hidden=explicit_hidden,
             factor_role=factor_role,
             factor_item=factor_item,
+            exposure_role=exposure_role,
+            exposure_source=exposure_source,
+            exposure_evidence=exposure_evidence,
             heading_text=heading_text,
             capacity_table=capacity_table,
             capacity_row=capacity_row,
@@ -904,6 +1593,22 @@ class _ReportParser(HTMLParser):
                 or claim is not None
             ):
                 self.factor_hidden_contract_elements += 1
+        if section == "exposure" and not self._in_evidence_body():
+            if exposure_role and exposure_role not in self.exposure_roles:
+                self._error(
+                    "invalid_exposure_contract",
+                    f"未知 data-exposure-role：{exposure_role}",
+                    section="exposure",
+                )
+            elif exposure_role and not self._in_default_hidden():
+                self.exposure_roles[exposure_role].append([])
+                self.exposure_role_attrs[exposure_role].append(attrs)
+            if self._in_default_hidden() and (
+                claim is not None
+                or exposure_source is not None
+                or exposure_role is not None
+            ):
+                self.exposure_hidden_contract_elements += 1
         if self._inside_report_document() and tag in {"table", "tr"}:
             metrics = self._metrics_bucket(section)
             if self._in_evidence_body():
@@ -972,9 +1677,28 @@ class _ReportParser(HTMLParser):
         factor_item = self._current_factor_item()
         if factor_item and not self._in_default_hidden():
             factor_item.visible_text.append(data)
+        exposure_source = self._current_exposure_source()
+        if exposure_source:
+            exposure_source.text.append(data)
+            if not any(frame.explicit_hidden for frame in self.stack):
+                exposure_source.visible_text.append(data)
+        exposure_evidence = self._current_exposure_evidence()
+        if exposure_evidence:
+            exposure_evidence.text.append(data)
+            if not any(frame.explicit_hidden for frame in self.stack):
+                exposure_evidence.visible_text.append(data)
+        exposure_role = self._current_exposure_role()
+        if (
+            exposure_role in self.exposure_roles
+            and not self._in_default_hidden()
+            and self.exposure_roles[exposure_role]
+        ):
+            self.exposure_roles[exposure_role][-1].append(data)
         evidence = self._current_evidence()
         if evidence and self._in_evidence_summary():
             evidence.summary_text.append(data)
+            if not any(frame.explicit_hidden for frame in self.stack):
+                evidence.summary_visible_text.append(data)
         for frame in reversed(self.stack):
             if frame.heading_text is not None:
                 frame.heading_text.append(data)
@@ -1000,13 +1724,32 @@ class _ReportParser(HTMLParser):
             if not any(frame.explicit_hidden for frame in self.stack):
                 structured_contract.rendered_text.append(data)
 
+        section = self._current_section()
+        if section == "exposure":
+            self.exposure_all_text.append(data)
+            if self._inside_tag("h2"):
+                self.exposure_heading_text.append(data)
         count = _compact_char_count(data)
         if not count:
             return
+        if (
+            section == "exposure"
+            and not self._in_evidence_body()
+            and not self._in_default_hidden()
+            and not self._inside_tag("h2")
+            and claim is None
+            and exposure_source is None
+            and exposure_role is None
+            and not (evidence and self._in_evidence_summary())
+        ):
+            self._error(
+                "invalid_exposure_contract",
+                "exposure 默认可见正文必须归属 Claim、三类来源或受控 role",
+                section="exposure",
+            )
         if evidence and self._in_evidence_body():
             evidence.body_chars += count
             evidence.body_text.append(data)
-        section = self._current_section()
         if (
             section == "factor"
             and not self._in_evidence_body()
@@ -1018,6 +1761,17 @@ class _ReportParser(HTMLParser):
             )
         ):
             self.factor_hidden_contract_elements += 1
+        if (
+            section == "exposure"
+            and not self._in_evidence_body()
+            and self._in_default_hidden()
+            and (
+                claim is not None
+                or exposure_source is not None
+                or exposure_role is not None
+            )
+        ):
+            self.exposure_hidden_contract_elements += 1
         if self._inside_report_document():
             self.document_text.append(data)
             if section and not self._in_default_hidden() and not self._in_evidence_body():
@@ -1159,6 +1913,643 @@ class _ReportParser(HTMLParser):
                 "invalid_factor_contract",
                 f"factor 可见状态不符合 data-factor-mode={mode} 的规范模板",
                 section="factor",
+            )
+
+    def _validate_exposure_contract(self, report_date: date_type) -> None:
+        if (
+            len(self.exposure_hosts) != 1
+            or self.exposure_hosts[0][0] != "section"
+            or "blk" not in self.exposure_hosts[0][1]
+        ):
+            raise ReportValidationError(
+                "invalid_exposure_contract",
+                "exposure 必须使用 section.blk 作为默认可见章节容器",
+                section="exposure",
+            )
+
+        mode = self.exposure_modes[0] if len(self.exposure_modes) == 1 else ""
+        tier = self.exposure_tiers[0] if len(self.exposure_tiers) == 1 else ""
+        boundary = (
+            self.exposure_boundaries[0]
+            if len(self.exposure_boundaries) == 1
+            else ""
+        )
+        if (
+            mode not in EXPOSURE_MODES
+            or tier not in EXPOSURE_TIERS
+            or boundary != EXPOSURE_BOUNDARY
+        ):
+            raise ReportValidationError(
+                "invalid_exposure_contract",
+                "exposure 必须声明合法 mode、tier 与只读环境评级边界",
+                section="exposure",
+            )
+        if self.exposure_section_hidden or self.exposure_hidden_contract_elements:
+            raise ReportValidationError(
+                "invalid_exposure_contract",
+                "exposure 的裁决与验证条件必须默认可见",
+                section="exposure",
+            )
+        if (
+            _normalize_guardrail_text("".join(self.exposure_heading_text))
+            not in EXPOSURE_HEADING_TEXTS
+        ):
+            raise ReportValidationError(
+                "invalid_exposure_contract",
+                "exposure 标题必须使用受控影子参考模板",
+                section="exposure",
+            )
+
+        visible_claims = [
+            claim
+            for claim in self.claims.values()
+            if claim.section == "exposure"
+            and not claim.in_evidence_body
+            and not claim.default_hidden
+        ]
+        if len(visible_claims) != 1 or visible_claims[0].kind != "judgment":
+            raise ReportValidationError(
+                "invalid_exposure_contract",
+                "exposure 必须且只能有 1 条可见 judgment Claim",
+                section="exposure",
+            )
+        if visible_claims[0].as_of != report_date.isoformat():
+            raise ReportValidationError(
+                "invalid_exposure_contract",
+                "exposure Claim 的 data-as-of 必须严格等于报告日",
+                section="exposure",
+            )
+        claim_text = _normalize_guardrail_text(
+            "".join(visible_claims[0].visible_text)
+        )
+        expected_tier_text = EXPOSURE_TIERS[tier]
+        tier_mentions = [
+            label for label in EXPOSURE_TIER_TEXTS if label in claim_text
+        ]
+        expected_claim_text = _expected_exposure_claim_text(mode, tier)
+        if (
+            claim_text != expected_claim_text
+            or tier_mentions != [expected_tier_text]
+            or claim_text.count(expected_tier_text) != 1
+        ):
+            raise ReportValidationError(
+                "invalid_exposure_contract",
+                "exposure Claim 必须使用报告日唯一规范定性档位模板",
+                section="exposure",
+            )
+
+        all_exposure_text = _normalize_guardrail_text(
+            "".join(self.exposure_all_text)
+        )
+        if EXPOSURE_DISALLOWED_VISIBLE_RE.search(all_exposure_text):
+            raise ReportValidationError(
+                "invalid_exposure_contract",
+                "exposure 全部内容不得给仓位比例或加减仓指令",
+                section="exposure",
+            )
+        if (mode, tier) != ("fallback", "cautious") and any(
+            marker in all_exposure_text
+            for marker in EXPOSURE_FALLBACK_CARD_VISIBLE_MARKERS
+        ):
+            raise ReportValidationError(
+                "invalid_exposure_contract",
+                "谨慎档专用验证文案只允许出现在 fallback+cautious 的受控角色中",
+                section="exposure",
+            )
+
+        sources_by_name: dict[str, _ExposureSource] = {}
+        for source in self.exposure_sources:
+            if (
+                source.source not in EXPOSURE_SOURCES
+                or source.source in sources_by_name
+                or not source.default_hidden
+                or source.explicit_hidden
+                or not source.in_evidence_body
+            ):
+                raise ReportValidationError(
+                    "invalid_exposure_contract",
+                    "exposure 必须在折叠留痕中各保留唯一 market/cognition/teacher 来源",
+                    section="exposure",
+                )
+            sources_by_name[source.source] = source
+        if tuple(sources_by_name) != EXPOSURE_SOURCES:
+            raise ReportValidationError(
+                "invalid_exposure_contract",
+                "exposure 来源必须按 market、cognition、teacher 顺序各出现一次",
+                section="exposure",
+            )
+
+        source_statuses: dict[str, str] = {}
+        for source_name, source in sources_by_name.items():
+            attrs = source.attrs
+            source_status = attrs.get("data-source-status", "")
+            as_of = attrs.get("data-as-of", "")
+            if (
+                source_status not in EXPOSURE_SOURCE_STATUSES
+                or not _valid_date(as_of)
+                or date_type.fromisoformat(as_of) > report_date
+            ):
+                raise ReportValidationError(
+                    "invalid_exposure_contract",
+                    "exposure 来源必须带合法状态和不晚于报告日的 data-as-of",
+                    section="exposure",
+                )
+            source_statuses[source_name] = source_status
+            compact_text = re.sub(
+                r"\s+", "", "".join(source.visible_text)
+            )
+            if source_status in {"complete", "conflicted"}:
+                required_label = {
+                    "market": "[事实]",
+                    "cognition": "[历史认知]",
+                    "teacher": "[老师观点]",
+                }[source_name]
+            else:
+                required_label = "[事实]"
+            if required_label not in compact_text or compact_text == required_label:
+                raise ReportValidationError(
+                    "invalid_exposure_contract",
+                    f"exposure 的 {source_name} 来源缺少规范标签或实质正文",
+                    section="exposure",
+                )
+            if (
+                source_status == "missing"
+                and as_of != report_date.isoformat()
+            ) or (
+                source_name in {"market", "teacher"}
+                and (
+                    (
+                        source_status in {"complete", "conflicted"}
+                        and as_of != report_date.isoformat()
+                    )
+                    or (
+                        source_status == "stale"
+                        and as_of >= report_date.isoformat()
+                    )
+                )
+            ):
+                raise ReportValidationError(
+                    "invalid_exposure_contract",
+                    f"{source_name} 的缺失查询须归属报告日；市场/老师完整来源归属报告日，陈旧来源早于报告日",
+                    section="exposure",
+                )
+            if (
+                source_name == "teacher"
+                and attrs.get("data-teacher-date-field") != "date"
+            ):
+                raise ReportValidationError(
+                    "invalid_exposure_contract",
+                    "老师观点必须按 teacher_notes.date 归属，不得使用 created_at 替代",
+                    section="exposure",
+                )
+            if source_name == "cognition":
+                cognition_availability = attrs.get(
+                    "data-cognition-availability", ""
+                )
+                cognition_status = attrs.get("data-cognition-status", "")
+                cognition_category = attrs.get("data-cognition-category", "")
+                if (
+                    cognition_availability
+                    not in EXPOSURE_COGNITION_AVAILABILITY
+                    or cognition_status not in EXPOSURE_COGNITION_STATUSES
+                ):
+                    raise ReportValidationError(
+                        "invalid_exposure_contract",
+                        "历史认知必须分别声明可用性与真实生命周期",
+                        section="exposure",
+                    )
+                if (
+                    source_status in {"complete", "conflicted"}
+                    and cognition_availability != "active"
+                ) or (
+                    source_status == "missing"
+                    and cognition_availability == "active"
+                ) or (
+                    source_status == "stale"
+                    and cognition_availability == "none"
+                ):
+                    raise ReportValidationError(
+                        "invalid_exposure_contract",
+                        "candidate 或缺失认知不得冒充可用于仓位参考的 active 认知",
+                        section="exposure",
+                    )
+                if (
+                    cognition_availability == "active"
+                    and (
+                        cognition_status != "active"
+                        or cognition_category != "sizing"
+                    )
+                ) or (
+                    cognition_availability == "candidate_only"
+                    and (
+                        cognition_status != "candidate"
+                        or cognition_category != "sizing"
+                    )
+                ) or (
+                    cognition_availability == "none"
+                    and cognition_status != "none"
+                ):
+                    raise ReportValidationError(
+                        "invalid_exposure_contract",
+                        "仓位参考只接受 category=sizing 且 lifecycle 与 availability 一致的历史认知",
+                        section="exposure",
+                    )
+
+        confirm_blocks = self.exposure_roles["confirm-if"]
+        invalidate_blocks = self.exposure_roles["invalidate-if"]
+        for role, blocks in (
+            ("confirm-if", confirm_blocks),
+            ("invalidate-if", invalidate_blocks),
+        ):
+            role_attrs = self.exposure_role_attrs[role]
+            if blocks:
+                expected_condition_text = _expected_exposure_condition_text(
+                    role,
+                    role_attrs[0] if len(role_attrs) == 1 else {},
+                )
+                actual_condition_text = (
+                    _normalize_guardrail_text("".join(blocks[0]))
+                    if len(blocks) == 1
+                    else ""
+                )
+                if (
+                    not expected_condition_text
+                    or actual_condition_text != expected_condition_text
+                ):
+                    raise ReportValidationError(
+                        "invalid_exposure_contract",
+                        "exposure 确认/失效条件必须使用受控市场事实模板",
+                        section="exposure",
+                    )
+        expected_visible_blocks = (
+            4
+            if (mode, tier) == ("fallback", "cautious")
+            else 3
+            if mode in {"shadow", "fallback"}
+            else 1
+        )
+        actual_visible_blocks = 1 + sum(
+            len(blocks) for blocks in self.exposure_roles.values()
+        )
+        if actual_visible_blocks != expected_visible_blocks:
+            raise ReportValidationError(
+                "invalid_exposure_contract",
+                "exposure 默认可见区只能保留结论、验证门与必要的缺口/复核",
+                section="exposure",
+            )
+        cognition_attrs = sources_by_name["cognition"].attrs
+        fallback_inputs_eligible = (
+            source_statuses["market"] == "complete"
+            and source_statuses["cognition"] == "missing"
+            and cognition_attrs.get("data-cognition-availability")
+            == "candidate_only"
+            and cognition_attrs.get("data-cognition-status") == "candidate"
+            and cognition_attrs.get("data-cognition-category") == "sizing"
+            and source_statuses["teacher"] in {"complete", "conflicted"}
+        )
+        portfolio_evidence_items = [
+            evidence
+            for evidence in self.exposure_evidence_sources
+            if evidence.attrs.get("data-exposure-evidence") == "portfolio"
+        ]
+        portfolio_evidence_attrs = (
+            portfolio_evidence_items[0].attrs
+            if len(portfolio_evidence_items) == 1
+            else {}
+        )
+        if (
+            (mode, tier) != ("fallback", "cautious")
+            and self.exposure_roles["review-rule"]
+        ):
+            raise ReportValidationError(
+                "invalid_exposure_contract",
+                "缺口/复核行只允许用于满足精确资格的 cautious fallback",
+                section="exposure",
+            )
+        if mode == "shadow":
+            if (
+                tier == "undetermined"
+                or any(status != "complete" for status in source_statuses.values())
+                or len(confirm_blocks) != 1
+                or len(invalidate_blocks) != 1
+                or not _has_labeled_content(confirm_blocks[0])
+                or not _has_labeled_content(invalidate_blocks[0])
+            ):
+                raise ReportValidationError(
+                    "invalid_exposure_contract",
+                    "shadow 仓位环境须有三类完整来源、定性档位及各一条确认/失效条件",
+                    section="exposure",
+                )
+        elif mode == "fallback":
+            expected_fallback_tier = _fallback_tier_from_market_state(
+                sources_by_name["market"].attrs
+            )
+            confirm_condition = (
+                self.exposure_role_attrs["confirm-if"][0].get(
+                    "data-exposure-condition", ""
+                )
+                if len(confirm_blocks) == 1
+                else ""
+            )
+            invalidate_condition = (
+                self.exposure_role_attrs["invalidate-if"][0].get(
+                    "data-exposure-condition", ""
+                )
+                if len(invalidate_blocks) == 1
+                else ""
+            )
+            review_blocks = self.exposure_roles["review-rule"]
+            confirm_attrs = (
+                self.exposure_role_attrs["confirm-if"][0]
+                if len(confirm_blocks) == 1
+                else {}
+            )
+            review_attrs = self.exposure_role_attrs["review-rule"]
+            portfolio_evidence_text = (
+                _normalize_guardrail_text(
+                    "".join(portfolio_evidence_items[0].visible_text)
+                )
+                if len(portfolio_evidence_items) == 1
+                else ""
+            )
+            expected_portfolio_evidence_text = (
+                _expected_exposure_portfolio_evidence_text(
+                    portfolio_evidence_attrs,
+                    report_date,
+                )
+                if portfolio_evidence_attrs
+                else ""
+            )
+            portfolio_evidence_status = (
+                portfolio_evidence_attrs.get(
+                    "data-portfolio-evidence-status", ""
+                )
+                if portfolio_evidence_attrs
+                else ""
+            )
+            review_text = (
+                _normalize_guardrail_text("".join(review_blocks[0]))
+                if len(review_blocks) == 1
+                else ""
+            )
+            expected_review_text = (
+                _expected_exposure_review_text(
+                    review_attrs[0],
+                    report_date,
+                    portfolio_evidence_attrs,
+                )
+                if len(review_attrs) == 1
+                else ""
+            )
+            cautious_card_invalid = tier == "cautious" and (
+                confirm_condition != "full-close-upside-gate"
+                or invalidate_condition != "full-close-downside-gate"
+                or confirm_attrs.get("data-turnover-floor-yiyuan", "")
+                != sources_by_name["market"].attrs.get(
+                    "data-market-turnover-yiyuan", ""
+                )
+                or portfolio_evidence_status
+                not in {"unreconciled", "not-read"}
+                or not expected_portfolio_evidence_text
+                or portfolio_evidence_text
+                != expected_portfolio_evidence_text
+                or not expected_review_text
+                or review_text != expected_review_text
+            )
+            generic_condition_invalid = tier != "cautious" and (
+                confirm_condition
+                not in EXPOSURE_FALLBACK_GENERIC_CONDITIONS["confirm-if"]
+                or invalidate_condition
+                not in EXPOSURE_FALLBACK_GENERIC_CONDITIONS["invalidate-if"]
+            )
+            if (
+                not fallback_inputs_eligible
+                or tier not in EXPOSURE_FALLBACK_TIERS
+                or tier != expected_fallback_tier
+                or len(confirm_blocks) != 1
+                or len(invalidate_blocks) != 1
+                or not _has_labeled_content(confirm_blocks[0])
+                or not _has_labeled_content(invalidate_blocks[0])
+                or cautious_card_invalid
+                or generic_condition_invalid
+            ):
+                raise ReportValidationError(
+                    "invalid_exposure_contract",
+                    "fallback 须满足精确来源资格、受控市场状态到档位映射及精简收盘验证契约",
+                    section="exposure",
+                )
+            ops_text = re.sub(r"\s+", "", "".join(self.section_text["ops"]))
+            if not all(
+                marker in ops_text
+                for marker in (
+                    "仓位建议置信度较低",
+                    "市场事实主导",
+                    "候选认知只作约束",
+                )
+            ):
+                raise ReportValidationError(
+                    "invalid_exposure_contract",
+                    "fallback 必须披露低置信原因，并声明市场事实主导、候选认知只作约束",
+                    section="ops",
+                )
+        elif mode == "conflicted":
+            if (
+                tier != "undetermined"
+                or "conflicted" not in source_statuses.values()
+                or any(
+                    status in {"missing", "stale"}
+                    for status in source_statuses.values()
+                )
+                or confirm_blocks
+                or invalidate_blocks
+            ):
+                raise ReportValidationError(
+                    "invalid_exposure_contract",
+                    "conflicted 模式只能并列冲突，不得给档位或验证指令",
+                    section="exposure",
+                )
+            ops_text = re.sub(r"\s+", "", "".join(self.section_text["ops"]))
+            if "仓位参考存在冲突" not in ops_text:
+                raise ReportValidationError(
+                    "invalid_exposure_contract",
+                    "conflicted 仓位参考必须在数据缺口章节保持可见",
+                    section="ops",
+                )
+        else:
+            if (
+                tier != "undetermined"
+                or not any(
+                    status in {"missing", "stale"}
+                    for status in source_statuses.values()
+                )
+                or confirm_blocks
+                or invalidate_blocks
+                or fallback_inputs_eligible
+            ):
+                raise ReportValidationError(
+                    "invalid_exposure_contract",
+                    "no_data 模式必须有无法降级的缺失或陈旧来源，且不得给档位或验证指令",
+                    section="exposure",
+                )
+            ops_text = re.sub(r"\s+", "", "".join(self.section_text["ops"]))
+            if "仓位参考证据不足" not in ops_text:
+                raise ReportValidationError(
+                    "invalid_exposure_contract",
+                    "no_data 仓位参考必须在数据缺口章节保持可见",
+                    section="ops",
+                )
+
+        detail_evidence = [
+            evidence
+            for evidence in self.evidences
+            if evidence.section == "exposure"
+            and evidence.kind == "exposure-detail"
+        ]
+        evidence_source_names = tuple(
+            evidence.attrs.get("data-exposure-evidence", "")
+            for evidence in self.exposure_evidence_sources
+        )
+        if (
+            len(detail_evidence) != 1
+            or detail_evidence[0].explicit_hidden
+            or detail_evidence[0].as_of != report_date.isoformat()
+            or detail_evidence[0].items != "4"
+            or _normalize_guardrail_text(
+                "".join(detail_evidence[0].summary_visible_text)
+            )
+            != (
+                "仓位证据与对账留痕·"
+                f"{report_date.isoformat()}·4项"
+            )
+            or evidence_source_names != EXPOSURE_EVIDENCE_ITEMS
+        ):
+            raise ReportValidationError(
+                "invalid_exposure_contract",
+                "exposure 必须保留报告日唯一 exposure-detail，并按三类来源及组合对账完整留痕",
+                section="exposure",
+            )
+        evidence_ids: list[str] = []
+        cognition_availability = sources_by_name["cognition"].attrs.get(
+            "data-cognition-availability", ""
+        )
+        for exposure_evidence in self.exposure_evidence_sources:
+            evidence_attrs = exposure_evidence.attrs
+            source_name = evidence_attrs["data-exposure-evidence"]
+            if exposure_evidence.explicit_hidden:
+                raise ReportValidationError(
+                    "invalid_exposure_contract",
+                    "exposure-detail 展开后的四项证据不得再被 hidden",
+                    section="exposure",
+                )
+            evidence_id = evidence_attrs.get("data-evidence-id", "").strip()
+            evidence_as_of = evidence_attrs.get("data-as-of", "")
+            boundary = evidence_attrs.get("data-evidence-boundary", "").strip()
+            evidence_text = _normalize_guardrail_text(
+                "".join(exposure_evidence.visible_text)
+            )
+            if source_name == "portfolio":
+                portfolio_status = evidence_attrs.get(
+                    "data-portfolio-evidence-status", ""
+                )
+                typed_id = bool(
+                    EXPOSURE_EVIDENCE_ID_RES[source_name].fullmatch(
+                        evidence_id
+                    )
+                    and evidence_id.endswith(f":{evidence_as_of}")
+                )
+                lookup_id = bool(
+                    EXPOSURE_EVIDENCE_LOOKUP_RES[source_name].fullmatch(
+                        evidence_id
+                    )
+                    and evidence_id.endswith(f":{evidence_as_of}")
+                )
+                expected_portfolio_text = (
+                    _expected_exposure_portfolio_evidence_text(
+                        evidence_attrs,
+                        report_date,
+                    )
+                )
+                if (
+                    evidence_id.lower() in EXPOSURE_EMPTY_EVIDENCE_VALUES
+                    or boundary.lower() in EXPOSURE_EMPTY_EVIDENCE_VALUES
+                    or len(_normalize_guardrail_text(boundary)) < 4
+                    or evidence_as_of != report_date.isoformat()
+                    or (
+                        portfolio_status == "unreconciled"
+                        and not typed_id
+                    )
+                    or (portfolio_status == "not-read" and not lookup_id)
+                    or not expected_portfolio_text
+                    or evidence_text != expected_portfolio_text
+                ):
+                    raise ReportValidationError(
+                        "invalid_exposure_contract",
+                        "exposure 组合对账必须保留受控状态、日期、正文与类型化留痕",
+                        section="exposure",
+                    )
+                evidence_ids.append(evidence_id)
+                continue
+            source_status = source_statuses[source_name]
+            typed_id = bool(
+                EXPOSURE_EVIDENCE_ID_RES[source_name].fullmatch(evidence_id)
+            )
+            if typed_id and source_name == "market":
+                typed_id = evidence_id.endswith(f":{evidence_as_of}")
+            if typed_id and source_name in {"cognition", "teacher"}:
+                record_ids = evidence_id.split(":", 1)[1].split(",")
+                typed_id = len(record_ids) == len(set(record_ids))
+            lookup_id = bool(
+                EXPOSURE_EVIDENCE_LOOKUP_RES[source_name].fullmatch(evidence_id)
+                and evidence_id.endswith(f":{evidence_as_of}")
+            )
+            if source_name in {"market", "teacher"}:
+                id_matches_status = (
+                    lookup_id if source_status == "missing" else typed_id
+                )
+            elif cognition_availability == "none":
+                id_matches_status = lookup_id
+            else:
+                id_matches_status = typed_id
+            fallback_market_state_matches = (
+                mode != "fallback"
+                or source_name != "market"
+                or all(
+                    evidence_attrs.get(key)
+                    == sources_by_name["market"].attrs.get(key)
+                    for key in EXPOSURE_FALLBACK_MARKET_STATE_KEYS
+                )
+            )
+            cautious_market_metric_matches = (
+                (mode, tier) != ("fallback", "cautious")
+                or source_name != "market"
+                or evidence_attrs.get("data-market-turnover-yiyuan", "")
+                == sources_by_name["market"].attrs.get(
+                    "data-market-turnover-yiyuan", ""
+                )
+            )
+            if (
+                evidence_id.lower() in EXPOSURE_EMPTY_EVIDENCE_VALUES
+                or boundary.lower() in EXPOSURE_EMPTY_EVIDENCE_VALUES
+                or len(_normalize_guardrail_text(boundary)) < 4
+                or len(evidence_text) < 4
+                or not _valid_date(evidence_as_of)
+                or evidence_as_of
+                != sources_by_name[source_name].attrs.get("data-as-of", "")
+                or not id_matches_status
+                or not fallback_market_state_matches
+                or not cautious_market_metric_matches
+            ):
+                raise ReportValidationError(
+                    "invalid_exposure_contract",
+                    "exposure 三类证据必须逐项保留类型化真实/查询 ID、来源日期、正文与适用/失效边界",
+                    section="exposure",
+                )
+            evidence_ids.append(evidence_id)
+        if len(set(evidence_ids)) != len(EXPOSURE_EVIDENCE_ITEMS):
+            raise ReportValidationError(
+                "invalid_exposure_contract",
+                "exposure 三类证据 ID 不得重复",
+                section="exposure",
             )
 
     def _validate_capacity_health_contract(self, report_date: date_type) -> None:
@@ -1953,7 +3344,7 @@ class _ReportParser(HTMLParser):
         ):
             raise ReportValidationError(
                 "invalid_schema",
-                "article#report-document 必须带 compact-v1 schema 和有效 data-report-date",
+                "article#report-document 必须带 compact-v2 schema 和有效 data-report-date",
             )
         report_date = date_type.fromisoformat(report_date_value)
 
@@ -1989,6 +3380,7 @@ class _ReportParser(HTMLParser):
             )
 
         self._validate_factor_contract()
+        self._validate_exposure_contract(report_date)
         self._validate_capacity_health_contract(report_date)
         self._validate_sector_contracts(report_date)
         self._validate_new_high_structure_contract(report_date)
@@ -2160,8 +3552,304 @@ def _parse_report(html: str) -> _ReportParser:
     return parser
 
 
+def _requires_exposure_validation_context(parser: _ReportParser) -> bool:
+    cautious_fallback = (
+        parser.exposure_modes == ["fallback"]
+        and parser.exposure_tiers == ["cautious"]
+    )
+    unreconciled_portfolio = any(
+        evidence.attrs.get("data-exposure-evidence") == "portfolio"
+        and evidence.attrs.get("data-portfolio-evidence-status")
+        == "unreconciled"
+        for evidence in parser.exposure_evidence_sources
+    )
+    return cautious_fallback or unreconciled_portfolio
+
+
+def load_exposure_validation_context(
+    db_path: str | os.PathLike[str],
+    report_date: str,
+) -> ExposureValidationContext:
+    """从 canonical SQLite 事实层只读加载市场、日历与组合对账事实。"""
+
+    _validate_date(report_date)
+    source = Path(db_path).expanduser().resolve()
+    if not source.is_file():
+        raise ReportValidationError(
+            "invalid_exposure_context",
+            f"仓位建议外部事实库不存在：{source}",
+            section="exposure",
+        )
+    report_day = date_type.fromisoformat(report_date)
+    calendar_end = report_day + timedelta(
+        days=EXPOSURE_REVIEW_DATE_MAX_DAYS
+        + EXPOSURE_RETRY_REVIEW_DATE_MAX_DAYS
+    )
+    try:
+        connection = sqlite3.connect(
+            f"{source.as_uri()}?mode=ro",
+            uri=True,
+        )
+        try:
+            amount_row = connection.execute(
+                "SELECT total_amount FROM daily_market WHERE date = ?",
+                (report_date,),
+            ).fetchone()
+            calendar_rows = connection.execute(
+                """
+                SELECT date, is_open
+                FROM trade_calendar
+                WHERE date BETWEEN ? AND ?
+                ORDER BY date
+                """,
+                (report_date, calendar_end.isoformat()),
+            ).fetchall()
+            portfolio_row = connection.execute(
+                """
+                SELECT
+                    (
+                        SELECT COUNT(*)
+                        FROM holdings
+                        WHERE status = 'active'
+                    ) AS active_holdings,
+                    (
+                        SELECT COUNT(*)
+                        FROM holdings
+                        WHERE status = 'active'
+                          AND thesis_id IS NULL
+                    ) AS unlinked_holdings,
+                    (
+                        SELECT COUNT(*)
+                        FROM trade_thesis
+                        WHERE status = 'open'
+                          AND opened_at <= ?
+                    ) AS open_theses,
+                    (
+                        SELECT COUNT(*)
+                        FROM broker_executions AS execution
+                        JOIN trade_thesis AS thesis
+                          ON thesis.id = execution.thesis_id
+                        WHERE COALESCE(execution.is_void, 0) = 0
+                          AND execution.biz_date <= ?
+                          AND thesis.status = 'open'
+                          AND thesis.opened_at <= ?
+                    ) AS linked_executions,
+                    (
+                        SELECT MAX(biz_date)
+                        FROM broker_executions
+                        WHERE biz_date <= ?
+                    ) AS latest_broker_biz_date
+                """,
+                (
+                    report_date,
+                    report_date,
+                    report_date,
+                    report_date,
+                ),
+            ).fetchone()
+        finally:
+            connection.close()
+    except sqlite3.Error as exc:
+        raise ReportValidationError(
+            "invalid_exposure_context",
+            f"仓位建议外部事实读取失败：{exc}",
+            section="exposure",
+        ) from exc
+
+    amount = amount_row[0] if amount_row else None
+    if (
+        isinstance(amount, bool)
+        or not isinstance(amount, (int, float))
+        or not 1_000 <= float(amount) <= 999_999
+    ):
+        raise ReportValidationError(
+            "invalid_exposure_context",
+            "报告日 daily_market.total_amount 缺失或非法",
+            section="exposure",
+        )
+    trade_calendar: dict[str, bool] = {}
+    for raw_date, raw_is_open in calendar_rows:
+        if (
+            not isinstance(raw_date, str)
+            or not _valid_date(raw_date)
+            or raw_is_open not in (0, 1)
+            or raw_date in trade_calendar
+        ):
+            raise ReportValidationError(
+                "invalid_exposure_context",
+                "trade_calendar 含非法或重复日期状态",
+                section="exposure",
+            )
+        trade_calendar[raw_date] = bool(raw_is_open)
+    if trade_calendar.get(report_date) is not True:
+        raise ReportValidationError(
+            "invalid_exposure_context",
+            "报告日必须是 trade_calendar 中的开放日",
+            section="exposure",
+        )
+    if portfolio_row is None:
+        raise ReportValidationError(
+            "invalid_exposure_context",
+            "组合事实层查询未返回结果",
+            section="exposure",
+        )
+    (
+        active_holdings,
+        unlinked_holdings,
+        open_theses,
+        linked_executions,
+        latest_broker_biz_date,
+    ) = portfolio_row
+    portfolio_counts = (
+        active_holdings,
+        unlinked_holdings,
+        open_theses,
+        linked_executions,
+    )
+    if (
+        any(
+            isinstance(value, bool)
+            or not isinstance(value, int)
+            or value < 0
+            for value in portfolio_counts
+        )
+        or unlinked_holdings > active_holdings
+        or not isinstance(latest_broker_biz_date, str)
+        or not _valid_date(latest_broker_biz_date)
+        or latest_broker_biz_date > report_date
+    ):
+        raise ReportValidationError(
+            "invalid_exposure_context",
+            "组合事实层计数或券商最新业务日缺失或非法",
+            section="exposure",
+        )
+    return ExposureValidationContext(
+        report_date=report_date,
+        market_turnover_yiyuan=f"{float(amount):.2f}",
+        trade_calendar=trade_calendar,
+        active_holdings=active_holdings,
+        unlinked_holdings=unlinked_holdings,
+        open_theses=open_theses,
+        linked_executions=linked_executions,
+        latest_broker_biz_date=latest_broker_biz_date,
+    )
+
+
+def _validate_exposure_context(
+    parser: _ReportParser,
+    report_date: str,
+    context: ExposureValidationContext | None,
+) -> None:
+    if not _requires_exposure_validation_context(parser):
+        return
+    cautious_fallback = (
+        parser.exposure_modes == ["fallback"]
+        and parser.exposure_tiers == ["cautious"]
+    )
+    if (
+        context is None
+        or context.report_date != report_date
+        or context.trade_calendar.get(report_date) is not True
+        or any(
+            isinstance(value, bool)
+            or not isinstance(value, int)
+            or value < 0
+            for value in (
+                context.active_holdings,
+                context.unlinked_holdings,
+                context.open_theses,
+                context.linked_executions,
+            )
+        )
+        or context.unlinked_holdings > context.active_holdings
+        or not isinstance(context.latest_broker_biz_date, str)
+        or not _valid_date(context.latest_broker_biz_date)
+        or context.latest_broker_biz_date > report_date
+    ):
+        raise ReportValidationError(
+            "invalid_exposure_context",
+            "需外部验真的 exposure 必须提供与报告日一致的只读市场、日历与组合事实",
+            section="exposure",
+        )
+
+    if cautious_fallback:
+        source_market = parser.exposure_sources[0].attrs
+        confirm_attrs = parser.exposure_role_attrs["confirm-if"][0]
+        if (
+            context.market_turnover_yiyuan
+            != source_market.get("data-market-turnover-yiyuan", "")
+            or context.market_turnover_yiyuan
+            != confirm_attrs.get("data-turnover-floor-yiyuan", "")
+        ):
+            raise ReportValidationError(
+                "invalid_exposure_context",
+                "成交额验证门必须等于报告日 daily_market.total_amount",
+                section="exposure",
+            )
+
+    portfolio_items = [
+        evidence
+        for evidence in parser.exposure_evidence_sources
+        if evidence.attrs.get("data-exposure-evidence") == "portfolio"
+    ]
+    portfolio_attrs = (
+        portfolio_items[0].attrs if len(portfolio_items) == 1 else {}
+    )
+    portfolio_status = portfolio_attrs.get(
+        "data-portfolio-evidence-status", ""
+    )
+    if cautious_fallback and portfolio_status != "unreconciled":
+        raise ReportValidationError(
+            "invalid_exposure_context",
+            "正式 fallback+cautious 已读取组合事实，不得降级标成 not-read",
+            section="exposure",
+        )
+    if portfolio_status == "unreconciled":
+        expected_portfolio_attrs = {
+            "data-active-holdings": str(context.active_holdings),
+            "data-unlinked-holdings": str(context.unlinked_holdings),
+            "data-open-theses": str(context.open_theses),
+            "data-linked-executions": str(context.linked_executions),
+            "data-latest-broker-biz-date": context.latest_broker_biz_date,
+        }
+        if any(
+            portfolio_attrs.get(key, "") != value
+            for key, value in expected_portfolio_attrs.items()
+        ):
+            raise ReportValidationError(
+                "invalid_exposure_context",
+                "组合对账留痕必须逐字段等于只读 holdings/trade_thesis/broker_executions 事实",
+                section="exposure",
+            )
+
+    if cautious_fallback:
+        review_attrs = parser.exposure_role_attrs["review-rule"][0]
+        for span_key in ("data-calendar-span", "data-retry-calendar-span"):
+            for item in review_attrs.get(span_key, "").split(","):
+                match = re.fullmatch(
+                    r"(\d{4}-\d{2}-\d{2}):(open|closed)",
+                    item,
+                )
+                if not match:
+                    raise ReportValidationError(
+                        "invalid_exposure_context",
+                        "复核交易日历声明格式非法",
+                        section="exposure",
+                    )
+                expected_open = match.group(2) == "open"
+                if (
+                    context.trade_calendar.get(match.group(1))
+                    is not expected_open
+                ):
+                    raise ReportValidationError(
+                        "invalid_exposure_context",
+                        "复核日与只读 trade_calendar 事实不一致",
+                        section="exposure",
+                    )
+
+
 def collect_metrics(html: str) -> ReportMetrics:
-    """解析完整 HTML，并按 compact-v1 的唯一口径返回正文/证据预算。"""
+    """解析完整 HTML，并按 compact-v2 的唯一口径返回正文/证据预算。"""
 
     return _parse_report(html).metrics()
 
@@ -2833,17 +4521,18 @@ def validate_report(
     *,
     capacity_manifest: dict | None = None,
     new_high_manifest: dict | None = None,
+    exposure_context: ExposureValidationContext | None = None,
 ) -> ReportMetrics:
     """校验结构、Claim、折叠证据、边界声明及双层预算。"""
 
     parser = _parse_report(html)
+    report_date = next(item[3] for item in parser.schema_hosts)
+    _validate_exposure_context(parser, report_date, exposure_context)
     metrics = parser.metrics()
     if capacity_manifest is not None:
-        report_date = next(item[3] for item in parser.schema_hosts)
         _validate_capacity_manifest_payload(capacity_manifest, report_date)
         _validate_capacity_manifest_match(parser, capacity_manifest)
     if new_high_manifest is not None:
-        report_date = next(item[3] for item in parser.schema_hosts)
         _validate_new_high_manifest_payload(new_high_manifest, report_date)
         _validate_new_high_manifest_match(parser, new_high_manifest)
     checks = (
@@ -3103,7 +4792,7 @@ def render_report(tmp_dir: str | os.PathLike[str], report_date: str) -> str:
     <nav aria-label="章节导航">
 {side_nav}
     </nav>
-    <small class="sidebar-note">八步复盘法 v1.5 · 9 路多 Agent 完整采集 · compact-v1 只读产物</small>
+    <small class="sidebar-note">八步复盘法 v1.5 · 9 路多 Agent 完整采集 · compact-v2 只读产物</small>
   </aside>
   <main class="reader-main">
     <article class="report-document" id="report-document" data-report-schema="{REPORT_SCHEMA}" data-report-date="{safe_date}">
@@ -3148,6 +4837,7 @@ def write_report(
     *,
     capacity_manifest: dict | None = None,
     new_high_manifest: dict | None = None,
+    exposure_context: ExposureValidationContext | None = None,
 ) -> Path:
     """带容量和滚动新高 sidecar 校验后原子落盘；失败时不写文件。"""
 
@@ -3167,6 +4857,7 @@ def write_report(
         html,
         capacity_manifest=capacity_manifest,
         new_high_manifest=new_high_manifest,
+        exposure_context=exposure_context,
     )
     return _atomic_write_report(html, output_path)
 
@@ -3197,6 +4888,10 @@ def _build_parser() -> argparse.ArgumentParser:
         "--new-high-manifest",
         help="滚动新高 sidecar；省略时读取 TMP/new_high_<DATE>.json",
     )
+    parser.add_argument(
+        "--trade-db",
+        help="只读市场/交易日历/组合事实库；省略时读取 data/trade.db",
+    )
     return parser
 
 
@@ -3214,10 +4909,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         new_high_manifest = load_new_high_structure_manifest(
             new_high_manifest_path, args.date
         )
+        exposure_context = None
+        parsed = _parse_report(html)
+        if _requires_exposure_validation_context(parsed):
+            trade_db_path = args.trade_db or (
+                _repo_root() / "data" / "trade.db"
+            )
+            exposure_context = load_exposure_validation_context(
+                trade_db_path,
+                args.date,
+            )
         metrics = validate_report(
             html,
             capacity_manifest=capacity_manifest,
             new_high_manifest=new_high_manifest,
+            exposure_context=exposure_context,
         )
         output = args.output or (_repo_root() / "data" / "reports" / f"复盘_{args.date}.html")
         path = _atomic_write_report(html, output)
