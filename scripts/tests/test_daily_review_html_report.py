@@ -1007,10 +1007,17 @@ def _valid_chunks(date: str = DATE) -> dict[str, str]:
   </details>
 </section>
 """,
-        "s0": """
+        "s0": f"""
 <section class="blk" id="s0">
   <h2>⓪ 前日判分</h2>
   <p>[事实] 本日无新增判分。</p>
+  <details class="evidence" data-evidence-kind="generic-test" data-as-of="{date}" data-items="2">
+    <summary>判分原始证据（2 项）</summary>
+    <div class="evidence-body">
+      <p>判分原始序列。</p>
+      <span data-test-slot="evidence-body"></span>
+    </div>
+  </details>
 </section>
 """,
         "s1": f"""
@@ -1018,11 +1025,76 @@ def _valid_chunks(date: str = DATE) -> dict[str, str]:
   <h2>① 大盘</h2>
   <p id="claim-market" data-claim-kind="judgment" data-source="market_snapshot" data-as-of="{date}">[判断] 市场仍在等待确认。</p>
   <ul><li>[事实] 成交较前日缩量。</li><li>[事实] 指数分化。</li></ul>
+  <p data-big-picture="verdict" data-as-of="{date}" data-reviewed-through="{date}">[判断] 大势仍需结合大类资产、外汇与掉期共同确认。</p>
   <p>[判断] confirm_if：放量修复；invalidate_if：继续缩量下跌。</p>
   <details class="evidence" data-as-of="{date}" data-items="1">
     <summary>大盘原始证据（1 项）</summary>
     <div class="evidence-body">
       <p>六指数完整原始序列。</p>
+      <table data-cross-asset-context="v1" data-as-of="{date}" data-reviewed-through="{date}" data-source-status="partial">
+        <thead><tr><th>资产</th><th>事实</th></tr></thead>
+        <tbody>
+          <tr data-asset-class="global-equity" data-instrument="标普500"
+              data-source="test:global-equity"
+              data-date-kind="source-date" data-source-date="{date}"
+              data-observed-at="{date} 07:00:00" data-status="ok"
+              data-primary-value="-0.14%">
+            <td>标普500</td><td>[事实] {date} -0.14%。</td>
+          </tr>
+          <tr data-asset-class="volatility" data-instrument="VIX"
+              data-source="test:volatility"
+              data-date-kind="source-date" data-source-date="{date}"
+              data-observed-at="{date} 07:00:00" data-status="ok"
+              data-primary-value="18.70">
+            <td>VIX</td><td>[事实] {date} 18.70。</td>
+          </tr>
+          <tr data-asset-class="commodity" data-instrument="COMEX铜"
+              data-source="test:commodity"
+              data-date-kind="fetch-only" data-source-date=""
+              data-observed-at="{date} 07:00:00" data-status="latest_available"
+              data-primary-value="-0.15%">
+            <td>COMEX铜</td><td>[事实] -0.15%，仅有抓取快照，源交易日缺失。</td>
+          </tr>
+          <tr data-asset-class="china-risk" data-instrument="A50期指"
+              data-source="test:china-risk"
+              data-date-kind="fetch-only" data-source-date=""
+              data-observed-at="{date} 07:00:00" data-status="latest_available"
+              data-primary-value="-0.60%">
+            <td>A50期指</td><td>[事实] -0.60%，仅有抓取快照，源交易日缺失。</td>
+          </tr>
+          <tr data-asset-class="rates" data-instrument="美债10Y"
+              data-source="test:rates"
+              data-date-kind="source-date" data-source-date="{date}"
+              data-observed-at="{date} 07:00:00" data-status="ok"
+              data-primary-value="4.71%">
+            <td>美债10Y</td><td>[事实] {date} 4.71%。</td>
+          </tr>
+        </tbody>
+      </table>
+      <table data-rmb-fx-observation="v1" data-as-of="{date}" data-reviewed-through="{date}" data-source-status="complete">
+        <thead><tr><th>观察项</th><th>报价事实</th></tr></thead>
+        <tbody>
+          <tr data-fx-instrument="spot" data-pair="USD/CNY" data-status="ok"
+              data-source-date="{date}" data-source="chinamoney:rfx-sp-quot"
+              data-source-url="https://www.chinamoney.com.cn/r/cms/www/chinamoney/data/fx/rfx-sp-quot.json"
+              data-observed-at="{date} 20:03:59"
+              data-fetched-at="{date}T20:04:03.309010"
+              data-price-kind="computed_bid_ask_mid"
+              data-bid="6.7720" data-ask="6.7725" data-mid="6.77225">
+            <td>USD/CNY 在岸即期</td><td>[事实] {date} 中国货币网：买 6.7720 / 卖 6.7725 / 算术中值 6.77225。</td>
+          </tr>
+          <tr data-fx-instrument="c-swap-1y" data-pair="USD/CNY" data-status="ok"
+              data-source-date="{date}" data-source="chinamoney:fx-c-swap-fixing"
+              data-source-url="https://www.chinamoney.org.cn/r/cms/www/chinamoney/data/fx/fx-c-sw-curv-USD.CNY.json"
+              data-observed-at="{date} 16:30:00"
+              data-fetched-at="{date}T20:04:05.489285"
+              data-price-kind="c_swap_fixing" data-tenor="1Y"
+              data-swap-point-pips="-1859.59" data-forward-rate="6.5881"
+              data-quote-source="报价数据">
+            <td>USD/CNY 1Y C-Swap</td><td>[事实] {date} 中国货币网报价数据定盘：-1859.59 Pips / 全价 6.5881。</td>
+          </tr>
+        </tbody>
+      </table>
       <span data-test-slot="appendix"></span>
     </div>
   </details>
@@ -1099,6 +1171,7 @@ def _valid_chunks(date: str = DATE) -> dict[str, str]:
 <section class="blk" id="ops">
   <h2>数据缺口</h2>
   <p>[事实] 仅列会改变结论可信度的缺口。</p>
+  <p>[事实] 大类资产数据不完整：部分线索只有抓取时间，源交易日缺失。</p>
   <span data-test-slot="visible"></span>
 </section>
 <footer><p>只读边界；[事实]/[判断] 分层；北向禁用；000001.SH + 399106.SZ。</p></footer>
@@ -3867,8 +3940,10 @@ def test_evidence_must_be_closed_by_default(assembler, tmp_path):
     html, _ = _render_valid(assembler, tmp_path / "chunks")
     invalid = _replace_once(
         html,
-        f'<details class="evidence" data-as-of="{DATE}" data-items="1">',
-        f'<details class="evidence" open data-as-of="{DATE}" data-items="1">',
+        f'<details class="evidence" data-evidence-kind="generic-test" '
+        f'data-as-of="{DATE}" data-items="2">',
+        f'<details class="evidence" open data-evidence-kind="generic-test" '
+        f'data-as-of="{DATE}" data-items="2">',
     )
     _assert_report_error(assembler, invalid)
 
@@ -3885,8 +3960,8 @@ def test_unclosed_evidence_is_rejected(assembler, tmp_path):
 def test_evidence_requires_a_nonempty_body(assembler, tmp_path):
     html, _ = _render_valid(assembler, tmp_path / "chunks")
     body = """    <div class="evidence-body">
-      <p>六指数完整原始序列。</p>
-      <span data-test-slot="appendix"></span>
+      <p>判分原始序列。</p>
+      <span data-test-slot="evidence-body"></span>
     </div>
 """
     invalid = _replace_once(html, body, "")
@@ -3896,8 +3971,8 @@ def test_evidence_requires_a_nonempty_body(assembler, tmp_path):
 def test_evidence_body_may_be_a_table_artifact(assembler, tmp_path):
     html, _ = _render_valid(assembler, tmp_path / "chunks")
     body = """    <div class="evidence-body">
-      <p>六指数完整原始序列。</p>
-      <span data-test-slot="appendix"></span>
+      <p>判分原始序列。</p>
+      <span data-test-slot="evidence-body"></span>
     </div>
 """
     changed = _replace_once(html, body, "    <table><tr></tr></table>\n")
@@ -5335,6 +5410,236 @@ def test_new_high_structure_none_and_missing_states_cannot_fake_complete(
     )
 
 
+def test_s1_big_picture_contract_cannot_be_silently_omitted(
+    assembler, tmp_path
+):
+    html, _ = _render_valid(assembler, tmp_path / "chunks")
+    invalid = _replace_once(
+        html,
+        ' data-big-picture="verdict"',
+        "",
+    )
+
+    error = _assert_report_error(
+        assembler,
+        invalid,
+        "invalid_big_picture",
+    )
+    assert error.section == "s1"
+
+
+def test_s1_big_picture_verdict_must_name_all_required_dimensions(
+    assembler, tmp_path
+):
+    html, _ = _render_valid(assembler, tmp_path / "chunks")
+    invalid = _replace_once(
+        html,
+        "[判断] 大势仍需结合大类资产、外汇与掉期共同确认。",
+        "[判断] 大势仍需结合境内指数共同确认。",
+    )
+
+    _assert_report_error(
+        assembler,
+        invalid,
+        "invalid_big_picture",
+    )
+
+
+def test_s1_cross_asset_fetch_only_rows_cannot_forge_source_dates(
+    assembler, tmp_path
+):
+    html, _ = _render_valid(assembler, tmp_path / "chunks")
+    invalid = _replace_once(
+        html,
+        'data-source="test:commodity"\n              '
+        'data-date-kind="fetch-only" data-source-date=""',
+        'data-source="test:commodity"\n              '
+        f'data-date-kind="fetch-only" data-source-date="{DATE}"',
+    )
+
+    _assert_report_error(
+        assembler,
+        invalid,
+        "invalid_cross_asset_context",
+    )
+
+
+def test_s1_cross_asset_complete_requires_real_source_dates(
+    assembler, tmp_path
+):
+    html, _ = _render_valid(assembler, tmp_path / "chunks")
+    invalid = _replace_once(
+        html,
+        f'data-reviewed-through="{DATE}" data-source-status="partial">',
+        f'data-reviewed-through="{DATE}" data-source-status="complete">',
+    )
+
+    _assert_report_error(
+        assembler,
+        invalid,
+        "invalid_cross_asset_context",
+    )
+
+
+def test_s1_cross_asset_primary_value_must_be_visible(
+    assembler, tmp_path
+):
+    html, _ = _render_valid(assembler, tmp_path / "chunks")
+    invalid = _replace_once(
+        html,
+        'data-primary-value="-0.15%"',
+        'data-primary-value="+9.99%"',
+    )
+
+    _assert_report_error(
+        assembler,
+        invalid,
+        "invalid_cross_asset_context",
+    )
+
+
+def test_s1_cross_asset_source_date_cannot_follow_observation_time(
+    assembler, tmp_path
+):
+    html, _ = _render_valid(assembler, tmp_path / "chunks")
+    invalid = _replace_once(
+        html,
+        'data-source="test:global-equity"\n              '
+        f'data-date-kind="source-date" data-source-date="{DATE}"\n              '
+        f'data-observed-at="{DATE} 07:00:00" data-status="ok"',
+        'data-source="test:global-equity"\n              '
+        f'data-date-kind="source-date" data-source-date="{DATE}"\n              '
+        'data-observed-at="2026-07-15 07:00:00" data-status="ok"',
+    )
+
+    _assert_report_error(
+        assembler,
+        invalid,
+        "invalid_cross_asset_context",
+    )
+
+
+def test_s1_big_picture_reviewed_through_must_match_report_date(
+    assembler, tmp_path
+):
+    html, _ = _render_valid(assembler, tmp_path / "chunks")
+    invalid = _replace_once(
+        html,
+        f'data-big-picture="verdict" data-as-of="{DATE}" '
+        f'data-reviewed-through="{DATE}"',
+        f'data-big-picture="verdict" data-as-of="{DATE}" '
+        'data-reviewed-through="2026-07-15"',
+    )
+
+    _assert_report_error(
+        assembler,
+        invalid,
+        "invalid_big_picture",
+    )
+
+
+def test_s1_rmb_spot_mid_must_match_bid_ask_arithmetic_mean(
+    assembler, tmp_path
+):
+    html, _ = _render_valid(assembler, tmp_path / "chunks")
+    invalid = _replace_once(
+        html,
+        'data-mid="6.77225"',
+        'data-mid="6.8000"',
+    )
+
+    _assert_report_error(
+        assembler,
+        invalid,
+        "invalid_rmb_fx_observation",
+    )
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        (
+            "https://www.chinamoney.com.cn/r/cms/www/chinamoney/data/fx/"
+            "rfx-sp-quot.json",
+            "https://example.com/rfx-sp-quot.json",
+        ),
+        (
+            "中国货币网报价数据定盘：-1859.59",
+            "中国货币网报价数据：-1859.59",
+        ),
+    ],
+)
+def test_s1_rmb_fx_requires_canonical_source_and_visible_fixing_semantics(
+    assembler, tmp_path, old, new
+):
+    html, _ = _render_valid(assembler, tmp_path / "chunks")
+
+    _assert_report_error(
+        assembler,
+        _replace_once(html, old, new),
+        "invalid_rmb_fx_observation",
+    )
+
+
+def test_s1_rmb_fx_partial_preserves_one_valid_leg(
+    assembler, tmp_path
+):
+    html, _ = _render_valid(assembler, tmp_path / "chunks")
+    partial = _replace_once(
+        html,
+        f'data-rmb-fx-observation="v1" data-as-of="{DATE}" '
+        f'data-reviewed-through="{DATE}" data-source-status="complete"',
+        f'data-rmb-fx-observation="v1" data-as-of="{DATE}" '
+        f'data-reviewed-through="{DATE}" data-source-status="partial"',
+    )
+    missing_swap = f"""<tr data-fx-instrument="c-swap-1y"
+              data-pair="USD/CNY" data-status="missing"
+              data-price-kind="missing" data-tenor="1Y">
+            <td>USD/CNY 1Y C-Swap</td><td>[事实] 数据缺失。</td>
+          </tr>"""
+    partial, replacements = re.subn(
+        r'<tr data-fx-instrument="c-swap-1y".*?</tr>',
+        missing_swap,
+        partial,
+        count=1,
+        flags=re.S,
+    )
+    assert replacements == 1
+    partial = _replace_once(
+        partial,
+        "<p>[事实] 仅列会改变结论可信度的缺口。</p>",
+        "<p>[事实] 仅列会改变结论可信度的缺口。</p>"
+        "<p>[事实] 人民币即期与1Y C-Swap数据不完整：掉期腿缺失。</p>",
+    )
+
+    assembler.validate_report(partial)
+
+
+def test_s1_rmb_fx_partial_cannot_hide_two_complete_legs(
+    assembler, tmp_path
+):
+    html, _ = _render_valid(assembler, tmp_path / "chunks")
+    invalid = _replace_once(
+        html,
+        f'data-rmb-fx-observation="v1" data-as-of="{DATE}" '
+        f'data-reviewed-through="{DATE}" data-source-status="complete"',
+        f'data-rmb-fx-observation="v1" data-as-of="{DATE}" '
+        f'data-reviewed-through="{DATE}" data-source-status="partial"',
+    )
+    invalid = _replace_once(
+        invalid,
+        "<p>[事实] 仅列会改变结论可信度的缺口。</p>",
+        "<p>[事实] 仅列会改变结论可信度的缺口。</p>"
+        "<p>[事实] 人民币即期与1Y C-Swap数据不完整。</p>",
+    )
+
+    _assert_report_error(
+        assembler,
+        invalid,
+        "invalid_rmb_fx_observation",
+    )
+
+
 def test_sector_concentration_verdict_must_be_unique_visible_and_labeled(
     assembler, tmp_path
 ):
@@ -6458,26 +6763,35 @@ def test_appendix_table_budget_accepts_boundary_and_rejects_one_over(
     assembler, tmp_path
 ):
     html, _ = _render_valid(assembler, tmp_path / "chunks")
-    at_limit = _appendix(html, "".join(_table(1, str(i)) for i in range(60)))
+    base = assembler.collect_metrics(html)
+    remaining_tables = 60 - base.appendix_tables
+    assert remaining_tables > 0
+    at_limit = _appendix(
+        html,
+        "".join(_table(1, str(i)) for i in range(remaining_tables)),
+    )
     metrics = assembler.validate_report(at_limit)
     assert metrics.visible_tables == 0
     assert metrics.visible_rows == 0
     assert metrics.appendix_tables == 60
-    assert metrics.appendix_rows == 60
+    assert metrics.appendix_rows == base.appendix_rows + remaining_tables
 
     _assert_report_error(assembler, _appendix(at_limit, _table(1, "extra")))
 
 
 def test_appendix_row_budget_accepts_boundary_and_rejects_one_over(assembler, tmp_path):
     html, _ = _render_valid(assembler, tmp_path / "chunks")
-    at_limit = _appendix(html, _table(400))
+    base = assembler.collect_metrics(html)
+    remaining_rows = 400 - base.appendix_rows
+    assert remaining_rows > 0
+    at_limit = _appendix(html, _table(remaining_rows))
     metrics = assembler.validate_report(at_limit)
     assert metrics.visible_tables == 0
     assert metrics.visible_rows == 0
-    assert metrics.appendix_tables == 1
+    assert metrics.appendix_tables == base.appendix_tables + 1
     assert metrics.appendix_rows == 400
 
-    _assert_report_error(assembler, _appendix(html, _table(401)))
+    _assert_report_error(assembler, _appendix(html, _table(remaining_rows + 1)))
 
 
 @pytest.mark.parametrize(
