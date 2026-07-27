@@ -463,7 +463,12 @@ class TestPremiumSplit:
 
         def mock_call(method, *args, **kwargs):
             if method == "get_stock_daily":
-                return DataResult(data={"open": 10.5}, source="test")
+                # H 修复后 yizi_first_open 需要 T 日 high>low 证明真实打开；
+                # 缺 high/low 会 fail-closed 落 yizi_undetermined（见 test_premium_yizi_split.py）
+                return DataResult(
+                    data={"open": 10.5, "high": 11.0, "low": 10.3, "close": 10.8},
+                    source="test",
+                )
             return DataResult(data=None, source="test", error="skip")
 
         reg.call = mock_call

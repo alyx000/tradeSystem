@@ -357,6 +357,9 @@ def _extract_market_row(date_str: str, envelope: dict) -> dict:
         premium_second_board = style.get("premium_second_board")
 
     # 容量票（全市场成交额前10）/ 一字首开溢价中位：仅快照来源，无 legacy YAML 标量列
+    # 口径断点：yizi_first_open 自 2026-07-27（H 修复）起 = T-1 一字连板且 T 日真实打开
+    # （high>low）；此前含 T 日继续一字的票（以涨停价计溢价）。premium_first_open 序列
+    # 跨该日不可直接比较，历史值是否按新口径回填由用户决策，未回填前保持原值。
     premium_capacity = _snap_premium_med("capacity_top10")
     premium_first_open = _snap_premium_med("yizi_first_open")
 

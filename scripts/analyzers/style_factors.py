@@ -22,7 +22,9 @@ _PREMIUM_KEYS = [
     "first_board", "first_board_10cm", "first_board_20cm", "first_board_30cm",
     "first_board_yizi", "second_board",
     "third_board_plus", "third_board", "fourth_board", "fifth_board_plus",
-    "yizi_first_open", "capacity_top10",
+    # yizi_first_open 自 2026-07-27 H 修复起 = T-1 一字连板且 T 日真实打开（high>low）；
+    # T 日继续一字的入 yizi_continued（无可成交首开事件，单列观察不混入首开溢价）。
+    "yizi_first_open", "yizi_continued", "capacity_top10",
 ]
 
 

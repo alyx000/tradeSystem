@@ -1047,6 +1047,8 @@ def get_daily_market_history(conn: sqlite3.Connection, days: int = 20) -> list[d
     premium_first_open。风格赚钱效应趋势图走 /api/style-factors/series（已含全部 premium_* 6 列），
     不复用本接口。触发补列条件：未来 /market/history 的前端消费方需要风格档位 premium 时再加，
     并同步 web types.ts MarketHistoryItem。
+    注（口径断点）：premium_first_open 自 2026-07-27（H 修复）起剔除 T 日继续一字的票，
+    仅统计真实打开者；跨该日的序列对比会混口径（详见 collectors/premium.py H 修复注释）。
     """
     rows = conn.execute(
         "SELECT date, sh_index_close, sh_index_change_pct, "

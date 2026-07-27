@@ -1477,7 +1477,8 @@ def _render_style_factors(lines: list, raw_data: dict, section_idx: int) -> int:
             ("third_board", "├ 三板"),
             ("fourth_board", "├ 四板"),
             ("fifth_board_plus", "└ 五板+"),
-            ("yizi_first_open", "一字首开（连板）"),
+            ("yizi_first_open", "一字首开（连板，T日真实打开）"),
+            ("yizi_continued", "一字延续（连板，T日仍未开）"),
             ("capacity_top10", "容量票 Top10"),
         ]
         for key, label in _DISPLAY_ORDER:

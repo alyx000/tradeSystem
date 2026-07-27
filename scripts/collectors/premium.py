@@ -30,6 +30,17 @@ BASE_DIR = Path(__file__).resolve().parent.parent.parent
 DAILY_DIR = BASE_DIR / "daily"
 
 
+def _to_price(value) -> Optional[float]:
+    """价格字段安全转 float；缺失/非法/0 一律返回 None（0 价视为脏数据）。"""
+    if value in (None, ""):
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
 class PremiumCollector:
     """T-1 涨停板次日开盘溢价率回填"""
 
@@ -73,8 +84,10 @@ class PremiumCollector:
             "third_board": [], "fourth_board": [], "fifth_board_plus": [],
             "first_board_yizi": [],
             "yizi_first_open": [],
+            "yizi_continued": [],
         }
         st_excluded = 0
+        yizi_undetermined = 0
 
         for stock in stocks:
             code = stock.get("code")
@@ -97,8 +110,8 @@ class PremiumCollector:
                 logger.debug(f"  {code} T 日行情获取失败：{r.error}")
                 continue
 
-            t_open = r.data.get("open", 0)
-            if not t_open:
+            t_open = _to_price(r.data.get("open"))
+            if t_open is None:
                 continue
 
             premium_pct = round((t_open - prev_close) / prev_close * 100, 2)
@@ -139,8 +152,35 @@ class PremiumCollector:
                 else:
                     groups["fifth_board_plus"].append(entry)
 
+            # H 修复：yizi_first_open 旧口径只判「T-1 是一字连板」，不判 T 日是否真实打开。
+            # T 日继续一字的票（如 2026-07-27 爱丽家居/五洲医疗）以涨停价当"开盘溢价"计入
+            # +10%/+20%，系统性抬高该组 mean（当日 mean 5.28 vs median 1.57 的差即由此来）——
+            # 但封板延续根本没有可成交的"首开"事件。按 T 日 high==low（一字，无价差成交）且
+            # 溢价为正拆去 yizi_continued 桶；一字但溢价非正（如次日一字跌停）既非首开也非
+            # 涨停延续，与 high/low 缺失/脏（high<low）一并 fail-closed 不入两桶只计数，
+            # 避免把不可成交或反向的票混进任一溢价分布。
+            # t_opened 字段仅 yizi 两桶的 detail 携带（现有 detail 消费方均不读该字段）。
             if is_yizi and limit_times >= 2:
-                groups["yizi_first_open"].append(entry)
+                t_high = _to_price(r.data.get("high"))
+                t_low = _to_price(r.data.get("low"))
+                if t_high is None or t_low is None or t_high < t_low:
+                    yizi_undetermined += 1
+                    logger.debug(
+                        f"  {code} T 日 high/low 缺失或非法，无法判定一字是否打开，"
+                        "不入 yizi_first_open / yizi_continued"
+                    )
+                elif t_high == t_low:
+                    if premium_pct > 0:
+                        groups["yizi_continued"].append({**entry, "t_opened": False})
+                    else:
+                        # 单价成交但非正溢价（一字跌停/平价单价）：非涨停延续，单独计数
+                        yizi_undetermined += 1
+                        logger.debug(
+                            f"  {code} T 日单价成交但溢价非正（{premium_pct}%），"
+                            "非涨停延续，不入 yizi_continued"
+                        )
+                else:
+                    groups["yizi_first_open"].append({**entry, "t_opened": True})
 
         if st_excluded:
             logger.info(f"溢价分组已排除 ST/*ST 共 {st_excluded} 只（5% 板不计入审美档位）")
@@ -182,6 +222,8 @@ class PremiumCollector:
             "fourth_board": _agg(groups["fourth_board"]),
             "fifth_board_plus": _agg(groups["fifth_board_plus"]),
             "yizi_first_open": _agg(groups["yizi_first_open"]),
+            "yizi_continued": _agg(groups["yizi_continued"]),
+            "yizi_undetermined": yizi_undetermined,
             "capacity_top10": _agg(capacity_top10),
         }
 
@@ -243,8 +285,8 @@ class PremiumCollector:
             r = self.registry.call("get_stock_daily", code, trade_date)
             if not r.success or not r.data:
                 continue
-            t_open = r.data.get("open", 0)
-            if not t_open:
+            t_open = _to_price(r.data.get("open"))
+            if t_open is None:
                 continue
             premium_pct = round((t_open - prev_close) / prev_close * 100, 2)
             entries.append({
@@ -502,7 +544,11 @@ class PremiumCollector:
         lines += _fmt_group("  ├ 三板", result.get("third_board", {}))
         lines += _fmt_group("  ├ 四板", result.get("fourth_board", {}))
         lines += _fmt_group("  └ 五板+", result.get("fifth_board_plus", {}))
-        lines += _fmt_group("一字首开（连板）", result.get("yizi_first_open", {}))
+        lines += _fmt_group("一字首开（连板，T日真实打开）", result.get("yizi_first_open", {}))
+        lines += _fmt_group("一字延续（连板，T日仍未开）", result.get("yizi_continued", {}))
+        undetermined = result.get("yizi_undetermined", 0)
+        if undetermined:
+            lines.append(f"一字连板 high/low 缺失无法判定：{undetermined} 只（不入首开/延续组）")
         lines += _fmt_group("容量票 Top10", result.get("capacity_top10", {}))
 
         return "\n".join(lines)

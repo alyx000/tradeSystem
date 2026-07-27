@@ -281,6 +281,33 @@ class TestStyleAnalyzer:
         assert snap["first_board"]["premium_median"] == 0.14
         assert snap["second_board"]["open_up_rate"] == 0.71
 
+    def test_premium_snapshot_yizi_continued_and_legacy_yaml(self, tmp_path):
+        """新键 yizi_continued 进 snapshot；旧口径 yaml 缺该键时安全跳过（H 修复消费端）"""
+        from analyzers.style_factors import StyleAnalyzer
+        sa = StyleAnalyzer()
+        backfill = {
+            "trade_date": "2026-03-28",
+            "yizi_first_open": {"count": 3, "premium_median": 0.66, "premium_mean": 1.1, "open_up_rate": 0.67},
+            "yizi_continued": {"count": 2, "premium_median": 15.0, "premium_mean": 15.0, "open_up_rate": 1.0},
+        }
+        self._write_backfill(tmp_path, "2026-03-27", backfill)
+        with patch("analyzers.style_factors.DAILY_DIR", tmp_path):
+            result = sa.analyze(self._make_raw_data(), "2026-03-28")
+        snap = result["premium_snapshot"]
+        assert snap["yizi_continued"]["premium_median"] == 15.0
+        assert snap["yizi_first_open"]["count"] == 3
+
+        # 旧口径 yaml：无 yizi_continued 键 → snapshot 不含该键，不报错
+        legacy = {
+            "trade_date": "2026-03-29",
+            "yizi_first_open": {"count": 1, "premium_median": 2.0, "premium_mean": 2.0, "open_up_rate": 1.0},
+        }
+        self._write_backfill(tmp_path, "2026-03-28", legacy)
+        with patch("analyzers.style_factors.DAILY_DIR", tmp_path):
+            result2 = sa.analyze(self._make_raw_data(), "2026-03-29")
+        assert "yizi_continued" not in result2["premium_snapshot"]
+        assert result2["premium_snapshot"]["yizi_first_open"]["count"] == 1
+
     def test_popularity_injected_from_prev_yaml(self, tmp_path):
         """analyze 把 T-1 yaml 的 popularity_backfill 注入 result['popularity']"""
         import yaml
