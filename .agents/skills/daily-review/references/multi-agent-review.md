@@ -17,7 +17,7 @@
 
 | 路 | 面 | 主要数据源 | 素材文件 |
 |---|---|---|---|
-| 1 | 大盘/择时/期指/两融 | 镜像 index_daily/fut_daily + 库 market_timing_signal / margin_index_correlation_daily | market_YYYY-MM-DD.md |
+| 1 | 大势/大类资产/外汇掉期/择时/期指/两融 | `daily/<T>/pre-market.yaml` 的 `market_data` + `daily/<T>/post-market.yaml` 的 `raw_data.forex / fx_swaps` + 镜像 index_daily/fut_daily + 库 market_timing_signal / margin_index_correlation_daily | market_YYYY-MM-DD.md |
 | 2 | 板块/集中度/全行业拥挤度/主升主跌辨识度/资金流/研报业绩 | 库 daily_volume_concentration + CLI `sector-crowding report --date <T>`（只读，底表 sector_crowding_daily）+ 镜像 daily/sw_daily/moneyflow_ind_ths + data/reports | sector_*.md |
 | 3 | 情绪/涨跌停/连板梯队 | 镜像 limit_list_d(U/D/Z) + daily；断板反包读 board-break 报告 | emotion_*.md |
 | 4 | 龙虎榜 | 镜像 top_list/top_inst | lhb_*.md |
@@ -44,6 +44,8 @@
 
 | 路 | 专属字段 | 强制内容 |
 |---|---|---|
+| 1 | `big_picture_verdict` | 默认可见 1 句，必须同时点明大势、大类资产、外汇与掉期；报告日休市时明确最近事实日，不把抓取日或周末当成新行情 |
+| 1 | `cross_asset_context` / `rmb_fx_observation` | 折叠证据分别保留全球权益/中国风险映射/商品/波动率/利率，以及 USD/CNY 在岸即期买卖中值与 1Y C-Swap；带来源日、抓取/定盘时间、价格语义和结构化 `v1 / missing-data` 状态，任一缺失须进入 conflicts_or_gaps 与 `ops` |
 | 2 | `sector_concentration_verdict` | 1 句集中度裁决，至少对照当日与上一交易日；即使无法裁决也必须输出结构化状态 |
 | 2 | `sector_concentration_evidence` | 完整集中度事实表；完整无记录与来源不完整必须分别标 `none / missing-data` |
 | 2 | `sector_labels_verdict` | 默认可见 1 句标签汇总：`[事实]` 半年线上/年线上命中数，`[判断]` 近期价量共振/年线+共振命中数；部分覆盖或无法判定必须在本句显式披露 |
@@ -89,6 +91,23 @@
 - ths_daily 无 amount 列；sw_daily 列名 `pct_change`（非 `pct_chg`）；index_daily/daily 列名 `pct_chg`。
 - **ETF 拆分污染名单**（份额跳变≠申赎，登记日剔除或按拆分比还原 + 验价格连续性）：512480/515880/588170/562590/515070/159995 等，遇份额跳变+价格同日近似等比落位即疑拆分，单独标注剔除。
 - 龙虎榜 top_inst 同席位跨买/卖榜双计需去重；3 日段净额含前两日累计，与单日段不可直加。
+
+### 大势、大类资产与外汇掉期（第 1 路 → `s1` 硬契约）
+
+“大势”同时包含境内市场结构和外部资产背景，不能只交付 A 股指数、期指、两融。第 1 路必须读取报告窗口最近开放日的盘前与盘后归档：
+
+- 大类资产：`daily/<T>/pre-market.yaml.market_data` 中的全球权益、中国风险映射、商品、VIX 和美债收益率。逐项区分 provider 的 `as_of` 与本地抓取时间；原字段没有来源交易日时使用 `fetch-only`，可见文字固定披露“源交易日缺失”，禁止把抓取日冒充市场日。
+- 人民币即期：`daily/<T>/post-market.yaml.raw_data.forex.usd_cny`。只认中国货币网买卖报价及其算术中值，明确它不是中间价、收盘价或定盘价。
+- 外汇掉期：同文件 `raw_data.fx_swaps.usd_cny_1y`。保留 1Y tenor、掉期点 Pips、全价、16:30 定盘、报价/交易来源与采集时间；不得拿即期涨跌幅替代。
+- 报告日休市时，`data-as-of` 指向最近事实日，三块统一携带 `data-reviewed-through=报告日`；07-25/26 之类休市日不插值、不复制成新增事实。
+
+HTML 中 `s1` 必须同时满足：
+
+1. 唯一默认可见 `<p data-big-picture="verdict">`，带 `[判断]`，同时覆盖“大势 / 大类资产（或跨资产）/ 外汇（或人民币即期）/ 掉期（或 C-Swap）”四组语义。
+2. 默认收起的证据层内唯一 `data-cross-asset-context="v1|missing-data"`。`complete` 的 v1 表覆盖全球权益、中国风险映射、商品、波动率、利率五类且每行都有真实来源日；任一行只有抓取时间时整表必须标 `partial`。`partial` 至少保留三类并在 `ops` 可见披露；每行的来源日或“源交易日缺失”及 `data-primary-value` 必须可见；全缺使用 `missing-data`。
+3. 同一证据层内唯一 `data-rmb-fx-observation="v1|missing-data"`。v1 表固定保留 `spot` 与 `c-swap-1y` 两条身份行，完整腿保留 pair、中国货币网对应域名、来源日、严格观察/抓取时间、价格语义和数值字段。仅一腿缺失时整表标 `partial`，保留另一腿事实并把缺失腿显式写成 `data-status="missing"`；两腿全缺才使用 `missing-data`。掉期必须可见“定盘 / 报价数据”，任一缺失态都须在 `ops` 可见。
+
+上述任一模块缺失、重复、错节、日期晚于报告日、隐藏摘要、伪造来源日或数值不变量不成立，组装器必须拒绝生成；正文预算只能压缩解释，不能删除模块。
 
 ### 容量中军独立筛选（硬契约）
 
@@ -160,7 +179,7 @@ python3 .agents/skills/daily-review/references/html-report-template/build_new_hi
 |---|---|---|
 | `head` | `tldr`, `factor` | 6 个 KPI；“今天变了什么 / 核心矛盾 / 明天验证什么”3 条短结论；三位一体重点因子 |
 | `s0` | `s0` | ⓪前日判分 |
-| `s1` | `s1` | ①大盘 |
+| `s1` | `s1` | ①大势（境内大盘 + 大类资产 + 外汇掉期） |
 | `s2` | `s2` | ②板块 |
 | `s456` | `s3`, `s4`, `s5`, `s6` | ③情绪、④风格、⑤龙头、⑥节点 |
 | `s7t` | `s7`, `teachers`, `industry`, `cognition`, `exposure` | ⑦持仓、老师观点、行业信息、认知对照、仓位环境与纪律参考 |
@@ -173,6 +192,7 @@ python3 .agents/skills/daily-review/references/html-report-template/build_new_hi
 
 | 章节 | 默认可见 | 折叠证据 | 无数据/缺失处理 |
 |---|---|---|---|
+| ①大势 | 唯一 1 句同时覆盖大势、大类资产、外汇与掉期的裁决；境内指数证据仍按原 1～3 条预算 | 大类资产五类事实表；USD/CNY 在岸即期 + 1Y C-Swap 两行事实表；境内指数/期指/两融原始证据 | 大类资产与外汇掉期分别使用 `missing-data`，并在数据缺口章节可见；抓取时间不代替来源交易日 |
 | ②板块 | 唯一 1 句集中度裁决 + 唯一 1 句趋势标签汇总；后者把半年线/年线标 `[事实]`、近期价量共振标 `[判断]` | 唯一集中度表；唯一标签命中并集；唯一主升辨识度矩阵；唯一主跌辨识度矩阵。主升/主跌必须成对出现，不因结果为空而删侧。另固定携带全行业拥挤度快照（L1 全量占比/分位 + 斜率分位 + 双高清单状态；趋势标签是组装器硬门，其余为文档级要求），命名用「全行业交易拥挤度」，与 Top20 主线集中度口径严格分表不混排 | 标签完整无命中用 `none`；部分覆盖仍保留已确认命中表并在摘要与数据缺口披露；全缺用 `missing-data`。其他模块同样区分 `none / missing-data`，禁止静默省略 |
 | ⑤龙头 | 1 句容量中军变化（确有变化时）+ 1 句滚动新高结构裁决 | 唯一容量中军健康表；唯一 60/120/250 日滚动新高结构；趋势池历史代表另表 | 容量与新高各自独立三态；任一来源不完整都用本模块 `missing-data` 并在数据缺口可见 |
 | ⑥节点 | 唯一 1 句报告日后 7 个自然日事件窗裁决 | 唯一事件窗表，事件日期标交易/休市及对次日验证的影响 | 无相关事件用 `none`；来源不完整用 `missing-data`，并在数据缺口章节可见 |

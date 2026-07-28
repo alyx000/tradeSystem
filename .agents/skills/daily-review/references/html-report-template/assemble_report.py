@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import sqlite3
@@ -22,11 +23,12 @@ import sys
 import tempfile
 import unicodedata
 from dataclasses import dataclass, field
-from datetime import date as date_type, timedelta
+from datetime import date as date_type, datetime, timedelta
 from html import escape
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Mapping, Sequence
+from urllib.parse import urlparse
 
 
 REPORT_SCHEMA = "compact-v2"
@@ -311,12 +313,39 @@ CAPACITY_MISSING_TEXT = "[事实]容量排名数据不完整，本日无法判�
 CAPACITY_SOURCE_STATUSES = frozenset({"complete", "partial", "failed"})
 CAPACITY_CODE_RE = re.compile(r"^\d{6}\.(?:SH|SZ|BJ)$")
 STRUCTURED_CONTRACT_ATTRIBUTES = (
+    "data-big-picture",
+    "data-cross-asset-context",
+    "data-rmb-fx-observation",
     "data-sector-concentration",
     "data-sector-labels",
     "data-rising-recognition",
     "data-falling-recognition",
     "data-new-high-structure",
     "data-event-window",
+)
+BIG_PICTURE_REQUIRED_TERM_GROUPS = (
+    ("大势",),
+    ("大类资产", "跨资产"),
+    ("外汇", "人民币即期", "USD/CNY"),
+    ("掉期", "C-Swap"),
+)
+CROSS_ASSET_MISSING_TEXT = "[事实]大类资产数据不完整，本日无法判定"
+CROSS_ASSET_SOURCE_STATUSES = frozenset({"complete", "partial"})
+CROSS_ASSET_ROW_STATUSES = frozenset({"ok", "latest_available"})
+CROSS_ASSET_CLASSES = frozenset(
+    {
+        "global-equity",
+        "china-risk",
+        "commodity",
+        "volatility",
+        "rates",
+    }
+)
+RMB_FX_MISSING_TEXT = "[事实]人民币即期与1YC-Swap数据不完整，本日无法判定"
+RMB_FX_SOURCE_STATUSES = frozenset({"complete", "partial"})
+RMB_FX_AVAILABLE_ROW_STATUSES = frozenset({"ok", "latest_available"})
+RMB_FX_ROW_STATUSES = frozenset(
+    {*RMB_FX_AVAILABLE_ROW_STATUSES, "missing"}
 )
 SECTOR_CONCENTRATION_NONE_TEXT = "[事实]本日无可用板块集中度数据"
 SECTOR_CONCENTRATION_MISSING_TEXT = "[事实]板块集中度数据不完整，本日无法判定"
@@ -916,6 +945,19 @@ def _valid_date(value: str) -> bool:
     except ValueError:
         return False
     return True
+
+
+def _parse_local_datetime(value: str) -> datetime | None:
+    if not re.fullmatch(
+        r"\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?",
+        value,
+    ):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is None else None
 
 
 def _cell_text(cell: _CapacityCell) -> str:
@@ -2780,6 +2822,470 @@ class _ReportParser(HTMLParser):
                 section=section,
             )
 
+    def _validate_big_picture_contract(self, report_date: date_type) -> None:
+        """确保 s1 不会再静默丢失大类资产、人民币即期与外汇掉期。"""
+
+        verdicts = self.structured_contracts["data-big-picture"]
+        cross_asset_blocks = self.structured_contracts[
+            "data-cross-asset-context"
+        ]
+        fx_blocks = self.structured_contracts["data-rmb-fx-observation"]
+        if (
+            len(verdicts) != 1
+            or len(cross_asset_blocks) != 1
+            or len(fx_blocks) != 1
+        ):
+            raise ReportValidationError(
+                "invalid_big_picture",
+                "s1 必须且只能包含一句大势摘要、一份大类资产证据和一份人民币即期/1Y C-Swap 证据",
+                section="s1",
+            )
+
+        verdict = verdicts[0]
+        verdict_text = re.sub(
+            r"\s+", "", "".join(verdict.rendered_text)
+        )
+        if (
+            verdict.value != "verdict"
+            or verdict.tag != "p"
+            or verdict.section != "s1"
+            or verdict.default_hidden
+            or not self._valid_contract_as_of(verdict, report_date)
+            or "[判断]" not in verdict_text
+            or any(
+                not any(term in verdict_text for term in group)
+                for group in BIG_PICTURE_REQUIRED_TERM_GROUPS
+            )
+            or verdict.attrs.get("data-reviewed-through")
+            != report_date.isoformat()
+        ):
+            raise ReportValidationError(
+                "invalid_big_picture",
+                "大势摘要必须是 s1 默认可见、日期有效且同时点明大势/大类资产/外汇/掉期的判断句",
+                section="s1",
+            )
+
+        cross_asset = cross_asset_blocks[0]
+        fx = fx_blocks[0]
+        if (
+            not cross_asset.default_hidden
+            or not fx.default_hidden
+            or cross_asset.attrs.get("data-as-of")
+            != verdict.attrs.get("data-as-of")
+            or fx.attrs.get("data-as-of")
+            != verdict.attrs.get("data-as-of")
+            or cross_asset.attrs.get("data-reviewed-through")
+            != report_date.isoformat()
+            or fx.attrs.get("data-reviewed-through")
+            != report_date.isoformat()
+        ):
+            raise ReportValidationError(
+                "invalid_big_picture",
+                "大类资产与外汇掉期明细必须进入 s1 折叠证据并与可见摘要使用同一观察日",
+                section="s1",
+            )
+
+        self._validate_cross_asset_context(cross_asset, report_date)
+        self._validate_rmb_fx_observation(fx, report_date)
+
+    def _validate_cross_asset_context(
+        self,
+        contract: _StructuredContract,
+        report_date: date_type,
+    ) -> None:
+        if (
+            contract.section != "s1"
+            or not self._valid_contract_as_of(contract, report_date)
+        ):
+            raise ReportValidationError(
+                "invalid_cross_asset_context",
+                "大类资产证据必须归属 s1 并带不晚于报告日的 data-as-of",
+                section="s1",
+            )
+
+        source_status = contract.attrs.get("data-source-status", "")
+        compact_text = re.sub(
+            r"\s+", "", "".join(contract.rendered_text)
+        ).rstrip("。.;；")
+        ops_text = re.sub(r"\s+", "", "".join(self.section_text["ops"]))
+        if contract.value == "missing-data":
+            if (
+                contract.tag != "p"
+                or source_status not in {"partial", "failed"}
+                or compact_text != CROSS_ASSET_MISSING_TEXT
+                or "大类资产数据不完整" not in ops_text
+            ):
+                raise ReportValidationError(
+                    "invalid_cross_asset_context",
+                    "大类资产缺失态必须显式标记 partial/failed 并在 ops 保持可见",
+                    section="s1",
+                )
+            return
+
+        if (
+            contract.value != "v1"
+            or contract.tag != "table"
+            or source_status not in CROSS_ASSET_SOURCE_STATUSES
+            or len(contract.rows) < 4
+            or not compact_text
+        ):
+            raise ReportValidationError(
+                "invalid_cross_asset_context",
+                "大类资产仅允许至少三项有效资产线索的 v1 表或显式 missing-data",
+                section="s1",
+            )
+        if (
+            source_status == "partial"
+            and "大类资产数据不完整" not in ops_text
+        ):
+            raise ReportValidationError(
+                "invalid_cross_asset_context",
+                "大类资产 partial 状态必须在 ops 披露数据不完整",
+                section="s1",
+            )
+
+        as_of = date_type.fromisoformat(contract.attrs["data-as-of"])
+        seen_instruments: set[str] = set()
+        seen_classes: set[str] = set()
+        seen_fetch_only = False
+        for row in contract.rows[1:]:
+            asset_class = row.attrs.get("data-asset-class", "").strip()
+            instrument = row.attrs.get("data-instrument", "").strip()
+            source = row.attrs.get("data-source", "").strip()
+            date_kind = row.attrs.get("data-date-kind", "").strip()
+            source_date = row.attrs.get("data-source-date", "").strip()
+            observed_at = row.attrs.get("data-observed-at", "").strip()
+            status = row.attrs.get("data-status", "").strip()
+            primary_value = row.attrs.get("data-primary-value", "").strip()
+            visible = re.sub(r"\s+", "", "".join(row.rendered_text))
+            observed_datetime = _parse_local_datetime(observed_at)
+            source_day = (
+                date_type.fromisoformat(source_date)
+                if _valid_date(source_date)
+                else None
+            )
+            valid_observed_at = (
+                observed_datetime is not None
+                and observed_datetime.date() <= as_of
+            )
+            valid_source_date = (
+                date_kind == "source-date"
+                and source_day is not None
+                and source_day <= as_of
+                and observed_datetime is not None
+                and source_day <= observed_datetime.date()
+            )
+            valid_fetch_only = date_kind == "fetch-only" and not source_date
+            valid_status_date = (
+                status == "ok"
+                and valid_source_date
+                and source_day == as_of
+            ) or (
+                status == "latest_available"
+                and (valid_source_date or valid_fetch_only)
+            )
+            if (
+                asset_class not in CROSS_ASSET_CLASSES
+                or not instrument
+                or not source
+                or instrument in seen_instruments
+                or status not in CROSS_ASSET_ROW_STATUSES
+                or not valid_observed_at
+                or not (valid_source_date or valid_fetch_only)
+                or not valid_status_date
+                or not re.fullmatch(
+                    r"[+-]?\d+(?:,\d{3})*(?:\.\d+)?(?:%|bp)?",
+                    primary_value,
+                )
+                or re.sub(r"\s+", "", instrument) not in visible
+                or "[事实]" not in visible
+                or primary_value not in visible
+                or (valid_source_date and source_date not in visible)
+                or (valid_fetch_only and "源交易日缺失" not in visible)
+            ):
+                raise ReportValidationError(
+                    "invalid_cross_asset_context",
+                    "大类资产行必须带唯一品种、受控资产类、可见主数值、来源日或 fetch-only 语义及严格时间边界",
+                    section="s1",
+                )
+            seen_instruments.add(instrument)
+            seen_classes.add(asset_class)
+            seen_fetch_only = seen_fetch_only or valid_fetch_only
+
+        if (
+            source_status == "complete"
+            and (
+                seen_classes != CROSS_ASSET_CLASSES
+                or seen_fetch_only
+            )
+        ) or (
+            source_status == "partial"
+            and (
+                len(seen_classes) < 3
+                or (
+                    seen_classes == CROSS_ASSET_CLASSES
+                    and not seen_fetch_only
+                )
+            )
+        ):
+            raise ReportValidationError(
+                "invalid_cross_asset_context",
+                "大类资产 complete 必须覆盖五类且来源日完整；partial 至少保留三类并真实存在类别或来源日缺口",
+                section="s1",
+            )
+
+    def _validate_rmb_fx_observation(
+        self,
+        contract: _StructuredContract,
+        report_date: date_type,
+    ) -> None:
+        if (
+            contract.section != "s1"
+            or not self._valid_contract_as_of(contract, report_date)
+        ):
+            raise ReportValidationError(
+                "invalid_rmb_fx_observation",
+                "人民币即期与外汇掉期证据必须归属 s1 并带有效观察日",
+                section="s1",
+            )
+
+        source_status = contract.attrs.get("data-source-status", "")
+        compact_text = re.sub(
+            r"\s+", "", "".join(contract.rendered_text)
+        ).rstrip("。.;；")
+        ops_text = re.sub(r"\s+", "", "".join(self.section_text["ops"]))
+        if contract.value == "missing-data":
+            if (
+                contract.tag != "p"
+                or source_status not in {"partial", "failed"}
+                or compact_text != RMB_FX_MISSING_TEXT
+                or "人民币即期与1YC-Swap数据不完整" not in ops_text
+            ):
+                raise ReportValidationError(
+                    "invalid_rmb_fx_observation",
+                    "外汇掉期缺失态必须显式标记 partial/failed 并在 ops 保持可见",
+                    section="s1",
+                )
+            return
+
+        if (
+            contract.value != "v1"
+            or contract.tag != "table"
+            or source_status not in RMB_FX_SOURCE_STATUSES
+            or len(contract.rows) != 3
+            or not compact_text
+        ):
+            raise ReportValidationError(
+                "invalid_rmb_fx_observation",
+                "人民币外汇 v1 表必须固定包含表头、USD/CNY 即期和 1Y C-Swap 两行",
+                section="s1",
+            )
+        if (
+            source_status == "partial"
+            and "人民币即期与1YC-Swap数据不完整" not in ops_text
+        ):
+            raise ReportValidationError(
+                "invalid_rmb_fx_observation",
+                "人民币外汇 partial 状态必须在 ops 披露数据不完整",
+                section="s1",
+            )
+
+        rows = {
+            row.attrs.get("data-fx-instrument", "").strip(): row
+            for row in contract.rows[1:]
+        }
+        if set(rows) != {"spot", "c-swap-1y"}:
+            raise ReportValidationError(
+                "invalid_rmb_fx_observation",
+                "人民币外汇表必须且只能包含 spot 与 c-swap-1y",
+                section="s1",
+            )
+
+        as_of = date_type.fromisoformat(contract.attrs["data-as-of"])
+        expected_sources = {
+            "spot": (
+                "chinamoney:rfx-sp-quot",
+                "www.chinamoney.com.cn",
+                "rfx-sp-quot.json",
+            ),
+            "c-swap-1y": (
+                "chinamoney:fx-c-swap-fixing",
+                "www.chinamoney.org.cn",
+                "fx-c-sw-curv-USD.CNY.json",
+            ),
+        }
+        missing_instruments: set[str] = set()
+        for instrument, row in rows.items():
+            attrs = row.attrs
+            row_status = attrs.get("data-status", "")
+            visible = re.sub(r"\s+", "", "".join(row.rendered_text))
+            if row_status == "missing":
+                prohibited_keys = (
+                    "data-source",
+                    "data-source-url",
+                    "data-source-date",
+                    "data-observed-at",
+                    "data-fetched-at",
+                    "data-bid",
+                    "data-ask",
+                    "data-mid",
+                    "data-swap-point-pips",
+                    "data-forward-rate",
+                    "data-quote-source",
+                )
+                valid_missing_identity = (
+                    "USD/CNY" in visible
+                    and "[事实]" in visible
+                    and "数据缺失" in visible
+                    and (
+                        instrument == "spot"
+                        and "即期" in visible
+                        and not attrs.get("data-tenor")
+                        or instrument == "c-swap-1y"
+                        and "C-Swap" in visible
+                        and attrs.get("data-tenor") == "1Y"
+                    )
+                )
+                if (
+                    source_status != "partial"
+                    or attrs.get("data-pair") != "USD/CNY"
+                    or attrs.get("data-price-kind") != "missing"
+                    or not valid_missing_identity
+                    or any(attrs.get(key, "").strip() for key in prohibited_keys)
+                ):
+                    raise ReportValidationError(
+                        "invalid_rmb_fx_observation",
+                        "人民币外汇 partial 缺失腿必须显式可见且不得伪造来源、日期或数值",
+                        section="s1",
+                    )
+                missing_instruments.add(instrument)
+                continue
+
+            source_date = attrs.get("data-source-date", "")
+            observed_at = attrs.get("data-observed-at", "")
+            fetched_at = attrs.get("data-fetched-at", "")
+            source, expected_host, url_suffix = expected_sources[instrument]
+            source_url = urlparse(attrs.get("data-source-url", ""))
+            observed_datetime = _parse_local_datetime(observed_at)
+            fetched_datetime = _parse_local_datetime(fetched_at)
+            source_day = (
+                date_type.fromisoformat(source_date)
+                if _valid_date(source_date)
+                else None
+            )
+            if (
+                attrs.get("data-pair") != "USD/CNY"
+                or row_status not in RMB_FX_AVAILABLE_ROW_STATUSES
+                or attrs.get("data-source") != source
+                or source_url.scheme != "https"
+                or source_url.hostname != expected_host
+                or not source_url.path.endswith(url_suffix)
+                or source_day is None
+                or source_day > as_of
+                or observed_datetime is None
+                or observed_datetime.date() != source_day
+                or fetched_datetime is None
+                or fetched_datetime.date() != source_day
+                or fetched_datetime < observed_datetime
+                or (
+                    row_status == "ok"
+                    and source_day != as_of
+                )
+                or source_date not in visible
+                or "中国货币网" not in visible
+            ):
+                raise ReportValidationError(
+                    "invalid_rmb_fx_observation",
+                    "人民币即期/掉期行的品种、来源、日期或观察时间不合法",
+                    section="s1",
+                )
+
+        if (
+            source_status == "complete"
+            and missing_instruments
+        ) or (
+            source_status == "partial"
+            and len(missing_instruments) != 1
+        ):
+            raise ReportValidationError(
+                "invalid_rmb_fx_observation",
+                "人民币外汇 complete 必须两腿完整；partial 必须保留一腿有效事实并显式标记另一腿缺失",
+                section="s1",
+            )
+
+        if "spot" not in missing_instruments:
+            spot_attrs = rows["spot"].attrs
+            try:
+                bid = float(spot_attrs.get("data-bid", ""))
+                ask = float(spot_attrs.get("data-ask", ""))
+                mid = float(spot_attrs.get("data-mid", ""))
+            except ValueError:
+                bid = ask = mid = math.nan
+            spot_visible = re.sub(
+                r"\s+", "", "".join(rows["spot"].rendered_text)
+            )
+            if (
+                spot_attrs.get("data-price-kind") != "computed_bid_ask_mid"
+                or not all(
+                    math.isfinite(value) and value > 0
+                    for value in (bid, ask, mid)
+                )
+                or bid > ask
+                or not bid <= mid <= ask
+                or not math.isclose(mid, (bid + ask) / 2, abs_tol=1e-8)
+                or "USD/CNY" not in spot_visible
+                or "即期" not in spot_visible
+                or any(
+                    term not in spot_visible
+                    for term in ("买", "卖", "算术中值")
+                )
+                or any(
+                    spot_attrs[key] not in spot_visible
+                    for key in ("data-bid", "data-ask", "data-mid")
+                )
+            ):
+                raise ReportValidationError(
+                    "invalid_rmb_fx_observation",
+                    "USD/CNY 即期必须使用有效买卖报价的算术中值并在表内可见",
+                    section="s1",
+                )
+
+        if "c-swap-1y" not in missing_instruments:
+            swap_attrs = rows["c-swap-1y"].attrs
+            try:
+                swap_points = float(
+                    swap_attrs.get("data-swap-point-pips", "")
+                )
+                forward_rate = float(
+                    swap_attrs.get("data-forward-rate", "")
+                )
+            except ValueError:
+                swap_points = forward_rate = math.nan
+            swap_visible = re.sub(
+                r"\s+", "", "".join(rows["c-swap-1y"].rendered_text)
+            )
+            if (
+                swap_attrs.get("data-price-kind") != "c_swap_fixing"
+                or swap_attrs.get("data-tenor") != "1Y"
+                or swap_attrs.get("data-quote-source") != "报价数据"
+                or not math.isfinite(swap_points)
+                or not math.isfinite(forward_rate)
+                or forward_rate <= 0
+                or "C-Swap" not in swap_visible
+                or "Pips" not in swap_visible
+                or "定盘" not in swap_visible
+                or "报价数据" not in swap_visible
+                or swap_attrs.get("data-swap-point-pips", "")
+                not in swap_visible
+                or swap_attrs.get("data-forward-rate", "")
+                not in swap_visible
+            ):
+                raise ReportValidationError(
+                    "invalid_rmb_fx_observation",
+                    "1Y C-Swap 必须保留有效掉期点、全价、定盘语义和可见单位",
+                    section="s1",
+                )
+
     def _validate_sector_labels_contract(self, report_date: date_type) -> None:
         contracts = self.structured_contracts["data-sector-labels"]
         verdicts = [item for item in contracts if item.value == "verdict"]
@@ -3381,6 +3887,7 @@ class _ReportParser(HTMLParser):
 
         self._validate_factor_contract()
         self._validate_exposure_contract(report_date)
+        self._validate_big_picture_contract(report_date)
         self._validate_capacity_health_contract(report_date)
         self._validate_sector_contracts(report_date)
         self._validate_new_high_structure_contract(report_date)

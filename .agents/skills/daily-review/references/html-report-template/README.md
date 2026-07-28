@@ -17,7 +17,7 @@
 |---|---|
 | `head` | `tldr`, `factor`：header + 6 个 KPI + 3 条短结论 + 🧩三位一体重点因子 |
 | `s0` | `s0`：第 0 节前日对照判分 |
-| `s1` | `s1`：①大盘 |
+| `s1` | `s1`：①大势（境内大盘 + 大类资产 + 外汇掉期） |
 | `s2` | `s2`：②板块 |
 | `s456` | `s3`, `s4`, `s5`, `s6`：③情绪 + ④风格 + ⑤龙头 + ⑥节点 |
 | `s7t` | `s7`, `teachers`, `industry`, `cognition`, `exposure`：⑦持仓 + 🎓老师观点 + 📰行业信息 + 🧠认知对照 + 仓位环境与纪律参考（影子） |
@@ -57,6 +57,7 @@ python3 .agents/skills/daily-review/references/html-report-template/assemble_rep
 - 8 个 chunk 必须齐全；17 个锚点 `tldr/factor/s0/s1/s2/s3/s4/s5/s6/s7/teachers/industry/cognition/exposure/proj/s8/ops` 必须按此顺序各出现一次。缺失、重复或乱序均拒绝生成。HTML 展示路径固定为“速览 → 三位一体重点因子 → ⓪前日判分 → ①–⑦ → 老师观点 → 行业信息 → 认知对照 → 仓位环境与纪律参考（影子） → 次日推演 → ⑧次日计划 → 数据缺口”。重点因子与仓位环境仍须在 9 路完整采集、八步复盘与认知对照综合完成后生成。
 - 旧的 15-anchor 临时 chunks、16-anchor（尚无 `exposure`）chunks，以及把 `factor` 留在 `proj` 的过渡 chunks，都必须按新归属重新生成；既有静态 HTML 仍可直接阅读，但不会被当前严格校验器当作 17-anchor 新契约报告重新验收。
 - 每节默认「1 句裁决 + 最多 3 条证据 + 1 条证伪或缺口」；无新增只写一行，不生成空表。
+- `s1` 不能只交付境内大盘。它必须有唯一默认可见 `data-big-picture="verdict"`，以及折叠证据中的唯一 `data-cross-asset-context` 和 `data-rmb-fx-observation`；报告日休市时三者的 `data-as-of` 仍指向最近事实日，`data-reviewed-through` 等于报告日。缺源只能使用结构化 `missing-data` 并在 `ops` 可见，不得静默通过。
 - `factor` 默认显示主因子、第一辅助、其余因子变化和切换/失效状态。章节容器必须是默认可见的 `<section class="blk" id="factor">`，并声明 `data-factor-mode="formal|rule_only|shadow|no_data"`：有分析时须有且仅有 1 个默认可见 judgment Claim、1～3 个默认可见 `<li>`、1 个默认可见 `data-factor-role="status"`；Claim / `<li>` 必须各自有可见的 `[事实]/[判断]` 标签和实质正文，正文不得藏进后代 `hidden`。状态节点不得藏入普通 `<details>` / `hidden`，且只接受与 mode 对应的规范模板：`formal=正式 factor-score 已完成`、`rule_only=rule_only 结果`；`shadow` 只能使用“正式评分停在日期 / 本日未运行 / 本日尚未评分 / 完成条件未满足”之一，并同时写明“影子口径、不写库”。唯一 `data-evidence-kind="factor-detail"` 折叠证据须实际含 `market_node / sector_rhythm / style_regime / leader_signal`。`no_data` 只允许标题和唯一 `<p data-factor-role="no-data">[事实] 本日无新增/本日无可判数据</p>`。完整四因子证据卡与切换对账不再归到 `s8`。
 - `exposure` 固定为 `<section class="blk" id="exposure" data-exposure-mode="shadow|fallback|conflicted|no_data" data-exposure-tier="defensive|cautious|neutral|constructive|undetermined" data-exposure-boundary="read-only-environment-rating">`。唯一可见 judgment Claim 严格归属报告日并使用受控短句；中文档位固定为 `防守档 / 谨慎档 / 中性档 / 偏积极档 / 不可判`。`market / cognition / teacher` 三类来源不再默认展开：各自必须与同名 `data-exposure-evidence` 合并成唯一折叠 `<p>`，按此顺序放入报告日唯一 `exposure-detail`。完整市场/老师来源严格等于报告日，老师只认 `teacher_notes.date`；认知分别保留 availability 与真实 lifecycle。真实 `active AND category=sizing` 用于标准 `shadow`，candidate-only 只能触发低置信 `fallback`，不得决定档位方向。
 - `fallback+cautious` 默认可见区必须恰好 4 个业务段落：①短结论；②`confirm-if=full-close-upside-gate` 上行门；③`invalidate-if=full-close-downside-gate` 下行门；④`review-rule` 缺口/复核。禁止重新增加独立 `recommendation / status / portfolio-status / portfolio-evidence` 可见段落，也禁止在可见区复述市场、认知或老师观点。上行门绑定报告日成交额基线、观察指数数量、MA20/MA5、跌停上限和组合对账；下行门绑定广度、MA5 与跌停下限。`review-rule` 带完整连续的 `trade_calendar` 自然日脊柱，并只压缩显示会影响结论的组合缺口和复核/顺延日。
@@ -82,6 +83,31 @@ python3 .agents/skills/daily-review/references/html-report-template/assemble_rep
 - Claim owner 使用唯一 `id="claim-*"`；跨节引用使用匹配的 `data-claim-ref="claim-*"`，每个 owner 最多 1 个短引用。悬空引用、重复 owner 或多次引用均拒绝生成。
 - 完整证据使用默认收起的 `<details class="evidence" data-as-of="YYYY-MM-DD" data-items="N"><summary>…</summary>…</details>`；summary 后必须有非空文本、表格或内嵌媒体。搜索命中折叠证据时临时展开，退出搜索后恢复原状态；“展开/收起全部”只控制证据区。
 - 外壳纯静态、无外部依赖；报告正文禁止 `script/style/form/iframe/object/embed`、事件属性和 `javascript:` URL，禁止远程 `src`/样式、CDN、`fetch`、XHR 与 WebSocket；普通来源超链接可以保留。
+
+### 大势、大类资产与外汇掉期硬门
+
+`section#s1` 固定承载境内市场与外部资产背景，不新增导航锚点：
+
+- 默认可见摘要必须有且仅有一个 `<p data-big-picture="verdict" data-as-of="YYYY-MM-DD" data-reviewed-through="<报告日>">`。它必须带 `[判断]`，同时覆盖“大势”、“大类资产/跨资产”、“外汇/人民币即期/USD-CNY”和“掉期/C-Swap”四组语义，且位于 `details` / `hidden` 之外。
+- 大类资产证据必须在折叠层两态之一且全页唯一：非空 `<table data-cross-asset-context="v1">` 或 `<p data-cross-asset-context="missing-data">[事实] 大类资产数据不完整，本日无法判定</p>`。v1 行使用 `data-asset-class="global-equity|china-risk|commodity|volatility|rates"`、唯一 `data-instrument`、非空 `data-source`、受控 `data-status`、`data-date-kind`、严格本地时间和可见 `data-primary-value`。`complete` 必须覆盖五类且每行都有真实来源日；出现任一 `fetch-only` 时只能标 `partial`。`partial` 至少保留三类并在 `ops` 可见披露；只有抓取时间没有来源交易日时，`data-source-date` 留空且可见文字固定写“源交易日缺失”。`source-date` 不得晚于 `observed-at`，两者均不得晚于观察日；来源日和主数值必须同时在可见单元格保留，不能只藏在属性中。
+- 人民币外汇证据同样全页唯一：非空 `<table data-rmb-fx-observation="v1">` 或 `<p data-rmb-fx-observation="missing-data">[事实] 人民币即期与1Y C-Swap数据不完整，本日无法判定</p>`。v1 表固定表头加 `spot` 与 `c-swap-1y` 两条身份行。`complete` 时两腿都必须有效；`partial` 时必须保留一腿完整事实，并把另一腿写成 `data-status="missing" data-price-kind="missing"` 的可见缺失行，同时在 `ops` 披露；两腿均缺才使用整块 `missing-data`。有效行固定 `data-pair="USD/CNY"`，只接受中国货币网对应域名和来源，来源日、观察时间、抓取时间必须严格可解析且同日。spot 使用 `computed_bid_ask_mid` 且 `bid <= mid <= ask`、`mid=(bid+ask)/2`；掉期使用 `c_swap_fixing`、`data-tenor="1Y"`、`data-quote-source="报价数据"`、有限 Pips 与正全价，并在可见单元格保留“即期 / 买 / 卖 / 算术中值 / C-Swap / Pips / 定盘 / 报价数据”语义。
+- 两张表与默认可见摘要的 `data-as-of` 必须一致，三者 `data-reviewed-through` 都必须等于报告日。`partial / failed` 必须在 `section#ops` 保持相应可见缺口；不允许用 `none` 把来源失败伪装成“没有事件”。
+
+最小结构：
+
+```html
+<p data-big-picture="verdict" data-as-of="2026-07-24"
+   data-reviewed-through="2026-07-26">[判断] 大势需结合大类资产、外汇与掉期共同确认。</p>
+<details class="evidence" data-as-of="2026-07-24" data-items="3">
+  <summary>大势完整证据（3 项）</summary>
+  <div class="evidence-body">
+    <table data-cross-asset-context="v1" data-as-of="2026-07-24"
+           data-reviewed-through="2026-07-26" data-source-status="complete">…</table>
+    <table data-rmb-fx-observation="v1" data-as-of="2026-07-24"
+           data-reviewed-through="2026-07-26" data-source-status="complete">…</table>
+  </div>
+</details>
+```
 
 ### 容量中军元数据硬门
 
