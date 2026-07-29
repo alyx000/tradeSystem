@@ -326,7 +326,11 @@ class TushareProvider(DataProvider):
 
     # ---- 国际指数（index_global，需约 6000 积分）----
 
-    def get_global_index(self, index_name: str) -> DataResult:
+    def get_global_index(
+        self,
+        index_name: str,
+        as_of_date: str | None = None,
+    ) -> DataResult:
         """
         国际主要指数日线最新一行。ts_code 见 Tushare index_global 文档。
         """
@@ -337,6 +341,9 @@ class TushareProvider(DataProvider):
             # a50 故意不在此：盘前「隔夜」语境要 SGX A50 夜盘期货（含美股时段情绪），
             # 由 akshare futures_global_spot_em 提供；XIN9 指数只有中国时段前日收盘，
             # 当作「A50期货」会语义错位。tushare 返回 unsupported 触发 registry 降级。
+            # 盘后跨资产在日期化期货源不可用时会显式请求 a50_proxy；它必须保留代理标记，
+            # 不能通过 a50 键静默顶替期货。
+            "a50_proxy": ("XIN9", "富时中国A50指数代理（XIN9）"),
             # 镜像 index_global 实测支持 N225/KS11，作日经/韩国的可靠主源；
             # 否则只能退到不稳的 yfinance + 已退化的东财 index_global_spot_em。
             "nikkei": ("N225", "日经225"),
@@ -351,8 +358,13 @@ class TushareProvider(DataProvider):
             )
         ts_code, display_name = pair
         try:
-            end = datetime.now().strftime("%Y%m%d")
-            start = (datetime.now() - timedelta(days=45)).strftime("%Y%m%d")
+            end_dt = (
+                datetime.strptime(as_of_date, "%Y-%m-%d")
+                if as_of_date
+                else datetime.now()
+            )
+            end = end_dt.strftime("%Y%m%d")
+            start = (end_dt - timedelta(days=45)).strftime("%Y%m%d")
             df = self.pro.index_global(ts_code=ts_code, start_date=start, end_date=end)
             if df is None or df.empty:
                 return DataResult(
@@ -381,6 +393,13 @@ class TushareProvider(DataProvider):
                 "change_pct": change_val,
                 "as_of": _normalize_trade_date(row.get("trade_date")),
             }
+            if index_name == "a50_proxy":
+                data.update(
+                    {
+                        "instrument_kind": "index_proxy",
+                        "proxy_for": "A50期指当月连续",
+                    }
+                )
             return DataResult(data=data, source="tushare:index_global")
         except Exception as e:
             return DataResult(data=None, source=self.name, error=str(e))

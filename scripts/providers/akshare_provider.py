@@ -2,8 +2,9 @@
 AkShare 数据提供者（免费，作为 tushare 的补充和降级）
 文档: https://akshare.akfamily.xyz/
 
-盘前外盘/大宗/汇率：优先使用东方财富全球指数现货 index_global_spot_em、
-全球期货现货 futures_global_spot_em；已移除失效的 index_investing_global。
+盘前外盘/大宗/汇率：优先使用东方财富全球指数现货 index_global_spot_em；
+A50 与商品仅在盘后显式传入目标日期时优先使用日期化历史源，盘前无日期
+调用仍走 futures_global_spot_em；已移除失效的 index_investing_global。
 """
 from __future__ import annotations
 
@@ -620,6 +621,7 @@ class AkshareProvider(DataProvider):
         self.ak = None
         self._df_global_spot_em: Optional[pd.DataFrame] = None
         self._df_futures_global_spot_em: Optional[pd.DataFrame] = None
+        self._df_bond_zh_us_rate: Optional[pd.DataFrame] = None
 
     def initialize(self) -> bool:
         try:
@@ -628,6 +630,7 @@ class AkshareProvider(DataProvider):
             ak.tool_trade_date_hist_sina()
             self._df_global_spot_em = None
             self._df_futures_global_spot_em = None
+            self._df_bond_zh_us_rate = None
             self._initialized = True
             return True
         except Exception as e:
@@ -982,6 +985,52 @@ class AkshareProvider(DataProvider):
             self._df_futures_global_spot_em = self.ak.futures_global_spot_em()
         return self._df_futures_global_spot_em
 
+    def _bond_zh_us_rate(self) -> pd.DataFrame:
+        """中美国债收益率宽表。单次盘前会被 us10y/cn10y/cn30y 三次消费，
+        而该接口内部分页拉取实测约 30s，不缓存会把盘前拖长 60s+。"""
+        if self._df_bond_zh_us_rate is None:
+            self._df_bond_zh_us_rate = self.ak.bond_zh_us_rate(start_date="20200101")
+        return self._df_bond_zh_us_rate
+
+    def _bond_yield_snapshot(
+        self, country: str, tenor: str, display_name: str
+    ) -> Optional[dict]:
+        """从 bond_zh_us_rate 宽表取某国某期限收益率的最近有效值 + 日变动（bp）。
+
+        选列必须同时锁国别与期限，且排除「10年-2年」利差列：只匹配期限会让
+        「中国国债收益率10年」与「美国国债收益率10年」互相误命中。
+        """
+        df = self._bond_zh_us_rate()
+        if df is None or df.empty:
+            return None
+        date_col = df.columns[0]
+        df = df.sort_values(date_col)
+        col = next(
+            (
+                c
+                for c in df.columns
+                if country in str(c) and tenor in str(c) and "-" not in str(c)
+            ),
+            None,
+        )
+        if not col:
+            return None
+        # 末几行常因数据滞后/休市为 NaN，取最近一个有效日，否则 iloc[-1] 会
+        # 落在空行 → close 归零、日期错位。
+        valid = df[df[col].notna()]
+        if valid.empty:
+            return None
+        row = valid.iloc[-1]
+        prev_row = valid.iloc[-2] if len(valid) >= 2 else row
+        close_val = _to_float_price(row[col])
+        prev_val = _to_float_price(prev_row[col])
+        return {
+            "name": display_name,
+            "close": close_val,
+            "change_bps": round((close_val - prev_val) * 100, 2),
+            "as_of": str(row[date_col]),
+        }
+
     def _row_global_spot_by_name(self, zh_name: str) -> Optional[pd.Series]:
         df = self._global_spot_em()
         exact = df[df["名称"] == zh_name]
@@ -1028,14 +1077,31 @@ class AkshareProvider(DataProvider):
             hist = hist.dropna(subset=["Close"])
             if hist.empty:
                 return None
-            close_val = round(float(hist["Close"].iloc[-1]), 2)
-            prev_val = round(float(hist["Close"].iloc[-2]), 2) if len(hist) >= 2 else close_val
-            change_pct = round((close_val - prev_val) / prev_val * 100, 2) if prev_val else 0.0
+            if yahoo_symbol in {"^DJI", "^IXIC", "^GSPC", "^VIX"}:
+                parsed = _overnight_from_hist(hist, _us_eastern_now())
+                if parsed is None:
+                    return None
+                close_val, change_pct, as_of = parsed
+                close_val = round(close_val, 2)
+            else:
+                close_val = round(float(hist["Close"].iloc[-1]), 2)
+                prev_val = (
+                    round(float(hist["Close"].iloc[-2]), 2)
+                    if len(hist) >= 2
+                    else close_val
+                )
+                change_pct = (
+                    round((close_val - prev_val) / prev_val * 100, 2)
+                    if prev_val
+                    else 0.0
+                )
+                as_of = hist.index[-1].strftime("%Y-%m-%d")
             return DataResult(
                 data={
                     "name": display_name,
                     "close": close_val,
                     "change_pct": change_pct,
+                    "as_of": as_of,
                 },
                 source=f"yfinance:{yahoo_symbol}",
             )
@@ -1136,10 +1202,130 @@ class AkshareProvider(DataProvider):
 
     # ---- 外盘数据 ----
 
-    def get_global_index(self, index_name: str) -> DataResult:
+    def _global_future_from_hist_em(
+        self,
+        symbol: str,
+        display_name: str,
+        as_of_date: str | None = None,
+        *,
+        attempts: int = 1,
+    ) -> DataResult | None:
+        """取不晚于目标日的外盘期货日期化行情，失败时由调用方降级实时快照。"""
+        if as_of_date:
+            try:
+                parsed_target = datetime.strptime(as_of_date, "%Y-%m-%d")
+            except ValueError:
+                return None
+            if parsed_target.strftime("%Y-%m-%d") != as_of_date:
+                return None
+
+        df = None
+        last_error: Exception | None = None
+        for _ in range(max(1, attempts)):
+            try:
+                df = self.ak.futures_global_hist_em(symbol=symbol)
+                break
+            except Exception as exc:
+                last_error = exc
+        if df is None and last_error is not None:
+            logger.warning(
+                "东财全球期货历史行情 %s 获取失败，降级实时快照: %s",
+                symbol,
+                last_error,
+            )
+            return None
+        if df is None or df.empty:
+            return None
+
+        candidates: list[tuple[str, pd.Series, float, float]] = []
+        for _, row in df.iterrows():
+            source_dt = pd.to_datetime(row.get("日期"), errors="coerce")
+            close_val = _to_float_or_none(row.get("最新价"))
+            change_pct = _to_float_or_none(row.get("涨幅"))
+            if pd.isna(source_dt) or close_val is None or change_pct is None:
+                continue
+            source_date = source_dt.strftime("%Y-%m-%d")
+            if as_of_date and source_date > as_of_date:
+                continue
+            candidates.append((source_date, row, close_val, change_pct))
+        if not candidates:
+            return None
+
+        source_date, row, close_val, change_pct = max(
+            candidates,
+            key=lambda item: item[0],
+        )
+        return DataResult(
+            data={
+                "name": str(row.get("名称", display_name)),
+                "close": close_val,
+                "change_pct": round(change_pct, 4),
+                "as_of": source_date,
+            },
+            source="akshare:futures_global_hist_em",
+        )
+
+    def _global_future_from_sina_hist(
+        self,
+        symbol: str,
+        display_name: str,
+        as_of_date: str | None = None,
+        *,
+        price_divisor: float = 1.0,
+    ) -> DataResult | None:
+        """新浪外盘日线备用源；用相邻收盘计算目标日涨跌幅。"""
+        try:
+            if as_of_date:
+                parsed_target = datetime.strptime(as_of_date, "%Y-%m-%d")
+                if parsed_target.strftime("%Y-%m-%d") != as_of_date:
+                    return None
+            df = self.ak.futures_foreign_hist(symbol=symbol)
+        except Exception as exc:
+            logger.warning("新浪全球期货历史行情 %s 获取失败: %s", symbol, exc)
+            return None
+        if df is None or df.empty:
+            return None
+
+        candidates: list[tuple[str, float]] = []
+        for _, row in df.iterrows():
+            source_dt = pd.to_datetime(row.get("date"), errors="coerce")
+            close_val = _to_float_or_none(row.get("close"))
+            if pd.isna(source_dt) or close_val is None:
+                continue
+            source_date = source_dt.strftime("%Y-%m-%d")
+            if as_of_date and source_date > as_of_date:
+                continue
+            candidates.append((source_date, close_val))
+        candidates.sort(key=lambda item: item[0])
+        if len(candidates) < 2:
+            return None
+
+        source_date, close_val = candidates[-1]
+        prev_close = candidates[-2][1]
+        if prev_close == 0 or price_divisor <= 0:
+            return None
+        return DataResult(
+            data={
+                "name": display_name,
+                "close": round(close_val / price_divisor, 4),
+                "change_pct": round(
+                    (close_val - prev_close) / prev_close * 100,
+                    4,
+                ),
+                "as_of": source_date,
+            },
+            source="akshare:futures_foreign_hist",
+        )
+
+    def get_global_index(
+        self,
+        index_name: str,
+        as_of_date: str | None = None,
+    ) -> DataResult:
         """
         全球指数：index_global_spot_em 按中文名称匹配；
-        A50：futures_global_spot_em 中「A50期指当月连续」等；
+        A50：显式传日期时用 futures_global_hist_em 日期化日线，失败再降级实时快照；
+        未传日期时保持盘前实时快照语义；
         VIX：yfinance ^VIX；
         US10Y：index_global_spot_em，失败则 bond_zh_us_rate()；
         恒生/恒生科技/日经：优先 yfinance（^HSI、HSTECH.HK、^N225 等），失败再试东财，减轻本机 ProxyError。
@@ -1163,6 +1349,15 @@ class AkshareProvider(DataProvider):
 
         try:
             if index_name == "a50":
+                if as_of_date is not None:
+                    dated = self._global_future_from_hist_em(
+                        "CN00Y",
+                        "A50期指当月连续",
+                        as_of_date,
+                        attempts=3,
+                    )
+                    if dated is not None:
+                        return dated
                 fut = self._futures_global_spot_em()
                 # 优先连续合约，否则取有成交价的 A50 期指合约
                 for prefer in ("A50期指当月连续",):
@@ -1191,24 +1386,9 @@ class AkshareProvider(DataProvider):
 
             if index_name == "vix":
                 # AkShare 无 US VIX 接口，使用 yfinance
-                try:
-                    import yfinance as yf
-                    hist = yf.Ticker("^VIX").history(period="3d")
-                    if hist is not None and not hist.empty:
-                        hist = hist.sort_index()
-                        close_val = round(float(hist["Close"].iloc[-1]), 2)
-                        prev_val = round(float(hist["Close"].iloc[-2]), 2) if len(hist) >= 2 else close_val
-                        change_pct = round((close_val - prev_val) / prev_val * 100, 2) if prev_val else 0.0
-                        return DataResult(
-                            data={
-                                "name": "VIX恐慌指数",
-                                "close": close_val,
-                                "change_pct": change_pct,
-                            },
-                            source="yfinance:^VIX",
-                        )
-                except Exception as e:
-                    logger.warning(f"yfinance VIX 获取失败: {e}")
+                vix_result = self._index_from_yfinance("^VIX", "VIX恐慌指数")
+                if vix_result is not None:
+                    return vix_result
                 return DataResult(
                     data=None, source=self.name, error="未找到 VIX 数据（yfinance 不可用）"
                 )
@@ -1243,43 +1423,31 @@ class AkshareProvider(DataProvider):
                             )
                 # 回退：bond_zh_us_rate（中/美多档收益率宽表）
                 try:
-                    df_bond = self.ak.bond_zh_us_rate(start_date="20200101")
-                    if df_bond is not None and not df_bond.empty:
-                        date_col = df_bond.columns[0]
-                        df_bond = df_bond.sort_values(date_col)
-                        # 必须显式锁定「美国国债收益率10年」：原 `"10" in col` 会先命中
-                        # 「中国国债收益率10年」误报中债收益率；排除「10年-2年」利差列。
-                        col_10y = next(
-                            (
-                                c
-                                for c in df_bond.columns
-                                if "美国" in str(c) and "10年" in str(c) and "-" not in str(c)
-                            ),
-                            None,
-                        )
-                        if col_10y:
-                            # 末几行常因美债数据滞后/美股休市为 NaN，取最近一个有效交易日，
-                            # 否则 iloc[-1] 会落在当日空行→ close 归零、日期错位。
-                            valid = df_bond[df_bond[col_10y].notna()]
-                            if not valid.empty:
-                                row = valid.iloc[-1]
-                                prev_row = valid.iloc[-2] if len(valid) >= 2 else row
-                                close_val = _to_float_price(row[col_10y])
-                                prev_val = _to_float_price(prev_row[col_10y])
-                                change_bps = round((close_val - prev_val) * 100, 2)
-                                return DataResult(
-                                    data={
-                                        "name": "美债10年期收益率",
-                                        "close": close_val,
-                                        "change_bps": change_bps,
-                                        "as_of": str(row[date_col]),
-                                    },
-                                    source="akshare:bond_zh_us_rate",
-                                )
+                    snap = self._bond_yield_snapshot("美国", "10年", "美债10年期收益率")
+                    if snap:
+                        return DataResult(data=snap, source="akshare:bond_zh_us_rate")
                 except Exception as bond_err:
                     logger.warning("us10y bond_zh_us_rate 回退失败: %s", bond_err)
                 return DataResult(
                     data=None, source=self.name, error="AkShare: 未找到美债10年期数据"
+                )
+
+            # 中债 10Y/30Y：无实时源（东财全球指数现货只有美债），只有 bond_zh_us_rate
+            # 日频一条路，故必然带 as_of —— 盘前 07:00 取到的是 T-1 收盘值，由报告显式标注。
+            cn_bond_map = {
+                "cn10y": ("10年", "中国10年期国债收益率"),
+                "cn30y": ("30年", "中国30年期国债收益率"),
+            }
+            if index_name in cn_bond_map:
+                tenor, display_name = cn_bond_map[index_name]
+                try:
+                    snap = self._bond_yield_snapshot("中国", tenor, display_name)
+                    if snap:
+                        return DataResult(data=snap, source="akshare:bond_zh_us_rate")
+                except Exception as bond_err:
+                    logger.warning("%s bond_zh_us_rate 获取失败: %s", index_name, bond_err)
+                return DataResult(
+                    data=None, source=self.name, error=f"AkShare: 未找到{display_name}数据"
                 )
 
             # 亚太股指：优先 yfinance，避免本机访问东财 push2.eastmoney.com 触发 ProxyError
@@ -1381,8 +1549,42 @@ class AkshareProvider(DataProvider):
         except Exception as e:
             return DataResult(data=None, source=self.name, error=str(e))
 
-    def get_commodity(self, name: str) -> DataResult:
-        """大宗商品：futures_global_spot_em 按名称关键词取第一条有效报价。"""
+    def get_commodity(
+        self,
+        name: str,
+        as_of_date: str | None = None,
+    ) -> DataResult:
+        """大宗商品：显式传日期时优先日期化日线；未传日期时保持实时语义。"""
+        dated_plans: dict[str, tuple[str, str]] = {
+            "gold": ("QO00Y", "迷你黄金"),
+            "crude_oil": ("QM00Y", "迷你原油"),
+            "copper": ("HG00Y", "COMEX铜"),
+        }
+        sina_plans: dict[str, tuple[str, str, float]] = {
+            "gold": ("GC", "COMEX黄金", 1.0),
+            "crude_oil": ("CL", "NYMEX原油", 1.0),
+            # 新浪铜报价以美分/磅返回，统一成与原东财 COMEX 铜相同的美元/磅。
+            "copper": ("HG", "COMEX铜", 100.0),
+        }
+        dated_plan = dated_plans.get(name)
+        if as_of_date is not None and dated_plan:
+            dated = self._global_future_from_hist_em(
+                dated_plan[0],
+                dated_plan[1],
+                as_of_date,
+            )
+            if dated is not None:
+                return dated
+        sina_plan = sina_plans.get(name)
+        if as_of_date is not None and sina_plan:
+            dated = self._global_future_from_sina_hist(
+                sina_plan[0],
+                sina_plan[1],
+                as_of_date,
+                price_divisor=sina_plan[2],
+            )
+            if dated is not None:
+                return dated
         plans: dict[str, list[str]] = {
             "gold": ["迷你黄金当月连续", "迷你黄金", "COMEX黄金", "微型黄金"],
             "crude_oil": ["迷你原油当月连续", "迷你原油", "布伦特原油"],

@@ -493,6 +493,222 @@ class MarketCollector:
         )
         return forex, fx_swaps
 
+    def _collect_cross_asset_snapshot(
+        self,
+        *,
+        phase: str,
+        expected_date: str,
+    ) -> dict:
+        """采集复盘所需的五类跨资产证据，并保留来源与抓取时间。
+
+        ``as_of`` 只能来自 provider 的真实日线/源页面日期。A50 与商品优先按
+        ``expected_date`` 读取日期化日线；历史源失败降级实时快照时只保留
+        ``_fetched_at``，由消费端按 fetch-only/partial 处理，不能拿目标日或抓取日
+        冒充市场交易日。
+        """
+        expected_text = str(expected_date or "").strip()
+        try:
+            canonical_expected_date = datetime.strptime(
+                expected_text,
+                "%Y-%m-%d",
+            ).strftime("%Y-%m-%d")
+        except ValueError as exc:
+            raise ValueError(
+                f"跨资产目标日期无效: {expected_date}"
+            ) from exc
+        if canonical_expected_date != expected_text:
+            raise ValueError(f"跨资产目标日期无效: {expected_date}")
+        expected_date = canonical_expected_date
+
+        def iso_date(raw) -> str | None:
+            text = str(raw or "").strip()[:10]
+            if len(text) != 10:
+                return None
+            try:
+                parsed = datetime.strptime(text, "%Y-%m-%d").strftime("%Y-%m-%d")
+            except ValueError:
+                return None
+            return parsed if parsed == text else None
+
+        def checked_latest(payload: dict, label: str) -> dict:
+            if payload.get("error"):
+                return {
+                    **payload,
+                    "status": payload.get("status") or "source_failed",
+                }
+            source_date = payload.get("as_of") or payload.get("source_date")
+            if source_date:
+                parsed_source_date = iso_date(source_date)
+                if parsed_source_date and parsed_source_date <= expected_date:
+                    return payload
+            else:
+                fetched_date = iso_date(payload.get("_fetched_at"))
+                if fetched_date == expected_date:
+                    return payload
+            return {
+                "status": "historical_not_supported",
+                "error": (
+                    f"{label} 当前接口只提供最新快照，不能用于补跑 {expected_date}"
+                ),
+                "source_date": source_date,
+                "expected_date": expected_date,
+                "_source": payload.get("_source"),
+                "_source_url": payload.get("_source_url"),
+                "_fetched_at": payload.get("_fetched_at"),
+                "_timeliness": payload.get("_timeliness"),
+            }
+
+        global_indices = {}
+        for name in ("dow_jones", "nasdaq", "sp500", "a50"):
+            payload = self._snapshot_payload(
+                self.registry.call("get_global_index", name, expected_date),
+                name,
+            )
+            if name == "a50":
+                source_date = payload.get("as_of") or payload.get("source_date")
+                parsed_source_date = iso_date(source_date)
+                if not (
+                    parsed_source_date
+                    and parsed_source_date <= expected_date
+                ):
+                    proxy_payload = self._snapshot_payload(
+                        self.registry.call(
+                            "get_global_index",
+                            "a50_proxy",
+                            expected_date,
+                        ),
+                        "a50_proxy",
+                    )
+                    proxy_source_date = (
+                        proxy_payload.get("as_of")
+                        or proxy_payload.get("source_date")
+                    )
+                    parsed_proxy_date = iso_date(proxy_source_date)
+                    if (
+                        not proxy_payload.get("error")
+                        and parsed_proxy_date
+                        and parsed_proxy_date <= expected_date
+                        and proxy_payload.get("instrument_kind") == "index_proxy"
+                        and proxy_payload.get("proxy_for")
+                        == "A50期指当月连续"
+                    ):
+                        payload = proxy_payload
+            global_indices[name] = checked_latest(
+                payload,
+                name,
+            )
+
+        global_indices_apac = {}
+        for name in ("nikkei", "kospi"):
+            global_indices_apac[name] = checked_latest(
+                self._snapshot_payload(
+                    self.registry.call(
+                        "get_global_index",
+                        name,
+                        expected_date,
+                    ),
+                    name,
+                ),
+                name,
+            )
+
+        us_china = self._snapshot_payload(
+            self.registry.call("get_us_tickers_overnight", ["HXC"]),
+            "HXC",
+        )
+        if not us_china.get("error"):
+            for ticker, item in tuple(us_china.items()):
+                if isinstance(ticker, str) and ticker.startswith("_"):
+                    continue
+                if not isinstance(ticker, str):
+                    us_china.pop(ticker, None)
+                    us_china["_error"] = "HXC 数据结构无效：ticker 键不是字符串"
+                    continue
+                provenance = {
+                    "_source": us_china.get("_source"),
+                    "_source_url": us_china.get("_source_url"),
+                    "_fetched_at": us_china.get("_fetched_at"),
+                    "_timeliness": us_china.get("_timeliness"),
+                }
+                if not isinstance(item, dict):
+                    us_china[ticker] = {
+                        "status": "missing_data",
+                        "error": f"{ticker} 数据结构无效",
+                        **provenance,
+                    }
+                    continue
+                us_china[ticker] = checked_latest(
+                    {**item, **provenance},
+                    ticker,
+                )
+            if "HXC" not in us_china:
+                us_china["HXC"] = {
+                    "status": "missing_data",
+                    "error": "HXC 数据缺失",
+                    "_source": us_china.get("_source"),
+                    "_source_url": us_china.get("_source_url"),
+                    "_fetched_at": us_china.get("_fetched_at"),
+                    "_timeliness": us_china.get("_timeliness"),
+                }
+
+        commodities = {}
+        for name in ("gold", "crude_oil", "copper"):
+            commodities[name] = checked_latest(
+                self._snapshot_payload(
+                    self.registry.call("get_commodity", name, expected_date),
+                    name,
+                ),
+                name,
+            )
+
+        risk_indicators = {}
+        for name in ("vix", "us10y", "cn10y", "cn30y"):
+            item = checked_latest(
+                self._snapshot_payload(
+                    self.registry.call("get_global_index", name, expected_date),
+                    name,
+                ),
+                name,
+            )
+            if item.get("error"):
+                logger.warning("风险指标 %s 获取失败: %s", name, item["error"])
+            risk_indicators[name] = item
+
+        for section in (
+            global_indices,
+            global_indices_apac,
+            commodities,
+            risk_indicators,
+        ):
+            for item in section.values():
+                if isinstance(item, dict) and item.get("error"):
+                    item["error"] = _normalize_source_error(item["error"])
+        for key, item in us_china.items():
+            if (
+                isinstance(key, str)
+                and not key.startswith("_")
+                and isinstance(item, dict)
+                and item.get("error")
+            ):
+                item["error"] = _normalize_source_error(item["error"])
+        for error_key in ("error", "_error"):
+            if us_china.get(error_key):
+                us_china[error_key] = _normalize_source_error(us_china[error_key])
+
+        return {
+            "global_indices": global_indices,
+            "global_indices_apac": global_indices_apac,
+            "us_china_assets": us_china,
+            "commodities": commodities,
+            "risk_indicators": risk_indicators,
+            "_cross_asset_context": {
+                "phase": phase,
+                "expected_date": expected_date,
+                "observed_at": datetime.now().isoformat(),
+                "source_date_policy": "provider_as_of_else_fetch_only",
+            },
+        }
+
     def collect_post_market(self, date: str) -> dict:
         """
         盘后数据采集（20:00 执行）
@@ -518,6 +734,15 @@ class MarketCollector:
             "spot_expected_date": date,
             "swap_expected_date": date,
         }
+
+        # 盘后统一沉淀复盘所需的跨资产五类证据。盘前仍保留同类取数服务早间简报；
+        # 新复盘以本文件为主来源，避免 07:00 抓取时间与报告日/源交易日混用。
+        result.update(
+            self._collect_cross_asset_snapshot(
+                phase="post",
+                expected_date=date,
+            )
+        )
 
         # 1. 指数数据
         indices = {}

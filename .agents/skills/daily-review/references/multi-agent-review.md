@@ -17,7 +17,7 @@
 
 | 路 | 面 | 主要数据源 | 素材文件 |
 |---|---|---|---|
-| 1 | 大势/大类资产/外汇掉期/择时/期指/两融 | `daily/<T>/pre-market.yaml` 的 `market_data` + `daily/<T>/post-market.yaml` 的 `raw_data.forex / fx_swaps` + 镜像 index_daily/fut_daily + 库 market_timing_signal / margin_index_correlation_daily | market_YYYY-MM-DD.md |
+| 1 | 大势/大类资产/外汇掉期/择时/期指/两融 | `daily/<T>/post-market.yaml` 的 `raw_data.global_indices / global_indices_apac / us_china_assets / commodities / risk_indicators / forex / fx_swaps`（旧归档缺跨资产块时才回退同日 `pre-market.yaml.market_data`）+ 镜像 index_daily/fut_daily + 库 market_timing_signal / margin_index_correlation_daily | market_YYYY-MM-DD.md |
 | 2 | 板块/集中度/全行业拥挤度/主升主跌辨识度/资金流/研报业绩 | 库 daily_volume_concentration + CLI `sector-crowding report --date <T>`（只读，底表 sector_crowding_daily）+ 镜像 daily/sw_daily/moneyflow_ind_ths + data/reports | sector_*.md |
 | 3 | 情绪/涨跌停/连板梯队 | 镜像 limit_list_d(U/D/Z) + daily；断板反包读 board-break 报告 | emotion_*.md |
 | 4 | 龙虎榜 | 镜像 top_list/top_inst | lhb_*.md |
@@ -96,9 +96,9 @@
 
 ### 大势、大类资产与外汇掉期（第 1 路 → `s1` 硬契约）
 
-“大势”同时包含境内市场结构和外部资产背景，不能只交付 A 股指数、期指、两融。第 1 路必须读取报告窗口最近开放日的盘前与盘后归档：
+“大势”同时包含境内市场结构和外部资产背景，不能只交付 A 股指数、期指、两融。第 1 路必须读取报告窗口最近开放日的盘后归档：
 
-- 大类资产：`daily/<T>/pre-market.yaml.market_data` 中的全球权益、中国风险映射、商品、VIX 和美债收益率。逐项区分 provider 的 `as_of` 与本地抓取时间；原字段没有来源交易日时使用 `fetch-only`，可见文字固定披露“源交易日缺失”，禁止把抓取日冒充市场日。
+- 大类资产：`daily/<T>/post-market.yaml.raw_data` 中的 `global_indices / global_indices_apac / us_china_assets / commodities / risk_indicators`，由工作日 20:00 的 `main.py post` 同批采集。逐项区分 provider 的 `as_of` 与本地 `_fetched_at`；原字段没有来源交易日时使用 `fetch-only`，可见文字固定披露“源交易日缺失”，禁止把抓取日或 `expected_date` 冒充市场日。2026-07-27 以前或盘后跨资产块确实缺失的旧归档才允许回退同日 `pre-market.yaml.market_data`，并在 `conflicts_or_gaps` 与 `ops` 明示“历史盘前回退”。
 - 人民币即期：`daily/<T>/post-market.yaml.raw_data.forex.usd_cny`。只认中国货币网买卖报价及其算术中值，明确它不是中间价、收盘价或定盘价。
 - 外汇掉期：同文件 `raw_data.fx_swaps.usd_cny_1y`。保留 1Y tenor、掉期点 Pips、全价、16:30 定盘、报价/交易来源与采集时间；不得拿即期涨跌幅替代。
 - 报告日休市时，`data-as-of` 指向最近事实日，三块统一携带 `data-reviewed-through=报告日`；07-25/26 之类休市日不插值、不复制成新增事实。

@@ -17,7 +17,12 @@ class _StubPro:
 
     def index_global(self, **kwargs):
         self.index_global_calls.append(kwargs)
-        latest = {"DJI": 50285.66, "N225": 63339.07, "KS11": 7847.71}
+        latest = {
+            "DJI": 50285.66,
+            "N225": 63339.07,
+            "KS11": 7847.71,
+            "XIN9": 14852.88,
+        }
         code = kwargs.get("ts_code")
         if code in latest:
             return pd.DataFrame([
@@ -182,6 +187,25 @@ def test_a50_not_handled_by_tushare_falls_through_to_akshare_futures():
     result = provider.get_global_index("a50")
     assert not result.success
     assert "未支持" in (result.error or ""), "a50 应从 tushare code_map 移除，触发 registry 降级"
+
+
+def test_a50_proxy_is_explicitly_labeled_and_target_date_bounded():
+    """盘后备用可读 XIN9，但必须显式声明它是指数代理，不得冒充 A50 期货。"""
+    provider = _provider()
+
+    result = provider.get_global_index("a50_proxy", "2026-05-22")
+
+    assert result.success
+    assert result.source == "tushare:index_global"
+    assert result.data["name"] == "富时中国A50指数代理（XIN9）"
+    assert result.data["as_of"] == "2026-05-22"
+    assert result.data["instrument_kind"] == "index_proxy"
+    assert result.data["proxy_for"] == "A50期指当月连续"
+    assert provider.pro.index_global_calls[-1] == {
+        "ts_code": "XIN9",
+        "start_date": "20260407",
+        "end_date": "20260522",
+    }
 
 
 @pytest.mark.parametrize(

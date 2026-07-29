@@ -428,3 +428,42 @@ def test_roman_chinese_section_index():
     assert _roman(21) == "二十一"
     assert _roman(99) == "九十九"
     assert _roman(100) == "100"
+
+
+def test_cn_bond_yields_rendered_with_as_of(tmp_path: Path):
+    """中债 10/30 年期须在风险指标段渲染，且必须带「截至 日期」。
+
+    出处：体系课第11课，中债为内部锚定维度。中债无实时源，盘前 07:00 取到的
+    必然是上一发布日收盘值——不标 as_of 会被误读为当日实时。
+    """
+    gen = ReportGenerator()
+    gen.daily_dir = tmp_path
+    market_data = _minimal_market_data()
+    market_data["risk_indicators"]["cn10y"] = {
+        "name": "中国10年期国债收益率", "close": 1.7325,
+        "change_bps": 0.28, "as_of": "2026-07-23",
+    }
+    market_data["risk_indicators"]["cn30y"] = {
+        "name": "中国30年期国债收益率", "close": 2.2045,
+        "change_bps": -0.75, "as_of": "2026-07-23",
+    }
+    md, _ = gen.generate_pre_market(
+        date="2026-07-24", market_data=market_data, holdings_announcements={}
+    )
+    assert "[事实] 中国10年期国债收益率: 1.7325% (+0.28bp，截至 2026-07-23)" in md
+    assert "[事实] 中国30年期国债收益率: 2.2045% (-0.75bp，截至 2026-07-23)" in md
+    # 中美同段并存，不得互相覆盖
+    assert "美债10年期收益率" in md
+
+
+def test_cn_bond_absent_renders_nothing(tmp_path: Path):
+    """未采到中债时静默跳过，不得打印 N/A 行冒充有数据。"""
+    gen = ReportGenerator()
+    gen.daily_dir = tmp_path
+    market_data = _minimal_market_data()
+    market_data["risk_indicators"]["cn10y"] = {"error": "AkShare: 未找到中国10年期国债收益率数据"}
+    md, _ = gen.generate_pre_market(
+        date="2026-07-24", market_data=market_data, holdings_announcements={}
+    )
+    assert "中国10年期国债收益率" not in md
+    assert "中国30年期国债收益率" not in md

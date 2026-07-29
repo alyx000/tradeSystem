@@ -111,3 +111,105 @@ class TestUs10yPrimaryPathRegression:
         assert r.data["close"] == pytest.approx(4.55)
         assert r.source == "akshare:index_global_spot_em"
         ak.ak.bond_zh_us_rate.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# 中债 10Y/30Y（cn10y / cn30y）
+#
+# 出处：体系课第11课「大类资产观察跟踪大趋势」——中国国债是内部锚定维度。
+# 与美债共用 bond_zh_us_rate 宽表，故必须钉死：选列锁国别（不能被美国列串味）、
+# 锁期限（10年 vs 30年）、排除利差列、跳过末尾 NaN，以及单次采集只拉一次全表。
+# ---------------------------------------------------------------------------
+
+
+def _cn_bond_df() -> pd.DataFrame:
+    """中美同表；中债末行 NaN（未发布），最近有效中债日为 2026-07-23。
+
+    刻意让美债 10 年期(4.71) 与中国 30 年期(2.2045) 同表，用于验证选列不串国别；
+    并带「中国国债收益率10年-2年」利差列，验证不被误选。
+    """
+    return pd.DataFrame([
+        {"日期": "2026-07-22", "中国国债收益率10年": 1.7297, "中国国债收益率30年": 2.2120,
+         "中国国债收益率10年-2年": 0.4648, "美国国债收益率10年": 4.67},
+        {"日期": "2026-07-23", "中国国债收益率10年": 1.7325, "中国国债收益率30年": 2.2045,
+         "中国国债收益率10年-2年": 0.4634, "美国国债收益率10年": 4.71},
+        {"日期": "2026-07-24", "中国国债收益率10年": float("nan"),
+         "中国国债收益率30年": float("nan"), "中国国债收益率10年-2年": float("nan"),
+         "美国国债收益率10年": 4.69},
+    ])
+
+
+class TestCnBondYield:
+    def test_cn10y_picks_china_column(self, ak: AkshareProvider):
+        """cn10y 必须取中国 10 年期(1.7325)，不得串到美国 10 年期(4.71)。"""
+        ak.ak.bond_zh_us_rate.return_value = _cn_bond_df()
+
+        r = ak.get_global_index("cn10y")
+        assert r.success
+        assert r.data["close"] == pytest.approx(1.7325), (
+            f"取到 {r.data['close']}，疑似误用美债 10 年期"
+        )
+        assert r.data["name"] == "中国10年期国债收益率"
+        assert r.source == "akshare:bond_zh_us_rate"
+
+    def test_cn30y_picks_30y_not_10y(self, ak: AkshareProvider):
+        """cn30y 必须取 30 年期(2.2045)，不得落到同国别的 10 年期。"""
+        ak.ak.bond_zh_us_rate.return_value = _cn_bond_df()
+
+        r = ak.get_global_index("cn30y")
+        assert r.success
+        assert r.data["close"] == pytest.approx(2.2045)
+        assert r.data["name"] == "中国30年期国债收益率"
+
+    def test_cn10y_ignores_spread_column(self, ak: AkshareProvider):
+        """不得命中「中国国债收益率10年-2年」利差列(0.4634)。"""
+        ak.ak.bond_zh_us_rate.return_value = _cn_bond_df()
+
+        r = ak.get_global_index("cn10y")
+        assert r.data["close"] != pytest.approx(0.4634)
+        assert r.data["close"] == pytest.approx(1.7325)
+
+    def test_cn10y_skips_nan_tail_and_reports_as_of(self, ak: AkshareProvider):
+        """末行中债 NaN（未发布），须取最近有效日 07-23 并带 as_of，bp 基于前一有效日。"""
+        ak.ak.bond_zh_us_rate.return_value = _cn_bond_df()
+
+        r = ak.get_global_index("cn10y")
+        assert r.data.get("as_of") == "2026-07-23", (
+            f"数据日期 {r.data.get('as_of')} 不对，应为最近有效中债发布日"
+        )
+        # (1.7325 - 1.7297) * 100 = 0.28bp
+        assert r.data["change_bps"] == pytest.approx(0.28)
+
+    def test_all_nan_column_fails_closed(self, ak: AkshareProvider):
+        """整列无有效值时必须失败，不得返回 0 或末行 NaN 冒充收益率。"""
+        df = _cn_bond_df()
+        df["中国国债收益率30年"] = float("nan")
+        ak.ak.bond_zh_us_rate.return_value = df
+
+        r = ak.get_global_index("cn30y")
+        assert not r.success
+        assert r.data is None
+
+    def test_missing_column_fails_closed(self, ak: AkshareProvider):
+        """接口改版丢列时必须失败，不得回退到别的期限。"""
+        ak.ak.bond_zh_us_rate.return_value = _cn_bond_df().drop(
+            columns=["中国国债收益率30年"]
+        )
+
+        r = ak.get_global_index("cn30y")
+        assert not r.success
+
+
+class TestBondTableCachedAcrossCalls:
+    def test_single_fetch_for_us10y_cn10y_cn30y(self, ak: AkshareProvider):
+        """一次盘前会连着取三档收益率；宽表接口实测约 30s，必须只拉一次。"""
+        ak.ak.index_global_spot_em.side_effect = ValueError("endpoint down")
+        ak.ak.bond_zh_us_rate.return_value = _cn_bond_df()
+
+        assert ak.get_global_index("us10y").success
+        assert ak.get_global_index("cn10y").success
+        assert ak.get_global_index("cn30y").success
+
+        assert ak.ak.bond_zh_us_rate.call_count == 1, (
+            f"宽表被拉了 {ak.ak.bond_zh_us_rate.call_count} 次，缓存未生效"
+        )

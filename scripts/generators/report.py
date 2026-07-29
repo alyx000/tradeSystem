@@ -340,6 +340,20 @@ class ReportGenerator:
                     f"- [事实] 美债10年期收益率: {close_val}% ({sign}{pct}%{as_of_str}) [★★★]"
                 )
 
+        # 中债 10Y/30Y：内部锚定维度，只给数值与 bp 变动，股债跷跷板解读留给复盘
+        for key, label in [("cn10y", "中国10年期国债收益率"), ("cn30y", "中国30年期国债收益率")]:
+            info = ri.get(key, {})
+            if not info or "error" in info:
+                continue
+            as_of = info.get("as_of")
+            # 中债无实时源，盘前拿到的必然是上一发布日收盘值，不标 as_of 会被误读为实时
+            as_of_str = f"，截至 {as_of}" if as_of else ""
+            bps = info.get("change_bps", 0)
+            bps_str = f"+{bps}bp" if bps >= 0 else f"{bps}bp"
+            lines.append(
+                f"- [事实] {label}: {info.get('close', 'N/A')}% ({bps_str}{as_of_str}) [★★★]"
+            )
+
         # 二、美股中国金龙（隔夜）
         lines.append("\n## 二、美股中国金龙（隔夜）\n")
         us_cn = market_data.get("us_china_assets", {})

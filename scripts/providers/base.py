@@ -288,13 +288,23 @@ class DataProvider(ABC):
         return DataResult(data=None, source=self.name, error="not implemented")
 
     # ---- 外盘 ----
-    def get_global_index(self, index_name: str) -> DataResult:
+    def get_global_index(
+        self,
+        index_name: str,
+        as_of_date: str | None = None,
+    ) -> DataResult:
+        """获取全球指数；as_of_date 可用于选择不晚于目标日的日期化快照。"""
         return DataResult(data=None, source=self.name, error="not implemented")
 
     def get_us_tickers_overnight(self, tickers: list[str]) -> DataResult:
         return DataResult(data=None, source=self.name, error="not implemented")
 
-    def get_commodity(self, name: str) -> DataResult:
+    def get_commodity(
+        self,
+        name: str,
+        as_of_date: str | None = None,
+    ) -> DataResult:
+        """获取商品行情；as_of_date 可用于选择不晚于目标日的日期化快照。"""
         return DataResult(data=None, source=self.name, error="not implemented")
 
     def get_forex(self, pair: str) -> DataResult:

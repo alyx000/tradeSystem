@@ -33,6 +33,7 @@ def test_get_global_index_hsi_uses_yfinance(mock_ticker, ak: AkshareProvider):
     assert r.success
     assert r.data["close"] == 24500.0
     assert r.data["change_pct"] == pytest.approx(2.08, abs=0.02)
+    assert r.data["as_of"] == "2026-03-21"
     assert "yfinance" in r.source
 
 
@@ -188,6 +189,51 @@ def test_index_from_yfinance_skips_trailing_nan(mock_ticker, ak: AkshareProvider
     r = ak._index_from_yfinance("^KS11", "韩国综指")
     assert r is not None
     assert r.data["close"] == 2600.0
+    assert r.data["as_of"] == "2026-03-21"
+
+
+@patch("yfinance.Ticker")
+def test_vix_yfinance_snapshot_includes_source_date(mock_ticker, ak: AkshareProvider):
+    """VIX 日线须带真实来源日，避免复盘把本地抓取日冒充市场交易日。"""
+    mock_ticker.return_value.history.return_value = _hist_df([18.0, 18.7])
+    r = ak.get_global_index("vix")
+    assert r.success
+    assert r.data["close"] == 18.7
+    assert r.data["as_of"] == "2026-03-21"
+
+
+@patch("yfinance.Ticker")
+def test_vix_yfinance_skips_trailing_nan(mock_ticker, ak: AkshareProvider):
+    """尾部空 K 线不能输出 NaN 数值或把空行日期标成来源日。"""
+    mock_ticker.return_value.history.return_value = _hist_df(
+        [18.0, 18.7, float("nan")]
+    )
+    r = ak.get_global_index("vix")
+    assert r.success
+    assert r.data["close"] == 18.7
+    assert r.data["as_of"] == "2026-03-21"
+
+
+@patch("providers.akshare_provider._us_eastern_now")
+@patch("yfinance.Ticker")
+def test_us_index_yfinance_drops_forming_session(
+    mock_ticker,
+    mock_now,
+    ak: AkshareProvider,
+):
+    """手工晚间重跑处于美股盘中时，必须继续使用最近已收盘交易日。"""
+    mock_ticker.return_value.history.return_value = _hist_with_dates(
+        [
+            ("2026-07-23", 99.0),
+            ("2026-07-24", 100.0),
+            ("2026-07-27", 110.0),
+        ]
+    )
+    mock_now.return_value = datetime(2026, 7, 27, 12, 0, tzinfo=_ET)
+    r = ak.get_global_index("dow_jones")
+    assert r.success
+    assert r.data["close"] == 100.0
+    assert r.data["as_of"] == "2026-07-24"
 
 
 @patch("yfinance.Ticker")

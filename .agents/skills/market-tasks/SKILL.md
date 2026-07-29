@@ -1,7 +1,7 @@
 ---
 name: market-tasks
 description: 手动触发或自动定时执行盘前/盘后行情采集任务、微信公众号白名单归档、行业推荐推送、研报速读，并将结果摘要推送回 channel
-version: "1.9"
+version: "1.10"
 ---
 
 # Skill: 市场数据任务（盘前 / 盘后采集）
@@ -46,6 +46,12 @@ make wechat-teacher-show DATE=YYYY-MM-DD
 python3 main.py pre --date YYYY-MM-DD
 python3 main.py post --date YYYY-MM-DD
 ```
+
+## 跨资产盘后快照
+
+`main.py post` 在工作日 20:00 的主采集阶段同步抓取全球权益（美股三指数、日经、韩国综指）、中国风险映射（金龙代理、A50）、黄金/原油/铜、VIX 与中美债券收益率，并与人民币在岸即期、USD/CNY 1Y C-Swap 一起写入 `daily/<T>/post-market.yaml.raw_data`。这是多 Agent 复盘自 2026-07-27 起的默认跨资产来源；盘前同类取数只服务早间简报和旧归档兼容。
+
+来源日期语义保持严格分离：A50、黄金、原油、铜优先读取不晚于目标日的日期化日线并保存真实 `as_of`，避免北京时间晚间把下一期货交易日快照并入当日复盘；A50 先取东财期货日期化日线并做有限重试，失败后仅在盘后目标日场景取 Tushare `index_global/XIN9` 且明确标注为 `index_proxy` 的富时中国 A50 指数日期化代理（不得冒充期指），商品在东财失败时再取新浪日期化日线；日期化历史源均失败才降级实时快照，仅保存 `_fetched_at` 并按 `fetch-only` 使用，禁止把目标日或抓取日冒充市场交易日。单个外部源失败只在对应块写 `source_failed`，不阻断 A 股盘后主链。
 
 ## 监管异动盘后采集（regulatory）
 
