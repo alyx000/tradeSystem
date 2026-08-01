@@ -340,10 +340,14 @@ def _run_daily(config: dict, args: argparse.Namespace) -> None:
             logger.info("[monthly-pattern] 报告: %s", report_path)
 
         if not args.dry_run and not args.no_push and summary["status"] != "failed":
-            push_focus_rows = list(pool.list_pool(conn, status="active"))
-            push_focus_rows.extend(
-                pool.list_pool(conn, status="fundamental_verified")
-            )
+            push_focus_rows = []
+            for status in (
+                "active",
+                "fundamental_verified",
+                "technical_candidate",
+                "risk",
+            ):
+                push_focus_rows.extend(pool.list_pool(conn, status=status))
     finally:
         _close_working(conn, real)
 

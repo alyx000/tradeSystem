@@ -10,7 +10,7 @@ from collections.abc import Mapping, Sequence
 from numbers import Real
 from typing import Any
 
-from services.monthly_pattern import financials
+from services.monthly_pattern import financials, focus
 
 
 _NOTICE = "> 仅用于事实核验与模式观察，不构成交易指令。"
@@ -52,6 +52,7 @@ _SOURCE_LABELS = {
     "market": "市场行情",
     "financial": "财务快照",
     "financials": "财务快照",
+    "valuation": "行业估值",
     "mainline": "主线证据",
     "names": "证券名称",
 }
@@ -63,6 +64,8 @@ _SOURCE_STATE_LABELS = {
     "partial": "部分可用",
     "degraded": "降级可用",
     "limited_history": "历史样本有限",
+    "insufficient": "资料不足",
+    "stale": "数据陈旧",
     "source_ok_empty": "来源成功但无记录",
     "coverage_failed": "覆盖不足",
     "as_of_coverage_failed": "历史时点可见覆盖不足",
@@ -972,6 +975,165 @@ def _render_grouped_candidates(
     return lines
 
 
+def _focus_breakdown_text(item: Mapping[str, Any]) -> str:
+    breakdown = item.get("breakdown")
+    values = breakdown if isinstance(breakdown, Mapping) else {}
+    return "；".join(
+        (
+            f"技术{_score_text(values.get('technical'))}/30",
+            f"主线{_score_text(values.get('mainline'))}/25",
+            f"基本面{_score_text(values.get('fundamental'))}/20",
+            f"估值{_score_text(values.get('valuation'))}/10",
+            f"行业增强{_score_text(values.get('industry_factors'))}/10",
+            f"数据完整度{_score_text(values.get('data_quality'))}/5",
+        )
+    )
+
+
+def _focus_valuation_text(item: Mapping[str, Any]) -> str:
+    value = item.get("valuation")
+    if not isinstance(value, Mapping) or value.get("status") != "success":
+        return "资料不足，不跨行业使用绝对估值补分"
+    metric_labels = {"pe_ttm": "PE(TTM)", "pb": "PB", "ps_ttm": "PS(TTM)"}
+    metric = str(value.get("metric") or "")
+    return (
+        f"{metric_labels.get(metric, _safe_text(metric) or '指标')}="
+        f"{_score_text(value.get('value'))}；行业低值分位="
+        f"{_score_text(value.get('industry_percentile'))}%；"
+        f"样本={_score_text(value.get('industry_sample_size'))}；"
+        f"时点={_safe_text(value.get('as_of_date')) or '缺失'}"
+    )
+
+
+def _render_focus_funnel(
+    candidates: Sequence[Mapping[str, Any]],
+) -> list[str]:
+    funnel = focus.build_focus_funnel(candidates)
+    focus_items = list(funnel["focus"])
+    priority_items = list(funnel["priority"])
+    lines = [
+        "## 候选漏斗 [判断]",
+        "",
+        f"- 后台技术初筛：{funnel['input_stocks']} 只；保留完整事实，不在日报逐只展开。",
+        f"- 基本面核验层：{funnel['verified_stocks']} 只；只有该层进入综合观察评分。",
+        f"- 重点观察层：展示 {len(focus_items)}/{funnel['verified_stocks']} 只。",
+        f"- 专池重点层：展示 {len(priority_items)}/"
+        f"{min(focus.PRIORITY_LIMIT, funnel['priority_eligible_stocks'])} 只。",
+        "",
+        f"> 综合观察分 100 分（{funnel['version']}）：技术30、主线25、"
+        "基本面20、行业内估值10、合同负债/研发投入行业增强10、"
+        "数据完整度5。只用于观察排序，不代表胜率、价格预测或操作建议。",
+        "",
+        "> 基本面硬门未核验的股票不参与 Top10；缺失证据记资料不足，不按失败处理。"
+        "合同负债和研发投入只按行业适用性加分，不适用时不作负面判断。",
+        "",
+        f"> 生命周期观察分 v1（{LIFECYCLE_SCORE_VERSION}）仍保留在策略明细中，"
+        "只表达池状态，不参与综合观察分，也不代表胜率、技术强弱或买卖建议。",
+        "",
+        "## 专池重点层（全市场前 3）",
+        "",
+    ]
+    if not priority_items:
+        lines += [
+            "当前没有同时满足基本面核验、行业可归类、无风险状态与数据完整度门槛的股票。",
+            "",
+        ]
+    else:
+        for rank, item in enumerate(priority_items, 1):
+            lines += [
+                f"{rank}. {_safe_text(item['stock_code'])} "
+                f"{_safe_text(item['stock_name'])}｜"
+                f"{_safe_text(item['industry'])}｜综合观察分 "
+                f"{_score_text(item['score'])}/100",
+                f"   - [判断] {_focus_breakdown_text(item)}",
+            ]
+        lines.append("")
+
+    lines += ["## 候选观察（按申万二级板块聚合）", ""]
+    if not focus_items:
+        lines += [
+            "当前没有可评分的基本面已核验股票；技术初筛结果仍保留在后台池。",
+            "",
+        ]
+        return lines
+
+    global_rank = {
+        str(item["stock_code"]): rank for rank, item in enumerate(focus_items, 1)
+    }
+    grouped: dict[str, list[Mapping[str, Any]]] = {}
+    for item in focus_items:
+        grouped.setdefault(str(item["industry"]), []).append(item)
+    sectors = sorted(
+        grouped,
+        key=lambda sector: (
+            -max(float(item["score"]) for item in grouped[sector]),
+            _sector_sort_key(sector),
+        ),
+    )
+    for sector in sectors:
+        items = sorted(
+            grouped[sector],
+            key=lambda item: (
+                -float(item["score"]),
+                global_rank[str(item["stock_code"])],
+            ),
+        )
+        record_count = sum(len(item["records"]) for item in items)
+        lines += [
+            f"### {sector}（{len(items)}只 / {record_count}条策略记录）",
+            "",
+        ]
+        for sector_rank, item in enumerate(items, 1):
+            projection = _stock_projections(item["records"])[0]
+            lifecycle_score = _score_text(projection.get("score"))
+            lines += [
+                f"#### {sector_rank}. {_safe_text(item['stock_code'])} "
+                f"{_safe_text(item['stock_name'])}"
+                f"｜生命周期观察分 {lifecycle_score}｜综合观察分 "
+                f"{_score_text(item['score'])}/100（全市场第"
+                f"{global_rank[str(item['stock_code'])]}）",
+                f"- 评分依据：[判断] {_focus_breakdown_text(item)}；"
+                f"最高池状态分={lifecycle_score}；同股多策略不累加",
+                f"- 主线依据：[判断] {item['mainline_reason']}",
+                f"- 估值依据：[事实] {_focus_valuation_text(item)}",
+                f"- 基本面依据：[事实] {'；'.join(item['fundamental_reasons'])}",
+                f"- 板块归属：[事实] {_safe_text(item['industry'])}",
+                f"- 命中策略：[判断] "
+                f"{'、'.join(_strategy_text(value) for value in item['strategies'])}"
+                f"（{len(item['records'])} 条策略记录）",
+                "",
+            ]
+            if item["industry"] == "行业冲突":
+                options = sorted(
+                    {
+                        _record_industry(record)
+                        for record in item["records"]
+                        if _record_industry(record) != "未分类"
+                    }
+                )
+                lines.insert(
+                    len(lines) - 1,
+                    "- 行业归属：[事实] 同质量证据冲突，已归入“行业冲突”；"
+                    f"候选={'、'.join(options) or '缺失'}",
+                )
+            for record in item["records"]:
+                lines += _render_candidate(
+                    record,
+                    heading=(
+                        f"##### {_strategy_text(record.get('strategy_type'))}"
+                        f"｜{_pool_status_text(_candidate_status(record))}"
+                        f"｜策略分 {_score_text(lifecycle_priority_score(record))}"
+                    ),
+                )
+    if funnel["omitted_verified"]:
+        lines += [
+            f"> 另有 {funnel['omitted_verified']} 只基本面已核验股票未进入 Top10；"
+            "完整池可通过只读命令 `python3 scripts/main.py monthly-pattern pool` 核对。",
+            "",
+        ]
+    return lines
+
+
 def render_daily(summary: Mapping[str, Any]) -> str:
     """渲染一次月线扫描摘要，并严格区分失败、partial 与真实空候选。"""
     scan_date = _safe_text(summary.get("scan_date")) or "未提供"
@@ -1011,10 +1173,12 @@ def render_daily(summary: Mapping[str, Any]) -> str:
         ]
 
     candidates = _candidate_records(summary.get("candidates"))
+    focus_candidates = _candidate_records(summary.get("focus_candidates"))
+    funnel_candidates = focus_candidates or candidates
     lines += _render_counts(
         _counts_with_candidate_semantics(summary.get("counts"), candidates)
     )
-    if not candidates:
+    if not funnel_candidates:
         lines += ["## 候选观察（按申万二级板块聚合）", ""]
         if run_status == "complete":
             lines += [
@@ -1027,7 +1191,7 @@ def render_daily(summary: Mapping[str, Any]) -> str:
                 "",
             ]
     else:
-        lines += _render_grouped_candidates(candidates)
+        lines += _render_focus_funnel(funnel_candidates)
 
     lines += _render_transitions(summary.get("transitions"))
     lines += _render_error(summary.get("error"))
@@ -1136,6 +1300,20 @@ def _push_stock_line(stock: Mapping[str, Any]) -> str:
     ).rstrip()
 
 
+def _push_focus_line(item: Mapping[str, Any]) -> str:
+    strategies = sorted(
+        (str(value) for value in item.get("strategies") or ()),
+        key=lambda value: _STRATEGY_ORDER.get(value, len(_STRATEGY_ORDER)),
+    )
+    return (
+        f"- {_push_plain(item.get('stock_code'), 20)} "
+        f"{_push_plain(item.get('stock_name'), 40)}｜"
+        f"综合观察分={_score_text(item.get('score'))}/100｜"
+        f"{_push_plain(_focus_breakdown_text(item), 180)}｜"
+        f"策略={_push_plain('、'.join(_strategy_text(value) for value in strategies), 80)}"
+    ).rstrip()
+
+
 def _push_header(
     summary: Mapping[str, Any],
     candidates: Sequence[Mapping[str, Any]],
@@ -1202,15 +1380,24 @@ def render_push_summary(
     all_candidates = _candidate_records(summary.get("candidates"))
     header = _push_header(summary, all_candidates)
     focus_source = focus_candidates if focus_candidates is not None else all_candidates
-    focus_records = [
-        item
-        for item in focus_source
-        if isinstance(item, Mapping)
-        if _candidate_status(item) in {"active", "fundamental_verified"}
-    ]
-    focus_groups = _sector_groups(focus_records)
-    focus_stocks = [
-        stock for _sector, sector_stocks in focus_groups for stock in sector_stocks
+    focus_funnel = focus.build_focus_funnel(focus_source)
+    focus_stocks = list(focus_funnel["focus"])
+    priority_stocks = list(focus_funnel["priority"])
+    grouped_focus: dict[str, list[Mapping[str, Any]]] = {}
+    for item in focus_stocks:
+        grouped_focus.setdefault(str(item["industry"]), []).append(item)
+    focus_groups = [
+        (
+            sector,
+            sorted(stocks, key=lambda item: (-float(item["score"]), item["stock_code"])),
+        )
+        for sector, stocks in sorted(
+            grouped_focus.items(),
+            key=lambda pair: (
+                -max(float(item["score"]) for item in pair[1]),
+                _sector_sort_key(pair[0]),
+            ),
+        )
     ]
     all_stocks = _stock_projections(all_candidates)
     path = _push_report_path(report_path)
@@ -1232,7 +1419,7 @@ def render_push_summary(
 
     def _shown_record_count() -> int:
         return sum(
-            int(stock.get("strategy_count") or 0)
+            len(stock.get("records") or ())
             for section in shown_sections
             for stock in section["stocks"]
         )
@@ -1248,6 +1435,12 @@ def render_push_summary(
         ):
             recovery = (
                 "；专池展示发生截断；当前完整专池只读入口："
+                "`python3 scripts/main.py monthly-pattern pool`。"
+            )
+        elif focus_funnel["omitted_verified"]:
+            recovery = (
+                f"；另有 {focus_funnel['omitted_verified']} 只基本面已核验股票"
+                "未进入 Top10；完整池只读入口："
                 "`python3 scripts/main.py monthly-pattern pool`。"
             )
         return (
@@ -1272,7 +1465,7 @@ def render_push_summary(
         for section in shown_sections:
             shown_stocks = section["stocks"]
             shown_records = sum(
-                int(stock.get("strategy_count") or 0) for stock in shown_stocks
+                len(stock.get("records") or ()) for stock in shown_stocks
             )
             if (
                 len(shown_stocks) == section["total_stocks"]
@@ -1290,9 +1483,20 @@ def render_push_summary(
                 )
             rendered.append(
                 f"{heading}\n\n"
-                + "\n".join(_push_stock_line(stock) for stock in shown_stocks)
+                + "\n".join(_push_focus_line(stock) for stock in shown_stocks)
             )
         return "\n\n".join(rendered)
+
+    def _priority_body() -> str:
+        if not priority_stocks:
+            return "当前无满足专池重点完整性门槛的股票。"
+        return "\n".join(
+            f"{rank}. {_push_plain(item.get('stock_code'), 20)} "
+            f"{_push_plain(item.get('stock_name'), 40)}｜"
+            f"{_push_plain(item.get('industry'), 40)}｜"
+            f"综合观察分={_score_text(item.get('score'))}/100"
+            for rank, item in enumerate(priority_stocks, 1)
+        )
 
     def _body() -> str:
         transition_body = (
@@ -1306,16 +1510,17 @@ def render_push_summary(
             else "本次无风险/退出状态变化。"
         )
         candidate_title = (
-            "## 专池重点层（按申万二级板块聚合）"
+            "## 重点观察层 Top10（按申万二级板块聚合）"
             if focus_candidates is not None
             else "## 本次重点观察层（按申万二级板块聚合）"
         )
         return (
             f"{header}\n\n## 状态变化汇总 [判断]\n\n{transition_body}\n\n"
             f"## 关键风险/退出明细 [判断]\n\n{critical_body}\n\n"
+            f"## 专池重点层 Top3 [判断]\n\n{_priority_body()}\n\n"
             f"{candidate_title}\n\n"
-            "> 生命周期观察分 v1 仅按池状态排序；同股多策略取最高分，"
-            "不代表胜率或技术强弱。\n\n"
+            "> 综合观察分只用于证据排序；基本面未核验者不入榜，"
+            "不代表胜率或操作建议。\n\n"
             f"{_candidate_body()}\n{_note()}"
         )
 
@@ -1337,7 +1542,7 @@ def render_push_summary(
             "sector": _push_plain(sector, 60) or "未分类",
             "total_stocks": len(stocks),
             "total_records": sum(
-                int(stock.get("strategy_count") or 0) for stock in stocks
+                len(stock.get("records") or ()) for stock in stocks
             ),
             "stocks": [],
         }

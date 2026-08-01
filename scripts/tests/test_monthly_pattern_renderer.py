@@ -319,15 +319,38 @@ def test_render_daily_groups_by_industry_merges_strategies_and_sorts_by_score():
     assert "## 候选观察（按申万二级板块聚合）" in md
     assert "生命周期观察分 v1" in md
     assert "不代表胜率、技术强弱或买卖建议" in md
-    assert "本次共 4 只独立股票，来自 5 条策略记录" in md
+    assert "后台技术初筛：4 只" in md
+    assert "基本面核验层：3 只" in md
     assert "### 电子（2只 / 3条策略记录）" in md
-    assert md.index("#### 1. 600002 高优先股｜生命周期观察分 4") < md.index(
-        "#### 2. 600001 双策略股｜生命周期观察分 3"
+    assert md.index("#### 1. 600001 双策略股｜生命周期观察分 3") < md.index(
+        "#### 2. 600002 高优先股｜生命周期观察分 4"
     )
     assert md.count("600001 双策略股｜生命周期观察分") == 1
     assert "##### 基本面月线趋势｜基本面已核验｜策略分 3" in md
     assert "##### 题材月线进攻｜基本面已核验｜策略分 3" in md
-    assert md.index("### 计算机设备") < md.index("### 未分类")
+    assert "### 计算机设备" not in md
+    assert "### 未分类" in md
+
+
+def test_render_daily_focus_uses_full_open_pool_snapshot_when_available():
+    matched = _candidate(stock_code="600001", stock_name="本次命中")
+    open_pool = _candidate(stock_code="600002", stock_name="完整开放池")
+
+    md = renderer.render_daily(
+        _summary(candidates=[matched], focus_candidates=[open_pool])
+    )
+
+    assert "600002 完整开放池" in md
+    assert "600001 本次命中" not in md
+
+
+def test_render_daily_does_not_report_empty_when_open_pool_snapshot_exists():
+    open_pool = _candidate(stock_code="600002", stock_name="完整开放池")
+
+    md = renderer.render_daily(_summary(candidates=[], focus_candidates=[open_pool]))
+
+    assert "600002 完整开放池" in md
+    assert "真实空候选" not in md
 
 
 def test_render_daily_prefers_classified_success_industry_when_strategies_conflict():
@@ -496,10 +519,10 @@ def test_render_push_summary_groups_and_dedupes_full_pool_by_score():
     )
 
     assert "### 电子（2只 / 3条策略记录）" in pushed
-    assert pushed.index("600001 双策略股｜评分=4") < pushed.index(
-        "600002 基本面股｜评分=3"
+    assert pushed.index("600001 双策略股｜综合观察分=") < pushed.index(
+        "600002 基本面股｜综合观察分="
     )
-    assert pushed.count("600001 双策略股｜评分=4") == 1
+    assert pushed.count("600001 双策略股｜综合观察分=") == 1
     assert "策略=题材月线进攻、月线二次启动" in pushed
     assert "池内重点股票展示 2/2 只（来自 3 条策略记录）" in pushed
     assert "本次初筛 0 只独立股票/0 条策略记录" in pushed
@@ -567,23 +590,20 @@ def test_render_push_summary_prioritizes_focus_statuses_and_keeps_full_path():
         report_path=path,
     )
 
-    assert len(full.encode("utf-8")) > renderer.PUSH_BODY_MAX_BYTES
+    assert len(full.encode("utf-8")) <= renderer.PUSH_BODY_MAX_BYTES
     assert len(pushed.encode("utf-8")) <= renderer.PUSH_BODY_MAX_BYTES
-    assert f"完整报告：`{path}`" in pushed
+    assert pushed == full
     assert "技术候选 → 在池观察" in pushed
     assert "技术候选 → 基本面已核验" in pushed
-    assert "题材月线进攻｜技术候选 → 在池观察" in pushed
-    assert "基本面月线趋势｜技术候选 → 基本面已核验" in pushed
+    assert "### 600001  · 题材月线进攻" in pushed
+    assert "### 600002  · 基本面月线趋势" in pushed
     assert "600001" in pushed
     assert "600002" in pushed
     assert "000001" not in pushed
     assert "### 股份制银行Ⅱ（2只 / 2条策略记录）" in pushed
-    assert pushed.count("｜评分=") == 2
-    assert "本次重点股票展示 2/2 只（来自 2 条策略记录）" in pushed
-    assert (
-        f"本次初筛 {len(candidates)} 只独立股票/"
-        f"{len(candidates)} 条策略记录"
-    ) in pushed
+    assert pushed.count("综合观察分") >= 4
+    assert f"后台技术初筛：{len(candidates)} 只" in pushed
+    assert "基本面核验层：2 只" in pushed
 
 
 def test_render_push_summary_uses_full_pool_projection_even_when_report_is_short():
@@ -636,17 +656,18 @@ def test_render_push_summary_caps_utf8_without_partial_compact_lines():
     )
 
     assert len(pushed.encode("utf-8")) <= renderer.PUSH_BODY_MAX_BYTES
-    shown = pushed.count("｜评分=")
+    shown = pushed.count("｜综合观察分=")
     assert 0 < shown < len(candidates)
-    assert f"池内重点股票展示 {shown}/{len(candidates)} 只" in pushed
-    assert "专池展示发生截断" in pushed
+    assert shown == 13  # Top3 三行 + Top10 十行
+    assert "池内重点股票展示 10/10 只" in pushed
+    assert "另有 490 只基本面已核验股票未进入 Top10" in pushed
     assert "python3 scripts/main.py monthly-pattern pool" in pushed
     for line in pushed.splitlines():
-        if "｜评分=" in line:
+        if "｜综合观察分=" in line and line.startswith("- "):
             assert line.startswith("- ")
-            assert line.count("｜") == 3
+            assert "｜策略=" in line
     for index, line in enumerate(pushed.splitlines()):
-        if line.startswith("### "):
+        if line.startswith("### 申万二级行业"):
             assert index + 2 < len(pushed.splitlines())
             assert pushed.splitlines()[index + 2].startswith("- ")
 
@@ -913,7 +934,7 @@ def test_render_daily_renders_source_counts_and_transitions_with_layers():
 def test_financial_timepoint_is_visible_even_when_missing():
     candidate = _candidate(financial_evidence={"status": "missing"})
 
-    md = renderer.render_daily(_summary(candidates=[candidate]))
+    md = renderer.render_pool([candidate])
 
     assert "公告日=缺失；报告期=缺失" in md
     assert "财务状态：[事实] 缺失" in md
@@ -936,7 +957,7 @@ def test_financial_hard_gate_status_is_distinct_from_source_failure():
         },
     )
 
-    md = renderer.render_daily(_summary(candidates=[verified, rejected]))
+    md = renderer.render_pool([verified, rejected])
 
     assert "财务状态：[事实] 已核验" in md
     assert "财务状态：[事实] 未通过硬门" in md
