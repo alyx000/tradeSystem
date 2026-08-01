@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from services.monthly_pattern.financials import evaluate_financial_snapshot
+from services.monthly_pattern.financials import (
+    build_industry_shadow,
+    classify_industry_factors,
+    evaluate_financial_snapshot,
+)
 
 
 def _snapshot(
@@ -13,6 +17,7 @@ def _snapshot(
     dt_netprofit_yoy: float | None = 22.0,
     contract_liab: float | None = 120.0,
     rd_exp: float | None = 12.0,
+    revenue: float | None = 100.0,
 ) -> dict:
     return {
         "ts_code": "600000.SH",
@@ -36,6 +41,7 @@ def _snapshot(
         },
         "income": {
             "ann_date": "2026-03-28",
+            "revenue": revenue,
             "assets_impair_loss": 0.0,
         },
     }
@@ -118,3 +124,171 @@ def test_rd_exp_can_fall_back_to_income_statement() -> None:
     assert result["context"]["rd_exp"] == 12.0
     assert result["context"]["rd_exp_growth_pct"] == 20.0
     assert result["context"]["rd_exp_increasing"] is True
+
+
+def test_context_adds_revenue_normalized_shadow_ratios_without_changing_gates() -> None:
+    result = evaluate_financial_snapshot(
+        _snapshot(contract_liab=20.0, rd_exp=12.0, revenue=100.0)
+    )
+
+    assert result["status"] == "verified"
+    assert result["core_passed"] is True
+    assert result["context"]["revenue"] == 100.0
+    assert result["context"]["contract_liability_to_revenue_pct"] == 20.0
+    assert result["context"]["rd_exp_to_revenue_pct"] == 12.0
+
+
+def test_contract_liability_qoq_uses_previous_report_period_and_stays_shadow_only() -> None:
+    result = evaluate_financial_snapshot(
+        _snapshot(
+            period="2026-03-31",
+            roe_waa=None,
+            roe_yearly=18.0,
+            contract_liab=120.0,
+        ),
+        prior_same_period=_snapshot(
+            period="2025-03-31",
+            contract_liab=100.0,
+        ),
+        prior_period=_snapshot(
+            period="2025-12-31",
+            contract_liab=40.0,
+        ),
+    )
+
+    assert result["status"] == "pre_screen"
+    assert result["core_passed"] is True
+    assert result["context"]["contract_liability_growth_pct"] == 20.0
+    assert result["context"]["contract_liability_qoq_pct"] == 200.0
+    assert result["context"]["contract_liability_qoq_delta"] == 80.0
+    assert result["context"]["contract_liability_qoq_prior_value"] == 40.0
+    assert (
+        result["context"]["contract_liability_qoq_prior_period"]
+        == "2025-12-31"
+    )
+    assert result["context"]["contract_liability_qoq_low_base"] is False
+
+
+def test_contract_liability_qoq_zero_base_has_delta_but_no_infinite_rate() -> None:
+    result = evaluate_financial_snapshot(
+        _snapshot(period="2026-03-31", contract_liab=20.0),
+        prior_period=_snapshot(period="2025-12-31", contract_liab=0.0),
+    )
+
+    assert result["context"]["contract_liability_qoq_pct"] is None
+    assert result["context"]["contract_liability_qoq_delta"] == 20.0
+    assert result["context"]["contract_liability_qoq_low_base"] is True
+
+
+def test_contract_liability_qoq_rejects_same_period_comparison() -> None:
+    result = evaluate_financial_snapshot(
+        _snapshot(period="2026-03-31", contract_liab=120.0),
+        prior_period=_snapshot(period="2026-03-31", contract_liab=40.0),
+    )
+
+    assert result["context"]["contract_liability_qoq_pct"] is None
+    assert result["context"]["contract_liability_qoq_delta"] is None
+    assert result["context"]["contract_liability_qoq_prior_period"] == ""
+    assert result["context"]["contract_liability_qoq_low_base"] is None
+
+
+def test_industry_factor_templates_are_conservative_and_explainable() -> None:
+    semiconductor = classify_industry_factors("半导体")
+    communication = classify_industry_factors("通信设备")
+    software = classify_industry_factors("软件开发")
+    property_developer = classify_industry_factors("房地产开发")
+    bank = classify_industry_factors("股份制银行Ⅱ")
+    unknown = classify_industry_factors("未分类")
+
+    assert semiconductor["contract_liability"]["applicability"] == "secondary"
+    assert semiconductor["rd_exp"]["applicability"] == "core"
+    assert communication["contract_liability"]["applicability"] == "secondary"
+    assert communication["rd_exp"]["applicability"] == "core"
+    assert software["contract_liability"]["applicability"] == "core"
+    assert software["rd_exp"]["applicability"] == "core"
+    assert (
+        property_developer["contract_liability"]["applicability"]
+        == "special_context"
+    )
+    assert bank["contract_liability"]["applicability"] == "not_applicable"
+    assert bank["rd_exp"]["applicability"] == "not_applicable"
+    assert unknown["contract_liability"]["applicability"] == "unknown"
+    assert unknown["rd_exp"]["applicability"] == "unknown"
+
+
+def test_industry_shadow_keeps_missing_and_not_applicable_out_of_failure_semantics() -> None:
+    current = evaluate_financial_snapshot(
+        _snapshot(contract_liab=None, rd_exp=None, revenue=100.0)
+    )
+    semiconductor = build_industry_shadow(
+        {"latest": current, "annual": current},
+        "半导体",
+    )
+    bank = build_industry_shadow(
+        {"latest": current, "annual": current},
+        "股份制银行Ⅱ",
+    )
+
+    assert semiconductor["scoring_effect"] == "display_only"
+    assert semiconductor["contract_liability"]["status"] == "missing"
+    assert semiconductor["rd_exp"]["status"] == "missing"
+    assert bank["contract_liability"]["status"] == "not_applicable"
+    assert bank["rd_exp"]["status"] == "not_applicable"
+    assert "failed" not in {
+        semiconductor["contract_liability"]["status"],
+        semiconductor["rd_exp"]["status"],
+        bank["contract_liability"]["status"],
+        bank["rd_exp"]["status"],
+    }
+
+
+def test_industry_shadow_uses_latest_and_annual_same_period_evidence() -> None:
+    latest = evaluate_financial_snapshot(
+        _snapshot(
+            period="2026-03-31",
+            roe_waa=None,
+            roe_yearly=18.0,
+            contract_liab=120.0,
+            rd_exp=18.0,
+            revenue=200.0,
+        ),
+        prior_same_period=_snapshot(
+            period="2025-03-31",
+            contract_liab=100.0,
+            rd_exp=15.0,
+            revenue=160.0,
+        ),
+    )
+    annual = evaluate_financial_snapshot(
+        _snapshot(contract_liab=300.0, rd_exp=40.0, revenue=500.0),
+        prior_same_period=_snapshot(
+            period="2024-12-31",
+            contract_liab=250.0,
+            rd_exp=32.0,
+            revenue=420.0,
+        ),
+    )
+
+    shadow = build_industry_shadow(
+        {"latest": latest, "annual": annual},
+        "通信设备",
+    )
+
+    assert shadow["contract_liability"]["status"] == "available"
+    assert shadow["contract_liability"]["latest"] == {
+        "report_period": "2026-03-31",
+        "value": 120.0,
+        "growth_pct": 20.0,
+        "to_revenue_pct": 60.0,
+        "qoq_pct": None,
+        "qoq_delta": None,
+        "qoq_prior_value": None,
+        "qoq_prior_period": "",
+        "qoq_low_base": None,
+    }
+    assert shadow["rd_exp"]["annual"] == {
+        "report_period": "2025-12-31",
+        "value": 40.0,
+        "growth_pct": 25.0,
+        "to_revenue_pct": 8.0,
+    }

@@ -74,6 +74,437 @@ def test_render_daily_labels_observation_facts_and_judgments():
     assert "ROE（加权）=18.60" in md
 
 
+def test_render_daily_adds_industry_shadow_without_changing_lifecycle_score():
+    assessment = {
+        "status": "verified",
+        "report_period": "2025-12-31",
+        "context": {
+            "contract_liability": 300_000_000.0,
+            "contract_liability_growth_pct": 20.0,
+            "contract_liability_growth_ge_20": True,
+            "contract_liability_to_revenue_pct": 12.5,
+            "contract_liability_qoq_pct": 200.0,
+            "contract_liability_qoq_delta": 200_000_000.0,
+            "contract_liability_qoq_prior_value": 100_000_000.0,
+            "contract_liability_qoq_prior_period": "2025-09-30",
+            "contract_liability_qoq_low_base": False,
+            "rd_exp": 80_000_000.0,
+            "rd_exp_growth_pct": 25.0,
+            "rd_exp_increasing": True,
+            "rd_exp_to_revenue_pct": 8.0,
+        },
+    }
+    candidate = _candidate(
+        stock_code="688001",
+        stock_name="研发样本",
+        industry="半导体",
+        financial_evidence={
+            "status": "verified",
+            "financial_ann_date": "2026-04-30",
+            "report_period": "2026-03-31",
+            "latest": {
+                **assessment,
+                "status": "pre_screen",
+                "report_period": "2026-03-31",
+            },
+            "annual": assessment,
+        },
+    )
+
+    md = renderer.render_daily(_summary(candidates=[candidate]))
+
+    assert "行业增强层：[判断·影子]" in md
+    assert "合同负债=辅助证据" in md
+    assert "研发费用=核心证据" in md
+    assert "仅展示，不参与基本面硬门、池状态或生命周期观察分" in md
+    assert "合同负债：[事实·影子]" in md
+    assert "研发费用：[事实·影子]" in md
+    assert "同比+20.00%" in md
+    assert "占同期营收12.50%" in md
+    assert "环比+200.00%" in md
+    assert "较2025-09-30增加2.00亿元" in md
+    assert "contract_liability_growth_ge_20" not in md
+    assert "contract_liability_qoq_pct" not in md
+    assert "contract_liability_qoq_delta" not in md
+    assert "rd_exp_increasing" not in md
+    assert "生命周期观察分 4" in md
+
+
+def test_render_daily_marks_contract_qoq_low_base_without_turning_it_into_score() -> None:
+    candidate = _candidate(
+        stock_code="688256",
+        stock_name="低基数样本",
+        industry="半导体",
+        financial_evidence={
+            "status": "verified",
+            "latest": {
+                "status": "pre_screen",
+                "report_period": "2026-03-31",
+                "context": {
+                    "contract_liability": 396_000_000.0,
+                    "contract_liability_qoq_pct": 64_700.0,
+                    "contract_liability_qoq_delta": 395_390_000.0,
+                    "contract_liability_qoq_prior_value": 610_000.0,
+                    "contract_liability_qoq_prior_period": "2025-12-31",
+                    "contract_liability_qoq_low_base": True,
+                },
+            },
+        },
+    )
+
+    md = renderer.render_daily(_summary(candidates=[candidate]))
+
+    assert "环比+64700.00%" in md
+    assert "较2025-12-31增加3.95亿元" in md
+    assert "环比基数敏感" in md
+    assert "contract_liability_qoq_low_base" not in md
+    assert "生命周期观察分 4" in md
+
+
+def test_render_daily_marks_financial_industry_factors_not_applicable_not_failed():
+    assessment = {
+        "status": "verified",
+        "report_period": "2025-12-31",
+        "context": {
+            "contract_liability": None,
+            "contract_liability_growth_pct": None,
+            "contract_liability_to_revenue_pct": None,
+            "rd_exp": None,
+            "rd_exp_growth_pct": None,
+            "rd_exp_to_revenue_pct": None,
+        },
+    }
+    candidate = _candidate(
+        financial_evidence={
+            "status": "verified",
+            "financial_ann_date": "2026-03-28",
+            "report_period": "2025-12-31",
+            "latest": assessment,
+            "annual": assessment,
+        }
+    )
+
+    md = renderer.render_daily(_summary(candidates=[candidate]))
+
+    assert "合同负债=不适用" in md
+    assert "研发费用=不适用" in md
+    assert "行业增强层" in md
+    assert "行业增强层：[判断·影子] 未通过" not in md
+
+
+def test_render_daily_does_not_apply_shadow_template_to_top_level_not_as_of_industry():
+    candidate = _candidate(
+        industry="半导体",
+        source_meta={
+            "industry": "半导体",
+            "industry_map": "not_as_of",
+        },
+        financial_evidence={
+            "status": "verified",
+            "latest": {
+                "status": "verified",
+                "report_period": "2025-12-31",
+                "context": {"rd_exp": 80_000_000.0},
+            },
+        },
+    )
+
+    md = renderer.render_daily(_summary(candidates=[candidate]))
+
+    assert "行业：[事实] 半导体" in md
+    assert "合同负债=行业未知；研发费用=行业未知" in md
+    assert "研发费用=核心证据" not in md
+
+
+def test_render_daily_does_not_apply_shadow_template_to_nested_not_as_of_industry():
+    candidate = _candidate(
+        industry=None,
+        source_meta={
+            "industry": "半导体",
+            "industry_map": "not_as_of",
+        },
+        financial_evidence={
+            "status": "verified",
+            "latest": {
+                "status": "verified",
+                "report_period": "2025-12-31",
+                "context": {"rd_exp": 80_000_000.0},
+            },
+        },
+    )
+
+    md = renderer.render_daily(_summary(candidates=[candidate]))
+
+    assert "行业：[事实] 半导体" in md
+    assert "合同负债=行业未知；研发费用=行业未知" in md
+    assert "研发费用=核心证据" not in md
+
+
+def test_lifecycle_priority_score_uses_status_only():
+    active_with_sparse_evidence = _candidate(
+        pool_status="active",
+        mainline_match=False,
+        technical_evidence={"conditions": {}},
+    )
+    active_with_rich_evidence = _candidate(
+        pool_status="active",
+        mainline_match=True,
+        technical_evidence={
+            "conditions": {
+                "first": {"met": True},
+                "second": {"met": True, "hard_gate": False},
+            }
+        },
+    )
+
+    assert renderer.lifecycle_priority_score(active_with_sparse_evidence) == 4
+    assert renderer.lifecycle_priority_score(active_with_rich_evidence) == 4
+    assert (
+        renderer.lifecycle_priority_score(
+            _candidate(pool_status="fundamental_verified")
+        )
+        == 3
+    )
+    assert (
+        renderer.lifecycle_priority_score(
+            _candidate(pool_status="technical_candidate")
+        )
+        == 2
+    )
+    assert renderer.lifecycle_priority_score(_candidate(pool_status="risk")) == 1
+    assert renderer.lifecycle_priority_score(_candidate(pool_status="exited")) == 0
+    assert renderer.lifecycle_priority_score(_candidate(pool_status="reentry")) is None
+    assert renderer.lifecycle_priority_score(_candidate(pool_status="unknown")) is None
+
+
+def test_render_daily_groups_by_industry_merges_strategies_and_sorts_by_score():
+    candidates = [
+        _candidate(
+            stock_code="000001",
+            stock_name="未分类股",
+            industry="未分类",
+            pool_status="active",
+        ),
+        _candidate(
+            stock_code="600001",
+            stock_name="双策略股",
+            industry="电子",
+            strategy_type="fundamental_monthly_trend",
+            pool_status="fundamental_verified",
+        ),
+        _candidate(
+            stock_code="600002",
+            stock_name="高优先股",
+            industry="电子",
+            strategy_type="monthly_reacceleration",
+            pool_status="active",
+        ),
+        _candidate(
+            stock_code="600001.SH",
+            stock_name="双策略股",
+            industry="电子",
+            strategy_type="theme_monthly_attack",
+            pool_status="fundamental_verified",
+        ),
+        _candidate(
+            stock_code="300001",
+            stock_name="计算机股",
+            industry="计算机设备",
+            pool_status="technical_candidate",
+        ),
+    ]
+
+    md = renderer.render_daily(_summary(candidates=list(reversed(candidates))))
+
+    assert "## 候选观察（按申万二级板块聚合）" in md
+    assert "生命周期观察分 v1" in md
+    assert "不代表胜率、技术强弱或买卖建议" in md
+    assert "本次共 4 只独立股票，来自 5 条策略记录" in md
+    assert "### 电子（2只 / 3条策略记录）" in md
+    assert md.index("#### 1. 600002 高优先股｜生命周期观察分 4") < md.index(
+        "#### 2. 600001 双策略股｜生命周期观察分 3"
+    )
+    assert md.count("600001 双策略股｜生命周期观察分") == 1
+    assert "##### 基本面月线趋势｜基本面已核验｜策略分 3" in md
+    assert "##### 题材月线进攻｜基本面已核验｜策略分 3" in md
+    assert md.index("### 计算机设备") < md.index("### 未分类")
+
+
+def test_render_daily_prefers_classified_success_industry_when_strategies_conflict():
+    low_quality = _candidate(
+        stock_code="688188",
+        stock_name="688188",
+        industry=None,
+        strategy_type="monthly_reacceleration",
+        pool_status="active",
+    )
+    low_quality["source_meta"] = {
+        "industry": "未分类",
+        "industry_map": "not_as_of",
+    }
+    classified = _candidate(
+        stock_code="688188.SH",
+        stock_name="柏楚电子",
+        industry=None,
+        strategy_type="fundamental_monthly_trend",
+        pool_status="fundamental_verified",
+    )
+    classified["source_meta"] = {
+        "industry": "计算机设备",
+        "industry_map": "success",
+    }
+
+    md = renderer.render_daily(
+        _summary(candidates=[low_quality, classified])
+    )
+
+    assert "### 计算机设备（1只 / 2条策略记录）" in md
+    assert "688188 柏楚电子｜生命周期观察分 4" in md
+    assert "### 未分类" not in md
+
+
+def test_render_daily_tie_break_is_stable_and_independent_of_input_order():
+    candidates = [
+        _candidate(
+            stock_code="600003",
+            stock_name="较早单策略",
+            industry="电子",
+            strategy_type="monthly_reacceleration",
+            pool_status="active",
+            signal_month="2026-05",
+        ),
+        _candidate(
+            stock_code="600002",
+            stock_name="较新单策略",
+            industry="电子",
+            strategy_type="monthly_reacceleration",
+            pool_status="active",
+            signal_month="2026-06",
+        ),
+        _candidate(
+            stock_code="600001",
+            stock_name="双策略",
+            industry="电子",
+            strategy_type="theme_monthly_attack",
+            pool_status="active",
+            signal_month="2026-05",
+        ),
+        _candidate(
+            stock_code="600001.SH",
+            stock_name="双策略",
+            industry="电子",
+            strategy_type="monthly_reacceleration",
+            pool_status="active",
+            signal_month="2026-05",
+        ),
+    ]
+
+    forward = renderer.render_daily(_summary(candidates=candidates))
+    reversed_order = renderer.render_daily(
+        _summary(candidates=list(reversed(candidates)))
+    )
+
+    assert forward == reversed_order
+    assert forward.index("#### 1. 600001 双策略") < forward.index(
+        "#### 2. 600002 较新单策略"
+    )
+    assert forward.index("#### 2. 600002 较新单策略") < forward.index(
+        "#### 3. 600003 较早单策略"
+    )
+
+
+def test_render_daily_places_equal_quality_industry_conflict_in_explicit_bucket():
+    first = _candidate(
+        stock_code="600001",
+        industry="电子",
+        strategy_type="theme_monthly_attack",
+    )
+    second = _candidate(
+        stock_code="600001.SH",
+        industry="计算机设备",
+        strategy_type="monthly_reacceleration",
+    )
+
+    md = renderer.render_daily(_summary(candidates=[first, second]))
+
+    assert "### 行业冲突（1只 / 2条策略记录）" in md
+    assert "同质量证据冲突" in md
+    assert "候选=电子、计算机设备" in md
+
+
+def test_render_daily_adds_unique_stock_and_risk_record_counts():
+    candidates = [
+        _candidate(
+            stock_code="600001",
+            strategy_type="fundamental_monthly_trend",
+            pool_status="active",
+        ),
+        _candidate(
+            stock_code="600001.SH",
+            strategy_type="monthly_reacceleration",
+            pool_status="risk",
+        ),
+        _candidate(stock_code="600002", pool_status="risk"),
+    ]
+
+    md = renderer.render_daily(
+        _summary(
+            candidates=candidates,
+            counts={"matched_candidates": 3},
+        )
+    )
+
+    assert "本次初筛命中记录数：[事实] 3" in md
+    assert "本次初筛去重股票数：[事实] 2" in md
+    assert "本次命中·风险观察记录数：[事实] 2" in md
+
+
+def test_render_push_summary_groups_and_dedupes_full_pool_by_score():
+    summary = _summary(candidates=[])
+    full = renderer.render_daily(summary)
+    focus = [
+        _candidate(
+            stock_code="600002",
+            stock_name="基本面股",
+            pool_status="fundamental_verified",
+            industry=None,
+            strategy_type="fundamental_monthly_trend",
+        ),
+        _candidate(
+            stock_code="600001",
+            stock_name="双策略股",
+            pool_status="active",
+            industry=None,
+            strategy_type="monthly_reacceleration",
+        ),
+        _candidate(
+            stock_code="600001.SH",
+            stock_name="双策略股",
+            pool_status="active",
+            industry=None,
+            strategy_type="theme_monthly_attack",
+        ),
+    ]
+    for item in focus:
+        item["source_meta"] = {"industry": "电子", "industry_map": "success"}
+
+    pushed = renderer.render_push_summary(
+        summary,
+        full_markdown=full,
+        report_path="data/reports/monthly-pattern/2026-07-01.md",
+        focus_candidates=list(reversed(focus)),
+    )
+
+    assert "### 电子（2只 / 3条策略记录）" in pushed
+    assert pushed.index("600001 双策略股｜评分=4") < pushed.index(
+        "600002 基本面股｜评分=3"
+    )
+    assert pushed.count("600001 双策略股｜评分=4") == 1
+    assert "策略=题材月线进攻、月线二次启动" in pushed
+    assert "池内重点股票展示 2/2 只（来自 3 条策略记录）" in pushed
+    assert "本次初筛 0 只独立股票/0 条策略记录" in pushed
+
+
 def test_render_push_summary_returns_full_report_within_budget():
     full = renderer.render_daily(_summary())
 
@@ -146,9 +577,13 @@ def test_render_push_summary_prioritizes_focus_statuses_and_keeps_full_path():
     assert "600001" in pushed
     assert "600002" in pushed
     assert "000001" not in pushed
-    assert pushed.count("｜行业=") == 2
-    assert "重点候选展示 2/2 只" in pushed
-    assert f"本次命中候选 {len(candidates)} 只" in pushed
+    assert "### 股份制银行Ⅱ（2只 / 2条策略记录）" in pushed
+    assert pushed.count("｜评分=") == 2
+    assert "本次重点股票展示 2/2 只（来自 2 条策略记录）" in pushed
+    assert (
+        f"本次初筛 {len(candidates)} 只独立股票/"
+        f"{len(candidates)} 条策略记录"
+    ) in pushed
 
 
 def test_render_push_summary_uses_full_pool_projection_even_when_report_is_short():
@@ -174,9 +609,9 @@ def test_render_push_summary_uses_full_pool_projection_even_when_report_is_short
     assert len(full.encode("utf-8")) <= renderer.PUSH_BODY_MAX_BYTES
     assert pushed != full
     assert "600001 专池存量" in pushed
-    assert "行业=电力" in pushed
-    assert "池内重点候选展示 1/1 只" in pushed
-    assert "本次命中候选 0 只" in pushed
+    assert "### 电力（1只 / 1条策略记录）" in pushed
+    assert "池内重点股票展示 1/1 只（来自 1 条策略记录）" in pushed
+    assert "本次初筛 0 只独立股票/0 条策略记录" in pushed
     assert "真实空候选" not in pushed
 
 
@@ -197,16 +632,23 @@ def test_render_push_summary_caps_utf8_without_partial_compact_lines():
         summary,
         full_markdown=full,
         report_path="data/reports/monthly-pattern/2026-07-01.md",
+        focus_candidates=candidates,
     )
 
     assert len(pushed.encode("utf-8")) <= renderer.PUSH_BODY_MAX_BYTES
-    shown = pushed.count("｜行业=")
+    shown = pushed.count("｜评分=")
     assert 0 < shown < len(candidates)
-    assert f"重点候选展示 {shown}/{len(candidates)} 只" in pushed
+    assert f"池内重点股票展示 {shown}/{len(candidates)} 只" in pushed
+    assert "专池展示发生截断" in pushed
+    assert "python3 scripts/main.py monthly-pattern pool" in pushed
     for line in pushed.splitlines():
-        if "｜行业=" in line:
+        if "｜评分=" in line:
             assert line.startswith("- ")
             assert line.count("｜") == 3
+    for index, line in enumerate(pushed.splitlines()):
+        if line.startswith("### "):
+            assert index + 2 < len(pushed.splitlines())
+            assert pushed.splitlines()[index + 2].startswith("- ")
 
 
 def test_render_push_summary_aggregates_many_transitions_without_losing_exit():
@@ -302,8 +744,8 @@ def test_render_push_summary_can_use_full_open_pool_focus_projection():
     assert "600001" in pushed
     assert "600002" in pushed
     assert "600003" not in pushed
-    assert "池内重点候选展示 2/2 只" in pushed
-    assert "本次命中候选 40 只" in pushed
+    assert "池内重点股票展示 2/2 只（来自 2 条策略记录）" in pushed
+    assert "本次初筛 40 只独立股票/40 条策略记录" in pushed
 
 
 def test_render_daily_failure_is_not_assumed_to_be_only_a_source_failure():
@@ -436,10 +878,10 @@ def test_service_count_keys_render_with_chinese_labels():
     )
 
     assert "扫描股票数：[事实] 5200" in md
-    assert "本次模式命中数：[事实] 18" in md
-    assert "本次命中·在池观察数：[事实] 5" in md
-    assert "池内·在池观察数：[事实] 9" in md
-    assert "池内·风险观察数：[事实] 2" in md
+    assert "本次初筛命中记录数：[事实] 18" in md
+    assert "本次命中·在池观察记录数：[事实] 5" in md
+    assert "池内·在池观察记录数：[事实] 9" in md
+    assert "池内·风险观察记录数：[事实] 2" in md
     assert "market_stocks" not in md
     assert "matched_candidates" not in md
 
@@ -463,7 +905,7 @@ def test_render_daily_renders_source_counts_and_transitions_with_layers():
     assert "月线行情：成功" in md
     assert "财务快照：成功" in md
     assert "扫描股票数：[事实] 5200" in md
-    assert "命中数：[事实] 1" in md
+    assert "命中记录数：[事实] 1" in md
     assert "状态变化：[判断] 在池观察 → 风险观察" in md
     assert "完成月收盘跌破 MA5" in md
 

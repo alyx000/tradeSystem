@@ -1367,6 +1367,49 @@ def test_prior_year_annual_alone_is_stale_after_q1_is_due() -> None:
     assert view["verified"] is False
 
 
+def test_latest_financial_view_binds_contract_qoq_to_strict_previous_period() -> None:
+    def snapshot(
+        period: str,
+        contract_liab: float,
+        *,
+        annual: bool = False,
+    ) -> dict:
+        return {
+            "stock_code": "600000",
+            "report_period": period,
+            "financial_ann_date": "2026-04-30",
+            "fina_indicator": {
+                "roe_waa": 18.0 if annual else None,
+                "roe_yearly": None if annual else 18.0,
+                "debt_to_assets": 42.0,
+                "netprofit_yoy": 26.0,
+                "dt_netprofit_yoy": 22.0,
+            },
+            "balancesheet": {"contract_liab": contract_liab},
+            "income": {"revenue": 1000.0},
+        }
+
+    view = service._latest_financial_views(
+        [
+            snapshot("2026-03-31", 120.0),
+            snapshot("2025-03-31", 100.0),
+            snapshot("2025-12-31", 40.0, annual=True),
+            snapshot("2025-09-30", 25.0),
+            snapshot("2024-12-31", 30.0, annual=True),
+        ],
+        scan_date="2026-07-31",
+    )["600000"]
+
+    latest = view["latest"]["context"]
+    annual = view["annual"]["context"]
+    assert latest["contract_liability_growth_pct"] == 20.0
+    assert latest["contract_liability_qoq_pct"] == 200.0
+    assert latest["contract_liability_qoq_prior_period"] == "2025-12-31"
+    assert annual["contract_liability_growth_pct"] == 33.3333
+    assert annual["contract_liability_qoq_pct"] == 60.0
+    assert annual["contract_liability_qoq_prior_period"] == "2025-09-30"
+
+
 def test_revision_without_proven_visibility_is_not_treated_as_historical_as_of() -> None:
     conn = _conn()
     q3_revision = {

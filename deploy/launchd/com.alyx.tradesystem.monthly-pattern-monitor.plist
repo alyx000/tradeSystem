@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Sleep policy: 日频指标观察错过可接受；下一次完整运行会与最近完整基线比较，pending 通知继续重试。 -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.alyx.tradesystem.monthly-pattern-monitor</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/alyx/tradeSystem/deploy/launchd/monthly-pattern-monitor-runner.sh</string>
+    </array>
+
+    <!-- 每 15 分钟做一次无时区轻量 tick；runner 只在上海工作日
+         19:10（含）至 19:25（不含）执行一次重任务。这样 Mac 切换本机
+         时区也不会把“19:10”漂移到上海次日。节假日再由命令内
+         latest-closed==上海自然日今天硬门安全跳过。 -->
+    <key>StartInterval</key>
+    <integer>900</integer>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/tradesystem-monthly-pattern-monitor.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/tradesystem-monthly-pattern-monitor.log</string>
+
+    <key>RunAtLoad</key>
+    <false/>
+    <key>KeepAlive</key>
+    <false/>
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>

@@ -8,6 +8,7 @@ import pytest
 from services.monthly_pattern.market import (
     SourceCoverageError,
     apply_month_end_qfq,
+    is_b_share_code,
     join_month_quotes_and_factors,
     select_completed_month_ends,
     validate_month_manifest_sequence,
@@ -806,3 +807,42 @@ def test_qfq_marks_the_month_with_an_adj_factor_change_as_shape_invalid() -> Non
     assert [row["price_shape_valid"] for row in adjusted] == [True, True, False]
     assert adjusted[-1]["close"] == 6.0
     assert adjusted[-1]["open"] == 11.5
+
+
+def test_qfq_accepts_daily_derived_shape_certificate_across_factor_change() -> None:
+    rows = [
+        {
+            "month_end": "2026-05-29",
+            "stock_code": "600000",
+            "open": 10.5,
+            "high": 12.0,
+            "low": 10.0,
+            "close": 11.5,
+            "adj_factor": 1.0,
+        },
+        {
+            "month_end": "2026-06-30",
+            "stock_code": "600000",
+            "open": 5.75,
+            "high": 6.0,
+            "low": 5.5,
+            "close": 6.0,
+            "adj_factor": 2.0,
+            "shape_certified": True,
+        },
+    ]
+
+    adjusted = apply_month_end_qfq(rows)
+
+    assert [row["price_shape_valid"] for row in adjusted] == [True, True]
+    assert adjusted[-1]["shape_certified"] is True
+
+
+@pytest.mark.parametrize("code", ["200011", "201872.SZ", "900901.SH"])
+def test_b_share_codes_are_outside_a_share_selection_universe(code: str) -> None:
+    assert is_b_share_code(code) is True
+
+
+@pytest.mark.parametrize("code", ["000001", "300001.SZ", "600000.SH", "920001.BJ"])
+def test_a_share_codes_are_not_classified_as_b_share(code: str) -> None:
+    assert is_b_share_code(code) is False

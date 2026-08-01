@@ -494,6 +494,125 @@ CREATE TABLE IF NOT EXISTS monthly_pattern_bar_manifests (
 );
 """
 
+# 由日线 + 日复权因子重建并认证的完成月事实。该表只覆盖原始月线中无法可靠
+# 表达月内形态的单股单月，不修改 monthly_pattern_bars。事实身份固定为
+# (month_end, stock_code)，同身份只允许一个内容哈希。
+_SQL_MONTHLY_PATTERN_DERIVED_MONTH_FACTS = """
+CREATE TABLE IF NOT EXISTS monthly_pattern_derived_month_facts (
+    month_end TEXT NOT NULL CHECK(month_end GLOB '????-??-??'),
+    stock_code TEXT NOT NULL CHECK(TRIM(stock_code) <> ''),
+    stock_name TEXT,
+    fact_status TEXT NOT NULL CHECK(
+        fact_status IN ('certified_bar', 'certified_no_trade')
+    ),
+    open REAL,
+    high REAL,
+    low REAL,
+    close REAL,
+    volume REAL,
+    amount REAL,
+    anchor_adj_factor REAL,
+    trading_days INTEGER,
+    first_trade_date TEXT CHECK(
+        first_trade_date IS NULL OR first_trade_date GLOB '????-??-??'
+    ),
+    last_trade_date TEXT CHECK(
+        last_trade_date IS NULL OR last_trade_date GLOB '????-??-??'
+    ),
+    source_payload_hash TEXT NOT NULL CHECK(
+        LENGTH(source_payload_hash) = 64
+        AND source_payload_hash NOT GLOB '*[^0-9a-f]*'
+    ),
+    fact_hash TEXT NOT NULL CHECK(
+        LENGTH(fact_hash) = 64 AND fact_hash NOT GLOB '*[^0-9a-f]*'
+    ),
+    formula_version TEXT NOT NULL CHECK(TRIM(formula_version) <> ''),
+    replacement_reason TEXT NOT NULL CHECK(TRIM(replacement_reason) <> ''),
+    raw_crosscheck_status TEXT NOT NULL CHECK(TRIM(raw_crosscheck_status) <> ''),
+    source_meta_json TEXT NOT NULL DEFAULT '{}',
+    first_run_id TEXT NOT NULL CHECK(TRIM(first_run_id) <> ''),
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (month_end, stock_code),
+    CHECK(
+        (
+            fact_status = 'certified_bar'
+            AND open IS NOT NULL AND open > 0
+            AND high IS NOT NULL AND high > 0
+            AND low IS NOT NULL AND low > 0
+            AND close IS NOT NULL AND close > 0
+            AND high >= open AND high >= close
+            AND low <= open AND low <= close
+            AND volume IS NOT NULL AND volume >= 0
+            AND amount IS NOT NULL AND amount >= 0
+            AND anchor_adj_factor IS NOT NULL AND anchor_adj_factor > 0
+            AND trading_days IS NOT NULL AND trading_days > 0
+            AND first_trade_date IS NOT NULL
+            AND last_trade_date IS NOT NULL
+            AND first_trade_date <= last_trade_date
+        )
+        OR
+        (
+            fact_status = 'certified_no_trade'
+            AND open IS NULL AND high IS NULL AND low IS NULL AND close IS NULL
+            AND volume IS NULL AND amount IS NULL AND anchor_adj_factor IS NULL
+            AND trading_days = 0
+            AND first_trade_date IS NULL AND last_trade_date IS NULL
+        )
+    ),
+    FOREIGN KEY(first_run_id)
+        REFERENCES monthly_pattern_derived_fact_runs(run_id)
+);
+"""
+
+# 每次派生事实回填一条追加式收据；事实行用 first_run_id 指向首次成功写入
+# 的运行身份。更新/删除由触发器拒绝，保留完整审计历史。
+_SQL_MONTHLY_PATTERN_DERIVED_FACT_RUNS = """
+CREATE TABLE IF NOT EXISTS monthly_pattern_derived_fact_runs (
+    run_id TEXT PRIMARY KEY CHECK(TRIM(run_id) <> ''),
+    input_by TEXT NOT NULL CHECK(TRIM(input_by) <> ''),
+    status TEXT NOT NULL CHECK(status IN ('complete', 'partial', 'failed')),
+    receipt_hash TEXT NOT NULL CHECK(
+        LENGTH(receipt_hash) = 64 AND receipt_hash NOT GLOB '*[^0-9a-f]*'
+    ),
+    request_json TEXT NOT NULL DEFAULT '{}',
+    counts_json TEXT NOT NULL DEFAULT '{}',
+    receipt_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+"""
+
+_SQL_MONTHLY_PATTERN_DERIVED_RUNS_NO_UPDATE_TRIGGER = """
+CREATE TRIGGER IF NOT EXISTS trg_monthly_pattern_derived_runs_no_update
+BEFORE UPDATE ON monthly_pattern_derived_fact_runs
+BEGIN
+    SELECT RAISE(ABORT, 'monthly_pattern_derived_fact_runs is append-only');
+END;
+"""
+
+_SQL_MONTHLY_PATTERN_DERIVED_RUNS_NO_DELETE_TRIGGER = """
+CREATE TRIGGER IF NOT EXISTS trg_monthly_pattern_derived_runs_no_delete
+BEFORE DELETE ON monthly_pattern_derived_fact_runs
+BEGIN
+    SELECT RAISE(ABORT, 'monthly_pattern_derived_fact_runs is append-only');
+END;
+"""
+
+_SQL_MONTHLY_PATTERN_DERIVED_FACTS_NO_UPDATE_TRIGGER = """
+CREATE TRIGGER IF NOT EXISTS trg_monthly_pattern_derived_facts_no_update
+BEFORE UPDATE ON monthly_pattern_derived_month_facts
+BEGIN
+    SELECT RAISE(ABORT, 'monthly_pattern_derived_month_facts is append-only');
+END;
+"""
+
+_SQL_MONTHLY_PATTERN_DERIVED_FACTS_NO_DELETE_TRIGGER = """
+CREATE TRIGGER IF NOT EXISTS trg_monthly_pattern_derived_facts_no_delete
+BEFORE DELETE ON monthly_pattern_derived_month_facts
+BEGIN
+    SELECT RAISE(ABORT, 'monthly_pattern_derived_month_facts is append-only');
+END;
+"""
+
 # 财务快照按「报告期 + 公告日 + 内容哈希」追加保存。上游修订若沿用原公告日，
 # version_visible_date 取首次观测日，防止未来修订穿越到历史 as-of。
 _SQL_MONTHLY_PATTERN_FINANCIAL_SNAPSHOTS = """
@@ -1228,6 +1347,10 @@ CREATE TABLE IF NOT EXISTS knowledge_assets (
 _SQL_MONTHLY_PATTERN_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_monthly_pattern_bars_stock_month "
     "ON monthly_pattern_bars(stock_code, month_end DESC);",
+    "CREATE INDEX IF NOT EXISTS idx_monthly_pattern_derived_facts_stock_month "
+    "ON monthly_pattern_derived_month_facts(stock_code, month_end DESC);",
+    "CREATE INDEX IF NOT EXISTS idx_monthly_pattern_derived_runs_created "
+    "ON monthly_pattern_derived_fact_runs(created_at DESC);",
     "CREATE INDEX IF NOT EXISTS idx_monthly_pattern_financial_stock_period "
     "ON monthly_pattern_financial_snapshots("
     "stock_code, report_period DESC, financial_ann_date DESC, "
@@ -1706,6 +1829,8 @@ _ALL_TABLE_SQL = [
     _SQL_TREND_LEADER_POOL,
     _SQL_MONTHLY_PATTERN_BARS,
     _SQL_MONTHLY_PATTERN_BAR_MANIFESTS,
+    _SQL_MONTHLY_PATTERN_DERIVED_FACT_RUNS,
+    _SQL_MONTHLY_PATTERN_DERIVED_MONTH_FACTS,
     _SQL_MONTHLY_PATTERN_FINANCIAL_SNAPSHOTS,
     _SQL_MONTHLY_PATTERN_RUNS,
     _SQL_MONTHLY_PATTERN_POOL,
@@ -1761,6 +1886,10 @@ _ALL_TRIGGER_SQL = (
         _SQL_FACTOR_SCORE_RUNS_NO_DELETE_TRIGGER,
         _SQL_FACTOR_SCORE_REQUESTS_NO_UPDATE_TRIGGER,
         _SQL_FACTOR_SCORE_REQUESTS_NO_DELETE_TRIGGER,
+        _SQL_MONTHLY_PATTERN_DERIVED_RUNS_NO_UPDATE_TRIGGER,
+        _SQL_MONTHLY_PATTERN_DERIVED_RUNS_NO_DELETE_TRIGGER,
+        _SQL_MONTHLY_PATTERN_DERIVED_FACTS_NO_UPDATE_TRIGGER,
+        _SQL_MONTHLY_PATTERN_DERIVED_FACTS_NO_DELETE_TRIGGER,
     ]
 )
 
@@ -1771,6 +1900,7 @@ EXPECTED_TABLES = [
     "industry_info", "macro_info",
     "daily_market", "daily_volume_concentration", "trend_leader_pool", "sector_correlation_daily",
     "monthly_pattern_bars", "monthly_pattern_bar_manifests",
+    "monthly_pattern_derived_month_facts", "monthly_pattern_derived_fact_runs",
     "monthly_pattern_financial_snapshots",
     "monthly_pattern_runs", "monthly_pattern_pool",
     "sector_crowding_daily",

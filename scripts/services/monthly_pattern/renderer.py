@@ -10,15 +10,21 @@ from collections.abc import Mapping, Sequence
 from numbers import Real
 from typing import Any
 
+from services.monthly_pattern import financials
+
 
 _NOTICE = "> 仅用于事实核验与模式观察，不构成交易指令。"
 PUSH_BODY_MAX_BYTES = 18_000
 PUSH_CRITICAL_TRANSITION_MAX_ITEMS = 12
+LIFECYCLE_SCORE_VERSION = "monthly_pool_lifecycle_v1"
 
 _STRATEGY_LABELS = {
     "fundamental_monthly_trend": "基本面月线趋势",
     "theme_monthly_attack": "题材月线进攻",
     "monthly_reacceleration": "月线二次启动",
+}
+_STRATEGY_ORDER = {
+    strategy: index for index, strategy in enumerate(_STRATEGY_LABELS)
 }
 
 _POOL_STATUS_LABELS = {
@@ -28,6 +34,13 @@ _POOL_STATUS_LABELS = {
     "risk": "风险观察",
     "reentry": "重新进入观察",
     "exited": "已移出观察",
+}
+_LIFECYCLE_PRIORITY_SCORES = {
+    "active": 4,
+    "fundamental_verified": 3,
+    "technical_candidate": 2,
+    "risk": 1,
+    "exited": 0,
 }
 
 _SOURCE_LABELS = {
@@ -74,24 +87,26 @@ _COUNT_LABELS = {
     "scanned": "扫描股票数",
     "total": "扫描股票数",
     "market_stocks": "扫描股票数",
-    "matched": "命中数",
-    "matched_candidates": "本次模式命中数",
-    "matched_technical_candidate": "本次命中·技术候选数",
-    "matched_fundamental_verified": "本次命中·基本面已核验数",
-    "matched_active": "本次命中·在池观察数",
-    "pool_technical_candidate": "池内·技术候选数",
-    "pool_fundamental_verified": "池内·基本面已核验数",
-    "pool_active": "池内·在池观察数",
-    "pool_risk": "池内·风险观察数",
+    "matched": "命中记录数",
+    "matched_candidates": "本次初筛命中记录数",
+    "matched_stocks": "本次初筛去重股票数",
+    "matched_technical_candidate": "本次命中·技术候选记录数",
+    "matched_fundamental_verified": "本次命中·基本面已核验记录数",
+    "matched_active": "本次命中·在池观察记录数",
+    "matched_risk": "本次命中·风险观察记录数",
+    "pool_technical_candidate": "池内·技术候选记录数",
+    "pool_fundamental_verified": "池内·基本面已核验记录数",
+    "pool_active": "池内·在池观察记录数",
+    "pool_risk": "池内·风险观察记录数",
     # 兼容旧 run：这些字段历史上统计的也是“本次命中”，不是池内总数。
-    "technical_candidate": "本次命中·技术候选数",
-    "technical_candidates": "本次模式命中数",
-    "fundamental_verified": "本次命中·基本面已核验数",
-    "financial_verified": "基本面核验数",
-    "active": "本次命中·在池观察数",
-    "risk": "本次命中·风险观察数",
-    "reentry": "重新进入观察数",
-    "exited": "移出观察数",
+    "technical_candidate": "本次命中·技术候选记录数",
+    "technical_candidates": "本次模式命中记录数",
+    "fundamental_verified": "本次命中·基本面已核验记录数",
+    "financial_verified": "基本面核验记录数",
+    "active": "本次命中·在池观察记录数",
+    "risk": "本次命中·风险观察记录数",
+    "reentry": "重新进入观察记录数",
+    "exited": "移出观察记录数",
 }
 
 _EVIDENCE_LABELS = {
@@ -117,6 +132,13 @@ _EVIDENCE_LABELS = {
     "debt_to_assets": "资产负债率",
     "netprofit_yoy": "净利润同比",
     "deductedprofit_yoy": "扣非净利润同比",
+    "contract_liability": "合同负债",
+    "contract_liability_growth_pct": "合同负债同比",
+    "contract_liability_to_revenue_pct": "合同负债/同期营收",
+    "revenue": "同期营业收入",
+    "rd_exp": "研发费用",
+    "rd_exp_growth_pct": "研发费用同比",
+    "rd_exp_to_revenue_pct": "研发费用/同期营收",
     "bullish_body_crosses_three_mas": "阳线实体穿三线",
     "zero_axis_golden_cross": "MACD零轴上金叉",
     "volume_above_ma5_or_ma10": "成交量超过月均量",
@@ -190,6 +212,14 @@ def _collect_evidence(
             "reason",
             "note",
             "text",
+            # 这两个行业差异项由显式影子层解释，不能在通用财务规则中写成“命中”。
+            "contract_liability_growth_ge_20",
+            "contract_liability_qoq_pct",
+            "contract_liability_qoq_delta",
+            "contract_liability_qoq_prior_value",
+            "contract_liability_qoq_prior_period",
+            "contract_liability_qoq_low_base",
+            "rd_exp_increasing",
         }:
             continue
         if isinstance(value, Mapping):
@@ -247,6 +277,273 @@ def _pool_status_text(value: Any) -> str:
     return _POOL_STATUS_LABELS.get(text, _safe_text(text) or "未提供")
 
 
+def _candidate_status(candidate: Mapping[str, Any]) -> str:
+    value = (
+        candidate.get("pool_status")
+        if candidate.get("pool_status") is not None
+        else candidate.get("status")
+    )
+    return str(value or "").strip().lower()
+
+
+def lifecycle_priority_score(candidate: Mapping[str, Any]) -> int | None:
+    """返回生命周期观察分；只编码池状态层级，不评价技术强弱。"""
+    return _LIFECYCLE_PRIORITY_SCORES.get(_candidate_status(candidate))
+
+
+def _source_meta(candidate: Mapping[str, Any]) -> Mapping[str, Any]:
+    value = candidate.get("source_meta")
+    return value if isinstance(value, Mapping) else {}
+
+
+def _canonical_stock_code(candidate: Mapping[str, Any]) -> str:
+    value = candidate.get("stock_code") or candidate.get("code")
+    return str(value or "").strip().upper().split(".", 1)[0]
+
+
+def _normalized_industry(value: Any) -> str:
+    text = "".join(str(value or "").split())
+    if not text or text in {"未提供", "未分类", "unknown", "None", "null"}:
+        return "未分类"
+    return _safe_text(text)
+
+
+def _source_state(value: Any) -> str:
+    if isinstance(value, Mapping):
+        value = value.get("status", value.get("state"))
+    return str(value or "").strip().lower()
+
+
+def _record_industry_signal(
+    candidate: Mapping[str, Any],
+) -> tuple[str, int, str]:
+    """返回行业、来源质量与来源说明；高质量分类不被旧的未分类覆盖。"""
+    top_level = _normalized_industry(candidate.get("industry"))
+    nested = _normalized_industry(_source_meta(candidate).get("industry"))
+    industry_map_state = _source_state(_source_meta(candidate).get("industry_map"))
+    if top_level != "未分类":
+        return top_level, 3, "本次候选"
+    if nested != "未分类" and industry_map_state == "success":
+        return nested, 3, "申万映射成功快照"
+    if nested != "未分类":
+        return nested, 2, f"持久池快照（{industry_map_state or '状态未提供'}）"
+    return "未分类", 0, "行业证据缺失"
+
+
+def _record_industry(candidate: Mapping[str, Any]) -> str:
+    return _record_industry_signal(candidate)[0]
+
+
+def _industry_for_shadow(
+    candidate: Mapping[str, Any],
+    rendered_industry: str,
+) -> str:
+    """只把目标时点可信的行业证据交给影子解释模板。"""
+    source_meta = _source_meta(candidate)
+    industry_map_state = _source_state(source_meta.get("industry_map"))
+    if industry_map_state:
+        return rendered_industry if industry_map_state == "success" else ""
+    # 当次扫描候选会把可靠行业放在顶层；旧持久池只在 source_meta 留存。
+    top_level = _normalized_industry(candidate.get("industry"))
+    return rendered_industry if top_level != "未分类" else ""
+
+
+def _record_mainline(candidate: Mapping[str, Any]) -> Any:
+    value = candidate.get("mainline_match")
+    if value is None:
+        value = _source_meta(candidate).get("mainline_match")
+    return value
+
+
+def _stock_name(records: Sequence[Mapping[str, Any]], code: str) -> str:
+    ranked: list[tuple[int, str, str]] = []
+    for record in records:
+        name = _safe_text(record.get("stock_name") or record.get("name"))
+        if not name:
+            continue
+        normalized_name = name.strip().upper().split(".", 1)[0]
+        quality = 1 if normalized_name == code else 2
+        recency = _safe_text(
+            record.get("last_seen_date")
+            or record.get("signal_month")
+            or ""
+        )
+        ranked.append((quality, recency, name))
+    if not ranked:
+        return code or "未提供"
+    return max(ranked)[2]
+
+
+def _stock_sector(
+    records: Sequence[Mapping[str, Any]],
+) -> tuple[str, str, str, tuple[str, ...]]:
+    signals = [_record_industry_signal(record) for record in records]
+    best_quality = max((quality for _sector, quality, _source in signals), default=0)
+    best = sorted(
+        {
+            (sector, source)
+            for sector, quality, source in signals
+            if quality == best_quality and sector != "未分类"
+        }
+    )
+    sectors = tuple(sorted({sector for sector, _source in best}))
+    if len(sectors) > 1:
+        return "行业冲突", "conflict", "同质量行业证据冲突", sectors
+    if sectors:
+        sector = sectors[0]
+        sources = sorted(source for value, source in best if value == sector)
+        return sector, "classified", "、".join(sources), sectors
+    return "未分类", "missing", "行业证据缺失", ()
+
+
+def _strategy_sort_key(candidate: Mapping[str, Any]) -> tuple[int, int, str]:
+    strategy = str(candidate.get("strategy_type") or "").strip()
+    score = lifecycle_priority_score(candidate)
+    return (
+        _STRATEGY_ORDER.get(strategy, len(_STRATEGY_ORDER)),
+        -(score if score is not None else -1),
+        _safe_text(candidate.get("signal_month")),
+    )
+
+
+def _month_rank(value: Any) -> int:
+    text = str(value or "").strip()
+    digits = text.replace("-", "")[:6]
+    return int(digits) if len(digits) == 6 and digits.isdigit() else -1
+
+
+def _stock_projections(
+    candidates: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    buckets: dict[str, list[Mapping[str, Any]]] = {}
+    for candidate in candidates:
+        code = _canonical_stock_code(candidate)
+        if code:
+            key = code
+        else:
+            key = (
+                "missing:"
+                f"{_safe_text(candidate.get('stock_name') or candidate.get('name'))}:"
+                f"{_safe_text(candidate.get('strategy_type'))}:"
+                f"{_safe_text(candidate.get('signal_month'))}"
+            )
+        buckets.setdefault(key, []).append(candidate)
+
+    stocks: list[dict[str, Any]] = []
+    for key, raw_records in buckets.items():
+        records = sorted(raw_records, key=_strategy_sort_key)
+        code = _canonical_stock_code(records[0])
+        scores = [
+            score
+            for score in (lifecycle_priority_score(record) for record in records)
+            if score is not None
+        ]
+        score = max(scores) if scores else None
+        primary_records = [
+            record
+            for record in records
+            if lifecycle_priority_score(record) == score
+        ]
+        primary = (
+            min(primary_records, key=_strategy_sort_key)
+            if primary_records
+            else records[0]
+        )
+        sector, sector_status, sector_source, sector_options = _stock_sector(records)
+        strategy_labels: list[str] = []
+        status_labels: list[str] = []
+        for record in records:
+            strategy_label = _strategy_text(record.get("strategy_type"))
+            if strategy_label not in strategy_labels:
+                strategy_labels.append(strategy_label)
+        for record in sorted(
+            records,
+            key=lambda item: (
+                -(
+                    lifecycle_priority_score(item)
+                    if lifecycle_priority_score(item) is not None
+                    else -1
+                ),
+                _candidate_status(item),
+            ),
+        ):
+            status_label = _pool_status_text(_candidate_status(record))
+            if status_label not in status_labels:
+                status_labels.append(status_label)
+        latest_month = max(
+            (
+                _safe_text(record.get("signal_month"))
+                for record in records
+                if record.get("signal_month")
+            ),
+            default="",
+        )
+        stocks.append(
+            {
+                "stock_code": code or "未提供",
+                "stock_name": _stock_name(records, code),
+                "sector": sector,
+                "sector_status": sector_status,
+                "sector_source": sector_source,
+                "sector_options": sector_options,
+                "score": score,
+                "score_kind": "lifecycle_priority",
+                "score_version": LIFECYCLE_SCORE_VERSION,
+                "primary_strategy": _strategy_text(primary.get("strategy_type")),
+                "primary_status": _pool_status_text(_candidate_status(primary)),
+                "strategies": strategy_labels,
+                "statuses": status_labels,
+                "strategy_count": len(records),
+                "latest_signal_month": latest_month,
+                "records": records,
+                "_identity_key": key,
+            }
+        )
+    return stocks
+
+
+def _stock_sort_key(stock: Mapping[str, Any]) -> tuple[Any, ...]:
+    score = stock.get("score")
+    valid_score = isinstance(score, Real) and not isinstance(score, bool)
+    return (
+        0 if valid_score else 1,
+        -float(score) if valid_score else 0.0,
+        -int(stock.get("strategy_count") or 0),
+        -_month_rank(stock.get("latest_signal_month")),
+        _safe_text(stock.get("stock_code")),
+    )
+
+
+def _sector_sort_key(sector: str) -> tuple[int, str]:
+    if sector == "行业冲突":
+        return 1, sector
+    if sector == "未分类":
+        return 2, sector
+    return 0, sector
+
+
+def _sector_groups(
+    candidates: Sequence[Mapping[str, Any]],
+) -> list[tuple[str, list[dict[str, Any]]]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for stock in _stock_projections(candidates):
+        grouped.setdefault(str(stock["sector"]), []).append(stock)
+    return [
+        (sector, sorted(stocks, key=_stock_sort_key))
+        for sector, stocks in sorted(
+            grouped.items(),
+            key=lambda item: _sector_sort_key(item[0]),
+        )
+    ]
+
+
+def _score_text(value: Any) -> str:
+    if isinstance(value, Real) and not isinstance(value, bool):
+        number = float(value)
+        return str(int(number)) if number.is_integer() else f"{number:.1f}"
+    return "—"
+
+
 def _mainline_text(value: Any) -> str:
     if isinstance(value, Mapping):
         value = value.get("matched", value.get("met", value.get("value")))
@@ -279,7 +576,126 @@ def _financial_status_text(value: Any) -> str:
     return labels.get(normalized, _safe_text(value) or "未提供")
 
 
-def _render_candidate(candidate: Mapping[str, Any]) -> list[str]:
+_SHADOW_APPLICABILITY_LABELS = {
+    "core": "核心证据",
+    "secondary": "辅助证据",
+    "special_context": "特殊风险口径",
+    "not_applicable": "不适用",
+    "unknown": "行业未知",
+}
+
+
+def _shadow_money_text(value: Any) -> str:
+    if not isinstance(value, Real) or isinstance(value, bool):
+        return "缺失"
+    number = float(value)
+    magnitude = abs(number)
+    if magnitude >= 100_000_000:
+        return f"{number / 100_000_000:.2f}亿元"
+    if magnitude >= 10_000:
+        return f"{number / 10_000:.2f}万元"
+    return f"{number:.2f}元"
+
+
+def _shadow_pct_text(value: Any) -> str:
+    if not isinstance(value, Real) or isinstance(value, bool):
+        return "缺失"
+    return f"{float(value):+.2f}%"
+
+
+def _shadow_delta_text(value: Any) -> str:
+    if not isinstance(value, Real) or isinstance(value, bool):
+        return "增减额缺失"
+    number = float(value)
+    if number > 0:
+        return f"增加{_shadow_money_text(number)}"
+    if number < 0:
+        return f"减少{_shadow_money_text(abs(number))}"
+    return "持平"
+
+
+def _shadow_point_text(point: Any) -> str:
+    if not isinstance(point, Mapping):
+        return ""
+    period = _safe_text(point.get("report_period")) or "报告期缺失"
+    values: list[str] = []
+    if point.get("value") is not None:
+        values.append(_shadow_money_text(point.get("value")))
+    if point.get("growth_pct") is not None:
+        values.append(f"同比{_shadow_pct_text(point.get('growth_pct'))}")
+    if point.get("to_revenue_pct") is not None:
+        values.append(
+            f"占同期营收{float(point.get('to_revenue_pct')):.2f}%"
+        )
+    if point.get("qoq_pct") is not None:
+        values.append(f"环比{_shadow_pct_text(point.get('qoq_pct'))}")
+    if point.get("qoq_delta") is not None:
+        prior_period = _safe_text(point.get("qoq_prior_period")) or "上一报告期"
+        values.append(
+            f"较{prior_period}{_shadow_delta_text(point.get('qoq_delta'))}"
+        )
+    if point.get("qoq_low_base") is True:
+        values.append("环比基数敏感")
+    return f"{period}：{'、'.join(values) if values else '数据缺失'}"
+
+
+def _shadow_factor_facts(factor: Mapping[str, Any]) -> str:
+    points = [
+        _shadow_point_text(factor.get("latest")),
+        _shadow_point_text(factor.get("annual")),
+    ]
+    unique: list[str] = []
+    for point in points:
+        if point and point not in unique:
+            unique.append(point)
+    return "；".join(unique) or "无可见报告期证据"
+
+
+def _render_industry_financial_shadow(
+    financial_map: Mapping[str, Any],
+    industry: str,
+) -> list[str]:
+    shadow = financials.build_industry_shadow(financial_map, industry)
+    if not shadow.get("has_assessment"):
+        return []
+    contract = shadow["contract_liability"]
+    rd_exp = shadow["rd_exp"]
+    contract_label = _SHADOW_APPLICABILITY_LABELS.get(
+        str(contract.get("applicability") or "unknown"),
+        "行业未知",
+    )
+    rd_label = _SHADOW_APPLICABILITY_LABELS.get(
+        str(rd_exp.get("applicability") or "unknown"),
+        "行业未知",
+    )
+    lines = [
+        "- 行业增强层：[判断·影子] "
+        f"合同负债={contract_label}；研发费用={rd_label}；"
+        "仅展示，不参与基本面硬门、池状态或生命周期观察分"
+        f"（版本={shadow['version']}）。",
+        "- 行业解释：[判断·影子] "
+        f"合同负债：{_safe_text(contract.get('reason')) or '缺失'}；"
+        f"研发费用：{_safe_text(rd_exp.get('reason')) or '缺失'}。",
+    ]
+    if contract.get("status") != "not_applicable":
+        lines.append(
+            "- 合同负债：[事实·影子] "
+            f"{_shadow_factor_facts(contract)}。"
+        )
+    if rd_exp.get("status") != "not_applicable":
+        lines.append(
+            "- 研发费用：[事实·影子] "
+            f"{_shadow_factor_facts(rd_exp)}；字段为 rd_exp，"
+            "不代表资本化研发的完整口径。"
+        )
+    return lines
+
+
+def _render_candidate(
+    candidate: Mapping[str, Any],
+    *,
+    heading: str | None = None,
+) -> list[str]:
     code = _safe_text(candidate.get("stock_code") or candidate.get("code"))
     name = _safe_text(candidate.get("stock_name") or candidate.get("name"))
     strategy = _strategy_text(candidate.get("strategy_type"))
@@ -288,11 +704,11 @@ def _render_candidate(candidate: Mapping[str, Any]) -> list[str]:
         if candidate.get("pool_status") is not None
         else candidate.get("status")
     )
-    industry = _safe_text(candidate.get("industry")) or "未提供"
-    mainline = _mainline_text(candidate.get("mainline_match"))
+    industry = _record_industry(candidate)
+    mainline = _mainline_text(_record_mainline(candidate))
 
     lines = [
-        f"### {code} {name}".rstrip(),
+        heading or f"### {code} {name}".rstrip(),
         f"- 模式归类：[判断] {strategy}",
         f"- 池状态：[判断] {pool_status}",
         f"- 行业：[事实] {industry}",
@@ -355,6 +771,10 @@ def _render_candidate(candidate: Mapping[str, Any]) -> list[str]:
             f"- 财务规则：[判断] "
             f"{_pairs_text(_dedupe(financial_judgments, limit=8))}"
         )
+    lines += _render_industry_financial_shadow(
+        financial_map,
+        _industry_for_shadow(candidate, industry),
+    )
     lines.append("")
     return lines
 
@@ -476,6 +896,82 @@ def _render_transitions(transitions: Any) -> list[str]:
     return lines
 
 
+def _candidate_records(value: Any) -> list[Mapping[str, Any]]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        return []
+    return [item for item in value if isinstance(item, Mapping)]
+
+
+def _counts_with_candidate_semantics(
+    counts: Any,
+    candidates: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    result = dict(counts) if isinstance(counts, Mapping) else {}
+    result["matched_stocks"] = len(_stock_projections(candidates))
+    result["matched_risk"] = sum(
+        _candidate_status(candidate) == "risk" for candidate in candidates
+    )
+    return result
+
+
+def _render_grouped_candidates(
+    candidates: Sequence[Mapping[str, Any]],
+) -> list[str]:
+    stocks = _stock_projections(candidates)
+    lines = [
+        "## 候选观察（按申万二级板块聚合）",
+        "",
+        f"> 生命周期观察分 v1（{LIFECYCLE_SCORE_VERSION}）：[判断] "
+        "在池观察=4、基本面已核验=3、"
+        "技术候选=2、风险观察=1、已移出观察=0。"
+        "该分数只反映池状态层级，不代表胜率、技术强弱或买卖建议；"
+        "触发条件与主线证据只展示、不加分。",
+        "",
+        "> 同股多策略取最高分、不累加；同分依次按策略记录数降序、"
+        "最近信号月降序、股票代码升序破平。",
+        "",
+        f"- 本次共 {len(stocks)} 只独立股票，来自 {len(candidates)} 条策略记录。",
+        "",
+    ]
+    for sector, sector_stocks in _sector_groups(candidates):
+        record_count = sum(
+            int(stock.get("strategy_count") or 0) for stock in sector_stocks
+        )
+        lines += [
+            f"### {sector}（{len(sector_stocks)}只 / {record_count}条策略记录）",
+            "",
+        ]
+        for rank, stock in enumerate(sector_stocks, 1):
+            score = _score_text(stock.get("score"))
+            lines += [
+                f"#### {rank}. {stock['stock_code']} {stock['stock_name']}"
+                f"｜生命周期观察分 {score}",
+                f"- 评分依据：[判断] 主策略={stock['primary_strategy']}；"
+                f"生命周期状态={stock['primary_status']}；"
+                f"最高池状态分={score}；同股多策略不累加",
+                f"- 板块归属：[事实] {stock['sector']}"
+                f"（来源={stock['sector_source']}）",
+                f"- 命中策略：[判断] {'、'.join(stock['strategies'])}"
+                f"（{stock['strategy_count']} 条策略记录）",
+            ]
+            if stock.get("sector_status") == "conflict":
+                lines.append(
+                    "- 行业归属：[事实] 同质量证据冲突，已归入“行业冲突”；"
+                    f"候选={'、'.join(stock.get('sector_options') or ())}"
+                )
+            lines.append("")
+            for record in stock["records"]:
+                lines += _render_candidate(
+                    record,
+                    heading=(
+                        f"##### {_strategy_text(record.get('strategy_type'))}"
+                        f"｜{_pool_status_text(_candidate_status(record))}"
+                        f"｜策略分 {_score_text(lifecycle_priority_score(record))}"
+                    ),
+                )
+    return lines
+
+
 def render_daily(summary: Mapping[str, Any]) -> str:
     """渲染一次月线扫描摘要，并严格区分失败、partial 与真实空候选。"""
     scan_date = _safe_text(summary.get("scan_date")) or "未提供"
@@ -514,15 +1010,12 @@ def render_daily(summary: Mapping[str, Any]) -> str:
             "",
         ]
 
-    lines += _render_counts(summary.get("counts"))
-    raw_candidates = summary.get("candidates")
-    candidates = (
-        [item for item in raw_candidates if isinstance(item, Mapping)]
-        if isinstance(raw_candidates, Sequence) and not isinstance(raw_candidates, (str, bytes))
-        else []
+    candidates = _candidate_records(summary.get("candidates"))
+    lines += _render_counts(
+        _counts_with_candidate_semantics(summary.get("counts"), candidates)
     )
-    lines += ["## 候选观察", ""]
     if not candidates:
+        lines += ["## 候选观察（按申万二级板块聚合）", ""]
         if run_status == "complete":
             lines += [
                 "真实空候选（非采集故障）：来源均成功，完成月规则筛选后数量为 0。",
@@ -534,21 +1027,11 @@ def render_daily(summary: Mapping[str, Any]) -> str:
                 "",
             ]
     else:
-        for candidate in candidates:
-            lines += _render_candidate(candidate)
+        lines += _render_grouped_candidates(candidates)
 
     lines += _render_transitions(summary.get("transitions"))
     lines += _render_error(summary.get("error"))
     return "\n".join(lines).rstrip() + "\n"
-
-
-def _candidate_status(candidate: Mapping[str, Any]) -> str:
-    value = (
-        candidate.get("pool_status")
-        if candidate.get("pool_status") is not None
-        else candidate.get("status")
-    )
-    return str(value or "").strip().lower()
 
 
 def _push_plain(value: Any, limit: int) -> str:
@@ -641,26 +1124,22 @@ def _push_critical_transition_lines(transitions: Any) -> list[str]:
     return [line for _priority, _index, line in prioritized]
 
 
-def _push_candidate_line(candidate: Mapping[str, Any]) -> str:
-    code = _push_plain(candidate.get("stock_code") or candidate.get("code"), 20)
-    name = _push_plain(candidate.get("stock_name") or candidate.get("name"), 40)
-    source_meta = candidate.get("source_meta")
-    nested_industry = (
-        source_meta.get("industry")
-        if isinstance(source_meta, Mapping)
-        else None
-    )
-    industry = (
-        _push_plain(candidate.get("industry") or nested_industry, 40)
-        or "未提供"
-    )
+def _push_stock_line(stock: Mapping[str, Any]) -> str:
+    code = _push_plain(stock.get("stock_code"), 20)
+    name = _push_plain(stock.get("stock_name"), 40)
+    statuses = "、".join(str(value) for value in stock.get("statuses") or ())
+    strategies = "、".join(str(value) for value in stock.get("strategies") or ())
     return (
-        f"- {code} {name}｜{_pool_status_text(_candidate_status(candidate))}｜"
-        f"{_strategy_text(candidate.get('strategy_type'))}｜行业={industry}"
+        f"- {code} {name}｜评分={_score_text(stock.get('score'))}｜"
+        f"状态={_push_plain(statuses, 40) or '未提供'}｜"
+        f"策略={_push_plain(strategies, 80) or '未提供'}"
     ).rstrip()
 
 
-def _push_header(summary: Mapping[str, Any]) -> str:
+def _push_header(
+    summary: Mapping[str, Any],
+    candidates: Sequence[Mapping[str, Any]],
+) -> str:
     scan_date = _push_plain(summary.get("scan_date"), 32) or "未提供"
     signal_month = _push_plain(summary.get("signal_month"), 16) or "未提供"
     run_status = _effective_run_status(summary)
@@ -687,7 +1166,11 @@ def _push_header(summary: Mapping[str, Any]) -> str:
                 "",
             ]
         )
-    lines.extend(_render_counts(summary.get("counts")))
+    lines.extend(
+        _render_counts(
+            _counts_with_candidate_semantics(summary.get("counts"), candidates)
+        )
+    )
     if summary.get("error"):
         lines.extend(
             [
@@ -716,30 +1199,20 @@ def render_push_summary(
     ):
         return full_markdown
 
-    header = _push_header(summary)
-
-    raw_candidates = summary.get("candidates")
-    all_candidates = (
-        [item for item in raw_candidates if isinstance(item, Mapping)]
-        if isinstance(raw_candidates, Sequence)
-        and not isinstance(raw_candidates, (str, bytes))
-        else []
-    )
+    all_candidates = _candidate_records(summary.get("candidates"))
+    header = _push_header(summary, all_candidates)
     focus_source = focus_candidates if focus_candidates is not None else all_candidates
-    focus_candidates = [
+    focus_records = [
         item
         for item in focus_source
         if isinstance(item, Mapping)
         if _candidate_status(item) in {"active", "fundamental_verified"}
     ]
-    ordered = sorted(
-        focus_candidates,
-        key=lambda item: (
-            0 if _candidate_status(item) == "active" else 1,
-            _safe_text(item.get("stock_code") or item.get("code")),
-            _safe_text(item.get("strategy_type")),
-        ),
-    )
+    focus_groups = _sector_groups(focus_records)
+    focus_stocks = [
+        stock for _sector, sector_stocks in focus_groups for stock in sector_stocks
+    ]
+    all_stocks = _stock_projections(all_candidates)
     path = _push_report_path(report_path)
     transition_groups, transition_total = _push_transition_groups(
         summary.get("transitions")
@@ -749,21 +1222,77 @@ def render_push_summary(
     )
     shown_transition_groups: list[tuple[str, int]] = []
     shown_critical_transitions: list[str] = []
-    candidate_lines: list[str] = []
+    shown_sections: list[dict[str, Any]] = []
+    focus_scope_label = (
+        "池内重点" if focus_candidates is not None else "本次重点"
+    )
+
+    def _shown_stock_count() -> int:
+        return sum(len(section["stocks"]) for section in shown_sections)
+
+    def _shown_record_count() -> int:
+        return sum(
+            int(stock.get("strategy_count") or 0)
+            for section in shown_sections
+            for stock in section["stocks"]
+        )
 
     def _note() -> str:
         shown_transition_total = sum(
             count for _line, count in shown_transition_groups
         )
+        recovery = ""
+        if (
+            focus_candidates is not None
+            and _shown_stock_count() < len(focus_stocks)
+        ):
+            recovery = (
+                "；专池展示发生截断；当前完整专池只读入口："
+                "`python3 scripts/main.py monthly-pattern pool`。"
+            )
         return (
             "\n> [来源状态·推送摘要] "
             f"状态变化覆盖 {shown_transition_total}/{transition_total} 条"
             f"（{len(shown_transition_groups)}/{len(transition_groups)} 组）；"
             f"关键风险/退出明细 {len(shown_critical_transitions)}/"
             f"{len(critical_transitions)} 条；"
-            f"池内重点候选展示 {len(candidate_lines)}/{len(ordered)} 只；"
-            f"本次命中候选 {len(all_candidates)} 只。完整报告：{path}\n"
+            f"{focus_scope_label}股票展示 {_shown_stock_count()}/"
+            f"{len(focus_stocks)} 只"
+            f"（来自 {_shown_record_count()} 条策略记录）；"
+            f"本次初筛 {len(all_stocks)} 只独立股票/"
+            f"{len(all_candidates)} 条策略记录。"
+            f"本次扫描完整报告：{path}"
+            f"{recovery}\n"
         )
+
+    def _candidate_body() -> str:
+        if not shown_sections:
+            return "本次无在池观察或基本面已核验股票。"
+        rendered: list[str] = []
+        for section in shown_sections:
+            shown_stocks = section["stocks"]
+            shown_records = sum(
+                int(stock.get("strategy_count") or 0) for stock in shown_stocks
+            )
+            if (
+                len(shown_stocks) == section["total_stocks"]
+                and shown_records == section["total_records"]
+            ):
+                heading = (
+                    f"### {section['sector']}（{len(shown_stocks)}只 / "
+                    f"{shown_records}条策略记录）"
+                )
+            else:
+                heading = (
+                    f"### {section['sector']}（展示{len(shown_stocks)}/"
+                    f"{section['total_stocks']}只 / {shown_records}/"
+                    f"{section['total_records']}条策略记录）"
+                )
+            rendered.append(
+                f"{heading}\n\n"
+                + "\n".join(_push_stock_line(stock) for stock in shown_stocks)
+            )
+        return "\n\n".join(rendered)
 
     def _body() -> str:
         transition_body = (
@@ -771,20 +1300,23 @@ def render_push_summary(
             if shown_transition_groups
             else "本次无状态变化。"
         )
-        candidate_body = (
-            "\n".join(candidate_lines)
-            if candidate_lines
-            else "本次无在池观察或基本面已核验候选。"
-        )
         critical_body = (
             "\n".join(shown_critical_transitions)
             if shown_critical_transitions
             else "本次无风险/退出状态变化。"
         )
+        candidate_title = (
+            "## 专池重点层（按申万二级板块聚合）"
+            if focus_candidates is not None
+            else "## 本次重点观察层（按申万二级板块聚合）"
+        )
         return (
             f"{header}\n\n## 状态变化汇总 [判断]\n\n{transition_body}\n\n"
             f"## 关键风险/退出明细 [判断]\n\n{critical_body}\n\n"
-            f"## 重点候选观察\n\n{candidate_body}\n{_note()}"
+            f"{candidate_title}\n\n"
+            "> 生命周期观察分 v1 仅按池状态排序；同股多策略取最高分，"
+            "不代表胜率或技术强弱。\n\n"
+            f"{_candidate_body()}\n{_note()}"
         )
 
     for group in transition_groups:
@@ -799,10 +1331,27 @@ def render_push_summary(
             shown_critical_transitions.pop()
             break
 
-    for candidate in ordered:
-        candidate_lines.append(_push_candidate_line(candidate))
-        if len(_body().encode("utf-8")) > PUSH_BODY_MAX_BYTES:
-            candidate_lines.pop()
+    stop_candidates = False
+    for sector, stocks in focus_groups:
+        section = {
+            "sector": _push_plain(sector, 60) or "未分类",
+            "total_stocks": len(stocks),
+            "total_records": sum(
+                int(stock.get("strategy_count") or 0) for stock in stocks
+            ),
+            "stocks": [],
+        }
+        for stock in stocks:
+            if not section["stocks"]:
+                shown_sections.append(section)
+            section["stocks"].append(stock)
+            if len(_body().encode("utf-8")) > PUSH_BODY_MAX_BYTES:
+                section["stocks"].pop()
+                if not section["stocks"]:
+                    shown_sections.pop()
+                stop_candidates = True
+                break
+        if stop_candidates:
             break
 
     result = _body()
@@ -821,7 +1370,7 @@ def render_push_summary(
         f"- 信号月：{_push_plain(summary.get('signal_month'), 16) or '未提供'}\n"
         f"- 运行状态：[事实] {run_status}\n\n"
         "> [来源状态·推送摘要] 结构化摘要超出推送预算，"
-        f"请查看完整报告：{path}\n"
+        f"请查看本次扫描完整报告：{path}\n"
     )
     if len(fallback.encode("utf-8")) > PUSH_BODY_MAX_BYTES:
         raise ValueError("月线模式推送摘要无法在预算内保留运行状态和报告路径")

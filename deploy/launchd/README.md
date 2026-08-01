@@ -34,6 +34,8 @@
 - `com.alyx.tradesystem.daily-leaders.plist` — 工作日 22:30 触发（每日最票候选确认稿；stdout `/tmp/tradesystem-daily-leaders.out.log`，stderr `/tmp/tradesystem-daily-leaders.err.log`）
 - `monthly-pattern-runner.sh` — 包装脚本：设置 PATH、cd 仓库根、source `scripts/.env` + `~/.config/tradeSystem.env`、打印脱敏环境诊断 → 调 `/usr/bin/python3 scripts/main.py monthly-pattern daily --input-by launchd`
 - `com.alyx.tradesystem.monthly-pattern.plist` — 每月 2 日 23:10 单次触发（只使用带 certified 覆盖收据的完成月前复权月线 + 公告日 as-of 财务，维护三策略观察池；休眠错过可接受；日志 `/tmp/tradesystem-monthly-pattern.log`）
+- `monthly-pattern-monitor-runner.sh` — 包装脚本：source 行情/钉钉 env → 调 `/usr/bin/python3 scripts/main.py monthly-pattern monitor-daily`
+- `com.alyx.tradesystem.monthly-pattern-monitor.plist` — 每 15 分钟轻量 tick，runner 仅在上海工作日 19:10（含）至 19:25（不含）执行一次重任务（月线种子日频动态 5 月线 + 日/周 MACD 变化监控；不受 Mac 本机时区切换影响；日志 `/tmp/tradesystem-monthly-pattern-monitor.log`）
 
 ## 前置条件
 
@@ -371,6 +373,46 @@ rm ~/Library/LaunchAgents/com.alyx.tradesystem.monthly-pattern.plist
 
 **时段**：每月 2 日 23:10 单次运行，在当月第一个自然日后的晚间处理上一个完成月，避免原工作日频率对同一完成月重复刷新和推送。它是低频观察任务，休眠错过可接受，不配 pmset 唤醒；`RunAtLoad=false`，不做开机补跑。**调度唯一入口=per-task launchd**，不进 `main.py schedule` / APScheduler。
 
+## 月线指标日频变化监控（工作日 19:10）
+
+`monthly-pattern monitor-daily` 与上面的月度业务池任务完全独立：它用 SQLite `mode=ro` 调用手工 `monitor` 的事实计算，生产禁止 `max_seeds` 截断；默认仅在“最近已收盘开放日=上海自然日今天”时运行，周末、节假日和盘中不回退重跑上一开放日。初始化、交易日历或只读库故障也会落 `blocked` 健康收据，而不是只留 launchd 日志；日历未确认时只落本地并把健康事件保留在 pending，绝不越过交易日推送闸门。完整 latest 快照保存到 `data/runs/monthly-pattern-monitor/snapshots/YYYY-MM-DD.json`，latest 报告保存到 `data/reports/monthly-pattern-monitor/YYYY-MM-DD.md`；每次实际写入另在 `data/runs/monthly-pattern-monitor/attempts/YYYY-MM-DD/` 原子追加不可覆盖的 `planned`、逐批 `delivery` 和 `final` JSON，保留完整事件、发送状态与失败原因。`state.json` 只保存通知基线与 pending/sent/suppressed 水位，不是业务数据库或观察池。
+
+只有同一完成月的两次 `complete` 快照才比较个股状态。`partial/blocked` 只产生运行健康事件且不推进股票基线；健康指纹包含所有导致 partial 的缺口股票身份与原因（含 `insufficient_history`），等量换票也不会静默。首次完整运行只初始化基线，完成月翻页只报 rollover 并重建基线，避免把整批种子变化误报为进出。动态 5 月线收复/失守、日/周 MACD 双线零上与零上运行、日线重回和日周共振等状态变化才进入通知候选。事件先原子写入 pending，钉钉成功后才记 sent；失败保留下次按事件流 at-least-once 重试。显式 `--date` 默认是零写入预览且永不推送；只有同时带 `--no-push` 才保存、推进本地基线并明确抑制本轮新通知；`--dry-run` 同样不写任何文件。
+
+安装与真实验证：
+
+```bash
+chmod +x deploy/launchd/monthly-pattern-monitor-runner.sh
+plutil -lint deploy/launchd/com.alyx.tradesystem.monthly-pattern-monitor.plist
+bash -n deploy/launchd/monthly-pattern-monitor-runner.sh
+
+# 历史完整日只建初始基线，不推送
+python3 scripts/main.py monthly-pattern monitor-daily \
+  --date 2026-07-24 --no-push --json
+
+cp deploy/launchd/com.alyx.tradesystem.monthly-pattern-monitor.plist \
+  ~/Library/LaunchAgents/
+launchctl bootstrap "gui/$(id -u)" \
+  ~/Library/LaunchAgents/com.alyx.tradesystem.monthly-pattern-monitor.plist
+
+# 必须真触发；当前不在上海 19:10-19:25 窗口时 runner 应轻量 skip、退出 0
+launchctl kickstart -k \
+  "gui/$(id -u)/com.alyx.tradesystem.monthly-pattern-monitor"
+launchctl print \
+  "gui/$(id -u)/com.alyx.tradesystem.monthly-pattern-monitor"
+tail -100 /tmp/tradesystem-monthly-pattern-monitor.log
+```
+
+卸载：
+
+```bash
+launchctl bootout \
+  "gui/$(id -u)/com.alyx.tradesystem.monthly-pattern-monitor"
+rm ~/Library/LaunchAgents/com.alyx.tradesystem.monthly-pattern-monitor.plist
+```
+
+**时段**：plist 用 `StartInterval=900` 做无时区 tick，runner 用 `TZ=Asia/Shanghai` 只放行 19:10（含）至 19:25（不含）窗口内的一次调用；因此 Mac 切换本机时区不会把任务漂移到上海次日。该窗口距 18:30 cognition-digest 至少 40 分钟、距 20:00 today-post 至少 35 分钟，避开 21:00 后的密集派生任务。休眠错过可接受；下次完整运行会与最近完整基线比较，未发送 pending 继续重试。该任务不写 SQLite 七表、月线池、关注池、TradeDraft 或 TradePlan，不进 `main.py schedule` / APScheduler。
+
 ## 研报速读（已迁移到 Codex 自动化）
 
 研报速读不再使用 macOS launchd。生产定时入口是 Codex 自动化「每日慧博研报速读（Computer Use）」：每天 22:00 触发，自动化先按 A 股交易日/交易日前一天判断是否继续，然后必须通过 Computer Use 操作慧博终端进入「热点研报追踪」、获取当前 HotReport URL、按预筛候选在慧博终端下载 PDF 到本地目录，再运行 JS workflow 读取这些本地 PDF 并发布。正式自动化不使用旧 `HUIBO_HOT_REPORT_URL` 兜底，也不走裸 URL 直连下载 PDF。
@@ -453,3 +495,9 @@ rm ~/Library/LaunchAgents/com.alyx.tradesystem.board-break.plist
 ```
 
 **时段**：21:20 在 sector-correlation(21:15) 与 trend-leader(21:30) 之间，主线板块归属取 `daily_volume_concentration` 当日快照，无冲突。断板反包是盘后只读观察清单（非交易决策），错过可接受，不配 pmset 唤醒。**调度唯一入口=per-task launchd**，不进 `main.py schedule`/APScheduler。
+
+## 月线派生事实回补（仅手工，不挂 launchd）
+
+`monthly-pattern facts-backfill` 是针对历史月线事实缺口的审计修复入口，不是日常定时任务。必须先运行 `--dry-run`，核对严格只读真实库所生成的内存逐项收据、未决计数和 `receipt_hash`；只有用户确认该批收据后，才可在不带 `--dry-run` 的命令中显式传入相同 `--expect-receipt-hash`。真实执行会重新拉取并重算，哈希绑定 raw/manifest/既有派生事实水位，`certified_no_trade` 还绑定全市场月线与历史宇宙的完整排序行摘要；事实水位、未决项、截断或 A 股分类守恒任一不一致即不写派生事实。确认后只在 `BEGIN IMMEDIATE` 同一事务内运行派生两表专用 schema ensure，并按 SQL 指纹验证表、索引和防改触发器，禁止调用全库 migrate；DDL、运行收据与事实行共同提交或回滚。`monitor_preview` 仅作信息性预览，不属于事实写入确认哈希。
+
+该入口只允许写 `monthly_pattern_derived_month_facts` 和追加式 `monthly_pattern_derived_fact_runs`，不覆盖原始月线五表、不修改观察池/关注池/计划层、不推送。A 股选股宇宙中的缺口才进入回补；沪深 B 股代码 `200/201/900` 单列审计，不当作 A 股缺口。日线 `vol=手`、`amount=千元` 统一换算为月线 `股`、`元` 后才允许交叉验签。`certified_no_trade` 是“在册但整月两层行情均无成交记录”的证据，不得转换为平盘月 K。由于其运行依赖人工确认且可能耗时数分钟，禁止配置 launchd、APScheduler 或其他自动重试。

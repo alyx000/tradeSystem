@@ -11,11 +11,13 @@ globs:
   - scripts/cli/daily_leaders.py
   - scripts/cli/value_watch.py
   - scripts/cli/sector_crowding.py
+  - scripts/cli/monthly_pattern.py
   - scripts/services/trinity_factor/*.py
   - scripts/services/tail_scan/*.py
   - scripts/services/daily_leaders/*.py
   - scripts/services/value_watch/*.py
   - scripts/services/sector_crowding/*.py
+  - scripts/services/monthly_pattern/*.py
   - scripts/providers/base.py
   - scripts/providers/tushare_provider.py
   - scripts/api/routes/*.py
@@ -123,6 +125,7 @@ python3 -m pytest scripts/tests/test_cli_smoke.py -v
 | `scripts/main.py` 的 `cmd_post` new-high 接线、`scripts/cli/new_high.py`、`scripts/services/new_high/` 或 `scripts/utils/trade_date.py` 的 new-high 日历语义 | `market-tasks/SKILL.md` + `INDEX.md` 中 `new-high` 行；须核对复用 `today-post` 工作日 20:00 单一调度、无独立 launchd/APScheduler、只写两表及目标日报告且不自动推送、schema/基线相等/自然日日历完整、行业源非空、有效行情绝对地板、重复/有效 join/复权宇宙/申万覆盖/相邻日市场数门禁、按开放日动态升序补缺、canonical 只追加、单日同事务、`BEGIN IMMEDIATE` 二次查重 + 尾日 CAS、成功前缀与失败续跑、目标日报告原子替换及 `already_complete` 损坏自愈、手工 `daily` 连续协调/`backfill` 强刷年度日历且拒绝跳过尾日后开放日/历史更正须重建后缀、失败隔离且不阻断 margin 的完整契约 |
 | `scripts/cli/trend_leader.py` 或 `scripts/services/trend_leader/` | `market-tasks/SKILL.md` + `INDEX.md` 中 `trend-leader` 行 + `AGENTS.md` / `CLAUDE.md`；必须核对自动申万主线最近最多 3 个有效集中度快照（空/全部 UNCLASSIFIED 不计）、2～3 条至少命中 2 次/仅 1 条命中 1 次、`--sectors` 绕过稳定门、默认 `hybrid` LLM 失败关闭概念并标 `fallback_l2`、显式 `hybrid --no-llm` / `l2+concept` 机械分支、报告快照数/门槛/来源/LLM 状态、本地 MD 先原子落盘再推送、dry-run 零报告写入及不回溯清理历史池边界 |
 | `scripts/cli/monthly_pattern.py`、`scripts/services/monthly_pattern/`、`monthly_pattern_*` schema/migration，或 provider 的 `get_market_monthly_quotes` / `get_financial_snapshots` capability | `market-tasks/SKILL.md` + `INDEX.md` 中 `monthly-pattern` 行 + `AGENTS.md` / `CLAUDE.md` + `deploy/launchd/README.md`；必须核对只用完成月、月线与 `adj_factor` 前复权、股票基础资料 `L/D/P` 全状态按 `list_date/delist_date` 还原历史 as-of 外部宇宙并用 `monthly_pattern_bar_manifests` certified 收据认证覆盖、供应商新旧影子代码重复仅在同交易所+完整有效月线九字段/复权一致+唯一 canonical 对应+窗口内无角色反转/链式映射时抑制并留版本化 manifest 收据，缓存复用校验九字段摘要并将持久化六字段+复权逐项对照 canonical bar，schema/摘要/计数/事实任一损坏即 cache miss（否则 fail-closed，不拼接分段行情或迁移旧 episode）、公告日 as-of 财务（同公告日修订按内容哈希追加且无法证明公开日时从首次观测日起可见；年报 verified / 中报仅 pre_screen）、三策略及历史行业无 as-of 时题材 fail-closed、基本面 verified 下一严格完成月确认、active/risk 严格重入资格、连续两完成月跌破 MA5 才进入 exited 终态并保留 episode 历史、申万二级成交额稳定前排仅标 `[判断]`、五表、所有 daily/backfill 写入口显式 `--input-by`、裸/`--no-push`/`--dry-run` 三档、backfill/pool 边界、每月 2 日 23:10 per-task launchd 单次调度且休眠错过可接受，以及不写 TradeDraft/TradePlan/关注池、不提供买卖建议 |
+| `scripts/services/monthly_pattern/indicator_watch*.py` / `monitor_daily.py` 或 `monthly-pattern monitor*` CLI | `market-tasks/SKILL.md` + `INDEX.md` 中 `monthly-pattern monitor` / `monitor-daily` 行 + `AGENTS.md` / `CLAUDE.md` + `deploy/launchd/README.md`；必须核对只读复用 certified 完成月、不自动补采/不回退旧月，最新完成月 as-of 宇宙与 certified `universe_count` 精确对账后区分合法退出与缺尾月，并覆盖整窗无 bar 的在册代码；五阳与初始 MA5 支撑只认完成月，目标月仅在 T 日前复权坐标下以前四个连续自然月月末收盘 + 当前 T 日收盘计算动态 MA5 当前资格硬门，`support_held=True` 才能进主清单，`False` 必须单列等待且不得被日/周 MACD 共振越过，`None` 必须单列不可判并把运行标为 `partial`，也不得用 as-of 目标月新增完成月种子；等待桶仅为同一目标月的无状态日频快照，跨月保留期限未定义前不得持久化成永久池；默认日期遵守上海 15:30 收盘安全线，目标日之后的日线/周线不得进入历史结果，日线与周线统一用 T 日前复权锚，MACD `above_zero` 与 `bullish_on_zero` 分开，5/13 均量只标现有系统辅助口径，目标日 ST 身份与可选行业/简称解耦且空/非法 ST 结果 fail-closed，历史行业无 as-of 时标未知，关键源缺失分 `blocked/partial` 而非正常空候选；手工 `monitor` 默认不落文件、不推送、不挂调度，只有显式 `--save-report` 才写本地 Markdown；自动 `monitor-daily` 禁止截断，只在当前已收盘开放日运行，初始化/日历/只读库故障也要落 blocked 健康收据，日历未确认时只落本地 pending 且不得推送；显式历史日默认仅预览且永不推送，只有同时带 `--no-push` 才保存并推进基线；日期文件只作 latest 摘要，每次调用须追加不可覆盖的 planned/delivery/final 审计 JSON，以本地原子快照+pending/sent 账本实现 complete 基线差异和事件流 at-least-once 通知，partial/blocked 不推进股票基线且健康指纹包含所有缺口身份/原因（含 `insufficient_history`）、首次完整快照与完成月翻页不制造批量事件；独立 launchd 用无时区 15 分钟 tick，由 runner 只在上海工作日 19:10（含）至 19:25（不含）执行一次，不进 schedule/APScheduler；两者均不改月线七表/池、不要求 `--input-by`、不写 TradeDraft/TradePlan/关注池、不提供买卖建议 |
 | `scripts/cli/tail_scan.py` 或 `scripts/services/tail_scan/` | `market-tasks/SKILL.md` + `INDEX.md` 中 `tail-scan` 行 + `AGENTS.md` / `CLAUDE.md` |
 | `scripts/cli/daily_leaders.py` 或 `scripts/services/daily_leaders/` | `market-tasks/SKILL.md` + `INDEX.md` 中 `daily-leaders` 行 + `AGENTS.md` / `CLAUDE.md`；核对申万二级板块口径、语义属性与板型分离、同板块同属性唯一、最终最多 15、LLM 失败仍按相同硬约束兜底，并保持展示内代码解析、非法后缀及显式代码冲突 fail-closed |
 | `scripts/utils/pattern.py`，或 `scripts/cli/pattern_scan.py` / `scripts/services/pattern_scan/` | `market-tasks/SKILL.md`（形态篇小节）+ `INDEX.md` 中 `pattern-scan` 行 + `AGENTS.md` / `CLAUDE.md`；核对四条件缺一不可（多头排列严格递减、`zero_axis_bullish`=DIF 与 DEA **同时**>0 且 DIF>=DEA 而非只看 DIF、放量阳占比≥50% 且「放量阳→缩量阴」≥1 组且放量阴打断待成组、近 20 交易日未加速复用 `trend_leader.detectors.accel_threshold` 不得复制口径）、主线复用 `string_yang.mainline.judge_mainline(use_llm=False)` 不得另写一份、**均量线用 `vol` 且窗口 5/13**（区别于 `ma-breakout` 的成交额 5/10，两套故意不复用）、**前复权须 `apply_qfq(keys=OHLC_PRICE_KEYS)` 含 open**（判阴阳要 close/open 同坐标系，只复权 close 会在除权日把阳线判成阴线）且因子缺失整票剔除不硬算、两个 worker 有界并发但每票调用顺序/次数与输入结果顺序不变、样本不足与「形态不满足」分开计数不折叠、全宇宙取数失败必须 `source_failed` 不得报成空池、报告须声明前复权口径与「形态成立不等于应当买入」、排序为成交额降序非形态强弱排名、无池无状态不写库、22:45 per-task launchd 单一调度不进 `schedule`/APScheduler；回归 `scripts/tests/test_pattern.py` |
@@ -146,6 +149,10 @@ python3 -m pytest scripts/tests/test_cli_smoke.py -v
 | `api/routes/review_factors.py` | `daily-review/SKILL.md`、`sector-projection-analysis/SKILL.md` 与 `INDEX.md`；评分/回验/metrics 路径必须与 `review factor-*` CLI 共用 service 语义 |
 | `api/routes/planning.py` 中 `/api/plans/*` | `plan-workbench/SKILL.md` |
 | `api/routes/planning.py` 中 `/api/knowledge/*` | `knowledge-to-plan/SKILL.md` |
+
+> `monthly-pattern monitor` 还必须保持完成月种子的 AND 三态短路契约：结构损坏优先 `blocked`；月内复权形态未知但已有其他可信硬门失败时归 `not_matched` 并计 `shape_short_circuited_not_matched`；仅结论真正依赖未知形态时计 `blocked_price_shape`，且重分类不得扩大 `matched` 集合。
+
+> `monthly-pattern facts-backfill` 必须同步 `market-tasks/SKILL.md`、`INDEX.md`、`AGENTS.md`、`CLAUDE.md` 与 `deploy/launchd/README.md`：dry-run 必须从严格只读连接复制到内存并先生成确认哈希，partial 仍给信息性预览；收据哈希须绑定 raw/manifest/既有派生事实水位，真实写入只接受同一重算收据且 unresolved/截断/漂移均为 0，并在 `BEGIN IMMEDIATE` 写锁内再次复核；A 股选股宇宙须显式排除并审计 B 股，五个主分类与种子数必须守恒；日线手/千元须换算为月线股/元后交叉验证，raw 月末复权因子也须一致；全市场月线源通过 as-of 覆盖门后才可证明 `certified_no_trade`，且证据哈希须绑定全市场月线与历史宇宙完整排序行摘要。确认后仅可在同一事务内运行派生两表专用 schema ensure，表、索引、防改触发器按 SQL 指纹验签，禁止从该入口调用全库 migrate；只追加独立派生事实与审计行，DDL 与事实共同回滚，禁止覆盖 raw 五表或把 `certified_no_trade` 合成为价格。
 
 ### 3.1 检查 `agents/openai.yaml` 是否仍匹配
 

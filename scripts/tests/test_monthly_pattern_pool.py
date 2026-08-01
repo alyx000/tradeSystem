@@ -7,7 +7,13 @@ from datetime import date
 
 import pytest
 
-from db.migrate import CURRENT_SCHEMA_VERSION, get_schema_version, migrate, set_schema_version
+from db.migrate import (
+    CURRENT_SCHEMA_VERSION,
+    ensure_monthly_pattern_derived_fact_schema,
+    get_schema_version,
+    migrate,
+    set_schema_version,
+)
 from db.schema import init_schema
 from services.monthly_pattern import pool
 
@@ -64,6 +70,40 @@ def test_schema_creates_all_monthly_pattern_tables(conn: sqlite3.Connection) -> 
         "source",
         "fetched_at",
     } <= _table_columns(conn, "monthly_pattern_bars")
+    assert {
+        "month_end",
+        "stock_code",
+        "stock_name",
+        "fact_status",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "amount",
+        "anchor_adj_factor",
+        "trading_days",
+        "first_trade_date",
+        "last_trade_date",
+        "source_payload_hash",
+        "fact_hash",
+        "formula_version",
+        "replacement_reason",
+        "raw_crosscheck_status",
+        "source_meta_json",
+        "first_run_id",
+        "created_at",
+    } <= _table_columns(conn, "monthly_pattern_derived_month_facts")
+    assert {
+        "run_id",
+        "input_by",
+        "status",
+        "receipt_hash",
+        "request_json",
+        "counts_json",
+        "receipt_json",
+        "created_at",
+    } <= _table_columns(conn, "monthly_pattern_derived_fact_runs")
     assert {
         "stock_code",
         "report_period",
@@ -147,6 +187,99 @@ def test_monthly_bars_primary_key_blocks_duplicate_raw_fact(
         )
 
     assert "qfq_close" not in _table_columns(conn, "monthly_pattern_bars")
+
+
+def test_derived_fact_schema_enforces_status_shape_and_append_only_run(
+    conn: sqlite3.Connection,
+) -> None:
+    run_values = (
+        "run_schema",
+        "pytest",
+        "complete",
+        "a" * 64,
+        "{}",
+        "{}",
+        "{}",
+    )
+    conn.execute(
+        """
+        INSERT INTO monthly_pattern_derived_fact_runs (
+            run_id, input_by, status, receipt_hash,
+            request_json, counts_json, receipt_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        run_values,
+    )
+    with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+        conn.execute(
+            """
+            UPDATE monthly_pattern_derived_fact_runs
+            SET status = 'partial'
+            WHERE run_id = 'run_schema'
+            """
+        )
+    with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+        conn.execute(
+            "DELETE FROM monthly_pattern_derived_fact_runs WHERE run_id = 'run_schema'"
+        )
+
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            """
+            INSERT INTO monthly_pattern_derived_month_facts (
+                month_end, stock_code, fact_status, trading_days,
+                source_payload_hash, fact_hash, formula_version,
+                replacement_reason, raw_crosscheck_status, first_run_id
+            ) VALUES (
+                '2026-06-30', '600000', 'unknown', 0,
+                ?, ?, 'daily_qfq_month_v1', 'test', 'test', 'run_schema'
+            )
+            """,
+            ("b" * 64, "c" * 64),
+        )
+    conn.execute(
+        """
+        INSERT INTO monthly_pattern_derived_month_facts (
+            month_end, stock_code, fact_status, trading_days,
+            source_payload_hash, fact_hash, formula_version,
+            replacement_reason, raw_crosscheck_status, first_run_id
+        ) VALUES (
+            '2026-06-30', '600001', 'certified_no_trade', 0,
+            ?, ?, 'daily_qfq_month_v1', 'test',
+            'certified_no_trade', 'run_schema'
+        )
+        """,
+        ("d" * 64, "e" * 64),
+    )
+    with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+        conn.execute(
+            "UPDATE monthly_pattern_derived_month_facts "
+            "SET stock_name = 'tampered' "
+            "WHERE month_end = '2026-06-30' AND stock_code = '600001'"
+        )
+    with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+        conn.execute(
+            "DELETE FROM monthly_pattern_derived_month_facts "
+            "WHERE month_end = '2026-06-30' AND stock_code = '600001'"
+        )
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            """
+            INSERT INTO monthly_pattern_derived_month_facts (
+                month_end, stock_code, fact_status,
+                open, high, low, close, volume, amount, anchor_adj_factor,
+                trading_days, first_trade_date, last_trade_date,
+                source_payload_hash, fact_hash, formula_version,
+                replacement_reason, raw_crosscheck_status, first_run_id
+            ) VALUES (
+                '2026-06-30', '600000', 'certified_no_trade',
+                1, NULL, NULL, NULL, NULL, NULL, NULL,
+                0, NULL, NULL, ?, ?, 'daily_qfq_month_v1',
+                'test', 'certified_no_trade', 'run_schema'
+            )
+            """,
+            ("b" * 64, "c" * 64),
+        )
 
 
 def test_financial_snapshot_keeps_announcement_revision_history(
@@ -405,6 +538,8 @@ def test_migrate_repairs_missing_monthly_pattern_tables_without_version_drift() 
         "monthly_pattern_runs",
         "monthly_pattern_financial_snapshots",
         "monthly_pattern_bars",
+        "monthly_pattern_derived_month_facts",
+        "monthly_pattern_derived_fact_runs",
     ):
         conn.execute(f"DROP TABLE {table}")
     conn.commit()
@@ -423,11 +558,165 @@ def test_migrate_repairs_missing_monthly_pattern_tables_without_version_drift() 
     assert tables == {
         "monthly_pattern_bars",
         "monthly_pattern_bar_manifests",
+        "monthly_pattern_derived_month_facts",
+        "monthly_pattern_derived_fact_runs",
         "monthly_pattern_financial_snapshots",
         "monthly_pattern_pool",
         "monthly_pattern_runs",
     }
+    triggers = {
+        row["name"]
+        for row in conn.execute(
+            """
+            SELECT name FROM sqlite_master
+            WHERE type = 'trigger' AND name LIKE 'trg_monthly_pattern_%'
+            """
+        )
+    }
+    assert triggers == {
+        "trg_monthly_pattern_derived_facts_no_delete",
+        "trg_monthly_pattern_derived_facts_no_update",
+        "trg_monthly_pattern_derived_runs_no_delete",
+        "trg_monthly_pattern_derived_runs_no_update",
+    }
     assert get_schema_version(conn) == CURRENT_SCHEMA_VERSION
+
+
+def test_migrate_rebuilds_empty_malformed_derived_tables() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    init_schema(conn)
+    set_schema_version(conn, CURRENT_SCHEMA_VERSION)
+    conn.execute("DROP TABLE monthly_pattern_derived_month_facts")
+    conn.execute("DROP TABLE monthly_pattern_derived_fact_runs")
+    conn.execute(
+        "CREATE TABLE monthly_pattern_derived_fact_runs "
+        "(run_id TEXT PRIMARY KEY)"
+    )
+    conn.execute(
+        "CREATE TABLE monthly_pattern_derived_month_facts "
+        "(month_end TEXT, stock_code TEXT, PRIMARY KEY(month_end, stock_code))"
+    )
+    conn.commit()
+
+    migrate(conn)
+
+    assert {
+        "fact_status",
+        "fact_hash",
+        "source_payload_hash",
+        "first_run_id",
+    } <= _table_columns(conn, "monthly_pattern_derived_month_facts")
+    assert {
+        "input_by",
+        "receipt_hash",
+        "request_json",
+    } <= _table_columns(conn, "monthly_pattern_derived_fact_runs")
+
+
+def test_migrate_fails_closed_on_nonempty_malformed_derived_tables() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    init_schema(conn)
+    set_schema_version(conn, CURRENT_SCHEMA_VERSION)
+    conn.execute("DROP TABLE monthly_pattern_derived_month_facts")
+    conn.execute(
+        "CREATE TABLE monthly_pattern_derived_month_facts "
+        "(month_end TEXT, stock_code TEXT, PRIMARY KEY(month_end, stock_code))"
+    )
+    conn.execute(
+        "INSERT INTO monthly_pattern_derived_month_facts VALUES "
+        "('2026-06-30', '600000')"
+    )
+    conn.commit()
+
+    with pytest.raises(RuntimeError, match="已有审计数据"):
+        migrate(conn)
+
+
+def test_derived_schema_ensure_is_transactional_and_does_not_touch_raw_tables() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    init_schema(conn)
+    raw_tables = (
+        "monthly_pattern_bars",
+        "monthly_pattern_bar_manifests",
+        "monthly_pattern_financial_snapshots",
+        "monthly_pattern_runs",
+        "monthly_pattern_pool",
+    )
+    raw_sql_before = {
+        table: conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name=?",
+            (table,),
+        ).fetchone()[0]
+        for table in raw_tables
+    }
+    conn.execute("DROP TABLE monthly_pattern_derived_month_facts")
+    conn.execute("DROP TABLE monthly_pattern_derived_fact_runs")
+    conn.commit()
+
+    conn.execute("BEGIN IMMEDIATE")
+    assert ensure_monthly_pattern_derived_fact_schema(conn) is True
+    assert conn.in_transaction is True
+    conn.rollback()
+
+    assert conn.execute(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' "
+        "AND name LIKE 'monthly_pattern_derived_%'"
+    ).fetchone()[0] == 0
+    assert {
+        table: conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name=?",
+            (table,),
+        ).fetchone()[0]
+        for table in raw_tables
+    } == raw_sql_before
+
+
+def test_migrate_repairs_same_name_tampered_append_only_trigger_when_empty() -> None:
+    conn = sqlite3.connect(":memory:")
+    init_schema(conn)
+    set_schema_version(conn, CURRENT_SCHEMA_VERSION)
+    conn.execute("DROP TRIGGER trg_monthly_pattern_derived_facts_no_update")
+    conn.execute(
+        "CREATE TRIGGER trg_monthly_pattern_derived_facts_no_update "
+        "AFTER INSERT ON monthly_pattern_derived_month_facts "
+        "BEGIN SELECT 1; END"
+    )
+    conn.commit()
+
+    migrate(conn)
+
+    sql = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='trigger' "
+        "AND name='trg_monthly_pattern_derived_facts_no_update'"
+    ).fetchone()[0]
+    assert "BEFORE UPDATE ON monthly_pattern_derived_month_facts" in sql
+
+
+def test_migrate_fails_closed_on_tampered_append_only_trigger_with_data() -> None:
+    conn = sqlite3.connect(":memory:")
+    init_schema(conn)
+    set_schema_version(conn, CURRENT_SCHEMA_VERSION)
+    conn.execute(
+        """
+        INSERT INTO monthly_pattern_derived_fact_runs (
+            run_id, input_by, status, receipt_hash
+        ) VALUES ('run_tampered', 'pytest', 'complete', ?)
+        """,
+        ("a" * 64,),
+    )
+    conn.execute("DROP TRIGGER trg_monthly_pattern_derived_runs_no_update")
+    conn.execute(
+        "CREATE TRIGGER trg_monthly_pattern_derived_runs_no_update "
+        "AFTER INSERT ON monthly_pattern_derived_fact_runs "
+        "BEGIN SELECT 1; END"
+    )
+    conn.commit()
+
+    with pytest.raises(RuntimeError, match="防改触发器"):
+        migrate(conn)
 
 
 def test_migrate_repairs_legacy_monthly_run_audit_column() -> None:
