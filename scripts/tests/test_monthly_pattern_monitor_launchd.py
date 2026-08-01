@@ -9,6 +9,9 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RUNNER = REPO_ROOT / "deploy/launchd/monthly-pattern-monitor-runner.sh"
+PRODUCTION_RUNNER = Path(
+    "/Users/alyx/tradeSystem/deploy/launchd/monthly-pattern-monitor-runner.sh"
+)
 PLIST = (
     REPO_ROOT
     / "deploy/launchd/com.alyx.tradesystem.monthly-pattern-monitor.plist"
@@ -74,7 +77,7 @@ class TestPlist:
             data["Label"]
             == "com.alyx.tradesystem.monthly-pattern-monitor"
         )
-        assert data["ProgramArguments"] == [str(RUNNER)]
+        assert data["ProgramArguments"] == [str(PRODUCTION_RUNNER)]
 
     def test_timezone_independent_tick(self):
         data = self._load()
