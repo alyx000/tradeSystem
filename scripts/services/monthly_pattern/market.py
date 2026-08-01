@@ -101,6 +101,17 @@ _CODE_ALIAS_RECEIPT_FIELDS = frozenset(
         "receipt_sha256",
     }
 )
+_B_SHARE_PREFIXES = ("200", "201", "900")
+
+
+def is_b_share_code(raw: Any) -> bool:
+    """识别沪深 B 股代码；月线选股策略的可执行股票宇宙仅覆盖 A 股。"""
+    code = str(raw or "").strip().upper().split(".", 1)[0]
+    return (
+        len(code) == 6
+        and code.isdigit()
+        and code.startswith(_B_SHARE_PREFIXES)
+    )
 
 
 def _code_alias_receipt_sha256(receipt: dict) -> str:
@@ -776,8 +787,16 @@ def apply_month_end_qfq(rows: list[dict]) -> list[dict]:
             factor = _number(row.get("adj_factor"))
             if factor is None or factor <= 0:
                 raise SourceCoverageError(f"{code} {row.get('month_end')} 复权因子缺失")
+            shape_certified = row.get("shape_certified")
+            if shape_certified is not None and not isinstance(
+                shape_certified, bool
+            ):
+                raise SourceCoverageError(
+                    f"{code} {row.get('month_end')} shape_certified 非法"
+                )
             row["price_shape_valid"] = bool(
-                previous_factor is None
+                shape_certified is True
+                or previous_factor is None
                 or math.isclose(
                     factor,
                     previous_factor,

@@ -212,6 +212,217 @@ def _ensure_sector_crowding_daily(conn: sqlite3.Connection) -> None:
     conn.commit()  # 仅在确需修复时才提交
 
 
+def _normalized_schema_sql(value: Any) -> str:
+    """Normalize sqlite_master SQL for exact schema-object fingerprints."""
+    normalized = "".join(str(value or "").split()).casefold()
+    normalized = normalized.replace("ifnotexists", "")
+    return normalized.rstrip(";")
+
+
+def ensure_monthly_pattern_derived_fact_schema(
+    conn: sqlite3.Connection,
+) -> bool:
+    """只确保派生事实两表、两索引和四个防改触发器。
+
+    本函数不提交事务，也不检查或迁移任何 raw 月线表。调用方可把它放进
+    ``BEGIN IMMEDIATE``，令 DDL 与派生事实写入共同提交或回滚。已有数据时，
+    表结构或 append-only 触发器任一异常都 fail-closed；只有空表允许重建。
+    """
+    from .schema import (
+        _SQL_MONTHLY_PATTERN_DERIVED_FACT_RUNS,
+        _SQL_MONTHLY_PATTERN_DERIVED_FACTS_NO_DELETE_TRIGGER,
+        _SQL_MONTHLY_PATTERN_DERIVED_FACTS_NO_UPDATE_TRIGGER,
+        _SQL_MONTHLY_PATTERN_DERIVED_MONTH_FACTS,
+        _SQL_MONTHLY_PATTERN_DERIVED_RUNS_NO_DELETE_TRIGGER,
+        _SQL_MONTHLY_PATTERN_DERIVED_RUNS_NO_UPDATE_TRIGGER,
+        _SQL_MONTHLY_PATTERN_INDEXES,
+    )
+
+    fact_table = "monthly_pattern_derived_month_facts"
+    run_table = "monthly_pattern_derived_fact_runs"
+    expected_tables = {fact_table, run_table}
+    expected_triggers = {
+        "trg_monthly_pattern_derived_runs_no_update": (
+            run_table,
+            _SQL_MONTHLY_PATTERN_DERIVED_RUNS_NO_UPDATE_TRIGGER,
+        ),
+        "trg_monthly_pattern_derived_runs_no_delete": (
+            run_table,
+            _SQL_MONTHLY_PATTERN_DERIVED_RUNS_NO_DELETE_TRIGGER,
+        ),
+        "trg_monthly_pattern_derived_facts_no_update": (
+            fact_table,
+            _SQL_MONTHLY_PATTERN_DERIVED_FACTS_NO_UPDATE_TRIGGER,
+        ),
+        "trg_monthly_pattern_derived_facts_no_delete": (
+            fact_table,
+            _SQL_MONTHLY_PATTERN_DERIVED_FACTS_NO_DELETE_TRIGGER,
+        ),
+    }
+    expected_index_sql = {
+        "idx_monthly_pattern_derived_facts_stock_month": next(
+            sql
+            for sql in _SQL_MONTHLY_PATTERN_INDEXES
+            if "idx_monthly_pattern_derived_facts_stock_month" in sql
+        ),
+        "idx_monthly_pattern_derived_runs_created": next(
+            sql
+            for sql in _SQL_MONTHLY_PATTERN_INDEXES
+            if "idx_monthly_pattern_derived_runs_created" in sql
+        ),
+    }
+    existing_tables = {
+        str(row[0])
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' "
+            "AND name IN (?, ?)",
+            (fact_table, run_table),
+        ).fetchall()
+    }
+
+    def _row_count() -> int:
+        return sum(
+            int(conn.execute(f'SELECT COUNT(*) FROM "{name}"').fetchone()[0])
+            for name in expected_tables
+            if name in existing_tables
+        )
+
+    def _tables_are_healthy() -> bool:
+        if existing_tables != expected_tables:
+            return False
+        fact_info = conn.execute(f'PRAGMA table_info("{fact_table}")').fetchall()
+        run_info = conn.execute(f'PRAGMA table_info("{run_table}")').fetchall()
+        fact_columns = {str(row[1]) for row in fact_info}
+        run_columns = {str(row[1]) for row in run_info}
+        required_fact_columns = {
+            "month_end",
+            "stock_code",
+            "stock_name",
+            "fact_status",
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "amount",
+            "anchor_adj_factor",
+            "trading_days",
+            "first_trade_date",
+            "last_trade_date",
+            "source_payload_hash",
+            "fact_hash",
+            "formula_version",
+            "replacement_reason",
+            "raw_crosscheck_status",
+            "source_meta_json",
+            "first_run_id",
+            "created_at",
+        }
+        required_run_columns = {
+            "run_id",
+            "input_by",
+            "status",
+            "receipt_hash",
+            "request_json",
+            "counts_json",
+            "receipt_json",
+            "created_at",
+        }
+        fact_pk = {str(row[1]): int(row[5]) for row in fact_info}
+        run_pk = {str(row[1]): int(row[5]) for row in run_info}
+        foreign_keys = conn.execute(
+            f'PRAGMA foreign_key_list("{fact_table}")'
+        ).fetchall()
+        table_sql = {
+            str(row[0]): str(row[1] or "")
+            for row in conn.execute(
+                "SELECT name, sql FROM sqlite_master WHERE type='table' "
+                "AND name IN (?, ?)",
+                (fact_table, run_table),
+            ).fetchall()
+        }
+        return (
+            required_fact_columns.issubset(fact_columns)
+            and required_run_columns.issubset(run_columns)
+            and fact_pk.get("month_end") == 1
+            and fact_pk.get("stock_code") == 2
+            and run_pk.get("run_id") == 1
+            and any(
+                str(row[2]) == run_table
+                and str(row[3]) == "first_run_id"
+                and str(row[4]) == "run_id"
+                for row in foreign_keys
+            )
+            and "fact_statusin('certified_bar','certified_no_trade')"
+            in _normalized_schema_sql(table_sql.get(fact_table))
+            and "statusin('complete','partial','failed')"
+            in _normalized_schema_sql(table_sql.get(run_table))
+            and _normalized_schema_sql(table_sql.get(fact_table))
+            == _normalized_schema_sql(_SQL_MONTHLY_PATTERN_DERIVED_MONTH_FACTS)
+            and _normalized_schema_sql(table_sql.get(run_table))
+            == _normalized_schema_sql(_SQL_MONTHLY_PATTERN_DERIVED_FACT_RUNS)
+        )
+
+    changed = False
+    if not _tables_are_healthy():
+        if _row_count():
+            raise RuntimeError(
+                "月线派生事实表结构不完整且已有审计数据，拒绝自动重建；"
+                "请先导出并人工修复"
+            )
+        conn.execute(f'DROP TABLE IF EXISTS "{fact_table}"')
+        conn.execute(f'DROP TABLE IF EXISTS "{run_table}"')
+        conn.execute(_SQL_MONTHLY_PATTERN_DERIVED_FACT_RUNS)
+        conn.execute(_SQL_MONTHLY_PATTERN_DERIVED_MONTH_FACTS)
+        existing_tables = expected_tables
+        changed = True
+
+    row_count = _row_count()
+    trigger_rows = {
+        str(row[0]): (str(row[1] or ""), str(row[2] or ""))
+        for row in conn.execute(
+            "SELECT name, tbl_name, sql FROM sqlite_master "
+            "WHERE type='trigger' AND name IN (?, ?, ?, ?)",
+            tuple(expected_triggers),
+        ).fetchall()
+    }
+    invalid_triggers = [
+        name
+        for name, (table_name, expected_sql) in expected_triggers.items()
+        if name not in trigger_rows
+        or trigger_rows[name][0] != table_name
+        or _normalized_schema_sql(trigger_rows[name][1])
+        != _normalized_schema_sql(expected_sql)
+    ]
+    if invalid_triggers and row_count:
+        raise RuntimeError(
+            "月线派生事实防改触发器缺失或被篡改，且已有审计数据，拒绝自动修复"
+        )
+    for name in invalid_triggers:
+        conn.execute(f'DROP TRIGGER IF EXISTS "{name}"')
+        conn.execute(expected_triggers[name][1])
+        changed = True
+
+    index_rows = {
+        str(row[0]): str(row[1] or "")
+        for row in conn.execute(
+            "SELECT name, sql FROM sqlite_master WHERE type='index' "
+            "AND name IN (?, ?)",
+            tuple(expected_index_sql),
+        ).fetchall()
+    }
+    for name, expected_sql in expected_index_sql.items():
+        if (
+            name not in index_rows
+            or _normalized_schema_sql(index_rows[name])
+            != _normalized_schema_sql(expected_sql)
+        ):
+            conn.execute(f'DROP INDEX IF EXISTS "{name}"')
+            conn.execute(expected_sql)
+            changed = True
+    return changed
+
+
 def _ensure_monthly_pattern_tables(conn: sqlite3.Connection) -> None:
     """确保月线模式独立表及其索引存在，不跨越 teacher_notes v40 门禁。
 
@@ -219,19 +430,31 @@ def _ensure_monthly_pattern_tables(conn: sqlite3.Connection) -> None:
     sector_crowding_daily 等独立能力的版本无关兜底；CURRENT_SCHEMA_VERSION
     仍保持 40。健康库只读探查后直接返回，不提交调用方事务。
     """
+    if ensure_monthly_pattern_derived_fact_schema(conn):
+        conn.commit()
     required_tables = {
         "monthly_pattern_bars",
         "monthly_pattern_bar_manifests",
+        "monthly_pattern_derived_month_facts",
+        "monthly_pattern_derived_fact_runs",
         "monthly_pattern_financial_snapshots",
         "monthly_pattern_runs",
         "monthly_pattern_pool",
     }
     required_indexes = {
         "idx_monthly_pattern_bars_stock_month",
+        "idx_monthly_pattern_derived_facts_stock_month",
+        "idx_monthly_pattern_derived_runs_created",
         "idx_monthly_pattern_financial_stock_period",
         "idx_monthly_pattern_runs_signal_status",
         "idx_monthly_pattern_pool_open",
         "idx_monthly_pattern_pool_status_seen",
+    }
+    required_triggers = {
+        "trg_monthly_pattern_derived_runs_no_update",
+        "trg_monthly_pattern_derived_runs_no_delete",
+        "trg_monthly_pattern_derived_facts_no_update",
+        "trg_monthly_pattern_derived_facts_no_delete",
     }
     existing_tables = {
         row[0]
@@ -245,6 +468,13 @@ def _ensure_monthly_pattern_tables(conn: sqlite3.Connection) -> None:
         for row in conn.execute(
             "SELECT name FROM sqlite_master WHERE type='index' "
             "AND name LIKE 'idx_monthly_pattern_%'"
+        ).fetchall()
+    }
+    existing_triggers = {
+        row[0]
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='trigger' "
+            "AND name LIKE 'trg_monthly_pattern_%'"
         ).fetchall()
     }
     run_columns = (
@@ -267,25 +497,143 @@ def _ensure_monthly_pattern_tables(conn: sqlite3.Connection) -> None:
         if "monthly_pattern_financial_snapshots" in existing_tables
         else set()
     )
+    derived_fact_info = (
+        conn.execute(
+            "PRAGMA table_info(monthly_pattern_derived_month_facts)"
+        ).fetchall()
+        if "monthly_pattern_derived_month_facts" in existing_tables
+        else []
+    )
+    derived_run_info = (
+        conn.execute(
+            "PRAGMA table_info(monthly_pattern_derived_fact_runs)"
+        ).fetchall()
+        if "monthly_pattern_derived_fact_runs" in existing_tables
+        else []
+    )
+    required_derived_fact_columns = {
+        "month_end",
+        "stock_code",
+        "stock_name",
+        "fact_status",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "amount",
+        "anchor_adj_factor",
+        "trading_days",
+        "first_trade_date",
+        "last_trade_date",
+        "source_payload_hash",
+        "fact_hash",
+        "formula_version",
+        "replacement_reason",
+        "raw_crosscheck_status",
+        "source_meta_json",
+        "first_run_id",
+        "created_at",
+    }
+    required_derived_run_columns = {
+        "run_id",
+        "input_by",
+        "status",
+        "receipt_hash",
+        "request_json",
+        "counts_json",
+        "receipt_json",
+        "created_at",
+    }
+    derived_fact_columns = {row[1] for row in derived_fact_info}
+    derived_run_columns = {row[1] for row in derived_run_info}
+    derived_fact_pk = {row[1]: row[5] for row in derived_fact_info}
+    derived_run_pk = {row[1]: row[5] for row in derived_run_info}
+    derived_fact_foreign_keys = (
+        conn.execute(
+            "PRAGMA foreign_key_list(monthly_pattern_derived_month_facts)"
+        ).fetchall()
+        if derived_fact_info
+        else []
+    )
+    derived_fact_sql_row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' "
+        "AND name='monthly_pattern_derived_month_facts'"
+    ).fetchone()
+    derived_run_sql_row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' "
+        "AND name='monthly_pattern_derived_fact_runs'"
+    ).fetchone()
+    derived_fact_sql = str(derived_fact_sql_row[0] if derived_fact_sql_row else "")
+    derived_run_sql = str(derived_run_sql_row[0] if derived_run_sql_row else "")
+    derived_fact_schema_invalid = bool(derived_fact_info) and not (
+        required_derived_fact_columns.issubset(derived_fact_columns)
+        and derived_fact_pk.get("month_end") == 1
+        and derived_fact_pk.get("stock_code") == 2
+        and any(
+            row[2] == "monthly_pattern_derived_fact_runs"
+            and row[3] == "first_run_id"
+            and row[4] == "run_id"
+            for row in derived_fact_foreign_keys
+        )
+        and "fact_status IN ('certified_bar', 'certified_no_trade')"
+        in derived_fact_sql
+    )
+    derived_run_schema_invalid = bool(derived_run_info) and not (
+        required_derived_run_columns.issubset(derived_run_columns)
+        and derived_run_pk.get("run_id") == 1
+        and "status IN ('complete', 'partial', 'failed')" in derived_run_sql
+    )
+    needs_derived_schema_rebuild = (
+        derived_fact_schema_invalid or derived_run_schema_invalid
+    )
     needs_input_by = bool(run_columns) and "input_by" not in run_columns
     needs_financial_revision_history = bool(financial_columns) and not {
         "version_visible_date",
         "version_observed_at",
         "snapshot_hash",
     }.issubset(financial_columns)
-    if required_tables.issubset(existing_tables) and required_indexes.issubset(
-        existing_indexes
-    ) and not needs_input_by and not needs_financial_revision_history:
+    if (
+        required_tables.issubset(existing_tables)
+        and required_indexes.issubset(existing_indexes)
+        and required_triggers.issubset(existing_triggers)
+        and not needs_input_by
+        and not needs_financial_revision_history
+        and not needs_derived_schema_rebuild
+    ):
         return
 
     from .schema import (
         _SQL_MONTHLY_PATTERN_BAR_MANIFESTS,
         _SQL_MONTHLY_PATTERN_BARS,
+        _SQL_MONTHLY_PATTERN_DERIVED_FACT_RUNS,
+        _SQL_MONTHLY_PATTERN_DERIVED_FACTS_NO_DELETE_TRIGGER,
+        _SQL_MONTHLY_PATTERN_DERIVED_FACTS_NO_UPDATE_TRIGGER,
+        _SQL_MONTHLY_PATTERN_DERIVED_MONTH_FACTS,
+        _SQL_MONTHLY_PATTERN_DERIVED_RUNS_NO_DELETE_TRIGGER,
+        _SQL_MONTHLY_PATTERN_DERIVED_RUNS_NO_UPDATE_TRIGGER,
         _SQL_MONTHLY_PATTERN_FINANCIAL_SNAPSHOTS,
         _SQL_MONTHLY_PATTERN_INDEXES,
         _SQL_MONTHLY_PATTERN_POOL,
         _SQL_MONTHLY_PATTERN_RUNS,
     )
+
+    if needs_derived_schema_rebuild:
+        derived_row_count = sum(
+            conn.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
+            for table_name in (
+                "monthly_pattern_derived_month_facts",
+                "monthly_pattern_derived_fact_runs",
+            )
+            if table_name in existing_tables
+        )
+        if derived_row_count:
+            raise RuntimeError(
+                "月线派生事实表结构不完整且已有审计数据，拒绝自动重建；"
+                "请先导出并人工修复"
+            )
+        conn.execute("DROP TABLE IF EXISTS monthly_pattern_derived_month_facts")
+        conn.execute("DROP TABLE IF EXISTS monthly_pattern_derived_fact_runs")
 
     if needs_financial_revision_history:
         legacy_visible_sql = (
@@ -397,6 +745,8 @@ def _ensure_monthly_pattern_tables(conn: sqlite3.Connection) -> None:
     for sql in (
         _SQL_MONTHLY_PATTERN_BARS,
         _SQL_MONTHLY_PATTERN_BAR_MANIFESTS,
+        _SQL_MONTHLY_PATTERN_DERIVED_FACT_RUNS,
+        _SQL_MONTHLY_PATTERN_DERIVED_MONTH_FACTS,
         _SQL_MONTHLY_PATTERN_FINANCIAL_SNAPSHOTS,
         _SQL_MONTHLY_PATTERN_RUNS,
         _SQL_MONTHLY_PATTERN_POOL,
@@ -410,6 +760,10 @@ def _ensure_monthly_pattern_tables(conn: sqlite3.Connection) -> None:
         )
     for sql in _SQL_MONTHLY_PATTERN_INDEXES:
         conn.execute(sql)
+    conn.executescript(_SQL_MONTHLY_PATTERN_DERIVED_RUNS_NO_UPDATE_TRIGGER)
+    conn.executescript(_SQL_MONTHLY_PATTERN_DERIVED_RUNS_NO_DELETE_TRIGGER)
+    conn.executescript(_SQL_MONTHLY_PATTERN_DERIVED_FACTS_NO_UPDATE_TRIGGER)
+    conn.executescript(_SQL_MONTHLY_PATTERN_DERIVED_FACTS_NO_DELETE_TRIGGER)
     conn.commit()  # 仅在确需创建表/索引时才提交
 
 

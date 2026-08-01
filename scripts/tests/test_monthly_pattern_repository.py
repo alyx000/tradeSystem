@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import sqlite3
 
+import pytest
+
 from db.schema import init_schema
-from services.monthly_pattern import repository, service
+from services.monthly_pattern import derived_facts, repository, service
 
 
 def _conn() -> sqlite3.Connection:
@@ -28,6 +30,61 @@ def _alias_evidence_meta(
         "code_alias_normalizations": [],
         **extra,
     }
+
+
+def _derived_run(run_id: str, *, status: str = "complete") -> dict:
+    run = {
+        "run_id": run_id,
+        "input_by": "pytest",
+        "status": status,
+        "request": {"month_end": "2026-06-30"},
+        "counts": {"facts": 1},
+        "receipt": {"source": "fixture"},
+    }
+    run["receipt_hash"] = repository.compute_derived_fact_run_receipt_hash(run)
+    return run
+
+
+def _derived_bar(*, source_meta: dict | None = None) -> dict:
+    return derived_facts.build_month_fact(
+        "600000",
+        "2026-06-30",
+        [
+            {
+                "trade_date": "2026-06-29",
+                "open": 10.0,
+                "high": 12.0,
+                "low": 9.0,
+                "close": 11.0,
+                "volume": 100.0,
+                "amount": 1000.0,
+            },
+            {
+                "trade_date": "2026-06-30",
+                "open": 5.5,
+                "high": 6.0,
+                "low": 5.0,
+                "close": 5.8,
+                "volume": 200.0,
+                "amount": 2000.0,
+            },
+        ],
+        [
+            {"trade_date": "2026-06-29", "adj_factor": 1.0},
+            {"trade_date": "2026-06-30", "adj_factor": 2.0},
+        ],
+        raw_monthly={
+            "month_end": "2026-06-30",
+            "open": 10.0,
+            "high": 12.0,
+            "low": 5.0,
+            "close": 5.8,
+            "volume": 30000.0,
+            "amount": 3000000.0,
+        },
+        stock_name="测试股份",
+        source_meta=source_meta,
+    )
 
 
 def test_month_bars_upsert_is_idempotent_and_keeps_raw_prices() -> None:
@@ -154,6 +211,200 @@ def test_month_bars_upsert_is_idempotent_and_keeps_raw_prices() -> None:
     assert repository.existing_month_ends(
         conn, ["2026-06-30"], min_rows=1
     ) == set()
+
+
+def test_derived_fact_overlay_is_hashed_and_same_hash_is_idempotent() -> None:
+    conn = _conn()
+    repository.save_month_bars(
+        conn,
+        [
+            {
+                "month_end": "2026-06-30",
+                "stock_code": "600000",
+                "stock_name": "原始名称",
+                "open": 10.0,
+                "high": 12.0,
+                "low": 5.0,
+                "close": 5.8,
+                "volume": 300.0,
+                "amount": 3000.0,
+                "adj_factor": 2.0,
+                "source": "fixture:raw_monthly",
+            }
+        ],
+    )
+    fact = _derived_bar(source_meta={"batch": "first"})
+    first = repository.save_derived_fact_run_and_facts(
+        conn,
+        run=_derived_run("derived_run_1"),
+        facts=[fact],
+    )
+    second = repository.save_derived_fact_run_and_facts(
+        conn,
+        run=_derived_run("derived_run_2"),
+        facts=[fact],
+    )
+
+    assert first == {"run_id": "derived_run_1", "inserted": 1, "idempotent": 0}
+    assert second == {"run_id": "derived_run_2", "inserted": 0, "idempotent": 1}
+    loaded = repository.load_derived_month_facts(conn, ["2026-06-30"])
+    assert len(loaded) == 1
+    assert loaded[0]["fact_hash"] == fact["fact_hash"]
+    assert loaded[0]["first_run_id"] == "derived_run_1"
+    assert loaded[0]["source_meta"]["batch"] == "first"
+
+    effective = repository.load_effective_month_bars(conn, ["2026-06-30"])
+    assert len(effective) == 1
+    assert effective[0]["open"] == 5.0
+    assert effective[0]["adj_factor"] == 2.0
+    assert effective[0]["shape_certified"] is True
+    assert effective[0]["source"] == "derived_daily_certified"
+    assert effective[0]["derived_fact_hash"] == fact["fact_hash"]
+    assert len(repository.load_derived_fact_runs(conn)) == 2
+
+
+def test_derived_fact_different_hash_is_rejected_and_run_rolls_back() -> None:
+    conn = _conn()
+    original = _derived_bar(source_meta={"batch": "first"})
+    repository.save_derived_fact_run_and_facts(
+        conn,
+        run=_derived_run("derived_run_1"),
+        facts=[original],
+    )
+    conflicting = _derived_bar(source_meta={"batch": "changed"})
+
+    with pytest.raises(ValueError, match="derived fact conflict"):
+        repository.save_derived_fact_run_and_facts(
+            conn,
+            run=_derived_run("derived_run_conflict"),
+            facts=[conflicting],
+        )
+
+    assert repository.load_derived_fact_runs(
+        conn,
+        run_id="derived_run_conflict",
+    ) == []
+    loaded = repository.load_derived_month_facts(conn, ["2026-06-30"])
+    assert [row["fact_hash"] for row in loaded] == [original["fact_hash"]]
+
+
+def test_standalone_derived_fact_preflight_avoids_partial_batch_insert() -> None:
+    conn = _conn()
+    original = _derived_bar(source_meta={"batch": "first"})
+    repository.save_derived_fact_run_and_facts(
+        conn,
+        run=_derived_run("derived_run_1"),
+        facts=[original],
+    )
+    new_fact = derived_facts.build_certified_no_trade_fact(
+        "600001",
+        "2026-06-30",
+        universe_proven=True,
+        raw_monthly_empty=True,
+        daily_empty=True,
+    )
+    conflicting = _derived_bar(source_meta={"batch": "changed"})
+
+    with pytest.raises(ValueError, match="derived fact conflict"):
+        repository.save_derived_month_facts(
+            conn,
+            [new_fact, conflicting],
+            first_run_id="derived_run_1",
+        )
+
+    assert [
+        row["stock_code"]
+        for row in repository.load_derived_month_facts(
+            conn,
+            ["2026-06-30"],
+        )
+    ] == ["600000"]
+
+
+def test_effective_no_trade_yields_to_later_raw_month_fact() -> None:
+    conn = _conn()
+    fact = derived_facts.build_certified_no_trade_fact(
+        "600001",
+        "2026-06-30",
+        universe_proven=True,
+        raw_monthly_empty=True,
+        daily_empty=True,
+        source_meta={"proof": "fixture"},
+    )
+    repository.save_derived_fact_run_and_facts(
+        conn,
+        run=_derived_run("derived_run_no_trade"),
+        facts=[fact],
+    )
+    assert [
+        row["stock_code"]
+        for row in repository.load_effective_no_trade_facts(
+            conn,
+            ["2026-06-30"],
+        )
+    ] == ["600001"]
+
+    repository.save_month_bars(
+        conn,
+        [
+            {
+                "month_end": "2026-06-30",
+                "stock_code": "600001",
+                "open": 10.0,
+                "high": 11.0,
+                "low": 9.0,
+                "close": 10.5,
+                "volume": 100.0,
+                "amount": 1000.0,
+                "adj_factor": 1.0,
+                "source": "fixture:late_raw",
+            }
+        ],
+    )
+    assert repository.load_effective_no_trade_facts(
+        conn,
+        ["2026-06-30"],
+    ) == []
+    assert [
+        row["stock_code"]
+        for row in repository.load_effective_month_bars(
+            conn,
+            ["2026-06-30"],
+        )
+    ] == ["600001"]
+
+
+def test_effective_month_bars_falls_back_to_raw_when_derived_table_is_absent() -> None:
+    conn = _conn()
+    repository.save_month_bars(
+        conn,
+        [
+            {
+                "month_end": "2026-06-30",
+                "stock_code": "600000",
+                "open": 10.0,
+                "high": 11.0,
+                "low": 9.0,
+                "close": 10.5,
+                "volume": 100.0,
+                "amount": 1000.0,
+                "adj_factor": 1.0,
+                "source": "fixture:raw",
+            }
+        ],
+    )
+    conn.execute("DROP TABLE monthly_pattern_derived_month_facts")
+    conn.execute("DROP TABLE monthly_pattern_derived_fact_runs")
+
+    effective = repository.load_effective_month_bars(conn, ["2026-06-30"])
+
+    assert len(effective) == 1
+    assert effective[0]["source"] == "fixture:raw"
+    assert "shape_certified" not in effective[0]
+    assert repository.load_effective_no_trade_facts(
+        conn,
+        ["2026-06-30"],
+    ) == []
 
 
 def test_financial_snapshot_keeps_distinct_announcement_revisions() -> None:

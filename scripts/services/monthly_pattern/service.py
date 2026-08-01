@@ -352,14 +352,32 @@ def _latest_financial_views(
                 return None
             return periods.get(prior_period)
 
+        def previous_period_for(snapshot: dict | None) -> dict | None:
+            if snapshot is None:
+                return None
+            period = str(snapshot.get("report_period") or "")
+            try:
+                year = int(period[:4])
+            except (TypeError, ValueError):
+                return None
+            previous_period = {
+                "03-31": f"{year - 1:04d}-12-31",
+                "06-30": f"{year:04d}-03-31",
+                "09-30": f"{year:04d}-06-30",
+                "12-31": f"{year:04d}-09-30",
+            }.get(period[5:])
+            return periods.get(previous_period) if previous_period else None
+
         latest_assessment = financials.evaluate_financial_snapshot(
             latest,
             prior_same_period=prior_for(latest),
+            prior_period=previous_period_for(latest),
         )
         annual_assessment = (
             financials.evaluate_financial_snapshot(
                 annual,
                 prior_same_period=prior_for(annual),
+                prior_period=previous_period_for(annual),
             )
             if annual is not None
             else None
@@ -430,7 +448,11 @@ def _financial_views(
     if not snapshots:
         # 成功空批次不能回读历史缓存，否则新候选会被陈旧财务误升为 active。
         return {}, "source_ok_empty"
-    repository.save_financial_snapshots(conn, snapshots)
+    repository.save_financial_snapshots(
+        conn,
+        snapshots,
+        observed_date=(scan_date if not _is_historical_scan(scan_date) else None),
+    )
     conn.commit()
     batch_codes = {
         str(row.get("stock_code") or row.get("ts_code") or "").split(".")[0]
@@ -1344,7 +1366,7 @@ def run_daily(
             "fetched": fetched,
             "cached": cached,
         }
-        rows = repository.load_month_bars(conn, month_ends)
+        rows = repository.load_effective_month_bars(conn, month_ends)
         series = _stock_series(rows)
     except Exception as exc:
         source_status.setdefault("monthly_bars", "source_failed")
