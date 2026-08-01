@@ -15,6 +15,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RUNNER = REPO_ROOT / "deploy/launchd/pattern-scan-runner.sh"
 PLIST = REPO_ROOT / "deploy/launchd/com.alyx.tradesystem.pattern-scan.plist"
+PRODUCTION_RUNNER = Path("/Users/alyx/tradeSystem/deploy/launchd/pattern-scan-runner.sh")
 
 
 class TestRunner:
@@ -73,7 +74,7 @@ class TestPlist:
         assert self._load()["Label"] == "com.alyx.tradesystem.pattern-scan"
 
     def test_program_points_at_runner(self):
-        assert self._load()["ProgramArguments"] == [str(RUNNER)]
+        assert self._load()["ProgramArguments"] == [str(PRODUCTION_RUNNER)]
 
     def test_weekday_schedule_at_2245(self):
         """工作日 22:45；launchd 不支持 Weekday 范围语法，必须逐条列出。"""

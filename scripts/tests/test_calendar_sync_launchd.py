@@ -9,6 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 RUNNER = ROOT / "deploy/launchd/calendar-sync-runner.sh"
 PLIST = ROOT / "deploy/launchd/com.alyx.tradesystem.calendar-sync.plist"
+PRODUCTION_RUNNER = Path("/Users/alyx/tradeSystem/deploy/launchd/calendar-sync-runner.sh")
 
 
 def test_calendar_sync_runner_contract():
@@ -26,7 +27,7 @@ def test_calendar_sync_runner_contract():
 def test_calendar_sync_plist_contract():
     data = plistlib.loads(PLIST.read_bytes())
     assert data["Label"] == "com.alyx.tradesystem.calendar-sync"
-    assert data["ProgramArguments"] == ["/bin/bash", str(RUNNER)]
+    assert data["ProgramArguments"] == ["/bin/bash", str(PRODUCTION_RUNNER)]
     assert data["StartCalendarInterval"] == {"Hour": 6, "Minute": 30}
     assert data["RunAtLoad"] is False
     assert data["StandardOutPath"] == data["StandardErrorPath"]
