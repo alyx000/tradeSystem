@@ -8,6 +8,8 @@ import pytest
 
 from cli import monthly_pattern
 from db.connection import get_connection as real_get_connection
+from db.connection import get_readonly_connection as real_get_readonly_connection
+from db.migrate import migrate as real_migrate
 
 
 def _args(*, dry_run: bool, no_push: bool = False) -> argparse.Namespace:
@@ -38,10 +40,18 @@ def test_daily_dry_run_uses_memory_copy_and_has_no_report_or_push(
     tmp_path, monkeypatch
 ) -> None:
     db_path = tmp_path / "trade.db"
+    seed = real_get_connection(db_path)
+    real_migrate(seed)
+    seed.close()
     monkeypatch.setattr(
         monthly_pattern,
         "get_connection",
         lambda: real_get_connection(db_path),
+    )
+    monkeypatch.setattr(
+        monthly_pattern,
+        "get_readonly_connection",
+        lambda: real_get_readonly_connection(db_path),
     )
     monkeypatch.setattr(monthly_pattern, "_initialized_registry", lambda _config: object())
 
