@@ -282,8 +282,21 @@ def test_run_daily_builds_verified_and_theme_pool_from_completed_months(
     )
     assert strategies["theme_monthly_attack"]["mainline_match"] is True
     assert strategies["theme_monthly_attack"]["pool_status"] == "active"
+    assert strategies["fundamental_monthly_trend"]["source_meta"]["valuation"] == {
+        "status": "missing",
+        "version": "monthly_industry_valuation_percentile_v1",
+        "as_of_date": None,
+    }
+    assert summary["focus_candidates"]
+    assert {row["status"] for row in summary["focus_candidates"]} <= {
+        "technical_candidate",
+        "fundamental_verified",
+        "active",
+        "risk",
+    }
     fundamental = pool.get_open(conn, "600000", "fundamental_monthly_trend")
     assert fundamental["source_meta"]["input_by"] == "pytest"
+    assert fundamental["source_meta"]["valuation"]["status"] == "missing"
     run = repository.get_run(conn, "2026-06-30")
     assert run["status"] == "complete"
     assert run["input_by"] == "pytest"

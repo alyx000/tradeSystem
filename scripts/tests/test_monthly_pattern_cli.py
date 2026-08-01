@@ -138,6 +138,10 @@ def test_daily_push_uses_bounded_summary_and_keeps_full_report(
         "fundamental_verified": [
             {"stock_code": "600002", "status": "fundamental_verified"}
         ],
+        "technical_candidate": [
+            {"stock_code": "600003", "status": "technical_candidate"}
+        ],
+        "risk": [{"stock_code": "600004", "status": "risk"}],
     }
     monkeypatch.setattr(
         monthly_pattern.pool,
@@ -180,7 +184,10 @@ def test_daily_push_uses_bounded_summary_and_keeps_full_report(
             summary,
             "# full report",
             str(report_path),
-            focus_rows["active"] + focus_rows["fundamental_verified"],
+            focus_rows["active"]
+            + focus_rows["fundamental_verified"]
+            + focus_rows["technical_candidate"]
+            + focus_rows["risk"],
         )
     ]
     assert pushes == [("月线模式观察池 · 2026-06-30", "# bounded push")]

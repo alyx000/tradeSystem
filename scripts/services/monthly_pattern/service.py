@@ -7,7 +7,15 @@ import sqlite3
 from collections import defaultdict
 from datetime import date as date_type
 
-from services.monthly_pattern import detectors, financials, mainline, market, pool, repository
+from services.monthly_pattern import (
+    detectors,
+    financials,
+    mainline,
+    market,
+    pool,
+    repository,
+    valuation,
+)
 from services.monthly_pattern.models import MonthlyBar
 from services.volume_concentration import repo as concentration_repo
 
@@ -1103,6 +1111,13 @@ def _scan_and_update_pool(
     source_status["industry_map"] = industry_status
     mainline_status = mainline_meta["status"]
     source_status["mainline"] = mainline_status
+    valuation_by_code, valuation_meta = valuation.load_industry_valuation_views(
+        conn,
+        scan_date,
+        industry_map=industry_map,
+        market_codes=market_codes,
+    )
+    source_status["valuation"] = valuation_meta
     mainline_reliable = (
         industry_status == "success"
         and mainline_status in {"ok", "limited_history"}
@@ -1162,6 +1177,12 @@ def _scan_and_update_pool(
                 "industry": industry,
                 "mainline_match": mainline_match,
                 "mainline": mainline_meta,
+                "valuation": valuation_by_code.get(code)
+                or {
+                    "status": str(valuation_meta.get("status") or "missing"),
+                    "version": valuation.VALUATION_VERSION,
+                    "as_of_date": valuation_meta.get("as_of_date"),
+                },
                 "input_by": input_by,
             }
             source_meta = _source_meta_for_status(
@@ -1218,6 +1239,7 @@ def _scan_and_update_pool(
                 "mainline_match": mainline_match,
                 "technical_evidence": technical_evidence,
                 "financial_evidence": financial_evidence,
+                "source_meta": source_meta,
             }
             candidates.append(candidate)
             transition = _transition(
@@ -1307,6 +1329,7 @@ def _scan_and_update_pool(
                 item["stock_code"],
             ),
         ),
+        "focus_candidates": open_pool_rows,
         "transitions": transitions,
         "error": None,
     }
