@@ -680,12 +680,15 @@ class TestTrendLeaderNonTradingDay:
             check.close()
         assert n == 0, f"dry-run 不应写真实 trade_calendar，实际新增 {n} 条"
 
+    @patch("cli.trend_leader._write_report")
     @patch("cli.trend_leader.renderer")
     @patch("cli.trend_leader._push_to_dingtalk")
     @patch("cli.trend_leader.scanner")
     @patch("cli.trend_leader.get_connection")
     @patch("main.setup_providers")
-    def test_daily_runs_on_trading_day(self, mock_sp, mock_conn_fn, mock_scanner, mock_push, mock_renderer, tmp_path):
+    def test_daily_runs_on_trading_day(
+        self, mock_sp, mock_conn_fn, mock_scanner, mock_push, mock_renderer, mock_write, tmp_path
+    ):
         """交易日（is_trade_day=True）→ 正常调 scanner。"""
         conn = _make_test_db(tmp_path)
         mock_conn_fn.return_value = conn
@@ -697,13 +700,18 @@ class TestTrendLeaderNonTradingDay:
         from cli.trend_leader import _run_daily
         _run_daily({}, self._daily_args("2026-04-07", no_push=True))
         mock_scanner.run_daily.assert_called_once()
+        mock_write.assert_called_once_with("2026-04-07", "# 报告")
 
+    @patch("cli.trend_leader._write_report")
     @patch("cli.trend_leader.renderer")
     @patch("cli.trend_leader._push_to_dingtalk")
     @patch("cli.trend_leader.scanner")
     @patch("cli.trend_leader.get_connection")
     @patch("main.setup_providers")
-    def test_api_failure_does_not_block(self, mock_sp, mock_conn_fn, mock_scanner, mock_push, mock_renderer, caplog, tmp_path):
+    def test_api_failure_does_not_block(
+        self, mock_sp, mock_conn_fn, mock_scanner, mock_push, mock_renderer,
+        mock_write, caplog, tmp_path
+    ):
         """is_trade_day 判定失败且无日历缓存 → 不阻塞（工作日按 weekday 兜底放行）。"""
         conn = _make_test_db(tmp_path)  # 空日历
         mock_conn_fn.return_value = conn
@@ -717,6 +725,7 @@ class TestTrendLeaderNonTradingDay:
             _run_daily({}, self._daily_args("2026-04-07", no_push=True))  # 周二
         assert "非交易日" not in caplog.text
         mock_scanner.run_daily.assert_called_once()
+        mock_write.assert_called_once_with("2026-04-07", "# 报告")
 
     @patch("cli.trend_leader._push_to_dingtalk")
     @patch("cli.trend_leader.scanner")

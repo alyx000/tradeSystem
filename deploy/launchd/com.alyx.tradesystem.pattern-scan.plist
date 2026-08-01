@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Sleep policy: 形态篇观察清单错过可接受（盘后只读非交易决策任务）；macOS 休眠期间不触发，可接受 -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.alyx.tradesystem.pattern-scan</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/alyx/tradeSystem/deploy/launchd/pattern-scan-runner.sh</string>
+    </array>
+
+    <!-- 工作日 22:45。本任务逐票拉 300 自然日行情 + 复权因子（双调用），
+         实测量级参考 string-yang（435 只 / 140 自然日 / 单调用约 10 分钟），
+         2026-07-24 实测 883 只 23 分 12 秒（22:45 起约 23:08 结束），
+         故排在 daily-leaders 22:30 之后单独占窗口，
+         避免与 string-yang 21:50、earnings-digest 22:00 并发打 Tushare。 -->
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>22</integer><key>Minute</key><integer>45</integer></dict>
+        <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>22</integer><key>Minute</key><integer>45</integer></dict>
+        <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>22</integer><key>Minute</key><integer>45</integer></dict>
+        <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>22</integer><key>Minute</key><integer>45</integer></dict>
+        <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>22</integer><key>Minute</key><integer>45</integer></dict>
+    </array>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/tradesystem-pattern-scan.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/tradesystem-pattern-scan.log</string>
+
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>

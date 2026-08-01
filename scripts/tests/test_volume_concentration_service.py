@@ -421,6 +421,7 @@ def test_run_daily_persists_concepts_and_payload_has_concept_rankings():
     assert "题材区间涨幅排名" in md                       # 题材榜段进了报告
     rec = repo.get_concentration(conn, "2026-05-29")
     assert all("concepts" in s for s in rec["gain_universe"])   # 概念已落库
+    assert rec["source"]["gain_concept"]["status"] == "complete"
     payload = service.build_sector_gain_ranking_payload(conn, "2026-05-29")
     assert "共封装光学(CPO)" in {s["industry"] for s in payload["concept_rankings"]["5d"]}
 
@@ -438,6 +439,7 @@ def test_run_daily_concept_failure_does_not_block_sector_ranking():
     assert "题材区间涨幅排名" not in md        # 题材榜降级缺省
     rec = repo.get_concentration(conn, "2026-05-29")
     assert rec["gain_universe"][0]["concepts"] == []   # 概念空（不影响 gain）
+    assert rec["source"]["gain_concept"]["status"] == "source_failed"
 
 
 def test_run_daily_concept_failure_rerun_preserves_concepts():
@@ -458,6 +460,26 @@ def test_run_daily_concept_failure_rerun_preserves_concepts():
     after_concepts = {s["code"]: s["concepts"] for s in after}
     before_concepts = {s["code"]: s["concepts"] for s in before}
     assert after_concepts == before_concepts   # 既有题材被回填保留，未被抹空
+    assert repo.get_concentration(conn, "2026-05-29")["source"]["gain_concept"]["status"] == \
+        "fallback_preserved"
+
+
+def test_concept_health_marks_small_successful_intersection_as_healthy_sparse():
+    universe = [
+        {"code": f"{index:06d}", "concepts": ["CPO"] if index < 4 else []}
+        for index in range(50)
+    ]
+
+    meta = service._concept_health(universe, concept_ok=True)
+
+    assert meta == {
+        "status": "healthy_sparse",
+        "caliber": "top15_hot_concept_intersection",
+        "universe_count": 50,
+        "tagged_count": 4,
+        "tagged_ratio": 0.08,
+        "reason": None,
+    }
 
 
 def test_run_daily_concept_enrich_exception_does_not_lose_sector_ranking(monkeypatch):

@@ -13,6 +13,7 @@ TREND_DAYS = 30
 _STACK_TOP_K = 8           # 堆叠面积图保留的行业数(其余并入「其他」)
 _RETENTION_MIN_STREAK = 2  # 连续在榜入快照的最小天数
 _RETENTION_TOP_N = 12      # 连续在榜快照截断(限制载荷)
+_CONCEPT_SPARSE_RATIO = 0.2  # 热概念 Top15 与成交额前50交集低于20%时标「健康稀疏」
 
 
 def _has_gain_coverage(universe) -> bool:
@@ -31,6 +32,35 @@ def _has_gain_coverage(universe) -> bool:
         for period_rows in ranked.values()
         for sector in period_rows
     )
+
+
+def _concept_health(
+    universe: list[dict],
+    *,
+    concept_ok: bool | None,
+    fallback_preserved: bool = False,
+    reason: str | None = None,
+) -> dict:
+    """生成可持久化的题材标签健康收据，避免把正常小交集误报成数据缺口。"""
+    total = len(universe)
+    tagged = sum(1 for stock in universe if stock.get("concepts"))
+    ratio = round(tagged / total, 4) if total else 0.0
+    if fallback_preserved:
+        status = "fallback_preserved"
+    elif concept_ok is True:
+        status = "healthy_sparse" if ratio < _CONCEPT_SPARSE_RATIO else "complete"
+    elif concept_ok is False:
+        status = "source_failed"
+    else:
+        status = "not_run"
+    return {
+        "status": status,
+        "caliber": "top15_hot_concept_intersection",
+        "universe_count": total,
+        "tagged_count": tagged,
+        "tagged_ratio": ratio,
+        "reason": reason,
+    }
 
 
 def run_daily(conn, registry, date: str, trend_days: int = TREND_DAYS,
@@ -63,14 +93,22 @@ def run_daily(conn, registry, date: str, trend_days: int = TREND_DAYS,
     except Exception as exc:  # noqa: BLE001 — 隔离区间涨幅取数失败,保住主日报
         logger.warning("[volume-watch] 区间涨幅取数失败,降级(不阻断集中度日报): %s", exc)
         gain_universe = None
-    concept_ok = False
+    concept_ok: bool | None = None
+    concept_reason: str | None = None
     if gain_universe:  # 申万 universe 成功 → 才打概念标签;概念失败只置空 concepts,不动 gains
         try:
             gain_universe, concept_ok = collector.enrich_concepts(gain_universe, registry, date)
+            if not concept_ok:
+                concept_reason = "concept_provider_or_coverage_failed"
         except Exception as exc:  # noqa: BLE001 — 隔离题材概念取数失败,保住申万榜
             logger.warning("[volume-watch] 题材概念取数失败,题材榜降级(不影响申万榜): %s", exc)
             gain_universe = [{**s, "concepts": []} for s in gain_universe]
             concept_ok = False
+            concept_reason = type(exc).__name__
+    elif gain_universe is not None:
+        concept_reason = "gain_universe_empty"
+
+    fallback_preserved = False
     if _has_gain_coverage(gain_universe):
         record["gain_universe"] = gain_universe
         # 题材维度幂等:**仅当概念链路确实失败**(concept_ok=False:provider/coverage/异常)才按码回填旧
@@ -85,11 +123,26 @@ def run_daily(conn, registry, date: str, trend_days: int = TREND_DAYS,
                     {**s, "concepts": s.get("concepts") or prev_concepts.get(s.get("code"), [])}
                     for s in gain_universe
                 ]
+                fallback_preserved = True
     elif persist:
         prev = repo.get_concentration(conn, date)  # 降级 → 保留前次已落库榜单,幂等不抹
         record["gain_universe"] = (prev.get("gain_universe") if prev else None) or []
+        fallback_preserved = any(
+            stock.get("concepts") for stock in record["gain_universe"]
+        )
+        concept_reason = "gain_universe_unavailable"
     else:
         record["gain_universe"] = []  # dry-run 降级:无库可保,留空(预览诚实略过该段)
+        concept_reason = "gain_universe_unavailable"
+
+    source = dict(record.get("source") or {})
+    source["gain_concept"] = _concept_health(
+        record["gain_universe"],
+        concept_ok=concept_ok,
+        fallback_preserved=fallback_preserved,
+        reason=concept_reason,
+    )
+    record["source"] = source
 
     if persist:
         repo.save_concentration(conn, record)

@@ -109,6 +109,36 @@ def test_insufficient_omits_analysis_blocks():
     assert "环比前一交易日" not in out   # 不足 2 日不渲染对比块
 
 
+def test_healthy_sparse_concepts_are_not_reported_as_source_failure():
+    record = _record()
+    record["source"]["gain_concept"] = {
+        "status": "healthy_sparse",
+        "caliber": "top15_hot_concept_intersection",
+        "universe_count": 50,
+        "tagged_count": 4,
+        "tagged_ratio": 0.08,
+        "reason": None,
+    }
+
+    out = formatter.format_daily_report(record, _trend(sufficient=False))
+
+    assert "健康稀疏(热概念 Top15 交集 4/50)" in out
+    assert "不是来源失败" in out
+
+
+def test_failed_concept_source_is_explicit():
+    record = _record()
+    record["source"]["gain_concept"] = {
+        "status": "source_failed",
+        "universe_count": 50,
+        "tagged_count": 0,
+    }
+
+    out = formatter.format_daily_report(record, _trend(sufficient=False))
+
+    assert "来源失败,本次题材榜不可用" in out
+
+
 # ---- 📅 环比前一交易日(独立对比小块) ----
 
 def test_prev_compare_block_full_lines():

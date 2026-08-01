@@ -131,6 +131,27 @@ def _format_concept_ranking(universe: list[dict]) -> list[str]:
                            "📈 题材区间涨幅排名(成交额前50 · 同花顺概念)", "题材")
 
 
+def _format_concept_health(record: dict) -> list[str]:
+    """渲染题材标签健康状态；健康小交集与来源失败必须明确区分。"""
+    meta = ((record.get("source") or {}).get("gain_concept") or {})
+    status = meta.get("status")
+    if not status:
+        return []
+    tagged = meta.get("tagged_count", 0)
+    total = meta.get("universe_count", 0)
+    if status == "healthy_sparse":
+        text = f"- [事实] 题材标签状态:健康稀疏(热概念 Top15 交集 {tagged}/{total}),不是来源失败。"
+    elif status == "complete":
+        text = f"- [事实] 题材标签状态:完整(热概念 Top15 交集 {tagged}/{total})。"
+    elif status == "fallback_preserved":
+        text = f"- [事实] 题材标签状态:本次来源失败,沿用同日既有标签 {tagged}/{total}。"
+    elif status == "source_failed":
+        text = "- [事实] 题材标签状态:来源失败,本次题材榜不可用。"
+    else:
+        text = "- [事实] 题材标签状态:未执行(区间涨幅原始集不可用)。"
+    return [text, ""]
+
+
 def format_daily_report(record: dict | None, trend_result: dict) -> str:
     if not record:
         return "当日无成交额数据,跳过。"
@@ -191,6 +212,7 @@ def format_daily_report(record: dict | None, trend_result: dict) -> str:
     # 📈 区间涨幅排名(成交额前50,独立于上方 Top20 集中度):申万板块榜 + 同花顺题材榜,恒展示
     _universe = record.get("gain_universe") or []
     lines.extend(_format_gain_ranking(_universe))
+    lines.extend(_format_concept_health(record))
     lines.extend(_format_concept_ranking(_universe))
 
     # 不足 2 日:跨日趋势分析无意义,出兜底文案收尾

@@ -226,6 +226,9 @@ ALL_SKILL_COMMANDS = (
 
 ARCHITECTURE_COMMANDS = [
     # 基础盘前/盘后与 legacy 常驻调度器
+    ["prefetch-calendar", "--input-by", "pytest"],
+    ["prefetch-calendar", "--days", "14", "--from", "2026-07-29",
+     "--input-by", "launchd_calendar_sync", "--json"],
     ["pre"],
     ["pre", "--date", "2026-07-13"],
     ["post"],
@@ -434,6 +437,14 @@ ARCHITECTURE_COMMANDS = [
     ["string-yang", "daily", "--dry-run"],
     ["string-yang", "daily", "--no-push"],
     ["string-yang", "daily", "--date", "2026-06-12", "--top-k", "8", "--top-concepts", "6", "--no-llm", "--dry-run"],
+    # pattern-scan (形态篇:主线板块内 多头排列+MACD零上+阳放阴缩+未加速 四条件共振,只读观察清单)
+    ["pattern-scan", "daily"],
+    ["pattern-scan", "daily", "--date", "2026-07-24"],
+    ["pattern-scan", "daily", "--top-k", "8"],
+    ["pattern-scan", "daily", "--top-concepts", "6"],
+    ["pattern-scan", "daily", "--dry-run"],
+    ["pattern-scan", "daily", "--no-push"],
+    ["pattern-scan", "daily", "--date", "2026-07-24", "--top-k", "8", "--top-concepts", "6", "--no-push"],
     # daily-leaders (每日最票候选:预填+趋势池+老师观点→候选稿→确认写入复盘第5步)
     ["daily-leaders", "propose"],
     ["daily-leaders", "propose", "--date", "2026-07-03", "--no-llm"],

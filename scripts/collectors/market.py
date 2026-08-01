@@ -6,6 +6,9 @@ from __future__ import annotations
 
 import logging
 import math
+import os
+import tempfile
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -269,6 +272,105 @@ def _normalize_auto_event(ev: dict) -> dict:
     }
 
 
+@dataclass(frozen=True)
+class CalendarPrefetchResult:
+    """宏观日历预取收据；events 仅含本次 provider 返回并通过规范化的条目。"""
+
+    from_date: str
+    to_date: str
+    fetched_count: int
+    total_count: int
+    coverage_end: str | None
+    events: tuple[dict, ...]
+
+
+def prefetch_calendar_result(
+    registry: ProviderRegistry,
+    *,
+    days: int = 14,
+    from_date: str | None = None,
+    base_dir: Path = BASE_DIR,
+) -> CalendarPrefetchResult:
+    """预拉取并原子更新 calendar_auto.yaml，返回可供 SQLite 同步的结构化收据。"""
+    if days < 1:
+        raise ValueError("days 必须 >= 1")
+    if from_date is None:
+        from_date = datetime.now().strftime("%Y-%m-%d")
+    start = datetime.strptime(from_date, "%Y-%m-%d").date()
+    end = start + timedelta(days=days - 1)
+    to_date = end.isoformat()
+
+    r = registry.call("get_macro_calendar_range", from_date, to_date)
+    fetched: list[dict] = []
+    if r.success and isinstance(r.data, list):
+        fetched = [
+            norm
+            for ev in r.data
+            if isinstance(ev, dict)
+            if (norm := _normalize_auto_event(ev))["date"] and norm["event"]
+        ]
+    else:
+        logger.warning(f"get_macro_calendar_range 失败或无数据: {r.error}")
+
+    auto_path = base_dir / "tracking" / "calendar_auto.yaml"
+    by_key: dict[tuple[str, str], dict] = {}
+    if auto_path.exists():
+        try:
+            with open(auto_path, encoding="utf-8") as f:
+                raw = yaml.safe_load(f) or {}
+            for ev in (raw.get("events") or []):
+                norm = _normalize_auto_event(ev)
+                key = (norm["date"], norm["event"])
+                if key[0] and key[1]:
+                    by_key[key] = norm
+        except Exception as exc:
+            logger.warning(f"读取已有 calendar_auto.yaml 失败: {exc}")
+
+    for norm in fetched:
+        by_key[(norm["date"], norm["event"])] = norm
+
+    merged_list = sorted(
+        by_key.values(),
+        key=lambda item: (item.get("date", ""), item.get("time", ""), item.get("event", "")),
+    )
+    body = yaml.safe_dump(
+        {"events": merged_list},
+        allow_unicode=True,
+        default_flow_style=False,
+        sort_keys=False,
+    )
+    auto_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path: str | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=auto_path.parent,
+            prefix=f".{auto_path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temp_path = handle.name
+            handle.write(CALENDAR_AUTO_HEADER)
+            handle.write(body)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_path, auto_path)
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            os.unlink(temp_path)
+
+    coverage_end = max((event["date"] for event in fetched), default=None)
+    return CalendarPrefetchResult(
+        from_date=from_date,
+        to_date=to_date,
+        fetched_count=len(fetched),
+        total_count=len(merged_list),
+        coverage_end=coverage_end,
+        events=tuple(fetched),
+    )
+
+
 def prefetch_calendar(
     registry: ProviderRegistry,
     *,
@@ -281,55 +383,13 @@ def prefetch_calendar(
     与已有条目按 (date, event) 合并更新，不删除区间外的历史条目。
     返回 (API 返回条数, 写入后文件内事件总数)。
     """
-    if days < 1:
-        raise ValueError("days 必须 >= 1")
-    if from_date is None:
-        from_date = datetime.now().strftime("%Y-%m-%d")
-    start = datetime.strptime(from_date, "%Y-%m-%d").date()
-    end = start + timedelta(days=days - 1)
-    to_date = end.isoformat()
-
-    r = registry.call("get_macro_calendar_range", from_date, to_date)
-    fetched: list[dict] = []
-    if r.success and r.data:
-        fetched = list(r.data)
-    else:
-        logger.warning(f"get_macro_calendar_range 失败或无数据: {r.error}")
-
-    auto_path = base_dir / "tracking" / "calendar_auto.yaml"
-    by_key: dict[tuple[str, str], dict] = {}
-    if auto_path.exists():
-        try:
-            with open(auto_path, encoding="utf-8") as f:
-                raw = yaml.safe_load(f) or {}
-            for ev in (raw.get("events") or []):
-                norm = _normalize_auto_event(ev)
-                k = (norm["date"], norm["event"])
-                if k[0] and k[1]:
-                    by_key[k] = norm
-        except Exception as e:
-            logger.warning(f"读取已有 calendar_auto.yaml 失败: {e}")
-
-    for ev in fetched:
-        norm = _normalize_auto_event(ev)
-        k = (norm["date"], norm["event"])
-        if k[0] and k[1]:
-            by_key[k] = norm
-
-    merged_list = sorted(by_key.values(), key=lambda x: (x.get("date", ""), x.get("time", "")))
-
-    auto_path.parent.mkdir(parents=True, exist_ok=True)
-    body = yaml.safe_dump(
-        {"events": merged_list},
-        allow_unicode=True,
-        default_flow_style=False,
-        sort_keys=False,
+    result = prefetch_calendar_result(
+        registry,
+        days=days,
+        from_date=from_date,
+        base_dir=base_dir,
     )
-    with open(auto_path, "w", encoding="utf-8") as f:
-        f.write(CALENDAR_AUTO_HEADER)
-        f.write(body)
-
-    return len(fetched), len(merged_list)
+    return result.fetched_count, result.total_count
 
 
 from utils import is_st_stock as _is_st_stock

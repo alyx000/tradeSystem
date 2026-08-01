@@ -85,14 +85,16 @@ def tmp_db(tmp_path):
 
 
 @pytest.fixture
-def wired(tmp_db, monkeypatch):
+def wired(tmp_db, monkeypatch, tmp_path):
     """接线：setup_providers→FakeRegistry，get_connection→临时库，push→记账。"""
     reg = _leader_registry()
     monkeypatch.setattr(main_module, "setup_providers", lambda config: reg)
     monkeypatch.setattr(tl, "get_connection", lambda *a, **k: get_connection(tmp_db))
+    report_root = tmp_path / "reports"
+    monkeypatch.setattr(tl, "REPORT_ROOT", report_root)
     pushes = []
     monkeypatch.setattr(tl, "_push_to_dingtalk", lambda title, md: pushes.append((title, md)))
-    return {"db": tmp_db, "pushes": pushes}
+    return {"db": tmp_db, "pushes": pushes, "report_root": report_root}
 
 
 def _daily_args(**over):
@@ -107,6 +109,7 @@ def test_daily_dry_run_does_not_persist(wired, capsys):
     out = capsys.readouterr().out
     assert "趋势主升观察清单" in out
     assert wired["pushes"] == []                       # 未推送
+    assert not (wired["report_root"] / "2026-06-12.md").exists()
     conn = get_connection(wired["db"])
     try:
         assert pool.get_active(conn, "600552") is None  # 内存副本跑，真实库无落池
@@ -117,6 +120,9 @@ def test_daily_dry_run_does_not_persist(wired, capsys):
 def test_daily_no_push_persists_without_push(wired, capsys):
     tl._run_daily({}, _daily_args(no_push=True))
     assert wired["pushes"] == []                        # 未推送
+    assert (wired["report_root"] / "2026-06-12.md").read_text(encoding="utf-8").startswith(
+        "# 趋势主升观察清单"
+    )
     conn = get_connection(wired["db"])
     try:
         assert pool.get_active(conn, "600552") is not None  # 已落池
@@ -128,6 +134,7 @@ def test_daily_persists_and_pushes(wired, capsys):
     tl._run_daily({}, _daily_args())
     assert len(wired["pushes"]) == 1                    # 推送一次
     assert "趋势主升观察清单 · 2026-06-12" == wired["pushes"][0][0]
+    assert (wired["report_root"] / "2026-06-12.md").exists()
     conn = get_connection(wired["db"])
     try:
         assert pool.get_active(conn, "600552") is not None
@@ -154,6 +161,16 @@ def test_parse_sectors_invalid_json_exits():
 
 def test_parse_sectors_valid_list():
     assert tl._parse_sectors('["半导体","电池"]') == ["半导体", "电池"]
+
+
+def test_write_report_atomically_replaces_existing_file(tmp_path):
+    root = tmp_path / "reports"
+    path = tl._write_report("2026-06-12", "first", root=root)
+    assert path.read_text(encoding="utf-8") == "first"
+
+    path = tl._write_report("2026-06-12", "second", root=root)
+    assert path.read_text(encoding="utf-8") == "second"
+    assert list(root.glob("*.tmp")) == []
 
 
 def test_daily_same_day_rerun_still_shows_entry(wired, capsys):

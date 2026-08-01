@@ -2777,8 +2777,12 @@ class AkshareProvider(DataProvider):
 
             return DataResult(data=results, source="akshare:news_economic_baidu")
         except Exception as e:
-            logger.warning(f"news_economic_baidu 失败: {e}，返回空列表")
-            return DataResult(data=[], source=self.name)
+            logger.warning("news_economic_baidu 失败: %s", e)
+            return DataResult(
+                data=None,
+                source="akshare:news_economic_baidu",
+                error=str(e),
+            )
 
     def get_macro_calendar_range(self, from_date: str, to_date: str) -> DataResult:
         """
@@ -2794,15 +2798,28 @@ class AkshareProvider(DataProvider):
             return DataResult(data=None, source=self.name, error=f"日期格式错误: {e}")
 
         all_events: list[dict] = []
+        failed_dates: list[str] = []
         d = start
         while d <= end:
             date_str = d.isoformat()
             r = self.get_macro_calendar(date_str)
-            if r.success and r.data:
+            if not r.success:
+                failed_dates.append(date_str)
+            elif r.data:
                 for ev in r.data:
                     all_events.append({"date": date_str, **ev})
             d += timedelta(days=1)
 
+        if failed_dates:
+            return DataResult(
+                data=None,
+                source="akshare:news_economic_baidu_range",
+                error=(
+                    "经济日历区间存在失败日期: "
+                    + ",".join(failed_dates[:5])
+                    + ("..." if len(failed_dates) > 5 else "")
+                ),
+            )
         return DataResult(data=all_events, source="akshare:news_economic_baidu_range")
 
     # ---- 宏观经济指标 ----

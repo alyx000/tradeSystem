@@ -33,8 +33,8 @@
     # 采集阶段默认会临时清除 HTTP_PROXY/HTTPS_PROXY，避免误走本机代理导致 Tushare 超时。
     # 若你必须让采集也走代理：export TRADESYSTEM_USE_HTTP_PROXY=1
 
-    # 预拉取未来 N 天宏观日历到 tracking/calendar_auto.yaml（供盘前合并）
-    python main.py prefetch-calendar [--days 14] [--from YYYY-MM-DD]
+    # 预拉取未来 N 天宏观日历并幂等同步 SQLite（供盘前与复盘共用）
+    python main.py prefetch-calendar --input-by USER [--days 14] [--from YYYY-MM-DD]
 
     # 持仓（SQLite；CODE / NAME 等为占位符，请替换为实际证券代码、简称等）
     python main.py db holdings-add --code CODE --name NAME --shares N --price P --sector SECTOR
@@ -759,23 +759,57 @@ def cmd_check(config: dict):
             print(f"  {p.name}: {'OK' if p.enabled else 'FAIL'}")
 
 
-def cmd_prefetch_calendar(config: dict, days: int, from_date: Optional[str]):
-    """预拉取宏观日历并写入 tracking/calendar_auto.yaml"""
+def cmd_prefetch_calendar(
+    config: dict,
+    days: int,
+    from_date: Optional[str],
+    *,
+    input_by: str,
+    as_json: bool = False,
+) -> None:
+    """预拉取宏观日历，原子更新 YAML，并经标准 CLI 幂等同步 SQLite。"""
     logger.info(f"=== 预拉取宏观日历 days={days} from={from_date or 'today'} ===")
     with without_standard_http_proxy():
         registry = setup_providers(config)
         registry.initialize_all()
 
-        from collectors.market import prefetch_calendar
+        from collectors.market import prefetch_calendar_result
 
-        n_fetch, n_total = prefetch_calendar(
+        result = prefetch_calendar_result(
             registry,
             days=days,
             from_date=from_date,
             base_dir=BASE_DIR,
         )
-    print(f"预拉取完成：API 返回 {n_fetch} 条，calendar_auto.yaml 共 {n_total} 条事件")
-    logger.info(f"calendar_auto 已更新：拉取 {n_fetch} 条，文件合计 {n_total} 条")
+    from db.connection import get_connection
+    from services.calendar_sync import coverage_receipt, sync_calendar_events
+
+    conn = get_connection()
+    try:
+        db_receipt = sync_calendar_events(conn, result.events, input_by=input_by)
+    finally:
+        conn.close()
+    coverage = coverage_receipt(result, required_days=7)
+    payload = {
+        "status": coverage["status"],
+        "message": (
+            "宏观日历已更新"
+            if coverage["status"] == "complete"
+            else "宏观日历仅部分覆盖，未来7日窗口仍不完整"
+        ),
+        "from_date": result.from_date,
+        "to_date": result.to_date,
+        "required_through": coverage["required_through"],
+        "coverage_end": coverage["coverage_end"],
+        "fetched_count": result.fetched_count,
+        "yaml_total_count": result.total_count,
+        **db_receipt,
+        "input_by": input_by,
+    }
+    _emit_cli_result(payload, as_json=as_json)
+    logger.info("calendar_auto/SQLite 同步收据: %s", payload)
+    if coverage["status"] != "complete":
+        raise SystemExit(1)
 
 
 def cmd_pre(config: dict, target_date: str):
@@ -1423,10 +1457,12 @@ def build_parser() -> argparse.ArgumentParser:
     # prefetch-calendar
     prefetch_parser = subparsers.add_parser(
         "prefetch-calendar",
-        help="预拉取未来多日宏观日历到 tracking/calendar_auto.yaml",
+        help="预拉取未来多日宏观日历并同步 tracking/calendar_auto.yaml + SQLite",
     )
     prefetch_parser.add_argument("--days", type=int, default=14, help="从起始日起连续拉取的天数（默认 14）")
     prefetch_parser.add_argument("--from", dest="from_date", default=None, help="起始日 YYYY-MM-DD（默认今天）")
+    prefetch_parser.add_argument("--input-by", required=True, help="写入请求者（审计必填）")
+    prefetch_parser.add_argument("--json", action="store_true", help="输出 JSON 收据")
 
     # pre
     pre_parser = subparsers.add_parser("pre", help="生成盘前简报")
@@ -1899,6 +1935,10 @@ def build_parser() -> argparse.ArgumentParser:
     from cli.string_yang import register_subparser as register_string_yang_subparser
     register_string_yang_subparser(subparsers)
 
+    # pattern-scan (形态篇:主线板块内 多头排列+MACD零上+阳放阴缩+未加速 四条件共振)
+    from cli.pattern_scan import register_subparser as register_pattern_scan_subparser
+    register_pattern_scan_subparser(subparsers)
+
     # daily-leaders (每日最票候选:预填+趋势池+老师观点→候选稿→确认写入复盘第5步)
     from cli.daily_leaders import register_subparser as register_daily_leaders_subparser
     register_daily_leaders_subparser(subparsers)
@@ -1942,7 +1982,13 @@ def main():
     if args.command == "check":
         cmd_check(config)
     elif args.command == "prefetch-calendar":
-        cmd_prefetch_calendar(config, args.days, args.from_date)
+        cmd_prefetch_calendar(
+            config,
+            args.days,
+            args.from_date,
+            input_by=args.input_by,
+            as_json=args.json,
+        )
     elif args.command == "pre":
         cmd_pre(config, args.date)
     elif args.command == "post":
@@ -2011,6 +2057,9 @@ def main():
     elif args.command == "string-yang":
         from cli import string_yang as string_yang_module
         string_yang_module.handle_command(config, args)
+    elif args.command == "pattern-scan":
+        from cli import pattern_scan as pattern_scan_module
+        pattern_scan_module.handle_command(config, args)
     elif args.command == "daily-leaders":
         from cli import daily_leaders as daily_leaders_module
         daily_leaders_module.handle_command(config, args)

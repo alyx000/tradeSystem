@@ -151,6 +151,17 @@ make macro-flash-doctor         # live 探测金十可达性
 
 失败语义：`source_failed`（源不可达）/ `partial_window_truncated`（推送预算截断）/ `pagination_stalled`（翻页停滞）/ `schema_drift`（字段漂移）/ `push_failed`（归档成功但推送失败，`--repush` 补推）/ `run_error`（编排层意外异常）各有独立退出码；同日已 `complete` 归档默认幂等跳过（`--force-refresh` 覆盖重采）；`show` 仅在归档状态为 `complete` 且 `digest.md` sha256 与 manifest 记录一致时展示正文，否则只给状态与错误提示。
 
+## 宏观事件日历同步（prefetch-calendar）
+
+每天 06:30 的 per-task launchd 模板 `com.alyx.tradesystem.calendar-sync` 在 07:00 盘前任务前拉取未来 14 个自然日：
+
+```bash
+python3 main.py prefetch-calendar --days 14 --input-by manual --json
+python3 main.py prefetch-calendar --from 2026-07-29 --days 14 --input-by manual --json
+```
+
+流程是 provider 取数 → 原子更新 `tracking/calendar_auto.yaml` → 按 `(date,event)` 幂等同步 `calendar_events`。自动来源允许刷新，人工同名事件不覆盖；所有写入必须显式 `--input-by`。未来 7 日覆盖不足返回 `status=partial` 且非零退出，不能把一次 API 成功伪装成完整事件窗。launchd 模板只随仓库提供，安装/首次真实同步属于业务数据写入，须经用户确认。
+
 ## 成交额板块集中度监控（volume-watch）
 
 每交易日 21:00 自动跑（launchd `com.alyx.tradesystem.volume-watch`），也可手动：
@@ -181,7 +192,7 @@ done
 - **📈 区间涨幅排名（成交额前50，独立于上方 Top20 集中度）—— 申万板块榜 + 同花顺题材榜双维度**：独立取**成交额前50**个股 → `get_stock_daily_range` 算 5/10/20 日区间涨幅(`(close[-1]/close[-1-N]-1)*100`，历史不足/末根非榜单日/NaN→None) → 出两份榜：
   - **申万板块榜**：按申万二级单标签分组，剔「未分类」，`build_sector_gain_ranking`。
   - **同花顺题材榜**：复用共享 `concept_tags.build_stock_concept_map`(`get_ths_member` 反查 + 容器概念≤300 过滤)给每票打 `concepts`，**多标签**(一票进它每个概念)、概念在 universe 内成员 ≥2 才出，`build_concept_gain_ranking`。
-  - 两份均**组按组内涨幅最大个股降序、平手比次大**(向量字典序降序)，5/10/20 各一份独立榜。原始集(含 industry + concepts + gains)落 `daily_volume_concentration.gain_universe_json`(v34 增列 + ALTER 兜底；concepts 为 JSON 增键无新列)。纯函数被 Markdown 与 API 共用。健壮性：gains/概念取数失败各自 fail-closed(不拖垮主日报)，降级重跑按覆盖判据保留库内既有榜单不抹(coverage-aware 幂等)。全客观区间涨幅(属 [事实])，守红线不出价位目标/不给买卖建议。经只读 API `GET /api/market/sector-gain-ranking/{date}`(`rankings`+`concept_rankings`) 在八步复盘「2.板块」(`SectorGainRanking` 组件，申万/题材维度切换 + 三档周期 Tab)展示。慧博/同花顺概念依赖 `TUSHARE_TOKEN` 积分(`ths_member`)。
+  - 两份均**组按组内涨幅最大个股降序、平手比次大**(向量字典序降序)，5/10/20 各一份独立榜。原始集(含 industry + concepts + gains)落 `daily_volume_concentration.gain_universe_json`(v34 增列 + ALTER 兜底；concepts 为 JSON 增键无新列)。题材取数健康状态另落 `source_json.gain_concept`：`complete` / `healthy_sparse` / `source_failed` / `fallback_preserved`；例如热概念 Top15 与成交额前50只有 4/50 交集但链路成功时是 `healthy_sparse`，不得写成“概念标签缺失”。纯函数被 Markdown 与 API 共用。健壮性：gains/概念取数失败各自 fail-closed(不拖垮主日报)，降级重跑按覆盖判据保留库内既有榜单不抹(coverage-aware 幂等)。全客观区间涨幅(属 [事实])，守红线不出价位目标/不给买卖建议。经只读 API `GET /api/market/sector-gain-ranking/{date}`(`rankings`+`concept_rankings`) 在八步复盘「2.板块」(`SectorGainRanking` 组件，申万/题材维度切换 + 三档周期 Tab)展示。慧博/同花顺概念依赖 `TUSHARE_TOKEN` 积分(`ths_member`)。
 - 行业口径=**申万二级**（联动 `get_sector_rankings`）；「未分类」（次新等）不计入前3行业集中度，报告标 `industry_coverage`。
 - 依赖 env：`TUSHARE_TOKEN`（`scripts/.env`，`index_member_all` 需积分）、`DINGTALK_WEBHOOK_TOKEN/SECRET`（`~/.config/tradeSystem.env`，daily 推送）。
 
@@ -272,7 +283,7 @@ python3 main.py margin-index-correlation signals --json                         
 # 日报：涨停∩主线→检测→入池/退池→渲染→钉钉
 python3 main.py trend-leader daily
 python3 main.py trend-leader daily --date 2026-06-12 --dry-run    # 内存副本跑：不落池、不推送（历史校准用）
-python3 main.py trend-leader daily --no-push                       # 落池但仅打印，不推送（软上线/排障）
+python3 main.py trend-leader daily --no-push                       # 落池+原子落报告，但不推送（软上线/排障）
 python3 main.py trend-leader daily --sectors '["半导体","玻璃玻纤"]' --top-k 8  # 手工主线直接保留 ∪ 自动稳定 Top-K（top-k 须正整数）
 python3 main.py trend-leader daily --main-line hybrid --top-concepts 8           # 默认：稳定申万二级 ∪ LLM 过滤概念分支
 python3 main.py trend-leader daily --main-line hybrid --no-llm                   # 人工禁用 LLM，明确使用机械 l2+concept
@@ -290,7 +301,7 @@ python3 main.py trend-leader pool --status exited --json
 - **主线口径 `--main-line`（GAP B，对齐鞠磊「主线或其分支」）**：默认 `hybrid`=稳定申万二级主线 ∪ 同花顺概念资金净流入 Top-M，并用 LLM 只过滤概念分支；LLM 不允许新增概念/个股/事实，不否决稳定申万主线，不给买卖建议。LLM 异常、超时、非法输出或命中红线时关闭概念分支，状态标为 `fallback_l2`，不再机械放行概念。只有人工显式 `hybrid --no-llm` 或 `l2+concept` 才使用机械概念分支；`l2`=仅稳定申万二级主线。概念分支 = 同花顺概念（CPO/PCB/液冷服务器…），**非申万一级**（一级太宽混杂已被全月验证否定）。trend-leader 先按 `get_concept_moneyflow_ths` 排序，再只查资金流前排有限窗口的 `get_ths_member` 成员（默认 `max(40, Top-M*5)`，provider 进程内缓存重复概念），避免历史回放全量扫同花顺概念。个股命中`二级∈主线` **或** `概念∩主线概念` 即入候选；经概念分支入池的票在报告标「申万二级·分支:概念名」。**成员数闸 `CONCEPT_MAX_MEMBERS=300`**：净流入排序前先剔容器概念（融资融券/深股通/华为概念等几千成员的资格类标签，聚合净流入霸榜但非窄分支）。降级可观测：`source_errors` 含 `concept_flow`/`ths_member`/`concept_coverage`/`mainline_llm`；报告同时展示实际有效快照数、当前命中门槛、目标/回退/缺失来源状态及 LLM 状态。
 - **历史池边界**：稳定门和 LLM fail-closed 只作用于本次及后续扫描，不回溯清理 `trend_leader_pool` 既有记录；历史池仍由原趋势破坏退出规则维护。
 - **入池门槛**：首次加速（board-aware，近 60 日除今日外无同级加速）+ 主线缓涨（不含贴MA5——加速日必远离 MA5，贴MA5 是入池后回踩信号）。**退出只在客观趋势破坏**（收盘跌破 MA10 / 连续 2 日跌破 MA5 且跌幅扩大）；远离 MA5 只打「乖离过大」标记，不退池。
-- **三档运行**：裸 `daily`（落池+推）/ `--no-push`（落池+仅打印）/ `--dry-run`（内存副本跑，不落池不推送，历史校准安全）。
+- **三档运行**：裸 `daily`（落池 + 原子落 `data/reports/trend-leader/YYYY-MM-DD.md` + 推）/ `--no-push`（落池+落报告但不推）/ `--dry-run`（内存副本跑，不落池、不落报告、不推送，历史校准安全）。本地报告先于推送写入，推送故障不再造成“只有 launchd 日志、没有落盘报告”。
 - **池内唯一身份=裸代码**：Tushare `600552.SH` 与 AkShare `600552` 归一，避免重复 active 行。同日重跑/推送失败重试：已 active 票归 `refreshed`，报告仍合并展示在「今日新入池」不丢。
 - **守红线**：盘后只读观察清单，全部标 `[判断]`、不出价位、不给买卖建议、不写交易计划层；临盘买点用户自行判断。信号 label 中性化（缩量回踩/贴MA5/乖离过大），渲染层零业务决策。
 - 依赖 env 同 volume-watch（`TUSHARE_TOKEN` + 钉钉）。架构归位见 [`tradesystem-blueprint`](../../../docs/architecture/tradesystem-blueprint.md)「派生信号层」+「盘后只读监控族」。
@@ -346,6 +357,35 @@ python3 main.py string-yang daily --no-llm --dry-run
 - **三档运行**：裸 `daily`（写 `data/reports/string-yang/YYYY-MM-DD.md` + 推钉钉）/ `--no-push`（落报告不推送）/ `--dry-run`（仅打印，不落报告不推送）。非交易日守卫仅在非 dry-run 时生效。
 - **守红线**：全标 `[判断]`，不出价位、不给买卖建议、不写交易计划层、不自动入关注池。
 - 依赖 env 同 volume-watch（`TUSHARE_TOKEN` + 钉钉），LLM 额外依赖 `ANTIGRAVITY_BIN`/`AGY_BIN`、可选 `LLM_MODEL`、`LLM_TIMEOUT_SECONDS`（默认 180）。
+
+## 形态篇选股形态观察清单（pattern-scan）
+
+出处：`teacher_notes#444` 鞠磊《形态篇（第一节技术课程）· 牛市板块内选股形态标准》，认知 `cog_3b32e660`。
+
+每交易日 22:45 自动跑（launchd `com.alyx.tradesystem.pattern-scan`，排在 daily-leaders 22:30 之后；本任务以两个 worker 有界并发处理股票，单票仍保持“行情成功后才取复权因子”的原调用语义，并按输入顺序消费结果，避免全市场突发并发；单独占窗口避开 string-yang 21:50 / earnings-digest 22:00），也可手动：
+
+```bash
+python3 main.py pattern-scan daily
+python3 main.py pattern-scan daily --date 2026-07-24 --dry-run   # 只打印，不落盘不推送（历史校准）
+python3 main.py pattern-scan daily --no-push                      # 落报告不推送
+python3 main.py pattern-scan daily --top-k 8 --top-concepts 6
+```
+
+- **板块优先**：课程原则是「先发现板块，再在板块里找个股」。主线判断直接复用 `string_yang.mainline.judge_mainline(use_llm=False)`——主线口径必须与 string-yang 一致，各写一份会给出两个「什么是主线」的答案。**本命令不接 LLM**：四条件全是机械判定，接 LLM 只会引入幻觉面。
+- **四条件共振**（`utils.pattern`，缺一不可）：
+  1. **均线多头排列**：MA5 > MA10 > MA20 > MA30 > MA55 严格递减。严格大于是设计选择（与 `ma_position` 的「站上」同口径），恰好相等不算排列。
+  2. **MACD 零轴上方**：金叉**或零上运行**（课程原话「不管是金叉还是运行，都要在零轴上方」），判定字段是 `zero_axis_bullish` = DIF 与 DEA 同时 > 0 且 DIF >= DEA。只看 DIF 会把「DIF 刚翻正、DEA 仍在零下」的纠结段误判成零上，与课程「零下金叉难成主升浪」相悖。
+  3. **量能节奏**：近 20 交易日内，放量阳线（当日 `vol` 同时站上 5 日与 13 日**均量线**）占阳线 ≥50%（课程说「大部分」不是「每根」），且完整「放量阳→缩量阴」≥1 组。放量阴线是节奏翻转，会打断待成组的放量阳。**注意口径**：用 `vol` 不是 `amount`、窗口 5/13 不是 `ma-breakout` 的成交额 5/10，两套故意不复用。
+  4. **尚未加速**：近 20 交易日无涨停 / 双创 15%+（复用 `trend_leader.detectors.accel_threshold`，加速口径全项目单一真源）。前三条成立但已加速的票单列 `already_accelerated`，与「形态本就不干净」区分。
+- **前复权强制**：算的是 MA55 与 120 根 MACD，跨除权必错（`utils.qfq` 有实证：1.9% 分红即可翻转 MA233 结论）。走 `apply_qfq(keys=OHLC_PRICE_KEYS)` **含 open**——判 K 线阴阳要 close 与 open 同坐标系，只复权 close 会让除权日的阳线被判成阴线。因子取不到即整票剔除（计 `qfq_failed`），绝不退回未复权硬算。
+- **样本不足 ≠ 不满足**：任一条件样本不足计 `insufficient_history`，不折叠进 `ma_not_aligned` 等——两者在筛选语义上是不同结论，折叠会让次新股被误报为形态破坏。
+- **失败与空池区分**：全宇宙取数失败 → `status=source_failed`，落失败报告 + 推告警 + 非零退出，报告显式写「不代表已完成筛选后的空池」。
+- **排序**：今日成交额降序（`[事实]`），报告显式声明「非形态强弱排名」。
+- **口径诊断**：报告附「多头排列断点分布」（哪一对均线断得最多，按计数降序）。五线严格递减是最强的门——2026-07-24 实测 883 只里 842 只栽在这里，命中仅 1 只。该分布**纯观测、不参与筛选**，用途是等真实分布积累够了再决定课程「基本上要多头排列」该怎么放宽，避免拍脑袋改阈值。
+- **三档运行**：裸 `daily`（写 `data/reports/pattern-scan/YYYY-MM-DD.md` + 推钉钉）/ `--no-push`（落报告不推送）/ `--dry-run`（仅打印）。非交易日守卫仅在非 dry-run 时生效。
+- **守红线**：全标 `[判断]`，不出价位、不给买卖建议、不写交易计划层、不入关注池，不写库（无池无状态）。报告显式声明「形态成立只说明资金进场且空间未透支，不等于应当买入」。课程举例个股（甘李、蓝思、水晶光电等）只作认知实例的历史验证样本，不进任何推送。
+- 依赖 env：`TUSHARE_TOKEN` + 钉钉（`DINGTALK_WEBHOOK_TOKEN` / `DINGTALK_WEBHOOK_SECRET`）。不依赖 LLM env。
+
 ## 断板反包盘后扫描（board-break）
 
 每交易日 21:20 自动跑（launchd `com.alyx.tradesystem.board-break`，排在 volume-watch 21:00 + sector-correlation 21:15 之后、trend-leader 21:30 之前），也可手动：

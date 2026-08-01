@@ -5,6 +5,8 @@
 ## 文件
 
 - `recommend-runner.sh` — 包装脚本：cd 仓库根 → source 项目 env → 调 `python3 main.py recommend`
+- `calendar-sync-runner.sh` — 包装脚本：每天预取未来 14 日宏观事件，原子更新 `tracking/calendar_auto.yaml` 并幂等同步 `calendar_events`
+- `com.alyx.tradesystem.calendar-sync.plist` — 每天 06:30 触发，早于 07:00 盘前任务；未来 7 日覆盖不足时非零退出并写 `/tmp/tradesystem-calendar-sync.log`
 - `com.alyx.tradesystem.recommend-daily.plist` — 工作日 07:10 触发（行业日报）
 - `com.alyx.tradesystem.recommend-weekly.plist` — 周日 20:00 触发（行业周报）
 - `volume-watch-runner.sh` — 包装脚本：cd 仓库根 → source `scripts/.env`(TUSHARE_TOKEN) + `~/.config/tradeSystem.env`(钉钉) → 调 `python3 main.py volume-watch daily`
@@ -38,6 +40,15 @@
 - `~/.config/tradeSystem.env` 已存在且含 `DINGTALK_WEBHOOK_TOKEN` + `DINGTALK_WEBHOOK_SECRET`（盘前/盘后/行业推荐共用同一对凭据）
 - `python3` 在 `/usr/bin/python3`（或修改 runner 内的绝对路径）
 - `agy` 在 PATH 中，或通过 `ANTIGRAVITY_BIN` 指向 Antigravity CLI
+
+宏观日历模板不会自动安装或首次同步。确认业务数据写入后再执行：
+
+```bash
+chmod +x deploy/launchd/calendar-sync-runner.sh
+cp deploy/launchd/com.alyx.tradesystem.calendar-sync.plist ~/Library/LaunchAgents/
+launchctl load ~/Library/LaunchAgents/com.alyx.tradesystem.calendar-sync.plist
+launchctl list | grep tradesystem.calendar-sync
+```
 
 ## 安装（一次性）
 
