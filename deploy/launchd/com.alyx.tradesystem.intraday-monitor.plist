@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Sleep policy: 盘中阈值告警依赖 Mac 唤醒；休眠期间 launchd 不执行，强保障需 pmset 或迁 VPS。 -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.alyx.tradesystem.intraday-monitor</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/alyx/tradeSystem/deploy/launchd/intraday-monitor-runner.sh</string>
+    </array>
+
+    <!-- 无时区 5 分钟 tick；runner 与 Python 双层使用 Asia/Shanghai
+         交易时段/交易日门禁，避免本机时区变化和节假日误推。 -->
+    <key>StartInterval</key>
+    <integer>300</integer>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/tradesystem-intraday-monitor.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/tradesystem-intraday-monitor.log</string>
+
+    <key>RunAtLoad</key>
+    <false/>
+    <key>KeepAlive</key>
+    <false/>
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>

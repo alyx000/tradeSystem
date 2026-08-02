@@ -133,6 +133,10 @@ def test_bare_code_input_normalized(prov, monkeypatch):
     pytest.param('var hq_str_sz000001="平安银行,1,2,3";', id="short-fields"),
     pytest.param(_line("sz000001", "平安银行", "abc", "1.0", "1.0", "1.0", "1.0", "0", "0"),
                  id="numeric-garbage"),
+    pytest.param(_line("sz000001", "平安银行", "1.0", "1.0", "nan", "1.0", "1.0", "0", "0"),
+                 id="numeric-nan"),
+    pytest.param(_line("sz000001", "平安银行", "1.0", "1.0", "inf", "1.0", "1.0", "0", "0"),
+                 id="numeric-inf"),
 ])
 def test_dirty_single_code_skipped_into_note(prov, monkeypatch, dirty_line):
     monkeypatch.setattr(prov, "_fetch_raw", lambda symbols: [MAOTAI, dirty_line])

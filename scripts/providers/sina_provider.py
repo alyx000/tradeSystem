@@ -7,14 +7,15 @@
 选型与吞吐实测见 docs/superpowers/specs/2026-07-11-sina-realtime-quotes-design.md：
 800 码/请求，全市场 5609 只（含北交所）串行 6.4s。
 
-频控为已知未处理项：本期无消费方，不实现节流（YAGNI）；
-首个盘中轮询消费方接入时，须在消费侧或此处实现最小间隔（建议 >=3s），
-并连同 session 跨调用复用一起处理（现在缓存 session 会让长间隔后的
-stale keep-alive 连接触发整体报错，收益却只在轮询场景才存在）。
+盘中轮询消费方 `intraday-monitor` 已在消费侧以本地状态实现跨进程最小
+抓取间隔（>=3s），生产 launchd 实际每 5 分钟调用一次。provider 仍每次
+创建短生命周期 session：5 分钟长间隔下复用 keep-alive 容易命中 stale
+连接，节省的握手成本不值得扩大整体请求失败面。
 """
 from __future__ import annotations
 
 import logging
+import math
 
 from .base import DataProvider, DataResult, Timeliness
 
@@ -173,6 +174,11 @@ class SinaProvider(DataProvider):
                 amount = float(fields[9])
             except ValueError:
                 skipped.append(f"{ts_code}(数值解析失败)")
+                continue
+            if not all(math.isfinite(value) for value in (
+                open_, pre_close, price, high, low, volume, amount,
+            )):
+                skipped.append(f"{ts_code}(数值非有限)")
                 continue
             # 停牌股新浪返回完整布局但 price=0（真机 430047.BJ 实测），
             # 直接返回会带出 pct_chg=-100% 的误导行，跳过进 note

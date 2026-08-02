@@ -1955,6 +1955,10 @@ def build_parser() -> argparse.ArgumentParser:
     from cli.tail_scan import register_subparser as register_tail_scan_subparser
     register_tail_scan_subparser(subparsers)
 
+    # intraday-monitor (每5分钟盘中阈值监控;当前科创50跌破1572首发告警)
+    from cli.intraday_monitor import register_subparser as register_intraday_monitor_subparser
+    register_intraday_monitor_subparser(subparsers)
+
     # wechat-teacher-feed (本机 WeRSS 白名单采集与老师观点候选查看)
     from cli.wechat_teacher_feed import register_subparser as register_wechat_teacher_feed_subparser
     register_wechat_teacher_feed_subparser(subparsers)
@@ -2072,6 +2076,11 @@ def main():
     elif args.command == "tail-scan":
         from cli import tail_scan as tail_scan_module
         tail_scan_module.handle_command(config, args)
+    elif args.command == "intraday-monitor":
+        from cli import intraday_monitor as intraday_monitor_module
+        exit_code = intraday_monitor_module.handle_command(config, args)
+        if exit_code:
+            raise SystemExit(exit_code)
     elif args.command == "wechat-teacher-feed":
         from cli import wechat_teacher_feed as wechat_teacher_feed_module
         exit_code = wechat_teacher_feed_module.handle_command(config, args)

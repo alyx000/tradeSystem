@@ -36,6 +36,8 @@
 - `com.alyx.tradesystem.monthly-pattern.plist` — 每月 2 日 23:10 单次触发（只使用带 certified 覆盖收据的完成月前复权月线 + 公告日 as-of 财务，维护三策略观察池；休眠错过可接受；日志 `/tmp/tradesystem-monthly-pattern.log`）
 - `monthly-pattern-monitor-runner.sh` — 包装脚本：source 行情/钉钉 env → 调 `/usr/bin/python3 scripts/main.py monthly-pattern monitor-daily`
 - `com.alyx.tradesystem.monthly-pattern-monitor.plist` — 每 15 分钟轻量 tick，runner 仅在上海工作日 19:10（含）至 19:25（不含）执行一次重任务（月线种子日频动态 5 月线 + 日/周 MACD 变化监控；不受 Mac 本机时区切换影响；日志 `/tmp/tradesystem-monthly-pattern-monitor.log`）
+- `intraday-monitor-runner.sh` — 每 5 分钟 tick 的盘中门禁入口；只在上海 `09:30-11:30 / 13:00-15:00` 调 `intraday-monitor check`
+- `com.alyx.tradesystem.intraday-monitor.plist` — 盘中实时阈值监控；当前科创50严格跌破 1572 首发推钉钉，日志 `/tmp/tradesystem-intraday-monitor.log`
 
 ## 前置条件
 
@@ -462,6 +464,42 @@ rm ~/Library/LaunchAgents/com.alyx.tradesystem.cognition-digest-*.plist
 ```
 
 **时段**：recent3d 18:30 在 today-post(20:00) 之前、空档无冲突；weekly 周日 20:00 与 recommend-weekly(周日 20:00) 同点但互不依赖、均短 I/O 任务可接受；monthly 每月 1 号 09:00 为非交易时段无争用。认知沉淀错过可接受(非交易决策),不配 pmset 唤醒。**调度唯一入口=launchd per-task plist**,不进 `main.py schedule`/APScheduler(避免双触发)。
+
+## 盘中实时阈值监控（每 5 分钟）
+
+当前规则监控科创50 `000688.SH`，新浪实时点位严格 `<1572` 时推送钉钉。持续低于阈值不会每 5 分钟重复刷屏；重新站回后再次跌破会重新提醒。行情日期必须为上海当日、时间陈旧不超过 10 分钟；交易日历只读缺失时 fail-closed。
+
+```bash
+chmod +x deploy/launchd/intraday-monitor-runner.sh
+plutil -lint deploy/launchd/com.alyx.tradesystem.intraday-monitor.plist
+bash -n deploy/launchd/intraday-monitor-runner.sh
+
+cp deploy/launchd/com.alyx.tradesystem.intraday-monitor.plist \
+  ~/Library/LaunchAgents/
+launchctl load ~/Library/LaunchAgents/com.alyx.tradesystem.intraday-monitor.plist
+launchctl list | grep tradesystem.intraday-monitor
+
+# 非交易时段手动触发只验证 runner 安全跳过；盘中才会实际抓行情
+launchctl start com.alyx.tradesystem.intraday-monitor
+tail -f /tmp/tradesystem-intraday-monitor.log
+```
+
+卸载：
+
+```bash
+launchctl unload ~/Library/LaunchAgents/com.alyx.tradesystem.intraday-monitor.plist
+rm ~/Library/LaunchAgents/com.alyx.tradesystem.intraday-monitor.plist
+```
+
+状态仅写 `data/runs/intraday-monitor/state.json`，用于 pending/sent 去重，不写 SQLite、持仓、关注池或计划层。事件发送失败会在同一交易日后续 tick 重试；跨日旧事件过期。**Mac 休眠时 launchd 不执行**，这是盘中提醒的真实可用性边界；若必须保证覆盖整个交易时段，应配置盘中唤醒或迁到 VPS。
+
+经用户授权做真实链路验收时，只在交易时段执行一次：
+
+```bash
+python3 scripts/main.py intraday-monitor e2e-test --input-by USER --json
+```
+
+该命令使用当日新鲜真实行情和仅本次测试线触发一条醒目标注“测试”的钉钉消息；不修改正式 `1572` 规则，也不读写 `data/runs/intraday-monitor/state.json`。
 
 ## 断板反包盘后扫描（工作日 21:20）
 
