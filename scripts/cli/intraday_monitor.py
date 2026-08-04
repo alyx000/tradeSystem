@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 def register_subparser(subparsers: argparse._SubParsersAction) -> None:
     parser = subparsers.add_parser(
         "intraday-monitor",
-        help="盘中实时阈值监控（当前：科创50 跌破 1572）",
+        help="盘中实时阈值监控（当前：科创50 跌破 1572 / 收复 1582）",
     )
     commands = parser.add_subparsers(dest="intraday_monitor_command")
     check = commands.add_parser("check", help="抓取一次实时行情并评估阈值")

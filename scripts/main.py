@@ -1955,7 +1955,7 @@ def build_parser() -> argparse.ArgumentParser:
     from cli.tail_scan import register_subparser as register_tail_scan_subparser
     register_tail_scan_subparser(subparsers)
 
-    # intraday-monitor (每5分钟盘中阈值监控;当前科创50跌破1572首发告警)
+    # intraday-monitor (每5分钟盘中阈值监控;当前科创50跌破1572/收复1582告警)
     from cli.intraday_monitor import register_subparser as register_intraday_monitor_subparser
     register_intraday_monitor_subparser(subparsers)
 

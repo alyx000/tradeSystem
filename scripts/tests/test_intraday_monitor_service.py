@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 
 import services.intraday_monitor.service as intraday_service
 from services.intraday_monitor.service import run_check, run_e2e_test
-from services.intraday_monitor.rules import MonitorRule
+from services.intraday_monitor.rules import DEFAULT_RULES, MonitorRule
 
 
 TZ = ZoneInfo("Asia/Shanghai")
@@ -32,6 +32,7 @@ class _Registry:
         self.now = datetime(2026, 8, 3, 10, 0, tzinfo=TZ)
         self.provider = _Provider()
         self.call_count = 0
+        self.requested_codes = []
 
     def get_provider(self, name):
         return self.provider if name == "sina" else None
@@ -40,6 +41,7 @@ class _Registry:
         assert provider == "sina"
         assert capability == "get_realtime_quotes"
         self.call_count += 1
+        self.requested_codes.append(list(codes))
         return _Result([
             {
                 "code": code,
@@ -125,6 +127,51 @@ def test_recovery_then_second_breach_pushes_again(tmp_path):
 
     assert recovered["events"] == []
     assert len(rebreach["events"]) == 1
+    assert len(pusher.messages) == 2
+
+
+def test_reclaim_1582_only_pushes_after_observed_below_to_at_or_above(tmp_path):
+    db_path = _calendar(tmp_path)
+    state_path = tmp_path / "state.json"
+    registry = _Registry(price=1583.0)
+    pusher = _Pusher()
+    now = datetime(2026, 8, 3, 10, 0, tzinfo=TZ)
+
+    initial_above = _run(registry, pusher, state_path, db_path, now)
+    registry.price = 1581.0
+    below = _run(registry, pusher, state_path, db_path, now + timedelta(minutes=5))
+    registry.price = 1582.0
+    reclaimed = _run(registry, pusher, state_path, db_path, now + timedelta(minutes=10))
+    still_above = _run(registry, pusher, state_path, db_path, now + timedelta(minutes=15))
+
+    assert initial_above["events"] == []
+    assert below["events"] == []
+    assert len(reclaimed["events"]) == 1
+    assert reclaimed["events"][0]["rule_id"] == "star50-reclaim-1582"
+    assert reclaimed["events"][0]["action_text"] == "收复"
+    assert reclaimed["events"][0]["price"] == 1582.0
+    assert still_above["events"] == []
+    assert len(pusher.messages) == 1
+    assert "已收复监控线 **1582.00**" in pusher.messages[0][1]
+
+
+def test_reclaim_rearms_after_falling_below_again(tmp_path):
+    db_path = _calendar(tmp_path)
+    state_path = tmp_path / "state.json"
+    registry = _Registry(price=1581.0)
+    pusher = _Pusher()
+    now = datetime(2026, 8, 3, 10, 0, tzinfo=TZ)
+
+    _run(registry, pusher, state_path, db_path, now)
+    registry.price = 1582.5
+    first_reclaim = _run(registry, pusher, state_path, db_path, now + timedelta(minutes=5))
+    registry.price = 1581.5
+    _run(registry, pusher, state_path, db_path, now + timedelta(minutes=10))
+    registry.price = 1582.0
+    second_reclaim = _run(registry, pusher, state_path, db_path, now + timedelta(minutes=15))
+
+    assert len(first_reclaim["events"]) == 1
+    assert len(second_reclaim["events"]) == 1
     assert len(pusher.messages) == 2
 
 
@@ -235,6 +282,26 @@ def test_multiple_rules_on_same_provider_share_one_quote_request(tmp_path):
     assert len(result["events"]) == 2
     assert registry.call_count == 1
     assert len(pusher.messages) == 1
+
+
+def test_default_rules_share_one_deduplicated_quote_request(tmp_path):
+    db_path = _calendar(tmp_path)
+    registry = _Registry(price=1575.0)
+    pusher = _Pusher()
+
+    result = run_check(
+        registry,
+        rules=DEFAULT_RULES,
+        now=datetime(2026, 8, 3, 10, 0, tzinfo=TZ),
+        state_path=tmp_path / "state.json",
+        db_path=db_path,
+        pusher_factory=lambda: pusher,
+    )
+
+    assert result["status"] == "complete"
+    assert registry.call_count == 1
+    assert registry.requested_codes == [["000688.SH"]]
+    assert result["quotes_checked"] == 1
 
 
 def test_non_finite_price_fails_closed_without_resetting_active_state(tmp_path):

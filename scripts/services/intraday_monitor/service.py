@@ -66,7 +66,7 @@ def _fetch_quotes(registry, rules: Iterable[MonitorRule]) -> tuple[dict[str, dic
             result = registry.call_specific(
                 provider_name,
                 "get_realtime_quotes",
-                [rule.code for rule in provider_rules],
+                list(dict.fromkeys(rule.code for rule in provider_rules)),
             )
         except Exception as exc:
             errors.append(f"{provider_name}: 实时行情异常 {type(exc).__name__}: {exc}")
@@ -124,7 +124,7 @@ def _run_locked(
 
     quotes, errors = _fetch_quotes(registry, rules)
     events: list[dict] = []
-    valid_quotes = 0
+    valid_quote_codes: set[str] = set()
     rule_states = state.setdefault("rules", {})
     sent_ids = set(state.get("sent_event_ids") or [])
     today = now.date().isoformat()
@@ -154,7 +154,7 @@ def _run_locked(
         if not math.isfinite(price) or price <= 0:
             errors.append(f"{rule.rule_id}: 最新价非有限或非正数")
             continue
-        valid_quotes += 1
+        valid_quote_codes.add(rule.code.upper())
         previous = rule_states.get(rule.rule_id) or {}
         previous_active = (
             bool(previous.get("active"))
@@ -162,7 +162,11 @@ def _run_locked(
             else None
         )
         active = rule.is_active(price)
-        if should_emit(previous_active=previous_active, current_active=active):
+        if should_emit(
+            previous_active=previous_active,
+            current_active=active,
+            emit_on_initial_match=rule.emit_on_initial_match,
+        ):
             event = _event(rule, quote, quoted_at, str(quote.get("_source") or rule.provider))
             if event["event_id"] not in sent_ids and event["event_id"] not in pending_ids:
                 events.append(event)
@@ -175,7 +179,7 @@ def _run_locked(
             "updated_at": now.isoformat(),
         }
 
-    if valid_quotes == 0:
+    if not valid_quote_codes:
         return {"status": "source_failed", "events": [], "errors": errors}
 
     if dry_run:
@@ -183,7 +187,7 @@ def _run_locked(
             "status": "dry_run",
             "events": events,
             "errors": errors,
-            "quotes_checked": valid_quotes,
+            "quotes_checked": len(valid_quote_codes),
         }
 
     if events:
@@ -200,7 +204,7 @@ def _run_locked(
         "status": status,
         "events": events,
         "errors": errors,
-        "quotes_checked": valid_quotes,
+        "quotes_checked": len(valid_quote_codes),
         "pending_count": len(state.get("pending_events") or []),
         "pushed": push_ok and pending_before_send > 0,
     }

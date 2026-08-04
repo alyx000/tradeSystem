@@ -489,7 +489,7 @@ ARCHITECTURE_COMMANDS = [
     ["tail-scan", "daily", "--no-push"],
     ["tail-scan", "daily", "--no-llm"],
     ["tail-scan", "daily", "--min-pct", "7", "--min-amount", "20", "--no-push", "--no-llm"],
-    # intraday-monitor (盘中每5分钟阈值监控；当前科创50跌破1572)
+    # intraday-monitor (盘中每5分钟阈值监控；当前科创50跌破1572/收复1582)
     ["intraday-monitor", "check"],
     ["intraday-monitor", "check", "--dry-run"],
     ["intraday-monitor", "check", "--json"],

@@ -1,7 +1,7 @@
 ---
 name: market-tasks
 description: 手动触发或自动定时执行盘前/盘后行情采集任务、微信公众号白名单归档、行业推荐推送、研报速读，并将结果摘要推送回 channel
-version: "1.11"
+version: "1.12"
 ---
 
 # Skill: 市场数据任务（盘前 / 盘后采集）
@@ -428,7 +428,7 @@ python3 main.py board-break daily --no-llm                       # 跳过 LLM �
 
 ## 盘中实时阈值监控（intraday-monitor）
 
-独立 launchd `com.alyx.tradesystem.intraday-monitor` 每 5 分钟做一次无时区 tick，runner 只在上海交易时段 `09:30-11:30 / 13:00-15:00` 进入命令，Python 再用只读 `trade_calendar` 做交易日门禁。当前规则为：新浪实时行情 `000688.SH`（科创50）最新点位严格 `<1572` 时推送钉钉。
+独立 launchd `com.alyx.tradesystem.intraday-monitor` 每 5 分钟做一次无时区 tick，runner 只在上海交易时段 `09:30-11:30 / 13:00-15:00` 进入命令，Python 再用只读 `trade_calendar` 做交易日门禁。当前用新浪实时行情监控 `000688.SH`（科创50）两条独立规则：最新点位严格 `<1572` 时提醒跌破；当天先观察到 `<1582`，随后回到 `>=1582` 时提醒收复。
 
 ```bash
 python3 main.py intraday-monitor check             # 正式检查；命中时推送
@@ -437,10 +437,10 @@ python3 main.py intraday-monitor check --json      # 输出结构化运行回执
 python3 main.py intraday-monitor e2e-test --input-by USER --json  # 盘中真实行情端到端测试
 ```
 
-- **扩展方式**：规则由 `services.intraday_monitor.rules.MonitorRule` 统一描述（标的、代码、阈值、方向、provider）；追加规则不改抓取、去重、推送与调度编排。相同 provider 的规则合并成一次批量实时行情请求。
-- **触发语义**：首次观察即已命中会告警；持续低于阈值不重复；重新回到阈值上方或等于阈值后，再次跌破会再次告警。等于 `1572` 不算跌破。
+- **扩展方式**：规则由 `services.intraday_monitor.rules.MonitorRule` 统一描述（标的、代码、阈值、方向、是否含等号、首次命中策略、provider）；追加规则不改抓取、去重、推送与调度编排。相同 provider 的规则合并成一次批量实时行情请求，相同代码自动去重。
+- **触发语义**：跌破线首次观察即已命中会告警，持续 `<1572` 不重复，恢复后再次跌破可重推，等于 `1572` 不算跌破。收复线只在当天已观察到 `<1582` 后首次回到 `>=1582` 时告警，持续站上不重复，重新跌到下方后再次收复可重推；当天首次观察已在 `>=1582` 只建状态基线，不误报刚刚收复。
 - **可靠性**：行情日期必须为上海当日，行情时间最多陈旧 10 分钟；旧行情/缺行情 fail-closed。事件先原子写 `data/runs/intraday-monitor/state.json` pending，再推钉钉；发送失败保留到同一交易日下一 tick 重试，成功后才记 sent。跨日未送达事件过期，不把昨日点位伪装成今日实时告警。
-- **真实链路测试**：`e2e-test` 只在交易时段和已确认开放日执行，必须带 `--input-by`；先取得当日新鲜真实行情，再用“实际点位上方的仅本次测试线”复用严格跌破判定并发送一条标题、正文均显式标注“测试”的钉钉消息。正式 `1572` 规则与 `state.json` 均不读写、不修改；旧行情、异常点位、推送失败必须返回非成功状态。
+- **真实链路测试**：`e2e-test` 只在交易时段和已确认开放日执行，必须带 `--input-by`；先取得当日新鲜真实行情，再用“实际点位上方的仅本次测试线”复用严格跌破判定并发送一条标题、正文均显式标注“测试”的钉钉消息。正式 `1572` / `1582` 规则与 `state.json` 均不读写、不修改；旧行情、异常点位、推送失败必须返回非成功状态。
 - **边界**：监控线是用户给定条件，只标 `[事实]`，不构成买卖建议，不写 SQLite、TradeDraft、TradePlan、持仓或关注池。Mac 休眠期间 launchd 不触发；需要强保障时须配盘中唤醒或迁 VPS。
 
 ## 盘中尾盘强势股扫描（tail-scan）

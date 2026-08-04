@@ -37,7 +37,7 @@
 - `monthly-pattern-monitor-runner.sh` — 包装脚本：source 行情/钉钉 env → 调 `/usr/bin/python3 scripts/main.py monthly-pattern monitor-daily`
 - `com.alyx.tradesystem.monthly-pattern-monitor.plist` — 每 15 分钟轻量 tick，runner 仅在上海工作日 19:10（含）至 19:25（不含）执行一次重任务（月线种子日频动态 5 月线 + 日/周 MACD 变化监控；不受 Mac 本机时区切换影响；日志 `/tmp/tradesystem-monthly-pattern-monitor.log`）
 - `intraday-monitor-runner.sh` — 每 5 分钟 tick 的盘中门禁入口；只在上海 `09:30-11:30 / 13:00-15:00` 调 `intraday-monitor check`
-- `com.alyx.tradesystem.intraday-monitor.plist` — 盘中实时阈值监控；当前科创50严格跌破 1572 首发推钉钉，日志 `/tmp/tradesystem-intraday-monitor.log`
+- `com.alyx.tradesystem.intraday-monitor.plist` — 盘中实时阈值监控；当前科创50严格跌破 1572 或从 1582 下方收复该线时推钉钉，日志 `/tmp/tradesystem-intraday-monitor.log`
 
 ## 前置条件
 
@@ -467,7 +467,7 @@ rm ~/Library/LaunchAgents/com.alyx.tradesystem.cognition-digest-*.plist
 
 ## 盘中实时阈值监控（每 5 分钟）
 
-当前规则监控科创50 `000688.SH`，新浪实时点位严格 `<1572` 时推送钉钉。持续低于阈值不会每 5 分钟重复刷屏；重新站回后再次跌破会重新提醒。行情日期必须为上海当日、时间陈旧不超过 10 分钟；交易日历只读缺失时 fail-closed。
+当前规则监控科创50 `000688.SH`：新浪实时点位严格 `<1572` 时提醒跌破；当天先观察到 `<1582`、随后回到 `>=1582` 时提醒收复。两条规则持续命中都不会每 5 分钟重复刷屏，恢复后再次进入条件可重推；当天首次观察已经在 `>=1582` 只建基线，不误报收复。行情日期必须为上海当日、时间陈旧不超过 10 分钟；交易日历只读缺失时 fail-closed。
 
 ```bash
 chmod +x deploy/launchd/intraday-monitor-runner.sh
@@ -499,7 +499,7 @@ rm ~/Library/LaunchAgents/com.alyx.tradesystem.intraday-monitor.plist
 python3 scripts/main.py intraday-monitor e2e-test --input-by USER --json
 ```
 
-该命令使用当日新鲜真实行情和仅本次测试线触发一条醒目标注“测试”的钉钉消息；不修改正式 `1572` 规则，也不读写 `data/runs/intraday-monitor/state.json`。
+该命令使用当日新鲜真实行情和仅本次测试线触发一条醒目标注“测试”的钉钉消息；不修改正式 `1572` / `1582` 规则，也不读写 `data/runs/intraday-monitor/state.json`。
 
 ## 断板反包盘后扫描（工作日 21:20）
 

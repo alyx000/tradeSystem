@@ -2,7 +2,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from services.intraday_monitor.guards import is_intraday_session
-from services.intraday_monitor.rules import MonitorRule, should_emit
+from services.intraday_monitor.rules import DEFAULT_RULES, MonitorRule, should_emit
 
 
 def test_below_is_strict_and_equality_does_not_trigger():
@@ -10,6 +10,26 @@ def test_below_is_strict_and_equality_does_not_trigger():
     assert rule.is_active(1571.99) is True
     assert rule.is_active(1572.0) is False
     assert rule.is_active(1572.01) is False
+
+
+def test_reclaim_is_inclusive_and_does_not_emit_on_initial_match():
+    rule = DEFAULT_RULES[1]
+
+    assert rule.rule_id == "star50-reclaim-1582"
+    assert rule.is_active(1581.99) is False
+    assert rule.is_active(1582.0) is True
+    assert rule.is_active(1582.01) is True
+    assert rule.action_text == "收复"
+    assert should_emit(
+        previous_active=None,
+        current_active=True,
+        emit_on_initial_match=rule.emit_on_initial_match,
+    ) is False
+    assert should_emit(
+        previous_active=False,
+        current_active=True,
+        emit_on_initial_match=rule.emit_on_initial_match,
+    ) is True
 
 
 def test_transition_only_emits_on_entry():
