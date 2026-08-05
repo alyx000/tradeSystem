@@ -37,7 +37,7 @@
 - `monthly-pattern-monitor-runner.sh` — 包装脚本：source 行情/钉钉 env → 调 `/usr/bin/python3 scripts/main.py monthly-pattern monitor-daily`
 - `com.alyx.tradesystem.monthly-pattern-monitor.plist` — 每 15 分钟轻量 tick，runner 仅在上海工作日 19:10（含）至 19:25（不含）执行一次重任务（月线种子日频动态 5 月线 + 日/周 MACD 变化监控；不受 Mac 本机时区切换影响；日志 `/tmp/tradesystem-monthly-pattern-monitor.log`）
 - `intraday-monitor-runner.sh` — 每 5 分钟 tick 的盘中门禁入口；只在上海 `09:30-11:30 / 13:00-15:00` 调 `intraday-monitor check`
-- `com.alyx.tradesystem.intraday-monitor.plist` — 盘中实时阈值监控；当前科创50严格跌破 1572 或从 1582 下方收复该线时推钉钉，日志 `/tmp/tradesystem-intraday-monitor.log`
+- `com.alyx.tradesystem.intraday-monitor.plist` — 盘中实时阈值监控能力；当前无启用规则，tick 安全返回 `no_rules`，日志 `/tmp/tradesystem-intraday-monitor.log`
 
 ## 前置条件
 
@@ -467,7 +467,7 @@ rm ~/Library/LaunchAgents/com.alyx.tradesystem.cognition-digest-*.plist
 
 ## 盘中实时阈值监控（每 5 分钟）
 
-当前规则监控科创50 `000688.SH`：新浪实时点位严格 `<1572` 时提醒跌破；当天先观察到 `<1582`、随后回到 `>=1582` 时提醒收复。两条规则持续命中都不会每 5 分钟重复刷屏，恢复后再次进入条件可重推；当天首次观察已经在 `>=1582` 只建基线，不误报收复。行情日期必须为上海当日、时间陈旧不超过 10 分钟；交易日历只读缺失时 fail-closed。
+监控引擎、CLI、launchd 与状态机继续保留，但当前没有启用任何生产规则，科创50的跌破与收复监控均已下线。runner 在盘中仍会触发命令；CLI 不初始化行情 provider，命令不读取交易日历、不抓行情、不推送。状态文件不存在时不创建；若已有待发送事件，只将其移入 expired，防止以后同日复用相同规则 ID 后误发，然后返回 `status=no_rules`。
 
 ```bash
 chmod +x deploy/launchd/intraday-monitor-runner.sh
@@ -479,7 +479,7 @@ cp deploy/launchd/com.alyx.tradesystem.intraday-monitor.plist \
 launchctl load ~/Library/LaunchAgents/com.alyx.tradesystem.intraday-monitor.plist
 launchctl list | grep tradesystem.intraday-monitor
 
-# 非交易时段手动触发只验证 runner 安全跳过；盘中才会实际抓行情
+# 当前无规则时，盘中触发也只返回 no_rules，不会抓行情
 launchctl start com.alyx.tradesystem.intraday-monitor
 tail -f /tmp/tradesystem-intraday-monitor.log
 ```
@@ -491,15 +491,15 @@ launchctl unload ~/Library/LaunchAgents/com.alyx.tradesystem.intraday-monitor.pl
 rm ~/Library/LaunchAgents/com.alyx.tradesystem.intraday-monitor.plist
 ```
 
-状态仅写 `data/runs/intraday-monitor/state.json`，用于 pending/sent 去重，不写 SQLite、持仓、关注池或计划层。事件发送失败会在同一交易日后续 tick 重试；跨日旧事件过期。**Mac 休眠时 launchd 不执行**，这是盘中提醒的真实可用性边界；若必须保证覆盖整个交易时段，应配置盘中唤醒或迁到 VPS。
+已有 `data/runs/intraday-monitor/state.json` 保留为休眠历史；停用 tick 仅在存在 pending 时原子改记 expired，其余内容不动。以后注册新规则时，状态机仍用于 pending/sent 去重；停用前的旧 pending 不会补发。全链路不写 SQLite、持仓、关注池或计划层。**Mac 休眠时 launchd 不执行**，这是盘中提醒的真实可用性边界；若以后重新启用并要求覆盖整个交易时段，应配置盘中唤醒或迁到 VPS。
 
-经用户授权做真实链路验收时，只在交易时段执行一次：
+注册新的生产规则并经用户授权做真实链路验收时，只在交易时段执行一次：
 
 ```bash
 python3 scripts/main.py intraday-monitor e2e-test --input-by USER --json
 ```
 
-该命令使用当日新鲜真实行情和仅本次测试线触发一条醒目标注“测试”的钉钉消息；不修改正式 `1572` / `1582` 规则，也不读写 `data/runs/intraday-monitor/state.json`。
+当前无启用规则时，该命令返回 `status=no_rules` 与非零退出，不抓行情、不推送、不读写 `data/runs/intraday-monitor/state.json`，不能视为验收成功。注册规则后，它才使用当日新鲜真实行情和仅本次测试线发送醒目标注“测试”的钉钉消息，且仍不读写正式状态。
 
 ## 断板反包盘后扫描（工作日 21:20）
 

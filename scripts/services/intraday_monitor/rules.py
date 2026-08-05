@@ -36,27 +36,8 @@ class MonitorRule:
         return "跌破" if self.direction == "below" else "突破"
 
 
-DEFAULT_RULES: tuple[MonitorRule, ...] = (
-    MonitorRule(
-        rule_id="star50-below-1572",
-        instrument_name="科创50",
-        code="000688.SH",
-        threshold=1572.0,
-        direction="below",
-        provider="sina",
-    ),
-    MonitorRule(
-        rule_id="star50-reclaim-1582",
-        instrument_name="科创50",
-        code="000688.SH",
-        threshold=1582.0,
-        direction="above",
-        provider="sina",
-        inclusive=True,
-        emit_on_initial_match=False,
-        action_label="收复",
-    ),
-)
+# 当前没有启用的生产规则。监控引擎与规则模型保留，后续注册新规则即可恢复。
+DEFAULT_RULES: tuple[MonitorRule, ...] = ()
 
 
 def should_emit(

@@ -12,6 +12,24 @@ from services.intraday_monitor.rules import DEFAULT_RULES, MonitorRule
 
 TZ = ZoneInfo("Asia/Shanghai")
 
+BREACH_RULE = MonitorRule(
+    "test-below-1572",
+    "测试指数",
+    "000688.SH",
+    1572.0,
+)
+RECLAIM_RULE = MonitorRule(
+    "test-reclaim-1582",
+    "测试指数",
+    "000688.SH",
+    1582.0,
+    direction="above",
+    inclusive=True,
+    emit_on_initial_match=False,
+    action_label="收复",
+)
+TEST_RULES = (BREACH_RULE, RECLAIM_RULE)
+
 
 class _Result:
     def __init__(self, data=None, error=None, source="sina"):
@@ -45,7 +63,7 @@ class _Registry:
         return _Result([
             {
                 "code": code,
-                "name": "科创50",
+                "name": "测试指数",
                 "price": self.price,
                 "quote_date": self.now.date().isoformat(),
                 "quote_time": self.now.time().isoformat(),
@@ -84,6 +102,7 @@ def _run(registry, pusher, state_path, db_path, now):
     registry.now = now
     return run_check(
         registry,
+        rules=TEST_RULES,
         now=now,
         state_path=state_path,
         db_path=db_path,
@@ -109,7 +128,7 @@ def test_initial_breach_pushes_once_and_persists_state(tmp_path):
     assert "1571.00" in pusher.messages[0][1]
     state = json.loads(state_path.read_text(encoding="utf-8"))
     assert state["pending_events"] == []
-    assert state["rules"]["star50-below-1572"]["active"] is True
+    assert state["rules"][BREACH_RULE.rule_id]["active"] is True
 
 
 def test_recovery_then_second_breach_pushes_again(tmp_path):
@@ -147,7 +166,7 @@ def test_reclaim_1582_only_pushes_after_observed_below_to_at_or_above(tmp_path):
     assert initial_above["events"] == []
     assert below["events"] == []
     assert len(reclaimed["events"]) == 1
-    assert reclaimed["events"][0]["rule_id"] == "star50-reclaim-1582"
+    assert reclaimed["events"][0]["rule_id"] == RECLAIM_RULE.rule_id
     assert reclaimed["events"][0]["action_text"] == "收复"
     assert reclaimed["events"][0]["price"] == 1582.0
     assert still_above["events"] == []
@@ -216,6 +235,7 @@ def test_stale_quote_fails_closed(tmp_path):
     registry.now = now - timedelta(minutes=11)
     result = run_check(
         registry,
+        rules=TEST_RULES,
         now=now,
         state_path=tmp_path / "state.json",
         db_path=db_path,
@@ -235,6 +255,7 @@ def test_calendar_missing_blocks_before_fetch(tmp_path):
     registry = _Registry(price=1571.0)
     result = run_check(
         registry,
+        rules=TEST_RULES,
         now=datetime(2026, 8, 3, 10, 0, tzinfo=TZ),
         state_path=tmp_path / "state.json",
         db_path=missing_day_db,
@@ -250,6 +271,7 @@ def test_dry_run_has_no_state_or_push_side_effect(tmp_path):
     state_path = tmp_path / "state.json"
     result = run_check(
         registry,
+        rules=TEST_RULES,
         now=datetime(2026, 8, 3, 10, 0, tzinfo=TZ),
         state_path=state_path,
         db_path=db_path,
@@ -284,24 +306,44 @@ def test_multiple_rules_on_same_provider_share_one_quote_request(tmp_path):
     assert len(pusher.messages) == 1
 
 
-def test_default_rules_share_one_deduplicated_quote_request(tmp_path):
-    db_path = _calendar(tmp_path)
+def test_default_rules_are_disabled_without_any_side_effect(tmp_path, monkeypatch):
     registry = _Registry(price=1575.0)
     pusher = _Pusher()
+    state_path = tmp_path / "state.json"
+
+    def fail_calendar(*args, **kwargs):
+        raise AssertionError("无启用规则时不得访问交易日历")
+
+    monkeypatch.setattr(intraday_service, "confirmed_trade_day", fail_calendar)
+    monkeypatch.setattr(
+        intraday_service,
+        "locked_state",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("无启用规则时不得访问状态层")
+        ),
+    )
 
     result = run_check(
         registry,
-        rules=DEFAULT_RULES,
         now=datetime(2026, 8, 3, 10, 0, tzinfo=TZ),
-        state_path=tmp_path / "state.json",
-        db_path=db_path,
+        state_path=state_path,
+        db_path=tmp_path / "missing.db",
         pusher_factory=lambda: pusher,
     )
 
-    assert result["status"] == "complete"
-    assert registry.call_count == 1
-    assert registry.requested_codes == [["000688.SH"]]
-    assert result["quotes_checked"] == 1
+    assert DEFAULT_RULES == ()
+    assert result == {
+        "status": "no_rules",
+        "events": [],
+        "errors": [],
+        "rules_checked": 0,
+        "quotes_checked": 0,
+        "pushed": False,
+        "retired_pending_count": 0,
+    }
+    assert registry.call_count == 0
+    assert pusher.messages == []
+    assert not state_path.exists()
 
 
 def test_non_finite_price_fails_closed_without_resetting_active_state(tmp_path):
@@ -343,11 +385,122 @@ def test_cross_day_pending_expires_and_new_day_breach_alerts_once(tmp_path):
     assert state["pending_events"] == []
 
 
+def test_retired_rule_pending_event_never_pushes_after_other_rule_is_enabled(tmp_path):
+    db_path = _calendar(tmp_path)
+    state_path = tmp_path / "state.json"
+    now = datetime(2026, 8, 3, 10, 0, tzinfo=TZ)
+    retired_event = {
+        "event_id": "retired-event",
+        "rule_id": "retired-rule",
+        "instrument_name": "已下线指数",
+        "code": "000688.SH",
+        "threshold": 1572.0,
+        "direction": "below",
+        "action_text": "跌破",
+        "price": 1571.0,
+        "quote_at": now.isoformat(),
+        "source": "sina",
+    }
+    state_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "last_fetch_at": None,
+                "rules": {},
+                "pending_events": [retired_event],
+                "sent_event_ids": [],
+                "expired_event_ids": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    registry = _Registry(price=200.0)
+    pusher = _Pusher()
+    active_rule = MonitorRule("new-rule", "新指数", "000001.SH", 100.0)
+
+    result = run_check(
+        registry,
+        rules=(active_rule,),
+        now=now,
+        state_path=state_path,
+        db_path=db_path,
+        pusher_factory=lambda: pusher,
+    )
+
+    assert result["status"] == "complete"
+    assert result["events"] == []
+    assert result["pushed"] is False
+    assert pusher.messages == []
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert state["pending_events"] == []
+    assert state["expired_event_ids"] == ["retired-event"]
+
+
+def test_disabled_tick_retires_pending_before_same_rule_id_is_reenabled(tmp_path):
+    db_path = _calendar(tmp_path)
+    state_path = tmp_path / "state.json"
+    now = datetime(2026, 8, 3, 10, 0, tzinfo=TZ)
+    retired_event = {
+        "event_id": "same-rule-retired-event",
+        "rule_id": BREACH_RULE.rule_id,
+        "instrument_name": "已下线指数",
+        "code": BREACH_RULE.code,
+        "threshold": BREACH_RULE.threshold,
+        "direction": "below",
+        "action_text": "跌破",
+        "price": 1571.0,
+        "quote_at": now.isoformat(),
+        "source": "sina",
+    }
+    state_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "last_fetch_at": None,
+                "rules": {},
+                "pending_events": [retired_event],
+                "sent_event_ids": [],
+                "expired_event_ids": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    registry = _Registry(price=2000.0)
+    pusher = _Pusher()
+
+    disabled = run_check(
+        registry,
+        now=now,
+        state_path=state_path,
+        db_path=tmp_path / "missing.db",
+        pusher_factory=lambda: pusher,
+    )
+    reenabled = run_check(
+        registry,
+        rules=(BREACH_RULE,),
+        now=now + timedelta(minutes=5),
+        state_path=state_path,
+        db_path=db_path,
+        pusher_factory=lambda: pusher,
+    )
+
+    assert disabled["status"] == "no_rules"
+    assert disabled["retired_pending_count"] == 1
+    assert reenabled["status"] == "complete"
+    assert reenabled["events"] == []
+    assert reenabled["pushed"] is False
+    assert pusher.messages == []
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert state["pending_events"] == []
+    assert state["expired_event_ids"] == ["same-rule-retired-event"]
+
+
 def test_confirmed_non_trade_day_skips_without_fetch_or_state(tmp_path):
     db_path = _calendar(tmp_path, is_open=0)
     registry = _Registry(price=1571.0)
     result = run_check(
         registry,
+        rules=TEST_RULES,
         now=datetime(2026, 8, 3, 10, 0, tzinfo=TZ),
         state_path=tmp_path / "state.json",
         db_path=db_path,
@@ -368,6 +521,7 @@ def test_previous_day_and_future_quotes_fail_closed(tmp_path):
         registry.now = quote_now
         result = run_check(
             registry,
+            rules=TEST_RULES,
             now=now,
             state_path=tmp_path / f"state-{expected}.json",
             db_path=db_path,
@@ -391,6 +545,7 @@ def test_e2e_test_uses_fresh_real_quote_and_never_calls_state_layer(tmp_path, mo
     result = run_e2e_test(
         registry,
         input_by="pytest",
+        rule=BREACH_RULE,
         now=datetime(2026, 8, 3, 10, 0, tzinfo=TZ),
         db_path=db_path,
         pusher_factory=lambda: pusher,
@@ -433,6 +588,7 @@ def test_e2e_test_rejects_stale_quote_without_push(tmp_path):
     result = run_e2e_test(
         registry,
         input_by="pytest",
+        rule=BREACH_RULE,
         now=now,
         db_path=db_path,
         pusher_factory=lambda: pusher,
@@ -451,6 +607,7 @@ def test_e2e_test_outside_session_does_not_fetch_or_push(tmp_path):
     result = run_e2e_test(
         registry,
         input_by="pytest",
+        rule=BREACH_RULE,
         now=datetime(2026, 8, 3, 8, 0, tzinfo=TZ),
         db_path=db_path,
         pusher_factory=lambda: pusher,
@@ -469,6 +626,7 @@ def test_e2e_test_reports_push_failure(tmp_path):
     result = run_e2e_test(
         registry,
         input_by="pytest",
+        rule=BREACH_RULE,
         now=datetime(2026, 8, 3, 10, 0, tzinfo=TZ),
         db_path=db_path,
         pusher_factory=lambda: pusher,
@@ -476,4 +634,44 @@ def test_e2e_test_reports_push_failure(tmp_path):
 
     assert result["status"] == "push_failed"
     assert result["pushed"] is False
+    assert len(pusher.messages) == 1
+
+
+def test_e2e_test_without_active_rule_does_not_fetch_or_push(tmp_path):
+    registry = _Registry(price=1600.0)
+    pusher = _Pusher()
+
+    result = run_e2e_test(
+        registry,
+        input_by="pytest",
+        now=datetime(2026, 8, 3, 10, 0, tzinfo=TZ),
+        db_path=tmp_path / "missing.db",
+        pusher_factory=lambda: pusher,
+    )
+
+    assert result["status"] == "no_rules"
+    assert result["pushed"] is False
+    assert registry.call_count == 0
+    assert pusher.messages == []
+
+
+def test_e2e_test_uses_first_registered_rule_when_monitoring_is_reenabled(
+    tmp_path,
+    monkeypatch,
+):
+    db_path = _calendar(tmp_path)
+    registry = _Registry(price=1600.0)
+    pusher = _Pusher()
+    monkeypatch.setattr(intraday_service, "DEFAULT_RULES", (BREACH_RULE,))
+
+    result = run_e2e_test(
+        registry,
+        input_by="pytest",
+        now=datetime(2026, 8, 3, 10, 0, tzinfo=TZ),
+        db_path=db_path,
+        pusher_factory=lambda: pusher,
+    )
+
+    assert result["status"] == "complete"
+    assert result["production_threshold"] == BREACH_RULE.threshold
     assert len(pusher.messages) == 1

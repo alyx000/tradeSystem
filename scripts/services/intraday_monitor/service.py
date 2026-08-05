@@ -103,6 +103,22 @@ def _send_pending(state: dict, pusher_factory: Callable[[], object]) -> tuple[bo
     return True, None
 
 
+def _retire_pending_while_disabled(state_path: Path) -> int:
+    """停用期只处理既有 pending；不存在状态文件时不创建任何文件。"""
+    if not state_path.exists():
+        return 0
+    with locked_state(state_path) as state:
+        pending = list(state.get("pending_events") or [])
+        if not pending:
+            return 0
+        expired = [event.get("event_id") for event in pending if event.get("event_id")]
+        state.setdefault("expired_event_ids", []).extend(expired)
+        state["expired_event_ids"] = state["expired_event_ids"][-SENT_IDS_LIMIT:]
+        state["pending_events"] = []
+        save_state(state_path, state)
+        return len(pending)
+
+
 def _run_locked(
     *,
     registry,
@@ -128,8 +144,14 @@ def _run_locked(
     rule_states = state.setdefault("rules", {})
     sent_ids = set(state.get("sent_event_ids") or [])
     today = now.date().isoformat()
+    active_rule_ids = {rule.rule_id for rule in rules}
     pending = list(state.get("pending_events") or [])
-    current_pending = [event for event in pending if str(event.get("quote_at") or "")[:10] == today]
+    current_pending = [
+        event
+        for event in pending
+        if str(event.get("quote_at") or "")[:10] == today
+        and event.get("rule_id") in active_rule_ids
+    ]
     expired = [event.get("event_id") for event in pending if event not in current_pending]
     if expired:
         state.setdefault("expired_event_ids", []).extend(event_id for event_id in expired if event_id)
@@ -222,6 +244,29 @@ def run_check(
 ) -> dict:
     """执行一次盘中监控；正式模式写本地状态并按 pending 账本推送。"""
     local_now = shanghai_now(now)
+    if not rules:
+        retired_pending_count = 0
+        if not dry_run:
+            try:
+                retired_pending_count = _retire_pending_while_disabled(Path(state_path))
+            except (OSError, ValueError) as exc:
+                return {
+                    "status": "state_error",
+                    "events": [],
+                    "errors": [str(exc)],
+                    "rules_checked": 0,
+                    "quotes_checked": 0,
+                    "pushed": False,
+                }
+        return {
+            "status": "no_rules",
+            "events": [],
+            "errors": [],
+            "rules_checked": 0,
+            "quotes_checked": 0,
+            "pushed": False,
+            "retired_pending_count": retired_pending_count,
+        }
     if not is_intraday_session(local_now):
         return {"status": "outside_session", "events": [], "errors": []}
     trade_day = confirmed_trade_day(local_now.date().isoformat(), db_path=db_path)
@@ -229,9 +274,6 @@ def run_check(
         return {"status": "blocked_calendar", "events": [], "errors": ["交易日历缺失或不可读"]}
     if not trade_day:
         return {"status": "non_trade_day", "events": [], "errors": []}
-    if not rules:
-        return {"status": "no_rules", "events": [], "errors": []}
-
     if pusher_factory is None:
         from pushers.dingtalk_pusher import DingTalkPusher
 
@@ -279,7 +321,7 @@ def run_e2e_test(
     registry,
     *,
     input_by: str,
-    rule: MonitorRule = DEFAULT_RULES[0],
+    rule: MonitorRule | None = None,
     now: datetime | None = None,
     db_path=None,
     pusher_factory: Callable[[], object] | None = None,
@@ -288,6 +330,15 @@ def run_e2e_test(
     normalized_input_by = str(input_by or "").strip()
     if not normalized_input_by:
         return {"status": "invalid_input", "events": [], "errors": ["--input-by 不能为空"]}
+    if rule is None and DEFAULT_RULES:
+        rule = DEFAULT_RULES[0]
+    if rule is None:
+        return {
+            "status": "no_rules",
+            "events": [],
+            "errors": ["当前没有启用的生产监控规则"],
+            "pushed": False,
+        }
     local_now = shanghai_now(now)
     if not is_intraday_session(local_now):
         return {"status": "outside_session", "events": [], "errors": []}
@@ -342,7 +393,7 @@ def run_e2e_test(
         )
         pushed = bool(
             pusher.send_markdown(
-                title="【测试】科创50盘中监控链路验证",
+                title=f"【测试】{rule.instrument_name}盘中监控链路验证",
                 content=content,
             )
         )

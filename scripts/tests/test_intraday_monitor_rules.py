@@ -13,9 +13,17 @@ def test_below_is_strict_and_equality_does_not_trigger():
 
 
 def test_reclaim_is_inclusive_and_does_not_emit_on_initial_match():
-    rule = DEFAULT_RULES[1]
+    rule = MonitorRule(
+        "reclaim",
+        "指数",
+        "000001.SH",
+        1582.0,
+        direction="above",
+        inclusive=True,
+        emit_on_initial_match=False,
+        action_label="收复",
+    )
 
-    assert rule.rule_id == "star50-reclaim-1582"
     assert rule.is_active(1581.99) is False
     assert rule.is_active(1582.0) is True
     assert rule.is_active(1582.01) is True
@@ -30,6 +38,10 @@ def test_reclaim_is_inclusive_and_does_not_emit_on_initial_match():
         current_active=True,
         emit_on_initial_match=rule.emit_on_initial_match,
     ) is True
+
+
+def test_no_production_rules_are_enabled():
+    assert DEFAULT_RULES == ()
 
 
 def test_transition_only_emits_on_entry():
