@@ -2,7 +2,12 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from services.intraday_monitor.guards import is_intraday_session
-from services.intraday_monitor.rules import DEFAULT_RULES, MonitorRule, should_emit
+from services.intraday_monitor.rules import (
+    DEFAULT_RULES,
+    SSE_COMPOSITE_RECLAIM_3955,
+    MonitorRule,
+    should_emit,
+)
 
 
 def test_below_is_strict_and_equality_does_not_trigger():
@@ -40,8 +45,18 @@ def test_reclaim_is_inclusive_and_does_not_emit_on_initial_match():
     ) is True
 
 
-def test_no_production_rules_are_enabled():
-    assert DEFAULT_RULES == ()
+def test_only_sse_composite_reclaim_3955_is_enabled():
+    assert DEFAULT_RULES == (SSE_COMPOSITE_RECLAIM_3955,)
+    assert SSE_COMPOSITE_RECLAIM_3955.rule_id == "sse-composite-reclaim-3955"
+    assert SSE_COMPOSITE_RECLAIM_3955.instrument_name == "上证指数"
+    assert SSE_COMPOSITE_RECLAIM_3955.code == "000001.SH"
+    assert SSE_COMPOSITE_RECLAIM_3955.threshold == 3955.0
+    assert SSE_COMPOSITE_RECLAIM_3955.direction == "above"
+    assert SSE_COMPOSITE_RECLAIM_3955.inclusive is True
+    assert SSE_COMPOSITE_RECLAIM_3955.emit_on_initial_match is False
+    assert SSE_COMPOSITE_RECLAIM_3955.action_text == "站上"
+    assert SSE_COMPOSITE_RECLAIM_3955.is_active(3954.99) is False
+    assert SSE_COMPOSITE_RECLAIM_3955.is_active(3955.0) is True
 
 
 def test_transition_only_emits_on_entry():

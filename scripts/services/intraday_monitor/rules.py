@@ -36,8 +36,20 @@ class MonitorRule:
         return "跌破" if self.direction == "below" else "突破"
 
 
-# 当前没有启用的生产规则。监控引擎与规则模型保留，后续注册新规则即可恢复。
-DEFAULT_RULES: tuple[MonitorRule, ...] = ()
+SSE_COMPOSITE_RECLAIM_3955 = MonitorRule(
+    rule_id="sse-composite-reclaim-3955",
+    instrument_name="上证指数",
+    code="000001.SH",
+    threshold=3955.0,
+    direction="above",
+    inclusive=True,
+    emit_on_initial_match=False,
+    action_label="站上",
+)
+
+
+# 生产规则只注册上证指数站上 3955；已下线的科创50规则不在此恢复。
+DEFAULT_RULES: tuple[MonitorRule, ...] = (SSE_COMPOSITE_RECLAIM_3955,)
 
 
 def should_emit(

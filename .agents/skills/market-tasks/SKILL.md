@@ -428,20 +428,19 @@ python3 main.py board-break daily --no-llm                       # 跳过 LLM �
 
 ## 盘中实时阈值监控（intraday-monitor）
 
-独立 launchd `com.alyx.tradesystem.intraday-monitor` 每 5 分钟做一次无时区 tick，runner 只在上海交易时段 `09:30-11:30 / 13:00-15:00` 进入命令。监控能力与调度保留，但当前 `DEFAULT_RULES=()`，没有启用任何生产规则，科创50的跌破/收复监控均已下线。
+独立 launchd `com.alyx.tradesystem.intraday-monitor` 每 5 分钟做一次无时区 tick，runner 只在上海交易时段 `09:30-11:30 / 13:00-15:00` 进入命令。当前唯一生产规则监控新浪实时 `000001.SH` 上证指数从 3955 点下方站上 3955 点（`>=3955`）；科创50的跌破/收复规则保持下线。
 
 ```bash
-python3 main.py intraday-monitor check             # 当前返回 no_rules；仅把既有 pending 标记过期
-python3 main.py intraday-monitor check --dry-run   # 当前同样返回 no_rules
+python3 main.py intraday-monitor check             # 正式检查；命中时写 pending 并推钉钉
+python3 main.py intraday-monitor check --dry-run   # 只预览，不写状态、不推送
 python3 main.py intraday-monitor check --json      # 输出结构化运行回执
-python3 main.py intraday-monitor e2e-test --input-by USER --json  # 无规则时返回 no_rules、非零退出且不发送
+python3 main.py intraday-monitor e2e-test --input-by USER --confirm-real-push --json  # 仅在用户授权后做一次真实链路测试
 ```
 
-- **停用语义**：没有生产规则时，CLI 不初始化行情 provider，`check` 也不访问交易日历、不读取行情、不推送；不存在 `state.json` 时不创建文件，存在时只把旧 pending 移入 expired，避免以后同日复用相同 `rule_id` 时补发已下线消息，其余历史状态保留。完成这项受控维护后返回 `status=no_rules`。
-- **扩展方式**：规则由 `services.intraday_monitor.rules.MonitorRule` 统一描述（标的、代码、阈值、方向、是否含等号、首次命中策略、provider）；注册新规则即可重新启用，不改抓取、去重、推送与调度编排。相同 provider 的规则合并成一次批量实时行情请求，相同代码自动去重。
-- **触发语义**：通用引擎保留首次命中策略、持续命中去重、恢复后重入和上下穿越两种方向；具体阈值只属于后续显式注册的规则，不再内置科创50阈值。
-- **可靠性**：启用规则后，行情日期必须为上海当日，行情时间最多陈旧 10 分钟；旧行情/缺行情 fail-closed。事件先原子写 `data/runs/intraday-monitor/state.json` pending，再推钉钉；发送失败保留到同一交易日下一 tick 重试，成功后才记 sent。跨日或已退役规则的未送达事件过期，不会在以后启用其他规则时补发。
-- **真实链路测试**：CLI `e2e-test` 必须带 `--input-by`，并且只使用当前启用的生产规则；当前无规则时返回 `status=no_rules` 与非零退出，不抓行情、不发送测试消息、不读写正式状态，不能把未执行误报为验收成功。注册规则后才可在交易时段以新鲜真实行情和仅本次测试线验收。
+- **当前规则**：`sse-composite-reclaim-3955` 使用 `direction=above`、`inclusive=True`、`emit_on_initial_match=False`、动作“站上”。必须先观察到 `<3955`，随后 `>=3955` 才推送；启动或当日首次检查已在线上不补发，持续在线上不重复，跌回下方后再次站上可重推。
+- **扩展方式**：规则由 `services.intraday_monitor.rules.MonitorRule` 统一描述（标的、代码、阈值、方向、是否含等号、首次命中策略、provider）；追加规则不改抓取、去重、推送与调度编排。相同 provider 的规则合并成一次批量实时行情请求，相同代码自动去重。
+- **可靠性**：行情日期必须为上海当日，行情时间最多陈旧 10 分钟；旧行情/缺行情 fail-closed。事件先原子写 `data/runs/intraday-monitor/state.json` pending，再推钉钉；发送失败保留到同一交易日下一 tick 重试，成功后才记 sent。跨日或已退役规则的未送达事件过期，不会在以后启用其他规则时补发。
+- **真实链路测试**：CLI `e2e-test` 必须带 `--input-by` 与一次性显式确认 `--confirm-real-push`；缺少确认时在 provider 初始化、日历、行情与推送之前返回 `authorization_required`。必须经用户单独授权后，才可在交易时段以新鲜真实行情和仅本次测试线验收。测试不读写正式状态；只有退出码 0、`status=complete`、`pushed=true` 才能报告成功。
 - **边界**：监控线是用户给定条件，只标 `[事实]`，不构成买卖建议，不写 SQLite、TradeDraft、TradePlan、持仓或关注池。Mac 休眠期间 launchd 不触发；需要强保障时须配盘中唤醒或迁 VPS。
 
 ## 盘中尾盘强势股扫描（tail-scan）

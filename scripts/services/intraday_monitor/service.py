@@ -321,6 +321,7 @@ def run_e2e_test(
     registry,
     *,
     input_by: str,
+    confirm_real_push: bool = False,
     rule: MonitorRule | None = None,
     now: datetime | None = None,
     db_path=None,
@@ -330,6 +331,13 @@ def run_e2e_test(
     normalized_input_by = str(input_by or "").strip()
     if not normalized_input_by:
         return {"status": "invalid_input", "events": [], "errors": ["--input-by 不能为空"]}
+    if confirm_real_push is not True:
+        return {
+            "status": "authorization_required",
+            "events": [],
+            "errors": ["真实钉钉链路测试必须显式传 --confirm-real-push"],
+            "pushed": False,
+        }
     if rule is None and DEFAULT_RULES:
         rule = DEFAULT_RULES[0]
     if rule is None:

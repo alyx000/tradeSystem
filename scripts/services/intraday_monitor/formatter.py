@@ -33,6 +33,6 @@ def render_e2e_test_alert(event: dict, *, production_threshold: float, input_by:
             f"- 数据来源：{event['source']}",
             f"- 测试请求者：{input_by}",
             "",
-            "> 这是一条链路测试消息，不是正式跌破告警，不构成买卖建议。",
+            "> 这是一条链路测试消息，不是正式监控告警，不构成买卖建议。",
         ]
     )

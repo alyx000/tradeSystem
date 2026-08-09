@@ -7,7 +7,11 @@ from zoneinfo import ZoneInfo
 
 import services.intraday_monitor.service as intraday_service
 from services.intraday_monitor.service import run_check, run_e2e_test
-from services.intraday_monitor.rules import DEFAULT_RULES, MonitorRule
+from services.intraday_monitor.rules import (
+    DEFAULT_RULES,
+    SSE_COMPOSITE_RECLAIM_3955,
+    MonitorRule,
+)
 
 
 TZ = ZoneInfo("Asia/Shanghai")
@@ -306,44 +310,59 @@ def test_multiple_rules_on_same_provider_share_one_quote_request(tmp_path):
     assert len(pusher.messages) == 1
 
 
-def test_default_rules_are_disabled_without_any_side_effect(tmp_path, monkeypatch):
-    registry = _Registry(price=1575.0)
+def test_default_rule_pushes_only_after_observed_below_to_3955(tmp_path):
+    db_path = _calendar(tmp_path)
+    registry = _Registry(price=3956.0)
     pusher = _Pusher()
     state_path = tmp_path / "state.json"
+    now = datetime(2026, 8, 3, 10, 0, tzinfo=TZ)
 
-    def fail_calendar(*args, **kwargs):
-        raise AssertionError("无启用规则时不得访问交易日历")
-
-    monkeypatch.setattr(intraday_service, "confirmed_trade_day", fail_calendar)
-    monkeypatch.setattr(
-        intraday_service,
-        "locked_state",
-        lambda *args, **kwargs: (_ for _ in ()).throw(
-            AssertionError("无启用规则时不得访问状态层")
-        ),
-    )
-
-    result = run_check(
+    initial_above = run_check(
         registry,
-        now=datetime(2026, 8, 3, 10, 0, tzinfo=TZ),
+        now=now,
         state_path=state_path,
-        db_path=tmp_path / "missing.db",
+        db_path=db_path,
+        pusher_factory=lambda: pusher,
+    )
+    registry.price = 3954.0
+    registry.now = now + timedelta(minutes=5)
+    below = run_check(
+        registry,
+        now=now + timedelta(minutes=5),
+        state_path=state_path,
+        db_path=db_path,
+        pusher_factory=lambda: pusher,
+    )
+    registry.price = 3955.0
+    registry.now = now + timedelta(minutes=10)
+    standing = run_check(
+        registry,
+        now=now + timedelta(minutes=10),
+        state_path=state_path,
+        db_path=db_path,
+        pusher_factory=lambda: pusher,
+    )
+    registry.now = now + timedelta(minutes=15)
+    still_above = run_check(
+        registry,
+        now=now + timedelta(minutes=15),
+        state_path=state_path,
+        db_path=db_path,
         pusher_factory=lambda: pusher,
     )
 
-    assert DEFAULT_RULES == ()
-    assert result == {
-        "status": "no_rules",
-        "events": [],
-        "errors": [],
-        "rules_checked": 0,
-        "quotes_checked": 0,
-        "pushed": False,
-        "retired_pending_count": 0,
-    }
-    assert registry.call_count == 0
-    assert pusher.messages == []
-    assert not state_path.exists()
+    assert DEFAULT_RULES == (SSE_COMPOSITE_RECLAIM_3955,)
+    assert initial_above["events"] == []
+    assert below["events"] == []
+    assert len(standing["events"]) == 1
+    assert standing["events"][0]["rule_id"] == SSE_COMPOSITE_RECLAIM_3955.rule_id
+    assert standing["events"][0]["action_text"] == "站上"
+    assert standing["events"][0]["price"] == 3955.0
+    assert still_above["status"] == "complete"
+    assert still_above["events"] == []
+    assert len(pusher.messages) == 1
+    assert "上证指数" in pusher.messages[0][1]
+    assert "已站上监控线 **3955.00**" in pusher.messages[0][1]
 
 
 def test_non_finite_price_fails_closed_without_resetting_active_state(tmp_path):
@@ -470,6 +489,7 @@ def test_disabled_tick_retires_pending_before_same_rule_id_is_reenabled(tmp_path
 
     disabled = run_check(
         registry,
+        rules=(),
         now=now,
         state_path=state_path,
         db_path=tmp_path / "missing.db",
@@ -545,6 +565,7 @@ def test_e2e_test_uses_fresh_real_quote_and_never_calls_state_layer(tmp_path, mo
     result = run_e2e_test(
         registry,
         input_by="pytest",
+        confirm_real_push=True,
         rule=BREACH_RULE,
         now=datetime(2026, 8, 3, 10, 0, tzinfo=TZ),
         db_path=db_path,
@@ -578,6 +599,27 @@ def test_e2e_test_rejects_blank_input_by_before_fetch(tmp_path):
     assert registry.call_count == 0
 
 
+def test_e2e_test_requires_explicit_real_push_authorization_before_fetch(tmp_path):
+    for denied_value in (False, None, 1, "false", "true"):
+        registry = _Registry(price=1600.0)
+        pusher = _Pusher()
+
+        result = run_e2e_test(
+            registry,
+            input_by="pytest",
+            confirm_real_push=denied_value,
+            now=datetime(2026, 8, 3, 10, 0, tzinfo=TZ),
+            db_path=tmp_path / "missing.db",
+            pusher_factory=lambda: pusher,
+        )
+
+        assert result["status"] == "authorization_required"
+        assert result["pushed"] is False
+        assert "--confirm-real-push" in result["errors"][0]
+        assert registry.call_count == 0
+        assert pusher.messages == []
+
+
 def test_e2e_test_rejects_stale_quote_without_push(tmp_path):
     db_path = _calendar(tmp_path)
     now = datetime(2026, 8, 3, 10, 0, tzinfo=TZ)
@@ -588,6 +630,7 @@ def test_e2e_test_rejects_stale_quote_without_push(tmp_path):
     result = run_e2e_test(
         registry,
         input_by="pytest",
+        confirm_real_push=True,
         rule=BREACH_RULE,
         now=now,
         db_path=db_path,
@@ -607,6 +650,7 @@ def test_e2e_test_outside_session_does_not_fetch_or_push(tmp_path):
     result = run_e2e_test(
         registry,
         input_by="pytest",
+        confirm_real_push=True,
         rule=BREACH_RULE,
         now=datetime(2026, 8, 3, 8, 0, tzinfo=TZ),
         db_path=db_path,
@@ -626,6 +670,7 @@ def test_e2e_test_reports_push_failure(tmp_path):
     result = run_e2e_test(
         registry,
         input_by="pytest",
+        confirm_real_push=True,
         rule=BREACH_RULE,
         now=datetime(2026, 8, 3, 10, 0, tzinfo=TZ),
         db_path=db_path,
@@ -637,13 +682,15 @@ def test_e2e_test_reports_push_failure(tmp_path):
     assert len(pusher.messages) == 1
 
 
-def test_e2e_test_without_active_rule_does_not_fetch_or_push(tmp_path):
+def test_e2e_test_without_active_rule_does_not_fetch_or_push(tmp_path, monkeypatch):
     registry = _Registry(price=1600.0)
     pusher = _Pusher()
+    monkeypatch.setattr(intraday_service, "DEFAULT_RULES", ())
 
     result = run_e2e_test(
         registry,
         input_by="pytest",
+        confirm_real_push=True,
         now=datetime(2026, 8, 3, 10, 0, tzinfo=TZ),
         db_path=tmp_path / "missing.db",
         pusher_factory=lambda: pusher,
@@ -667,6 +714,7 @@ def test_e2e_test_uses_first_registered_rule_when_monitoring_is_reenabled(
     result = run_e2e_test(
         registry,
         input_by="pytest",
+        confirm_real_push=True,
         now=datetime(2026, 8, 3, 10, 0, tzinfo=TZ),
         db_path=db_path,
         pusher_factory=lambda: pusher,

@@ -489,12 +489,12 @@ ARCHITECTURE_COMMANDS = [
     ["tail-scan", "daily", "--no-push"],
     ["tail-scan", "daily", "--no-llm"],
     ["tail-scan", "daily", "--min-pct", "7", "--min-amount", "20", "--no-push", "--no-llm"],
-    # intraday-monitor (盘中每5分钟阈值监控能力；当前无启用规则)
+    # intraday-monitor (盘中每5分钟监控上证指数站上3955)
     ["intraday-monitor", "check"],
     ["intraday-monitor", "check", "--dry-run"],
     ["intraday-monitor", "check", "--json"],
-    ["intraday-monitor", "e2e-test", "--input-by", "codex_automation"],
-    ["intraday-monitor", "e2e-test", "--input-by", "codex_automation", "--json"],
+    ["intraday-monitor", "e2e-test", "--input-by", "codex_automation", "--confirm-real-push"],
+    ["intraday-monitor", "e2e-test", "--input-by", "codex_automation", "--confirm-real-push", "--json"],
     # wechat-teacher-feed (本机 WeRSS 白名单采集；确认前仅归档/查看)
     ["wechat-teacher-feed", "should-run", "--phase", "post-market", "--date", "2026-07-13", "--json"],
     ["wechat-teacher-feed", "doctor", "--json"],
