@@ -3,7 +3,7 @@ from __future__ import annotations
 
 
 _REDLINE = (
-    "> 盘后只读观察清单 · 全部为 [判断] · "
+    "> 尾盘实时快照观察清单 · 全部为 [判断] · 尚未收盘确认 · "
     "不构成买卖建议、不含价位、不预测点位、不写交易计划层。"
 )
 
@@ -25,7 +25,7 @@ def _pct(value) -> str:
 def render_daily(summary: dict) -> str:
     date = summary.get("date", "")
     windows = summary.get("windows") or [5, 10]
-    lines = [f"# 4日均线模式观察池 · {date}  [判断]", "", _REDLINE, ""]
+    lines = [f"# 4日均线尾盘观察池 · {date}  [判断]", "", _REDLINE, ""]
     if summary.get("status") == "source_failed":
         lines += [
             "## 数据状态",
@@ -36,16 +36,17 @@ def render_daily(summary: dict) -> str:
 
     lines += [
         "## 扫描概览",
+        f"- 快照时间：{summary.get('snapshot_at') or '未记录'}；今日收盘价使用实时价、今日成交额使用截至快照时的累计成交额。",
         f"- 历史龙头窗口：近 {summary.get('leader_lookback_days') or '默认'} 自然日内复盘第 5 步人工确认的最票/龙头。",
         f"- 历史龙头宇宙：{summary.get('leader_universe_count', 0)}",
-        f"- 条件：历史龙头池内，MA4 重新拐头向上（今日 MA4 上行，且上拐前至少两根 MA4 连续下行）；今日成交额同时大于 MA{windows[0]} / MA{windows[1]} 成交额均线；当日未涨停。",
+        f"- 条件：历史龙头池内，尾盘实时价代替今日收盘价后 MA4 重新拐头向上（今日 MA4 上行，且上拐前至少两根 MA4 连续下行）；截至快照的累计成交额同时大于 MA{windows[0]} / MA{windows[1]} 成交额均线；快照时未涨停。",
         f"- 扫描股票：{summary.get('scanned_count', 0)}",
         f"- 命中股票：{summary.get('matched_count', 0)}",
         f"- 历史不足未评估：{summary.get('insufficient_count', 0)}",
         "",
     ]
     if summary.get("source_errors"):
-        lines += ["## 运营提示", f"- 部分历史行情日期获取失败：{'、'.join(summary.get('source_errors') or [])}", ""]
+        lines += ["## 运营提示", f"- 实时行情为部分覆盖：{'、'.join(summary.get('source_errors') or [])}", ""]
     if summary.get("leader_unresolved_count"):
         if "## 运营提示" not in lines:
             lines += ["## 运营提示"]

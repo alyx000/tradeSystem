@@ -5,6 +5,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 import re
 import sqlite3
+from zoneinfo import ZoneInfo
 
 from services.ma_breakout import constants as C
 from services.ma_breakout import detectors
@@ -189,35 +190,152 @@ def _is_weekday(date: str) -> bool:
     return datetime.strptime(date, "%Y-%m-%d").weekday() < 5
 
 
-def _fetch_recent_quotes(registry, target_date: str, required_days: int) -> tuple[list[tuple[str, list[dict]]], list[str], bool]:
+def _fetch_completed_quotes_before(
+    registry,
+    target_date: str,
+    required_days: int,
+) -> tuple[list[tuple[str, list[dict]]], list[str]]:
+    """读取目标日前的完成日线；目标日只允许由实时快照合成。"""
     quote_days: list[tuple[str, list[dict]]] = []
     source_errors: list[str] = []
-    target_failed = False
-    for date in _date_range_desc(target_date, C.MAX_LOOKBACK_CALENDAR_DAYS):
+    previous_calendar_date = (
+        datetime.strptime(target_date, "%Y-%m-%d").date() - timedelta(days=1)
+    ).isoformat()
+    for date in _date_range_desc(previous_calendar_date, C.MAX_LOOKBACK_CALENDAR_DAYS):
+        is_trade_day = _registry_is_trade_day(registry, date)
+        if is_trade_day is False or (is_trade_day is None and not _is_weekday(date)):
+            continue
         result = registry.call("get_market_daily_quotes", date)
         if not getattr(result, "success", False):
             source_errors.append(f"market_daily_quotes:{date}")
-            if date == target_date:
-                target_failed = True
-                break
             continue
         rows = result.data if isinstance(result.data, list) else []
         if rows:
             quote_days.append((date, rows))
-        elif date == target_date:
-            source_errors.append("target_quotes_missing")
-            target_failed = True
-            break
-        else:
-            is_trade_day = _registry_is_trade_day(registry, date)
-            if is_trade_day is True:
-                source_errors.append(f"market_daily_quotes_empty:{date}")
-            elif is_trade_day is None and _is_weekday(date):
-                source_errors.append(f"market_daily_quotes_empty_calendar_unknown:{date}")
+        elif is_trade_day is True:
+            source_errors.append(f"market_daily_quotes_empty:{date}")
+        elif is_trade_day is None:
+            source_errors.append(f"market_daily_quotes_empty_calendar_unknown:{date}")
         if len(quote_days) >= required_days:
             break
     quote_days.sort(key=lambda item: item[0])
-    return quote_days, source_errors, target_failed
+    return quote_days, source_errors
+
+
+def _quote_datetime(quote: dict) -> datetime | None:
+    quote_date = str(quote.get("quote_date") or "").strip()
+    if len(quote_date) == 8 and quote_date.isdigit():
+        quote_date = f"{quote_date[:4]}-{quote_date[4:6]}-{quote_date[6:]}"
+    quote_time = str(quote.get("quote_time") or "").strip()
+    try:
+        return datetime.fromisoformat(f"{quote_date}T{quote_time}").replace(
+            tzinfo=ZoneInfo("Asia/Shanghai")
+        )
+    except ValueError:
+        return None
+
+
+def _snapshot_at(target_date: str, snapshot_at: datetime | None) -> datetime:
+    shanghai = ZoneInfo("Asia/Shanghai")
+    if snapshot_at is None:
+        return datetime.fromisoformat(f"{target_date}T14:50:00").replace(tzinfo=shanghai)
+    if snapshot_at.tzinfo is None:
+        return snapshot_at.replace(tzinfo=shanghai)
+    return snapshot_at.astimezone(shanghai)
+
+
+def _valid_realtime_bar(
+    quote: dict,
+    *,
+    target_date: str,
+    snapshot_at: datetime,
+) -> tuple[dict | None, str | None]:
+    quoted_at = _quote_datetime(quote)
+    if quoted_at is None:
+        return None, "quote_datetime_invalid"
+    if quoted_at.date().isoformat() != target_date:
+        return None, f"quote_date_mismatch:{quoted_at.date().isoformat()}"
+    age_seconds = (snapshot_at - quoted_at).total_seconds()
+    if age_seconds > C.MAX_REALTIME_QUOTE_AGE_SECONDS:
+        return None, f"quote_stale:{int(age_seconds)}s"
+    if age_seconds < -C.MAX_REALTIME_FUTURE_SKEW_SECONDS:
+        return None, f"quote_future:{int(-age_seconds)}s"
+    price = _num(quote.get("price"))
+    amount_yuan = _num(quote.get("amount"))
+    if price is None or price <= 0:
+        return None, "price_invalid"
+    if amount_yuan is None or amount_yuan < 0:
+        return None, "amount_invalid"
+    code = quote.get("code") or quote.get("ts_code")
+    return {
+        "trade_date": target_date,
+        "ts_code": code,
+        "code": code,
+        "name": quote.get("name") or "",
+        "close": price,
+        # 新浪实时 amount=元；Tushare daily amount=千元。统一到既有检测器量纲。
+        "amount": amount_yuan / 1000.0,
+        "pct_chg": _num(quote.get("pct_chg")),
+        "quote_date": target_date,
+        "quote_time": quoted_at.strftime("%H:%M:%S"),
+    }, None
+
+
+def _fetch_realtime_bars(
+    registry,
+    codes: list[str],
+    *,
+    target_date: str,
+    snapshot_at: datetime,
+) -> tuple[dict[str, dict], list[str]]:
+    if not codes:
+        return {}, []
+
+    def fetch(request_codes: list[str]):
+        result = registry.call("get_realtime_quotes", request_codes)
+        if not getattr(result, "success", False) or not isinstance(result.data, list):
+            result = registry.call("get_realtime_quotes", request_codes)
+        return result
+
+    result = fetch(codes)
+    if not getattr(result, "success", False) or not isinstance(result.data, list):
+        return {}, [f"realtime_quotes_failed:{getattr(result, 'error', 'unknown')}"]
+
+    raw_by_code = {
+        _bare_code(row.get("code") or row.get("ts_code")): row
+        for row in result.data
+        if isinstance(row, dict)
+        and _bare_code(row.get("code") or row.get("ts_code"))
+    }
+    missing = [code for code in codes if _bare_code(code) not in raw_by_code]
+    if missing:
+        retry = registry.call("get_realtime_quotes", missing)
+        if getattr(retry, "success", False) and isinstance(retry.data, list):
+            for row in retry.data:
+                if not isinstance(row, dict):
+                    continue
+                bare = _bare_code(row.get("code") or row.get("ts_code"))
+                if bare:
+                    raw_by_code[bare] = row
+
+    bars: dict[str, dict] = {}
+    errors: list[str] = []
+    for requested in codes:
+        bare = _bare_code(requested)
+        quote = raw_by_code.get(bare)
+        if quote is None:
+            errors.append(f"realtime_quote_missing:{bare}")
+            continue
+        bar, error = _valid_realtime_bar(
+            quote,
+            target_date=target_date,
+            snapshot_at=snapshot_at,
+        )
+        if bar is None:
+            errors.append(f"realtime_quote_invalid:{bare}:{error}")
+            continue
+        bars[bare] = bar
+    return bars, errors
 
 
 def _sw_lookup(registry) -> dict[str, dict]:
@@ -286,6 +404,7 @@ def _flatten_candidate(code: str, bars: list[dict], sw: dict[str, dict], detail:
         "amount_ma10": amount_detail.get("amount_ma10"),
         "ma4_today": ma_detail.get("ma_today"),
         "ma4_prev": ma_detail.get("ma_prev"),
+        "quote_time": today.get("quote_time"),
         "former_leader_sources": former_meta.get("sources") or [],
         "former_leader_first_seen": former_meta.get("first_seen_date"),
         "former_leader_last_seen": former_meta.get("last_seen_date"),
@@ -301,17 +420,23 @@ def run_daily(
     top_n: int = C.DEFAULT_TOP_N,
     min_target_quote_rows: int = C.MIN_TARGET_QUOTE_ROWS,
     former_leaders: dict[str, dict] | None = None,
+    snapshot_at: datetime | None = None,
 ) -> dict:
-    """扫描目标日全市场，返回当日命中清单。"""
+    """用完成日线 + 目标日尾盘实时快照扫描历史龙头宇宙。"""
     required_days = max(max(windows), C.MA_PERIOD + 2)
-    quote_days, source_errors, target_failed = _fetch_recent_quotes(registry, date, required_days)
-    target_rows = []
-    if quote_days and quote_days[-1][0] == date:
-        target_rows = quote_days[-1][1]
-    if target_failed or source_errors:
+    required_history_days = required_days - 1
+    local_snapshot_at = _snapshot_at(date, snapshot_at)
+    quote_days, source_errors = _fetch_completed_quotes_before(
+        registry,
+        date,
+        required_history_days,
+    )
+    if source_errors:
         return {
             "status": "source_failed",
             "date": date,
+            "data_scope": "intraday_snapshot",
+            "snapshot_at": local_snapshot_at.isoformat(),
             "candidates": [],
             "source_errors": source_errors,
             "scanned_count": 0,
@@ -323,32 +448,58 @@ def run_daily(
     for quote_date, rows in quote_days:
         if len(rows) < min_target_quote_rows:
             below_floor_errors.append(f"quote_rows_below_floor:{quote_date}")
-            if quote_date == date:
-                below_floor_errors.append("target_quote_rows_below_floor")
     if below_floor_errors:
         return {
             "status": "source_failed",
             "date": date,
+            "data_scope": "intraday_snapshot",
+            "snapshot_at": local_snapshot_at.isoformat(),
             "candidates": [],
             "source_errors": below_floor_errors,
-            "scanned_count": len(target_rows),
+            "scanned_count": 0,
             "matched_count": 0,
             "insufficient_count": 0,
             "truncated": False,
         }
-    if len(quote_days) < required_days:
+    if len(quote_days) < required_history_days:
         return {
             "status": "source_failed",
             "date": date,
+            "data_scope": "intraday_snapshot",
+            "snapshot_at": local_snapshot_at.isoformat(),
             "candidates": [],
             "source_errors": ["insufficient_market_history"],
-            "scanned_count": len(target_rows),
+            "scanned_count": 0,
             "matched_count": 0,
             "insufficient_count": 0,
             "truncated": False,
         }
-
     grouped = _bars_by_code(quote_days)
+    requested_codes = list(former_leaders) if former_leaders is not None else list(grouped)
+    realtime_bars, realtime_errors = _fetch_realtime_bars(
+        registry,
+        requested_codes,
+        target_date=date,
+        snapshot_at=local_snapshot_at,
+    )
+    if requested_codes and not realtime_bars:
+        return {
+            "status": "source_failed",
+            "date": date,
+            "data_scope": "intraday_snapshot",
+            "snapshot_at": local_snapshot_at.isoformat(),
+            "candidates": [],
+            "source_errors": realtime_errors or ["realtime_quotes_empty"],
+            "leader_universe_count": len(former_leaders) if former_leaders is not None else None,
+            "realtime_requested_count": len(requested_codes),
+            "realtime_valid_count": 0,
+            "scanned_count": 0,
+            "matched_count": 0,
+            "insufficient_count": 0,
+            "truncated": False,
+        }
+    for code, bar in realtime_bars.items():
+        grouped.setdefault(code, []).append(bar)
     sw = _sw_lookup(registry)
     candidates = []
     insufficient = 0
@@ -359,7 +510,7 @@ def run_daily(
             former_meta = former_leaders.get(code)
             if former_meta is None:
                 continue
-        if not bars or bars[-1].get("trade_date") != date:
+        if code not in realtime_bars or not bars or bars[-1].get("trade_date") != date:
             continue
         scanned += 1
         matched, detail = detectors.match_pattern(bars, target_date=date, windows=windows)
@@ -377,12 +528,16 @@ def run_daily(
     matched_count = len(candidates)
     limited = candidates[:top_n]
     return {
-        "status": "ok",
+        "status": "partial" if realtime_errors else "ok",
         "date": date,
+        "data_scope": "intraday_snapshot",
+        "snapshot_at": local_snapshot_at.isoformat(),
         "windows": list(windows),
         "candidates": limited,
-        "source_errors": source_errors,
+        "source_errors": realtime_errors,
         "leader_universe_count": len(former_leaders) if former_leaders is not None else None,
+        "realtime_requested_count": len(requested_codes),
+        "realtime_valid_count": len(realtime_bars),
         "scanned_count": scanned,
         "matched_count": matched_count,
         "insufficient_count": insufficient,

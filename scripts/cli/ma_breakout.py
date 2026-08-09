@@ -13,7 +13,8 @@ from services.ma_breakout import constants as C
 from services.ma_breakout import renderer, scanner
 
 logger = logging.getLogger(__name__)
-_AFTER_CLOSE_CUTOFF = datetime.time(15, 30)
+_TAIL_WINDOW_START = datetime.time(14, 45)
+_TAIL_WINDOW_END = datetime.time(15, 0)
 
 
 def _positive_int(raw: str) -> int:
@@ -40,8 +41,8 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
     mb = subparsers.add_parser("ma-breakout", help="4日均线拐头 + 成交额突破双均量线观察池")
     sub = mb.add_subparsers(dest="ma_breakout_command")
 
-    daily = sub.add_parser("daily", help="盘后扫描并输出观察清单")
-    daily.add_argument("--date", default=None, help="交易日 YYYY-MM-DD（默认今天）")
+    daily = sub.add_parser("daily", help="尾盘实时扫描并输出观察清单")
+    daily.add_argument("--date", default=None, help="交易日 YYYY-MM-DD（只能是上海当日，默认今天）")
     daily.add_argument("--windows", type=_windows, default=C.DEFAULT_AMOUNT_WINDOWS,
                        help="成交额均线周期，逗号分隔（默认 5,10）")
     daily.add_argument("--top-n", type=_positive_int, default=C.DEFAULT_TOP_N,
@@ -62,10 +63,6 @@ def handle_command(config: dict, args: argparse.Namespace) -> None:
     sys.exit(2)
 
 
-def _today() -> str:
-    return datetime.date.today().isoformat()
-
-
 def _now_shanghai() -> datetime.datetime:
     try:
         from zoneinfo import ZoneInfo
@@ -75,67 +72,38 @@ def _now_shanghai() -> datetime.datetime:
         return datetime.datetime.now()
 
 
-def _next_calendar_day(date: str) -> str:
-    current = datetime.datetime.strptime(date, "%Y-%m-%d").date()
-    return (current + datetime.timedelta(days=1)).isoformat()
-
-
-def _resolve_effective_date(conn, registry, date: str, *, explicit_date: bool) -> tuple[str, dict]:
-    """隐式自动任务在目标交易日尚未收盘时，回退到最近已完成交易日。"""
-    if explicit_date:
-        return date, {}
-    from utils.trade_date import get_prev_trade_date, is_trade_day
-
-    trade_day = is_trade_day(date, conn=conn, registry=registry)
-    if trade_day is True:
-        now = _now_shanghai()
-        if now.date().isoformat() == date and now.time() < _AFTER_CLOSE_CUTOFF:
-            target_date = get_prev_trade_date(registry, date)
-            return target_date, {
-                "run_date": date,
-                "auto_resolved_from": "pre_close_trade_day",
-                "next_trade_date": date,
-            }
-        return date, {}
-    if trade_day is not False:
-        return date, {}
-    next_date = _next_calendar_day(date)
-    if is_trade_day(next_date, conn=conn, registry=registry) is not True:
-        return date, {}
-    target_date = get_prev_trade_date(registry, date)
-    return target_date, {
-        "run_date": date,
-        "auto_resolved_from": "pre_trade_day",
-        "next_trade_date": next_date,
-    }
+def _emit_skip(args: argparse.Namespace, date: str, reason: str) -> None:
+    payload = {"status": "skipped", "reason": reason, "date": date, "candidates": []}
+    if args.json:
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+    else:
+        logger.warning("⚠️ %s 跳过 4日均线尾盘扫描：%s（不落盘、不推送）", date, reason)
 
 
 def _run_daily(config: dict, args: argparse.Namespace) -> None:
     from main import setup_providers
 
-    date = args.date or _today()
+    now = _now_shanghai()
+    date = args.date or now.date().isoformat()
+    if date != now.date().isoformat():
+        _emit_skip(args, date, "not_current_trade_date")
+        return
+    current_time = now.time().replace(tzinfo=None)
+    if not (_TAIL_WINDOW_START <= current_time <= _TAIL_WINDOW_END):
+        _emit_skip(args, date, "outside_tail_window")
+        return
+
     registry = setup_providers(config)
     registry.initialize_all()
 
     former_leaders = {}
     leader_stats = {}
-    auto_meta = {}
     conn = get_connection()
     try:
-        date, auto_meta = _resolve_effective_date(conn, registry, date, explicit_date=bool(args.date))
-        if args.json or not args.dry_run:
-            from utils.trade_date import is_non_trading_day
-            if is_non_trading_day(conn, registry, date):
-                if args.json:
-                    print(json.dumps({
-                        "status": "skipped",
-                        "reason": "non_trading_day",
-                        "date": date,
-                        "candidates": [],
-                    }, ensure_ascii=False, indent=2))
-                    return
-                logger.warning("⚠️ %s 为非交易日，跳过 4日均线模式扫描（不推送）", date)
-                return
+        from utils.trade_date import is_non_trading_day
+        if is_non_trading_day(conn, registry, date):
+            _emit_skip(args, date, "non_trading_day")
+            return
         former_leaders = scanner.load_former_leader_universe(
             conn,
             date,
@@ -150,6 +118,8 @@ def _run_daily(config: dict, args: argparse.Namespace) -> None:
         summary = {
             "status": "source_failed",
             "date": date,
+            "data_scope": "intraday_snapshot",
+            "snapshot_at": now.isoformat(),
             "windows": list(args.windows),
             "candidates": [],
             "source_errors": [f"leader_resolution_error:{leader_stats['leader_resolution_error']}"],
@@ -168,10 +138,10 @@ def _run_daily(config: dict, args: argparse.Namespace) -> None:
             windows=args.windows,
             top_n=args.top_n,
             former_leaders=former_leaders,
+            snapshot_at=now,
         )
         summary["leader_lookback_days"] = args.leader_lookback_days
         summary["leader_unresolved_count"] = leader_stats.get("unresolved_leader_tracking", 0)
-    summary.update(auto_meta)
     if args.json:
         print(json.dumps(summary, ensure_ascii=False, indent=2))
         return
@@ -191,7 +161,7 @@ def _run_daily(config: dict, args: argparse.Namespace) -> None:
     if summary.get("status") == "source_failed":
         logger.error("[ma-breakout daily] 行情源失败，跳过推送")
         return
-    _push_to_dingtalk(f"4日均线模式观察池 · {date}", md)
+    _push_to_dingtalk(f"4日均线尾盘观察 · {date}", md)
 
 
 def _write_reports(date: str, markdown: str, summary: dict) -> dict[str, str]:

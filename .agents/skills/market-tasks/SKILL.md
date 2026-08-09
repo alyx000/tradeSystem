@@ -470,18 +470,19 @@ python3 main.py tail-scan daily --min-pct 7 --min-amount 20    # 显式指定筛
 
 ## 4日均线二波观察池（ma-breakout）
 
-每交易日盘后 + 周日 21:35 自动跑（launchd `com.alyx.tradesystem.ma-breakout`，排在 trend-leader 21:30 后、market-timing 21:40 前），也可手动：
+每个交易日 14:50 自动跑一次尾盘实时快照（launchd `com.alyx.tradesystem.ma-breakout`）；不再运行 21:35 收盘版。macOS 休眠错过可接受，补触发若不在上海 14:45～15:00 会安全跳过。也可在该时间窗内手动：
 
 ```bash
 python3 main.py ma-breakout daily
-python3 main.py ma-breakout daily --date 2026-06-12 --dry-run
+python3 main.py ma-breakout daily --date 2026-06-12 --dry-run  # 日期必须是上海当日
 python3 main.py ma-breakout daily --windows 5,10 --leader-lookback-days 60 --top-n 30 --no-push
 python3 main.py ma-breakout daily --json
 ```
 
-- **口径**：用于二波，不找当前才冒出来的强票，也不找太久远的老龙头。先从 `leader_tracking`（复盘第 5 步人工确认最票/龙头）取目标日前近端历史龙头宇宙，默认近 60 自然日（可用 `--leader-lookback-days` 调整；若首次出现较早但最近仍被跟踪，也保留）。`trend_leader_pool` 自动趋势主升观察池只说明曾经强势，不作为默认历史龙头来源。再对该宇宙内股票用 `get_market_daily_quotes` 近 10 个有效行情日组装序列；MA4 重新拐头向上 = 今日 MA4 > 昨日 MA4，且昨日 MA4 < 前日 MA4 < 前两日 MA4，要求上拐前至少两根 MA4 连续下行，避免把一日回踩反弹误判为重新拐头；成交额突破 = 今日成交额同时大于两条成交额均线（默认 MA5/MA10，可用 `--windows` 改）；当日涨停的股票剔除，不进入观察池。
-- **输出**：按今日成交额降序渲染盘后只读观察清单，表格展示历史龙头依据与首次出现日期，全部标 `[判断]`；Markdown/JSON 报告落 `data/reports/ma-breakout/YYYY-MM-DD.{md,json}`；不出价位、不做买卖建议、不写交易计划层/关注池。
-- **运行语义**：无状态、不落库；裸 `daily` 落盘、打印并推钉钉；`--no-push` 落盘并打印但不推送；`--dry-run` 仅打印、不落盘不推送；`--json` 输出结构化结果且不落盘不推送。未显式 `--date` 且当前交易日尚未收盘（上海时间 15:30 前）或当天为交易日前一天（如周日）时，自动回退到最近已完成交易日作为目标日；显式 `--date` 仍按指定日期执行，非交易日会跳过。
+- **口径**：用于二波，不找当前才冒出来的强票，也不找太久远的老龙头。先从 `leader_tracking`（复盘第 5 步人工确认最票/龙头）取目标日前近端历史龙头宇宙，默认近 60 自然日（可用 `--leader-lookback-days` 调整；若首次出现较早但最近仍被跟踪，也保留）。`trend_leader_pool` 自动趋势主升观察池只说明曾经强势，不作为默认历史龙头来源。历史 9 个完成交易日用 `get_market_daily_quotes`，目标日只对历史龙头批量取 `get_realtime_quotes`：实时价临时代替今日收盘价，累计成交额从新浪“元”换算为 Tushare 日线“千元”后合成今日临时 bar，保持原 MA4 与成交额 MA5/MA10 检测器量纲。MA4 重新拐头向上 = 今日 MA4 > 昨日 MA4，且昨日 MA4 < 前日 MA4 < 前两日 MA4；截至快照累计成交额同时突破两条均额线；快照时涨停的股票剔除。
+- **时效与失败语义**：实时行情日期必须等于上海当日，最多陈旧 10 分钟、最多超前 2 分钟；全批失败重试 1 次，缺票再按缺失代码补取 1 次。全部不可判为 `source_failed`；部分股票缺失/陈旧为 `partial` 并保留 `source_errors`，不得写成完整空池。尾盘结果是 `[判断·实时快照]`，尚未收盘确认。
+- **输出**：按快照累计成交额降序渲染尾盘只读观察清单，表格展示历史龙头依据与首次出现日期；Markdown/JSON 报告落 `data/reports/ma-breakout/YYYY-MM-DD.{md,json}`；不出价位、不做买卖建议、不写交易计划层/关注池。
+- **运行语义**：无状态、不落库；裸 `daily` 落盘、打印并推钉钉；`--no-push` 落盘并打印但不推送；`--dry-run` 仅打印、不落盘不推送；`--json` 输出结构化结果且不落盘不推送。目标日期不是上海当日、当前不在 14:45～15:00、或当日不是交易日时，均跳过且不落盘不推送；不再回退到上一完成交易日，也不再运行晚间确认版。
 - **依赖 env**：`TUSHARE_TOKEN` + 钉钉 `DINGTALK_WEBHOOK_TOKEN/SECRET`。
 
 ## 每日最票候选确认稿（daily-leaders）

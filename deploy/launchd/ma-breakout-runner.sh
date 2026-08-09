@@ -1,16 +1,11 @@
 #!/bin/bash
-# 4日均线二波观察池定时入口（launchd 调用）。
-#
-# 工作日 + 周日 21:35 触发（plist 按系统时区 Asia/Shanghai，单触发，与兄弟任务同范式）；
-# 近端历史龙头池内 MA4 拐头 + 成交额突破 5/10 日均额线 → 只读观察清单 + 钉钉。
-# 2026-07-11 修复：移除原「Pacific 折算触发 + 21:20-22:05 时间窗守卫」——休眠错过晚间档后
-# launchd 把补跑合并到晨间折算触发、再被守卫杀掉，曾致 0708/0709 连续两日无产出（详见 plist 注释）。
+# 4日均线二波尾盘观察定时入口（launchd 调用）。
+# 工作日 14:50 触发；CLI 只允许 14:45-15:00 的上海当日实时快照，休眠补触发安全跳过。
+# 近端历史龙头池内：实时价合成今日收盘 + 累计成交额 → MA4 拐头与 5/10 日均额线观察。
 set -e
 
 export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
-# TZ 钉死 A 股市场时区：保证子进程 date.today()（cli/ma_breakout.py:_today）算出的目标日
-# 不随系统时区漂移（与 market-timing / earnings-digest runner 同派）。此 TZ 与已删除的
-# Pacific 折算触发/时间窗守卫无关——那才是 0708/0709 缺报的根因，TZ 本身无害且必要。
+# TZ 钉死 A 股市场时区，保证日期与尾盘时间窗均按上海解释。
 export TZ="Asia/Shanghai"
 
 REPO_ROOT="/Users/alyx/tradeSystem"

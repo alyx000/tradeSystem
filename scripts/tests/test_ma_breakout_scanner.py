@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 import sqlite3
 
 from services.ma_breakout import scanner
@@ -14,13 +15,14 @@ class _R:
 
 class FakeRegistry:
     def __init__(self, quotes_by_date, sw_map=None, fail_dates=None, trade_days=None,
-                 calendar_fail_dates=None, stock_basic_error=""):
+                 calendar_fail_dates=None, stock_basic_error="", realtime_error=""):
         self.quotes_by_date = quotes_by_date
         self.sw_map = sw_map or {}
         self.fail_dates = set(fail_dates or [])
         self.trade_days = set(trade_days or quotes_by_date.keys())
         self.calendar_fail_dates = set(calendar_fail_dates or [])
         self.stock_basic_error = stock_basic_error
+        self.realtime_error = realtime_error
 
     def call(self, name, *args):
         if name == "get_market_daily_quotes":
@@ -30,6 +32,28 @@ class FakeRegistry:
             return _R(self.quotes_by_date.get(date, []))
         if name == "get_stock_sw_industry_map":
             return _R(self.sw_map)
+        if name == "get_realtime_quotes":
+            if self.realtime_error:
+                return _R(None, success=False, error=self.realtime_error)
+            if not self.quotes_by_date:
+                return _R([])
+            target_date = max(self.quotes_by_date)
+            requested = {str(code).split(".")[0] for code in args[0]}
+            rows = []
+            for row in self.quotes_by_date.get(target_date, []):
+                bare = str(row.get("ts_code") or row.get("code") or "").split(".")[0]
+                if bare not in requested:
+                    continue
+                rows.append({
+                    "code": row.get("ts_code") or row.get("code"),
+                    "name": row.get("name") or "",
+                    "price": row.get("close"),
+                    "amount": float(row.get("amount") or 0) * 1000.0,
+                    "pct_chg": row.get("pct_chg"),
+                    "quote_date": target_date,
+                    "quote_time": "14:50:00",
+                })
+            return _R(rows)
         if name == "is_trade_day":
             if args[0] in self.calendar_fail_dates:
                 return _R(None, success=False, error=f"calendar_failed:{args[0]}")
@@ -84,6 +108,8 @@ def test_run_daily_returns_only_ma4_amount_breakout_hits():
     summary = scanner.run_daily(reg, "2026-06-12", windows=(5, 10), top_n=10, min_target_quote_rows=1)
 
     assert summary["status"] == "ok"
+    assert summary["data_scope"] == "intraday_snapshot"
+    assert summary["snapshot_at"].startswith("2026-06-12T14:50:00")
     assert summary["matched_count"] == 1
     assert summary["scanned_count"] == 2
     assert summary["candidates"][0]["code"] == "600001"
@@ -377,14 +403,14 @@ def test_run_daily_sorts_by_today_amount_and_caps_top_n():
     assert summary["truncated"] is True
 
 
-def test_run_daily_source_failed_when_target_quotes_fail():
-    reg = FakeRegistry({}, fail_dates={"2026-06-12"})
+def test_run_daily_source_failed_when_realtime_quotes_fail_after_retry():
+    reg = FakeRegistry(_quotes_for_hit_and_miss(), realtime_error="timeout")
 
     summary = scanner.run_daily(reg, "2026-06-12", windows=(5, 10), top_n=10, min_target_quote_rows=1)
 
     assert summary["status"] == "source_failed"
     assert summary["candidates"] == []
-    assert "market_daily_quotes:2026-06-12" in summary["source_errors"]
+    assert summary["source_errors"] == ["realtime_quotes_failed:timeout"]
 
 
 def test_run_daily_reports_insufficient_history_without_false_hit():
@@ -397,7 +423,14 @@ def test_run_daily_reports_insufficient_history_without_false_hit():
     ]
     reg = FakeRegistry(quotes)
 
-    summary = scanner.run_daily(reg, "2026-06-12", windows=(5, 10), top_n=10, min_target_quote_rows=1)
+    summary = scanner.run_daily(
+        reg,
+        "2026-06-12",
+        windows=(5, 10),
+        top_n=10,
+        min_target_quote_rows=1,
+        former_leaders={"600999": {}, "600001": {}},
+    )
 
     assert summary["status"] == "ok"
     assert summary["matched_count"] == 0
@@ -414,16 +447,16 @@ def test_run_daily_source_failed_when_lookback_quote_day_fails():
     assert "market_daily_quotes:2026-06-11" in summary["source_errors"]
 
 
-def test_run_daily_source_failed_when_target_quotes_below_floor():
+def test_run_daily_partial_when_one_realtime_quote_is_missing():
     quotes = _quotes_for_hit_and_miss()
     quotes["2026-06-12"] = quotes["2026-06-12"][:1]
 
     summary = scanner.run_daily(FakeRegistry(quotes), "2026-06-12", windows=(5, 10), top_n=10, min_target_quote_rows=2)
 
-    assert summary["status"] == "source_failed"
-    assert summary["candidates"] == []
-    assert "target_quote_rows_below_floor" in summary["source_errors"]
-    assert "quote_rows_below_floor:2026-06-12" in summary["source_errors"]
+    assert summary["status"] == "partial"
+    assert summary["realtime_requested_count"] == 2
+    assert summary["realtime_valid_count"] == 1
+    assert "realtime_quote_missing:600002" in summary["source_errors"]
 
 
 def test_run_daily_source_failed_when_history_quotes_below_floor():
@@ -445,7 +478,42 @@ def test_run_daily_source_failed_when_target_quotes_empty():
 
     assert summary["status"] == "source_failed"
     assert summary["candidates"] == []
-    assert "target_quotes_missing" in summary["source_errors"]
+    assert summary["realtime_valid_count"] == 0
+    assert "realtime_quote_missing:600001" in summary["source_errors"]
+
+
+def test_run_daily_rejects_stale_realtime_quotes():
+    summary = scanner.run_daily(
+        FakeRegistry(_quotes_for_hit_and_miss()),
+        "2026-06-12",
+        windows=(5, 10),
+        top_n=10,
+        min_target_quote_rows=1,
+        snapshot_at=datetime.fromisoformat("2026-06-12T15:01:00"),
+    )
+
+    assert summary["status"] == "source_failed"
+    assert any("quote_stale" in error for error in summary["source_errors"])
+
+
+def test_run_daily_ignores_malformed_realtime_rows():
+    class MalformedRealtimeRegistry(FakeRegistry):
+        def call(self, name, *args):
+            result = super().call(name, *args)
+            if name == "get_realtime_quotes" and result.success and result.data:
+                return _R([None, *result.data])
+            return result
+
+    summary = scanner.run_daily(
+        MalformedRealtimeRegistry(_quotes_for_hit_and_miss()),
+        "2026-06-12",
+        windows=(5, 10),
+        top_n=10,
+        min_target_quote_rows=1,
+    )
+
+    assert summary["status"] == "ok"
+    assert summary["realtime_valid_count"] == 2
 
 
 def test_run_daily_source_failed_when_history_trade_day_quotes_empty():

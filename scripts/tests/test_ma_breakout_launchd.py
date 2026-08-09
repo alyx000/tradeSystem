@@ -13,9 +13,8 @@ def _ma_breakout_intervals() -> list[dict]:
     return data["StartCalendarInterval"]
 
 
-def test_ma_breakout_plist_includes_shanghai_evening_trigger():
+def test_ma_breakout_plist_only_includes_weekday_tail_trigger():
     intervals = _ma_breakout_intervals()
     actual = {(item["Weekday"], item["Hour"], item["Minute"]) for item in intervals}
 
-    for weekday in range(0, 6):
-        assert (weekday, 21, 35) in actual
+    assert actual == {(weekday, 14, 50) for weekday in range(1, 6)}
