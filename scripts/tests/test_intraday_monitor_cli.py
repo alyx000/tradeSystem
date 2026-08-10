@@ -111,7 +111,7 @@ def test_e2e_cli_requires_explicit_real_push_confirmation_before_provider_setup(
     assert calls == [(None, "pytest", False)] * len(denied_values)
 
 
-def test_help_describes_sse_3955_behavior_at_every_command_level():
+def test_help_describes_current_rules_at_every_command_level():
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="command")
     intraday_monitor.register_subparser(subparsers)
@@ -127,9 +127,13 @@ def test_help_describes_sse_3955_behavior_at_every_command_level():
         if isinstance(action, argparse._SubParsersAction)
     )
 
-    assert "上证指数从3955点下方" in intraday_parser.format_help()
-    check_help = command_choices["check"].format_help()
-    assert "跌回下方后再次站上可重推" in check_help
+    root_help = intraday_parser.format_help()
+    assert "上证指数从3955点下方" in root_help
+    assert "2026年8月11日临时监控利通电子严格跌破123.92元" in root_help
+    check_help = "".join(command_choices["check"].format_help().split())
+    assert "价格严格低于123.92元" in check_help
+    assert "持续命中去重" in check_help
+    assert "恢复后再次命中可重推" in check_help
     e2e_help = command_choices["e2e-test"].format_help()
     assert "上证指数3955生产规则" in e2e_help
     assert "不读写正式监控状态" in e2e_help

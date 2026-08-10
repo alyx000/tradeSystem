@@ -16,7 +16,8 @@ def test_runner_contract():
     text = RUNNER.read_text(encoding="utf-8")
     assert RUNNER.exists() and os.access(RUNNER, os.X_OK)
     assert 'export PATH="$HOME/.local/bin:' in text
-    assert 'REPO_ROOT="/Users/alyx/tradeSystem"' in text
+    assert 'SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"' in text
+    assert 'REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"' in text
     assert 'cd "$REPO_ROOT"' in text
     assert 'source "$REPO_ROOT/scripts/.env"' in text
     assert 'source "$HOME/.config/tradeSystem.env"' in text
@@ -29,6 +30,12 @@ def test_runner_contract():
     assert "exec /usr/bin/python3 scripts/main.py intraday-monitor check --json" in text
 
 
+def test_runner_uses_the_checkout_that_contains_it():
+    """避免已加载任务误跑另一个含未提交代码的工作区。"""
+    text = RUNNER.read_text(encoding="utf-8")
+    assert 'REPO_ROOT="/Users/alyx/tradeSystem"' not in text
+
+
 def test_runner_syntax():
     subprocess.run(["bash", "-n", str(RUNNER)], check=True)
 
@@ -37,7 +44,8 @@ def test_plist_contract():
     data = plistlib.loads(PLIST.read_bytes())
     assert data["Label"] == "com.alyx.tradesystem.intraday-monitor"
     assert data["ProgramArguments"] == [
-        "/Users/alyx/tradeSystem/deploy/launchd/intraday-monitor-runner.sh"
+        "/Users/alyx/tradeSystem/.worktrees/intraday-monitor-runtime/"
+        "deploy/launchd/intraday-monitor-runner.sh"
     ]
     assert data["StartInterval"] == 300
     assert "StartCalendarInterval" not in data

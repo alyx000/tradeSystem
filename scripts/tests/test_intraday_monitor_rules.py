@@ -1,9 +1,12 @@
-from datetime import datetime
+from datetime import date, datetime
 from zoneinfo import ZoneInfo
+
+import pytest
 
 from services.intraday_monitor.guards import is_intraday_session
 from services.intraday_monitor.rules import (
     DEFAULT_RULES,
+    LITONG_ELECTRONICS_BELOW_123_92_20260811,
     SSE_COMPOSITE_RECLAIM_3955,
     MonitorRule,
     should_emit,
@@ -45,8 +48,11 @@ def test_reclaim_is_inclusive_and_does_not_emit_on_initial_match():
     ) is True
 
 
-def test_only_sse_composite_reclaim_3955_is_enabled():
-    assert DEFAULT_RULES == (SSE_COMPOSITE_RECLAIM_3955,)
+def test_sse_and_one_day_litong_rules_are_enabled():
+    assert DEFAULT_RULES == (
+        SSE_COMPOSITE_RECLAIM_3955,
+        LITONG_ELECTRONICS_BELOW_123_92_20260811,
+    )
     assert SSE_COMPOSITE_RECLAIM_3955.rule_id == "sse-composite-reclaim-3955"
     assert SSE_COMPOSITE_RECLAIM_3955.instrument_name == "上证指数"
     assert SSE_COMPOSITE_RECLAIM_3955.code == "000001.SH"
@@ -57,6 +63,33 @@ def test_only_sse_composite_reclaim_3955_is_enabled():
     assert SSE_COMPOSITE_RECLAIM_3955.action_text == "站上"
     assert SSE_COMPOSITE_RECLAIM_3955.is_active(3954.99) is False
     assert SSE_COMPOSITE_RECLAIM_3955.is_active(3955.0) is True
+
+    litong = LITONG_ELECTRONICS_BELOW_123_92_20260811
+    assert litong.rule_id == "litong-electronics-below-123-92-20260811"
+    assert litong.instrument_name == "利通电子"
+    assert litong.code == "603629.SH"
+    assert litong.threshold == 123.92
+    assert litong.inclusive is False
+    assert litong.emit_on_initial_match is True
+    assert litong.value_label == "价格"
+    assert litong.value_unit == "元"
+    assert litong.is_active(123.91) is True
+    assert litong.is_active(123.92) is False
+    assert litong.is_effective_on(date(2026, 8, 10)) is False
+    assert litong.is_effective_on(date(2026, 8, 11)) is True
+    assert litong.is_effective_on(date(2026, 8, 12)) is False
+
+
+def test_rule_rejects_reversed_validity_window():
+    with pytest.raises(ValueError, match="valid_from"):
+        MonitorRule(
+            "invalid-window",
+            "测试标的",
+            "600000.SH",
+            10.0,
+            valid_from=date(2026, 8, 12),
+            valid_until=date(2026, 8, 11),
+        )
 
 
 def test_transition_only_emits_on_entry():

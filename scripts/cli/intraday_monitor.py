@@ -14,19 +14,20 @@ logger = logging.getLogger(__name__)
 def register_subparser(subparsers: argparse._SubParsersAction) -> None:
     parser = subparsers.add_parser(
         "intraday-monitor",
-        help="盘中实时阈值监控（当前监控上证指数站上3955）",
+        help="盘中实时阈值监控（上证3955长期规则 + 利通电子8月11日临时规则）",
         description=(
-            "可扩展盘中实时阈值监控。当前生产规则监控上证指数从3955点下方"
-            "站上3955点；首次观察已在线上不补发，持续在线上不重复推送。"
+            "可扩展盘中实时阈值监控。长期规则监控上证指数从3955点下方站上"
+            "3955点；2026年8月11日临时监控利通电子严格跌破123.92元。"
         ),
     )
     commands = parser.add_subparsers(dest="intraday_monitor_command")
     check = commands.add_parser(
         "check",
-        help="执行一次上证指数3955监控检查",
+        help="执行一次当前有效规则的监控检查",
         description=(
             "执行一次监控检查。上证指数从3955点下方站上3955点时推送钉钉；"
-            "首次观察已在线上不补发，持续在线上去重，跌回下方后再次站上可重推。"
+            "利通电子规则仅在2026年8月11日有效，价格严格低于123.92元时推送。"
+            "各规则持续命中去重，恢复后再次命中可重推。"
         ),
     )
     check.add_argument("--dry-run", action="store_true", help="只预览，不写状态、不推送")

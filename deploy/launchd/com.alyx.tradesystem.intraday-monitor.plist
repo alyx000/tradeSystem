@@ -8,7 +8,7 @@
 
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/alyx/tradeSystem/deploy/launchd/intraday-monitor-runner.sh</string>
+        <string>/Users/alyx/tradeSystem/.worktrees/intraday-monitor-runtime/deploy/launchd/intraday-monitor-runner.sh</string>
     </array>
 
     <!-- 无时区 5 分钟 tick；runner 与 Python 双层使用 Asia/Shanghai

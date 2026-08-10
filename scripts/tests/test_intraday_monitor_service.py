@@ -9,6 +9,7 @@ import services.intraday_monitor.service as intraday_service
 from services.intraday_monitor.service import run_check, run_e2e_test
 from services.intraday_monitor.rules import (
     DEFAULT_RULES,
+    LITONG_ELECTRONICS_BELOW_123_92_20260811,
     SSE_COMPOSITE_RECLAIM_3955,
     MonitorRule,
 )
@@ -310,7 +311,7 @@ def test_multiple_rules_on_same_provider_share_one_quote_request(tmp_path):
     assert len(pusher.messages) == 1
 
 
-def test_default_rule_pushes_only_after_observed_below_to_3955(tmp_path):
+def test_default_sse_rule_pushes_only_after_observed_below_to_3955(tmp_path):
     db_path = _calendar(tmp_path)
     registry = _Registry(price=3956.0)
     pusher = _Pusher()
@@ -351,7 +352,10 @@ def test_default_rule_pushes_only_after_observed_below_to_3955(tmp_path):
         pusher_factory=lambda: pusher,
     )
 
-    assert DEFAULT_RULES == (SSE_COMPOSITE_RECLAIM_3955,)
+    assert DEFAULT_RULES == (
+        SSE_COMPOSITE_RECLAIM_3955,
+        LITONG_ELECTRONICS_BELOW_123_92_20260811,
+    )
     assert initial_above["events"] == []
     assert below["events"] == []
     assert len(standing["events"]) == 1
@@ -363,6 +367,130 @@ def test_default_rule_pushes_only_after_observed_below_to_3955(tmp_path):
     assert len(pusher.messages) == 1
     assert "上证指数" in pusher.messages[0][1]
     assert "已站上监控线 **3955.00**" in pusher.messages[0][1]
+
+
+def test_litong_rule_is_not_fetched_before_its_effective_day(tmp_path):
+    db_path = _calendar(tmp_path, dates=("2026-08-10",))
+    registry = _Registry(price=123.0)
+    pusher = _Pusher()
+    now = datetime(2026, 8, 10, 10, 0, tzinfo=TZ)
+
+    result = run_check(
+        registry,
+        rules=(LITONG_ELECTRONICS_BELOW_123_92_20260811,),
+        now=now,
+        state_path=tmp_path / "state.json",
+        db_path=db_path,
+        pusher_factory=lambda: pusher,
+    )
+
+    assert result["status"] == "no_active_rules"
+    assert result["rules_configured"] == 1
+    assert result["rules_checked"] == 0
+    assert registry.call_count == 0
+    assert pusher.messages == []
+    assert not (tmp_path / "state.json").exists()
+
+
+def test_litong_rule_is_strict_and_pushes_on_20260811_only(tmp_path):
+    db_path = _calendar(tmp_path, dates=("2026-08-11",))
+    state_path = tmp_path / "state.json"
+    registry = _Registry(price=123.92)
+    pusher = _Pusher()
+    now = datetime(2026, 8, 11, 10, 0, tzinfo=TZ)
+    registry.now = now
+
+    equal = run_check(
+        registry,
+        rules=(LITONG_ELECTRONICS_BELOW_123_92_20260811,),
+        now=now,
+        state_path=state_path,
+        db_path=db_path,
+        pusher_factory=lambda: pusher,
+    )
+    registry.price = 123.91
+    registry.now = now + timedelta(minutes=5)
+    below = run_check(
+        registry,
+        rules=(LITONG_ELECTRONICS_BELOW_123_92_20260811,),
+        now=now + timedelta(minutes=5),
+        state_path=state_path,
+        db_path=db_path,
+        pusher_factory=lambda: pusher,
+    )
+
+    assert equal["status"] == "complete"
+    assert equal["events"] == []
+    assert len(below["events"]) == 1
+    event = below["events"][0]
+    assert event["rule_id"] == "litong-electronics-below-123-92-20260811"
+    assert event["price"] == 123.91
+    assert event["threshold"] == 123.92
+    assert len(pusher.messages) == 1
+    assert "利通电子" in pusher.messages[0][1]
+    assert "最新价格 **123.91**元" in pusher.messages[0][1]
+    assert "跌破监控线 **123.92**元" in pusher.messages[0][1]
+
+
+def test_litong_rule_is_not_fetched_after_expiry(tmp_path):
+    db_path = _calendar(tmp_path, dates=("2026-08-12",))
+    registry = _Registry(price=123.0)
+    pusher = _Pusher()
+    now = datetime(2026, 8, 12, 10, 0, tzinfo=TZ)
+
+    result = run_check(
+        registry,
+        rules=(LITONG_ELECTRONICS_BELOW_123_92_20260811,),
+        now=now,
+        state_path=tmp_path / "state.json",
+        db_path=db_path,
+        pusher_factory=lambda: pusher,
+    )
+
+    assert result["status"] == "no_active_rules"
+    assert registry.call_count == 0
+    assert pusher.messages == []
+
+
+def test_default_rules_fetch_litong_only_on_its_effective_day(tmp_path):
+    db_path = _calendar(tmp_path, dates=("2026-08-11",))
+    registry = _Registry(price=4000.0)
+    pusher = _Pusher()
+    now = datetime(2026, 8, 11, 10, 0, tzinfo=TZ)
+    registry.now = now
+
+    result = run_check(
+        registry,
+        now=now,
+        state_path=tmp_path / "state.json",
+        db_path=db_path,
+        pusher_factory=lambda: pusher,
+    )
+
+    assert result["status"] == "complete"
+    assert registry.call_count == 1
+    assert registry.requested_codes == [["000001.SH", "603629.SH"]]
+
+
+def test_default_rules_fetch_only_sse_before_and_after_litong_day(tmp_path):
+    db_path = _calendar(tmp_path, dates=("2026-08-10", "2026-08-12"))
+
+    for day in (10, 12):
+        registry = _Registry(price=4000.0)
+        pusher = _Pusher()
+        now = datetime(2026, 8, day, 10, 0, tzinfo=TZ)
+        registry.now = now
+
+        result = run_check(
+            registry,
+            now=now,
+            state_path=tmp_path / f"state-{day}.json",
+            db_path=db_path,
+            pusher_factory=lambda: pusher,
+        )
+
+        assert result["status"] == "complete"
+        assert registry.requested_codes == [["000001.SH"]]
 
 
 def test_non_finite_price_fails_closed_without_resetting_active_state(tmp_path):
@@ -583,6 +711,32 @@ def test_e2e_test_uses_fresh_real_quote_and_never_calls_state_layer(tmp_path, mo
     assert "真实行情 → 阈值判断 → 钉钉送达" in content
     assert "正式监控线仍为 **1572.00**" in content
     assert "pytest" in content
+
+
+def test_e2e_test_preserves_stock_price_label_and_unit(tmp_path):
+    db_path = _calendar(tmp_path, dates=("2026-08-11",))
+    now = datetime(2026, 8, 11, 10, 0, tzinfo=TZ)
+    registry = _Registry(price=125.0)
+    registry.now = now
+    pusher = _Pusher()
+
+    result = run_e2e_test(
+        registry,
+        input_by="pytest",
+        confirm_real_push=True,
+        rule=LITONG_ELECTRONICS_BELOW_123_92_20260811,
+        now=now,
+        db_path=db_path,
+        pusher_factory=lambda: pusher,
+    )
+
+    assert result["status"] == "complete"
+    assert result["pushed"] is True
+    assert len(pusher.messages) == 1
+    content = pusher.messages[0][1]
+    assert "实时价格 **125.00**元" in content
+    assert "本次临时测试线 **126.00**元" in content
+    assert "正式监控线仍为 **123.92**元" in content
 
 
 def test_e2e_test_rejects_blank_input_by_before_fetch(tmp_path):

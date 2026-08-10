@@ -42,6 +42,8 @@ def _event(rule: MonitorRule, quote: dict, quoted_at: datetime, source: str) -> 
         "threshold": rule.threshold,
         "direction": rule.direction,
         "action_text": rule.action_text,
+        "value_label": rule.value_label,
+        "value_unit": rule.value_unit,
         "price": price,
         "quote_at": quote_at,
         "source": source,
@@ -267,6 +269,31 @@ def run_check(
             "pushed": False,
             "retired_pending_count": retired_pending_count,
         }
+    effective_rules = tuple(rule for rule in rules if rule.is_effective_on(local_now.date()))
+    if not effective_rules:
+        retired_pending_count = 0
+        if not dry_run:
+            try:
+                retired_pending_count = _retire_pending_while_disabled(Path(state_path))
+            except (OSError, ValueError) as exc:
+                return {
+                    "status": "state_error",
+                    "events": [],
+                    "errors": [str(exc)],
+                    "rules_checked": 0,
+                    "quotes_checked": 0,
+                    "pushed": False,
+                }
+        return {
+            "status": "no_active_rules",
+            "events": [],
+            "errors": [],
+            "rules_configured": len(rules),
+            "rules_checked": 0,
+            "quotes_checked": 0,
+            "pushed": False,
+            "retired_pending_count": retired_pending_count,
+        }
     if not is_intraday_session(local_now):
         return {"status": "outside_session", "events": [], "errors": []}
     trade_day = confirmed_trade_day(local_now.date().isoformat(), db_path=db_path)
@@ -294,7 +321,7 @@ def run_check(
             }
         return _run_locked(
             registry=registry,
-            rules=rules,
+            rules=effective_rules,
             now=local_now,
             state=state,
             state_path=path,
@@ -306,7 +333,7 @@ def run_check(
         with locked_state(path) as state:
             return _run_locked(
                 registry=registry,
-                rules=rules,
+                rules=effective_rules,
                 now=local_now,
                 state=state,
                 state_path=path,
@@ -381,6 +408,8 @@ def run_e2e_test(
         threshold=price + margin,
         direction="below",
         provider=rule.provider,
+        value_label=rule.value_label,
+        value_unit=rule.value_unit,
     )
     if not test_rule.is_active(price):
         return {"status": "test_condition_failed", "events": [], "errors": ["临时测试条件未命中"]}

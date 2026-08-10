@@ -428,7 +428,7 @@ python3 main.py board-break daily --no-llm                       # 跳过 LLM �
 
 ## 盘中实时阈值监控（intraday-monitor）
 
-独立 launchd `com.alyx.tradesystem.intraday-monitor` 每 5 分钟做一次无时区 tick，runner 只在上海交易时段 `09:30-11:30 / 13:00-15:00` 进入命令。当前唯一生产规则监控新浪实时 `000001.SH` 上证指数从 3955 点下方站上 3955 点（`>=3955`）；科创50的跌破/收复规则保持下线。
+独立 launchd `com.alyx.tradesystem.intraday-monitor` 每 5 分钟做一次无时区 tick，runner 只在上海交易时段 `09:30-11:30 / 13:00-15:00` 进入命令。长期规则监控新浪实时 `000001.SH` 上证指数从 3955 点下方站上 3955 点（`>=3955`）；临时规则仅在 2026-08-11 监控 `603629.SH` 利通电子价格严格 `<123.92` 元。科创50的跌破/收复规则保持下线。
 
 ```bash
 python3 main.py intraday-monitor check             # 正式检查；命中时写 pending 并推钉钉
@@ -438,7 +438,8 @@ python3 main.py intraday-monitor e2e-test --input-by USER --confirm-real-push --
 ```
 
 - **当前规则**：`sse-composite-reclaim-3955` 使用 `direction=above`、`inclusive=True`、`emit_on_initial_match=False`、动作“站上”。必须先观察到 `<3955`，随后 `>=3955` 才推送；启动或当日首次检查已在线上不补发，持续在线上不重复，跌回下方后再次站上可重推。
-- **扩展方式**：规则由 `services.intraday_monitor.rules.MonitorRule` 统一描述（标的、代码、阈值、方向、是否含等号、首次命中策略、provider）；追加规则不改抓取、去重、推送与调度编排。相同 provider 的规则合并成一次批量实时行情请求，相同代码自动去重。
+- **一日临时规则**：`litong-electronics-below-123-92-20260811` 使用 `direction=below`、`inclusive=False`、`emit_on_initial_match=True`，`valid_from=valid_until=2026-08-11`。当日首次观察若已严格低于 123.92 元即推送；等于 123.92 元不触发，持续低于去重，恢复到阈值或上方后再次跌破可重推。8 月 11 日之前和之后都在行情请求前自动排除。
+- **扩展方式**：规则由 `services.intraday_monitor.rules.MonitorRule` 统一描述（标的、代码、阈值、方向、是否含等号、首次命中策略、有效日期、价格标签/单位、provider）；追加规则不改抓取、去重、推送与调度编排。相同 provider 的规则合并成一次批量实时行情请求，相同代码自动去重。
 - **可靠性**：行情日期必须为上海当日，行情时间最多陈旧 10 分钟；旧行情/缺行情 fail-closed。事件先原子写 `data/runs/intraday-monitor/state.json` pending，再推钉钉；发送失败保留到同一交易日下一 tick 重试，成功后才记 sent。跨日或已退役规则的未送达事件过期，不会在以后启用其他规则时补发。
 - **真实链路测试**：CLI `e2e-test` 必须带 `--input-by` 与一次性显式确认 `--confirm-real-push`；缺少确认时在 provider 初始化、日历、行情与推送之前返回 `authorization_required`。必须经用户单独授权后，才可在交易时段以新鲜真实行情和仅本次测试线验收。测试不读写正式状态；只有退出码 0、`status=complete`、`pushed=true` 才能报告成功。
 - **边界**：监控线是用户给定条件，只标 `[事实]`，不构成买卖建议，不写 SQLite、TradeDraft、TradePlan、持仓或关注池。Mac 休眠期间 launchd 不触发；需要强保障时须配盘中唤醒或迁 VPS。

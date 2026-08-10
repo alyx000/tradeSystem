@@ -17,7 +17,8 @@ if { [ "$HHMM" -lt 930 ] || [ "$HHMM" -ge 1131 ]; } \
     exit 0
 fi
 
-REPO_ROOT="/Users/alyx/tradeSystem"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$REPO_ROOT"
 
 set -a

@@ -5,11 +5,13 @@ from __future__ import annotations
 def render_alert(events: list[dict]) -> str:
     lines = ["### ⚠️ 盘中阈值监控告警", ""]
     for event in events:
+        value_label = str(event.get("value_label") or "点位")
+        value_unit = str(event.get("value_unit") or "")
         lines.extend(
             [
                 f"- [事实] **{event['instrument_name']}**（{event['code']}）"
-                f"最新点位 **{event['price']:.2f}**，已{event['action_text']}"
-                f"监控线 **{event['threshold']:.2f}**",
+                f"最新{value_label} **{event['price']:.2f}**{value_unit}，"
+                f"已{event['action_text']}监控线 **{event['threshold']:.2f}**{value_unit}",
                 f"  - 行情时间：{event['quote_at']}",
                 f"  - 数据来源：{event['source']}",
             ]
@@ -20,15 +22,18 @@ def render_alert(events: list[dict]) -> str:
 
 def render_e2e_test_alert(event: dict, *, production_threshold: float, input_by: str) -> str:
     """渲染真实行情端到端测试消息；明确区分临时测试线与正式监控线。"""
+    value_label = str(event.get("value_label") or "点位")
+    value_unit = str(event.get("value_unit") or "")
     return "\n".join(
         [
             "### ✅ 【测试】盘中监控端到端验证",
             "",
             f"- [事实] **{event['instrument_name']}**（{event['code']}）"
-            f"实时点位 **{event['price']:.2f}**",
-            f"- [测试] 本次临时测试线 **{event['threshold']:.2f}**，"
+            f"实时{value_label} **{event['price']:.2f}**{value_unit}",
+            f"- [测试] 本次临时测试线 **{event['threshold']:.2f}**{value_unit}，"
             "仅用于验证真实行情 → 阈值判断 → 钉钉送达链路",
-            f"- [事实] 正式监控线仍为 **{production_threshold:.2f}**，未修改正式规则或去重状态",
+            f"- [事实] 正式监控线仍为 **{production_threshold:.2f}**{value_unit}，"
+            "未修改正式规则或去重状态",
             f"- 行情时间：{event['quote_at']}",
             f"- 数据来源：{event['source']}",
             f"- 测试请求者：{input_by}",

@@ -489,7 +489,7 @@ ARCHITECTURE_COMMANDS = [
     ["tail-scan", "daily", "--no-push"],
     ["tail-scan", "daily", "--no-llm"],
     ["tail-scan", "daily", "--min-pct", "7", "--min-amount", "20", "--no-push", "--no-llm"],
-    # intraday-monitor (盘中每5分钟监控上证指数站上3955)
+    # intraday-monitor (上证3955长期规则 + 日期限定的个股阈值规则)
     ["intraday-monitor", "check"],
     ["intraday-monitor", "check", "--dry-run"],
     ["intraday-monitor", "check", "--json"],

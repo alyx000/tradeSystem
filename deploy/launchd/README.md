@@ -37,7 +37,7 @@
 - `monthly-pattern-monitor-runner.sh` — 包装脚本：source 行情/钉钉 env → 调 `/usr/bin/python3 scripts/main.py monthly-pattern monitor-daily`
 - `com.alyx.tradesystem.monthly-pattern-monitor.plist` — 每 15 分钟轻量 tick，runner 仅在上海工作日 19:10（含）至 19:25（不含）执行一次重任务（月线种子日频动态 5 月线 + 日/周 MACD 变化监控；不受 Mac 本机时区切换影响；日志 `/tmp/tradesystem-monthly-pattern-monitor.log`）
 - `intraday-monitor-runner.sh` — 每 5 分钟 tick 的盘中门禁入口；只在上海 `09:30-11:30 / 13:00-15:00` 调 `intraday-monitor check`
-- `com.alyx.tradesystem.intraday-monitor.plist` — 盘中实时阈值监控；当前规则为上证指数从下方站上 3955，日志 `/tmp/tradesystem-intraday-monitor.log`
+- `com.alyx.tradesystem.intraday-monitor.plist` — 盘中实时阈值监控；长期规则为上证指数站上 3955，2026-08-11 临时规则为利通电子跌破 123.92 元，日志 `/tmp/tradesystem-intraday-monitor.log`
 
 ## 前置条件
 
@@ -468,15 +468,23 @@ rm ~/Library/LaunchAgents/com.alyx.tradesystem.cognition-digest-*.plist
 
 ## 盘中实时阈值监控（每 5 分钟）
 
-监控引擎、CLI、launchd 与状态机继续保留。当前唯一生产规则使用新浪实时 `000001.SH`，监控上证指数从 3955 点下方站上 3955 点（等于 3955 即命中）；首次观察已在线上不补发，持续在线上去重，跌回下方后再次站上可重推。科创50跌破与收复规则保持下线。
+监控引擎、CLI、launchd 与状态机继续保留。长期生产规则使用新浪实时 `000001.SH`，监控上证指数从 3955 点下方站上 3955 点（等于 3955 即命中）；首次观察已在线上不补发，持续在线上去重，跌回下方后再次站上可重推。临时规则使用 `603629.SH`，只在 2026-08-11 监控利通电子价格严格跌破 123.92 元；首次观察已跌破会推送，等于 123.92 元不触发，持续跌破去重，恢复后再次跌破可重推，有效期外不会请求该标的行情。科创50跌破与收复规则保持下线。
 
 ```bash
-chmod +x deploy/launchd/intraday-monitor-runner.sh
-plutil -lint deploy/launchd/com.alyx.tradesystem.intraday-monitor.plist
-bash -n deploy/launchd/intraday-monitor-runner.sh
+RUNTIME_ROOT=/Users/alyx/tradeSystem/.worktrees/intraday-monitor-runtime
+REVIEWED_COMMIT=<REVIEWED_COMMIT>
+git worktree add --detach "$RUNTIME_ROOT" "$REVIEWED_COMMIT"
+test "$(git -C "$RUNTIME_ROOT" rev-parse HEAD)" = "$REVIEWED_COMMIT"
+test -z "$(git -C "$RUNTIME_ROOT" status --porcelain --untracked-files=no)"
+ln -s /Users/alyx/tradeSystem/data "$RUNTIME_ROOT/data"
 
-cp deploy/launchd/com.alyx.tradesystem.intraday-monitor.plist \
+chmod +x "$RUNTIME_ROOT/deploy/launchd/intraday-monitor-runner.sh"
+plutil -lint "$RUNTIME_ROOT/deploy/launchd/com.alyx.tradesystem.intraday-monitor.plist"
+bash -n "$RUNTIME_ROOT/deploy/launchd/intraday-monitor-runner.sh"
+
+cp "$RUNTIME_ROOT/deploy/launchd/com.alyx.tradesystem.intraday-monitor.plist" \
   ~/Library/LaunchAgents/
+launchctl enable gui/$(id -u)/com.alyx.tradesystem.intraday-monitor
 launchctl load ~/Library/LaunchAgents/com.alyx.tradesystem.intraday-monitor.plist
 launchctl list | grep tradesystem.intraday-monitor
 
@@ -489,8 +497,11 @@ tail -f /tmp/tradesystem-intraday-monitor.log
 
 ```bash
 launchctl unload ~/Library/LaunchAgents/com.alyx.tradesystem.intraday-monitor.plist
+launchctl disable gui/$(id -u)/com.alyx.tradesystem.intraday-monitor
 rm ~/Library/LaunchAgents/com.alyx.tradesystem.intraday-monitor.plist
 ```
+
+模板固定把 `ProgramArguments` 指向 `.worktrees/intraday-monitor-runtime`。该目录必须是从已审查 commit 创建的 detached worktree，并把生产 `data/` 目录链接进去，以复用只读交易日历和正式 pending/sent 状态。runner 会从自身文件位置推导代码根目录，不能把模板改回仍含未提交代码的主工作区。`launchctl enable` 用于清除 macOS 持久化的 disabled 覆盖，仅执行 `load` 不足以证明任务已启用。
 
 已有 `data/runs/intraday-monitor/state.json` 继续用于 pending/sent 去重；与当前上证规则无关的旧 pending 会过期，不会补发。事件先原子落 pending，推送成功才记 sent；发送失败同一交易日下个 tick 重试，跨日过期。全链路不写 SQLite、持仓、关注池或计划层。**Mac 休眠时 launchd 不执行**，这是盘中提醒的真实可用性边界；若要求覆盖整个交易时段，应配置盘中唤醒或迁到 VPS。
 
