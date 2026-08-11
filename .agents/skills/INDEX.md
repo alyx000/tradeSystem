@@ -18,8 +18,8 @@
 
 | Skill | CLI 子命令 | 说明 |
 |-------|-----------|------|
-| `cognition-evolution` | `knowledge cognition-* / instance-* / review-* (含 review-list)` | 认知提炼 / 实例验证 / 周期复盘（手动闭环）；`instance-add` 支持观点 `[事实]/[判断]` 拆分、因子快照、可证伪假设，`validate` 支持 `feedback_action` 回写交易系统反馈；`review-generate` 聚合 `evolving_views_json`（部分降级项见 SKILL.md） |
-| `record-notes` | `db add-note` | 录入老师观点（文字/图片/多附件）；可选 `--sync-watchlist-from-stocks`（用户确认入池后） |
+| `cognition-evolution` | `knowledge cognition-* / instance-* / review-* (含 review-list)` | 认知提炼 / 实例验证 / 周期复盘（手动写入闭环）；新建老师观点回查后由 `record-notes` 默认触发只读候选提取与已有认知匹配，任何认知/实例写入仍须再次确认；`instance-add` 支持观点 `[事实]/[判断]` 拆分、因子快照、可证伪假设，`validate` 支持 `feedback_action` 回写交易系统反馈；`review-generate` 聚合 `evolving_views_json`（部分降级项见 SKILL.md） |
+| `record-notes` | `db add-note` | 录入老师观点（文字/图片/多附件）；新建并回查成功后默认只读提取 1–4 条强交易认知候选，不自动写认知层；可选 `--sync-watchlist-from-stocks`（用户确认入池后） |
 | `record-notes` | `db add-note --source-platform --source-url --source-article-id --published-at --fetched-at --content-sha256 --raw-content-file --input-by` | 经用户确认后录入带来源审计的老师观点；来源包与受控原文必须完整，幂等重复返回已有 ID，不重复附件/关注池副作用 |
 | `record-notes` | `db update-note` / `db delete-note` | 修订或删除已有老师观点；删除必须显式 `--yes`，用于经确认后的纠错重写 |
 | `record-notes` / `portfolio-manager` | `db stock-resolve` | 通过已配置 Provider 统一做证券简称/代码解析，供 Agent 补码与补名使用 |

@@ -1,7 +1,7 @@
 ---
 name: cognition-evolution
 description: 从老师观点提炼可复用交易认知，通过实例验证与周期复盘让交易体系持续进化（Phase 1b 手动闭环版，默认输出强候选）
-version: "1.1"
+version: "1.2"
 ---
 
 # Skill: 交易认知进化（手动闭环版）
@@ -18,13 +18,14 @@ version: "1.1"
 - 「看一下当前有哪些 candidate 认知 / 某分类下的 active 认知」
 - 「列出今日可验证的 pending 实例」
 
-时激活此 skill。
+出现以上请求，或 `record-notes` 已完成一条老师观点的新建与回查、需要执行默认的录入后认知提取时，激活此 skill。
 
 ## Phase 1b 范围说明
 
 本版本是 **Phase 1b「手动闭环」**：
 
 - Agent 负责结构化提炼与写入辅助，**所有认知的新建 / 升级 / 合并 / 弃用必须由用户确认**
+- 老师观点录入后的自动动作止于**候选提取与匹配建议**；`cognition-add`、`cognition-refine`、`instance-add` 等任何认知层写入仍须再次获得用户明确确认
 - 实例验证必须挂到事实层（`daily_market` / `market_fact_snapshots` / `teacher_notes` 等），无事实源保持 `pending`
 - 周期复盘由 CLI 生成 `draft`，用户补充 `user_reflection` 后再 `confirm`
 
@@ -63,6 +64,17 @@ version: "1.1"
 ## 核心流程
 
 完整闭环分 5 步，按顺序执行。所有写入命令必须带 `--input-by cursor | claude | web | manual`。
+
+### 默认触发：老师观点录入后自动提取
+
+当 `record-notes` 返回一条**新建成功且已回查**的 `teacher_notes.id` 时，在同一轮协作中自动执行步骤 1、1.5 和 2 的只读部分：
+
+1. 绑定该 `teacher_notes.id` 读取已落库观点及原文，不把录入确认稿或写入失败内容冒充事实源。
+2. 查询相关 `active` / `candidate` 认知，先判断能否挂到已有认知或提出 refine，避免同义重复。
+3. 展示 1–4 条强候选，逐条写明 `title / description / pattern / applicability / invalidation / why_keep`；若不够格，明确说明“不建议落库”。
+4. 停在候选预览态等待确认。匹配已有认知也只提出 `instance-add` 建议，不自动写实例；用户明确确认后才进入对应 CLI 写入步骤。
+
+该默认触发不是后台定时任务，也不扩展到未确认的公众号候选、行业信息或宏观信息。`db add-note` 的 duplicate 收据默认不重复触发，除非用户明确要求重新提取。
 
 ### 步骤 1：老师观点结构化提炼
 
@@ -278,6 +290,7 @@ python3 main.py knowledge review-confirm \
 - **`--input-by` 必填**：所有写入命令必须带 `--input-by cursor | claude | web | manual`，空值或缺省由 service 层拒绝（与现有 `knowledge` 规范一致）
 - **Agent 不得写 `confirmed` 级 `TradePlan`**：本 skill 范围仅到认知 / 实例 / 复盘层；映射计划走 [`plan-workbench`](../plan-workbench/SKILL.md)
 - **新建认知默认 `status=candidate`**：升 `active` 必须由用户显式确认（例如用户说「这条先留为 candidate 观察 3 个实例再升」）
+- **录入后自动提取只读**：自动读取新建笔记、匹配现有认知并展示强候选；任何 `cognition-add` / `cognition-refine` / `instance-add` 写入都必须再次确认，不能把“确认录入老师观点”扩张解释为“确认写入认知层”
 - **默认输出强候选，不做占位版短描述**：若候选还无法清楚说明“为什么成立 / 适用于何处 / 何时失效”，先继续打磨或明确“不建议落库”，不要为了尽快写库输出一条过短 description
 - **认知状态流转**：`cognition-add` 仅允许 `candidate` / `active` 初始状态；`deprecated` 必须走 `cognition-deprecate`；`merged` **仅允许通过 merge 流程达成（Phase 1b `cognition-merge` CLI 未实现，当前不可用）**
 - **`outcome_fact_source` 校验**：`<table>[:<sub>]:<YYYY-MM-DD>` 格式；表名必须 ∈ 白名单 `{daily_market, market_fact_snapshots, fact_entities}`；service 层会真实查表（按对应日期字段）确认记录存在。三项任一失败均抛 `ValueError` 并保持 `outcome=pending`
