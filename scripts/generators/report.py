@@ -826,6 +826,9 @@ class ReportGenerator:
         # ---- 风格化赚钱效应 ----
         section_idx = _render_style_factors(lines, raw_data, section_idx)
 
+        # ---- 连板断板次日反馈 ----
+        section_idx = _render_board_break_feedback(lines, raw_data, section_idx)
+
         # ---- AI 自动分析摘要 ----
         auto = _generate_auto_analysis(raw_data)
         if auto:
@@ -1594,4 +1597,96 @@ def _render_style_factors(lines: list, raw_data: dict, section_idx: int) -> int:
             )
         lines.append("")
 
+    return section_idx
+
+
+def _render_board_break_feedback(lines: list, raw_data: dict, section_idx: int) -> int:
+    """渲染 T-2 连板 → T-1 断板 → T 反馈的只读事实统计。"""
+    feedback = raw_data.get("board_break_feedback")
+    if not isinstance(feedback, dict):
+        return section_idx
+
+    lines.append(f"\n## {_roman(section_idx)}、连板断板次日反馈 [事实] ★★★\n")
+    section_idx += 1
+    source_date = feedback.get("source_connected_date", "-")
+    break_date = feedback.get("break_date", "-")
+    outcome_date = feedback.get("outcome_date", "-")
+    lines.append(
+        f"> 口径：{source_date} 连板≥2且非 ST → {break_date} 有交易但不再涨停"
+        f" → {outcome_date} 下一交易日反馈；不采用断板反包观察清单的选股门槛。\n"
+    )
+
+    status = feedback.get("status")
+    errors = [str(item) for item in (feedback.get("errors") or []) if item]
+    if status == "source_failed":
+        reason = "；".join(errors) or "必要来源不可得"
+        lines.append(f"- ⚠ **来源失败**：{reason}。本项未计算，不代表断板样本为 0。")
+        return section_idx
+    if status == "partial":
+        reason = "；".join(errors) or "部分样本不可得"
+        lines.append(f"- ⚠ **部分统计**：{reason}。以下仅基于有效样本。")
+
+    sample_count = int(feedback.get("sample_count") or 0)
+    break_count = int(feedback.get("break_count") or 0)
+    break_candidate_count = int(feedback.get("break_candidate_count") or 0)
+    if sample_count == 0:
+        empty_reason = feedback.get("empty_reason")
+        if empty_reason == "no_connected_candidates":
+            lines.append("- 当期无符合口径的非 ST 连板股，反馈样本为空。")
+        elif empty_reason == "no_board_breaks":
+            lines.append("- 当期连板股均延续涨停，未形成断板反馈样本。")
+        else:
+            lines.append("- 经核验暂无有效反馈样本。")
+        return section_idx
+
+    def _rate(value) -> str:
+        return f"{float(value):.1%}" if value is not None else "-"
+
+    def _pct(value) -> str:
+        return f"{float(value):+.2f}%" if value is not None else "-"
+
+    def _count(value) -> str:
+        return str(value) if value is not None else "-"
+
+    break_coverage = feedback.get("break_coverage_pct")
+    feedback_coverage = feedback.get("feedback_coverage_pct", feedback.get("coverage_pct"))
+    break_coverage_text = f"{float(break_coverage):.1f}%" if break_coverage is not None else "-"
+    feedback_coverage_text = (
+        f"{float(feedback_coverage):.1f}%" if feedback_coverage is not None else "-"
+    )
+    lines.append(
+        f"- 断板候选核验: **{break_count}/{break_candidate_count}只**"
+        f"（覆盖 {break_coverage_text}）｜反馈行情: **{sample_count}/{break_count}只**"
+        f"（覆盖 {feedback_coverage_text}）"
+    )
+    lines.append(
+        f"次日高开 {feedback.get('open_up_count', 0)}只（{_rate(feedback.get('open_up_rate'))}）｜"
+        f"次日收涨 {feedback.get('close_up_count', 0)}只（{_rate(feedback.get('close_up_rate'))}）"
+    )
+    lines.append(
+        f"- 开盘反馈: 均值 {_pct(feedback.get('open_mean_pct'))}，"
+        f"中位 {_pct(feedback.get('open_median_pct'))}｜"
+        f"收盘反馈: 均值 {_pct(feedback.get('close_mean_pct'))}，"
+        f"中位 {_pct(feedback.get('close_median_pct'))}"
+    )
+    lines.append(
+        f"- 再涨停: {_count(feedback.get('relimit_count'))}只（{_rate(feedback.get('relimit_rate'))}）｜"
+        f"跌停: {_count(feedback.get('limit_down_count'))}只（{_rate(feedback.get('limit_down_rate'))}）\n"
+    )
+
+    lines.append("| 股票 | 断板前高度 | 断板日涨跌 | 次日开盘 | 次日收盘 | 结果 |")
+    lines.append("|------|-----------|-----------|---------|---------|------|")
+    details = feedback.get("details") or []
+    for row in details[:20]:
+        name = str(row.get("name") or row.get("code") or "-").replace("|", "\\|")
+        code = str(row.get("code") or "")
+        label = f"{name}({code})" if code else name
+        lines.append(
+            f"| {label} | {row.get('previous_height', '-')}板 | "
+            f"{_pct(row.get('break_change_pct'))} | {_pct(row.get('feedback_open_pct'))} | "
+            f"{_pct(row.get('feedback_close_pct'))} | {row.get('outcome', '-')} |"
+        )
+    if len(details) > 20:
+        lines.append(f"\n> 报告展示前 20 只，完整 {len(details)} 只明细保留在 post-market.yaml。")
+    lines.append("")
     return section_idx

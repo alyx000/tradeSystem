@@ -1066,6 +1066,30 @@ class MarketCollector:
         except Exception as e:
             logger.warning(f"风格化因子分析失败: {e}")
 
+        # 13b. 连板股断板后的下一交易日反馈（纯事实统计，不复用 board-break 选股门槛）
+        try:
+            from analyzers.board_break_feedback import collect_board_break_feedback
+
+            result["board_break_feedback"] = collect_board_break_feedback(
+                self.registry,
+                date,
+                result,
+                daily_dir=BASE_DIR / "daily",
+            )
+            logger.info(
+                "连板断板次日反馈统计完成: status=%s sample=%s",
+                result["board_break_feedback"].get("status"),
+                result["board_break_feedback"].get("sample_count", 0),
+            )
+        except Exception as e:
+            logger.warning("连板断板次日反馈统计失败: %s", e)
+            result["board_break_feedback"] = {
+                "status": "source_failed",
+                "outcome_date": date,
+                "errors": [f"统计异常: {e}"],
+                "details": [],
+            }
+
         # 14. 客观节点信号
         try:
             from analyzers import NodeSignalAnalyzer
