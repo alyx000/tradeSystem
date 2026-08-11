@@ -111,7 +111,7 @@ python3 -m pytest scripts/tests/test_cli_smoke.py -v
 
 | 改动文件 | 需检查的 SKILL.md |
 |---------|-----------------|
-| `cli.py` 的 `add-note/add-industry/add-macro` | `record-notes/SKILL.md` |
+| `cli.py` 的 `add-note/add-industry/add-macro` | `record-notes/SKILL.md`；若改动老师观点成功/duplicate 收据或回查语义，同时检查 `cognition-evolution/SKILL.md`、`INDEX.md` 与两个 skill 的 `agents/openai.yaml`，保留“新建回查后自动提取候选、认知层写入再次确认”边界 |
 | `cli.py` 的 `stock-resolve` | `record-notes/SKILL.md`、`portfolio-manager/SKILL.md` |
 | `cli.py` 的 `holdings-*`（含 `--thesis-id` 关联语义）/ `watchlist-*` / `add-trade` / `blacklist-*` | `portfolio-manager/SKILL.md` |
 | `cli.py` 的 `query-notes/db-search` | `daily-review/SKILL.md` |
