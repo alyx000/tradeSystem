@@ -1,7 +1,7 @@
 ---
 name: market-tasks
 description: 手动触发或自动定时执行盘前/盘后行情采集任务、微信公众号白名单归档、行业推荐推送、研报速读，并将结果摘要推送回 channel
-version: "1.13"
+version: "1.14"
 ---
 
 # Skill: 市场数据任务（盘前 / 盘后采集）
@@ -425,6 +425,25 @@ python3 main.py board-break daily --no-llm                       # 跳过 LLM �
 - **核心源失败**：不产出正常候选清单，落 `source_failed` 失败报告 + 推告警 + 非零退出（launchd 场景可观测）。
 - **无池无状态**：不落库、不建观察池；隔日盘中是否突破 6% 交易由用户自行判断，本清单不跟踪。
 - 依赖 env 同 volume-watch（`TUSHARE_TOKEN` + 钉钉）；PK 依赖 Antigravity CLI（同 research-digest/cognition-digest 家族，独立 runner），可调 env 见上文表格：`ANTIGRAVITY_BIN`/`AGY_BIN`、`LLM_MODEL`、`LLM_TIMEOUT_SECONDS`（launchd 下建议 180+，见 `launchd-deploy.md`）；红线过滤复用 `services.recommend.formatter.REDLINE_KEYWORDS`。
+
+## 情绪核心生命周期监控（emotion-leader）
+
+支持手工全量校准与日常增量运行：
+
+```bash
+python3 main.py emotion-leader daily --date 2026-08-11 --dry-run
+python3 main.py emotion-leader daily --date 2026-08-11 --no-push
+python3 main.py emotion-leader daily --date 2026-08-11 --json
+python3 main.py emotion-leader daily --date 2026-08-11 --full-refresh --no-push
+```
+
+- **发现与晋级**：只读 `daily_market.raw_data` 逐日涨停事实，剔除 ST；二连板进入候选，三连板或当日非 ST 连板高度前二自动晋级。允许停牌造成日期间隔，但连板高度必须逐级递增；回看窗截断时只能按已覆盖开放日保守推断启动日。复盘第 5 步已确认且仍活跃的「连板核心/前排活跃/弹性前排」从 `leader_tracking` 合并为人工核心，不反向写库。
+- **打开高度与节点联动**：固定比较目标日非 ST 二板及以上的最高连板数与此前 **20 个开放日**的最高连板数；只有目标日严格创新高才记 `height_breakthrough.status=triggered`，并输出该高度全部核心及其生命周期 `launch_date`。高度对比是 `[事实]`，将这些启动日列为「情绪节点日候选」是 `[判断]`；它不替代事件日历或市场/板块结构确认。20 日窗口、目标日涨停事实或启动日对账任一不完整时必须为 `missing_data`，不得写成未触发。
+- **生命周期统计**：启动日为本轮连板第一板，基准为启动日前一交易日收盘；区间 OHLC 全部使用 `utils.qfq.apply_qfq(keys=OHLC_PRICE_KEYS)` 前复权，输出最大涨幅、区间涨幅、距峰值、峰值日、最高连板数和当日状态。因子缺失、错位或目标日行情陈旧时单票 fail-closed 为 `partial`，不退回未复权硬算。
+- **波段与归档**：波段标签属于 `[判断]`——收盘自运行峰值回撤不少于 10% 后，重新触及前高才确认下一波；仅自低点反弹不少于 10% 时标候选。非人工核心最后涨停超过 20 个交易日且距峰值不高于 -30% 时只从活跃展示归档，不删除事实。
+- **状态与输出**：目标日涨跌停事实不完整为 `source_failed`；历史开放日缺口、申万行业失败或单票行情/复权失败为 `partial`；失败/缺失不得写成空池。裸 `daily` 原子落 `data/reports/emotion-leader/YYYY-MM-DD.{md,json}` 并推钉钉，`--no-push` 落报告不推，`--dry-run`/`--json` 不落不推。
+- **增量刷新**：默认读取目标日前最近一份同回看口径的有效 JSON，只刷新上期活跃、本期新晋级、当日重新涨停或第 5 步人工确认标的；上期已归档且未重新触发者只复用旧指标并记录 `metric_as_of/cache_note`，不混入当天活跃统计或来源错误。缓存损坏、口径变化或不存在时自动回退全量；`--full-refresh` 可强制全量校准。
+- **只读边界**：不写 SQLite、持仓、关注池、TradeDraft 或 TradePlan；数值标 `[事实]`、波段标 `[判断]`，不出价位、不给买卖建议。
 
 ## 盘中实时阈值监控（intraday-monitor）
 

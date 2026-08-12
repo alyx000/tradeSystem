@@ -11,7 +11,7 @@
 2. **主会话汇总裁决**：读 9 份素材，做口径仲裁、第 0 节判分和跨面冲突对齐；完成八步复盘与认知对照的综合后再生成重点因子裁决。正文只接收变化、冲突、会改变总裁决或直接影响持仓检视的内容。
 3. **生成确定性容量 sidecar**：主会话从板块结论中选定 1～3 个申万二级方向，调用模板内 `build_capacity_manifest.py` 从只读镜像生成 `capacity_<REPORT_DATE>.json`；Agent 不得自行计算后手写排名。
 4. **生成滚动新高 sidecar**：调用 `build_new_high_structure_manifest.py` 对最近 251 个开放日的 `daily.high × adj_factor` 只读重算 60/120/250 日结构；不得用 `daily_new_high_stats` 的全历史高水位口径替代。
-5. **分块渲染 HTML**：固定 8 个 body chunk（见下）→ 结构、Claim、证据、预算、容量 sidecar、滚动新高契约和外部依赖校验 → 与 `review_style.css` 组装 → 只读落盘。任何硬门不通过都拒绝生成，不自动删字。
+5. **分块渲染 HTML**：固定 7 个 body chunk（见下）→ 结构、Claim、证据、预算、容量 sidecar、滚动新高契约和外部依赖校验 → 与 `review_style.css` 组装 → 只读落盘。任何硬门不通过都拒绝生成，不自动删字。
 
 ## 9 路分工
 
@@ -25,7 +25,7 @@
 | 6 | 板块相关性 | 库 sector_correlation_daily | sector_corr_*.md |
 | 7 | 历史同类日基率 | 镜像 index_daily 全历史 | analog_days_*.md |
 | 8 | 龙头/趋势池/滚动新高/派生报告 | 库 trend_leader_pool + 镜像 251 个开放日 daily/adj_factor + data/reports 四份派生报告 | trend_*.md |
-| 9 | 老师观点/持仓/行业信息/未来事件窗/仓位证据 | 库 teacher_notes/holdings/broker_executions/trade_thesis/industry_info/calendar_events + `status=active AND category=sizing` 的 trading_cognitions + 交易日历 | teacher_portfolio_*.md |
+| 9 | 老师观点/持仓/行业信息/未来事件窗 | 库 teacher_notes/holdings/broker_executions/trade_thesis/industry_info/calendar_events + 交易日历 | teacher_portfolio_*.md |
 
 ## 单路输出契约（采集完整，主输出精简）
 
@@ -52,9 +52,11 @@
 | 2 | `sector_labels_evidence` | 申万二级标签命中并集及完整汇总元数据：`close>MA144/MA233`、最近 10 个交易快照日内 close/amount 同日突破此前 20 日高点；保留最近共振日、三类数据不足数与 `complete / partial / failed`，不得把 `null` 写成 `false` |
 | 2 | `rising_recognition` / `falling_recognition` | 主升与主跌方向 × 辨识度个股矩阵必须成对采集；任一侧无合格项也保留该侧 `none`，来源不足标 `missing-data`，不得只交付主跌矩阵 |
 | 2 | `sector_crowding_snapshot` | 全行业拥挤度快照（卞老师三维度框架）：跑只读 `python3 main.py sector-crowding report --date <T>`，采集 ① 交易拥挤度（占比 + 历史分位，标注 ≥30%/≥40% 绝对参考线触及情况）② 斜率拥挤度（5/20/60 日涨幅 + 20 日斜率分位，≥90% 标高斜率）③ 双高清单状态（有名单列名单，无双高显式写「无双高拥挤板块」）④ 同一输出中的半年线/年线/近期价量共振标签汇总与命中清单。资金流代理维度已由其他路承载，不重复采集。CLI 失败或当日无行时标 `missing-data` 记入 conflicts_or_gaps，不得静默省略 |
+| 3 | `emotion_leader_lifecycle` / `height_breakthrough` | 复用同日 `data/reports/emotion-leader/<T>.json`，保留 status、历史覆盖、增量刷新模式/数量、活跃/归档、今日涨停/创新高、今日晋级、新增二连板候选、前 12 只活跃核心及 source_errors；另保留目标日与此前 20 个开放日非 ST 最高连板对比和打开高度核心的启动日。波段固定标 `[判断]`；高度对比标 `[事实]`、启动日节点候选标 `[判断]`，`partial/source_failed/missing_data` 不得写成空池、0 或未触发 |
+
+板块路读取 `daily_volume_concentration.source_json.gain_concept` 判题材标签健康：`healthy_sparse` 表示热概念 Top15 与成交额前50的成功小交集（如 4/50），必须写“交集稀疏”而不是“概念标签缺失”；只有 `source_failed` 才是本次来源失败，`fallback_preserved` 须说明沿用同日既有标签。旧记录没有该字段时标口径未知，不得仅凭标签数量反推失败。
 | 8 | `new_high_structure_verdict` / `new_high_structure_evidence` | 前复权滚动 60/120/250 日双日计数、60 日行业 Top3/CR3、名单延续与最多 5 个代表票；不同于全历史高水位任务 |
 | 9 | `event_window_verdict` / `event_window_evidence` | 1 句节点裁决 + 报告日后 7 个自然日的事件窗；事件日期须标交易/休市并说明是否影响次日验证 |
-| 9 | `exposure_inputs` | 引用路 1 已提交的当日客观量能/`market_node`，本路补充严格按 `teacher_notes.date` 的当日老师观点与 `category=sizing` 历史认知；保留来源状态、ID、日期、适用与失效边界，`candidate` 必须如实形成 `candidate_only`，只能触发市场事实主导的低置信降级，不能冒充 active lifecycle |
 
 主会话按优先级取材：
 
@@ -108,8 +110,36 @@ HTML 中 `s1` 必须同时满足：
 1. 唯一默认可见 `<p data-big-picture="verdict">`，带 `[判断]`，同时覆盖“大势 / 大类资产（或跨资产）/ 外汇（或人民币即期）/ 掉期（或 C-Swap）”四组语义。
 2. 默认收起的证据层内唯一 `data-cross-asset-context="v1|missing-data"`。`complete` 的 v1 表覆盖全球权益、中国风险映射、商品、波动率、利率五类且每行都有真实来源日；任一行只有抓取时间时整表必须标 `partial`。`partial` 至少保留三类并在 `ops` 可见披露；每行的来源日或“源交易日缺失”及 `data-primary-value` 必须可见；全缺使用 `missing-data`。
 3. 同一证据层内唯一 `data-rmb-fx-observation="v1|missing-data"`。v1 表固定保留 `spot` 与 `c-swap-1y` 两条身份行，完整腿保留 pair、中国货币网对应域名、来源日、严格观察/抓取时间、价格语义和数值字段。仅一腿缺失时整表标 `partial`，保留另一腿事实并把缺失腿显式写成 `data-status="missing"`；两腿全缺才使用 `missing-data`。掉期必须可见“定盘 / 报价数据”，任一缺失态都须在 `ops` 可见。
+4. 组装器从当前 `s1` 与 `data/reports/复盘_*.html` 中已经通过结构校验的人民币外汇事实，按来源日去重，取最近最多 15 个“即期 + 1Y 全价 + 1Y 掉期点”同日工作日点，自动生成唯一 `data-rmb-fx-chart="v1|missing-data"` 静态 SVG 双图。上图即期中值与 1Y 全价共用“人民币/美元”轴，下图单列 Pips；至少 8 点才画，历史不足只说明“不足 8 个工作日”，不补 0、不插值。图后保留折叠数值表，离线、打印和无脚本环境仍可核对。
 
 上述任一模块缺失、重复、错节、日期晚于报告日、隐藏摘要、伪造来源日或数值不变量不成立，组装器必须拒绝生成；正文预算只能压缩解释，不能删除模块。
+
+### 情绪核心生命周期（第 3 路 → `s3`）
+
+- `emotion-leader daily --no-push` 的同日 JSON 是唯一输入；HTML 组装器直接读取，chunk 不得手写或重复注入 `data-emotion-leader`。
+- 默认可见摘要必须给出 `ok / partial`、历史覆盖、刷新模式/数量、活跃/归档、今日涨停/创新高，以及今日晋级核心和新增二连板候选；前 12 只活跃核心与 source_errors 前 3 条进入默认收起证据层。
+- 明细至少保留代码、板型、行业、最大/区间涨幅、距峰值、启动日/最高板数、今日状态。波段为机械生命周期解释，必须逐行标 `[判断]`；其余数值与状态标 `[事实]`。
+- `partial` 可展示已经取得的有效核心并显式披露缺口；`source_failed`、JSON 缺失/损坏、日期错位或汇总无法与明细对账时使用 `missing-data`。只有 `status=ok` 且活跃数确为 0 时才允许 `none`，禁止把失败或部分覆盖写成空池。
+- 同一 JSON 的 `height_breakthrough` 由组装器跨节注入 `s6`，chunk 不得手写或重复注入 `data-emotion-node`。仅当目标日非 ST 二板及以上的最高连板数严格超过此前 20 个完整开放日的最高值时使用 `v1`：可核对高度差标 `[事实]`，对应打开高度核心的生命周期启动日标 `[判断] 情绪节点日候选`；它不替代事件日历或市场/板块结构确认。未突破使用 `none`，比较窗、目标日涨停事实或启动日对账不完整使用 `missing-data`。
+
+### 指数周/月均线状态与事件（第 1 路 → `s1`）
+
+出处老师《交易系统》课程第一课方向判断体系。**只读**库内 `market_timing_signal`（PK `trade_date`+`index_code`，
+21:40 per-task launchd 落库，早于复盘）的 `ma_state_json` / `ma_events_json`，**不在复盘流程重算**；
+指数集合、周月聚合口径与事件定义指回 `scripts/services/market_timing/ma_state.py`（勿在本文抄值防漂移）。
+
+- `s1` 默认可见**只占 1 条关键证据**，一行写完位置 + 方向 + 事件。格式样例（数字为 2026-07-24 实测，
+  只示范格式，**须按当日库内值现算，勿照抄**）：
+  `[判断] 周月锚定：0/6 在 5 周线上、5 周线 6/6 向下；1/6 在 5 月线上。今日无新增事件。`
+  实测真实报告默认可见正文（含情绪核心与外汇趋势图固定模块）已接近 10,000 / 硬上限 10,500，**只容得下这一行，不得扩成表格**。
+- 有事件时同一行追加，**最多 2 条**，按 `EVENT_LABELS` 的严重度标记取（🔴 优先于 ⚠️ 优先于 🟢）；
+  其余事件与 6 指数逐行明细一并进折叠证据层。
+- `ma_events_json` 为 NULL / `[]` = **当日无事件**（事件按今昨视角翻转报，已处于该状态不重复报），
+  **不是数据缺失**，不得记 ops 缺口；`ma_state_json` 为空才是缺失，须登记 `section#ops`。
+- 月线 `ma10` / `ma20` 为 `null` 属历史不足（如平均股价 880003），照实写“数据不足”，不硬算、不省略。
+- 与 `daily_market.*_above_ma5w` 冲突时以 `market_timing_signal` 为准（后者 6 指数、含方向与月线，
+  前者 5 指数只有位置）；两者同为“含当前未完成周”口径，出现不一致须记 ops 缺口。
+- 红线：全部标 `[判断]`，不出价位、**不给具体买卖建议**。「不给买卖建议」必须逐字写进第 1 路 subagent prompt；新版 HTML 已无 `exposure` 章节，不得把相关话术迁入 `s1` 替代展示。
 
 ### 容量中军独立筛选（硬契约）
 
@@ -165,7 +195,6 @@ python3 .agents/skills/daily-review/references/html-report-template/build_new_hi
 
 - **北向资金维度一律不采**（用户裁定无效数据）。
 - 输出标 `[事实]`/`[判断]`；不做买卖建议、不预测价格目标、不将 `[判断]` 伪装成 `[事实]`。
-- 仓位环境只给定性档位，不输出百分比，不出现加仓/减仓/满仓/空仓指令；老师仓位话术只作 `[老师观点]` 证据，不直接映射为系统结论。
 - 股通席位仅作单票承接事实，不升格为市场级维度。
 - 只读取数：`sqlite3 "file:<db>?mode=ro"` 纯 SELECT，SQL 禁含 REPLACE 关键词；查表前先 `PRAGMA table_info`。
 - 镜像脚本样板：`load_dotenv('scripts/.env')` 取 TUSHARE_TOKEN；`api=ts.pro_api(token); api._DataApi__http_url='http://tushare.xyz'`。
@@ -175,7 +204,7 @@ python3 .agents/skills/daily-review/references/html-report-template/build_new_hi
 
 ### 固定 chunks 与 anchors
 
-8 个 chunk 与 17 个导航锚点必须全部存在、按下列精确顺序各出现一次：`tldr/factor/s0/s1/s2/s3/s4/s5/s6/s7/teachers/industry/cognition/exposure/proj/s8/ops`。无新增的章节也保留锚点，只写“本日无新增”或“本日无可判数据”，不生成空表。
+7 个 chunk 与 15 个导航锚点必须全部存在、按下列精确顺序各出现一次：`tldr/factor/s0/s1/s2/s3/s4/s5/s6/s7/teachers/industry/cognition/s8/ops`。无新增的章节也保留锚点，只写“本日无新增”或“本日无可判数据”，不生成空表。
 
 | chunk | 固定 anchors | 正文归属 |
 |---|---|---|
@@ -184,11 +213,10 @@ python3 .agents/skills/daily-review/references/html-report-template/build_new_hi
 | `s1` | `s1` | ①大势（境内大盘 + 大类资产 + 外汇掉期） |
 | `s2` | `s2` | ②板块 |
 | `s456` | `s3`, `s4`, `s5`, `s6` | ③情绪、④风格、⑤龙头、⑥节点 |
-| `s7t` | `s7`, `teachers`, `industry`, `cognition`, `exposure` | ⑦持仓、老师观点、行业信息、认知对照、仓位环境与纪律参考 |
-| `proj` | `proj` | 🔭次日推演 |
+| `s7t` | `s7`, `teachers`, `industry`, `cognition` | ⑦持仓、老师观点、行业信息、认知对照 |
 | `s8ops` | `s8`, `ops` | ⑧次日计划、数据缺口 |
 
-每个八步章节默认只有：**1 句裁决 + 最多 3 条关键证据 + 1 条证伪或缺口**。老师观点最多显示 3 个共识、3 个分歧、2 个新增变化；仓位环境的 `fallback+cautious` 固定只显示 4 条：结论、上行门、下行门、缺口/复核，三类来源与完整对账全部折叠；次日推演最多 3 个场景，每个只含优先级、确认和证伪。宽基 ETF 只归大盘，主题 ETF 只归板块；风格不再独立重复 ETF 内容。完整 P1-P5、行情/资金/梯队/持仓/老师原文/认知历史表进入证据层；同义总结、已关闭仓位的重复文字、无变化项目、正常运维状态和每节重复的方法/红线说明不生成。
+每个八步章节默认只有：**1 句裁决 + 最多 3 条关键证据 + 1 条证伪或缺口**。老师观点最多显示 3 个共识、3 个分歧、2 个新增变化。宽基 ETF 只归大盘，主题 ETF 只归板块；风格不再独立重复 ETF 内容。完整 P1-P5、行情/资金/梯队/持仓/老师原文/认知历史表进入证据层；同义总结、已关闭仓位的重复文字、无变化项目、正常运维状态和每节重复的方法/红线说明不生成。
 
 #### 不可精简保留清单
 
@@ -197,19 +225,11 @@ python3 .agents/skills/daily-review/references/html-report-template/build_new_hi
 | ①大势 | 唯一 1 句同时覆盖大势、大类资产、外汇与掉期的裁决；境内指数证据仍按原 1～3 条预算 | 大类资产五类事实表；USD/CNY 在岸即期 + 1Y C-Swap 两行事实表；境内指数/期指/两融原始证据 | 大类资产与外汇掉期分别使用 `missing-data`，并在数据缺口章节可见；抓取时间不代替来源交易日 |
 | ②板块 | 唯一 1 句集中度裁决 + 唯一 1 句趋势标签汇总；后者把半年线/年线标 `[事实]`、近期价量共振标 `[判断]` | 唯一集中度表；唯一标签命中并集；唯一主升辨识度矩阵；唯一主跌辨识度矩阵。主升/主跌必须成对出现，不因结果为空而删侧。另固定携带全行业拥挤度快照（L1 全量占比/分位 + 斜率分位 + 双高清单状态；趋势标签是组装器硬门，其余为文档级要求），命名用「全行业交易拥挤度」，与 Top20 主线集中度口径严格分表不混排 | 标签完整无命中用 `none`；部分覆盖仍保留已确认命中表并在摘要与数据缺口披露；全缺用 `missing-data`。其他模块同样区分 `none / missing-data`，禁止静默省略 |
 | ⑤龙头 | 1 句容量中军变化（确有变化时）+ 1 句滚动新高结构裁决 | 唯一容量中军健康表；唯一 60/120/250 日滚动新高结构；趋势池历史代表另表 | 容量与新高各自独立三态；任一来源不完整都用本模块 `missing-data` 并在数据缺口可见 |
-| ⑥节点 | 唯一 1 句报告日后 7 个自然日事件窗裁决 | 唯一事件窗表，事件日期标交易/休市及对次日验证的影响 | 无相关事件用 `none`；来源不完整用 `missing-data`，并在数据缺口章节可见 |
+| ⑥节点 | 唯一 1 句报告日后 7 个自然日事件窗裁决；若打开非 ST 连板高度，另显示 `[事实]` 高度对比与 `[判断]` 启动日节点候选 | 唯一事件窗表；唯一情绪高度节点联动表，列代码、当日高度、启动日及启动日来源 | 两个模块独立三态；事件窗或情绪高度证据不完整时各自用 `missing-data`，不得互相替代 |
 
 上述三节即使无新增，也不能套用通用“只写一行、不生成空表”后静默省略模块；必须保留模板规定的结构化状态。⑤中的容量和滚动新高是两个独立模块，不能互相代替。具体 HTML 结构以 [模板硬门](html-report-template/README.md#组装与硬校验) 为准。
 
-正文展示顺序固定为：`速览 → 三位一体重点因子 → ⓪前日判分 → ①–⑦ → 老师观点 → 行业信息 → 认知对照 → 仓位环境与纪律参考（影子） → 次日推演 → ⑧次日计划 → 数据缺口`。这是展示前置，不是生成前置：重点因子与仓位环境仍必须在 9 路完整采集、八步复盘与认知对照综合完成后生成，再由次日推演消费；不得继续藏在 ⑧ 的折叠证据里。
-
-### 仓位环境与纪律参考（影子）
-
-- 固定使用 `section#exposure`，声明 `data-exposure-mode="shadow|fallback|conflicted|no_data"`、定性 `data-exposure-tier="defensive|cautious|neutral|constructive|undetermined"` 与 `data-exposure-boundary="read-only-environment-rating"`。
-- 三类来源按 `market / cognition / teacher` 各一条，并与同名 `data-exposure-evidence` 合并为默认收起的 `<p>`，不得在可见区再复述。市场与老师完整来源严格归属报告日；老师只认 `teacher_notes.date`；认知分别保留 availability 与真实 lifecycle。lifecycle=`active` 且 `category=sizing` 用于标准 `shadow`；candidate-only 只允许触发低置信 `fallback`，不参与档位方向。
-- `shadow` 只在三类来源完整且无实质冲突时给定性档位。`fallback` 只接受“当日 market 完整 + candidate-only sizing + 当日 teacher 完整或冲突”；合并后的 market 来源/证据声明受控广度、量能、结构状态，组装器机械重算 `defensive/cautious/neutral`。`shadow/fallback` 各保留一条受控上行门和下行门；`fallback+cautious` 使用 `full-close-upside-gate / full-close-downside-gate`，绑定报告日成交额、涨跌家数、MA20/MA5、跌停阈值与组合对账。`conflicted/no_data` 固定 `undetermined`。
-- 唯一 Claim 与 `exposure-detail` 严格归属报告日。`fallback+cautious` 默认可见区必须恰好 4 个业务段落：短结论、`confirm-if` 上行门、`invalidate-if` 下行门、`review-rule` 缺口/复核；不再生成独立 `recommendation / status / portfolio-status / portfolio-evidence` 可见段落。`exposure-detail` 固定 4 项：三类合并来源/证据，加 1 项 `portfolio` 对账留痕；后者保留 `not-read / unreconciled`、结构化计数、券商最新业务日及受控事实正文。可见 `review-rule` 只压缩呈现影响结论的对账摘要和复核/顺延日，并与折叠 portfolio 逐字对账。
-- 复核日与顺延日由连续、以首个 `open` 结束的完整 `trade_calendar` 自然日脊柱证明；正式组装用只读 `data/trade.db` 将成交额门槛与 `daily_market.total_amount`、逐日开闭状态与 `trade_calendar` 外部对账；任一 mode 的 `unreconciled` 都触发组合 context，并将 active holdings、未关联 thesis、open thesis、关联非作废成交及券商最新业务日与 `holdings / trade_thesis / broker_executions` 逐字段对账，`fallback+cautious` 不得改报 `not-read`。`holdings` 无历史快照，只能表述组装时 canonical 当前组合状态。默认可见实质正文只允许唯一 Claim 和已知 role，任意无 role `<p>/<div>` 均拒绝；唯一折叠容器、summary、证据正文、四项证据及其实质正文不得显式或祖先 `hidden`；整个章节（含折叠证据）继续执行 Unicode 归一化与比例/操作指令护栏，不写工作台、计划层或持仓。
+正文展示顺序固定为：`速览 → 三位一体重点因子 → ⓪前日判分 → ①–⑦ → 老师观点 → 行业信息 → 认知对照 → ⑧次日计划 → 数据缺口`。「仓位环境与纪律参考（影子）」与独立「次日推演」不再生成，也不得出现在导航、锚点或 chunk 契约中。
 
 重点因子章节默认只显示：1 条主因子裁决、最多 3 条证据（第一辅助与其余两因子可合并）、1 条切换/失效或数据状态。未运行正式评分时必须标为 `shadow` 并写明“影子口径、不写库”，不得伪装成正式评分结果；四因子完整对账和切换预埋进入本节证据层，⑧只保留次日核对清单。`data-factor-mode`、可见 Claim、`no_data` 与 `factor-detail` 的具体 HTML 硬契约只以 [HTML 模板“组装与硬校验”](html-report-template/README.md#组装与硬校验) 为准。
 
@@ -225,7 +245,7 @@ python3 .agents/skills/daily-review/references/html-report-template/build_new_hi
 | 区域 | 非空白字符 | 表格 | 表格行 |
 |---|---:|---:|---:|
 | 速览 | ≤ 500 | 计入正文 | 计入正文 |
-| 默认可见正文 | 目标 ≤ 6,000，硬上限 10,000 | ≤ 12 | ≤ 80 |
+| 默认可见正文 | 目标 ≤ 6,000，硬上限 10,500 | ≤ 12 | ≤ 80 |
 | 折叠证据层 | ≤ 40,000 | ≤ 60 | ≤ 400 |
 
 组装器按章节报告实际用量。超过任一硬上限、Claim 引用悬空/重复、锚点缺失/重复/乱序、证据元数据或正文不完整、出现静态外部依赖时，必须指出责任章节并拒绝生成；不得自动截断、删句或把冗余机械搬进折叠区。HTML 必须是单文件静态产物；报告正文禁止活动标签、事件属性和 `javascript:` URL，禁止 CDN、远程脚本/样式、`fetch`、XHR 和 WebSocket，普通来源链接不视为渲染依赖。

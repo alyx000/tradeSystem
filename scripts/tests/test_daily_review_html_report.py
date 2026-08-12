@@ -1027,7 +1027,8 @@ def _valid_chunks(date: str = DATE) -> dict[str, str]:
   <ul><li>[事实] 成交较前日缩量。</li><li>[事实] 指数分化。</li></ul>
   <p data-big-picture="verdict" data-as-of="{date}" data-reviewed-through="{date}">[判断] 大势仍需结合大类资产、外汇与掉期共同确认。</p>
   <p>[判断] confirm_if：放量修复；invalidate_if：继续缩量下跌。</p>
-  <details class="evidence" data-as-of="{date}" data-items="1">
+  <details class="evidence" data-as-of="{date}" data-evidence-kind="sector-labels"
+           data-items="1">
     <summary>大盘原始证据（1 项）</summary>
     <div class="evidence-body">
       <p>六指数完整原始序列。</p>
@@ -1108,7 +1109,7 @@ def _valid_chunks(date: str = DATE) -> dict[str, str]:
   {_sector_concentration_verdict(date=date)}
   {_sector_labels_verdict(date=date)}
   {_sector_state("sector-concentration", date=date)}
-  <details class="evidence" data-as-of="{date}" data-evidence-kind="sector-labels" data-items="1">
+  <details class="evidence" data-as-of="{date}" data-items="1">
     <summary>板块趋势标签（1 项）</summary>
     <div class="evidence-body">{_sector_labels_state(date=date)}</div>
   </details>
@@ -1237,7 +1238,64 @@ def _write_new_high_manifest(
 
 def _render_valid(assembler, tmp_path: Path, date: str = DATE) -> tuple[str, dict[str, Path]]:
     paths = _write_chunks(tmp_path, date)
-    return assembler.render_report(tmp_path, date), paths
+    return assembler.render_report(
+        tmp_path,
+        date,
+        include_legacy_sections=True,
+    ), paths
+
+
+def _emotion_leader_report(date: str = DATE, *, status: str = "partial") -> dict:
+    active = [
+        {
+            "code": "600664.SH",
+            "name": "哈药股份",
+            "board_type": "10cm",
+            "wave_label": "多波",
+            "metric_status": "ok",
+            "industry": "化学制药",
+            "max_gain_pct": 170.26,
+            "interval_gain_pct": 170.26,
+            "distance_from_peak_pct": 0.0,
+            "launch_date": "2026-07-10",
+            "max_height": 5,
+            "current_state": "涨停",
+        }
+    ]
+    return {
+        "date": date,
+        "status": status,
+        "active": active,
+        "archived": [],
+        "summary": {
+            "active_count": 1,
+            "archived_count": 0,
+            "today_limit_up_count": 1,
+            "new_peak_count": 1,
+        },
+        "coverage": {"expected_open_days": 64, "loaded_limit_days": 63},
+        "refresh": {"mode": "incremental", "metric_refresh_count": 1},
+        "source_errors": ["历史涨停事实缺 1 个开放日"] if status == "partial" else [],
+        "promoted_today": [{"name": "哈药股份"}],
+        "new_candidates": [{"name": "北京文化"}],
+        "height_breakthrough": {
+            "status": "triggered",
+            "source_status": "complete",
+            "as_of": date,
+            "lookback_open_days": 20,
+            "previous_window_start": "2026-06-18",
+            "previous_window_end": "2026-07-15",
+            "current_max_height": 5,
+            "previous_max_height": 4,
+            "leaders": [{
+                "code": "600664.SH",
+                "name": "哈药股份",
+                "launch_date": "2026-07-10",
+                "launch_method": "limit_chain",
+                "current_height": 5,
+            }],
+        },
+    }
 
 
 def _replace_once(html: str, old: str, new: str) -> str:
@@ -1701,7 +1759,7 @@ def test_render_validate_and_write_valid_compact_report(assembler, tmp_path):
     metrics = assembler.validate_report(html)
     assert type(metrics).__name__ == "ReportMetrics"
     assert metrics.tldr_chars <= 500
-    assert metrics.visible_chars <= 10_000
+    assert metrics.visible_chars <= assembler.VISIBLE_CHAR_LIMIT
     assert metrics.visible_tables <= 12
     assert metrics.visible_rows <= 80
     assert metrics.appendix_chars <= 40_000
@@ -1719,6 +1777,30 @@ def test_render_validate_and_write_valid_compact_report(assembler, tmp_path):
     assert written == output
     assert output.read_text(encoding="utf-8") == html
     assert output.stat().st_mode & 0o777 == 0o644
+
+
+def test_current_report_omits_exposure_and_projection_everywhere(
+    assembler, tmp_path
+):
+    chunk_dir = tmp_path / "chunks"
+    paths = _write_chunks(chunk_dir)
+    paths["proj"].unlink()
+
+    html = assembler.render_report(chunk_dir, DATE)
+    metrics = assembler.validate_report(html)
+
+    assert f'data-report-layout="{assembler.CURRENT_REPORT_LAYOUT}"' in html
+    assert 'data-report-chunk="proj"' not in html
+    assert 'id="exposure"' not in html
+    assert 'href="#exposure"' not in html
+    assert 'id="proj"' not in html
+    assert 'href="#proj"' not in html
+    assert "仓位环境与纪律参考" not in html
+    assert "🔭 次日推演" not in html
+    assert 'id="s8"' in html
+    for anchor in assembler.CURRENT_REQUIRED_ANCHORS:
+        assert html.count(f'id="{anchor}"') == 1
+        assert anchor in metrics.sections
 
 
 def test_write_report_requires_capacity_manifest_before_writing(assembler, tmp_path):
@@ -1824,7 +1906,11 @@ def test_legacy_factor_location_in_proj_is_rejected(assembler, tmp_path):
         encoding="utf-8",
     )
 
-    invalid = assembler.render_report(paths["head"].parent, DATE)
+    invalid = assembler.render_report(
+        paths["head"].parent,
+        DATE,
+        include_legacy_sections=True,
+    )
     error = _assert_report_error(
         assembler,
         invalid,
@@ -3230,6 +3316,41 @@ def test_exposure_rejects_recommendation_ratios_and_position_actions(
     )
 
 
+# 2026-07-25 用户裁定：「不给仓位建议」红线全系统删除 → 仓位族一律放行（见下方正向锁）；
+# 「不做具体买卖建议」用户未要求删除 → 买卖动作族继续拒绝。
+# Unicode 变体（零宽空格 / 变体选择符 / 组合字符）**必须留在被拒绝的一侧**，
+# 否则 `_normalize_guardrail_text` 的防绕过覆盖会随仓位门一起消失。
+@pytest.mark.parametrize(
+    "instruction",
+    [
+        "增配",
+        "买进",
+        "介入标的",
+        "退出标的",
+        "回避所有标的",
+        "建议减持",
+        "立即清仓",
+        "买​入",
+        "建议买️入",
+        "建议买͏入",
+    ],
+)
+def test_exposure_guardrail_normalizes_and_rejects_trade_actions(
+    assembler, tmp_path, instruction
+):
+    html, _ = _render_valid(assembler, tmp_path / "chunks")
+    invalid = _replace_once(
+        html,
+        "[事实] 当日量能与 market_node 状态。",
+        f"[事实] {instruction}。",
+    )
+    _assert_report_error(
+        assembler,
+        invalid,
+        "invalid_exposure_contract",
+    )
+
+
 @pytest.mark.parametrize(
     "instruction",
     [
@@ -3240,8 +3361,6 @@ def test_exposure_rejects_recommendation_ratios_and_position_actions(
         "仓位四分之一",
         "上调仓位",
         "提高风险敞口",
-        "增配",
-        "买进",
         "仓位一半",
         "仓位 50％",
         "加\u200b仓",
@@ -3253,9 +3372,6 @@ def test_exposure_rejects_recommendation_ratios_and_position_actions(
         "提升仓位",
         "减少头寸",
         "扩大敞口",
-        "介入标的",
-        "退出标的",
-        "回避所有标的",
         "仓位对半",
         "仓位五五开",
         "½ 仓位",
@@ -3270,22 +3386,24 @@ def test_exposure_rejects_recommendation_ratios_and_position_actions(
         "条件成立后缩仓",
         "条件成立后提仓",
         "条件成立后控仓",
+        "维持七成仓位",
+        "动态满仓",
     ],
 )
-def test_exposure_guardrail_normalizes_and_rejects_visible_instructions(
+def test_exposure_allows_position_sizing_after_redline_removal(
     assembler, tmp_path, instruction
 ):
+    """仓位红线删除后的**正向锁**：这些短语必须能进入 exposure 且校验通过。
+
+    只删门不加正向锁，下次有人顺手把仓位族加回正则时不会有任何测试变红。
+    """
     html, _ = _render_valid(assembler, tmp_path / "chunks")
-    invalid = _replace_once(
+    updated = _replace_once(
         html,
         "[事实] 当日量能与 market_node 状态。",
         f"[事实] {instruction}。",
     )
-    _assert_report_error(
-        assembler,
-        invalid,
-        "invalid_exposure_contract",
-    )
+    assembler.validate_report(updated, exposure_context=_exposure_context())
 
 
 @pytest.mark.parametrize(
@@ -3345,14 +3463,15 @@ def test_exposure_heading_and_summary_are_controlled(
     )
 
 
-def test_exposure_guardrail_rejects_position_actions_in_folded_evidence(
+def test_exposure_guardrail_rejects_trade_actions_in_folded_evidence(
     assembler, tmp_path
 ):
+    """折叠证据层同样被扫（仓位红线已删，故改用买卖动作短语验证该路径仍在）。"""
     html, _ = _render_valid(assembler, tmp_path / "evidence-guardrail")
     invalid = _replace_once(
         html,
         "严格 teacher_notes.date 当日观点，不直接映射老师仓位话术。",
-        "老师原文包含七成仓并加仓。",
+        "老师原文建议买进并增持。",
     )
 
     _assert_report_error(
@@ -3365,12 +3484,13 @@ def test_exposure_guardrail_rejects_position_actions_in_folded_evidence(
 def test_exposure_guardrail_rejects_actions_in_folded_evidence_attributes(
     assembler, tmp_path
 ):
+    """属性同样被扫（仓位红线已删，故改用买卖动作短语验证该路径仍在）。"""
     html, _ = _render_valid(assembler, tmp_path / "evidence-attribute-guardrail")
     invalid = _replace_once(
         html,
         'data-evidence-boundary="仅作严格当日观点背景，不直接映射仓位">',
         'data-evidence-boundary="仅作严格当日观点背景，不直接映射仓位" '
-        'title="建议加仓">',
+        'title="建议买进">',
     )
 
     _assert_report_error(
@@ -5640,6 +5760,180 @@ def test_s1_rmb_fx_partial_cannot_hide_two_complete_legs(
     )
 
 
+def test_s1_rmb_fx_chart_uses_eight_same_day_history_points(
+    assembler, tmp_path
+):
+    chunks = tmp_path / "chunks"
+    archive = tmp_path / "archive"
+    _write_chunks(chunks)
+    archive.mkdir()
+    prior_dates = (
+        "2026-07-07",
+        "2026-07-08",
+        "2026-07-09",
+        "2026-07-10",
+        "2026-07-13",
+        "2026-07-14",
+        "2026-07-15",
+    )
+    for prior_date in prior_dates:
+        (archive / f"复盘_{prior_date}.html").write_text(
+            _valid_chunks(prior_date)["s1"], encoding="utf-8"
+        )
+
+    html = assembler.render_report(chunks, DATE, fx_history_dir=archive)
+    metrics = assembler.validate_report(html)
+
+    assert 'data-rmb-fx-chart="v1"' in html
+    assert 'data-point-count="8"' in html
+    assert "在岸即期中值" in html
+    assert "1Y C-Swap 全价" in html
+    assert "掉期点（Pips）" in html
+    assert metrics.sections["s1"].visible_chars > 0
+
+
+def test_s1_rmb_fx_chart_rejects_hidden_or_unlabeled_series(
+    assembler, tmp_path
+):
+    chunks = tmp_path / "chunks"
+    archive = tmp_path / "archive"
+    _write_chunks(chunks)
+    archive.mkdir()
+    for day in range(7, 16):
+        prior_date = f"2026-07-{day:02d}"
+        (archive / f"复盘_{prior_date}.html").write_text(
+            _valid_chunks(prior_date)["s1"], encoding="utf-8"
+        )
+    html = assembler.render_report(chunks, DATE, fx_history_dir=archive)
+    invalid = _replace_once(html, "即期买卖算术中值", "即期数值")
+
+    _assert_report_error(assembler, invalid, "invalid_rmb_fx_chart")
+
+
+def test_s3_emotion_leader_report_is_injected_with_fact_judgment_boundary(
+    assembler, tmp_path
+):
+    _write_chunks(tmp_path)
+    html = assembler.render_report(
+        tmp_path,
+        DATE,
+        emotion_leader_report=_emotion_leader_report(),
+    )
+    assembler.validate_report(html)
+
+    assert 'data-emotion-leader="v1"' in html
+    assert "状态 partial" in html
+    assert "今日晋级核心：哈药股份" in html
+    assert "新增二连板候选：北京文化" in html
+    assert "[判断] 多波" in html
+    assert "source_errors 共 1 条" in html
+    assert 'data-emotion-node="v1"' in html
+    s6, _ = _extract_section(html, "s6")
+    assert 'data-emotion-node="v1"' in s6
+    assert "[事实] 打开非ST连板高度" in s6
+    assert "此前20个开放日最高4板" in s6
+    assert "[判断] 哈药股份启动日2026-07-10列为情绪节点日候选" in s6
+    assert "该线索不替代事件日历或市场/板块结构确认" in s6
+
+
+def test_s6_emotion_node_none_is_rendered_as_objective_non_trigger(
+    assembler, tmp_path
+):
+    _write_chunks(tmp_path)
+    payload = _emotion_leader_report(status="ok")
+    payload["height_breakthrough"] = {
+        "status": "none",
+        "source_status": "complete",
+        "as_of": DATE,
+        "lookback_open_days": 20,
+        "previous_window_start": "2026-06-18",
+        "previous_window_end": "2026-07-15",
+        "current_max_height": 4,
+        "previous_max_height": 5,
+        "leaders": [],
+    }
+    html = assembler.render_report(
+        tmp_path,
+        DATE,
+        emotion_leader_report=payload,
+    )
+    assembler.validate_report(html)
+
+    s6, _ = _extract_section(html, "s6")
+    assert 'data-emotion-node="none"' in s6
+    assert assembler.EMOTION_NODE_NONE_TEXT in s6
+    assert "情绪节点日候选" not in s6
+
+
+def test_s6_emotion_node_missing_evidence_fails_closed(
+    assembler, tmp_path
+):
+    _write_chunks(tmp_path)
+    payload = _emotion_leader_report(status="ok")
+    payload.pop("height_breakthrough")
+    html = assembler.render_report(
+        tmp_path,
+        DATE,
+        emotion_leader_report=payload,
+    )
+    assembler.validate_report(html)
+
+    s6, _ = _extract_section(html, "s6")
+    assert 'data-emotion-node="missing-data"' in s6
+    assert assembler.EMOTION_NODE_MISSING_TEXT in s6
+    assert "情绪节点日候选" not in s6
+
+
+def test_s6_emotion_node_judgment_label_cannot_be_removed(
+    assembler, tmp_path
+):
+    _write_chunks(tmp_path)
+    html = assembler.render_report(
+        tmp_path,
+        DATE,
+        emotion_leader_report=_emotion_leader_report(status="ok"),
+    )
+    invalid = _replace_once(
+        html,
+        "[判断] 哈药股份启动日2026-07-10",
+        "哈药股份启动日2026-07-10",
+    )
+
+    _assert_report_error(assembler, invalid, "invalid_emotion_node")
+
+
+def test_s3_emotion_leader_partial_cannot_be_rendered_as_empty_pool(
+    assembler, tmp_path
+):
+    _write_chunks(tmp_path)
+    payload = _emotion_leader_report()
+    payload["active"] = []
+    payload["summary"]["active_count"] = 0
+    html = assembler.render_report(
+        tmp_path,
+        DATE,
+        emotion_leader_report=payload,
+    )
+    assembler.validate_report(html)
+
+    assert 'data-emotion-leader="missing-data"' in html
+    assert assembler.EMOTION_LEADER_NONE_TEXT not in html
+
+
+def test_s3_emotion_leader_wave_label_must_remain_judgment(
+    assembler, tmp_path
+):
+    _write_chunks(tmp_path)
+    html = assembler.render_report(
+        tmp_path,
+        DATE,
+        emotion_leader_report=_emotion_leader_report(status="ok"),
+    )
+    invalid = _replace_once(html, "[判断] 多波", "多波")
+
+    _assert_report_error(assembler, invalid, "invalid_emotion_leader")
+
+
 def test_sector_concentration_verdict_must_be_unique_visible_and_labeled(
     assembler, tmp_path
 ):
@@ -6671,20 +6965,22 @@ def test_visible_character_budget_accepts_boundary_and_rejects_one_over(
 ):
     html, _ = _render_valid(assembler, tmp_path / "chunks")
     base = assembler.collect_metrics(html)
-    assert base.visible_chars < 10_000
+    limit = assembler.VISIBLE_CHAR_LIMIT
+    assert base.visible_chars < limit
 
-    at_limit = _visible(html, "甲" * (10_000 - base.visible_chars))
-    assert assembler.validate_report(at_limit).visible_chars == 10_000
+    at_limit = _visible(html, "甲" * (limit - base.visible_chars))
+    assert assembler.validate_report(at_limit).visible_chars == limit
     _assert_report_error(assembler, _visible(at_limit, "乙"))
 
 
 def test_unscoped_report_text_is_included_in_visible_budget(assembler, tmp_path):
     html, _ = _render_valid(assembler, tmp_path / "chunks")
     base = assembler.collect_metrics(html)
+    limit = assembler.VISIBLE_CHAR_LIMIT
 
-    at_limit = _unscoped(html, "甲" * (10_000 - base.visible_chars))
+    at_limit = _unscoped(html, "甲" * (limit - base.visible_chars))
     metrics = assembler.validate_report(at_limit)
-    assert metrics.visible_chars == 10_000
+    assert metrics.visible_chars == limit
     assert metrics.sections["document"].visible_chars > 0
     _assert_report_error(
         assembler,
@@ -7001,7 +7297,7 @@ def test_cli_accepts_explicit_capacity_manifest_path(tmp_path):
     assert output.exists()
 
 
-def test_cli_returns_nonzero_without_all_eight_chunks(tmp_path):
+def test_cli_returns_nonzero_without_all_seven_current_chunks(tmp_path):
     chunk_dir = tmp_path / "chunks"
     paths = _write_chunks(chunk_dir)
     paths[CHUNK_ORDER[-1]].unlink()

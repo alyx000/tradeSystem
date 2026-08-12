@@ -4,12 +4,12 @@
 
 ## 文件
 
-- `review_style.css` — 报告样式 **v2「纸面档案阅读器」**：米纸底色 + 衬线大标题 + 粘性顶栏/导航 + 阅读进度 + 表格横向滚动 + 证据展开/收起 + 回到顶部。正文 class 语义不变（tag t-fact/t-judge / kpi / callout.note/.risk/.warn / tr.hl / up/.down/.warn / p-up/.p-mid/.p-down / twocol / mono / num / src / sub）。
+- `review_style.css` — 报告样式 **v2「纸面档案阅读器」**：米纸底色 + 衬线大标题 + 粘性顶栏/导航 + 阅读进度 + 表格横向滚动 + 证据展开/收起 + 回到顶部，并包含 USD/CNY/1Y C-Swap 静态 SVG 在宽屏、窄屏与系统暗色模式下的样式。正文 class 语义不变（tag t-fact/t-judge / kpi / callout.note/.risk/.warn / tr.hl / up/.down/.warn / p-up/.p-mid/.p-down / twocol / mono / num / src / sub）。
 - `build_capacity_manifest.py` — 容量排名 sidecar 官方生成器：只读镜像、最多 3 个申万二级方向、全市场 `daily.amount` 排名、最近 5 个开放日连续性；禁止 Agent 手写 sidecar。
 - `build_new_high_structure_manifest.py` — 历史新高结构生成器：只读最近 251 个开放日，按 `daily.high × adj_factor` 生成滚动 60/120/250 日双日计数、行业结构与代表票；不写库。
-- `assemble_report.py` — 组装脚本（结构、Claim、证据、预算、外部依赖校验 + 阅读器外壳 + 原生 JS），用法见文件头。
+- `assemble_report.py` — 组装脚本（结构、Claim、证据、预算、外部依赖校验 + 阅读器外壳 + 原生 JS）；同时自动读取同日情绪核心 JSON 注入 `s3`，把打开高度对应的启动日候选注入 `s6`，并从已验证复盘档案汇总人民币外汇历史、向 `s1` 注入静态趋势图。用法见文件头。
 
-## Body chunk 骨架（8 块）
+## Body chunk 骨架（7 块）
 
 分块写便于逐节迭代；每块是纯 HTML 片段（无 `<html>`/`<head>`/`<body>`）：
 
@@ -20,8 +20,7 @@
 | `s1` | `s1`：①大势（境内大盘 + 大类资产 + 外汇掉期） |
 | `s2` | `s2`：②板块 |
 | `s456` | `s3`, `s4`, `s5`, `s6`：③情绪 + ④风格 + ⑤龙头 + ⑥节点 |
-| `s7t` | `s7`, `teachers`, `industry`, `cognition`, `exposure`：⑦持仓 + 🎓老师观点 + 📰行业信息 + 🧠认知对照 + 仓位环境与纪律参考（影子） |
-| `proj` | `proj`：🔭次日推演 |
+| `s7t` | `s7`, `teachers`, `industry`, `cognition`：⑦持仓 + 🎓老师观点 + 📰行业信息 + 🧠认知对照 |
 | `s8ops` | `s8`, `ops`：⑧次日计划 + 🔧数据缺口 + footer |
 
 ## 组装与硬校验
@@ -43,43 +42,27 @@ python3 .agents/skills/daily-review/references/html-report-template/assemble_rep
   --output data/reports/复盘_YYYY-MM-DD_compact.html
 ```
 
+组装器默认读取 `data/reports/emotion-leader/<REPORT_DATE>.json`，并从 `data/reports/复盘_*.html` 取最近最多 15 个已验证同日外汇点；仅在回归或迁移时使用 `--emotion-leader-report` / `--fx-history-dir` 改读路径。情绪源失败会生成显式 `missing-data`，外汇同日点少于 8 个工作日会保留历史不足说明，不补 0、不插值。
+
 sidecar 使用其他 helper 输出路径时显式传入；两个参数都只改变读取路径，不是跳过门禁：
 
 ```bash
 python3 .agents/skills/daily-review/references/html-report-template/assemble_report.py <scratchpad目录> <REPORT_DATE> \
   --capacity-manifest <容量sidecar路径> \
   --new-high-manifest <滚动新高sidecar路径> \
-  --trade-db data/trade.db --output <报告路径>
+  --output <报告路径>
 ```
 
-要点（`compact-v2` 外壳，17-anchor 期起）：
+要点（`compact-v2` 外壳，当前 15-anchor 布局）：
 
-- 8 个 chunk 必须齐全；17 个锚点 `tldr/factor/s0/s1/s2/s3/s4/s5/s6/s7/teachers/industry/cognition/exposure/proj/s8/ops` 必须按此顺序各出现一次。缺失、重复或乱序均拒绝生成。HTML 展示路径固定为“速览 → 三位一体重点因子 → ⓪前日判分 → ①–⑦ → 老师观点 → 行业信息 → 认知对照 → 仓位环境与纪律参考（影子） → 次日推演 → ⑧次日计划 → 数据缺口”。重点因子与仓位环境仍须在 9 路完整采集、八步复盘与认知对照综合完成后生成。
-- 旧的 15-anchor 临时 chunks、16-anchor（尚无 `exposure`）chunks，以及把 `factor` 留在 `proj` 的过渡 chunks，都必须按新归属重新生成；既有静态 HTML 仍可直接阅读，但不会被当前严格校验器当作 17-anchor 新契约报告重新验收。
+- 7 个正式 chunk 必须齐全；15 个锚点 `tldr/factor/s0/s1/s2/s3/s4/s5/s6/s7/teachers/industry/cognition/s8/ops` 必须按此顺序各出现一次。缺失、重复或乱序均拒绝生成。HTML 展示路径固定为“速览 → 三位一体重点因子 → ⓪前日判分 → ①–⑦ → 老师观点 → 行业信息 → 认知对照 → ⑧次日计划 → 数据缺口”。
+- 「仓位环境与纪律参考（影子）」和独立「次日推演」已从正式生成链路、桌面/移动导航与锚点契约移除。旧 17-anchor 静态 HTML 仍可直接阅读和迁移校验，但不得作为新报告模板。
 - 每节默认「1 句裁决 + 最多 3 条证据 + 1 条证伪或缺口」；无新增只写一行，不生成空表。
 - `s1` 不能只交付境内大盘。它必须有唯一默认可见 `data-big-picture="verdict"`，以及折叠证据中的唯一 `data-cross-asset-context` 和 `data-rmb-fx-observation`；报告日休市时三者的 `data-as-of` 仍指向最近事实日，`data-reviewed-through` 等于报告日。缺源只能使用结构化 `missing-data` 并在 `ops` 可见，不得静默通过。
+- `s1` 还必须由组装器生成唯一 `data-rmb-fx-chart="v1|missing-data"`：至少 8 个、最多 15 个同日工作日点；上图即期买卖算术中值与 1Y C-Swap 全价共用汇率轴，下图单列掉期点 Pips，图后附折叠数据表。chunk 自行注入、日期乱序、数值越界或价格语义缺失均拒绝生成。
+- `s3` 的情绪核心生命周期由组装器从同日 JSON 自动注入唯一 `data-emotion-leader="v1|none|missing-data"`。`v1` 默认可见状态/覆盖/刷新/计数/晋级与二板候选，前 12 只活跃核心进入折叠证据；波段逐行标 `[判断]`。只有 `ok` 真空池允许 `none`，`partial/source_failed` 不得伪装为空池或 0。
+- `s6` 还由组装器从同一 JSON 自动注入唯一 `data-emotion-node="v1|none|missing-data"`。仅当目标日非 ST 二板及以上的最高连板数严格超过此前 20 个完整开放日的最高值时使用 `v1`：高度对比标 `[事实]`，打开高度核心的生命周期启动日只标为 `[判断] 情绪节点日候选`。比较窗、目标日涨停事实或启动日对账不完整必须用 `missing-data`，不得写成 `none`。
 - `factor` 默认显示主因子、第一辅助、其余因子变化和切换/失效状态。章节容器必须是默认可见的 `<section class="blk" id="factor">`，并声明 `data-factor-mode="formal|rule_only|shadow|no_data"`：有分析时须有且仅有 1 个默认可见 judgment Claim、1～3 个默认可见 `<li>`、1 个默认可见 `data-factor-role="status"`；Claim / `<li>` 必须各自有可见的 `[事实]/[判断]` 标签和实质正文，正文不得藏进后代 `hidden`。状态节点不得藏入普通 `<details>` / `hidden`，且只接受与 mode 对应的规范模板：`formal=正式 factor-score 已完成`、`rule_only=rule_only 结果`；`shadow` 只能使用“正式评分停在日期 / 本日未运行 / 本日尚未评分 / 完成条件未满足”之一，并同时写明“影子口径、不写库”。唯一 `data-evidence-kind="factor-detail"` 折叠证据须实际含 `market_node / sector_rhythm / style_regime / leader_signal`。`no_data` 只允许标题和唯一 `<p data-factor-role="no-data">[事实] 本日无新增/本日无可判数据</p>`。完整四因子证据卡与切换对账不再归到 `s8`。
-- `exposure` 固定为 `<section class="blk" id="exposure" data-exposure-mode="shadow|fallback|conflicted|no_data" data-exposure-tier="defensive|cautious|neutral|constructive|undetermined" data-exposure-boundary="read-only-environment-rating">`。唯一可见 judgment Claim 严格归属报告日并使用受控短句；中文档位固定为 `防守档 / 谨慎档 / 中性档 / 偏积极档 / 不可判`。`market / cognition / teacher` 三类来源不再默认展开：各自必须与同名 `data-exposure-evidence` 合并成唯一折叠 `<p>`，按此顺序放入报告日唯一 `exposure-detail`。完整市场/老师来源严格等于报告日，老师只认 `teacher_notes.date`；认知分别保留 availability 与真实 lifecycle。真实 `active AND category=sizing` 用于标准 `shadow`，candidate-only 只能触发低置信 `fallback`，不得决定档位方向。
-- `fallback+cautious` 默认可见区必须恰好 4 个业务段落：①短结论；②`confirm-if=full-close-upside-gate` 上行门；③`invalidate-if=full-close-downside-gate` 下行门；④`review-rule` 缺口/复核。禁止重新增加独立 `recommendation / status / portfolio-status / portfolio-evidence` 可见段落，也禁止在可见区复述市场、认知或老师观点。上行门绑定报告日成交额基线、观察指数数量、MA20/MA5、跌停上限和组合对账；下行门绑定广度、MA5 与跌停下限。`review-rule` 带完整连续的 `trade_calendar` 自然日脊柱，并只压缩显示会影响结论的组合缺口和复核/顺延日。
-- 唯一 `exposure-detail` 固定 `data-items="4"`：前三项是合并后的 market/cognition/teacher 来源与证据，第 4 项是 `data-exposure-evidence="portfolio"`。portfolio 状态只接受 `not-read / unreconciled`；未对齐时用结构化属性和规范文本保留 active holdings、未关联 thesis、open thesis、非作废成交及券商最新业务日，未读取时使用类型化 `lookup:portfolio:<报告日>`。四项都必须有类型化记录/查询引用、来源日期、非空正文和边界；details 默认收起，但容器、summary、evidence-body、证据节点及其实质正文都不得再被显式或祖先 `hidden`。
-- 正式验收从只读 `data/trade.db`（或显式 `--trade-db`）加载事实：成交额门槛精确等于 `daily_market.total_amount`，复核日历逐日状态精确等于 `trade_calendar`；任一 mode 的 `unreconciled` 都会触发 context 加载，并把 active holdings、未关联 thesis、open thesis、关联非作废成交及券商最新业务日逐字段对齐 `holdings / trade_thesis / broker_executions`；`fallback+cautious` 已读取组合事实，不允许改报 `not-read`。HTML 内同步改值、自报组合计数或自报周末开放日都会拒绝落盘。`holdings` 仅有当前状态、没有历史快照，因此该项证明的是组装时 canonical 当前组合状态，不得标成报告日收盘持仓快照。其他 `fallback` 的确认/失效条件仍只允许 market-only 枚举；`conflicted/no_data` 固定 `undetermined` 并在数据缺口可见。整个章节（含折叠证据）执行 Unicode 归一化和比例/操作指令护栏；默认可见实质正文只能归属唯一 Claim 或已知 role，任意无 role `<p>/<div>` 都拒绝。
-- `fallback` 的合并 market 来源/证据携带三项受控状态：`data-market-breadth-state="weak|improving|stable"`、`data-market-volume-state="weak|stable|improving"`、`data-market-structure-state="weak|unconfirmed|stable"`。组装器只用这三项纯函数重算档位：广度与结构同时 `weak` 为 `defensive`；广度非 `weak`、量能非 `weak` 且结构为 `stable` 时为 `neutral`；其余合法组合均为 `cautious`。HTML 声明 tier 必须与重算结果一致。
-- `data-exposure-condition` 固定枚举：`fallback+cautious` 只接受 `full-close-upside-gate / full-close-downside-gate`；其他路径的确认条件可选 `market-structure-holds / volume-breadth-improves / risk-signals-ease / sources-remain-aligned`，失效条件可选 `market-structure-weakens / volume-breadth-deteriorates / risk-signals-worsen / source-conflict-emerges`；可见句子必须与组装器按结构化属性重建的规范文本完全一致。
-
-受控条件的键和值：
-
-| role | `data-exposure-condition` | 固定可见文本 |
-|---|---|---|
-| `confirm-if` | `full-close-upside-gate` | `[判断] 上行门（六项全满足）：成交额 ≥ {data-turnover-floor-yiyuan} 亿元、上涨家数占优、至少 {data-ma20-recovery-min} 个核心宽基收回 MA20、{data-index-universe-size} 个观察指数中至少 {data-ma5-hold-min} 个站上 MA5、跌停 ≤ {data-limit-down-max}、组合完成对账。` |
-| `invalidate-if` | `full-close-downside-gate` | `[判断] 下行门（任一成立）：上涨家数不多于下跌家数且跌停 ≥ {data-limit-down-min}，或 {data-index-universe-size} 个观察指数中至少 {data-ma5-break-min} 个收盘低于 MA5。` |
-| `confirm-if` | `market-structure-holds` | `[判断] 上行门：次日指数结构与市场节点维持。` |
-| `confirm-if` | `volume-breadth-improves` | `[判断] 上行门：次日量能与涨跌家数改善。` |
-| `confirm-if` | `risk-signals-ease` | `[判断] 上行门：次日跌停与高位负反馈缓和。` |
-| `confirm-if` | `sources-remain-aligned` | `[判断] 上行门：次日市场事实继续与认知、老师观点一致。` |
-| `invalidate-if` | `market-structure-weakens` | `[判断] 下行门：次日指数结构或市场节点转弱。` |
-| `invalidate-if` | `volume-breadth-deteriorates` | `[判断] 下行门：次日缩量且下跌家数扩散。` |
-| `invalidate-if` | `risk-signals-worsen` | `[判断] 下行门：次日跌停或高位负反馈扩散。` |
-| `invalidate-if` | `source-conflict-emerges` | `[判断] 下行门：次日市场事实与认知、老师观点出现实质冲突。` |
 - Claim owner 使用唯一 `id="claim-*"`；跨节引用使用匹配的 `data-claim-ref="claim-*"`，每个 owner 最多 1 个短引用。悬空引用、重复 owner 或多次引用均拒绝生成。
 - 完整证据使用默认收起的 `<details class="evidence" data-as-of="YYYY-MM-DD" data-items="N"><summary>…</summary>…</details>`；summary 后必须有非空文本、表格或内嵌媒体。搜索命中折叠证据时临时展开，退出搜索后恢复原状态；“展开/收起全部”只控制证据区。
 - 外壳纯静态、无外部依赖；报告正文禁止 `script/style/form/iframe/object/embed`、事件属性和 `javascript:` URL，禁止远程 `src`/样式、CDN、`fetch`、XHR 与 WebSocket；普通来源超链接可以保留。
@@ -173,6 +156,10 @@ python3 .agents/skills/daily-review/references/html-report-template/assemble_rep
 
 `section#s6` 必须保留节点与未来一周事件窗：
 
+- 情绪节点联动与未来事件窗是两个独立模块，互不替代。全页必须且只能有一份组装器生成的 `data-emotion-node="v1|none|missing-data"`；chunk 自行注入直接拒绝生成。
+- `v1` 必须带 `data-lookback-open-days="20"`、目标日/此前窗口最高板数、此前窗口起止日以及至少一只打开高度核心；默认可见正文同时包含 `[事实] 打开非ST连板高度` 和 `[判断] 启动日…情绪节点日候选`，折叠表逐票显示代码、当日高度、启动日与启动日来源。启动日不得晚于报告日。
+- 未打开高度时使用规范 `none` 事实句；20 个开放日比较窗、目标日涨停事实或启动日对账任一不完整时使用 `missing-data`，禁止把缺口解释为“未触发”。节点候选只是一条需结合事件日历和市场/板块结构复核的 `[判断]`。
+
 - 默认可见正文必须有且仅有 1 个 `<p data-event-window="verdict">`，位于 `details` / `hidden` 之外，只写 1 句带 `[事实]` 或 `[判断]` 标签的事件窗裁决。
 - 证据层必须三选一且全页唯一：非空 `<table data-event-window="v1">`、`<p data-event-window="none">` 或 `<p data-event-window="missing-data">`。三者均须携带 `data-window-start`（报告日 +1）、`data-window-end`（报告日 +7）、`data-as-of` 与 `data-source-status`，精确覆盖报告日后的 7 个自然日；表格的 `data-source-status` 只能为 `complete`。
 - 表格每个事件行必须显示事件日期、该日 `交易 / 休市` 状态、事件内容及其是否影响次日验证；只收录会影响次日验证的时间窗口。
@@ -183,7 +170,7 @@ python3 .agents/skills/daily-review/references/html-report-template/assemble_rep
 | 区域 | 非空白字符 | 表格 | 表格行 |
 |---|---:|---:|---:|
 | `tldr` | ≤ 500 | 计入正文 | 计入正文 |
-| 默认可见正文 | 目标 ≤ 6,000；硬上限 10,000 | ≤ 12 | ≤ 80 |
+| 默认可见正文 | 目标 ≤ 6,000；硬上限 10,500 | ≤ 12 | ≤ 80 |
 | `details.evidence` 折叠层 | ≤ 40,000 | ≤ 60 | ≤ 400 |
 
 组装器按章节计算并报告用量；超过硬上限时指出责任章节并非零退出，不自动截断、改写或把冗余移入折叠层。

@@ -211,3 +211,44 @@ a{color:inherit}
 .report-document details:not(.evidence)>blockquote{border:0;margin:0;background:transparent;padding:12px 18px}
 .report-document [data-claim-ref]{text-decoration-color:#ad3b3270;text-underline-offset:3px}
 .report-document [id^=claim-]{scroll-margin-top:118px}
+
+/* USD/CNY 即期与 1Y C-Swap：服务端静态 SVG，离线/打印均可读 */
+.report-document .fx-chart{margin:24px 0 12px;border:1px solid var(--line);
+  background:#f8f7f2;padding:18px 18px 14px;overflow:hidden}
+.report-document .fx-chart figcaption{display:grid;gap:4px;margin-bottom:8px}
+.report-document .fx-chart figcaption strong{font-size:19px;line-height:1.45}
+.report-document .fx-chart figcaption span{color:var(--muted);font-size:12px;line-height:1.6}
+.report-document .fx-chart>p{color:var(--muted);margin:8px 0 4px;font-size:12.5px}
+.report-document .fx-chart svg{display:block;width:100%;height:auto;min-width:620px;
+  color:var(--ink);font-family:"PingFang SC","Microsoft YaHei",system-ui,sans-serif}
+.report-document .fx-grid{stroke:#8b949933;stroke-width:1}
+.report-document .fx-line{fill:none;stroke-width:3;stroke-linejoin:round;stroke-linecap:round}
+.report-document .fx-dot{fill:var(--surface);stroke-width:2.2}
+.report-document .fx-spot{stroke:#3182bd}.report-document .fx-forward{stroke:#e5863b}
+.report-document .fx-swap{stroke:#38a169}
+.report-document .fx-panel-title{fill:currentColor;font-size:17px;font-weight:700}
+.report-document .fx-axis-label{fill:var(--muted);font-size:12px;font-variant-numeric:tabular-nums}
+.report-document .fx-legend{stroke-width:4}.report-document .fx-legend-text{fill:currentColor;font-size:12px}
+.report-document .fx-latest{font-size:12px;font-weight:700;font-variant-numeric:tabular-nums}
+.report-document .fx-spot-text{fill:#2472aa}.report-document .fx-forward-text{fill:#c96824}
+.report-document .fx-swap-text{fill:#2b8a55}
+.report-document .fx-chart .chart-data{margin:10px 0 0}
+.report-document .emotion-leader>p{margin:10px 0}
+@media (max-width:700px){
+  .report-document .fx-chart{margin-inline:0;padding:14px 10px 10px;overflow-x:auto}
+  .report-document .fx-chart svg{width:760px}
+}
+@media (prefers-color-scheme:dark){
+  .report-document .fx-chart{background:#161a1d;border-color:#394248;color:#edf2f3}
+  .report-document .fx-chart .fx-dot{fill:#161a1d}
+  .report-document .fx-chart .fx-grid{stroke:#d9e0e226}
+  .report-document .fx-chart .fx-axis-label,
+  .report-document .fx-chart figcaption span,
+  .report-document .fx-chart>p{color:#aeb9bd;fill:#aeb9bd}
+  .report-document .fx-chart .fx-spot{stroke:#74b9f2}
+  .report-document .fx-chart .fx-forward{stroke:#ff9d52}
+  .report-document .fx-chart .fx-swap{stroke:#72d491}
+  .report-document .fx-chart .fx-spot-text{fill:#74b9f2}
+  .report-document .fx-chart .fx-forward-text{fill:#ff9d52}
+  .report-document .fx-chart .fx-swap-text{fill:#72d491}
+}

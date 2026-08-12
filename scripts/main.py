@@ -1951,6 +1951,10 @@ def build_parser() -> argparse.ArgumentParser:
     from cli.board_break import register_subparser as register_board_break_subparser
     register_board_break_subparser(subparsers)
 
+    # emotion-leader (连板启动→情绪核心晋级→前复权生命周期统计;只读观察清单)
+    from cli.emotion_leader import register_subparser as register_emotion_leader_subparser
+    register_emotion_leader_subparser(subparsers)
+
     # tail-scan (盘中尾盘强势股:14:30实时筛涨幅>7%/非ST/成交额>20亿 → 四维事实卡+LLM两两PK观察清单;无状态)
     from cli.tail_scan import register_subparser as register_tail_scan_subparser
     register_tail_scan_subparser(subparsers)
@@ -2073,6 +2077,11 @@ def main():
     elif args.command == "board-break":
         from cli import board_break as board_break_module
         board_break_module.handle_command(config, args)
+    elif args.command == "emotion-leader":
+        from cli import emotion_leader as emotion_leader_module
+        exit_code = emotion_leader_module.handle_command(config, args)
+        if exit_code:
+            raise SystemExit(exit_code)
     elif args.command == "tail-scan":
         from cli import tail_scan as tail_scan_module
         tail_scan_module.handle_command(config, args)

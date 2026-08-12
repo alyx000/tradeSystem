@@ -482,6 +482,12 @@ ARCHITECTURE_COMMANDS = [
     ["board-break", "daily", "--no-push"],
     ["board-break", "daily", "--no-llm"],
     ["board-break", "daily", "--date", "2026-07-04", "--no-push", "--no-llm"],
+    # emotion-leader (连板启动→情绪核心晋级→生命周期统计;只读观察清单)
+    ["emotion-leader", "daily"],
+    ["emotion-leader", "daily", "--date", "2026-08-11"],
+    ["emotion-leader", "daily", "--dry-run"],
+    ["emotion-leader", "daily", "--no-push"],
+    ["emotion-leader", "daily", "--json", "--lookback-days", "90", "--max-rows", "20", "--full-refresh"],
     # tail-scan (盘中尾盘强势股:实时筛选 → 四维PK观察清单;无状态)
     ["tail-scan", "daily"],
     ["tail-scan", "daily", "--date", "2026-07-13"],

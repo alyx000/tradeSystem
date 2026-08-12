@@ -4,8 +4,11 @@
 用法：
     python3 assemble_report.py <TMP目录> <YYYY-MM-DD> [--output PATH]
 
-TMP 必须包含 8 个 chunk：
-    b<DATE>_{head,s0,s1,s2,s456,s7t,proj,s8ops}.html
+TMP 必须包含 7 个正式 chunk：
+    b<DATE>_{head,s0,s1,s2,s456,s7t,s8ops}.html
+
+新版正式报告不再生成「仓位环境与纪律参考（影子）」和「次日推演」。
+组装器仍可以校验已归档的旧版 8-chunk HTML，但新生成默认走 7-chunk 布局。
 
 默认输出 ``data/reports/复盘_<DATE>.html``；``--output`` 可用于生成不覆盖正式
 档案的验收样例。组装器只做确定性校验，不会在超限时自动删字或截表。
@@ -71,9 +74,29 @@ NAV_LABELS = {
 }
 NAV = tuple((anchor, NAV_LABELS[anchor]) for anchor in REQUIRED_ANCHORS)
 
+CURRENT_REPORT_LAYOUT = "without-exposure-proj"
+CURRENT_CHUNK_ORDER = ("head", "s0", "s1", "s2", "s456", "s7t", "s8ops")
+CURRENT_ANCHOR_MAP = {
+    "head": ("tldr", "factor"),
+    "s0": ("s0",),
+    "s1": ("s1",),
+    "s2": ("s2",),
+    "s456": ("s3", "s4", "s5", "s6"),
+    "s7t": ("s7", "teachers", "industry", "cognition"),
+    "s8ops": ("s8", "ops"),
+}
+CURRENT_REQUIRED_ANCHORS = tuple(
+    anchor
+    for chunk in CURRENT_CHUNK_ORDER
+    for anchor in CURRENT_ANCHOR_MAP[chunk]
+)
+CURRENT_NAV = tuple(
+    (anchor, NAV_LABELS[anchor]) for anchor in CURRENT_REQUIRED_ANCHORS
+)
+
 TLDR_CHAR_LIMIT = 500
 VISIBLE_CHAR_TARGET = 6_000
-VISIBLE_CHAR_LIMIT = 10_000
+VISIBLE_CHAR_LIMIT = 10_500
 VISIBLE_TABLE_LIMIT = 12
 VISIBLE_ROW_LIMIT = 80
 EVIDENCE_CHAR_LIMIT = 40_000
@@ -229,30 +252,16 @@ EXPOSURE_EVIDENCE_LOOKUP_RES = {
     "teacher": re.compile(r"^lookup:teacher_notes:\d{4}-\d{2}-\d{2}$"),
     "portfolio": re.compile(r"^lookup:portfolio:\d{4}-\d{2}-\d{2}$"),
 }
+# 2026-07-25 用户裁定：**「不给仓位建议」红线全系统删除**，`exposure` 可以直接给档位与比例
+# （五成 / 七成 / 动态满仓 / 加仓 / 减仓 / 风险预算升降档 …）。
+#
+# 但顶层红线清单里「不做具体买卖建议」用户未要求删除，故本门**只收窄不拆除**：仓位族全部移出，
+# 买卖动作族（买入 / 卖出 / 增持 / 减持 / 清仓 / 建仓 …）保留。两条红线原先混在同一个正则里，
+# 整个删掉会连买卖门一起失守——这是收窄而非拆除的唯一理由，改动此处前请先确认是哪条红线要动。
 EXPOSURE_DISALLOWED_VISIBLE_RE = re.compile(
-    r"(?:回落至(?:目标|防守档|谨慎档|中性档|偏积极档)|"
-    r"升一档|降一档|保持不变|(?<!不)自动调整|"
-    r"加仓|减仓|增仓|降仓|扩仓|缩仓|提仓|控仓|"
-    r"清仓|建仓|补仓|满仓|空仓|重仓|轻仓|梭哈|"
-    r"买入|卖出|买进|抛出|持有|增持|减持|增配|减配|降配|"
-    r"加码|减码|进场|离场|介入|退出|回避|半仓(?:位)?|"
-    r"(?:上调|下调|调高|调低|提高|降低|提升|增加|减少|扩大|收缩|维持).{0,4}"
-    r"(?:仓位|持仓|头寸|敞口|风险敞口|风险暴露|配置)|"
-    r"(?:仓位|持仓|头寸|敞口|风险敞口|风险暴露|配置).{0,4}"
-    r"(?:上调|下调|调高|调低|提高|降低|提升|增加|减少|扩大|收缩|维持|一半|对半|五五开)|"
-    r"(?:风险预算).{0,10}(?:回落|升一档|降一档|升档|降档|保持不变|对齐|自动调整)|"
-    r"(?:回落|升一档|降一档|升档|降档|保持不变|对齐|自动调整).{0,10}(?:风险预算)|"
-    r"[零一二三四五六七八九十两\d]+成仓|"
-    r"\d{1,3}\s*/\s*\d{1,3}\s*(?:仓|仓位|持仓|头寸|敞口|风险敞口|风险暴露|配置)|"
-    r"(?:0?\.\d+|1\.0+)\s*(?:仓|仓位|持仓|头寸|敞口|风险敞口|风险暴露|配置)|"
-    r"[零一二三四五六七八九十百两]+分之[零一二三四五六七八九十百两]+"
-    r"\s*(?:仓|仓位|持仓|头寸|敞口|风险敞口|风险暴露|配置)|"
-    r"(?:仓位|持仓|头寸|敞口|风险敞口|风险暴露|配置).{0,8}(?:\d{1,3}(?:\.\d+)?\s*%|"
-    r"百分之[零一二三四五六七八九十百两\d]+|[零一二三四五六七八九十两\d]+成|"
-    r"\d{1,3}\s*/\s*\d{1,3}|(?:0?\.\d+|1\.0+)|"
-    r"[零一二三四五六七八九十百两]+分之[零一二三四五六七八九十百两]+)|"
-    r"(?:\d{1,3}(?:\.\d+)?\s*%|百分之[零一二三四五六七八九十百两\d]+|"
-    r"[零一二三四五六七八九十两\d]+成).{0,8}(?:仓位|持仓|头寸|敞口|风险敞口|风险暴露|配置))"
+    r"(?:买入|卖出|买进|抛出|持有|增持|减持|增配|减配|降配|"
+    r"加码|减码|进场|离场|介入|退出|回避|"
+    r"清仓|建仓|补仓)"
 )
 EXPOSURE_FALLBACK_CARD_VISIBLE_MARKERS = (
     "[判断]上行门(六项全满足):",
@@ -316,6 +325,9 @@ STRUCTURED_CONTRACT_ATTRIBUTES = (
     "data-big-picture",
     "data-cross-asset-context",
     "data-rmb-fx-observation",
+    "data-rmb-fx-chart",
+    "data-emotion-leader",
+    "data-emotion-node",
     "data-sector-concentration",
     "data-sector-labels",
     "data-rising-recognition",
@@ -347,6 +359,30 @@ RMB_FX_AVAILABLE_ROW_STATUSES = frozenset({"ok", "latest_available"})
 RMB_FX_ROW_STATUSES = frozenset(
     {*RMB_FX_AVAILABLE_ROW_STATUSES, "missing"}
 )
+RMB_FX_CHART_MISSING_TEXT = (
+    "[事实]USD/CNY即期与1YC-Swap可用同日历史不足8个工作日，暂不绘制趋势图"
+)
+RMB_FX_CHART_MIN_POINTS = 8
+RMB_FX_CHART_MAX_POINTS = 15
+EMOTION_LEADER_MISSING_TEXT = (
+    "[事实]情绪核心生命周期报告缺失或不可解析，本日无法完成该模块"
+)
+EMOTION_LEADER_NONE_TEXT = "[事实]本日情绪核心生命周期活跃池为空"
+EMOTION_LEADER_MAX_ROWS = 12
+EMOTION_LEADER_CODE_RE = re.compile(r"^\d{6}\.(?:SH|SZ|BJ)$")
+EMOTION_LEADER_STATUSES = frozenset({"ok", "partial", "source_failed"})
+EMOTION_LEADER_WAVE_LABELS = frozenset(
+    {"单波", "二波", "多波", "二波候选", "多波候选", "未计算"}
+)
+EMOTION_NODE_NONE_TEXT = (
+    "[事实]今日非ST连板最高高度未超过近20个开放日高度,"
+    "未触发情绪启动日节点联动"
+)
+EMOTION_NODE_MISSING_TEXT = (
+    "[事实]情绪高度节点证据不完整,本日无法判定启动日节点联动"
+)
+EMOTION_NODE_LOOKBACK_OPEN_DAYS = 20
+EMOTION_NODE_LAUNCH_METHODS = frozenset({"limit_chain", "calendar_inferred"})
 SECTOR_CONCENTRATION_NONE_TEXT = "[事实]本日无可用板块集中度数据"
 SECTOR_CONCENTRATION_MISSING_TEXT = "[事实]板块集中度数据不完整，本日无法判定"
 SECTOR_LABELS_NONE_TEXT = "[事实]本日半年线、年线与近期价量共振标签均无命中板块"
@@ -561,6 +597,14 @@ class _StructuredContract:
     text: list[str] = field(default_factory=list)
     rendered_text: list[str] = field(default_factory=list)
     rows: list[_StructuredRow] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class _FxChartPoint:
+    source_date: str
+    spot_mid: float
+    forward_rate: float
+    swap_point_pips: float
 
 
 @dataclass
@@ -1021,7 +1065,7 @@ class _ReportParser(HTMLParser):
         }
         self.anchors_seen: list[str] = []
         self.chunks: list[str] = []
-        self.schema_hosts: list[tuple[str, str, str | None, str]] = []
+        self.schema_hosts: list[tuple[str, str, str | None, str, str]] = []
         self.evidences: list[_Evidence] = []
         self.claims: dict[str, _Claim] = {}
         self.claim_refs: list[tuple[str, str, str | None]] = []
@@ -1327,7 +1371,7 @@ class _ReportParser(HTMLParser):
             ):
                 self._error(
                     "invalid_exposure_contract",
-                    "exposure 全部属性不得携带仓位比例或操作指令",
+                    "exposure 全部属性不得携带买卖动作指令（仓位比例已于 2026-07-25 解禁）",
                     section="exposure",
                 )
 
@@ -1507,7 +1551,13 @@ class _ReportParser(HTMLParser):
         schema = attrs.get("data-report-schema")
         if schema is not None:
             self.schema_hosts.append(
-                (schema, tag, element_id, attrs.get("data-report-date", ""))
+                (
+                    schema,
+                    tag,
+                    element_id,
+                    attrs.get("data-report-date", ""),
+                    attrs.get("data-report-layout", ""),
+                )
             )
 
         if element_id:
@@ -2046,7 +2096,7 @@ class _ReportParser(HTMLParser):
         if EXPOSURE_DISALLOWED_VISIBLE_RE.search(all_exposure_text):
             raise ReportValidationError(
                 "invalid_exposure_contract",
-                "exposure 全部内容不得给仓位比例或加减仓指令",
+                "exposure 全部内容不得给具体买卖指令（仓位比例已于 2026-07-25 解禁）",
                 section="exposure",
             )
         if (mode, tier) != ("fallback", "cautious") and any(
@@ -3286,6 +3336,332 @@ class _ReportParser(HTMLParser):
                     section="s1",
                 )
 
+    def _validate_rmb_fx_chart_contract(self, report_date: date_type) -> None:
+        contracts = self.structured_contracts["data-rmb-fx-chart"]
+        if len(contracts) != 1:
+            raise ReportValidationError(
+                "invalid_rmb_fx_chart",
+                "s1 必须且只能包含一份人民币即期与外汇掉期趋势图状态",
+                section="s1",
+            )
+        contract = contracts[0]
+        compact_text = re.sub(
+            r"\s+", "", "".join(contract.rendered_text)
+        ).rstrip("。.;；")
+        if contract.section != "s1":
+            raise ReportValidationError(
+                "invalid_rmb_fx_chart", "人民币外汇趋势图只能位于 s1", section="s1"
+            )
+        if contract.value == "missing-data":
+            if (
+                contract.tag != "p"
+                or contract.attrs.get("data-as-of") != report_date.isoformat()
+                or contract.attrs.get("data-source-status") != "insufficient-history"
+                or compact_text != RMB_FX_CHART_MISSING_TEXT
+            ):
+                raise ReportValidationError(
+                    "invalid_rmb_fx_chart",
+                    "趋势图历史不足态必须显式说明少于 8 个同日工作日数据",
+                    section="s1",
+                )
+            return
+        point_count = _bounded_int_attr(
+            contract.attrs,
+            "data-point-count",
+            minimum=RMB_FX_CHART_MIN_POINTS,
+            maximum=RMB_FX_CHART_MAX_POINTS,
+        )
+        start_date = contract.attrs.get("data-start-date", "")
+        end_date = contract.attrs.get("data-end-date", "")
+        if (
+            contract.value != "v1"
+            or contract.tag != "figure"
+            or contract.default_hidden
+            or contract.attrs.get("data-source-status") not in {"complete", "partial"}
+            or contract.attrs.get("data-source") != "chinamoney:validated-review-archive"
+            or contract.attrs.get("data-reviewed-through") != report_date.isoformat()
+            or contract.attrs.get("data-as-of") != end_date
+            or not _valid_date(start_date)
+            or not _valid_date(end_date)
+            or not start_date < end_date <= report_date.isoformat()
+            or point_count is None
+            or len(contract.rows) != point_count + 1
+            or "[事实]" not in compact_text
+            or "即期买卖算术中值" not in compact_text
+            or "1YC-Swap全价" not in compact_text
+            or "掉期点" not in compact_text
+        ):
+            raise ReportValidationError(
+                "invalid_rmb_fx_chart",
+                "完整趋势图必须可见、含 8-15 个同日点、三条序列、来源与价格语义",
+                section="s1",
+            )
+        seen_dates: list[str] = []
+        for row in contract.rows[1:]:
+            attrs = row.attrs
+            source_date = attrs.get("data-source-date", "")
+            spot = _finite_float(attrs.get("data-spot-mid"))
+            forward = _finite_float(attrs.get("data-forward-rate"))
+            swap = _finite_float(attrs.get("data-swap-point-pips"))
+            visible = re.sub(r"\s+", "", "".join(row.rendered_text))
+            if (
+                not _valid_date(source_date)
+                or source_date in seen_dates
+                or spot is None
+                or forward is None
+                or swap is None
+                or not 5 < spot < 9
+                or not 5 < forward < 9
+                or abs(swap) > 10_000
+                or source_date not in visible
+            ):
+                raise ReportValidationError(
+                    "invalid_rmb_fx_chart",
+                    "趋势图数据行必须使用唯一来源日和有效的即期、全价、掉期点",
+                    section="s1",
+                )
+            seen_dates.append(source_date)
+        if seen_dates != sorted(seen_dates) or seen_dates[0] != start_date or seen_dates[-1] != end_date:
+            raise ReportValidationError(
+                "invalid_rmb_fx_chart",
+                "趋势图日期必须严格升序并与起止元数据一致",
+                section="s1",
+            )
+
+    def _validate_emotion_leader_contract(self, report_date: date_type) -> None:
+        contracts = self.structured_contracts["data-emotion-leader"]
+        if len(contracts) != 1:
+            raise ReportValidationError(
+                "invalid_emotion_leader",
+                "s3 必须且只能包含一份情绪核心生命周期模块",
+                section="s3",
+            )
+        contract = contracts[0]
+        compact_text = re.sub(
+            r"\s+", "", "".join(contract.rendered_text)
+        ).rstrip("。.;；")
+        if (
+            contract.section != "s3"
+            or contract.attrs.get("data-as-of") != report_date.isoformat()
+        ):
+            raise ReportValidationError(
+                "invalid_emotion_leader",
+                "情绪核心生命周期模块必须位于 s3 且与报告日同日",
+                section="s3",
+            )
+        source_status = contract.attrs.get("data-source-status", "")
+        if contract.value == "missing-data":
+            if (
+                contract.tag != "p"
+                or source_status != "failed"
+                or compact_text != EMOTION_LEADER_MISSING_TEXT
+            ):
+                raise ReportValidationError(
+                    "invalid_emotion_leader",
+                    "情绪核心缺失态必须显式标记 failed，不能伪装为空池",
+                    section="s3",
+                )
+            return
+        if contract.value == "none":
+            if (
+                contract.tag != "p"
+                or source_status != "ok"
+                or compact_text != EMOTION_LEADER_NONE_TEXT
+            ):
+                raise ReportValidationError(
+                    "invalid_emotion_leader",
+                    "情绪核心空池仅允许由 ok 状态给出",
+                    section="s3",
+                )
+            return
+
+        int_keys = (
+            "data-active-count",
+            "data-archived-count",
+            "data-today-limit-up-count",
+            "data-new-peak-count",
+            "data-promoted-count",
+            "data-candidate-count",
+            "data-displayed-count",
+            "data-error-count",
+            "data-coverage-loaded",
+            "data-coverage-expected",
+            "data-refreshed-count",
+        )
+        counts = {
+            key: _bounded_int_attr(contract.attrs, key, minimum=0, maximum=100_000)
+            for key in int_keys
+        }
+        displayed = counts["data-displayed-count"]
+        if (
+            contract.value != "v1"
+            or contract.tag != "div"
+            or contract.default_hidden
+            or source_status not in {"ok", "partial"}
+            or any(value is None for value in counts.values())
+            or displayed is None
+            or not 1 <= displayed <= EMOTION_LEADER_MAX_ROWS
+            or counts["data-active-count"] < displayed
+            or counts["data-coverage-loaded"] > counts["data-coverage-expected"]
+            or len(contract.rows) != displayed + 1
+            or not contract.attrs.get("data-refresh-mode")
+            or f"状态{source_status}" not in compact_text
+            or f"活跃{counts['data-active-count']}" not in compact_text
+            or f"归档{counts['data-archived-count']}" not in compact_text
+            or "今日晋级核心" not in compact_text
+            or "新增二连板候选" not in compact_text
+        ):
+            raise ReportValidationError(
+                "invalid_emotion_leader",
+                "情绪核心完整态必须包含可见状态、覆盖、刷新、计数与前 12 只明细",
+                section="s3",
+            )
+        seen_codes: set[str] = set()
+        for row in contract.rows[1:]:
+            code = row.attrs.get("data-code", "").upper()
+            wave = row.attrs.get("data-wave-label", "")
+            metric_status = row.attrs.get("data-metric-status", "")
+            visible = re.sub(r"\s+", "", "".join(row.rendered_text))
+            if (
+                not EMOTION_LEADER_CODE_RE.fullmatch(code)
+                or code in seen_codes
+                or wave not in EMOTION_LEADER_WAVE_LABELS
+                or metric_status not in {"ok", "source_failed"}
+                or code not in visible
+                or f"[判断]{wave}" not in visible
+            ):
+                raise ReportValidationError(
+                    "invalid_emotion_leader",
+                    "情绪核心行必须带唯一代码、波段判断标签和指标状态",
+                    section="s3",
+                )
+            seen_codes.add(code)
+
+    def _validate_emotion_node_contract(self, report_date: date_type) -> None:
+        contracts = self.structured_contracts["data-emotion-node"]
+        if len(contracts) != 1:
+            raise ReportValidationError(
+                "invalid_emotion_node",
+                "s6 必须且只能包含一份情绪高度节点联动",
+                section="s6",
+            )
+        contract = contracts[0]
+        compact_text = re.sub(r"\s+", "", "".join(contract.rendered_text)).rstrip(
+            "。.;；"
+        )
+        if (
+            contract.section != "s6"
+            or contract.attrs.get("data-as-of") != report_date.isoformat()
+            or contract.default_hidden
+        ):
+            raise ReportValidationError(
+                "invalid_emotion_node",
+                "情绪高度节点联动必须默认可见、位于 s6 且与报告日同日",
+                section="s6",
+            )
+        source_status = contract.attrs.get("data-source-status", "")
+        if contract.value == "missing-data":
+            if (
+                contract.tag != "p"
+                or source_status not in {"partial", "failed"}
+                or compact_text != EMOTION_NODE_MISSING_TEXT
+            ):
+                raise ReportValidationError(
+                    "invalid_emotion_node",
+                    "情绪高度缺失态必须显式标记 partial/failed",
+                    section="s6",
+                )
+            return
+
+        lookback = _bounded_int_attr(
+            contract.attrs,
+            "data-lookback-open-days",
+            minimum=EMOTION_NODE_LOOKBACK_OPEN_DAYS,
+            maximum=EMOTION_NODE_LOOKBACK_OPEN_DAYS,
+        )
+        current_height = _bounded_int_attr(
+            contract.attrs, "data-current-max-height", minimum=0, maximum=100
+        )
+        previous_height = _bounded_int_attr(
+            contract.attrs, "data-previous-max-height", minimum=0, maximum=100
+        )
+        if (
+            source_status != "complete"
+            or lookback != EMOTION_NODE_LOOKBACK_OPEN_DAYS
+            or current_height is None
+            or previous_height is None
+        ):
+            raise ReportValidationError(
+                "invalid_emotion_node",
+                "情绪高度完整态必须带近20个开放日及双边最高板数",
+                section="s6",
+            )
+        if contract.value == "none":
+            if (
+                contract.tag != "p"
+                or current_height > previous_height
+                or compact_text != EMOTION_NODE_NONE_TEXT
+            ):
+                raise ReportValidationError(
+                    "invalid_emotion_node",
+                    "未打开高度时必须使用规范 none 事实句",
+                    section="s6",
+                )
+            return
+
+        leader_count = _bounded_int_attr(
+            contract.attrs, "data-leader-count", minimum=1, maximum=20
+        )
+        window_start = contract.attrs.get("data-window-start", "")
+        window_end = contract.attrs.get("data-window-end", "")
+        if (
+            contract.value != "v1"
+            or contract.tag != "div"
+            or current_height < 2
+            or current_height <= previous_height
+            or leader_count is None
+            or len(contract.rows) != leader_count + 1
+            or not _valid_date(window_start)
+            or not _valid_date(window_end)
+            or not window_start <= window_end < report_date.isoformat()
+            or "[事实]" not in compact_text
+            or "[判断]" not in compact_text
+            or "打开非ST连板高度" not in compact_text
+            or "启动日" not in compact_text
+            or "情绪节点日候选" not in compact_text
+        ):
+            raise ReportValidationError(
+                "invalid_emotion_node",
+                "打开高度时必须展示客观高度对比和带[判断]的启动日节点候选",
+                section="s6",
+            )
+        seen_codes: set[str] = set()
+        for row in contract.rows[1:]:
+            attrs = row.attrs
+            code = attrs.get("data-code", "").upper()
+            launch_date = attrs.get("data-launch-date", "")
+            launch_method = attrs.get("data-launch-method", "")
+            height = _bounded_int_attr(
+                attrs, "data-current-height", minimum=2, maximum=100
+            )
+            visible = re.sub(r"\s+", "", "".join(row.rendered_text))
+            if (
+                not EMOTION_LEADER_CODE_RE.fullmatch(code)
+                or code in seen_codes
+                or not _valid_date(launch_date)
+                or launch_date > report_date.isoformat()
+                or launch_method not in EMOTION_NODE_LAUNCH_METHODS
+                or height != current_height
+                or code not in visible
+                or launch_date not in visible
+            ):
+                raise ReportValidationError(
+                    "invalid_emotion_node",
+                    "情绪高度节点明细必须带唯一股票、可核对启动日与当日高度",
+                    section="s6",
+                )
+            seen_codes.add(code)
+
     def _validate_sector_labels_contract(self, report_date: date_type) -> None:
         contracts = self.structured_contracts["data-sector-labels"]
         verdicts = [item for item in contracts if item.value == "verdict"]
@@ -3841,26 +4217,36 @@ class _ReportParser(HTMLParser):
                 "invalid_schema",
                 f"data-report-schema 必须且只能出现一次，并取值 {REPORT_SCHEMA}",
             )
-        schema, schema_tag, schema_host, report_date_value = self.schema_hosts[0]
+        schema, schema_tag, schema_host, report_date_value, report_layout = (
+            self.schema_hosts[0]
+        )
         if (
             schema != REPORT_SCHEMA
             or schema_tag != "article"
             or schema_host != "report-document"
             or not _valid_date(report_date_value)
+            or report_layout not in {"", CURRENT_REPORT_LAYOUT}
         ):
             raise ReportValidationError(
                 "invalid_schema",
-                "article#report-document 必须带 compact-v2 schema 和有效 data-report-date",
+                "article#report-document 必须带 compact-v2 schema、有效 data-report-date 和受控 layout",
             )
         report_date = date_type.fromisoformat(report_date_value)
 
-        if tuple(self.chunks) != CHUNK_ORDER:
+        current_layout = report_layout == CURRENT_REPORT_LAYOUT
+        expected_chunks = CURRENT_CHUNK_ORDER if current_layout else CHUNK_ORDER
+        expected_anchor_map = CURRENT_ANCHOR_MAP if current_layout else ANCHOR_MAP
+        expected_anchors = (
+            CURRENT_REQUIRED_ANCHORS if current_layout else REQUIRED_ANCHORS
+        )
+
+        if tuple(self.chunks) != expected_chunks:
             raise ReportValidationError(
                 "invalid_chunks",
-                f"chunk 必须按顺序且各出现一次：{', '.join(CHUNK_ORDER)}；实际：{', '.join(self.chunks)}",
+                f"chunk 必须按顺序且各出现一次：{', '.join(expected_chunks)}；实际：{', '.join(self.chunks)}",
             )
 
-        for anchor in REQUIRED_ANCHORS:
+        for anchor in expected_anchors:
             count = self.ids.get(anchor, 0)
             if count != 1:
                 raise ReportValidationError(
@@ -3869,7 +4255,9 @@ class _ReportParser(HTMLParser):
                     section=anchor,
                 )
             expected_chunk = next(
-                chunk for chunk, anchors in ANCHOR_MAP.items() if anchor in anchors
+                chunk
+                for chunk, anchors in expected_anchor_map.items()
+                if anchor in anchors
             )
             actual_chunks = self.anchor_chunks[anchor]
             if actual_chunks != [expected_chunk]:
@@ -3879,15 +4267,19 @@ class _ReportParser(HTMLParser):
                     section=anchor,
                 )
 
-        if tuple(self.anchors_seen) != REQUIRED_ANCHORS:
+        if tuple(self.anchors_seen) != expected_anchors:
             raise ReportValidationError(
                 "invalid_anchor_order",
-                "章节锚点必须按固定顺序出现：" + ", ".join(REQUIRED_ANCHORS),
+                "章节锚点必须按固定顺序出现：" + ", ".join(expected_anchors),
             )
 
         self._validate_factor_contract()
-        self._validate_exposure_contract(report_date)
+        if not current_layout:
+            self._validate_exposure_contract(report_date)
         self._validate_big_picture_contract(report_date)
+        self._validate_rmb_fx_chart_contract(report_date)
+        self._validate_emotion_leader_contract(report_date)
+        self._validate_emotion_node_contract(report_date)
         self._validate_capacity_health_contract(report_date)
         self._validate_sector_contracts(report_date)
         self._validate_new_high_structure_contract(report_date)
@@ -3900,7 +4292,7 @@ class _ReportParser(HTMLParser):
             )
 
         for evidence in self.evidences:
-            if evidence.section not in REQUIRED_ANCHORS:
+            if evidence.section not in expected_anchors:
                 raise ReportValidationError(
                     "evidence_without_home",
                     "evidence 必须归属一个固定章节",
@@ -3950,7 +4342,7 @@ class _ReportParser(HTMLParser):
                 )
 
         for claim_id, claim in self.claims.items():
-            if claim.section not in REQUIRED_ANCHORS:
+            if claim.section not in expected_anchors:
                 raise ReportValidationError(
                     "claim_without_home",
                     f"claim owner 必须位于唯一正文章节：{claim_id}",
@@ -5227,6 +5619,613 @@ def _chunk_path(tmp_dir: Path, report_date: str, chunk: str) -> Path:
     return tmp_dir / f"b{report_date}_{chunk}.html"
 
 
+class _FxHistoryParser(HTMLParser):
+    """只提取已落盘复盘中的人民币即期/掉期结构化属性。"""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.in_fx_table = False
+        self.current: dict[str, object] | None = None
+        self.tables: list[dict[str, object]] = []
+
+    def handle_starttag(
+        self, tag: str, attrs_list: list[tuple[str, str | None]]
+    ) -> None:
+        attrs = {key.lower(): (value or "") for key, value in attrs_list}
+        if tag.lower() == "table" and attrs.get("data-rmb-fx-observation") == "v1":
+            self.in_fx_table = True
+            self.current = {"attrs": attrs, "rows": []}
+            self.tables.append(self.current)
+            return
+        if tag.lower() == "tr" and self.in_fx_table and self.current is not None:
+            rows = self.current["rows"]
+            assert isinstance(rows, list)
+            rows.append(attrs)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag.lower() == "table" and self.in_fx_table:
+            self.in_fx_table = False
+            self.current = None
+
+
+def _finite_float(value: object) -> float | None:
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return None
+    return result if math.isfinite(result) else None
+
+
+def _nonnegative_int(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        result = int(value)
+    except (TypeError, ValueError):
+        return None
+    return result if result >= 0 else None
+
+
+def _extract_fx_legs(html: str, report_date: str) -> tuple[dict[str, dict[str, float]], str, str]:
+    parser = _FxHistoryParser()
+    try:
+        parser.feed(html)
+        parser.close()
+    except Exception:
+        return {}, "partial", ""
+    if len(parser.tables) != 1:
+        return {}, "partial", ""
+    table = parser.tables[0]
+    attrs = table["attrs"]
+    rows = table["rows"]
+    assert isinstance(attrs, dict) and isinstance(rows, list)
+    table_as_of = str(attrs.get("data-as-of", ""))
+    if not _valid_date(table_as_of) or table_as_of > report_date:
+        return {}, "partial", ""
+    source_status = str(attrs.get("data-source-status", "partial"))
+    legs: dict[str, dict[str, float]] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        instrument = str(row.get("data-fx-instrument", ""))
+        source_date = str(row.get("data-source-date", ""))
+        if (
+            str(row.get("data-status", "")) not in RMB_FX_AVAILABLE_ROW_STATUSES
+            or not _valid_date(source_date)
+            or source_date > report_date
+        ):
+            continue
+        if instrument == "spot":
+            bid = _finite_float(row.get("data-bid"))
+            ask = _finite_float(row.get("data-ask"))
+            mid = _finite_float(row.get("data-mid"))
+            source_url = urlparse(str(row.get("data-source-url", "")))
+            observed_at = _parse_local_datetime(str(row.get("data-observed-at", "")))
+            fetched_at = _parse_local_datetime(str(row.get("data-fetched-at", "")))
+            if (
+                bid is not None
+                and ask is not None
+                and mid is not None
+                and 5.0 < mid < 9.0
+                and bid <= mid <= ask
+                and math.isclose(mid, (bid + ask) / 2, abs_tol=1e-8)
+                and row.get("data-source") == "chinamoney:rfx-sp-quot"
+                and row.get("data-price-kind") == "computed_bid_ask_mid"
+                and source_url.scheme == "https"
+                and source_url.hostname == "www.chinamoney.com.cn"
+                and source_url.path.endswith("rfx-sp-quot.json")
+                and observed_at is not None
+                and fetched_at is not None
+                and observed_at.date().isoformat() == source_date
+                and fetched_at.date().isoformat() == source_date
+                and fetched_at >= observed_at
+            ):
+                legs.setdefault(source_date, {})["spot_mid"] = mid
+        elif instrument == "c-swap-1y":
+            forward = _finite_float(row.get("data-forward-rate"))
+            swap = _finite_float(row.get("data-swap-point-pips"))
+            source_url = urlparse(str(row.get("data-source-url", "")))
+            observed_at = _parse_local_datetime(str(row.get("data-observed-at", "")))
+            fetched_at = _parse_local_datetime(str(row.get("data-fetched-at", "")))
+            if (
+                forward is not None
+                and swap is not None
+                and 5.0 < forward < 9.0
+                and abs(swap) <= 10_000
+                and row.get("data-source") == "chinamoney:fx-c-swap-fixing"
+                and row.get("data-tenor") == "1Y"
+                and row.get("data-price-kind") == "c_swap_fixing"
+                and row.get("data-quote-source") == "报价数据"
+                and source_url.scheme == "https"
+                and source_url.hostname == "www.chinamoney.org.cn"
+                and source_url.path.endswith("fx-c-sw-curv-USD.CNY.json")
+                and observed_at is not None
+                and fetched_at is not None
+                and observed_at.date().isoformat() == source_date
+                and fetched_at.date().isoformat() == source_date
+                and fetched_at >= observed_at
+            ):
+                target = legs.setdefault(source_date, {})
+                target["forward_rate"] = forward
+                target["swap_point_pips"] = swap
+    return legs, source_status, table_as_of
+
+
+def _load_fx_chart_points(
+    current_s1_html: str,
+    report_date: str,
+    archive_dir: str | os.PathLike[str] | None,
+) -> tuple[list[_FxChartPoint], str]:
+    merged: dict[str, dict[str, float]] = {}
+    if archive_dir is not None:
+        root = Path(archive_dir)
+        if root.is_dir():
+            exact_name = re.compile(r"^复盘_(\d{4}-\d{2}-\d{2})\.html$")
+            for path in sorted(root.glob("复盘_*.html")):
+                match = exact_name.fullmatch(path.name)
+                if not match or match.group(1) >= report_date:
+                    continue
+                try:
+                    prior_html = path.read_text(encoding="utf-8")
+                except OSError:
+                    continue
+                legs, _, _ = _extract_fx_legs(prior_html, report_date)
+                for source_date, values in legs.items():
+                    merged.setdefault(source_date, {}).update(values)
+
+    current_legs, current_status, current_as_of = _extract_fx_legs(
+        current_s1_html, report_date
+    )
+    for source_date, values in current_legs.items():
+        merged.setdefault(source_date, {}).update(values)
+
+    points = [
+        _FxChartPoint(
+            source_date=source_date,
+            spot_mid=values["spot_mid"],
+            forward_rate=values["forward_rate"],
+            swap_point_pips=values["swap_point_pips"],
+        )
+        for source_date, values in sorted(merged.items())
+        if {"spot_mid", "forward_rate", "swap_point_pips"} <= values.keys()
+    ][-RMB_FX_CHART_MAX_POINTS:]
+    status = "complete"
+    if (
+        current_status != "complete"
+        or not points
+        or not current_as_of
+        or points[-1].source_date != current_as_of
+    ):
+        status = "partial"
+    return points, status
+
+
+def _svg_points(
+    values: Sequence[float], *, left: float, top: float, width: float, height: float
+) -> tuple[str, list[tuple[float, float]], list[float]]:
+    low, high = min(values), max(values)
+    padding = max((high - low) * 0.12, max(abs(high), 1.0) * 0.002)
+    low -= padding
+    high += padding
+    span = high - low
+    coords: list[tuple[float, float]] = []
+    for index, value in enumerate(values):
+        x = left + (width * index / max(len(values) - 1, 1))
+        y = top + height - ((value - low) / span * height)
+        coords.append((x, y))
+    return " ".join(f"{x:.1f},{y:.1f}" for x, y in coords), coords, [low + span * i / 4 for i in range(5)]
+
+
+def _render_fx_chart(
+    points: Sequence[_FxChartPoint], report_date: str, source_status: str
+) -> str:
+    if len(points) < RMB_FX_CHART_MIN_POINTS:
+        return (
+            f'<p data-rmb-fx-chart="missing-data" data-as-of="{escape(report_date)}" '
+            'data-source-status="insufficient-history">'
+            f"{RMB_FX_CHART_MISSING_TEXT}</p>"
+        )
+
+    left, width, panel_height = 78.0, 810.0, 190.0
+    top_one, top_two = 72.0, 356.0
+    # 即期与全价必须共享同一汇率坐标轴，重新映射到两组值的共同范围。
+    all_rates = [point.spot_mid for point in points] + [
+        point.forward_rate for point in points
+    ]
+    _, _, rate_ticks = _svg_points(
+        all_rates, left=left, top=top_one, width=width, height=panel_height
+    )
+    rate_low, rate_high = rate_ticks[0], rate_ticks[-1]
+    rate_span = rate_high - rate_low
+    spot_coords = [
+        (
+            left + width * index / max(len(points) - 1, 1),
+            top_one + panel_height - (point.spot_mid - rate_low) / rate_span * panel_height,
+        )
+        for index, point in enumerate(points)
+    ]
+    forward_coords = [
+        (
+            left + width * index / max(len(points) - 1, 1),
+            top_one + panel_height - (point.forward_rate - rate_low) / rate_span * panel_height,
+        )
+        for index, point in enumerate(points)
+    ]
+    spot_path = " ".join(f"{x:.1f},{y:.1f}" for x, y in spot_coords)
+    forward_path = " ".join(f"{x:.1f},{y:.1f}" for x, y in forward_coords)
+    swap_path, swap_coords, swap_ticks = _svg_points(
+        [point.swap_point_pips for point in points],
+        left=left,
+        top=top_two,
+        width=width,
+        height=panel_height,
+    )
+
+    rate_grid = "".join(
+        f'<line class="fx-grid" x1="{left:.1f}" x2="{left + width:.1f}" y1="{top_one + panel_height - i * panel_height / 4:.1f}" y2="{top_one + panel_height - i * panel_height / 4:.1f}"/>'
+        f'<text class="fx-axis-label" x="{left - 12:.1f}" y="{top_one + panel_height - i * panel_height / 4 + 4:.1f}" text-anchor="end">{tick:.3f}</text>'
+        for i, tick in enumerate(rate_ticks)
+    )
+    swap_grid = "".join(
+        f'<line class="fx-grid" x1="{left:.1f}" x2="{left + width:.1f}" y1="{top_two + panel_height - i * panel_height / 4:.1f}" y2="{top_two + panel_height - i * panel_height / 4:.1f}"/>'
+        f'<text class="fx-axis-label" x="{left - 12:.1f}" y="{top_two + panel_height - i * panel_height / 4 + 4:.1f}" text-anchor="end">{tick:,.0f}</text>'
+        for i, tick in enumerate(swap_ticks)
+    )
+    label_indexes = sorted({0, len(points) // 3, len(points) * 2 // 3, len(points) - 1})
+    x_labels = "".join(
+        f'<text class="fx-axis-label" x="{spot_coords[index][0]:.1f}" y="286" text-anchor="middle">{escape(points[index].source_date[5:])}</text>'
+        f'<text class="fx-axis-label" x="{spot_coords[index][0]:.1f}" y="580" text-anchor="middle">{escape(points[index].source_date[5:])}</text>'
+        for index in label_indexes
+    )
+    spot_dots = "".join(
+        f'<circle class="fx-dot fx-spot" cx="{x:.1f}" cy="{y:.1f}" r="3.5"/>'
+        for x, y in spot_coords
+    )
+    forward_dots = "".join(
+        f'<circle class="fx-dot fx-forward" cx="{x:.1f}" cy="{y:.1f}" r="3.5"/>'
+        for x, y in forward_coords
+    )
+    swap_dots = "".join(
+        f'<circle class="fx-dot fx-swap" cx="{x:.1f}" cy="{y:.1f}" r="3.5"/>'
+        for x, y in swap_coords
+    )
+    latest = points[-1]
+    rows = "".join(
+        '<tr '
+        f'data-source-date="{escape(point.source_date)}" '
+        f'data-spot-mid="{point.spot_mid:.5f}" '
+        f'data-forward-rate="{point.forward_rate:.4f}" '
+        f'data-swap-point-pips="{point.swap_point_pips:.2f}">'
+        f'<td>{escape(point.source_date)}</td><td>{point.spot_mid:.5f}</td>'
+        f'<td>{point.forward_rate:.4f}</td><td>{point.swap_point_pips:.2f}</td></tr>'
+        for point in points
+    )
+    safe_start = escape(points[0].source_date)
+    safe_end = escape(points[-1].source_date)
+    return f'''<figure class="fx-chart" data-rmb-fx-chart="v1" data-as-of="{safe_end}"
+        data-reviewed-through="{escape(report_date)}" data-source-status="{escape(source_status)}"
+        data-start-date="{safe_start}" data-end-date="{safe_end}" data-point-count="{len(points)}"
+        data-source="chinamoney:validated-review-archive">
+  <figcaption><strong>USD/CNY 即期与 1Y 外汇掉期</strong><span>{safe_start} 至 {safe_end} · {len(points)} 个工作日 · 中国货币网 · 数据状态：{escape(source_status)}</span></figcaption>
+  <p>[事实] 上图共用“人民币/美元”坐标比较即期买卖算术中值与 1Y C-Swap 全价；下图单列 1Y 掉期点，三者不混算涨跌。</p>
+  <svg viewBox="0 0 960 600" role="img" aria-labelledby="fx-chart-title fx-chart-desc">
+    <title id="fx-chart-title">USD/CNY 即期与 1Y 外汇掉期趋势</title>
+    <desc id="fx-chart-desc">{safe_start} 至 {safe_end}，在岸即期中值、1Y C-Swap 全价与掉期点的工作日折线图。</desc>
+    <text class="fx-panel-title" x="78" y="38">汇率</text>
+    <line class="fx-legend fx-spot" x1="78" x2="106" y1="54" y2="54"/><text class="fx-legend-text" x="114" y="59">在岸即期中值</text>
+    <line class="fx-legend fx-forward" x1="252" x2="280" y1="54" y2="54"/><text class="fx-legend-text" x="288" y="59">1Y C-Swap 全价</text>
+    {rate_grid}
+    <polyline class="fx-line fx-spot" points="{spot_path}"/>{spot_dots}
+    <polyline class="fx-line fx-forward" points="{forward_path}"/>{forward_dots}
+    <text class="fx-latest fx-spot-text" x="900" y="{spot_coords[-1][1] + 4:.1f}">{latest.spot_mid:.5f}</text>
+    <text class="fx-latest fx-forward-text" x="900" y="{forward_coords[-1][1] + 4:.1f}">{latest.forward_rate:.4f}</text>
+    <text class="fx-panel-title" x="78" y="324">掉期点（Pips）</text>
+    {swap_grid}
+    <polyline class="fx-line fx-swap" points="{swap_path}"/>{swap_dots}
+    <text class="fx-latest fx-swap-text" x="900" y="{swap_coords[-1][1] + 4:.1f}">{latest.swap_point_pips:.2f}</text>
+    {x_labels}
+  </svg>
+  <details class="evidence chart-data" data-as-of="{safe_end}" data-items="{len(points)}" data-evidence-kind="rmb-fx-chart-data"><summary>查看图表数据（{len(points)} 项）</summary>
+    <div class="evidence-body"><div class="table-scroll-shell"><table><thead><tr><th>来源日</th><th>即期中值</th><th>1Y 全价</th><th>掉期点 Pips</th></tr></thead><tbody>{rows}</tbody></table></div></div>
+  </details>
+</figure>'''
+
+
+def load_emotion_leader_report(
+    path: str | os.PathLike[str], report_date: str
+) -> dict[str, object]:
+    source = Path(path)
+    try:
+        payload = json.loads(source.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return {
+            "date": report_date,
+            "status": "source_failed",
+            "_load_error": f"{source.name}: {type(exc).__name__}",
+        }
+    if not isinstance(payload, dict):
+        return {
+            "date": report_date,
+            "status": "source_failed",
+            "_load_error": f"{source.name}: 顶层不是对象",
+        }
+    return payload
+
+
+def _format_optional_pct(value: object) -> str:
+    number = _finite_float(value)
+    return "未计算" if number is None else f"{number:.2f}%"
+
+
+def _emotion_missing_fragment(report_date: str, reason: str = "") -> str:
+    note = ""
+    if reason:
+        note = f'<p class="note">[事实] 缺口原因：{escape(reason[:240])}</p>'
+    return (
+        f'<p data-emotion-leader="missing-data" data-as-of="{escape(report_date)}" '
+        f'data-source-status="failed">{EMOTION_LEADER_MISSING_TEXT}</p>{note}'
+    )
+
+
+def _render_emotion_leader(payload: Mapping[str, object] | None, report_date: str) -> str:
+    if payload is None or payload.get("date") != report_date:
+        return _emotion_missing_fragment(report_date, "同日 JSON 不存在或日期不匹配")
+    status = str(payload.get("status", ""))
+    if status not in EMOTION_LEADER_STATUSES or status == "source_failed":
+        return _emotion_missing_fragment(
+            report_date, str(payload.get("_load_error") or "报告状态为 source_failed")
+        )
+    active = payload.get("active")
+    archived = payload.get("archived")
+    summary = payload.get("summary")
+    coverage = payload.get("coverage")
+    refresh = payload.get("refresh")
+    source_errors = payload.get("source_errors")
+    promoted = payload.get("promoted_today")
+    candidates = payload.get("new_candidates")
+    if not (
+        isinstance(active, list)
+        and isinstance(archived, list)
+        and isinstance(summary, dict)
+        and isinstance(coverage, dict)
+        and isinstance(refresh, dict)
+        and isinstance(source_errors, list)
+        and isinstance(promoted, list)
+        and isinstance(candidates, list)
+    ):
+        return _emotion_missing_fragment(report_date, "JSON 结构不完整")
+
+    count_keys = {
+        "active": _nonnegative_int(summary.get("active_count")),
+        "archived": _nonnegative_int(summary.get("archived_count")),
+        "limit_up": _nonnegative_int(summary.get("today_limit_up_count")),
+        "new_peak": _nonnegative_int(summary.get("new_peak_count")),
+        "expected": _nonnegative_int(coverage.get("expected_open_days")),
+        "loaded": _nonnegative_int(coverage.get("loaded_limit_days")),
+        "refreshed": _nonnegative_int(refresh.get("metric_refresh_count")),
+    }
+    if (
+        any(value is None for value in count_keys.values())
+        or count_keys["active"] != len(active)
+        or count_keys["archived"] != len(archived)
+        or count_keys["loaded"] > count_keys["expected"]
+    ):
+        return _emotion_missing_fragment(report_date, "汇总计数无法与明细对账")
+    if not active:
+        if status != "ok":
+            return _emotion_missing_fragment(report_date, "partial 状态不能解释为空池")
+        return (
+            f'<p data-emotion-leader="none" data-as-of="{escape(report_date)}" '
+            f'data-source-status="ok">{EMOTION_LEADER_NONE_TEXT}</p>'
+        )
+
+    displayed: list[Mapping[str, object]] = []
+    for item in active[:EMOTION_LEADER_MAX_ROWS]:
+        if not isinstance(item, Mapping):
+            return _emotion_missing_fragment(report_date, "活跃核心明细格式无效")
+        code = str(item.get("code", "")).upper()
+        name = str(item.get("name", "")).strip()
+        wave = str(item.get("wave_label") or "未计算")
+        if not EMOTION_LEADER_CODE_RE.fullmatch(code) or not name or wave not in EMOTION_LEADER_WAVE_LABELS:
+            return _emotion_missing_fragment(report_date, "活跃核心身份或波段标签无效")
+        displayed.append(item)
+
+    promoted_names = "、".join(
+        escape(str(item.get("name", "")))
+        for item in promoted[:5]
+        if isinstance(item, Mapping) and item.get("name")
+    ) or "无"
+    candidate_names = "、".join(
+        escape(str(item.get("name", "")))
+        for item in candidates[:10]
+        if isinstance(item, Mapping) and item.get("name")
+    ) or "无"
+    rows = []
+    for item in displayed:
+        code = str(item.get("code", "")).upper()
+        name = str(item.get("name", "")).strip()
+        wave = str(item.get("wave_label") or "未计算")
+        metric_status = str(item.get("metric_status") or "source_failed")
+        if metric_status not in {"ok", "source_failed"}:
+            metric_status = "source_failed"
+        industry = str(item.get("industry") or item.get("limit_industry") or "未分类")
+        rows.append(
+            '<tr '
+            f'data-code="{escape(code)}" data-wave-label="{escape(wave)}" '
+            f'data-metric-status="{escape(metric_status)}">'
+            f'<td>{escape(name)}<br><small>{escape(code)}</small></td>'
+            f'<td>{escape(str(item.get("board_type") or "—"))}</td>'
+            f'<td>[判断] {escape(wave)}</td><td>{escape(industry)}</td>'
+            f'<td>{_format_optional_pct(item.get("max_gain_pct"))}</td>'
+            f'<td>{_format_optional_pct(item.get("interval_gain_pct"))}</td>'
+            f'<td>{_format_optional_pct(item.get("distance_from_peak_pct"))}</td>'
+            f'<td>{escape(str(item.get("launch_date") or "—"))} / {escape(str(item.get("max_height") or "—"))}板</td>'
+            f'<td>{escape(str(item.get("current_state") or "未计算"))}</td></tr>'
+        )
+    error_items = "".join(
+        f"<li>{escape(str(error)[:240])}</li>" for error in source_errors[:3]
+    )
+    errors_block = (
+        f'<p class="note">[事实] source_errors 共 {len(source_errors)} 条，前 3 条：</p><ul>{error_items}</ul>'
+        if source_errors
+        else '<p class="note">[事实] source_errors：0 条。</p>'
+    )
+    refresh_mode = escape(str(refresh.get("mode") or "unknown"))
+    return f'''<div class="emotion-leader" data-emotion-leader="v1" data-as-of="{escape(report_date)}"
+    data-source-status="{escape(status)}" data-active-count="{count_keys['active']}"
+    data-archived-count="{count_keys['archived']}" data-today-limit-up-count="{count_keys['limit_up']}"
+    data-new-peak-count="{count_keys['new_peak']}" data-promoted-count="{len(promoted)}"
+    data-candidate-count="{len(candidates)}" data-displayed-count="{len(displayed)}"
+    data-error-count="{len(source_errors)}" data-coverage-loaded="{count_keys['loaded']}"
+    data-coverage-expected="{count_keys['expected']}" data-refresh-mode="{refresh_mode}"
+    data-refreshed-count="{count_keys['refreshed']}">
+  <p><strong>[事实] 情绪核心生命周期：</strong>状态 {escape(status)}；历史覆盖 {count_keys['loaded']}/{count_keys['expected']}；刷新 {refresh_mode} / {count_keys['refreshed']} 只；活跃 {count_keys['active']} / 归档 {count_keys['archived']}；今日涨停 {count_keys['limit_up']} / 创新高 {count_keys['new_peak']}。</p>
+  <p>[事实] 今日晋级核心：{promoted_names}；新增二连板候选：{candidate_names}。</p>
+  <details class="evidence" data-as-of="{escape(report_date)}" data-items="{len(displayed)}" data-evidence-kind="emotion-leader">
+    <summary>活跃核心前 {len(displayed)} 只（{len(displayed)} 项）</summary>
+    <div class="evidence-body"><div class="table-scroll-shell"><table>
+      <thead><tr><th>核心</th><th>板型</th><th>波段</th><th>行业</th><th>最大涨幅</th><th>区间涨幅</th><th>距峰值</th><th>启动/高度</th><th>今日状态</th></tr></thead>
+      <tbody>{''.join(rows)}</tbody></table></div>{errors_block}</div>
+  </details>
+</div>'''
+
+
+def _emotion_node_missing_fragment(
+    report_date: str,
+    *,
+    source_status: str = "failed",
+) -> str:
+    normalized_status = source_status if source_status in {"partial", "failed"} else "failed"
+    return (
+        f'<p data-emotion-node="missing-data" data-as-of="{escape(report_date)}" '
+        f'data-source-status="{normalized_status}">{EMOTION_NODE_MISSING_TEXT}</p>'
+    )
+
+
+def _render_emotion_node(
+    payload: Mapping[str, object] | None,
+    report_date: str,
+) -> str:
+    """将「打开连板高度 → 启动日节点候选」自动注入 s6。"""
+
+    if payload is None or payload.get("date") != report_date:
+        return _emotion_node_missing_fragment(report_date)
+    payload_status = str(payload.get("status") or "")
+    if payload_status == "source_failed":
+        return _emotion_node_missing_fragment(report_date)
+    event = payload.get("height_breakthrough")
+    if not isinstance(event, Mapping):
+        return _emotion_node_missing_fragment(report_date)
+
+    status = str(event.get("status") or "")
+    source_status = str(event.get("source_status") or "")
+    if status == "missing_data":
+        return _emotion_node_missing_fragment(
+            report_date,
+            source_status=source_status,
+        )
+    lookback = _nonnegative_int(event.get("lookback_open_days"))
+    current_height = _nonnegative_int(event.get("current_max_height"))
+    previous_height = _nonnegative_int(event.get("previous_max_height"))
+    if (
+        source_status != "complete"
+        or lookback != EMOTION_NODE_LOOKBACK_OPEN_DAYS
+        or current_height is None
+        or previous_height is None
+    ):
+        return _emotion_node_missing_fragment(report_date)
+    common_attrs = (
+        f'data-as-of="{escape(report_date)}" data-source-status="complete" '
+        f'data-lookback-open-days="{lookback}" '
+        f'data-current-max-height="{current_height}" '
+        f'data-previous-max-height="{previous_height}"'
+    )
+    if status == "none":
+        if current_height > previous_height:
+            return _emotion_node_missing_fragment(report_date)
+        return (
+            f'<p data-emotion-node="none" {common_attrs}>'
+            f"{EMOTION_NODE_NONE_TEXT}</p>"
+        )
+    if status != "triggered" or current_height < 2 or current_height <= previous_height:
+        return _emotion_node_missing_fragment(report_date)
+
+    window_start = str(event.get("previous_window_start") or "")
+    window_end = str(event.get("previous_window_end") or "")
+    leaders = event.get("leaders")
+    if (
+        not _valid_date(window_start)
+        or not _valid_date(window_end)
+        or not window_start <= window_end < report_date
+        or not isinstance(leaders, list)
+        or not leaders
+        or len(leaders) > 20
+    ):
+        return _emotion_node_missing_fragment(report_date)
+
+    rows: list[str] = []
+    fact_names: list[str] = []
+    judgment_names: list[str] = []
+    for item in leaders:
+        if not isinstance(item, Mapping):
+            return _emotion_node_missing_fragment(report_date)
+        code = str(item.get("code") or "").upper()
+        name = str(item.get("name") or "").strip()
+        launch_date = str(item.get("launch_date") or "")
+        launch_method = str(item.get("launch_method") or "")
+        leader_height = _nonnegative_int(item.get("current_height"))
+        if (
+            not EMOTION_LEADER_CODE_RE.fullmatch(code)
+            or not name
+            or not _valid_date(launch_date)
+            or launch_date > report_date
+            or launch_method not in EMOTION_NODE_LAUNCH_METHODS
+            or leader_height != current_height
+        ):
+            return _emotion_node_missing_fragment(report_date)
+        method_label = "连板链直接确认" if launch_method == "limit_chain" else "日历保守推定"
+        fact_names.append(f"{escape(name)} {current_height}板")
+        judgment_names.append(f"{escape(name)}启动日{escape(launch_date)}")
+        rows.append(
+            f'<tr data-code="{escape(code)}" data-launch-date="{escape(launch_date)}" '
+            f'data-launch-method="{escape(launch_method)}" '
+            f'data-current-height="{current_height}">'
+            f"<td>{escape(name)}<br><small>{escape(code)}</small></td>"
+            f"<td>{current_height}板</td><td>{escape(launch_date)}</td>"
+            f"<td>{method_label}</td></tr>"
+        )
+
+    return f'''<div class="emotion-node" data-emotion-node="v1" {common_attrs}
+    data-window-start="{escape(window_start)}" data-window-end="{escape(window_end)}"
+    data-leader-count="{len(rows)}">
+  <p><strong>[事实] 打开非ST连板高度：</strong>{'、'.join(fact_names)}；此前{lookback}个开放日最高{previous_height}板。
+  [判断] {'、'.join(judgment_names)}列为情绪节点日候选；该线索不替代事件日历或市场/板块结构确认。</p>
+  <details class="evidence" data-as-of="{escape(report_date)}" data-items="{len(rows)}" data-evidence-kind="emotion-node">
+    <summary>打开高度与启动日对账（{len(rows)} 项）</summary>
+    <div class="evidence-body"><div class="table-scroll-shell"><table>
+      <thead><tr><th>情绪核心</th><th>当日高度</th><th>启动日</th><th>启动日来源</th></tr></thead>
+      <tbody>{''.join(rows)}</tbody></table></div></div>
+  </details>
+</div>'''
+
+
+def _inject_section_fragment(html: str, section_id: str, fragment: str) -> str:
+    pattern = re.compile(
+        rf'(<section\b[^>]*\bid=["\']{re.escape(section_id)}["\'][^>]*>)(.*?)(</section>)',
+        re.IGNORECASE | re.DOTALL,
+    )
+    matches = list(pattern.finditer(html))
+    if len(matches) != 1:
+        raise ReportValidationError(
+            "invalid_injection_target",
+            f"自动模块要求唯一 section#{section_id}，实际 {len(matches)}",
+            section=section_id,
+        )
+    match = matches[0]
+    replacement = f"{match.group(1)}{match.group(2)}\n{fragment}\n{match.group(3)}"
+    return html[: match.start()] + replacement + html[match.end() :]
+
+
 def _validate_date(report_date: str) -> None:
     if not _valid_date(report_date):
         raise ReportValidationError(
@@ -5234,33 +6233,110 @@ def _validate_date(report_date: str) -> None:
         )
 
 
-def render_report(tmp_dir: str | os.PathLike[str], report_date: str) -> str:
-    """读取固定 8 个 chunk，包裹静态阅读器外壳并返回 HTML 字符串。"""
+def _strip_legacy_section(html: str, section_id: str) -> str:
+    """从 chunk 中移除一个旧版顶层 section。
+
+    旧 scratchpad 可能仍带 exposure；新版正式组装在输出前确定性剔除。
+    同名 section 重复时 fail-closed，不猜测应删哪一个。
+    """
+
+    pattern = re.compile(
+        rf"<section\b(?=[^>]*\bid=[\"']{re.escape(section_id)}[\"'])[^>]*>.*?</section\s*>",
+        re.IGNORECASE | re.DOTALL,
+    )
+    matches = list(pattern.finditer(html))
+    if len(matches) > 1:
+        raise ReportValidationError(
+            "duplicate_removed_section",
+            f"旧版 section#{section_id} 出现 {len(matches)} 次，拒绝自动删除",
+            section=section_id,
+        )
+    return pattern.sub("", html, count=1)
+
+
+def render_report(
+    tmp_dir: str | os.PathLike[str],
+    report_date: str,
+    *,
+    emotion_leader_report: Mapping[str, object] | None = None,
+    fx_history_dir: str | os.PathLike[str] | None = None,
+    include_legacy_sections: bool = False,
+) -> str:
+    """读取固定 chunk，包裹静态阅读器外壳并返回 HTML 字符串。
+
+    默认使用不含 exposure/proj 的新版 7-chunk 布局。
+    ``include_legacy_sections`` 仅用于旧归档迁移与回归校验。
+    """
 
     _validate_date(report_date)
     tmp_path = Path(tmp_dir)
-    parts: list[str] = []
+    chunk_order = CHUNK_ORDER if include_legacy_sections else CURRENT_CHUNK_ORDER
+    chunks: dict[str, str] = {}
     missing: list[str] = []
-    for chunk in CHUNK_ORDER:
+    for chunk in chunk_order:
         path = _chunk_path(tmp_path, report_date, chunk)
         if not path.is_file():
             missing.append(path.name)
             continue
-        parts.append(
-            f'<div class="report-chunk" data-report-chunk="{chunk}">\n'
-            f"{path.read_text(encoding='utf-8')}\n"
-            "</div>"
-        )
+        chunks[chunk] = path.read_text(encoding="utf-8")
     if missing:
         raise ReportValidationError(
             "missing_chunk", f"缺少 chunk：{', '.join(missing)}"
+        )
+    if "data-rmb-fx-chart=" in chunks["s1"]:
+        raise ReportValidationError(
+            "duplicate_rmb_fx_chart",
+            "s1 的人民币外汇图由组装器统一生成，chunk 不得自行注入",
+            section="s1",
+        )
+    if "data-emotion-leader=" in chunks["s456"]:
+        raise ReportValidationError(
+            "duplicate_emotion_leader",
+            "s3 的情绪核心模块由组装器统一生成，chunk 不得自行注入",
+            section="s3",
+        )
+    if "data-emotion-node=" in chunks["s456"]:
+        raise ReportValidationError(
+            "duplicate_emotion_node",
+            "s6 的情绪高度节点联动由组装器统一生成，chunk 不得自行注入",
+            section="s6",
+        )
+
+    fx_points, fx_status = _load_fx_chart_points(
+        chunks["s1"], report_date, fx_history_dir
+    )
+    chunks["s1"] = _inject_section_fragment(
+        chunks["s1"],
+        "s1",
+        _render_fx_chart(fx_points, report_date, fx_status),
+    )
+    chunks["s456"] = _inject_section_fragment(
+        chunks["s456"],
+        "s3",
+        _render_emotion_leader(emotion_leader_report, report_date),
+    )
+    chunks["s456"] = _inject_section_fragment(
+        chunks["s456"],
+        "s6",
+        _render_emotion_node(emotion_leader_report, report_date),
+    )
+    if not include_legacy_sections:
+        chunks["s7t"] = _strip_legacy_section(chunks["s7t"], "exposure")
+
+    parts: list[str] = []
+    for chunk in chunk_order:
+        parts.append(
+            f'<div class="report-chunk" data-report-chunk="{chunk}">\n'
+            f"{chunks[chunk]}\n"
+            "</div>"
         )
 
     css_path = Path(__file__).with_name("review_style.css")
     css = css_path.read_text(encoding="utf-8")
     body = "\n\n".join(parts)
-    side_nav = "\n".join(f'      <a href="#{item}">{title}</a>' for item, title in NAV)
-    mobile_nav = "\n".join(f'    <a href="#{item}">{title}</a>' for item, title in NAV)
+    nav = NAV if include_legacy_sections else CURRENT_NAV
+    side_nav = "\n".join(f'      <a href="#{item}">{title}</a>' for item, title in nav)
+    mobile_nav = "\n".join(f'    <a href="#{item}">{title}</a>' for item, title in nav)
     year_month, day = report_date[:7].replace("-", " · "), report_date[8:]
     safe_date = escape(report_date)
 
@@ -5299,10 +6375,10 @@ def render_report(tmp_dir: str | os.PathLike[str], report_date: str) -> str:
     <nav aria-label="章节导航">
 {side_nav}
     </nav>
-    <small class="sidebar-note">八步复盘法 v1.5 · 9 路多 Agent 完整采集 · compact-v2 只读产物</small>
+    <small class="sidebar-note">八步复盘法 v1.5 · 多 Agent 完整采集 · compact-v2 只读产物</small>
   </aside>
   <main class="reader-main">
-    <article class="report-document" id="report-document" data-report-schema="{REPORT_SCHEMA}" data-report-date="{safe_date}">
+    <article class="report-document" id="report-document" data-report-schema="{REPORT_SCHEMA}" data-report-date="{safe_date}"{'' if include_legacy_sections else f' data-report-layout="{CURRENT_REPORT_LAYOUT}"'}>
 {body}
     </article>
   </main>
@@ -5381,7 +6457,7 @@ class _ArgumentParser(argparse.ArgumentParser):
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = _ArgumentParser(description=__doc__)
-    parser.add_argument("tmp_dir", help="包含 8 个 HTML chunk 的临时目录")
+    parser.add_argument("tmp_dir", help="包含 7 个正式 HTML chunk 的临时目录")
     parser.add_argument("date", help="复盘交易日，YYYY-MM-DD")
     parser.add_argument(
         "--output",
@@ -5399,13 +6475,33 @@ def _build_parser() -> argparse.ArgumentParser:
         "--trade-db",
         help="只读市场/交易日历/组合事实库；省略时读取 data/trade.db",
     )
+    parser.add_argument(
+        "--emotion-leader-report",
+        help="情绪核心生命周期 JSON；省略时读取 data/reports/emotion-leader/<DATE>.json",
+    )
+    parser.add_argument(
+        "--fx-history-dir",
+        help="历史复盘 HTML 目录；省略时读取 data/reports，用于绘制人民币外汇趋势图",
+    )
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     try:
         args = _build_parser().parse_args(argv)
-        html = render_report(args.tmp_dir, args.date)
+        emotion_path = args.emotion_leader_report or (
+            _repo_root() / "data" / "reports" / "emotion-leader" / f"{args.date}.json"
+        )
+        emotion_report = load_emotion_leader_report(emotion_path, args.date)
+        fx_history_dir = args.fx_history_dir or (
+            _repo_root() / "data" / "reports"
+        )
+        html = render_report(
+            args.tmp_dir,
+            args.date,
+            emotion_leader_report=emotion_report,
+            fx_history_dir=fx_history_dir,
+        )
         manifest_path = args.capacity_manifest or (
             Path(args.tmp_dir) / f"capacity_{args.date}.json"
         )
