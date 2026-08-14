@@ -540,7 +540,7 @@ python3 main.py research-digest daily --huibo-mode off --dry-run
 python3 main.py research-digest daily --huibo-cleanup-only --dry-run
 
 # 研报覆盖·申万一级行业趋势（机构定价视角：覆盖热度流向哪些板块；只读渲染，复盘「2.板块」可引用）
-python3 main.py research-digest trend                    # 近5有效日 vs 前5有效日 占比Δpp
+python3 main.py research-digest trend                    # 近5有效日 vs 前5有效日 占比Δpp + 每行业 streak_up 连续上行有效日数
 python3 main.py research-digest trend --backfill 30      # 先回补最近30个交易日缺失日（逐日 cninfo，失败跳过）
 python3 main.py research-digest trend --recent-n 10 --top 15 --json
 

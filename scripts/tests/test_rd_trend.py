@@ -158,6 +158,81 @@ def test_trend_empty_series():
     assert t["recent_days"] == [] and t["items"] == []
 
 
+# ---------- build_share_streaks / streak_up ----------
+
+def test_streak_monotonic_rise_counts_tail_steps():
+    # 电子份额 25%→50%→75%→100%，4 个完整窗（recent_n=1）→ 连续上行 3 步
+    s = {
+        "2026-06-01": {"电子": 1, "食品饮料": 3},
+        "2026-06-02": {"电子": 2, "食品饮料": 2},
+        "2026-06-03": {"电子": 3, "食品饮料": 1},
+        "2026-06-04": {"电子": 4},
+    }
+    assert trend.build_share_streaks(s, recent_n=1)["电子"] == 3
+
+
+def test_streak_flat_share_is_zero():
+    # 结构不变（脉冲日总量×10 份额不动）→ 严格递增不成立，streak=0
+    s = {
+        "2026-06-01": {"电子": 6, "食品饮料": 4},
+        "2026-06-02": {"电子": 60, "食品饮料": 40},
+    }
+    assert trend.build_share_streaks(s, recent_n=1)["电子"] == 0
+
+
+def test_streak_broken_then_rising_counts_only_tail():
+    # 升→降→升→升：只计尾部连续 2 步
+    s = {
+        "2026-06-01": {"电子": 1, "食品饮料": 9},   # 10%
+        "2026-06-02": {"电子": 5, "食品饮料": 5},   # 50%
+        "2026-06-03": {"电子": 2, "食品饮料": 8},   # 20%（中断）
+        "2026-06-04": {"电子": 3, "食品饮料": 7},   # 30%
+        "2026-06-05": {"电子": 4, "食品饮料": 6},   # 40%
+    }
+    assert trend.build_share_streaks(s, recent_n=1)["电子"] == 2
+
+
+def test_streak_absent_industry_rises_from_zero():
+    # 前窗无篇数按份额 0 参与比较：0 → 50% 计 1 步上行
+    s = {
+        "2026-06-01": {"食品饮料": 4},
+        "2026-06-02": {"电子": 2, "食品饮料": 2},
+    }
+    assert trend.build_share_streaks(s, recent_n=1)["电子"] == 1
+
+
+def test_streak_insufficient_windows_returns_empty_and_item_none():
+    # recent_n=2 只有 2 个有效日 → 仅 1 个完整窗，无法比较 → 空 dict；item.streak_up=None
+    s = {"2026-06-01": {"电子": 1}, "2026-06-02": {"电子": 2}}
+    assert trend.build_share_streaks(s, recent_n=2) == {}
+    t = trend.build_industry_trend(s, recent_n=2)
+    assert t["items"][0]["streak_up"] is None
+
+
+def test_trend_items_carry_streak_up():
+    # streak 可判时，items 逐行携带整数 streak_up（缺席行业得 0 而非 None）
+    s = {
+        "2026-06-01": {"电子": 1, "食品饮料": 3},
+        "2026-06-02": {"电子": 2, "食品饮料": 2},
+        "2026-06-03": {"电子": 3, "食品饮料": 1},
+    }
+    t = trend.build_industry_trend(s, recent_n=1)
+    by_ind = {it["industry"]: it["streak_up"] for it in t["items"]}
+    assert by_ind["电子"] == 2 and by_ind["食品饮料"] == 0
+
+
+def test_render_trend_md_shows_streak_column():
+    s = {
+        "2026-06-01": {"电子": 1, "食品饮料": 3},
+        "2026-06-02": {"电子": 2, "食品饮料": 2},
+        "2026-06-03": {"电子": 3, "食品饮料": 1},
+    }
+    md = trend.render_trend_md(trend.build_industry_trend(s, recent_n=1))
+    assert "连续上行(有效日)" in md
+    elec_line = next(line for line in md.splitlines() if line.startswith("| 电子"))
+    assert elec_line.rstrip().endswith("| 2 |")
+
+
 # ---------- backfill_missing_payloads ----------
 
 class _FakeRegistry:

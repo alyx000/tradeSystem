@@ -56,12 +56,47 @@ def load_daily_industry_series(conn, prefix_index: dict, *, days: int = 30) -> d
     return dict(sorted(series.items()))
 
 
+def build_share_streaks(series: dict, *, recent_n: int = 5) -> dict:
+    """纯函数：逐有效日滚动 recent_n 窗份额 → {行业: 连续上行步数}。
+
+    - 每个有效日作为窗尾构成一个完整滚动窗（不足 recent_n 个有效日不成窗）；
+      streak = 以最新窗结尾、份额**严格递增**的连续步数（vs 上一有效日的窗）。
+    - 行业在某窗内无篇数按份额 0 参与比较（从 0 起增计入上行）。
+    - 完整窗少于 2 个（无法比较）返回空 dict，消费方按「数据不足」处理，不伪造 0。
+    - streak 可回看的最大步数受调用方读库 days 限制（run_trend_report 缺省
+      recent_n×4 份 payload），只保证「近端连续性」不保证全历史极值。
+    """
+    valid_dates = sorted(series)
+    windows: list[dict] = []
+    for i in range(recent_n - 1, len(valid_dates)):
+        counts: dict[str, int] = defaultdict(int)
+        for d in valid_dates[i - recent_n + 1:i + 1]:
+            for ind, n in series[d].items():
+                counts[ind] += n
+        total = sum(counts.values())
+        windows.append(
+            {ind: c / total * 100 for ind, c in counts.items()} if total else {})
+    if len(windows) < 2:
+        return {}
+    streaks: dict[str, int] = {}
+    for ind in set().union(*windows):
+        streak = 0
+        for j in range(len(windows) - 1, 0, -1):
+            if windows[j].get(ind, 0.0) > windows[j - 1].get(ind, 0.0):
+                streak += 1
+            else:
+                break
+        streaks[ind] = streak
+    return streaks
+
+
 def build_industry_trend(series: dict, *, recent_n: int = 5) -> dict:
     """纯函数：近 recent_n 个有效日 vs 前 recent_n 个有效日的行业覆盖占比对比。
 
     - 窗口按**有效日**取（空日/未采集日不占窗口位），窗口实际日期由
       recent_days / prior_days 披露，消费方据此判断置信度。
     - prior 窗口数据不足时照算：prior_total=0 时 delta_pp 置 None（无对照，不伪造 0 变化）。
+    - 每行业附 streak_up（见 build_share_streaks）；完整窗不足 2 个时置 None。
     """
     valid_dates = sorted(series)
     recent_dates = valid_dates[-recent_n:]
@@ -76,6 +111,7 @@ def build_industry_trend(series: dict, *, recent_n: int = 5) -> dict:
 
     recent, prior = _bucket(recent_dates), _bucket(prior_dates)
     recent_total, prior_total = sum(recent.values()), sum(prior.values())
+    streaks = build_share_streaks(series, recent_n=recent_n)
     items = []
     for ind in set(recent) | set(prior):
         rc, pc = recent.get(ind, 0), prior.get(ind, 0)
@@ -88,6 +124,9 @@ def build_industry_trend(series: dict, *, recent_n: int = 5) -> dict:
             "prior_count": pc,   # render 不用，但保留在 --json 契约里供 agent 消费
             "prior_share": round(ps, 1),
             "delta_pp": round(rs - ps, 1) if prior_total else None,
+            # 连续上行有效日数（滚动 recent_n 窗份额逐窗严格递增的尾部步数）；
+            # 完整窗不足 2 个时 None=数据不足，与 0=近端无上行 区分
+            "streak_up": streaks.get(ind, 0) if streaks else None,
         })
     # 未分类桶恒排最后（与 collector.aggregate_by_industry 同语义）；主序=近窗篇数
     items.sort(key=lambda x: (
@@ -211,16 +250,20 @@ def render_trend_md(trend: dict, *, top_cap: int = 10) -> str:
     header = (
         f"**研报覆盖·行业趋势**（近{len(rd)}有效日 {rd[0]}~{rd[-1]} 共{trend['recent_total']}篇"
         + (f" vs 前{len(pd_)}有效日 共{trend['prior_total']}篇" if pd_ else "；无前窗口对照")
-        + "；占比=窗口内份额）"
+        + f"；占比=窗口内份额；连续上行=滚动{len(rd)}日窗份额逐窗递增步数，相邻窗重叠非逐日涨）"
     )
-    lines = [header, "", "| 行业 | 近窗篇数 | 占比% | 前窗占比% | Δpp |", "|---|---|---|---|---|"]
+    lines = [header, "",
+             "| 行业 | 近窗篇数 | 占比% | 前窗占比% | Δpp | 连续上行(有效日) |",
+             "|---|---|---|---|---|---|"]
     for it in trend["items"][:top_cap]:
         delta = f"{it['delta_pp']:+.1f}" if it["delta_pp"] is not None else "—"
+        streak = it.get("streak_up")
+        streak_cell = str(streak) if isinstance(streak, int) else "—"
         lines.append(
             f"| {it['industry']} | {it['recent_count']} | {it['recent_share']:.1f} "
-            f"| {it['prior_share']:.1f} | {delta} |"
+            f"| {it['prior_share']:.1f} | {delta} | {streak_cell} |"
         )
     hidden = len(trend["items"]) - top_cap
     if hidden > 0:
-        lines.append(f"| …还有 {hidden} 个行业 |  |  |  |  |")
+        lines.append(f"| …还有 {hidden} 个行业 |  |  |  |  |  |")
     return "\n".join(lines)
