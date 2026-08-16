@@ -15,7 +15,7 @@ import multiprocessing
 import queue as queue_module
 import re
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Optional
 
 import pandas as pd
@@ -674,6 +674,7 @@ class AkshareProvider(DataProvider):
             "get_index_weekly",
             "get_margin_data",
             "get_margin_series",
+            "get_market_announcements_range",
         ]
 
     def get_stock_business_profiles(self, ts_codes: list[str]) -> DataResult:
@@ -2444,6 +2445,170 @@ class AkshareProvider(DataProvider):
             return DataResult(data=results, source="akshare:eastmoney_ann")
         except Exception as e:
             return DataResult(data=None, source=self.name, error=str(e))
+
+    # 巨潮全市场公告：直连 hisAnnouncement/query 自带分页/时间预算。
+    # akshare 的 stock_zh_a_disclosure_report_cninfo 按 totalAnnouncement 无预算翻全页，
+    # 年报季单日可上万条（每页 30 = 300+ 请求），故不复用其封装。
+    _CNINFO_ANN_URL = "http://www.cninfo.com.cn/new/hisAnnouncement/query"
+    _CNINFO_ANN_PAGE_SIZE = 30       # 服务端单页上限
+    _CNINFO_ANN_MAX_PAGES = 200      # ≈6000 条；隔夜窗实测 ~50 页，财报季留 3 倍余量
+    _CNINFO_ANN_MAX_RUNTIME = 180.0  # 秒；实测 50 页 ≈45s；任一预算触发即 truncated，不伪装全量
+    _CNINFO_ANN_RETRIES = 2          # 单请求重试(退避 1s/2s)；实测巨潮偶发瞬时连接超时
+
+    def get_market_announcements_range(self, start_time: str, end_time: str) -> DataResult:
+        """全市场公告（沪深京）：逐自然日查询，页内按公告时间新→旧，触及窗口起点即早停。"""
+        source = "akshare:cninfo_announcements"
+        try:
+            start_dt = datetime.strptime(start_time, "%Y-%m-%d %H:%M:%S")
+            end_dt = datetime.strptime(end_time, "%Y-%m-%d %H:%M:%S")
+            if start_dt > end_dt:
+                return DataResult(data=None, source=source, error="窗口起点晚于终点")
+
+            items: list[dict] = []
+            seen_ids: set[str] = set()
+            raw_count = 0
+            pages_used = 0
+            started = time.monotonic()
+            truncated = False
+
+            # 从终点日往起点日逐日查（新→旧），单日内服务端默认按时间降序分页
+            day = end_dt.date()
+            while day >= start_dt.date() and not truncated:
+                day_str = day.isoformat()
+                page = 1
+                total_pages = 1
+                # 早停依赖服务端降序;跨页时间一旦乱序(服务端排序变更)即关闭早停,
+                # 改靠页数/时间预算兜底,避免把窗口内公告静默丢弃还标 complete
+                order_ok = True
+                prev_page_min: Optional[datetime] = None
+                while page <= total_pages:
+                    if (pages_used >= self._CNINFO_ANN_MAX_PAGES
+                            or time.monotonic() - started > self._CNINFO_ANN_MAX_RUNTIME):
+                        truncated = True
+                        break
+                    payload = {
+                        "pageNum": str(page),
+                        "pageSize": str(self._CNINFO_ANN_PAGE_SIZE),
+                        "column": "szse",
+                        "tabName": "fulltext",
+                        "plate": "",
+                        "stock": "",
+                        "searchkey": "",
+                        "secid": "",
+                        "category": "",
+                        "trade": "",
+                        "seDate": f"{day_str}~{day_str}",
+                        "sortName": "",
+                        "sortType": "",
+                        "isHLtitle": "false",
+                    }
+                    try:
+                        body = self._cninfo_ann_fetch_page(payload)
+                    except Exception as page_exc:  # noqa: BLE001 — 重试耗尽
+                        if pages_used == 0:
+                            raise  # 首页都取不到 = 源失败,整段报错
+                        # 中途失败:保留已采页按 truncated 降级,不丢已取公告也不伪装全量
+                        logger.warning("[cninfo_ann] 第 %d 页重试耗尽,保留已采 %d 页降级 truncated: %s",
+                                       pages_used + 1, pages_used, page_exc)
+                        truncated = True
+                        break
+                    if page == 1:
+                        total = int(body.get("totalAnnouncement") or 0)
+                        total_pages = max(
+                            1, -(-total // self._CNINFO_ANN_PAGE_SIZE))
+                    rows = body.get("announcements") or []
+                    pages_used += 1
+                    raw_count += len(rows)
+                    if not rows:
+                        break
+                    page_max_ts: Optional[datetime] = None
+                    page_min_ts: Optional[datetime] = None
+                    for row in rows:
+                        parsed = self._parse_cninfo_ann_row(row)
+                        if parsed is None:
+                            continue
+                        ann_id, ts = parsed
+                        if page_max_ts is None or ts > page_max_ts:
+                            page_max_ts = ts
+                        if page_min_ts is None or ts < page_min_ts:
+                            page_min_ts = ts
+                        if ann_id in seen_ids:
+                            continue
+                        seen_ids.add(ann_id)
+                        if start_dt <= ts <= end_dt:
+                            items.append(self._build_cninfo_ann_item(row, ts))
+                    if (prev_page_min is not None and page_max_ts is not None
+                            and page_max_ts > prev_page_min):
+                        order_ok = False  # 跨页乱序证据:后页出现比前页更新的条目
+                    if page_min_ts is not None:
+                        prev_page_min = page_min_ts
+                    # 早停：整页都早于窗口起点（仅在降序假设未被推翻时,后续页只会更旧）
+                    if order_ok and page_max_ts is not None and page_max_ts < start_dt:
+                        break
+                    page += 1
+                day = day - timedelta(days=1)
+
+            items.sort(key=lambda i: i["time"], reverse=True)
+            return DataResult(
+                data={
+                    "items": items,
+                    "status": "truncated" if truncated else "complete",
+                    "raw_count": raw_count,
+                },
+                source=source,
+            )
+        except Exception as e:
+            return DataResult(data=None, source=self.name, error=str(e))
+
+    def _cninfo_ann_fetch_page(self, payload: dict) -> dict:
+        """取一页公告;瞬时网络失败重试(退避 1s/2s),耗尽后抛最后一次异常。"""
+        last_err: Optional[Exception] = None
+        for attempt in range(self._CNINFO_ANN_RETRIES + 1):
+            try:
+                resp = requests.post(
+                    self._CNINFO_ANN_URL, data=payload, timeout=(5, 15),
+                    headers={"User-Agent": self._CNINFO_UA})
+                resp.raise_for_status()
+                return resp.json() or {}
+            except Exception as exc:  # noqa: BLE001 — 网络/JSON 统一按可重试失败
+                last_err = exc
+                if attempt < self._CNINFO_ANN_RETRIES:
+                    time.sleep(attempt + 1)
+        raise last_err
+
+    @staticmethod
+    def _parse_cninfo_ann_row(row: Any) -> "Optional[tuple[str, datetime]]":
+        """校验必需字段并解析公告时间（ms epoch → 上海 naive）；不合格返回 None。"""
+        if not isinstance(row, dict):
+            return None
+        ann_id = row.get("announcementId")
+        ts_ms = row.get("announcementTime")
+        if not ann_id or not isinstance(ts_ms, (int, float)):
+            return None
+        if not (row.get("announcementTitle") and row.get("secCode")):
+            return None
+        try:
+            from datetime import timezone
+            ts = datetime.fromtimestamp(
+                ts_ms / 1000, tz=timezone(timedelta(hours=8))).replace(tzinfo=None)
+        except (ValueError, OSError, OverflowError):
+            return None
+        return str(ann_id), ts
+
+    @staticmethod
+    def _build_cninfo_ann_item(row: dict, ts: datetime) -> dict:
+        code = str(row.get("secCode") or "")
+        url = (
+            f"http://www.cninfo.com.cn/new/disclosure/detail?stockCode={code}"
+            f"&announcementId={row.get('announcementId')}&orgId={row.get('orgId') or ''}"
+        )
+        return {
+            "code": code,
+            "name": str(row.get("secName") or ""),
+            "title": str(row.get("announcementTitle") or "").strip(),
+            "time": ts.strftime("%Y-%m-%d %H:%M:%S"),
+            "url": url,
+        }
 
     # ---- 互动易 ----
 

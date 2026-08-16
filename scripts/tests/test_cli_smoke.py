@@ -312,6 +312,12 @@ ARCHITECTURE_COMMANDS = [
     ["macro-flash", "run", "--date", "2026-07-23", "--repush"],
     ["macro-flash", "show"],
     ["macro-flash", "show", "--date", "2026-07-23", "--json"],
+    # morning-brief (盘前早报:隔夜行情+海外/国内要闻+公告,08:00 launchd)
+    ["morning-brief", "daily"],
+    ["morning-brief", "daily", "--date", "2026-08-14"],
+    ["morning-brief", "daily", "--dry-run"],
+    ["morning-brief", "daily", "--no-push"],
+    ["morning-brief", "daily", "--date", "2026-08-14", "--dry-run"],
     ["macro-flash", "doctor"],
     ["macro-flash", "doctor", "--json"],
     # new-high (前复权历史新高统计:全市场新高数 + 申万二级分组;默认不推送)

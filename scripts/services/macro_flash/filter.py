@@ -14,18 +14,22 @@ class FlashCandidate:
     topic: str
 
 
-def load_keyword_config(config: dict) -> "OrderedDict[str, List[str]]":
-    """校验并载入 macro_flash.keywords;缺失/全空 fail fast,不静默空筛。"""
-    raw = ((config or {}).get("macro_flash") or {}).get("keywords")
+def load_keyword_config(config: dict,
+                        config_key: str = "macro_flash") -> "OrderedDict[str, List[str]]":
+    """校验并载入 <config_key>.keywords;缺失/全空 fail fast,不静默空筛。
+
+    config_key 参数化供 morning_brief 复用同一校验/清洗逻辑(门1 去重 finding)。
+    """
+    raw = ((config or {}).get(config_key) or {}).get("keywords")
     if not isinstance(raw, dict) or not raw:
-        raise ValueError("配置缺失:scripts/config.yaml 需含非空 macro_flash.keywords")
+        raise ValueError(f"配置缺失:scripts/config.yaml 需含非空 {config_key}.keywords")
     cleaned: "OrderedDict[str, List[str]]" = OrderedDict()
     for topic, words in raw.items():
         valid = [str(w).strip() for w in (words or []) if str(w).strip()]
         if valid:
             cleaned[str(topic)] = valid
     if not cleaned:
-        raise ValueError("配置无效:macro_flash.keywords 所有主题词表为空")
+        raise ValueError(f"配置无效:{config_key}.keywords 所有主题词表为空")
     return cleaned
 
 

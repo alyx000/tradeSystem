@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Sleep policy: 盘前早报错过可接受——可手动 morning-brief daily 补跑(金十仅近期可回翻) -->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.alyx.tradesystem.morning-brief</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/alyx/tradeSystem/deploy/launchd/morning-brief-runner.sh</string>
+    </array>
+    <!-- 工作日 08:00:接 calendar-sync 06:30 / today-pre 07:00 / recommend-daily 07:10 之后；
+         非交易日由 CLI 内交易日历守卫跳过 -->
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>8</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>8</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>8</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>8</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>8</integer><key>Minute</key><integer>0</integer></dict>
+    </array>
+    <key>StandardOutPath</key>
+    <string>/tmp/tradesystem-morning-brief.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/tradesystem-morning-brief.log</string>
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>

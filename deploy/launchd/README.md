@@ -36,6 +36,8 @@
 - `com.alyx.tradesystem.monthly-pattern.plist` — 每月 2 日 23:10 单次触发（只使用带 certified 覆盖收据的完成月前复权月线 + 公告日 as-of 财务，维护三策略观察池；休眠错过可接受；日志 `/tmp/tradesystem-monthly-pattern.log`）
 - `monthly-pattern-monitor-runner.sh` — 包装脚本：source 行情/钉钉 env → 调 `/usr/bin/python3 scripts/main.py monthly-pattern monitor-daily`
 - `com.alyx.tradesystem.monthly-pattern-monitor.plist` — 每 15 分钟轻量 tick，runner 仅在上海工作日 19:10（含）至 19:25（不含）执行一次重任务（月线种子日频动态 5 月线 + 日/周 MACD 变化监控；不受 Mac 本机时区切换影响；日志 `/tmp/tradesystem-monthly-pattern-monitor.log`）
+- `morning-brief-runner.sh` — 包装脚本：cd 仓库根 → source `~/.config/tradeSystem.env`(钉钉；TUSHARE_TOKEN 由 `scripts/.env` 在 Python 侧加载) → 调 `python3 main.py morning-brief daily`
+- `com.alyx.tradesystem.morning-brief.plist` — 工作日 08:00 触发（盘前早报：隔夜行情+海外/国内要闻[金十]+上市公司公告[巨潮]；非交易日 CLI 内守卫跳过；日志 `/tmp/tradesystem-morning-brief.log`；Sleep policy: 错过可接受——可手动 `morning-brief daily` 补跑）
 - `intraday-monitor-runner.sh` — 每 5 分钟 tick 的盘中门禁入口；只在上海 `09:30-11:30 / 13:00-15:00` 调 `intraday-monitor check`
 - `com.alyx.tradesystem.intraday-monitor.plist` — 盘中实时阈值监控；长期规则为上证指数站上 3955，2026-08-11 临时规则为利通电子跌破 123.92 元，日志 `/tmp/tradesystem-intraday-monitor.log`
 

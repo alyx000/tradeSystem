@@ -151,6 +151,24 @@ make macro-flash-doctor         # live 探测金十可达性
 
 失败语义：`source_failed`（源不可达）/ `partial_window_truncated`（推送预算截断）/ `pagination_stalled`（翻页停滞）/ `schema_drift`（字段漂移）/ `push_failed`（归档成功但推送失败，`--repush` 补推）/ `run_error`（编排层意外异常）各有独立退出码；同日已 `complete` 归档默认幂等跳过（`--force-refresh` 覆盖重采）；`show` 仅在归档状态为 `complete` 且 `digest.md` sha256 与 manifest 记录一致时展示正文，否则只给状态与错误提示。
 
+## 盘前早报（morning-brief）
+
+每交易日 08:00 生成三段式早报并推钉钉（launchd `com.alyx.tradesystem.morning-brief`）：
+
+1. **隔夜行情**：标普/纳指/道指 + 纳斯达克中国金龙（PGJ 代理）+ 黄金/原油/铜（registry `get_global_index` / `get_us_tickers_overnight` / `get_commodity`，逐标的失败隔离标缺）；
+2. **海外/国内要闻**：复用 `macro_flash.collector` 金十采集器，窗口=上一交易日 20:00 → 今 08:00（接 macro-flash 盘后档之后不重叠），按 `scripts/config.yaml` 的 `morning_brief.keywords` 双主题词表归组，未命中但金十标 `important` 的归「其他要闻」兜底；每主题 15 条/其他 5 条；
+3. **上市公司公告**：新 provider capability `get_market_announcements_range`（akshare 侧直连巨潮 `hisAnnouncement/query`，自带分页/时间预算 + 整页早于窗口起点即早停，不复用 akshare 无预算封装），窗口=上一交易日 15:00 → 今 08:00；噪音标题排除（法律意见书/保荐书等从属文件）→ 七组关键词分类（停复牌/风险与监管/业绩/再融资与重组/增减持与回购/重大合同/投资与经营）→ 同股同组只留最新 → 每组 10 条。
+
+```bash
+make morning-brief-daily        # 等价 python3 main.py morning-brief daily（落报告+推送）
+make morning-brief-daily-dry    # 等价 --dry-run（仅打印，不落不推）
+python3 main.py morning-brief daily [--date YYYY-MM-DD] [--dry-run|--no-push]
+```
+
+报告落 `data/reports/morning-brief/YYYY-MM-DD.md`（原子写），推送体 18KB 预算整块截断（复用 macro-flash formatter）。三档=裸[落报告+推]/`--no-push`[落报告不推]/`--dry-run`[仅打印不落不推，豁免非交易日守卫]。`--date` 补跑窗口终点固定取该日 08:00（金十仅近期可回翻）。
+
+失败语义：金十失败=`source_failed`（落失败报告+推告警+非零退出）；金十窗口不完整（截断/停滞/漂移）、公告失败/预算截断、任一隔夜标的失败=`partial`（正常推送，缺口在报告头 `> ⚠️` 显式列出）。非交易日守卫复用 `utils.trade_date.is_non_trading_day`。全部为转述事实层，无 LLM 生成段；不写 SQLite 业务表/计划层/关注池，不构成买卖建议。
+
 ## 宏观事件日历同步（prefetch-calendar）
 
 每天 06:30 的 per-task launchd 模板 `com.alyx.tradesystem.calendar-sync` 在 07:00 盘前任务前拉取未来 14 个自然日：

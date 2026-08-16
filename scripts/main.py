@@ -1887,6 +1887,10 @@ def build_parser() -> argparse.ArgumentParser:
     from cli.macro_flash import register_subparser as register_macro_flash_subparser
     register_macro_flash_subparser(subparsers)
 
+    # morning-brief (盘前早报:隔夜行情+要闻+公告)
+    from cli.morning_brief import register_subparser as register_morning_brief_subparser
+    register_morning_brief_subparser(subparsers)
+
     # value-watch (价值投资条件监控:红利回撤/卖出阶梯/稀缺周线,teacher_notes#391)
     from cli.value_watch import register_subparser as register_value_watch_subparser
     register_value_watch_subparser(subparsers)
@@ -2029,6 +2033,9 @@ def main():
     elif args.command == "macro-flash":
         from cli import macro_flash as macro_flash_module
         macro_flash_module.handle_command(config, args)
+    elif args.command == "morning-brief":
+        from cli import morning_brief as morning_brief_module
+        morning_brief_module.handle_command(config, args)
     elif args.command == "value-watch":
         from cli import value_watch as value_watch_module
         value_watch_module.handle_command(config, args)

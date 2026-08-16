@@ -214,6 +214,16 @@ class DataProvider(ABC):
     def get_market_announcements(self, date: str) -> DataResult:
         return DataResult(data=None, source=self.name, error="not implemented")
 
+    def get_market_announcements_range(self, start_time: str, end_time: str) -> DataResult:
+        """全市场公告（沪深京），按公告时间窗口过滤。
+
+        :param start_time: 窗口起点 "YYYY-MM-DD HH:MM:SS"（上海时间，含）
+        :param end_time: 窗口终点 "YYYY-MM-DD HH:MM:SS"（上海时间，含）
+        :return: data = {"items": [{code, name, title, time, url}...] 新→旧,
+                 "status": "complete"|"truncated", "raw_count": int}
+        """
+        return DataResult(data=None, source=self.name, error="not implemented")
+
     def get_disclosure_dates(self, date: str) -> DataResult:
         return DataResult(data=None, source=self.name, error="not implemented")
 
