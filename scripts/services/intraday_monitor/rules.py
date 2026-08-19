@@ -5,8 +5,11 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Literal
 
+from utils.price_limit import compute_limit_prices
+
 
 Direction = Literal["below", "above"]
+ThresholdMode = Literal["fixed", "daily_up_limit"]
 
 
 @dataclass(frozen=True)
@@ -16,7 +19,7 @@ class MonitorRule:
     rule_id: str
     instrument_name: str
     code: str
-    threshold: float
+    threshold: float | None
     direction: Direction = "below"
     provider: str = "sina"
     inclusive: bool = False
@@ -26,16 +29,45 @@ class MonitorRule:
     valid_until: date | None = None
     value_label: str = "点位"
     value_unit: str = ""
+    threshold_mode: ThresholdMode = "fixed"
+    threshold_label: str = "监控线"
 
     def __post_init__(self) -> None:
         if self.valid_from and self.valid_until and self.valid_from > self.valid_until:
             raise ValueError("监控规则 valid_from 不能晚于 valid_until")
+        if self.threshold_mode == "fixed" and self.threshold is None:
+            raise ValueError("固定阈值规则必须提供 threshold")
+        if self.threshold_mode == "daily_up_limit" and self.threshold is not None:
+            raise ValueError("每日涨停价规则不得同时提供固定 threshold")
+        if self.threshold_mode not in {"fixed", "daily_up_limit"}:
+            raise ValueError(f"不支持的阈值模式: {self.threshold_mode}")
 
-    def is_active(self, price: float) -> bool:
+    def resolve_threshold(self, quote: dict) -> float:
+        """从固定配置或当日实时行情解析本次比较阈值。"""
+        if self.threshold_mode == "fixed":
+            return float(self.threshold)
+        try:
+            pre_close = float(quote.get("pre_close"))
+        except (TypeError, ValueError):
+            pre_close = None
+        prices = compute_limit_prices(
+            pre_close,
+            self.code,
+            name=str(quote.get("name") or self.instrument_name),
+        )
+        up_limit = prices.get("up_limit")
+        if up_limit is None:
+            raise ValueError("无法根据前收盘价计算当日涨停价")
+        return float(up_limit)
+
+    def is_active(self, price: float, *, threshold: float | None = None) -> bool:
+        resolved = self.threshold if threshold is None else threshold
+        if resolved is None:
+            raise ValueError("动态阈值规则必须先解析本次阈值")
         if self.direction == "below":
-            return price <= self.threshold if self.inclusive else price < self.threshold
+            return price <= resolved if self.inclusive else price < resolved
         if self.direction == "above":
-            return price >= self.threshold if self.inclusive else price > self.threshold
+            return price >= resolved if self.inclusive else price > resolved
         raise ValueError(f"不支持的监控方向: {self.direction}")
 
     def is_effective_on(self, trade_date: date) -> bool:
@@ -80,11 +112,68 @@ LITONG_ELECTRONICS_BELOW_123_92_20260811 = MonitorRule(
 )
 
 
-# 长期规则保留上证指数站上 3955；利通电子规则仅在 2026-08-11 生效。
+JINJIAN_RICE_BOARD_BREAK_20260819_20 = MonitorRule(
+    rule_id="jinjian-rice-board-break-20260819-20",
+    instrument_name="金健米业",
+    code="600127.SH",
+    threshold=None,
+    direction="below",
+    inclusive=False,
+    emit_on_initial_match=True,
+    action_label="低于",
+    valid_from=date(2026, 8, 19),
+    valid_until=date(2026, 8, 20),
+    value_label="价格",
+    value_unit="元",
+    threshold_mode="daily_up_limit",
+    threshold_label="当日涨停价",
+)
+
+
+RED_SIFANG_BOARD_BREAK_20260819_20 = MonitorRule(
+    rule_id="red-sifang-board-break-20260819-20",
+    instrument_name="红四方",
+    code="603395.SH",
+    threshold=None,
+    direction="below",
+    inclusive=False,
+    emit_on_initial_match=True,
+    action_label="低于",
+    valid_from=date(2026, 8, 19),
+    valid_until=date(2026, 8, 20),
+    value_label="价格",
+    value_unit="元",
+    threshold_mode="daily_up_limit",
+    threshold_label="当日涨停价",
+)
+
+
+JINGLIANG_HOLDINGS_BOARD_BREAK_20260819_20 = MonitorRule(
+    rule_id="jingliang-holdings-board-break-20260819-20",
+    instrument_name="京粮控股",
+    code="000505.SZ",
+    threshold=None,
+    direction="below",
+    inclusive=False,
+    emit_on_initial_match=True,
+    action_label="低于",
+    valid_from=date(2026, 8, 19),
+    valid_until=date(2026, 8, 20),
+    value_label="价格",
+    value_unit="元",
+    threshold_mode="daily_up_limit",
+    threshold_label="当日涨停价",
+)
+
+
+# 长期规则保留上证指数站上 3955；个股规则仅在各自日期范围生效。
 # 已下线的科创50规则不在此恢复。
 DEFAULT_RULES: tuple[MonitorRule, ...] = (
     SSE_COMPOSITE_RECLAIM_3955,
     LITONG_ELECTRONICS_BELOW_123_92_20260811,
+    JINJIAN_RICE_BOARD_BREAK_20260819_20,
+    RED_SIFANG_BOARD_BREAK_20260819_20,
+    JINGLIANG_HOLDINGS_BOARD_BREAK_20260819_20,
 )
 
 

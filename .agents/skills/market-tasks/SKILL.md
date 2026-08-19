@@ -465,20 +465,21 @@ python3 main.py emotion-leader daily --date 2026-08-11 --full-refresh --no-push
 
 ## 盘中实时阈值监控（intraday-monitor）
 
-独立 launchd `com.alyx.tradesystem.intraday-monitor` 每 5 分钟做一次无时区 tick，runner 只在上海交易时段 `09:30-11:30 / 13:00-15:00` 进入命令。长期规则监控新浪实时 `000001.SH` 上证指数从 3955 点下方站上 3955 点（`>=3955`）；临时规则仅在 2026-08-11 监控 `603629.SH` 利通电子价格严格 `<123.92` 元。科创50的跌破/收复规则保持下线。
+独立 launchd `com.alyx.tradesystem.intraday-monitor` 每 5 分钟做一次无时区 tick，runner 在上海交易时段 `09:30-11:30 / 13:00-15:00` 做常规检查；Python 对 11:30/15:00 结束分钟保留不足 1 分钟的进程启动宽限，另允许 `15:01-15:05` 仅对动态涨停价规则补取收盘终态，以覆盖 `StartInterval=300` 相对节拍未恰落 15:00 的情况。长期规则监控新浪实时 `000001.SH` 上证指数从 3955 点下方站上 3955 点（`>=3955`）；日期限定规则在 2026-08-19～20 监控金健米业 `600127.SH`、红四方 `603395.SH`、京粮控股 `000505.SZ` 是否严格低于各自当日涨停价。科创50的跌破/收复规则保持下线。
 
 ```bash
 python3 main.py intraday-monitor check             # 正式检查；命中时写 pending 并推钉钉
 python3 main.py intraday-monitor check --dry-run   # 只预览，不写状态、不推送
 python3 main.py intraday-monitor check --json      # 输出结构化运行回执
-python3 main.py intraday-monitor e2e-test --input-by USER --confirm-real-push --json  # 仅在用户授权后做一次真实链路测试
+python3 main.py intraday-monitor e2e-test --rule-id RULE_ID --input-by USER --confirm-real-push --json  # 仅在用户授权后做一次真实链路测试
 ```
 
 - **当前规则**：`sse-composite-reclaim-3955` 使用 `direction=above`、`inclusive=True`、`emit_on_initial_match=False`、动作“站上”。必须先观察到 `<3955`，随后 `>=3955` 才推送；启动或当日首次检查已在线上不补发，持续在线上不重复，跌回下方后再次站上可重推。
 - **一日临时规则**：`litong-electronics-below-123-92-20260811` 使用 `direction=below`、`inclusive=False`、`emit_on_initial_match=True`，`valid_from=valid_until=2026-08-11`。当日首次观察若已严格低于 123.92 元即推送；等于 123.92 元不触发，持续低于去重，恢复到阈值或上方后再次跌破可重推。8 月 11 日之前和之后都在行情请求前自动排除。
+- **两日断板规则**：三只股票使用 `threshold_mode=daily_up_limit`，以新浪当日新鲜行情的 `pre_close` 复用 `utils.price_limit.compute_limit_prices` 按交易所 `ROUND_HALF_UP` 规则计算当日涨停价。最新价严格低于涨停价时，盘中提醒只称“当前未封涨停，最终以收盘为准”；本机时间达到 15:00 且行情时间也达到 15:00、仍低于涨停价时，额外发送一次 `[事实·收盘]` 终态确认。14:59 或更早行情不得冒充收盘，补确认未就绪须失败并等待 `15:01-15:05` 内下一 tick；事件 ID 绑定盘中/收盘阶段，终态入 pending/sent 后才推进 `close_confirmed`。等于涨停价仍算封板；首次快照已低于也推送，持续低于去重，回封后再次开板可重推。仅 2026-08-19～20 生效，其他日期在 provider 请求前排除；`pre_close` 缺失或非法时 fail-closed，不猜涨停价。三只目标部分不可判为 `partial` 且 CLI 非零退出，不以仍成功的上证行情掩盖漏监控。
 - **扩展方式**：规则由 `services.intraday_monitor.rules.MonitorRule` 统一描述（标的、代码、阈值、方向、是否含等号、首次命中策略、有效日期、价格标签/单位、provider）；追加规则不改抓取、去重、推送与调度编排。相同 provider 的规则合并成一次批量实时行情请求，相同代码自动去重。
 - **可靠性**：行情日期必须为上海当日，行情时间最多陈旧 10 分钟；旧行情/缺行情 fail-closed。事件先原子写 `data/runs/intraday-monitor/state.json` pending，再推钉钉；发送失败保留到同一交易日下一 tick 重试，成功后才记 sent。跨日或已退役规则的未送达事件过期，不会在以后启用其他规则时补发。
-- **真实链路测试**：CLI `e2e-test` 必须带 `--input-by` 与一次性显式确认 `--confirm-real-push`；缺少确认时在 provider 初始化、日历、行情与推送之前返回 `authorization_required`。必须经用户单独授权后，才可在交易时段以新鲜真实行情和仅本次测试线验收。测试不读写正式状态；只有退出码 0、`status=complete`、`pushed=true` 才能报告成功。
+- **真实链路测试**：CLI `e2e-test` 可用 `--rule-id` 选择任一当前生效的注册生产规则（默认上证 3955），并必须带 `--input-by` 与一次性显式确认 `--confirm-real-push`；缺少确认时在 provider 初始化、日历、行情与推送之前返回 `authorization_required`，已过期规则同样在 provider 前返回 `inactive_rule`。必须经用户单独授权后，才可在交易时段以新鲜真实行情和仅本次测试线验收。测试不读写正式状态；只有退出码 0、`status=complete`、`pushed=true` 才能报告成功。
 - **边界**：监控线是用户给定条件，只标 `[事实]`，不构成买卖建议，不写 SQLite、TradeDraft、TradePlan、持仓或关注池。Mac 休眠期间 launchd 不触发；需要强保障时须配盘中唤醒或迁 VPS。
 
 ## 盘中尾盘强势股扫描（tail-scan）

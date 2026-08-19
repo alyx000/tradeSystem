@@ -38,8 +38,8 @@
 - `com.alyx.tradesystem.monthly-pattern-monitor.plist` — 每 15 分钟轻量 tick，runner 仅在上海工作日 19:10（含）至 19:25（不含）执行一次重任务（月线种子日频动态 5 月线 + 日/周 MACD 变化监控；不受 Mac 本机时区切换影响；日志 `/tmp/tradesystem-monthly-pattern-monitor.log`）
 - `morning-brief-runner.sh` — 包装脚本：cd 仓库根 → source `~/.config/tradeSystem.env`(钉钉；TUSHARE_TOKEN 由 `scripts/.env` 在 Python 侧加载) → 调 `python3 main.py morning-brief daily`
 - `com.alyx.tradesystem.morning-brief.plist` — 工作日 08:00 触发（盘前早报：隔夜行情+海外/国内要闻[金十]+上市公司公告[巨潮]；非交易日 CLI 内守卫跳过；日志 `/tmp/tradesystem-morning-brief.log`；Sleep policy: 错过可接受——可手动 `morning-brief daily` 补跑）
-- `intraday-monitor-runner.sh` — 每 5 分钟 tick 的盘中门禁入口；只在上海 `09:30-11:30 / 13:00-15:00` 调 `intraday-monitor check`
-- `com.alyx.tradesystem.intraday-monitor.plist` — 盘中实时阈值监控；长期规则为上证指数站上 3955，2026-08-11 临时规则为利通电子跌破 123.92 元，日志 `/tmp/tradesystem-intraday-monitor.log`
+- `intraday-monitor-runner.sh` — 每 5 分钟 tick 的盘中门禁入口；上海 `09:30-11:30 / 13:00-15:00` 做常规检查，并保留 `15:01-15:05` 收盘补确认窗口（仅动态涨停价规则）以覆盖相对 300 秒节拍
+- `com.alyx.tradesystem.intraday-monitor.plist` — 盘中实时监控；长期规则为上证指数站上 3955，2026-08-19～20 监控三只连板股是否低于动态涨停价，日志 `/tmp/tradesystem-intraday-monitor.log`
 
 ## 前置条件
 
@@ -470,15 +470,26 @@ rm ~/Library/LaunchAgents/com.alyx.tradesystem.cognition-digest-*.plist
 
 ## 盘中实时阈值监控（每 5 分钟）
 
-监控引擎、CLI、launchd 与状态机继续保留。长期生产规则使用新浪实时 `000001.SH`，监控上证指数从 3955 点下方站上 3955 点（等于 3955 即命中）；首次观察已在线上不补发，持续在线上去重，跌回下方后再次站上可重推。临时规则使用 `603629.SH`，只在 2026-08-11 监控利通电子价格严格跌破 123.92 元；首次观察已跌破会推送，等于 123.92 元不触发，持续跌破去重，恢复后再次跌破可重推，有效期外不会请求该标的行情。科创50跌破与收复规则保持下线。
+监控引擎、CLI、launchd 与状态机继续保留。长期生产规则使用新浪实时 `000001.SH`，监控上证指数从 3955 点下方站上 3955 点（等于 3955 即命中）。2026-08-19～20 的日期限定规则监控金健米业 `600127.SH`、红四方 `603395.SH`、京粮控股 `000505.SZ` 是否断板：根据当日新鲜行情的 `pre_close`，复用统一涨跌停价工具按交易所舍入规则计算每只股票的当日涨停价；最新价严格低于涨停价时，盘中只表述为“当前未封涨停，最终以收盘为准”，行情时间达到 15:00 且仍低于涨停价才确认为当日断板并单独提醒，等值仍算封板。相对 300 秒节拍可能错过 15:00 分钟，因此 runner 允许到 15:05 补取一次终态；补确认窗口只请求三只动态规则，14:59 或更早的行情不冒充收盘且会非零退出等待下一 tick。首次快照已低于会推送，持续低于去重，回封后再次开板可重推；有效期外不会请求三只股票，无法可靠取得前收盘价时 fail-closed。三只目标行情部分失败会返回 `partial` 且 CLI 非零退出。科创50跌破与收复规则保持下线。
 
 ```bash
 RUNTIME_ROOT=/Users/alyx/tradeSystem/.worktrees/intraday-monitor-runtime
 REVIEWED_COMMIT=<REVIEWED_COMMIT>
-git worktree add --detach "$RUNTIME_ROOT" "$REVIEWED_COMMIT"
+# 已加载的任务必须先停掉，避免切换 detached worktree 时与正在启动的 Python 竞态。
+if launchctl print "gui/$(id -u)/com.alyx.tradesystem.intraday-monitor" >/dev/null 2>&1; then
+  launchctl bootout "gui/$(id -u)" \
+    "$HOME/Library/LaunchAgents/com.alyx.tradesystem.intraday-monitor.plist"
+fi
+if [ -e "$RUNTIME_ROOT/.git" ]; then
+  test -z "$(git -C "$RUNTIME_ROOT" status --porcelain --untracked-files=no)"
+  git -C "$RUNTIME_ROOT" switch --detach "$REVIEWED_COMMIT"
+else
+  git worktree add --detach "$RUNTIME_ROOT" "$REVIEWED_COMMIT"
+  ln -s /Users/alyx/tradeSystem/data "$RUNTIME_ROOT/data"
+fi
 test "$(git -C "$RUNTIME_ROOT" rev-parse HEAD)" = "$REVIEWED_COMMIT"
 test -z "$(git -C "$RUNTIME_ROOT" status --porcelain --untracked-files=no)"
-ln -s /Users/alyx/tradeSystem/data "$RUNTIME_ROOT/data"
+test "$(readlink "$RUNTIME_ROOT/data")" = /Users/alyx/tradeSystem/data
 
 chmod +x "$RUNTIME_ROOT/deploy/launchd/intraday-monitor-runner.sh"
 plutil -lint "$RUNTIME_ROOT/deploy/launchd/com.alyx.tradesystem.intraday-monitor.plist"
@@ -487,11 +498,12 @@ bash -n "$RUNTIME_ROOT/deploy/launchd/intraday-monitor-runner.sh"
 cp "$RUNTIME_ROOT/deploy/launchd/com.alyx.tradesystem.intraday-monitor.plist" \
   ~/Library/LaunchAgents/
 launchctl enable gui/$(id -u)/com.alyx.tradesystem.intraday-monitor
-launchctl load ~/Library/LaunchAgents/com.alyx.tradesystem.intraday-monitor.plist
+launchctl bootstrap gui/$(id -u) \
+  ~/Library/LaunchAgents/com.alyx.tradesystem.intraday-monitor.plist
 launchctl list | grep tradesystem.intraday-monitor
 
 # 手工启动一次 tick；仅在盘中、开放交易日且行情新鲜时检查
-launchctl start com.alyx.tradesystem.intraday-monitor
+launchctl kickstart -k gui/$(id -u)/com.alyx.tradesystem.intraday-monitor
 tail -f /tmp/tradesystem-intraday-monitor.log
 ```
 
@@ -510,7 +522,8 @@ rm ~/Library/LaunchAgents/com.alyx.tradesystem.intraday-monitor.plist
 注册新的生产规则并经用户授权做真实链路验收时，只在交易时段执行一次：
 
 ```bash
-python3 scripts/main.py intraday-monitor e2e-test --input-by USER --confirm-real-push --json
+python3 scripts/main.py intraday-monitor e2e-test --rule-id RULE_ID \
+  --input-by USER --confirm-real-push --json
 ```
 
 该命令只在用户明确授权后执行，并要求一次性显式参数 `--confirm-real-push`；缺少确认时在初始化行情源前返回 `authorization_required`，不会访问日历、行情或钉钉。授权后使用当日新鲜真实行情和仅本次测试线发送醒目标注“测试”的钉钉消息，且不读写正式状态。只有退出码为 0、`status=complete` 且 `pushed=true` 才能视为真实链路验收成功。
