@@ -2,17 +2,14 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import services.intraday_monitor.service as intraday_service
 from services.intraday_monitor.service import run_check, run_e2e_test
 from services.intraday_monitor.rules import (
     DEFAULT_RULES,
-    JINGLIANG_HOLDINGS_BOARD_BREAK_20260819_20,
-    JINJIAN_RICE_BOARD_BREAK_20260819_20,
     LITONG_ELECTRONICS_BELOW_123_92_20260811,
-    RED_SIFANG_BOARD_BREAK_20260819_20,
     SSE_COMPOSITE_RECLAIM_3955,
     MonitorRule,
 )
@@ -35,6 +32,22 @@ RECLAIM_RULE = MonitorRule(
     inclusive=True,
     emit_on_initial_match=False,
     action_label="收复",
+)
+BOARD_BREAK_RULE = MonitorRule(
+    "test-board-break",
+    "测试股票",
+    "600127.SH",
+    None,
+    direction="below",
+    inclusive=False,
+    emit_on_initial_match=True,
+    action_label="低于",
+    valid_from=date(2026, 8, 19),
+    valid_until=date(2026, 8, 20),
+    value_label="价格",
+    value_unit="元",
+    threshold_mode="daily_up_limit",
+    threshold_label="当日涨停价",
 )
 TEST_RULES = (BREACH_RULE, RECLAIM_RULE)
 
@@ -363,9 +376,6 @@ def test_default_sse_rule_pushes_only_after_observed_below_to_3955(tmp_path):
     assert DEFAULT_RULES == (
         SSE_COMPOSITE_RECLAIM_3955,
         LITONG_ELECTRONICS_BELOW_123_92_20260811,
-        JINJIAN_RICE_BOARD_BREAK_20260819_20,
-        RED_SIFANG_BOARD_BREAK_20260819_20,
-        JINGLIANG_HOLDINGS_BOARD_BREAK_20260819_20,
     )
     assert initial_above["events"] == []
     assert below["events"] == []
@@ -504,18 +514,11 @@ def test_default_rules_fetch_only_sse_before_and_after_litong_day(tmp_path):
         assert registry.requested_codes == [["000001.SH"]]
 
 
-def test_default_rules_fetch_three_board_break_stocks_only_during_two_day_window(tmp_path):
+def test_default_rules_do_not_fetch_cancelled_board_break_stocks(tmp_path):
     db_path = _calendar(
         tmp_path,
         dates=("2026-08-19", "2026-08-20", "2026-08-21"),
     )
-    expected_active_codes = [
-        "000001.SH",
-        "600127.SH",
-        "603395.SH",
-        "000505.SZ",
-    ]
-
     for day in (19, 20, 21):
         registry = _Registry(price=4000.0)
         pusher = _Pusher()
@@ -531,9 +534,7 @@ def test_default_rules_fetch_three_board_break_stocks_only_during_two_day_window
         )
 
         assert result["status"] == "complete"
-        assert registry.requested_codes == [
-            expected_active_codes if day in (19, 20) else ["000001.SH"]
-        ]
+        assert registry.requested_codes == [["000001.SH"]]
 
 
 def test_board_break_rule_uses_daily_limit_and_rearms_after_reseal(tmp_path):
@@ -544,7 +545,7 @@ def test_board_break_rule_uses_daily_limit_and_rearms_after_reseal(tmp_path):
     pusher = _Pusher()
     now = datetime(2026, 8, 19, 13, 0, tzinfo=TZ)
     registry.now = now
-    rules = (JINJIAN_RICE_BOARD_BREAK_20260819_20,)
+    rules = (BOARD_BREAK_RULE,)
 
     sealed = run_check(
         registry,
@@ -601,7 +602,7 @@ def test_board_break_rule_uses_daily_limit_and_rearms_after_reseal(tmp_path):
     assert still_broken["events"] == []
     assert len(broken_again["events"]) == 1
     assert len(pusher.messages) == 2
-    assert "金健米业" in pusher.messages[0][1]
+    assert "测试股票" in pusher.messages[0][1]
     assert "最新价格 **7.81**元" in pusher.messages[0][1]
     assert "低于当日涨停价 **7.82**元" in pusher.messages[0][1]
     assert "当前未封涨停" in pusher.messages[0][1]
@@ -614,7 +615,7 @@ def test_board_break_sends_distinct_close_confirmation_after_intraday_alert(tmp_
     registry = _Registry(price=7.81)
     registry.pre_close = 7.11
     pusher = _Pusher()
-    rules = (JINJIAN_RICE_BOARD_BREAK_20260819_20,)
+    rules = (BOARD_BREAK_RULE,)
 
     intraday_now = datetime(2026, 8, 19, 14, 55, tzinfo=TZ)
     registry.now = intraday_now
@@ -661,7 +662,7 @@ def test_close_does_not_accept_1459_quote_and_retries_with_1500_quote(tmp_path):
     registry = _Registry(price=7.81)
     registry.pre_close = 7.11
     pusher = _Pusher()
-    rules = (JINJIAN_RICE_BOARD_BREAK_20260819_20,)
+    rules = (BOARD_BREAK_RULE,)
 
     intraday_now = datetime(2026, 8, 19, 14, 59, 30, tzinfo=TZ)
     registry.now = datetime(2026, 8, 19, 14, 59, 0, tzinfo=TZ)
@@ -708,7 +709,7 @@ def test_same_quote_timestamp_has_distinct_intraday_and_close_event_ids(tmp_path
     registry.pre_close = 7.11
     registry.now = datetime(2026, 8, 19, 15, 0, 0, tzinfo=TZ)
     pusher = _Pusher()
-    rules = (JINJIAN_RICE_BOARD_BREAK_20260819_20,)
+    rules = (BOARD_BREAK_RULE,)
 
     intraday = run_check(
         registry,
@@ -741,6 +742,7 @@ def test_post_close_finalization_fetches_only_dynamic_rules(tmp_path):
 
     result = run_check(
         registry,
+        rules=(BOARD_BREAK_RULE,),
         now=now,
         state_path=tmp_path / "state.json",
         db_path=db_path,
@@ -748,7 +750,7 @@ def test_post_close_finalization_fetches_only_dynamic_rules(tmp_path):
     )
 
     assert result["status"] == "complete"
-    assert registry.requested_codes == [["600127.SH", "603395.SH", "000505.SZ"]]
+    assert registry.requested_codes == [["600127.SH"]]
 
 
 def test_board_break_first_observation_below_limit_pushes_and_recalculates_next_day(tmp_path):
@@ -759,7 +761,7 @@ def test_board_break_first_observation_below_limit_pushes_and_recalculates_next_
     pusher = _Pusher()
     day_one = datetime(2026, 8, 19, 13, 0, tzinfo=TZ)
     registry.now = day_one
-    rules = (JINJIAN_RICE_BOARD_BREAK_20260819_20,)
+    rules = (BOARD_BREAK_RULE,)
 
     first = run_check(
         registry,
@@ -797,7 +799,7 @@ def test_board_break_missing_pre_close_fails_closed(tmp_path):
 
     result = run_check(
         registry,
-        rules=(JINJIAN_RICE_BOARD_BREAK_20260819_20,),
+        rules=(BOARD_BREAK_RULE,),
         now=now,
         state_path=tmp_path / "state.json",
         db_path=db_path,
@@ -809,7 +811,7 @@ def test_board_break_missing_pre_close_fails_closed(tmp_path):
     assert pusher.messages == []
 
 
-def test_default_check_is_partial_when_all_three_board_break_quotes_are_invalid(tmp_path):
+def test_default_check_ignores_cancelled_board_break_quote_overrides(tmp_path):
     db_path = _calendar(tmp_path, dates=("2026-08-19",))
     registry = _Registry(price=4000.0)
     for code in ("600127.SH", "603395.SH", "000505.SZ"):
@@ -826,9 +828,10 @@ def test_default_check_is_partial_when_all_three_board_break_quotes_are_invalid(
         pusher_factory=lambda: pusher,
     )
 
-    assert result["status"] == "partial"
+    assert result["status"] == "complete"
     assert result["quotes_checked"] == 1
-    assert len([error for error in result["errors"] if "无法根据前收盘价" in error]) == 3
+    assert result["errors"] == []
+    assert registry.requested_codes == [["000001.SH"]]
     assert pusher.messages == []
 
 
@@ -1084,14 +1087,14 @@ def test_e2e_test_resolves_dynamic_board_break_threshold(tmp_path):
     registry = _Registry(price=7.81)
     registry.pre_close = 7.11
     registry.now = now
-    registry.quote_overrides["600127.SH"] = {"name": "金健米业"}
+    registry.quote_overrides["600127.SH"] = {"name": "测试股票"}
     pusher = _Pusher()
 
     result = run_e2e_test(
         registry,
         input_by="pytest",
         confirm_real_push=True,
-        rule=JINJIAN_RICE_BOARD_BREAK_20260819_20,
+        rule=BOARD_BREAK_RULE,
         now=now,
         db_path=db_path,
         pusher_factory=lambda: pusher,
@@ -1168,7 +1171,7 @@ def test_e2e_test_rejects_inactive_rule_before_fetch(tmp_path):
         registry,
         input_by="pytest",
         confirm_real_push=True,
-        rule=JINJIAN_RICE_BOARD_BREAK_20260819_20,
+        rule=BOARD_BREAK_RULE,
         now=datetime(2026, 8, 21, 10, 0, tzinfo=TZ),
         db_path=tmp_path / "missing.db",
         pusher_factory=lambda: pusher,

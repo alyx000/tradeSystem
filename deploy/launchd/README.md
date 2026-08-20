@@ -39,7 +39,7 @@
 - `morning-brief-runner.sh` — 包装脚本：cd 仓库根 → source `~/.config/tradeSystem.env`(钉钉；TUSHARE_TOKEN 由 `scripts/.env` 在 Python 侧加载) → 调 `python3 main.py morning-brief daily`
 - `com.alyx.tradesystem.morning-brief.plist` — 工作日 08:00 触发（盘前早报：隔夜行情+海外/国内要闻[金十]+上市公司公告[巨潮]；非交易日 CLI 内守卫跳过；日志 `/tmp/tradesystem-morning-brief.log`；Sleep policy: 错过可接受——可手动 `morning-brief daily` 补跑）
 - `intraday-monitor-runner.sh` — 每 5 分钟 tick 的盘中门禁入口；上海 `09:30-11:30 / 13:00-15:00` 做常规检查，并保留 `15:01-15:05` 收盘补确认窗口（仅动态涨停价规则）以覆盖相对 300 秒节拍
-- `com.alyx.tradesystem.intraday-monitor.plist` — 盘中实时监控；长期规则为上证指数站上 3955，2026-08-19～20 监控三只连板股是否低于动态涨停价，日志 `/tmp/tradesystem-intraday-monitor.log`
+- `com.alyx.tradesystem.intraday-monitor.plist` — 盘中实时监控；当前仅启用上证指数站上 3955，历史个股规则已下线，日志 `/tmp/tradesystem-intraday-monitor.log`
 
 ## 前置条件
 
@@ -470,18 +470,24 @@ rm ~/Library/LaunchAgents/com.alyx.tradesystem.cognition-digest-*.plist
 
 ## 盘中实时阈值监控（每 5 分钟）
 
-监控引擎、CLI、launchd 与状态机继续保留。长期生产规则使用新浪实时 `000001.SH`，监控上证指数从 3955 点下方站上 3955 点（等于 3955 即命中）。2026-08-19～20 的日期限定规则监控金健米业 `600127.SH`、红四方 `603395.SH`、京粮控股 `000505.SZ` 是否断板：根据当日新鲜行情的 `pre_close`，复用统一涨跌停价工具按交易所舍入规则计算每只股票的当日涨停价；最新价严格低于涨停价时，盘中只表述为“当前未封涨停，最终以收盘为准”，行情时间达到 15:00 且仍低于涨停价才确认为当日断板并单独提醒，等值仍算封板。相对 300 秒节拍可能错过 15:00 分钟，因此 runner 允许到 15:05 补取一次终态；补确认窗口只请求三只动态规则，14:59 或更早的行情不冒充收盘且会非零退出等待下一 tick。首次快照已低于会推送，持续低于去重，回封后再次开板可重推；有效期外不会请求三只股票，无法可靠取得前收盘价时 fail-closed。三只目标行情部分失败会返回 `partial` 且 CLI 非零退出。科创50跌破与收复规则保持下线。
+监控引擎、CLI、launchd 与状态机继续保留。当前启用的长期生产规则仅使用新浪实时 `000001.SH`，监控上证指数从 3955 点下方站上 3955 点（等于 3955 即命中）。金健米业 `600127.SH`、红四方 `603395.SH`、京粮控股 `000505.SZ` 三条断板规则已于 2026-08-20 应用户要求下线，不再请求行情或推送；科创50跌破与收复规则也保持下线。动态涨停价计算、盘中/收盘阶段、去重、回封重入、有效期过滤及 fail-closed 等通用能力仍保留，后续新增规则无需改动编排与调度。
 
 ```bash
 RUNTIME_ROOT=/Users/alyx/tradeSystem/.worktrees/intraday-monitor-runtime
 REVIEWED_COMMIT=<REVIEWED_COMMIT>
+set -euo pipefail
+
+# 停任务前先验证 commit 存在，并确认既有 runtime 没有代码改动。
+git -C /Users/alyx/tradeSystem rev-parse --verify "$REVIEWED_COMMIT^{commit}" >/dev/null
+if [ -e "$RUNTIME_ROOT/.git" ]; then
+  test -z "$(git -C "$RUNTIME_ROOT" status --porcelain --untracked-files=no)"
+fi
 # 已加载的任务必须先停掉，避免切换 detached worktree 时与正在启动的 Python 竞态。
 if launchctl print "gui/$(id -u)/com.alyx.tradesystem.intraday-monitor" >/dev/null 2>&1; then
   launchctl bootout "gui/$(id -u)" \
     "$HOME/Library/LaunchAgents/com.alyx.tradesystem.intraday-monitor.plist"
 fi
 if [ -e "$RUNTIME_ROOT/.git" ]; then
-  test -z "$(git -C "$RUNTIME_ROOT" status --porcelain --untracked-files=no)"
   git -C "$RUNTIME_ROOT" switch --detach "$REVIEWED_COMMIT"
 else
   git worktree add --detach "$RUNTIME_ROOT" "$REVIEWED_COMMIT"
@@ -506,6 +512,8 @@ launchctl list | grep tradesystem.intraday-monitor
 launchctl kickstart -k gui/$(id -u)/com.alyx.tradesystem.intraday-monitor
 tail -f /tmp/tradesystem-intraday-monitor.log
 ```
+
+以上步骤使用 `set -euo pipefail`，任何验签、切换、lint 或加载失败都会立即停止，禁止带错继续。若失败发生在 `bootout` 之后，应先修复报错并从 `git switch --detach "$REVIEWED_COMMIT"` 继续完成加载；不得在未通过 HEAD、干净状态、data 链接、plist 与 shell 语法校验时恢复任务。
 
 卸载：
 

@@ -6,6 +6,7 @@ import json
 import logging
 
 from services.intraday_monitor import DEFAULT_RULES, run_check, run_e2e_test
+from services.intraday_monitor.guards import shanghai_now
 
 
 logger = logging.getLogger(__name__)
@@ -14,11 +15,10 @@ logger = logging.getLogger(__name__)
 def register_subparser(subparsers: argparse._SubParsersAction) -> None:
     parser = subparsers.add_parser(
         "intraday-monitor",
-        help="盘中实时监控（上证3955长期规则 + 三只连板股两日断板规则）",
+        help="盘中实时监控（当前仅启用上证3955长期规则）",
         description=(
-            "可扩展盘中实时阈值监控。长期规则监控上证指数从3955点下方站上"
-            "3955点；2026年8月19日至20日监控金健米业、红四方、京粮控股"
-            "是否严格低于按前收盘价计算的当日涨停价。"
+            "可扩展盘中实时阈值监控。当前长期监控上证指数从3955点下方站上"
+            "3955点；历史个股规则已下线，动态阈值能力继续保留。"
         ),
     )
     commands = parser.add_subparsers(dest="intraday_monitor_command")
@@ -27,9 +27,8 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
         help="执行一次当前有效规则的监控检查",
         description=(
             "执行一次监控检查。上证指数从3955点下方站上3955点时推送钉钉；"
-            "三只连板股规则仅在2026年8月19日至20日有效，价格严格低于当日"
-            "涨停价时提醒当前未封涨停，最终是否断板以收盘为准。"
-            "各规则持续命中去重，恢复后再次命中可重推。"
+            "历史个股规则已下线。各规则持续命中去重，恢复后再次命中可重推；"
+            "监控引擎与动态阈值能力继续保留。"
         ),
     )
     check.add_argument("--dry-run", action="store_true", help="只预览，不写状态、不推送")
@@ -84,6 +83,15 @@ def handle_command(config: dict, args: argparse.Namespace) -> int:
                 None,
                 input_by=str(args.input_by),
                 confirm_real_push=False,
+                rule=selected_rule,
+            )
+        elif selected_rule is not None and not selected_rule.is_effective_on(
+            shanghai_now().date()
+        ):
+            result = run_e2e_test(
+                None,
+                input_by=str(args.input_by),
+                confirm_real_push=True,
                 rule=selected_rule,
             )
         else:

@@ -112,68 +112,12 @@ LITONG_ELECTRONICS_BELOW_123_92_20260811 = MonitorRule(
 )
 
 
-JINJIAN_RICE_BOARD_BREAK_20260819_20 = MonitorRule(
-    rule_id="jinjian-rice-board-break-20260819-20",
-    instrument_name="金健米业",
-    code="600127.SH",
-    threshold=None,
-    direction="below",
-    inclusive=False,
-    emit_on_initial_match=True,
-    action_label="低于",
-    valid_from=date(2026, 8, 19),
-    valid_until=date(2026, 8, 20),
-    value_label="价格",
-    value_unit="元",
-    threshold_mode="daily_up_limit",
-    threshold_label="当日涨停价",
-)
-
-
-RED_SIFANG_BOARD_BREAK_20260819_20 = MonitorRule(
-    rule_id="red-sifang-board-break-20260819-20",
-    instrument_name="红四方",
-    code="603395.SH",
-    threshold=None,
-    direction="below",
-    inclusive=False,
-    emit_on_initial_match=True,
-    action_label="低于",
-    valid_from=date(2026, 8, 19),
-    valid_until=date(2026, 8, 20),
-    value_label="价格",
-    value_unit="元",
-    threshold_mode="daily_up_limit",
-    threshold_label="当日涨停价",
-)
-
-
-JINGLIANG_HOLDINGS_BOARD_BREAK_20260819_20 = MonitorRule(
-    rule_id="jingliang-holdings-board-break-20260819-20",
-    instrument_name="京粮控股",
-    code="000505.SZ",
-    threshold=None,
-    direction="below",
-    inclusive=False,
-    emit_on_initial_match=True,
-    action_label="低于",
-    valid_from=date(2026, 8, 19),
-    valid_until=date(2026, 8, 20),
-    value_label="价格",
-    value_unit="元",
-    threshold_mode="daily_up_limit",
-    threshold_label="当日涨停价",
-)
-
-
-# 长期规则保留上证指数站上 3955；个股规则仅在各自日期范围生效。
+# 长期规则保留上证指数站上 3955；历史个股规则不再启用。
+# 动态涨停价能力仍由 MonitorRule.threshold_mode 保留，供后续配置复用。
 # 已下线的科创50规则不在此恢复。
 DEFAULT_RULES: tuple[MonitorRule, ...] = (
     SSE_COMPOSITE_RECLAIM_3955,
     LITONG_ELECTRONICS_BELOW_123_92_20260811,
-    JINJIAN_RICE_BOARD_BREAK_20260819_20,
-    RED_SIFANG_BOARD_BREAK_20260819_20,
-    JINGLIANG_HOLDINGS_BOARD_BREAK_20260819_20,
 )
 
 

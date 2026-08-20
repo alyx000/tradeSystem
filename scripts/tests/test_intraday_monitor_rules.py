@@ -9,13 +9,28 @@ from services.intraday_monitor.guards import (
 )
 from services.intraday_monitor.rules import (
     DEFAULT_RULES,
-    JINGLIANG_HOLDINGS_BOARD_BREAK_20260819_20,
-    JINJIAN_RICE_BOARD_BREAK_20260819_20,
     LITONG_ELECTRONICS_BELOW_123_92_20260811,
-    RED_SIFANG_BOARD_BREAK_20260819_20,
     SSE_COMPOSITE_RECLAIM_3955,
     MonitorRule,
     should_emit,
+)
+
+
+BOARD_BREAK_RULE = MonitorRule(
+    "test-board-break",
+    "测试股票",
+    "600127.SH",
+    None,
+    direction="below",
+    inclusive=False,
+    emit_on_initial_match=True,
+    action_label="低于",
+    valid_from=date(2026, 8, 19),
+    valid_until=date(2026, 8, 20),
+    value_label="价格",
+    value_unit="元",
+    threshold_mode="daily_up_limit",
+    threshold_label="当日涨停价",
 )
 
 
@@ -54,13 +69,10 @@ def test_reclaim_is_inclusive_and_does_not_emit_on_initial_match():
     ) is True
 
 
-def test_sse_litong_and_two_day_board_break_rules_are_enabled():
+def test_sse_and_litong_are_enabled_and_board_break_rules_are_disabled():
     assert DEFAULT_RULES == (
         SSE_COMPOSITE_RECLAIM_3955,
         LITONG_ELECTRONICS_BELOW_123_92_20260811,
-        JINJIAN_RICE_BOARD_BREAK_20260819_20,
-        RED_SIFANG_BOARD_BREAK_20260819_20,
-        JINGLIANG_HOLDINGS_BOARD_BREAK_20260819_20,
     )
     assert SSE_COMPOSITE_RECLAIM_3955.rule_id == "sse-composite-reclaim-3955"
     assert SSE_COMPOSITE_RECLAIM_3955.instrument_name == "上证指数"
@@ -88,27 +100,20 @@ def test_sse_litong_and_two_day_board_break_rules_are_enabled():
     assert litong.is_effective_on(date(2026, 8, 11)) is True
     assert litong.is_effective_on(date(2026, 8, 12)) is False
 
-    expected = (
-        (JINJIAN_RICE_BOARD_BREAK_20260819_20, "金健米业", "600127.SH", 7.11, 7.82),
-        (RED_SIFANG_BOARD_BREAK_20260819_20, "红四方", "603395.SH", 26.36, 29.0),
-        (JINGLIANG_HOLDINGS_BOARD_BREAK_20260819_20, "京粮控股", "000505.SZ", 6.79, 7.47),
-    )
-    for rule, name, code, pre_close, up_limit in expected:
-        assert rule.instrument_name == name
-        assert rule.code == code
-        assert rule.threshold is None
-        assert rule.threshold_mode == "daily_up_limit"
-        assert rule.threshold_label == "当日涨停价"
-        assert rule.direction == "below"
-        assert rule.inclusive is False
-        assert rule.emit_on_initial_match is True
-        assert rule.resolve_threshold({"pre_close": pre_close, "name": name}) == up_limit
-        assert rule.is_active(up_limit, threshold=up_limit) is False
-        assert rule.is_active(up_limit - 0.01, threshold=up_limit) is True
-        assert rule.is_effective_on(date(2026, 8, 18)) is False
-        assert rule.is_effective_on(date(2026, 8, 19)) is True
-        assert rule.is_effective_on(date(2026, 8, 20)) is True
-        assert rule.is_effective_on(date(2026, 8, 21)) is False
+
+
+def test_dynamic_board_break_capability_remains_available():
+    rule = BOARD_BREAK_RULE
+    assert rule.threshold is None
+    assert rule.threshold_mode == "daily_up_limit"
+    assert rule.threshold_label == "当日涨停价"
+    assert rule.resolve_threshold({"pre_close": 7.11, "name": "测试股票"}) == 7.82
+    assert rule.is_active(7.82, threshold=7.82) is False
+    assert rule.is_active(7.81, threshold=7.82) is True
+    assert rule.is_effective_on(date(2026, 8, 18)) is False
+    assert rule.is_effective_on(date(2026, 8, 19)) is True
+    assert rule.is_effective_on(date(2026, 8, 20)) is True
+    assert rule.is_effective_on(date(2026, 8, 21)) is False
 
 
 def test_rule_rejects_reversed_validity_window():
@@ -135,9 +140,9 @@ def test_dynamic_limit_rule_rejects_ambiguous_or_missing_threshold_inputs():
     with pytest.raises(ValueError, match="必须提供"):
         MonitorRule("missing", "测试标的", "600000.SH", None)
     with pytest.raises(ValueError, match="必须先解析"):
-        JINJIAN_RICE_BOARD_BREAK_20260819_20.is_active(7.81)
+        BOARD_BREAK_RULE.is_active(7.81)
     with pytest.raises(ValueError, match="无法根据前收盘价"):
-        JINJIAN_RICE_BOARD_BREAK_20260819_20.resolve_threshold({"pre_close": None})
+        BOARD_BREAK_RULE.resolve_threshold({"pre_close": None})
 
 
 def test_transition_only_emits_on_entry():

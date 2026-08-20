@@ -1963,7 +1963,7 @@ def build_parser() -> argparse.ArgumentParser:
     from cli.tail_scan import register_subparser as register_tail_scan_subparser
     register_tail_scan_subparser(subparsers)
 
-    # intraday-monitor (上证3955长期规则 + 日期限定的个股动态涨停价盘中开板/收盘断板规则)
+    # intraday-monitor (当前仅启用上证3955长期规则；动态阈值监控能力保留)
     from cli.intraday_monitor import register_subparser as register_intraday_monitor_subparser
     register_intraday_monitor_subparser(subparsers)
 
