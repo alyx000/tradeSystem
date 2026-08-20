@@ -11,6 +11,7 @@ from services.intraday_monitor.rules import (
     DEFAULT_RULES,
     LITONG_ELECTRONICS_BELOW_123_92_20260811,
     SSE_COMPOSITE_RECLAIM_3955,
+    STAR50_BREAKOUT_1700_20260821_24,
     MonitorRule,
     should_emit,
 )
@@ -69,10 +70,11 @@ def test_reclaim_is_inclusive_and_does_not_emit_on_initial_match():
     ) is True
 
 
-def test_sse_and_litong_are_enabled_and_board_break_rules_are_disabled():
+def test_sse_litong_and_two_trade_day_star50_rule_are_registered():
     assert DEFAULT_RULES == (
         SSE_COMPOSITE_RECLAIM_3955,
         LITONG_ELECTRONICS_BELOW_123_92_20260811,
+        STAR50_BREAKOUT_1700_20260821_24,
     )
     assert SSE_COMPOSITE_RECLAIM_3955.rule_id == "sse-composite-reclaim-3955"
     assert SSE_COMPOSITE_RECLAIM_3955.instrument_name == "上证指数"
@@ -99,6 +101,22 @@ def test_sse_and_litong_are_enabled_and_board_break_rules_are_disabled():
     assert litong.is_effective_on(date(2026, 8, 10)) is False
     assert litong.is_effective_on(date(2026, 8, 11)) is True
     assert litong.is_effective_on(date(2026, 8, 12)) is False
+
+    star50 = STAR50_BREAKOUT_1700_20260821_24
+    assert star50.rule_id == "star50-breakout-1700-20260821-24"
+    assert star50.instrument_name == "科创50"
+    assert star50.code == "000688.SH"
+    assert star50.threshold == 1700.0
+    assert star50.direction == "above"
+    assert star50.inclusive is False
+    assert star50.emit_on_initial_match is True
+    assert star50.action_text == "突破"
+    assert star50.is_active(1700.0) is False
+    assert star50.is_active(1700.01) is True
+    assert star50.is_effective_on(date(2026, 8, 20)) is False
+    assert star50.is_effective_on(date(2026, 8, 21)) is True
+    assert star50.is_effective_on(date(2026, 8, 24)) is True
+    assert star50.is_effective_on(date(2026, 8, 25)) is False
 
 
 

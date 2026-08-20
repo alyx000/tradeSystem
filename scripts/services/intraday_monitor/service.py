@@ -223,11 +223,7 @@ def _run_locked(
         local_time = now.time().replace(tzinfo=None)
         quote_time = quoted_at.time().replace(tzinfo=None)
         close_phase = local_time >= time(15, 0)
-        if (
-            close_phase
-            and rule.threshold_mode == "daily_up_limit"
-            and quote_time < CLOSING_SNAPSHOT_MIN_QUOTE_TIME
-        ):
+        if close_phase and quote_time < CLOSING_SNAPSHOT_MIN_QUOTE_TIME:
             errors.append(f"{rule.rule_id}: 收盘行情尚未就绪（行情时间 {quote_time.isoformat()}）")
             continue
         closing_snapshot = (
@@ -363,19 +359,6 @@ def run_check(
     close_finalization = is_close_finalization_window(local_now)
     if not is_intraday_session(local_now) and not close_finalization:
         return {"status": "outside_session", "events": [], "errors": []}
-    if local_now.time().replace(tzinfo=None) >= time(15, 0):
-        effective_rules = tuple(
-            rule for rule in effective_rules if rule.threshold_mode == "daily_up_limit"
-        )
-        if not effective_rules:
-            return {
-                "status": "no_close_rules",
-                "events": [],
-                "errors": [],
-                "rules_checked": 0,
-                "quotes_checked": 0,
-                "pushed": False,
-            }
     trade_day = confirmed_trade_day(local_now.date().isoformat(), db_path=db_path)
     if trade_day is None:
         return {"status": "blocked_calendar", "events": [], "errors": ["交易日历缺失或不可读"]}

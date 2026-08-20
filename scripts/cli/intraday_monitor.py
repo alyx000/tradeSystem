@@ -15,10 +15,10 @@ logger = logging.getLogger(__name__)
 def register_subparser(subparsers: argparse._SubParsersAction) -> None:
     parser = subparsers.add_parser(
         "intraday-monitor",
-        help="盘中实时监控（当前仅启用上证3955长期规则）",
+        help="盘中实时监控（上证3955长期规则 + 科创50两交易日1700规则）",
         description=(
-            "可扩展盘中实时阈值监控。当前长期监控上证指数从3955点下方站上"
-            "3955点；历史个股规则已下线，动态阈值能力继续保留。"
+            "可扩展盘中实时阈值监控。长期监控上证指数从3955点下方站上"
+            "3955点；2026年8月21日与24日监控科创50是否严格突破1700点。"
         ),
     )
     commands = parser.add_subparsers(dest="intraday_monitor_command")
@@ -27,8 +27,8 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
         help="执行一次当前有效规则的监控检查",
         description=(
             "执行一次监控检查。上证指数从3955点下方站上3955点时推送钉钉；"
-            "历史个股规则已下线。各规则持续命中去重，恢复后再次命中可重推；"
-            "监控引擎与动态阈值能力继续保留。"
+            "2026年8月21日与24日科创50严格高于1700点时推送。各规则持续"
+            "命中去重，恢复后再次命中可重推；历史个股规则保持下线。"
         ),
     )
     check.add_argument("--dry-run", action="store_true", help="只预览，不写状态、不推送")

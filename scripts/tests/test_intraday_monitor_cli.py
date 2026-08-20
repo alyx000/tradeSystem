@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime
 
 import main
 from cli import intraday_monitor
@@ -87,6 +88,32 @@ def test_e2e_cli_rejects_inactive_rule_before_provider_setup(monkeypatch, capsys
     assert '"status": "inactive_rule"' in capsys.readouterr().out
 
 
+def test_e2e_cli_selects_active_star50_rule(monkeypatch, capsys):
+    registry = object()
+    monkeypatch.setattr(main, "setup_providers", lambda config: registry)
+    monkeypatch.setattr(
+        intraday_monitor,
+        "shanghai_now",
+        lambda: datetime(2026, 8, 21, 10, 0),
+    )
+    calls = []
+    monkeypatch.setattr(
+        intraday_monitor,
+        "run_e2e_test",
+        lambda got, input_by, confirm_real_push, rule: calls.append(rule) or {
+            "status": "complete",
+            "events": [{}],
+            "errors": [],
+            "pushed": True,
+        },
+    )
+    selected = intraday_monitor.DEFAULT_RULES[2]
+
+    assert intraday_monitor.handle_command({}, _args(rule_id=selected.rule_id)) == 0
+    assert calls == [selected]
+    assert '"status": "complete"' in capsys.readouterr().out
+
+
 def test_e2e_cli_requires_explicit_real_push_confirmation_before_provider_setup(
     monkeypatch,
     capsys,
@@ -146,11 +173,10 @@ def test_help_describes_current_rules_at_every_command_level():
 
     root_help = intraday_parser.format_help()
     assert "上证指数从3955点下方" in root_help
-    assert "历史个股规则已下线" in root_help
-    assert "动态阈值能力继续保留" in root_help
+    assert "2026年8月21日与24日监控科创50是否严格突破1700点" in root_help
     check_help = "".join(command_choices["check"].format_help().split())
-    assert "历史个股规则已下线" in check_help
-    assert "动态阈值能力继续保留" in check_help
+    assert "历史个股规则保持下线" in check_help
+    assert "科创50严格高于1700点时推送" in check_help
     assert "持续命中去重" in check_help
     assert "恢复后再次命中可重推" in check_help
     e2e_help = command_choices["e2e-test"].format_help()

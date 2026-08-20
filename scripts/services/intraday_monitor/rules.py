@@ -112,12 +112,28 @@ LITONG_ELECTRONICS_BELOW_123_92_20260811 = MonitorRule(
 )
 
 
+STAR50_BREAKOUT_1700_20260821_24 = MonitorRule(
+    rule_id="star50-breakout-1700-20260821-24",
+    instrument_name="科创50",
+    code="000688.SH",
+    threshold=1700.0,
+    direction="above",
+    inclusive=False,
+    emit_on_initial_match=True,
+    action_label="突破",
+    valid_from=date(2026, 8, 21),
+    valid_until=date(2026, 8, 24),
+)
+
+
 # 长期规则保留上证指数站上 3955；历史个股规则不再启用。
 # 动态涨停价能力仍由 MonitorRule.threshold_mode 保留，供后续配置复用。
-# 已下线的科创50规则不在此恢复。
+# 科创50 1700 临时规则覆盖 8 月 21 日与 24 日两个开放交易日；
+# 周末自然日仍由只读交易日历门禁拦截，不请求行情。
 DEFAULT_RULES: tuple[MonitorRule, ...] = (
     SSE_COMPOSITE_RECLAIM_3955,
     LITONG_ELECTRONICS_BELOW_123_92_20260811,
+    STAR50_BREAKOUT_1700_20260821_24,
 )
 
 
