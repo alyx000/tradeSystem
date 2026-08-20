@@ -502,8 +502,6 @@ def _coarse_score(card: dict) -> float:
         s += C.W_RHYTHM_MA
     if card.get("broke_high"):
         s += C.W_NODE_BREAK
-    if card.get("is_limit_up") and (card.get("close_pos") or 0) >= C.TAIL_STRONG_CLOSE_POS_MIN:
-        s += C.W_TAIL_STRONG
     return s
 
 

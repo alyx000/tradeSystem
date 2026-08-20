@@ -177,7 +177,7 @@ def test_render_concept_names_are_plain_markdown_text():
 def test_render_concept_lines_precede_industry_logic_and_disclaimer_is_explicit():
     card = {
         **_scored()[0],
-        "is_limit_up": True,
+        "is_limit_up": False,
         "business_status": "missing",
         "industry_position": "",
         "catalyst_status": "none",
@@ -187,12 +187,18 @@ def test_render_concept_lines_precede_industry_logic_and_disclaimer_is_explicit(
     md = renderer.render_daily(_scan(), [card], None)
 
     candidate_head = next(line for line in md.splitlines() if line.startswith("- **"))
-    assert "｜主线 已涨停" in candidate_head
+    assert "｜主线" in candidate_head
+    assert "已涨停" not in candidate_head
     assert "概念:" not in candidate_head
     assert md.index("[事实·归属概念]") < md.index("[事实·T-1热概念命中]")
     assert md.index("[事实·T-1热概念命中]") < md.index("[事实·主营]")
     assert "归属概念为扫描时当前快照" in md
     assert "T-1热概念命中为上一交易日资金流口径" in md
+
+
+def test_render_discloses_limit_up_exclusion():
+    md = renderer.render_daily(_scan(), _scored(), None)
+    assert "成交额>20亿 ∩ 未涨停" in md
 
 
 @pytest.mark.parametrize("hot_status", ["source_failed", "member_failed", "coverage_failed"])

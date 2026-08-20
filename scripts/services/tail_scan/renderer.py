@@ -217,7 +217,7 @@ def _report_prefix(scan_result: dict, pk_result: dict | None) -> list[str]:
     date = scan_result.get("quote_date", "")
     qt = scan_result.get("quote_time", "")
     lines = [f"# 尾盘强势股观察清单 · {date} {qt}\n", _DISCLAIMER,
-             f"\n筛选：涨幅>7% ∩ 非ST ∩ 成交额>20亿 · 全市场扫 {scan_result.get('scanned', 0)} 只 → "
+             f"\n筛选：涨幅>7% ∩ 非ST ∩ 成交额>20亿 ∩ 未涨停 · 全市场扫 {scan_result.get('scanned', 0)} 只 → "
              f"命中 **{scan_result.get('matched', 0)}** 只\n"]
     if pk_result and pk_result.get("status") == "melted":
         lines.append("\n> [判断] PK 循环赛熔断（预算/无效场率超限），仅按粗分排序展示。\n")
@@ -228,8 +228,6 @@ def _candidate_block(card: dict, pk_result: dict | None) -> str:
     tags = []
     if card.get("in_main_sector"):
         tags.append("主线")
-    if card.get("is_limit_up"):
-        tags.append("已涨停")
     tag_s = ("｜" + " ".join(tags)) if tags else ""
     lines = [
         f"- **{card.get('name','')}**（{card.get('code','')}）涨{_fmt(card.get('pct_chg'), 2, '%')} "

@@ -493,7 +493,7 @@ python3 main.py tail-scan daily --no-llm                       # 跳过 LLM 两�
 python3 main.py tail-scan daily --min-pct 7 --min-amount 20    # 显式指定筛选阈值（同默认值）
 ```
 
-- **候选筛选（[事实]）**：全市场实时快照（`get_realtime_quotes`，sina 分片源单点脆弱，14:40 单次触发失败自动重试一次，仍失败落 `source_failed`）→ 涨幅 > `--min-pct`（默认 7%）∩ 非ST ∩ 成交额 > `--min-amount`（默认 20 亿）。
+- **候选筛选（[事实]）**：全市场实时快照（`get_realtime_quotes`，sina 分片源单点脆弱，14:40 单次触发失败自动重试一次，仍失败落 `source_failed`）→ 涨幅 > `--min-pct`（默认 7%）∩ 非ST ∩ 成交额 > `--min-amount`（默认 20 亿）∩ 未涨停；涨停按实时价是否触及板块制度、前收盘价及交易所分币舍入后的正式涨停价判定，在构建事实卡与 PK 前直接剔除。上市后前 5 个开放日属无涨跌幅限制日，不套用常规理论涨停价；上市日或所需交易日历无法确认时落 `source_failed`，不猜测。
 - **四维事实卡（[事实]，单维度取数失败只降级该维度不中断整批）**：逻辑（T-1 主线申万二级 Top-K + 同花顺概念资金流 T-1 Top-M + 老师观点命中）/ 三位一体（候选池内涨幅名次 + 指数背景）/ 节奏（近5日涨幅、是否站上均线、连涨天数、半日成交额追平昨日全日节奏的首次放量加速代理 `first_surge`）/ 节点（距前高距离、是否突破前高）。
 - **两层概念上下文（每票同时展示）**：`get_stock_concept_memberships` 按候选代码反查同花顺 `type=N` 的扫描时当前快照，归属概念复用共享成员数 `<=300` 过滤；这是当前公开静态归属，**不是历史 as-of 快照**，完整过滤后列表只供报告和产业证据匹配，报告最多展示 5 个并标总数，不进入粗分或 PK。T-1 热概念严格取上一交易日资金流，按净流入排序后先用 `company_num<=300` 剔除容器，再向后补足 Top8；逐票命中按热榜顺序，报告最多展示 2 个。兼容字段 `concept_names` / `concept_status` / `in_hot_concept` 仍只表示 T-1 热命中并维持原粗分语义；`stock_concept_*` 表示当前归属。状态不得混淆：归属 `missing` 是成功反查但无可用窄概念，`source_failed` 是归属源失败；热概念 `source_failed` 是资金流失败或为空，`coverage_failed` 是宽度数据不足以安全过滤，`member_failed` 是单票归属失败，只有 `concept_status=ok` 且命中列表为空才是确定未命中。
 - **产业逻辑增强（每票展示）**：`[事实·主营]` 由 Tushare `stock_company` 主源、AkShare `stock_zyjs_ths` 补缺，摘要优先级为 `main_business` > `introduction` > `business_scope`；这是扫描时取得的当前公开静态资料，**不是历史 as-of 快照**。`[判断·产业链位置]` 只基于申万二级、主营摘要与产品做受控归纳，不引入模型自由发挥。

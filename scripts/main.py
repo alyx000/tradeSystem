@@ -1959,7 +1959,7 @@ def build_parser() -> argparse.ArgumentParser:
     from cli.emotion_leader import register_subparser as register_emotion_leader_subparser
     register_emotion_leader_subparser(subparsers)
 
-    # tail-scan (盘中尾盘强势股:14:30实时筛涨幅>7%/非ST/成交额>20亿 → 四维事实卡+LLM两两PK观察清单;无状态)
+    # tail-scan (盘中尾盘强势股:14:40实时筛涨幅>7%/非ST/成交额>20亿/剔除涨停 → 四维事实卡+LLM两两PK观察清单;无状态)
     from cli.tail_scan import register_subparser as register_tail_scan_subparser
     register_tail_scan_subparser(subparsers)
 

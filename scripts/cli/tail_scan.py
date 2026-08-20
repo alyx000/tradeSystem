@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 def register_subparser(subparsers: argparse._SubParsersAction) -> None:
     ts = subparsers.add_parser(
         "tail-scan",
-        help=f"盘中尾盘强势股扫描（涨幅>{C.DEFAULT_MIN_PCT:g}%%/非ST/成交额>{C.DEFAULT_MIN_AMOUNT_YI:g}亿 + 四维事实卡+产业逻辑+PK）",
+        help=f"盘中尾盘强势股扫描（涨幅>{C.DEFAULT_MIN_PCT:g}%%/非ST/成交额>{C.DEFAULT_MIN_AMOUNT_YI:g}亿/剔除涨停 + 四维事实卡+产业逻辑+PK）",
     )
     sub = ts.add_subparsers(dest="tail_scan_command")
     daily = sub.add_parser("daily", help="实时筛选→四维事实卡+产业逻辑→PK→渲染")
