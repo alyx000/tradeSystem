@@ -482,6 +482,19 @@ git -C /Users/alyx/tradeSystem rev-parse --verify "$REVIEWED_COMMIT^{commit}" >/
 if [ -e "$RUNTIME_ROOT/.git" ]; then
   test -z "$(git -C "$RUNTIME_ROOT" status --porcelain --untracked-files=no)"
 fi
+# 切换前必须确认目标提交认识所有未送达事件。旧 runtime 尚无 guard 时仅允许
+# pending 为空；一旦部署本版本，后续回滚也会被同一检查机械阻断，避免旧代码
+# 把新规则发送失败的 pending 当成退役事件永久丢弃。
+STATE_PATH=/Users/alyx/tradeSystem/data/runs/intraday-monitor/state.json
+TRANSITION_GUARD="$RUNTIME_ROOT/deploy/launchd/intraday_monitor_transition_guard.py"
+if [ -f "$TRANSITION_GUARD" ]; then
+  /usr/bin/python3 "$TRANSITION_GUARD" \
+    --repo /Users/alyx/tradeSystem \
+    --target-commit "$REVIEWED_COMMIT" \
+    --state-path "$STATE_PATH"
+else
+  /usr/bin/python3 -c 'import json, pathlib, sys; p=pathlib.Path(sys.argv[1]); d=json.loads(p.read_text()) if p.exists() else {}; assert not (d.get("pending_events") or []), "旧 runtime 无切换 guard，pending 非空，禁止切换"' "$STATE_PATH"
+fi
 # 已加载的任务必须先停掉，避免切换 detached worktree 时与正在启动的 Python 竞态。
 if launchctl print "gui/$(id -u)/com.alyx.tradesystem.intraday-monitor" >/dev/null 2>&1; then
   launchctl bootout "gui/$(id -u)" \
