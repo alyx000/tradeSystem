@@ -114,6 +114,32 @@ def test_e2e_cli_selects_active_star50_rule(monkeypatch, capsys):
     assert '"status": "complete"' in capsys.readouterr().out
 
 
+def test_e2e_cli_selects_active_kailaiying_rule(monkeypatch, capsys):
+    registry = object()
+    monkeypatch.setattr(main, "setup_providers", lambda config: registry)
+    monkeypatch.setattr(
+        intraday_monitor,
+        "shanghai_now",
+        lambda: datetime(2026, 8, 21, 10, 0),
+    )
+    calls = []
+    monkeypatch.setattr(
+        intraday_monitor,
+        "run_e2e_test",
+        lambda got, input_by, confirm_real_push, rule: calls.append(rule) or {
+            "status": "complete",
+            "events": [{}],
+            "errors": [],
+            "pushed": True,
+        },
+    )
+    selected = intraday_monitor.DEFAULT_RULES[3]
+
+    assert intraday_monitor.handle_command({}, _args(rule_id=selected.rule_id)) == 0
+    assert calls == [selected]
+    assert '"status": "complete"' in capsys.readouterr().out
+
+
 def test_e2e_cli_requires_explicit_real_push_confirmation_before_provider_setup(
     monkeypatch,
     capsys,
@@ -171,12 +197,14 @@ def test_help_describes_current_rules_at_every_command_level():
         if isinstance(action, argparse._SubParsersAction)
     )
 
-    root_help = intraday_parser.format_help()
+    root_help = "".join(intraday_parser.format_help().split())
     assert "上证指数从3955点下方" in root_help
-    assert "2026年8月21日与24日监控科创50是否严格突破1700点" in root_help
+    assert "2026年8月21日与24日监控科创50严格突破1700点" in root_help
+    assert "凯莱英严格突破172.26元" in root_help
     check_help = "".join(command_choices["check"].format_help().split())
-    assert "历史个股规则保持下线" in check_help
-    assert "科创50严格高于1700点时推送" in check_help
+    assert "历史已退役规则保持下线" in check_help
+    assert "科创50严格高于1700点" in check_help
+    assert "凯莱英严格高于172.26元时推送" in check_help
     assert "持续命中去重" in check_help
     assert "恢复后再次命中可重推" in check_help
     e2e_help = command_choices["e2e-test"].format_help()

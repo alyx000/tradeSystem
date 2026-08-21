@@ -39,7 +39,7 @@
 - `morning-brief-runner.sh` — 包装脚本：cd 仓库根 → source `~/.config/tradeSystem.env`(钉钉；TUSHARE_TOKEN 由 `scripts/.env` 在 Python 侧加载) → 调 `python3 main.py morning-brief daily`
 - `com.alyx.tradesystem.morning-brief.plist` — 工作日 08:00 触发（盘前早报：隔夜行情+海外/国内要闻[金十]+上市公司公告[巨潮]；非交易日 CLI 内守卫跳过；日志 `/tmp/tradesystem-morning-brief.log`；Sleep policy: 错过可接受——可手动 `morning-brief daily` 补跑）
 - `intraday-monitor-runner.sh` — 每 5 分钟 tick 的盘中门禁入口；上海 `09:30-11:30 / 13:00-15:00` 做常规检查，并保留 `15:01-15:05` 收盘终态补窗：固定阈值规则补检 15:00 终态行情，动态涨停价规则同时补做收盘确认，以覆盖相对 300 秒节拍
-- `com.alyx.tradesystem.intraday-monitor.plist` — 盘中实时监控；上证指数站上 3955 长期规则 + 2026-08-21/24 科创50严格突破1700临时规则，日志 `/tmp/tradesystem-intraday-monitor.log`
+- `com.alyx.tradesystem.intraday-monitor.plist` — 盘中实时监控；上证指数站上 3955 长期规则 + 2026-08-21/24 科创50突破1700/凯莱英突破172.26临时规则，日志 `/tmp/tradesystem-intraday-monitor.log`
 
 ## 前置条件
 
@@ -470,7 +470,7 @@ rm ~/Library/LaunchAgents/com.alyx.tradesystem.cognition-digest-*.plist
 
 ## 盘中实时阈值监控（每 5 分钟）
 
-监控引擎、CLI、launchd 与状态机继续保留。长期生产规则使用新浪实时 `000001.SH`，监控上证指数从 3955 点下方站上 3955 点（等于 3955 即命中）。临时生产规则 `star50-breakout-1700-20260821-24` 在 2026-08-21～24 自然日期窗口内监控 `000688.SH` 科创50严格高于 1700 点；只读交易日历使其实际覆盖 8 月 21 日和 24 日两个开放交易日，周末不请求行情，8 月 25 日起自动排除。首次检查已严格高于会推送，等于不触发，持续命中去重，回到1700或下方后再次突破可重推。金健米业、红四方、京粮控股三条断板规则与旧科创50跌破/收复规则保持下线；新规则使用独立 rule id，不继承旧状态。
+监控引擎、CLI、launchd 与状态机继续保留。长期生产规则使用新浪实时 `000001.SH`，监控上证指数从 3955 点下方站上 3955 点（等于 3955 即命中）。两条临时生产规则在 2026-08-21～24 自然日期窗口内分别监控 `000688.SH` 科创50严格高于 1700 点，以及 `002821.SZ` 凯莱英严格高于 172.26 元；只读交易日历使其实际覆盖 8 月 21 日和 24 日两个开放交易日，周末不请求行情，8 月 25 日起自动排除。两条规则首次检查已严格高于均会推送，等于不触发，持续命中去重，回到阈值或下方后再次突破可重推。金健米业、红四方、京粮控股三条断板规则与旧科创50跌破/收复规则保持下线；新规则均使用独立 rule id，不继承旧状态。
 
 ```bash
 RUNTIME_ROOT=/Users/alyx/tradeSystem/.worktrees/intraday-monitor-runtime

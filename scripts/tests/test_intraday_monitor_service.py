@@ -9,6 +9,7 @@ import services.intraday_monitor.service as intraday_service
 from services.intraday_monitor.service import run_check, run_e2e_test
 from services.intraday_monitor.rules import (
     DEFAULT_RULES,
+    KAILAIYING_BREAKOUT_172_26_20260821_24,
     LITONG_ELECTRONICS_BELOW_123_92_20260811,
     SSE_COMPOSITE_RECLAIM_3955,
     STAR50_BREAKOUT_1700_20260821_24,
@@ -378,6 +379,7 @@ def test_default_sse_rule_pushes_only_after_observed_below_to_3955(tmp_path):
         SSE_COMPOSITE_RECLAIM_3955,
         LITONG_ELECTRONICS_BELOW_123_92_20260811,
         STAR50_BREAKOUT_1700_20260821_24,
+        KAILAIYING_BREAKOUT_172_26_20260821_24,
     )
     assert initial_above["events"] == []
     assert below["events"] == []
@@ -516,7 +518,7 @@ def test_default_rules_fetch_only_sse_before_and_after_litong_day(tmp_path):
         assert registry.requested_codes == [["000001.SH"]]
 
 
-def test_default_rules_fetch_star50_only_during_confirmed_two_trade_day_window(tmp_path):
+def test_default_rules_fetch_temporary_breakouts_only_during_two_trade_day_window(tmp_path):
     db_path = _calendar(
         tmp_path,
         dates=(
@@ -542,7 +544,11 @@ def test_default_rules_fetch_star50_only_during_confirmed_two_trade_day_window(t
         )
 
         assert result["status"] == "complete"
-        expected = ["000001.SH", "000688.SH"] if day in (21, 24) else ["000001.SH"]
+        expected = (
+            ["000001.SH", "000688.SH", "002821.SZ"]
+            if day in (21, 24)
+            else ["000001.SH"]
+        )
         assert registry.requested_codes == [expected]
 
 
@@ -601,6 +607,65 @@ def test_star50_breakout_is_strict_initially_emits_and_rearms(tmp_path):
     assert len(pusher.messages) == 2
     assert "科创50" in pusher.messages[0][1]
     assert "已突破监控线 **1700.00**" in pusher.messages[0][1]
+
+
+def test_kailaiying_breakout_is_strict_initially_emits_and_rearms(tmp_path):
+    db_path = _calendar(tmp_path, dates=("2026-08-21",))
+    state_path = tmp_path / "state.json"
+    registry = _Registry(price=172.27)
+    pusher = _Pusher()
+    now = datetime(2026, 8, 21, 10, 0, tzinfo=TZ)
+    registry.now = now
+    rules = (KAILAIYING_BREAKOUT_172_26_20260821_24,)
+
+    initial = run_check(
+        registry,
+        rules=rules,
+        now=now,
+        state_path=state_path,
+        db_path=db_path,
+        pusher_factory=lambda: pusher,
+    )
+    registry.now = now + timedelta(minutes=5)
+    continuous = run_check(
+        registry,
+        rules=rules,
+        now=registry.now,
+        state_path=state_path,
+        db_path=db_path,
+        pusher_factory=lambda: pusher,
+    )
+    registry.price = 172.26
+    registry.now = now + timedelta(minutes=10)
+    equal = run_check(
+        registry,
+        rules=rules,
+        now=registry.now,
+        state_path=state_path,
+        db_path=db_path,
+        pusher_factory=lambda: pusher,
+    )
+    registry.price = 172.27
+    registry.now = now + timedelta(minutes=15)
+    reentered = run_check(
+        registry,
+        rules=rules,
+        now=registry.now,
+        state_path=state_path,
+        db_path=db_path,
+        pusher_factory=lambda: pusher,
+    )
+
+    assert len(initial["events"]) == 1
+    assert initial["events"][0]["rule_id"] == rules[0].rule_id
+    assert initial["events"][0]["threshold"] == 172.26
+    assert continuous["events"] == []
+    assert equal["events"] == []
+    assert len(reentered["events"]) == 1
+    assert len(pusher.messages) == 2
+    assert "凯莱英" in pusher.messages[0][1]
+    assert "最新价格 **172.27**元" in pusher.messages[0][1]
+    assert "已突破监控线 **172.26**元" in pusher.messages[0][1]
 
 
 def test_board_break_rule_uses_daily_limit_and_rearms_after_reseal(tmp_path):

@@ -126,14 +126,31 @@ STAR50_BREAKOUT_1700_20260821_24 = MonitorRule(
 )
 
 
+KAILAIYING_BREAKOUT_172_26_20260821_24 = MonitorRule(
+    rule_id="kailaiying-breakout-172-26-20260821-24",
+    instrument_name="凯莱英",
+    code="002821.SZ",
+    threshold=172.26,
+    direction="above",
+    inclusive=False,
+    emit_on_initial_match=True,
+    action_label="突破",
+    valid_from=date(2026, 8, 21),
+    valid_until=date(2026, 8, 24),
+    value_label="价格",
+    value_unit="元",
+)
+
+
 # 长期规则保留上证指数站上 3955；历史个股规则不再启用。
 # 动态涨停价能力仍由 MonitorRule.threshold_mode 保留，供后续配置复用。
-# 科创50 1700 临时规则覆盖 8 月 21 日与 24 日两个开放交易日；
-# 周末自然日仍由只读交易日历门禁拦截，不请求行情。
+# 科创50 1700 与凯莱英 172.26 临时规则覆盖 8 月 21 日与 24 日两个
+# 开放交易日；周末自然日仍由只读交易日历门禁拦截，不请求行情。
 DEFAULT_RULES: tuple[MonitorRule, ...] = (
     SSE_COMPOSITE_RECLAIM_3955,
     LITONG_ELECTRONICS_BELOW_123_92_20260811,
     STAR50_BREAKOUT_1700_20260821_24,
+    KAILAIYING_BREAKOUT_172_26_20260821_24,
 )
 
 

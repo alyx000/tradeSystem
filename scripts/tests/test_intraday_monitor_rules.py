@@ -9,6 +9,7 @@ from services.intraday_monitor.guards import (
 )
 from services.intraday_monitor.rules import (
     DEFAULT_RULES,
+    KAILAIYING_BREAKOUT_172_26_20260821_24,
     LITONG_ELECTRONICS_BELOW_123_92_20260811,
     SSE_COMPOSITE_RECLAIM_3955,
     STAR50_BREAKOUT_1700_20260821_24,
@@ -70,11 +71,12 @@ def test_reclaim_is_inclusive_and_does_not_emit_on_initial_match():
     ) is True
 
 
-def test_sse_litong_and_two_trade_day_star50_rule_are_registered():
+def test_sse_litong_and_two_trade_day_breakout_rules_are_registered():
     assert DEFAULT_RULES == (
         SSE_COMPOSITE_RECLAIM_3955,
         LITONG_ELECTRONICS_BELOW_123_92_20260811,
         STAR50_BREAKOUT_1700_20260821_24,
+        KAILAIYING_BREAKOUT_172_26_20260821_24,
     )
     assert SSE_COMPOSITE_RECLAIM_3955.rule_id == "sse-composite-reclaim-3955"
     assert SSE_COMPOSITE_RECLAIM_3955.instrument_name == "上证指数"
@@ -117,6 +119,24 @@ def test_sse_litong_and_two_trade_day_star50_rule_are_registered():
     assert star50.is_effective_on(date(2026, 8, 21)) is True
     assert star50.is_effective_on(date(2026, 8, 24)) is True
     assert star50.is_effective_on(date(2026, 8, 25)) is False
+
+    kailaiying = KAILAIYING_BREAKOUT_172_26_20260821_24
+    assert kailaiying.rule_id == "kailaiying-breakout-172-26-20260821-24"
+    assert kailaiying.instrument_name == "凯莱英"
+    assert kailaiying.code == "002821.SZ"
+    assert kailaiying.threshold == 172.26
+    assert kailaiying.direction == "above"
+    assert kailaiying.inclusive is False
+    assert kailaiying.emit_on_initial_match is True
+    assert kailaiying.action_text == "突破"
+    assert kailaiying.value_label == "价格"
+    assert kailaiying.value_unit == "元"
+    assert kailaiying.is_active(172.26) is False
+    assert kailaiying.is_active(172.27) is True
+    assert kailaiying.is_effective_on(date(2026, 8, 20)) is False
+    assert kailaiying.is_effective_on(date(2026, 8, 21)) is True
+    assert kailaiying.is_effective_on(date(2026, 8, 24)) is True
+    assert kailaiying.is_effective_on(date(2026, 8, 25)) is False
 
 
 
