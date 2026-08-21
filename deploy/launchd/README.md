@@ -38,8 +38,8 @@
 - `com.alyx.tradesystem.monthly-pattern-monitor.plist` — 每 15 分钟轻量 tick，runner 仅在上海工作日 19:10（含）至 19:25（不含）执行一次重任务（月线种子日频动态 5 月线 + 日/周 MACD 变化监控；不受 Mac 本机时区切换影响；日志 `/tmp/tradesystem-monthly-pattern-monitor.log`）
 - `morning-brief-runner.sh` — 包装脚本：cd 仓库根 → source `~/.config/tradeSystem.env`(钉钉；TUSHARE_TOKEN 由 `scripts/.env` 在 Python 侧加载) → 调 `python3 main.py morning-brief daily`
 - `com.alyx.tradesystem.morning-brief.plist` — 工作日 08:00 触发（盘前早报：隔夜行情+海外/国内要闻[金十]+上市公司公告[巨潮]；非交易日 CLI 内守卫跳过；日志 `/tmp/tradesystem-morning-brief.log`；Sleep policy: 错过可接受——可手动 `morning-brief daily` 补跑）
-- `intraday-monitor-runner.sh` — 每 5 分钟 tick 的盘中门禁入口；只在上海 `09:30-11:30 / 13:00-15:00` 调 `intraday-monitor check`
-- `com.alyx.tradesystem.intraday-monitor.plist` — 盘中实时阈值监控；长期规则为上证指数站上 3955，2026-08-11 临时规则为利通电子跌破 123.92 元，日志 `/tmp/tradesystem-intraday-monitor.log`
+- `intraday-monitor-runner.sh` — 每 5 分钟 tick 的盘中门禁入口；上海 `09:30-11:30 / 13:00-15:00` 做常规检查，并保留 `15:01-15:05` 收盘终态补窗：固定阈值规则补检 15:00 终态行情，动态涨停价规则同时补做收盘确认，以覆盖相对 300 秒节拍
+- `com.alyx.tradesystem.intraday-monitor.plist` — 盘中实时监控；上证指数站上 3955 长期规则 + 2026-08-21/24 科创50突破1700/凯莱英突破172.26临时规则，日志 `/tmp/tradesystem-intraday-monitor.log`
 
 ## 前置条件
 
@@ -470,15 +470,32 @@ rm ~/Library/LaunchAgents/com.alyx.tradesystem.cognition-digest-*.plist
 
 ## 盘中实时阈值监控（每 5 分钟）
 
-监控引擎、CLI、launchd 与状态机继续保留。长期生产规则使用新浪实时 `000001.SH`，监控上证指数从 3955 点下方站上 3955 点（等于 3955 即命中）；首次观察已在线上不补发，持续在线上去重，跌回下方后再次站上可重推。临时规则使用 `603629.SH`，只在 2026-08-11 监控利通电子价格严格跌破 123.92 元；首次观察已跌破会推送，等于 123.92 元不触发，持续跌破去重，恢复后再次跌破可重推，有效期外不会请求该标的行情。科创50跌破与收复规则保持下线。
+监控引擎、CLI、launchd 与状态机继续保留。长期生产规则使用新浪实时 `000001.SH`，监控上证指数从 3955 点下方站上 3955 点（等于 3955 即命中）。两条临时生产规则在 2026-08-21～24 自然日期窗口内分别监控 `000688.SH` 科创50严格高于 1700 点，以及 `002821.SZ` 凯莱英严格高于 172.26 元；只读交易日历使其实际覆盖 8 月 21 日和 24 日两个开放交易日，周末不请求行情，8 月 25 日起自动排除。两条规则首次检查已严格高于均会推送，等于不触发，持续命中去重，回到阈值或下方后再次突破可重推。金健米业、红四方、京粮控股三条断板规则与旧科创50跌破/收复规则保持下线；新规则均使用独立 rule id，不继承旧状态。
 
 ```bash
 RUNTIME_ROOT=/Users/alyx/tradeSystem/.worktrees/intraday-monitor-runtime
 REVIEWED_COMMIT=<REVIEWED_COMMIT>
-git worktree add --detach "$RUNTIME_ROOT" "$REVIEWED_COMMIT"
+set -euo pipefail
+
+# 停任务前先验证 commit 存在，并确认既有 runtime 没有代码改动。
+git -C /Users/alyx/tradeSystem rev-parse --verify "$REVIEWED_COMMIT^{commit}" >/dev/null
+if [ -e "$RUNTIME_ROOT/.git" ]; then
+  test -z "$(git -C "$RUNTIME_ROOT" status --porcelain --untracked-files=no)"
+fi
+# 已加载的任务必须先停掉，避免切换 detached worktree 时与正在启动的 Python 竞态。
+if launchctl print "gui/$(id -u)/com.alyx.tradesystem.intraday-monitor" >/dev/null 2>&1; then
+  launchctl bootout "gui/$(id -u)" \
+    "$HOME/Library/LaunchAgents/com.alyx.tradesystem.intraday-monitor.plist"
+fi
+if [ -e "$RUNTIME_ROOT/.git" ]; then
+  git -C "$RUNTIME_ROOT" switch --detach "$REVIEWED_COMMIT"
+else
+  git worktree add --detach "$RUNTIME_ROOT" "$REVIEWED_COMMIT"
+  ln -s /Users/alyx/tradeSystem/data "$RUNTIME_ROOT/data"
+fi
 test "$(git -C "$RUNTIME_ROOT" rev-parse HEAD)" = "$REVIEWED_COMMIT"
 test -z "$(git -C "$RUNTIME_ROOT" status --porcelain --untracked-files=no)"
-ln -s /Users/alyx/tradeSystem/data "$RUNTIME_ROOT/data"
+test "$(readlink "$RUNTIME_ROOT/data")" = /Users/alyx/tradeSystem/data
 
 chmod +x "$RUNTIME_ROOT/deploy/launchd/intraday-monitor-runner.sh"
 plutil -lint "$RUNTIME_ROOT/deploy/launchd/com.alyx.tradesystem.intraday-monitor.plist"
@@ -487,13 +504,16 @@ bash -n "$RUNTIME_ROOT/deploy/launchd/intraday-monitor-runner.sh"
 cp "$RUNTIME_ROOT/deploy/launchd/com.alyx.tradesystem.intraday-monitor.plist" \
   ~/Library/LaunchAgents/
 launchctl enable gui/$(id -u)/com.alyx.tradesystem.intraday-monitor
-launchctl load ~/Library/LaunchAgents/com.alyx.tradesystem.intraday-monitor.plist
+launchctl bootstrap gui/$(id -u) \
+  ~/Library/LaunchAgents/com.alyx.tradesystem.intraday-monitor.plist
 launchctl list | grep tradesystem.intraday-monitor
 
 # 手工启动一次 tick；仅在盘中、开放交易日且行情新鲜时检查
-launchctl start com.alyx.tradesystem.intraday-monitor
+launchctl kickstart -k gui/$(id -u)/com.alyx.tradesystem.intraday-monitor
 tail -f /tmp/tradesystem-intraday-monitor.log
 ```
+
+以上步骤使用 `set -euo pipefail`，任何验签、切换、lint 或加载失败都会立即停止，禁止带错继续。若失败发生在 `bootout` 之后，应先修复报错并从 `git switch --detach "$REVIEWED_COMMIT"` 继续完成加载；不得在未通过 HEAD、干净状态、data 链接、plist 与 shell 语法校验时恢复任务。
 
 卸载：
 
@@ -505,12 +525,13 @@ rm ~/Library/LaunchAgents/com.alyx.tradesystem.intraday-monitor.plist
 
 模板固定把 `ProgramArguments` 指向 `.worktrees/intraday-monitor-runtime`。该目录必须是从已审查 commit 创建的 detached worktree，并把生产 `data/` 目录链接进去，以复用只读交易日历和正式 pending/sent 状态。runner 会从自身文件位置推导代码根目录，不能把模板改回仍含未提交代码的主工作区。`launchctl enable` 用于清除 macOS 持久化的 disabled 覆盖，仅执行 `load` 不足以证明任务已启用。
 
-已有 `data/runs/intraday-monitor/state.json` 继续用于 pending/sent 去重；与当前上证规则无关的旧 pending 会过期，不会补发。事件先原子落 pending，推送成功才记 sent；发送失败同一交易日下个 tick 重试，跨日过期。全链路不写 SQLite、持仓、关注池或计划层。**Mac 休眠时 launchd 不执行**，这是盘中提醒的真实可用性边界；若要求覆盖整个交易时段，应配置盘中唤醒或迁到 VPS。
+已有 `data/runs/intraday-monitor/state.json` 继续用于 pending/sent 去重；与当前有效规则无关的旧 pending 会过期，不会补发。事件先原子落 pending，推送成功才记 sent；发送失败同一交易日下个 tick 重试，跨日过期。全链路不写 SQLite、持仓、关注池或计划层。**Mac 休眠时 launchd 不执行**，这是盘中提醒的真实可用性边界；若要求覆盖整个交易时段，应配置盘中唤醒或迁到 VPS。
 
 注册新的生产规则并经用户授权做真实链路验收时，只在交易时段执行一次：
 
 ```bash
-python3 scripts/main.py intraday-monitor e2e-test --input-by USER --confirm-real-push --json
+python3 scripts/main.py intraday-monitor e2e-test --rule-id RULE_ID \
+  --input-by USER --confirm-real-push --json
 ```
 
 该命令只在用户明确授权后执行，并要求一次性显式参数 `--confirm-real-push`；缺少确认时在初始化行情源前返回 `authorization_required`，不会访问日历、行情或钉钉。授权后使用当日新鲜真实行情和仅本次测试线发送醒目标注“测试”的钉钉消息，且不读写正式状态。只有退出码为 0、`status=complete` 且 `pushed=true` 才能视为真实链路验收成功。

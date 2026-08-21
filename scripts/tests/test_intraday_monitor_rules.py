@@ -3,13 +3,36 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from services.intraday_monitor.guards import is_intraday_session
+from services.intraday_monitor.guards import (
+    is_close_finalization_window,
+    is_intraday_session,
+)
 from services.intraday_monitor.rules import (
     DEFAULT_RULES,
+    KAILAIYING_BREAKOUT_172_26_20260821_24,
     LITONG_ELECTRONICS_BELOW_123_92_20260811,
     SSE_COMPOSITE_RECLAIM_3955,
+    STAR50_BREAKOUT_1700_20260821_24,
     MonitorRule,
     should_emit,
+)
+
+
+BOARD_BREAK_RULE = MonitorRule(
+    "test-board-break",
+    "测试股票",
+    "600127.SH",
+    None,
+    direction="below",
+    inclusive=False,
+    emit_on_initial_match=True,
+    action_label="低于",
+    valid_from=date(2026, 8, 19),
+    valid_until=date(2026, 8, 20),
+    value_label="价格",
+    value_unit="元",
+    threshold_mode="daily_up_limit",
+    threshold_label="当日涨停价",
 )
 
 
@@ -48,10 +71,12 @@ def test_reclaim_is_inclusive_and_does_not_emit_on_initial_match():
     ) is True
 
 
-def test_sse_and_one_day_litong_rules_are_enabled():
+def test_sse_litong_and_two_trade_day_breakout_rules_are_registered():
     assert DEFAULT_RULES == (
         SSE_COMPOSITE_RECLAIM_3955,
         LITONG_ELECTRONICS_BELOW_123_92_20260811,
+        STAR50_BREAKOUT_1700_20260821_24,
+        KAILAIYING_BREAKOUT_172_26_20260821_24,
     )
     assert SSE_COMPOSITE_RECLAIM_3955.rule_id == "sse-composite-reclaim-3955"
     assert SSE_COMPOSITE_RECLAIM_3955.instrument_name == "上证指数"
@@ -79,6 +104,55 @@ def test_sse_and_one_day_litong_rules_are_enabled():
     assert litong.is_effective_on(date(2026, 8, 11)) is True
     assert litong.is_effective_on(date(2026, 8, 12)) is False
 
+    star50 = STAR50_BREAKOUT_1700_20260821_24
+    assert star50.rule_id == "star50-breakout-1700-20260821-24"
+    assert star50.instrument_name == "科创50"
+    assert star50.code == "000688.SH"
+    assert star50.threshold == 1700.0
+    assert star50.direction == "above"
+    assert star50.inclusive is False
+    assert star50.emit_on_initial_match is True
+    assert star50.action_text == "突破"
+    assert star50.is_active(1700.0) is False
+    assert star50.is_active(1700.01) is True
+    assert star50.is_effective_on(date(2026, 8, 20)) is False
+    assert star50.is_effective_on(date(2026, 8, 21)) is True
+    assert star50.is_effective_on(date(2026, 8, 24)) is True
+    assert star50.is_effective_on(date(2026, 8, 25)) is False
+
+    kailaiying = KAILAIYING_BREAKOUT_172_26_20260821_24
+    assert kailaiying.rule_id == "kailaiying-breakout-172-26-20260821-24"
+    assert kailaiying.instrument_name == "凯莱英"
+    assert kailaiying.code == "002821.SZ"
+    assert kailaiying.threshold == 172.26
+    assert kailaiying.direction == "above"
+    assert kailaiying.inclusive is False
+    assert kailaiying.emit_on_initial_match is True
+    assert kailaiying.action_text == "突破"
+    assert kailaiying.value_label == "价格"
+    assert kailaiying.value_unit == "元"
+    assert kailaiying.is_active(172.26) is False
+    assert kailaiying.is_active(172.27) is True
+    assert kailaiying.is_effective_on(date(2026, 8, 20)) is False
+    assert kailaiying.is_effective_on(date(2026, 8, 21)) is True
+    assert kailaiying.is_effective_on(date(2026, 8, 24)) is True
+    assert kailaiying.is_effective_on(date(2026, 8, 25)) is False
+
+
+
+def test_dynamic_board_break_capability_remains_available():
+    rule = BOARD_BREAK_RULE
+    assert rule.threshold is None
+    assert rule.threshold_mode == "daily_up_limit"
+    assert rule.threshold_label == "当日涨停价"
+    assert rule.resolve_threshold({"pre_close": 7.11, "name": "测试股票"}) == 7.82
+    assert rule.is_active(7.82, threshold=7.82) is False
+    assert rule.is_active(7.81, threshold=7.82) is True
+    assert rule.is_effective_on(date(2026, 8, 18)) is False
+    assert rule.is_effective_on(date(2026, 8, 19)) is True
+    assert rule.is_effective_on(date(2026, 8, 20)) is True
+    assert rule.is_effective_on(date(2026, 8, 21)) is False
+
 
 def test_rule_rejects_reversed_validity_window():
     with pytest.raises(ValueError, match="valid_from"):
@@ -92,6 +166,23 @@ def test_rule_rejects_reversed_validity_window():
         )
 
 
+def test_dynamic_limit_rule_rejects_ambiguous_or_missing_threshold_inputs():
+    with pytest.raises(ValueError, match="不得同时提供固定"):
+        MonitorRule(
+            "ambiguous",
+            "测试标的",
+            "600000.SH",
+            11.0,
+            threshold_mode="daily_up_limit",
+        )
+    with pytest.raises(ValueError, match="必须提供"):
+        MonitorRule("missing", "测试标的", "600000.SH", None)
+    with pytest.raises(ValueError, match="必须先解析"):
+        BOARD_BREAK_RULE.is_active(7.81)
+    with pytest.raises(ValueError, match="无法根据前收盘价"):
+        BOARD_BREAK_RULE.resolve_threshold({"pre_close": None})
+
+
 def test_transition_only_emits_on_entry():
     assert should_emit(previous_active=None, current_active=True) is True
     assert should_emit(previous_active=False, current_active=True) is True
@@ -103,7 +194,12 @@ def test_shanghai_session_boundaries_are_explicit():
     tz = ZoneInfo("Asia/Shanghai")
     assert is_intraday_session(datetime(2026, 8, 3, 9, 30, tzinfo=tz)) is True
     assert is_intraday_session(datetime(2026, 8, 3, 11, 30, tzinfo=tz)) is True
+    assert is_intraday_session(datetime(2026, 8, 3, 11, 30, 59, tzinfo=tz)) is True
     assert is_intraday_session(datetime(2026, 8, 3, 11, 31, tzinfo=tz)) is False
     assert is_intraday_session(datetime(2026, 8, 3, 13, 0, tzinfo=tz)) is True
     assert is_intraday_session(datetime(2026, 8, 3, 15, 0, tzinfo=tz)) is True
+    assert is_intraday_session(datetime(2026, 8, 3, 15, 0, 59, tzinfo=tz)) is True
     assert is_intraday_session(datetime(2026, 8, 3, 15, 1, tzinfo=tz)) is False
+    assert is_close_finalization_window(datetime(2026, 8, 3, 15, 0, tzinfo=tz)) is True
+    assert is_close_finalization_window(datetime(2026, 8, 3, 15, 5, 59, tzinfo=tz)) is True
+    assert is_close_finalization_window(datetime(2026, 8, 3, 15, 6, tzinfo=tz)) is False

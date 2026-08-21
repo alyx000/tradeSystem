@@ -23,7 +23,7 @@ def test_runner_contract():
     assert 'source "$HOME/.config/tradeSystem.env"' in text
     assert "TZ=Asia/Shanghai /bin/date '+%u'" in text
     assert "TZ=Asia/Shanghai /bin/date '+%H%M'" in text
-    assert "-lt 930" in text and "-ge 1501" in text
+    assert "-lt 930" in text and "-ge 1506" in text
     assert 'if [ "$SHANGHAI_WEEKDAY" -gt 5 ]; then' in text
     assert "DINGTALK_WEBHOOK_TOKEN=${DINGTALK_WEBHOOK_TOKEN:+set}" in text
     assert "DINGTALK_WEBHOOK_SECRET=${DINGTALK_WEBHOOK_SECRET:+set}" in text
