@@ -60,7 +60,8 @@ def test_load_thesis_reviews_returns_empty_when_db_missing(tmp_path, monkeypatch
     assert review._load_thesis_reviews() == {}
 
 
-_EIGHT_DAYS = [
+_NINE_DAYS = [
+    "2026-05-19",
     "2026-05-20",
     "2026-05-21",
     "2026-05-22",
@@ -1190,7 +1191,7 @@ def test_report_renders_weak_sell_section_and_summary(tmp_path, monkeypatch):
         raise AssertionError(f"unexpected command: {cmd}")
 
     monkeypatch.setattr(review, "PROJECT_ROOT", tmp_path)
-    monkeypatch.setattr(review, "_try_get_last_n_trade_days", lambda n, as_of: _EIGHT_DAYS)
+    monkeypatch.setattr(review, "_try_get_last_n_trade_days", lambda n, as_of: _NINE_DAYS)
     monkeypatch.setattr(review, "_run_json", fake_run_json)
     monkeypatch.setattr(
         review,
@@ -1285,7 +1286,7 @@ def test_report_uses_same_canonical_split_summary_rows_for_all_metrics(
         raise AssertionError(f"unexpected command: {cmd}")
 
     monkeypatch.setattr(review, "PROJECT_ROOT", tmp_path)
-    monkeypatch.setattr(review, "_try_get_last_n_trade_days", lambda n, as_of: _EIGHT_DAYS)
+    monkeypatch.setattr(review, "_try_get_last_n_trade_days", lambda n, as_of: _NINE_DAYS)
     monkeypatch.setattr(review, "_run_json", fake_run_json)
     monkeypatch.setattr(
         review,
@@ -1310,6 +1311,7 @@ def test_report_uses_same_canonical_split_summary_rows_for_all_metrics(
     assert "14,536.00" in report_md
     assert "29,072.00" not in report_md
     assert "缺少 thesis_id" not in report_md
+    assert "| thesis_id 覆盖率(按流水行) | 0.6667 |" in report_md
 
 
 def test_open_thesis_appears_in_failure_self_check(tmp_path, monkeypatch):
@@ -1356,7 +1358,7 @@ def test_open_thesis_appears_in_failure_self_check(tmp_path, monkeypatch):
         raise AssertionError(f"unexpected command: {cmd}")
 
     monkeypatch.setattr(review, "PROJECT_ROOT", tmp_path)
-    monkeypatch.setattr(review, "_try_get_last_n_trade_days", lambda n, as_of: _EIGHT_DAYS)
+    monkeypatch.setattr(review, "_try_get_last_n_trade_days", lambda n, as_of: _NINE_DAYS)
     monkeypatch.setattr(review, "_run_json", fake_run_json)
 
     result = review.generate(run_date=date(2026, 5, 29), account="default", limit=10000, push=False)
@@ -1430,7 +1432,7 @@ def test_discipline_review_buckets(tmp_path, monkeypatch):
         raise AssertionError(f"unexpected command: {cmd}")
 
     monkeypatch.setattr(review, "PROJECT_ROOT", tmp_path)
-    monkeypatch.setattr(review, "_try_get_last_n_trade_days", lambda n, as_of: _EIGHT_DAYS)
+    monkeypatch.setattr(review, "_try_get_last_n_trade_days", lambda n, as_of: _NINE_DAYS)
     monkeypatch.setattr(review, "_run_json", fake_run_json)
 
     result = review.generate(run_date=date(2026, 5, 29), account="default", limit=10000, push=False)
@@ -1476,7 +1478,7 @@ def test_no_open_no_closed_renders_empty_fallbacks(tmp_path, monkeypatch):
         raise AssertionError(f"unexpected command: {cmd}")
 
     monkeypatch.setattr(review, "PROJECT_ROOT", tmp_path)
-    monkeypatch.setattr(review, "_try_get_last_n_trade_days", lambda n, as_of: _EIGHT_DAYS)
+    monkeypatch.setattr(review, "_try_get_last_n_trade_days", lambda n, as_of: _NINE_DAYS)
     monkeypatch.setattr(review, "_run_json", fake_run_json)
 
     result = review.generate(run_date=date(2026, 5, 29), account="default", limit=10000, push=False)
@@ -1538,7 +1540,7 @@ def test_push_summary_includes_failure_discipline_segment(tmp_path, monkeypatch)
             return True
 
     monkeypatch.setattr(review, "PROJECT_ROOT", tmp_path)
-    monkeypatch.setattr(review, "_try_get_last_n_trade_days", lambda n, as_of: _EIGHT_DAYS)
+    monkeypatch.setattr(review, "_try_get_last_n_trade_days", lambda n, as_of: _NINE_DAYS)
     monkeypatch.setattr(review, "_run_json", fake_run_json)
     fake_dingtalk_module = ModuleType("scripts.pushers.dingtalk_pusher")
     fake_dingtalk_module.DingTalkPusher = FakePusher
@@ -1581,7 +1583,7 @@ def _generate_report(tmp_path, monkeypatch, *, theses, reviews=None, rows=None) 
         raise AssertionError(f"unexpected command: {cmd}")
 
     monkeypatch.setattr(review, "PROJECT_ROOT", tmp_path)
-    monkeypatch.setattr(review, "_try_get_last_n_trade_days", lambda n, as_of: _EIGHT_DAYS)
+    monkeypatch.setattr(review, "_try_get_last_n_trade_days", lambda n, as_of: _NINE_DAYS)
     monkeypatch.setattr(review, "_run_json", fake_run_json)
     result = review.generate(run_date=date(2026, 5, 29), account="default", limit=10000, push=False)
     return Path(result["report_path"]).read_text(encoding="utf-8")
@@ -1608,7 +1610,7 @@ def test_discipline_executed_as_planned_2_renders_in_deviation_bucket(tmp_path, 
     assert "没执行计划" in report_md
 
 
-def test_push_summary_excludes_cashflow_but_report_keeps_it(tmp_path, monkeypatch):
+def test_push_summary_includes_cashflow_and_canonical_counts(tmp_path, monkeypatch):
     rows = [
         {
             "id": 1, "account_id": "default", "biz_date": "2026-05-26", "exec_time": "09:40:00",
@@ -1616,9 +1618,14 @@ def test_push_summary_excludes_cashflow_but_report_keeps_it(tmp_path, monkeypatc
             "shares": 200, "amount": 2000.0, "net_amount": -2000.0, "total_fees": 0.0, "thesis_id": None,
         },
         {
-            "id": 2, "account_id": "default", "biz_date": "2026-05-27", "exec_time": "10:10:00",
+            "id": 2, "account_id": "default", "biz_date": "2026-05-26", "exec_time": "09:41:00",
+            "stock_code": "600333", "stock_name": "测试", "direction": "buy",
+            "shares": 200, "amount": 2000.0, "net_amount": -2000.0, "total_fees": 0.0, "thesis_id": None,
+        },
+        {
+            "id": 3, "account_id": "default", "biz_date": "2026-05-27", "exec_time": "10:10:00",
             "stock_code": "600333", "stock_name": "测试", "direction": "sell",
-            "shares": 200, "amount": 1800.0, "net_amount": 1800.0, "total_fees": 0.0, "thesis_id": None,
+            "shares": 400, "amount": 3600.0, "net_amount": 3600.0, "total_fees": 0.0, "thesis_id": None,
         },
     ]
     sent: dict[str, str] = {}
@@ -1638,11 +1645,18 @@ def test_push_summary_excludes_cashflow_but_report_keeps_it(tmp_path, monkeypatc
             return True
 
         def send_markdown(self, title, markdown):
+            pending_report = (
+                tmp_path
+                / "tmp"
+                / "daily-trade-reviews"
+                / "2026-05-29-four-trading-day-review.md"
+            ).read_text(encoding="utf-8")
+            assert "推送结果：发送中" in pending_report
             sent["markdown"] = markdown
             return True
 
     monkeypatch.setattr(review, "PROJECT_ROOT", tmp_path)
-    monkeypatch.setattr(review, "_try_get_last_n_trade_days", lambda n, as_of: _EIGHT_DAYS)
+    monkeypatch.setattr(review, "_try_get_last_n_trade_days", lambda n, as_of: _NINE_DAYS)
     monkeypatch.setattr(review, "_run_json", fake_run_json)
     fake_dingtalk_module = ModuleType("scripts.pushers.dingtalk_pusher")
     fake_dingtalk_module.DingTalkPusher = FakePusher
@@ -1650,14 +1664,28 @@ def test_push_summary_excludes_cashflow_but_report_keeps_it(tmp_path, monkeypatc
 
     result = review.generate(run_date=date(2026, 5, 29), account="default", limit=10000, push=True)
 
-    # 钉钉短摘要：现金流已撤掉，但盈亏/胜率仍在；闭环改名为「已实现盈亏」
+    # 钉钉只发一份标准摘要：原始流水、合并动作与净现金流一次给全。
     markdown = sent["markdown"]
-    assert "现金流" not in markdown
+    assert "原始流水 3 / 合并动作 2" in markdown
+    assert "净现金流 -400.00" in markdown
     assert "已实现盈亏" in markdown
     assert "胜率" in markdown
-    # 本地完整报告：现金流保留（仅短摘要精简）
+    # 本地完整报告继续保留现金流。
     report_md = Path(result["report_path"]).read_text(encoding="utf-8")
     assert "现金流" in report_md
+    assert "| 窗口 | 原始流水行数 | 合并动作数 |" in report_md
+    assert "| 本期 2026-05-26~2026-05-29 | 3 | 2 |" in report_md
+
+    # 同日无推送重算不得擦掉终态收据，否则下一次 --push 会重复发送。
+    review.generate(
+        run_date=date(2026, 5, 29),
+        account="default",
+        limit=10000,
+        push=False,
+    )
+    recomputed_report = Path(result["report_path"]).read_text(encoding="utf-8")
+    assert "推送结果：成功" in recomputed_report
+    assert review._existing_push_result(Path(result["report_path"])) is not None
 
 
 def test_pl_ratio_shows_infinity_when_no_losses(tmp_path, monkeypatch):
@@ -1695,7 +1723,7 @@ def test_pl_ratio_shows_infinity_when_no_losses(tmp_path, monkeypatch):
             return True
 
     monkeypatch.setattr(review, "PROJECT_ROOT", tmp_path)
-    monkeypatch.setattr(review, "_try_get_last_n_trade_days", lambda n, as_of: _EIGHT_DAYS)
+    monkeypatch.setattr(review, "_try_get_last_n_trade_days", lambda n, as_of: _NINE_DAYS)
     monkeypatch.setattr(review, "_run_json", fake_run_json)
     fake_dingtalk_module = ModuleType("scripts.pushers.dingtalk_pusher")
     fake_dingtalk_module.DingTalkPusher = FakePusher
@@ -1772,6 +1800,7 @@ def test_four_day_review_counts_same_stock_same_direction_as_one_action(tmp_path
         review,
         "_try_get_last_n_trade_days",
         lambda n, as_of: [
+            "2026-05-08",
             "2026-05-11",
             "2026-05-12",
             "2026-05-13",
@@ -1792,8 +1821,8 @@ def test_four_day_review_counts_same_stock_same_direction_as_one_action(tmp_path
     )
 
     report_md = Path(result["report_path"]).read_text(encoding="utf-8")
-    assert "| 本期 2026-05-15~2026-05-20 | 2 | 1 | 1 |" in report_md
-    assert "| 2026-05-20 | 1 | 1 | 1,000.00 | 2,000.00 |" in report_md
+    assert "| 本期 2026-05-15~2026-05-20 | 3 | 2 | 1 | 1 |" in report_md
+    assert "| 2026-05-20 | 3 | 2 | 1 | 1 | 1,000.00 | 2,000.00 |" in report_md
     assert "sell 688143 长盈通 200@10.00" in report_md
 
 
@@ -1900,6 +1929,7 @@ def test_four_day_review_push_summary_includes_medium_context(tmp_path, monkeypa
         review,
         "_try_get_last_n_trade_days",
         lambda n, as_of: [
+            "2026-05-12",
             "2026-05-13",
             "2026-05-14",
             "2026-05-15",
@@ -1935,7 +1965,224 @@ def test_four_day_review_push_summary_includes_medium_context(tmp_path, monkeypa
     assert "159516" in markdown
     assert "### 复盘问题" in markdown
     assert "核对止盈/止损与仓位执行" in markdown
+    change_lines = markdown.split("### 重点变化\n", 1)[1].split("\n\n", 1)[0].splitlines()
+    question_lines = markdown.split("### 复盘问题\n", 1)[1].split("\n\n", 1)[0].splitlines()
+    assert len([line for line in change_lines if line.startswith("- ")]) == 3
+    assert len([line for line in question_lines if line.startswith("- ")]) == 3
+    report_md = Path(result["report_path"]).read_text(encoding="utf-8")
+    compare_section = report_md.split("### 本期 vs 上期 环比表\n", 1)[1].split("\n\n", 1)[0]
+    compare_rows = [line for line in compare_section.splitlines() if line.startswith("| ")][2:]
+    assert len(compare_rows) == 19
+    assert any("同日快进快出次数" in line for line in compare_rows)
+    assert any("隔日快进快出次数" in line for line in compare_rows)
+    assert any("thesis_id 覆盖率" in line for line in compare_rows)
     assert "failure_condition" not in markdown
     assert "planned_position_pct" not in markdown
     assert "thesis_id" not in markdown
     assert "本地完整报告：" in markdown
+
+
+def test_calendar_unavailable_fails_closed_without_execution_fallback(tmp_path, monkeypatch):
+    monkeypatch.setattr(review, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(review, "_try_get_last_n_trade_days", lambda n, as_of: None)
+
+    def forbidden_run_json(cmd: list[str]):
+        raise AssertionError(f"calendar failure must stop before execution fallback: {cmd}")
+
+    monkeypatch.setattr(review, "_run_json", forbidden_run_json)
+
+    with pytest.raises(RuntimeError, match="拒绝按有流水日期近似"):
+        review.generate(
+            run_date=date(2026, 5, 29),
+            account="default",
+            limit=10000,
+            push=False,
+        )
+
+
+@pytest.mark.parametrize("status", ["发送中", "成功", "失败"])
+def test_existing_push_attempt_is_terminal_for_automatic_retry(tmp_path, monkeypatch, status):
+    monkeypatch.setattr(review, "PROJECT_ROOT", tmp_path)
+    report_path = review._report_path(date(2026, 5, 29))
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(
+        "# report\n\n"
+        "## 按交易日拆分节奏\n"
+        "- 2026-05-26：无券商成交流水\n"
+        "- 2026-05-27：无券商成交流水\n"
+        "- 2026-05-28：无券商成交流水\n"
+        "- 2026-05-29：无券商成交流水\n\n"
+        "---\n\n"
+        "## 钉钉推送状态\n"
+        f"- [事实] 推送结果：{status}\n",
+        encoding="utf-8",
+    )
+
+    result = review._existing_push_result(report_path)
+
+    assert result is not None
+    assert result["push_skipped"] is True
+    assert result["push_ok"] is (status == "成功")
+    assert result["current_days"] == [
+        "2026-05-26",
+        "2026-05-27",
+        "2026-05-28",
+        "2026-05-29",
+    ]
+
+
+@pytest.mark.parametrize(
+    "legacy_line",
+    [
+        "- [事实] 推送结果：成功（22:30 已完成）",
+        "- [事实] 原始短摘要推送结果：成功",
+        "- [事实] 修正版短摘要推送结果：成功",
+    ],
+)
+def test_existing_push_attempt_accepts_legacy_success_receipts(
+    tmp_path, monkeypatch, legacy_line
+):
+    monkeypatch.setattr(review, "PROJECT_ROOT", tmp_path)
+    report_path = review._report_path(date(2026, 5, 29))
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(
+        "# report\n\n"
+        "## 按交易日拆分节奏\n"
+        "- 2026-05-26：无券商成交流水\n"
+        "- 2026-05-27：无券商成交流水\n"
+        "- 2026-05-28：无券商成交流水\n"
+        "- 2026-05-29：无券商成交流水\n\n"
+        "---\n\n"
+        "## 钉钉推送状态\n"
+        f"{legacy_line}\n",
+        encoding="utf-8",
+    )
+
+    result = review._existing_push_result(report_path)
+
+    assert result is not None
+    assert result["push_ok"] is True
+    assert result["push_skipped"] is True
+
+
+def test_previous_window_unclosed_and_first_day_next_day_flip_are_computed(
+    tmp_path, monkeypatch
+):
+    calendar_days = [
+        "2026-05-15",
+        "2026-05-18",
+        "2026-05-19",
+        "2026-05-20",
+        "2026-05-21",
+        "2026-05-22",
+        "2026-05-25",
+        "2026-05-26",
+        "2026-05-27",
+    ]
+    rows = [
+        _execution(
+            row_id=1,
+            trade_date="2026-05-15",
+            exec_time="14:00:00",
+            code="600001",
+            direction="buy",
+            shares=100,
+            amount=1000.0,
+        ),
+        _execution(
+            row_id=2,
+            trade_date="2026-05-18",
+            exec_time="10:00:00",
+            code="600001",
+            direction="sell",
+            shares=100,
+            amount=1100.0,
+        ),
+        _execution(
+            row_id=3,
+            trade_date="2026-05-19",
+            exec_time="10:30:00",
+            code="600002",
+            direction="buy",
+            shares=100,
+            amount=1000.0,
+        ),
+    ]
+    rows[0].update(net_amount=-1000.0, total_fees=0.0)
+    rows[1].update(net_amount=1100.0, total_fees=0.0)
+    rows[2].update(net_amount=-1000.0, total_fees=0.0)
+
+    def fake_run_json(cmd: list[str]):
+        if cmd[2:4] == ["db", "thesis-list"]:
+            return []
+        if cmd[2:4] == ["executions", "list"]:
+            from_day = cmd[cmd.index("--from") + 1]
+            to_day = cmd[cmd.index("--to") + 1]
+            return [row for row in rows if from_day <= row["biz_date"] <= to_day]
+        raise AssertionError(f"unexpected command: {cmd}")
+
+    monkeypatch.setattr(review, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(
+        review, "_try_get_last_n_trade_days", lambda n, as_of: calendar_days
+    )
+    monkeypatch.setattr(review, "_run_json", fake_run_json)
+    monkeypatch.setattr(review, "_load_holding_snapshots", lambda days: {})
+
+    result = review.generate(
+        run_date=date(2026, 5, 27),
+        account="default",
+        limit=10000,
+        push=False,
+    )
+    report_md = Path(result["report_path"]).read_text(encoding="utf-8")
+
+    assert "| 未闭环线索数 | 0.0000 | 1.00 | -1.00 | 下降 |" in report_md
+    assert (
+        "| 隔日快进快出次数(按卖出笔) | 0.0000 | 1.00 | -1.00 | 下降 |"
+        in report_md
+    )
+
+
+def test_main_same_day_push_receipt_does_not_generate_or_resend(
+    tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setattr(review, "PROJECT_ROOT", tmp_path)
+    report_path = review._report_path(date(2026, 5, 29))
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(
+        "# report\n\n"
+        "## 按交易日拆分节奏\n"
+        "- 2026-05-26：无券商成交流水\n"
+        "- 2026-05-27：无券商成交流水\n"
+        "- 2026-05-28：无券商成交流水\n"
+        "- 2026-05-29：无券商成交流水\n\n"
+        "---\n\n"
+        "## 钉钉推送状态\n"
+        "- [事实] 推送结果：成功\n",
+        encoding="utf-8",
+    )
+
+    def forbidden_generate(**kwargs):
+        raise AssertionError("same-day successful push must not regenerate or resend")
+
+    monkeypatch.setattr(review, "generate", forbidden_generate)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "four_trading_day_review.py",
+            "--date",
+            "2026-05-29",
+            "--account",
+            "default",
+            "--limit",
+            "10000",
+            "--push",
+        ],
+    )
+
+    review.main()
+
+    result = json.loads(capsys.readouterr().out)
+    assert result["push_ok"] is True
+    assert result["push_skipped"] is True

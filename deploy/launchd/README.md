@@ -148,37 +148,11 @@ sudo pmset repeat cancel
 - 看 launchd 自身是否报错：`log show --predicate 'process == "launchd"' --info --last 1h | grep tradesystem`
 - 钉钉凭据未注入：`today-runner.sh` 在 log 头打 `[env] DINGTALK_WEBHOOK_TOKEN=set DINGTALK_WEBHOOK_SECRET=set`；若任一为空 → 检查 `~/.config/tradeSystem.env` 路径、权限、行尾 CRLF
 
-## 最近 4 个交易日交易复盘（工作日 22:30）
+## 最近 4 个交易日交易复盘（已迁出 launchd）
 
-生成完整 Markdown 报告并推送钉钉短摘要。报告会按券商真实成交顺序，使用卖出日前一
-交易日且在当日收盘后生成的盘后持仓涨跌幅做“卖弱优先”无前视代理检查；快照、行情
-或成交顺序不完整、快照后又补录更早成交时，显式标记为无法判断，不计入符合率。该检
-查不替代止损、失效、止盈等计划性退出复核。
-
-```bash
-# 1. 包装脚本可执行
-chmod +x deploy/launchd/four-trading-day-review-runner.sh
-
-# 2. 复制 plist
-cp deploy/launchd/com.alyx.tradesystem.four-trading-day-review.plist ~/Library/LaunchAgents/
-
-# 3. 加载
-launchctl load ~/Library/LaunchAgents/com.alyx.tradesystem.four-trading-day-review.plist
-
-# 4. 验证
-launchctl list | grep tradesystem.four-trading-day-review
-
-# 5. 真触发立即测试
-launchctl start com.alyx.tradesystem.four-trading-day-review
-tail -f /tmp/tradesystem-four-trading-day-review.log
-```
-
-卸载：
-
-```bash
-launchctl unload ~/Library/LaunchAgents/com.alyx.tradesystem.four-trading-day-review.plist
-rm ~/Library/LaunchAgents/com.alyx.tradesystem.four-trading-day-review.plist
-```
+该任务统一由 Codex `automation-2` 在工作日 22:30 调度，唯一业务实现为
+`scripts/automations/four_trading_day_review.py`。本目录不再提供第二套 launchd 入口；
+调整运行时间或任务说明时应更新现有 Codex 自动化，不要新增并行调度。
 
 ## 成交额 Top20 板块集中度（工作日 21:00）
 
@@ -211,7 +185,7 @@ launchctl unload ~/Library/LaunchAgents/com.alyx.tradesystem.volume-watch.plist
 rm ~/Library/LaunchAgents/com.alyx.tradesystem.volume-watch.plist
 ```
 
-**时段**：21:00 在 today-post(20:00)与 four-trading-day-review(22:30)之间,无冲突。
+**时段**：21:00 在 today-post(20:00)之后、sector-correlation(21:15)之前，无冲突。
 
 ## 板块相关性（工作日 21:15）
 
@@ -245,7 +219,7 @@ launchctl unload ~/Library/LaunchAgents/com.alyx.tradesystem.sector-correlation.
 rm ~/Library/LaunchAgents/com.alyx.tradesystem.sector-correlation.plist
 ```
 
-**时段**：21:15 在 volume-watch(21:00)与 four-trading-day-review(22:30)之间,无冲突。
+**时段**：21:15 在 volume-watch(21:00)与 trend-leader(21:30)之间，无冲突。
 
 ## 串阳首阴股票池（工作日 21:50）
 

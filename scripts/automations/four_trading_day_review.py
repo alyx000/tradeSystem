@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from bisect import bisect_left, bisect_right
+import fcntl
 import json
 import math
 import subprocess
@@ -18,6 +19,7 @@ import sqlite3
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 RUN_TZ = ZoneInfo("Asia/Shanghai")
+PUSH_STATUS_HEADING = "## 钉钉推送状态"
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -34,6 +36,77 @@ def _run_json(cmd: list[str]) -> Any:
         raise RuntimeError(f"cmd failed: {' '.join(cmd)}\nstderr: {p.stderr.strip()}")
     out = p.stdout.strip()
     return json.loads(out) if out else None
+
+
+def _report_path(run_date: date) -> Path:
+    return PROJECT_ROOT / "tmp" / "daily-trade-reviews" / (
+        f"{run_date.isoformat()}-four-trading-day-review.md"
+    )
+
+
+def _existing_push_result(report_path: Path) -> dict[str, Any] | None:
+    """Return the existing same-day push receipt, if any.
+
+    Any recorded attempt is terminal for automatic runs. Treating ``发送中`` as
+    terminal makes the CLI at-most-once if it is interrupted after DingTalk has
+    accepted the message but before the final receipt is persisted.
+    """
+    if not report_path.exists():
+        return None
+    text = report_path.read_text(encoding="utf-8")
+    heading_index = text.rfind(PUSH_STATUS_HEADING)
+    if heading_index < 0:
+        return None
+    status_text = text[heading_index:]
+    status = None
+    for line in status_text.splitlines():
+        if "推送结果" not in line:
+            continue
+        if "发送中" in line:
+            status = "发送中"
+        elif "成功" in line:
+            status = "成功"
+        elif "失败" in line:
+            status = "失败"
+    if status is None:
+        return None
+
+    current_days: list[str] = []
+    in_rhythm = False
+    for line in text.splitlines():
+        if line == "## 按交易日拆分节奏":
+            in_rhythm = True
+            continue
+        if in_rhythm and line.startswith("## "):
+            break
+        if in_rhythm and line.startswith("- ") and len(line) >= 12:
+            candidate = line[2:12]
+            if _parse_date(candidate) is not None:
+                current_days.append(candidate)
+
+    return {
+        "report_path": str(report_path),
+        "push_ok": status == "成功",
+        "push_err": None if status == "成功" else f"same_day_push_already_attempted:{status}",
+        "push_skipped": True,
+        "current_days": current_days,
+        "current_window": [current_days[0], current_days[-1]] if current_days else None,
+        "prev_window": None,
+        "weak_sell_summary": None,
+    }
+
+
+def _existing_push_status_section(report_path: Path) -> str:
+    if not report_path.exists():
+        return ""
+    text = report_path.read_text(encoding="utf-8")
+    heading_index = text.rfind(PUSH_STATUS_HEADING)
+    if heading_index < 0:
+        return ""
+    section_start = text.rfind("\n\n---", 0, heading_index)
+    if section_start < 0:
+        section_start = heading_index
+    return text[section_start:]
 
 
 def _format_money(x: float | None) -> str:
@@ -555,15 +628,23 @@ def _review_question_lines(
         questions.append("- 思路核查：确认是否需要补复盘或重新归因。")
     if same_day_flip_n or next_trade_day_flip_n:
         questions.append(f"- 快进快出：同日{same_day_flip_n}/隔日{next_trade_day_flip_n}，核对是否由主线变化触发。")
-    if not questions:
-        questions.append("- 本期无闭环卖出：优先确认数据新鲜度和未闭环线索。")
-    return questions[:4]
+    fallback_questions = [
+        "- 数据完整性：核对 4 个交易日的券商流水是否均已导入。",
+        "- 思路一致性：核对未闭环线索与 thesis 状态是否一致。",
+        "- 交易节奏：核对净现金流变化与实际仓位变化是否一致。",
+    ]
+    for fallback in fallback_questions:
+        if len(questions) >= 3:
+            break
+        questions.append(fallback)
+    return questions[:3]
 
 
 def _build_dingtalk_summary(
     *,
     current_start: str,
     current_end: str,
+    current_raw_row_n: int,
     current_agg: dict[str, Any],
     prev_agg: dict[str, Any] | None,
     current_day_summaries: list[dict[str, Any]],
@@ -593,6 +674,7 @@ def _build_dingtalk_summary(
             ("成交笔数", float(current_agg["n"]) - float(prev_agg["n"])),
             ("买入金额", float(current_agg["buy_amount"]) - float(prev_agg["buy_amount"])),
             ("卖出金额", float(current_agg["sell_amount"]) - float(prev_agg["sell_amount"])),
+            ("净现金流", float(current_agg["net_cashflow"]) - float(prev_agg["net_cashflow"])),
             ("交易费用", float(current_agg["fees"]) - float(prev_agg["fees"])),
             ("近似已实现净盈亏", current_realized_total - realized_prev_total),
         ]
@@ -638,7 +720,11 @@ def _build_dingtalk_summary(
         f"### 4日复盘｜{current_start}~{current_end}",
         "",
         "### 核心",
-        f"- 笔数 {int(current_agg['n'])}（买{int(current_agg['buy_n'])}/卖{int(current_agg['sell_n'])}）",
+        (
+            f"- 原始流水 {current_raw_row_n} / 合并动作 {int(current_agg['n'])}"
+            f"（买{int(current_agg['buy_n'])}/卖{int(current_agg['sell_n'])}）"
+        ),
+        f"- 净现金流 {_format_signed_money(float(current_agg['net_cashflow']))}",
         f"- 已实现盈亏 {_format_signed_money(current_realized_total)}｜胜率 {_format_pct(win_rate)}｜盈亏比 {_format_ratio(pl_ratio)}｜PF {_format_ratio(profit_factor)}",
         f"- 未闭环 {unclosed_clue_n}｜快进快出 同{same_day_flip_n}/隔{next_trade_day_flip_n}",
         "",
@@ -1554,50 +1640,17 @@ class Lot:
 def generate(*, run_date: date, account: str, limit: int, push: bool) -> dict[str, Any]:
     run_date_str = run_date.isoformat()
 
-    sample_limit_note = None
-    last8 = _try_get_last_n_trade_days(8, run_date)
-    if last8 is None:
-        lookback_start = (run_date - timedelta(days=21)).isoformat()
-        rows = _run_json(
-            [
-                "python3",
-                "scripts/main.py",
-                "executions",
-                "list",
-                "--from",
-                lookback_start,
-                "--to",
-                run_date_str,
-                "--account",
-                account,
-                "--limit",
-                str(limit),
-                "--json",
-            ]
-        ) or []
-        uniq = sorted(
-            {
-                r.get("biz_date")
-                for r in rows
-                if r.get("biz_date") and r.get("biz_date") <= run_date_str
-            }
-        )
-        if len(uniq) < 4:
-            raise RuntimeError("交易日历不可用且近21自然日流水不足以推断4日窗口")
-        current4 = uniq[-4:]
-        prev4 = uniq[-8:-4] if len(uniq) >= 8 else []
-        sample_limit_note = "交易日历不可用，本次按有券商流水日期近似"
-    else:
-        current4 = last8[-4:]
-        prev4 = last8[-8:-4]
+    last9 = _try_get_last_n_trade_days(9, run_date)
+    if last9 is None or len(last9) < 9:
+        raise RuntimeError("交易日历不可用或不足 9 个开放日，拒绝按有流水日期近似")
+    current4 = last9[-4:]
+    prev4 = last9[-8:-4]
 
     current_start, current_end = current4[0], current4[-1]
     prev_start, prev_end = (prev4[0], prev4[-1]) if prev4 else (None, None)
-    trade_day_idx = _trade_day_index(last8) if last8 else {}
+    trade_day_idx = _trade_day_index(last9)
     prior_day_by_day = (
-        {last8[i]: last8[i - 1] for i in range(1, len(last8))}
-        if last8
-        else {}
+        {last9[i]: last9[i - 1] for i in range(1, len(last9))}
     )
     weak_snapshot_days = {
         prior_day_by_day[trade_day]
@@ -1634,6 +1687,14 @@ def generate(*, run_date: date, account: str, limit: int, push: bool) -> dict[st
     ) or []
     window_truncated = len(window_raw_rows) >= limit
     window_rows = _collapse_split_plus_summary_rows(window_raw_rows)
+    current_day_set = set(current4)
+    prev_day_set = set(prev4)
+    current_raw_row_n = sum(
+        1 for row in window_raw_rows if row.get("biz_date") in current_day_set
+    )
+    prev_raw_row_n = sum(
+        1 for row in window_raw_rows if row.get("biz_date") in prev_day_set
+    )
 
     fifo_start = (run_date - timedelta(days=180)).isoformat()
     fifo_raw_rows = _run_json(
@@ -1686,6 +1747,11 @@ def generate(*, run_date: date, account: str, limit: int, push: bool) -> dict[st
         d = r.get("biz_date")
         if d:
             rows_by_date[d].append(r)
+    raw_rows_by_date: dict[str, list[dict]] = defaultdict(list)
+    for r in window_raw_rows:
+        d = r.get("biz_date")
+        if d:
+            raw_rows_by_date[d].append(r)
 
     def compute_day_summary(day: str) -> dict[str, Any]:
         day_rows = rows_by_date.get(day, [])
@@ -1705,6 +1771,7 @@ def generate(*, run_date: date, account: str, limit: int, push: bool) -> dict[st
         net_cashflow = sell_amount - buy_amount - fees
         return {
             "day": day,
+            "raw_n": len(raw_rows_by_date.get(day, [])),
             "n": len(actions),
             "buy_n": len(buys),
             "sell_n": len(sells),
@@ -1721,6 +1788,7 @@ def generate(*, run_date: date, account: str, limit: int, push: bool) -> dict[st
 
     def agg_summaries(summaries: list[dict[str, Any]]) -> dict[str, float]:
         return {
+            "raw_n": float(sum(s["raw_n"] for s in summaries)),
             "n": float(sum(s["n"] for s in summaries)),
             "buy_n": float(sum(s["buy_n"] for s in summaries)),
             "sell_n": float(sum(s["sell_n"] for s in summaries)),
@@ -1743,11 +1811,34 @@ def generate(*, run_date: date, account: str, limit: int, push: bool) -> dict[st
     for day in sorted(fifo_actions_by_date):
         fifo_sorted.extend(_group_trade_actions(fifo_actions_by_date[day]))
     positions: dict[tuple[str, str], list[Lot]] = defaultdict(list)
+    positions_at_prev_end: dict[tuple[str, str], list[Lot]] | None = None
     realized_events_current: list[dict[str, Any]] = []
     realized_events_prev: list[dict[str, Any]] = []
     unmatched_sells_current: list[dict[str, Any]] = []
 
+    def snapshot_positions() -> dict[tuple[str, str], list[Lot]]:
+        return {
+            key: [
+                Lot(
+                    shares=lot.shares,
+                    cost_total=lot.cost_total,
+                    buy_date=lot.buy_date,
+                    thesis_id=lot.thesis_id,
+                )
+                for lot in lots
+            ]
+            for key, lots in positions.items()
+        }
+
     for r in fifo_sorted:
+        row_day = r.get("biz_date")
+        if (
+            positions_at_prev_end is None
+            and prev_end is not None
+            and row_day
+            and row_day > prev_end
+        ):
+            positions_at_prev_end = snapshot_positions()
         direction = (r.get("direction") or "").lower()
         stock = r.get("stock_code") or r.get("stock_code_raw") or ""
         if not stock or direction not in ("buy", "sell"):
@@ -1811,32 +1902,59 @@ def generate(*, run_date: date, account: str, limit: int, push: bool) -> dict[st
         if ev["biz_date"] in prev4:
             realized_events_prev.append(ev)
 
+    if positions_at_prev_end is None:
+        positions_at_prev_end = snapshot_positions()
+
     realized_by_day: dict[str, float] = defaultdict(float)
     for e in realized_events_current:
         realized_by_day[e["biz_date"]] += float(e["realized_pnl"])
     current_realized_total = sum(realized_by_day.get(d, 0.0) for d in current4)
     realized_prev_total = sum(float(e["realized_pnl"]) for e in realized_events_prev)
 
-    pnls = [float(e["realized_pnl"]) for e in realized_events_current]
-    wins = [p for p in pnls if p > 1e-9]
-    losses = [p for p in pnls if p < -1e-9]
-    win_rate = (len(wins) / len(pnls)) if pnls else None
-    avg_win = (sum(wins) / len(wins)) if wins else None
-    avg_loss = (sum(losses) / len(losses)) if losses else None
-    # 与 profit_factor 同口径：全胜无亏损 → ∞（而非 -）；全亏无盈利 → 0.0；无样本 → None。
-    pl_ratio = (
-        (avg_win / abs(avg_loss)) if (wins and losses)
-        else (float("inf") if wins else (0.0 if losses else None))
-    )
-    profit_factor = (sum(wins) / abs(sum(losses))) if losses else (None if not wins else float("inf"))
-    max_win = max(wins) if wins else None
-    max_loss = min(losses) if losses else None
+    def pnl_metrics(events: list[dict[str, Any]]) -> dict[str, float | None]:
+        pnls = [float(e["realized_pnl"]) for e in events]
+        wins = [p for p in pnls if p > 1e-9]
+        losses = [p for p in pnls if p < -1e-9]
+        avg_win_value = (sum(wins) / len(wins)) if wins else None
+        avg_loss_value = (sum(losses) / len(losses)) if losses else None
+        # 与 profit_factor 同口径：全胜无亏损 → ∞；全亏无盈利 → 0.0；无样本 → None。
+        pl_ratio_value = (
+            (avg_win_value / abs(avg_loss_value)) if (wins and losses)
+            else (float("inf") if wins else (0.0 if losses else None))
+        )
+        profit_factor_value = (
+            (sum(wins) / abs(sum(losses)))
+            if losses
+            else (None if not wins else float("inf"))
+        )
+        loss_concentration_value = None
+        if losses:
+            abs_losses = sorted([abs(x) for x in losses], reverse=True)
+            total_abs_loss = sum(abs_losses)
+            loss_concentration_value = (
+                abs_losses[0] / total_abs_loss if total_abs_loss else None
+            )
+        return {
+            "win_rate": (len(wins) / len(pnls)) if pnls else None,
+            "avg_win": avg_win_value,
+            "avg_loss": avg_loss_value,
+            "pl_ratio": pl_ratio_value,
+            "profit_factor": profit_factor_value,
+            "max_win": max(wins) if wins else None,
+            "max_loss": min(losses) if losses else None,
+            "loss_concentration": loss_concentration_value,
+        }
 
-    loss_concentration = None
-    if losses:
-        abs_losses = sorted([abs(x) for x in losses], reverse=True)
-        total_abs_loss = sum(abs_losses)
-        loss_concentration = (abs_losses[0] / total_abs_loss) if total_abs_loss else None
+    current_pnl = pnl_metrics(realized_events_current)
+    prev_pnl = pnl_metrics(realized_events_prev)
+    win_rate = current_pnl["win_rate"]
+    avg_win = current_pnl["avg_win"]
+    avg_loss = current_pnl["avg_loss"]
+    pl_ratio = current_pnl["pl_ratio"]
+    profit_factor = current_pnl["profit_factor"]
+    max_win = current_pnl["max_win"]
+    max_loss = current_pnl["max_loss"]
+    loss_concentration = current_pnl["loss_concentration"]
 
     rows_current = [r for r in window_rows if r.get("biz_date") in current4]
     weak_sell_checks = _analyze_weak_sell_order(
@@ -1850,31 +1968,55 @@ def generate(*, run_date: date, account: str, limit: int, push: bool) -> dict[st
         weak_sell_checks,
         history_complete=not window_truncated,
     )
-    thesis_nonnull = [r for r in rows_current if r.get("thesis_id") is not None]
-    thesis_coverage = (len(thesis_nonnull) / len(rows_current)) if rows_current else None
+    raw_rows_current = [
+        r for r in window_raw_rows if r.get("biz_date") in current4
+    ]
+    thesis_nonnull = [
+        r for r in raw_rows_current if r.get("thesis_id") is not None
+    ]
+    thesis_coverage = (
+        len(thesis_nonnull) / len(raw_rows_current) if raw_rows_current else None
+    )
+    raw_rows_prev = [r for r in window_raw_rows if r.get("biz_date") in prev4]
+    thesis_nonnull_prev = [
+        r for r in raw_rows_prev if r.get("thesis_id") is not None
+    ]
+    thesis_coverage_prev = (
+        len(thesis_nonnull_prev) / len(raw_rows_prev) if raw_rows_prev else None
+    )
 
-    need_thesis_review = 0
-    for e in realized_events_current:
-        tid = e.get("sell_thesis_id")
-        t = thesis_by_id.get(tid) if tid is not None else None
-        status = (t.get("status") if t else None)
-        if tid is None or status in ("closed", "archived"):
-            need_thesis_review += 1
+    def count_need_thesis_review(events: list[dict[str, Any]]) -> int:
+        count = 0
+        for event in events:
+            tid = event.get("sell_thesis_id")
+            thesis = thesis_by_id.get(tid) if tid is not None else None
+            status = thesis.get("status") if thesis else None
+            if tid is None or status in ("closed", "archived"):
+                count += 1
+        return count
+
+    need_thesis_review = count_need_thesis_review(realized_events_current)
+    need_thesis_review_prev = count_need_thesis_review(realized_events_prev)
 
     # quick in/out heuristics (by trade-day distance using calendar indices when available)
-    same_day_flip_n = 0
-    next_trade_day_flip_n = 0
-    for e in realized_events_current:
-        sell_day = e.get("biz_date")
-        buy_days = e.get("buy_dates") or []
-        if not sell_day or not buy_days:
-            continue
-        if sell_day in buy_days:
-            same_day_flip_n += 1
-        latest_buy_day = max(buy_days)
-        if sell_day in trade_day_idx and latest_buy_day in trade_day_idx:
-            if trade_day_idx[sell_day] - trade_day_idx[latest_buy_day] == 1:
-                next_trade_day_flip_n += 1
+    def count_quick_flips(events: list[dict[str, Any]]) -> tuple[int, int]:
+        same_day = 0
+        next_trade_day = 0
+        for event in events:
+            sell_day = event.get("biz_date")
+            buy_days = event.get("buy_dates") or []
+            if not sell_day or not buy_days:
+                continue
+            if sell_day in buy_days:
+                same_day += 1
+            latest_buy_day = max(buy_days)
+            if sell_day in trade_day_idx and latest_buy_day in trade_day_idx:
+                if trade_day_idx[sell_day] - trade_day_idx[latest_buy_day] == 1:
+                    next_trade_day += 1
+        return same_day, next_trade_day
+
+    same_day_flip_n, next_trade_day_flip_n = count_quick_flips(realized_events_current)
+    prev_same_day_flip_n, prev_next_trade_day_flip_n = count_quick_flips(realized_events_prev)
 
     # unclosed clues: remaining lots that were bought in current window
     unclosed_clues = []
@@ -1882,6 +2024,11 @@ def generate(*, run_date: date, account: str, limit: int, push: bool) -> dict[st
         if any(l.buy_date in current4 for l in lots):
             unclosed_clues.append({"stock_code": stock, "shares": sum(l.shares for l in lots)})
     unclosed_clue_n = len(unclosed_clues)
+    prev_unclosed_clue_n = sum(
+        1
+        for lots in positions_at_prev_end.values()
+        if any(lot.buy_date in prev4 for lot in lots)
+    )
 
     # same-day switch heuristic: both buy and sell happen, with different stock sets
     same_day_switch_days: list[dict[str, Any]] = []
@@ -1911,7 +2058,8 @@ def generate(*, run_date: date, account: str, limit: int, push: bool) -> dict[st
         realized = realized_by_day.get(day, 0.0)
         merged_actions = _format_actions(s["actions"])
         rhythm_lines.append(
-            f"- {day}：买入{s['buy_n']} 卖出{s['sell_n']}；买入金额{_format_money(s['buy_amount'])} "
+            f"- {day}：原始流水{s['raw_n']} 合并动作{s['n']}；买入{s['buy_n']} 卖出{s['sell_n']}；"
+            f"买入金额{_format_money(s['buy_amount'])} "
             f"卖出金额{_format_money(s['sell_amount'])}；净现金流(近似){_format_money(s['net_cashflow'])}；"
             f"当日闭环盈亏(近似){_format_money(realized)}；主要动作：{merged_actions}"
         )
@@ -1924,6 +2072,8 @@ def generate(*, run_date: date, account: str, limit: int, push: bool) -> dict[st
         trend_rows.append(
             [
                 day,
+                str(int(s["raw_n"])),
+                str(int(s["n"])),
                 str(int(s["buy_n"])),
                 str(int(s["sell_n"])),
                 _format_money(s["buy_amount"]),
@@ -1934,28 +2084,46 @@ def generate(*, run_date: date, account: str, limit: int, push: bool) -> dict[st
             ]
         )
     trend_table = md_table(
-        ["交易日", "买入笔数", "卖出笔数", "买入金额", "卖出金额", "净现金流(近似)", "当日闭环盈亏(近似)", "主要动作"],
+        [
+            "交易日",
+            "原始流水行数",
+            "合并动作数",
+            "买入动作数",
+            "卖出动作数",
+            "买入金额",
+            "卖出金额",
+            "净现金流(近似)",
+            "当日闭环盈亏(近似)",
+            "主要动作",
+        ],
         trend_rows,
     )
 
     # compare table (keep explanation empty; human to fill)
     compare_metrics = [
-        ("成交笔数", current_agg["n"], prev_agg["n"] if prev_agg else None),
+        ("成交笔数(合并动作)", current_agg["n"], prev_agg["n"] if prev_agg else None),
         ("买入金额", current_agg["buy_amount"], prev_agg["buy_amount"] if prev_agg else None),
         ("卖出金额", current_agg["sell_amount"], prev_agg["sell_amount"] if prev_agg else None),
         ("净现金流(近似)", current_agg["net_cashflow"], prev_agg["net_cashflow"] if prev_agg else None),
         ("交易费用", current_agg["fees"], prev_agg["fees"] if prev_agg else None),
         ("近似已实现净盈亏", current_realized_total, realized_prev_total if prev4 else None),
-        ("胜率(按卖出笔)", win_rate, None),
-        ("盈亏比(按卖出笔)", pl_ratio, None),
-        ("Profit Factor(按卖出笔)", profit_factor if isinstance(profit_factor, float) else None, None),
-        ("平均盈利", avg_win, None),
-        ("平均亏损", avg_loss, None),
-        ("最大单笔盈利", max_win, None),
-        ("最大单笔亏损", max_loss, None),
-        ("亏损集中度(Top1/总亏损)", loss_concentration, None),
-        ("未闭环线索数", float(unclosed_clue_n), None),
-        ("需核查 thesis_review 的闭环交易数(启发式)", float(need_thesis_review), None),
+        ("胜率(按卖出笔)", win_rate, prev_pnl["win_rate"]),
+        ("盈亏比(按卖出笔)", pl_ratio, prev_pnl["pl_ratio"]),
+        ("Profit Factor(按卖出笔)", profit_factor, prev_pnl["profit_factor"]),
+        ("平均盈利", avg_win, prev_pnl["avg_win"]),
+        ("平均亏损", avg_loss, prev_pnl["avg_loss"]),
+        ("最大单笔盈利", max_win, prev_pnl["max_win"]),
+        ("最大单笔亏损", max_loss, prev_pnl["max_loss"]),
+        ("亏损集中度(Top1/总亏损)", loss_concentration, prev_pnl["loss_concentration"]),
+        ("未闭环线索数", float(unclosed_clue_n), float(prev_unclosed_clue_n)),
+        ("同日快进快出次数(按卖出笔)", float(same_day_flip_n), float(prev_same_day_flip_n)),
+        ("隔日快进快出次数(按卖出笔)", float(next_trade_day_flip_n), float(prev_next_trade_day_flip_n)),
+        ("thesis_id 覆盖率(按流水行)", thesis_coverage, thesis_coverage_prev),
+        (
+            "需核查 thesis_review 的闭环交易数(启发式)",
+            float(need_thesis_review),
+            float(need_thesis_review_prev),
+        ),
     ]
     cmp_rows = []
     for name, cur, prev in compare_metrics:
@@ -1968,8 +2136,12 @@ def generate(*, run_date: date, account: str, limit: int, push: bool) -> dict[st
                 return _format_money(v) if abs(v) >= 1 else f"{v:.4f}"
             return str(v)
 
-        if prev is None:
-            cmp_rows.append([name, fmt(cur), "样本不足", "样本不足", "样本不足", ""])
+        if cur is None or prev is None:
+            cmp_rows.append(
+                [name, fmt(cur), fmt(prev), "样本不足", "样本不足", ""]
+            )
+        elif cur == float("inf") and prev == float("inf"):
+            cmp_rows.append([name, "∞", "∞", "0.0000", "持平", ""])
         else:
             d = float(cur) - float(prev)
             direction = "上升" if d > 0 else ("下降" if d < 0 else "持平")
@@ -2034,9 +2206,9 @@ def generate(*, run_date: date, account: str, limit: int, push: bool) -> dict[st
     )
 
     # report path (allowed write)
-    report_dir = PROJECT_ROOT / "tmp" / "daily-trade-reviews"
-    report_path = report_dir / f"{run_date_str}-four-trading-day-review.md"
-    report_dir.mkdir(parents=True, exist_ok=True)
+    report_path = _report_path(run_date)
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    existing_push_status = _existing_push_status_section(report_path)
 
     lines: list[str] = []
     lines.append(f"# 最近 4 个交易日交易复盘（运行日 {run_date_str}，Asia/Shanghai）")
@@ -2058,8 +2230,6 @@ def generate(*, run_date: date, account: str, limit: int, push: bool) -> dict[st
         "- [事实] 卖弱顺序检查读取严格上一交易日 daily_market.raw_data.holdings_data，"
         "并按券商 exec_time / id 正序回放当日成交。"
     )
-    if sample_limit_note:
-        lines.append(f"- [事实] 样本限制：{sample_limit_note}")
     lines.append("")
 
     lines.append("## 数据新鲜度检查")
@@ -2077,6 +2247,7 @@ def generate(*, run_date: date, account: str, limit: int, push: bool) -> dict[st
     summary_rows = [
         [
             f"本期 {current_start}~{current_end}",
+            str(current_raw_row_n),
             str(int(current_agg["n"])),
             str(int(current_agg["buy_n"])),
             str(int(current_agg["sell_n"])),
@@ -2090,6 +2261,7 @@ def generate(*, run_date: date, account: str, limit: int, push: bool) -> dict[st
         summary_rows.append(
             [
                 f"上期 {prev_start}~{prev_end}",
+                str(prev_raw_row_n),
                 str(int(prev_agg["n"])),
                 str(int(prev_agg["buy_n"])),
                 str(int(prev_agg["sell_n"])),
@@ -2101,7 +2273,17 @@ def generate(*, run_date: date, account: str, limit: int, push: bool) -> dict[st
         )
     lines.append(
         md_table(
-            ["窗口", "成交笔数", "买入笔数", "卖出笔数", "买入金额", "卖出金额", "交易费用", "净现金流(近似)"],
+            [
+                "窗口",
+                "原始流水行数",
+                "合并动作数",
+                "买入动作数",
+                "卖出动作数",
+                "买入金额",
+                "卖出金额",
+                "交易费用",
+                "净现金流(近似)",
+            ],
             summary_rows,
         )
     )
@@ -2313,18 +2495,26 @@ def generate(*, run_date: date, account: str, limit: int, push: bool) -> dict[st
             f"- [事实] 复盘窗口流水读取达到 {limit} 条上限；"
             "卖弱顺序统一标记为持仓回放不完整，不判符合。"
         )
-    if sample_limit_note:
-        lines.append(f"- [事实] {sample_limit_note}。")
     if unmatched_sells_current:
         lines.append(f"- [事实] FIFO 匹配存在 {len(unmatched_sells_current)} 笔本期卖出无法在近 { (run_date - timedelta(days=180)).isoformat() } 起的历史中找到足够买入匹配，可能是更早历史或导入不全。")
     lines.append("- [判断] “需核查 thesis_review 的闭环交易数”为启发式提示：仅基于 thesis_id 是否缺失/状态是否已关闭，不能替代人工核查。")
 
     report_md = "\n".join(lines) + "\n"
-    report_path.write_text(report_md, encoding="utf-8")
+    report_path.write_text(
+        report_md + (existing_push_status if not push else ""),
+        encoding="utf-8",
+    )
 
     push_ok = False
     push_err = None
     if push:
+        pending_status_md = (
+            "\n\n---\n\n"
+            f"{PUSH_STATUS_HEADING}\n"
+            "- [事实] 推送结果：发送中\n"
+            "- [判断] 已开始本日唯一一次推送尝试；进程异常中断时禁止自动重推，以免重复消息。\n"
+        )
+        report_path.write_text(report_md + pending_status_md, encoding="utf-8")
         try:
             from scripts.pushers.dingtalk_pusher import DingTalkPusher
 
@@ -2335,6 +2525,7 @@ def generate(*, run_date: date, account: str, limit: int, push: bool) -> dict[st
                 summary = _build_dingtalk_summary(
                     current_start=current_start,
                     current_end=current_end,
+                    current_raw_row_n=current_raw_row_n,
                     current_agg=current_agg,
                     prev_agg=prev_agg,
                     current_day_summaries=current_day_summaries,
@@ -2365,7 +2556,7 @@ def generate(*, run_date: date, account: str, limit: int, push: bool) -> dict[st
             push_ok = False
             push_err = f"DingTalk 推送异常: {type(e).__name__}: {str(e)[:200]}"
 
-        status_md = "\n\n---\n\n## 钉钉推送状态\n"
+        status_md = f"\n\n---\n\n{PUSH_STATUS_HEADING}\n"
         status_md += "- [事实] 推送结果：成功\n" if push_ok else f"- [事实] 推送结果：失败\n- [事实] 失败原因：{push_err or '-'}\n"
         report_path.write_text(report_md + status_md, encoding="utf-8")
 
@@ -2393,7 +2584,17 @@ def main() -> None:
     else:
         run_date = datetime.now(RUN_TZ).date()
 
-    result = generate(run_date=run_date, account=args.account, limit=args.limit, push=bool(args.push))
+    report_path = _report_path(run_date)
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    with report_path.open("a+", encoding="utf-8") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        existing = _existing_push_result(report_path) if args.push else None
+        result = existing or generate(
+            run_date=run_date,
+            account=args.account,
+            limit=args.limit,
+            push=bool(args.push),
+        )
     print(json.dumps(result, ensure_ascii=False))
 
 
