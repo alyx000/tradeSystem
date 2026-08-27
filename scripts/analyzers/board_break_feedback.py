@@ -19,6 +19,30 @@ from utils.trade_date import get_prev_trade_date
 
 DAILY_DIR = Path(__file__).resolve().parent.parent.parent / "daily"
 
+HEIGHT_BUCKETS = (
+    {
+        "key": "low",
+        "label": "低位",
+        "height_min": 2,
+        "height_max": 2,
+        "height_range": "2板",
+    },
+    {
+        "key": "mid",
+        "label": "中位",
+        "height_min": 3,
+        "height_max": 4,
+        "height_range": "3-4板",
+    },
+    {
+        "key": "high",
+        "label": "高位",
+        "height_min": 5,
+        "height_max": None,
+        "height_range": "5板及以上",
+    },
+)
+
 
 def _finite_float(value) -> float | None:
     try:
@@ -129,6 +153,94 @@ def _mean(values: list[float]) -> float | None:
 
 def _median(values: list[float]) -> float | None:
     return round(statistics.median(values), 2) if values else None
+
+
+def _height_bucket(height: int) -> dict:
+    for bucket in HEIGHT_BUCKETS:
+        maximum = bucket["height_max"]
+        if height >= bucket["height_min"] and (maximum is None or height <= maximum):
+            return bucket
+    raise ValueError(f"连板高度不在分层口径内: {height}")
+
+
+def _feedback_metrics(
+    details: list[dict],
+    *,
+    limit_status_uncertain: bool,
+    down_status_uncertain: bool,
+) -> dict:
+    open_values = [row["feedback_open_pct"] for row in details]
+    close_values = [row["feedback_close_pct"] for row in details]
+    sample_count = len(details)
+    open_up_count = sum(value > 0 for value in open_values)
+    close_up_count = sum(value > 0 for value in close_values)
+    relimit_count = (
+        None
+        if limit_status_uncertain or not sample_count
+        else sum(row["outcome"] == "再涨停" for row in details)
+    )
+    limit_down_count = (
+        None
+        if down_status_uncertain or not sample_count
+        else sum(row["outcome"] == "跌停" for row in details)
+    )
+    return {
+        "sample_count": sample_count,
+        "open_up_count": open_up_count,
+        "open_up_rate": round(open_up_count / sample_count, 3) if sample_count else None,
+        "open_mean_pct": _mean(open_values),
+        "open_median_pct": _median(open_values),
+        "close_up_count": close_up_count,
+        "close_up_rate": round(close_up_count / sample_count, 3) if sample_count else None,
+        "close_mean_pct": _mean(close_values),
+        "close_median_pct": _median(close_values),
+        "relimit_count": relimit_count,
+        "relimit_rate": (
+            round(relimit_count / sample_count, 3)
+            if sample_count and relimit_count is not None else None
+        ),
+        "limit_down_count": limit_down_count,
+        "limit_down_rate": (
+            round(limit_down_count / sample_count, 3)
+            if sample_count and limit_down_count is not None else None
+        ),
+    }
+
+
+def _build_height_buckets(
+    break_candidates: list[dict],
+    break_confirmed: list[dict],
+    details: list[dict],
+    *,
+    limit_status_uncertain: bool,
+    down_status_uncertain: bool,
+) -> list[dict]:
+    summaries: list[dict] = []
+    for definition in HEIGHT_BUCKETS:
+        key = definition["key"]
+        candidates = [row for row in break_candidates if _height_bucket(row["height"])["key"] == key]
+        confirmed = [row for row in break_confirmed if _height_bucket(row["height"])["key"] == key]
+        bucket_details = [row for row in details if row["height_bucket"] == key]
+        candidate_count = len(candidates)
+        break_count = len(confirmed)
+        metrics = _feedback_metrics(
+            bucket_details,
+            limit_status_uncertain=limit_status_uncertain,
+            down_status_uncertain=down_status_uncertain,
+        )
+        summaries.append({
+            **definition,
+            "break_candidate_count": candidate_count,
+            "break_count": break_count,
+            "break_coverage_pct": (
+                round(break_count / candidate_count * 100, 1) if candidate_count else None
+            ),
+            "feedback_coverage_pct": (
+                round(metrics["sample_count"] / break_count * 100, 1) if break_count else None
+            ),
+            **metrics,
+        })
+    return summaries
 
 
 def collect_board_break_feedback(
@@ -280,6 +392,8 @@ def collect_board_break_feedback(
                     "code": row["code"],
                     "name": row["name"],
                     "previous_height": row["height"],
+                    "height_bucket": _height_bucket(row["height"])["key"],
+                    "height_bucket_label": _height_bucket(row["height"])["label"],
                     "break_change_pct": row["break_change_pct"],
                     "feedback_open_pct": open_pct,
                     "feedback_close_pct": close_pct,
@@ -317,19 +431,19 @@ def collect_board_break_feedback(
     else:
         status = "ok"
 
-    open_values = [row["feedback_open_pct"] for row in details]
-    close_values = [row["feedback_close_pct"] for row in details]
-    sample_count = len(details)
-    break_count = len(break_confirmed)
-    open_up_count = sum(value > 0 for value in open_values)
-    close_up_count = sum(value > 0 for value in close_values)
-    relimit_count = (
-        None if limit_status_uncertain
-        else sum(row["outcome"] == "再涨停" for row in details)
+    summary = _feedback_metrics(
+        details,
+        limit_status_uncertain=limit_status_uncertain,
+        down_status_uncertain=down_status_uncertain,
     )
-    limit_down_count = (
-        None if down_status_uncertain
-        else sum(row["outcome"] == "跌停" for row in details)
+    sample_count = summary["sample_count"]
+    break_count = len(break_confirmed)
+    height_buckets = _build_height_buckets(
+        break_candidates,
+        break_confirmed,
+        details,
+        limit_status_uncertain=limit_status_uncertain,
+        down_status_uncertain=down_status_uncertain,
     )
 
     empty_reason = None
@@ -346,7 +460,6 @@ def collect_board_break_feedback(
         "connected_count": len(connected),
         "break_candidate_count": len(break_candidates),
         "break_count": break_count,
-        "sample_count": sample_count,
         "break_coverage_pct": (
             round(break_count / len(break_candidates) * 100, 1)
             if break_candidates else None
@@ -354,24 +467,9 @@ def collect_board_break_feedback(
         "feedback_coverage_pct": round(sample_count / break_count * 100, 1) if break_count else None,
         # 兼容首版内部字段；明确等同反馈日行情覆盖，不再承担断板候选核验覆盖语义。
         "coverage_pct": round(sample_count / break_count * 100, 1) if break_count else None,
-        "open_up_count": open_up_count,
-        "open_up_rate": round(open_up_count / sample_count, 3) if sample_count else None,
-        "open_mean_pct": _mean(open_values),
-        "open_median_pct": _median(open_values),
-        "close_up_count": close_up_count,
-        "close_up_rate": round(close_up_count / sample_count, 3) if sample_count else None,
-        "close_mean_pct": _mean(close_values),
-        "close_median_pct": _median(close_values),
-        "relimit_count": relimit_count,
-        "relimit_rate": (
-            round(relimit_count / sample_count, 3)
-            if sample_count and relimit_count is not None else None
-        ),
-        "limit_down_count": limit_down_count,
-        "limit_down_rate": (
-            round(limit_down_count / sample_count, 3)
-            if sample_count and limit_down_count is not None else None
-        ),
+        **summary,
+        "height_bucket_definition": "低位=2板，中位=3-4板，高位=5板及以上",
+        "height_buckets": height_buckets,
         "dirty_source_count": dirty_source_count,
         "missing_break_quotes": missing_break_quotes,
         "missing_outcome_quotes": missing_outcome_quotes,

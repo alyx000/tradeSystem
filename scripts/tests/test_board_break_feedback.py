@@ -130,10 +130,16 @@ def test_collects_next_day_feedback_with_exact_timeline_and_excludes_st(tmp_path
     assert result["close_median_pct"] == 10.0
     assert result["relimit_count"] == 1
     assert result["limit_down_count"] == 0
+    assert result["height_bucket_definition"] == "低位=2板，中位=3-4板，高位=5板及以上"
+    assert [bucket["key"] for bucket in result["height_buckets"]] == ["low", "mid", "high"]
+    assert result["height_buckets"][1]["sample_count"] == 1
+    assert result["height_buckets"][1]["close_median_pct"] == 10.0
     assert result["details"] == [{
         "code": "000001",
         "name": "断板A",
         "previous_height": 3,
+        "height_bucket": "mid",
+        "height_bucket_label": "中位",
         "break_change_pct": -2.0,
         "feedback_open_pct": 5.0,
         "feedback_close_pct": 10.0,
@@ -177,6 +183,72 @@ def test_partial_does_not_turn_missing_feedback_or_limit_status_into_zero(tmp_pa
     assert result["details"][0]["outcome"] == "上涨（涨停状态未核验）"
     assert len(result["missing_outcome_quotes"]) == 1
     assert any("反馈日行情" in error for error in result["errors"])
+    low, mid, high = result["height_buckets"]
+    assert low["break_count"] == 1 and low["sample_count"] == 0
+    assert low["feedback_coverage_pct"] == 0.0
+    assert low["open_mean_pct"] is None and low["relimit_count"] is None
+    assert mid["break_count"] == mid["sample_count"] == 1
+    assert high["break_candidate_count"] == 0
+
+
+def test_height_buckets_use_two_three_to_four_and_five_plus_boundaries(tmp_path):
+    daily_dir = tmp_path / "daily"
+    connected = [
+        {"code": "000002.SZ", "name": "二板", "limit_times": 2},
+        {"code": "000003.SZ", "name": "三板", "limit_times": 3},
+        {"code": "000004.SZ", "name": "四板", "limit_times": 4},
+        {"code": "000005.SZ", "name": "五板", "limit_times": 5},
+        {"code": "000008.SZ", "name": "八板", "limit_times": 8},
+    ]
+    _write_post(daily_dir, CONNECTED_DATE, connected)
+    _write_post(daily_dir, BREAK_DATE, [])
+    break_quotes = [
+        _quote(row["code"], BREAK_DATE, 10.0, 10.0, -1.0, pre_close=10.1)
+        for row in connected
+    ]
+    outcome_changes = {
+        "000002.SZ": (1.0, 2.0),
+        "000003.SZ": (-1.0, -2.0),
+        "000004.SZ": (3.0, 4.0),
+        "000005.SZ": (-3.0, -4.0),
+        "000008.SZ": (5.0, 6.0),
+    }
+    outcome_quotes = [
+        _quote(
+            row["code"],
+            OUTCOME_DATE,
+            10.0 * (1 + outcome_changes[row["code"]][0] / 100),
+            10.0 * (1 + outcome_changes[row["code"]][1] / 100),
+            outcome_changes[row["code"]][1],
+            pre_close=10.0,
+        )
+        for row in connected
+    ]
+    registry = _Registry({BREAK_DATE: break_quotes, OUTCOME_DATE: outcome_quotes})
+
+    result = collect_board_break_feedback(
+        registry,
+        OUTCOME_DATE,
+        _today_raw(
+            limit_up=[{"code": "000008.SZ", "name": "八板"}],
+            limit_down=[{"code": "000005.SZ", "name": "五板"}],
+        ),
+        daily_dir=daily_dir,
+    )
+
+    assert result["status"] == "ok"
+    low, mid, high = result["height_buckets"]
+    assert (low["height_range"], low["sample_count"], low["close_mean_pct"]) == (
+        "2板", 1, 2.0
+    )
+    assert (mid["height_range"], mid["sample_count"], mid["close_mean_pct"]) == (
+        "3-4板", 2, 1.0
+    )
+    assert (high["height_range"], high["sample_count"], high["close_mean_pct"]) == (
+        "5板及以上", 2, 1.0
+    )
+    assert high["relimit_count"] == high["limit_down_count"] == 1
+    assert {row["height_bucket_label"] for row in result["details"]} == {"低位", "中位", "高位"}
 
 
 def test_break_day_coverage_uses_all_candidates_as_denominator(tmp_path):
@@ -297,8 +369,44 @@ def test_report_renders_metrics_and_source_failure_without_fake_zero():
             "relimit_rate": 0.0,
             "limit_down_count": 0,
             "limit_down_rate": 0.0,
+            "height_buckets": [
+                {
+                    "key": "low", "label": "低位", "height_range": "2板",
+                    "break_candidate_count": 0, "break_count": 0, "sample_count": 0,
+                    "break_coverage_pct": None, "feedback_coverage_pct": None,
+                    "open_up_count": 0, "open_up_rate": None,
+                    "open_mean_pct": None, "open_median_pct": None,
+                    "close_up_count": 0, "close_up_rate": None,
+                    "close_mean_pct": None, "close_median_pct": None,
+                    "relimit_count": None, "relimit_rate": None,
+                    "limit_down_count": None, "limit_down_rate": None,
+                },
+                {
+                    "key": "mid", "label": "中位", "height_range": "3-4板",
+                    "break_candidate_count": 1, "break_count": 1, "sample_count": 1,
+                    "break_coverage_pct": 100.0, "feedback_coverage_pct": 100.0,
+                    "open_up_count": 1, "open_up_rate": 1.0,
+                    "open_mean_pct": 2.0, "open_median_pct": 2.0,
+                    "close_up_count": 1, "close_up_rate": 1.0,
+                    "close_mean_pct": 5.0, "close_median_pct": 5.0,
+                    "relimit_count": 0, "relimit_rate": 0.0,
+                    "limit_down_count": 0, "limit_down_rate": 0.0,
+                },
+                {
+                    "key": "high", "label": "高位", "height_range": "5板及以上",
+                    "break_candidate_count": 0, "break_count": 0, "sample_count": 0,
+                    "break_coverage_pct": None, "feedback_coverage_pct": None,
+                    "open_up_count": 0, "open_up_rate": None,
+                    "open_mean_pct": None, "open_median_pct": None,
+                    "close_up_count": 0, "close_up_rate": None,
+                    "close_mean_pct": None, "close_median_pct": None,
+                    "relimit_count": None, "relimit_rate": None,
+                    "limit_down_count": None, "limit_down_rate": None,
+                },
+            ],
             "details": [{
                 "code": "000001", "name": "样本A", "previous_height": 3,
+                "height_bucket": "mid", "height_bucket_label": "中位",
                 "break_change_pct": -2.0, "feedback_open_pct": 2.0,
                 "feedback_close_pct": 5.0, "outcome": "上涨",
             }],
@@ -310,6 +418,10 @@ def test_report_renders_metrics_and_source_failure_without_fake_zero():
     assert "连板断板次日反馈 [事实]" in text
     assert "断板候选核验: **1/1只**" in text
     assert "反馈行情: **1/1只**" in text
+    assert "低位=2板、中位=3-4板、高位=5板及以上" in text
+    assert "按断板前连板高度分层" in text
+    assert "| 中位（3-4板） | 1/1（100.0%） | 1/1（100.0%） |" in text
+    assert "| 样本A(000001) | 中位 | 3板 |" in text
     assert "样本A(000001)" in text
 
     failed_lines: list[str] = []

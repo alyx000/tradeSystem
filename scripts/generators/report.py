@@ -1613,7 +1613,8 @@ def _render_board_break_feedback(lines: list, raw_data: dict, section_idx: int) 
     outcome_date = feedback.get("outcome_date", "-")
     lines.append(
         f"> 口径：{source_date} 连板≥2且非 ST → {break_date} 有交易但不再涨停"
-        f" → {outcome_date} 下一交易日反馈；不采用断板反包观察清单的选股门槛。\n"
+        f" → {outcome_date} 下一交易日反馈；低位=2板、中位=3-4板、高位=5板及以上；"
+        "不采用断板反包观察清单的选股门槛。\n"
     )
 
     status = feedback.get("status")
@@ -1674,15 +1675,56 @@ def _render_board_break_feedback(lines: list, raw_data: dict, section_idx: int) 
         f"跌停: {_count(feedback.get('limit_down_count'))}只（{_rate(feedback.get('limit_down_rate'))}）\n"
     )
 
-    lines.append("| 股票 | 断板前高度 | 断板日涨跌 | 次日开盘 | 次日收盘 | 结果 |")
-    lines.append("|------|-----------|-----------|---------|---------|------|")
+    height_buckets = feedback.get("height_buckets")
+    if isinstance(height_buckets, list) and height_buckets:
+        def _coverage(count, total, pct) -> str:
+            pct_text = f"{float(pct):.1f}%" if pct is not None else "-"
+            return f"{int(count or 0)}/{int(total or 0)}（{pct_text}）"
+
+        def _count_rate(count, rate, samples: int) -> str:
+            if not samples:
+                return "未计算"
+            if count is None:
+                return "-"
+            return f"{int(count)}只（{_rate(rate)}）"
+
+        def _mean_median(mean, median, samples: int) -> str:
+            return f"{_pct(mean)} / {_pct(median)}" if samples else "未计算"
+
+        lines.append("### 按断板前连板高度分层\n")
+        lines.append("| 层级 | 断板核验 | 反馈行情 | 次日高开 | 次日收涨 | 开盘均值/中位 | 收盘均值/中位 | 再涨停/跌停 |")
+        lines.append("|------|----------|----------|----------|----------|---------------|---------------|-------------|")
+        for bucket in height_buckets:
+            bucket_samples = int(bucket.get("sample_count") or 0)
+            label = f"{bucket.get('label', '-')}（{bucket.get('height_range', '-')}）"
+            relimit = _count_rate(
+                bucket.get("relimit_count"), bucket.get("relimit_rate"), bucket_samples
+            )
+            limit_down = _count_rate(
+                bucket.get("limit_down_count"), bucket.get("limit_down_rate"), bucket_samples
+            )
+            lines.append(
+                f"| {label} | "
+                f"{_coverage(bucket.get('break_count'), bucket.get('break_candidate_count'), bucket.get('break_coverage_pct'))} | "
+                f"{_coverage(bucket_samples, bucket.get('break_count'), bucket.get('feedback_coverage_pct'))} | "
+                f"{_count_rate(bucket.get('open_up_count'), bucket.get('open_up_rate'), bucket_samples)} | "
+                f"{_count_rate(bucket.get('close_up_count'), bucket.get('close_up_rate'), bucket_samples)} | "
+                f"{_mean_median(bucket.get('open_mean_pct'), bucket.get('open_median_pct'), bucket_samples)} | "
+                f"{_mean_median(bucket.get('close_mean_pct'), bucket.get('close_median_pct'), bucket_samples)} | "
+                f"{relimit} / {limit_down} |"
+            )
+        lines.append("")
+
+    lines.append("| 股票 | 层级 | 断板前高度 | 断板日涨跌 | 次日开盘 | 次日收盘 | 结果 |")
+    lines.append("|------|------|-----------|-----------|---------|---------|------|")
     details = feedback.get("details") or []
     for row in details[:20]:
         name = str(row.get("name") or row.get("code") or "-").replace("|", "\\|")
         code = str(row.get("code") or "")
         label = f"{name}({code})" if code else name
         lines.append(
-            f"| {label} | {row.get('previous_height', '-')}板 | "
+            f"| {label} | {row.get('height_bucket_label', '-')} | "
+            f"{row.get('previous_height', '-')}板 | "
             f"{_pct(row.get('break_change_pct'))} | {_pct(row.get('feedback_open_pct'))} | "
             f"{_pct(row.get('feedback_close_pct'))} | {row.get('outcome', '-')} |"
         )
