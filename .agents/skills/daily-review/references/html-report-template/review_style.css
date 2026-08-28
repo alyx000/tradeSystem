@@ -233,10 +233,29 @@ a{color:inherit}
 .report-document .fx-spot-text{fill:#2472aa}.report-document .fx-forward-text{fill:#c96824}
 .report-document .fx-swap-text{fill:#2b8a55}
 .report-document .fx-chart .chart-data{margin:10px 0 0}
+.report-document .emotion-height-chart{margin:20px 0 14px;border:1px solid var(--line);
+  background:#f8f7f2;padding:18px 18px 14px;overflow:hidden}
+.report-document .emotion-height-chart figcaption{display:grid;gap:4px;margin-bottom:8px}
+.report-document .emotion-height-chart figcaption strong{font-size:19px;line-height:1.45}
+.report-document .emotion-height-chart figcaption span{color:var(--muted);font-size:12px;line-height:1.6}
+.report-document .emotion-height-chart>p{color:var(--muted);margin:8px 0 4px;font-size:12.5px}
+.report-document .emotion-height-chart svg{display:block;width:100%;height:auto;min-width:620px;
+  color:var(--ink);font-family:"PingFang SC","Microsoft YaHei",system-ui,sans-serif}
+.report-document .emotion-height-grid{stroke:#8b949933;stroke-width:1}
+.report-document .emotion-height-line{fill:none;stroke:#ad3b32;stroke-width:3;
+  stroke-linejoin:round;stroke-linecap:round}
+.report-document .emotion-height-dot{fill:var(--surface);stroke:#ad3b32;stroke-width:2.2}
+.report-document .emotion-height-axis{fill:var(--muted);font-size:12px;font-variant-numeric:tabular-nums}
+.report-document .emotion-height-value{fill:#8f2f29;font-size:12px;font-weight:700;
+  font-variant-numeric:tabular-nums}
+.report-document .emotion-height-gap{fill:#b7791f;font-size:12px;font-weight:700}
+.report-document .emotion-height-chart .chart-data{margin:10px 0 0}
 .report-document .emotion-leader>p{margin:10px 0}
 @media (max-width:700px){
   .report-document .fx-chart{margin-inline:0;padding:14px 10px 10px;overflow-x:auto}
   .report-document .fx-chart svg{width:760px}
+  .report-document .emotion-height-chart{margin-inline:0;padding:14px 10px 10px;overflow-x:auto}
+  .report-document .emotion-height-chart svg{width:760px}
 }
 @media (prefers-color-scheme:dark){
   .report-document .fx-chart{background:#161a1d;border-color:#394248;color:#edf2f3}
@@ -251,4 +270,13 @@ a{color:inherit}
   .report-document .fx-chart .fx-spot-text{fill:#74b9f2}
   .report-document .fx-chart .fx-forward-text{fill:#ff9d52}
   .report-document .fx-chart .fx-swap-text{fill:#72d491}
+  .report-document .emotion-height-chart{background:#161a1d;border-color:#394248;color:#edf2f3}
+  .report-document .emotion-height-chart .emotion-height-dot{fill:#161a1d;stroke:#ff8178}
+  .report-document .emotion-height-chart .emotion-height-grid{stroke:#d9e0e226}
+  .report-document .emotion-height-chart .emotion-height-line{stroke:#ff8178}
+  .report-document .emotion-height-chart .emotion-height-axis,
+  .report-document .emotion-height-chart figcaption span,
+  .report-document .emotion-height-chart>p{color:#aeb9bd;fill:#aeb9bd}
+  .report-document .emotion-height-chart .emotion-height-value{fill:#ff9f98}
+  .report-document .emotion-height-chart .emotion-height-gap{fill:#f6c36b}
 }

@@ -53,7 +53,7 @@
 | 2 | `rising_recognition` / `falling_recognition` | 主升与主跌方向 × 辨识度个股矩阵必须成对采集；任一侧无合格项也保留该侧 `none`，来源不足标 `missing-data`，不得只交付主跌矩阵 |
 | 2 | `sector_crowding_snapshot` | 全行业拥挤度快照（卞老师三维度框架）：跑只读 `python3 main.py sector-crowding report --date <T>`，采集 ① 交易拥挤度（占比 + 历史分位，标注 ≥30%/≥40% 绝对参考线触及情况）② 斜率拥挤度（5/20/60 日涨幅 + 20 日斜率分位，≥90% 标高斜率）③ 双高清单状态（有名单列名单，无双高显式写「无双高拥挤板块」）④ 同一输出中的半年线/年线/近期价量共振标签汇总与命中清单。资金流代理维度已由其他路承载，不重复采集。CLI 失败或当日无行时标 `missing-data` 记入 conflicts_or_gaps，不得静默省略 |
 | 2 | `research_coverage_trend` | 研报覆盖趋势（机构议程背景）：跑只读 `python3 main.py research-digest trend --json --top 31` 取申万一级**全量 31 行业**（不接受 Top10 截断口径），保留 recent/prior 窗口日期、逐行业 `recent_share / delta_pp / streak_up`；`streak_up`（连续上行有效日数，完整窗<2 为 null=数据不足）≥3 且 `delta_pp>0` 的行业单列「覆盖持续上行候选」，全 [事实] 计数、解读标 [判断]。**定位=机构议程背景（卖方研究日历），禁止当短线方向先验**（2026-07 实测 Δpp 与后 1~2 日板块涨跌 Spearman≈0），持续上行只作机构关注度提升的中期观察信号（认知出处参照 teacher_notes#614）。CLI 失败或库内有效日不足标 `missing-data` 记入 conflicts_or_gaps，不得静默省略 |
-| 3 | `emotion_leader_lifecycle` / `height_breakthrough` | 复用同日 `data/reports/emotion-leader/<T>.json`，保留 status、历史覆盖、增量刷新模式/数量、活跃/归档、今日涨停/创新高、今日晋级、新增二连板候选、前 12 只活跃核心及 source_errors；另保留目标日与此前 20 个开放日非 ST 最高连板对比和打开高度核心的启动日。波段固定标 `[判断]`；高度对比标 `[事实]`、启动日节点候选标 `[判断]`，`partial/source_failed/missing_data` 不得写成空池、0 或未触发 |
+| 3 | `emotion_leader_lifecycle` / `height_breakthrough` | 复用同日 JSON，并按 `trade_calendar.date` 最近最多 20 个开放日对齐 `data/reports/emotion-leader/<T>.json`，保留 status、历史覆盖、增量刷新模式/数量、活跃/归档、今日涨停/创新高、今日晋级、新增二连板候选、前 12 只活跃核心及 source_errors；另保留逐日非 ST 最高连板趋势、目标日与此前 20 个开放日最高连板对比和打开高度核心的启动日。趋势缺日断线且不补 0；波段固定标 `[判断]`；高度对比标 `[事实]`、启动日节点候选标 `[判断]`，`partial/source_failed/missing_data` 不得写成空池、0 或未触发 |
 
 板块路读取 `daily_volume_concentration.source_json.gain_concept` 判题材标签健康：`healthy_sparse` 表示热概念 Top15 与成交额前50的成功小交集（如 4/50），必须写“交集稀疏”而不是“概念标签缺失”；只有 `source_failed` 才是本次来源失败，`fallback_preserved` 须说明沿用同日既有标签。旧记录没有该字段时标口径未知，不得仅凭标签数量反推失败。
 | 8 | `new_high_structure_verdict` / `new_high_structure_evidence` | 前复权滚动 60/120/250 日双日计数、60 日行业 Top3/CR3、名单延续与最多 5 个代表票；不同于全历史高水位任务 |
@@ -118,6 +118,7 @@ HTML 中 `s1` 必须同时满足：
 ### 情绪核心生命周期（第 3 路 → `s3`）
 
 - `emotion-leader daily --no-push` 的同日 JSON 是唯一输入；HTML 组装器直接读取，chunk 不得手写或重复注入 `data-emotion-leader`。
+- 组装器按最近最多 20 个开放日对齐情绪日报，自动生成唯一、默认可见的 `data-emotion-height-chart="v1|missing-data"` 静态 SVG 和折叠数据表。每点只接受 `height_breakthrough.source_status=complete` 的当日非 ST 最高连板；至少 2 个有效日才绘图，确认无二板及以上时 0 是有效事实，JSON 缺失/损坏或高度不可判保留为空点并断线，整体标 `partial`，绝不补 0 或插值。
 - 默认可见摘要必须给出 `ok / partial`、历史覆盖、刷新模式/数量、活跃/归档、今日涨停/创新高，以及今日晋级核心和新增二连板候选；前 12 只活跃核心与 source_errors 前 3 条进入默认收起证据层。
 - 明细至少保留代码、板型、行业、最大/区间涨幅、距峰值、启动日/最高板数、今日状态。波段为机械生命周期解释，必须逐行标 `[判断]`；其余数值与状态标 `[事实]`。
 - `partial` 可展示已经取得的有效核心并显式披露缺口；`source_failed`、JSON 缺失/损坏、日期错位或汇总无法与明细对账时使用 `missing-data`。只有 `status=ok` 且活跃数确为 0 时才允许 `none`，禁止把失败或部分覆盖写成空池。
@@ -226,7 +227,7 @@ python3 .agents/skills/daily-review/references/html-report-template/build_new_hi
 | ①大势 | 唯一 1 句同时覆盖大势、大类资产、外汇与掉期的裁决；境内指数证据仍按原 1～3 条预算 | 大类资产五类事实表；USD/CNY 在岸即期 + 1Y C-Swap 两行事实表；境内指数/期指/两融原始证据 | 大类资产与外汇掉期分别使用 `missing-data`，并在数据缺口章节可见；抓取时间不代替来源交易日 |
 | ②板块 | 唯一 1 句集中度裁决 + 唯一 1 句趋势标签汇总；后者把半年线/年线标 `[事实]`、近期价量共振标 `[判断]` | 唯一集中度表；唯一标签命中并集；唯一主升辨识度矩阵；唯一主跌辨识度矩阵。主升/主跌必须成对出现，不因结果为空而删侧。另固定携带全行业拥挤度快照（L1 全量占比/分位 + 斜率分位 + 双高清单状态；趋势标签是组装器硬门，其余为文档级要求），命名用「全行业交易拥挤度」，与 Top20 主线集中度口径严格分表不混排。还固定携带研报覆盖趋势表（Δpp + `streak_up` 连续上行有效日数，`streak_up≥3 ∧ Δpp>0` 单列「覆盖持续上行候选」；文档级要求，标 `[判断]·机构议程背景`，禁作短线方向先验） | 标签完整无命中用 `none`；部分覆盖仍保留已确认命中表并在摘要与数据缺口披露；全缺用 `missing-data`。其他模块同样区分 `none / missing-data`，禁止静默省略（研报趋势 CLI 失败/有效日不足同样显式 `missing-data` 并登记缺口） |
 | ⑤龙头 | 1 句容量中军变化（确有变化时）+ 1 句滚动新高结构裁决 | 唯一容量中军健康表；唯一 60/120/250 日滚动新高结构；趋势池历史代表另表 | 容量与新高各自独立三态；任一来源不完整都用本模块 `missing-data` 并在数据缺口可见 |
-| ⑥节点 | 唯一 1 句报告日后 7 个自然日事件窗裁决；若打开非 ST 连板高度，另显示 `[事实]` 高度对比与 `[判断]` 启动日节点候选 | 唯一事件窗表；唯一情绪高度节点联动表，列代码、当日高度、启动日及启动日来源 | 两个模块独立三态；事件窗或情绪高度证据不完整时各自用 `missing-data`，不得互相替代 |
+| ⑥节点 | 唯一 1 句报告日后 7 个自然日事件窗裁决；若打开非 ST 连板高度，另显示 `[事实]` 高度对比与 `[判断]` 启动日节点候选 | 唯一事件窗表；唯一情绪高度节点联动表，列代码、当日高度、启动日及启动日来源 | 两个模块独立三态；事件窗或情绪高度证据不完整时各自用 `missing-data`，不得互相替代；最近连板高度趋势固定归属 ③情绪，不与节点模块互相替代 |
 
 上述三节即使无新增，也不能套用通用“只写一行、不生成空表”后静默省略模块；必须保留模板规定的结构化状态。⑤中的容量和滚动新高是两个独立模块，不能互相代替。具体 HTML 结构以 [模板硬门](html-report-template/README.md#组装与硬校验) 为准。
 

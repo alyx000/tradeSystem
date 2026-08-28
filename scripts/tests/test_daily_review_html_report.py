@@ -1298,6 +1298,42 @@ def _emotion_leader_report(date: str = DATE, *, status: str = "partial") -> dict
     }
 
 
+def _write_emotion_height_history(
+    directory: Path,
+    *,
+    report_date: str = DATE,
+    missing_index: int | None = None,
+) -> list[str]:
+    directory.mkdir(parents=True, exist_ok=True)
+    dates: list[str] = []
+    cursor = date_type.fromisoformat(report_date)
+    while len(dates) < 20:
+        if cursor.weekday() < 5:
+            dates.append(cursor.isoformat())
+        cursor -= timedelta(days=1)
+    dates.reverse()
+    for index, source_date in enumerate(dates[:-1]):
+        if index == missing_index:
+            continue
+        height = 0 if index == 4 else 2 + index % 7
+        payload = {
+            "date": source_date,
+            "height_breakthrough": {
+                "status": "none",
+                "source_status": "complete",
+                "as_of": source_date,
+                "lookback_open_days": 20,
+                "current_max_height": height,
+                "previous_max_height": 10,
+            },
+        }
+        (directory / f"{source_date}.json").write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+    return dates
+
+
 def _replace_once(html: str, old: str, new: str) -> str:
     assert html.count(old) == 1, old
     return html.replace(old, new, 1)
@@ -5834,6 +5870,134 @@ def test_s3_emotion_leader_report_is_injected_with_fact_judgment_boundary(
     assert "此前20个开放日最高4板" in s6
     assert "[判断] 哈药股份启动日2026-07-10列为情绪节点日候选" in s6
     assert "该线索不替代事件日历或市场/板块结构确认" in s6
+
+
+def test_s3_emotion_height_chart_renders_twenty_report_days_and_keeps_true_zero(
+    assembler, tmp_path
+):
+    chunks = tmp_path / "chunks"
+    history = tmp_path / "emotion-history"
+    _write_chunks(chunks)
+    dates = _write_emotion_height_history(history)
+    html = assembler.render_report(
+        chunks,
+        DATE,
+        emotion_leader_report=_emotion_leader_report(status="ok"),
+        emotion_history_dir=history,
+        emotion_open_dates=dates,
+    )
+    assembler.validate_report(html)
+
+    s3, _ = _extract_section(html, "s3")
+    assert 'data-emotion-height-chart="v1"' in s3
+    assert 'data-source-status="complete"' in s3
+    assert 'data-point-count="20"' in s3
+    assert 'data-sample-count="20"' in s3
+    assert 'data-height="0"' in s3
+    assert ">0板<" in s3
+    assert "缺失数据不按 0 补齐" in s3
+    assert "最近非 ST 最高连板高度趋势" in s3
+
+
+def test_emotion_height_chart_uses_trade_calendar_date_as_open_day_spine(
+    assembler, tmp_path
+):
+    db_path = tmp_path / "trade.db"
+    connection = sqlite3.connect(db_path)
+    try:
+        connection.execute(
+            "CREATE TABLE trade_calendar (date TEXT PRIMARY KEY, is_open INTEGER NOT NULL)"
+        )
+        open_dates: list[str] = []
+        cursor = date_type.fromisoformat(DATE)
+        while len(open_dates) < 22:
+            if cursor.weekday() < 5:
+                open_dates.append(cursor.isoformat())
+            cursor -= timedelta(days=1)
+        open_dates.reverse()
+        connection.executemany(
+            "INSERT INTO trade_calendar(date, is_open) VALUES (?, 1)",
+            [(value,) for value in open_dates],
+        )
+        connection.execute(
+            "INSERT INTO trade_calendar(date, is_open) VALUES (?, 0)",
+            ("2026-07-12",),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    assert assembler.load_emotion_open_dates(db_path, DATE) == tuple(
+        open_dates[-20:]
+    )
+
+
+def test_s3_emotion_height_chart_breaks_line_for_missing_day_instead_of_zero(
+    assembler, tmp_path
+):
+    chunks = tmp_path / "chunks"
+    history = tmp_path / "emotion-history"
+    _write_chunks(chunks)
+    dates = _write_emotion_height_history(history, missing_index=7)
+    html = assembler.render_report(
+        chunks,
+        DATE,
+        emotion_leader_report=_emotion_leader_report(status="ok"),
+        emotion_history_dir=history,
+        emotion_open_dates=dates,
+    )
+    assembler.validate_report(html)
+
+    assert 'data-source-status="partial"' in _extract_section(html, "s3")[0]
+    assert 'data-point-count="19"' in html
+    assert 'data-sample-count="20"' in html
+    assert (
+        f'data-source-date="{dates[7]}" data-point-status="missing" data-height=""'
+        in html
+    )
+    assert "—（缺失）" in html
+    assert html.count('class="emotion-height-line"') == 2
+
+    invalid = _replace_once(html, 'data-height=""', 'data-height="0"')
+    _assert_report_error(
+        assembler,
+        invalid,
+        "invalid_emotion_height_chart",
+    )
+
+
+def test_s3_emotion_height_chart_insufficient_history_is_explicit(
+    assembler, tmp_path
+):
+    _write_chunks(tmp_path)
+    html = assembler.render_report(
+        tmp_path,
+        DATE,
+        emotion_leader_report=_emotion_leader_report(status="ok"),
+    )
+    assembler.validate_report(html)
+
+    s3, _ = _extract_section(html, "s3")
+    assert 'data-emotion-height-chart="missing-data"' in s3
+    assert assembler.EMOTION_HEIGHT_CHART_MISSING_TEXT in s3
+
+
+def test_s3_emotion_height_chart_chunk_cannot_self_inject(
+    assembler, tmp_path
+):
+    paths = _write_chunks(tmp_path)
+    paths["s456"].write_text(
+        _replace_once(
+            paths["s456"].read_text(encoding="utf-8"),
+            '<section class="blk" id="s3">',
+            '<section class="blk" id="s3"><p data-emotion-height-chart="missing-data">重复</p>',
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(assembler.ReportValidationError) as exc_info:
+        assembler.render_report(tmp_path, DATE)
+    assert exc_info.value.code == "duplicate_emotion_height_chart"
 
 
 def test_s6_emotion_node_none_is_rendered_as_objective_non_trigger(

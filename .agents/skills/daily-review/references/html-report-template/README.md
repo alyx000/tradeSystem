@@ -7,7 +7,7 @@
 - `review_style.css` — 报告样式 **v2「纸面档案阅读器」**：米纸底色 + 衬线大标题 + 粘性顶栏/导航 + 阅读进度 + 表格横向滚动 + 证据展开/收起 + 回到顶部，并包含 USD/CNY/1Y C-Swap 静态 SVG 在宽屏、窄屏与系统暗色模式下的样式。正文 class 语义不变（tag t-fact/t-judge / kpi / callout.note/.risk/.warn / tr.hl / up/.down/.warn / p-up/.p-mid/.p-down / twocol / mono / num / src / sub）。
 - `build_capacity_manifest.py` — 容量排名 sidecar 官方生成器：只读镜像、最多 3 个申万二级方向、全市场 `daily.amount` 排名、最近 5 个开放日连续性；禁止 Agent 手写 sidecar。
 - `build_new_high_structure_manifest.py` — 历史新高结构生成器：只读最近 251 个开放日，按 `daily.high × adj_factor` 生成滚动 60/120/250 日双日计数、行业结构与代表票；不写库。
-- `assemble_report.py` — 组装脚本（结构、Claim、证据、预算、外部依赖校验 + 阅读器外壳 + 原生 JS）；同时自动读取同日情绪核心 JSON 注入 `s3`，把打开高度对应的启动日候选注入 `s6`，并从已验证复盘档案汇总人民币外汇历史、向 `s1` 注入静态趋势图。用法见文件头。
+- `assemble_report.py` — 组装脚本（结构、Claim、证据、预算、外部依赖校验 + 阅读器外壳 + 原生 JS）；同时自动读取同日情绪核心 JSON 注入 `s3`，按最近 20 个开放日注入最高连板静态趋势图，把打开高度对应的启动日候选注入 `s6`，并从已验证复盘档案汇总人民币外汇历史、向 `s1` 注入静态趋势图。用法见文件头。
 
 ## Body chunk 骨架（7 块）
 
@@ -61,6 +61,7 @@ python3 .agents/skills/daily-review/references/html-report-template/assemble_rep
 - `s1` 不能只交付境内大盘。它必须有唯一默认可见 `data-big-picture="verdict"`，以及折叠证据中的唯一 `data-cross-asset-context` 和 `data-rmb-fx-observation`；报告日休市时三者的 `data-as-of` 仍指向最近事实日，`data-reviewed-through` 等于报告日。缺源只能使用结构化 `missing-data` 并在 `ops` 可见，不得静默通过。
 - `s1` 还必须由组装器生成唯一 `data-rmb-fx-chart="v1|missing-data"`：至少 8 个、最多 15 个同日工作日点；上图即期买卖算术中值与 1Y C-Swap 全价共用汇率轴，下图单列掉期点 Pips，图后附折叠数据表。chunk 自行注入、日期乱序、数值越界或价格语义缺失均拒绝生成。
 - `s3` 的情绪核心生命周期由组装器从同日 JSON 自动注入唯一 `data-emotion-leader="v1|none|missing-data"`。`v1` 默认可见状态/覆盖/刷新/计数/晋级与二板候选，前 12 只活跃核心进入折叠证据；波段逐行标 `[判断]`。只有 `ok` 真空池允许 `none`，`partial/source_failed` 不得伪装为空池或 0。
+- `s3` 还必须由组装器按 `trade_calendar.date` 最近最多 20 个开放日对齐情绪日报，生成唯一、默认可见的 `data-emotion-height-chart="v1|missing-data"` 静态 SVG。每点取 `height_breakthrough.source_status=complete` 的当日非 ST 二板及以上最高连板，图后附日期/高度/状态折叠表；至少 2 个有效日才画。确认无符合项才允许高度 0；日报缺失、损坏或高度不可判时保留空行、折线断开并标 `partial`，不得补 0 或插值。chunk 自行注入、日期乱序、点数/状态不一致均拒绝生成。
 - `s6` 还由组装器从同一 JSON 自动注入唯一 `data-emotion-node="v1|none|missing-data"`。仅当目标日非 ST 二板及以上的最高连板数严格超过此前 20 个完整开放日的最高值时使用 `v1`：高度对比标 `[事实]`，打开高度核心的生命周期启动日只标为 `[判断] 情绪节点日候选`。比较窗、目标日涨停事实或启动日对账不完整必须用 `missing-data`，不得写成 `none`。
 - `factor` 默认显示主因子、第一辅助、其余因子变化和切换/失效状态。章节容器必须是默认可见的 `<section class="blk" id="factor">`，并声明 `data-factor-mode="formal|rule_only|shadow|no_data"`：有分析时须有且仅有 1 个默认可见 judgment Claim、1～3 个默认可见 `<li>`、1 个默认可见 `data-factor-role="status"`；Claim / `<li>` 必须各自有可见的 `[事实]/[判断]` 标签和实质正文，正文不得藏进后代 `hidden`。状态节点不得藏入普通 `<details>` / `hidden`，且只接受与 mode 对应的规范模板：`formal=正式 factor-score 已完成`、`rule_only=rule_only 结果`；`shadow` 只能使用“正式评分停在日期 / 本日未运行 / 本日尚未评分 / 完成条件未满足”之一，并同时写明“影子口径、不写库”。唯一 `data-evidence-kind="factor-detail"` 折叠证据须实际含 `market_node / sector_rhythm / style_regime / leader_signal`。`no_data` 只允许标题和唯一 `<p data-factor-role="no-data">[事实] 本日无新增/本日无可判数据</p>`。完整四因子证据卡与切换对账不再归到 `s8`。
 - Claim owner 使用唯一 `id="claim-*"`；跨节引用使用匹配的 `data-claim-ref="claim-*"`，每个 owner 最多 1 个短引用。悬空引用、重复 owner 或多次引用均拒绝生成。
@@ -156,7 +157,7 @@ python3 .agents/skills/daily-review/references/html-report-template/assemble_rep
 
 `section#s6` 必须保留节点与未来一周事件窗：
 
-- 情绪节点联动与未来事件窗是两个独立模块，互不替代。全页必须且只能有一份组装器生成的 `data-emotion-node="v1|none|missing-data"`；chunk 自行注入直接拒绝生成。
+- 连板高度趋势、情绪节点联动与未来事件窗是三个独立模块，互不替代。全页必须且只能有一份组装器生成的 `data-emotion-height-chart="v1|missing-data"` 和一份 `data-emotion-node="v1|none|missing-data"`；chunk 自行注入直接拒绝生成。
 - `v1` 必须带 `data-lookback-open-days="20"`、目标日/此前窗口最高板数、此前窗口起止日以及至少一只打开高度核心；默认可见正文同时包含 `[事实] 打开非ST连板高度` 和 `[判断] 启动日…情绪节点日候选`，折叠表逐票显示代码、当日高度、启动日与启动日来源。启动日不得晚于报告日。
 - 未打开高度时使用规范 `none` 事实句；20 个开放日比较窗、目标日涨停事实或启动日对账任一不完整时使用 `missing-data`，禁止把缺口解释为“未触发”。节点候选只是一条需结合事件日历和市场/板块结构复核的 `[判断]`。
 

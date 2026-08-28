@@ -327,6 +327,7 @@ STRUCTURED_CONTRACT_ATTRIBUTES = (
     "data-rmb-fx-observation",
     "data-rmb-fx-chart",
     "data-emotion-leader",
+    "data-emotion-height-chart",
     "data-emotion-node",
     "data-sector-concentration",
     "data-sector-labels",
@@ -374,6 +375,11 @@ EMOTION_LEADER_STATUSES = frozenset({"ok", "partial", "source_failed"})
 EMOTION_LEADER_WAVE_LABELS = frozenset(
     {"单波", "二波", "多波", "二波候选", "多波候选", "未计算"}
 )
+EMOTION_HEIGHT_CHART_MISSING_TEXT = (
+    "[事实]非ST最高连板高度可用历史不足2个交易日，暂不绘制趋势图"
+)
+EMOTION_HEIGHT_CHART_MIN_POINTS = 2
+EMOTION_HEIGHT_CHART_MAX_SAMPLES = 20
 EMOTION_NODE_NONE_TEXT = (
     "[事实]今日非ST连板最高高度未超过近20个开放日高度,"
     "未触发情绪启动日节点联动"
@@ -605,6 +611,13 @@ class _FxChartPoint:
     spot_mid: float
     forward_rate: float
     swap_point_pips: float
+
+
+@dataclass(frozen=True)
+class _EmotionHeightPoint:
+    source_date: str
+    height: int | None
+    source_status: str
 
 
 @dataclass
@@ -3537,6 +3550,149 @@ class _ReportParser(HTMLParser):
                 )
             seen_codes.add(code)
 
+    def _validate_emotion_height_chart_contract(
+        self, report_date: date_type
+    ) -> None:
+        contracts = self.structured_contracts["data-emotion-height-chart"]
+        if len(contracts) != 1:
+            raise ReportValidationError(
+                "invalid_emotion_height_chart",
+                "s3 必须且只能包含一份最近连板高度趋势图状态",
+                section="s3",
+            )
+        contract = contracts[0]
+        compact_text = re.sub(r"\s+", "", "".join(contract.rendered_text)).rstrip(
+            "。.;；"
+        )
+        if contract.section != "s3" or contract.default_hidden:
+            raise ReportValidationError(
+                "invalid_emotion_height_chart",
+                "连板高度趋势图必须默认可见且只能位于 s3",
+                section="s3",
+            )
+        if contract.value == "missing-data":
+            if (
+                contract.tag != "p"
+                or contract.attrs.get("data-as-of") != report_date.isoformat()
+                or contract.attrs.get("data-source-status")
+                != "insufficient-history"
+                or compact_text != EMOTION_HEIGHT_CHART_MISSING_TEXT
+            ):
+                raise ReportValidationError(
+                    "invalid_emotion_height_chart",
+                    "连板高度历史不足态必须显式说明少于 2 个有效交易日",
+                    section="s3",
+                )
+            return
+
+        point_count = _bounded_int_attr(
+            contract.attrs,
+            "data-point-count",
+            minimum=EMOTION_HEIGHT_CHART_MIN_POINTS,
+            maximum=EMOTION_HEIGHT_CHART_MAX_SAMPLES,
+        )
+        sample_count = _bounded_int_attr(
+            contract.attrs,
+            "data-sample-count",
+            minimum=EMOTION_HEIGHT_CHART_MIN_POINTS,
+            maximum=EMOTION_HEIGHT_CHART_MAX_SAMPLES,
+        )
+        lookback = _bounded_int_attr(
+            contract.attrs,
+            "data-lookback-open-days",
+            minimum=EMOTION_HEIGHT_CHART_MAX_SAMPLES,
+            maximum=EMOTION_HEIGHT_CHART_MAX_SAMPLES,
+        )
+        start_date = contract.attrs.get("data-start-date", "")
+        end_date = contract.attrs.get("data-end-date", "")
+        as_of = contract.attrs.get("data-as-of", "")
+        source_status = contract.attrs.get("data-source-status", "")
+        if (
+            contract.value != "v1"
+            or contract.tag != "figure"
+            or source_status not in {"complete", "partial"}
+            or contract.attrs.get("data-source")
+            != "emotion-leader:daily-json-archive"
+            or contract.attrs.get("data-reviewed-through")
+            != report_date.isoformat()
+            or point_count is None
+            or sample_count is None
+            or point_count > sample_count
+            or lookback != EMOTION_HEIGHT_CHART_MAX_SAMPLES
+            or len(contract.rows) != sample_count + 1
+            or not _valid_date(start_date)
+            or not _valid_date(end_date)
+            or not _valid_date(as_of)
+            or not start_date < end_date <= report_date.isoformat()
+            or not start_date <= as_of <= end_date
+            or "[事实]" not in compact_text
+            or "非ST" not in compact_text
+            or "最高连板" not in compact_text
+            or "缺失数据不按0补齐" not in compact_text
+        ):
+            raise ReportValidationError(
+                "invalid_emotion_height_chart",
+                "完整连板高度趋势图必须可见、含 2-20 个有效点及缺失语义",
+                section="s3",
+            )
+
+        seen_dates: list[str] = []
+        valid_dates: list[str] = []
+        missing_count = 0
+        for row in contract.rows[1:]:
+            source_date = row.attrs.get("data-source-date", "")
+            row_status = row.attrs.get("data-point-status", "")
+            visible = re.sub(r"\s+", "", "".join(row.rendered_text))
+            height = _bounded_int_attr(
+                row.attrs, "data-height", minimum=0, maximum=100
+            )
+            if (
+                not _valid_date(source_date)
+                or source_date in seen_dates
+                or source_date not in visible
+                or row_status not in {"ok", "missing"}
+            ):
+                raise ReportValidationError(
+                    "invalid_emotion_height_chart",
+                    "连板高度明细必须按唯一交易日标记 ok/missing",
+                    section="s3",
+                )
+            if row_status == "ok":
+                if height is None or f"{height}板" not in visible:
+                    raise ReportValidationError(
+                        "invalid_emotion_height_chart",
+                        "有效连板高度必须是 0-100 的可见板数",
+                        section="s3",
+                    )
+                valid_dates.append(source_date)
+            else:
+                if row.attrs.get("data-height", "") or "—（缺失）" not in visible:
+                    raise ReportValidationError(
+                        "invalid_emotion_height_chart",
+                        "缺失日期必须保留空高度和可见缺失标记",
+                        section="s3",
+                    )
+                missing_count += 1
+            seen_dates.append(source_date)
+        if (
+            seen_dates != sorted(seen_dates)
+            or seen_dates[0] != start_date
+            or seen_dates[-1] != end_date
+            or len(valid_dates) != point_count
+            or valid_dates[-1] != as_of
+            or (source_status == "complete" and missing_count)
+            or (
+                source_status == "partial"
+                and not missing_count
+                and end_date == report_date.isoformat()
+            )
+        ):
+            raise ReportValidationError(
+                "invalid_emotion_height_chart",
+                "连板高度日期、点数、截至日与 complete/partial 状态必须一致",
+                section="s3",
+            )
+
     def _validate_emotion_node_contract(self, report_date: date_type) -> None:
         contracts = self.structured_contracts["data-emotion-node"]
         if len(contracts) != 1:
@@ -4279,6 +4435,7 @@ class _ReportParser(HTMLParser):
         self._validate_big_picture_contract(report_date)
         self._validate_rmb_fx_chart_contract(report_date)
         self._validate_emotion_leader_contract(report_date)
+        self._validate_emotion_height_chart_contract(report_date)
         self._validate_emotion_node_contract(report_date)
         self._validate_capacity_health_contract(report_date)
         self._validate_sector_contracts(report_date)
@@ -5931,6 +6088,224 @@ def _render_fx_chart(
 </figure>'''
 
 
+def _emotion_height_point(
+    payload: Mapping[str, object] | None,
+    source_date: str,
+) -> _EmotionHeightPoint:
+    if payload is None or payload.get("date") != source_date:
+        return _EmotionHeightPoint(source_date, None, "missing")
+    event = payload.get("height_breakthrough")
+    if not isinstance(event, Mapping):
+        return _EmotionHeightPoint(source_date, None, "missing")
+    height = _nonnegative_int(event.get("current_max_height"))
+    if (
+        event.get("as_of") != source_date
+        or event.get("source_status") != "complete"
+        or event.get("status") not in {"triggered", "none"}
+        or _nonnegative_int(event.get("lookback_open_days"))
+        != EMOTION_NODE_LOOKBACK_OPEN_DAYS
+        or height is None
+        or height > 100
+    ):
+        return _EmotionHeightPoint(source_date, None, "missing")
+    return _EmotionHeightPoint(source_date, height, "complete")
+
+
+def _load_emotion_height_points(
+    current_payload: Mapping[str, object] | None,
+    report_date: str,
+    archive_dir: str | os.PathLike[str] | None,
+    open_dates: Sequence[str] | None = None,
+) -> tuple[list[_EmotionHeightPoint], str]:
+    """按最近 20 个开放日汇总情绪日报；不可判日期保留为空点。"""
+
+    payloads: dict[str, Mapping[str, object] | None] = {}
+    exact_name = re.compile(r"^(\d{4}-\d{2}-\d{2})\.json$")
+    if archive_dir is not None:
+        root = Path(archive_dir)
+        if root.is_dir():
+            for path in sorted(root.glob("*.json")):
+                match = exact_name.fullmatch(path.name)
+                if not match:
+                    continue
+                source_date = match.group(1)
+                if not _valid_date(source_date) or source_date > report_date:
+                    continue
+                try:
+                    raw = json.loads(path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    raw = None
+                payloads[source_date] = raw if isinstance(raw, Mapping) else None
+
+    if current_payload is not None and current_payload.get("date") == report_date:
+        payloads[report_date] = current_payload
+
+    sample_dates = sorted(payloads)[-EMOTION_HEIGHT_CHART_MAX_SAMPLES:]
+    if open_dates is not None:
+        normalized_open_dates = sorted(
+            {
+                value
+                for value in open_dates
+                if isinstance(value, str)
+                and _valid_date(value)
+                and value <= report_date
+            }
+        )[-EMOTION_HEIGHT_CHART_MAX_SAMPLES:]
+        if normalized_open_dates:
+            sample_dates = normalized_open_dates
+    points = [
+        _emotion_height_point(payloads.get(source_date), source_date)
+        for source_date in sample_dates
+    ]
+    source_status = "complete"
+    if (
+        not points
+        or points[-1].source_date != report_date
+        or any(point.source_status != "complete" for point in points)
+    ):
+        source_status = "partial"
+    return points, source_status
+
+
+def load_emotion_open_dates(
+    db_path: str | os.PathLike[str],
+    report_date: str,
+) -> tuple[str, ...] | None:
+    """尽力读取 canonical 开放日脊柱；不可用时返回 None，由图表显式降级。"""
+
+    source = Path(db_path).expanduser().resolve()
+    if not source.is_file():
+        return None
+    try:
+        connection = sqlite3.connect(f"{source.as_uri()}?mode=ro", uri=True)
+        try:
+            rows = connection.execute(
+                """
+                SELECT date
+                FROM trade_calendar
+                WHERE date <= ? AND is_open = 1
+                ORDER BY date DESC
+                LIMIT ?
+                """,
+                (report_date, EMOTION_HEIGHT_CHART_MAX_SAMPLES),
+            ).fetchall()
+        finally:
+            connection.close()
+    except sqlite3.Error:
+        return None
+    dates = [row[0] for row in rows]
+    if (
+        len(dates) < EMOTION_HEIGHT_CHART_MIN_POINTS
+        or any(not isinstance(value, str) or not _valid_date(value) for value in dates)
+        or len(dates) != len(set(dates))
+    ):
+        return None
+    return tuple(reversed(dates))
+
+
+def _render_emotion_height_chart(
+    points: Sequence[_EmotionHeightPoint],
+    report_date: str,
+    source_status: str,
+) -> str:
+    valid_points = [point for point in points if point.height is not None]
+    if len(valid_points) < EMOTION_HEIGHT_CHART_MIN_POINTS:
+        return (
+            f'<p data-emotion-height-chart="missing-data" data-as-of="{escape(report_date)}" '
+            'data-source-status="insufficient-history">'
+            f"{EMOTION_HEIGHT_CHART_MISSING_TEXT}</p>"
+        )
+
+    left, top, width, height = 72.0, 58.0, 820.0, 230.0
+    axis_max = max(2, max(point.height or 0 for point in valid_points))
+    coords: list[tuple[float, float] | None] = []
+    for index, point in enumerate(points):
+        x = left + width * index / max(len(points) - 1, 1)
+        if point.height is None:
+            coords.append(None)
+            continue
+        y = top + height - point.height / axis_max * height
+        coords.append((x, y))
+
+    segments: list[list[tuple[float, float]]] = []
+    current_segment: list[tuple[float, float]] = []
+    for coord in coords:
+        if coord is None:
+            if current_segment:
+                segments.append(current_segment)
+                current_segment = []
+            continue
+        current_segment.append(coord)
+    if current_segment:
+        segments.append(current_segment)
+    paths = "".join(
+        '<polyline class="emotion-height-line" points="'
+        + " ".join(f"{x:.1f},{y:.1f}" for x, y in segment)
+        + '"/>'
+        for segment in segments
+    )
+    dots = "".join(
+        f'<circle class="emotion-height-dot" cx="{coord[0]:.1f}" cy="{coord[1]:.1f}" r="4"/>'
+        f'<text class="emotion-height-value" x="{coord[0]:.1f}" y="{coord[1] - 10:.1f}" text-anchor="middle">{point.height}</text>'
+        for point, coord in zip(points, coords)
+        if coord is not None
+    )
+    gaps = "".join(
+        f'<text class="emotion-height-gap" x="{left + width * index / max(len(points) - 1, 1):.1f}" '
+        f'y="{top + height / 2:.1f}" text-anchor="middle">缺</text>'
+        for index, point in enumerate(points)
+        if point.height is None
+    )
+    tick_values = sorted({0, math.ceil(axis_max / 2), axis_max})
+    grid = "".join(
+        f'<line class="emotion-height-grid" x1="{left:.1f}" x2="{left + width:.1f}" '
+        f'y1="{top + height - tick / axis_max * height:.1f}" y2="{top + height - tick / axis_max * height:.1f}"/>'
+        f'<text class="emotion-height-axis" x="{left - 12:.1f}" '
+        f'y="{top + height - tick / axis_max * height + 4:.1f}" text-anchor="end">{tick}板</text>'
+        for tick in tick_values
+    )
+    label_indexes = sorted(
+        {0, len(points) // 3, len(points) * 2 // 3, len(points) - 1}
+    )
+    x_labels = "".join(
+        f'<text class="emotion-height-axis" '
+        f'x="{left + width * index / max(len(points) - 1, 1):.1f}" y="318" '
+        f'text-anchor="middle">{escape(points[index].source_date[5:])}</text>'
+        for index in label_indexes
+    )
+    rows = "".join(
+        '<tr '
+        f'data-source-date="{escape(point.source_date)}" '
+        f'data-point-status="{"ok" if point.height is not None else "missing"}" '
+        f'data-height="{"" if point.height is None else point.height}">'
+        f'<td>{escape(point.source_date)}</td><td>{"—（缺失）" if point.height is None else f"{point.height}板"}</td>'
+        f'<td>{"完整" if point.height is not None else "不可判"}</td></tr>'
+        for point in points
+    )
+    start_date = points[0].source_date
+    end_date = points[-1].source_date
+    as_of = valid_points[-1].source_date
+    missing_count = len(points) - len(valid_points)
+    gap_text = "无缺失点" if not missing_count else f"{missing_count} 个日期不可判，折线已断开"
+    return f'''<figure class="emotion-height-chart" data-emotion-height-chart="v1"
+    data-as-of="{escape(as_of)}" data-reviewed-through="{escape(report_date)}"
+    data-source-status="{escape(source_status)}" data-start-date="{escape(start_date)}"
+    data-end-date="{escape(end_date)}" data-point-count="{len(valid_points)}"
+    data-sample-count="{len(points)}" data-lookback-open-days="{EMOTION_HEIGHT_CHART_MAX_SAMPLES}"
+    data-source="emotion-leader:daily-json-archive">
+  <figcaption><strong>最近非 ST 最高连板高度</strong><span>{escape(start_date)} 至 {escape(end_date)} · {len(valid_points)}/{len(points)} 个有效交易日 · 数据状态：{escape(source_status)}</span></figcaption>
+  <p>[事实] 每点取当日非 ST 二板及以上股票的最高连板数；确认无符合项时 0 才是 0，缺失数据不按 0 补齐。{escape(gap_text)}。</p>
+  <svg viewBox="0 0 960 340" role="img" aria-labelledby="emotion-height-chart-title emotion-height-chart-desc">
+    <title id="emotion-height-chart-title">最近非 ST 最高连板高度趋势</title>
+    <desc id="emotion-height-chart-desc">{escape(start_date)} 至 {escape(end_date)}，最近最多 20 个开放日的最高连板高度；缺失日期以断线显示。</desc>
+    {grid}{paths}{dots}{gaps}{x_labels}
+  </svg>
+  <details class="evidence chart-data" data-as-of="{escape(as_of)}" data-items="{len(points)}" data-evidence-kind="emotion-height-chart-data"><summary>查看连板高度数据（{len(points)} 项）</summary>
+    <div class="evidence-body"><div class="table-scroll-shell"><table><thead><tr><th>交易日</th><th>最高连板</th><th>状态</th></tr></thead><tbody>{rows}</tbody></table></div></div>
+  </details>
+</figure>'''
+
+
 def load_emotion_leader_report(
     path: str | os.PathLike[str], report_date: str
 ) -> dict[str, object]:
@@ -6259,6 +6634,8 @@ def render_report(
     report_date: str,
     *,
     emotion_leader_report: Mapping[str, object] | None = None,
+    emotion_history_dir: str | os.PathLike[str] | None = None,
+    emotion_open_dates: Sequence[str] | None = None,
     fx_history_dir: str | os.PathLike[str] | None = None,
     include_legacy_sections: bool = False,
 ) -> str:
@@ -6295,6 +6672,12 @@ def render_report(
             "s3 的情绪核心模块由组装器统一生成，chunk 不得自行注入",
             section="s3",
         )
+    if "data-emotion-height-chart=" in chunks["s456"]:
+        raise ReportValidationError(
+            "duplicate_emotion_height_chart",
+            "s3 的最近连板高度趋势图由组装器统一生成，chunk 不得自行注入",
+            section="s3",
+        )
     if "data-emotion-node=" in chunks["s456"]:
         raise ReportValidationError(
             "duplicate_emotion_node",
@@ -6314,6 +6697,21 @@ def render_report(
         chunks["s456"],
         "s3",
         _render_emotion_leader(emotion_leader_report, report_date),
+    )
+    emotion_height_points, emotion_height_status = _load_emotion_height_points(
+        emotion_leader_report,
+        report_date,
+        emotion_history_dir,
+        emotion_open_dates,
+    )
+    chunks["s456"] = _inject_section_fragment(
+        chunks["s456"],
+        "s3",
+        _render_emotion_height_chart(
+            emotion_height_points,
+            report_date,
+            emotion_height_status,
+        ),
     )
     chunks["s456"] = _inject_section_fragment(
         chunks["s456"],
@@ -6480,6 +6878,10 @@ def _build_parser() -> argparse.ArgumentParser:
         help="情绪核心生命周期 JSON；省略时读取 data/reports/emotion-leader/<DATE>.json",
     )
     parser.add_argument(
+        "--emotion-history-dir",
+        help="历史情绪核心 JSON 目录；省略时使用情绪核心日报所在目录，用于绘制最近连板高度趋势图",
+    )
+    parser.add_argument(
         "--fx-history-dir",
         help="历史复盘 HTML 目录；省略时读取 data/reports，用于绘制人民币外汇趋势图",
     )
@@ -6493,6 +6895,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             _repo_root() / "data" / "reports" / "emotion-leader" / f"{args.date}.json"
         )
         emotion_report = load_emotion_leader_report(emotion_path, args.date)
+        emotion_history_dir = args.emotion_history_dir or Path(emotion_path).parent
+        trade_db_path = args.trade_db or (_repo_root() / "data" / "trade.db")
+        emotion_open_dates = load_emotion_open_dates(trade_db_path, args.date)
         fx_history_dir = args.fx_history_dir or (
             _repo_root() / "data" / "reports"
         )
@@ -6500,6 +6905,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.tmp_dir,
             args.date,
             emotion_leader_report=emotion_report,
+            emotion_history_dir=emotion_history_dir,
+            emotion_open_dates=emotion_open_dates,
             fx_history_dir=fx_history_dir,
         )
         manifest_path = args.capacity_manifest or (
@@ -6515,9 +6922,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         exposure_context = None
         parsed = _parse_report(html)
         if _requires_exposure_validation_context(parsed):
-            trade_db_path = args.trade_db or (
-                _repo_root() / "data" / "trade.db"
-            )
             exposure_context = load_exposure_validation_context(
                 trade_db_path,
                 args.date,
