@@ -5,7 +5,12 @@ import argparse
 import json
 import logging
 
-from services.intraday_monitor import DEFAULT_RULES, run_check, run_e2e_test
+from services.intraday_monitor import (
+    DEFAULT_MARKET_SCAN_RULES,
+    DEFAULT_RULES,
+    run_all_checks,
+    run_e2e_test,
+)
 from services.intraday_monitor.guards import shanghai_now
 
 
@@ -15,11 +20,13 @@ logger = logging.getLogger(__name__)
 def register_subparser(subparsers: argparse._SubParsersAction) -> None:
     parser = subparsers.add_parser(
         "intraday-monitor",
-        help="盘中实时监控（上证3955 + 两交易日科创50/凯莱英突破规则）",
+        help="盘中实时监控（单标的阈值 + 10点前百亿成交涨停板）",
         description=(
             "可扩展盘中实时阈值监控。长期监控上证指数从3955点下方站上"
             "3955点；2026年8月21日与24日监控科创50严格突破1700点及"
-            "凯莱英严格突破172.26元。"
+            "凯莱英严格突破172.26元；并在09:30至10:00（不含10:00）每5分钟扫描"
+            "最新价达到正式涨停价且"
+            "当日累计成交额不少于100亿元的A股，同股当日只提醒一次。"
         ),
     )
     commands = parser.add_subparsers(dest="intraday_monitor_command")
@@ -30,7 +37,7 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
             "执行一次监控检查。上证指数从3955点下方站上3955点时推送钉钉；"
             "2026年8月21日与24日科创50严格高于1700点、凯莱英严格高于"
             "172.26元时推送。各规则持续命中去重，恢复后再次命中可重推；"
-            "历史已退役规则保持下线。"
+            "历史已退役规则保持下线；另扫描10点前百亿成交额涨停板。"
         ),
     )
     check.add_argument("--dry-run", action="store_true", help="只预览，不写状态、不推送")
@@ -105,8 +112,8 @@ def handle_command(config: dict, args: argparse.Namespace) -> int:
                 rule=selected_rule,
             )
     else:
-        registry = setup_providers(config) if DEFAULT_RULES else None
-        result = run_check(registry, dry_run=bool(args.dry_run))
+        registry = setup_providers(config) if (DEFAULT_RULES or DEFAULT_MARKET_SCAN_RULES) else None
+        result = run_all_checks(registry, dry_run=bool(args.dry_run))
     if args.json:
         print(json.dumps(result, ensure_ascii=False, indent=2))
     else:

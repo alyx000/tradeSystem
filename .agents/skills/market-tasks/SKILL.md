@@ -465,7 +465,7 @@ python3 main.py emotion-leader daily --date 2026-08-11 --full-refresh --no-push
 
 ## 盘中实时阈值监控（intraday-monitor）
 
-独立 launchd `com.alyx.tradesystem.intraday-monitor` 每 5 分钟做一次无时区 tick，runner 在上海交易时段 `09:30-11:30 / 13:00-15:00` 做常规检查；Python 对 11:30/15:00 结束分钟保留不足 1 分钟的进程启动宽限，另允许 `15:01-15:05` 补取不早于 15:00 的终态行情：固定阈值规则补做最后一次条件检查，动态涨停价规则同时补做收盘确认，以覆盖 `StartInterval=300` 相对节拍未恰落 15:00 的情况。长期规则监控新浪实时 `000001.SH` 上证指数从 3955 点下方站上 3955 点（`>=3955`）；临时规则在 2026-08-21～24 自然日期窗口内监控 `000688.SH` 科创50严格突破 1700 点与 `002821.SZ` 凯莱英严格突破 172.26 元，结合只读交易日历实际覆盖 8 月 21 日与 24 日两个开放交易日。金健米业、红四方、京粮控股三条断板规则保持下线。
+独立 launchd `com.alyx.tradesystem.intraday-monitor` 每 5 分钟做一次无时区 tick，并额外固定在本机 09:59 补扫一次（runner 仍以 Asia/Shanghai 二次门禁），runner 在上海交易时段 `09:30-11:30 / 13:00-15:00` 做常规检查；Python 对 11:30/15:00 结束分钟保留不足 1 分钟的进程启动宽限，另允许 `15:01-15:05` 补取不早于 15:00 的终态行情。长期规则监控新浪实时 `000001.SH` 上证指数从 3955 点下方站上 3955 点（`>=3955`）；横截面规则在 `09:30 <= quote_time < 10:00` 批量扫描最新价达到交易所正式涨停价且当日累计成交额 `>=100亿元` 的 A 股，同股当日只推一次。临时规则在 2026-08-21～24 自然日期窗口内监控 `000688.SH` 科创50严格突破 1700 点与 `002821.SZ` 凯莱英严格突破 172.26 元。金健米业、红四方、京粮控股三条断板规则保持下线。
 
 ```bash
 python3 main.py intraday-monitor check             # 正式检查；命中时写 pending 并推钉钉
@@ -475,12 +475,13 @@ python3 main.py intraday-monitor e2e-test --rule-id RULE_ID --input-by USER --co
 ```
 
 - **当前规则**：`sse-composite-reclaim-3955` 使用 `direction=above`、`inclusive=True`、`emit_on_initial_match=False`、动作“站上”。必须先观察到 `<3955`，随后 `>=3955` 才推送；启动或当日首次检查已在线上不补发，持续在线上不重复，跌回下方后再次站上可重推。
+- **10点前百亿成交涨停板**：`limit-up-amount-100b-before-1000` 使用当前上市 A 股清单与新浪批量实时行情，累计成交额按元换算为亿元并以 `>=100` 命中；这里的可证事实是“最新成交价达到正式涨停价”，不把未采集盘口队列伪装成“封单仍在”。涨停价复用 `utils.price_limit.compute_limit_prices`，覆盖沪深主板 10%/ST 5%、双创 20%、北交所 30% 与交易所分币舍入，基金、沪深上市后前五开放日及北交所上市首日无涨跌幅限制股票不误报。新浪部分响应或行情时间不可判时标 `partial`，已确认命中仍进账本推送，缺失不得伪装完整空池。独立状态 `data/runs/intraday-monitor/market-scan-state.json` 以“规则+股票+交易日”去重；同一 tick 多票合并一条钉钉，失败 pending 可在 10:00 后继续重试且不再抓行情，跨日过期。
 - **科创50两交易日临时规则**：`star50-breakout-1700-20260821-24` 使用 `direction=above`、`inclusive=False`、`emit_on_initial_match=True`、动作“突破”。8 月 21 日或 24 日首次检查若已严格高于 1700 点即推送；等于 1700 点不触发，持续高于去重，回到 1700 点或下方后再次突破可重推。规则自然日期窗口为 8 月 21～24 日，周末由交易日历门禁在 provider 前阻断，8 月 25 日起不再请求科创50行情。
 - **凯莱英两交易日临时规则**：`kailaiying-breakout-172-26-20260821-24` 使用 `002821.SZ`、`direction=above`、`inclusive=False`、`emit_on_initial_match=True`、动作“突破”。8 月 21 日或 24 日首次检查若已严格高于 172.26 元即推送；等于 172.26 元不触发，持续高于去重，回到 172.26 元或下方后再次突破可重推。规则自然日期窗口为 8 月 21～24 日，周末在 provider 前阻断，8 月 25 日起不再请求。
 - **一日临时规则**：`litong-electronics-below-123-92-20260811` 使用 `direction=below`、`inclusive=False`、`emit_on_initial_match=True`，`valid_from=valid_until=2026-08-11`。当日首次观察若已严格低于 123.92 元即推送；等于 123.92 元不触发，持续低于去重，恢复到阈值或上方后再次跌破可重推。8 月 11 日之前和之后都在行情请求前自动排除。
 - **已下线规则**：金健米业、红四方、京粮控股三条生产规则，以及旧科创50跌破1572/收复1582规则，均不在 `DEFAULT_RULES`。正式状态文件不删除，历史状态只作审计保留；退役规则的 pending 会按既有过期机制丢弃，不补发旧提醒。新增的科创50与凯莱英规则均使用独立 rule id，不继承旧状态。
-- **扩展方式**：规则由 `services.intraday_monitor.rules.MonitorRule` 统一描述（标的、代码、固定或动态阈值、方向、是否含等号、首次命中策略、有效日期、价格标签/单位、provider）；`threshold_mode=daily_up_limit` 仍会用新鲜行情 `pre_close` 复用 `utils.price_limit.compute_limit_prices` 计算涨停价，盘中/收盘阶段、事件去重、回封重入与 fail-closed 能力均保留。新增规则不改抓取、去重、推送与调度编排；相同 provider 的规则合并成一次批量实时行情请求，相同代码自动去重。
-- **可靠性**：行情日期必须为上海当日，行情时间最多陈旧 10 分钟；旧行情/缺行情 fail-closed。事件先原子写 `data/runs/intraday-monitor/state.json` pending，再推钉钉；发送失败保留到同一交易日下一 tick 重试，成功后才记 sent。跨日或已退役规则的未送达事件过期，不会在以后启用其他规则时补发。
+- **扩展方式**：单标的阈值由 `MonitorRule` 配置，横截面扫描由 `MarketScanRule` 配置；抓取、匹配、pending/sent 账本、推送与调度彼此分层。新增同类横截面条件不修改 launchd 或单标的状态机。`threshold_mode=daily_up_limit` 与横截面涨停判断均复用 `utils.price_limit.compute_limit_prices`，避免板块比例和舍入口径漂移。
+- **可靠性**：行情日期必须为上海当日，行情时间最多陈旧 10 分钟；旧行情/缺行情 fail-closed。事件先原子写对应状态文件 pending，再推钉钉；发送失败保留到同一交易日下一 tick 重试，成功后才记 sent。切换 runtime 前 transition guard 同时核对两个状态文件，未知 pending 会机械阻断回滚。
 - **真实链路测试**：CLI `e2e-test` 可用 `--rule-id` 选择任一当前生效的注册生产规则（默认上证 3955），并必须带 `--input-by` 与一次性显式确认 `--confirm-real-push`；缺少确认时在 provider 初始化、日历、行情与推送之前返回 `authorization_required`，已过期规则同样在 provider 前返回 `inactive_rule`。必须经用户单独授权后，才可在交易时段以新鲜真实行情和仅本次测试线验收。测试不读写正式状态；只有退出码 0、`status=complete`、`pushed=true` 才能报告成功。
 - **边界**：监控线是用户给定条件，只标 `[事实]`，不构成买卖建议，不写 SQLite、TradeDraft、TradePlan、持仓或关注池。Mac 休眠期间 launchd 不触发；需要强保障时须配盘中唤醒或迁 VPS。
 

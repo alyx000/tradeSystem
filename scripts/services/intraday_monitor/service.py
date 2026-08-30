@@ -407,6 +407,46 @@ def run_check(
         return {"status": "state_error", "events": [], "errors": [str(exc)]}
 
 
+def run_all_checks(registry, *, dry_run: bool = False) -> dict:
+    """统一执行单标的阈值与全市场横截面监控，并保留兼容的顶层回执。"""
+    from .market_scan import run_market_scan
+
+    threshold_result = run_check(registry, dry_run=dry_run)
+    market_result = run_market_scan(registry, dry_run=dry_run)
+    failing = {"blocked_calendar", "source_failed", "partial", "push_failed", "state_error"}
+    failures = [
+        result["status"]
+        for result in (threshold_result, market_result)
+        if result.get("status") in failing
+    ]
+    if failures:
+        unique_failures = set(failures)
+        status = failures[0] if len(unique_failures) == 1 else "partial"
+    elif dry_run and any(
+        result.get("status") == "dry_run" for result in (threshold_result, market_result)
+    ):
+        status = "dry_run"
+    else:
+        # 窗口外/非交易日属于预期无动作；优先保留阈值监控原有状态语义。
+        status = str(threshold_result.get("status") or market_result.get("status") or "complete")
+    events = list(threshold_result.get("events") or []) + list(market_result.get("events") or [])
+    errors = [
+        f"threshold: {error}" for error in threshold_result.get("errors") or []
+    ] + [f"market_scan: {error}" for error in market_result.get("errors") or []]
+    return {
+        "status": status,
+        "events": events,
+        "errors": errors,
+        "quotes_checked": int(threshold_result.get("quotes_checked") or 0)
+        + int(market_result.get("quotes_checked") or 0),
+        "pending_count": int(threshold_result.get("pending_count") or 0)
+        + int(market_result.get("pending_count") or 0),
+        "pushed": bool(threshold_result.get("pushed") or market_result.get("pushed")),
+        "threshold_monitor": threshold_result,
+        "market_scan": market_result,
+    }
+
+
 def run_e2e_test(
     registry,
     *,

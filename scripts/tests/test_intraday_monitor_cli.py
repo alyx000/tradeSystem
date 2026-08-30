@@ -30,7 +30,7 @@ def test_check_cli_initializes_provider_for_active_rule(monkeypatch, capsys):
     monkeypatch.setattr(main, "setup_providers", lambda config: registry)
     calls = []
 
-    def fake_run_check(registry, *, dry_run):
+    def fake_run_all_checks(registry, *, dry_run):
         calls.append((registry, dry_run))
         return {
             "status": "complete",
@@ -41,7 +41,7 @@ def test_check_cli_initializes_provider_for_active_rule(monkeypatch, capsys):
             "pushed": False,
         }
 
-    monkeypatch.setattr(intraday_monitor, "run_check", fake_run_check)
+    monkeypatch.setattr(intraday_monitor, "run_all_checks", fake_run_all_checks)
 
     assert intraday_monitor.handle_command({}, _check_args()) == 0
     output = capsys.readouterr().out
@@ -201,12 +201,14 @@ def test_help_describes_current_rules_at_every_command_level():
     assert "上证指数从3955点下方" in root_help
     assert "2026年8月21日与24日监控科创50严格突破1700点" in root_help
     assert "凯莱英严格突破172.26元" in root_help
+    assert "当日累计成交额不少于100亿元" in root_help
     check_help = "".join(command_choices["check"].format_help().split())
     assert "历史已退役规则保持下线" in check_help
     assert "科创50严格高于1700点" in check_help
     assert "凯莱英严格高于172.26元时推送" in check_help
     assert "持续命中去重" in check_help
     assert "恢复后再次命中可重推" in check_help
+    assert "10点前百亿成交额涨停板" in check_help
     e2e_help = command_choices["e2e-test"].format_help()
     assert "默认上证指数3955规则" in e2e_help
     assert "不读写正式监控状态" in e2e_help
@@ -251,7 +253,7 @@ def test_check_cli_returns_nonzero_for_partial_monitoring(monkeypatch, capsys):
     monkeypatch.setattr(main, "setup_providers", lambda config: object())
     monkeypatch.setattr(
         intraday_monitor,
-        "run_check",
+        "run_all_checks",
         lambda registry, dry_run: {
             "status": "partial",
             "events": [],

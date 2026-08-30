@@ -38,8 +38,8 @@
 - `com.alyx.tradesystem.monthly-pattern-monitor.plist` — 每 15 分钟轻量 tick，runner 仅在上海工作日 19:10（含）至 19:25（不含）执行一次重任务（月线种子日频动态 5 月线 + 日/周 MACD 变化监控；不受 Mac 本机时区切换影响；日志 `/tmp/tradesystem-monthly-pattern-monitor.log`）
 - `morning-brief-runner.sh` — 包装脚本：cd 仓库根 → source `~/.config/tradeSystem.env`(钉钉；TUSHARE_TOKEN 由 `scripts/.env` 在 Python 侧加载) → 调 `python3 main.py morning-brief daily`
 - `com.alyx.tradesystem.morning-brief.plist` — 工作日 08:00 触发（盘前早报：隔夜行情+海外/国内要闻[金十]+上市公司公告[巨潮]；非交易日 CLI 内守卫跳过；日志 `/tmp/tradesystem-morning-brief.log`；Sleep policy: 错过可接受——可手动 `morning-brief daily` 补跑）
-- `intraday-monitor-runner.sh` — 每 5 分钟 tick 的盘中门禁入口；上海 `09:30-11:30 / 13:00-15:00` 做常规检查，并保留 `15:01-15:05` 收盘终态补窗：固定阈值规则补检 15:00 终态行情，动态涨停价规则同时补做收盘确认，以覆盖相对 300 秒节拍
-- `com.alyx.tradesystem.intraday-monitor.plist` — 盘中实时监控；上证指数站上 3955 长期规则 + 2026-08-21/24 科创50突破1700/凯莱英突破172.26临时规则，日志 `/tmp/tradesystem-intraday-monitor.log`
+- `intraday-monitor-runner.sh` — 每 5 分钟 tick 的盘中门禁入口；上海 `09:30-11:30 / 13:00-15:00` 做常规检查，并保留 `15:01-15:05` 收盘终态补窗
+- `com.alyx.tradesystem.intraday-monitor.plist` — 单标的阈值 + 09:30～10:00（不含10:00）百亿成交额涨停板横截面监控；除相对 300 秒节拍外固定 09:59 做最后补扫，日志 `/tmp/tradesystem-intraday-monitor.log`
 
 ## 前置条件
 
@@ -460,14 +460,21 @@ fi
 # pending 为空；一旦部署本版本，后续回滚也会被同一检查机械阻断，避免旧代码
 # 把新规则发送失败的 pending 当成退役事件永久丢弃。
 STATE_PATH=/Users/alyx/tradeSystem/data/runs/intraday-monitor/state.json
+MARKET_SCAN_STATE_PATH=/Users/alyx/tradeSystem/data/runs/intraday-monitor/market-scan-state.json
 TRANSITION_GUARD="$RUNTIME_ROOT/deploy/launchd/intraday_monitor_transition_guard.py"
 if [ -f "$TRANSITION_GUARD" ]; then
+  # 分两次调用，兼容首次升级前只接受单个 --state-path 的旧 guard；新 guard
+  # 同样支持。不得合成一次重复参数调用，否则旧 argparse 只保留最后一路。
   /usr/bin/python3 "$TRANSITION_GUARD" \
     --repo /Users/alyx/tradeSystem \
     --target-commit "$REVIEWED_COMMIT" \
     --state-path "$STATE_PATH"
+  /usr/bin/python3 "$TRANSITION_GUARD" \
+    --repo /Users/alyx/tradeSystem \
+    --target-commit "$REVIEWED_COMMIT" \
+    --state-path "$MARKET_SCAN_STATE_PATH"
 else
-  /usr/bin/python3 -c 'import json, pathlib, sys; p=pathlib.Path(sys.argv[1]); d=json.loads(p.read_text()) if p.exists() else {}; assert not (d.get("pending_events") or []), "旧 runtime 无切换 guard，pending 非空，禁止切换"' "$STATE_PATH"
+  /usr/bin/python3 -c 'import json, pathlib, sys; ps=[pathlib.Path(x) for x in sys.argv[1:]]; bad=[str(p) for p in ps if p.exists() and (json.loads(p.read_text()).get("pending_events") or [])]; assert not bad, f"旧 runtime 无切换 guard，pending 非空，禁止切换: {bad}"' "$STATE_PATH" "$MARKET_SCAN_STATE_PATH"
 fi
 # 已加载的任务必须先停掉，避免切换 detached worktree 时与正在启动的 Python 竞态。
 if launchctl print "gui/$(id -u)/com.alyx.tradesystem.intraday-monitor" >/dev/null 2>&1; then
@@ -512,7 +519,7 @@ rm ~/Library/LaunchAgents/com.alyx.tradesystem.intraday-monitor.plist
 
 模板固定把 `ProgramArguments` 指向 `.worktrees/intraday-monitor-runtime`。该目录必须是从已审查 commit 创建的 detached worktree，并把生产 `data/` 目录链接进去，以复用只读交易日历和正式 pending/sent 状态。runner 会从自身文件位置推导代码根目录，不能把模板改回仍含未提交代码的主工作区。`launchctl enable` 用于清除 macOS 持久化的 disabled 覆盖，仅执行 `load` 不足以证明任务已启用。
 
-已有 `data/runs/intraday-monitor/state.json` 继续用于 pending/sent 去重；与当前有效规则无关的旧 pending 会过期，不会补发。事件先原子落 pending，推送成功才记 sent；发送失败同一交易日下个 tick 重试，跨日过期。全链路不写 SQLite、持仓、关注池或计划层。**Mac 休眠时 launchd 不执行**，这是盘中提醒的真实可用性边界；若要求覆盖整个交易时段，应配置盘中唤醒或迁到 VPS。
+`data/runs/intraday-monitor/state.json` 用于单标的阈值状态，`market-scan-state.json` 用于横截面规则的 pending/sent 去重。事件先原子落 pending，推送成功才记 sent；发送失败同一交易日下个 tick 重试，横截面待发送事件在 10:00 后可继续重试但不再抓行情，跨日过期。transition guard 切换前同时检查两份状态。全链路不写 SQLite、持仓、关注池或计划层。**Mac 休眠时 launchd 不执行**，这是盘中提醒的真实可用性边界；若要求覆盖整个交易时段，应配置盘中唤醒或迁到 VPS。
 
 注册新的生产规则并经用户授权做真实链路验收时，只在交易时段执行一次：
 

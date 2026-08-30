@@ -59,7 +59,7 @@ def test_plist_contract():
         "deploy/launchd/intraday-monitor-runner.sh"
     ]
     assert data["StartInterval"] == 300
-    assert "StartCalendarInterval" not in data
+    assert data["StartCalendarInterval"] == {"Hour": 9, "Minute": 59}
     assert data["RunAtLoad"] is False
     assert data["KeepAlive"] is False
     assert data["StandardOutPath"] == data["StandardErrorPath"]
@@ -85,6 +85,20 @@ UNUSED = MonitorRule(rule_id="unused", instrument_name="U", code="3", threshold=
 DEFAULT_RULES: tuple[MonitorRule, ...] = (A, B)
 '''
     assert guard.default_rule_ids(source) == {"rule-a", "rule-b"}
+
+
+def test_transition_guard_parses_market_scan_rule_ids_without_executing_source():
+    guard = _load_transition_guard()
+    source = '''
+A = MarketScanRule(rule_id="scan-a", display_name="A", start_time=None, end_time=None, min_amount_yi=1)
+DEFAULT_MARKET_SCAN_RULES = (A,)
+'''
+    assert guard.default_rule_ids(
+        source,
+        rules_path="scripts/services/intraday_monitor/market_scan.py",
+        constructor_name="MarketScanRule",
+        collection_name="DEFAULT_MARKET_SCAN_RULES",
+    ) == {"scan-a"}
 
 
 def test_transition_guard_blocks_pending_unknown_to_target_commit(tmp_path):

@@ -9,7 +9,15 @@ import subprocess
 from pathlib import Path
 
 
-RULES_PATH = "scripts/services/intraday_monitor/rules.py"
+RULE_SOURCES = (
+    ("scripts/services/intraday_monitor/rules.py", "MonitorRule", "DEFAULT_RULES", True),
+    (
+        "scripts/services/intraday_monitor/market_scan.py",
+        "MarketScanRule",
+        "DEFAULT_MARKET_SCAN_RULES",
+        False,
+    ),
+)
 
 
 def _literal_string(node: ast.AST | None) -> str | None:
@@ -18,9 +26,15 @@ def _literal_string(node: ast.AST | None) -> str | None:
     return None
 
 
-def default_rule_ids(source: str) -> set[str]:
+def default_rule_ids(
+    source: str,
+    *,
+    rules_path: str = RULE_SOURCES[0][0],
+    constructor_name: str = RULE_SOURCES[0][1],
+    collection_name: str = RULE_SOURCES[0][2],
+) -> set[str]:
     """只读解析目标提交 DEFAULT_RULES，不执行目标代码。"""
-    tree = ast.parse(source, filename=RULES_PATH)
+    tree = ast.parse(source, filename=rules_path)
     declared: dict[str, str] = {}
     default_names: list[str] | None = None
     for node in tree.body:
@@ -39,7 +53,7 @@ def default_rule_ids(source: str) -> set[str]:
         if (
             isinstance(value, ast.Call)
             and isinstance(value.func, ast.Name)
-            and value.func.id == "MonitorRule"
+            and value.func.id == constructor_name
         ):
             rule_id = _literal_string(value.args[0]) if value.args else None
             for keyword in value.keywords:
@@ -47,26 +61,42 @@ def default_rule_ids(source: str) -> set[str]:
                     rule_id = _literal_string(keyword.value)
             if rule_id:
                 declared[name] = rule_id
-        if name == "DEFAULT_RULES" and isinstance(value, (ast.Tuple, ast.List)):
+        if name == collection_name and isinstance(value, (ast.Tuple, ast.List)):
             default_names = [
                 item.id for item in value.elts if isinstance(item, ast.Name)
             ]
     if default_names is None:
-        raise ValueError("目标提交缺少可解析的 DEFAULT_RULES")
+        raise ValueError(f"目标提交缺少可解析的 {collection_name}")
     missing = [name for name in default_names if name not in declared]
     if missing:
-        raise ValueError(f"目标提交 DEFAULT_RULES 含不可解析项: {', '.join(missing)}")
+        raise ValueError(f"目标提交 {collection_name} 含不可解析项: {', '.join(missing)}")
     return {declared[name] for name in default_names}
 
 
 def rules_at_commit(repo: Path, commit: str) -> set[str]:
-    result = subprocess.run(
-        ["git", "-C", str(repo), "show", f"{commit}:{RULES_PATH}"],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    return default_rule_ids(result.stdout)
+    rule_ids: set[str] = set()
+    for rules_path, constructor_name, collection_name, required in RULE_SOURCES:
+        result = subprocess.run(
+            ["git", "-C", str(repo), "show", f"{commit}:{rules_path}"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            if required:
+                raise subprocess.CalledProcessError(
+                    result.returncode, result.args, output=result.stdout, stderr=result.stderr
+                )
+            continue
+        rule_ids.update(
+            default_rule_ids(
+                result.stdout,
+                rules_path=rules_path,
+                constructor_name=constructor_name,
+                collection_name=collection_name,
+            )
+        )
+    return rule_ids
 
 
 def pending_rule_ids(state_path: Path) -> set[str]:
@@ -88,12 +118,14 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="盘中监控 runtime 切换前 pending 安全检查")
     parser.add_argument("--repo", type=Path, required=True)
     parser.add_argument("--target-commit", required=True)
-    parser.add_argument("--state-path", type=Path, required=True)
+    parser.add_argument("--state-path", type=Path, action="append", required=True)
     args = parser.parse_args()
 
     try:
         target_rule_ids = rules_at_commit(args.repo, args.target_commit)
-        pending_ids = pending_rule_ids(args.state_path)
+        pending_ids: set[str] = set()
+        for state_path in args.state_path:
+            pending_ids.update(pending_rule_ids(state_path))
     except (OSError, ValueError, json.JSONDecodeError, subprocess.CalledProcessError) as exc:
         print(json.dumps({"status": "guard_failed", "error": str(exc)}, ensure_ascii=False))
         return 2

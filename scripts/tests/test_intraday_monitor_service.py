@@ -6,7 +6,7 @@ from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import services.intraday_monitor.service as intraday_service
-from services.intraday_monitor.service import run_check, run_e2e_test
+from services.intraday_monitor.service import run_all_checks, run_check, run_e2e_test
 from services.intraday_monitor.rules import (
     DEFAULT_RULES,
     KAILAIYING_BREAKOUT_172_26_20260821_24,
@@ -1487,3 +1487,52 @@ def test_e2e_test_uses_first_registered_rule_when_monitoring_is_reenabled(
     assert result["status"] == "complete"
     assert result["production_threshold"] == BREACH_RULE.threshold
     assert len(pusher.messages) == 1
+
+
+def test_run_all_checks_combines_receipts_and_surfaces_market_failure(monkeypatch):
+    import services.intraday_monitor.market_scan as market_scan
+
+    monkeypatch.setattr(
+        intraday_service,
+        "run_check",
+        lambda registry, dry_run: {
+            "status": "complete",
+            "events": [{"event_id": "threshold"}],
+            "errors": [],
+            "quotes_checked": 1,
+            "pushed": False,
+        },
+    )
+    monkeypatch.setattr(
+        market_scan,
+        "run_market_scan",
+        lambda registry, dry_run: {
+            "status": "source_failed",
+            "events": [],
+            "errors": ["全市场行情失败"],
+            "pushed": False,
+        },
+    )
+
+    result = run_all_checks(object())
+
+    assert result["status"] == "source_failed"
+    assert result["events"] == [{"event_id": "threshold"}]
+    assert result["errors"] == ["market_scan: 全市场行情失败"]
+    assert result["threshold_monitor"]["status"] == "complete"
+    assert result["market_scan"]["status"] == "source_failed"
+
+
+def test_run_all_checks_keeps_matching_calendar_failure_status(monkeypatch):
+    import services.intraday_monitor.market_scan as market_scan
+
+    blocked = {
+        "status": "blocked_calendar",
+        "events": [],
+        "errors": ["交易日历缺失"],
+        "pushed": False,
+    }
+    monkeypatch.setattr(intraday_service, "run_check", lambda registry, dry_run: blocked)
+    monkeypatch.setattr(market_scan, "run_market_scan", lambda registry, dry_run: blocked)
+
+    assert run_all_checks(object())["status"] == "blocked_calendar"

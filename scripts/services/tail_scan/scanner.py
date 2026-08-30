@@ -138,6 +138,8 @@ def _load_no_limit_codes(
     target_date: str,
     listing_dates: dict[str, str],
     codes: set[str],
+    *,
+    open_days_by_code: dict[str, int] | None = None,
 ) -> tuple[set[str], str | None]:
     """用完整交易日历确认上市后前五个开放日；缺一天也拒绝猜测。"""
     years = {int(target_date[:4])}
@@ -186,9 +188,8 @@ def _load_no_limit_codes(
         list_date = listing_dates[code]
         if not states.get(list_date, False):
             return set(), f"上市日未标记为开放日（{code}:{list_date}）"
-        first_open_dates = [d for d in ordered_open_dates if d >= list_date][
-            :IPO_NO_LIMIT_OPEN_DAYS
-        ]
+        open_days = (open_days_by_code or {}).get(code, IPO_NO_LIMIT_OPEN_DAYS)
+        first_open_dates = [d for d in ordered_open_dates if d >= list_date][:open_days]
         if target_date in first_open_dates:
             no_limit_codes.add(code)
     return no_limit_codes, None

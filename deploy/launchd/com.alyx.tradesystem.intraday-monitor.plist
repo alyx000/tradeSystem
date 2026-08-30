@@ -16,6 +16,15 @@
     <key>StartInterval</key>
     <integer>300</integer>
 
+    <!-- StartInterval 是相对节拍，额外保证 09:59 做最后一次“10点前”补扫。 -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>9</integer>
+        <key>Minute</key>
+        <integer>59</integer>
+    </dict>
+
     <key>StandardOutPath</key>
     <string>/tmp/tradesystem-intraday-monitor.log</string>
     <key>StandardErrorPath</key>
