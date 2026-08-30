@@ -11,8 +11,11 @@ from db.queries import is_trade_day_from_db
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 MAX_QUOTE_AGE = timedelta(minutes=10)
 MAX_FUTURE_SKEW = timedelta(minutes=2)
-MORNING = (time(9, 30), time(11, 30))
-AFTERNOON = (time(13, 0), time(15, 0))
+# launchd 按分钟唤起，进程通常会晚数秒进入 Python。结束边界保留到下一
+# 分钟（不含），确保 11:30 / 15:00 这一分钟的 tick 能真正执行。
+MORNING = (time(9, 30), time(11, 31))
+AFTERNOON = (time(13, 0), time(15, 1))
+CLOSE_FINALIZATION = (time(15, 0), time(15, 6))
 
 
 def shanghai_now(now: datetime | None = None) -> datetime:
@@ -26,7 +29,14 @@ def shanghai_now(now: datetime | None = None) -> datetime:
 def is_intraday_session(now: datetime) -> bool:
     local = shanghai_now(now)
     current = local.time().replace(tzinfo=None)
-    return MORNING[0] <= current <= MORNING[1] or AFTERNOON[0] <= current <= AFTERNOON[1]
+    return MORNING[0] <= current < MORNING[1] or AFTERNOON[0] <= current < AFTERNOON[1]
+
+
+def is_close_finalization_window(now: datetime) -> bool:
+    """允许相对 5 分钟节拍在收盘后补取一次 15:00 终态行情。"""
+    local = shanghai_now(now)
+    current = local.time().replace(tzinfo=None)
+    return CLOSE_FINALIZATION[0] <= current < CLOSE_FINALIZATION[1]
 
 
 def confirmed_trade_day(day: str, db_path=None) -> bool | None:

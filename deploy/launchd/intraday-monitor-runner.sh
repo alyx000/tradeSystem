@@ -12,7 +12,7 @@ if [ "$SHANGHAI_WEEKDAY" -gt 5 ]; then
     exit 0
 fi
 if { [ "$HHMM" -lt 930 ] || [ "$HHMM" -ge 1131 ]; } \
-    && { [ "$HHMM" -lt 1300 ] || [ "$HHMM" -ge 1501 ]; }; then
+    && { [ "$HHMM" -lt 1300 ] || [ "$HHMM" -ge 1506 ]; }; then
     echo "[intraday-monitor] skip outside Shanghai sessions; weekday=$SHANGHAI_WEEKDAY hhmm=$SHANGHAI_HHMM"
     exit 0
 fi

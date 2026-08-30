@@ -3,12 +3,18 @@ from __future__ import annotations
 
 import hashlib
 import math
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 from pathlib import Path
 from typing import Callable, Iterable
 
 from .formatter import render_alert, render_e2e_test_alert
-from .guards import confirmed_trade_day, is_intraday_session, quote_is_fresh, shanghai_now
+from .guards import (
+    confirmed_trade_day,
+    is_close_finalization_window,
+    is_intraday_session,
+    quote_is_fresh,
+    shanghai_now,
+)
 from .rules import DEFAULT_RULES, MonitorRule, should_emit
 from .state import DEFAULT_STATE_PATH, load_state, locked_state, save_state
 
@@ -17,6 +23,7 @@ MIN_FETCH_INTERVAL = timedelta(seconds=3)
 SENT_IDS_LIMIT = 500
 E2E_TEST_MARGIN_MIN = 1.0
 E2E_TEST_MARGIN_RATIO = 0.001
+CLOSING_SNAPSHOT_MIN_QUOTE_TIME = time(15, 0)
 
 
 def _parse_iso_datetime(raw: object) -> datetime | None:
@@ -26,20 +33,38 @@ def _parse_iso_datetime(raw: object) -> datetime | None:
         return None
 
 
-def _event_id(rule: MonitorRule, quote_at: str, price: float) -> str:
-    raw = f"{rule.rule_id}|{quote_at}|{price:.8f}".encode("utf-8")
+def _event_id(
+    rule: MonitorRule,
+    quote_at: str,
+    price: float,
+    threshold: float,
+    observation_phase: str,
+) -> str:
+    raw = (
+        f"{rule.rule_id}|{quote_at}|{price:.8f}|{threshold:.8f}|{observation_phase}"
+    ).encode("utf-8")
     return hashlib.sha256(raw).hexdigest()[:24]
 
 
-def _event(rule: MonitorRule, quote: dict, quoted_at: datetime, source: str) -> dict:
+def _event(
+    rule: MonitorRule,
+    quote: dict,
+    quoted_at: datetime,
+    source: str,
+    *,
+    threshold: float,
+    observation_phase: str = "intraday",
+) -> dict:
     price = float(quote["price"])
     quote_at = quoted_at.isoformat()
     return {
-        "event_id": _event_id(rule, quote_at, price),
+        "event_id": _event_id(rule, quote_at, price, threshold, observation_phase),
         "rule_id": rule.rule_id,
         "instrument_name": rule.instrument_name,
         "code": rule.code,
-        "threshold": rule.threshold,
+        "threshold": threshold,
+        "threshold_label": rule.threshold_label,
+        "threshold_mode": rule.threshold_mode,
         "direction": rule.direction,
         "action_text": rule.action_text,
         "value_label": rule.value_label,
@@ -47,6 +72,7 @@ def _event(rule: MonitorRule, quote: dict, quoted_at: datetime, source: str) -> 
         "price": price,
         "quote_at": quote_at,
         "source": source,
+        "observation_phase": observation_phase,
     }
 
 
@@ -178,29 +204,65 @@ def _run_locked(
         if not math.isfinite(price) or price <= 0:
             errors.append(f"{rule.rule_id}: 最新价非有限或非正数")
             continue
-        valid_quote_codes.add(rule.code.upper())
+        try:
+            threshold = rule.resolve_threshold(quote)
+        except (TypeError, ValueError) as exc:
+            errors.append(f"{rule.rule_id}: {exc}")
+            continue
+        if not math.isfinite(threshold) or threshold <= 0:
+            errors.append(f"{rule.rule_id}: 比较阈值非有限或非正数")
+            continue
         previous = rule_states.get(rule.rule_id) or {}
+        same_trade_date = previous.get("trade_date") == now.date().isoformat()
         previous_active = (
             bool(previous.get("active"))
-            if previous.get("trade_date") == now.date().isoformat()
+            if same_trade_date
             else None
         )
-        active = rule.is_active(price)
-        if should_emit(
+        active = rule.is_active(price, threshold=threshold)
+        local_time = now.time().replace(tzinfo=None)
+        quote_time = quoted_at.time().replace(tzinfo=None)
+        close_phase = local_time >= time(15, 0)
+        if close_phase and quote_time < CLOSING_SNAPSHOT_MIN_QUOTE_TIME:
+            errors.append(f"{rule.rule_id}: 收盘行情尚未就绪（行情时间 {quote_time.isoformat()}）")
+            continue
+        closing_snapshot = (
+            rule.threshold_mode == "daily_up_limit"
+            and close_phase
+            and quote_time >= CLOSING_SNAPSHOT_MIN_QUOTE_TIME
+        )
+        valid_quote_codes.add(rule.code.upper())
+        close_confirmed_before = bool(previous.get("close_confirmed")) if same_trade_date else False
+        transition_alert = should_emit(
             previous_active=previous_active,
             current_active=active,
             emit_on_initial_match=rule.emit_on_initial_match,
-        ):
-            event = _event(rule, quote, quoted_at, str(quote.get("_source") or rule.provider))
+        )
+        close_confirmation_alert = active and closing_snapshot and not close_confirmed_before
+        close_event_recorded = False
+        if transition_alert or close_confirmation_alert:
+            event = _event(
+                rule,
+                quote,
+                quoted_at,
+                str(quote.get("_source") or rule.provider),
+                threshold=threshold,
+                observation_phase="close" if closing_snapshot else "intraday",
+            )
             if event["event_id"] not in sent_ids and event["event_id"] not in pending_ids:
                 events.append(event)
                 pending_ids.add(event["event_id"])
+                close_event_recorded = closing_snapshot
+            elif closing_snapshot:
+                close_event_recorded = True
         rule_states[rule.rule_id] = {
             "trade_date": today,
             "active": active,
             "last_price": price,
+            "last_threshold": threshold,
             "last_quote_at": quoted_at.isoformat(),
             "updated_at": now.isoformat(),
+            "close_confirmed": close_confirmed_before or close_event_recorded,
         }
 
     if not valid_quote_codes:
@@ -294,7 +356,8 @@ def run_check(
             "pushed": False,
             "retired_pending_count": retired_pending_count,
         }
-    if not is_intraday_session(local_now):
+    close_finalization = is_close_finalization_window(local_now)
+    if not is_intraday_session(local_now) and not close_finalization:
         return {"status": "outside_session", "events": [], "errors": []}
     trade_day = confirmed_trade_day(local_now.date().isoformat(), db_path=db_path)
     if trade_day is None:
@@ -375,6 +438,13 @@ def run_e2e_test(
             "pushed": False,
         }
     local_now = shanghai_now(now)
+    if not rule.is_effective_on(local_now.date()):
+        return {
+            "status": "inactive_rule",
+            "events": [],
+            "errors": [f"规则 {rule.rule_id} 在 {local_now.date().isoformat()} 不生效"],
+            "pushed": False,
+        }
     if not is_intraday_session(local_now):
         return {"status": "outside_session", "events": [], "errors": []}
     trade_day = confirmed_trade_day(local_now.date().isoformat(), db_path=db_path)
@@ -401,6 +471,12 @@ def run_e2e_test(
         return {"status": "source_failed", "events": [], "errors": errors}
 
     margin = max(E2E_TEST_MARGIN_MIN, abs(price) * E2E_TEST_MARGIN_RATIO)
+    try:
+        production_threshold = rule.resolve_threshold(quote)
+    except (TypeError, ValueError) as exc:
+        errors.append(f"{rule.rule_id}: {exc}")
+        return {"status": "source_failed", "events": [], "errors": errors}
+
     test_rule = MonitorRule(
         rule_id=f"{rule.rule_id}-e2e-test",
         instrument_name=rule.instrument_name,
@@ -413,7 +489,13 @@ def run_e2e_test(
     )
     if not test_rule.is_active(price):
         return {"status": "test_condition_failed", "events": [], "errors": ["临时测试条件未命中"]}
-    event = _event(test_rule, quote, quoted_at, str(quote.get("_source") or rule.provider))
+    event = _event(
+        test_rule,
+        quote,
+        quoted_at,
+        str(quote.get("_source") or rule.provider),
+        threshold=float(test_rule.threshold),
+    )
 
     if pusher_factory is None:
         from pushers.dingtalk_pusher import DingTalkPusher
@@ -425,7 +507,7 @@ def run_e2e_test(
             return {"status": "push_failed", "events": [event], "errors": ["钉钉凭据未配置"], "pushed": False}
         content = render_e2e_test_alert(
             event,
-            production_threshold=rule.threshold,
+            production_threshold=production_threshold,
             input_by=normalized_input_by,
         )
         pushed = bool(
@@ -449,6 +531,6 @@ def run_e2e_test(
         "errors": errors,
         "quotes_checked": 1,
         "pushed": True,
-        "production_threshold": rule.threshold,
+        "production_threshold": production_threshold,
         "input_by": normalized_input_by,
     }

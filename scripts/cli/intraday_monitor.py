@@ -6,6 +6,7 @@ import json
 import logging
 
 from services.intraday_monitor import DEFAULT_RULES, run_check, run_e2e_test
+from services.intraday_monitor.guards import shanghai_now
 
 
 logger = logging.getLogger(__name__)
@@ -14,10 +15,11 @@ logger = logging.getLogger(__name__)
 def register_subparser(subparsers: argparse._SubParsersAction) -> None:
     parser = subparsers.add_parser(
         "intraday-monitor",
-        help="盘中实时阈值监控（上证3955长期规则 + 利通电子8月11日临时规则）",
+        help="盘中实时监控（上证3955 + 两交易日科创50/凯莱英突破规则）",
         description=(
-            "可扩展盘中实时阈值监控。长期规则监控上证指数从3955点下方站上"
-            "3955点；2026年8月11日临时监控利通电子严格跌破123.92元。"
+            "可扩展盘中实时阈值监控。长期监控上证指数从3955点下方站上"
+            "3955点；2026年8月21日与24日监控科创50严格突破1700点及"
+            "凯莱英严格突破172.26元。"
         ),
     )
     commands = parser.add_subparsers(dest="intraday_monitor_command")
@@ -26,17 +28,18 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
         help="执行一次当前有效规则的监控检查",
         description=(
             "执行一次监控检查。上证指数从3955点下方站上3955点时推送钉钉；"
-            "利通电子规则仅在2026年8月11日有效，价格严格低于123.92元时推送。"
-            "各规则持续命中去重，恢复后再次命中可重推。"
+            "2026年8月21日与24日科创50严格高于1700点、凯莱英严格高于"
+            "172.26元时推送。各规则持续命中去重，恢复后再次命中可重推；"
+            "历史已退役规则保持下线。"
         ),
     )
     check.add_argument("--dry-run", action="store_true", help="只预览，不写状态、不推送")
     check.add_argument("--json", action="store_true", help="输出 JSON 结果")
     e2e = commands.add_parser(
         "e2e-test",
-        help="对上证指数3955规则做真实链路测试",
+        help="对指定生产规则做真实链路测试",
         description=(
-            "对当前启用的上证指数3955生产规则做真实链路测试。只使用盘中新鲜"
+            "对指定生产规则做真实链路测试（默认上证指数3955规则）。只使用盘中新鲜"
             "真实行情和本次临时测试线，不读写正式监控状态。"
         ),
     )
@@ -46,6 +49,12 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
         action="store_true",
         help="确认本次会使用真实行情并发送一条钉钉测试消息",
     )
+    e2e.add_argument(
+        "--rule-id",
+        choices=[rule.rule_id for rule in DEFAULT_RULES],
+        default=DEFAULT_RULES[0].rule_id if DEFAULT_RULES else None,
+        help="选择要验证的生产规则；默认验证上证指数3955规则",
+    )
     e2e.add_argument("--json", action="store_true", help="输出 JSON 结果")
 
 
@@ -54,7 +63,7 @@ def handle_command(config: dict, args: argparse.Namespace) -> int:
     if command not in {"check", "e2e-test"}:
         logger.error(
             "用法: python3 scripts/main.py intraday-monitor "
-            "check [--dry-run] [--json] | e2e-test --input-by USER "
+            "check [--dry-run] [--json] | e2e-test [--rule-id RULE_ID] --input-by USER "
             "--confirm-real-push [--json]"
         )
         return 2
@@ -62,12 +71,30 @@ def handle_command(config: dict, args: argparse.Namespace) -> int:
     from main import setup_providers
 
     if command == "e2e-test":
+        selected_rule = next(
+            (
+                rule
+                for rule in DEFAULT_RULES
+                if rule.rule_id == getattr(args, "rule_id", None)
+            ),
+            DEFAULT_RULES[0] if DEFAULT_RULES else None,
+        )
         confirm_real_push = getattr(args, "confirm_real_push", False)
         if confirm_real_push is not True:
             result = run_e2e_test(
                 None,
                 input_by=str(args.input_by),
                 confirm_real_push=False,
+                rule=selected_rule,
+            )
+        elif selected_rule is not None and not selected_rule.is_effective_on(
+            shanghai_now().date()
+        ):
+            result = run_e2e_test(
+                None,
+                input_by=str(args.input_by),
+                confirm_real_push=True,
+                rule=selected_rule,
             )
         else:
             registry = setup_providers(config) if DEFAULT_RULES else None
@@ -75,6 +102,7 @@ def handle_command(config: dict, args: argparse.Namespace) -> int:
                 registry,
                 input_by=str(args.input_by),
                 confirm_real_push=True,
+                rule=selected_rule,
             )
     else:
         registry = setup_providers(config) if DEFAULT_RULES else None
@@ -92,6 +120,12 @@ def handle_command(config: dict, args: argparse.Namespace) -> int:
 
     if command == "e2e-test" and result["status"] != "complete":
         return 1
-    if result["status"] in {"blocked_calendar", "source_failed", "push_failed", "state_error"}:
+    if result["status"] in {
+        "blocked_calendar",
+        "source_failed",
+        "partial",
+        "push_failed",
+        "state_error",
+    }:
         return 1
     return 0

@@ -4,12 +4,23 @@ from __future__ import annotations
 import os
 import plistlib
 import subprocess
+import importlib.util
+import json
 from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RUNNER = REPO_ROOT / "deploy/launchd/intraday-monitor-runner.sh"
 PLIST = REPO_ROOT / "deploy/launchd/com.alyx.tradesystem.intraday-monitor.plist"
+TRANSITION_GUARD = REPO_ROOT / "deploy/launchd/intraday_monitor_transition_guard.py"
+
+
+def _load_transition_guard():
+    spec = importlib.util.spec_from_file_location("intraday_monitor_transition_guard", TRANSITION_GUARD)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def test_runner_contract():
@@ -23,7 +34,7 @@ def test_runner_contract():
     assert 'source "$HOME/.config/tradeSystem.env"' in text
     assert "TZ=Asia/Shanghai /bin/date '+%u'" in text
     assert "TZ=Asia/Shanghai /bin/date '+%H%M'" in text
-    assert "-lt 930" in text and "-ge 1501" in text
+    assert "-lt 930" in text and "-ge 1506" in text
     assert 'if [ "$SHANGHAI_WEEKDAY" -gt 5 ]; then' in text
     assert "DINGTALK_WEBHOOK_TOKEN=${DINGTALK_WEBHOOK_TOKEN:+set}" in text
     assert "DINGTALK_WEBHOOK_SECRET=${DINGTALK_WEBHOOK_SECRET:+set}" in text
@@ -63,3 +74,65 @@ def test_plist_parses_with_plutil():
         check=True,
     )
     assert "OK" in output.stdout
+
+
+def test_transition_guard_parses_default_rule_ids_without_executing_source():
+    guard = _load_transition_guard()
+    source = '''
+A = MonitorRule(rule_id="rule-a", instrument_name="A", code="1", threshold=1)
+B = MonitorRule("rule-b", "B", "2", 2)
+UNUSED = MonitorRule(rule_id="unused", instrument_name="U", code="3", threshold=3)
+DEFAULT_RULES: tuple[MonitorRule, ...] = (A, B)
+'''
+    assert guard.default_rule_ids(source) == {"rule-a", "rule-b"}
+
+
+def test_transition_guard_blocks_pending_unknown_to_target_commit(tmp_path):
+    state_path = tmp_path / "state.json"
+    state_path.write_text(
+        json.dumps({"pending_events": [{"rule_id": "future-rule"}]}),
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [
+            "/usr/bin/python3",
+            str(TRANSITION_GUARD),
+            "--repo",
+            str(REPO_ROOT),
+            "--target-commit",
+            "2d9c4769",
+            "--state-path",
+            str(state_path),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    payload = json.loads(result.stdout)
+    assert result.returncode == 2
+    assert payload["status"] == "blocked_pending_rules"
+    assert payload["unknown_rule_ids"] == ["future-rule"]
+
+
+def test_transition_guard_allows_pending_known_to_target_commit(tmp_path):
+    state_path = tmp_path / "state.json"
+    state_path.write_text(
+        json.dumps({"pending_events": [{"rule_id": "sse-composite-reclaim-3955"}]}),
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [
+            "/usr/bin/python3",
+            str(TRANSITION_GUARD),
+            "--repo",
+            str(REPO_ROOT),
+            "--target-commit",
+            "2d9c4769",
+            "--state-path",
+            str(state_path),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    payload = json.loads(result.stdout)
+    assert result.returncode == 0
+    assert payload["status"] == "safe"

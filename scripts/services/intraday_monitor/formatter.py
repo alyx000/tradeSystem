@@ -7,15 +7,24 @@ def render_alert(events: list[dict]) -> str:
     for event in events:
         value_label = str(event.get("value_label") or "点位")
         value_unit = str(event.get("value_unit") or "")
+        threshold_label = str(event.get("threshold_label") or "监控线")
         lines.extend(
             [
                 f"- [事实] **{event['instrument_name']}**（{event['code']}）"
                 f"最新{value_label} **{event['price']:.2f}**{value_unit}，"
-                f"已{event['action_text']}监控线 **{event['threshold']:.2f}**{value_unit}",
+                f"已{event['action_text']}{threshold_label} "
+                f"**{event['threshold']:.2f}**{value_unit}",
                 f"  - 行情时间：{event['quote_at']}",
                 f"  - 数据来源：{event['source']}",
             ]
         )
+        if event.get("threshold_mode") == "daily_up_limit":
+            if event.get("observation_phase") == "close":
+                lines.append("  - [事实·收盘] 收盘价低于当日涨停价，按本监控口径确认为当日断板")
+            else:
+                lines.append(
+                    "  - [判断·盘中] 当前未封涨停；盘中仍可能回封，最终是否断板以收盘为准"
+                )
     lines.extend(["", "> 仅为条件触发提醒，不构成买卖建议。"])
     return "\n".join(lines)
 

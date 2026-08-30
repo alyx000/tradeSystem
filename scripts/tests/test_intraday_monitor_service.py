@@ -2,15 +2,17 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import services.intraday_monitor.service as intraday_service
 from services.intraday_monitor.service import run_check, run_e2e_test
 from services.intraday_monitor.rules import (
     DEFAULT_RULES,
+    KAILAIYING_BREAKOUT_172_26_20260821_24,
     LITONG_ELECTRONICS_BELOW_123_92_20260811,
     SSE_COMPOSITE_RECLAIM_3955,
+    STAR50_BREAKOUT_1700_20260821_24,
     MonitorRule,
 )
 
@@ -33,6 +35,22 @@ RECLAIM_RULE = MonitorRule(
     emit_on_initial_match=False,
     action_label="收复",
 )
+BOARD_BREAK_RULE = MonitorRule(
+    "test-board-break",
+    "测试股票",
+    "600127.SH",
+    None,
+    direction="below",
+    inclusive=False,
+    emit_on_initial_match=True,
+    action_label="低于",
+    valid_from=date(2026, 8, 19),
+    valid_until=date(2026, 8, 20),
+    value_label="价格",
+    value_unit="元",
+    threshold_mode="daily_up_limit",
+    threshold_label="当日涨停价",
+)
 TEST_RULES = (BREACH_RULE, RECLAIM_RULE)
 
 
@@ -52,6 +70,8 @@ class _Provider:
 class _Registry:
     def __init__(self, price=1571.0):
         self.price = price
+        self.pre_close = 100.0
+        self.quote_overrides = {}
         self.now = datetime(2026, 8, 3, 10, 0, tzinfo=TZ)
         self.provider = _Provider()
         self.call_count = 0
@@ -65,16 +85,19 @@ class _Registry:
         assert capability == "get_realtime_quotes"
         self.call_count += 1
         self.requested_codes.append(list(codes))
-        return _Result([
-            {
+        rows = []
+        for code in codes:
+            row = {
                 "code": code,
                 "name": "测试指数",
                 "price": self.price,
+                "pre_close": self.pre_close,
                 "quote_date": self.now.date().isoformat(),
                 "quote_time": self.now.time().isoformat(),
             }
-            for code in codes
-        ])
+            row.update(self.quote_overrides.get(code, {}))
+            rows.append(row)
+        return _Result(rows)
 
 
 class _Pusher:
@@ -355,6 +378,8 @@ def test_default_sse_rule_pushes_only_after_observed_below_to_3955(tmp_path):
     assert DEFAULT_RULES == (
         SSE_COMPOSITE_RECLAIM_3955,
         LITONG_ELECTRONICS_BELOW_123_92_20260811,
+        STAR50_BREAKOUT_1700_20260821_24,
+        KAILAIYING_BREAKOUT_172_26_20260821_24,
     )
     assert initial_above["events"] == []
     assert below["events"] == []
@@ -491,6 +516,546 @@ def test_default_rules_fetch_only_sse_before_and_after_litong_day(tmp_path):
 
         assert result["status"] == "complete"
         assert registry.requested_codes == [["000001.SH"]]
+
+
+def test_default_rules_fetch_temporary_breakouts_only_during_two_trade_day_window(tmp_path):
+    db_path = _calendar(
+        tmp_path,
+        dates=(
+            "2026-08-19",
+            "2026-08-20",
+            "2026-08-21",
+            "2026-08-24",
+            "2026-08-25",
+        ),
+    )
+    for day in (19, 20, 21, 24, 25):
+        registry = _Registry(price=4000.0)
+        pusher = _Pusher()
+        now = datetime(2026, 8, day, 10, 0, tzinfo=TZ)
+        registry.now = now
+
+        result = run_check(
+            registry,
+            now=now,
+            state_path=tmp_path / f"state-{day}.json",
+            db_path=db_path,
+            pusher_factory=lambda: pusher,
+        )
+
+        assert result["status"] == "complete"
+        expected = (
+            ["000001.SH", "000688.SH", "002821.SZ"]
+            if day in (21, 24)
+            else ["000001.SH"]
+        )
+        assert registry.requested_codes == [expected]
+
+
+def test_star50_breakout_is_strict_initially_emits_and_rearms(tmp_path):
+    db_path = _calendar(tmp_path, dates=("2026-08-21",))
+    state_path = tmp_path / "state.json"
+    registry = _Registry(price=1700.01)
+    pusher = _Pusher()
+    now = datetime(2026, 8, 21, 10, 0, tzinfo=TZ)
+    registry.now = now
+    rules = (STAR50_BREAKOUT_1700_20260821_24,)
+
+    initial = run_check(
+        registry,
+        rules=rules,
+        now=now,
+        state_path=state_path,
+        db_path=db_path,
+        pusher_factory=lambda: pusher,
+    )
+    registry.now = now + timedelta(minutes=5)
+    continuous = run_check(
+        registry,
+        rules=rules,
+        now=registry.now,
+        state_path=state_path,
+        db_path=db_path,
+        pusher_factory=lambda: pusher,
+    )
+    registry.price = 1700.0
+    registry.now = now + timedelta(minutes=10)
+    equal = run_check(
+        registry,
+        rules=rules,
+        now=registry.now,
+        state_path=state_path,
+        db_path=db_path,
+        pusher_factory=lambda: pusher,
+    )
+    registry.price = 1700.01
+    registry.now = now + timedelta(minutes=15)
+    reentered = run_check(
+        registry,
+        rules=rules,
+        now=registry.now,
+        state_path=state_path,
+        db_path=db_path,
+        pusher_factory=lambda: pusher,
+    )
+
+    assert len(initial["events"]) == 1
+    assert initial["events"][0]["rule_id"] == STAR50_BREAKOUT_1700_20260821_24.rule_id
+    assert continuous["events"] == []
+    assert equal["events"] == []
+    assert len(reentered["events"]) == 1
+    assert len(pusher.messages) == 2
+    assert "科创50" in pusher.messages[0][1]
+    assert "已突破监控线 **1700.00**" in pusher.messages[0][1]
+
+
+def test_kailaiying_breakout_is_strict_initially_emits_and_rearms(tmp_path):
+    db_path = _calendar(tmp_path, dates=("2026-08-21",))
+    state_path = tmp_path / "state.json"
+    registry = _Registry(price=172.27)
+    pusher = _Pusher()
+    now = datetime(2026, 8, 21, 10, 0, tzinfo=TZ)
+    registry.now = now
+    rules = (KAILAIYING_BREAKOUT_172_26_20260821_24,)
+
+    initial = run_check(
+        registry,
+        rules=rules,
+        now=now,
+        state_path=state_path,
+        db_path=db_path,
+        pusher_factory=lambda: pusher,
+    )
+    registry.now = now + timedelta(minutes=5)
+    continuous = run_check(
+        registry,
+        rules=rules,
+        now=registry.now,
+        state_path=state_path,
+        db_path=db_path,
+        pusher_factory=lambda: pusher,
+    )
+    registry.price = 172.26
+    registry.now = now + timedelta(minutes=10)
+    equal = run_check(
+        registry,
+        rules=rules,
+        now=registry.now,
+        state_path=state_path,
+        db_path=db_path,
+        pusher_factory=lambda: pusher,
+    )
+    registry.price = 172.27
+    registry.now = now + timedelta(minutes=15)
+    reentered = run_check(
+        registry,
+        rules=rules,
+        now=registry.now,
+        state_path=state_path,
+        db_path=db_path,
+        pusher_factory=lambda: pusher,
+    )
+
+    assert len(initial["events"]) == 1
+    assert initial["events"][0]["rule_id"] == rules[0].rule_id
+    assert initial["events"][0]["threshold"] == 172.26
+    assert continuous["events"] == []
+    assert equal["events"] == []
+    assert len(reentered["events"]) == 1
+    assert len(pusher.messages) == 2
+    assert "凯莱英" in pusher.messages[0][1]
+    assert "最新价格 **172.27**元" in pusher.messages[0][1]
+    assert "已突破监控线 **172.26**元" in pusher.messages[0][1]
+
+
+def test_board_break_rule_uses_daily_limit_and_rearms_after_reseal(tmp_path):
+    db_path = _calendar(tmp_path, dates=("2026-08-19",))
+    state_path = tmp_path / "state.json"
+    registry = _Registry(price=7.82)
+    registry.pre_close = 7.11
+    pusher = _Pusher()
+    now = datetime(2026, 8, 19, 13, 0, tzinfo=TZ)
+    registry.now = now
+    rules = (BOARD_BREAK_RULE,)
+
+    sealed = run_check(
+        registry,
+        rules=rules,
+        now=now,
+        state_path=state_path,
+        db_path=db_path,
+        pusher_factory=lambda: pusher,
+    )
+    registry.price = 7.81
+    registry.now = now + timedelta(minutes=5)
+    broken = run_check(
+        registry,
+        rules=rules,
+        now=registry.now,
+        state_path=state_path,
+        db_path=db_path,
+        pusher_factory=lambda: pusher,
+    )
+    registry.now = now + timedelta(minutes=10)
+    still_broken = run_check(
+        registry,
+        rules=rules,
+        now=registry.now,
+        state_path=state_path,
+        db_path=db_path,
+        pusher_factory=lambda: pusher,
+    )
+    registry.price = 7.82
+    registry.now = now + timedelta(minutes=15)
+    run_check(
+        registry,
+        rules=rules,
+        now=registry.now,
+        state_path=state_path,
+        db_path=db_path,
+        pusher_factory=lambda: pusher,
+    )
+    registry.price = 7.81
+    registry.now = now + timedelta(minutes=20)
+    broken_again = run_check(
+        registry,
+        rules=rules,
+        now=registry.now,
+        state_path=state_path,
+        db_path=db_path,
+        pusher_factory=lambda: pusher,
+    )
+
+    assert sealed["events"] == []
+    assert len(broken["events"]) == 1
+    assert broken["events"][0]["threshold"] == 7.82
+    assert broken["events"][0]["threshold_mode"] == "daily_up_limit"
+    assert still_broken["events"] == []
+    assert len(broken_again["events"]) == 1
+    assert len(pusher.messages) == 2
+    assert "测试股票" in pusher.messages[0][1]
+    assert "最新价格 **7.81**元" in pusher.messages[0][1]
+    assert "低于当日涨停价 **7.82**元" in pusher.messages[0][1]
+    assert "当前未封涨停" in pusher.messages[0][1]
+    assert "最终是否断板以收盘为准" in pusher.messages[0][1]
+
+
+def test_board_break_sends_distinct_close_confirmation_after_intraday_alert(tmp_path):
+    db_path = _calendar(tmp_path, dates=("2026-08-19",))
+    state_path = tmp_path / "state.json"
+    registry = _Registry(price=7.81)
+    registry.pre_close = 7.11
+    pusher = _Pusher()
+    rules = (BOARD_BREAK_RULE,)
+
+    intraday_now = datetime(2026, 8, 19, 14, 55, tzinfo=TZ)
+    registry.now = intraday_now
+    intraday = run_check(
+        registry,
+        rules=rules,
+        now=intraday_now,
+        state_path=state_path,
+        db_path=db_path,
+        pusher_factory=lambda: pusher,
+    )
+    close_now = datetime(2026, 8, 19, 15, 0, 4, tzinfo=TZ)
+    registry.now = close_now
+    close = run_check(
+        registry,
+        rules=rules,
+        now=close_now,
+        state_path=state_path,
+        db_path=db_path,
+        pusher_factory=lambda: pusher,
+    )
+    registry.now = datetime(2026, 8, 19, 15, 0, 30, tzinfo=TZ)
+    repeated = run_check(
+        registry,
+        rules=rules,
+        now=registry.now,
+        state_path=state_path,
+        db_path=db_path,
+        pusher_factory=lambda: pusher,
+    )
+
+    assert intraday["events"][0]["observation_phase"] == "intraday"
+    assert close["events"][0]["observation_phase"] == "close"
+    assert repeated["events"] == []
+    assert len(pusher.messages) == 2
+    assert "最终是否断板以收盘为准" in pusher.messages[0][1]
+    assert "[事实·收盘]" in pusher.messages[1][1]
+    assert "确认为当日断板" in pusher.messages[1][1]
+
+
+def test_close_does_not_accept_1459_quote_and_retries_with_1500_quote(tmp_path):
+    db_path = _calendar(tmp_path, dates=("2026-08-19",))
+    state_path = tmp_path / "state.json"
+    registry = _Registry(price=7.81)
+    registry.pre_close = 7.11
+    pusher = _Pusher()
+    rules = (BOARD_BREAK_RULE,)
+
+    intraday_now = datetime(2026, 8, 19, 14, 59, 30, tzinfo=TZ)
+    registry.now = datetime(2026, 8, 19, 14, 59, 0, tzinfo=TZ)
+    intraday = run_check(
+        registry,
+        rules=rules,
+        now=intraday_now,
+        state_path=state_path,
+        db_path=db_path,
+        pusher_factory=lambda: pusher,
+    )
+    close_now = datetime(2026, 8, 19, 15, 0, 4, tzinfo=TZ)
+    stale_close = run_check(
+        registry,
+        rules=rules,
+        now=close_now,
+        state_path=state_path,
+        db_path=db_path,
+        pusher_factory=lambda: pusher,
+    )
+    state_after_stale = json.loads(state_path.read_text(encoding="utf-8"))
+    registry.now = datetime(2026, 8, 19, 15, 0, 0, tzinfo=TZ)
+    fresh_close = run_check(
+        registry,
+        rules=rules,
+        now=datetime(2026, 8, 19, 15, 4, 0, tzinfo=TZ),
+        state_path=state_path,
+        db_path=db_path,
+        pusher_factory=lambda: pusher,
+    )
+
+    assert intraday["status"] == "complete"
+    assert stale_close["status"] == "source_failed"
+    assert "收盘行情尚未就绪" in stale_close["errors"][0]
+    assert state_after_stale["rules"][rules[0].rule_id]["close_confirmed"] is False
+    assert fresh_close["events"][0]["observation_phase"] == "close"
+    assert len(pusher.messages) == 2
+
+
+def test_same_quote_timestamp_has_distinct_intraday_and_close_event_ids(tmp_path):
+    db_path = _calendar(tmp_path, dates=("2026-08-19",))
+    state_path = tmp_path / "state.json"
+    registry = _Registry(price=7.81)
+    registry.pre_close = 7.11
+    registry.now = datetime(2026, 8, 19, 15, 0, 0, tzinfo=TZ)
+    pusher = _Pusher()
+    rules = (BOARD_BREAK_RULE,)
+
+    intraday = run_check(
+        registry,
+        rules=rules,
+        now=datetime(2026, 8, 19, 14, 59, 59, tzinfo=TZ),
+        state_path=state_path,
+        db_path=db_path,
+        pusher_factory=lambda: pusher,
+    )
+    close = run_check(
+        registry,
+        rules=rules,
+        now=datetime(2026, 8, 19, 15, 0, 4, tzinfo=TZ),
+        state_path=state_path,
+        db_path=db_path,
+        pusher_factory=lambda: pusher,
+    )
+
+    assert intraday["events"][0]["quote_at"] == close["events"][0]["quote_at"]
+    assert intraday["events"][0]["event_id"] != close["events"][0]["event_id"]
+    assert len(pusher.messages) == 2
+
+
+def test_post_close_finalization_fetches_fixed_and_dynamic_rules(tmp_path):
+    db_path = _calendar(tmp_path, dates=("2026-08-19",))
+    registry = _Registry(price=4000.0)
+    pusher = _Pusher()
+    now = datetime(2026, 8, 19, 15, 4, tzinfo=TZ)
+    registry.now = datetime(2026, 8, 19, 15, 0, tzinfo=TZ)
+
+    result = run_check(
+        registry,
+        rules=(SSE_COMPOSITE_RECLAIM_3955, BOARD_BREAK_RULE),
+        now=now,
+        state_path=tmp_path / "state.json",
+        db_path=db_path,
+        pusher_factory=lambda: pusher,
+    )
+
+    assert result["status"] == "complete"
+    assert registry.requested_codes == [["000001.SH", "600127.SH"]]
+
+
+def test_fixed_rule_uses_1500_snapshot_in_close_grace_window_once(tmp_path):
+    db_path = _calendar(tmp_path, dates=("2026-08-21",))
+    state_path = tmp_path / "state.json"
+    registry = _Registry(price=1699.99)
+    pusher = _Pusher()
+    rules = (STAR50_BREAKOUT_1700_20260821_24,)
+
+    intraday_now = datetime(2026, 8, 21, 14, 55, tzinfo=TZ)
+    registry.now = intraday_now
+    intraday = run_check(
+        registry,
+        rules=rules,
+        now=intraday_now,
+        state_path=state_path,
+        db_path=db_path,
+        pusher_factory=lambda: pusher,
+    )
+    registry.price = 1700.01
+    registry.now = datetime(2026, 8, 21, 15, 0, tzinfo=TZ)
+    close_grace = run_check(
+        registry,
+        rules=rules,
+        now=datetime(2026, 8, 21, 15, 4, tzinfo=TZ),
+        state_path=state_path,
+        db_path=db_path,
+        pusher_factory=lambda: pusher,
+    )
+    repeated = run_check(
+        registry,
+        rules=rules,
+        now=datetime(2026, 8, 21, 15, 5, tzinfo=TZ),
+        state_path=state_path,
+        db_path=db_path,
+        pusher_factory=lambda: pusher,
+    )
+    saved = json.loads(state_path.read_text(encoding="utf-8"))
+
+    assert intraday["events"] == []
+    assert len(close_grace["events"]) == 1
+    assert close_grace["events"][0]["observation_phase"] == "intraday"
+    assert repeated["status"] == "complete"
+    assert repeated["events"] == []
+    assert saved["rules"][rules[0].rule_id]["active"] is True
+    assert saved["rules"][rules[0].rule_id]["last_quote_at"].endswith("15:00:00+08:00")
+    assert len(pusher.messages) == 1
+
+
+def test_fixed_rule_rejects_1459_snapshot_without_advancing_rule_state(tmp_path):
+    db_path = _calendar(tmp_path, dates=("2026-08-21",))
+    state_path = tmp_path / "state.json"
+    registry = _Registry(price=1700.01)
+    registry.now = datetime(2026, 8, 21, 14, 59, 59, tzinfo=TZ)
+    pusher = _Pusher()
+
+    result = run_check(
+        registry,
+        rules=(STAR50_BREAKOUT_1700_20260821_24,),
+        now=datetime(2026, 8, 21, 15, 4, tzinfo=TZ),
+        state_path=state_path,
+        db_path=db_path,
+        pusher_factory=lambda: pusher,
+    )
+    saved = json.loads(state_path.read_text(encoding="utf-8"))
+
+    assert result["status"] == "source_failed"
+    assert "收盘行情尚未就绪" in result["errors"][0]
+    assert STAR50_BREAKOUT_1700_20260821_24.rule_id not in saved["rules"]
+    assert pusher.messages == []
+
+
+def test_close_grace_window_stops_at_1506_without_fetch_or_state(tmp_path):
+    db_path = _calendar(tmp_path, dates=("2026-08-21",))
+    state_path = tmp_path / "state.json"
+    registry = _Registry(price=1700.01)
+    registry.now = datetime(2026, 8, 21, 15, 0, tzinfo=TZ)
+    pusher = _Pusher()
+
+    result = run_check(
+        registry,
+        rules=(STAR50_BREAKOUT_1700_20260821_24,),
+        now=datetime(2026, 8, 21, 15, 6, tzinfo=TZ),
+        state_path=state_path,
+        db_path=db_path,
+        pusher_factory=lambda: pusher,
+    )
+
+    assert result["status"] == "outside_session"
+    assert registry.requested_codes == []
+    assert state_path.exists() is False
+    assert pusher.messages == []
+
+
+def test_board_break_first_observation_below_limit_pushes_and_recalculates_next_day(tmp_path):
+    db_path = _calendar(tmp_path, dates=("2026-08-19", "2026-08-20"))
+    state_path = tmp_path / "state.json"
+    registry = _Registry(price=7.81)
+    registry.pre_close = 7.11
+    pusher = _Pusher()
+    day_one = datetime(2026, 8, 19, 13, 0, tzinfo=TZ)
+    registry.now = day_one
+    rules = (BOARD_BREAK_RULE,)
+
+    first = run_check(
+        registry,
+        rules=rules,
+        now=day_one,
+        state_path=state_path,
+        db_path=db_path,
+        pusher_factory=lambda: pusher,
+    )
+    registry.pre_close = 7.82
+    registry.price = 8.59
+    day_two = datetime(2026, 8, 20, 9, 30, tzinfo=TZ)
+    registry.now = day_two
+    second = run_check(
+        registry,
+        rules=rules,
+        now=day_two,
+        state_path=state_path,
+        db_path=db_path,
+        pusher_factory=lambda: pusher,
+    )
+
+    assert first["events"][0]["threshold"] == 7.82
+    assert second["events"][0]["threshold"] == 8.60
+    assert len(pusher.messages) == 2
+
+
+def test_board_break_missing_pre_close_fails_closed(tmp_path):
+    db_path = _calendar(tmp_path, dates=("2026-08-19",))
+    registry = _Registry(price=7.81)
+    registry.quote_overrides["600127.SH"] = {"pre_close": None}
+    pusher = _Pusher()
+    now = datetime(2026, 8, 19, 13, 0, tzinfo=TZ)
+    registry.now = now
+
+    result = run_check(
+        registry,
+        rules=(BOARD_BREAK_RULE,),
+        now=now,
+        state_path=tmp_path / "state.json",
+        db_path=db_path,
+        pusher_factory=lambda: pusher,
+    )
+
+    assert result["status"] == "source_failed"
+    assert "无法根据前收盘价计算当日涨停价" in result["errors"][0]
+    assert pusher.messages == []
+
+
+def test_default_check_ignores_cancelled_board_break_quote_overrides(tmp_path):
+    db_path = _calendar(tmp_path, dates=("2026-08-19",))
+    registry = _Registry(price=4000.0)
+    for code in ("600127.SH", "603395.SH", "000505.SZ"):
+        registry.quote_overrides[code] = {"pre_close": None}
+    pusher = _Pusher()
+    now = datetime(2026, 8, 19, 13, 0, tzinfo=TZ)
+    registry.now = now
+
+    result = run_check(
+        registry,
+        now=now,
+        state_path=tmp_path / "state.json",
+        db_path=db_path,
+        pusher_factory=lambda: pusher,
+    )
+
+    assert result["status"] == "complete"
+    assert result["quotes_checked"] == 1
+    assert result["errors"] == []
+    assert registry.requested_codes == [["000001.SH"]]
+    assert pusher.messages == []
 
 
 def test_non_finite_price_fails_closed_without_resetting_active_state(tmp_path):
@@ -739,6 +1304,31 @@ def test_e2e_test_preserves_stock_price_label_and_unit(tmp_path):
     assert "正式监控线仍为 **123.92**元" in content
 
 
+def test_e2e_test_resolves_dynamic_board_break_threshold(tmp_path):
+    db_path = _calendar(tmp_path, dates=("2026-08-19",))
+    now = datetime(2026, 8, 19, 13, 0, tzinfo=TZ)
+    registry = _Registry(price=7.81)
+    registry.pre_close = 7.11
+    registry.now = now
+    registry.quote_overrides["600127.SH"] = {"name": "测试股票"}
+    pusher = _Pusher()
+
+    result = run_e2e_test(
+        registry,
+        input_by="pytest",
+        confirm_real_push=True,
+        rule=BOARD_BREAK_RULE,
+        now=now,
+        db_path=db_path,
+        pusher_factory=lambda: pusher,
+    )
+
+    assert result["status"] == "complete"
+    assert result["production_threshold"] == 7.82
+    assert registry.requested_codes == [["600127.SH"]]
+    assert "正式监控线仍为 **7.82**元" in pusher.messages[0][1]
+
+
 def test_e2e_test_rejects_blank_input_by_before_fetch(tmp_path):
     registry = _Registry(price=1600.0)
     result = run_e2e_test(
@@ -793,6 +1383,26 @@ def test_e2e_test_rejects_stale_quote_without_push(tmp_path):
 
     assert result["status"] == "source_failed"
     assert "陈旧" in result["errors"][0]
+    assert pusher.messages == []
+
+
+def test_e2e_test_rejects_inactive_rule_before_fetch(tmp_path):
+    registry = _Registry(price=7.81)
+    pusher = _Pusher()
+
+    result = run_e2e_test(
+        registry,
+        input_by="pytest",
+        confirm_real_push=True,
+        rule=BOARD_BREAK_RULE,
+        now=datetime(2026, 8, 21, 10, 0, tzinfo=TZ),
+        db_path=tmp_path / "missing.db",
+        pusher_factory=lambda: pusher,
+    )
+
+    assert result["status"] == "inactive_rule"
+    assert result["pushed"] is False
+    assert registry.call_count == 0
     assert pusher.messages == []
 
 
