@@ -12,11 +12,13 @@ from .guards import (
     confirmed_trade_day,
     is_close_finalization_window,
     is_intraday_session,
+    previous_open_dates,
     quote_is_fresh,
     shanghai_now,
 )
 from .rules import DEFAULT_RULES, MonitorRule, should_emit
 from .state import DEFAULT_STATE_PATH, load_state, locked_state, save_state
+from utils.qfq import apply_qfq
 
 
 MIN_FETCH_INTERVAL = timedelta(seconds=3)
@@ -53,6 +55,9 @@ def _event(
     source: str,
     *,
     threshold: float,
+    threshold_source: str | None = None,
+    threshold_basis_dates: list[str] | None = None,
+    threshold_anchor_pre_close: float | None = None,
     observation_phase: str = "intraday",
 ) -> dict:
     price = float(quote["price"])
@@ -63,6 +68,9 @@ def _event(
         "instrument_name": rule.instrument_name,
         "code": rule.code,
         "threshold": threshold,
+        "threshold_source": threshold_source,
+        "threshold_basis_dates": list(threshold_basis_dates or []),
+        "threshold_anchor_pre_close": threshold_anchor_pre_close,
         "threshold_label": rule.threshold_label,
         "threshold_mode": rule.threshold_mode,
         "direction": rule.direction,
@@ -74,6 +82,176 @@ def _event(
         "source": source,
         "observation_phase": observation_phase,
     }
+
+
+def _normalize_trade_date(raw: object) -> str | None:
+    text = str(raw or "").strip().replace("-", "")[:8]
+    if len(text) != 8 or not text.isdigit():
+        return None
+    return f"{text[:4]}-{text[4:6]}-{text[6:]}"
+
+
+def _exact_history_rows(
+    rows: object,
+    expected_dates: list[str],
+    *,
+    value_key: str,
+    label: str,
+) -> list[dict]:
+    if not isinstance(rows, list):
+        raise ValueError(f"{label}返回格式非法")
+    expected = set(expected_dates)
+    by_date: dict[str, dict] = {}
+    for raw in rows:
+        if not isinstance(raw, dict):
+            raise ValueError(f"{label}包含非对象行")
+        trade_date = _normalize_trade_date(raw.get("trade_date"))
+        if trade_date is None:
+            raise ValueError(f"{label}包含非法交易日")
+        if trade_date not in expected:
+            raise ValueError(f"{label}返回非预期交易日 {trade_date}")
+        if trade_date in by_date:
+            raise ValueError(f"{label}存在重复交易日 {trade_date}")
+        if raw.get(value_key) is None:
+            raise ValueError(f"{label}在 {trade_date} 缺少 {value_key}")
+        row = dict(raw)
+        row["trade_date"] = trade_date
+        by_date[trade_date] = row
+    missing = [trade_date for trade_date in expected_dates if trade_date not in by_date]
+    if missing:
+        raise ValueError(f"{label}缺少开放日: {','.join(missing)}")
+    return [by_date[trade_date] for trade_date in expected_dates]
+
+
+def _initialized_provider(registry, provider_name: str):
+    provider = registry.get_provider(provider_name)
+    if provider is None:
+        raise ValueError(f"{provider_name}: 动态阈值 provider 未注册")
+    if not provider.supports("get_stock_daily_range"):
+        raise ValueError(f"{provider_name}: 不支持个股区间日线")
+    if not provider.supports("get_stock_adj_factor_range"):
+        raise ValueError(f"{provider_name}: 不支持个股复权因子")
+    if not bool(getattr(provider, "_initialized", False)):
+        try:
+            initialized = bool(provider.initialize())
+        except Exception as exc:
+            raise ValueError(
+                f"{provider_name}: 动态阈值 provider 初始化异常 {type(exc).__name__}: {exc}"
+            ) from exc
+        if not initialized:
+            raise ValueError(f"{provider_name}: 动态阈值 provider 初始化失败")
+    return provider
+
+
+def _resolve_rule_threshold(
+    registry,
+    rule: MonitorRule,
+    quote: dict,
+    *,
+    now: datetime,
+    db_path,
+    previous_state: dict | None = None,
+) -> tuple[float, str | None, list[str], float | None]:
+    if rule.threshold_mode != "previous_close_ma":
+        return rule.resolve_threshold(quote), None, [], None
+
+    window = int(rule.threshold_window or 0)
+    basis_dates = previous_open_dates(now.date().isoformat(), window, db_path=db_path)
+    if basis_dates is None:
+        raise ValueError(f"前 {window} 个开放日历缺失或不可读")
+
+    try:
+        quote_pre_close = float(quote.get("pre_close"))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("实时前收盘价无法用于均线坐标锚定") from exc
+    if not math.isfinite(quote_pre_close) or quote_pre_close <= 0:
+        raise ValueError("实时前收盘价非法")
+
+    previous = previous_state or {}
+    cached_dates = previous.get("threshold_basis_dates")
+    cached_threshold = previous.get("last_threshold")
+    cached_anchor = previous.get("threshold_anchor_pre_close")
+    try:
+        cached_anchor_value = float(cached_anchor)
+    except (TypeError, ValueError):
+        cached_anchor_value = float("nan")
+    if cached_dates == basis_dates and math.isclose(
+        cached_anchor_value,
+        quote_pre_close,
+        rel_tol=0.0,
+        abs_tol=1e-6,
+    ):
+        try:
+            cached_value = float(cached_threshold)
+        except (TypeError, ValueError):
+            cached_value = float("nan")
+        if math.isfinite(cached_value) and cached_value > 0:
+            return (
+                cached_value,
+                str(previous.get("threshold_source") or "cached_previous_close_ma"),
+                basis_dates,
+                quote_pre_close,
+            )
+
+    provider_name = str(rule.threshold_provider or "").strip()
+    _initialized_provider(registry, provider_name)
+    start_date, end_date = basis_dates[0], basis_dates[-1]
+    daily_result = registry.call_specific(
+        provider_name,
+        "get_stock_daily_range",
+        rule.code,
+        start_date,
+        end_date,
+    )
+    if not daily_result.success:
+        raise ValueError(f"历史日线失败: {daily_result.error or '未知错误'}")
+    factor_result = registry.call_specific(
+        provider_name,
+        "get_stock_adj_factor_range",
+        rule.code,
+        start_date,
+        end_date,
+    )
+    if not factor_result.success:
+        raise ValueError(f"复权因子失败: {factor_result.error or '未知错误'}")
+    bars = _exact_history_rows(
+        daily_result.data,
+        basis_dates,
+        value_key="close",
+        label="历史日线",
+    )
+    factors = _exact_history_rows(
+        factor_result.data,
+        basis_dates,
+        value_key="adj_factor",
+        label="复权因子",
+    )
+    adjusted = apply_qfq(bars, factors, keys=("close",))
+    if adjusted is None:
+        raise ValueError("历史日线与复权因子无法按开放日对齐")
+    try:
+        adjusted_last_close = float(adjusted[-1]["close"])
+    except (TypeError, ValueError, IndexError, KeyError) as exc:
+        raise ValueError("实时前收盘价无法用于均线坐标锚定") from exc
+    if (
+        not math.isfinite(adjusted_last_close)
+        or adjusted_last_close <= 0
+    ):
+        raise ValueError("实时前收盘价或历史末日收盘价非法")
+    # 以前一开放日为 T 的前复权序列仍可能漏掉“今天恰为除权日”的坐标变化。
+    # 新浪实时 pre_close 是今天盘口采用的官方前收盘参考价，用它把整段历史再锚到
+    # 当前实时价格坐标，避免除权日把正常价格跳空误报成跌破 MA5。
+    coordinate_scale = quote_pre_close / adjusted_last_close
+    historical_closes = [float(row["close"]) * coordinate_scale for row in adjusted]
+    threshold = rule.resolve_threshold(
+        quote,
+        historical_closes=historical_closes,
+    )
+    source = (
+        f"{daily_result.source}+{factor_result.source}+"
+        f"{rule.provider}:pre_close_anchor"
+    )
+    return threshold, source, basis_dates, quote_pre_close
 
 
 def _fetch_quotes(registry, rules: Iterable[MonitorRule]) -> tuple[dict[str, dict], list[str]]:
@@ -154,6 +332,7 @@ def _run_locked(
     now: datetime,
     state: dict,
     state_path: Path,
+    db_path,
     dry_run: bool,
     pusher_factory: Callable[[], object],
 ) -> dict:
@@ -204,16 +383,28 @@ def _run_locked(
         if not math.isfinite(price) or price <= 0:
             errors.append(f"{rule.rule_id}: 最新价非有限或非正数")
             continue
+        previous = rule_states.get(rule.rule_id) or {}
+        same_trade_date = previous.get("trade_date") == now.date().isoformat()
         try:
-            threshold = rule.resolve_threshold(quote)
+            (
+                threshold,
+                threshold_source,
+                threshold_basis_dates,
+                threshold_anchor_pre_close,
+            ) = _resolve_rule_threshold(
+                registry,
+                rule,
+                quote,
+                now=now,
+                db_path=db_path,
+                previous_state=previous if same_trade_date else None,
+            )
         except (TypeError, ValueError) as exc:
             errors.append(f"{rule.rule_id}: {exc}")
             continue
         if not math.isfinite(threshold) or threshold <= 0:
             errors.append(f"{rule.rule_id}: 比较阈值非有限或非正数")
             continue
-        previous = rule_states.get(rule.rule_id) or {}
-        same_trade_date = previous.get("trade_date") == now.date().isoformat()
         previous_active = (
             bool(previous.get("active"))
             if same_trade_date
@@ -247,6 +438,9 @@ def _run_locked(
                 quoted_at,
                 str(quote.get("_source") or rule.provider),
                 threshold=threshold,
+                threshold_source=threshold_source,
+                threshold_basis_dates=threshold_basis_dates,
+                threshold_anchor_pre_close=threshold_anchor_pre_close,
                 observation_phase="close" if closing_snapshot else "intraday",
             )
             if event["event_id"] not in sent_ids and event["event_id"] not in pending_ids:
@@ -260,13 +454,35 @@ def _run_locked(
             "active": active,
             "last_price": price,
             "last_threshold": threshold,
+            "threshold_source": threshold_source,
+            "threshold_basis_dates": threshold_basis_dates,
+            "threshold_anchor_pre_close": threshold_anchor_pre_close,
             "last_quote_at": quoted_at.isoformat(),
             "updated_at": now.isoformat(),
             "close_confirmed": close_confirmed_before or close_event_recorded,
         }
 
     if not valid_quote_codes:
-        return {"status": "source_failed", "events": [], "errors": errors}
+        if dry_run:
+            return {"status": "source_failed", "events": [], "errors": errors}
+        # 已确认并落盘的 pending 不依赖本轮行情继续成立；数据源故障时仍应重试
+        # 钉钉，否则“首轮推送失败 + 后续行情源失败”会让事件跨日静默过期。
+        save_state(state_path, state)
+        pending_before_send = len(state.get("pending_events") or [])
+        push_ok, push_error = _send_pending(state, pusher_factory)
+        save_state(state_path, state)
+        status = "source_failed"
+        if not push_ok:
+            status = "push_failed"
+            errors.append(push_error or "钉钉发送失败")
+        return {
+            "status": status,
+            "events": [],
+            "errors": errors,
+            "quotes_checked": 0,
+            "pending_count": len(state.get("pending_events") or []),
+            "pushed": push_ok and pending_before_send > 0,
+        }
 
     if dry_run:
         return {
@@ -388,6 +604,7 @@ def run_check(
             now=local_now,
             state=state,
             state_path=path,
+            db_path=db_path,
             dry_run=True,
             pusher_factory=pusher_factory,
         )
@@ -400,6 +617,7 @@ def run_check(
                 now=local_now,
                 state=state,
                 state_path=path,
+                db_path=db_path,
                 dry_run=False,
                 pusher_factory=pusher_factory,
             )
@@ -512,7 +730,18 @@ def run_e2e_test(
 
     margin = max(E2E_TEST_MARGIN_MIN, abs(price) * E2E_TEST_MARGIN_RATIO)
     try:
-        production_threshold = rule.resolve_threshold(quote)
+        (
+            production_threshold,
+            production_threshold_source,
+            production_basis_dates,
+            production_anchor_pre_close,
+        ) = _resolve_rule_threshold(
+            registry,
+            rule,
+            quote,
+            now=local_now,
+            db_path=db_path,
+        )
     except (TypeError, ValueError) as exc:
         errors.append(f"{rule.rule_id}: {exc}")
         return {"status": "source_failed", "events": [], "errors": errors}
@@ -548,6 +777,7 @@ def run_e2e_test(
         content = render_e2e_test_alert(
             event,
             production_threshold=production_threshold,
+            production_threshold_mode=rule.threshold_mode,
             input_by=normalized_input_by,
         )
         pushed = bool(
@@ -572,5 +802,8 @@ def run_e2e_test(
         "quotes_checked": 1,
         "pushed": True,
         "production_threshold": production_threshold,
+        "production_threshold_source": production_threshold_source,
+        "production_threshold_basis_dates": production_basis_dates,
+        "production_threshold_anchor_pre_close": production_anchor_pre_close,
         "input_by": normalized_input_by,
     }

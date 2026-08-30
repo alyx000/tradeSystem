@@ -5,14 +5,18 @@ import sqlite3
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
+import pytest
+
 import services.intraday_monitor.service as intraday_service
 from services.intraday_monitor.service import run_all_checks, run_check, run_e2e_test
 from services.intraday_monitor.rules import (
     DEFAULT_RULES,
+    GUOCI_MATERIALS_BELOW_67_22_20260831,
     KAILAIYING_BREAKOUT_172_26_20260821_24,
     LITONG_ELECTRONICS_BELOW_123_92_20260811,
     SSE_COMPOSITE_RECLAIM_3955,
     STAR50_BREAKOUT_1700_20260821_24,
+    ZHONGKE_FEICE_BELOW_PREVIOUS_MA5_20260831_0902,
     MonitorRule,
 )
 
@@ -67,6 +71,23 @@ class _Provider:
         return True
 
 
+class _HistoryProvider:
+    def __init__(self):
+        self._initialized = False
+        self.initialize_count = 0
+
+    def initialize(self):
+        self.initialize_count += 1
+        self._initialized = True
+        return True
+
+    def supports(self, capability):
+        return capability in {
+            "get_stock_daily_range",
+            "get_stock_adj_factor_range",
+        }
+
+
 class _Registry:
     def __init__(self, price=1571.0):
         self.price = price
@@ -100,6 +121,56 @@ class _Registry:
         return _Result(rows)
 
 
+class _DynamicRegistry(_Registry):
+    def __init__(self, price=102.0):
+        super().__init__(price=price)
+        self.pre_close = 104.0
+        self.history_provider = _HistoryProvider()
+        self.history_calls = []
+        self.history_dates = [
+            "2026-08-24",
+            "2026-08-25",
+            "2026-08-26",
+            "2026-08-27",
+            "2026-08-28",
+        ]
+        self.history_closes = [100.0, 101.0, 102.0, 103.0, 104.0]
+        self.history_factors = [1.0] * 5
+
+    def get_provider(self, name):
+        if name == "tushare":
+            return self.history_provider
+        return super().get_provider(name)
+
+    def call_specific(self, provider, capability, *args):
+        if provider == "sina":
+            return super().call_specific(provider, capability, *args)
+        assert provider == "tushare"
+        self.history_calls.append((capability, args))
+        if capability == "get_stock_daily_range":
+            rows = [
+                {"trade_date": day, "close": close}
+                for day, close in zip(self.history_dates, self.history_closes)
+            ]
+            return _Result(rows, source="tushare:daily")
+        if capability == "get_stock_adj_factor_range":
+            rows = [
+                {"trade_date": day, "adj_factor": factor}
+                for day, factor in zip(self.history_dates, self.history_factors)
+            ]
+            return _Result(rows, source="tushare:adj_factor")
+        raise AssertionError(capability)
+
+
+class _FailingQuoteRegistry(_Registry):
+    def call_specific(self, provider, capability, codes):
+        assert provider == "sina"
+        assert capability == "get_realtime_quotes"
+        self.call_count += 1
+        self.requested_codes.append(list(codes))
+        return _Result(data=None, error="quote source unavailable")
+
+
 class _Pusher:
     def __init__(self, succeed=True):
         self.succeed = succeed
@@ -113,13 +184,23 @@ class _Pusher:
         return self.succeed
 
 
-def _calendar(tmp_path, *, is_open=1, dates=("2026-08-03",)):
+def _calendar(
+    tmp_path,
+    *,
+    is_open=1,
+    dates=("2026-08-03",),
+    closed_dates=(),
+):
     path = tmp_path / "trade.db"
     conn = sqlite3.connect(path)
     conn.execute("CREATE TABLE trade_calendar (date TEXT PRIMARY KEY, is_open INTEGER NOT NULL)")
     conn.executemany(
         "INSERT INTO trade_calendar VALUES (?, ?)",
         [(day, is_open) for day in dates],
+    )
+    conn.executemany(
+        "INSERT INTO trade_calendar VALUES (?, 0)",
+        [(day,) for day in closed_dates],
     )
     conn.commit()
     conn.close()
@@ -255,6 +336,42 @@ def test_failed_push_stays_pending_and_retries(tmp_path):
     assert len(pusher.messages) == 2
 
 
+def test_pending_delivery_retries_even_when_next_quote_fetch_fails(tmp_path):
+    db_path = _calendar(tmp_path)
+    state_path = tmp_path / "state.json"
+    first_registry = _Registry(price=1571.0)
+    pusher = _Pusher(succeed=False)
+    now = datetime(2026, 8, 3, 10, 0, tzinfo=TZ)
+
+    failed_push = run_check(
+        first_registry,
+        rules=(BREACH_RULE,),
+        now=now,
+        state_path=state_path,
+        db_path=db_path,
+        pusher_factory=lambda: pusher,
+    )
+    pusher.succeed = True
+    failed_registry = _FailingQuoteRegistry(price=1571.0)
+    failed_registry.now = now + timedelta(minutes=5)
+    recovered_delivery = run_check(
+        failed_registry,
+        rules=(BREACH_RULE,),
+        now=failed_registry.now,
+        state_path=state_path,
+        db_path=db_path,
+        pusher_factory=lambda: pusher,
+    )
+
+    assert failed_push["status"] == "push_failed"
+    assert failed_push["pending_count"] == 1
+    assert recovered_delivery["status"] == "source_failed"
+    assert recovered_delivery["events"] == []
+    assert recovered_delivery["pushed"] is True
+    assert recovered_delivery["pending_count"] == 0
+    assert len(pusher.messages) == 2
+
+
 def test_stale_quote_fails_closed(tmp_path):
     db_path = _calendar(tmp_path)
     registry = _Registry(price=1571.0)
@@ -380,6 +497,8 @@ def test_default_sse_rule_pushes_only_after_observed_below_to_3955(tmp_path):
         LITONG_ELECTRONICS_BELOW_123_92_20260811,
         STAR50_BREAKOUT_1700_20260821_24,
         KAILAIYING_BREAKOUT_172_26_20260821_24,
+        GUOCI_MATERIALS_BELOW_67_22_20260831,
+        ZHONGKE_FEICE_BELOW_PREVIOUS_MA5_20260831_0902,
     )
     assert initial_above["events"] == []
     assert below["events"] == []
@@ -550,6 +669,304 @@ def test_default_rules_fetch_temporary_breakouts_only_during_two_trade_day_windo
             else ["000001.SH"]
         )
         assert registry.requested_codes == [expected]
+
+
+def test_guoci_rule_is_strict_and_only_active_on_20260831(tmp_path):
+    db_path = _calendar(tmp_path, dates=("2026-08-31", "2026-09-01"))
+    pusher = _Pusher()
+    now = datetime(2026, 8, 31, 10, 0, tzinfo=TZ)
+    registry = _Registry(price=67.22)
+    registry.now = now
+
+    equal = run_check(
+        registry,
+        rules=(GUOCI_MATERIALS_BELOW_67_22_20260831,),
+        now=now,
+        state_path=tmp_path / "guoci.json",
+        db_path=db_path,
+        pusher_factory=lambda: pusher,
+    )
+    registry.price = 67.21
+    registry.now = now + timedelta(minutes=5)
+    below = run_check(
+        registry,
+        rules=(GUOCI_MATERIALS_BELOW_67_22_20260831,),
+        now=registry.now,
+        state_path=tmp_path / "guoci.json",
+        db_path=db_path,
+        pusher_factory=lambda: pusher,
+    )
+    expired = run_check(
+        _Registry(price=60.0),
+        rules=(GUOCI_MATERIALS_BELOW_67_22_20260831,),
+        now=datetime(2026, 9, 1, 10, 0, tzinfo=TZ),
+        state_path=tmp_path / "expired.json",
+        db_path=db_path,
+        pusher_factory=lambda: pusher,
+    )
+
+    assert equal["events"] == []
+    assert below["events"][0]["threshold"] == 67.22
+    assert "国瓷材料" in pusher.messages[0][1]
+    assert expired["status"] == "no_active_rules"
+
+
+def test_previous_close_ma5_is_qfq_strict_cached_and_fail_closed(tmp_path):
+    dates = (
+        "2026-08-24",
+        "2026-08-25",
+        "2026-08-26",
+        "2026-08-27",
+        "2026-08-28",
+        "2026-08-31",
+    )
+    db_path = _calendar(
+        tmp_path,
+        dates=dates,
+        closed_dates=("2026-08-29", "2026-08-30"),
+    )
+    state_path = tmp_path / "zhongke.json"
+    registry = _DynamicRegistry(price=102.0)
+    pusher = _Pusher()
+    now = datetime(2026, 8, 31, 10, 0, tzinfo=TZ)
+    registry.now = now
+
+    equal = run_check(
+        registry,
+        rules=(ZHONGKE_FEICE_BELOW_PREVIOUS_MA5_20260831_0902,),
+        now=now,
+        state_path=state_path,
+        db_path=db_path,
+        pusher_factory=lambda: pusher,
+    )
+    registry.price = 101.99
+    registry.now = now + timedelta(minutes=5)
+    below = run_check(
+        registry,
+        rules=(ZHONGKE_FEICE_BELOW_PREVIOUS_MA5_20260831_0902,),
+        now=registry.now,
+        state_path=state_path,
+        db_path=db_path,
+        pusher_factory=lambda: pusher,
+    )
+
+    assert equal["status"] == "complete"
+    assert equal["events"] == []
+    assert len(below["events"]) == 1
+    event = below["events"][0]
+    assert event["threshold"] == 102.0
+    assert event["threshold_mode"] == "previous_close_ma"
+    assert event["threshold_basis_dates"] == list(dates[:-1])
+    assert event["threshold_source"] == (
+        "tushare:daily+tushare:adj_factor+sina:pre_close_anchor"
+    )
+    assert len(registry.history_calls) == 2
+    assert registry.history_provider.initialize_count == 1
+    assert "中科飞测" in pusher.messages[0][1]
+    assert "前5个已收盘交易日" in pusher.messages[0][1]
+    assert "前复权" in pusher.messages[0][1]
+
+    registry.pre_close = None
+    registry.now = now + timedelta(minutes=10)
+    warm_cache_missing_anchor = run_check(
+        registry,
+        rules=(ZHONGKE_FEICE_BELOW_PREVIOUS_MA5_20260831_0902,),
+        now=registry.now,
+        state_path=state_path,
+        db_path=db_path,
+        pusher_factory=lambda: pusher,
+    )
+    assert warm_cache_missing_anchor["status"] == "source_failed"
+    assert "坐标锚定" in warm_cache_missing_anchor["errors"][0]
+    assert len(registry.history_calls) == 2
+
+    registry.pre_close = 52.0
+    registry.price = 51.0
+    registry.now = now + timedelta(minutes=15)
+    changed_anchor = run_check(
+        registry,
+        rules=(ZHONGKE_FEICE_BELOW_PREVIOUS_MA5_20260831_0902,),
+        now=registry.now,
+        state_path=state_path,
+        db_path=db_path,
+        pusher_factory=lambda: pusher,
+    )
+    assert changed_anchor["status"] == "complete"
+    assert changed_anchor["events"] == []
+    assert len(registry.history_calls) == 4
+    changed_state = json.loads(state_path.read_text(encoding="utf-8"))
+    changed_rule_state = changed_state["rules"][
+        ZHONGKE_FEICE_BELOW_PREVIOUS_MA5_20260831_0902.rule_id
+    ]
+    assert changed_rule_state["last_threshold"] == 51.0
+    assert changed_rule_state["threshold_anchor_pre_close"] == 52.0
+
+    broken_registry = _DynamicRegistry(price=90.0)
+    broken_registry.now = now
+    broken_registry.history_dates.pop(2)
+    failed = run_check(
+        broken_registry,
+        rules=(ZHONGKE_FEICE_BELOW_PREVIOUS_MA5_20260831_0902,),
+        now=now,
+        state_path=tmp_path / "broken.json",
+        db_path=db_path,
+        pusher_factory=lambda: _Pusher(),
+    )
+    assert failed["status"] == "source_failed"
+    assert "缺少开放日" in failed["errors"][0]
+
+    missing_anchor_registry = _DynamicRegistry(price=90.0)
+    missing_anchor_registry.pre_close = None
+    missing_anchor_registry.now = now
+    missing_anchor = run_check(
+        missing_anchor_registry,
+        rules=(ZHONGKE_FEICE_BELOW_PREVIOUS_MA5_20260831_0902,),
+        now=now,
+        state_path=tmp_path / "missing-anchor.json",
+        db_path=db_path,
+        pusher_factory=lambda: _Pusher(),
+    )
+    assert missing_anchor["status"] == "source_failed"
+    assert "坐标锚定" in missing_anchor["errors"][0]
+
+    ex_date_registry = _DynamicRegistry(price=51.0)
+    ex_date_registry.pre_close = 52.0
+    ex_date_registry.now = now
+    ex_date_state = tmp_path / "ex-date.json"
+    ex_date = run_check(
+        ex_date_registry,
+        rules=(ZHONGKE_FEICE_BELOW_PREVIOUS_MA5_20260831_0902,),
+        now=now,
+        state_path=ex_date_state,
+        db_path=db_path,
+        pusher_factory=lambda: _Pusher(),
+    )
+    assert ex_date["status"] == "complete"
+    assert ex_date["events"] == []
+    ex_state = json.loads(ex_date_state.read_text(encoding="utf-8"))
+    assert ex_state["rules"][ZHONGKE_FEICE_BELOW_PREVIOUS_MA5_20260831_0902.rule_id][
+        "last_threshold"
+    ] == 51.0
+
+    extra_bar_registry = _DynamicRegistry(price=90.0)
+    extra_bar_registry.now = now
+    extra_bar_registry.history_dates.append("2026-08-29")
+    extra_bar_registry.history_closes.append(105.0)
+    extra_bar_registry.history_factors.append(1.0)
+    extra_bar = run_check(
+        extra_bar_registry,
+        rules=(ZHONGKE_FEICE_BELOW_PREVIOUS_MA5_20260831_0902,),
+        now=now,
+        state_path=tmp_path / "extra-bar.json",
+        db_path=db_path,
+        pusher_factory=lambda: _Pusher(),
+    )
+    assert extra_bar["status"] == "source_failed"
+    assert "非预期交易日 2026-08-29" in extra_bar["errors"][0]
+
+
+def test_previous_close_ma5_rejects_incomplete_natural_day_calendar(tmp_path):
+    db_path = _calendar(
+        tmp_path,
+        dates=(
+            "2026-08-21",
+            "2026-08-24",
+            "2026-08-25",
+            "2026-08-27",
+            "2026-08-28",
+            "2026-08-31",
+        ),
+        closed_dates=(
+            "2026-08-22",
+            "2026-08-23",
+            "2026-08-29",
+            "2026-08-30",
+        ),
+    )
+    registry = _DynamicRegistry(price=90.0)
+    now = datetime(2026, 8, 31, 10, 0, tzinfo=TZ)
+    registry.now = now
+
+    result = run_check(
+        registry,
+        rules=(ZHONGKE_FEICE_BELOW_PREVIOUS_MA5_20260831_0902,),
+        now=now,
+        state_path=tmp_path / "missing-calendar-day.json",
+        db_path=db_path,
+        pusher_factory=lambda: _Pusher(),
+    )
+
+    assert result["status"] == "source_failed"
+    assert "开放日历缺失或不可读" in result["errors"][0]
+    assert registry.history_calls == []
+
+
+def test_default_rules_batch_new_codes_and_resolve_ma_on_20260831(tmp_path):
+    dates = (
+        "2026-08-24",
+        "2026-08-25",
+        "2026-08-26",
+        "2026-08-27",
+        "2026-08-28",
+        "2026-08-31",
+    )
+    db_path = _calendar(
+        tmp_path,
+        dates=dates,
+        closed_dates=("2026-08-29", "2026-08-30"),
+    )
+    registry = _DynamicRegistry(price=4000.0)
+    pusher = _Pusher()
+    now = datetime(2026, 8, 31, 10, 0, tzinfo=TZ)
+    registry.now = now
+
+    result = run_check(
+        registry,
+        now=now,
+        state_path=tmp_path / "state.json",
+        db_path=db_path,
+        pusher_factory=lambda: pusher,
+    )
+
+    assert result["status"] == "complete"
+    assert registry.requested_codes == [["000001.SH", "300285.SZ", "688361.SH"]]
+    assert len(registry.history_calls) == 2
+
+
+def test_previous_close_ma_alert_displays_mill_precision(tmp_path):
+    dates = (
+        "2026-08-24",
+        "2026-08-25",
+        "2026-08-26",
+        "2026-08-27",
+        "2026-08-28",
+        "2026-08-31",
+    )
+    db_path = _calendar(
+        tmp_path,
+        dates=dates,
+        closed_dates=("2026-08-29", "2026-08-30"),
+    )
+    registry = _DynamicRegistry(price=67.22)
+    registry.pre_close = 67.23
+    registry.history_closes = [67.21, 67.22, 67.22, 67.23, 67.23]
+    pusher = _Pusher()
+    now = datetime(2026, 8, 31, 10, 0, tzinfo=TZ)
+    registry.now = now
+
+    result = run_check(
+        registry,
+        rules=(ZHONGKE_FEICE_BELOW_PREVIOUS_MA5_20260831_0902,),
+        now=now,
+        state_path=tmp_path / "mill-precision.json",
+        db_path=db_path,
+        pusher_factory=lambda: pusher,
+    )
+
+    assert result["status"] == "complete"
+    assert result["events"][0]["threshold"] == pytest.approx(67.222)
+    assert "最新价格 **67.22**元" in pusher.messages[0][1]
+    assert "**67.222**元" in pusher.messages[0][1]
 
 
 def test_star50_breakout_is_strict_initially_emits_and_rearms(tmp_path):
@@ -1327,6 +1744,53 @@ def test_e2e_test_resolves_dynamic_board_break_threshold(tmp_path):
     assert result["production_threshold"] == 7.82
     assert registry.requested_codes == [["600127.SH"]]
     assert "正式监控线仍为 **7.82**元" in pusher.messages[0][1]
+
+
+def test_e2e_test_resolves_previous_close_ma_without_state_access(tmp_path, monkeypatch):
+    dates = (
+        "2026-08-24",
+        "2026-08-25",
+        "2026-08-26",
+        "2026-08-27",
+        "2026-08-28",
+        "2026-08-31",
+    )
+    db_path = _calendar(
+        tmp_path,
+        dates=dates,
+        closed_dates=("2026-08-29", "2026-08-30"),
+    )
+    now = datetime(2026, 8, 31, 10, 0, tzinfo=TZ)
+    registry = _DynamicRegistry(price=120.0)
+    registry.now = now
+    pusher = _Pusher()
+
+    def fail_state_access(*args, **kwargs):
+        raise AssertionError("e2e-test 不得访问正式状态层")
+
+    monkeypatch.setattr(intraday_service, "load_state", fail_state_access)
+    monkeypatch.setattr(intraday_service, "save_state", fail_state_access)
+    monkeypatch.setattr(intraday_service, "locked_state", fail_state_access)
+
+    result = run_e2e_test(
+        registry,
+        input_by="pytest",
+        confirm_real_push=True,
+        rule=ZHONGKE_FEICE_BELOW_PREVIOUS_MA5_20260831_0902,
+        now=now,
+        db_path=db_path,
+        pusher_factory=lambda: pusher,
+    )
+
+    assert result["status"] == "complete"
+    assert result["production_threshold"] == 102.0
+    assert result["production_threshold_basis_dates"] == list(dates[:-1])
+    assert result["production_threshold_anchor_pre_close"] == 104.0
+    assert result["production_threshold_source"] == (
+        "tushare:daily+tushare:adj_factor+sina:pre_close_anchor"
+    )
+    assert len(registry.history_calls) == 2
+    assert "正式监控线仍为 **102.000**元" in pusher.messages[0][1]
 
 
 def test_e2e_test_rejects_blank_input_by_before_fetch(tmp_path):

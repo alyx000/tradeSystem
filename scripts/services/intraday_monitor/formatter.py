@@ -8,12 +8,13 @@ def render_alert(events: list[dict]) -> str:
         value_label = str(event.get("value_label") or "点位")
         value_unit = str(event.get("value_unit") or "")
         threshold_label = str(event.get("threshold_label") or "监控线")
+        threshold_digits = 3 if event.get("threshold_mode") == "previous_close_ma" else 2
         lines.extend(
             [
                 f"- [事实] **{event['instrument_name']}**（{event['code']}）"
                 f"最新{value_label} **{event['price']:.2f}**{value_unit}，"
                 f"已{event['action_text']}{threshold_label} "
-                f"**{event['threshold']:.2f}**{value_unit}",
+                f"**{event['threshold']:.{threshold_digits}f}**{value_unit}",
                 f"  - 行情时间：{event['quote_at']}",
                 f"  - 数据来源：{event['source']}",
             ]
@@ -25,14 +26,30 @@ def render_alert(events: list[dict]) -> str:
                 lines.append(
                     "  - [判断·盘中] 当前未封涨停；盘中仍可能回封，最终是否断板以收盘为准"
                 )
+        elif event.get("threshold_mode") == "previous_close_ma":
+            basis_dates = list(event.get("threshold_basis_dates") or [])
+            if basis_dates:
+                lines.append(
+                    f"  - 均线样本：{basis_dates[0]} 至 {basis_dates[-1]}，"
+                    f"共 {len(basis_dates)} 个已收盘交易日（前复权）"
+                )
+            if event.get("threshold_source"):
+                lines.append(f"  - 均线数据来源：{event['threshold_source']}")
     lines.extend(["", "> 仅为条件触发提醒，不构成买卖建议。"])
     return "\n".join(lines)
 
 
-def render_e2e_test_alert(event: dict, *, production_threshold: float, input_by: str) -> str:
+def render_e2e_test_alert(
+    event: dict,
+    *,
+    production_threshold: float,
+    production_threshold_mode: str = "fixed",
+    input_by: str,
+) -> str:
     """渲染真实行情端到端测试消息；明确区分临时测试线与正式监控线。"""
     value_label = str(event.get("value_label") or "点位")
     value_unit = str(event.get("value_unit") or "")
+    production_digits = 3 if production_threshold_mode == "previous_close_ma" else 2
     return "\n".join(
         [
             "### ✅ 【测试】盘中监控端到端验证",
@@ -41,7 +58,8 @@ def render_e2e_test_alert(event: dict, *, production_threshold: float, input_by:
             f"实时{value_label} **{event['price']:.2f}**{value_unit}",
             f"- [测试] 本次临时测试线 **{event['threshold']:.2f}**{value_unit}，"
             "仅用于验证真实行情 → 阈值判断 → 钉钉送达链路",
-            f"- [事实] 正式监控线仍为 **{production_threshold:.2f}**{value_unit}，"
+            f"- [事实] 正式监控线仍为 "
+            f"**{production_threshold:.{production_digits}f}**{value_unit}，"
             "未修改正式规则或去重状态",
             f"- 行情时间：{event['quote_at']}",
             f"- 数据来源：{event['source']}",

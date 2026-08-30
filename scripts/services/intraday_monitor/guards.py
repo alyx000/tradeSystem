@@ -53,6 +53,55 @@ def confirmed_trade_day(day: str, db_path=None) -> bool | None:
         conn.close()
 
 
+def previous_open_dates(day: str, limit: int, db_path=None) -> list[str] | None:
+    """读取 day 之前最近的开放日；日历不足或不可读时 fail-closed。"""
+    if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
+        return None
+    try:
+        conn = get_readonly_connection(db_path)
+    except Exception:
+        return None
+    try:
+        rows = conn.execute(
+            "SELECT date FROM trade_calendar "
+            "WHERE date < ? AND is_open = 1 ORDER BY date DESC LIMIT ?",
+            (day, limit),
+        ).fetchall()
+        if len(rows) != limit:
+            return None
+        descending_dates = [
+            str(row["date"] if hasattr(row, "keys") else row[0]) for row in rows
+        ]
+        try:
+            start_day = date.fromisoformat(descending_dates[-1])
+            end_day = date.fromisoformat(day)
+        except ValueError:
+            return None
+        if start_day >= end_day:
+            return None
+        coverage_rows = conn.execute(
+            "SELECT date FROM trade_calendar WHERE date >= ? AND date < ? ORDER BY date",
+            (start_day.isoformat(), end_day.isoformat()),
+        ).fetchall()
+    except Exception:
+        return None
+    finally:
+        conn.close()
+    expected_natural_dates: list[str] = []
+    cursor = start_day
+    while cursor < end_day:
+        expected_natural_dates.append(cursor.isoformat())
+        cursor += timedelta(days=1)
+    actual_natural_dates = [
+        str(row["date"] if hasattr(row, "keys") else row[0]) for row in coverage_rows
+    ]
+    if actual_natural_dates != expected_natural_dates:
+        return None
+    dates = descending_dates
+    dates.reverse()
+    return dates
+
+
 def _parse_quote_date(raw: object) -> date | None:
     text = str(raw or "").strip()
     if len(text) == 8 and text.isdigit():

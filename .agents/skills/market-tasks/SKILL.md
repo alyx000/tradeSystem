@@ -465,7 +465,7 @@ python3 main.py emotion-leader daily --date 2026-08-11 --full-refresh --no-push
 
 ## 盘中实时阈值监控（intraday-monitor）
 
-独立 launchd `com.alyx.tradesystem.intraday-monitor` 每 5 分钟做一次无时区 tick，并额外固定在本机 09:59 补扫一次（runner 仍以 Asia/Shanghai 二次门禁），runner 在上海交易时段 `09:30-11:30 / 13:00-15:00` 做常规检查；Python 对 11:30/15:00 结束分钟保留不足 1 分钟的进程启动宽限，另允许 `15:01-15:05` 补取不早于 15:00 的终态行情。长期规则监控新浪实时 `000001.SH` 上证指数从 3955 点下方站上 3955 点（`>=3955`）；横截面规则在 `09:30 <= quote_time < 10:00` 批量扫描最新价达到交易所正式涨停价且当日累计成交额 `>=100亿元` 的 A 股，同股当日只推一次。临时规则在 2026-08-21～24 自然日期窗口内监控 `000688.SH` 科创50严格突破 1700 点与 `002821.SZ` 凯莱英严格突破 172.26 元。金健米业、红四方、京粮控股三条断板规则保持下线。
+独立 launchd `com.alyx.tradesystem.intraday-monitor` 每 5 分钟做一次无时区 tick，并额外固定在本机 09:59 补扫一次（runner 仍以 Asia/Shanghai 二次门禁），runner 在上海交易时段 `09:30-11:30 / 13:00-15:00` 做常规检查；Python 对 11:30/15:00 结束分钟保留不足 1 分钟的进程启动宽限，另允许 `15:01-15:05` 补取不早于 15:00 的终态行情。长期规则监控新浪实时 `000001.SH` 上证指数从 3955 点下方站上 3955 点（`>=3955`）；横截面规则在 `09:30 <= quote_time < 10:00` 批量扫描最新价达到交易所正式涨停价且当日累计成交额 `>=100亿元` 的 A 股，同股当日只推一次。临时规则包括：2026-08-31 的 `300285.SZ` 国瓷材料严格跌破 67.22 元，以及 2026-08-31～09-02 的 `688361.SH` 中科飞测严格跌破前 5 个已收盘交易日的前复权 MA5。历史科创50/凯莱英临时规则保留审计，金健米业、红四方、京粮控股三条断板规则保持下线。
 
 ```bash
 python3 main.py intraday-monitor check             # 正式检查；命中时写 pending 并推钉钉
@@ -479,8 +479,10 @@ python3 main.py intraday-monitor e2e-test --rule-id RULE_ID --input-by USER --co
 - **科创50两交易日临时规则**：`star50-breakout-1700-20260821-24` 使用 `direction=above`、`inclusive=False`、`emit_on_initial_match=True`、动作“突破”。8 月 21 日或 24 日首次检查若已严格高于 1700 点即推送；等于 1700 点不触发，持续高于去重，回到 1700 点或下方后再次突破可重推。规则自然日期窗口为 8 月 21～24 日，周末由交易日历门禁在 provider 前阻断，8 月 25 日起不再请求科创50行情。
 - **凯莱英两交易日临时规则**：`kailaiying-breakout-172-26-20260821-24` 使用 `002821.SZ`、`direction=above`、`inclusive=False`、`emit_on_initial_match=True`、动作“突破”。8 月 21 日或 24 日首次检查若已严格高于 172.26 元即推送；等于 172.26 元不触发，持续高于去重，回到 172.26 元或下方后再次突破可重推。规则自然日期窗口为 8 月 21～24 日，周末在 provider 前阻断，8 月 25 日起不再请求。
 - **一日临时规则**：`litong-electronics-below-123-92-20260811` 使用 `direction=below`、`inclusive=False`、`emit_on_initial_match=True`，`valid_from=valid_until=2026-08-11`。当日首次观察若已严格低于 123.92 元即推送；等于 123.92 元不触发，持续低于去重，恢复到阈值或上方后再次跌破可重推。8 月 11 日之前和之后都在行情请求前自动排除。
+- **国瓷材料一日临时规则**：`guoci-materials-below-67-22-20260831` 使用 `300285.SZ`、`direction=below`、`inclusive=False`、`emit_on_initial_match=True`，仅在 2026-08-31 生效。最新价严格低于 67.22 元即推送；等于不触发，持续低于去重，恢复后再次跌破可重推；生效日前后均在行情请求前排除。
+- **中科飞测三交易日 MA5 临时规则**：`zhongke-feice-below-previous-ma5-20260831-0902` 使用 `688361.SH`，在 2026-08-31～09-02 生效。阈值是目标日之前最近 5 个、经本地只读交易日历确认的已收盘开放日收盘价简单平均；历史收盘价与复权因子必须逐日完整对齐，先统一前复权到最近样本日，再用新浪实时 `pre_close` 锚到当日盘口坐标，防止今天恰为除权日时误报。盘中最新原始价严格低于该 MA5 才触发，等于不触发；同一交易日阈值写入规则状态缓存，避免每 5 分钟重复拉取不可变历史。日历、日线、复权因子、实时前收盘、样本数量或日期任一缺失均 fail-closed 为 `partial/source_failed`，不得推送伪信号。
 - **已下线规则**：金健米业、红四方、京粮控股三条生产规则，以及旧科创50跌破1572/收复1582规则，均不在 `DEFAULT_RULES`。正式状态文件不删除，历史状态只作审计保留；退役规则的 pending 会按既有过期机制丢弃，不补发旧提醒。新增的科创50与凯莱英规则均使用独立 rule id，不继承旧状态。
-- **扩展方式**：单标的阈值由 `MonitorRule` 配置，横截面扫描由 `MarketScanRule` 配置；抓取、匹配、pending/sent 账本、推送与调度彼此分层。新增同类横截面条件不修改 launchd 或单标的状态机。`threshold_mode=daily_up_limit` 与横截面涨停判断均复用 `utils.price_limit.compute_limit_prices`，避免板块比例和舍入口径漂移。
+- **扩展方式**：单标的阈值由 `MonitorRule` 配置，横截面扫描由 `MarketScanRule` 配置；抓取、匹配、pending/sent 账本、推送与调度彼此分层。新增同类横截面条件不修改 launchd 或单标的状态机。`threshold_mode=daily_up_limit` 与横截面涨停判断均复用 `utils.price_limit.compute_limit_prices`；`threshold_mode=previous_close_ma` 复用只读交易日历与 `utils.qfq.apply_qfq`，动态均线缺证据时失败关闭。
 - **可靠性**：行情日期必须为上海当日，行情时间最多陈旧 10 分钟；旧行情/缺行情 fail-closed。事件先原子写对应状态文件 pending，再推钉钉；发送失败保留到同一交易日下一 tick 重试，成功后才记 sent。切换 runtime 前 transition guard 同时核对两个状态文件，未知 pending 会机械阻断回滚。
 - **真实链路测试**：CLI `e2e-test` 可用 `--rule-id` 选择任一当前生效的注册生产规则（默认上证 3955），并必须带 `--input-by` 与一次性显式确认 `--confirm-real-push`；缺少确认时在 provider 初始化、日历、行情与推送之前返回 `authorization_required`，已过期规则同样在 provider 前返回 `inactive_rule`。必须经用户单独授权后，才可在交易时段以新鲜真实行情和仅本次测试线验收。测试不读写正式状态；只有退出码 0、`status=complete`、`pushed=true` 才能报告成功。
 - **边界**：监控线是用户给定条件，只标 `[事实]`，不构成买卖建议，不写 SQLite、TradeDraft、TradePlan、持仓或关注池。Mac 休眠期间 launchd 不触发；需要强保障时须配盘中唤醒或迁 VPS。

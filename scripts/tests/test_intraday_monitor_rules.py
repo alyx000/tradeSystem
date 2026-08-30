@@ -9,10 +9,12 @@ from services.intraday_monitor.guards import (
 )
 from services.intraday_monitor.rules import (
     DEFAULT_RULES,
+    GUOCI_MATERIALS_BELOW_67_22_20260831,
     KAILAIYING_BREAKOUT_172_26_20260821_24,
     LITONG_ELECTRONICS_BELOW_123_92_20260811,
     SSE_COMPOSITE_RECLAIM_3955,
     STAR50_BREAKOUT_1700_20260821_24,
+    ZHONGKE_FEICE_BELOW_PREVIOUS_MA5_20260831_0902,
     MonitorRule,
     should_emit,
 )
@@ -71,12 +73,14 @@ def test_reclaim_is_inclusive_and_does_not_emit_on_initial_match():
     ) is True
 
 
-def test_sse_litong_and_two_trade_day_breakout_rules_are_registered():
+def test_fixed_and_ma_temporary_rules_are_registered():
     assert DEFAULT_RULES == (
         SSE_COMPOSITE_RECLAIM_3955,
         LITONG_ELECTRONICS_BELOW_123_92_20260811,
         STAR50_BREAKOUT_1700_20260821_24,
         KAILAIYING_BREAKOUT_172_26_20260821_24,
+        GUOCI_MATERIALS_BELOW_67_22_20260831,
+        ZHONGKE_FEICE_BELOW_PREVIOUS_MA5_20260831_0902,
     )
     assert SSE_COMPOSITE_RECLAIM_3955.rule_id == "sse-composite-reclaim-3955"
     assert SSE_COMPOSITE_RECLAIM_3955.instrument_name == "上证指数"
@@ -138,6 +142,35 @@ def test_sse_litong_and_two_trade_day_breakout_rules_are_registered():
     assert kailaiying.is_effective_on(date(2026, 8, 24)) is True
     assert kailaiying.is_effective_on(date(2026, 8, 25)) is False
 
+    guoci = GUOCI_MATERIALS_BELOW_67_22_20260831
+    assert guoci.rule_id == "guoci-materials-below-67-22-20260831"
+    assert guoci.instrument_name == "国瓷材料"
+    assert guoci.code == "300285.SZ"
+    assert guoci.threshold == 67.22
+    assert guoci.is_active(67.21) is True
+    assert guoci.is_active(67.22) is False
+    assert guoci.is_effective_on(date(2026, 8, 30)) is False
+    assert guoci.is_effective_on(date(2026, 8, 31)) is True
+    assert guoci.is_effective_on(date(2026, 9, 1)) is False
+
+    zhongke = ZHONGKE_FEICE_BELOW_PREVIOUS_MA5_20260831_0902
+    assert zhongke.rule_id == "zhongke-feice-below-previous-ma5-20260831-0902"
+    assert zhongke.instrument_name == "中科飞测"
+    assert zhongke.code == "688361.SH"
+    assert zhongke.threshold is None
+    assert zhongke.threshold_mode == "previous_close_ma"
+    assert zhongke.threshold_window == 5
+    assert zhongke.threshold_provider == "tushare"
+    assert zhongke.resolve_threshold(
+        {}, historical_closes=[100, 101, 102, 103, 104]
+    ) == 102.0
+    assert zhongke.is_active(101.99, threshold=102.0) is True
+    assert zhongke.is_active(102.0, threshold=102.0) is False
+    assert zhongke.is_effective_on(date(2026, 8, 30)) is False
+    assert zhongke.is_effective_on(date(2026, 8, 31)) is True
+    assert zhongke.is_effective_on(date(2026, 9, 2)) is True
+    assert zhongke.is_effective_on(date(2026, 9, 3)) is False
+
 
 
 def test_dynamic_board_break_capability_remains_available():
@@ -181,6 +214,42 @@ def test_dynamic_limit_rule_rejects_ambiguous_or_missing_threshold_inputs():
         BOARD_BREAK_RULE.is_active(7.81)
     with pytest.raises(ValueError, match="无法根据前收盘价"):
         BOARD_BREAK_RULE.resolve_threshold({"pre_close": None})
+
+
+def test_previous_close_ma_rule_rejects_ambiguous_or_incomplete_inputs():
+    with pytest.raises(ValueError, match="不得同时提供固定"):
+        MonitorRule(
+            "ambiguous-ma",
+            "测试标的",
+            "688001.SH",
+            10.0,
+            threshold_mode="previous_close_ma",
+            threshold_window=5,
+            threshold_provider="tushare",
+        )
+    with pytest.raises(ValueError, match="正整数"):
+        MonitorRule(
+            "missing-window",
+            "测试标的",
+            "688001.SH",
+            None,
+            threshold_mode="previous_close_ma",
+            threshold_provider="tushare",
+        )
+    with pytest.raises(ValueError, match="threshold_provider"):
+        MonitorRule(
+            "missing-provider",
+            "测试标的",
+            "688001.SH",
+            None,
+            threshold_mode="previous_close_ma",
+            threshold_window=5,
+        )
+    rule = ZHONGKE_FEICE_BELOW_PREVIOUS_MA5_20260831_0902
+    with pytest.raises(ValueError, match="需要 5 个"):
+        rule.resolve_threshold({}, historical_closes=[100, 101, 102, 103])
+    with pytest.raises(ValueError, match="非有限或非正"):
+        rule.resolve_threshold({}, historical_closes=[100, 101, 0, 103, 104])
 
 
 def test_transition_only_emits_on_entry():
