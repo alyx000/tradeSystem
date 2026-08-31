@@ -22,6 +22,10 @@ logger = logging.getLogger(__name__)
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
+ROLLING_3M_VOLUME_OPEN_DAYS = 60
+ROLLING_3M_VOLUME_TRIGGER_RATIO = 0.5
+ROLLING_3M_VOLUME_YAML_FALLBACK_LIMIT = 5
+
 # 网络 / 外部源不可达类失败的特征片段：本机到不了 Yahoo（yfinance）、akshare 远端瞬断、
 # tushare 不支持的国际指数等。命中则归一化为可读提示，避免把隐晦栈信息抛给用户。
 _UNREACHABLE_SIGNATURES = (
@@ -1285,7 +1289,7 @@ class MarketCollector:
         }
 
     def _enrich_volume_comparison(self, vol_data: dict, date: str) -> None:
-        """从历史 post-market.yaml 读取近20日成交额，计算对比指标"""
+        """从历史 post-market.yaml 读取成交额，计算短窗与滚动三个月对比指标。"""
         daily_dir = BASE_DIR / "daily"
         history_volumes: list[float] = []
 
@@ -1297,7 +1301,7 @@ class MarketCollector:
                 reverse=True,
             )
         except FileNotFoundError:
-            return
+            dirs = []
 
         for d in dirs[:20]:
             pm_file = d / "post-market.yaml"
@@ -1315,6 +1319,11 @@ class MarketCollector:
                 continue
 
         today_vol = vol_data.get("total_billion", 0)
+        vol_data["rolling_3m_peak_comparison"] = self._rolling_3m_volume_peak_comparison(
+            date=date,
+            today_volume=today_vol,
+        )
+
         if not today_vol or not history_volumes:
             return
 
@@ -1334,6 +1343,235 @@ class MarketCollector:
             ma20 = sum(history_volumes[:20]) / 20
             vol_data["ma20_billion"] = round(ma20, 2)
             vol_data["vs_ma20"] = "高于" if today_vol > ma20 else ("低于" if today_vol < ma20 else "持平")
+
+    def _rolling_3m_volume_peak_comparison(
+        self,
+        *,
+        date: str,
+        today_volume,
+    ) -> dict:
+        """计算两市成交额相对前 60 个开放交易日峰值的位置。
+
+        “滚动三个月”在盘后事实层固定为目标日前连续 60 个 SSE 开放日，目标日不入窗。
+        窗口必须由 ``trade_calendar`` 精确给出，成交额优先读取 ``daily_market``；
+        DB 少量缺口才回看对应盘后 YAML。任一开放日最终仍缺失即 ``partial``，不得用
+        更早的“最近可用日”跨缺口补齐。
+        """
+        base = {
+            "schema": "rolling-3m-market-volume-peak-v1",
+            "basis": "previous_60_sse_open_days_excluding_target",
+            "expected_days": ROLLING_3M_VOLUME_OPEN_DAYS,
+            "trigger_ratio": ROLLING_3M_VOLUME_TRIGGER_RATIO,
+        }
+
+        try:
+            today = float(today_volume)
+        except (TypeError, ValueError):
+            today = math.nan
+        if not math.isfinite(today) or today <= 0:
+            return {
+                **base,
+                "status": "source_failed",
+                "observed_days": 0,
+                "reason": "目标日两市成交额缺失或非法",
+            }
+
+        db_path = BASE_DIR / "data" / "trade.db"
+        try:
+            from db.connection import get_readonly_connection
+
+            conn = get_readonly_connection(db_path)
+            try:
+                target_row = conn.execute(
+                    "SELECT is_open FROM trade_calendar WHERE date = ?",
+                    (date,),
+                ).fetchone()
+                if target_row is None:
+                    return {
+                        **base,
+                        "status": "source_failed",
+                        "observed_days": 0,
+                        "reason": "目标日交易日历缺失",
+                    }
+                if not bool(target_row[0]):
+                    return {
+                        **base,
+                        "status": "skipped",
+                        "observed_days": 0,
+                        "reason": "目标日不是 SSE 开放日",
+                    }
+                rows = conn.execute(
+                    """
+                    SELECT date
+                    FROM trade_calendar
+                    WHERE date < ? AND is_open = 1
+                    ORDER BY date DESC
+                    LIMIT ?
+                    """,
+                    (date, ROLLING_3M_VOLUME_OPEN_DAYS),
+                ).fetchall()
+
+                expected_dates = sorted(str(row[0]) for row in rows)
+                if len(expected_dates) != ROLLING_3M_VOLUME_OPEN_DAYS:
+                    return {
+                        **base,
+                        "status": "source_failed",
+                        "observed_days": 0,
+                        "reason": (
+                            f"交易日历窗口不足: {len(expected_dates)}/"
+                            f"{ROLLING_3M_VOLUME_OPEN_DAYS}"
+                        ),
+                    }
+
+                calendar_rows = conn.execute(
+                    """
+                    SELECT date
+                    FROM trade_calendar
+                    WHERE date BETWEEN ? AND ?
+                    ORDER BY date
+                    """,
+                    (expected_dates[0], date),
+                ).fetchall()
+                calendar_dates = {str(row[0]) for row in calendar_rows}
+                span_start = datetime.strptime(expected_dates[0], "%Y-%m-%d")
+                span_end = datetime.strptime(date, "%Y-%m-%d")
+                missing_calendar_dates: list[str] = []
+                cursor = span_start
+                while cursor <= span_end:
+                    cursor_date = cursor.strftime("%Y-%m-%d")
+                    if cursor_date not in calendar_dates:
+                        missing_calendar_dates.append(cursor_date)
+                    cursor += timedelta(days=1)
+                if missing_calendar_dates:
+                    return {
+                        **base,
+                        "status": "source_failed",
+                        "observed_days": 0,
+                        "missing_calendar_dates": missing_calendar_dates,
+                        "reason": "滚动窗口自然日交易日历不完整",
+                    }
+
+                table_row = conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'daily_market'"
+                ).fetchone()
+                if table_row is None:
+                    return {
+                        **base,
+                        "status": "source_failed",
+                        "observed_days": 0,
+                        "reason": "daily_market 事实表缺失",
+                    }
+                amount_rows = conn.execute(
+                    """
+                    SELECT date, total_amount
+                    FROM daily_market
+                    WHERE date BETWEEN ? AND ? AND total_amount IS NOT NULL
+                    """,
+                    (expected_dates[0], expected_dates[-1]),
+                ).fetchall()
+            finally:
+                conn.close()
+        except Exception as exc:
+            return {
+                **base,
+                "status": "source_failed",
+                "observed_days": 0,
+                "reason": f"交易日历不可用: {exc}",
+            }
+
+        expected_date_set = set(expected_dates)
+        observed_by_date: dict[str, float] = {}
+        for row in amount_rows:
+            trade_date = str(row[0])
+            if trade_date not in expected_date_set:
+                continue
+            try:
+                amount = float(row[1])
+                if not math.isfinite(amount) or amount <= 0:
+                    continue
+                observed_by_date[trade_date] = amount
+            except (TypeError, ValueError):
+                continue
+
+        fallback_dates = [d for d in expected_dates if d not in observed_by_date]
+        yaml_fallback_dates: list[str] = []
+        if len(fallback_dates) <= ROLLING_3M_VOLUME_YAML_FALLBACK_LIMIT:
+            for trade_date in fallback_dates:
+                pm_file = BASE_DIR / "daily" / trade_date / "post-market.yaml"
+                try:
+                    with open(pm_file, encoding="utf-8") as f:
+                        data = yaml.safe_load(f) or {}
+                    raw = data.get("raw_data", data)
+                    amount = float((raw.get("total_volume") or {}).get("total_billion"))
+                    if not math.isfinite(amount) or amount <= 0:
+                        continue
+                    observed_by_date[trade_date] = amount
+                    yaml_fallback_dates.append(trade_date)
+                except (OSError, UnicodeError, TypeError, ValueError, yaml.YAMLError):
+                    continue
+
+        missing_dates = [d for d in expected_dates if d not in observed_by_date]
+        provider_fallback: list[dict] = []
+        if (
+            missing_dates
+            and len(missing_dates) <= ROLLING_3M_VOLUME_YAML_FALLBACK_LIMIT
+            and self.registry is not None
+        ):
+            for trade_date in missing_dates:
+                try:
+                    provider_result = self.registry.call("get_market_volume", trade_date)
+                    provider_data = provider_result.data if provider_result.success else None
+                    amount = float((provider_data or {}).get("total_billion"))
+                    if not math.isfinite(amount) or amount <= 0:
+                        continue
+                    observed_by_date[trade_date] = amount
+                    provider_fallback.append({
+                        "date": trade_date,
+                        "source": provider_result.source,
+                    })
+                except (AttributeError, TypeError, ValueError):
+                    continue
+
+        missing_dates = [d for d in expected_dates if d not in observed_by_date]
+
+        if missing_dates:
+            return {
+                **base,
+                "status": "partial",
+                "window_start": expected_dates[0],
+                "window_end": expected_dates[-1],
+                "observed_days": len(observed_by_date),
+                "missing_dates": missing_dates,
+                "db_days": (
+                    len(observed_by_date)
+                    - len(yaml_fallback_dates)
+                    - len(provider_fallback)
+                ),
+                "yaml_fallback_dates": yaml_fallback_dates,
+                "provider_fallback": provider_fallback,
+                "reason": "连续开放日成交额存在缺口，未计算峰值比例",
+            }
+
+        observed = sorted(observed_by_date.items())
+        peak_date, peak = max(observed, key=lambda item: (item[1], item[0]))
+        ratio = today / peak
+        return {
+            **base,
+            "status": "complete",
+            "window_start": expected_dates[0],
+            "window_end": expected_dates[-1],
+            "observed_days": len(observed),
+            "db_days": len(observed) - len(yaml_fallback_dates) - len(provider_fallback),
+            "yaml_fallback_dates": yaml_fallback_dates,
+            "provider_fallback": provider_fallback,
+            "today_billion": round(today, 2),
+            "peak_billion": round(peak, 2),
+            "peak_date": peak_date,
+            "half_peak_billion": round(peak * ROLLING_3M_VOLUME_TRIGGER_RATIO, 2),
+            "today_to_peak_ratio": round(ratio, 6),
+            "today_to_peak_pct": round(ratio * 100, 2),
+            "triggered": ratio <= ROLLING_3M_VOLUME_TRIGGER_RATIO,
+        }
 
     def _compute_index_ma(self, result: dict, date: str) -> None:
         """计算上证指数日线均线（MA5/10/20/60）和四大指数（沪/深/创业板/科创50）5 周均线"""

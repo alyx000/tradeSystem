@@ -161,6 +161,32 @@ class NodeSignalAnalyzer:
         signals: list[dict] = []
         vol_today = today.get("total_volume", {})
         today_vol = _safe_float(vol_today.get("total_billion"))
+
+        rolling = vol_today.get("rolling_3m_peak_comparison")
+        if (
+            isinstance(rolling, dict)
+            and rolling.get("status") == "complete"
+            and rolling.get("triggered") is True
+        ):
+            ratio_pct = _safe_float(rolling.get("today_to_peak_pct"))
+            peak = _safe_float(rolling.get("peak_billion"))
+            peak_date = rolling.get("peak_date")
+            if ratio_pct is not None and peak is not None and peak_date:
+                signals.append({
+                    "type": "volume_extreme",
+                    "signal": "成交额缩至滚动三个月峰值一半",
+                    "direction": "negative",
+                    "value": round(ratio_pct, 2),
+                    "description": (
+                        f"全市场成交额为前60个交易日峰值的 {ratio_pct:.2f}%"
+                        f"（峰值 {peak:.2f} 亿，{peak_date}）"
+                    ),
+                    "window_start": rolling.get("window_start"),
+                    "window_end": rolling.get("window_end"),
+                    "peak_date": peak_date,
+                    "peak_billion": peak,
+                })
+
         if today_vol is None or not history:
             return signals
 

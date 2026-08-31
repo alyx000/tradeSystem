@@ -592,6 +592,41 @@ class ReportGenerator:
             if ma_parts:
                 lines.append(f"{'　|　'.join(ma_parts)}")
 
+            rolling = vol.get("rolling_3m_peak_comparison")
+            if isinstance(rolling, dict):
+                rolling_status = rolling.get("status")
+                if rolling_status == "complete":
+                    try:
+                        ratio_pct = float(rolling["today_to_peak_pct"])
+                        peak = float(rolling["peak_billion"])
+                        peak_date = str(rolling["peak_date"])
+                        half_peak = float(rolling["half_peak_billion"])
+                    except (KeyError, TypeError, ValueError):
+                        lines.append("滚动三个月量能：**未计算**（完整态指标字段不完整）")
+                    else:
+                        state = (
+                            "已缩至一半及以下"
+                            if rolling.get("triggered") is True
+                            else "未缩至一半"
+                        )
+                        lines.append(
+                            "滚动三个月量能（前60个交易日）："
+                            f"今日为峰值的 **{ratio_pct:.2f}%**（{state}）；"
+                            f"峰值 {peak:.2f} 亿（{peak_date}），"
+                            f"50% 阈值 {half_peak:.2f} 亿"
+                        )
+                elif rolling_status in {"partial", "source_failed"}:
+                    observed = rolling.get("observed_days", 0)
+                    expected = rolling.get("expected_days", 60)
+                    reason = rolling.get("reason") or "历史成交额不可得"
+                    lines.append(
+                        "滚动三个月量能：**未计算**"
+                        f"（{observed}/{expected} 个开放日；{reason}）"
+                    )
+                elif rolling_status == "skipped":
+                    reason = rolling.get("reason") or "目标日不满足计算条件"
+                    lines.append(f"滚动三个月量能：**已跳过**（{reason}）")
+
         # 市场宽度
         breadth = raw_data.get("breadth", {})
         if breadth.get("advance"):
