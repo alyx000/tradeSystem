@@ -40,6 +40,8 @@
 - `com.alyx.tradesystem.morning-brief.plist` — 工作日 08:00 触发（盘前早报：隔夜行情+海外/国内要闻[金十]+上市公司公告[巨潮]；非交易日 CLI 内守卫跳过；日志 `/tmp/tradesystem-morning-brief.log`；Sleep policy: 错过可接受——可手动 `morning-brief daily` 补跑）
 - `intraday-monitor-runner.sh` — 每 5 分钟 tick 的盘中门禁入口；上海 `09:30-11:30 / 13:00-15:00` 做常规检查，并保留 `15:01-15:05` 收盘终态补窗
 - `com.alyx.tradesystem.intraday-monitor.plist` — 单标的阈值 + 09:30～10:00（不含10:00）百亿成交额涨停板横截面监控；除相对 300 秒节拍外固定 09:59 做最后补扫，日志 `/tmp/tradesystem-intraday-monitor.log`
+- `intraday-summary-runner.sh` — 每分钟轻量 tick，只在上海半小时槽位后 5 分钟内调 `intraday-summary run`
+- `com.alyx.tradesystem.intraday-summary.plist` — 全市场半小时快照差分摘要并推钉钉，日志 `/tmp/tradesystem-intraday-summary.log`
 
 ## 前置条件
 
@@ -529,6 +531,24 @@ python3 scripts/main.py intraday-monitor e2e-test --rule-id RULE_ID \
 ```
 
 该命令只在用户明确授权后执行，并要求一次性显式参数 `--confirm-real-push`；缺少确认时在初始化行情源前返回 `authorization_required`，不会访问日历、行情或钉钉。授权后使用当日新鲜真实行情和仅本次测试线发送醒目标注“测试”的钉钉消息，且不读写正式状态。只有退出码为 0、`status=complete` 且 `pushed=true` 才能视为真实链路验收成功。
+
+## 全市场盘中半小时扫描
+
+09:30 与 13:00 保存基线；10:00、10:30、11:00、11:30、13:30、14:00、14:30、15:00 用两点全市场实时快照生成最近半小时摘要并推钉钉。任务只认本地只读交易日历中的开放日；股票清单少于 4000、实时覆盖低于 95% 或行情陈旧时 fail-closed。缺少上一槽位时只发当前快照并明确标 `partial / 最近半小时未计算`。
+
+```bash
+chmod +x deploy/launchd/intraday-summary-runner.sh
+plutil -lint deploy/launchd/com.alyx.tradesystem.intraday-summary.plist
+bash -n deploy/launchd/intraday-summary-runner.sh
+
+cp deploy/launchd/com.alyx.tradesystem.intraday-summary.plist \
+  ~/Library/LaunchAgents/
+launchctl load ~/Library/LaunchAgents/com.alyx.tradesystem.intraday-summary.plist
+launchctl list | grep tradesystem.intraday-summary
+tail -f /tmp/tradesystem-intraday-summary.log
+```
+
+滚动状态/outbox 为 `data/runs/intraday-summary/state.json`，报告为 `data/reports/intraday-summary/YYYY-MM-DD/HHMM.md`。钉钉失败会在同槽位 5 分钟窗口内重试；成功后同槽位不重复抓取或推送。Mac 休眠或错过 5 分钟窗口时不补发陈旧摘要。
 
 ## 断板反包盘后扫描（工作日 21:20）
 

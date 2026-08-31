@@ -488,6 +488,23 @@ python3 main.py intraday-monitor e2e-test --rule-id RULE_ID --input-by USER --co
 - **真实链路测试**：CLI `e2e-test` 可用 `--rule-id` 选择任一当前生效的注册生产规则（默认上证 3955），并必须带 `--input-by` 与一次性显式确认 `--confirm-real-push`；缺少确认时在 provider 初始化、日历、行情与推送之前返回 `authorization_required`，已过期规则同样在 provider 前返回 `inactive_rule`。必须经用户单独授权后，才可在交易时段以新鲜真实行情和仅本次测试线验收。测试不读写正式状态；只有退出码 0、`status=complete`、`pushed=true` 才能报告成功。
 - **边界**：监控线是用户给定条件，只标 `[事实]`，不构成买卖建议，不写 SQLite、TradeDraft、TradePlan、持仓或关注池。Mac 休眠期间 launchd 不触发；需要强保障时须配盘中唤醒或迁 VPS。
 
+## 全市场盘中半小时扫描（intraday-summary）
+
+独立 launchd `com.alyx.tradesystem.intraday-summary` 每分钟轻量 tick，只在上海目标槽位后的 5 分钟内进入命令；Python 再用只读 `trade_calendar` 确认交易日。09:30 与 13:00 仅保存开盘/午后基线，10:00、10:30、11:00、11:30、13:30、14:00、14:30、15:00 生成最近半小时盘面摘要并推钉钉。
+
+```bash
+python3 main.py intraday-summary run              # 当前槽位：保存快照/报告并推送
+python3 main.py intraday-summary run --dry-run    # 只计算打印，不写文件、不推送
+python3 main.py intraday-summary run --no-push    # 保存快照/报告，不推送
+python3 main.py intraday-summary run --json       # 结构化运行回执
+```
+
+- **两点快照口径**：每个槽位用当前上市 A 股清单批量取新浪实时行情；全市场有效股票不少于 4000 且覆盖至少 95%，行情日期必须为上海当日、陈旧不超过 10 分钟。半小时涨跌用两点最新价差分，区间成交额用新浪累计成交额差分；上午收盘和午后开盘不跨午休比较。
+- **摘要内容**：半小时上涨/下跌/平盘家数、涨幅中位数、±1% 扩散、区间成交额增量；上证/深成/创业板/科创50 两点变化；申万二级按成分股半小时涨幅中位数与上涨占比分组；个股上行/下行波动居前。机械归纳只用“中位涨幅 ±0.15% + 上涨占比 60%/40%”，显式标 `[判断·机械口径]`。
+- **失败与缺口**：交易日历缺失、实时源失败、全市场覆盖不足均 fail-closed，不生成正常摘要；缺少上一槽位基线时仍推当前快照，但明确标 `partial` 与“最近半小时未计算”；申万映射或宽基缺失只降级对应段，不把缺口写成 0 或完整空值。
+- **落盘与送达**：滚动快照与 outbox 落 `data/runs/intraday-summary/state.json`，完整 Markdown 落 `data/reports/intraday-summary/YYYY-MM-DD/HHMM.md`；报告先落盘、再进入 pending，钉钉成功后才记 sent，失败在同槽位 5 分钟窗口内重试，同一槽位已送达后不重复抓取或推送。跨日旧 pending 过期。
+- **只读边界**：不写 SQLite、持仓、关注池、TradeDraft 或 TradePlan，不预测后续方向、不构成买卖建议。Mac 休眠或错过槽位 5 分钟窗口时不补发陈旧摘要；需要强保障时须配置盘中唤醒或迁 VPS。
+
 ## 盘中尾盘强势股扫描（tail-scan）
 
 工作日 14:40 per-task launchd（`com.alyx.tradesystem.tail-scan`），不进 `schedule`/APScheduler；休眠期间不触发（需盘中 mac 唤醒）。也可手动执行：
