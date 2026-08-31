@@ -507,6 +507,10 @@ ARCHITECTURE_COMMANDS = [
     ["intraday-monitor", "check", "--json"],
     ["intraday-monitor", "e2e-test", "--input-by", "codex_automation", "--confirm-real-push"],
     ["intraday-monitor", "e2e-test", "--input-by", "codex_automation", "--confirm-real-push", "--json"],
+    # intraday-summary (全市场盘中半小时快照差分总结)
+    ["intraday-summary", "run"],
+    ["intraday-summary", "run", "--dry-run"],
+    ["intraday-summary", "run", "--no-push", "--json"],
     # wechat-teacher-feed (本机 WeRSS 白名单采集；确认前仅归档/查看)
     ["wechat-teacher-feed", "should-run", "--phase", "post-market", "--date", "2026-07-13", "--json"],
     ["wechat-teacher-feed", "doctor", "--json"],
