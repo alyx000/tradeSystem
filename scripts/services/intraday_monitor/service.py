@@ -38,12 +38,12 @@ def _parse_iso_datetime(raw: object) -> datetime | None:
 def _event_id(
     rule: MonitorRule,
     quote_at: str,
-    price: float,
+    value: float,
     threshold: float,
     observation_phase: str,
 ) -> str:
     raw = (
-        f"{rule.rule_id}|{quote_at}|{price:.8f}|{threshold:.8f}|{observation_phase}"
+        f"{rule.rule_id}|{quote_at}|{value:.8f}|{threshold:.8f}|{observation_phase}"
     ).encode("utf-8")
     return hashlib.sha256(raw).hexdigest()[:24]
 
@@ -54,6 +54,7 @@ def _event(
     quoted_at: datetime,
     source: str,
     *,
+    value: float,
     threshold: float,
     threshold_source: str | None = None,
     threshold_basis_dates: list[str] | None = None,
@@ -63,7 +64,7 @@ def _event(
     price = float(quote["price"])
     quote_at = quoted_at.isoformat()
     return {
-        "event_id": _event_id(rule, quote_at, price, threshold, observation_phase),
+        "event_id": _event_id(rule, quote_at, value, threshold, observation_phase),
         "rule_id": rule.rule_id,
         "instrument_name": rule.instrument_name,
         "code": rule.code,
@@ -77,6 +78,8 @@ def _event(
         "action_text": rule.action_text,
         "value_label": rule.value_label,
         "value_unit": rule.value_unit,
+        "value_mode": rule.value_mode,
+        "value": value,
         "price": price,
         "quote_at": quote_at,
         "source": source,
@@ -377,11 +380,9 @@ def _run_locked(
             continue
         try:
             price = float(quote.get("price"))
-        except (TypeError, ValueError):
-            errors.append(f"{rule.rule_id}: 最新价非法")
-            continue
-        if not math.isfinite(price) or price <= 0:
-            errors.append(f"{rule.rule_id}: 最新价非有限或非正数")
+            value = rule.resolve_value(quote)
+        except (TypeError, ValueError) as exc:
+            errors.append(f"{rule.rule_id}: {exc}")
             continue
         previous = rule_states.get(rule.rule_id) or {}
         same_trade_date = previous.get("trade_date") == now.date().isoformat()
@@ -402,15 +403,17 @@ def _run_locked(
         except (TypeError, ValueError) as exc:
             errors.append(f"{rule.rule_id}: {exc}")
             continue
-        if not math.isfinite(threshold) or threshold <= 0:
-            errors.append(f"{rule.rule_id}: 比较阈值非有限或非正数")
+        if not math.isfinite(threshold) or (
+            rule.value_mode == "price" and threshold <= 0
+        ):
+            errors.append(f"{rule.rule_id}: 比较阈值非法")
             continue
         previous_active = (
             bool(previous.get("active"))
             if same_trade_date
             else None
         )
-        active = rule.is_active(price, threshold=threshold)
+        active = rule.is_active(value, threshold=threshold)
         local_time = now.time().replace(tzinfo=None)
         quote_time = quoted_at.time().replace(tzinfo=None)
         close_phase = local_time >= time(15, 0)
@@ -437,6 +440,7 @@ def _run_locked(
                 quote,
                 quoted_at,
                 str(quote.get("_source") or rule.provider),
+                value=value,
                 threshold=threshold,
                 threshold_source=threshold_source,
                 threshold_basis_dates=threshold_basis_dates,
@@ -453,6 +457,7 @@ def _run_locked(
             "trade_date": today,
             "active": active,
             "last_price": price,
+            "last_value": value,
             "last_threshold": threshold,
             "threshold_source": threshold_source,
             "threshold_basis_dates": threshold_basis_dates,
@@ -728,7 +733,12 @@ def run_e2e_test(
         errors.append(f"{rule.rule_id}: 最新价非有限或非正数")
         return {"status": "source_failed", "events": [], "errors": errors}
 
-    margin = max(E2E_TEST_MARGIN_MIN, abs(price) * E2E_TEST_MARGIN_RATIO)
+    try:
+        value = rule.resolve_value(quote)
+    except (TypeError, ValueError) as exc:
+        errors.append(f"{rule.rule_id}: {exc}")
+        return {"status": "source_failed", "events": [], "errors": errors}
+    margin = max(E2E_TEST_MARGIN_MIN, abs(value) * E2E_TEST_MARGIN_RATIO)
     try:
         (
             production_threshold,
@@ -750,19 +760,21 @@ def run_e2e_test(
         rule_id=f"{rule.rule_id}-e2e-test",
         instrument_name=rule.instrument_name,
         code=rule.code,
-        threshold=price + margin,
+        threshold=value + margin,
         direction="below",
         provider=rule.provider,
         value_label=rule.value_label,
         value_unit=rule.value_unit,
+        value_mode=rule.value_mode,
     )
-    if not test_rule.is_active(price):
+    if not test_rule.is_active(value):
         return {"status": "test_condition_failed", "events": [], "errors": ["临时测试条件未命中"]}
     event = _event(
         test_rule,
         quote,
         quoted_at,
         str(quote.get("_source") or rule.provider),
+        value=value,
         threshold=float(test_rule.threshold),
     )
 

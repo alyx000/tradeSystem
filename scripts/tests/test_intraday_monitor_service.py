@@ -17,6 +17,7 @@ from services.intraday_monitor.rules import (
     SSE_COMPOSITE_RECLAIM_3955,
     STAR50_BREAKOUT_1700_20260821_24,
     ZHONGKE_FEICE_BELOW_PREVIOUS_MA5_20260831_0902,
+    THS_ALL_A_HUSHEN_DAILY_DROP_OVER_4PCT,
     MonitorRule,
 )
 
@@ -99,10 +100,10 @@ class _Registry:
         self.requested_codes = []
 
     def get_provider(self, name):
-        return self.provider if name == "sina" else None
+        return self.provider if name in {"sina", "tonghuashun"} else None
 
     def call_specific(self, provider, capability, codes):
-        assert provider == "sina"
+        assert provider in {"sina", "tonghuashun"}
         assert capability == "get_realtime_quotes"
         self.call_count += 1
         self.requested_codes.append(list(codes))
@@ -118,7 +119,32 @@ class _Registry:
             }
             row.update(self.quote_overrides.get(code, {}))
             rows.append(row)
-        return _Result(rows)
+        return _Result(rows, source="sina" if provider == "sina" else "tonghuashun:realhead_v6")
+
+
+class _ThsRegistry(_Registry):
+    def get_provider(self, name):
+        return self.provider if name == "tonghuashun" else None
+
+    def call_specific(self, provider, capability, codes):
+        assert provider == "tonghuashun"
+        assert capability == "get_realtime_quotes"
+        self.call_count += 1
+        self.requested_codes.append(list(codes))
+        return _Result(
+            [
+                {
+                    "code": "883421.THS",
+                    "name": "同花顺全A(沪深)",
+                    "price": self.price,
+                    "pre_close": self.pre_close,
+                    "pct_chg": 99.0,
+                    "quote_date": self.now.date().isoformat(),
+                    "quote_time": self.now.time().isoformat(),
+                }
+            ],
+            source="tonghuashun:realhead_v6",
+        )
 
 
 class _DynamicRegistry(_Registry):
@@ -143,7 +169,7 @@ class _DynamicRegistry(_Registry):
         return super().get_provider(name)
 
     def call_specific(self, provider, capability, *args):
-        if provider == "sina":
+        if provider in {"sina", "tonghuashun"}:
             return super().call_specific(provider, capability, *args)
         assert provider == "tushare"
         self.history_calls.append((capability, args))
@@ -238,6 +264,78 @@ def test_initial_breach_pushes_once_and_persists_state(tmp_path):
     state = json.loads(state_path.read_text(encoding="utf-8"))
     assert state["pending_events"] == []
     assert state["rules"][BREACH_RULE.rule_id]["active"] is True
+
+
+def test_daily_drop_rule_compares_computed_pct_and_renders_index_point(tmp_path):
+    db_path = _calendar(tmp_path, dates=("2026-08-31",))
+    state_path = tmp_path / "state.json"
+    registry = _ThsRegistry(price=95.99)
+    registry.pre_close = 100.0
+    registry.now = datetime(2026, 8, 31, 10, 0, tzinfo=TZ)
+    pusher = _Pusher()
+
+    result = run_check(
+        registry,
+        rules=(THS_ALL_A_HUSHEN_DAILY_DROP_OVER_4PCT,),
+        now=registry.now,
+        state_path=state_path,
+        db_path=db_path,
+        pusher_factory=lambda: pusher,
+    )
+
+    assert result["status"] == "complete"
+    assert len(result["events"]) == 1
+    event = result["events"][0]
+    assert event["price"] == 95.99
+    assert event["value"] == pytest.approx(-4.01)
+    assert event["value_mode"] == "daily_pct_change"
+    assert "最新单日涨跌幅 **-4.01000000**%" in pusher.messages[0][1]
+    assert "单日涨跌幅监控线 **-4.00000000**%" in pusher.messages[0][1]
+    assert "最新点位：95.990" in pusher.messages[0][1]
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert state["rules"][THS_ALL_A_HUSHEN_DAILY_DROP_OVER_4PCT.rule_id][
+        "last_value"
+    ] == pytest.approx(-4.01)
+
+
+def test_daily_drop_equal_minus_four_does_not_trigger(tmp_path):
+    db_path = _calendar(tmp_path, dates=("2026-08-31",))
+    registry = _ThsRegistry(price=96.0)
+    registry.pre_close = 100.0
+    registry.now = datetime(2026, 8, 31, 10, 0, tzinfo=TZ)
+    pusher = _Pusher()
+
+    result = run_check(
+        registry,
+        rules=(THS_ALL_A_HUSHEN_DAILY_DROP_OVER_4PCT,),
+        now=registry.now,
+        state_path=tmp_path / "state.json",
+        db_path=db_path,
+        pusher_factory=lambda: pusher,
+    )
+
+    assert result["status"] == "complete"
+    assert result["events"] == []
+    assert pusher.messages == []
+
+
+def test_daily_drop_invalid_pre_close_fails_closed(tmp_path):
+    db_path = _calendar(tmp_path, dates=("2026-08-31",))
+    registry = _ThsRegistry(price=95.0)
+    registry.pre_close = 0.0
+    registry.now = datetime(2026, 8, 31, 10, 0, tzinfo=TZ)
+
+    result = run_check(
+        registry,
+        rules=(THS_ALL_A_HUSHEN_DAILY_DROP_OVER_4PCT,),
+        now=registry.now,
+        state_path=tmp_path / "state.json",
+        db_path=db_path,
+        pusher_factory=lambda: _Pusher(),
+    )
+
+    assert result["status"] == "source_failed"
+    assert any("前收盘价" in error for error in result["errors"])
 
 
 def test_recovery_then_second_breach_pushes_again(tmp_path):
@@ -499,6 +597,7 @@ def test_default_sse_rule_pushes_only_after_observed_below_to_3955(tmp_path):
         KAILAIYING_BREAKOUT_172_26_20260821_24,
         GUOCI_MATERIALS_BELOW_67_22_20260831,
         ZHONGKE_FEICE_BELOW_PREVIOUS_MA5_20260831_0902,
+        THS_ALL_A_HUSHEN_DAILY_DROP_OVER_4PCT,
     )
     assert initial_above["events"] == []
     assert below["events"] == []
@@ -612,8 +711,11 @@ def test_default_rules_fetch_litong_only_on_its_effective_day(tmp_path):
     )
 
     assert result["status"] == "complete"
-    assert registry.call_count == 1
-    assert registry.requested_codes == [["000001.SH", "603629.SH"]]
+    assert registry.call_count == 2
+    assert registry.requested_codes == [
+        ["000001.SH", "603629.SH"],
+        ["883421.THS"],
+    ]
 
 
 def test_default_rules_fetch_only_sse_before_and_after_litong_day(tmp_path):
@@ -634,7 +736,7 @@ def test_default_rules_fetch_only_sse_before_and_after_litong_day(tmp_path):
         )
 
         assert result["status"] == "complete"
-        assert registry.requested_codes == [["000001.SH"]]
+        assert registry.requested_codes == [["000001.SH"], ["883421.THS"]]
 
 
 def test_default_rules_fetch_temporary_breakouts_only_during_two_trade_day_window(tmp_path):
@@ -668,7 +770,7 @@ def test_default_rules_fetch_temporary_breakouts_only_during_two_trade_day_windo
             if day in (21, 24)
             else ["000001.SH"]
         )
-        assert registry.requested_codes == [expected]
+        assert registry.requested_codes == [expected, ["883421.THS"]]
 
 
 def test_guoci_rule_is_strict_and_only_active_on_20260831(tmp_path):
@@ -929,7 +1031,10 @@ def test_default_rules_batch_new_codes_and_resolve_ma_on_20260831(tmp_path):
     )
 
     assert result["status"] == "complete"
-    assert registry.requested_codes == [["000001.SH", "300285.SZ", "688361.SH"]]
+    assert registry.requested_codes == [
+        ["000001.SH", "300285.SZ", "688361.SH"],
+        ["883421.THS"],
+    ]
     assert len(registry.history_calls) == 2
 
 
@@ -1469,9 +1574,9 @@ def test_default_check_ignores_cancelled_board_break_quote_overrides(tmp_path):
     )
 
     assert result["status"] == "complete"
-    assert result["quotes_checked"] == 1
+    assert result["quotes_checked"] == 2
     assert result["errors"] == []
-    assert registry.requested_codes == [["000001.SH"]]
+    assert registry.requested_codes == [["000001.SH"], ["883421.THS"]]
     assert pusher.messages == []
 
 
@@ -1719,6 +1824,33 @@ def test_e2e_test_preserves_stock_price_label_and_unit(tmp_path):
     assert "实时价格 **125.00**元" in content
     assert "本次临时测试线 **126.00**元" in content
     assert "正式监控线仍为 **123.92**元" in content
+
+
+def test_e2e_test_preserves_daily_pct_boundary_precision(tmp_path):
+    db_path = _calendar(tmp_path, dates=("2026-08-31",))
+    now = datetime(2026, 8, 31, 10, 0, tzinfo=TZ)
+    registry = _ThsRegistry(price=95.996)
+    registry.pre_close = 100.0
+    registry.now = now
+    pusher = _Pusher()
+
+    result = run_e2e_test(
+        registry,
+        input_by="pytest",
+        confirm_real_push=True,
+        rule=THS_ALL_A_HUSHEN_DAILY_DROP_OVER_4PCT,
+        now=now,
+        db_path=db_path,
+        pusher_factory=lambda: pusher,
+    )
+
+    assert result["status"] == "complete"
+    assert result["pushed"] is True
+    assert result["events"][0]["value"] == -4.004
+    content = pusher.messages[0][1]
+    assert "实时单日涨跌幅 **-4.00400000**%" in content
+    assert "正式监控线仍为 **-4.00000000**%" in content
+    assert "实时点位 **95.996**" in content
 
 
 def test_e2e_test_resolves_dynamic_board_break_threshold(tmp_path):

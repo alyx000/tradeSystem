@@ -15,6 +15,7 @@ from services.intraday_monitor.rules import (
     SSE_COMPOSITE_RECLAIM_3955,
     STAR50_BREAKOUT_1700_20260821_24,
     ZHONGKE_FEICE_BELOW_PREVIOUS_MA5_20260831_0902,
+    THS_ALL_A_HUSHEN_DAILY_DROP_OVER_4PCT,
     MonitorRule,
     should_emit,
 )
@@ -81,6 +82,7 @@ def test_fixed_and_ma_temporary_rules_are_registered():
         KAILAIYING_BREAKOUT_172_26_20260821_24,
         GUOCI_MATERIALS_BELOW_67_22_20260831,
         ZHONGKE_FEICE_BELOW_PREVIOUS_MA5_20260831_0902,
+        THS_ALL_A_HUSHEN_DAILY_DROP_OVER_4PCT,
     )
     assert SSE_COMPOSITE_RECLAIM_3955.rule_id == "sse-composite-reclaim-3955"
     assert SSE_COMPOSITE_RECLAIM_3955.instrument_name == "上证指数"
@@ -170,6 +172,52 @@ def test_fixed_and_ma_temporary_rules_are_registered():
     assert zhongke.is_effective_on(date(2026, 8, 31)) is True
     assert zhongke.is_effective_on(date(2026, 9, 2)) is True
     assert zhongke.is_effective_on(date(2026, 9, 3)) is False
+
+    ths_all_a = THS_ALL_A_HUSHEN_DAILY_DROP_OVER_4PCT
+    assert ths_all_a.code == "883421.THS"
+    assert ths_all_a.provider == "tonghuashun"
+    assert ths_all_a.threshold == -4.0
+    assert ths_all_a.value_mode == "daily_pct_change"
+    assert ths_all_a.resolve_value({"price": 96, "pre_close": 100}) == -4.0
+    assert ths_all_a.is_active(-4.0) is False
+    assert ths_all_a.is_active(-4.0001) is True
+
+
+def test_daily_pct_change_uses_price_and_pre_close_not_provider_pct_field():
+    rule = THS_ALL_A_HUSHEN_DAILY_DROP_OVER_4PCT
+    assert rule.resolve_value({"price": 95, "pre_close": 100, "pct_chg": 9.9}) == -5.0
+    with pytest.raises(ValueError, match="前收盘价"):
+        rule.resolve_value({"price": 95, "pre_close": 0})
+    with pytest.raises(ValueError, match="前收盘价"):
+        rule.resolve_value({"price": 95})
+
+
+def test_negative_threshold_only_allowed_for_non_price_value_mode():
+    with pytest.raises(ValueError, match="价格阈值必须为正数"):
+        MonitorRule("negative-price", "指数", "000001.SH", -4.0)
+
+
+@pytest.mark.parametrize(
+    ("threshold_mode", "extra"),
+    (
+        ("daily_up_limit", {}),
+        (
+            "previous_close_ma",
+            {"threshold_window": 5, "threshold_provider": "tushare"},
+        ),
+    ),
+)
+def test_daily_pct_change_rejects_dynamic_price_threshold_modes(threshold_mode, extra):
+    with pytest.raises(ValueError, match="仅支持固定百分比阈值"):
+        MonitorRule(
+            "invalid-pct-dynamic",
+            "测试指数",
+            "883421.THS",
+            None,
+            threshold_mode=threshold_mode,
+            value_mode="daily_pct_change",
+            **extra,
+        )
 
 
 

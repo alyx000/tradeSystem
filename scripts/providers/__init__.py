@@ -3,6 +3,7 @@ from .tushare_provider import TushareProvider
 from .akshare_provider import AkshareProvider
 from .tdx_provider import TdxProvider
 from .sina_provider import SinaProvider
+from .tonghuashun_provider import TonghuashunProvider
 from .registry import ProviderRegistry
 
 __all__ = [
@@ -12,5 +13,6 @@ __all__ = [
     "AkshareProvider",
     "TdxProvider",
     "SinaProvider",
+    "TonghuashunProvider",
     "ProviderRegistry",
 ]

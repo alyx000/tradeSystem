@@ -28,6 +28,11 @@ providers:
     priority: 3
     note: "新浪实时行情（get_realtime_quotes），免费无 token；频控未做节流，消费方轮询间隔建议 >=3s"
 
+  tonghuashun:
+    enabled: true
+    priority: 4
+    note: "同花顺官方自编指数实时行情（realhead_v6），当前用于 883421 同花顺全A（沪深）"
+
 # 数据采集调度
 schedule:
   pre_market:

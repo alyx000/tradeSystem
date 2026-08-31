@@ -140,7 +140,7 @@ def test_e2e_cli_selects_active_kailaiying_rule(monkeypatch, capsys):
     assert '"status": "complete"' in capsys.readouterr().out
 
 
-def test_e2e_cli_selects_new_guoci_and_zhongke_rules(monkeypatch, capsys):
+def test_e2e_cli_selects_new_guoci_zhongke_and_ths_rules(monkeypatch, capsys):
     registry = object()
     monkeypatch.setattr(main, "setup_providers", lambda config: registry)
     monkeypatch.setattr(
@@ -160,11 +160,11 @@ def test_e2e_cli_selects_new_guoci_and_zhongke_rules(monkeypatch, capsys):
         },
     )
 
-    for selected in intraday_monitor.DEFAULT_RULES[4:6]:
+    for selected in intraday_monitor.DEFAULT_RULES[4:7]:
         assert intraday_monitor.handle_command({}, _args(rule_id=selected.rule_id)) == 0
 
-    assert calls == list(intraday_monitor.DEFAULT_RULES[4:6])
-    assert capsys.readouterr().out.count('"status": "complete"') == 2
+    assert calls == list(intraday_monitor.DEFAULT_RULES[4:7])
+    assert capsys.readouterr().out.count('"status": "complete"') == 3
 
 
 def test_e2e_cli_requires_explicit_real_push_confirmation_before_provider_setup(
@@ -230,6 +230,7 @@ def test_help_describes_current_rules_at_every_command_level():
     assert "凯莱英严格突破172.26元" in root_help
     assert "8月31日监控国瓷材料严格跌破67.22元" in root_help
     assert "中科飞测严格跌破前5个已收盘交易日的前复权MA5" in root_help
+    assert "同花顺全A（沪深）单日跌幅严格超过4.00%" in root_help
     assert "当日累计成交额不少于100亿元" in root_help
     check_help = "".join(command_choices["check"].format_help().split())
     assert "历史已退役规则保持下线" in check_help
@@ -237,6 +238,7 @@ def test_help_describes_current_rules_at_every_command_level():
     assert "凯莱英严格高于172.26元时推送" in check_help
     assert "国瓷材料严格低于67.22元" in check_help
     assert "中科飞测严格低于前5个已收盘交易日MA5时推送" in check_help
+    assert "同花顺全A（沪深）单日涨跌幅严格低于-4.00%时推送" in check_help
     assert "持续命中去重" in check_help
     assert "恢复后再次命中可重推" in check_help
     assert "10点前百亿成交额涨停板" in check_help

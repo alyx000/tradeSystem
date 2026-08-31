@@ -11,6 +11,7 @@ from utils.price_limit import compute_limit_prices
 
 Direction = Literal["below", "above"]
 ThresholdMode = Literal["fixed", "daily_up_limit", "previous_close_ma"]
+ValueMode = Literal["price", "daily_pct_change"]
 
 
 @dataclass(frozen=True)
@@ -34,6 +35,7 @@ class MonitorRule:
     threshold_label: str = "监控线"
     threshold_window: int | None = None
     threshold_provider: str | None = None
+    value_mode: ValueMode = "price"
 
     def __post_init__(self) -> None:
         if self.valid_from and self.valid_until and self.valid_from > self.valid_until:
@@ -57,6 +59,16 @@ class MonitorRule:
                 raise ValueError("前收盘均线规则必须提供 threshold_provider")
         else:
             raise ValueError(f"不支持的阈值模式: {self.threshold_mode}")
+        if self.value_mode not in ("price", "daily_pct_change"):
+            raise ValueError(f"不支持的比较值模式: {self.value_mode}")
+        if self.value_mode == "daily_pct_change" and self.threshold_mode != "fixed":
+            raise ValueError("单日涨跌幅比较值仅支持固定百分比阈值")
+        if self.threshold is not None:
+            value = float(self.threshold)
+            if not math.isfinite(value):
+                raise ValueError("固定阈值必须为有限数")
+            if self.value_mode == "price" and value <= 0:
+                raise ValueError("价格阈值必须为正数")
 
     def resolve_threshold(
         self,
@@ -106,6 +118,26 @@ class MonitorRule:
         if self.direction == "above":
             return price >= resolved if self.inclusive else price > resolved
         raise ValueError(f"不支持的监控方向: {self.direction}")
+
+    def resolve_value(self, quote: dict) -> float:
+        """解析规则实际比较值；涨跌幅统一由最新点位与昨收计算。"""
+        try:
+            price = float(quote.get("price"))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("最新价非法") from exc
+        if not math.isfinite(price) or price <= 0:
+            raise ValueError("最新价非有限或非正数")
+        if self.value_mode == "price":
+            return price
+        try:
+            pre_close = float(quote.get("pre_close"))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("实时前收盘价非法") from exc
+        if not math.isfinite(pre_close) or pre_close <= 0:
+            raise ValueError("实时前收盘价非有限或非正数")
+        # 规范到 8 位小数，避免 96/100 在二进制浮点中变成
+        # -4.0000000000000036，导致“恰好 -4%”被严格小于误判为触发。
+        return round((price / pre_close - 1.0) * 100.0, 8)
 
     def is_effective_on(self, trade_date: date) -> bool:
         """判断规则是否在给定上海自然日有效，日期边界均包含。"""
@@ -213,6 +245,23 @@ ZHONGKE_FEICE_BELOW_PREVIOUS_MA5_20260831_0902 = MonitorRule(
 )
 
 
+THS_ALL_A_HUSHEN_DAILY_DROP_OVER_4PCT = MonitorRule(
+    rule_id="ths-all-a-hushen-daily-drop-over-4pct",
+    instrument_name="同花顺全A（沪深）",
+    code="883421.THS",
+    threshold=-4.0,
+    direction="below",
+    provider="tonghuashun",
+    inclusive=False,
+    emit_on_initial_match=True,
+    action_label="跌破",
+    value_label="单日涨跌幅",
+    value_unit="%",
+    threshold_label="单日涨跌幅监控线",
+    value_mode="daily_pct_change",
+)
+
+
 # 长期规则保留上证指数站上 3955；历史个股规则不再启用。
 # 动态涨停价与前收盘均线能力由 MonitorRule.threshold_mode 统一扩展。
 # 科创50 1700 与凯莱英 172.26 临时规则覆盖 8 月 21 日与 24 日两个
@@ -224,6 +273,7 @@ DEFAULT_RULES: tuple[MonitorRule, ...] = (
     KAILAIYING_BREAKOUT_172_26_20260821_24,
     GUOCI_MATERIALS_BELOW_67_22_20260831,
     ZHONGKE_FEICE_BELOW_PREVIOUS_MA5_20260831_0902,
+    THS_ALL_A_HUSHEN_DAILY_DROP_OVER_4PCT,
 )
 
 
