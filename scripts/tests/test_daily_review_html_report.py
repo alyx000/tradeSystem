@@ -7760,3 +7760,218 @@ def test_cli_returns_nonzero_without_all_seven_current_chunks(tmp_path):
 
     assert result.returncode == 1
     assert not (tmp_path / "should-not-exist.html").exists()
+
+
+def _style_market_effect_payload() -> dict:
+    horizons = {
+        str(horizon): {
+            "sample_count": 1,
+            "median_pct": float(horizon) / 10,
+            "mean_pct": float(horizon) / 10,
+            "positive_count": 1,
+            "positive_rate": 1.0,
+            "shown_rate_pct": 100,
+        }
+        for horizon in (1, 3, 5, 10)
+    }
+    return {
+        "schema": "style-market-effect-v1",
+        "report_date": DATE,
+        "market": {
+            "status": "complete",
+            "as_of": DATE,
+            "current": {
+                "date": DATE,
+                "count": 4,
+                "first": 2,
+                "continuation": 2,
+                "max_height": 3,
+                "board": {
+                    "10": {
+                        "count": 2,
+                        "first": 1,
+                        "continuation": 1,
+                        "max_height": 2,
+                    },
+                    "20": {
+                        "count": 1,
+                        "first": 1,
+                        "continuation": 0,
+                        "max_height": 1,
+                    },
+                    "30": {
+                        "count": 1,
+                        "first": 0,
+                        "continuation": 1,
+                        "max_height": 3,
+                    },
+                },
+                "bse": [
+                    {"code": "920001.BJ", "name": "北证样本", "height": 3}
+                ],
+            },
+            "history": [
+                {
+                    "date": DATE,
+                    "limit_up_count": 4,
+                    "first_board_count": 2,
+                    "consecutive_board_count": 2,
+                    "board_10_count": 2,
+                    "board_20_count": 1,
+                    "board_30_count": 1,
+                    "bse_count": 1,
+                }
+            ],
+            "errors": [],
+        },
+        "shock": {
+            "date": DATE,
+            "status": "ok",
+            "event_count": 1,
+            "horizons": horizons,
+            "errors": [],
+        },
+    }
+
+
+def test_s4_style_market_effect_is_auto_injected_with_board_bse_and_shock(
+    assembler, tmp_path
+):
+    chunks = tmp_path / "chunks"
+    _write_chunks(chunks)
+    html = assembler.render_report(
+        chunks,
+        DATE,
+        style_market_effect=_style_market_effect_payload(),
+        include_legacy_sections=True,
+    )
+
+    assembler.validate_report(html)
+    assert html.count('data-style-market-effect="v1"') == 1
+    assert html.count('data-style-shock-feedback="v1"') == 1
+    assert "非ST涨停4只，首板2只、连板2只，最高3板" in html
+    assert "10cm 2只（首板1 / 连板1，最高2板）" in html
+    assert "北证样本（920001.BJ）" in html
+    assert "T+10 中位+1.0%、正收益1/1（100%）" in html
+
+
+def test_s4_style_market_effect_rejects_board_sum_or_shock_mismatch(
+    assembler, tmp_path
+):
+    chunks = tmp_path / "chunks"
+    _write_chunks(chunks)
+    html = assembler.render_report(
+        chunks,
+        DATE,
+        style_market_effect=_style_market_effect_payload(),
+        include_legacy_sections=True,
+    )
+
+    _assert_report_error(
+        assembler,
+        _replace_once(
+            html,
+            'data-board-20-count="1"',
+            'data-board-20-count="2"',
+        ),
+        "invalid_style_market_effect",
+    )
+    _assert_report_error(
+        assembler,
+        _replace_once(
+            html,
+            'data-source-status="ok" data-event-count="1"',
+            'data-source-status="ok" data-event-count="2"',
+        ),
+        "invalid_style_shock_feedback",
+    )
+
+
+def test_style_market_effect_loader_recomputes_non_st_widths_and_shock_horizons(
+    assembler, tmp_path
+):
+    daily_root = tmp_path / "daily"
+    report_dir = daily_root / DATE
+    report_dir.mkdir(parents=True)
+    post_market = {
+        "date": DATE,
+        "raw_data": {
+            "limit_up": {
+                "_source": "fixture.limit-up",
+                "count_ex_st": 3,
+                "consecutive_board_count_ex_st": 2,
+                "highest_board_ex_st": 3,
+                "stocks": [
+                    {"code": "000001.SZ", "name": "主板首板", "limit_times": 1},
+                    {"code": "300001.SZ", "name": "双创连板", "limit_times": 2},
+                    {"code": "920001.BJ", "name": "北证连板", "limit_times": 3},
+                    {"code": "600001.SH", "name": "ST样本", "limit_times": 1},
+                ],
+            }
+        },
+    }
+    (report_dir / "post-market.yaml").write_text(
+        json.dumps(post_market, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    shock_report = tmp_path / "shock.md"
+    shock_report.write_text(
+        f"""# 严重异动反馈观察 · {DATE}
+
+- 窗口内事件：2 例（同股二次触发算两例）
+- 状态：**partial**（1 只不可判，见下方缺口）
+
+### 汇总统计 [判断]
+
+| 地平线 | 样本 | 中位数 | 均值 | 正收益 | 最好 | 最差 |
+|---|---|---|---|---|---|---|
+| T+1 | 2 | +1.0% | +2.0% | 1/2（50%） | +3.0% | -1.0% |
+| T+3 | 2 | -2.0% | -1.0% | 0/2（0%） | +0.0% | -2.0% |
+| T+5 | 1 | +4.0% | +4.0% | 1/1（100%） | +4.0% | +4.0% |
+| T+10 | 1 | -5.0% | -5.0% | 0/1（0%） | -5.0% | -5.0% |
+""",
+        encoding="utf-8",
+    )
+
+    payload = assembler.load_style_market_effect(
+        daily_root,
+        shock_report,
+        DATE,
+    )
+
+    assert payload["market"]["status"] == "complete"
+    assert payload["market"]["current"]["count"] == 3
+    assert payload["market"]["current"]["board"]["30"] == {
+        "count": 1,
+        "first": 0,
+        "continuation": 1,
+        "max_height": 3,
+    }
+    assert payload["shock"]["status"] == "partial"
+    assert payload["shock"]["horizons"]["10"]["median_pct"] == -5.0
+
+    next_date = (date_type.fromisoformat(DATE) + timedelta(days=1)).isoformat()
+    assert assembler.load_style_market_effect(
+        daily_root,
+        None,
+        next_date,
+    )["market"]["status"] == "partial"
+    assert assembler.load_style_market_effect(
+        daily_root,
+        None,
+        next_date,
+        report_is_open=False,
+    )["market"]["status"] == "latest_available"
+
+
+def test_s4_style_market_effect_missing_state_is_visible_and_never_zero_filled(
+    assembler, tmp_path
+):
+    html, _ = _render_valid(assembler, tmp_path / "chunks")
+
+    assembler.validate_report(html)
+    assert "涨停宽度、连板延续与北交所数据不完整，本日无法判定" in html
+    assert "严重异动反馈数据不完整，本日无法判定" in html
+    style = _extract_section(html, "s4")[0]
+    assert "非ST涨停0只" not in style
+    assert "北交所涨停0只" not in style

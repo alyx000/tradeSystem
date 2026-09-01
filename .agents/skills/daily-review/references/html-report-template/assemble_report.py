@@ -25,6 +25,7 @@ import sqlite3
 import sys
 import tempfile
 import unicodedata
+import yaml
 from dataclasses import dataclass, field
 from datetime import date as date_type, datetime, timedelta
 from html import escape
@@ -36,6 +37,7 @@ from urllib.parse import urlparse
 
 
 REPORT_SCHEMA = "compact-v2"
+STYLE_MARKET_EFFECT_SCHEMA = "style-market-effect-v1"
 CAPACITY_MANIFEST_SCHEMA = "capacity-health-v1"
 NEW_HIGH_MANIFEST_SCHEMA = "rolling-new-high-structure-v1"
 CAPACITY_MIN_UNIVERSE = 4_000
@@ -331,6 +333,8 @@ STRUCTURED_CONTRACT_ATTRIBUTES = (
     "data-emotion-height-chart",
     "data-board-break-feedback",
     "data-style-board-break-feedback",
+    "data-style-market-effect",
+    "data-style-shock-feedback",
     "data-emotion-node",
     "data-sector-concentration",
     "data-sector-labels",
@@ -398,6 +402,17 @@ STYLE_BOARD_BREAK_FEEDBACK_NONE_TEXT = "[事实]本日无断板股次日赚钱�
 STYLE_BOARD_BREAK_FEEDBACK_MISSING_TEXT = (
     "[事实]断板股次日赚钱效应数据不完整，本日无法判定"
 )
+STYLE_MARKET_EFFECT_MISSING_TEXT = (
+    "[事实]涨停宽度、连板延续与北交所数据不完整，本日无法判定"
+)
+STYLE_SHOCK_FEEDBACK_NONE_TEXT = "[判断]严重异动反馈回看窗口内无事件"
+STYLE_SHOCK_FEEDBACK_MISSING_TEXT = (
+    "[判断]严重异动反馈数据不完整，本日无法判定"
+)
+STYLE_MARKET_EFFECT_MAX_SAMPLES = 5
+STYLE_MARKET_EFFECT_MAX_BSE_DISPLAY = 8
+STYLE_BOARD_WIDTHS = (10, 20, 30)
+STYLE_SHOCK_HORIZONS = (1, 3, 5, 10)
 FEEDBACK_CODE_RE = re.compile(r"^\d{6}(?:\.(?:SH|SZ|BJ))?$")
 SECTOR_CONCENTRATION_NONE_TEXT = "[事实]本日无可用板块集中度数据"
 SECTOR_CONCENTRATION_MISSING_TEXT = "[事实]板块集中度数据不完整，本日无法判定"
@@ -4035,6 +4050,406 @@ class _ReportParser(HTMLParser):
                 section="s4",
             )
 
+    def _validate_style_market_effect_contract(
+        self,
+        report_date: date_type,
+    ) -> None:
+        """校验④固定板型/北交所模块及严重异动已实现反馈摘要。"""
+
+        contracts = self.structured_contracts["data-style-market-effect"]
+        if len(contracts) != 1:
+            raise ReportValidationError(
+                "invalid_style_market_effect",
+                "s4 必须且只能包含一份涨停宽度、连板延续与北交所模块",
+                section="s4",
+            )
+        contract = contracts[0]
+        compact_text = re.sub(r"\s+", "", "".join(contract.rendered_text)).rstrip(
+            "。.;；"
+        )
+        reviewed_through = contract.attrs.get("data-reviewed-through", "")
+        source_status = contract.attrs.get("data-source-status", "")
+        ops_text = "".join(self.section_text["ops"])
+        if (
+            contract.section != "s4"
+            or contract.tag != "div"
+            or contract.default_hidden
+            or reviewed_through != report_date.isoformat()
+        ):
+            raise ReportValidationError(
+                "invalid_style_market_effect",
+                "板型与北交所模块必须位于 s4、默认可见且复核到报告日",
+                section="s4",
+            )
+        if contract.value == "missing-data":
+            if (
+                source_status not in {"partial", "source_failed"}
+                or contract.attrs.get("data-as-of") != report_date.isoformat()
+                or STYLE_MARKET_EFFECT_MISSING_TEXT not in compact_text
+                or "涨停宽度、连板延续与北交所数据不完整" not in ops_text
+            ):
+                raise ReportValidationError(
+                    "invalid_style_market_effect",
+                    "板型缺失态必须保留真实状态和可见 ops 缺口，不能补 0",
+                    section="s4",
+                )
+        else:
+            as_of = contract.attrs.get("data-as-of", "")
+            totals = {
+                "count": _bounded_int_attr(
+                    contract.attrs, "data-limit-up-count", minimum=0, maximum=10_000
+                ),
+                "first": _bounded_int_attr(
+                    contract.attrs, "data-first-board-count", minimum=0, maximum=10_000
+                ),
+                "continuation": _bounded_int_attr(
+                    contract.attrs,
+                    "data-consecutive-board-count",
+                    minimum=0,
+                    maximum=10_000,
+                ),
+                "max_height": _bounded_int_attr(
+                    contract.attrs, "data-highest-board", minimum=0, maximum=100
+                ),
+            }
+            boards: dict[int, dict[str, int | None]] = {}
+            for width in STYLE_BOARD_WIDTHS:
+                boards[width] = {
+                    key: _bounded_int_attr(
+                        contract.attrs,
+                        f'data-board-{width}-{key.replace("_", "-")}',
+                        minimum=0,
+                        maximum=100 if key == "max_height" else 10_000,
+                    )
+                    for key in ("count", "first", "continuation", "max_height")
+                }
+            if (
+                contract.value != "v1"
+                or source_status not in {"complete", "latest_available", "partial"}
+                or not _valid_date(as_of)
+                or as_of > report_date.isoformat()
+                or (source_status == "complete" and as_of != report_date.isoformat())
+                or (
+                    source_status == "latest_available"
+                    and as_of >= report_date.isoformat()
+                )
+                or any(value is None for value in totals.values())
+                or any(
+                    value is None
+                    for item in boards.values()
+                    for value in item.values()
+                )
+            ):
+                raise ReportValidationError(
+                    "invalid_style_market_effect",
+                    "板型完整态必须保留同日/最新可用来源、总量和 10/20/30cm 分项",
+                    section="s4",
+                )
+            assert all(value is not None for value in totals.values())
+            if (
+                totals["first"] + totals["continuation"] != totals["count"]
+                or sum(int(boards[width]["count"]) for width in STYLE_BOARD_WIDTHS)
+                != totals["count"]
+                or sum(int(boards[width]["first"]) for width in STYLE_BOARD_WIDTHS)
+                != totals["first"]
+                or sum(
+                    int(boards[width]["continuation"])
+                    for width in STYLE_BOARD_WIDTHS
+                )
+                != totals["continuation"]
+                or max(
+                    int(boards[width]["max_height"])
+                    for width in STYLE_BOARD_WIDTHS
+                )
+                != totals["max_height"]
+                or any(
+                    int(item["first"]) + int(item["continuation"])
+                    != int(item["count"])
+                    for item in boards.values()
+                )
+            ):
+                raise ReportValidationError(
+                    "invalid_style_market_effect",
+                    "涨停总量、首板/连板与 10/20/30cm 分项无法对账",
+                    section="s4",
+                )
+
+            bse = {
+                "count": _bounded_int_attr(
+                    contract.attrs, "data-bse-count", minimum=0, maximum=10_000
+                ),
+                "first": _bounded_int_attr(
+                    contract.attrs, "data-bse-first", minimum=0, maximum=10_000
+                ),
+                "continuation": _bounded_int_attr(
+                    contract.attrs,
+                    "data-bse-continuation",
+                    minimum=0,
+                    maximum=10_000,
+                ),
+                "max_height": _bounded_int_attr(
+                    contract.attrs, "data-bse-max-height", minimum=0, maximum=100
+                ),
+            }
+            displayed_count = _bounded_int_attr(
+                contract.attrs,
+                "data-bse-displayed-count",
+                minimum=0,
+                maximum=STYLE_MARKET_EFFECT_MAX_BSE_DISPLAY,
+            )
+            codes = [
+                value
+                for value in contract.attrs.get("data-bse-codes", "").split(",")
+                if value
+            ]
+            names = [
+                value
+                for value in contract.attrs.get("data-bse-names", "").split("|")
+                if value
+            ]
+            if (
+                any(value is None for value in bse.values())
+                or any(int(bse[key]) != int(boards[30][key]) for key in bse)
+                or displayed_count is None
+                or displayed_count != len(codes)
+                or displayed_count != len(names)
+                or displayed_count
+                != min(int(bse["count"]), STYLE_MARKET_EFFECT_MAX_BSE_DISPLAY)
+                or len(codes) != len(set(codes))
+                or any(
+                    not code.endswith(".BJ")
+                    or not EMOTION_LEADER_CODE_RE.fullmatch(code)
+                    for code in codes
+                )
+                or any(not name or name not in compact_text for name in names)
+            ):
+                raise ReportValidationError(
+                    "invalid_style_market_effect",
+                    "北交所必须与 30cm 分项同值，并保留可见代表身份",
+                    section="s4",
+                )
+
+            history_samples = _bounded_int_attr(
+                contract.attrs,
+                "data-history-samples",
+                minimum=1,
+                maximum=STYLE_MARKET_EFFECT_MAX_SAMPLES,
+            )
+            history_dates = contract.attrs.get("data-history-dates", "").split(",")
+            total_series = contract.attrs.get("data-limit-up-series", "").split(",")
+            first_series = contract.attrs.get("data-first-board-series", "").split(",")
+            continuation_series = contract.attrs.get(
+                "data-consecutive-board-series", ""
+            ).split(",")
+            board_series = {
+                width: contract.attrs.get(f"data-board-{width}-series", "").split(",")
+                for width in STYLE_BOARD_WIDTHS
+            }
+            bse_series = contract.attrs.get("data-bse-series", "").split(",")
+            numeric_values = (
+                *total_series,
+                *first_series,
+                *continuation_series,
+                *(
+                    value
+                    for width in STYLE_BOARD_WIDTHS
+                    for value in board_series[width]
+                ),
+                *bse_series,
+            )
+            if (
+                history_samples is None
+                or len(history_dates) != history_samples
+                or len(total_series) != history_samples
+                or len(first_series) != history_samples
+                or len(continuation_series) != history_samples
+                or any(
+                    len(board_series[width]) != history_samples
+                    for width in STYLE_BOARD_WIDTHS
+                )
+                or len(bse_series) != history_samples
+                or history_dates != sorted(set(history_dates))
+                or history_dates[-1] != as_of
+                or any(not _valid_date(value) for value in history_dates)
+                or any(
+                    not re.fullmatch(r"(?:0|[1-9]\d{0,5})", value)
+                    for value in numeric_values
+                )
+                or any(
+                    int(first_value) + int(continuation_value) != int(total_value)
+                    for total_value, first_value, continuation_value in zip(
+                        total_series, first_series, continuation_series
+                    )
+                )
+                or any(
+                    sum(
+                        int(board_series[width][index])
+                        for width in STYLE_BOARD_WIDTHS
+                    )
+                    != int(total_series[index])
+                    or int(board_series[30][index]) != int(bse_series[index])
+                    for index in range(history_samples)
+                )
+                or int(total_series[-1]) != totals["count"]
+                or int(first_series[-1]) != totals["first"]
+                or int(continuation_series[-1]) != totals["continuation"]
+                or any(
+                    int(board_series[width][-1]) != boards[width]["count"]
+                    for width in STYLE_BOARD_WIDTHS
+                )
+                or int(bse_series[-1]) != bse["count"]
+            ):
+                raise ReportValidationError(
+                    "invalid_style_market_effect",
+                    "最近盘后样本日期、首板/连板、10/20/30cm 与北交所序列必须同长、闭合且落到 as-of",
+                    section="s4",
+                )
+
+            visible_terms = [
+                "[事实]涨停宽度与连板延续",
+                f"非ST涨停{totals['count']}只",
+                f"首板{totals['first']}只、连板{totals['continuation']}只",
+                f"最高{totals['max_height']}板",
+                "[事实]北交所/30cm",
+                "总涨停/首板/连板/10cm/20cm/30cm",
+            ]
+            visible_terms.extend(
+                f"{width}cm{boards[width]['count']}只（首板{boards[width]['first']}/"
+                f"连板{boards[width]['continuation']}，最高{boards[width]['max_height']}板）"
+                for width in STYLE_BOARD_WIDTHS
+            )
+            if any(term not in compact_text for term in visible_terms):
+                raise ReportValidationError(
+                    "invalid_style_market_effect",
+                    "板型模块必须把总宽度、首板/连板与 10/20/30cm 分项默认可见",
+                    section="s4",
+                )
+            if (
+                source_status == "partial"
+                and "涨停宽度、连板延续与北交所数据不完整" not in ops_text
+            ):
+                raise ReportValidationError(
+                    "invalid_style_market_effect",
+                    "板型部分态必须登记可见 ops 缺口",
+                    section="s4",
+                )
+
+        shock_contracts = self.structured_contracts["data-style-shock-feedback"]
+        if len(shock_contracts) != 1:
+            raise ReportValidationError(
+                "invalid_style_shock_feedback",
+                "s4 必须且只能包含一份严重异动已实现反馈摘要",
+                section="s4",
+            )
+        shock = shock_contracts[0]
+        shock_text = re.sub(r"\s+", "", "".join(shock.rendered_text)).rstrip(
+            "。.;；"
+        )
+        shock_status = shock.attrs.get("data-source-status", "")
+        if (
+            shock.section != "s4"
+            or shock.tag != "p"
+            or shock.default_hidden
+            or shock.attrs.get("data-as-of") != report_date.isoformat()
+            or "[判断]" not in shock_text
+        ):
+            raise ReportValidationError(
+                "invalid_style_shock_feedback",
+                "严重异动反馈摘要必须位于 s4、默认可见并标注判断",
+                section="s4",
+            )
+        if shock.value == "missing-data":
+            if (
+                shock_status not in {"partial", "source_failed"}
+                or shock_text != STYLE_SHOCK_FEEDBACK_MISSING_TEXT
+                or "严重异动反馈数据不完整" not in ops_text
+            ):
+                raise ReportValidationError(
+                    "invalid_style_shock_feedback",
+                    "严重异动反馈缺失态必须保留状态和 ops 缺口，不能补 0",
+                    section="s4",
+                )
+            return
+        if shock.value == "none":
+            event_count = _bounded_int_attr(
+                shock.attrs, "data-event-count", minimum=0, maximum=0
+            )
+            if (
+                shock_status != "empty"
+                or event_count != 0
+                or shock_text != STYLE_SHOCK_FEEDBACK_NONE_TEXT
+            ):
+                raise ReportValidationError(
+                    "invalid_style_shock_feedback",
+                    "严重异动空窗必须保留真实 empty 状态",
+                    section="s4",
+                )
+            return
+
+        event_count = _bounded_int_attr(
+            shock.attrs, "data-event-count", minimum=1, maximum=10_000
+        )
+        if (
+            shock.value != "v1"
+            or shock_status not in {"ok", "partial"}
+            or event_count is None
+            or f"严重异动已实现反馈（事件{event_count}例）" not in shock_text
+        ):
+            raise ReportValidationError(
+                "invalid_style_shock_feedback",
+                "严重异动摘要必须保留事件数与来源状态",
+                section="s4",
+            )
+        for horizon in STYLE_SHOCK_HORIZONS:
+            sample_count = _bounded_int_attr(
+                shock.attrs,
+                f"data-t{horizon}-sample-count",
+                minimum=1,
+                maximum=event_count,
+            )
+            positive_count = _bounded_int_attr(
+                shock.attrs,
+                f"data-t{horizon}-positive-count",
+                minimum=0,
+                maximum=event_count,
+            )
+            median_pct = _finite_float(
+                shock.attrs.get(f"data-t{horizon}-median-pct")
+            )
+            positive_rate = _finite_float(
+                shock.attrs.get(f"data-t{horizon}-positive-rate")
+            )
+            if (
+                sample_count is None
+                or positive_count is None
+                or positive_count > sample_count
+                or median_pct is None
+                or positive_rate is None
+                or not 0 <= positive_rate <= 1
+                or not math.isclose(
+                    positive_rate,
+                    round(positive_count / sample_count, 3),
+                    abs_tol=0.0005,
+                )
+                or f"T+{horizon}中位{median_pct:+.1f}%" not in shock_text
+                or (
+                    f"正收益{positive_count}/{sample_count}"
+                    f"（{round(positive_count / sample_count * 100)}%）"
+                )
+                not in shock_text
+            ):
+                raise ReportValidationError(
+                    "invalid_style_shock_feedback",
+                    "严重异动摘要的 T+1/T+3/T+5/T+10 样本、中位数与正收益率必须可见且可对账",
+                    section="s4",
+                )
+        if shock_status == "partial" and "严重异动反馈数据不完整" not in ops_text:
+            raise ReportValidationError(
+                "invalid_style_shock_feedback",
+                "严重异动部分态必须登记可见 ops 缺口",
+                section="s4",
+            )
+
     def _validate_emotion_node_contract(self, report_date: date_type) -> None:
         contracts = self.structured_contracts["data-emotion-node"]
         if len(contracts) != 1:
@@ -4780,6 +5195,7 @@ class _ReportParser(HTMLParser):
         self._validate_emotion_height_chart_contract(report_date)
         self._validate_board_break_feedback_contract(report_date)
         self._validate_style_board_break_feedback_contract(report_date)
+        self._validate_style_market_effect_contract(report_date)
         self._validate_emotion_node_contract(report_date)
         self._validate_capacity_health_contract(report_date)
         self._validate_sector_contracts(report_date)
@@ -6928,6 +7344,641 @@ def _render_emotion_node(
 </div>'''
 
 
+def _style_exact_nonnegative_int(value: object) -> int | None:
+    number = _finite_float(value)
+    if number is None or number < 0 or not number.is_integer():
+        return None
+    return int(number)
+
+
+def _style_is_st_name(value: object) -> bool:
+    normalized = re.sub(r"\s+", "", str(value or "")).upper()
+    return (
+        normalized.startswith(("ST", "*ST", "S*ST", "SST"))
+        or normalized.endswith("退")
+        or "退市" in normalized
+    )
+
+
+def _style_board_width(code: str) -> int | None:
+    normalized = code.upper()
+    if not EMOTION_LEADER_CODE_RE.fullmatch(normalized):
+        return None
+    bare = normalized[:6]
+    if normalized.endswith(".BJ"):
+        return 30
+    if bare.startswith(("300", "301", "688", "689")):
+        return 20
+    return 10
+
+
+def _load_style_daily_snapshot(
+    path: Path,
+    source_date: str,
+) -> tuple[dict[str, object] | None, str | None]:
+    """读取一份盘后归档并重算非 ST 板型分布；任何身份歧义都 fail-closed。"""
+
+    try:
+        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as exc:
+        return None, f"{source_date} 盘后归档不可读：{type(exc).__name__}"
+    if not isinstance(raw, Mapping) or str(raw.get("date") or "") != source_date:
+        return None, f"{source_date} 盘后归档日期或顶层结构无效"
+    raw_data = raw.get("raw_data")
+    limit_up = raw_data.get("limit_up") if isinstance(raw_data, Mapping) else None
+    if not isinstance(limit_up, Mapping):
+        return None, f"{source_date} 缺少 raw_data.limit_up"
+    stocks = limit_up.get("stocks")
+    if not isinstance(stocks, list) or not str(limit_up.get("_source") or "").strip():
+        return None, f"{source_date} 涨停池或来源标识无效"
+
+    board_rows: dict[int, list[dict[str, object]]] = {
+        width: [] for width in STYLE_BOARD_WIDTHS
+    }
+    seen_codes: set[str] = set()
+    for item in stocks:
+        if not isinstance(item, Mapping):
+            return None, f"{source_date} 涨停池存在非对象明细"
+        code = str(item.get("code") or "").upper()
+        name = str(item.get("name") or "").strip()
+        height = _style_exact_nonnegative_int(item.get("limit_times"))
+        width = _style_board_width(code)
+        if (
+            width is None
+            or not name
+            or height is None
+            or height < 1
+            or code in seen_codes
+        ):
+            return None, f"{source_date} 涨停池代码、名称或连板高度无效"
+        seen_codes.add(code)
+        if _style_is_st_name(name):
+            continue
+        board_rows[width].append(
+            {"code": code, "name": name, "height": height}
+        )
+
+    board: dict[str, dict[str, int]] = {}
+    for width, rows in board_rows.items():
+        first = sum(int(item["height"]) == 1 for item in rows)
+        continuation = len(rows) - first
+        board[str(width)] = {
+            "count": len(rows),
+            "first": first,
+            "continuation": continuation,
+            "max_height": max(
+                (int(item["height"]) for item in rows), default=0
+            ),
+        }
+
+    count = sum(item["count"] for item in board.values())
+    first = sum(item["first"] for item in board.values())
+    continuation = sum(item["continuation"] for item in board.values())
+    max_height = max(item["max_height"] for item in board.values())
+    declared = {
+        "count": _style_exact_nonnegative_int(limit_up.get("count_ex_st")),
+        "continuation": _style_exact_nonnegative_int(
+            limit_up.get("consecutive_board_count_ex_st")
+        ),
+        "max_height": _style_exact_nonnegative_int(
+            limit_up.get("highest_board_ex_st")
+        ),
+    }
+    if declared != {
+        "count": count,
+        "continuation": continuation,
+        "max_height": max_height,
+    }:
+        return None, f"{source_date} 非 ST 涨停汇总无法与逐股池对账"
+
+    bse_rows = sorted(
+        board_rows[30],
+        key=lambda item: (-int(item["height"]), str(item["code"])),
+    )
+    return {
+        "date": source_date,
+        "source": str(limit_up.get("_source")),
+        "count": count,
+        "first": first,
+        "continuation": continuation,
+        "max_height": max_height,
+        "board": board,
+        "bse": bse_rows,
+    }, None
+
+
+def _load_style_market_snapshot(
+    daily_root: str | os.PathLike[str] | None,
+    report_date: str,
+    report_is_open: bool | None = None,
+) -> dict[str, object]:
+    if daily_root is None:
+        return {
+            "schema": STYLE_MARKET_EFFECT_SCHEMA,
+            "report_date": report_date,
+            "status": "source_failed",
+            "errors": ["未提供 daily 盘后归档目录"],
+        }
+    root = Path(daily_root)
+    if not root.is_dir():
+        return {
+            "schema": STYLE_MARKET_EFFECT_SCHEMA,
+            "report_date": report_date,
+            "status": "source_failed",
+            "errors": [f"盘后归档目录不存在：{root.name}"],
+        }
+
+    try:
+        dated_dirs = sorted(
+            (
+                path
+                for path in root.iterdir()
+                if path.is_dir()
+                and _valid_date(path.name)
+                and path.name <= report_date
+            ),
+            key=lambda path: path.name,
+        )
+    except OSError as exc:
+        return {
+            "schema": STYLE_MARKET_EFFECT_SCHEMA,
+            "report_date": report_date,
+            "status": "source_failed",
+            "errors": [f"盘后归档目录不可读：{type(exc).__name__}"],
+        }
+    valid: list[dict[str, object]] = []
+    errors: list[str] = []
+    for directory in reversed(dated_dirs):
+        snapshot, error = _load_style_daily_snapshot(
+            directory / "post-market.yaml", directory.name
+        )
+        if snapshot is not None:
+            valid.append(snapshot)
+            if len(valid) >= STYLE_MARKET_EFFECT_MAX_SAMPLES:
+                break
+        elif len(errors) < STYLE_MARKET_EFFECT_MAX_SAMPLES:
+            errors.append(error or f"{directory.name} 盘后归档不可判")
+    if not valid:
+        return {
+            "schema": STYLE_MARKET_EFFECT_SCHEMA,
+            "report_date": report_date,
+            "status": "source_failed",
+            "errors": errors or ["报告日以前无可用盘后归档"],
+        }
+
+    valid.reverse()
+    current = valid[-1]
+    as_of = str(current["date"])
+    if as_of == report_date:
+        status = "complete"
+    elif report_is_open is False:
+        status = "latest_available"
+    else:
+        status = "partial"
+    return {
+        "schema": STYLE_MARKET_EFFECT_SCHEMA,
+        "report_date": report_date,
+        "as_of": as_of,
+        "status": status,
+        "current": current,
+        "history": [
+            {
+                "date": item["date"],
+                "limit_up_count": item["count"],
+                "first_board_count": item["first"],
+                "consecutive_board_count": item["continuation"],
+                "board_10_count": item["board"]["10"]["count"],
+                "board_20_count": item["board"]["20"]["count"],
+                "board_30_count": item["board"]["30"]["count"],
+                "bse_count": item["board"]["30"]["count"],
+            }
+            for item in valid
+        ],
+        "errors": errors,
+    }
+
+
+def _load_style_shock_snapshot(
+    path: str | os.PathLike[str] | None,
+    report_date: str,
+) -> dict[str, object]:
+    if path is None:
+        return {
+            "date": report_date,
+            "status": "source_failed",
+            "errors": ["未提供严重异动反馈报告"],
+        }
+    source = Path(path)
+    try:
+        text = source.read_text(encoding="utf-8")
+    except OSError as exc:
+        return {
+            "date": report_date,
+            "status": "source_failed",
+            "errors": [f"{source.name}: {type(exc).__name__}"],
+        }
+    title_match = re.search(
+        r"^#\s+严重异动反馈观察\s*·\s*(\d{4}-\d{2}-\d{2})\s*$",
+        text,
+        re.MULTILINE,
+    )
+    status_match = re.search(r"^-\s*状态：([^\n]+)$", text, re.MULTILINE)
+    event_match = re.search(r"^-\s*窗口内事件：(\d+)\s*例", text, re.MULTILINE)
+    if not title_match or title_match.group(1) != report_date or not status_match:
+        return {
+            "date": report_date,
+            "status": "source_failed",
+            "errors": [f"{source.name}: 日期或状态行无效"],
+        }
+    status_text = re.sub(r"[*_`]", "", status_match.group(1)).strip().lower()
+    if "source_failed" in status_text or "源失败" in status_text:
+        status = "source_failed"
+    elif status_text.startswith("partial"):
+        status = "partial"
+    elif status_text.startswith("empty"):
+        status = "empty"
+    elif status_text.startswith("ok"):
+        status = "ok"
+    else:
+        status = "source_failed"
+
+    event_count = int(event_match.group(1)) if event_match else None
+    if status == "empty" and event_count == 0:
+        return {
+            "date": report_date,
+            "status": "empty",
+            "event_count": 0,
+            "horizons": {},
+            "errors": [],
+        }
+    if status not in {"ok", "partial"} or event_count is None or event_count <= 0:
+        return {
+            "date": report_date,
+            "status": status
+            if status in {"partial", "source_failed"}
+            else "source_failed",
+            "event_count": event_count,
+            "horizons": {},
+            "errors": [f"{source.name}: 事件数或完整状态无效"],
+        }
+
+    row_re = re.compile(
+        r"^\|\s*T\+(1|3|5|10)\s*\|\s*(\d+)\s*\|\s*"
+        r"([+-]?\d+(?:\.\d+)?)%\s*\|\s*([+-]?\d+(?:\.\d+)?)%\s*\|\s*"
+        r"(\d+)\s*/\s*(\d+)（(\d+)%）\s*\|",
+        re.MULTILINE,
+    )
+    horizons: dict[str, dict[str, object]] = {}
+    for match in row_re.finditer(text):
+        (
+            horizon,
+            sample,
+            median_value,
+            mean_value,
+            positive,
+            denominator,
+            shown_rate,
+        ) = match.groups()
+        sample_count = int(sample)
+        positive_count = int(positive)
+        denominator_count = int(denominator)
+        if (
+            horizon in horizons
+            or sample_count <= 0
+            or denominator_count != sample_count
+            or positive_count > sample_count
+            or int(shown_rate) != round(positive_count / sample_count * 100)
+        ):
+            return {
+                "date": report_date,
+                "status": "partial" if status == "partial" else "source_failed",
+                "event_count": event_count,
+                "horizons": {},
+                "errors": [f"{source.name}: 汇总统计无法对账"],
+            }
+        horizons[horizon] = {
+            "sample_count": sample_count,
+            "median_pct": float(median_value),
+            "mean_pct": float(mean_value),
+            "positive_count": positive_count,
+            "positive_rate": round(positive_count / sample_count, 3),
+            "shown_rate_pct": int(shown_rate),
+        }
+    if set(horizons) != {str(value) for value in STYLE_SHOCK_HORIZONS}:
+        return {
+            "date": report_date,
+            "status": "partial" if status == "partial" else "source_failed",
+            "event_count": event_count,
+            "horizons": {},
+            "errors": [f"{source.name}: 缺少 T+1/T+3/T+5/T+10 汇总"],
+        }
+    return {
+        "date": report_date,
+        "status": status,
+        "event_count": event_count,
+        "horizons": horizons,
+        "errors": [],
+    }
+
+
+def load_style_market_effect(
+    daily_root: str | os.PathLike[str] | None,
+    shock_report: str | os.PathLike[str] | None,
+    report_date: str,
+    *,
+    report_is_open: bool | None = None,
+) -> dict[str, object]:
+    """装载④风格固定模块：板型/北交所来自盘后 YAML，异动来自同日报告。"""
+
+    return {
+        "schema": STYLE_MARKET_EFFECT_SCHEMA,
+        "report_date": report_date,
+        "market": _load_style_market_snapshot(
+            daily_root,
+            report_date,
+            report_is_open,
+        ),
+        "shock": _load_style_shock_snapshot(shock_report, report_date),
+    }
+
+
+def _style_format_signed_pct(value: object) -> str:
+    number = float(value)
+    return f"{number:+.1f}%"
+
+
+def _render_style_shock_feedback(
+    shock: Mapping[str, object], report_date: str
+) -> str:
+    status = str(shock.get("status") or "source_failed")
+    if status == "empty" and _style_exact_nonnegative_int(shock.get("event_count")) == 0:
+        return (
+            f'<p data-style-shock-feedback="none" data-as-of="{escape(report_date)}" '
+            f'data-source-status="empty" data-event-count="0">'
+            f"{STYLE_SHOCK_FEEDBACK_NONE_TEXT}</p>"
+        )
+    horizons = shock.get("horizons")
+    event_count = _style_exact_nonnegative_int(shock.get("event_count"))
+    if (
+        status not in {"ok", "partial"}
+        or event_count is None
+        or event_count <= 0
+        or not isinstance(horizons, Mapping)
+        or set(horizons) != {str(value) for value in STYLE_SHOCK_HORIZONS}
+    ):
+        normalized = "partial" if status == "partial" else "source_failed"
+        return (
+            f'<p data-style-shock-feedback="missing-data" data-as-of="{escape(report_date)}" '
+            f'data-source-status="{normalized}">{STYLE_SHOCK_FEEDBACK_MISSING_TEXT}</p>'
+        )
+
+    attrs: list[str] = []
+    visible: list[str] = []
+    for horizon in STYLE_SHOCK_HORIZONS:
+        item = horizons[str(horizon)]
+        if not isinstance(item, Mapping):
+            return (
+                f'<p data-style-shock-feedback="missing-data" data-as-of="{escape(report_date)}" '
+                f'data-source-status="source_failed">{STYLE_SHOCK_FEEDBACK_MISSING_TEXT}</p>'
+            )
+        sample_count = _style_exact_nonnegative_int(item.get("sample_count"))
+        positive_count = _style_exact_nonnegative_int(item.get("positive_count"))
+        median_pct = _finite_float(item.get("median_pct"))
+        positive_rate = _finite_float(item.get("positive_rate"))
+        shown_rate = _style_exact_nonnegative_int(item.get("shown_rate_pct"))
+        if (
+            sample_count is None
+            or sample_count <= 0
+            or positive_count is None
+            or positive_count > sample_count
+            or median_pct is None
+            or positive_rate is None
+            or shown_rate is None
+        ):
+            return (
+                f'<p data-style-shock-feedback="missing-data" data-as-of="{escape(report_date)}" '
+                f'data-source-status="source_failed">{STYLE_SHOCK_FEEDBACK_MISSING_TEXT}</p>'
+            )
+        prefix = f"data-t{horizon}"
+        attrs.extend(
+            (
+                f'{prefix}-sample-count="{sample_count}"',
+                f'{prefix}-median-pct="{median_pct:.1f}"',
+                f'{prefix}-positive-count="{positive_count}"',
+                f'{prefix}-positive-rate="{positive_rate:.3f}"',
+            )
+        )
+        visible.append(
+            f"T+{horizon} 中位{_style_format_signed_pct(median_pct)}、"
+            f"正收益{positive_count}/{sample_count}（{shown_rate}%）"
+        )
+    return (
+        f'<p data-style-shock-feedback="v1" data-as-of="{escape(report_date)}" '
+        f'data-source-status="{escape(status)}" data-event-count="{event_count}" '
+        f'{" ".join(attrs)}>[判断] 严重异动已实现反馈（事件{event_count}例）：'
+        f'{"；".join(visible)}。各地平线仅统计已走满样本。</p>'
+    )
+
+
+def _render_style_market_effect(
+    payload: Mapping[str, object] | None,
+    report_date: str,
+) -> str:
+    market = payload.get("market") if isinstance(payload, Mapping) else None
+    shock = payload.get("shock") if isinstance(payload, Mapping) else None
+    shock_fragment = _render_style_shock_feedback(
+        shock if isinstance(shock, Mapping) else {}, report_date
+    )
+    if not isinstance(market, Mapping):
+        market = {}
+    current = market.get("current")
+    history = market.get("history")
+    status = str(market.get("status") or "source_failed")
+    if (
+        status not in {"complete", "latest_available", "partial"}
+        or not isinstance(current, Mapping)
+        or not isinstance(history, list)
+        or not history
+    ):
+        normalized = "partial" if status == "partial" else "source_failed"
+        return f'''<div class="style-market-effect" data-style-market-effect="missing-data"
+    data-as-of="{escape(report_date)}" data-reviewed-through="{escape(report_date)}"
+    data-source-status="{normalized}">
+  <h3>风格化赚钱效应 · 板型与反馈</h3>
+  <p>{STYLE_MARKET_EFFECT_MISSING_TEXT}</p>
+  {shock_fragment}
+</div>'''
+
+    as_of = str(market.get("as_of") or "")
+    board = current.get("board")
+    if not _valid_date(as_of) or not isinstance(board, Mapping):
+        return _render_style_market_effect(None, report_date)
+    count = _style_exact_nonnegative_int(current.get("count"))
+    first = _style_exact_nonnegative_int(current.get("first"))
+    continuation = _style_exact_nonnegative_int(current.get("continuation"))
+    max_height = _style_exact_nonnegative_int(current.get("max_height"))
+    if None in {count, first, continuation, max_height}:
+        return _render_style_market_effect(None, report_date)
+
+    board_attrs: list[str] = []
+    board_visible: list[str] = []
+    for width in STYLE_BOARD_WIDTHS:
+        item = board.get(str(width))
+        if not isinstance(item, Mapping):
+            return _render_style_market_effect(None, report_date)
+        values = {
+            key: _style_exact_nonnegative_int(item.get(key))
+            for key in ("count", "first", "continuation", "max_height")
+        }
+        if any(value is None for value in values.values()):
+            return _render_style_market_effect(None, report_date)
+        board_attrs.extend(
+            f'data-board-{width}-{key.replace("_", "-")}="{value}"'
+            for key, value in values.items()
+        )
+        board_visible.append(
+            f"{width}cm {values['count']}只（首板{values['first']} / "
+            f"连板{values['continuation']}，最高{values['max_height']}板）"
+        )
+
+    bse = current.get("bse")
+    if not isinstance(bse, list):
+        return _render_style_market_effect(None, report_date)
+    displayed = bse[:STYLE_MARKET_EFFECT_MAX_BSE_DISPLAY]
+    bse_codes = [
+        str(item.get("code") or "")
+        for item in displayed
+        if isinstance(item, Mapping)
+    ]
+    bse_names = [
+        str(item.get("name") or "")
+        for item in displayed
+        if isinstance(item, Mapping)
+    ]
+    if len(bse_codes) != len(displayed) or len(bse_names) != len(displayed):
+        return _render_style_market_effect(None, report_date)
+
+    history_dates: list[str] = []
+    history_totals: list[str] = []
+    history_first: list[str] = []
+    history_continuation: list[str] = []
+    history_board: dict[int, list[str]] = {
+        width: [] for width in STYLE_BOARD_WIDTHS
+    }
+    history_bse: list[str] = []
+    history_visible: list[str] = []
+    for item in history:
+        if not isinstance(item, Mapping):
+            return _render_style_market_effect(None, report_date)
+        source_date = str(item.get("date") or "")
+        total_value = _style_exact_nonnegative_int(item.get("limit_up_count"))
+        first_value = _style_exact_nonnegative_int(item.get("first_board_count"))
+        continuation_value = _style_exact_nonnegative_int(
+            item.get("consecutive_board_count")
+        )
+        board_values = {
+            width: _style_exact_nonnegative_int(item.get(f"board_{width}_count"))
+            for width in STYLE_BOARD_WIDTHS
+        }
+        bse_value = _style_exact_nonnegative_int(item.get("bse_count"))
+        if (
+            not _valid_date(source_date)
+            or total_value is None
+            or first_value is None
+            or continuation_value is None
+            or any(value is None for value in board_values.values())
+            or bse_value is None
+            or first_value + continuation_value != total_value
+            or sum(int(value) for value in board_values.values()) != total_value
+            or board_values[30] != bse_value
+        ):
+            return _render_style_market_effect(None, report_date)
+        history_dates.append(source_date)
+        history_totals.append(str(total_value))
+        history_first.append(str(first_value))
+        history_continuation.append(str(continuation_value))
+        for width in STYLE_BOARD_WIDTHS:
+            history_board[width].append(str(board_values[width]))
+        history_bse.append(str(bse_value))
+        history_visible.append(
+            f"{source_date[5:]} {total_value}/{first_value}/{continuation_value}/"
+            f"{board_values[10]}/{board_values[20]}/{board_values[30]}"
+        )
+
+    board30 = board["30"]
+    bse_text = (
+        "本日无北交所涨停"
+        if not bse_names
+        else "北交所涨停："
+        + "、".join(
+            f"{escape(name)}（{escape(code)}）"
+            for name, code in zip(bse_names, bse_codes)
+        )
+        + (f"等{len(bse)}只" if len(bse) > len(displayed) else "")
+    )
+    as_of_note = "" if as_of == report_date else f"（最新可用 {as_of}）"
+    return f'''<div class="style-market-effect" data-style-market-effect="v1"
+    data-as-of="{escape(as_of)}" data-reviewed-through="{escape(report_date)}"
+    data-source-status="{escape(status)}" data-limit-up-count="{count}"
+    data-first-board-count="{first}" data-consecutive-board-count="{continuation}"
+    data-highest-board="{max_height}" {" ".join(board_attrs)}
+    data-bse-count="{board30['count']}" data-bse-first="{board30['first']}"
+    data-bse-continuation="{board30['continuation']}" data-bse-max-height="{board30['max_height']}"
+    data-bse-displayed-count="{len(displayed)}" data-bse-codes="{escape(','.join(bse_codes), quote=True)}"
+    data-bse-names="{escape('|'.join(bse_names), quote=True)}"
+    data-history-samples="{len(history_dates)}" data-history-dates="{','.join(history_dates)}"
+    data-limit-up-series="{','.join(history_totals)}" data-first-board-series="{','.join(history_first)}"
+    data-consecutive-board-series="{','.join(history_continuation)}"
+    data-board-10-series="{','.join(history_board[10])}" data-board-20-series="{','.join(history_board[20])}"
+    data-board-30-series="{','.join(history_board[30])}" data-bse-series="{','.join(history_bse)}">
+  <h3>风格化赚钱效应 · 板型与反馈</h3>
+  <p><strong>[事实] 涨停宽度与连板延续{escape(as_of_note)}：</strong>非ST涨停{count}只，首板{first}只、连板{continuation}只，最高{max_height}板；{'；'.join(board_visible)}。</p>
+  <p><strong>[事实] 北交所 / 30cm：</strong>{bse_text}；最近{len(history_dates)}份可用盘后归档按“总涨停/首板/连板/10cm/20cm/30cm”为 {'，'.join(history_visible)}。</p>
+  {shock_fragment}
+</div>'''
+
+
+def _style_market_effect_ops_fragments(
+    payload: Mapping[str, object] | None,
+) -> tuple[str, ...]:
+    market = payload.get("market") if isinstance(payload, Mapping) else None
+    shock = payload.get("shock") if isinstance(payload, Mapping) else None
+    fragments: list[str] = []
+    market_status = (
+        str(market.get("status") or "source_failed")
+        if isinstance(market, Mapping)
+        else "source_failed"
+    )
+    if market_status in {"source_failed", "partial"}:
+        errors = market.get("errors") if isinstance(market, Mapping) else []
+        reason = (
+            str(errors[0])
+            if isinstance(errors, list) and errors
+            else "盘后板型归档不可判"
+        )
+        fragments.append(
+            '<p data-style-market-effect-ops="gap">[事实] '
+            f"涨停宽度、连板延续与北交所数据不完整：{escape(reason[:240])}。</p>"
+        )
+    shock_status = (
+        str(shock.get("status") or "source_failed")
+        if isinstance(shock, Mapping)
+        else "source_failed"
+    )
+    if shock_status in {"source_failed", "partial"}:
+        errors = shock.get("errors") if isinstance(shock, Mapping) else []
+        reason = (
+            str(errors[0])
+            if isinstance(errors, list) and errors
+            else "严重异动反馈不可判"
+        )
+        fragments.append(
+            '<p data-style-shock-feedback-ops="gap">[事实] '
+            f"严重异动反馈数据不完整：{escape(reason[:240])}。</p>"
+        )
+    return tuple(fragments)
+
+
 def _inject_section_fragment(html: str, section_id: str, fragment: str) -> str:
     pattern = re.compile(
         rf'(<section\b[^>]*\bid=["\']{re.escape(section_id)}["\'][^>]*>)(.*?)(</section>)',
@@ -6981,6 +8032,7 @@ def render_report(
     emotion_history_dir: str | os.PathLike[str] | None = None,
     emotion_open_dates: Sequence[str] | None = None,
     fx_history_dir: str | os.PathLike[str] | None = None,
+    style_market_effect: Mapping[str, object] | None = None,
     include_legacy_sections: bool = False,
 ) -> str:
     """读取固定 chunk，包裹静态阅读器外壳并返回 HTML 字符串。
@@ -7028,6 +8080,15 @@ def render_report(
             "s6 的情绪高度节点联动由组装器统一生成，chunk 不得自行注入",
             section="s6",
         )
+    if (
+        "data-style-market-effect=" in chunks["s456"]
+        or "data-style-shock-feedback=" in chunks["s456"]
+    ):
+        raise ReportValidationError(
+            "duplicate_style_market_effect",
+            "s4 的板型与严重异动反馈模块由组装器统一生成，chunk 不得自行注入",
+            section="s4",
+        )
 
     fx_points, fx_status = _load_fx_chart_points(
         chunks["s1"], report_date, fx_history_dir
@@ -7062,6 +8123,17 @@ def render_report(
         "s6",
         _render_emotion_node(emotion_leader_report, report_date),
     )
+    chunks["s456"] = _inject_section_fragment(
+        chunks["s456"],
+        "s4",
+        _render_style_market_effect(style_market_effect, report_date),
+    )
+    for fragment in _style_market_effect_ops_fragments(style_market_effect):
+        chunks["s8ops"] = _inject_section_fragment(
+            chunks["s8ops"],
+            "ops",
+            fragment,
+        )
     if not include_legacy_sections:
         chunks["s7t"] = _strip_legacy_section(chunks["s7t"], "exposure")
 
@@ -7229,6 +8301,14 @@ def _build_parser() -> argparse.ArgumentParser:
         "--fx-history-dir",
         help="历史复盘 HTML 目录；省略时读取 data/reports，用于绘制人民币外汇趋势图",
     )
+    parser.add_argument(
+        "--daily-dir",
+        help="盘后归档目录；省略时读取 daily，用于梳理最近板型与北交所反馈",
+    )
+    parser.add_argument(
+        "--shock-feedback-report",
+        help="严重异动反馈 Markdown；省略时读取 data/reports/shock-feedback/<DATE>.md",
+    )
     return parser
 
 
@@ -7245,6 +8325,24 @@ def main(argv: Sequence[str] | None = None) -> int:
         fx_history_dir = args.fx_history_dir or (
             _repo_root() / "data" / "reports"
         )
+        daily_root = args.daily_dir or (_repo_root() / "daily")
+        shock_feedback_report = args.shock_feedback_report or (
+            _repo_root()
+            / "data"
+            / "reports"
+            / "shock-feedback"
+            / f"{args.date}.md"
+        )
+        style_market_effect = load_style_market_effect(
+            daily_root,
+            shock_feedback_report,
+            args.date,
+            report_is_open=(
+                args.date in emotion_open_dates
+                if emotion_open_dates is not None
+                else None
+            ),
+        )
         html = render_report(
             args.tmp_dir,
             args.date,
@@ -7252,6 +8350,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             emotion_history_dir=emotion_history_dir,
             emotion_open_dates=emotion_open_dates,
             fx_history_dir=fx_history_dir,
+            style_market_effect=style_market_effect,
         )
         manifest_path = args.capacity_manifest or (
             Path(args.tmp_dir) / f"capacity_{args.date}.json"
