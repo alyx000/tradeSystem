@@ -30,6 +30,7 @@ from datetime import date as date_type, datetime, timedelta
 from html import escape
 from html.parser import HTMLParser
 from pathlib import Path
+from statistics import median
 from typing import Mapping, Sequence
 from urllib.parse import urlparse
 
@@ -328,6 +329,8 @@ STRUCTURED_CONTRACT_ATTRIBUTES = (
     "data-rmb-fx-chart",
     "data-emotion-leader",
     "data-emotion-height-chart",
+    "data-board-break-feedback",
+    "data-style-board-break-feedback",
     "data-emotion-node",
     "data-sector-concentration",
     "data-sector-labels",
@@ -389,6 +392,13 @@ EMOTION_NODE_MISSING_TEXT = (
 )
 EMOTION_NODE_LOOKBACK_OPEN_DAYS = 20
 EMOTION_NODE_LAUNCH_METHODS = frozenset({"limit_chain", "calendar_inferred"})
+BOARD_BREAK_FEEDBACK_NONE_TEXT = "[事实]本日无断板股次日反馈样本"
+BOARD_BREAK_FEEDBACK_MISSING_TEXT = "[事实]断板股次日反馈数据不完整，本日无法判定"
+STYLE_BOARD_BREAK_FEEDBACK_NONE_TEXT = "[事实]本日无断板股次日赚钱效应样本"
+STYLE_BOARD_BREAK_FEEDBACK_MISSING_TEXT = (
+    "[事实]断板股次日赚钱效应数据不完整，本日无法判定"
+)
+FEEDBACK_CODE_RE = re.compile(r"^\d{6}(?:\.(?:SH|SZ|BJ))?$")
 SECTOR_CONCENTRATION_NONE_TEXT = "[事实]本日无可用板块集中度数据"
 SECTOR_CONCENTRATION_MISSING_TEXT = "[事实]板块集中度数据不完整，本日无法判定"
 SECTOR_LABELS_NONE_TEXT = "[事实]本日半年线、年线与近期价量共振标签均无命中板块"
@@ -3693,6 +3703,338 @@ class _ReportParser(HTMLParser):
                 section="s3",
             )
 
+    def _validate_board_break_feedback_contract(self, report_date: date_type) -> None:
+        contracts = self.structured_contracts["data-board-break-feedback"]
+        if len(contracts) != 1:
+            raise ReportValidationError(
+                "invalid_board_break_feedback",
+                "s3 必须且只能包含一份断板股次日反馈模块",
+                section="s3",
+            )
+        contract = contracts[0]
+        compact_text = re.sub(r"\s+", "", "".join(contract.rendered_text)).rstrip(
+            "。.;；"
+        )
+        if (
+            contract.section != "s3"
+            or contract.attrs.get("data-as-of") != report_date.isoformat()
+            or not contract.default_hidden
+        ):
+            raise ReportValidationError(
+                "invalid_board_break_feedback",
+                "断板股次日反馈必须位于 s3 折叠证据层且与报告日同日",
+                section="s3",
+            )
+        source_status = contract.attrs.get("data-source-status", "")
+        ops_text = "".join(self.section_text["ops"])
+        if contract.value == "missing-data":
+            if (
+                contract.tag != "p"
+                or source_status not in {"partial", "source_failed"}
+                or compact_text != BOARD_BREAK_FEEDBACK_MISSING_TEXT
+                or "断板股次日反馈数据不完整" not in ops_text
+            ):
+                raise ReportValidationError(
+                    "invalid_board_break_feedback",
+                    "断板反馈缺失态必须保留 partial/source_failed 与可见 ops 缺口",
+                    section="s3",
+                )
+            return
+
+        connected_date = contract.attrs.get("data-connected-date", "")
+        break_date = contract.attrs.get("data-break-date", "")
+        outcome_date = contract.attrs.get("data-outcome-date", "")
+        timeline_valid = (
+            _valid_date(connected_date)
+            and _valid_date(break_date)
+            and _valid_date(outcome_date)
+            and connected_date < break_date < outcome_date == report_date.isoformat()
+        )
+        if contract.value == "none":
+            empty_reason = contract.attrs.get("data-empty-reason", "")
+            sample_count = _bounded_int_attr(
+                contract.attrs, "data-sample-count", minimum=0, maximum=0
+            )
+            if (
+                contract.tag != "p"
+                or source_status != "ok"
+                or compact_text != BOARD_BREAK_FEEDBACK_NONE_TEXT
+                or empty_reason not in {"no_connected_candidates", "no_board_breaks"}
+                or sample_count != 0
+                or not timeline_valid
+            ):
+                raise ReportValidationError(
+                    "invalid_board_break_feedback",
+                    "断板反馈无样本仅允许由 ok 状态和完整 T-2/T-1/T 时间轴给出",
+                    section="s3",
+                )
+            return
+
+        connected_count = _bounded_int_attr(
+            contract.attrs, "data-connected-count", minimum=1, maximum=10_000
+        )
+        candidate_count = _bounded_int_attr(
+            contract.attrs, "data-break-candidate-count", minimum=1, maximum=10_000
+        )
+        break_count = _bounded_int_attr(
+            contract.attrs, "data-break-count", minimum=1, maximum=10_000
+        )
+        sample_count = _bounded_int_attr(
+            contract.attrs, "data-sample-count", minimum=1, maximum=10_000
+        )
+        coverage_pct = _finite_float(
+            contract.attrs.get("data-feedback-coverage-pct")
+        )
+        expected_coverage_pct = (
+            round(sample_count / break_count * 100, 1)
+            if sample_count is not None and break_count
+            else None
+        )
+        required_headers = ("代码", "连板", "断板日涨幅", "反馈开盘", "反馈收盘", "结果")
+        if (
+            contract.value != "v1"
+            or contract.tag != "table"
+            or source_status not in {"ok", "partial"}
+            or not timeline_valid
+            or None in {connected_count, candidate_count, break_count, sample_count}
+            or not sample_count <= break_count <= candidate_count <= connected_count
+            or coverage_pct is None
+            or not 0 <= coverage_pct <= 100
+            or coverage_pct != expected_coverage_pct
+            or len(contract.rows) != sample_count + 1
+            or any(header not in compact_text for header in required_headers)
+            or f"断板{break_count}只" not in compact_text
+            or f"反馈样本{sample_count}只" not in compact_text
+            or f"覆盖{coverage_pct:.1f}%" not in compact_text
+            or (
+                source_status == "partial"
+                and "断板股次日反馈数据不完整" not in ops_text
+            )
+        ):
+            raise ReportValidationError(
+                "invalid_board_break_feedback",
+                "断板反馈完整态必须保留 T-2/T-1/T、覆盖率、样本数与 partial 缺口",
+                section="s3",
+            )
+        seen_codes: set[str] = set()
+        for row in contract.rows[1:]:
+            code = row.attrs.get("data-code", "").upper()
+            height = _bounded_int_attr(
+                row.attrs, "data-previous-height", minimum=2, maximum=100
+            )
+            outcome = row.attrs.get("data-outcome", "").strip()
+            numeric_values = (
+                _finite_float(row.attrs.get("data-break-change-pct")),
+                _finite_float(row.attrs.get("data-feedback-open-pct")),
+                _finite_float(row.attrs.get("data-feedback-close-pct")),
+            )
+            visible = re.sub(r"\s+", "", "".join(row.rendered_text))
+            if (
+                not FEEDBACK_CODE_RE.fullmatch(code)
+                or code in seen_codes
+                or height is None
+                or not outcome
+                or any(value is None for value in numeric_values)
+                or code not in visible
+                or outcome not in visible
+            ):
+                raise ReportValidationError(
+                    "invalid_board_break_feedback",
+                    "断板反馈明细必须带唯一代码、前高、断板/开收盘反馈与结果",
+                    section="s3",
+                )
+            seen_codes.add(code)
+
+    def _validate_style_board_break_feedback_contract(
+        self,
+        report_date: date_type,
+    ) -> None:
+        """校验 s4 赚钱效应摘要与 s3 逐股断板反馈同源、同值。"""
+        contracts = self.structured_contracts["data-style-board-break-feedback"]
+        if len(contracts) != 1:
+            raise ReportValidationError(
+                "invalid_style_board_break_feedback",
+                "s4 必须且只能包含一份断板股次日赚钱效应摘要",
+                section="s4",
+            )
+        contract = contracts[0]
+        compact_text = re.sub(r"\s+", "", "".join(contract.rendered_text)).rstrip(
+            "。.;；"
+        )
+        source_contracts = self.structured_contracts["data-board-break-feedback"]
+        if len(source_contracts) != 1:
+            raise ReportValidationError(
+                "invalid_style_board_break_feedback",
+                "s4 断板赚钱效应缺少唯一的 s3 同源反馈",
+                section="s4",
+            )
+        source = source_contracts[0]
+        source_status = contract.attrs.get("data-source-status", "")
+        if (
+            contract.section != "s4"
+            or contract.tag != "p"
+            or contract.attrs.get("data-as-of") != report_date.isoformat()
+            or contract.default_hidden
+            or "[事实]" not in compact_text
+            or "断板股次日赚钱效应" not in compact_text
+            or contract.value != source.value
+            or source_status != source.attrs.get("data-source-status", "")
+        ):
+            raise ReportValidationError(
+                "invalid_style_board_break_feedback",
+                "s4 断板赚钱效应必须默认可见、标注事实并与 s3 状态一致",
+                section="s4",
+            )
+
+        if contract.value == "missing-data":
+            if (
+                source_status not in {"partial", "source_failed"}
+                or compact_text != STYLE_BOARD_BREAK_FEEDBACK_MISSING_TEXT
+            ):
+                raise ReportValidationError(
+                    "invalid_style_board_break_feedback",
+                    "断板赚钱效应缺失态必须保留 partial/source_failed，不能写成 0",
+                    section="s4",
+                )
+            return
+
+        sample_count = _bounded_int_attr(
+            contract.attrs, "data-sample-count", minimum=0, maximum=10_000
+        )
+        source_sample_count = _bounded_int_attr(
+            source.attrs, "data-sample-count", minimum=0, maximum=10_000
+        )
+        if contract.value == "none":
+            if (
+                source_status != "ok"
+                or sample_count != 0
+                or source_sample_count != 0
+                or compact_text != STYLE_BOARD_BREAK_FEEDBACK_NONE_TEXT
+            ):
+                raise ReportValidationError(
+                    "invalid_style_board_break_feedback",
+                    "断板赚钱效应无样本态必须与 s3 完整空样本一致",
+                    section="s4",
+                )
+            return
+
+        if (
+            contract.value != "v1"
+            or source.value != "v1"
+            or source_status not in {"ok", "partial"}
+            or sample_count is None
+            or sample_count <= 0
+            or sample_count != source_sample_count
+        ):
+            raise ReportValidationError(
+                "invalid_style_board_break_feedback",
+                "断板赚钱效应完整态必须与 s3 的有效样本状态和样本数一致",
+                section="s4",
+            )
+
+        coverage = _finite_float(contract.attrs.get("data-feedback-coverage-pct"))
+        source_coverage = _finite_float(
+            source.attrs.get("data-feedback-coverage-pct")
+        )
+        rows = source.rows[1:]
+        open_values = [
+            _finite_float(row.attrs.get("data-feedback-open-pct")) for row in rows
+        ]
+        close_values = [
+            _finite_float(row.attrs.get("data-feedback-close-pct")) for row in rows
+        ]
+        if any(value is None for value in (*open_values, *close_values)):
+            raise ReportValidationError(
+                "invalid_style_board_break_feedback",
+                "s3 断板反馈缺少可用于 s4 聚合的开收盘数值",
+                section="s4",
+            )
+        open_numbers = [float(value) for value in open_values if value is not None]
+        close_numbers = [float(value) for value in close_values if value is not None]
+        expected = {
+            "data-open-mean-pct": round(sum(open_numbers) / sample_count, 2),
+            "data-open-median-pct": round(float(median(open_numbers)), 2),
+            "data-open-up-rate": round(
+                sum(value > 0 for value in open_numbers) / sample_count, 3
+            ),
+            "data-close-mean-pct": round(sum(close_numbers) / sample_count, 2),
+            "data-close-median-pct": round(float(median(close_numbers)), 2),
+            "data-close-up-rate": round(
+                sum(value > 0 for value in close_numbers) / sample_count, 3
+            ),
+        }
+        actual = {key: _finite_float(contract.attrs.get(key)) for key in expected}
+        outcomes = [row.attrs.get("data-outcome", "").strip() for row in rows]
+        relimit_uncertain = any("涨停状态未核验" in value for value in outcomes)
+        limit_down_uncertain = any("跌停状态未核验" in value for value in outcomes)
+        relimit_count = (
+            None
+            if relimit_uncertain
+            else _bounded_int_attr(
+                contract.attrs, "data-relimit-count", minimum=0, maximum=sample_count
+            )
+        )
+        limit_down_count = (
+            None
+            if limit_down_uncertain
+            else _bounded_int_attr(
+                contract.attrs, "data-limit-down-count", minimum=0, maximum=sample_count
+            )
+        )
+        expected_relimit_count = sum(value.startswith("再涨停") for value in outcomes)
+        expected_limit_down_count = sum(value.startswith("跌停") for value in outcomes)
+        result_counts_valid = (
+            (
+                contract.attrs.get("data-relimit-count") == "unavailable"
+                if relimit_uncertain
+                else relimit_count == expected_relimit_count
+            )
+            and (
+                contract.attrs.get("data-limit-down-count") == "unavailable"
+                if limit_down_uncertain
+                else limit_down_count == expected_limit_down_count
+            )
+        )
+        source_break_count = _bounded_int_attr(
+            source.attrs, "data-break-count", minimum=sample_count, maximum=10_000
+        )
+        visible_terms = (
+            f"反馈样本{sample_count}/{source_break_count}只",
+            f"覆盖{coverage:.1f}%" if coverage is not None else "",
+            f"开盘均值{actual['data-open-mean-pct']:+.2f}%"
+            if actual["data-open-mean-pct"] is not None else "",
+            f"中位{actual['data-open-median-pct']:+.2f}%"
+            if actual["data-open-median-pct"] is not None else "",
+            f"高开率{actual['data-open-up-rate']:.1%}"
+            if actual["data-open-up-rate"] is not None else "",
+            f"收盘均值{actual['data-close-mean-pct']:+.2f}%"
+            if actual["data-close-mean-pct"] is not None else "",
+            f"中位{actual['data-close-median-pct']:+.2f}%"
+            if actual["data-close-median-pct"] is not None else "",
+            f"收涨率{actual['data-close-up-rate']:.1%}"
+            if actual["data-close-up-rate"] is not None else "",
+            "再涨停未计算" if relimit_uncertain else f"再涨停{relimit_count}只",
+            "跌停未计算" if limit_down_uncertain else f"跌停{limit_down_count}只",
+        )
+        if (
+            coverage is None
+            or source_coverage is None
+            or not math.isclose(coverage, source_coverage, abs_tol=0.05)
+            or any(
+                actual[key] is None
+                or not math.isclose(actual[key], expected_value, abs_tol=0.005)
+                for key, expected_value in expected.items()
+            )
+            or not result_counts_valid
+            or source_break_count is None
+            or any(term not in compact_text for term in visible_terms)
+        ):
+            raise ReportValidationError(
+                "invalid_style_board_break_feedback",
+                "s4 断板赚钱效应必须与 s3 逐股开收盘、涨停和跌停结果对账",
+                section="s4",
+            )
+
     def _validate_emotion_node_contract(self, report_date: date_type) -> None:
         contracts = self.structured_contracts["data-emotion-node"]
         if len(contracts) != 1:
@@ -4436,6 +4778,8 @@ class _ReportParser(HTMLParser):
         self._validate_rmb_fx_chart_contract(report_date)
         self._validate_emotion_leader_contract(report_date)
         self._validate_emotion_height_chart_contract(report_date)
+        self._validate_board_break_feedback_contract(report_date)
+        self._validate_style_board_break_feedback_contract(report_date)
         self._validate_emotion_node_contract(report_date)
         self._validate_capacity_health_contract(report_date)
         self._validate_sector_contracts(report_date)

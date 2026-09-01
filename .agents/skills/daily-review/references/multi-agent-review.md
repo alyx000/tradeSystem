@@ -19,7 +19,7 @@
 |---|---|---|---|
 | 1 | 大势/大类资产/外汇掉期/择时/期指/两融/多周期结构 | `daily/<T>/post-market.yaml` 的 `raw_data.global_indices / global_indices_apac / us_china_assets / commodities / risk_indicators / forex / fx_swaps`（旧归档缺跨资产块时才回退同日 `pre-market.yaml.market_data`）+ 镜像 index_daily/fut_daily + 库 market_timing_signal / margin_index_correlation_daily + pytdx 通达信直连（六指数 30/60 分钟 K 线，见「指数 30/60 分钟与日线多周期结构」小节） | market_YYYY-MM-DD.md |
 | 2 | 板块/集中度/全行业拥挤度/主升主跌辨识度/资金流/研报业绩 | 库 daily_volume_concentration + CLI `sector-crowding report --date <T>`（只读，底表 sector_crowding_daily）+ 镜像 daily/sw_daily/moneyflow_ind_ths + data/reports | sector_*.md |
-| 3 | 情绪/涨跌停/连板梯队 | 镜像 limit_list_d(U/D/Z) + daily；断板反包读 board-break 报告 | emotion_*.md |
+| 3 | 情绪/涨跌停/连板梯队/断板反馈 | 镜像 limit_list_d(U/D/Z) + daily；`post-market.yaml.raw_data.board_break_feedback`；断板反包观察清单另读 board-break 报告 | emotion_*.md |
 | 4 | 龙虎榜 | 镜像 top_list/top_inst | lhb_*.md |
 | 5 | ETF 份额申赎 | 镜像 fund_share/fund_daily | etf_flow_*.md |
 | 6 | 板块相关性 | 库 sector_correlation_daily | sector_corr_*.md |
@@ -123,6 +123,12 @@ HTML 中 `s1` 必须同时满足：
 - 明细至少保留代码、板型、行业、最大/区间涨幅、距峰值、启动日/最高板数、今日状态。波段为机械生命周期解释，必须逐行标 `[判断]`；其余数值与状态标 `[事实]`。
 - `partial` 可展示已经取得的有效核心并显式披露缺口；`source_failed`、JSON 缺失/损坏、日期错位或汇总无法与明细对账时使用 `missing-data`。只有 `status=ok` 且活跃数确为 0 时才允许 `none`，禁止把失败或部分覆盖写成空池。
 - 同一 JSON 的 `height_breakthrough` 由组装器跨节注入 `s6`，chunk 不得手写或重复注入 `data-emotion-node`。仅当目标日非 ST 二板及以上的最高连板数严格超过此前 20 个完整开放日的最高值时使用 `v1`：可核对高度差标 `[事实]`，对应打开高度核心的生命周期启动日标 `[判断] 情绪节点日候选`；它不替代事件日历或市场/板块结构确认。未突破使用 `none`，比较窗、目标日涨停事实或启动日对账不完整使用 `missing-data`。
+
+### 断板反馈与风格化赚钱效应（第 3 路 → `s3`，聚合 → `s4`）
+
+- 第 3 路从盘后归档读取 `board_break_feedback`，按 `T-2 连板 → T-1 断板 → T 日反馈` 保留代码、前一日连板高度、断板日涨幅、反馈日开盘/收盘涨幅与结果；逐股明细只进入 `s3` 的折叠 `data-board-break-feedback`。
+- `s4` 默认可见区只保留同一批样本的 `data-style-board-break-feedback` 聚合：样本/覆盖率、开收盘均值与中位数、高开/收涨率、再涨停与跌停数。组装器按 `s3` 明细重算并逐项对账，禁止复制明细表或手写不一致摘要。
+- `ok` 有样本时聚合结果可作为 `style_regime.board_break_realization` 独立客观来源；`partial/source_failed` 不进入完整评分证据。完整无样本才可写 `none`；来源失败或零有效覆盖必须写 `missing-data` 并在 `ops` 披露，禁止报成 0。
 
 ### 指数周/月均线状态与事件（第 1 路 → `s1`）
 
@@ -236,6 +242,8 @@ python3 .agents/skills/daily-review/references/html-report-template/build_new_hi
 |---|---|---|---|
 | ①大势 | 唯一 1 句同时覆盖大势、大类资产、外汇与掉期的裁决；境内指数证据仍按原 1～3 条预算 | 大类资产五类事实表；USD/CNY 在岸即期 + 1Y C-Swap 两行事实表；境内指数/期指/两融原始证据；六指数 30/60 分钟×日线多周期结构表（2026-08-20 起固定，口径见专属小节） | 大类资产与外汇掉期分别使用 `missing-data`，并在数据缺口章节可见；抓取时间不代替来源交易日；多周期结构单指数/单周期失败标缺口不硬算 |
 | ②板块 | 唯一 1 句集中度裁决 + 唯一 1 句趋势标签汇总；后者把半年线/年线标 `[事实]`、近期价量共振标 `[判断]` | 唯一集中度表；唯一标签命中并集；唯一主升辨识度矩阵；唯一主跌辨识度矩阵。主升/主跌必须成对出现，不因结果为空而删侧。另固定携带全行业拥挤度快照（L1 全量占比/分位 + 斜率分位 + 双高清单状态；趋势标签是组装器硬门，其余为文档级要求），命名用「全行业交易拥挤度」，与 Top20 主线集中度口径严格分表不混排。还固定携带研报覆盖趋势表（Δpp + `streak_up` 连续上行有效日数，`streak_up≥3 ∧ Δpp>0` 单列「覆盖持续上行候选」；文档级要求，标 `[判断]·机构议程背景`，禁作短线方向先验） | 标签完整无命中用 `none`；部分覆盖仍保留已确认命中表并在摘要与数据缺口披露；全缺用 `missing-data`。其他模块同样区分 `none / missing-data`，禁止静默省略（研报趋势 CLI 失败/有效日不足同样显式 `missing-data` 并登记缺口） |
+| ③情绪 | 梯队与情绪核心裁决 | 唯一 `data-board-break-feedback` 逐股 T-2/T-1/T 反馈明细 | 完整真空样本用 `none`；`partial/source_failed` 不得伪装为 0，并须在 `ops` 披露 |
+| ④风格 | 唯一默认可见 `data-style-board-break-feedback` 聚合赚钱效应摘要 | 其他风格原始证据；不重复断板逐股明细 | 与③状态、样本、覆盖和开收盘/结果统计硬对账；缺失用 `missing-data` |
 | ⑤龙头 | 1 句容量中军变化（确有变化时）+ 1 句滚动新高结构裁决 | 唯一容量中军健康表；唯一 60/120/250 日滚动新高结构；趋势池历史代表另表 | 容量与新高各自独立三态；任一来源不完整都用本模块 `missing-data` 并在数据缺口可见 |
 | ⑥节点 | 唯一 1 句报告日后 7 个自然日事件窗裁决；若打开非 ST 连板高度，另显示 `[事实]` 高度对比与 `[判断]` 启动日节点候选 | 唯一事件窗表；唯一情绪高度节点联动表，列代码、当日高度、启动日及启动日来源 | 两个模块独立三态；事件窗或情绪高度证据不完整时各自用 `missing-data`，不得互相替代；最近连板高度趋势固定归属 ③情绪，不与节点模块互相替代 |
 

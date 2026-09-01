@@ -732,7 +732,82 @@ class TestStyleAnalyzer:
         assert result["premium_snapshot"] == {}
         assert result["board_preference"] == {}
         assert result["cap_preference"] == {}
+        assert result["board_break_feedback"] == {}
         assert result["switch_signals"] == []
+
+    def test_board_break_feedback_is_compacted_into_style_metric(self, tmp_path):
+        from analyzers.style_factors import StyleAnalyzer
+
+        raw = self._make_raw_data(board_break_feedback={
+            "status": "ok",
+            "source_connected_date": "2026-03-26",
+            "break_date": "2026-03-27",
+            "outcome_date": "2026-03-28",
+            "connected_count": 12,
+            "break_candidate_count": 8,
+            "break_count": 7,
+            "sample_count": 6,
+            "break_coverage_pct": 87.5,
+            "feedback_coverage_pct": 85.7,
+            "open_mean_pct": -0.8,
+            "open_median_pct": -0.4,
+            "open_up_count": 2,
+            "open_up_rate": 2 / 6,
+            "close_mean_pct": 1.2,
+            "close_median_pct": 0.5,
+            "close_up_count": 4,
+            "close_up_rate": 4 / 6,
+            "relimit_count": 1,
+            "relimit_rate": 1 / 6,
+            "limit_down_count": 0,
+            "limit_down_rate": 0.0,
+            "height_buckets": [{
+                "key": "low",
+                "label": "低位",
+                "height_range": "2板",
+                "sample_count": 3,
+                "close_mean_pct": 2.0,
+                "close_up_rate": 2 / 3,
+            }],
+            "details": [{"code": "000001.SZ", "name": "不得进入风格摘要"}],
+            "errors": ["不得进入风格摘要"],
+        })
+
+        with patch("analyzers.style_factors.DAILY_DIR", tmp_path):
+            result = StyleAnalyzer().analyze(raw, "2026-03-28")
+
+        metric = result["board_break_feedback"]
+        assert metric["status"] == "ok"
+        assert metric["sample_count"] == 6
+        assert metric["close_mean_pct"] == 1.2
+        assert metric["height_buckets"] == [{
+            "key": "low",
+            "label": "低位",
+            "height_range": "2板",
+            "sample_count": 3,
+            "close_mean_pct": 2.0,
+            "close_up_rate": 2 / 3,
+        }]
+        assert "details" not in metric
+        assert "errors" not in metric
+
+    def test_board_break_feedback_preserves_incomplete_status(self, tmp_path):
+        from analyzers.style_factors import StyleAnalyzer
+
+        raw = self._make_raw_data(board_break_feedback={
+            "status": "source_failed",
+            "outcome_date": "2026-03-28",
+            "sample_count": 0,
+            "close_mean_pct": 0.0,
+            "errors": ["行情来源失败"],
+        })
+        with patch("analyzers.style_factors.DAILY_DIR", tmp_path):
+            result = StyleAnalyzer().analyze(raw, "2026-03-28")
+
+        assert result["board_break_feedback"] == {
+            "status": "source_failed",
+            "outcome_date": "2026-03-28",
+        }
 
 
 # ====================================================================
@@ -781,6 +856,65 @@ class TestReportStyleSection:
         assert "10cm 为主" in text
         assert "偏小盘" in text
         assert "风格切换信号" in text
+        assert new_idx == 9
+
+    def test_render_board_break_feedback_as_style_profitability(self):
+        from generators.report import _render_style_factors
+
+        raw_data = {
+            "style_factors": {
+                "board_break_feedback": {
+                    "status": "ok",
+                    "source_connected_date": "2026-03-26",
+                    "break_date": "2026-03-27",
+                    "outcome_date": "2026-03-28",
+                    "break_count": 7,
+                    "sample_count": 6,
+                    "feedback_coverage_pct": 85.7,
+                    "open_mean_pct": -0.8,
+                    "open_median_pct": -0.4,
+                    "open_up_count": 2,
+                    "open_up_rate": 2 / 6,
+                    "close_mean_pct": 1.2,
+                    "close_median_pct": 0.5,
+                    "close_up_count": 4,
+                    "close_up_rate": 4 / 6,
+                    "relimit_count": 1,
+                    "relimit_rate": 1 / 6,
+                    "limit_down_count": 0,
+                    "limit_down_rate": 0.0,
+                },
+            },
+        }
+
+        lines: list[str] = []
+        new_idx = _render_style_factors(lines, raw_data, 8)
+        text = "\n".join(lines)
+
+        assert "断板股次日赚钱效应" in text
+        assert "反馈样本 6/7只（覆盖 85.7%）" in text
+        assert "开盘均值 -0.80%" in text
+        assert "收盘均值 +1.20%" in text
+        assert "再涨停 1只" in text
+        assert "未计算只" not in text
+        assert new_idx == 9
+
+    def test_render_failed_board_break_feedback_is_not_zero(self):
+        from generators.report import _render_style_factors
+
+        lines: list[str] = []
+        new_idx = _render_style_factors(lines, {
+            "style_factors": {
+                "board_break_feedback": {
+                    "status": "source_failed",
+                    "outcome_date": "2026-03-28",
+                },
+            },
+        }, 8)
+        text = "\n".join(lines)
+
+        assert "断板股次日赚钱效应数据不完整，本日无法判定" in text
+        assert "0只" not in text
         assert new_idx == 9
 
     def test_render_popularity_table(self):

@@ -167,6 +167,30 @@ def _lineage_prefill(*, promotion_date: str = "2026-07-10") -> dict:
                 "direction": "走强",
                 "first_board_median_5d": [-0.2, 0.3, 1.2],
             },
+            "board_break_feedback": {
+                "status": "ok",
+                "source_connected_date": "2026-07-08",
+                "break_date": "2026-07-09",
+                "outcome_date": "2026-07-10",
+                "connected_count": 12,
+                "break_candidate_count": 8,
+                "break_count": 7,
+                "sample_count": 6,
+                "feedback_coverage_pct": 85.7,
+                "open_mean_pct": -0.8,
+                "open_median_pct": -0.4,
+                "open_up_count": 2,
+                "open_up_rate": 2 / 6,
+                "close_mean_pct": 1.2,
+                "close_median_pct": 0.5,
+                "close_up_count": 4,
+                "close_up_rate": 4 / 6,
+                "relimit_count": 1,
+                "relimit_rate": 1 / 6,
+                "limit_down_count": 0,
+                "limit_down_rate": 0.0,
+                "details": [{"code": "000001.SZ", "name": "不得进入因子卡"}],
+            },
             "promotion": {
                 "trade_date": promotion_date,
                 "prev_date": "2026-07-09",
@@ -387,7 +411,7 @@ def test_evidence_snapshot_has_exact_factors_and_only_six_core_sectors() -> None
     assert snapshot["schema_version"] == SERVICE_SCHEMA_VERSION == "trinity_dual_score_run_v2"
 
 
-def test_style_regime_emits_three_independent_lineage_cards() -> None:
+def test_style_regime_emits_four_independent_lineage_cards() -> None:
     snapshot = build_evidence_snapshot("2026-07-10", _lineage_prefill(), {})
 
     style = _factor(snapshot, "style_regime")
@@ -397,13 +421,15 @@ def test_style_regime_emits_three_independent_lineage_cards() -> None:
         ("2026-07-10:style_regime:cap_relative_strength", "cap_relative_strength"),
         ("2026-07-10:style_regime:board_preference", "board_preference"),
         ("2026-07-10:style_regime:premium_regime", "premium_regime"),
+        ("2026-07-10:style_regime:board_break_realization", "board_break_realization"),
     ]
     assert [item["quality_group"] for item in facts] == [
         "index_relative_strength",
         "limit_board_mix",
         "premium_realization",
+        "board_break_realization",
     ]
-    assert style["objective_source_count"] == 3
+    assert style["objective_source_count"] == 4
     assert style["evidence_quality"] == 4
     assert style["critical_missing"] is False
     assert facts[0]["content"] == {
@@ -434,6 +460,41 @@ def test_style_regime_emits_three_independent_lineage_cards() -> None:
     assert "switch_signals" not in repr(facts)
     assert "popularity" not in repr(facts)
     assert "promotion" not in repr(facts)
+    board_break = facts[3]["content"]
+    assert board_break == {
+        "source_connected_date": "2026-07-08",
+        "break_date": "2026-07-09",
+        "outcome_date": "2026-07-10",
+        "connected_count": 12,
+        "break_candidate_count": 8,
+        "break_count": 7,
+        "sample_count": 6,
+        "feedback_coverage_pct": 85.7,
+        "open_mean_pct": -0.8,
+        "open_median_pct": -0.4,
+        "open_up_count": 2,
+        "open_up_rate": 2 / 6,
+        "close_mean_pct": 1.2,
+        "close_median_pct": 0.5,
+        "close_up_count": 4,
+        "close_up_rate": 4 / 6,
+        "relimit_count": 1,
+        "relimit_rate": 1 / 6,
+        "limit_down_count": 0,
+        "limit_down_rate": 0.0,
+    }
+    assert "details" not in repr(board_break)
+
+
+def test_style_regime_does_not_count_partial_board_break_feedback() -> None:
+    prefill = _lineage_prefill()
+    prefill["market"]["style_factors"]["board_break_feedback"]["status"] = "partial"
+
+    style = _factor(build_evidence_snapshot("2026-07-10", prefill, {}), "style_regime")
+    facts = _ok_facts(style)
+
+    assert all(item["source"] != "board_break_realization" for item in facts)
+    assert style["objective_source_count"] == 3
 
 
 def test_leader_signal_emits_three_cards_but_two_lineage_groups() -> None:

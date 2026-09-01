@@ -1596,6 +1596,11 @@ class TestCollectPostMarketE2E:
 
         assert result["date"] == "2026-03-28"
         assert "generated_at" in result
+        assert (
+            result["style_factors"]["board_break_feedback"]["status"]
+            == result["board_break_feedback"]["status"]
+            == "source_failed"
+        )
 
 
 def test_index_table_handles_none_amount_and_pct():

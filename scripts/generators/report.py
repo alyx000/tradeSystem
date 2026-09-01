@@ -1505,9 +1505,10 @@ def _render_style_factors(lines: list, raw_data: dict, section_idx: int) -> int:
     signals = sf.get("switch_signals", [])
     popularity = sf.get("popularity", []) or []
     promotion = sf.get("promotion") or {}
+    board_break = sf.get("board_break_feedback") or {}
 
     if (not snap and not board_pref and not cap_pref and not popularity
-            and not promotion and not trend and not signals):
+            and not promotion and not trend and not signals and not board_break):
         return section_idx
 
     lines.append(f"\n## {_roman(section_idx)}、风格化赚钱效应 [事实] ★★★\n")
@@ -1588,6 +1589,50 @@ def _render_style_factors(lines: list, raw_data: dict, section_idx: int) -> int:
             f" / 中证1000 {_fmt(cap_pref.get('csi1000_chg', 0))}"
             f"，价差 {cap_pref.get('spread', 0):+.2f}%）\n"
         )
+
+    if board_break:
+        lines.append("### 断板股次日赚钱效应（T-2 连板 → T-1 断板 → T 反馈）\n")
+        status = board_break.get("status")
+        sample_count = int(board_break.get("sample_count") or 0)
+        if status in {"partial", "source_failed"} and sample_count <= 0:
+            lines.append("- [事实] 断板股次日赚钱效应数据不完整，本日无法判定。\n")
+        elif status == "ok" and sample_count <= 0:
+            lines.append("- [事实] 本日无断板股次日赚钱效应样本。\n")
+        else:
+            def _style_pct(value):
+                return f"{float(value):+.2f}%" if value is not None else "-"
+
+            def _style_rate(value):
+                return f"{float(value):.1%}" if value is not None else "-"
+
+            def _style_count(value):
+                return f"{int(value)}只" if value is not None else "未计算"
+
+            break_count = int(board_break.get("break_count") or 0)
+            coverage = board_break.get("feedback_coverage_pct")
+            coverage_text = (
+                f"{float(coverage):.1f}%" if coverage is not None else "-"
+            )
+            prefix = "[事实] 部分统计；" if status == "partial" else "[事实] "
+            lines.append(
+                f"- {prefix}反馈样本 {sample_count}/{break_count}只（覆盖 {coverage_text}）｜"
+                f"高开 {_style_count(board_break.get('open_up_count'))}"
+                f"（{_style_rate(board_break.get('open_up_rate'))}）｜"
+                f"收涨 {_style_count(board_break.get('close_up_count'))}"
+                f"（{_style_rate(board_break.get('close_up_rate'))}）"
+            )
+            lines.append(
+                f"- [事实] 开盘均值 {_style_pct(board_break.get('open_mean_pct'))}，"
+                f"中位 {_style_pct(board_break.get('open_median_pct'))}｜"
+                f"收盘均值 {_style_pct(board_break.get('close_mean_pct'))}，"
+                f"中位 {_style_pct(board_break.get('close_median_pct'))}"
+            )
+            lines.append(
+                f"- [事实] 再涨停 {_style_count(board_break.get('relimit_count'))}"
+                f"（{_style_rate(board_break.get('relimit_rate'))}）｜"
+                f"跌停 {_style_count(board_break.get('limit_down_count'))}"
+                f"（{_style_rate(board_break.get('limit_down_rate'))}）\n"
+            )
 
     # 风格切换信号
     if signals:

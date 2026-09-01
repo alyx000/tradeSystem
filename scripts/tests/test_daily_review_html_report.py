@@ -269,6 +269,87 @@ def _event_window_verdict(
     return f'<p data-event-window="verdict" data-as-of="{date}">{text}</p>'
 
 
+def _board_break_feedback_state(
+    *,
+    state: str = "v1",
+    date: str = DATE,
+    source_status: str = "ok",
+    text: str | None = None,
+) -> str:
+    report_day = date_type.fromisoformat(date)
+    connected_date = (report_day - timedelta(days=2)).isoformat()
+    break_date = (report_day - timedelta(days=1)).isoformat()
+    timeline = (
+        f'data-connected-date="{connected_date}" data-break-date="{break_date}" '
+        f'data-outcome-date="{date}"'
+    )
+    if state == "none":
+        value = text or "[事实] 本日无断板股次日反馈样本"
+        return (
+            f'<p data-board-break-feedback="none" data-as-of="{date}" '
+            f'data-source-status="{source_status}" {timeline} '
+            'data-empty-reason="no_board_breaks" data-sample-count="0">'
+            f"{value}</p>"
+        )
+    if state == "missing-data":
+        value = text or "[事实] 断板股次日反馈数据不完整，本日无法判定"
+        return (
+            f'<p data-board-break-feedback="missing-data" data-as-of="{date}" '
+            f'data-source-status="{source_status}">{value}</p>'
+        )
+    return f"""
+<table data-board-break-feedback="v1" data-as-of="{date}"
+       data-source-status="{source_status}" {timeline}
+       data-connected-count="2" data-break-candidate-count="1"
+       data-break-count="1" data-sample-count="1" data-feedback-coverage-pct="100.0">
+  <caption>[事实] 断板 1 只，反馈样本 1 只，覆盖 100.0%。</caption>
+  <thead><tr><th>代码</th><th>名称</th><th>前一日连板</th><th>断板日涨幅</th><th>反馈开盘</th><th>反馈收盘</th><th>结果</th></tr></thead>
+  <tbody><tr data-code="002412" data-previous-height="5"
+             data-break-change-pct="6.16" data-feedback-open-pct="1.07"
+             data-feedback-close-pct="7.10" data-outcome="上涨">
+    <td>002412</td><td>样本股</td><td>5板</td><td>+6.16%</td><td>+1.07%</td><td>+7.10%</td><td>上涨</td>
+  </tr></tbody>
+</table>"""
+
+
+def _style_board_break_feedback_state(
+    *,
+    state: str = "v1",
+    date: str = DATE,
+    source_status: str = "ok",
+    text: str | None = None,
+) -> str:
+    if state == "none":
+        value = text or "[事实] 本日无断板股次日赚钱效应样本"
+        return (
+            f'<p data-style-board-break-feedback="none" data-as-of="{date}" '
+            f'data-source-status="{source_status}" data-sample-count="0">'
+            f"{value}</p>"
+        )
+    if state == "missing-data":
+        value = text or "[事实] 断板股次日赚钱效应数据不完整，本日无法判定"
+        return (
+            f'<p data-style-board-break-feedback="missing-data" data-as-of="{date}" '
+            f'data-source-status="{source_status}">{value}</p>'
+        )
+    value = text or (
+        "[事实] 断板股次日赚钱效应：反馈样本 1/1只（覆盖 100.0%）；"
+        "开盘均值 +1.07%、中位 +1.07%、高开率 100.0%；"
+        "收盘均值 +7.10%、中位 +7.10%、收涨率 100.0%；"
+        "再涨停 0只，跌停 0只。"
+    )
+    return (
+        f'<p data-style-board-break-feedback="v1" data-as-of="{date}" '
+        f'data-source-status="{source_status}" data-sample-count="1" '
+        'data-feedback-coverage-pct="100.0" '
+        'data-open-mean-pct="1.07" data-open-median-pct="1.07" '
+        'data-open-up-rate="1.0" data-close-mean-pct="7.10" '
+        'data-close-median-pct="7.10" data-close-up-rate="1.0" '
+        'data-relimit-count="0" data-limit-down-count="0">'
+        f"{value}</p>"
+    )
+
+
 def _capacity_manifest_row(
     *,
     code: str = "000001.SZ",
@@ -1109,7 +1190,8 @@ def _valid_chunks(date: str = DATE) -> dict[str, str]:
   {_sector_concentration_verdict(date=date)}
   {_sector_labels_verdict(date=date)}
   {_sector_state("sector-concentration", date=date)}
-  <details class="evidence" data-as-of="{date}" data-items="1">
+  <details class="evidence" data-as-of="{date}"
+           data-evidence-kind="board-break-feedback" data-items="1">
     <summary>板块趋势标签（1 项）</summary>
     <div class="evidence-body">{_sector_labels_state(date=date)}</div>
   </details>
@@ -1121,10 +1203,17 @@ def _valid_chunks(date: str = DATE) -> dict[str, str]:
 <section class="blk" id="s3">
   <h2>③ 情绪</h2>
   <p>[事实] 梯队变化有限。</p>
+  <details class="evidence" data-as-of="{date}" data-items="1">
+    <summary>断板股反馈（1 项）</summary>
+    <div class="evidence-body">
+      {_board_break_feedback_state(date=date)}
+    </div>
+  </details>
 </section>
 <section class="blk" id="s4">
   <h2>④ 风格</h2>
   <p>[判断] 风格暂未切换。</p>
+  {_style_board_break_feedback_state(date=date)}
 </section>
 <section class="blk" id="s5">
   <h2>⑤ 龙头</h2>
@@ -7394,6 +7483,205 @@ def test_cli_accepts_explicit_noncanonical_output(tmp_path):
     assert output.exists()
     assert 'data-report-schema="compact-v2"' in output.read_text(encoding="utf-8")
     assert str(output) in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("fragment", "error_code"),
+    [
+        (_board_break_feedback_state(), "invalid_board_break_feedback"),
+        (
+            _style_board_break_feedback_state(),
+            "invalid_style_board_break_feedback",
+        ),
+    ],
+)
+def test_board_break_profitability_contracts_are_required(
+    assembler, tmp_path, fragment, error_code
+):
+    html, _ = _render_valid(assembler, tmp_path / "chunks")
+
+    _assert_report_error(
+        assembler,
+        _replace_once(html, fragment, ""),
+        error_code,
+    )
+
+
+def test_board_break_profitability_none_states_preserve_upstream_semantics(
+    assembler, tmp_path
+):
+    html, _ = _render_valid(assembler, tmp_path / "chunks")
+    html = _replace_once(
+        html,
+        _board_break_feedback_state(),
+        _board_break_feedback_state(state="none", source_status="ok"),
+    )
+    html = _replace_once(
+        html,
+        _style_board_break_feedback_state(),
+        _style_board_break_feedback_state(state="none", source_status="ok"),
+    )
+
+    assembler.validate_report(html)
+
+
+def test_board_break_profitability_partial_requires_visible_ops_gap(
+    assembler, tmp_path
+):
+    html, _ = _render_valid(assembler, tmp_path / "chunks")
+    partial = _replace_once(
+        html,
+        _board_break_feedback_state(),
+        _board_break_feedback_state(source_status="partial"),
+    )
+    partial = _replace_once(
+        partial,
+        _style_board_break_feedback_state(),
+        _style_board_break_feedback_state(source_status="partial"),
+    )
+
+    _assert_report_error(assembler, partial, "invalid_board_break_feedback")
+
+    partial = _replace_once(
+        partial,
+        "<p>[事实] 仅列会改变结论可信度的缺口。</p>",
+        "<p>[事实] 仅列会改变结论可信度的缺口。</p>"
+        "<p>[事实] 断板股次日反馈数据不完整：1 只反馈日行情缺失。</p>",
+    )
+    assembler.validate_report(partial)
+
+
+def test_board_break_profitability_source_failure_is_not_rendered_as_zero(
+    assembler, tmp_path
+):
+    html, _ = _render_valid(assembler, tmp_path / "chunks")
+    missing = _replace_once(
+        html,
+        _board_break_feedback_state(),
+        _board_break_feedback_state(
+            state="missing-data", source_status="source_failed"
+        ),
+    )
+    missing = _replace_once(
+        missing,
+        _style_board_break_feedback_state(),
+        _style_board_break_feedback_state(
+            state="missing-data", source_status="source_failed"
+        ),
+    )
+    missing = _replace_once(
+        missing,
+        "<p>[事实] 仅列会改变结论可信度的缺口。</p>",
+        "<p>[事实] 仅列会改变结论可信度的缺口。</p>"
+        "<p>[事实] 断板股次日反馈数据不完整：目标日来源失败。</p>",
+    )
+
+    assembler.validate_report(missing)
+    assert "本日无断板股" not in missing
+
+
+@pytest.mark.parametrize(
+    "old,new",
+    [
+        (
+            'data-connected-date="2026-07-14" data-break-date="2026-07-15" '
+            'data-outcome-date="2026-07-16"',
+            'data-connected-date="2026-07-15" data-break-date="2026-07-14" '
+            'data-outcome-date="2026-07-16"',
+        ),
+        (
+            'data-break-count="1" data-sample-count="1" '
+            'data-feedback-coverage-pct="100.0"',
+            'data-break-count="1" data-sample-count="1" '
+            'data-feedback-coverage-pct="50.0"',
+        ),
+    ],
+)
+def test_board_break_feedback_rejects_timeline_or_coverage_mismatch(
+    assembler, tmp_path, old, new
+):
+    html, _ = _render_valid(assembler, tmp_path / "chunks")
+
+    _assert_report_error(
+        assembler,
+        _replace_once(html, old, new),
+        "invalid_board_break_feedback",
+    )
+
+
+def test_style_board_break_profitability_is_visible_fact_and_fully_stated(
+    assembler, tmp_path
+):
+    html, _ = _render_valid(assembler, tmp_path / "chunks")
+    summary = _style_board_break_feedback_state()
+
+    for replacement in (
+        "",
+        summary * 2,
+        summary.replace("<p ", "<p hidden ", 1),
+        summary.replace("[事实]", "", 1),
+        _style_board_break_feedback_state(
+            text="[事实] 断板股次日赚钱效应已纳入。"
+        ),
+    ):
+        _assert_report_error(
+            assembler,
+            _replace_once(html, summary, replacement),
+            "invalid_style_board_break_feedback",
+        )
+
+
+def test_style_board_break_profitability_reconciles_with_s3(
+    assembler, tmp_path
+):
+    html, _ = _render_valid(assembler, tmp_path / "chunks")
+    invalid = _replace_once(
+        html,
+        'data-open-mean-pct="1.07" data-open-median-pct="1.07"',
+        'data-open-mean-pct="9.99" data-open-median-pct="1.07"',
+    )
+
+    _assert_report_error(
+        assembler,
+        invalid,
+        "invalid_style_board_break_feedback",
+    )
+
+
+def test_style_board_break_partial_can_mark_limit_state_unavailable(
+    assembler, tmp_path
+):
+    html, _ = _render_valid(assembler, tmp_path / "chunks")
+    s3_partial = _board_break_feedback_state(source_status="partial").replace(
+        'data-outcome="上涨">',
+        'data-outcome="上涨（涨停状态未核验）">',
+    ).replace(
+        "<td>上涨</td>",
+        "<td>上涨（涨停状态未核验）</td>",
+    )
+    s4_partial = _style_board_break_feedback_state(
+        source_status="partial"
+    ).replace(
+        'data-relimit-count="0"',
+        'data-relimit-count="unavailable"',
+    ).replace(
+        "再涨停 0只",
+        "再涨停 未计算",
+    )
+    partial = _replace_once(html, _board_break_feedback_state(), s3_partial)
+    partial = _replace_once(
+        partial,
+        _style_board_break_feedback_state(),
+        s4_partial,
+    )
+    partial = _replace_once(
+        partial,
+        "<p>[事实] 仅列会改变结论可信度的缺口。</p>",
+        "<p>[事实] 仅列会改变结论可信度的缺口。</p>"
+        "<p>[事实] 断板股次日反馈数据不完整：涨停状态未核验。</p>",
+    )
+
+    assembler.validate_report(partial)
 
 
 def test_cli_requires_default_capacity_manifest(tmp_path):

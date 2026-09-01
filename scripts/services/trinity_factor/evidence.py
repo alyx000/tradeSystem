@@ -517,7 +517,101 @@ def _style_objective_items(
             trade_date, "style_regime", "premium_regime", "style",
             "premium_realization", groups,
         ))
+
+    board_break = _board_break_realization_content(trade_date, style)
+    if board_break is not None:
+        cards.append(_lineage_fact(
+            trade_date, "style_regime", "board_break_realization", "style",
+            "board_break_realization", board_break,
+        ))
     return cards
+
+
+def _board_break_realization_content(
+    trade_date: str,
+    style: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    """仅把完整、可自洽的断板次日聚合事实纳入 style_regime。"""
+    feedback = style.get("board_break_feedback")
+    if not isinstance(feedback, Mapping) or feedback.get("status") != "ok":
+        return None
+
+    source_date = _optional_trade_date(feedback.get("source_connected_date"))
+    break_date = _optional_trade_date(feedback.get("break_date"))
+    outcome_date = _optional_trade_date(feedback.get("outcome_date"))
+    if not (
+        source_date is not None
+        and break_date is not None
+        and outcome_date == trade_date
+        and source_date < break_date < outcome_date
+    ):
+        return None
+
+    count_fields = (
+        "connected_count", "break_candidate_count", "break_count", "sample_count",
+    )
+    counts = {field: _strict_int(feedback.get(field)) for field in count_fields}
+    if (
+        any(value is None for value in counts.values())
+        or not 0 < counts["sample_count"] <= counts["break_count"]
+        <= counts["break_candidate_count"] <= counts["connected_count"]
+    ):
+        return None
+
+    coverage = _strict_number(feedback.get("feedback_coverage_pct"))
+    expected_coverage = round(
+        counts["sample_count"] / counts["break_count"] * 100, 1
+    )
+    if coverage is None or abs(coverage - expected_coverage) > 0.05:
+        return None
+
+    number_fields = (
+        "open_mean_pct", "open_median_pct", "close_mean_pct", "close_median_pct",
+    )
+    numbers = {field: _strict_number(feedback.get(field)) for field in number_fields}
+    result_count_fields = (
+        "open_up_count", "close_up_count", "relimit_count", "limit_down_count",
+    )
+    result_counts = {
+        field: _strict_int(feedback.get(field)) for field in result_count_fields
+    }
+    rate_fields = (
+        "open_up_rate", "close_up_rate", "relimit_rate", "limit_down_rate",
+    )
+    rates = {field: _strict_number(feedback.get(field)) for field in rate_fields}
+    sample_count = counts["sample_count"]
+    if (
+        any(value is None for value in numbers.values())
+        or any(
+            value is None or not 0 <= value <= sample_count
+            for value in result_counts.values()
+        )
+        or any(value is None or not 0 <= value <= 1 for value in rates.values())
+    ):
+        return None
+
+    rate_count_pairs = (
+        ("open_up_rate", "open_up_count"),
+        ("close_up_rate", "close_up_count"),
+        ("relimit_rate", "relimit_count"),
+        ("limit_down_rate", "limit_down_count"),
+    )
+    if any(
+        abs(rates[rate_field] - result_counts[count_field] / sample_count) > 0.001
+        for rate_field, count_field in rate_count_pairs
+    ):
+        return None
+
+    return {
+        "source_connected_date": source_date,
+        "break_date": break_date,
+        "outcome_date": outcome_date,
+        **counts,
+        "feedback_coverage_pct": coverage,
+        **numbers,
+        **result_counts,
+        **rates,
+    }
 
 
 def _leader_objective_items(

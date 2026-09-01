@@ -1061,16 +1061,7 @@ class MarketCollector:
         except Exception as e:
             logger.warning(f"板块节奏分析失败，已跳过: {e}")
 
-        # 13. 风格化因子分析
-        try:
-            from analyzers import StyleAnalyzer
-            style_analyzer = StyleAnalyzer()
-            result["style_factors"] = style_analyzer.analyze(result, date)
-            logger.info("风格化因子分析完成")
-        except Exception as e:
-            logger.warning(f"风格化因子分析失败: {e}")
-
-        # 13b. 连板股断板后的下一交易日反馈（纯事实统计，不复用 board-break 选股门槛）
+        # 13. 连板股断板后的下一交易日反馈（纯事实统计，不复用 board-break 选股门槛）
         try:
             from analyzers.board_break_feedback import collect_board_break_feedback
 
@@ -1093,6 +1084,15 @@ class MarketCollector:
                 "errors": [f"统计异常: {e}"],
                 "details": [],
             }
+
+        # 13b. 风格化因子分析（含上一步断板股次日赚钱效应聚合）
+        try:
+            from analyzers import StyleAnalyzer
+            style_analyzer = StyleAnalyzer()
+            result["style_factors"] = style_analyzer.analyze(result, date)
+            logger.info("风格化因子分析完成")
+        except Exception as e:
+            logger.warning(f"风格化因子分析失败: {e}")
 
         # 14. 客观节点信号
         try:

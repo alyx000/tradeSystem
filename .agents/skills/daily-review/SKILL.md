@@ -18,6 +18,10 @@ version: "1.16"
 
 ③情绪固定消费同日 `data/reports/emotion-leader/<T>.json`，由组装器自动注入 `data-emotion-leader`，chunk 不得手写：默认可见 status、历史覆盖、增量刷新模式/数量、活跃/归档、今日涨停/创新高、今日晋级核心与新增二连板候选，前 12 只活跃核心及 source_errors 进入折叠证据。组装器还按 `trade_calendar.date` 最近最多 20 个开放日对齐该目录日报，固定注入默认可见的 `data-emotion-height-chart` 静态 SVG，逐日展示非 ST 二板及以上最高连板；可用历史少于 2 日使用 `missing-data`，确认无符合项才记 0，日报缺失或高度不可判必须保留为断线并标 `partial`，不得补 0 或插值。波段逐行标 `[判断]`；`partial` 如实披露缺口并保留有效明细，`source_failed` 或 JSON 缺失/损坏使用 `missing-data`，只有 `ok` 真空池才允许 `none`，不得把失败写成 0 或空池。同一 JSON 的 `height_breakthrough` 还由组装器自动注入 ⑥节点的 `data-emotion-node`：目标日非 ST 最高连板严格超过此前 20 个开放日最高值时，高度对比标 `[事实]`，对应核心启动日仅标为 `[判断] 情绪节点日候选`；比较窗或启动日证据不完整必须显示 `missing-data`。
 
+③情绪还必须把 `post-market.yaml.raw_data.board_break_feedback` 的 `T-2 连板 → T-1 断板 → T 日` 逐股反馈放入折叠证据，使用唯一 `data-board-break-feedback="v1|none|missing-data"`。`partial` 有有效样本时保留明细并在 `ops` 披露，零有效样本用 `missing-data`；只有完整 `ok` 的真空样本才可写 `none`，`source_failed` 不得伪装成 0。
+
+④风格必须把同一份反馈聚合为默认可见、唯一的 `data-style-board-break-feedback="v1|none|missing-data"`，展示样本/覆盖率、开收盘均值与中位数、正反馈率、再涨停与跌停计数，并与③逐股明细逐项对账。完整 `ok` 且有样本时，聚合事实进入 `style_regime.board_break_realization` 独立客观来源；`partial/source_failed` 仅披露状态，不得作为完整评分证据或补 0。
+
 HTML 默认展示顺序为：`速览 → 三位一体重点因子 → ⓪前日判分 → ①–⑦ → 老师观点 → 行业信息 → 认知对照 → ⑧次日计划 → 数据缺口`。「仓位环境与纪律参考（影子）」与独立「次日推演」不再生成，也不得出现在章节导航。重点因子仍必须在 9 路完整采集、八步复盘与认知对照综合完成后生成，只是在 HTML 中前置展示，不得因展示顺序提前而跳过后续事实输入。该章节必须用 `data-factor-mode` 区分正式 `factor-score`、`rule_only`、人工影子分析或明确无数据；未运行正式评分时必须使用 `shadow` 并写明“影子口径、不写库”。
 
 多 Agent HTML 中的“容量中军”必须从全市场成交额排名**独立筛选**，不得把 `trend_leader_pool`、`leader_tracking` 或最票身份直接当成容量资格：`core` = 当日全市场成交额排名 ≤30 且归属方向成交额排名 ≤2；`candidate` = 当日全市场成交额排名 31～50 且归属方向成交额排名 ≤2。最近 5 个开放交易日进入 Top50 的次数只展示容量连续性，不能覆盖当日成交额门槛。未达门槛者只能进入“趋势池历史代表”或“辨识度票”分表，禁止使用“旧池中军”标签；⑤必须输出结构化容量表、完整来源下的无合格项声明，或来源不足声明。完整筛选、健康度和 HTML 元数据契约见 [多 Agent 流程](references/multi-agent-review.md#容量中军独立筛选硬契约) 与 [HTML 模板](references/html-report-template/README.md#容量中军元数据硬门)。
@@ -89,7 +93,7 @@ python3 main.py review factor-metrics [--days 20] [--json]
 
 这是复盘内的**影子观察层**，不是交易计划生成器：
 
-1. `factor-score` 从当日复盘第 1～6 步与 `prefill` 生成四张固定因子证据卡：`market_node / sector_rhythm / style_regime / leader_signal`。`style_regime` 的独立客观来源族是指数相对强弱、10/20/30cm 板型混合、已实现溢价；`leader_signal` 的独立客观来源族是剔除 ST 的连板梯队、晋级实现与前高标回验。`promotion_realization` 当前只保证 `promotion.trade_date` 与评分日一致；`prior_core_feedback` 的来源日必须等于 `trade_calendar` 严格上一开放日，不得以 `prefill.prev_market` 的最近行情日替代。日期血缘优先读取显式 `popularity_provenance`，该键存在但类型非法或日期错位时直接拒绝且不得 fallback，只有历史数据完全缺少该键时，才允许用同一 `style_factors.promotion.prev_date / trade_date` 作兼容 fallback。来源日期缺失或错位不得抬高证据质量。规则门、证据质量、封顶与总分由程序控制，不喂给 LLM；主观 context 可供解释，但不能抬高客观门槛。
+1. `factor-score` 从当日复盘第 1～6 步与 `prefill` 生成四张固定因子证据卡：`market_node / sector_rhythm / style_regime / leader_signal`。`style_regime` 的独立客观来源族是指数相对强弱、10/20/30cm 板型混合、已实现溢价，以及完整 `ok` 的断板次日赚钱效应；断板反馈的 `partial/source_failed` 不计入客观来源。`leader_signal` 的独立客观来源族是剔除 ST 的连板梯队、晋级实现与前高标回验。`promotion_realization` 当前只保证 `promotion.trade_date` 与评分日一致；`prior_core_feedback` 的来源日必须等于 `trade_calendar` 严格上一开放日，不得以 `prefill.prev_market` 的最近行情日替代。日期血缘优先读取显式 `popularity_provenance`，该键存在但类型非法或日期错位时直接拒绝且不得 fallback，只有历史数据完全缺少该键时，才允许用同一 `style_factors.promotion.prev_date / trade_date` 作兼容 fallback。来源日期缺失或错位不得抬高证据质量。规则门、证据质量、封顶与总分由程序控制，不喂给 LLM；主观 context 可供解释，但不能抬高客观门槛。
 2. 第 1 层 LLM 只给四因子相对重要度，程序重算后选主因子；只有主因子成立且存在候选时，才把该主因子的受控证据卡传入第 2 层，对确定性排序中的最多 6 个 `candidate_tier=core` 板块评分。`watch/context` 不得升格；Step 5 人工最票与自动 leader 名称只能作为标注 `[判断]` 的 context，不能伪装成客观来源或提升证据质量。每行必须引用至少一条正向证据和一个 T+1 check；所有分数只表示相对重要度，**不是概率、胜率或买卖建议，也不得进入 `TradeDraft` / `TradePlan`**。
 3. 因子层失败时不展示数字 LLM 分，只允许唯一规则降级或“不确定”；板块层失败时保留已成立的主因子，并回退到确定性 `core` 排序。`sector_failed` 是完整可展示的部分降级结果，可命中缓存；需要重跑时显式传 `--retry-of-run-id`，新建 append-only 子 run，不覆盖旧 run。
 4. 展示系统建议后，必须让用户三选一：`accepted`（接受）、`overridden`（改选，必须写 `override_reason`）或 `undetermined`（看不懂/不确认）。CLI 入口：

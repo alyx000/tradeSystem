@@ -40,6 +40,7 @@ class StyleAnalyzer:
         result["premium_trend"] = self._build_premium_trend(date)
         result["board_preference"] = self._build_board_preference(raw_data)
         result["cap_preference"] = self._build_cap_preference(raw_data)
+        result["board_break_feedback"] = self._build_board_break_feedback(raw_data)
         result["switch_signals"] = self._build_switch_signals(result)
         # 昨日人气股今日表现（具名）：来自 T-1 yaml 的 popularity_backfill。
         # 渲染文案语义固定为「T-1 高标 → T 日结局」，因此只读紧邻前一交易日，
@@ -191,6 +192,59 @@ class StyleAnalyzer:
             "spread": spread,
             "relative": relative,
         }
+
+    # ------------------------------------------------------------------
+    # 断板股次日赚钱效应：T-2 连板 → T-1 断板 → T 反馈
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _build_board_break_feedback(raw_data: dict) -> dict:
+        """投影断板反馈聚合事实，排除逐股明细和错误文本。"""
+        raw = raw_data.get("board_break_feedback")
+        if not isinstance(raw, Mapping):
+            return {}
+        status = raw.get("status")
+        if status not in {"ok", "partial", "source_failed"}:
+            return {}
+
+        state_fields = (
+            "status", "source_connected_date", "break_date", "outcome_date",
+            "empty_reason",
+        )
+        if status == "source_failed" or not raw.get("sample_count"):
+            return {key: raw[key] for key in state_fields if key in raw}
+
+        fields = (
+            "status", "source_connected_date", "break_date", "outcome_date",
+            "connected_count", "break_candidate_count", "break_count",
+            "sample_count", "break_coverage_pct", "feedback_coverage_pct",
+            "empty_reason", "open_mean_pct", "open_median_pct",
+            "open_up_count", "open_up_rate", "close_mean_pct",
+            "close_median_pct", "close_up_count", "close_up_rate",
+            "relimit_count", "relimit_rate", "limit_down_count",
+            "limit_down_rate",
+        )
+        compact = {key: raw[key] for key in fields if key in raw}
+        if "feedback_coverage_pct" not in compact and "coverage_pct" in raw:
+            compact["feedback_coverage_pct"] = raw["coverage_pct"]
+
+        bucket_fields = (
+            "key", "label", "height_range", "break_candidate_count",
+            "break_count", "sample_count", "break_coverage_pct",
+            "feedback_coverage_pct", "open_mean_pct", "open_median_pct",
+            "open_up_count", "open_up_rate", "close_mean_pct",
+            "close_median_pct", "close_up_count", "close_up_rate",
+            "relimit_count", "relimit_rate", "limit_down_count",
+            "limit_down_rate",
+        )
+        raw_buckets = raw.get("height_buckets")
+        if isinstance(raw_buckets, list):
+            compact["height_buckets"] = [
+                {key: bucket[key] for key in bucket_fields if key in bucket}
+                for bucket in raw_buckets
+                if isinstance(bucket, Mapping)
+            ]
+        return compact
 
     # ------------------------------------------------------------------
     # 风格切换信号
