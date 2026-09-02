@@ -53,6 +53,27 @@ python3 main.py post --date YYYY-MM-DD
 
 来源日期语义保持严格分离：A50、黄金、原油、铜优先读取不晚于目标日的日期化日线并保存真实 `as_of`，避免北京时间晚间把下一期货交易日快照并入当日复盘；A50 先取东财期货日期化日线并做有限重试，失败后仅在盘后目标日场景取 Tushare `index_global/XIN9` 且明确标注为 `index_proxy` 的富时中国 A50 指数日期化代理（不得冒充期指），商品在东财失败时再取新浪日期化日线；日期化历史源均失败才降级实时快照，仅保存 `_fetched_at` 并按 `fetch-only` 使用，禁止把目标日或抓取日冒充市场交易日。单个外部源失败只在对应块写 `source_failed`，不阻断 A 股盘后主链。
 
+## 低价股赚钱效应盘后统计
+
+`main.py post` 随工作日 20:00 的标准盘后任务，同批计算并保存 `post-market.yaml.raw_data.low_price_effect`，不新增独立 launchd、APScheduler 或业务表。现有 `daily_market` 的 raw data 双写会保留该块，盘后 Markdown 同时展示独立章节。
+
+- **低价口径**：当日未复权收盘价 `<=10` 元，另拆 `<=5` 元与 `5～10` 元；样本为当日有有效日线的沪深北 A 股，剔除 ST/退市及沪深 B 股。
+- **赚钱效应指标**：个股等权的日涨跌中位/均值、上涨率、`>=5%` 强势率、`<=-5%` 明显回撤率、基于当日真实涨跌停名单的涨跌停率、成交额占全市场比例，以及低价股涨跌中位相对全市场的差值。全部为 `[事实·计算]`，不输出强弱评级、价格目标或买卖建议。
+- **硬源与覆盖**：`get_market_daily_quotes(date)` 必须日期匹配、代码唯一、有效行至少 4000 且有效率至少 98%；ST 名单为空/失败会令整块 `source_failed`。涨跌停或成交额辅助字段缺失时为 `partial`，保留仍可验证的核心统计；`source_failed` 不得写成低价股样本为 0。
+- **复盘 HTML 消费**：多 Agent 每日复盘的正式组装器只读报告日该块，在④风格区自动注入 `data-style-low-price-effect`，展示 `<=10` 元总体及 `<=5` 元 / `5～10` 元分档；`partial` 保留核心值并把缺项标“未计算”，`source_failed`/缺块进入 `ops`，不得回退旧日或补 0。
+- **回补边界**：分类使用目标日原始收盘价，不做复权。单日完整盘后重跑仍可用 `main.py post --date`；只补本指标或生成趋势时必须走下列标准命令，不得直接手改 YAML/SQLite。`backfill` 精确读取本地 `trade_calendar`，只调用 ST、涨停、跌停、全市场日线四个日期键控接口，原子更新既有盘后信封并复用 `daily_market` 双写；已有 `complete` 默认幂等跳过，`--refetch` 的新结果若降级则保留旧事实。命令不触发持仓、关注池、监管派生或任何推送。
+
+```bash
+# 补采截至目标日的最近 10 个交易日，并生成 CSV/JSON/PNG
+python3 scripts/main.py low-price-effect backfill --end-date YYYY-MM-DD --days 10 --input-by USER --json
+
+# 只读最终归档重新画图；partial/source_failed 断线，不补 0、不插值
+python3 scripts/main.py low-price-effect trend --end-date YYYY-MM-DD --days 10 --json
+```
+
+趋势产物默认落 `data/reports/low-price-effect/`；主图对比低价股与全市场涨跌中位，辅图展示低价股上涨家数占比和成交额占比。补采后优先对账目标日 YAML 与 `daily_market.raw_data`；本地 API 未启动时可直接按最终文件和 SQLite 核验，不以 localhost 失败否定已完成双写。
+
+
 ## 监管异动盘后采集（regulatory）
 
 `stk_alert` / `stk_shock` / `stk_high_shock` 统一通过 Tushare 的 range 接口按日期区间采集，并全部注册到 `post_extended`。盘后原始事实层采集完成后，再派生 `regulatory_anomaly_overview` 总览快照；该派生任务属于 `cmd_post` 的辅助任务，失败只记录 `failed` 与错误，不阻断其余盘后流程。

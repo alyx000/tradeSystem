@@ -1985,6 +1985,10 @@ def build_parser() -> argparse.ArgumentParser:
     from cli.intraday_summary import register_subparser as register_intraday_summary_subparser
     register_intraday_summary_subparser(subparsers)
 
+    # low-price-effect (低价股赚钱效应历史补采 + 趋势图；无推送)
+    from cli.low_price_effect import register_subparser as register_low_price_effect_subparser
+    register_low_price_effect_subparser(subparsers)
+
     # wechat-teacher-feed (本机 WeRSS 白名单采集与老师观点候选查看)
     from cli.wechat_teacher_feed import register_subparser as register_wechat_teacher_feed_subparser
     register_wechat_teacher_feed_subparser(subparsers)
@@ -2118,6 +2122,11 @@ def main():
     elif args.command == "intraday-summary":
         from cli import intraday_summary as intraday_summary_module
         exit_code = intraday_summary_module.handle_command(config, args)
+        if exit_code:
+            raise SystemExit(exit_code)
+    elif args.command == "low-price-effect":
+        from cli import low_price_effect as low_price_effect_module
+        exit_code = low_price_effect_module.handle_command(config, args)
         if exit_code:
             raise SystemExit(exit_code)
     elif args.command == "wechat-teacher-feed":

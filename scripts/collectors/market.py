@@ -1014,11 +1014,16 @@ class MarketCollector:
             logger.debug(f"融资融券数据获取失败（T+1 延迟正常）: {margin.error}")
 
         # 10b. 融资融券明细 / ST 名单
+        stock_st_result = None
         for method_name, result_key in [
             ("get_margin_detail", "margin_detail"),
             ("get_stock_st", "stock_st"),
         ]:
             r = self.registry.call(method_name, date)
+            if result_key == "stock_st":
+                # 低价股赚钱效应需要完整 ST 名单做硬剔除；报告中的 stock_st 仍沿用
+                # 既有最多 100 行展示契约，避免扩大盘后 YAML 的兼容块。
+                stock_st_result = r
             if r.success and r.data:
                 if result_key == "margin_detail" and isinstance(r.data, list):
                     rows = r.data
@@ -1042,6 +1047,35 @@ class MarketCollector:
                     result[result_key] = {"data": r.data, "_source": r.source}
             else:
                 logger.debug("%s 获取失败: %s", method_name, r.error)
+
+        # 10c. 低价股赚钱效应：收盘价≤10元，分≤5元/5～10元；只做客观横截面统计。
+        # 复用本批已取得的 ST 与涨跌停事实，另拉一次日期键控的全市场日线；来源失败
+        # 必须显式保存 source_failed，不能把“未取得数据”写成低价股样本为 0。
+        try:
+            from analyzers.low_price_effect import collect_low_price_effect
+
+            result["low_price_effect"] = collect_low_price_effect(
+                self.registry,
+                date,
+                stock_st_result=stock_st_result,
+                limit_up_section=result.get("limit_up"),
+                limit_down_section=result.get("limit_down"),
+            )
+            logger.info(
+                "低价股赚钱效应统计完成: status=%s sample=%s",
+                result["low_price_effect"].get("status"),
+                (result["low_price_effect"].get("low_price") or {}).get(
+                    "sample_count", 0
+                ),
+            )
+        except Exception as e:
+            logger.warning("低价股赚钱效应统计异常: %s", e)
+            result["low_price_effect"] = {
+                "status": "source_failed",
+                "trade_date": date,
+                "error": f"统计异常:{e}",
+                "gaps": [],
+            }
 
         # 11. 指数均线
         self._compute_index_ma(result, date)

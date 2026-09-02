@@ -7,7 +7,7 @@
 - `review_style.css` — 报告样式 **v2「纸面档案阅读器」**：米纸底色 + 衬线大标题 + 粘性顶栏/导航 + 阅读进度 + 表格横向滚动 + 证据展开/收起 + 回到顶部，并包含 USD/CNY/1Y C-Swap 静态 SVG 在宽屏、窄屏与系统暗色模式下的样式。正文 class 语义不变（tag t-fact/t-judge / kpi / callout.note/.risk/.warn / tr.hl / up/.down/.warn / p-up/.p-mid/.p-down / twocol / mono / num / src / sub）。
 - `build_capacity_manifest.py` — 容量排名 sidecar 官方生成器：只读镜像、最多 3 个申万二级方向、全市场 `daily.amount` 排名、最近 5 个开放日连续性；禁止 Agent 手写 sidecar。
 - `build_new_high_structure_manifest.py` — 历史新高结构生成器：只读最近 251 个开放日，按 `daily.high × adj_factor` 生成滚动 60/120/250 日双日计数、行业结构与代表票；不写库。
-- `assemble_report.py` — 组装脚本（结构、Claim、证据、预算、外部依赖校验 + 阅读器外壳 + 原生 JS）；同时自动读取同日情绪核心 JSON 注入 `s3`，按最近 20 个开放日注入最高连板静态趋势图，把打开高度对应的启动日候选注入 `s6`，并从已验证复盘档案汇总人民币外汇历史、向 `s1` 注入静态趋势图。用法见文件头。
+- `assemble_report.py` — 组装脚本（结构、Claim、证据、预算、外部依赖校验 + 阅读器外壳 + 原生 JS）；同时自动读取同日情绪核心 JSON 注入 `s3`，按最近 20 个开放日注入最高连板静态趋势图，把打开高度对应的启动日候选注入 `s6`，并从已验证复盘档案汇总人民币外汇历史、向 `s1` 注入静态趋势图；另从盘后 YAML 与同日严重异动 Markdown 向 `s4` 自动注入 10/20/30cm、首板/连板、北交所最近样本、低价股赚钱效应和 T+1/3/5/10 反馈固定模块。用法见文件头。
 
 ## Body chunk 骨架（7 块）
 
@@ -42,7 +42,7 @@ python3 .agents/skills/daily-review/references/html-report-template/assemble_rep
   --output data/reports/复盘_YYYY-MM-DD_compact.html
 ```
 
-组装器默认读取 `data/reports/emotion-leader/<REPORT_DATE>.json`、`daily/` 盘后归档与 `data/reports/shock-feedback/<REPORT_DATE>.md`，并从 `data/reports/复盘_*.html` 取最近最多 15 个已验证同日外汇点；仅在回归或迁移时使用 `--emotion-leader-report` / `--daily-dir` / `--shock-feedback-report` / `--fx-history-dir` 改读路径。情绪、板型或严重异动源失败会生成显式 `missing-data` 并进入 `ops`；外汇同日点少于 8 个工作日会保留历史不足说明，均不补 0、不插值。
+组装器默认读取 `data/reports/emotion-leader/<REPORT_DATE>.json`、`daily/` 盘后归档与 `data/reports/shock-feedback/<REPORT_DATE>.md`，并从 `data/reports/复盘_*.html` 取最近最多 15 个已验证同日外汇点；仅在回归或迁移时使用 `--emotion-leader-report` / `--daily-dir` / `--shock-feedback-report` / `--fx-history-dir` 改读路径。情绪、板型、低价股或严重异动源失败会生成显式 `missing-data` 并进入 `ops`；外汇同日点少于 8 个工作日会保留历史不足说明，均不补 0、不插值。
 
 sidecar 使用其他 helper 输出路径时显式传入；两个参数都只改变读取路径，不是跳过门禁：
 
@@ -65,6 +65,7 @@ python3 .agents/skills/daily-review/references/html-report-template/assemble_rep
 - `s3` 折叠证据还必须有且仅有一份 `data-board-break-feedback="v1|none|missing-data"`。`v1` 固定保存 `T-2 连板 → T-1 断板 → T 日反馈` 时间轴、候选/断板/有效样本数、覆盖率及逐股代码、前高、断板涨幅、反馈开收盘涨幅和结果；`partial` 保留有效行并在 `ops` 披露。只有 `ok` 的完整真空样本可用 `none`，`source_failed` 或零有效覆盖必须用 `missing-data`，不得写成 0。
 - `s4` 默认可见正文必须有且仅有一个 `<p data-style-board-break-feedback="v1|none|missing-data">`，带 `[事实]`。`v1` 必须展示样本/断板数与覆盖率、开收盘均值和中位数、高开/收涨率、再涨停与跌停数；组装器从 `s3` 逐股属性重算后逐项对账。`none/missing-data` 必须与 `s3` 状态完全一致，摘要不得隐藏、重复或复制逐股表。
 - `s4` 还必须且只能包含一份由组装器自动注入、默认可见的 `div[data-style-market-effect="v1|missing-data"]`；chunk 同时禁止手写 `data-style-market-effect` 和其内部的 `data-style-shock-feedback`。`v1` 从最近最多 5 份可用盘后 YAML 逐股重算并逐日展示非 ST 总涨停、首板、连板、10/20/30cm，当前日另展示各板型最高高度；三类之和必须与总量及首板/连板闭合，北交所 `.BJ` 当前身份和序列严格等于 30cm。严重异动摘要从同日 Markdown 的汇总表读取 T+1/T+3/T+5/T+10 中位数及正收益样本。市场板型标 `[事实]`、跨样本反馈标 `[判断]`；失败和部分态自动写入 `ops`，不得补 0。
+- `s4` 同时必须且只能包含一份由组装器自动注入、默认可见的 `div[data-style-low-price-effect="v1|missing-data"]`，chunk 禁止手写。`v1` 只读报告日 `post-market.yaml.raw_data.low_price_effect`，默认可见当日未复权收盘价 `<=10` 元总体以及 `<=5` 元、`5～10` 元分档的样本数、等权中位/均值、上涨率、`>=5%` / `<=-5%`、真实涨跌停率、成交额占比和相对全市场中位差；两个分档的样本、上涨、强涨强跌及可用涨跌停计数必须与总体闭合。`partial` 保留有效核心指标、不可判辅助项显示“未计算”并进入 `ops`；`source_failed`、缺块或日期错位用 `missing-data`，不得借旧日、补 0 或渲染成样本 0。
 - `s6` 还由组装器从同一 JSON 自动注入唯一 `data-emotion-node="v1|none|missing-data"`。仅当目标日非 ST 二板及以上的最高连板数严格超过此前 20 个完整开放日的最高值时使用 `v1`：高度对比标 `[事实]`，打开高度核心的生命周期启动日只标为 `[判断] 情绪节点日候选`。比较窗、目标日涨停事实或启动日对账不完整必须用 `missing-data`，不得写成 `none`。
 - `factor` 默认显示主因子、第一辅助、其余因子变化和切换/失效状态。章节容器必须是默认可见的 `<section class="blk" id="factor">`，并声明 `data-factor-mode="formal|rule_only|shadow|no_data"`：有分析时须有且仅有 1 个默认可见 judgment Claim、1～3 个默认可见 `<li>`、1 个默认可见 `data-factor-role="status"`；Claim / `<li>` 必须各自有可见的 `[事实]/[判断]` 标签和实质正文，正文不得藏进后代 `hidden`。状态节点不得藏入普通 `<details>` / `hidden`，且只接受与 mode 对应的规范模板：`formal=正式 factor-score 已完成`、`rule_only=rule_only 结果`；`shadow` 只能使用“正式评分停在日期 / 本日未运行 / 本日尚未评分 / 完成条件未满足”之一，并同时写明“影子口径、不写库”。唯一 `data-evidence-kind="factor-detail"` 折叠证据须实际含 `market_node / sector_rhythm / style_regime / leader_signal`。`no_data` 只允许标题和唯一 `<p data-factor-role="no-data">[事实] 本日无新增/本日无可判数据</p>`。完整四因子证据卡与切换对账不再归到 `s8`。
 - Claim owner 使用唯一 `id="claim-*"`；跨节引用使用匹配的 `data-claim-ref="claim-*"`，每个 owner 最多 1 个短引用。悬空引用、重复 owner 或多次引用均拒绝生成。

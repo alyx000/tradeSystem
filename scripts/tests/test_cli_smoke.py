@@ -511,6 +511,13 @@ ARCHITECTURE_COMMANDS = [
     ["intraday-summary", "run"],
     ["intraday-summary", "run", "--dry-run"],
     ["intraday-summary", "run", "--no-push", "--json"],
+    # low-price-effect (历史补采与只读趋势图；补采显式审计且永不推送)
+    ["low-price-effect", "backfill", "--end-date", "2026-09-01", "--input-by", "pytest"],
+    ["low-price-effect", "backfill", "--end-date", "2026-09-01", "--days", "10",
+     "--input-by", "pytest", "--refetch", "--output-dir", "/tmp/low-price", "--json"],
+    ["low-price-effect", "trend", "--end-date", "2026-09-01"],
+    ["low-price-effect", "trend", "--end-date", "2026-09-01", "--days", "10",
+     "--output-dir", "/tmp/low-price", "--json"],
     # wechat-teacher-feed (本机 WeRSS 白名单采集；确认前仅归档/查看)
     ["wechat-teacher-feed", "should-run", "--phase", "post-market", "--date", "2026-07-13", "--json"],
     ["wechat-teacher-feed", "doctor", "--json"],

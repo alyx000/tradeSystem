@@ -334,6 +334,7 @@ STRUCTURED_CONTRACT_ATTRIBUTES = (
     "data-board-break-feedback",
     "data-style-board-break-feedback",
     "data-style-market-effect",
+    "data-style-low-price-effect",
     "data-style-shock-feedback",
     "data-emotion-node",
     "data-sector-concentration",
@@ -404,6 +405,14 @@ STYLE_BOARD_BREAK_FEEDBACK_MISSING_TEXT = (
 )
 STYLE_MARKET_EFFECT_MISSING_TEXT = (
     "[事实]涨停宽度、连板延续与北交所数据不完整，本日无法判定"
+)
+STYLE_LOW_PRICE_EFFECT_MISSING_TEXT = (
+    "[事实]低价股赚钱效应数据不完整，本日无法判定"
+)
+STYLE_LOW_PRICE_EFFECT_OPS_MARKER = "低价股赚钱效应数据不完整"
+STYLE_LOW_PRICE_BANDS = (
+    ("price_le_5", "le5", "≤5元"),
+    ("price_5_to_10", "5to10", "5～10元"),
 )
 STYLE_SHOCK_FEEDBACK_NONE_TEXT = "[判断]严重异动反馈回看窗口内无事件"
 STYLE_SHOCK_FEEDBACK_MISSING_TEXT = (
@@ -4450,6 +4459,330 @@ class _ReportParser(HTMLParser):
                 section="s4",
             )
 
+    def _validate_style_low_price_effect_contract(
+        self,
+        report_date: date_type,
+    ) -> None:
+        """校验④同日低价股赚钱效应及价格分层。"""
+
+        contracts = self.structured_contracts["data-style-low-price-effect"]
+        if len(contracts) != 1:
+            raise ReportValidationError(
+                "invalid_style_low_price_effect",
+                "s4 必须且只能包含一份低价股赚钱效应模块",
+                section="s4",
+            )
+        contract = contracts[0]
+        compact_text = re.sub(r"\s+", "", "".join(contract.rendered_text)).rstrip(
+            "。.;；"
+        )
+        source_status = contract.attrs.get("data-source-status", "")
+        ops_text = re.sub(r"\s+", "", "".join(self.section_text["ops"]))
+        if (
+            contract.section != "s4"
+            or contract.tag != "div"
+            or contract.default_hidden
+            or contract.attrs.get("data-as-of") != report_date.isoformat()
+            or contract.attrs.get("data-reviewed-through")
+            != report_date.isoformat()
+        ):
+            raise ReportValidationError(
+                "invalid_style_low_price_effect",
+                "低价股赚钱效应必须位于 s4、默认可见且严格使用报告日事实",
+                section="s4",
+            )
+        if contract.value == "missing-data":
+            if (
+                source_status not in {"partial", "source_failed"}
+                or STYLE_LOW_PRICE_EFFECT_MISSING_TEXT not in compact_text
+                or STYLE_LOW_PRICE_EFFECT_OPS_MARKER not in ops_text
+            ):
+                raise ReportValidationError(
+                    "invalid_style_low_price_effect",
+                    "低价股缺失态必须保留 partial/source_failed 与可见 ops 缺口，不能补 0",
+                    section="s4",
+                )
+            return
+
+        if (
+            contract.value != "v1"
+            or source_status not in {"complete", "partial"}
+            or contract.attrs.get("data-definition-version") != "v1"
+            or _finite_float(contract.attrs.get("data-low-price-max-yuan"))
+            != 10.0
+            or _finite_float(
+                contract.attrs.get("data-very-low-price-max-yuan")
+            )
+            != 5.0
+        ):
+            raise ReportValidationError(
+                "invalid_style_low_price_effect",
+                "低价股完整态必须保留 v1 口径、同日状态与 5/10 元分档",
+                section="s4",
+            )
+
+        def parse_bucket(prefix: str) -> dict[str, int | float | None] | None:
+            sample_count = _bounded_int_attr(
+                contract.attrs,
+                f"data-{prefix}-sample-count",
+                minimum=1,
+                maximum=10_000,
+            )
+            advance_count = _bounded_int_attr(
+                contract.attrs,
+                f"data-{prefix}-advance-count",
+                minimum=0,
+                maximum=10_000,
+            )
+            strong_gain_count = _bounded_int_attr(
+                contract.attrs,
+                f"data-{prefix}-strong-gain-count",
+                minimum=0,
+                maximum=10_000,
+            )
+            strong_loss_count = _bounded_int_attr(
+                contract.attrs,
+                f"data-{prefix}-strong-loss-count",
+                minimum=0,
+                maximum=10_000,
+            )
+            advance_rate = _finite_float(
+                contract.attrs.get(f"data-{prefix}-advance-rate")
+            )
+            strong_gain_rate = _finite_float(
+                contract.attrs.get(f"data-{prefix}-strong-gain-rate")
+            )
+            strong_loss_rate = _finite_float(
+                contract.attrs.get(f"data-{prefix}-strong-loss-rate")
+            )
+            median_pct = _finite_float(
+                contract.attrs.get(f"data-{prefix}-median-pct")
+            )
+            mean_pct = _finite_float(
+                contract.attrs.get(f"data-{prefix}-mean-pct")
+            )
+            if (
+                sample_count is None
+                or advance_count is None
+                or strong_gain_count is None
+                or strong_loss_count is None
+                or advance_count > sample_count
+                or strong_gain_count > sample_count
+                or strong_loss_count > sample_count
+                or strong_gain_count + strong_loss_count > sample_count
+                or median_pct is None
+                or mean_pct is None
+                or not -100 <= median_pct <= 1_000
+                or not -100 <= mean_pct <= 1_000
+            ):
+                return None
+            rate_pairs = (
+                (advance_rate, advance_count),
+                (strong_gain_rate, strong_gain_count),
+                (strong_loss_rate, strong_loss_count),
+            )
+            if any(
+                rate is None
+                or not 0 <= rate <= 1
+                or not math.isclose(
+                    rate,
+                    round(count / sample_count, 4),
+                    abs_tol=0.00005,
+                )
+                for rate, count in rate_pairs
+            ):
+                return None
+
+            parsed: dict[str, int | float | None] = {
+                "sample_count": sample_count,
+                "advance_count": advance_count,
+                "advance_rate": advance_rate,
+                "median_pct": median_pct,
+                "mean_pct": mean_pct,
+                "strong_gain_count": strong_gain_count,
+                "strong_gain_rate": strong_gain_rate,
+                "strong_loss_count": strong_loss_count,
+                "strong_loss_rate": strong_loss_rate,
+            }
+            for name in ("limit-up", "limit-down"):
+                raw_count = contract.attrs.get(f"data-{prefix}-{name}-count", "")
+                raw_rate = contract.attrs.get(f"data-{prefix}-{name}-rate", "")
+                if raw_count == "unavailable" or raw_rate == "unavailable":
+                    if (
+                        raw_count != "unavailable"
+                        or raw_rate != "unavailable"
+                        or source_status != "partial"
+                    ):
+                        return None
+                    parsed[f"{name}_count"] = None
+                    parsed[f"{name}_rate"] = None
+                    continue
+                count = _bounded_int_attr(
+                    contract.attrs,
+                    f"data-{prefix}-{name}-count",
+                    minimum=0,
+                    maximum=10_000,
+                )
+                rate = _finite_float(raw_rate)
+                if (
+                    count is None
+                    or count > sample_count
+                    or rate is None
+                    or not 0 <= rate <= 1
+                    or not math.isclose(
+                        rate,
+                        round(count / sample_count, 4),
+                        abs_tol=0.00005,
+                    )
+                ):
+                    return None
+                parsed[f"{name}_count"] = count
+                parsed[f"{name}_rate"] = rate
+            return parsed
+
+        low_price = parse_bucket("low")
+        bands = {
+            attr_key: parse_bucket(f"band-{attr_key}")
+            for _, attr_key, _ in STYLE_LOW_PRICE_BANDS
+        }
+        market_sample_count = _bounded_int_attr(
+            contract.attrs,
+            "data-market-sample-count",
+            minimum=1,
+            maximum=10_000,
+        )
+        market_median = _finite_float(
+            contract.attrs.get("data-market-median-pct")
+        )
+        median_excess = _finite_float(
+            contract.attrs.get("data-median-excess-pp")
+        )
+        amount_share_raw = contract.attrs.get("data-amount-share-pct", "")
+        amount_share = (
+            None
+            if amount_share_raw == "unavailable"
+            else _finite_float(amount_share_raw)
+        )
+        if (
+            low_price is None
+            or any(item is None for item in bands.values())
+            or market_sample_count is None
+            or market_median is None
+            or not -100 <= market_median <= 1_000
+            or median_excess is None
+            or int(low_price["sample_count"]) > market_sample_count
+            or not math.isclose(
+                median_excess,
+                round(float(low_price["median_pct"]) - market_median, 2),
+                abs_tol=0.005,
+            )
+            or (
+                amount_share is None
+                and not (
+                    amount_share_raw == "unavailable"
+                    and source_status == "partial"
+                )
+            )
+            or (
+                amount_share is not None and not 0 <= amount_share <= 100
+            )
+        ):
+            raise ReportValidationError(
+                "invalid_style_low_price_effect",
+                "低价股总样本、全市场中位超额或成交额占比无法对账",
+                section="s4",
+            )
+
+        complete_bands = [item for item in bands.values() if item is not None]
+        for name in (
+            "sample_count",
+            "advance_count",
+            "strong_gain_count",
+            "strong_loss_count",
+        ):
+            if sum(int(item[name]) for item in complete_bands) != int(
+                low_price[name]
+            ):
+                raise ReportValidationError(
+                    "invalid_style_low_price_effect",
+                    "低价股 ≤5 元与 5～10 元分层计数必须与总计闭合",
+                    section="s4",
+                )
+        for name in ("limit-up", "limit-down"):
+            total_count = low_price[f"{name}_count"]
+            band_counts = [item[f"{name}_count"] for item in complete_bands]
+            if total_count is None:
+                valid = all(value is None for value in band_counts)
+            else:
+                valid = all(value is not None for value in band_counts) and sum(
+                    int(value) for value in band_counts if value is not None
+                ) == int(total_count)
+            if not valid:
+                raise ReportValidationError(
+                    "invalid_style_low_price_effect",
+                    "低价股价格分层的涨跌停可用性与计数必须同态闭合",
+                    section="s4",
+                )
+
+        amount_text = (
+            "成交额占比未计算"
+            if amount_share is None
+            else f"成交额占比{amount_share:.2f}%"
+        )
+        limit_terms = []
+        for label, name in (("涨停率", "limit-up"), ("跌停率", "limit-down")):
+            rate = low_price[f"{name}_rate"]
+            limit_terms.append(
+                f"{label}未计算"
+                if rate is None
+                else f"{label}{float(rate) * 100:.2f}%"
+            )
+        visible_terms = [
+            "[事实]低价股赚钱效应",
+            f"样本{low_price['sample_count']}只",
+            f"中位{float(low_price['median_pct']):+.2f}%",
+            f"均值{float(low_price['mean_pct']):+.2f}%",
+            f"上涨率{float(low_price['advance_rate']) * 100:.1f}%",
+            f"全市场中位{market_median:+.2f}%",
+            f"中位超额{median_excess:+.2f}个百分点",
+            amount_text,
+            f"≥5%占{float(low_price['strong_gain_rate']) * 100:.1f}%",
+            f"≤-5%占{float(low_price['strong_loss_rate']) * 100:.1f}%",
+            *limit_terms,
+            "[事实]价格分层",
+            "当日未复权收盘价",
+            "剔除ST/退市及沪深B股",
+            "个股等权",
+        ]
+        for _, attr_key, label in STYLE_LOW_PRICE_BANDS:
+            item = bands[attr_key]
+            assert item is not None
+            visible_terms.extend(
+                (
+                    f"{label}{item['sample_count']}只",
+                    f"中位{float(item['median_pct']):+.2f}%",
+                    f"上涨率{float(item['advance_rate']) * 100:.1f}%",
+                    f"≥5%占{float(item['strong_gain_rate']) * 100:.1f}%",
+                    f"≤-5%占{float(item['strong_loss_rate']) * 100:.1f}%",
+                )
+            )
+        if any(term not in compact_text for term in visible_terms):
+            raise ReportValidationError(
+                "invalid_style_low_price_effect",
+                "低价股总样本、相对全市场与两个价格分层必须默认可见",
+                section="s4",
+            )
+        if (
+            source_status == "partial"
+            and STYLE_LOW_PRICE_EFFECT_OPS_MARKER not in ops_text
+        ):
+            raise ReportValidationError(
+                "invalid_style_low_price_effect",
+                "低价股 partial 状态必须在 ops 保留可见缺口",
+                section="s4",
+            )
+
+
     def _validate_emotion_node_contract(self, report_date: date_type) -> None:
         contracts = self.structured_contracts["data-emotion-node"]
         if len(contracts) != 1:
@@ -5196,6 +5529,7 @@ class _ReportParser(HTMLParser):
         self._validate_board_break_feedback_contract(report_date)
         self._validate_style_board_break_feedback_contract(report_date)
         self._validate_style_market_effect_contract(report_date)
+        self._validate_style_low_price_effect_contract(report_date)
         self._validate_emotion_node_contract(report_date)
         self._validate_capacity_health_contract(report_date)
         self._validate_sector_contracts(report_date)
@@ -7681,6 +8015,229 @@ def _load_style_shock_snapshot(
     }
 
 
+def _style_rate_matches(rate: float, count: int, sample_count: int) -> bool:
+    return math.isclose(
+        rate,
+        round(count / sample_count, 4),
+        abs_tol=0.00005,
+    )
+
+
+def _normalize_style_low_price_bucket(
+    raw: object,
+    *,
+    allow_unavailable_limits: bool,
+) -> dict[str, object] | None:
+    if not isinstance(raw, Mapping):
+        return None
+    sample_count = _style_exact_nonnegative_int(raw.get("sample_count"))
+    if sample_count is None or sample_count <= 0:
+        return None
+    normalized: dict[str, object] = {"sample_count": sample_count}
+    counts: dict[str, int] = {}
+    for name in (
+        "advance_count",
+        "flat_count",
+        "decline_count",
+        "strong_gain_count",
+        "strong_loss_count",
+    ):
+        value = _style_exact_nonnegative_int(raw.get(name))
+        if value is None or value > sample_count:
+            return None
+        counts[name] = value
+        normalized[name] = value
+    if (
+        counts["advance_count"]
+        + counts["flat_count"]
+        + counts["decline_count"]
+        != sample_count
+        or counts["strong_gain_count"] + counts["strong_loss_count"]
+        > sample_count
+    ):
+        return None
+
+    for name, count_name in (
+        ("advance_rate", "advance_count"),
+        ("strong_gain_rate", "strong_gain_count"),
+        ("strong_loss_rate", "strong_loss_count"),
+    ):
+        value = _finite_float(raw.get(name))
+        if (
+            value is None
+            or not 0 <= value <= 1
+            or not _style_rate_matches(value, counts[count_name], sample_count)
+        ):
+            return None
+        normalized[name] = value
+
+    for name in ("pct_chg_median", "pct_chg_mean"):
+        value = _finite_float(raw.get(name))
+        if value is None or not -100 <= value <= 1_000:
+            return None
+        normalized[name] = value
+
+    for prefix in ("limit_up", "limit_down"):
+        count = _style_exact_nonnegative_int(raw.get(f"{prefix}_count"))
+        rate = _finite_float(raw.get(f"{prefix}_rate"))
+        if count is None or rate is None:
+            if not allow_unavailable_limits or count is not None or rate is not None:
+                return None
+            normalized[f"{prefix}_count"] = None
+            normalized[f"{prefix}_rate"] = None
+            continue
+        if (
+            count > sample_count
+            or not 0 <= rate <= 1
+            or not _style_rate_matches(rate, count, sample_count)
+        ):
+            return None
+        normalized[f"{prefix}_count"] = count
+        normalized[f"{prefix}_rate"] = rate
+    return normalized
+
+
+def _load_style_low_price_snapshot(
+    daily_root: str | os.PathLike[str] | None,
+    report_date: str,
+) -> dict[str, object]:
+    """读取同日低价股统计；交易日缺源时不回退旧日，也不补零。"""
+
+    def failed(reason: str, *, status: str = "source_failed") -> dict[str, object]:
+        return {
+            "date": report_date,
+            "status": status,
+            "errors": [reason],
+        }
+
+    if daily_root is None:
+        return failed("未提供 daily 盘后归档目录")
+    path = Path(daily_root) / report_date / "post-market.yaml"
+    try:
+        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as exc:
+        return failed(f"{path.name}: {type(exc).__name__}")
+    if not isinstance(raw, Mapping) or str(raw.get("date") or "") != report_date:
+        return failed("盘后归档日期或顶层结构无效")
+    raw_data = raw.get("raw_data")
+    block = raw_data.get("low_price_effect") if isinstance(raw_data, Mapping) else None
+    if not isinstance(block, Mapping):
+        return failed("缺少 raw_data.low_price_effect")
+    status = str(block.get("status") or "source_failed")
+    gaps = [str(item).strip() for item in list(block.get("gaps") or []) if str(item).strip()]
+    if status == "source_failed":
+        return failed(str(block.get("error") or "低价股统计来源失败"))
+    if status not in {"complete", "partial"}:
+        return failed(f"低价股统计状态无效:{status}")
+    if (status == "complete" and gaps) or (status == "partial" and not gaps):
+        return failed("低价股统计状态与 gaps 不一致", status="partial")
+
+    definition = block.get("definition")
+    if (
+        str(block.get("trade_date") or "") != report_date
+        or not isinstance(definition, Mapping)
+        or str(definition.get("version") or "") != "v1"
+        or _finite_float(definition.get("low_price_max_yuan")) != 10.0
+        or _finite_float(definition.get("very_low_price_max_yuan")) != 5.0
+        or str(definition.get("classification_basis") or "")
+        != "当日未复权收盘价"
+    ):
+        return failed("低价股统计日期或口径定义无效", status="partial")
+
+    allow_unavailable = status == "partial"
+    market = _normalize_style_low_price_bucket(
+        block.get("market_benchmark"),
+        allow_unavailable_limits=allow_unavailable,
+    )
+    low_price = _normalize_style_low_price_bucket(
+        block.get("low_price"),
+        allow_unavailable_limits=allow_unavailable,
+    )
+    bands_raw = block.get("bands")
+    if market is None or low_price is None or not isinstance(bands_raw, list):
+        return failed("低价股核心指标结构无效", status="partial")
+    bands_by_key: dict[str, dict[str, object]] = {}
+    expected_labels = {key: label for key, _, label in STYLE_LOW_PRICE_BANDS}
+    for item in bands_raw:
+        if not isinstance(item, Mapping):
+            return failed("低价股价格分层存在非对象行", status="partial")
+        key = str(item.get("key") or "")
+        if key in bands_by_key or str(item.get("label") or "") != expected_labels.get(key):
+            return failed("低价股价格分层身份或标签无效", status="partial")
+        normalized = _normalize_style_low_price_bucket(
+            item,
+            allow_unavailable_limits=allow_unavailable,
+        )
+        if normalized is None:
+            return failed(f"低价股价格分层指标无效:{key or 'unknown'}", status="partial")
+        bands_by_key[key] = normalized
+    if set(bands_by_key) != set(expected_labels):
+        return failed("低价股价格分层必须恰好包含≤5元和5～10元", status="partial")
+
+    bands = [bands_by_key[key] for key, _, _ in STYLE_LOW_PRICE_BANDS]
+    for name in (
+        "sample_count",
+        "advance_count",
+        "flat_count",
+        "decline_count",
+        "strong_gain_count",
+        "strong_loss_count",
+    ):
+        if sum(int(item[name]) for item in bands) != int(low_price[name]):
+            return failed(f"低价股价格分层无法与总计对账:{name}", status="partial")
+    for name in ("limit_up_count", "limit_down_count"):
+        total_value = low_price[name]
+        band_values = [item[name] for item in bands]
+        if total_value is None:
+            if any(value is not None for value in band_values):
+                return failed(f"低价股价格分层可用性不一致:{name}", status="partial")
+        elif any(value is None for value in band_values) or sum(
+            int(value) for value in band_values if value is not None
+        ) != int(total_value):
+            return failed(f"低价股价格分层无法与总计对账:{name}", status="partial")
+
+    market_median = float(market["pct_chg_median"])
+    low_median = float(low_price["pct_chg_median"])
+    excess = _finite_float(block.get("low_price", {}).get("median_excess_vs_market_pp"))
+    amount_share = _finite_float(block.get("low_price", {}).get("amount_share_pct"))
+    if excess is None or not math.isclose(
+        excess,
+        round(low_median - market_median, 2),
+        abs_tol=0.005,
+    ):
+        return failed("低价股相对全市场中位超额无法对账", status="partial")
+    if amount_share is None:
+        if status == "complete":
+            return failed("低价股成交额占比缺失", status="partial")
+    elif not 0 <= amount_share <= 100:
+        return failed("低价股成交额占比越界", status="partial")
+
+    coverage = block.get("coverage")
+    eligible_count = (
+        _style_exact_nonnegative_int(coverage.get("eligible_market_count"))
+        if isinstance(coverage, Mapping)
+        else None
+    )
+    if eligible_count != int(market["sample_count"]):
+        return failed("低价股全市场样本与覆盖元数据不一致", status="partial")
+    return {
+        "date": report_date,
+        "status": status,
+        "definition": dict(definition),
+        "market": market,
+        "low_price": {
+            **low_price,
+            "median_excess_vs_market_pp": excess,
+            "amount_share_pct": amount_share,
+        },
+        "bands": {
+            key: bands_by_key[key] for key, _, _ in STYLE_LOW_PRICE_BANDS
+        },
+        "errors": gaps,
+    }
+
+
+
 def load_style_market_effect(
     daily_root: str | os.PathLike[str] | None,
     shock_report: str | os.PathLike[str] | None,
@@ -7688,7 +8245,7 @@ def load_style_market_effect(
     *,
     report_is_open: bool | None = None,
 ) -> dict[str, object]:
-    """装载④风格固定模块：板型/北交所来自盘后 YAML，异动来自同日报告。"""
+    """装载④风格固定模块：板型/低价股来自盘后 YAML，异动来自同日报告。"""
 
     return {
         "schema": STYLE_MARKET_EFFECT_SCHEMA,
@@ -7698,6 +8255,7 @@ def load_style_market_effect(
             report_date,
             report_is_open,
         ),
+        "low_price": _load_style_low_price_snapshot(daily_root, report_date),
         "shock": _load_style_shock_snapshot(shock_report, report_date),
     }
 
@@ -7705,6 +8263,131 @@ def load_style_market_effect(
 def _style_format_signed_pct(value: object) -> str:
     number = float(value)
     return f"{number:+.1f}%"
+
+
+def _style_low_price_signed_pct(value: object) -> str:
+    return f"{float(value):+.2f}%"
+
+
+def _style_low_price_rate_pct(value: object, *, digits: int = 1) -> str:
+    return f"{float(value) * 100:.{digits}f}%"
+
+
+def _style_low_price_bucket_attrs(
+    prefix: str,
+    bucket: Mapping[str, object],
+) -> str:
+    attrs = [
+        f'data-{prefix}-sample-count="{int(bucket["sample_count"])}"',
+        f'data-{prefix}-advance-count="{int(bucket["advance_count"])}"',
+        f'data-{prefix}-advance-rate="{float(bucket["advance_rate"]):.4f}"',
+        f'data-{prefix}-median-pct="{float(bucket["pct_chg_median"]):.2f}"',
+        f'data-{prefix}-mean-pct="{float(bucket["pct_chg_mean"]):.2f}"',
+        f'data-{prefix}-strong-gain-count="{int(bucket["strong_gain_count"])}"',
+        f'data-{prefix}-strong-gain-rate="{float(bucket["strong_gain_rate"]):.4f}"',
+        f'data-{prefix}-strong-loss-count="{int(bucket["strong_loss_count"])}"',
+        f'data-{prefix}-strong-loss-rate="{float(bucket["strong_loss_rate"]):.4f}"',
+    ]
+    for name in ("limit_up", "limit_down"):
+        count = bucket.get(f"{name}_count")
+        rate = bucket.get(f"{name}_rate")
+        attrs.append(
+            f'data-{prefix}-{name.replace("_", "-")}-count="'
+            f'{"unavailable" if count is None else int(count)}"'
+        )
+        attrs.append(
+            f'data-{prefix}-{name.replace("_", "-")}-rate="'
+            f'{"unavailable" if rate is None else f"{float(rate):.4f}"}"'
+        )
+    return " ".join(attrs)
+
+
+def _render_style_low_price_effect(
+    payload: Mapping[str, object] | None,
+    report_date: str,
+) -> str:
+    def missing_fragment(missing_status: str) -> str:
+        normalized_status = (
+            "partial" if missing_status == "partial" else "source_failed"
+        )
+        return f'''<div class="style-low-price-effect" data-style-low-price-effect="missing-data"
+    data-as-of="{escape(report_date)}" data-reviewed-through="{escape(report_date)}"
+    data-source-status="{normalized_status}">
+  <h3>低价股赚钱效应 · 收盘价≤10元</h3>
+  <p>{STYLE_LOW_PRICE_EFFECT_MISSING_TEXT}</p>
+</div>'''
+
+    snapshot = payload.get("low_price") if isinstance(payload, Mapping) else None
+    status = (
+        str(snapshot.get("status") or "source_failed")
+        if isinstance(snapshot, Mapping)
+        else "source_failed"
+    )
+    if status not in {"complete", "partial"} or not isinstance(snapshot, Mapping):
+        return missing_fragment(status)
+
+    market = snapshot.get("market")
+    low_price = snapshot.get("low_price")
+    bands = snapshot.get("bands")
+    if (
+        str(snapshot.get("date") or "") != report_date
+        or not isinstance(market, Mapping)
+        or not isinstance(low_price, Mapping)
+        or not isinstance(bands, Mapping)
+    ):
+        return missing_fragment(status)
+    try:
+        band_items = [
+            (attr_key, label, bands[key])
+            for key, attr_key, label in STYLE_LOW_PRICE_BANDS
+        ]
+        if any(not isinstance(item, Mapping) for _, _, item in band_items):
+            return missing_fragment(status)
+        limit_texts = []
+        for label, name in (("涨停率", "limit_up_rate"), ("跌停率", "limit_down_rate")):
+            value = low_price.get(name)
+            limit_texts.append(
+                f"{label}未计算"
+                if value is None
+                else f"{label}{_style_low_price_rate_pct(value, digits=2)}"
+            )
+        amount_share = low_price.get("amount_share_pct")
+        amount_text = (
+            "成交额占比未计算"
+            if amount_share is None
+            else f"成交额占比{float(amount_share):.2f}%"
+        )
+        band_attrs = " ".join(
+            _style_low_price_bucket_attrs(f"band-{attr_key}", item)
+            for attr_key, _, item in band_items
+        )
+        band_visible = "；".join(
+            f"{label}{int(item['sample_count'])}只（中位"
+            f"{_style_low_price_signed_pct(item['pct_chg_median'])}、"
+            f"上涨率{_style_low_price_rate_pct(item['advance_rate'])}、"
+            f"≥5%占{_style_low_price_rate_pct(item['strong_gain_rate'])}、"
+            f"≤-5%占{_style_low_price_rate_pct(item['strong_loss_rate'])}）"
+            for _, label, item in band_items
+        )
+        low_attrs = _style_low_price_bucket_attrs("low", low_price)
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return missing_fragment(status)
+
+    partial_note = "本模块为部分覆盖，缺口见数据缺口。" if status == "partial" else ""
+    return f'''<div class="style-low-price-effect" data-style-low-price-effect="v1"
+    data-as-of="{escape(report_date)}" data-reviewed-through="{escape(report_date)}"
+    data-source-status="{status}" data-definition-version="v1"
+    data-low-price-max-yuan="10.0" data-very-low-price-max-yuan="5.0"
+    data-market-sample-count="{int(market['sample_count'])}"
+    data-market-median-pct="{float(market['pct_chg_median']):.2f}"
+    data-median-excess-pp="{float(low_price['median_excess_vs_market_pp']):.2f}"
+    data-amount-share-pct="{"unavailable" if amount_share is None else f'{float(amount_share):.2f}'}"
+    {low_attrs} {band_attrs}>
+  <h3>低价股赚钱效应 · 收盘价≤10元</h3>
+  <p><strong>[事实] 低价股赚钱效应：</strong>样本{int(low_price['sample_count'])}只，中位{_style_low_price_signed_pct(low_price['pct_chg_median'])}、均值{_style_low_price_signed_pct(low_price['pct_chg_mean'])}、上涨率{_style_low_price_rate_pct(low_price['advance_rate'])}；全市场中位{_style_low_price_signed_pct(market['pct_chg_median'])}，中位超额{float(low_price['median_excess_vs_market_pp']):+.2f}个百分点；{amount_text}；≥5%占{_style_low_price_rate_pct(low_price['strong_gain_rate'])}、≤-5%占{_style_low_price_rate_pct(low_price['strong_loss_rate'])}、{'、'.join(limit_texts)}。</p>
+  <p><strong>[事实] 价格分层：</strong>{band_visible}。口径为当日未复权收盘价、沪深北A股剔除ST/退市及沪深B股、个股等权。{partial_note}</p>
+</div>'''
+
 
 
 def _render_style_shock_feedback(
@@ -7786,6 +8469,7 @@ def _render_style_market_effect(
 ) -> str:
     market = payload.get("market") if isinstance(payload, Mapping) else None
     shock = payload.get("shock") if isinstance(payload, Mapping) else None
+    low_price = payload.get("low_price") if isinstance(payload, Mapping) else None
     shock_fragment = _render_style_shock_feedback(
         shock if isinstance(shock, Mapping) else {}, report_date
     )
@@ -7943,6 +8627,7 @@ def _style_market_effect_ops_fragments(
 ) -> tuple[str, ...]:
     market = payload.get("market") if isinstance(payload, Mapping) else None
     shock = payload.get("shock") if isinstance(payload, Mapping) else None
+    low_price = payload.get("low_price") if isinstance(payload, Mapping) else None
     fragments: list[str] = []
     market_status = (
         str(market.get("status") or "source_failed")
@@ -7975,6 +8660,22 @@ def _style_market_effect_ops_fragments(
         fragments.append(
             '<p data-style-shock-feedback-ops="gap">[事实] '
             f"严重异动反馈数据不完整：{escape(reason[:240])}。</p>"
+        )
+    low_price_status = (
+        str(low_price.get("status") or "source_failed")
+        if isinstance(low_price, Mapping)
+        else "source_failed"
+    )
+    if low_price_status in {"source_failed", "partial"}:
+        errors = low_price.get("errors") if isinstance(low_price, Mapping) else []
+        reason = (
+            str(errors[0])
+            if isinstance(errors, list) and errors
+            else "同日低价股统计不可判"
+        )
+        fragments.append(
+            '<p data-style-low-price-effect-ops="gap">[事实] '
+            f"{STYLE_LOW_PRICE_EFFECT_OPS_MARKER}：{escape(reason[:240])}。</p>"
         )
     return tuple(fragments)
 
@@ -8082,11 +8783,12 @@ def render_report(
         )
     if (
         "data-style-market-effect=" in chunks["s456"]
+        or "data-style-low-price-effect=" in chunks["s456"]
         or "data-style-shock-feedback=" in chunks["s456"]
     ):
         raise ReportValidationError(
             "duplicate_style_market_effect",
-            "s4 的板型与严重异动反馈模块由组装器统一生成，chunk 不得自行注入",
+            "s4 的板型、低价股与严重异动反馈模块由组装器统一生成，chunk 不得自行注入",
             section="s4",
         )
 
@@ -8127,6 +8829,11 @@ def render_report(
         chunks["s456"],
         "s4",
         _render_style_market_effect(style_market_effect, report_date),
+    )
+    chunks["s456"] = _inject_section_fragment(
+        chunks["s456"],
+        "s4",
+        _render_style_low_price_effect(style_market_effect, report_date),
     )
     for fragment in _style_market_effect_ops_fragments(style_market_effect):
         chunks["s8ops"] = _inject_section_fragment(

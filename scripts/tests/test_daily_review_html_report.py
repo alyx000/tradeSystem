@@ -350,6 +350,145 @@ def _style_board_break_feedback_state(
     )
 
 
+def _style_low_price_snapshot(
+    date: str = DATE,
+    *,
+    status: str = "complete",
+) -> dict:
+    def bucket(
+        *,
+        sample_count: int,
+        advance_count: int,
+        flat_count: int,
+        decline_count: int,
+        median_pct: float,
+        mean_pct: float,
+        strong_gain_count: int,
+        strong_loss_count: int,
+        limit_up_count: int | None,
+        limit_down_count: int | None,
+    ) -> dict:
+        return {
+            "sample_count": sample_count,
+            "advance_count": advance_count,
+            "flat_count": flat_count,
+            "decline_count": decline_count,
+            "advance_rate": round(advance_count / sample_count, 4),
+            "pct_chg_median": median_pct,
+            "pct_chg_mean": mean_pct,
+            "strong_gain_count": strong_gain_count,
+            "strong_gain_rate": round(strong_gain_count / sample_count, 4),
+            "strong_loss_count": strong_loss_count,
+            "strong_loss_rate": round(strong_loss_count / sample_count, 4),
+            "limit_up_count": limit_up_count,
+            "limit_up_rate": (
+                None
+                if limit_up_count is None
+                else round(limit_up_count / sample_count, 4)
+            ),
+            "limit_down_count": limit_down_count,
+            "limit_down_rate": (
+                None
+                if limit_down_count is None
+                else round(limit_down_count / sample_count, 4)
+            ),
+        }
+
+    unavailable = status == "partial"
+    market = bucket(
+        sample_count=10,
+        advance_count=6,
+        flat_count=1,
+        decline_count=3,
+        median_pct=0.5,
+        mean_pct=0.4,
+        strong_gain_count=1,
+        strong_loss_count=1,
+        limit_up_count=None if unavailable else 1,
+        limit_down_count=1,
+    )
+    low_price = bucket(
+        sample_count=4,
+        advance_count=2,
+        flat_count=1,
+        decline_count=1,
+        median_pct=1.0,
+        mean_pct=2.0,
+        strong_gain_count=1,
+        strong_loss_count=0,
+        limit_up_count=None if unavailable else 1,
+        limit_down_count=0,
+    )
+    low_price.update(
+        {
+            "median_excess_vs_market_pp": 0.5,
+            "amount_share_pct": None if unavailable else 20.0,
+        }
+    )
+    band_le5 = bucket(
+        sample_count=2,
+        advance_count=1,
+        flat_count=0,
+        decline_count=1,
+        median_pct=0.5,
+        mean_pct=2.5,
+        strong_gain_count=1,
+        strong_loss_count=0,
+        limit_up_count=None if unavailable else 1,
+        limit_down_count=0,
+    )
+    band_5to10 = bucket(
+        sample_count=2,
+        advance_count=1,
+        flat_count=1,
+        decline_count=0,
+        median_pct=1.5,
+        mean_pct=1.5,
+        strong_gain_count=0,
+        strong_loss_count=0,
+        limit_up_count=None if unavailable else 0,
+        limit_down_count=0,
+    )
+    return {
+        "date": date,
+        "status": status,
+        "definition": {
+            "version": "v1",
+            "low_price_max_yuan": 10.0,
+            "very_low_price_max_yuan": 5.0,
+            "classification_basis": "当日未复权收盘价",
+        },
+        "market": market,
+        "low_price": low_price,
+        "bands": {
+            "price_le_5": band_le5,
+            "price_5_to_10": band_5to10,
+        },
+        "errors": ["涨停事实缺失；成交额字段覆盖不足"] if unavailable else [],
+    }
+
+
+def _style_low_price_effect_block(
+    date: str = DATE,
+    *,
+    status: str = "complete",
+) -> dict:
+    snapshot = _style_low_price_snapshot(date, status=status)
+    bands = []
+    for key, label in (("price_le_5", "≤5元"), ("price_5_to_10", "5～10元")):
+        bands.append({"key": key, "label": label, **snapshot["bands"][key]})
+    return {
+        "trade_date": date,
+        "status": status,
+        "definition": snapshot["definition"],
+        "market_benchmark": snapshot["market"],
+        "low_price": snapshot["low_price"],
+        "bands": bands,
+        "coverage": {"eligible_market_count": 10},
+        "gaps": snapshot["errors"],
+    }
+
+
 def _capacity_manifest_row(
     *,
     code: str = "000001.SZ",
@@ -7824,6 +7963,7 @@ def _style_market_effect_payload() -> dict:
             ],
             "errors": [],
         },
+        "low_price": _style_low_price_snapshot(),
         "shock": {
             "date": DATE,
             "status": "ok",
@@ -7848,10 +7988,14 @@ def test_s4_style_market_effect_is_auto_injected_with_board_bse_and_shock(
 
     assembler.validate_report(html)
     assert html.count('data-style-market-effect="v1"') == 1
+    assert html.count('data-style-low-price-effect="v1"') == 1
     assert html.count('data-style-shock-feedback="v1"') == 1
     assert "非ST涨停4只，首板2只、连板2只，最高3板" in html
     assert "10cm 2只（首板1 / 连板1，最高2板）" in html
     assert "北证样本（920001.BJ）" in html
+    assert "低价股赚钱效应" in html
+    assert "样本4只，中位+1.00%" in html
+    assert "≤5元2只" in html
     assert "T+10 中位+1.0%、正收益1/1（100%）" in html
 
 
@@ -7885,6 +8029,64 @@ def test_s4_style_market_effect_rejects_board_sum_or_shock_mismatch(
         ),
         "invalid_style_shock_feedback",
     )
+    _assert_report_error(
+        assembler,
+        _replace_once(
+            html,
+            'data-band-le5-sample-count="2"',
+            'data-band-le5-sample-count="3"',
+        ),
+        "invalid_style_low_price_effect",
+    )
+    _assert_report_error(
+        assembler,
+        _replace_once(
+            html,
+            'data-amount-share-pct="20.00"',
+            'data-amount-share-pct=""',
+        ),
+        "invalid_style_low_price_effect",
+    )
+
+
+def test_s4_style_low_price_effect_partial_keeps_core_metrics_and_visible_gap(
+    assembler, tmp_path
+):
+    chunks = tmp_path / "chunks"
+    _write_chunks(chunks)
+    payload = _style_market_effect_payload()
+    payload["low_price"] = _style_low_price_snapshot(status="partial")
+
+    html = assembler.render_report(
+        chunks,
+        DATE,
+        style_market_effect=payload,
+        include_legacy_sections=True,
+    )
+
+    assembler.validate_report(html)
+    assert 'data-style-low-price-effect="v1"' in html
+    assert 'data-source-status="partial"' in _extract_section(html, "s4")[0]
+    assert "样本4只，中位+1.00%" in html
+    assert "成交额占比未计算" in html
+    assert "涨停率未计算" in html
+    assert "本模块为部分覆盖，缺口见数据缺口" in html
+    assert "低价股赚钱效应数据不完整" in _extract_section(html, "ops")[0]
+
+
+def test_s4_style_low_price_effect_missing_is_visible_and_never_zero_filled(
+    assembler, tmp_path
+):
+    html, _ = _render_valid(assembler, tmp_path / "chunks")
+
+    assembler.validate_report(html)
+    style = _extract_section(html, "s4")[0]
+    assert html.count('data-style-low-price-effect="missing-data"') == 1
+    assert "低价股赚钱效应数据不完整，本日无法判定" in style
+    assert "低价股样本0只" not in style
+    assert "成交额占比0.00%" not in style
+    assert "低价股赚钱效应数据不完整" in _extract_section(html, "ops")[0]
+
 
 
 def test_style_market_effect_loader_recomputes_non_st_widths_and_shock_horizons(
@@ -7907,7 +8109,8 @@ def test_style_market_effect_loader_recomputes_non_st_widths_and_shock_horizons(
                     {"code": "920001.BJ", "name": "北证连板", "limit_times": 3},
                     {"code": "600001.SH", "name": "ST样本", "limit_times": 1},
                 ],
-            }
+            },
+            "low_price_effect": _style_low_price_effect_block(),
         },
     }
     (report_dir / "post-market.yaml").write_text(
@@ -7949,6 +8152,8 @@ def test_style_market_effect_loader_recomputes_non_st_widths_and_shock_horizons(
     }
     assert payload["shock"]["status"] == "partial"
     assert payload["shock"]["horizons"]["10"]["median_pct"] == -5.0
+    assert payload["low_price"]["status"] == "complete"
+    assert payload["low_price"]["low_price"]["sample_count"] == 4
 
     next_date = (date_type.fromisoformat(DATE) + timedelta(days=1)).isoformat()
     assert assembler.load_style_market_effect(

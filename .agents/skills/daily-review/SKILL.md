@@ -24,6 +24,8 @@ version: "1.16"
 
 ④还由组装器固定注入唯一 `data-style-market-effect="v1|missing-data"`，chunk 不得手写。该模块从最近最多 5 份可用 `daily/<T>/post-market.yaml.raw_data.limit_up.stocks` 重算非 ST 涨停宽度：10cm / 20cm / 30cm 各自展示总数、首板、连板和最高高度，总量与逐股池、`count_ex_st / consecutive_board_count_ex_st / highest_board_ex_st` 必须对账；最近样本逐日显示总涨停/首板/连板/10cm/20cm/30cm，北交所按 `.BJ` 身份单独展开当前涨停并严格等于 30cm 分项。模块内唯一 `data-style-shock-feedback="v1|none|missing-data"` 从同日严重异动报告的汇总统计展示 T+1/T+3/T+5/T+10 中位数与正收益样本；每个地平线只统计已走满样本，`partial/source_failed` 自动进入 `ops`，不得补 0。涨停宽度/北交所标 `[事实]`，跨样本严重异动汇总标 `[判断]`。
 
+④同时由组装器从报告日 `daily/<T>/post-market.yaml.raw_data.low_price_effect` 固定注入唯一 `data-style-low-price-effect="v1|missing-data"`，chunk 不得手写。`v1` 默认可见当日收盘价 `<=10` 元低价股的样本数、等权涨跌中位/均值、上涨率、`>=5%` / `<=-5%` 尾部、真实涨跌停率、成交额占比、相对全市场中位差，并拆 `<=5` 元与 `5～10` 元两档；口径严格使用当日未复权收盘价，剔除 ST/退市与沪深 B 股。`partial` 保留仍可验证的核心统计，把不可判辅助项写成“未计算”并进入 `ops`；`source_failed` 或同日块缺失使用 `missing-data`，不得回退旧交易日、补 0 或伪装成样本 0。
+
 HTML 默认展示顺序为：`速览 → 三位一体重点因子 → ⓪前日判分 → ①–⑦ → 老师观点 → 行业信息 → 认知对照 → ⑧次日计划 → 数据缺口`。「仓位环境与纪律参考（影子）」与独立「次日推演」不再生成，也不得出现在章节导航。重点因子仍必须在 9 路完整采集、八步复盘与认知对照综合完成后生成，只是在 HTML 中前置展示，不得因展示顺序提前而跳过后续事实输入。该章节必须用 `data-factor-mode` 区分正式 `factor-score`、`rule_only`、人工影子分析或明确无数据；未运行正式评分时必须使用 `shadow` 并写明“影子口径、不写库”。
 
 多 Agent HTML 中的“容量中军”必须从全市场成交额排名**独立筛选**，不得把 `trend_leader_pool`、`leader_tracking` 或最票身份直接当成容量资格：`core` = 当日全市场成交额排名 ≤30 且归属方向成交额排名 ≤2；`candidate` = 当日全市场成交额排名 31～50 且归属方向成交额排名 ≤2。最近 5 个开放交易日进入 Top50 的次数只展示容量连续性，不能覆盖当日成交额门槛。未达门槛者只能进入“趋势池历史代表”或“辨识度票”分表，禁止使用“旧池中军”标签；⑤必须输出结构化容量表、完整来源下的无合格项声明，或来源不足声明。完整筛选、健康度和 HTML 元数据契约见 [多 Agent 流程](references/multi-agent-review.md#容量中军独立筛选硬契约) 与 [HTML 模板](references/html-report-template/README.md#容量中军元数据硬门)。

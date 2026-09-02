@@ -861,6 +861,9 @@ class ReportGenerator:
         # ---- 风格化赚钱效应 ----
         section_idx = _render_style_factors(lines, raw_data, section_idx)
 
+        # ---- 低价股赚钱效应 ----
+        section_idx = _render_low_price_effect(lines, raw_data, section_idx)
+
         # ---- 连板断板次日反馈 ----
         section_idx = _render_board_break_feedback(lines, raw_data, section_idx)
 
@@ -1677,6 +1680,93 @@ def _render_style_factors(lines: list, raw_data: dict, section_idx: int) -> int:
             )
         lines.append("")
 
+    return section_idx
+
+
+def _render_low_price_effect(lines: list, raw_data: dict, section_idx: int) -> int:
+    """渲染低价股横截面赚钱效应；来源失败与有效空集严格分开。"""
+    effect = raw_data.get("low_price_effect")
+    if not isinstance(effect, dict):
+        return section_idx
+
+    lines.append(f"\n## {_roman(section_idx)}、低价股赚钱效应 [事实·计算] ★★★\n")
+    section_idx += 1
+    definition = effect.get("definition") or {}
+    low_max = definition.get("low_price_max_yuan", 10)
+    very_low_max = definition.get("very_low_price_max_yuan", 5)
+    lines.append(
+        f"> 口径：当日未复权收盘价 ≤{low_max:g} 元；另拆 ≤{very_low_max:g} 元和"
+        f" {very_low_max:g}～{low_max:g} 元。剔除 ST/退市及沪深 B 股，个股等权；"
+        "仅描述当日横截面，不构成交易建议。\n"
+    )
+
+    status = effect.get("status")
+    if status == "source_failed":
+        reason = effect.get("error") or "必要来源不可得"
+        lines.append(f"- ⚠ **来源失败**：{reason}。本项未计算，不代表低价股样本为 0。")
+        return section_idx
+    if status not in {"complete", "partial"}:
+        lines.append(
+            f"- ⚠ **状态不可识别**：{status or 'missing'}。"
+            "本项未计算，不代表低价股样本为 0。"
+        )
+        return section_idx
+    gaps = [str(item) for item in (effect.get("gaps") or []) if item]
+    if status == "partial":
+        lines.append(
+            f"- ⚠ **部分统计**：{'；'.join(gaps) or '部分辅助指标不可得'}。"
+            "可用数值仅基于已验证来源。"
+        )
+
+    def _pct(value, *, signed: bool = False) -> str:
+        if value is None:
+            return "-"
+        number = float(value)
+        return f"{number:+.2f}%" if signed else f"{number:.1%}"
+
+    def _row(label: str, data: dict) -> str:
+        return (
+            f"| {label} | {int(data.get('sample_count') or 0)} | "
+            f"{_pct(data.get('pct_chg_median'), signed=True)} | "
+            f"{_pct(data.get('pct_chg_mean'), signed=True)} | "
+            f"{_pct(data.get('advance_rate'))} | "
+            f"{_pct(data.get('strong_gain_rate'))} | "
+            f"{_pct(data.get('strong_loss_rate'))} | "
+            f"{_pct(data.get('limit_up_rate'))} | "
+            f"{_pct(data.get('limit_down_rate'))} |"
+        )
+
+    low_price = effect.get("low_price") or {}
+    market = effect.get("market_benchmark") or {}
+    lines.append("| 区间 | 样本 | 涨跌中位 | 涨跌均值 | 上涨率 | ≥5%占比 | ≤-5%占比 | 涨停率 | 跌停率 |")
+    lines.append("|------|------|----------|----------|--------|----------|-----------|--------|--------|")
+    lines.append(_row(f"低价股（≤{low_max:g}元）", low_price))
+    for band in effect.get("bands") or []:
+        if isinstance(band, dict):
+            lines.append(_row(str(band.get("label") or "分档"), band))
+    lines.append(_row("全市场基准", market))
+    lines.append("")
+
+    excess = low_price.get("median_excess_vs_market_pp")
+    amount_share = low_price.get("amount_share_pct")
+    excess_text = _pct(excess, signed=True) if excess is not None else "未计算"
+    amount_text = f"{float(amount_share):.2f}%" if amount_share is not None else "未计算"
+    coverage = effect.get("coverage") or {}
+    valid_count = coverage.get("unique_quote_count", 0)
+    eligible_count = coverage.get("eligible_market_count", 0)
+    amount_coverage = coverage.get("amount_coverage_ratio")
+    amount_coverage_text = (
+        f"{float(amount_coverage):.1%}" if amount_coverage is not None else "-"
+    )
+    lines.append(
+        f"- 低价股涨跌中位相对全市场：**{excess_text}**；"
+        f"成交额占全市场：**{amount_text}**。"
+    )
+    lines.append(
+        f"- 覆盖：有效日线 {valid_count} 只，剔除后市场基准 {eligible_count} 只，"
+        f"成交额字段覆盖 {amount_coverage_text}。"
+    )
+    lines.append("")
     return section_idx
 
 
