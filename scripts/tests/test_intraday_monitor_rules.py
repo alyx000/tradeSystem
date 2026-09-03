@@ -9,6 +9,7 @@ from services.intraday_monitor.guards import (
 )
 from services.intraday_monitor.rules import (
     DEFAULT_RULES,
+    FANGSHENG_REACH_11_11_20260903_16,
     GUOCI_MATERIALS_BELOW_67_22_20260831,
     KAILAIYING_BREAKOUT_172_26_20260821_24,
     LITONG_ELECTRONICS_BELOW_123_92_20260811,
@@ -83,6 +84,7 @@ def test_fixed_and_ma_temporary_rules_are_registered():
         GUOCI_MATERIALS_BELOW_67_22_20260831,
         ZHONGKE_FEICE_BELOW_PREVIOUS_MA5_20260831_0902,
         THS_ALL_A_HUSHEN_DAILY_DROP_OVER_4PCT,
+        FANGSHENG_REACH_11_11_20260903_16,
     )
     assert SSE_COMPOSITE_RECLAIM_3955.rule_id == "sse-composite-reclaim-3955"
     assert SSE_COMPOSITE_RECLAIM_3955.instrument_name == "上证指数"
@@ -181,6 +183,27 @@ def test_fixed_and_ma_temporary_rules_are_registered():
     assert ths_all_a.resolve_value({"price": 96, "pre_close": 100}) == -4.0
     assert ths_all_a.is_active(-4.0) is False
     assert ths_all_a.is_active(-4.0001) is True
+
+
+def test_fangsheng_reach_rule_has_inclusive_price_and_fourteen_calendar_days():
+    rule = FANGSHENG_REACH_11_11_20260903_16
+    assert rule in DEFAULT_RULES
+    assert rule.code == "603998.SH"
+    assert rule.instrument_name == "方盛制药"
+    assert rule.provider == "sina"
+    assert rule.value_unit == "元"
+    assert rule.threshold == 11.11
+    assert rule.direction == "above"
+    assert rule.inclusive is True
+    assert rule.emit_on_initial_match is True
+    assert rule.is_active(11.10) is False
+    assert rule.is_active(11.11) is True
+    assert rule.is_active(11.12) is True
+    assert rule.is_effective_on(date(2026, 9, 2)) is False
+    assert rule.is_effective_on(date(2026, 9, 3)) is True
+    assert rule.is_effective_on(date(2026, 9, 16)) is True
+    assert rule.is_effective_on(date(2026, 9, 17)) is False
+    assert (rule.valid_until - rule.valid_from).days + 1 == 14
 
 
 def test_daily_pct_change_uses_price_and_pre_close_not_provider_pct_field():

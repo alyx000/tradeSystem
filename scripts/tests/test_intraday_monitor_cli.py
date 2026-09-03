@@ -5,6 +5,7 @@ from datetime import datetime
 
 import main
 from cli import intraday_monitor
+from services.intraday_monitor.rules import FANGSHENG_REACH_11_11_20260903_16
 
 
 def _args(*, confirm_real_push: bool = True, rule_id: str | None = None) -> argparse.Namespace:
@@ -167,6 +168,22 @@ def test_e2e_cli_selects_new_guoci_zhongke_and_ths_rules(monkeypatch, capsys):
     assert capsys.readouterr().out.count('"status": "complete"') == 3
 
 
+def test_e2e_cli_selects_fangsheng_rule(monkeypatch, capsys):
+    registry = object()
+    monkeypatch.setattr(main, "setup_providers", lambda config: registry)
+    monkeypatch.setattr(intraday_monitor, "shanghai_now", lambda: datetime(2026, 9, 3, 10))
+    calls = []
+    monkeypatch.setattr(
+        intraday_monitor, "run_e2e_test",
+        lambda got, input_by, confirm_real_push, rule: calls.append((got, rule)) or {
+            "status": "complete", "events": [{}], "errors": [], "pushed": True,
+        },
+    )
+    rule = FANGSHENG_REACH_11_11_20260903_16
+    assert intraday_monitor.handle_command({}, _args(rule_id=rule.rule_id)) == 0
+    assert calls == [(registry, rule)]
+
+
 def test_e2e_cli_requires_explicit_real_push_confirmation_before_provider_setup(
     monkeypatch,
     capsys,
@@ -231,6 +248,7 @@ def test_help_describes_current_rules_at_every_command_level():
     assert "8月31日监控国瓷材料严格跌破67.22元" in root_help
     assert "中科飞测严格跌破前5个已收盘交易日的前复权MA5" in root_help
     assert "同花顺全A（沪深）单日跌幅严格超过4.00%" in root_help
+    assert "2026年9月3日至16日监控方盛制药达到或高于11.11元" in root_help
     assert "当日累计成交额不少于100亿元" in root_help
     check_help = "".join(command_choices["check"].format_help().split())
     assert "历史已退役规则保持下线" in check_help
@@ -239,6 +257,7 @@ def test_help_describes_current_rules_at_every_command_level():
     assert "国瓷材料严格低于67.22元" in check_help
     assert "中科飞测严格低于前5个已收盘交易日MA5时推送" in check_help
     assert "同花顺全A（沪深）单日涨跌幅严格低于-4.00%时推送" in check_help
+    assert "2026年9月3日至16日方盛制药达到或高于11.11元时推送" in check_help
     assert "持续命中去重" in check_help
     assert "恢复后再次命中可重推" in check_help
     assert "10点前百亿成交额涨停板" in check_help
