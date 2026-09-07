@@ -10,6 +10,7 @@ from services.intraday_monitor.guards import (
 from services.intraday_monitor.rules import (
     DEFAULT_RULES,
     FANGSHENG_REACH_11_11_20260903_16,
+    MEDICILON_BELOW_87_65_20260907_1006,
     GUOCI_MATERIALS_BELOW_67_22_20260831,
     KAILAIYING_BREAKOUT_172_26_20260821_24,
     LITONG_ELECTRONICS_BELOW_123_92_20260811,
@@ -85,6 +86,7 @@ def test_fixed_and_ma_temporary_rules_are_registered():
         ZHONGKE_FEICE_BELOW_PREVIOUS_MA5_20260831_0902,
         THS_ALL_A_HUSHEN_DAILY_DROP_OVER_4PCT,
         FANGSHENG_REACH_11_11_20260903_16,
+        MEDICILON_BELOW_87_65_20260907_1006,
     )
     assert SSE_COMPOSITE_RECLAIM_3955.rule_id == "sse-composite-reclaim-3955"
     assert SSE_COMPOSITE_RECLAIM_3955.instrument_name == "上证指数"
@@ -204,6 +206,28 @@ def test_fangsheng_reach_rule_has_inclusive_price_and_fourteen_calendar_days():
     assert rule.is_effective_on(date(2026, 9, 16)) is True
     assert rule.is_effective_on(date(2026, 9, 17)) is False
     assert (rule.valid_until - rule.valid_from).days + 1 == 14
+
+
+def test_medicilon_below_rule_is_strict_and_valid_for_one_calendar_month():
+    rule = MEDICILON_BELOW_87_65_20260907_1006
+    assert rule in DEFAULT_RULES
+    assert rule.code == "688202.SH"
+    assert rule.instrument_name == "美迪西"
+    assert rule.provider == "sina"
+    assert rule.value_label == "价格"
+    assert rule.value_unit == "元"
+    assert rule.threshold == 87.65
+    assert rule.direction == "below"
+    assert rule.inclusive is False
+    assert rule.emit_on_initial_match is True
+    assert rule.is_active(87.64) is True
+    assert rule.is_active(87.65) is False
+    assert rule.is_active(87.66) is False
+    assert rule.is_effective_on(date(2026, 9, 6)) is False
+    assert rule.is_effective_on(date(2026, 9, 7)) is True
+    assert rule.is_effective_on(date(2026, 10, 6)) is True
+    assert rule.is_effective_on(date(2026, 10, 7)) is False
+    assert (rule.valid_until - rule.valid_from).days + 1 == 30
 
 
 def test_daily_pct_change_uses_price_and_pre_close_not_provider_pct_field():
