@@ -278,6 +278,21 @@ FANGSHENG_REACH_11_11_20260903_16 = MonitorRule(
 )
 
 
+MEDICILON_BELOW_87_65_20260907_1006 = MonitorRule(
+    rule_id="medicilon-below-87-65-20260907-1006",
+    instrument_name="美迪西",
+    code="688202.SH",
+    threshold=87.65,
+    direction="below",
+    inclusive=False,
+    emit_on_initial_match=True,
+    valid_from=date(2026, 9, 7),
+    valid_until=date(2026, 10, 6),
+    value_label="价格",
+    value_unit="元",
+)
+
+
 # 长期规则保留上证指数站上 3955；历史个股规则不再启用。
 # 动态涨停价与前收盘均线能力由 MonitorRule.threshold_mode 统一扩展。
 # 科创50 1700 与凯莱英 172.26 临时规则覆盖 8 月 21 日与 24 日两个
@@ -291,6 +306,7 @@ DEFAULT_RULES: tuple[MonitorRule, ...] = (
     ZHONGKE_FEICE_BELOW_PREVIOUS_MA5_20260831_0902,
     THS_ALL_A_HUSHEN_DAILY_DROP_OVER_4PCT,
     FANGSHENG_REACH_11_11_20260903_16,
+    MEDICILON_BELOW_87_65_20260907_1006,
 )
 
 

@@ -12,6 +12,7 @@ from services.intraday_monitor.service import run_all_checks, run_check, run_e2e
 from services.intraday_monitor.rules import (
     DEFAULT_RULES,
     FANGSHENG_REACH_11_11_20260903_16,
+    MEDICILON_BELOW_87_65_20260907_1006,
     GUOCI_MATERIALS_BELOW_67_22_20260831,
     KAILAIYING_BREAKOUT_172_26_20260821_24,
     LITONG_ELECTRONICS_BELOW_123_92_20260811,
@@ -306,6 +307,67 @@ def test_fangsheng_reach_equal_initial_dedupe_recovery_and_expiry(tmp_path):
     assert expired["status"] == "no_active_rules"
     assert registry.call_count == fetch_count
     assert len(pusher.messages) == push_count
+
+
+def test_medicilon_below_strict_initial_dedupe_recovery_and_expiry(tmp_path):
+    db_path = _calendar(tmp_path, dates=("2026-09-07", "2026-10-06", "2026-10-07"))
+    registry = _Registry(price=87.65)
+    pusher = _Pusher()
+    state_path = tmp_path / "state.json"
+    rule = MEDICILON_BELOW_87_65_20260907_1006
+    now = datetime(2026, 9, 7, 10, 0, tzinfo=TZ)
+    counts = []
+    for index, price in enumerate((87.65, 87.64, 87.63, 87.65, 87.64)):
+        registry.price = price
+        registry.now = now + timedelta(minutes=5 * index)
+        result = run_check(
+            registry, rules=(rule,), now=registry.now, state_path=state_path,
+            db_path=db_path, pusher_factory=lambda: pusher,
+        )
+        assert result["status"] == "complete"
+        counts.append(len(result["events"]))
+    assert counts == [0, 1, 0, 0, 1]
+    assert len(pusher.messages) == 2
+    assert "美迪西" in pusher.messages[0][1]
+    assert "最新价格 **87.64**元" in pusher.messages[0][1]
+    assert "已跌破监控线 **87.65**元" in pusher.messages[0][1]
+
+    registry.price = 87.64
+    registry.now = datetime(2026, 10, 6, 10, 0, tzinfo=TZ)
+    final_day = run_check(
+        registry, rules=(rule,), now=registry.now, state_path=state_path,
+        db_path=db_path, pusher_factory=lambda: pusher,
+    )
+    assert final_day["status"] == "complete"
+    fetch_count, push_count = registry.call_count, len(pusher.messages)
+    registry.now = datetime(2026, 10, 7, 10, 0, tzinfo=TZ)
+    expired = run_check(
+        registry, rules=(rule,), now=registry.now, state_path=state_path,
+        db_path=db_path, pusher_factory=lambda: pusher,
+    )
+    assert expired["status"] == "no_active_rules"
+    assert registry.call_count == fetch_count
+    assert len(pusher.messages) == push_count
+
+
+@pytest.mark.parametrize(
+    "date_text,included",
+    (("2026-09-06", False), ("2026-09-07", True), ("2026-10-06", True), ("2026-10-07", False)),
+)
+def test_default_rule_batch_includes_medicilon_only_in_valid_window(
+    tmp_path, date_text, included
+):
+    db_path = _calendar(tmp_path, dates=(date_text,))
+    registry = _Registry(price=87.65)
+    registry.now = datetime.fromisoformat(f"{date_text}T10:00:00").replace(tzinfo=TZ)
+    rules = tuple(r for r in DEFAULT_RULES if r.threshold_mode == "fixed")
+    result = run_check(
+        registry, rules=rules, now=registry.now, state_path=tmp_path / "state.json",
+        db_path=db_path, pusher_factory=lambda: _Pusher(),
+    )
+    assert result["status"] == "complete"
+    requested = [code for batch in registry.requested_codes for code in batch]
+    assert ("688202.SH" in requested) is included
 
 
 @pytest.mark.parametrize("day,included", ((2, False), (3, True), (16, True), (17, False)))
@@ -658,6 +720,7 @@ def test_default_sse_rule_pushes_only_after_observed_below_to_3955(tmp_path):
         ZHONGKE_FEICE_BELOW_PREVIOUS_MA5_20260831_0902,
         THS_ALL_A_HUSHEN_DAILY_DROP_OVER_4PCT,
         FANGSHENG_REACH_11_11_20260903_16,
+        MEDICILON_BELOW_87_65_20260907_1006,
     )
     assert initial_above["events"] == []
     assert below["events"] == []
