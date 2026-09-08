@@ -10,10 +10,13 @@ from services.intraday_monitor.guards import (
 from services.intraday_monitor.rules import (
     DEFAULT_RULES,
     FANGSHENG_REACH_11_11_20260903_16,
-    MEDICILON_BELOW_87_65_20260907_1006,
     GUOCI_MATERIALS_BELOW_67_22_20260831,
+    HAOXIANGNI_BREAKOUT_11_24_20260909_22,
     KAILAIYING_BREAKOUT_172_26_20260821_24,
+    LIANGPIN_STORE_BREAKOUT_10_17_20260909_22,
     LITONG_ELECTRONICS_BELOW_123_92_20260811,
+    MEDICILON_BELOW_87_65_20260907_1006,
+    PINWO_FOODS_BREAKOUT_25_89_20260909_22,
     SSE_COMPOSITE_RECLAIM_3955,
     STAR50_BREAKOUT_1700_20260821_24,
     ZHONGKE_FEICE_BELOW_PREVIOUS_MA5_20260831_0902,
@@ -87,6 +90,9 @@ def test_fixed_and_ma_temporary_rules_are_registered():
         THS_ALL_A_HUSHEN_DAILY_DROP_OVER_4PCT,
         FANGSHENG_REACH_11_11_20260903_16,
         MEDICILON_BELOW_87_65_20260907_1006,
+        HAOXIANGNI_BREAKOUT_11_24_20260909_22,
+        PINWO_FOODS_BREAKOUT_25_89_20260909_22,
+        LIANGPIN_STORE_BREAKOUT_10_17_20260909_22,
     )
     assert SSE_COMPOSITE_RECLAIM_3955.rule_id == "sse-composite-reclaim-3955"
     assert SSE_COMPOSITE_RECLAIM_3955.instrument_name == "上证指数"
@@ -228,6 +234,37 @@ def test_medicilon_below_rule_is_strict_and_valid_for_one_calendar_month():
     assert rule.is_effective_on(date(2026, 10, 6)) is True
     assert rule.is_effective_on(date(2026, 10, 7)) is False
     assert (rule.valid_until - rule.valid_from).days + 1 == 30
+
+
+@pytest.mark.parametrize(
+    ("rule", "code", "name", "threshold"),
+    (
+        (HAOXIANGNI_BREAKOUT_11_24_20260909_22, "002582.SZ", "好想你", 11.24),
+        (PINWO_FOODS_BREAKOUT_25_89_20260909_22, "300892.SZ", "品渥食品", 25.89),
+        (LIANGPIN_STORE_BREAKOUT_10_17_20260909_22, "603719.SH", "良品铺子", 10.17),
+    ),
+)
+def test_new_two_week_breakout_rules_are_strict_and_date_bounded(
+    rule, code, name, threshold
+):
+    assert rule in DEFAULT_RULES
+    assert rule.code == code
+    assert rule.instrument_name == name
+    assert rule.provider == "sina"
+    assert rule.value_label == "价格"
+    assert rule.value_unit == "元"
+    assert rule.threshold == threshold
+    assert rule.direction == "above"
+    assert rule.inclusive is False
+    assert rule.emit_on_initial_match is True
+    assert rule.action_text == "突破"
+    assert rule.is_active(threshold) is False
+    assert rule.is_active(threshold + 0.01) is True
+    assert rule.is_effective_on(date(2026, 9, 8)) is False
+    assert rule.is_effective_on(date(2026, 9, 9)) is True
+    assert rule.is_effective_on(date(2026, 9, 22)) is True
+    assert rule.is_effective_on(date(2026, 9, 23)) is False
+    assert (rule.valid_until - rule.valid_from).days + 1 == 14
 
 
 def test_daily_pct_change_uses_price_and_pre_close_not_provider_pct_field():

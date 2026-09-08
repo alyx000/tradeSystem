@@ -293,6 +293,54 @@ MEDICILON_BELOW_87_65_20260907_1006 = MonitorRule(
 )
 
 
+HAOXIANGNI_BREAKOUT_11_24_20260909_22 = MonitorRule(
+    rule_id="haoxiangni-breakout-11-24-20260909-22",
+    instrument_name="好想你",
+    code="002582.SZ",
+    threshold=11.24,
+    direction="above",
+    inclusive=False,
+    emit_on_initial_match=True,
+    action_label="突破",
+    valid_from=date(2026, 9, 9),
+    valid_until=date(2026, 9, 22),
+    value_label="价格",
+    value_unit="元",
+)
+
+
+PINWO_FOODS_BREAKOUT_25_89_20260909_22 = MonitorRule(
+    rule_id="pinwo-foods-breakout-25-89-20260909-22",
+    instrument_name="品渥食品",
+    code="300892.SZ",
+    threshold=25.89,
+    direction="above",
+    inclusive=False,
+    emit_on_initial_match=True,
+    action_label="突破",
+    valid_from=date(2026, 9, 9),
+    valid_until=date(2026, 9, 22),
+    value_label="价格",
+    value_unit="元",
+)
+
+
+LIANGPIN_STORE_BREAKOUT_10_17_20260909_22 = MonitorRule(
+    rule_id="liangpin-store-breakout-10-17-20260909-22",
+    instrument_name="良品铺子",
+    code="603719.SH",
+    threshold=10.17,
+    direction="above",
+    inclusive=False,
+    emit_on_initial_match=True,
+    action_label="突破",
+    valid_from=date(2026, 9, 9),
+    valid_until=date(2026, 9, 22),
+    value_label="价格",
+    value_unit="元",
+)
+
+
 # 长期规则保留上证指数站上 3955；历史个股规则不再启用。
 # 动态涨停价与前收盘均线能力由 MonitorRule.threshold_mode 统一扩展。
 # 科创50 1700 与凯莱英 172.26 临时规则覆盖 8 月 21 日与 24 日两个
@@ -307,6 +355,9 @@ DEFAULT_RULES: tuple[MonitorRule, ...] = (
     THS_ALL_A_HUSHEN_DAILY_DROP_OVER_4PCT,
     FANGSHENG_REACH_11_11_20260903_16,
     MEDICILON_BELOW_87_65_20260907_1006,
+    HAOXIANGNI_BREAKOUT_11_24_20260909_22,
+    PINWO_FOODS_BREAKOUT_25_89_20260909_22,
+    LIANGPIN_STORE_BREAKOUT_10_17_20260909_22,
 )
 
 

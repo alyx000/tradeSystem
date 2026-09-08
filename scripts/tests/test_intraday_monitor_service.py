@@ -12,10 +12,13 @@ from services.intraday_monitor.service import run_all_checks, run_check, run_e2e
 from services.intraday_monitor.rules import (
     DEFAULT_RULES,
     FANGSHENG_REACH_11_11_20260903_16,
-    MEDICILON_BELOW_87_65_20260907_1006,
     GUOCI_MATERIALS_BELOW_67_22_20260831,
+    HAOXIANGNI_BREAKOUT_11_24_20260909_22,
     KAILAIYING_BREAKOUT_172_26_20260821_24,
+    LIANGPIN_STORE_BREAKOUT_10_17_20260909_22,
     LITONG_ELECTRONICS_BELOW_123_92_20260811,
+    MEDICILON_BELOW_87_65_20260907_1006,
+    PINWO_FOODS_BREAKOUT_25_89_20260909_22,
     SSE_COMPOSITE_RECLAIM_3955,
     STAR50_BREAKOUT_1700_20260821_24,
     ZHONGKE_FEICE_BELOW_PREVIOUS_MA5_20260831_0902,
@@ -348,6 +351,85 @@ def test_medicilon_below_strict_initial_dedupe_recovery_and_expiry(tmp_path):
     assert expired["status"] == "no_active_rules"
     assert registry.call_count == fetch_count
     assert len(pusher.messages) == push_count
+
+
+@pytest.mark.parametrize(
+    ("rule", "threshold", "name"),
+    (
+        (HAOXIANGNI_BREAKOUT_11_24_20260909_22, 11.24, "好想你"),
+        (PINWO_FOODS_BREAKOUT_25_89_20260909_22, 25.89, "品渥食品"),
+        (LIANGPIN_STORE_BREAKOUT_10_17_20260909_22, 10.17, "良品铺子"),
+    ),
+)
+def test_two_week_breakout_strict_initial_dedupe_recovery_and_expiry(
+    tmp_path, rule, threshold, name
+):
+    db_path = _calendar(tmp_path, dates=("2026-09-09", "2026-09-22", "2026-09-23"))
+    registry = _Registry(price=threshold)
+    pusher = _Pusher()
+    state_path = tmp_path / "state.json"
+    now = datetime(2026, 9, 9, 10, 0, tzinfo=TZ)
+    counts = []
+    for index, price in enumerate(
+        (threshold, threshold + 0.01, threshold + 0.02, threshold, threshold + 0.01)
+    ):
+        registry.price = price
+        registry.now = now + timedelta(minutes=3 * index)
+        result = run_check(
+            registry, rules=(rule,), now=registry.now, state_path=state_path,
+            db_path=db_path, pusher_factory=lambda: pusher,
+        )
+        assert result["status"] == "complete"
+        counts.append(len(result["events"]))
+    assert counts == [0, 1, 0, 0, 1]
+    assert len(pusher.messages) == 2
+    assert name in pusher.messages[0][1]
+    assert f"最新价格 **{threshold + 0.01:.2f}**元" in pusher.messages[0][1]
+    assert f"已突破监控线 **{threshold:.2f}**元" in pusher.messages[0][1]
+
+    registry.now = datetime(2026, 9, 22, 10, 0, tzinfo=TZ)
+    final_day = run_check(
+        registry, rules=(rule,), now=registry.now, state_path=state_path,
+        db_path=db_path, pusher_factory=lambda: pusher,
+    )
+    assert final_day["status"] == "complete"
+    assert len(final_day["events"]) == 1
+    fetch_count, push_count = registry.call_count, len(pusher.messages)
+    registry.now = datetime(2026, 9, 23, 10, 0, tzinfo=TZ)
+    expired = run_check(
+        registry, rules=(rule,), now=registry.now, state_path=state_path,
+        db_path=db_path, pusher_factory=lambda: pusher,
+    )
+    assert expired["status"] == "no_active_rules"
+    assert registry.call_count == fetch_count
+    assert len(pusher.messages) == push_count
+
+
+@pytest.mark.parametrize(
+    ("date_text", "included"),
+    (
+        ("2026-09-08", False),
+        ("2026-09-09", True),
+        ("2026-09-22", True),
+        ("2026-09-23", False),
+    ),
+)
+def test_default_rule_batch_includes_new_breakouts_only_in_valid_window(
+    tmp_path, date_text, included
+):
+    db_path = _calendar(tmp_path, dates=(date_text,))
+    registry = _Registry(price=1.0)
+    registry.now = datetime.fromisoformat(f"{date_text}T10:00:00").replace(tzinfo=TZ)
+    rules = tuple(r for r in DEFAULT_RULES if r.threshold_mode == "fixed")
+    result = run_check(
+        registry, rules=rules, now=registry.now, state_path=tmp_path / "state.json",
+        db_path=db_path, pusher_factory=lambda: _Pusher(),
+    )
+    assert result["status"] == "complete"
+    requested = {code for batch in registry.requested_codes for code in batch}
+    assert ("002582.SZ" in requested) is included
+    assert ("300892.SZ" in requested) is included
+    assert ("603719.SH" in requested) is included
 
 
 @pytest.mark.parametrize(
@@ -721,6 +803,9 @@ def test_default_sse_rule_pushes_only_after_observed_below_to_3955(tmp_path):
         THS_ALL_A_HUSHEN_DAILY_DROP_OVER_4PCT,
         FANGSHENG_REACH_11_11_20260903_16,
         MEDICILON_BELOW_87_65_20260907_1006,
+        HAOXIANGNI_BREAKOUT_11_24_20260909_22,
+        PINWO_FOODS_BREAKOUT_25_89_20260909_22,
+        LIANGPIN_STORE_BREAKOUT_10_17_20260909_22,
     )
     assert initial_above["events"] == []
     assert below["events"] == []

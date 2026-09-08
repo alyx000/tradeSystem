@@ -1,5 +1,5 @@
 #!/bin/bash
-# 盘中实时阈值监控：每 5 分钟 tick，runner 仅在上海交易时段进入 Python。
+# 盘中实时阈值监控：每 3 分钟 tick，runner 仅在上海交易时段进入 Python。
 set -euo pipefail
 
 export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
