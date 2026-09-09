@@ -11,10 +11,10 @@
         <string>/Users/alyx/tradeSystem/.worktrees/intraday-monitor-runtime/deploy/launchd/intraday-monitor-runner.sh</string>
     </array>
 
-    <!-- 无时区 5 分钟 tick；runner 与 Python 双层使用 Asia/Shanghai
+    <!-- 无时区 3 分钟 tick；runner 与 Python 双层使用 Asia/Shanghai
          交易时段/交易日门禁，避免本机时区变化和节假日误推。 -->
     <key>StartInterval</key>
-    <integer>300</integer>
+    <integer>180</integer>
 
     <!-- StartInterval 是相对节拍，额外保证 09:59 做最后一次“10点前”补扫。 -->
     <key>StartCalendarInterval</key>

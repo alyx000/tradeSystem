@@ -38,8 +38,8 @@
 - `com.alyx.tradesystem.monthly-pattern-monitor.plist` — 每 15 分钟轻量 tick，runner 仅在上海工作日 19:10（含）至 19:25（不含）执行一次重任务（月线种子日频动态 5 月线 + 日/周 MACD 变化监控；不受 Mac 本机时区切换影响；日志 `/tmp/tradesystem-monthly-pattern-monitor.log`）
 - `morning-brief-runner.sh` — 包装脚本：cd 仓库根 → source `~/.config/tradeSystem.env`(钉钉；TUSHARE_TOKEN 由 `scripts/.env` 在 Python 侧加载) → 调 `python3 main.py morning-brief daily`
 - `com.alyx.tradesystem.morning-brief.plist` — 工作日 08:00 触发（盘前早报：隔夜行情+海外/国内要闻[金十]+上市公司公告[巨潮]；非交易日 CLI 内守卫跳过；日志 `/tmp/tradesystem-morning-brief.log`；Sleep policy: 错过可接受——可手动 `morning-brief daily` 补跑）
-- `intraday-monitor-runner.sh` — 每 5 分钟 tick 的盘中门禁入口；上海 `09:30-11:30 / 13:00-15:00` 做常规检查，并保留 `15:01-15:05` 收盘终态补窗
-- `com.alyx.tradesystem.intraday-monitor.plist` — 单标的阈值 + 09:30～10:00（不含10:00）百亿成交额涨停板横截面监控；除相对 300 秒节拍外固定 09:59 做最后补扫，日志 `/tmp/tradesystem-intraday-monitor.log`
+- `intraday-monitor-runner.sh` — 每 3 分钟 tick 的盘中门禁入口；上海 `09:30-11:30 / 13:00-15:00` 做常规检查，并保留 `15:01-15:05` 收盘终态补窗
+- `com.alyx.tradesystem.intraday-monitor.plist` — 单标的阈值 + 09:30～10:00（不含10:00）百亿成交额涨停板横截面监控；除相对 180 秒节拍外固定 09:59 做最后补扫，日志 `/tmp/tradesystem-intraday-monitor.log`
 - `intraday-summary-runner.sh` — 每分钟轻量 tick，只在上海半小时槽位后 5 分钟内调 `intraday-summary run`
 - `com.alyx.tradesystem.intraday-summary.plist` — 全市场半小时快照差分摘要并推钉钉，日志 `/tmp/tradesystem-intraday-summary.log`
 
@@ -444,11 +444,13 @@ rm ~/Library/LaunchAgents/com.alyx.tradesystem.cognition-digest-*.plist
 
 **时段**：recent3d 18:30 在 today-post(20:00) 之前、空档无冲突；weekly 周日 20:00 与 recommend-weekly(周日 20:00) 同点但互不依赖、均短 I/O 任务可接受；monthly 每月 1 号 09:00 为非交易时段无争用。认知沉淀错过可接受(非交易决策),不配 pmset 唤醒。**调度唯一入口=launchd per-task plist**,不进 `main.py schedule`/APScheduler(避免双触发)。
 
-## 盘中实时阈值监控（每 5 分钟）
+## 盘中实时阈值监控（每 3 分钟）
 
-新增临时规则：美迪西 `688202.SH <87.65元`，2026-09-07～10-06（首尾包含，共30自然日）有效。新浪实时行情；等于不触发、首次已命中提醒、同日持续命中去重、恢复后重新跌破提醒；10月7日起不再为该规则取数或推送。沿用下面的独立 runtime、双状态切换 guard 与300秒调度，不新增任务。
+新增三条两周临时规则：好想你 `002582.SZ >11.24元`、品渥食品 `300892.SZ >25.89元`、良品铺子 `603719.SH >10.17元`，均在 2026-09-09～09-22（首尾包含，共14自然日）有效。新浪实时行情；三条均为严格突破，等于不触发、首次已命中提醒、同日持续命中去重、回落后重新突破提醒；9月23日起不再为对应规则取数或推送。沿用下面的独立 runtime 与双状态切换 guard，调度统一为180秒，不新增任务。
 
-新增临时规则：方盛制药 `603998.SH >=11.11元`，2026-09-03～09-16（首尾包含，共14自然日）有效。新浪实时行情；等于触发、首次已命中提醒、同日持续命中去重、回落后重新触达提醒；9月17日起不再为该规则取数或推送。沿用下面的独立 runtime、双状态切换 guard 与300秒调度，不新增任务。
+新增临时规则：美迪西 `688202.SH <87.65元`，2026-09-07～10-06（首尾包含，共30自然日）有效。新浪实时行情；等于不触发、首次已命中提醒、同日持续命中去重、恢复后重新跌破提醒；10月7日起不再为该规则取数或推送。沿用下面的独立 runtime、双状态切换 guard 与180秒调度，不新增任务。
+
+新增临时规则：方盛制药 `603998.SH >=11.11元`，2026-09-03～09-16（首尾包含，共14自然日）有效。新浪实时行情；等于触发、首次已命中提醒、同日持续命中去重、回落后重新触达提醒；9月17日起不再为该规则取数或推送。沿用下面的独立 runtime、双状态切换 guard 与180秒调度，不新增任务。
 
 监控引擎、CLI、launchd 与状态机继续保留。长期生产规则包括：新浪实时 `000001.SH` 上证指数从 3955 点下方站上 3955 点（等于 3955 即命中）；同花顺官方 `realhead_v6` 实时 `883421.THS` 同花顺全A（沪深）相对昨收的单日涨跌幅严格 `<-4.00%`（等于不触发）。后者由同一回包的最新点位和昨收自行计算，要求 `updateTime` 为上海当天且不超过 10 分钟，布局漂移、昨收非法或行情陈旧均 fail-closed。当前临时生产规则包括：仅 2026-08-31 生效的 `300285.SZ` 国瓷材料严格跌破 67.22 元，以及 2026-08-31～09-02 生效的 `688361.SH` 中科飞测严格跌破前 5 个已收盘交易日的前复权 MA5；两者等于阈值均不触发、首次已在阈值下方会推送、持续命中去重，恢复后再次跌破可重推。MA5 样本由生产 SQLite 只读交易日历锁定，日线和复权因子必须逐日完整对齐，并用实时 `pre_close` 锚到当日盘口价格坐标；日历、行情、因子、实时前收盘或样本不足均 fail-closed，不推伪信号。历史科创50/凯莱英临时规则保留审计，金健米业、红四方、京粮控股及旧科创50跌破/收复规则保持下线；新规则均使用独立 rule id，不继承旧状态。
 

@@ -3,11 +3,16 @@ from __future__ import annotations
 import argparse
 from datetime import datetime
 
+import pytest
+
 import main
 from cli import intraday_monitor
 from services.intraday_monitor.rules import (
     FANGSHENG_REACH_11_11_20260903_16,
+    HAOXIANGNI_BREAKOUT_11_24_20260909_22,
+    LIANGPIN_STORE_BREAKOUT_10_17_20260909_22,
     MEDICILON_BELOW_87_65_20260907_1006,
+    PINWO_FOODS_BREAKOUT_25_89_20260909_22,
 )
 
 
@@ -203,6 +208,29 @@ def test_e2e_cli_selects_medicilon_rule(monkeypatch, capsys):
     assert calls == [(registry, rule)]
 
 
+@pytest.mark.parametrize(
+    "selected_rule",
+    (
+        HAOXIANGNI_BREAKOUT_11_24_20260909_22,
+        PINWO_FOODS_BREAKOUT_25_89_20260909_22,
+        LIANGPIN_STORE_BREAKOUT_10_17_20260909_22,
+    ),
+)
+def test_e2e_cli_selects_new_two_week_breakout_rules(monkeypatch, capsys, selected_rule):
+    registry = object()
+    monkeypatch.setattr(main, "setup_providers", lambda config: registry)
+    monkeypatch.setattr(intraday_monitor, "shanghai_now", lambda: datetime(2026, 9, 9, 10))
+    calls = []
+    monkeypatch.setattr(
+        intraday_monitor, "run_e2e_test",
+        lambda got, input_by, confirm_real_push, rule: calls.append((got, rule)) or {
+            "status": "complete", "events": [{}], "errors": [], "pushed": True,
+        },
+    )
+    assert intraday_monitor.handle_command({}, _args(rule_id=selected_rule.rule_id)) == 0
+    assert calls == [(registry, selected_rule)]
+
+
 def test_e2e_cli_requires_explicit_real_push_confirmation_before_provider_setup(
     monkeypatch,
     capsys,
@@ -268,6 +296,10 @@ def test_help_describes_current_rules_at_every_command_level():
     assert "中科飞测严格跌破前5个已收盘交易日的前复权MA5" in root_help
     assert "同花顺全A（沪深）单日跌幅严格超过4.00%" in root_help
     assert "2026年9月3日至16日监控方盛制药达到或高于11.11元" in root_help
+    assert "2026年9月9日至22日监控好想你严格突破11.24元" in root_help
+    assert "品渥食品严格突破25.89元" in root_help
+    assert "良品铺子严格突破10.17元" in root_help
+    assert "每3分钟扫描" in root_help
     assert "当日累计成交额不少于100亿元" in root_help
     check_help = "".join(command_choices["check"].format_help().split())
     assert "历史已退役规则保持下线" in check_help
@@ -278,6 +310,9 @@ def test_help_describes_current_rules_at_every_command_level():
     assert "同花顺全A（沪深）单日涨跌幅严格低于-4.00%时推送" in check_help
     assert "2026年9月3日至16日方盛制药达到或高于11.11元时推送" in check_help
     assert "2026年9月7日至10月6日美迪西严格低于87.65元时推送" in check_help
+    assert "2026年9月9日至22日好想你严格高于11.24元" in check_help
+    assert "品渥食品严格高于25.89元" in check_help
+    assert "良品铺子严格高于10.17元时推送" in check_help
     assert "持续命中去重" in check_help
     assert "恢复后再次命中可重推" in check_help
     assert "10点前百亿成交额涨停板" in check_help

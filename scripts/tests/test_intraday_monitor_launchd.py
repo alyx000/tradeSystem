@@ -58,7 +58,7 @@ def test_plist_contract():
         "/Users/alyx/tradeSystem/.worktrees/intraday-monitor-runtime/"
         "deploy/launchd/intraday-monitor-runner.sh"
     ]
-    assert data["StartInterval"] == 300
+    assert data["StartInterval"] == 180
     assert data["StartCalendarInterval"] == {"Hour": 9, "Minute": 59}
     assert data["RunAtLoad"] is False
     assert data["KeepAlive"] is False
