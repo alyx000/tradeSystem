@@ -1,6 +1,7 @@
 """可扩展的盘中实时阈值监控。"""
 
 from .rules import (
+    DAJIN_HEAVY_BREAKOUT_35_95_20260912_18,
     DEFAULT_RULES,
     GUOCI_MATERIALS_BELOW_67_22_20260831,
     HAOXIANGNI_BREAKOUT_11_24_20260909_22,
@@ -22,6 +23,7 @@ from .market_scan import (
 from .service import run_all_checks, run_check, run_e2e_test
 
 __all__ = [
+    "DAJIN_HEAVY_BREAKOUT_35_95_20260912_18",
     "DEFAULT_RULES",
     "GUOCI_MATERIALS_BELOW_67_22_20260831",
     "HAOXIANGNI_BREAKOUT_11_24_20260909_22",

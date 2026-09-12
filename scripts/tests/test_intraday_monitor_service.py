@@ -10,6 +10,7 @@ import pytest
 import services.intraday_monitor.service as intraday_service
 from services.intraday_monitor.service import run_all_checks, run_check, run_e2e_test
 from services.intraday_monitor.rules import (
+    DAJIN_HEAVY_BREAKOUT_35_95_20260912_18,
     DEFAULT_RULES,
     FANGSHENG_REACH_11_11_20260903_16,
     GUOCI_MATERIALS_BELOW_67_22_20260831,
@@ -62,6 +63,67 @@ BOARD_BREAK_RULE = MonitorRule(
     threshold_label="当日涨停价",
 )
 TEST_RULES = (BREACH_RULE, RECLAIM_RULE)
+
+
+def test_dajin_initial_match_dedupe_reentry_and_final_day(tmp_path):
+    rule = DAJIN_HEAVY_BREAKOUT_35_95_20260912_18
+    db_path = _calendar(tmp_path, dates=("2026-09-14", "2026-09-18"))
+    registry, pusher = _Registry(), _Pusher()
+    counts = []
+    for index, price in enumerate((35.96, 36.0, 35.95, 35.96)):
+        registry.price = price
+        registry.now = datetime(2026, 9, 14, 10, 3 * index, tzinfo=TZ)
+        result = run_check(
+            registry, rules=(rule,), now=registry.now, db_path=db_path,
+            state_path=tmp_path / "state.json", pusher_factory=lambda: pusher,
+        )
+        assert result["status"] == "complete"
+        counts.append(len(result["events"]))
+    assert counts == [1, 0, 0, 1]
+    assert len(pusher.messages) == 2
+    assert "大金重工" in pusher.messages[0][1]
+    assert "已突破监控线 **35.95**元" in pusher.messages[0][1]
+    registry.now = datetime(2026, 9, 18, 10, tzinfo=TZ)
+    final = run_check(
+        registry, rules=(rule,), now=registry.now, db_path=db_path,
+        state_path=tmp_path / "state.json", pusher_factory=lambda: pusher,
+    )
+    assert final["status"] == "complete"
+    assert len(final["events"]) == 1
+
+
+@pytest.mark.parametrize(
+    ("day", "is_open", "status"),
+    ((11, 1, "no_active_rules"), (12, 0, "non_trade_day"),
+     (13, 0, "non_trade_day"), (19, 1, "no_active_rules")),
+)
+def test_dajin_weekend_and_expiry_do_not_fetch_or_push(tmp_path, day, is_open, status):
+    date_text = f"2026-09-{day:02}"
+    db_path = _calendar(tmp_path, dates=(date_text,), is_open=is_open)
+    registry, pusher = _Registry(price=36), _Pusher()
+    registry.now = datetime(2026, 9, day, 10, tzinfo=TZ)
+    result = run_check(
+        registry, rules=(DAJIN_HEAVY_BREAKOUT_35_95_20260912_18,), now=registry.now,
+        db_path=db_path, state_path=tmp_path / "state.json", pusher_factory=lambda: pusher,
+    )
+    assert result["status"] == status
+    assert registry.call_count == 0
+    assert pusher.messages == []
+
+
+@pytest.mark.parametrize("day,included", ((11, False), (14, True), (18, True), (21, False)))
+def test_default_batch_only_fetches_dajin_in_valid_window(tmp_path, day, included):
+    db_path = _calendar(tmp_path, dates=(f"2026-09-{day:02}",))
+    registry = _Registry(price=35.95)
+    registry.now = datetime(2026, 9, day, 10, tzinfo=TZ)
+    result = run_check(
+        registry, rules=tuple(r for r in DEFAULT_RULES if r.threshold_mode == "fixed"),
+        now=registry.now, db_path=db_path, state_path=tmp_path / "state.json",
+        pusher_factory=_Pusher,
+    )
+    assert result["status"] == "complete"
+    requested = {code for batch in registry.requested_codes for code in batch}
+    assert ("002487.SZ" in requested) is included
 
 
 class _Result:
@@ -806,6 +868,7 @@ def test_default_sse_rule_pushes_only_after_observed_below_to_3955(tmp_path):
         HAOXIANGNI_BREAKOUT_11_24_20260909_22,
         PINWO_FOODS_BREAKOUT_25_89_20260909_22,
         LIANGPIN_STORE_BREAKOUT_10_17_20260909_22,
+        DAJIN_HEAVY_BREAKOUT_35_95_20260912_18,
     )
     assert initial_above["events"] == []
     assert below["events"] == []
