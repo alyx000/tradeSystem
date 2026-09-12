@@ -341,6 +341,22 @@ LIANGPIN_STORE_BREAKOUT_10_17_20260909_22 = MonitorRule(
 )
 
 
+DAJIN_HEAVY_BREAKOUT_35_95_20260912_18 = MonitorRule(
+    rule_id="dajin-heavy-breakout-35-95-20260912-18",
+    instrument_name="大金重工",
+    code="002487.SZ",
+    threshold=35.95,
+    direction="above",
+    inclusive=False,
+    emit_on_initial_match=True,
+    action_label="突破",
+    valid_from=date(2026, 9, 12),
+    valid_until=date(2026, 9, 18),
+    value_label="价格",
+    value_unit="元",
+)
+
+
 # 长期规则保留上证指数站上 3955；历史个股规则不再启用。
 # 动态涨停价与前收盘均线能力由 MonitorRule.threshold_mode 统一扩展。
 # 科创50 1700 与凯莱英 172.26 临时规则覆盖 8 月 21 日与 24 日两个
@@ -358,6 +374,7 @@ DEFAULT_RULES: tuple[MonitorRule, ...] = (
     HAOXIANGNI_BREAKOUT_11_24_20260909_22,
     PINWO_FOODS_BREAKOUT_25_89_20260909_22,
     LIANGPIN_STORE_BREAKOUT_10_17_20260909_22,
+    DAJIN_HEAVY_BREAKOUT_35_95_20260912_18,
 )
 
 

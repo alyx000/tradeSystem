@@ -8,6 +8,7 @@ from services.intraday_monitor.guards import (
     is_intraday_session,
 )
 from services.intraday_monitor.rules import (
+    DAJIN_HEAVY_BREAKOUT_35_95_20260912_18,
     DEFAULT_RULES,
     FANGSHENG_REACH_11_11_20260903_16,
     GUOCI_MATERIALS_BELOW_67_22_20260831,
@@ -93,6 +94,7 @@ def test_fixed_and_ma_temporary_rules_are_registered():
         HAOXIANGNI_BREAKOUT_11_24_20260909_22,
         PINWO_FOODS_BREAKOUT_25_89_20260909_22,
         LIANGPIN_STORE_BREAKOUT_10_17_20260909_22,
+        DAJIN_HEAVY_BREAKOUT_35_95_20260912_18,
     )
     assert SSE_COMPOSITE_RECLAIM_3955.rule_id == "sse-composite-reclaim-3955"
     assert SSE_COMPOSITE_RECLAIM_3955.instrument_name == "上证指数"
@@ -265,6 +267,24 @@ def test_new_two_week_breakout_rules_are_strict_and_date_bounded(
     assert rule.is_effective_on(date(2026, 9, 22)) is True
     assert rule.is_effective_on(date(2026, 9, 23)) is False
     assert (rule.valid_until - rule.valid_from).days + 1 == 14
+
+
+def test_dajin_one_week_breakout_boundaries():
+    rule = DAJIN_HEAVY_BREAKOUT_35_95_20260912_18
+    assert rule in DEFAULT_RULES
+    assert (rule.code, rule.instrument_name, rule.provider) == ("002487.SZ", "大金重工", "sina")
+    assert rule.threshold == 35.95
+    assert rule.emit_on_initial_match is True
+    assert rule.is_active(35.94) is False
+    assert rule.is_active(35.95) is False
+    assert rule.is_active(35.96) is True
+    assert rule.valid_from == date(2026, 9, 12)
+    assert rule.valid_until == date(2026, 9, 18)
+    assert (rule.valid_until - rule.valid_from).days + 1 == 7
+    assert rule.is_effective_on(date(2026, 9, 11)) is False
+    assert rule.is_effective_on(date(2026, 9, 12)) is True
+    assert rule.is_effective_on(date(2026, 9, 18)) is True
+    assert rule.is_effective_on(date(2026, 9, 19)) is False
 
 
 def test_daily_pct_change_uses_price_and_pre_close_not_provider_pct_field():
