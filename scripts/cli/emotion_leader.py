@@ -30,6 +30,7 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
     modes = parser.add_subparsers(dest="emotion_leader_command")
     daily = modes.add_parser("daily", help="连板启动识别→生命周期统计→报告/推送")
     daily.add_argument("--date", default=None, help="目标交易日 YYYY-MM-DD（默认今天）")
+    daily.add_argument("--input-by", default=None, help="报告生成请求者（Agent 运行须显式填写）")
     daily.add_argument("--lookback-days", type=_positive_int, default=C.DEFAULT_LOOKBACK_DAYS,
                        help=f"连板事实回看自然日（默认 {C.DEFAULT_LOOKBACK_DAYS}）")
     daily.add_argument("--max-rows", type=_positive_int, default=C.DEFAULT_MAX_ROWS,
@@ -78,6 +79,9 @@ def _run_daily(config: dict, args: argparse.Namespace) -> int:
             )
     finally:
         conn.close()
+
+    if getattr(args, "input_by", None):
+        result["input_by"] = args.input_by
 
     if args.json:
         print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))

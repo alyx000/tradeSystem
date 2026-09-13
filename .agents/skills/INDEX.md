@@ -1,5 +1,7 @@
 # Skills 依赖索引
 
+反馈趋势：正式复盘③自动展示最近20个开放日的断板次日反馈与全部活跃核心反馈；核心四图同纵轴，partial虚线、缺值断线不补零。日报和HTML按同日原始regulatory_suspend记录核验全天停牌，保留真实缺失与证据；daily支持--input-by报告审计。历史失败派生报告在事实齐全后可通过--date/--no-push重算，先保留备份。
+
 本文件只记录每个 skill 依赖的 CLI / API 签名与简要用途；详细行为按需读取对应 `SKILL.md` 或 reference。
 **修改 CLI、API、service、workflow、launchd 或 skill 行为契约后，必须按 `.agents/rules/skills-sync.md` 判断是否同步此索引。**
 

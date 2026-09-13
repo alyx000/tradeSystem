@@ -10,6 +10,7 @@ from services.emotion_leader import constants as C
 from services.emotion_leader.history import discover_lifecycles, load_history
 from services.emotion_leader.metrics import fetch_metrics
 from services.emotion_leader.state import plan_incremental_refresh
+from services.emotion_leader.suspensions import load_suspensions, reconcile_suspensions
 
 
 def _industry_map(registry) -> tuple[dict, str | None, str]:
@@ -168,7 +169,7 @@ def run_daily(
     ]
     promoted_today = [row for row in active if row.get("promoted_date") == target_date]
     status = "partial" if base["source_errors"] or history["missing_dates"] else "ok"
-    return {
+    result = {
         **base,
         "status": status,
         "active": active,
@@ -190,3 +191,5 @@ def run_daily(
             "distance_from_peak_median_pct": _median(active, "distance_from_peak_pct"),
         },
     }
+
+    return reconcile_suspensions(result, load_suspensions(conn, target_date))

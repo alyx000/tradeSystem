@@ -332,6 +332,8 @@ STRUCTURED_CONTRACT_ATTRIBUTES = (
     "data-emotion-leader",
     "data-emotion-height-chart",
     "data-board-break-feedback",
+    "data-board-feedback-trend",
+    "data-core-feedback-trend",
     "data-style-board-break-feedback",
     "data-style-market-effect",
     "data-style-low-price-effect",
@@ -3573,7 +3575,7 @@ class _ReportParser(HTMLParser):
                 not EMOTION_LEADER_CODE_RE.fullmatch(code)
                 or code in seen_codes
                 or wave not in EMOTION_LEADER_WAVE_LABELS
-                or metric_status not in {"ok", "source_failed"}
+                or metric_status not in {"ok", "source_failed", "suspended"}
                 or code not in visible
                 or f"[判断]{wave}" not in visible
             ):
@@ -6679,6 +6681,26 @@ def validate_report(
     report_date = next(item[3] for item in parser.schema_hosts)
     _validate_exposure_context(parser, report_date, exposure_context)
     metrics = parser.metrics()
+    # 两张自动趋势图各最多20行来源数据+1行表头，单独预留，原有证据预算仍为400行。
+    trend_rows = 0
+    trend_names = ("data-board-feedback-trend", "data-core-feedback-trend")
+    if any(parser.structured_contracts[name] for name in trend_names):
+        for name in trend_names:
+            blocks = parser.structured_contracts[name]
+            if len(blocks) != 1:
+                raise ReportValidationError("invalid_feedback_trend", "两类反馈趋势必须各出现一次", section="s3")
+            block = blocks[0]
+            if block.section != "s3" or block.default_hidden or block.attrs.get("data-as-of") != report_date:
+                raise ReportValidationError("invalid_feedback_trend", "反馈趋势必须在③默认可见且日期一致", section="s3")
+            if block.value == "missing-data" and block.tag == "p":
+                continue
+            dates = [row.attrs.get("data-source-date", "") for row in block.rows if row.attrs.get("data-source-date")]
+            if (block.value != "v1" or block.tag != "figure" or not 1 <= len(dates) <= 20
+                    or len(block.rows) != len(dates) + 1 or dates != sorted(set(dates))
+                    or any(not _valid_date(day) or day > report_date for day in dates)
+                    or block.attrs.get("data-source-status") not in {"complete", "partial"}):
+                raise ReportValidationError("invalid_feedback_trend", "反馈趋势日期或数据行非法", section="s3")
+            trend_rows += len(block.rows)
     if capacity_manifest is not None:
         _validate_capacity_manifest_payload(capacity_manifest, report_date)
         _validate_capacity_manifest_match(parser, capacity_manifest)
@@ -6723,10 +6745,10 @@ def validate_report(
             f"证据层 {metrics.evidence_tables} 张表，硬上限 {EVIDENCE_TABLE_LIMIT}",
         ),
         (
-            metrics.evidence_rows > EVIDENCE_ROW_LIMIT,
+            metrics.evidence_rows > EVIDENCE_ROW_LIMIT + trend_rows,
             "evidence_rows_exceeded",
             _largest_section(metrics, "evidence_rows"),
-            f"证据层 {metrics.evidence_rows} 行，硬上限 {EVIDENCE_ROW_LIMIT}",
+            f"证据层 {metrics.evidence_rows} 行，硬上限 {EVIDENCE_ROW_LIMIT}+趋势来源{trend_rows}行",
         ),
     )
     for failed, code, section, message in checks:
@@ -7515,7 +7537,7 @@ def _render_emotion_leader(payload: Mapping[str, object] | None, report_date: st
         name = str(item.get("name", "")).strip()
         wave = str(item.get("wave_label") or "未计算")
         metric_status = str(item.get("metric_status") or "source_failed")
-        if metric_status not in {"ok", "source_failed"}:
+        if metric_status not in {"ok", "source_failed", "suspended"}:
             metric_status = "source_failed"
         industry = str(item.get("industry") or item.get("limit_industry") or "未分类")
         rows.append(
@@ -7540,6 +7562,9 @@ def _render_emotion_leader(payload: Mapping[str, object] | None, report_date: st
         else '<p class="note">[事实] source_errors：0 条。</p>'
     )
     refresh_mode = escape(str(refresh.get("mode") or "unknown"))
+    suspension_note = ""
+    if summary.get("suspended_count"):
+        suspension_note = f'<p>[事实] 有效行情 {summary.get("metric_available_count", "—")} 只；全天停牌 {summary["suspended_count"]} 只；未解决缺失 {summary.get("unresolved_count", "—")} 只。停牌依据同日原始停牌记录核验，指标不适用，不补零。</p>'
     return f'''<div class="emotion-leader" data-emotion-leader="v1" data-as-of="{escape(report_date)}"
     data-source-status="{escape(status)}" data-active-count="{count_keys['active']}"
     data-archived-count="{count_keys['archived']}" data-today-limit-up-count="{count_keys['limit_up']}"
@@ -7550,6 +7575,7 @@ def _render_emotion_leader(payload: Mapping[str, object] | None, report_date: st
     data-refreshed-count="{count_keys['refreshed']}">
   <p><strong>[事实] 情绪核心生命周期：</strong>状态 {escape(status)}；历史覆盖 {count_keys['loaded']}/{count_keys['expected']}；刷新 {refresh_mode} / {count_keys['refreshed']} 只；活跃 {count_keys['active']} / 归档 {count_keys['archived']}；今日涨停 {count_keys['limit_up']} / 创新高 {count_keys['new_peak']}。</p>
   <p>[事实] 今日晋级核心：{promoted_names}；新增二连板候选：{candidate_names}。</p>
+  {suspension_note}
   <details class="evidence" data-as-of="{escape(report_date)}" data-items="{len(displayed)}" data-evidence-kind="emotion-leader">
     <summary>活跃核心前 {len(displayed)} 只（{len(displayed)} 项）</summary>
     <div class="evidence-body"><div class="table-scroll-shell"><table>
@@ -8735,6 +8761,7 @@ def render_report(
     fx_history_dir: str | os.PathLike[str] | None = None,
     style_market_effect: Mapping[str, object] | None = None,
     include_legacy_sections: bool = False,
+    feedback_trends: dict | None = None,
 ) -> str:
     """读取固定 chunk，包裹静态阅读器外壳并返回 HTML 字符串。
 
@@ -8757,6 +8784,17 @@ def render_report(
         raise ReportValidationError(
             "missing_chunk", f"缺少 chunk：{', '.join(missing)}"
         )
+    if any(re.search(r"\bdata-(?:board|core)-feedback-trend\s*=", body, re.I) for body in chunks.values()):
+        raise ReportValidationError("duplicate_feedback_trend", "反馈趋势由组装器统一生成，chunk 不得自行注入", section="s3")
+    scripts_path = str(_repo_root() / "scripts")
+    if scripts_path not in sys.path:
+        sys.path.insert(0, scripts_path)
+    from services.review_feedback_trends import render_feedback_trends
+
+    feedback_fragment, feedback_gaps = render_feedback_trends(feedback_trends, report_date)
+    chunks["s456"] = _inject_section_fragment(chunks["s456"], "s3", feedback_fragment)
+    for gap in feedback_gaps:
+        chunks["s8ops"] = _inject_section_fragment(chunks["s8ops"], "ops", f'<p>[事实] {escape(gap)}；缺失不补零。</p>')
     if "data-rmb-fx-chart=" in chunks["s1"]:
         raise ReportValidationError(
             "duplicate_rmb_fx_chart",
@@ -9028,6 +9066,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         emotion_report = load_emotion_leader_report(emotion_path, args.date)
         emotion_history_dir = args.emotion_history_dir or Path(emotion_path).parent
         trade_db_path = args.trade_db or (_repo_root() / "data" / "trade.db")
+        scripts_path = str(_repo_root() / "scripts")
+        if scripts_path not in sys.path:
+            sys.path.insert(0, scripts_path)
+        from services.emotion_leader.suspensions import reconcile_report_file
+        from services.review_feedback_trends import load_feedback_trends
+        emotion_report = reconcile_report_file(emotion_report, trade_db_path, args.date)
         emotion_open_dates = load_emotion_open_dates(trade_db_path, args.date)
         fx_history_dir = args.fx_history_dir or (
             _repo_root() / "data" / "reports"
@@ -9050,6 +9094,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 else None
             ),
         )
+        feedback_trends = load_feedback_trends(daily_root, emotion_history_dir, trade_db_path, args.date)
         html = render_report(
             args.tmp_dir,
             args.date,
@@ -9058,6 +9103,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             emotion_open_dates=emotion_open_dates,
             fx_history_dir=fx_history_dir,
             style_market_effect=style_market_effect,
+            feedback_trends=feedback_trends,
         )
         manifest_path = args.capacity_manifest or (
             Path(args.tmp_dir) / f"capacity_{args.date}.json"

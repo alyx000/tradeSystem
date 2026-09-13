@@ -1,5 +1,7 @@
 # 盘后复盘 HTML 报告模板
 
+反馈趋势：正式复盘③自动展示最近20个开放日的断板次日反馈与全部活跃核心反馈；核心四图同纵轴，partial虚线、缺值断线不补零。日报和HTML按同日原始regulatory_suspend记录核验全天停牌，保留真实缺失与证据；daily支持--input-by报告审计。历史失败派生报告在事实齐全后可通过--date/--no-push重算，先保留备份。
+
 配合 [`../multi-agent-review.md`](../multi-agent-review.md) 使用。默认产物 = `data/reports/复盘_YYYY-MM-DD.html`（只读，不写工作台/计划层）；回归样例必须用 `--output` 写非 canonical 文件，避免覆盖原报告。
 
 ## 文件

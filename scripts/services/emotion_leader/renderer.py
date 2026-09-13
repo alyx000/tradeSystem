@@ -69,6 +69,12 @@ def render_daily(result: dict, *, max_rows: int = C.DEFAULT_MAX_ROWS) -> str:
             "## 活跃情绪核心",
         ]
         active = result.get("active") or []
+        if summary.get("suspended_count"):
+            lines.insert(-1, f"- 有效行情 {summary.get('metric_available_count')} 只｜全天停牌 {summary['suspended_count']} 只｜未解决缺失 {summary.get('unresolved_count')} 只；停牌指标不适用，不补零。")
+            for row in active:
+                if row.get("metric_status") == "suspended":
+                    proof = row.get("suspension_evidence") or {}
+                    lines.insert(-1, f"- 停牌核验：{row.get('name')} {row.get('code')}；{proof.get('date')}，{proof.get('source')}，原始记录 #{proof.get('raw_payload_id')}。")
         if not active:
             lines += ["当前无可计算的活跃情绪核心。", ""]
         else:

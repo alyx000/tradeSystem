@@ -471,7 +471,7 @@ python3 main.py board-break daily --no-llm                       # 跳过 LLM �
 
 ```bash
 python3 main.py emotion-leader daily --date 2026-08-11 --dry-run
-python3 main.py emotion-leader daily --date 2026-08-11 --no-push
+python3 main.py emotion-leader daily --date 2026-08-11 --no-push --input-by codex
 python3 main.py emotion-leader daily --date 2026-08-11 --json
 python3 main.py emotion-leader daily --date 2026-08-11 --full-refresh --no-push
 ```
