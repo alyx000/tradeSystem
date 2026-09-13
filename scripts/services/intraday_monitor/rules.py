@@ -9,8 +9,8 @@ from typing import Iterable, Literal
 from utils.price_limit import compute_limit_prices
 
 
-Direction = Literal["below", "above"]
-ThresholdMode = Literal["fixed", "daily_up_limit", "previous_close_ma"]
+Direction = Literal["below", "above", "near"]
+ThresholdMode = Literal["fixed", "daily_up_limit", "previous_close_ma", "intraday_ma"]
 ValueMode = Literal["price", "daily_pct_change"]
 
 
@@ -36,8 +36,20 @@ class MonitorRule:
     threshold_window: int | None = None
     threshold_provider: str | None = None
     value_mode: ValueMode = "price"
+    proximity_pct: float | None = None
 
     def __post_init__(self) -> None:
+        if self.direction == "near":
+            if (
+                self.value_mode != "price"
+                or isinstance(self.proximity_pct, bool)
+                or not isinstance(self.proximity_pct, (int, float))
+                or not math.isfinite(self.proximity_pct)
+                or not 0 < self.proximity_pct < 100
+            ):
+                raise ValueError("附近监控须使用价格且提供0到100之间的 proximity_pct")
+        elif self.proximity_pct is not None:
+            raise ValueError("只有附近监控可以提供 proximity_pct")
         if self.valid_from and self.valid_until and self.valid_from > self.valid_until:
             raise ValueError("监控规则 valid_from 不能晚于 valid_until")
         if self.threshold_mode == "fixed":
@@ -46,7 +58,7 @@ class MonitorRule:
         elif self.threshold_mode == "daily_up_limit":
             if self.threshold is not None:
                 raise ValueError("每日涨停价规则不得同时提供固定 threshold")
-        elif self.threshold_mode == "previous_close_ma":
+        elif self.threshold_mode in ("previous_close_ma", "intraday_ma"):
             if self.threshold is not None:
                 raise ValueError("前收盘均线规则不得同时提供固定 threshold")
             if (
@@ -57,6 +69,8 @@ class MonitorRule:
                 raise ValueError("前收盘均线规则必须提供正整数 threshold_window")
             if not str(self.threshold_provider or "").strip():
                 raise ValueError("前收盘均线规则必须提供 threshold_provider")
+            if self.threshold_mode == "intraday_ma" and self.threshold_window < 2:
+                raise ValueError("动态盘中均线窗口必须至少为2")
         else:
             raise ValueError(f"不支持的阈值模式: {self.threshold_mode}")
         if self.value_mode not in ("price", "daily_pct_change"):
@@ -79,11 +93,12 @@ class MonitorRule:
         """从固定配置或当日实时行情解析本次比较阈值。"""
         if self.threshold_mode == "fixed":
             return float(self.threshold)
-        if self.threshold_mode == "previous_close_ma":
+        if self.threshold_mode in ("previous_close_ma", "intraday_ma"):
             closes = list(historical_closes or [])
-            if len(closes) != self.threshold_window:
+            expected = self.threshold_window - (self.threshold_mode == "intraday_ma")
+            if len(closes) != expected:
                 raise ValueError(
-                    f"前收盘均线需要 {self.threshold_window} 个完整收盘价，实际 {len(closes)} 个"
+                    f"前收盘均线需要 {expected} 个完整收盘价，实际 {len(closes)} 个"
                 )
             values: list[float] = []
             for raw in closes:
@@ -94,6 +109,8 @@ class MonitorRule:
                 if not math.isfinite(value) or value <= 0:
                     raise ValueError("前收盘均线包含非有限或非正收盘价")
                 values.append(value)
+            if self.threshold_mode == "intraday_ma":
+                values.append(self.resolve_value(quote))
             return sum(values) / len(values)
         try:
             pre_close = float(quote.get("pre_close"))
@@ -113,6 +130,11 @@ class MonitorRule:
         resolved = self.threshold if threshold is None else threshold
         if resolved is None:
             raise ValueError("动态阈值规则必须先解析本次阈值")
+        if self.direction == "near":
+            if not math.isfinite(price) or not math.isfinite(resolved) or resolved <= 0:
+                raise ValueError("附近监控比较值或均线非法")
+            distance = abs(round((price / resolved - 1.0) * 100.0, 8))
+            return distance <= self.proximity_pct if self.inclusive else distance < self.proximity_pct
         if self.direction == "below":
             return price <= resolved if self.inclusive else price < resolved
         if self.direction == "above":
@@ -357,6 +379,27 @@ DAJIN_HEAVY_BREAKOUT_35_95_20260912_18 = MonitorRule(
 )
 
 
+CHANGCHUN_GAS_NEAR_MA20_20260914_22 = MonitorRule(
+    rule_id="changchun-gas-near-ma20-20260914-22",
+    instrument_name="长春燃气",
+    code="600333.SH",
+    threshold=None,
+    direction="near",
+    inclusive=True,
+    proximity_pct=1.0,
+    emit_on_initial_match=True,
+    action_label="进入",
+    valid_from=date(2026, 9, 14),
+    valid_until=date(2026, 9, 22),
+    value_label="价格",
+    value_unit="元",
+    threshold_mode="intraday_ma",
+    threshold_window=20,
+    threshold_provider="tushare",
+    threshold_label="动态前复权MA20附近",
+)
+
+
 # 长期规则保留上证指数站上 3955；历史个股规则不再启用。
 # 动态涨停价与前收盘均线能力由 MonitorRule.threshold_mode 统一扩展。
 # 科创50 1700 与凯莱英 172.26 临时规则覆盖 8 月 21 日与 24 日两个
@@ -375,6 +418,7 @@ DEFAULT_RULES: tuple[MonitorRule, ...] = (
     PINWO_FOODS_BREAKOUT_25_89_20260909_22,
     LIANGPIN_STORE_BREAKOUT_10_17_20260909_22,
     DAJIN_HEAVY_BREAKOUT_35_95_20260912_18,
+    CHANGCHUN_GAS_NEAR_MA20_20260914_22,
 )
 
 
