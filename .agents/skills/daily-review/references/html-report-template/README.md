@@ -72,6 +72,11 @@ python3 .agents/skills/daily-review/references/html-report-template/assemble_rep
 - 完整证据使用默认收起的 `<details class="evidence" data-as-of="YYYY-MM-DD" data-items="N"><summary>…</summary>…</details>`；summary 后必须有非空文本、表格或内嵌媒体。搜索命中折叠证据时临时展开，退出搜索后恢复原状态；“展开/收起全部”只控制证据区。
 - 外壳纯静态、无外部依赖；报告正文禁止 `script/style/form/iframe/object/embed`、事件属性和 `javascript:` URL，禁止远程 `src`/样式、CDN、`fetch`、XHR 与 WebSocket；普通来源超链接可以保留。
 
+### 指数趋势、动能与量价（流程必查）
+
+①同时遵循[各大指数分析规范](../index-analysis.md)：日线MA摘要合并为综合指数摘要，保留MA数值/平收情景表，并在同一折叠证据区补充日线MACD最后5日、MA5方向、同源5日量价、同指数60分钟对照和确认/解除条件。可分窄表，不增加默认展开大表或重复分钟明细；分钟取证按当前发布版本的既有流程，尚无官方sidecar组件时不虚构自动模块。缺失保留单项未计算并进入ops；日线中证2000与分钟国证2000代理只并列观察，不合并为同指数共振。新增内容由第1路计算、主会话复算并渲染，当前不是组装器自动注入或硬门；生成成功仍须检查来源、计算与实际页面。
+
+
 ### 大势、大类资产与外汇掉期硬门
 
 `section#s1` 固定承载境内市场与外部资产背景，不新增导航锚点：
