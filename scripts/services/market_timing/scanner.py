@@ -34,7 +34,7 @@ def _bars_through(registry, code: str, date: str):
 def _today_quote(bars: list[dict]) -> tuple[float | None, float | None]:
     """当日收盘 + 涨跌幅(%)：末根 bar 收盘，对上一根收盘求百分比。
 
-    供 daily_market 未采集的指数（中证2000 / 平均股价）在复盘网站卡片显示当日点位。
+    供 daily_market 未采集的指数（通达信微盘股 / 平均股价）在复盘网站卡片显示当日点位。
     上一根缺失/为 0 → 涨跌幅 None（不臆造 0%，与 fallback 脏值防线一致）。
     """
     close = bars[-1].get("close") if bars else None

@@ -270,3 +270,17 @@ def test_init_schema_creates_market_timing_table(conn):
     cols = {r[1] for r in conn.execute("PRAGMA table_info(market_timing_signal)").fetchall()}
     assert {"trade_date", "index_code", "fractal_status", "fib_hit", "resonance_count",
             "amount_pctile_20d", "fractal_json"} <= cols
+
+
+def test_default_microcap_identity_does_not_overwrite_historical_proxy(conn):
+    from services.market_timing.constants import INDEX_LIST
+    codes = [item["code"] for item in INDEX_LIST]
+    assert len(codes) == 6 and "880823.TDX" in codes and "932000.CSI" not in codes
+    bars = _bars("2026-09-11", [(100, 100 + i, 1000) for i in range(30)])
+    reg = FakeRegistry({"932000.CSI": bars, "880823.TDX": bars})
+    scanner.run_daily(conn, reg, "2026-09-11", indices=[{"code": "932000.CSI", "name": "中证2000"}])
+    scanner.run_daily(conn, reg, "2026-09-11")
+    rows = repo.list_signals(conn, date="2026-09-11")
+    names = {row["index_code"]: row["index_name"] for row in rows}
+    assert names["932000.CSI"] == "中证2000"
+    assert names["880823.TDX"] == "通达信微盘股"

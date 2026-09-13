@@ -721,3 +721,7 @@ python3 main.py cognition-digest monthly --no-llm
 2. 关键市场摘要与产物路径
 3. 验证结果
 4. 剩余风险或后续建议
+
+### 大盘择时微盘股来源（2026-09-13）
+
+`market-timing daily` 默认六指数中的微盘股改用通达信 `880823.TDX`，`avg_price` 仍为通达信880003。取数、历史身份与失败边界见 [market-observability.md](references/market-observability.md)；最近800根日线按调用方请求窗口截取，历史中证2000不重新命名。

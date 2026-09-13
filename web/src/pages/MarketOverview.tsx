@@ -45,8 +45,8 @@ function pctColor(v: number | null | undefined) {
 }
 
 // 顶部指数卡片对应的 market-timing 指数代码（变盘窗口内嵌到卡片；6 指数全上卡 → 汇总条无「场外」段）
-// 前 4 个收盘价来自 daily_market；中证2000/平均股价 daily_market 未采集，点位取自 market-timing 末根 bar
-const TIMING_CARD_CODES = ['000001.SH', '399001.SZ', '399006.SZ', '000688.SH', '932000.CSI', 'avg_price']
+// 前 4 个收盘价来自 daily_market；通达信微盘股/平均股价 daily_market 未采集，点位取自 market-timing 末根 bar
+const TIMING_CARD_CODES = ['000001.SH', '399001.SZ', '399006.SZ', '000688.SH', 'avg_price']
 
 function IndexCard({
   label,
@@ -185,8 +185,11 @@ export default function MarketOverview() {
   const marketSignals = m ? getMarketSignals(m, history || []) : []
   const emotionSignals = m ? getEmotionSignals(m, strongestSectors, highMarkRows) : []
   const timingByCode = new Map((marketTiming?.signals ?? []).map((s) => [s.index_code, s] as const))
-  // 中证2000/平均股价 daily_market 未采集，点位与变盘窗口均取自 market-timing
-  const csi2000 = timingByCode.get('932000.CSI')
+  // 通达信微盘股/平均股价 daily_market 未采集，点位与变盘窗口均取自 market-timing
+  const microcap = timingByCode.get('880823.TDX')
+  // 历史代理仍显示原名；只有实际微盘股数据才使用通达信标签。
+  const smallCap = microcap ?? timingByCode.get('932000.CSI')
+  const smallCapLabel = smallCap?.index_code === '932000.CSI' ? '中证2000' : '通达信微盘股'
   const avgPrice = timingByCode.get('avg_price')
 
   return (
@@ -246,13 +249,13 @@ export default function MarketOverview() {
 
       {viewTab === 'summary' && hasSummary && m && (
       <>
-      {/* 指数概览（变盘窗口内嵌）。中证2000/平均股价 daily_market 未采集，点位取自 market-timing 末根 bar */}
+      {/* 指数概览（变盘窗口内嵌）。通达信微盘股/平均股价 daily_market 未采集，点位取自 market-timing 末根 bar */}
       <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4">
         <IndexCard label="上证指数" close={m.sh_index_close} pct={m.sh_index_change_pct} timing={timingByCode.get('000001.SH')} aboveMa5w={m.sh_above_ma5w} />
         <IndexCard label="深证成指" close={m.sz_index_close} pct={m.sz_index_change_pct} timing={timingByCode.get('399001.SZ')} aboveMa5w={m.sz_above_ma5w} />
         <IndexCard label="创业板指" close={extractIndex(m, 'chinext', 'close')} pct={extractIndex(m, 'chinext', 'pct')} timing={timingByCode.get('399006.SZ')} aboveMa5w={m.chinext_above_ma5w} />
         <IndexCard label="科创50" close={extractIndex(m, 'star50', 'close')} pct={extractIndex(m, 'star50', 'pct')} timing={timingByCode.get('000688.SH')} aboveMa5w={m.star50_above_ma5w} />
-        <IndexCard label="中证2000" close={csi2000?.close} pct={csi2000?.change_pct} timing={csi2000} />
+        <IndexCard label={smallCapLabel} close={smallCap?.close} pct={smallCap?.change_pct} timing={smallCap} />
         <IndexCard label="平均股价" close={avgPrice?.close} pct={avgPrice?.change_pct} timing={avgPrice} aboveMa5w={m.avg_price_above_ma5w} />
       </div>
 
@@ -262,7 +265,7 @@ export default function MarketOverview() {
 
       {marketTiming && (
         <Suspense fallback={<ChartLoadingFallback />}>
-          <MarketTimingPanel payload={marketTiming} history={marketTimingHistory} asOfDate={date} cardCodes={TIMING_CARD_CODES} />
+          <MarketTimingPanel payload={marketTiming} history={marketTimingHistory} asOfDate={date} cardCodes={[...TIMING_CARD_CODES, smallCap?.index_code ?? '880823.TDX']} />
         </Suspense>
       )}
 

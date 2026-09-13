@@ -4,11 +4,14 @@
   - tushare get_index_daily_range 返回完整 OHLCV+vol+amount（底分型/MA5/缩量/地量依赖），
     且保留 pct_chg/ts_code 向后兼容 regulatory 消费方。
   - tdx get_index_daily_range("avg_price") 走【日线】(KLINE category=9)，归一化 YYYY-MM-DD。
-  - tdx 非 avg_price 显式拒绝。
+  - tdx 仅支持 avg_price / 880823.TDX，拒绝浅历史节点。
 """
 from __future__ import annotations
 
+from datetime import date, timedelta
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 import pandas as pd
 
@@ -84,11 +87,22 @@ DAILY = _daily_bars([
 ])
 
 
+def _full_history(recent=DAILY):
+    """补齐800个不同工作日，模拟正常节点；尾部保留指定边界样本。"""
+    rows = [dict(row) for row in recent]
+    day = date(2026, 6, 9)
+    while len(rows) < 800:
+        if day.weekday() < 5:
+            rows.insert(0, {**DAILY[0], "datetime": f"{day.isoformat()} 15:00"})
+        day -= timedelta(days=1)
+    return rows
+
+
 class TestTdxIndexDailyRange:
     def test_avg_price_daily_uses_daily_category_and_normalizes(self):
         api = MagicMock()
         api.connect.return_value = True
-        api.get_index_bars.return_value = DAILY
+        api.get_index_bars.return_value = _full_history()
         with patch("pytdx.hq.TdxHq_API", return_value=api):
             prov = TdxProvider({"servers": [("1.1.1.1", 7709)]})
             r = prov.get_index_daily_range("avg_price", "2026-05-01", "2026-06-13")
@@ -115,3 +129,137 @@ class TestTdxIndexDailyRange:
         assert not r.success
         assert "avg_price" in r.error
         cls.assert_not_called()
+
+
+def test_microcap_daily_identity_depth_and_date_filter():
+    api = MagicMock()
+    api.connect.return_value = True
+    api.get_index_bars.return_value = list(reversed(_full_history()))
+    with patch("pytdx.hq.TdxHq_API", return_value=api):
+        result = TdxProvider({"servers": [("a", 7709)]}).get_index_daily_range(
+            "880823.TDX", "2026-06-11", "2026-06-12")
+    api.get_index_bars.assert_called_once_with(9, 1, "880823", 0, 800)
+    assert result.success and result.source == "tdx:880823_daily"
+    assert [row["trade_date"] for row in result.data] == ["2026-06-11", "2026-06-12"]
+    assert all(row["ts_code"] == "880823.TDX" for row in result.data)
+    api.disconnect.assert_called_once()
+
+
+@pytest.mark.parametrize("bad", [
+    [], _full_history([DAILY[0], DAILY[0]]),
+    _full_history([{**DAILY[0], "close": float("nan")}]),
+    _full_history([{**DAILY[0], "high": 1}]),
+    _full_history([{**DAILY[0], "datetime": "2026-02-30 15:00"}]),
+])
+def test_microcap_invalid_node_falls_back_and_disconnects(bad):
+    first, second = MagicMock(), MagicMock()
+    first.connect.return_value = second.connect.return_value = True
+    first.get_index_bars.return_value = bad
+    second.get_index_bars.return_value = _full_history()
+    with patch("pytdx.hq.TdxHq_API", side_effect=[first, second]):
+        result = TdxProvider({"servers": [("a", 7709), ("b", 7709)]}).get_index_daily_range(
+            "880823.TDX", "2026-06-01", "2026-06-12")
+    assert result.success and result.data[-1]["trade_date"] == "2026-06-12"
+    first.disconnect.assert_called_once()
+    second.disconnect.assert_called_once()
+
+
+def test_microcap_all_nodes_bad_is_failure_not_empty_success():
+    api = MagicMock()
+    api.connect.return_value = True
+    api.get_index_bars.side_effect = RuntimeError("short response")
+    with patch("pytdx.hq.TdxHq_API", return_value=api):
+        result = TdxProvider({"servers": [("a", 7709)]}).get_index_daily_range(
+            "880823.TDX", "2026-06-01", "2026-06-12")
+    assert not result.success and result.data is None
+    assert "880823" in result.error
+    assert result.source == "tdx:880823_daily"
+    api.disconnect.assert_called_once()
+
+
+def test_microcap_missing_volume_is_unknown_not_zero():
+    api = MagicMock()
+    api.connect.return_value = True
+    api.get_index_bars.return_value = _full_history([
+        {**DAILY[-1], "vol": None, "amount": float("inf")}])
+    with patch("pytdx.hq.TdxHq_API", return_value=api):
+        result = TdxProvider({"servers": [("a", 7709)]}).get_index_daily_range(
+            "880823.TDX", "2026-06-01", "2026-06-12")
+    assert result.success
+    assert result.data[-1]["vol"] is None and result.data[-1]["amount"] is None
+
+
+def test_microcap_invalid_window_rejected_before_network():
+    with patch("pytdx.hq.TdxHq_API") as client:
+        result = TdxProvider().get_index_daily_range("880823.TDX", "2026-09-12", "2026-09-11")
+    assert not result.success
+    client.assert_not_called()
+
+
+@pytest.mark.parametrize("code", ["880823.TDX", "avg_price"])
+def test_shallow_node_does_not_shadow_full_history(code):
+    first, second = MagicMock(), MagicMock()
+    first.connect.return_value = second.connect.return_value = True
+    first.get_index_bars.return_value = [DAILY[-1]]
+    second.get_index_bars.return_value = _full_history()
+    with patch("pytdx.hq.TdxHq_API", side_effect=[first, second]):
+        result = TdxProvider({"servers": [("a", 7709), ("b", 7709)]}).get_index_daily_range(
+            code, "2024-06-01", "2026-06-12")
+    assert result.success and len(result.data) > 500
+    first.disconnect.assert_called_once()
+    second.disconnect.assert_called_once()
+
+
+@pytest.mark.parametrize("code", ["880823.TDX", "avg_price"])
+def test_all_shallow_nodes_fail_with_explicit_depth_reason(code):
+    first, second = MagicMock(), MagicMock()
+    first.connect.return_value = second.connect.return_value = True
+    first.get_index_bars.return_value = [DAILY[-1]]
+    second.get_index_bars.return_value = DAILY
+    with patch("pytdx.hq.TdxHq_API", side_effect=[first, second]):
+        result = TdxProvider({"servers": [("a", 7709), ("b", 7709)]}).get_index_daily_range(
+            code, "2024-06-01", "2026-06-12")
+    assert not result.success and result.data is None
+    assert "insufficient_depth" in result.error
+    first.disconnect.assert_called_once()
+    second.disconnect.assert_called_once()
+
+
+def test_full_count_without_start_coverage_is_failure():
+    api = MagicMock()
+    api.connect.return_value = True
+    api.get_index_bars.return_value = _full_history()
+    with patch("pytdx.hq.TdxHq_API", return_value=api):
+        result = TdxProvider({"servers": [("a", 7709)]}).get_index_daily_range(
+            "880823.TDX", "2020-01-01", "2026-06-12")
+    assert not result.success and "insufficient_depth" in result.error
+    api.disconnect.assert_called_once()
+
+
+def test_duplicate_outside_request_window_cannot_inflate_depth():
+    api = MagicMock()
+    api.connect.return_value = True
+    bars = _full_history()
+    bars[0] = dict(bars[1])
+    api.get_index_bars.return_value = bars
+    with patch("pytdx.hq.TdxHq_API", return_value=api):
+        result = TdxProvider({"servers": [("a", 7709)]}).get_index_daily_range(
+            "880823.TDX", "2026-06-11", "2026-06-12")
+    assert not result.success and "重复" in result.error
+
+
+@pytest.mark.parametrize("code", ["880823.TDX", "avg_price"])
+def test_all_empty_nodes_are_source_unavailable_not_verified_zero_history(code):
+    first, second = MagicMock(), MagicMock()
+    first.connect.return_value = second.connect.return_value = True
+    first.get_index_bars.return_value = second.get_index_bars.return_value = []
+    with patch("pytdx.hq.TdxHq_API", side_effect=[first, second]):
+        result = TdxProvider({"servers": [("a", 7709), ("b", 7709)]}).get_index_daily_range(
+            code, "2024-06-01", "2026-06-12")
+    assert not result.success and result.data is None
+    assert "均无" in result.error and "有效数据" in result.error
+    assert "insufficient_depth" not in result.error
+    first.get_index_bars.assert_called_once()
+    second.get_index_bars.assert_called_once()
+    first.disconnect.assert_called_once()
+    second.disconnect.assert_called_once()

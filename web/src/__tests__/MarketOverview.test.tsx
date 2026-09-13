@@ -242,4 +242,62 @@ describe('MarketOverview', () => {
     expect(screen.getByText(/🎯 变盘窗口 21日/)).toBeInTheDocument()
     expect(screen.getByText(/未到（16日）/)).toBeInTheDocument()
   })
+  it.each(['both-valid', 'new-missing-quotes', 'neither'] as const)('微盘股身份和缺数边界：%s', async (scenario) => {
+    const market: MarketFullData = {
+      available: true, date: '2026-04-03',
+      sh_index_close: 3200, sh_index_change_pct: 1.2, sz_index_close: 10000, sz_index_change_pct: 2.1,
+      total_amount: 11800, northbound_net: null, advance_count: 3500, decline_count: 1500,
+      sh_above_ma5w: null, sz_above_ma5w: null, chinext_above_ma5w: null, star50_above_ma5w: null,
+      avg_price_above_ma5w: null, limit_up_count: null, limit_down_count: null, highest_board: null,
+      seal_rate: null, broken_rate: null, continuous_board_counts: null,
+      premium_10cm: null, premium_20cm: null, premium_30cm: null, premium_second_board: null,
+      margin_balance: null,
+    }
+    vi.mocked(api.getMarket).mockResolvedValue(market)
+    vi.mocked(api.getMarketTiming).mockResolvedValue({
+      date: '2026-04-03', available: true, resonance_count: 1,
+      context: { market_amount_yi: 11800, amount_pctile_20d: 0.5, advance: 3500, decline: 1500, limit_down_count: 0 },
+      signals: scenario === 'neither' ? [] : [
+        {
+          index_code: '880823.TDX', index_name: '通达信微盘股',
+          close: scenario === 'new-missing-quotes' ? null : 6910.55,
+          change_pct: scenario === 'new-missing-quotes' ? null : -2.65,
+          swing_pivot_date: '2026-03-10', swing_pivot_type: 'high', swing_pivot_price: 3400,
+          fib_day_count: 21, fib_hit: 21, fib_near: null,
+          fractal_status: 'forming', fractal_low_date: null, fractal_low_price: null, fractal_confirm_date: null,
+        },
+        {
+          index_code: '932000.CSI', index_name: '中证2000', close: 3313.78, change_pct: 0.82,
+          swing_pivot_date: null, swing_pivot_type: null, swing_pivot_price: null,
+          fib_day_count: null, fib_hit: null, fib_near: null,
+          fractal_status: 'none', fractal_low_date: null, fractal_low_price: null, fractal_confirm_date: null,
+        },
+        {
+          index_code: 'avg_price', index_name: '平均股价', close: 29.7, change_pct: 1.05,
+          swing_pivot_date: '2026-03-12', swing_pivot_type: 'high', swing_pivot_price: 31,
+          fib_day_count: 16, fib_hit: null, fib_near: null,
+          fractal_status: 'forming', fractal_low_date: null, fractal_low_price: null, fractal_confirm_date: null,
+        },
+      ],
+    } as never)
+
+    renderPage()
+
+    await waitFor(() => expect(screen.getByText('通达信微盘股')).toBeInTheDocument())
+    const card = screen.getByText('通达信微盘股').parentElement!
+    expect(card).not.toHaveTextContent('3313.78')
+    expect(card).not.toHaveTextContent('+0.82%')
+    if (scenario === 'both-valid') {
+      expect(card).toHaveTextContent('6910.55')
+      expect(card).toHaveTextContent('-2.65%')
+    } else {
+      expect(card.children[1]).toHaveTextContent(/^-$/)
+      expect(card.children[2]).toHaveTextContent(/^-$/)
+    }
+    if (scenario !== 'neither') {
+      expect(card).toHaveTextContent('🎯 变盘窗口 21日')
+      expect(screen.getByText('29.7')).toBeInTheDocument()
+    }
+
+  })
 })

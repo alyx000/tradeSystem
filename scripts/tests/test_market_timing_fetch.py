@@ -35,3 +35,16 @@ def test_avg_price_sentinel_normalizes_case_and_whitespace():
             "tdx", "get_index_daily_range", "avg_price", "2026-05-01", "2026-06-13"
         )
         reg.call.assert_not_called()
+
+
+def test_microcap_routes_exclusively_to_tdx_and_preserves_failure():
+    from providers.base import DataResult
+    for code in ("880823.TDX", " 880823.tdx "):
+        reg = MagicMock()
+        failed = DataResult(data=None, source="tdx:880823_daily", error="unavailable")
+        reg.call_specific.return_value = failed
+        assert fetch.fetch_index_daily(reg, code, "2024-09-01", "2026-09-11") is failed
+        reg.call_specific.assert_called_once_with(
+            "tdx", "get_index_daily_range", "880823.TDX", "2024-09-01", "2026-09-11"
+        )
+        reg.call.assert_not_called()
