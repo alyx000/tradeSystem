@@ -14,6 +14,8 @@
 
 本索引中的 CLI 依赖表仍以真实底层子命令为准，因为 `test_cli_smoke.py` 校验的是实际 argparse 签名，而不是 `make` 别名。
 
+2026-09-13：`daily-review` ①大势固定执行[指数趋势、动能与量价](daily-review/references/index-analysis.md)：日线MA方向/交叉、124开放日MACD预热后最后5日变化、同源5日量价、同指数60分钟对照与确认/解除条件；国证2000代理不拼接中证2000日线，缺源单项未计算。由Agent生成流程执行，不新增CLI、自动硬门、评分或业务写入。
+
 ## CLI 命令依赖表
 
 | Skill | CLI 子命令 | 说明 |
@@ -195,6 +197,7 @@
 | Skill | 路径 | 说明 |
 |-------|------|------|
 | `daily-review` | [daily-review/references/eight-step-prompt-templates.md](daily-review/references/eight-step-prompt-templates.md) | 八步复盘分步提问话术模板（配合 SKILL 速查） |
+| `daily-review` | [daily-review/references/index-analysis.md](daily-review/references/index-analysis.md) | ①各大指数趋势、日线MACD、5日量价与同指数60分钟对照；原MA表保留，正文摘要/明细折叠，反向修复、解除条件与缺口必查，Agent流程要求而非自动硬门 |
 | `daily-review` | [daily-review/references/multi-agent-review.md](daily-review/references/multi-agent-review.md) | 9 路完整采集、精简正文、Claim 唯一归属；①大势优先读取盘后归档，固定保留跨资产五类与 USD/CNY 在岸即期/1Y C-Swap，组装器按来源日汇总最近 8～15 个同日外汇点并自动画静态 SVG 双图；③自动读取同日 emotion-leader JSON，并折叠断板逐股 T-2/T-1/T 反馈；④固定自动展示非 ST 10/20/30cm 涨停宽度、首板/连板延续、北交所最近最多 5 份可用归档、同日 `<=10` 元低价股总体及 `<=5` 元/`5～10` 元分档赚钱效应，以及严重异动 T+1/3/5/10 已实现反馈，同时展示与③硬对账的断板赚钱效应聚合，完整 `ok` 样本可进入 `style_regime`，partial/source_failed 不计分；⑥从同一 JSON 自动注入近 20 个开放日打开连板高度的 `[事实]` 与对应启动日节点候选 `[判断]`，证据不足 fail-closed；另含容量/板块矩阵/申万二级半年线-年线-近期价量共振标签/滚动新高/事件窗硬门，以及 ETF 净申赎估算额、核心宽基互斥归属、A500/A50/中证500 边界与拆分标准化对账；当前正式 HTML 固定为 7 chunks / 15 anchors，不再生成仓位环境段和独立次日推演段，保留 ⑧次日计划与数据缺口；另含折叠证据与 HTML 预算/拒绝生成契约 |
 | `cognition-evolution` | [cognition-evolution/references/cognition-candidate-rules.md](cognition-evolution/references/cognition-candidate-rules.md) | 强候选最小标准、不建议落库条件、refine 默认动作与自检清单 |
 | `repo-maintenance-workflows` | [repo-maintenance-workflows/references/maintenance-checklist.md](repo-maintenance-workflows/references/maintenance-checklist.md) | 只读诊断、Review、跨入口对齐、每日巡检、同步与验证检查清单 |
