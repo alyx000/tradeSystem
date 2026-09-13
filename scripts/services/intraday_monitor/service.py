@@ -75,6 +75,7 @@ def _event(
         "threshold_label": rule.threshold_label,
         "threshold_mode": rule.threshold_mode,
         "direction": rule.direction,
+        "proximity_pct": rule.proximity_pct,
         "action_text": rule.action_text,
         "value_label": rule.value_label,
         "value_unit": rule.value_unit,
@@ -155,10 +156,10 @@ def _resolve_rule_threshold(
     db_path,
     previous_state: dict | None = None,
 ) -> tuple[float, str | None, list[str], float | None]:
-    if rule.threshold_mode != "previous_close_ma":
+    if rule.threshold_mode not in ("previous_close_ma", "intraday_ma"):
         return rule.resolve_threshold(quote), None, [], None
 
-    window = int(rule.threshold_window or 0)
+    window = int(rule.threshold_window or 0) - (rule.threshold_mode == "intraday_ma")
     basis_dates = previous_open_dates(now.date().isoformat(), window, db_path=db_path)
     if basis_dates is None:
         raise ValueError(f"前 {window} 个开放日历缺失或不可读")
@@ -188,6 +189,18 @@ def _resolve_rule_threshold(
             cached_value = float(cached_threshold)
         except (TypeError, ValueError):
             cached_value = float("nan")
+        if math.isfinite(cached_value) and cached_value > 0:
+            if rule.threshold_mode == "intraday_ma":
+                # 仅历史样本可复用；动态均线每次用最新价替换上次盘中价。
+                # 老状态若没有合法 last_price，必须重新取完整历史，不能冻结均线。
+                try:
+                    last_price = float(previous.get("last_price"))
+                except (TypeError, ValueError):
+                    last_price = float("nan")
+                if math.isfinite(last_price) and last_price > 0:
+                    cached_value += (rule.resolve_value(quote) - last_price) / rule.threshold_window
+                else:
+                    cached_value = float("nan")
         if math.isfinite(cached_value) and cached_value > 0:
             return (
                 cached_value,
@@ -790,6 +803,7 @@ def run_e2e_test(
             event,
             production_threshold=production_threshold,
             production_threshold_mode=rule.threshold_mode,
+            production_proximity_pct=rule.proximity_pct,
             input_by=normalized_input_by,
         )
         pushed = bool(
@@ -814,6 +828,7 @@ def run_e2e_test(
         "quotes_checked": 1,
         "pushed": True,
         "production_threshold": production_threshold,
+        "production_proximity_pct": rule.proximity_pct,
         "production_threshold_source": production_threshold_source,
         "production_threshold_basis_dates": production_basis_dates,
         "production_threshold_anchor_pre_close": production_anchor_pre_close,

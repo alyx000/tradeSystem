@@ -8,6 +8,7 @@ from services.intraday_monitor.guards import (
     is_intraday_session,
 )
 from services.intraday_monitor.rules import (
+    CHANGCHUN_GAS_NEAR_MA20_20260914_22,
     DAJIN_HEAVY_BREAKOUT_35_95_20260912_18,
     DEFAULT_RULES,
     FANGSHENG_REACH_11_11_20260903_16,
@@ -95,6 +96,7 @@ def test_fixed_and_ma_temporary_rules_are_registered():
         PINWO_FOODS_BREAKOUT_25_89_20260909_22,
         LIANGPIN_STORE_BREAKOUT_10_17_20260909_22,
         DAJIN_HEAVY_BREAKOUT_35_95_20260912_18,
+        CHANGCHUN_GAS_NEAR_MA20_20260914_22,
     )
     assert SSE_COMPOSITE_RECLAIM_3955.rule_id == "sse-composite-reclaim-3955"
     assert SSE_COMPOSITE_RECLAIM_3955.instrument_name == "上证指数"

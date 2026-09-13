@@ -6,7 +6,7 @@ def _display_digits(event: dict, *, threshold_mode: str | None = None) -> int:
     """百分比严格边界保留计算精度，避免触发值与阈值显示成相等。"""
     if event.get("value_mode") == "daily_pct_change":
         return 8
-    if threshold_mode == "previous_close_ma":
+    if threshold_mode in ("previous_close_ma", "intraday_ma"):
         return 3
     return 2
 
@@ -33,6 +33,15 @@ def render_alert(events: list[dict]) -> str:
                 f"  - 数据来源：{event['source']}",
             ]
         )
+        if event.get("direction") == "near":
+            tolerance = float(event["proximity_pct"])
+            ma = float(event["threshold"])
+            deviation = (observed_value / ma - 1.0) * 100.0
+            lines.append(
+                f"  - 附近范围（含边界）：MA±{tolerance:g}%，"
+                f"{ma * (1 - tolerance / 100):.4f}～{ma * (1 + tolerance / 100):.4f}元；"
+                f"当前偏离：{deviation:+.4f}%"
+            )
         if event.get("value_mode") == "daily_pct_change":
             lines.append(f"  - 最新点位：{event['price']:.3f}")
         if event.get("threshold_mode") == "daily_up_limit":
@@ -42,13 +51,15 @@ def render_alert(events: list[dict]) -> str:
                 lines.append(
                     "  - [判断·盘中] 当前未封涨停；盘中仍可能回封，最终是否断板以收盘为准"
                 )
-        elif event.get("threshold_mode") == "previous_close_ma":
+        elif event.get("threshold_mode") in ("previous_close_ma", "intraday_ma"):
             basis_dates = list(event.get("threshold_basis_dates") or [])
             if basis_dates:
                 lines.append(
                     f"  - 均线样本：{basis_dates[0]} 至 {basis_dates[-1]}，"
                     f"共 {len(basis_dates)} 个已收盘交易日（前复权）"
                 )
+            if event.get("threshold_mode") == "intraday_ma":
+                lines.append("  - 动态均线：上述历史收盘价与当日最新价共同计算，盘中随最新价更新")
             if event.get("threshold_source"):
                 lines.append(f"  - 均线数据来源：{event['threshold_source']}")
     lines.extend(["", "> 仅为条件触发提醒，不构成买卖建议。"])
@@ -60,6 +71,7 @@ def render_e2e_test_alert(
     *,
     production_threshold: float,
     production_threshold_mode: str = "fixed",
+    production_proximity_pct: float | None = None,
     input_by: str,
 ) -> str:
     """渲染真实行情端到端测试消息；明确区分临时测试线与正式监控线。"""
@@ -88,6 +100,11 @@ def render_e2e_test_alert(
             f"- [事实] 正式监控线仍为 "
             f"**{production_threshold:.{production_digits}f}**{value_unit}，"
             "未修改正式规则或去重状态",
+            *(
+                [f"- [事实] 正式触发范围为均线±{production_proximity_pct:g}%（含边界）"]
+                if production_proximity_pct is not None
+                else []
+            ),
             f"- 行情时间：{event['quote_at']}",
             f"- 数据来源：{event['source']}",
             f"- 测试请求者：{input_by}",
