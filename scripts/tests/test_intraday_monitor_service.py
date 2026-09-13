@@ -11,6 +11,7 @@ import services.intraday_monitor.service as intraday_service
 from services.intraday_monitor.service import run_all_checks, run_check, run_e2e_test
 from services.intraday_monitor.rules import (
     CHANGCHUN_GAS_NEAR_MA20_20260914_22,
+    CHANGCHUN_GAS_RECLAIM_MA5_20260914_22,
     DAJIN_HEAVY_BREAKOUT_35_95_20260912_18,
     DEFAULT_RULES,
     FANGSHENG_REACH_11_11_20260903_16,
@@ -871,6 +872,7 @@ def test_default_sse_rule_pushes_only_after_observed_below_to_3955(tmp_path):
         LIANGPIN_STORE_BREAKOUT_10_17_20260909_22,
         DAJIN_HEAVY_BREAKOUT_35_95_20260912_18,
         CHANGCHUN_GAS_NEAR_MA20_20260914_22,
+        CHANGCHUN_GAS_RECLAIM_MA5_20260914_22,
     )
     assert initial_above["events"] == []
     assert below["events"] == []
