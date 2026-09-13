@@ -136,8 +136,16 @@ class MonitorRule:
             distance = abs(round((price / resolved - 1.0) * 100.0, 8))
             return distance <= self.proximity_pct if self.inclusive else distance < self.proximity_pct
         if self.direction == "below":
+            if self.threshold_mode == "intraday_ma":
+                # 动态MA缓存的增量浮点误差不能把贴线误判为穿线；
+                # 规范到8位小数，精度远小于股票最小报价单位。
+                distance = round(price - resolved, 8)
+                return distance <= 0 if self.inclusive else distance < 0
             return price <= resolved if self.inclusive else price < resolved
         if self.direction == "above":
+            if self.threshold_mode == "intraday_ma":
+                distance = round(price - resolved, 8)
+                return distance >= 0 if self.inclusive else distance > 0
             return price >= resolved if self.inclusive else price > resolved
         raise ValueError(f"不支持的监控方向: {self.direction}")
 
@@ -400,6 +408,27 @@ CHANGCHUN_GAS_NEAR_MA20_20260914_22 = MonitorRule(
 )
 
 
+CHANGCHUN_GAS_RECLAIM_MA5_20260914_22 = MonitorRule(
+    rule_id="changchun-gas-reclaim-ma5-20260914-22",
+    instrument_name="长春燃气",
+    code="600333.SH",
+    threshold=None,
+    direction="above",
+    inclusive=False,
+    # “重新站上”须有同日不高于均线的观测，初始已在线上不补报。
+    emit_on_initial_match=False,
+    action_label="重新站上",
+    valid_from=date(2026, 9, 14),
+    valid_until=date(2026, 9, 22),
+    value_label="价格",
+    value_unit="元",
+    threshold_mode="intraday_ma",
+    threshold_window=5,
+    threshold_provider="tushare",
+    threshold_label="动态前复权MA5",
+)
+
+
 # 长期规则保留上证指数站上 3955；历史个股规则不再启用。
 # 动态涨停价与前收盘均线能力由 MonitorRule.threshold_mode 统一扩展。
 # 科创50 1700 与凯莱英 172.26 临时规则覆盖 8 月 21 日与 24 日两个
@@ -419,6 +448,7 @@ DEFAULT_RULES: tuple[MonitorRule, ...] = (
     LIANGPIN_STORE_BREAKOUT_10_17_20260909_22,
     DAJIN_HEAVY_BREAKOUT_35_95_20260912_18,
     CHANGCHUN_GAS_NEAR_MA20_20260914_22,
+    CHANGCHUN_GAS_RECLAIM_MA5_20260914_22,
 )
 
 

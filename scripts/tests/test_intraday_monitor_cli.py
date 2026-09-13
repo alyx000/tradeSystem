@@ -9,6 +9,7 @@ import main
 from cli import intraday_monitor
 from services.intraday_monitor.rules import (
     CHANGCHUN_GAS_NEAR_MA20_20260914_22,
+    CHANGCHUN_GAS_RECLAIM_MA5_20260914_22,
     DAJIN_HEAVY_BREAKOUT_35_95_20260912_18,
     FANGSHENG_REACH_11_11_20260903_16,
     HAOXIANGNI_BREAKOUT_11_24_20260909_22,
@@ -218,6 +219,7 @@ def test_e2e_cli_selects_medicilon_rule(monkeypatch, capsys):
         LIANGPIN_STORE_BREAKOUT_10_17_20260909_22,
         DAJIN_HEAVY_BREAKOUT_35_95_20260912_18,
         CHANGCHUN_GAS_NEAR_MA20_20260914_22,
+        CHANGCHUN_GAS_RECLAIM_MA5_20260914_22,
     ),
 )
 def test_e2e_cli_selects_new_two_week_breakout_rules(monkeypatch, capsys, selected_rule):
@@ -306,6 +308,8 @@ def test_help_describes_current_rules_at_every_command_level():
     assert "每3分钟扫描" in root_help
     assert "2026年9月14日至22日（7个交易日）监控长春燃气进入动态前复权MA20±1%范围" in root_help
     assert "MA20使用前19个已收盘交易日与当日最新价" in root_help
+    assert "长春燃气重新站上动态前复权MA5" in root_help
+    assert "MA5使用前4个已收盘交易日与当日最新价" in root_help
     assert "2026年9月12日至18日监控大金重工严格突破35.95元" in root_help
     assert "当日累计成交额不少于100亿元" in root_help
     check_help = "".join(command_choices["check"].format_help().split())
@@ -323,6 +327,7 @@ def test_help_describes_current_rules_at_every_command_level():
     assert "2026年9月12日至18日大金重工严格高于35.95元时推送" in check_help
     assert "持续命中去重" in check_help
     assert "长春燃气进入动态前复权MA20±1%范围（含边界）时推送" in check_help
+    assert "每日首次采样已在线上不补报" in check_help
     assert "恢复后再次命中可重推" in check_help
     assert "10点前百亿成交额涨停板" in check_help
     e2e_help = command_choices["e2e-test"].format_help()
