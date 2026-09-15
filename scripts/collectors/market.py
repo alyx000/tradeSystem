@@ -1203,6 +1203,15 @@ class MarketCollector:
         except Exception as e:
             logger.warning(f"研报覆盖统计失败: {e}")
 
+        # 与现有post同批落入raw_data信封；模块无推送/业务表/状态机写入。
+        try:
+            from services.sector_adjustment_risk.collector import collect as collect_sector_risk
+            result["sector_adjustment_risk"] = collect_sector_risk(self.registry, date)
+        except Exception:
+            from services.sector_adjustment_risk.collector import failed as sector_risk_failed
+            result["sector_adjustment_risk"] = sector_risk_failed(date, "板块风险采集异常，未判断")
+            logger.warning("板块风险采集异常，已隔离，不影响盘后主流程")
+
         logger.info(f"盘后数据采集完成: {date}")
         return result
 

@@ -4,6 +4,8 @@ description: 手动触发或自动定时执行盘前/盘后行情采集任务、
 version: "1.14"
 ---
 
+2026-09-16：既有20:00盘后采集同批生成 `raw_data.sector_adjustment_risk`，行业＋概念活跃榜、日线MACD预警及可得的60分钟确认，复盘HTML②自动消费。模块自身无推送／新业务表／状态机；单独补采仅运行 `python3 scripts/tools/sector_adjustment_risk.py --date YYYY-MM-DD --input-by codex_automation`，输出本地JSON/HTML。不得为此补跑整个post。见 [说明](/Users/alyx/tradeSystem/docs/sector-adjustment-risk.md)。
+
 # Skill: 市场数据任务（盘前 / 盘后采集）
 
 ## 使用场景

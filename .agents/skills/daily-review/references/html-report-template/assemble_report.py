@@ -334,6 +334,7 @@ STRUCTURED_CONTRACT_ATTRIBUTES = (
     "data-board-break-feedback",
     "data-board-feedback-trend",
     "data-core-feedback-trend",
+    "data-sector-adjustment-risk",
     "data-style-board-break-feedback",
     "data-style-market-effect",
     "data-style-low-price-effect",
@@ -6674,6 +6675,7 @@ def validate_report(
     capacity_manifest: dict | None = None,
     new_high_manifest: dict | None = None,
     exposure_context: ExposureValidationContext | None = None,
+    sector_adjustment_risk: dict | None = None,
 ) -> ReportMetrics:
     """校验结构、Claim、折叠证据、边界声明及双层预算。"""
 
@@ -6681,6 +6683,25 @@ def validate_report(
     report_date = next(item[3] for item in parser.schema_hosts)
     _validate_exposure_context(parser, report_date, exposure_context)
     metrics = parser.metrics()
+    risk_blocks = parser.structured_contracts["data-sector-adjustment-risk"]
+    risk_rows = 0
+    if risk_blocks:
+        if len(risk_blocks) != 1:
+            raise ReportValidationError("invalid_sector_adjustment_risk", "板块调整风险模块重复", section="s2")
+        risk = risk_blocks[0]
+        if (risk.section != "s2" or risk.default_hidden or risk.tag != "div" or risk.value != "v1"
+                or risk.attrs.get("data-as-of") != report_date
+                or risk.attrs.get("data-source-status") not in {"complete", "partial", "source_failed", "skipped"}
+                or len(risk.rows) > 29):
+            raise ReportValidationError("invalid_sector_adjustment_risk", "板块风险位置、日期、覆盖状态或行数非法", section="s2")
+        risk_rows = len(risk.rows)
+        if sector_adjustment_risk is not None:
+            from services.sector_adjustment_risk.renderer import render as render_sector_risk
+            expected_risk = _ReportParser()
+            expected_risk.feed(render_sector_risk(sector_adjustment_risk, report_date)[0])
+            source = expected_risk.structured_contracts["data-sector-adjustment-risk"][0]
+            if re.sub(r"\s+", "", "".join(risk.rendered_text)) != re.sub(r"\s+", "", "".join(source.rendered_text)):
+                raise ReportValidationError("sector_adjustment_risk_source_mismatch", "板块风险显示与同日证据不一致", section="s2")
     # 两张自动趋势图各最多20行来源数据+1行表头，单独预留，原有证据预算仍为400行。
     trend_rows = 0
     trend_names = ("data-board-feedback-trend", "data-core-feedback-trend")
@@ -6745,10 +6766,10 @@ def validate_report(
             f"证据层 {metrics.evidence_tables} 张表，硬上限 {EVIDENCE_TABLE_LIMIT}",
         ),
         (
-            metrics.evidence_rows > EVIDENCE_ROW_LIMIT + trend_rows,
+            metrics.evidence_rows > EVIDENCE_ROW_LIMIT + trend_rows + risk_rows,
             "evidence_rows_exceeded",
             _largest_section(metrics, "evidence_rows"),
-            f"证据层 {metrics.evidence_rows} 行，硬上限 {EVIDENCE_ROW_LIMIT}+趋势来源{trend_rows}行",
+            f"证据层 {metrics.evidence_rows} 行，硬上限 {EVIDENCE_ROW_LIMIT}+趋势来源{trend_rows}行+板块风险{risk_rows}行",
         ),
     )
     for failed, code, section, message in checks:
@@ -8762,6 +8783,7 @@ def render_report(
     style_market_effect: Mapping[str, object] | None = None,
     include_legacy_sections: bool = False,
     feedback_trends: dict | None = None,
+    sector_adjustment_risk: dict | None = None,
 ) -> str:
     """读取固定 chunk，包裹静态阅读器外壳并返回 HTML 字符串。
 
@@ -8790,6 +8812,14 @@ def render_report(
     if scripts_path not in sys.path:
         sys.path.insert(0, scripts_path)
     from services.review_feedback_trends import render_feedback_trends
+
+    from services.sector_adjustment_risk.renderer import render as render_sector_risk
+    if any(re.search(r"\bdata-sector-adjustment-risk\s*=", body, re.I) for body in chunks.values()):
+        raise ReportValidationError("duplicate_sector_adjustment_risk", "板块调整风险由组装器统一生成，chunk不得自行注入", section="s2")
+    risk_fragment, risk_gaps = render_sector_risk(sector_adjustment_risk, report_date)
+    chunks["s2"] = _inject_section_fragment(chunks["s2"], "s2", risk_fragment)
+    if risk_gaps:
+        chunks["s8ops"] = _inject_section_fragment(chunks["s8ops"], "ops", '<p>[事实] 板块调整风险缺口：'+escape('；'.join(risk_gaps))+'；未核验不代表没有风险。</p>')
 
     feedback_fragment, feedback_gaps = render_feedback_trends(feedback_trends, report_date)
     chunks["s456"] = _inject_section_fragment(chunks["s456"], "s3", feedback_fragment)
@@ -9071,6 +9101,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             sys.path.insert(0, scripts_path)
         from services.emotion_leader.suspensions import reconcile_report_file
         from services.review_feedback_trends import load_feedback_trends
+        from services.sector_adjustment_risk.renderer import load as load_sector_risk
         emotion_report = reconcile_report_file(emotion_report, trade_db_path, args.date)
         emotion_open_dates = load_emotion_open_dates(trade_db_path, args.date)
         fx_history_dir = args.fx_history_dir or (
@@ -9095,6 +9126,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             ),
         )
         feedback_trends = load_feedback_trends(daily_root, emotion_history_dir, trade_db_path, args.date)
+        sector_risk = load_sector_risk(daily_root, _repo_root()/"data/reports/sector-adjustment-risk", args.date)
         html = render_report(
             args.tmp_dir,
             args.date,
@@ -9104,6 +9136,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             fx_history_dir=fx_history_dir,
             style_market_effect=style_market_effect,
             feedback_trends=feedback_trends,
+            sector_adjustment_risk=sector_risk,
         )
         manifest_path = args.capacity_manifest or (
             Path(args.tmp_dir) / f"capacity_{args.date}.json"
@@ -9127,6 +9160,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             capacity_manifest=capacity_manifest,
             new_high_manifest=new_high_manifest,
             exposure_context=exposure_context,
+            sector_adjustment_risk=sector_risk,
         )
         output = args.output or (_repo_root() / "data" / "reports" / f"复盘_{args.date}.html")
         path = _atomic_write_report(html, output)

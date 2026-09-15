@@ -4317,7 +4317,14 @@ def test_evidence_requires_nonempty_summary_and_valid_metadata(
     assembler, tmp_path, old, new
 ):
     html, _ = _render_valid(assembler, tmp_path / "chunks")
-    _assert_report_error(assembler, _replace_once(html, old, new))
+    # 多个固定模块都可有 1 项证据；限定原有目标章节，不依赖全页唯一数量。
+    section_id = "s1" if "<summary>" in old else "s2"
+    section = re.search(
+        rf'<section\b[^>]*id="{section_id}"[^>]*>.*?</section>', html, re.S
+    ).group(0)
+    # 自动注入模块也可有1项证据；只变更该节首个原始证据，后续模块保持完整。
+    changed = html.replace(section, section.replace(old, new, 1), 1)
+    _assert_report_error(assembler, changed)
 
 
 def test_evidence_must_be_closed_by_default(assembler, tmp_path):
@@ -7592,6 +7599,7 @@ def test_cli_default_output_path_remains_compatible(
         capacity_manifest=None,
         new_high_manifest=None,
         exposure_context=None,
+        sector_adjustment_risk=None,
     ):
         nonlocal calls
         calls += 1
@@ -7600,6 +7608,7 @@ def test_cli_default_output_path_remains_compatible(
             capacity_manifest=capacity_manifest,
             new_high_manifest=new_high_manifest,
             exposure_context=exposure_context,
+            sector_adjustment_risk=sector_adjustment_risk,
         )
 
     monkeypatch.setattr(assembler, "validate_report", counted_validate)

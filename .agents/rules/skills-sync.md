@@ -52,6 +52,8 @@ globs:
 
 盘中临时规则同步（2026-09-03）：方盛制药 `603998.SH >=11.11元`，有效期 2026-09-03～09-16（首尾包含）；核对 `inclusive=True`、首次命中、同日去重与恢复重入、有效期前后不取数不推送，CLI 帮助与 E2E 规则选择同步覆盖。
 
+2026-09-16：`sector_adjustment_risk` 服务、盘后collector与正式HTML组装器形成单一信号源；同步 daily-review、模板README、market-tasks、INDEX与 docs/sector-adjustment-risk.md。无顶层CLI签名／schema／新调度／推送变更；专用报告工具要求 --input-by。后续改动需同步参数、来源验证、缺口语义及脚本/HTML测试。
+
 ## 触发条件
 
 当你修改以下任何文件时，此规则自动触发：

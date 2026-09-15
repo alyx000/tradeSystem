@@ -6,6 +6,8 @@ version: "1.16"
 
 # Skill: 每日复盘（八步复盘法）
 
+2026-09-16：复盘②板块由正式组装器自动注入「活跃板块调整风险」，读取同日盘后 `raw_data.sector_adjustment_risk`（缺键或受控补采恢复时读同日专用报告；恢复说明可见）。行业＋活跃概念，日线预警与60分钟确认分层，缺源 partial/source_failed 显式入ops；chunk不得手填模块。来源#826、候选认知及工程代理阈值见 [说明](/Users/alyx/tradeSystem/docs/sector-adjustment-risk.md)。不新增推送或计划写入。
+
 本文件为**速查**；八步中每一步的**详细提问话术、占位示例与附录说明**见 [references/eight-step-prompt-templates.md](references/eight-step-prompt-templates.md)。
 
 > **两种复盘形态**：本 SKILL 主流程是**单 Agent 表单式**复盘（review workbench 预填 + 引导填写 + 写库/钉钉）。
