@@ -2,10 +2,11 @@
 
   sector-correlation daily   [--date] [--windows 20,60] [--top-industries 15] [--top-concepts 10]
                              [--activity-days 10] [--indices a,b,..] [--no-concept] [--dry-run]
+                             [--no-push] [--input-by USER]
   sector-correlation matrix  [--date] [--windows] [--top-industries] [--top-concepts] [--no-concept] [--refetch]
   sector-correlation trend   [--date] [--days 30]
 
-daily: Tushare 采集 + 落库 + 渲染 + 推钉钉(--dry-run 仅打印不推不落)。
+daily: Tushare 采集 + 落库 + 渲染 + 推钉钉(--dry-run 不推不落，--no-push 落库不推)。
 matrix: 读当天(无/--refetch 现采,不落库)→ 打印完整矩阵,不推送。
 trend: 只读最近 N 日漂移,不采集不推送。
 """
@@ -43,6 +44,8 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
     daily = sub.add_parser("daily", help="采集 + 落库 + 渲染 + 推钉钉")
     _common(daily)
     daily.add_argument("--dry-run", action="store_true", help="仅打印 markdown,不落库不推送")
+    daily.add_argument("--no-push", action="store_true", help="落库并打印,不推送")
+    daily.add_argument("--input-by", default=None, help="记录采集请求者（Agent 写入须显式提供）")
 
     matrix = sub.add_parser("matrix", help="打印完整相关矩阵(不推送)")
     _common(matrix)
@@ -124,6 +127,7 @@ def _run_daily(config: dict, args: argparse.Namespace) -> None:
                 top_industries=args.top_industries, top_concepts=args.top_concepts,
                 indices=_indices(args), activity_days=args.activity_days,
                 include_concept=not args.no_concept, persist=not args.dry_run,
+                input_by=getattr(args, "input_by", None),
             )
     finally:
         conn.close()
@@ -132,9 +136,9 @@ def _run_daily(config: dict, args: argparse.Namespace) -> None:
         logger.info("[sector-correlation daily] %s 无足够数据,跳过(不落库不推送)", date)
         print(f"{date} 无足够板块相关性数据,跳过。")
         return
-    if args.dry_run:
+    if args.dry_run or getattr(args, "no_push", False):
         print(md)
-        logger.info("[sector-correlation daily] dry-run 完成,未推送")
+        logger.info("[sector-correlation daily] 完成,未推送（persist=%s）", not args.dry_run)
         return
     _push_to_dingtalk(f"板块相关性 · {date}", md)
 

@@ -153,3 +153,64 @@ def test_build_record_small_window_with_clamped_min_sample():
     assert rec is not None
     assert rec["windows"] == [10]
     assert rec["sample_days"]["10"] == 10
+
+
+def test_returns_series_identical_duplicates_do_not_weight_dates():
+    df = pd.DataFrame({'trade_date': ['20260103', '20260102', '20260102'],
+                       'pct_chg': [3.0, -2.0, -2.0]})
+    s = collector._returns_series(df, 'pct_chg')
+    assert list(s.index) == ['20260102', '20260103']
+    assert s.tolist() == [-2.0, 3.0]
+    assert s.attrs['duplicate_rows_removed'] == 1
+
+
+def test_returns_series_conflicting_duplicates_rejected():
+    import pytest
+    for values in ([1.0, 2.0], [1.0, float('nan')]):
+        df = pd.DataFrame({'trade_date': ['20260102', '20260102'], 'pct_chg': values})
+        with pytest.raises(ValueError, match='conflicting duplicate trade_date'):
+            collector._returns_series(df, 'pct_chg')
+
+
+def test_build_record_duplicate_replay_matches_clean_result():
+    class DuplicatePro(_FakePro):
+        def index_daily(self, **kw):
+            df = super().index_daily(**kw)
+            return pd.concat([df, df.iloc[-12:]], ignore_index=True)
+
+        def sw_daily(self, **kw):
+            df = super().sw_daily(**kw)
+            return df if kw.get('trade_date') else pd.concat([df, df.tail(3)], ignore_index=True)
+
+    clean = _build()
+    replay = _build(DuplicatePro())
+    for key in ('sample_days', 'sectors', 'sector_index', 'pair_raw', 'pair_excess'):
+        assert replay[key] == clean[key]
+    assert replay['meta']['duplicate_rows_removed']['indices']['000001.SH'] == 12
+    assert replay['meta']['duplicate_rows_removed']['sectors']['半导体'] == 3
+
+
+def test_conflicting_series_isolated_and_reported():
+    class ConflictPro(_FakePro):
+        def ths_daily(self, **kw):
+            df = super().ths_daily(**kw)
+            if kw.get('ts_code') == '885001.TI':
+                extra = df.tail(1).copy()
+                extra['pct_change'] += 1
+                return pd.concat([df, extra], ignore_index=True)
+            return df
+    record = _build(ConflictPro())
+    assert record['meta']['fetch_failures']['sectors'] == ['算力租赁']
+    assert record['top_n'] == 7
+    assert '算力租赁' not in record['sector_index']['60']
+
+
+def test_quality_diagnostics_visible_in_daily_and_matrix():
+    from services.sector_correlation import formatter
+    record = _build()
+    record['meta']['fetch_failures']['sectors'] = ['失败板块']
+    record['meta']['duplicate_rows_removed'] = {'indices': {'000001.SH': 12}, 'sectors': {}}
+    for render in (formatter.format_daily_report, formatter.format_matrix):
+        text = render(record)
+        assert 'partial' in text and '失败板块' in text
+        assert '12 行' in text

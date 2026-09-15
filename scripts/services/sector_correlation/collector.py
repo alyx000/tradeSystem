@@ -40,7 +40,16 @@ def _returns_series(df, pct_col: str) -> "pd.Series | None":
         return None
     s = df.set_index("trade_date")[pct_col].astype(float)
     s.index = s.index.astype(str)
-    return s.sort_index()
+    duplicates = s[s.index.duplicated(keep=False)]
+    # 镜像区间响应可能重放同一天。仅折叠同值，冲突不能取首行/均值伪造行情。
+    conflicts = duplicates.groupby(level=0).nunique(dropna=False)
+    conflicts = conflicts[conflicts > 1]
+    if not conflicts.empty:
+        raise ValueError(f"conflicting duplicate trade_date: {list(conflicts.index)}")
+    removed = int(s.index.duplicated().sum())
+    s = s[~s.index.duplicated()].sort_index()
+    s.attrs["duplicate_rows_removed"] = removed
+    return s
 
 
 def fetch_index_series(pro, index_codes: list[str], start: str, end: str) -> tuple[dict, list]:
@@ -237,6 +246,12 @@ def build_record(
             "min_sample": {str(w): min_sample_by_window[w] for w in windows},
             "excluded": {str(w): compute[w]["excluded"] for w in windows},
             "fetch_failures": {"indices": index_fails, "sectors": sec_fails},
+            "duplicate_rows_removed": {
+                "indices": {k: s.attrs["duplicate_rows_removed"] for k, s in index_series.items()
+                            if s.attrs.get("duplicate_rows_removed")},
+                "sectors": {k: s.attrs["duplicate_rows_removed"] for k, s in sec_series.items()
+                            if s.attrs.get("duplicate_rows_removed")},
+            },
             "base_present": base_index in index_series,
             "amount_unit_note": "申万 amount 万元/1e4=亿(同 provider)；指数仅取 pct_chg；概念按 turnover_rate",
             "source": "tushare:sw_daily+ths_daily+index_daily (镜像 tushare.xyz)",

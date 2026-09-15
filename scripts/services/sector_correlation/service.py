@@ -54,6 +54,7 @@ def run_daily(
     activity_days: int = ACTIVITY_DAYS,
     include_concept: bool = True,
     persist: bool = True,
+    input_by: str | None = None,
 ) -> str | None:
     """采集 + 落库 + 渲染。无数据返 None（调用方不推送）。"""
     record = _build(
@@ -65,6 +66,8 @@ def run_daily(
     )
     if record is None:
         return None
+    if input_by:
+        record.setdefault("meta", {})["input_by"] = input_by
     if persist:
         repo.save_correlation(conn, record)
     return formatter.format_daily_report(record)

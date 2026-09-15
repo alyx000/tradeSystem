@@ -44,6 +44,20 @@ def _pair_lookup(pairs: list[dict]) -> dict:
     return {_pair_key(p): p["corr"] for p in pairs}
 
 
+def _quality_lines(record: dict) -> list[str]:
+    meta = record.get("meta") or {}
+    lines = []
+    failures = meta.get("fetch_failures") or {}
+    for kind, label in (("indices", "指数"), ("sectors", "板块")):
+        if failures.get(kind):
+            lines.append(f"- 数据状态 partial：{label}序列失败/冲突，已剔除：{'、'.join(failures[kind])}")
+    duplicates = meta.get("duplicate_rows_removed") or {}
+    removed = sum(sum(items.values()) for items in duplicates.values())
+    if removed:
+        lines.append(f"- 来源校验：合并同日同值重复记录 {removed} 行，每交易日仅计一次。")
+    return lines
+
+
 def format_daily_report(record: dict, top_k: int = 8) -> str:
     date = record["date"]
     windows = record.get("windows") or [60]
@@ -54,6 +68,7 @@ def format_daily_report(record: dict, top_k: int = 8) -> str:
     L: list[str] = []
 
     L.append(f"## 板块相关性 · {date}")
+    L.extend(_quality_lines(record))
     L.append(
         f"- 窗口 {windows} | 样本 {_sample_str(sample)} 天 | 板块 {record.get('top_n')} 个 "
         f"| 对标 {len(record.get('indices', []))} 指数（基准 {base}）"
@@ -122,6 +137,7 @@ def format_daily_report(record: dict, top_k: int = 8) -> str:
 def format_matrix(record: dict) -> str:
     """逐窗打印 板块×指数 与 板块×板块（命令行细看，不推送）。"""
     L = [f"# 板块相关性矩阵 · {record['date']}"]
+    L.extend(_quality_lines(record))
     for w in record.get("windows", []):
         sw = str(w)
         L.append(f"\n## {w}日窗（样本 {record.get('sample_days', {}).get(sw)} 日）")

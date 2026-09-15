@@ -71,3 +71,10 @@ def test_run_trend_reads_recent(monkeypatch):
         repo.save_correlation(conn, _record(d))
     out = service.run_trend(conn, "2026-05-29", days=5)
     assert "2026-05-28" in out and "2026-05-29" in out
+
+
+def test_run_daily_persists_requester(monkeypatch):
+    monkeypatch.setattr(service.collector, 'build_record', lambda *a, **k: _record())
+    conn = _conn()
+    service.run_daily(conn, _DummyProvider(), '2026-05-29', input_by='codex')
+    assert repo.get_correlation(conn, '2026-05-29')['meta']['input_by'] == 'codex'

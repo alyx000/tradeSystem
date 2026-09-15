@@ -42,3 +42,34 @@ def test_run_matrix_cache_hit_skips_provider(monkeypatch, capsys):
     cli._run_matrix({}, _matrix_args())  # 不应抛 AssertionError
     out = capsys.readouterr().out
     assert "矩阵" in out  # 渲染了缓存矩阵
+
+
+def test_no_push_persists_with_requester_and_never_sends(monkeypatch, capsys):
+    parser = argparse.ArgumentParser()
+    cli.register_subparser(parser.add_subparsers(dest='command'))
+    args = parser.parse_args(['sector-correlation', 'daily', '--date', '2026-09-15',
+                              '--no-push', '--input-by', 'codex'])
+    conn = sqlite3.connect(':memory:')
+    monkeypatch.setattr(cli, 'get_connection', lambda: conn)
+    monkeypatch.setattr(cli, '_setup_tushare', lambda _: (object(), object()))
+    monkeypatch.setattr('utils.trade_date.is_non_trading_day', lambda *a: False)
+    calls = []
+    monkeypatch.setattr(cli.service, 'run_daily', lambda *a, **kw: calls.append(kw) or 'report')
+    monkeypatch.setattr(cli, '_push_to_dingtalk', lambda *a: (_ for _ in ()).throw(AssertionError('sent')))
+    cli._run_daily({}, args)
+    assert calls[0]['persist'] is True
+    assert calls[0]['input_by'] == 'codex'
+    assert 'report' in capsys.readouterr().out
+
+
+def test_dry_run_overrides_no_push_persistence(monkeypatch):
+    parser = argparse.ArgumentParser()
+    cli.register_subparser(parser.add_subparsers(dest='command'))
+    args = parser.parse_args(['sector-correlation', 'daily', '--dry-run', '--no-push'])
+    monkeypatch.setattr(cli, 'get_connection', lambda: sqlite3.connect(':memory:'))
+    monkeypatch.setattr(cli, '_setup_tushare', lambda _: (object(), object()))
+    calls = []
+    monkeypatch.setattr(cli.service, 'run_daily', lambda *a, **kw: calls.append(kw) or 'report')
+    monkeypatch.setattr(cli, '_push_to_dingtalk', lambda *a: (_ for _ in ()).throw(AssertionError('sent')))
+    cli._run_daily({}, args)
+    assert calls[0]['persist'] is False

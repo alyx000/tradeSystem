@@ -253,3 +253,7 @@ AI Agent（Claude Code / Codex / Cursor）通过 `.agents/skills/` 中的文档�
 如果 CLI 签名或 API 接口变更而 skill 文档未更新，Agent 将生成错误的命令，导致数据写入失败。
 尤其是 `scripts/main.py` 中新增的 `review`、`ingest`、`plan`、`knowledge` 命令组，以及 `api/routes/review_factors.py` / `planning.py` 中的复盘评分、计划和资料接口，会直接影响影子评分 / observation / draft / plan / 采集诊断的协作流。
 此规则确保每次底层变更时，skill 文档始终与实际接口保持同步。
+
+### 2026-09-16 板块相关性重复行情修复
+
+sector-correlation 同步核对：同日同值涨跌幅重复行折叠且审计计数；同日冲突序列剔除并展示 partial 缺口。`daily --no-push --input-by USER` 落库并打印、不推送，`--dry-run` 不落库不推送；请求者写入快照 meta。 回归 collector、CLI、service、formatter 及 CLI smoke；原21:15调度保持。

@@ -289,6 +289,8 @@ python3 main.py new-high backfill --start-date 2021-07-08 --end-date 2026-07-08
 
 ## 板块相关性监控（sector-correlation）
 
+- 同日同值涨跌幅重复行折叠且审计计数；同日冲突序列剔除并展示 partial 缺口。`daily --no-push --input-by USER` 落库并打印、不推送，`--dry-run` 不落库不推送；请求者写入快照 meta。
+
 每交易日 21:15 自动跑（launchd `com.alyx.tradesystem.sector-correlation`，错开 volume-watch 21:00），也可手动：
 
 ```bash
