@@ -863,6 +863,13 @@ class ReportGenerator:
 
         # ---- 低价股赚钱效应 ----
         section_idx = _render_low_price_effect(lines, raw_data, section_idx)
+        ipo_effect = raw_data.get("ipo_effect")
+        if isinstance(ipo_effect, dict):
+            from analyzers.ipo_effect import render_ipo_effect
+
+            lines.append(f"\n## {_roman(section_idx)}、次新股赚钱效应 [事实·计算]\n")
+            lines.extend(render_ipo_effect(ipo_effect))
+            section_idx += 1
 
         # ---- 连板断板次日反馈 ----
         section_idx = _render_board_break_feedback(lines, raw_data, section_idx)

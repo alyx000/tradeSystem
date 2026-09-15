@@ -1077,6 +1077,14 @@ class MarketCollector:
                 "gaps": [],
             }
 
+        # 10d. 次新股赚钱效应：严格交易日/收盘闸门，独立失败不影响其他盘后块。
+        from analyzers.ipo_effect import collect_ipo_effect
+
+        result["ipo_effect"] = collect_ipo_effect(
+            self.registry, date, stock_st_result=stock_st_result,
+        )
+        logger.info("次新股赚钱效应统计: status=%s", result["ipo_effect"].get("status"))
+
         # 11. 指数均线
         self._compute_index_ma(result, date)
 
