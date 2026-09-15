@@ -10,6 +10,8 @@ from cli import intraday_monitor
 from services.intraday_monitor.rules import (
     CHANGCHUN_GAS_NEAR_MA20_20260914_22,
     CHANGCHUN_GAS_RECLAIM_MA5_20260914_22,
+    FULONGMA_BREAKOUT_14_15_20260916_24,
+    YOUYAN_SILICON_BREAKOUT_46_14_20260916_30,
     DAJIN_HEAVY_BREAKOUT_35_95_20260912_18,
     FANGSHENG_REACH_11_11_20260903_16,
     HAOXIANGNI_BREAKOUT_11_24_20260909_22,
@@ -220,12 +222,14 @@ def test_e2e_cli_selects_medicilon_rule(monkeypatch, capsys):
         DAJIN_HEAVY_BREAKOUT_35_95_20260912_18,
         CHANGCHUN_GAS_NEAR_MA20_20260914_22,
         CHANGCHUN_GAS_RECLAIM_MA5_20260914_22,
+        FULONGMA_BREAKOUT_14_15_20260916_24,
+        YOUYAN_SILICON_BREAKOUT_46_14_20260916_30,
     ),
 )
 def test_e2e_cli_selects_new_two_week_breakout_rules(monkeypatch, capsys, selected_rule):
     registry = object()
     monkeypatch.setattr(main, "setup_providers", lambda config: registry)
-    monkeypatch.setattr(intraday_monitor, "shanghai_now", lambda: datetime(2026, 9, 14, 10))
+    monkeypatch.setattr(intraday_monitor, "shanghai_now", lambda: datetime(2026, 9, 16, 10))
     calls = []
     monkeypatch.setattr(
         intraday_monitor, "run_e2e_test",
@@ -328,6 +332,9 @@ def test_help_describes_current_rules_at_every_command_level():
     assert "持续命中去重" in check_help
     assert "长春燃气进入动态前复权MA20±1%范围（含边界）时推送" in check_help
     assert "每日首次采样已在线上不补报" in check_help
+    assert "福龙马严格高于14.15元时推送" in check_help
+    assert "有研硅严格高于46.14元时推送" in check_help
+    assert "2026年9月16日至24日（7个交易日）另监控福龙马严格突破14.15元" in root_help
     assert "恢复后再次命中可重推" in check_help
     assert "10点前百亿成交额涨停板" in check_help
     e2e_help = command_choices["e2e-test"].format_help()

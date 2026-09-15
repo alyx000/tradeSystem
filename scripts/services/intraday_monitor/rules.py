@@ -429,6 +429,38 @@ CHANGCHUN_GAS_RECLAIM_MA5_20260914_22 = MonitorRule(
 )
 
 
+FULONGMA_BREAKOUT_14_15_20260916_24 = MonitorRule(
+    rule_id="fulongma-breakout-14-15-20260916-24",
+    instrument_name="福龙马",
+    code="603686.SH",
+    threshold=14.15,
+    direction="above",
+    inclusive=False,
+    emit_on_initial_match=True,
+    action_label="突破",
+    valid_from=date(2026, 9, 16),
+    valid_until=date(2026, 9, 24),
+    value_label="价格",
+    value_unit="元",
+)
+
+
+YOUYAN_SILICON_BREAKOUT_46_14_20260916_30 = MonitorRule(
+    rule_id="youyan-silicon-breakout-46-14-20260916-30",
+    instrument_name="有研硅",
+    code="688432.SH",
+    threshold=46.14,
+    direction="above",
+    inclusive=False,
+    emit_on_initial_match=True,
+    action_label="突破",
+    valid_from=date(2026, 9, 16),
+    valid_until=date(2026, 9, 30),
+    value_label="价格",
+    value_unit="元",
+)
+
+
 # 长期规则保留上证指数站上 3955；历史个股规则不再启用。
 # 动态涨停价与前收盘均线能力由 MonitorRule.threshold_mode 统一扩展。
 # 科创50 1700 与凯莱英 172.26 临时规则覆盖 8 月 21 日与 24 日两个
@@ -449,6 +481,8 @@ DEFAULT_RULES: tuple[MonitorRule, ...] = (
     DAJIN_HEAVY_BREAKOUT_35_95_20260912_18,
     CHANGCHUN_GAS_NEAR_MA20_20260914_22,
     CHANGCHUN_GAS_RECLAIM_MA5_20260914_22,
+    FULONGMA_BREAKOUT_14_15_20260916_24,
+    YOUYAN_SILICON_BREAKOUT_46_14_20260916_30,
 )
 
 
