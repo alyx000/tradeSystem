@@ -1,5 +1,7 @@
 # Skills 依赖索引
 
+2026-09-15 次新股赚钱效应：`market-tasks` 的既有 `main.py post --date` 20:00采集新增 `raw_data.ipo_effect`，由 `analyzers/ipo_effect.py` 只读SSE日历、调用目标日日线及 `get_stock_universe_as_of`、复用本批完整ST名单；保存1～365/183/90自然日、剔除前5开放日和仅沪深对照组的等权日收益、开收盘表现、完整次新成分和覆盖缺口。随盘后Markdown及既有 `daily_market` 信封保存，不新增调度/业务表/CLI；休市及未收盘 skipped，硬源失败 source_failed，部分缺口 partial。详见 market-tasks/SKILL.md。
+
 反馈趋势：正式复盘③自动展示最近20个开放日的断板次日反馈与全部活跃核心反馈；核心四图同纵轴，partial虚线、缺值断线不补零。日报和HTML按同日原始regulatory_suspend记录核验全天停牌，保留真实缺失与证据；daily支持--input-by报告审计。历史失败派生报告在事实齐全后可通过--date/--no-push重算，先保留备份。
 
 本文件只记录每个 skill 依赖的 CLI / API 签名与简要用途；详细行为按需读取对应 `SKILL.md` 或 reference。

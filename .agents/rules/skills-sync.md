@@ -6,6 +6,7 @@ globs:
   - scripts/db/schema.py
   - scripts/main.py
   - scripts/cli/low_price_effect.py
+  - scripts/analyzers/ipo_effect.py
   - scripts/analyzers/low_price_effect.py
   - scripts/cli/emotion_leader.py
   - scripts/cli/wechat_teacher_feed.py
@@ -207,6 +208,10 @@ Skills 同步检查结果：
 - [✅/❌] 受影响的 SKILL.md 已检查并更新（如需）
 - [✅/❌] 受影响的 agents/openai.yaml 已检查并更新（如需）
 ```
+
+### 次新股赚钱效应盘后同步检查
+
+修改 `analyzers/ipo_effect.py`、`collectors/market.py` 或对应盘后渲染时，同步 `market-tasks/SKILL.md`、`INDEX.md` 与 `AGENTS.md` 的 `raw_data.ipo_effect` 契约：1～365/183/90自然日、剔除上市首日/ST/退市/B股，5开放日对照、沪深子组、等权日收益/开收盘表现、覆盖缺口与成分明细。复用20:00单一调度和 `daily_market` 信封，不新增业务表；回归 `test_ipo_effect.py` 与盘后专项测试。
 
 ## Rules 文件真源 + IDE symlink 壳同步
 
