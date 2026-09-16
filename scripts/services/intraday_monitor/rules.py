@@ -429,11 +429,11 @@ CHANGCHUN_GAS_RECLAIM_MA5_20260914_22 = MonitorRule(
 )
 
 
-FULONGMA_BREAKOUT_14_15_20260916_24 = MonitorRule(
-    rule_id="fulongma-breakout-14-15-20260916-24",
+FULONGMA_BREAKOUT_14_36_20260916_24 = MonitorRule(
+    rule_id="fulongma-breakout-14-36-20260916-24",
     instrument_name="福龙马",
     code="603686.SH",
-    threshold=14.15,
+    threshold=14.36,
     direction="above",
     inclusive=False,
     emit_on_initial_match=True,
@@ -445,6 +445,7 @@ FULONGMA_BREAKOUT_14_15_20260916_24 = MonitorRule(
 )
 
 
+# 2026-09-16 用户下线：仅保留历史定义，不加入默认监控。
 YOUYAN_SILICON_BREAKOUT_46_14_20260916_30 = MonitorRule(
     rule_id="youyan-silicon-breakout-46-14-20260916-30",
     instrument_name="有研硅",
@@ -481,8 +482,7 @@ DEFAULT_RULES: tuple[MonitorRule, ...] = (
     DAJIN_HEAVY_BREAKOUT_35_95_20260912_18,
     CHANGCHUN_GAS_NEAR_MA20_20260914_22,
     CHANGCHUN_GAS_RECLAIM_MA5_20260914_22,
-    FULONGMA_BREAKOUT_14_15_20260916_24,
-    YOUYAN_SILICON_BREAKOUT_46_14_20260916_30,
+    FULONGMA_BREAKOUT_14_36_20260916_24,
 )
 
 

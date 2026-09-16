@@ -1,17 +1,27 @@
-"""有研硅：十个交易日严格突破；与福龙马独立到期。"""
+"""有研硅已下线；显式传入历史规则仅用于能力回归测试。"""
 from datetime import datetime, timedelta
 
 import pytest
 
 from services.intraday_monitor.rules import (
+    DEFAULT_RULES,
     YOUYAN_SILICON_BREAKOUT_46_14_20260916_30 as RULE,
-    FULONGMA_BREAKOUT_14_15_20260916_24 as FULONGMA,
+    FULONGMA_BREAKOUT_14_36_20260916_24 as FULONGMA,
 )
 from services.intraday_monitor.service import run_check
 from tests.test_intraday_monitor_service import _Registry, _Pusher, _calendar, TZ
 
 
 OPEN_DAYS = (16, 17, 18, 21, 22, 23, 24, 28, 29, 30)
+
+
+@pytest.mark.parametrize("day", [16, 30])
+def test_retired_youyan_never_fetches_or_pushes_by_default(tmp_path, day):
+    selected = tuple(rule for rule in DEFAULT_RULES if rule.code == RULE.code)
+    assert selected == ()
+    result, registry, pusher = _run(tmp_path, day, rules=selected)
+    assert result["status"] == "no_rules"
+    assert registry.call_count == 0 and not pusher.messages
 
 
 def _run(tmp_path, day=16, price=46.15, rules=(RULE,), registry=None, pusher=None, **kwargs):
