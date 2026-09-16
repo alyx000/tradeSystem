@@ -12,8 +12,10 @@ from services.intraday_monitor.rules import (
     CHANGCHUN_GAS_RECLAIM_MA5_20260914_22,
     FULONGMA_BREAKOUT_14_36_20260916_24,
     SHUANGXING_MATERIALS_BREAKOUT_12_98_20260917_1016,
+    SUNWODA_BREAKOUT_19_94_20260917_28,
+    FEILONG_BREAKOUT_57_16_20260917_1008,
     YOUYAN_SILICON_BREAKOUT_46_14_20260916_30,
-    DAJIN_HEAVY_BREAKOUT_35_95_20260912_18,
+    DAJIN_HEAVY_BREAKOUT_41_96_20260917_28,
     FANGSHENG_REACH_11_11_20260903_16,
     HAOXIANGNI_BREAKOUT_11_24_20260909_22,
     LIANGPIN_STORE_BREAKOUT_10_17_20260909_22,
@@ -43,6 +45,7 @@ def _check_args() -> argparse.Namespace:
 @pytest.mark.parametrize("rule_id", [
     YOUYAN_SILICON_BREAKOUT_46_14_20260916_30.rule_id,
     "fulongma-breakout-14-15-20260916-24",
+    "dajin-heavy-breakout-35-95-20260912-18",
 ])
 def test_retired_rule_is_not_selectable_for_real_e2e(rule_id):
     parser = argparse.ArgumentParser()
@@ -233,11 +236,13 @@ def test_e2e_cli_selects_medicilon_rule(monkeypatch, capsys):
         HAOXIANGNI_BREAKOUT_11_24_20260909_22,
         PINWO_FOODS_BREAKOUT_25_89_20260909_22,
         LIANGPIN_STORE_BREAKOUT_10_17_20260909_22,
-        DAJIN_HEAVY_BREAKOUT_35_95_20260912_18,
+        DAJIN_HEAVY_BREAKOUT_41_96_20260917_28,
         CHANGCHUN_GAS_NEAR_MA20_20260914_22,
         CHANGCHUN_GAS_RECLAIM_MA5_20260914_22,
         FULONGMA_BREAKOUT_14_36_20260916_24,
         SHUANGXING_MATERIALS_BREAKOUT_12_98_20260917_1016,
+        SUNWODA_BREAKOUT_19_94_20260917_28,
+        FEILONG_BREAKOUT_57_16_20260917_1008,
     ),
 )
 def test_e2e_cli_selects_new_two_week_breakout_rules(monkeypatch, capsys, selected_rule):
@@ -328,7 +333,7 @@ def test_help_describes_current_rules_at_every_command_level():
     assert "MA20使用前19个已收盘交易日与当日最新价" in root_help
     assert "长春燃气重新站上动态前复权MA5" in root_help
     assert "MA5使用前4个已收盘交易日与当日最新价" in root_help
-    assert "2026年9月12日至18日监控大金重工严格突破35.95元" in root_help
+    assert "2026年9月17日至28日（7个交易日）监控大金重工严格突破41.96元" in root_help
     assert "当日累计成交额不少于100亿元" in root_help
     check_help = "".join(command_choices["check"].format_help().split())
     assert "历史已退役规则保持下线" in check_help
@@ -342,12 +347,17 @@ def test_help_describes_current_rules_at_every_command_level():
     assert "2026年9月9日至22日好想你严格高于11.24元" in check_help
     assert "品渥食品严格高于25.89元" in check_help
     assert "良品铺子严格高于10.17元时推送" in check_help
-    assert "2026年9月12日至18日大金重工严格高于35.95元时推送" in check_help
+    assert "2026年9月17日至28日大金重工严格高于41.96元时推送" in check_help
+    assert "旧35.95元规则已停用" in check_help
     assert "持续命中去重" in check_help
     assert "长春燃气进入动态前复权MA20±1%范围（含边界）时推送" in check_help
     assert "每日首次采样已在线上不补报" in check_help
     assert "福龙马严格高于14.36元时推送" in check_help
     assert "双星新材严格高于12.98元时推送" in check_help
+    assert "欣旺达严格高于19.94元时推送" in check_help
+    assert "飞龙股份严格高于57.16元时推送" in check_help
+    assert "2026年9月17日至10月8日（10个交易日）监控飞龙股份严格突破57.16元" in root_help
+    assert "2026年9月17日至28日（7个交易日）监控欣旺达严格突破19.94元" in root_help
     assert "2026年9月17日至10月16日（一个月）监控双星新材严格突破12.98元" in root_help
     assert "有研硅监控已下线" in check_help
     assert "2026年9月16日至24日（7个交易日）另监控福龙马严格突破14.36元" in root_help

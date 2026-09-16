@@ -11,9 +11,12 @@ from services.intraday_monitor.rules import (
     CHANGCHUN_GAS_NEAR_MA20_20260914_22,
     CHANGCHUN_GAS_RECLAIM_MA5_20260914_22,
     DAJIN_HEAVY_BREAKOUT_35_95_20260912_18,
+    DAJIN_HEAVY_BREAKOUT_41_96_20260917_28,
     DEFAULT_RULES,
     FULONGMA_BREAKOUT_14_36_20260916_24,
     SHUANGXING_MATERIALS_BREAKOUT_12_98_20260917_1016,
+    SUNWODA_BREAKOUT_19_94_20260917_28,
+    FEILONG_BREAKOUT_57_16_20260917_1008,
     FANGSHENG_REACH_11_11_20260903_16,
     GUOCI_MATERIALS_BELOW_67_22_20260831,
     HAOXIANGNI_BREAKOUT_11_24_20260909_22,
@@ -98,11 +101,13 @@ def test_fixed_and_ma_temporary_rules_are_registered():
         HAOXIANGNI_BREAKOUT_11_24_20260909_22,
         PINWO_FOODS_BREAKOUT_25_89_20260909_22,
         LIANGPIN_STORE_BREAKOUT_10_17_20260909_22,
-        DAJIN_HEAVY_BREAKOUT_35_95_20260912_18,
+        DAJIN_HEAVY_BREAKOUT_41_96_20260917_28,
         CHANGCHUN_GAS_NEAR_MA20_20260914_22,
         CHANGCHUN_GAS_RECLAIM_MA5_20260914_22,
         FULONGMA_BREAKOUT_14_36_20260916_24,
         SHUANGXING_MATERIALS_BREAKOUT_12_98_20260917_1016,
+        SUNWODA_BREAKOUT_19_94_20260917_28,
+        FEILONG_BREAKOUT_57_16_20260917_1008,
     )
     assert SSE_COMPOSITE_RECLAIM_3955.rule_id == "sse-composite-reclaim-3955"
     assert SSE_COMPOSITE_RECLAIM_3955.instrument_name == "上证指数"
@@ -277,9 +282,9 @@ def test_new_two_week_breakout_rules_are_strict_and_date_bounded(
     assert (rule.valid_until - rule.valid_from).days + 1 == 14
 
 
-def test_dajin_one_week_breakout_boundaries():
+def test_historical_dajin_one_week_rule_is_retired():
     rule = DAJIN_HEAVY_BREAKOUT_35_95_20260912_18
-    assert rule in DEFAULT_RULES
+    assert rule not in DEFAULT_RULES
     assert (rule.code, rule.instrument_name, rule.provider) == ("002487.SZ", "大金重工", "sina")
     assert rule.threshold == 35.95
     assert rule.emit_on_initial_match is True

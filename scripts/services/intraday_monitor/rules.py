@@ -371,6 +371,7 @@ LIANGPIN_STORE_BREAKOUT_10_17_20260909_22 = MonitorRule(
 )
 
 
+# 2026-09-17 已由41.96元规则替换；仅保留历史定义，不加入默认监控。
 DAJIN_HEAVY_BREAKOUT_35_95_20260912_18 = MonitorRule(
     rule_id="dajin-heavy-breakout-35-95-20260912-18",
     instrument_name="大金重工",
@@ -382,6 +383,22 @@ DAJIN_HEAVY_BREAKOUT_35_95_20260912_18 = MonitorRule(
     action_label="突破",
     valid_from=date(2026, 9, 12),
     valid_until=date(2026, 9, 18),
+    value_label="价格",
+    value_unit="元",
+)
+
+
+DAJIN_HEAVY_BREAKOUT_41_96_20260917_28 = MonitorRule(
+    rule_id="dajin-heavy-breakout-41-96-20260917-28",
+    instrument_name="大金重工",
+    code="002487.SZ",
+    threshold=41.96,
+    direction="above",
+    inclusive=False,
+    emit_on_initial_match=True,
+    action_label="突破",
+    valid_from=date(2026, 9, 17),
+    valid_until=date(2026, 9, 28),
     value_label="价格",
     value_unit="元",
 )
@@ -478,6 +495,38 @@ SHUANGXING_MATERIALS_BREAKOUT_12_98_20260917_1016 = MonitorRule(
 )
 
 
+SUNWODA_BREAKOUT_19_94_20260917_28 = MonitorRule(
+    rule_id="sunwoda-breakout-19-94-20260917-28",
+    instrument_name="欣旺达",
+    code="300207.SZ",
+    threshold=19.94,
+    direction="above",
+    inclusive=False,
+    emit_on_initial_match=True,
+    action_label="突破",
+    valid_from=date(2026, 9, 17),
+    valid_until=date(2026, 9, 28),
+    value_label="价格",
+    value_unit="元",
+)
+
+
+FEILONG_BREAKOUT_57_16_20260917_1008 = MonitorRule(
+    rule_id="feilong-breakout-57-16-20260917-1008",
+    instrument_name="飞龙股份",
+    code="002536.SZ",
+    threshold=57.16,
+    direction="above",
+    inclusive=False,
+    emit_on_initial_match=True,
+    action_label="突破",
+    valid_from=date(2026, 9, 17),
+    valid_until=date(2026, 10, 8),
+    value_label="价格",
+    value_unit="元",
+)
+
+
 # 长期规则保留上证指数站上 3955；历史个股规则不再启用。
 # 动态涨停价与前收盘均线能力由 MonitorRule.threshold_mode 统一扩展。
 # 科创50 1700 与凯莱英 172.26 临时规则覆盖 8 月 21 日与 24 日两个
@@ -495,11 +544,13 @@ DEFAULT_RULES: tuple[MonitorRule, ...] = (
     HAOXIANGNI_BREAKOUT_11_24_20260909_22,
     PINWO_FOODS_BREAKOUT_25_89_20260909_22,
     LIANGPIN_STORE_BREAKOUT_10_17_20260909_22,
-    DAJIN_HEAVY_BREAKOUT_35_95_20260912_18,
+    DAJIN_HEAVY_BREAKOUT_41_96_20260917_28,
     CHANGCHUN_GAS_NEAR_MA20_20260914_22,
     CHANGCHUN_GAS_RECLAIM_MA5_20260914_22,
     FULONGMA_BREAKOUT_14_36_20260916_24,
     SHUANGXING_MATERIALS_BREAKOUT_12_98_20260917_1016,
+    SUNWODA_BREAKOUT_19_94_20260917_28,
+    FEILONG_BREAKOUT_57_16_20260917_1008,
 )
 
 
