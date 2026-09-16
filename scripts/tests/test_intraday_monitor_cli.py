@@ -12,6 +12,7 @@ from services.intraday_monitor.rules import (
     CHANGCHUN_GAS_RECLAIM_MA5_20260914_22,
     FULONGMA_BREAKOUT_14_36_20260916_24,
     SHUANGXING_MATERIALS_BREAKOUT_12_98_20260917_1016,
+    SUNWODA_BREAKOUT_19_94_20260917_28,
     YOUYAN_SILICON_BREAKOUT_46_14_20260916_30,
     DAJIN_HEAVY_BREAKOUT_35_95_20260912_18,
     FANGSHENG_REACH_11_11_20260903_16,
@@ -238,6 +239,7 @@ def test_e2e_cli_selects_medicilon_rule(monkeypatch, capsys):
         CHANGCHUN_GAS_RECLAIM_MA5_20260914_22,
         FULONGMA_BREAKOUT_14_36_20260916_24,
         SHUANGXING_MATERIALS_BREAKOUT_12_98_20260917_1016,
+        SUNWODA_BREAKOUT_19_94_20260917_28,
     ),
 )
 def test_e2e_cli_selects_new_two_week_breakout_rules(monkeypatch, capsys, selected_rule):
@@ -348,6 +350,8 @@ def test_help_describes_current_rules_at_every_command_level():
     assert "每日首次采样已在线上不补报" in check_help
     assert "福龙马严格高于14.36元时推送" in check_help
     assert "双星新材严格高于12.98元时推送" in check_help
+    assert "欣旺达严格高于19.94元时推送" in check_help
+    assert "2026年9月17日至28日（7个交易日）监控欣旺达严格突破19.94元" in root_help
     assert "2026年9月17日至10月16日（一个月）监控双星新材严格突破12.98元" in root_help
     assert "有研硅监控已下线" in check_help
     assert "2026年9月16日至24日（7个交易日）另监控福龙马严格突破14.36元" in root_help
