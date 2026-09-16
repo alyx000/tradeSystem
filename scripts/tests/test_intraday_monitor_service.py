@@ -15,7 +15,9 @@ from services.intraday_monitor.rules import (
     FULONGMA_BREAKOUT_14_36_20260916_24,
     SHUANGXING_MATERIALS_BREAKOUT_12_98_20260917_1016,
     SUNWODA_BREAKOUT_19_94_20260917_28,
+    FEILONG_BREAKOUT_57_16_20260917_1008,
     DAJIN_HEAVY_BREAKOUT_35_95_20260912_18,
+    DAJIN_HEAVY_BREAKOUT_41_96_20260917_28,
     DEFAULT_RULES,
     FANGSHENG_REACH_11_11_20260903_16,
     GUOCI_MATERIALS_BELOW_67_22_20260831,
@@ -70,7 +72,7 @@ BOARD_BREAK_RULE = MonitorRule(
 TEST_RULES = (BREACH_RULE, RECLAIM_RULE)
 
 
-def test_dajin_initial_match_dedupe_reentry_and_final_day(tmp_path):
+def test_historical_dajin_initial_match_dedupe_reentry_and_final_day(tmp_path):
     rule = DAJIN_HEAVY_BREAKOUT_35_95_20260912_18
     db_path = _calendar(tmp_path, dates=("2026-09-14", "2026-09-18"))
     registry, pusher = _Registry(), _Pusher()
@@ -102,7 +104,7 @@ def test_dajin_initial_match_dedupe_reentry_and_final_day(tmp_path):
     ((11, 1, "no_active_rules"), (12, 0, "non_trade_day"),
      (13, 0, "non_trade_day"), (19, 1, "no_active_rules")),
 )
-def test_dajin_weekend_and_expiry_do_not_fetch_or_push(tmp_path, day, is_open, status):
+def test_historical_dajin_weekend_and_expiry_do_not_fetch_or_push(tmp_path, day, is_open, status):
     date_text = f"2026-09-{day:02}"
     db_path = _calendar(tmp_path, dates=(date_text,), is_open=is_open)
     registry, pusher = _Registry(price=36), _Pusher()
@@ -116,7 +118,7 @@ def test_dajin_weekend_and_expiry_do_not_fetch_or_push(tmp_path, day, is_open, s
     assert pusher.messages == []
 
 
-@pytest.mark.parametrize("day,included", ((11, False), (14, True), (18, True), (21, False)))
+@pytest.mark.parametrize("day,included", ((16, False), (17, True), (21, True), (28, True), (29, False)))
 def test_default_batch_only_fetches_dajin_in_valid_window(tmp_path, day, included):
     db_path = _calendar(tmp_path, dates=(f"2026-09-{day:02}",))
     registry = _Registry(price=35.95)
@@ -873,12 +875,13 @@ def test_default_sse_rule_pushes_only_after_observed_below_to_3955(tmp_path):
         HAOXIANGNI_BREAKOUT_11_24_20260909_22,
         PINWO_FOODS_BREAKOUT_25_89_20260909_22,
         LIANGPIN_STORE_BREAKOUT_10_17_20260909_22,
-        DAJIN_HEAVY_BREAKOUT_35_95_20260912_18,
+        DAJIN_HEAVY_BREAKOUT_41_96_20260917_28,
         CHANGCHUN_GAS_NEAR_MA20_20260914_22,
         CHANGCHUN_GAS_RECLAIM_MA5_20260914_22,
         FULONGMA_BREAKOUT_14_36_20260916_24,
         SHUANGXING_MATERIALS_BREAKOUT_12_98_20260917_1016,
         SUNWODA_BREAKOUT_19_94_20260917_28,
+        FEILONG_BREAKOUT_57_16_20260917_1008,
     )
     assert initial_above["events"] == []
     assert below["events"] == []
