@@ -544,6 +544,27 @@ FEILONG_BREAKOUT_57_16_20260917_1008 = MonitorRule(
 )
 
 
+FEILONG_RECLAIM_MA5_20260921_23 = MonitorRule(
+    rule_id="feilong-reclaim-ma5-20260921-23",
+    instrument_name="飞龙股份",
+    code="002536.SZ",
+    threshold=None,
+    direction="above",
+    inclusive=False,
+    # 沿用均线上穿口径：同日先观测到不高于均线，首次已在线上不补报。
+    emit_on_initial_match=False,
+    action_label="重新站上",
+    valid_from=date(2026, 9, 21),
+    valid_until=date(2026, 9, 23),
+    value_label="价格",
+    value_unit="元",
+    threshold_mode="intraday_ma",
+    threshold_window=5,
+    threshold_provider="tushare",
+    threshold_label="动态前复权MA5",
+)
+
+
 # 长期规则保留上证指数站上 3955；历史个股规则不再启用。
 # 动态涨停价与前收盘均线能力由 MonitorRule.threshold_mode 统一扩展。
 # 科创50 1700 与凯莱英 172.26 临时规则覆盖 8 月 21 日与 24 日两个
@@ -568,6 +589,7 @@ DEFAULT_RULES: tuple[MonitorRule, ...] = (
     SHUANGXING_MATERIALS_BREAKOUT_12_98_20260917_1016,
     SUNWODA_BREAKOUT_19_94_20260917_28,
     FEILONG_BREAKOUT_57_16_20260917_1008,
+    FEILONG_RECLAIM_MA5_20260921_23,
 )
 
 

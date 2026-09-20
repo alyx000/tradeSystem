@@ -16,6 +16,7 @@ from services.intraday_monitor.rules import (
     SHUANGXING_MATERIALS_BREAKOUT_12_98_20260917_1016,
     SUNWODA_BREAKOUT_19_94_20260917_28,
     FEILONG_BREAKOUT_57_16_20260917_1008,
+    FEILONG_RECLAIM_MA5_20260921_23,
     DAJIN_HEAVY_BREAKOUT_35_95_20260912_18,
     DAJIN_HEAVY_BREAKOUT_41_96_20260917_28,
     DEFAULT_RULES,
@@ -882,6 +883,7 @@ def test_default_sse_rule_pushes_only_after_observed_below_to_3955(tmp_path):
         SHUANGXING_MATERIALS_BREAKOUT_12_98_20260917_1016,
         SUNWODA_BREAKOUT_19_94_20260917_28,
         FEILONG_BREAKOUT_57_16_20260917_1008,
+        FEILONG_RECLAIM_MA5_20260921_23,
     )
     assert initial_above["events"] == []
     assert below["events"] == []

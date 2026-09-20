@@ -32,7 +32,7 @@ def test_strict_threshold_and_identity(price, matched):
     assert RULE.is_active(price) is matched
     assert RULE.valid_from == date(2026, 9, 17)
     assert RULE.valid_until == date(2026, 10, 8)
-    assert tuple(r for r in DEFAULT_RULES if r.code == RULE.code) == (RULE,)
+    assert tuple(r for r in DEFAULT_RULES if r.code == RULE.code and r.threshold_mode == "fixed") == (RULE,)
 
 
 @pytest.mark.parametrize("day", OPEN_DAYS)
