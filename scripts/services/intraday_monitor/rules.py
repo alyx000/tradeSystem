@@ -292,6 +292,7 @@ THS_ALL_A_HUSHEN_DAILY_DROP_OVER_4PCT = MonitorRule(
 )
 
 
+# 已到期的历史规则保留供审计，不再加入默认监控。
 FANGSHENG_REACH_11_11_20260903_16 = MonitorRule(
     rule_id="fangsheng-reach-11-11-20260903-16",
     instrument_name="方盛制药",
@@ -303,6 +304,22 @@ FANGSHENG_REACH_11_11_20260903_16 = MonitorRule(
     action_label="达到或高于",
     valid_from=date(2026, 9, 3),
     valid_until=date(2026, 9, 16),
+    value_label="价格",
+    value_unit="元",
+)
+
+
+FANGSHENG_REACH_11_11_20260921_1012 = MonitorRule(
+    rule_id="fangsheng-reach-11-11-20260921-1012",
+    instrument_name="方盛制药",
+    code="603998.SH",
+    threshold=11.11,
+    direction="above",
+    inclusive=True,
+    emit_on_initial_match=True,
+    action_label="达到或高于",
+    valid_from=date(2026, 9, 21),
+    valid_until=date(2026, 10, 12),
     value_label="价格",
     value_unit="元",
 )
@@ -539,7 +556,7 @@ DEFAULT_RULES: tuple[MonitorRule, ...] = (
     GUOCI_MATERIALS_BELOW_67_22_20260831,
     ZHONGKE_FEICE_BELOW_PREVIOUS_MA5_20260831_0902,
     THS_ALL_A_HUSHEN_DAILY_DROP_OVER_4PCT,
-    FANGSHENG_REACH_11_11_20260903_16,
+    FANGSHENG_REACH_11_11_20260921_1012,
     MEDICILON_BELOW_87_65_20260907_1006,
     HAOXIANGNI_BREAKOUT_11_24_20260909_22,
     PINWO_FOODS_BREAKOUT_25_89_20260909_22,
