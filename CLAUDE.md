@@ -161,3 +161,6 @@ CLI / API 依赖对照见 `.agents/skills/INDEX.md`（唯一真源）。Codex CL
 4. [20-architecture-and-data.md](/Users/alyx/tradeSystem/.cursor/agent-context/20-architecture-and-data.md)
 5. [30-runtime-and-ops.md](/Users/alyx/tradeSystem/.cursor/agent-context/30-runtime-and-ops.md)
 6. [99-full-reference.md](/Users/alyx/tradeSystem/.cursor/agent-context/99-full-reference.md)
+
+
+- 历史天量：`python3 scripts/main.py volume-record daily --date YYYY-MM-DD --input-by USER [--metric both|volume|amount] [--no-push] [--dry-run] [--json]`，默认成交量/成交额分别核验上市以来严格新高，随20:00盘后既有调度归档并推钉钉；简洁名单、倍数与双创结果，一句缺口提示，详细诊断留本地。`volume-record push --date YYYY-MM-DD --input-by USER`只补发归档、相同内容去重。完整契约见`.agents/skills/market-tasks/SKILL.md`历史天量章节；只写`data/reports/volume-record/`报告/基线/回执，不写业务库或池计划。

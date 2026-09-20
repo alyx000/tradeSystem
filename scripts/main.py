@@ -960,6 +960,18 @@ def cmd_pre(config: dict, target_date: str):
         multi.send_report("pre_market", f"盘前简报 {target_date}", md_text)
 
 
+def _run_volume_record_for_post(target_date: str, registry) -> None:
+    """沿用20:00调度，历史天量归档后推钉钉，失败不阻断其他盘后采集。"""
+    try:
+        from cli.volume_record import run_for_post
+        result = run_for_post(target_date, registry)
+        logger.info("历史天量双口径采集：status=%s matched=%s", result["status"], result.get("matched_counts", result.get("matched_count")))
+        if result["status"] in ("partial", "source_failed"):
+            logger.warning("历史天量存在缺口：%s", result.get("error") or result["gaps"])
+    except Exception as exc:
+        logger.warning("历史天量采集失败（不影响盘后主流程）：%s", exc)
+
+
 def _run_new_high_for_post(config: dict, target_date: str, registry) -> None:
     """在 ingest 后运行 new-high 派生任务，异常不影响 cmd_post。"""
     try:
@@ -1155,6 +1167,9 @@ def cmd_post(config: dict, target_date: str):
         run_for_post(config, target_date)
     except Exception as e:
         logger.warning(f"两融×指数联动采集失败（不影响主流程）：{e}")
+
+    # 历史天量量额双口径：归档后推钉钉，沿用既有20:00调度并隔离失败。
+    _run_volume_record_for_post(target_date, registry)
 
 
 def _cmd_regulatory_query(target_date: str, *, as_json: bool, type_filter: str) -> None:
@@ -1912,6 +1927,8 @@ def build_parser() -> argparse.ArgumentParser:
     # new-high (前复权历史新高统计:全市场新高数 + 申万二级分组)
     from cli.new_high import register_subparser as register_new_high_subparser
     register_new_high_subparser(subparsers)
+    from cli.volume_record import register_subparser as register_volume_record_subparser
+    register_volume_record_subparser(subparsers)
 
     # sector-correlation (板块相关性:同向/逆向/跷跷板)
     from cli.sector_correlation import register_subparser as register_sector_correlation_subparser
@@ -2061,6 +2078,9 @@ def main():
     elif args.command == "value-watch":
         from cli import value_watch as value_watch_module
         value_watch_module.handle_command(config, args)
+    elif args.command == "volume-record":
+        from cli import volume_record
+        volume_record.handle_command(config, args)
     elif args.command == "new-high":
         from cli import new_high as new_high_module
         new_high_module.handle_command(config, args)

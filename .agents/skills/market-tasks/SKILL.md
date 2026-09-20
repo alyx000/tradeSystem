@@ -751,3 +751,16 @@ python3 main.py cognition-digest monthly --no-llm
 ### 大盘择时微盘股来源（2026-09-13）
 
 `market-timing daily` 默认六指数中的微盘股改用通达信 `880823.TDX`，`avg_price` 仍为通达信880003。取数、历史身份与失败边界见 [market-observability.md](references/market-observability.md)；最近800根日线按调用方请求窗口截取，历史中证2000不重新命名。
+
+
+## 历史天量双口径采集与钉钉报告
+
+- 默认随既有交易日20:00 `main.py post` 同批运行，失败隔离，无新增调度。`volume-record daily --date YYYY-MM-DD --input-by USER [--metric both|volume|amount] [--no-push] [--dry-run] [--json]` 默认双口径采集、先归档再推钉钉；`--no-push`只落本地，`--dry-run`不落盘不推送，`--codes`抽样仅dry-run。用户明确启用的是本报告，不改变其它报告的推送偏好。
+- 沪深北A股剔ST/退市/B股与上市首日；成交量（手）、成交额（千元，直接取amount）分别严格超过上市以来此前最高值，持平不计；原始量额不复权，分别输出名单/原纪录日期和值/倍数/缺口，另列已核验双创交集。历史目标以当日身份为准，不以未来退市简称回删；行业/名称为采集时快照。
+- 只读完整SSE当月日历，开放日且上海16:00后取数；行情身份唯一/日期一致，数量≥4000、覆盖≥98%。两口径独立校验，缺数不相互污染。近期最多60开放日的同口径较高或持平事实仅能排除，剩余仍需上市以来全历史认证；反例逐票归档，缺源回原认证路径。
+- 历史日线按5000自然日分段，首日覆盖上市；完全相同重复行折叠并审计，冲突失败。完成月按日/月总量对账：固定Tushare镜像monthly为股/元，daily为手/千元，分别除100/1000，容忍最多1手/1千元舍入差；单位不符失败。整月缺口不能凭空证明停牌，当月缺日必须有全天停牌证明。
+- 成交量保留`data/reports/volume-record/YYYY-MM-DD.json/.md`及baseline；成交额在`amount/`，默认总报告在`dual/`。基线目录/版本/最高值字段分离，SHA校验；认证前缀与补齐后缀共同证明完整历史，追溯修订需独立重建。partial/source_failed保留缺口，不补0；降级不抹旧命中、另存attempt；Markdown先写，JSON最后作为完成收据，归档失败不报完成。
+- `volume-record push --date YYYY-MM-DD --input-by USER [--metric both|volume|amount] [--json]`只推已归档报告、不重采；核验日期/版本/SHA及complete或partial状态。自动推送核对本次采集SHA，归档失败/降级保护旧报告/skipped不发送旧结果。
+- 钉钉仅列完整命中名单、当日量额（万手/亿元）、原纪录倍数和双创名单；部分完成仅一句提示，不逐股推缺口/程序错误/覆盖统计。完整原纪录日期、来源与诊断保留本地。超长消息分片不截断名单；成功回执在`dingtalk/`，相同内容去重、失败续推跳过成功片；初始化/发送必须确认成功，不输出凭据。
+- `daily --json`分开输出`collection`与`delivery`；partial/source_failed或推送失败非零退出。不写业务SQLite、关注池、持仓、认知或计划层。
+- 验证：`python3 -m pytest scripts/tests/test_volume_record.py scripts/tests/test_volume_record_notification.py scripts/tests/test_non_trading_day.py scripts/tests/test_cli_smoke.py -q`、`make check-scripts`、`make commands-check`。

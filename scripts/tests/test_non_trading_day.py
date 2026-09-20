@@ -233,9 +233,13 @@ class TestPostCommandIngestAudit:
 
         with patch("main.without_standard_http_proxy", new=proxy_tracker), \
              patch("main._schedule_task_enabled", return_value=False), \
+             patch("main._run_volume_record_for_post") as mock_volume_record_for_post, \
+             patch("main._run_regulatory_overview_for_post"), \
+             patch("cli.margin_index_correlation.run_for_post"), \
              caplog.at_level(logging.INFO):
             cmd_post({}, "2026-04-17")
 
+        mock_volume_record_for_post.assert_called_once_with("2026-04-17", registry)
         assert ingest_service.execute_stage.call_count == 2
         stages = [call.args[0] for call in ingest_service.execute_stage.call_args_list]
         triggered_values = [call.kwargs["triggered_by"] for call in ingest_service.execute_stage.call_args_list]

@@ -267,3 +267,6 @@ AI Agent（Claude Code / Codex / Cursor）通过 `.agents/skills/` 中的文档�
 ### 2026-09-16 板块相关性重复行情修复
 
 sector-correlation 同步核对：同日同值涨跌幅重复行折叠且审计计数；同日冲突序列剔除并展示 partial 缺口。`daily --no-push --input-by USER` 落库并打印、不推送，`--dry-run` 不落库不推送；请求者写入快照 meta。 回归 collector、CLI、service、formatter 及 CLI smoke；原21:15调度保持。
+
+
+- 历史天量：`python3 scripts/main.py volume-record daily --date YYYY-MM-DD --input-by USER [--metric both|volume|amount] [--no-push] [--dry-run] [--json]`，默认成交量/成交额分别核验上市以来严格新高，随20:00盘后既有调度归档并推钉钉；简洁名单、倍数与双创结果，一句缺口提示，详细诊断留本地。`volume-record push --date YYYY-MM-DD --input-by USER`只补发归档、相同内容去重。完整契约见`.agents/skills/market-tasks/SKILL.md`历史天量章节；只写`data/reports/volume-record/`报告/基线/回执，不写业务库或池计划。
