@@ -231,7 +231,7 @@
 | `market-tasks` | [market-tasks/references/stock-scanners.md](market-tasks/references/stock-scanners.md) | 股票扫描、观察池与候选确认契约 |
 | `market-tasks` | [market-tasks/references/research-and-digests.md](market-tasks/references/research-and-digests.md) | 研报、业绩与认知摘要契约 |
 
-`repo-maintenance-workflows` 不绑定固定业务 API；它会按受影响的 CLI / API / service / workflow / launchd / skill 入口就近检查，并按 `.agents/rules/skills-sync.md` 核对 `INDEX.md`、对应 SKILL/reference 与同步映射。
+`repo-maintenance-workflows` 不绑定固定业务 API；入口保留授权边界、执行与验证要求，诊断/Review/对齐/巡检细节按需读取维护检查清单，并按 `.agents/rules/skills-sync.md` 核对索引与受影响文档。
 
 Raindrop 的 `instrument-agent` / `setup-agent-replay` 是官方 `raindrop-ai/workshop` 随 CLI 分发的通用工具，不作为本仓库团队 skill 发放。新机器需要时安装 Raindrop 后只运行 `raindrop setup --global`，由 `~/.raindrop/bundles/current/skills/` 安装到用户级 `~/.agents/skills/`；**不要在本仓库运行 `raindrop setup --local`**，否则会重新生成项目内重复 skill。截至 2026-07-19，本机 CLI 为 `0.1.12`，已核对的官方 `v0.1.15` 中两份 skill 内容仍一致。仓库 tracing 与 Workshop MCP 由 `Makefile`、`.mcp.json` 和运行时代码维护，不依赖项目内这两个向导。
 
