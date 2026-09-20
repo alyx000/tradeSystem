@@ -2487,7 +2487,9 @@ class TushareProvider(DataProvider):
             df = self.pro.trade_cal(exchange="SSE", start_date=d, end_date=d)
             if df.empty:
                 return DataResult(data=False, source="tushare:trade_cal")
-            is_open = df.iloc[0]["is_open"] == 1
+            # pandas 比较返回 numpy.bool_；统一为 Python bool，避免下游
+            # `data is False` 把已确认休市误报为交易日历鉴别失败。
+            is_open = bool(df.iloc[0]["is_open"] == 1)
             return DataResult(data=is_open, source="tushare:trade_cal")
         except Exception as e:
             return DataResult(data=None, source=self.name, error=str(e))

@@ -794,6 +794,59 @@ def test_service_empty_day_no_content(tmp_path):
                             "prev_trade_date": "2026-06-11"}
 
 
+@pytest.mark.parametrize("target,previous", [
+    ("2026-09-20", "2026-09-18"),  # 截图中的周日
+    ("2026-10-01", "2026-09-30"),  # 工作日休市，不能用 weekday 替代日历
+])
+@pytest.mark.parametrize("has_new_announcement", [False, True])
+def test_service_real_calendar_bool_does_not_warn_on_closed_day(
+    tmp_path, target, previous, has_new_announcement,
+):
+    import pandas as pd
+    from unittest.mock import Mock
+
+    from providers.tushare_provider import TushareProvider
+
+    conn, db_path = _db(tmp_path)
+    old_rows = [_fc(ann_date=previous.replace("-", ""))]
+    _insert_payload(conn, previous, old_rows)
+    conn.commit()
+    conn.close()
+    # 旧公告已推，仅留下应等下一交易日验证的候选，复现截图中的 warning-only。
+    collector.record_pushed(
+        target, {collector.announcement_marker_key("earnings_forecast", old_rows[0])},
+        set(), renderer.resolve_report_dir())
+
+    pro = Mock()
+    pro.trade_cal.side_effect = lambda **kw: pd.DataFrame({
+        "is_open": [int(kw["start_date"] == previous.replace("-", ""))],
+    })
+    provider = TushareProvider.__new__(TushareProvider)
+    provider.pro = pro
+
+    class _RealCalendarRegistry(_FakeRegistry):
+        def call(self, method_name, *args, **kwargs):
+            if method_name == "is_trade_day":
+                return provider.is_trade_day(*args, **kwargs)
+            return super().call(method_name, *args, **kwargs)
+
+    new_rows = [_fc(ts_code="600001.SH", ann_date=target.replace("-", ""))] if has_new_announcement else []
+    registry = _RealCalendarRegistry({
+        "get_earnings_forecast": DataResult(data=new_rows, source="fake"),
+        "get_earnings_express": DataResult(data=[], source="fake"),
+        "get_stock_sw_industry_map": DataResult(data={}, source="fake"),
+    })
+    result = run_daily_digest(registry, target, db_path=db_path, enable_consensus=False)
+
+    assert result.stats["prev_trade_date"] == previous
+    assert result.stats["gap_error"] is None
+    assert result.stats["gap_hits"] == 0
+    assert result.pushed_warning_keys == set()
+    assert result.has_content is has_new_announcement
+    assert result.stats["forecast_new"] == int(has_new_announcement)
+    assert "交易日鉴别失败" not in (result.markdown or "")
+
+
 def test_service_consensus_label_on_hit_stock(tmp_path):
     """口径三集成：命中票有券商覆盖+可折算 H1 占比 → 渲染附「vs一致预期 [判断]」。"""
     conn, db_path = _db(tmp_path)

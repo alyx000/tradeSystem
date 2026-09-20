@@ -106,6 +106,35 @@ def test_capabilities_declare_earnings_methods():
     assert "get_earnings_express" in caps
 
 
+@pytest.mark.parametrize("is_open,expected", [(0, False), (1, True)])
+def test_trade_day_returns_builtin_bool(is_open, expected):
+    from unittest.mock import Mock
+
+    pro = Mock()
+    pro.trade_cal.return_value = pd.DataFrame({"is_open": [is_open]})
+    provider = _provider(pro)
+
+    result = provider.is_trade_day("2026-09-20")
+
+    assert result.success
+    # pandas 比较结果为 numpy.bool_；休市消费者使用 `is False`，必须归一。
+    assert result.data is expected
+    pro.trade_cal.assert_called_once_with(
+        exchange="SSE", start_date="20260920", end_date="20260920")
+
+
+def test_trade_day_source_failure_stays_failure():
+    from unittest.mock import Mock
+
+    pro = Mock()
+    pro.trade_cal.side_effect = RuntimeError("calendar unavailable")
+    result = _provider(pro).is_trade_day("2026-09-20")
+
+    assert not result.success
+    assert result.data is None
+    assert result.error == "calendar unavailable"
+
+
 def test_forecast_window_single_range_query(monkeypatch):
     """默认回看 3 自然日：一次区间查询 [T-2, T]，跨日行聚合返回。"""
     monkeypatch.delenv("EARNINGS_LOOKBACK_DAYS", raising=False)
