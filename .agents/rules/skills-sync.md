@@ -31,6 +31,9 @@ globs:
   - .cursor/skills/**/*.md
 ---
 
+2026-09-21：`trend-leader daily` 同批附加股东户数／已披露业绩证据卡，标题显示“股票名称（代码）”；按代码覆盖最多12只、回看800自然日，仅引用观察日前已公告事实，保留未覆盖与 `partial/source_failed`。不改变池准入／退出，不新增调度或推送开关。见 [证据卡口径](/Users/alyx/tradeSystem/docs/trend-leader-research-evidence.md)。
+
+
 # Skills 同步检查规则
 
 反馈趋势：正式复盘③自动展示最近20个开放日的断板次日反馈与全部活跃核心反馈；核心四图同纵轴，partial虚线、缺值断线不补零。日报和HTML按同日原始regulatory_suspend记录核验全天停牌，保留真实缺失与证据；daily支持--input-by报告审计。历史失败派生报告在事实齐全后可通过--date/--no-push重算，先保留备份。

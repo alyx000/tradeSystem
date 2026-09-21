@@ -19,7 +19,7 @@ _SIGNAL_LABELS = [
     ("overheat", "远离MA5(乖离过大)"),
 ]
 
-_REDLINE = ("> 盘后只读观察清单 · 全部为 [判断] · "
+_REDLINE = ("> 盘后只读观察清单 · 技术信号为 [判断]，证据卡为 [事实] · "
             "不构成买卖建议、不含价位、不预测点位、不写交易计划层。")
 
 
@@ -93,7 +93,7 @@ def render_daily(conn: sqlite3.Connection, summary: dict) -> str:
     exited = {r["code"]: r for r in pool.list_pool(conn, status="exited")}
     date = summary.get("date", "")
 
-    lines: list[str] = [f"# 趋势主升观察清单 · {date}  [判断]", "", _REDLINE, ""]
+    lines: list[str] = [f"# 趋势主升观察清单 · {date}  [判断／事实分区]", "", _REDLINE, ""]
 
     # 漏斗概览
     main_sectors = summary.get("main_sectors") or []
@@ -153,6 +153,15 @@ def render_daily(conn: sqlite3.Connection, summary: dict) -> str:
             lines.append(
                 f"| {code} | {r.get('name', '')} | {r.get('days_in_pool', '')} | {marks} |")
         lines.append("")
+
+    if "research_cards" in summary:
+        from services.trend_leader.research_evidence import render as render_research
+        named_cards = [
+            {**card, "name": card.get("name") or active.get(card["code"], {}).get("name")
+             or exited.get(card["code"], {}).get("name")}
+            for card in summary["research_cards"]
+        ]
+        lines.extend(render_research(named_cards, summary["research_coverage"]))
 
     # 今日退池（趋势破坏）
     lines += ["## 今日退池（趋势破坏）[判断]"]

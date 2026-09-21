@@ -26,7 +26,7 @@ from services.concept_tags import (
 from services.trend_leader import constants as C
 from services.trend_leader import detectors as D
 from services.trend_leader import mainline_llm
-from services.trend_leader import pool
+from services.trend_leader import pool, research_evidence
 from services.volume_concentration import repo as vc_repo
 from services.volume_concentration.aggregator import UNCLASSIFIED
 from utils.price_limit import is_dual_board
@@ -343,6 +343,23 @@ def run_daily(conn: sqlite3.Connection, registry, date: str, *,
             "code": code, "shrink_pullback_buy": shrink, "near_ma5": near, "overheat": far,
         })
 
+    # 证据卡仅附加事实；原池准入、维护和退出全部完成后才取数。
+    active_rows = [r for r in pool.list_pool(conn, status="active") if r["last_seen_date"] <= date]
+    names = {r["code"]: r["name"] for r in active_rows}
+    codes = sorted(names)
+    selected = codes[:research_evidence.MAX_CARDS]
+    cards = {code: {**research_evidence.collect(registry, code, date), "name": names[code]}
+             for code in selected}
+    summary["research_cards"] = list(cards.values())
+    summary["research_coverage"] = dict(eligible=len(codes), collected=len(selected),
+                                       not_collected=codes[len(selected):])
+    for row in active_rows:
+        # 旧日或缺行情时不推进池日期；仅在本日已维护的信号中附加证据。
+        if row["last_seen_date"] == date:
+            signal = dict(row.get("last_signal") or {})
+            signal["research_evidence"] = cards.get(row["code"], dict(
+                status="not_collected", trade_date=date, reason="超出当日12只证据卡覆盖"))
+            pool.touch(conn, row["code"], date=date, signal_json=signal)
     return summary
 
 

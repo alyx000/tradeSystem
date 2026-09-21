@@ -1,5 +1,8 @@
 # 交易系统 - Claude 协作入口
 
+2026-09-21：`trend-leader daily` 同批附加股东户数／已披露业绩证据卡，标题显示“股票名称（代码）”；按代码覆盖最多12只、回看800自然日，仅引用观察日前已公告事实，保留未覆盖与 `partial/source_failed`。不改变池准入／退出，不新增调度或推送开关。见 [证据卡口径](docs/trend-leader-research-evidence.md)。
+
+
 本文件仅保留总则与索引，具体规则请按任务加载对应主题文档。
 权威入口与最新拆分结构以 [AGENTS.md](/Users/alyx/tradeSystem/AGENTS.md) 和 `.cursor/agent-context/` 为准；本文件作为 Claude / 兼容 Agent 的等价入口。
 

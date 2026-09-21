@@ -158,6 +158,7 @@ class TushareProvider(DataProvider):
             "get_adj_factor",
             "get_stock_adj_factor_range",
             "get_holder_trade",
+            "get_stock_holder_numbers",
             "get_limit_up_list",
             "get_limit_down_list",
             "get_stock_limit_prices",
@@ -592,6 +593,27 @@ class TushareProvider(DataProvider):
             return DataResult(data=out, source="tushare:stk_holdertrade")
         except Exception as e:
             return DataResult(data=None, source=self.name, error=str(e))
+
+    def get_stock_holder_numbers(self, stock_code: str, start_date: str, end_date: str) -> DataResult:
+        """stk_holdernumber：按公告窗口取数；保留实际数据截止日，单股封顶防截断。"""
+        try:
+            err = self._ensure_pro("get_stock_holder_numbers")
+            if err:
+                return err
+            code = self._normalize_stock_code(stock_code)
+            if not re.fullmatch(r"\d{6}\.(SH|SZ|BJ)", code):
+                raise ValueError("股票代码非法或为空")
+            start = self._normalize_financial_date(start_date, "start_date")
+            end = self._normalize_financial_date(end_date, "end_date")
+            if start > end:
+                raise ValueError("日期窗口倒置")
+            rows = self._query_records("stk_holdernumber", ts_code=code, start_date=start, end_date=end,
+                                       fields="ts_code,ann_date,end_date,holder_num")
+            if len(rows) >= 3000:
+                raise ValueError("股东户数返回触及3000行上限，疑似截断")
+            return DataResult(data=rows, source="tushare:stk_holdernumber")
+        except Exception as exc:
+            return DataResult(data=None, source=self.name, error=str(exc))
 
     # ---- 涨跌停数据 ----
 
@@ -1897,7 +1919,7 @@ class TushareProvider(DataProvider):
             records = self._query_records(
                 "income", ts_code=self._normalize_stock_code(ts_code),
                 start_date=self._date_fmt(start_date), end_date=self._date_fmt(end_date),
-                fields="ts_code,end_date,report_type,update_flag,n_income_attr_p",
+                fields="ts_code,ann_date,f_ann_date,end_date,report_type,update_flag,n_income_attr_p,revenue",
             )
             return DataResult(data=records, source="tushare:income")
         except Exception as e:

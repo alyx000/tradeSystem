@@ -364,3 +364,42 @@ def test_funnel_market_changes_failure_degrades_to_limit_only(conn):
     summary = scanner.run_daily(conn, reg, "2026-06-09")
     assert "market_changes" in summary["source_errors"]
     assert "600552" in summary["entered"]              # 涨停源仍正常入池
+
+
+def test_research_cards_bounded_named_and_do_not_advance_missing_quotes(conn):
+    from copy import deepcopy
+    codes = [f"600{i:03d}" for i in range(13)]
+    for code in codes:
+        pool.record(conn, code=code, name=f"名称{code}", sw_l2="玻璃玻纤",
+                    first_limit_date="2026-06-08", date="2026-06-08")
+    before = deepcopy(pool.list_pool(conn, status="active"))
+    calls = []
+
+    class Registry(FakeRegistry):
+        def call(self, name, *args):
+            if name in {"get_stock_holder_numbers", "get_income_history"}:
+                calls.append((name, args))
+            return super().call(name, *args)
+
+    reg = Registry([], {}, {})
+    result = scanner.run_daily(conn, reg, "2026-06-09", sectors=["玻璃玻纤"], main_line="l2")
+    assert len(calls) == 24
+    assert [c[1][0] for c in calls[::2]] == codes[:12]
+    assert result["research_coverage"] == dict(eligible=13, collected=12, not_collected=codes[12:])
+    assert all(card["name"] == f"名称{card['code']}" for card in result["research_cards"])
+    assert all(card["status"] == "source_failed" for card in result["research_cards"])
+    assert pool.list_pool(conn, status="active") == before
+
+
+def test_research_cards_attach_to_new_pool_signals_without_losing_entry(conn):
+    _seed_concentration(conn, "2026-06-09", ["玻璃玻纤"])
+    reg = FakeRegistry([{"code": "600552.SH", "name": "凯盛科技", "pct_chg": 10.0}],
+                       {"600552.SH": {"name": "凯盛科技", "sw_l2": "玻璃玻纤"}},
+                       {"600552": _leader_bars()})
+    result = scanner.run_daily(conn, reg, "2026-06-09", main_line="l2")
+    assert result["entered"] == ["600552"]
+    row = pool.get_active(conn, "600552")
+    assert row["last_signal"]["research_evidence"]["name"] == "凯盛科技"
+    assert row["last_signal"]["research_evidence"]["status"] == "source_failed"
+    assert "first_limit" in row["last_signal"]
+    assert row["days_in_pool"] == 1

@@ -320,3 +320,24 @@ def test_render_pool_lists_rows(conn):
 def test_render_pool_empty(conn):
     out = renderer.render_pool([])
     assert "池为空" in out or "无在池" in out
+
+
+def test_research_cards_use_names_and_preserve_failure_status(conn):
+    from copy import deepcopy
+    _seed(conn)
+    cards = [dict(code=code, status="source_failed",
+                  holders=dict(status="source_failed", reason="offline"),
+                  income=dict(status="source_failed", reason="offline"))
+             for code in ("600552", "000001", "999999")]
+    cards.append(dict(cards[0], name="档案名称"))
+    summary = _summary(research_cards=cards,
+                       research_coverage=dict(collected=4, eligible=4))
+    before = deepcopy(summary)
+    md = renderer.render_daily(conn, summary)
+    assert "### 凯盛科技（600552） · source_failed" in md
+    assert "### 平安银行（000001） · source_failed" in md
+    assert "### 名称待核验（999999） · source_failed" in md
+    assert "### 档案名称（600552） · source_failed" in md
+    assert "技术信号为 [判断]，证据卡为 [事实]" in md
+    assert "全部为 [判断]" not in md
+    assert summary == before

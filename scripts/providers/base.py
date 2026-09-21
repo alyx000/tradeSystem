@@ -127,6 +127,10 @@ class DataProvider(ABC):
         """个股区间股东增减持（in_de: IN=增持 / DE=减持）。"""
         return DataResult(data=None, source=self.name, error="not implemented")
 
+    def get_stock_holder_numbers(self, stock_code: str, start_date: str, end_date: str) -> DataResult:
+        """股东户数公告窗口，保留截止日与公告日；非股东增减持。"""
+        return DataResult(data=None, source=self.name, error="not implemented")
+
     # ---- 涨跌停数据 ----
     def get_limit_up_list(self, date: str) -> DataResult:
         return DataResult(data=None, source=self.name, error="not implemented")
