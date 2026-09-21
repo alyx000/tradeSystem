@@ -15,6 +15,7 @@ from services.intraday_monitor.rules import (
     SUNWODA_BREAKOUT_19_94_20260917_28,
     FEILONG_BREAKOUT_57_16_20260917_1008,
     FEILONG_RECLAIM_MA5_20260921_23,
+    KEXIANG_BELOW_108_30_20260922_1008,
     YOUYAN_SILICON_BREAKOUT_46_14_20260916_30,
     DAJIN_HEAVY_BREAKOUT_41_96_20260917_28,
     FANGSHENG_REACH_11_11_20260921_1012,
@@ -246,12 +247,13 @@ def test_e2e_cli_selects_medicilon_rule(monkeypatch, capsys):
         SUNWODA_BREAKOUT_19_94_20260917_28,
         FEILONG_BREAKOUT_57_16_20260917_1008,
         FEILONG_RECLAIM_MA5_20260921_23,
+        KEXIANG_BELOW_108_30_20260922_1008,
     ),
 )
 def test_e2e_cli_selects_new_two_week_breakout_rules(monkeypatch, capsys, selected_rule):
     registry = object()
     monkeypatch.setattr(main, "setup_providers", lambda config: registry)
-    monkeypatch.setattr(intraday_monitor, "shanghai_now", lambda: datetime(2026, 9, 21, 10))
+    monkeypatch.setattr(intraday_monitor, "shanghai_now", lambda: datetime(2026, 9, 22, 10))
     calls = []
     monkeypatch.setattr(
         intraday_monitor, "run_e2e_test",
@@ -359,6 +361,8 @@ def test_help_describes_current_rules_at_every_command_level():
     assert "双星新材严格高于12.98元时推送" in check_help
     assert "欣旺达严格高于19.94元时推送" in check_help
     assert "飞龙股份严格高于57.16元时推送" in check_help
+    assert "2026年9月22日至10月8日（7个交易日）监控科翔股份严格跌破108.30元" in root_help
+    assert "科翔股份严格低于108.30元时推送；等于不触发，首次已跌破提醒" in check_help
     assert "2026年9月21日至23日（3个交易日）另监控飞龙股份重新站上动态前复权MA5" in root_help
     assert "飞龙股份从不高于动态前复权MA5变为严格高于时推送" in check_help
     assert "每日首次采样已在线上不补报，57.16元规则保留" in check_help
