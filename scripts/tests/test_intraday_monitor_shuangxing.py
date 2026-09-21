@@ -46,7 +46,7 @@ def test_strict_price_boundary(price, matched):
     assert RULE.valid_from == START and RULE.valid_until == END
     assert tuple(r for r in DEFAULT_RULES if r.code == RULE.code) == (RULE,)
     assert FULONGMA_BREAKOUT_14_36_20260916_24.threshold == 14.36
-    assert all(r.code != "688432.SH" for r in DEFAULT_RULES)
+    assert all(r.rule_id != "youyan-silicon-breakout-46-14-20260916-30" for r in DEFAULT_RULES)
 
 
 @pytest.mark.parametrize("day", DAYS)

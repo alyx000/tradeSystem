@@ -16,6 +16,7 @@ from services.intraday_monitor.rules import (
     FEILONG_BREAKOUT_57_16_20260917_1008,
     FEILONG_RECLAIM_MA5_20260921_23,
     KEXIANG_BELOW_108_30_20260922_1008,
+    YOUYAN_SILICON_BREAKOUT_57_96_20260922_1008,
     YOUYAN_SILICON_BREAKOUT_46_14_20260916_30,
     DAJIN_HEAVY_BREAKOUT_41_96_20260917_28,
     FANGSHENG_REACH_11_11_20260921_1012,
@@ -248,6 +249,7 @@ def test_e2e_cli_selects_medicilon_rule(monkeypatch, capsys):
         FEILONG_BREAKOUT_57_16_20260917_1008,
         FEILONG_RECLAIM_MA5_20260921_23,
         KEXIANG_BELOW_108_30_20260922_1008,
+        YOUYAN_SILICON_BREAKOUT_57_96_20260922_1008,
     ),
 )
 def test_e2e_cli_selects_new_two_week_breakout_rules(monkeypatch, capsys, selected_rule):
@@ -369,7 +371,10 @@ def test_help_describes_current_rules_at_every_command_level():
     assert "2026年9月17日至10月8日（10个交易日）监控飞龙股份严格突破57.16元" in root_help
     assert "2026年9月17日至28日（7个交易日）监控欣旺达严格突破19.94元" in root_help
     assert "2026年9月17日至10月16日（一个月）监控双星新材严格突破12.98元" in root_help
-    assert "有研硅监控已下线" in check_help
+    assert "2026年9月22日至10月8日（7个交易日）监控有研硅严格突破57.96元" in root_help
+    assert "有研硅严格高于57.96元时推送；等于不触发，首次已突破提醒" in check_help
+    assert "旧46.14元规则保持下线" in root_help
+    assert "旧46.14元规则保持下线" in check_help
     assert "2026年9月16日至24日（7个交易日）另监控福龙马严格突破14.36元" in root_help
     assert "恢复后再次命中可重推" in check_help
     assert "10点前百亿成交额涨停板" in check_help

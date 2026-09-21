@@ -1,4 +1,4 @@
-"""有研硅已下线；显式传入历史规则仅用于能力回归测试。"""
+"""有研硅旧46.14元规则已下线；显式传入历史规则仅用于能力回归测试。"""
 from datetime import datetime, timedelta
 
 import pytest
@@ -16,8 +16,8 @@ OPEN_DAYS = (16, 17, 18, 21, 22, 23, 24, 28, 29, 30)
 
 
 @pytest.mark.parametrize("day", [16, 30])
-def test_retired_youyan_never_fetches_or_pushes_by_default(tmp_path, day):
-    selected = tuple(rule for rule in DEFAULT_RULES if rule.code == RULE.code)
+def test_retired_youyan_4614_never_fetches_or_pushes_by_default(tmp_path, day):
+    selected = tuple(rule for rule in DEFAULT_RULES if rule.rule_id == RULE.rule_id)
     assert selected == ()
     result, registry, pusher = _run(tmp_path, day, rules=selected)
     assert result["status"] == "no_rules"

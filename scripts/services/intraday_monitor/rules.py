@@ -581,6 +581,22 @@ KEXIANG_BELOW_108_30_20260922_1008 = MonitorRule(
 )
 
 
+YOUYAN_SILICON_BREAKOUT_57_96_20260922_1008 = MonitorRule(
+    rule_id="youyan-silicon-breakout-57-96-20260922-1008",
+    instrument_name="有研硅",
+    code="688432.SH",
+    threshold=57.96,
+    direction="above",
+    inclusive=False,
+    emit_on_initial_match=True,
+    action_label="突破",
+    valid_from=date(2026, 9, 22),
+    valid_until=date(2026, 10, 8),
+    value_label="价格",
+    value_unit="元",
+)
+
+
 # 长期规则保留上证指数站上 3955；历史个股规则不再启用。
 # 动态涨停价与前收盘均线能力由 MonitorRule.threshold_mode 统一扩展。
 # 科创50 1700 与凯莱英 172.26 临时规则覆盖 8 月 21 日与 24 日两个
@@ -607,6 +623,7 @@ DEFAULT_RULES: tuple[MonitorRule, ...] = (
     FEILONG_BREAKOUT_57_16_20260917_1008,
     FEILONG_RECLAIM_MA5_20260921_23,
     KEXIANG_BELOW_108_30_20260922_1008,
+    YOUYAN_SILICON_BREAKOUT_57_96_20260922_1008,
 )
 
 
