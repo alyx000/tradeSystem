@@ -4,7 +4,7 @@
 # 由 ~/Library/LaunchAgents/com.alyx.tradesystem.sector-correlation.plist 触发（交易日 21:15，
 # 错开 volume-watch 21:00，降低 Tushare 镜像并发压力）。
 # 跑 main.py sector-correlation daily：Tushare 采集多日活跃板块 + 指数 → 双窗相关/超额/β
-# → 落库 sector_correlation_daily + 渲染 + 推钉钉。
+# → 落库 sector_correlation_daily + 渲染到本地日志，不推钉钉（2026-09-21 用户偏好）。
 # 非交易日 / 数据不足 → 任务内返「无足够数据跳过」，不写库不推送。
 set -e
 
@@ -34,4 +34,4 @@ echo "[env] DINGTALK_WEBHOOK_TOKEN=${DINGTALK_WEBHOOK_TOKEN:+set} DINGTALK_WEBHO
 
 # /usr/bin/python3 绝对路径：按 launchd-deploy.md 规范保证版本可预测；依赖装在
 # system python user-site（与 volume-watch runner 同款，dry-run 实证 tushare/pandas 可用）。
-exec /usr/bin/python3 scripts/main.py sector-correlation daily
+exec /usr/bin/python3 scripts/main.py sector-correlation daily --no-push --input-by launchd

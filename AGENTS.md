@@ -1,5 +1,7 @@
 # 交易系统 - AI 协作入口
 
+2026-09-21 推送偏好：关闭「板块相关性」钉钉自动推送，工作日 21:15 采集、计算、落库与本地日志照常。`sector-correlation-runner.sh` 固定带 `--no-push --input-by launchd`；Agent 补跑也须使用 `--no-push --input-by USER`，除非用户重新明确要求发送。此条优先于下文旧的板块相关性推送说明。
+
 2026-09-21：`trend-leader daily` 同批附加股东户数／已披露业绩证据卡，标题显示“股票名称（代码）”；按代码覆盖最多12只、回看800自然日，仅引用观察日前已公告事实，保留未覆盖与 `partial/source_failed`。不改变池准入／退出，不新增调度或推送开关。见 [证据卡口径](docs/trend-leader-research-evidence.md)。
 
 

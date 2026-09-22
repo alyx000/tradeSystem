@@ -191,6 +191,8 @@ rm ~/Library/LaunchAgents/com.alyx.tradesystem.volume-watch.plist
 
 ## 板块相关性（工作日 21:15）
 
+2026-09-21 用户关闭钉钉自动推送：runner 固定执行 `sector-correlation daily --no-push --input-by launchd`，采集、计算与落库照常，报告打印到本地日志。已安装任务直接读取仓库 runner，修改后下次触发即生效，无需重载或补跑。
+
 错开 volume-watch(21:00) 15 分钟,降 Tushare 镜像并发。Tushare 主源拉多日活跃板块(行业按成交额 /
 概念按换手率)+ 4 指数 → 双窗 20/60 原始相关 + 剔大盘超额相关 + β → 落 `sector_correlation_daily`
 + 推钉钉。runner source `scripts/.env`(TUSHARE_TOKEN)+`~/.config/tradeSystem.env`(钉钉);
