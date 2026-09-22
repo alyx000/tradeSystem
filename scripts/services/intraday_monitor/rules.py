@@ -292,6 +292,7 @@ THS_ALL_A_HUSHEN_DAILY_DROP_OVER_4PCT = MonitorRule(
 )
 
 
+# 已到期的历史规则保留供审计，不再加入默认监控。
 FANGSHENG_REACH_11_11_20260903_16 = MonitorRule(
     rule_id="fangsheng-reach-11-11-20260903-16",
     instrument_name="方盛制药",
@@ -303,6 +304,22 @@ FANGSHENG_REACH_11_11_20260903_16 = MonitorRule(
     action_label="达到或高于",
     valid_from=date(2026, 9, 3),
     valid_until=date(2026, 9, 16),
+    value_label="价格",
+    value_unit="元",
+)
+
+
+FANGSHENG_REACH_11_11_20260921_1012 = MonitorRule(
+    rule_id="fangsheng-reach-11-11-20260921-1012",
+    instrument_name="方盛制药",
+    code="603998.SH",
+    threshold=11.11,
+    direction="above",
+    inclusive=True,
+    emit_on_initial_match=True,
+    action_label="达到或高于",
+    valid_from=date(2026, 9, 21),
+    valid_until=date(2026, 10, 12),
     value_label="价格",
     value_unit="元",
 )
@@ -527,6 +544,59 @@ FEILONG_BREAKOUT_57_16_20260917_1008 = MonitorRule(
 )
 
 
+FEILONG_RECLAIM_MA5_20260921_23 = MonitorRule(
+    rule_id="feilong-reclaim-ma5-20260921-23",
+    instrument_name="飞龙股份",
+    code="002536.SZ",
+    threshold=None,
+    direction="above",
+    inclusive=False,
+    # 沿用均线上穿口径：同日先观测到不高于均线，首次已在线上不补报。
+    emit_on_initial_match=False,
+    action_label="重新站上",
+    valid_from=date(2026, 9, 21),
+    valid_until=date(2026, 9, 23),
+    value_label="价格",
+    value_unit="元",
+    threshold_mode="intraday_ma",
+    threshold_window=5,
+    threshold_provider="tushare",
+    threshold_label="动态前复权MA5",
+)
+
+
+KEXIANG_BELOW_108_30_20260922_1008 = MonitorRule(
+    rule_id="kexiang-below-108-30-20260922-1008",
+    instrument_name="科翔股份",
+    code="300903.SZ",
+    threshold=108.30,
+    direction="below",
+    inclusive=False,
+    emit_on_initial_match=True,
+    action_label="跌破",
+    valid_from=date(2026, 9, 22),
+    valid_until=date(2026, 10, 8),
+    value_label="价格",
+    value_unit="元",
+)
+
+
+YOUYAN_SILICON_BREAKOUT_57_96_20260922_1008 = MonitorRule(
+    rule_id="youyan-silicon-breakout-57-96-20260922-1008",
+    instrument_name="有研硅",
+    code="688432.SH",
+    threshold=57.96,
+    direction="above",
+    inclusive=False,
+    emit_on_initial_match=True,
+    action_label="突破",
+    valid_from=date(2026, 9, 22),
+    valid_until=date(2026, 10, 8),
+    value_label="价格",
+    value_unit="元",
+)
+
+
 # 长期规则保留上证指数站上 3955；历史个股规则不再启用。
 # 动态涨停价与前收盘均线能力由 MonitorRule.threshold_mode 统一扩展。
 # 科创50 1700 与凯莱英 172.26 临时规则覆盖 8 月 21 日与 24 日两个
@@ -539,7 +609,7 @@ DEFAULT_RULES: tuple[MonitorRule, ...] = (
     GUOCI_MATERIALS_BELOW_67_22_20260831,
     ZHONGKE_FEICE_BELOW_PREVIOUS_MA5_20260831_0902,
     THS_ALL_A_HUSHEN_DAILY_DROP_OVER_4PCT,
-    FANGSHENG_REACH_11_11_20260903_16,
+    FANGSHENG_REACH_11_11_20260921_1012,
     MEDICILON_BELOW_87_65_20260907_1006,
     HAOXIANGNI_BREAKOUT_11_24_20260909_22,
     PINWO_FOODS_BREAKOUT_25_89_20260909_22,
@@ -551,6 +621,9 @@ DEFAULT_RULES: tuple[MonitorRule, ...] = (
     SHUANGXING_MATERIALS_BREAKOUT_12_98_20260917_1016,
     SUNWODA_BREAKOUT_19_94_20260917_28,
     FEILONG_BREAKOUT_57_16_20260917_1008,
+    FEILONG_RECLAIM_MA5_20260921_23,
+    KEXIANG_BELOW_108_30_20260922_1008,
+    YOUYAN_SILICON_BREAKOUT_57_96_20260922_1008,
 )
 
 

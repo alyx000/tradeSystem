@@ -17,7 +17,11 @@ from services.intraday_monitor.rules import (
     SHUANGXING_MATERIALS_BREAKOUT_12_98_20260917_1016,
     SUNWODA_BREAKOUT_19_94_20260917_28,
     FEILONG_BREAKOUT_57_16_20260917_1008,
+    FEILONG_RECLAIM_MA5_20260921_23,
+    KEXIANG_BELOW_108_30_20260922_1008,
+    YOUYAN_SILICON_BREAKOUT_57_96_20260922_1008,
     FANGSHENG_REACH_11_11_20260903_16,
+    FANGSHENG_REACH_11_11_20260921_1012,
     GUOCI_MATERIALS_BELOW_67_22_20260831,
     HAOXIANGNI_BREAKOUT_11_24_20260909_22,
     KAILAIYING_BREAKOUT_172_26_20260821_24,
@@ -96,7 +100,7 @@ def test_fixed_and_ma_temporary_rules_are_registered():
         GUOCI_MATERIALS_BELOW_67_22_20260831,
         ZHONGKE_FEICE_BELOW_PREVIOUS_MA5_20260831_0902,
         THS_ALL_A_HUSHEN_DAILY_DROP_OVER_4PCT,
-        FANGSHENG_REACH_11_11_20260903_16,
+        FANGSHENG_REACH_11_11_20260921_1012,
         MEDICILON_BELOW_87_65_20260907_1006,
         HAOXIANGNI_BREAKOUT_11_24_20260909_22,
         PINWO_FOODS_BREAKOUT_25_89_20260909_22,
@@ -108,6 +112,9 @@ def test_fixed_and_ma_temporary_rules_are_registered():
         SHUANGXING_MATERIALS_BREAKOUT_12_98_20260917_1016,
         SUNWODA_BREAKOUT_19_94_20260917_28,
         FEILONG_BREAKOUT_57_16_20260917_1008,
+        FEILONG_RECLAIM_MA5_20260921_23,
+        KEXIANG_BELOW_108_30_20260922_1008,
+        YOUYAN_SILICON_BREAKOUT_57_96_20260922_1008,
     )
     assert SSE_COMPOSITE_RECLAIM_3955.rule_id == "sse-composite-reclaim-3955"
     assert SSE_COMPOSITE_RECLAIM_3955.instrument_name == "上证指数"
@@ -208,9 +215,9 @@ def test_fixed_and_ma_temporary_rules_are_registered():
     assert ths_all_a.is_active(-4.0001) is True
 
 
-def test_fangsheng_reach_rule_has_inclusive_price_and_fourteen_calendar_days():
+def test_historical_fangsheng_rule_is_retired_with_original_dates():
     rule = FANGSHENG_REACH_11_11_20260903_16
-    assert rule in DEFAULT_RULES
+    assert rule not in DEFAULT_RULES
     assert rule.code == "603998.SH"
     assert rule.instrument_name == "方盛制药"
     assert rule.provider == "sina"

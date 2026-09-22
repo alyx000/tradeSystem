@@ -16,10 +16,14 @@ from services.intraday_monitor.rules import (
     SHUANGXING_MATERIALS_BREAKOUT_12_98_20260917_1016,
     SUNWODA_BREAKOUT_19_94_20260917_28,
     FEILONG_BREAKOUT_57_16_20260917_1008,
+    FEILONG_RECLAIM_MA5_20260921_23,
+    KEXIANG_BELOW_108_30_20260922_1008,
+    YOUYAN_SILICON_BREAKOUT_57_96_20260922_1008,
     DAJIN_HEAVY_BREAKOUT_35_95_20260912_18,
     DAJIN_HEAVY_BREAKOUT_41_96_20260917_28,
     DEFAULT_RULES,
     FANGSHENG_REACH_11_11_20260903_16,
+    FANGSHENG_REACH_11_11_20260921_1012,
     GUOCI_MATERIALS_BELOW_67_22_20260831,
     HAOXIANGNI_BREAKOUT_11_24_20260909_22,
     KAILAIYING_BREAKOUT_172_26_20260821_24,
@@ -521,13 +525,12 @@ def test_default_rule_batch_includes_medicilon_only_in_valid_window(
     assert ("688202.SH" in requested) is included
 
 
-@pytest.mark.parametrize("day,included", ((2, False), (3, True), (16, True), (17, False)))
-def test_default_rule_batch_includes_fangsheng_only_in_valid_window(tmp_path, day, included):
-    date_text = f"2026-09-{day:02d}"
+@pytest.mark.parametrize("date_text,included", (("2026-09-17", False), ("2026-09-21", True), ("2026-10-12", True), ("2026-10-13", False)))
+def test_default_rule_batch_includes_fangsheng_only_in_valid_window(tmp_path, date_text, included):
     db_path = _calendar(tmp_path, dates=(date_text,))
     registry = _Registry(price=11.10)
-    registry.now = datetime(2026, 9, day, 10, 0, tzinfo=TZ)
-    # 9月2日中科飞测的MA5需要历史数据；这里只核对新增固定规则的批量选择。
+    registry.now = datetime.fromisoformat(date_text + "T10:00:00").replace(tzinfo=TZ)
+    # 排除动态均线的历史依赖；这里只核对续期固定规则的批量选择。
     rules = tuple(r for r in DEFAULT_RULES if r.threshold_mode == "fixed")
     result = run_check(
         registry, rules=rules, now=registry.now, state_path=tmp_path / "state.json",
@@ -870,7 +873,7 @@ def test_default_sse_rule_pushes_only_after_observed_below_to_3955(tmp_path):
         GUOCI_MATERIALS_BELOW_67_22_20260831,
         ZHONGKE_FEICE_BELOW_PREVIOUS_MA5_20260831_0902,
         THS_ALL_A_HUSHEN_DAILY_DROP_OVER_4PCT,
-        FANGSHENG_REACH_11_11_20260903_16,
+        FANGSHENG_REACH_11_11_20260921_1012,
         MEDICILON_BELOW_87_65_20260907_1006,
         HAOXIANGNI_BREAKOUT_11_24_20260909_22,
         PINWO_FOODS_BREAKOUT_25_89_20260909_22,
@@ -882,6 +885,9 @@ def test_default_sse_rule_pushes_only_after_observed_below_to_3955(tmp_path):
         SHUANGXING_MATERIALS_BREAKOUT_12_98_20260917_1016,
         SUNWODA_BREAKOUT_19_94_20260917_28,
         FEILONG_BREAKOUT_57_16_20260917_1008,
+        FEILONG_RECLAIM_MA5_20260921_23,
+        KEXIANG_BELOW_108_30_20260922_1008,
+        YOUYAN_SILICON_BREAKOUT_57_96_20260922_1008,
     )
     assert initial_above["events"] == []
     assert below["events"] == []
