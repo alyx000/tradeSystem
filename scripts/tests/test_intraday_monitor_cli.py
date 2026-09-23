@@ -17,6 +17,7 @@ from services.intraday_monitor.rules import (
     FEILONG_RECLAIM_MA5_20260921_23,
     KEXIANG_BELOW_108_30_20260922_1008,
     YOUYAN_SILICON_BREAKOUT_57_96_20260922_1008,
+    NANHUA_BIO_BOARD_BREAK_20260923,
     YOUYAN_SILICON_BREAKOUT_46_14_20260916_30,
     DAJIN_HEAVY_BREAKOUT_41_96_20260917_28,
     FANGSHENG_REACH_11_11_20260921_1012,
@@ -250,12 +251,14 @@ def test_e2e_cli_selects_medicilon_rule(monkeypatch, capsys):
         FEILONG_RECLAIM_MA5_20260921_23,
         KEXIANG_BELOW_108_30_20260922_1008,
         YOUYAN_SILICON_BREAKOUT_57_96_20260922_1008,
+        NANHUA_BIO_BOARD_BREAK_20260923,
     ),
 )
 def test_e2e_cli_selects_new_two_week_breakout_rules(monkeypatch, capsys, selected_rule):
     registry = object()
     monkeypatch.setattr(main, "setup_providers", lambda config: registry)
-    monkeypatch.setattr(intraday_monitor, "shanghai_now", lambda: datetime(2026, 9, 22, 10))
+    check_day = 23 if selected_rule == NANHUA_BIO_BOARD_BREAK_20260923 else 22
+    monkeypatch.setattr(intraday_monitor, "shanghai_now", lambda: datetime(2026, 9, check_day, 10))
     calls = []
     monkeypatch.setattr(
         intraday_monitor, "run_e2e_test",
@@ -375,6 +378,10 @@ def test_help_describes_current_rules_at_every_command_level():
     assert "有研硅严格高于57.96元时推送；等于不触发，首次已突破提醒" in check_help
     assert "旧46.14元规则保持下线" in root_help
     assert "旧46.14元规则保持下线" in check_help
+    assert "2026年9月23日仅一天监控南华生物断板风险" in root_help
+    assert "盘中未封涨停提醒，收盘低于当日涨停价才确认断板" in root_help
+    assert "南华生物严格低于当日动态涨停价时推送" in check_help
+    assert "收盘仍未封板另发断板确认，9月24日起停用" in check_help
     assert "2026年9月16日至24日（7个交易日）另监控福龙马严格突破14.36元" in root_help
     assert "恢复后再次命中可重推" in check_help
     assert "10点前百亿成交额涨停板" in check_help
