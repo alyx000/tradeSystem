@@ -616,6 +616,23 @@ NANHUA_BIO_BOARD_BREAK_20260923 = MonitorRule(
 )
 
 
+# 2026-09-24 开盘前新增；9月24、28、29日共3个开放日，中秋休市不计入。
+ZHONGCAI_TECH_BELOW_59_00_20260924_29 = MonitorRule(
+    rule_id="zhongcai-tech-below-59-00-20260924-29",
+    instrument_name="中材科技",
+    code="002080.SZ",
+    threshold=59.00,
+    direction="below",
+    inclusive=False,
+    emit_on_initial_match=True,
+    action_label="跌破",
+    valid_from=date(2026, 9, 24),
+    valid_until=date(2026, 9, 29),
+    value_label="价格",
+    value_unit="元",
+)
+
+
 # 长期规则保留上证指数站上 3955；历史个股规则不再启用。
 # 动态涨停价与前收盘均线能力由 MonitorRule.threshold_mode 统一扩展。
 # 科创50 1700 与凯莱英 172.26 临时规则覆盖 8 月 21 日与 24 日两个
@@ -643,6 +660,7 @@ DEFAULT_RULES: tuple[MonitorRule, ...] = (
     FEILONG_RECLAIM_MA5_20260921_23,
     YOUYAN_SILICON_BREAKOUT_57_96_20260922_1008,
     NANHUA_BIO_BOARD_BREAK_20260923,
+    ZHONGCAI_TECH_BELOW_59_00_20260924_29,
 )
 
 
