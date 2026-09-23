@@ -19,6 +19,7 @@ from services.intraday_monitor.rules import (
     FEILONG_RECLAIM_MA5_20260921_23,
     YOUYAN_SILICON_BREAKOUT_57_96_20260922_1008,
     NANHUA_BIO_BOARD_BREAK_20260923,
+    ZHONGCAI_TECH_BELOW_59_00_20260924_29,
     DAJIN_HEAVY_BREAKOUT_35_95_20260912_18,
     DAJIN_HEAVY_BREAKOUT_41_96_20260917_28,
     DEFAULT_RULES,
@@ -888,6 +889,7 @@ def test_default_sse_rule_pushes_only_after_observed_below_to_3955(tmp_path):
         FEILONG_RECLAIM_MA5_20260921_23,
         YOUYAN_SILICON_BREAKOUT_57_96_20260922_1008,
         NANHUA_BIO_BOARD_BREAK_20260923,
+        ZHONGCAI_TECH_BELOW_59_00_20260924_29,
     )
     assert initial_above["events"] == []
     assert below["events"] == []
