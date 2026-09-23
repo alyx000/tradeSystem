@@ -597,6 +597,24 @@ YOUYAN_SILICON_BREAKOUT_57_96_20260922_1008 = MonitorRule(
 )
 
 
+NANHUA_BIO_BOARD_BREAK_20260923 = MonitorRule(
+    rule_id="nanhua-bio-board-break-20260923",
+    instrument_name="南华生物",
+    code="000504.SZ",
+    threshold=None,
+    direction="below",
+    inclusive=False,
+    emit_on_initial_match=True,
+    action_label="低于",
+    valid_from=date(2026, 9, 23),
+    valid_until=date(2026, 9, 23),
+    value_label="价格",
+    value_unit="元",
+    threshold_mode="daily_up_limit",
+    threshold_label="当日涨停价",
+)
+
+
 # 长期规则保留上证指数站上 3955；历史个股规则不再启用。
 # 动态涨停价与前收盘均线能力由 MonitorRule.threshold_mode 统一扩展。
 # 科创50 1700 与凯莱英 172.26 临时规则覆盖 8 月 21 日与 24 日两个
@@ -624,6 +642,7 @@ DEFAULT_RULES: tuple[MonitorRule, ...] = (
     FEILONG_RECLAIM_MA5_20260921_23,
     KEXIANG_BELOW_108_30_20260922_1008,
     YOUYAN_SILICON_BREAKOUT_57_96_20260922_1008,
+    NANHUA_BIO_BOARD_BREAK_20260923,
 )
 
 
