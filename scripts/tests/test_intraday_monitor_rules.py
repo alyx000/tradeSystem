@@ -114,10 +114,10 @@ def test_fixed_and_ma_temporary_rules_are_registered():
         SUNWODA_BREAKOUT_19_94_20260917_28,
         FEILONG_BREAKOUT_57_16_20260917_1008,
         FEILONG_RECLAIM_MA5_20260921_23,
-        KEXIANG_BELOW_108_30_20260922_1008,
         YOUYAN_SILICON_BREAKOUT_57_96_20260922_1008,
         NANHUA_BIO_BOARD_BREAK_20260923,
     )
+    assert KEXIANG_BELOW_108_30_20260922_1008 not in DEFAULT_RULES
     assert SSE_COMPOSITE_RECLAIM_3955.rule_id == "sse-composite-reclaim-3955"
     assert SSE_COMPOSITE_RECLAIM_3955.instrument_name == "上证指数"
     assert SSE_COMPOSITE_RECLAIM_3955.code == "000001.SH"

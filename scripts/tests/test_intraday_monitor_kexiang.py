@@ -1,4 +1,4 @@
-"""科翔股份七个开放日的严格跌破、去重、日期与失败保护。"""
+"""科翔股份已下线；历史规则仅供显式回归，不参与正式监控。"""
 import json
 from datetime import date, datetime, timedelta
 
@@ -32,7 +32,31 @@ def test_strict_threshold_and_identity(price, matched):
     assert RULE.is_active(price) is matched
     assert RULE.valid_from == date(2026, 9, 22)
     assert RULE.valid_until == date(2026, 10, 8)
-    assert tuple(r for r in DEFAULT_RULES if r.code == RULE.code and r.threshold_mode == "fixed") == (RULE,)
+    assert not any(r.code == RULE.code for r in DEFAULT_RULES)
+
+
+@pytest.mark.parametrize("day", OPEN_DAYS)
+def test_retired_kexiang_never_fetches_or_pushes_by_default(tmp_path, day):
+    registry, pusher, db, state = _setup(tmp_path, day)
+    selected = tuple(r for r in DEFAULT_RULES if r.code == RULE.code)
+    assert selected == ()
+    result = run_check(registry, rules=selected, now=registry.now, db_path=db,
+                       state_path=state, pusher_factory=lambda: pusher)
+    assert result["status"] == "no_rules"
+    assert registry.call_count == 0 and not pusher.messages
+
+
+def test_live_fixed_batch_keeps_other_rules_but_never_requests_kexiang(tmp_path):
+    registry, pusher, db, state = _setup(tmp_path, "2026-09-23")
+    result = run_check(
+        registry, rules=tuple(r for r in DEFAULT_RULES if r.threshold_mode == "fixed"),
+        now=registry.now, db_path=db, state_path=state, pusher_factory=lambda: pusher,
+    )
+    assert result["status"] == "complete"
+    requested = {code for batch in registry.requested_codes for code in batch}
+    assert RULE.code not in requested
+    assert "688432.SH" in requested
+    assert all(event["rule_id"] != RULE.rule_id for event in result["events"])
 
 
 @pytest.mark.parametrize("day", OPEN_DAYS)
