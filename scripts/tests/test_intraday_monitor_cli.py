@@ -47,6 +47,7 @@ def _check_args() -> argparse.Namespace:
 
 
 @pytest.mark.parametrize("rule_id", [
+    KEXIANG_BELOW_108_30_20260922_1008.rule_id,
     YOUYAN_SILICON_BREAKOUT_46_14_20260916_30.rule_id,
     "fulongma-breakout-14-15-20260916-24",
     "dajin-heavy-breakout-35-95-20260912-18",
@@ -249,7 +250,6 @@ def test_e2e_cli_selects_medicilon_rule(monkeypatch, capsys):
         SUNWODA_BREAKOUT_19_94_20260917_28,
         FEILONG_BREAKOUT_57_16_20260917_1008,
         FEILONG_RECLAIM_MA5_20260921_23,
-        KEXIANG_BELOW_108_30_20260922_1008,
         YOUYAN_SILICON_BREAKOUT_57_96_20260922_1008,
         NANHUA_BIO_BOARD_BREAK_20260923,
     ),
@@ -366,8 +366,8 @@ def test_help_describes_current_rules_at_every_command_level():
     assert "双星新材严格高于12.98元时推送" in check_help
     assert "欣旺达严格高于19.94元时推送" in check_help
     assert "飞龙股份严格高于57.16元时推送" in check_help
-    assert "2026年9月22日至10月8日（7个交易日）监控科翔股份严格跌破108.30元" in root_help
-    assert "科翔股份严格低于108.30元时推送；等于不触发，首次已跌破提醒" in check_help
+    assert "科翔股份108.30元监控已下线" in root_help
+    assert "科翔股份108.30元监控已下线，不再为该规则取数或推送" in check_help
     assert "2026年9月21日至23日（3个交易日）另监控飞龙股份重新站上动态前复权MA5" in root_help
     assert "飞龙股份从不高于动态前复权MA5变为严格高于时推送" in check_help
     assert "每日首次采样已在线上不补报，57.16元规则保留" in check_help
