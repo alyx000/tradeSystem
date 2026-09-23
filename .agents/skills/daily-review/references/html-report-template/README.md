@@ -194,3 +194,19 @@ python3 .agents/skills/daily-review/references/html-report-template/assemble_rep
 - 逐节增改后重跑结构与预算校验；用户新增证据（老师观点/持仓变动/派生报告补跑）就地织入唯一归属章节再重建。
 - 报告全程 `[事实]`/`[判断]` 分标；红线见 `multi-agent-review.md`。
 - 量能一律用镜像综指口径 `000001.SH + 399106.SZ` 自算；北向资金维度继续禁用，只读边界不变。
+
+
+## 三项观察集成
+
+- ②板块沿用同日盘后 `raw_data.sector_increment`。⑤龙头只读 `data/reports/trend-leader/<T>.review.json`，展示放量后回踩与最多12只股东户数/已披露业绩证据，保留完整未覆盖名单。
+- 快照由现有 `trend-leader daily` 在Markdown落盘后原子生成，以SHA256绑定同日日报；裸跑/`--no-push`归档，`--dry-run`不落盘。不新增调度，不在生成HTML时取数或查询当前趋势池。
+- 默认状态摘要＋带日期/数量元数据的折叠明细。`data-trend-review-evidence=<T>`由组装器唯一注入并按官方渲染结果对账；chunk自填、重复、错日或显示篡改拒绝。该模块不参与容量资格、候选排名或因子评分。
+- 同日快照/日报缺失标`missing-data`；损坏、错日、日报SHA不匹配标`source_failed`；行情/板块支持/财务不全与超出12只覆盖保留`partial`并进入ops。通常21:30扫描启动后产出；提前生成的静态HTML须在证据到齐后重新组装，不自动刷新或回退旧日。
+
+2026-09-16：②板块固定增加 `data-sector-adjustment-risk`：可见风险摘要＋折叠全量证据，读取同日盘后块，缺键或受控补采恢复时读取 `data/reports/sector-adjustment-risk/YYYY-MM-DD.json`，不跨日回退。恢复说明可见，组装器重算信号并核对输出，28板块最多29表格行单独预算；缺分钟只能日线预警，缺口进ops。技术与补采入口见 [说明](/Users/alyx/tradeSystem/docs/sector-adjustment-risk.md)。
+
+停牌核验：情绪日报和 HTML 共用 `emotion_leader/suspensions.py`，只读同日 `raw_interface_payloads.regulatory_suspend` 最新成功且日期、代码、计数一致的 `tushare:suspend_d` 快照；仅全天停牌可解释“目标日行情缺失或陈旧”，日内停牌、复牌、错日及其他错误不豁免。历史 JSON 保留原样，HTML 内存核验后区分有效行情/全天停牌/未解决缺失并展示原始记录编号。历史来源缺口与整日报告失败继续保留。趋势“触及区间高点”含持平；样本分母仍是全部活跃核心，停牌不补零。
+
+③情绪区固定加入两类反馈趋势（`data-board-feedback-trend` / `data-core-feedback-trend`），保留连板高度图。只读 SSE 完整自然日日历中的最近20个开放日及前2日：断板逐股重算开盘/收盘均值、收盘中位数和收涨率；核心读取全部活跃样本的涨停/跌停/创新高/新增核心计数（非连板晋级率）。完整点之间用实线；有值 partial 用空心点及虚线连接，缺值/失败/无样本才断线且不补零。核心四指标拆为同纵轴小图，桌面2列、窄屏1列，逐日样本仍见明细。逐日样本、分母与状态可展开，缺口进入 ops；不补采、不写业务库、不推送。实现：`scripts/services/review_feedback_trends.py`，由组装器自动加载，chunk 不得手写。
+
+配合 [`../multi-agent-review.md`](../multi-agent-review.md) 使用。默认产物 = `data/reports/复盘_YYYY-MM-DD.html`（只读，不写工作台/计划层）；回归样例必须用 `--output` 写非 canonical 文件，避免覆盖原报告。

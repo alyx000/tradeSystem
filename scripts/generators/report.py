@@ -858,6 +858,12 @@ class ReportGenerator:
         # ---- 板块节奏分析 ----
         section_idx = _render_sector_rhythm(lines, raw_data, section_idx)
 
+        if isinstance(raw_data.get("sector_increment"), dict):
+            from analyzers.sector_increment import render as render_sector_increment
+            lines.append(f"\n## {_roman(section_idx)}、板块增量归因 [事实·计算]\n")
+            lines.extend(render_sector_increment(raw_data["sector_increment"]))
+            section_idx += 1
+
         # ---- 风格化赚钱效应 ----
         section_idx = _render_style_factors(lines, raw_data, section_idx)
 

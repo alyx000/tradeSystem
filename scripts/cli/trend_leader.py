@@ -26,7 +26,7 @@ from pathlib import Path
 
 from db.connection import get_connection
 from services.trend_leader import constants as C
-from services.trend_leader import pool, renderer, scanner
+from services.trend_leader import pool, renderer, scanner, review_evidence
 
 logger = logging.getLogger(__name__)
 REPORT_ROOT = Path(__file__).resolve().parents[2] / "data" / "reports" / "trend-leader"
@@ -152,6 +152,7 @@ def _run_daily(config: dict, args: argparse.Namespace) -> None:
         logger.info("[trend-leader daily] dry-run（内存副本，未落池/未推送）完成")
         return
     report_path = _write_report(date, md)
+    review_evidence.write(REPORT_ROOT, date, review_evidence.build(summary, md))
     logger.info("[trend-leader daily] 报告已写入 %s", report_path)
     if args.no_push:
         logger.info("[trend-leader daily] --no-push：已落池/报告，未推送")

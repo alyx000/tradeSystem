@@ -154,6 +154,18 @@ def render_daily(conn: sqlite3.Connection, summary: dict) -> str:
                 f"| {code} | {r.get('name', '')} | {r.get('days_in_pool', '')} | {marks} |")
         lines.append("")
 
+    if "launch_pullbacks" in summary:
+        lines += ["## 放量启动后的回踩观察 [判断]",
+                  "前复权OHLC；启动代理=近20根内放量阳线突破前5根最高价，成交量≥前5根均量1.5倍。",
+                  "参数为工程代理，未经收益验证；只作观察，不改变原池规则。板块支持采用同日完整成交额增量证据。",
+                  "| 代码 | 启动日 | 距启动K线数 | 当前状态 | 数据状态 |",
+                  "| --- | --- | --- | --- | --- |"]
+        for obs in summary["launch_pullbacks"]:
+            lines.append(f"| {obs['code']} | {obs.get('launch_date', '—')} | {obs.get('bars_since_launch', '—')} | "
+                         f"{obs['label']} | {obs['status']} |")
+            if obs.get("reason"):
+                lines.append(f"\n{obs['code']} 缺口：{obs['reason']}\n")
+        lines.append("")
     if "research_cards" in summary:
         from services.trend_leader.research_evidence import render as render_research
         named_cards = [

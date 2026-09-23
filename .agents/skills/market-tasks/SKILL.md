@@ -11,6 +11,8 @@ version: "1.14"
 
 # Skill: 市场数据任务（盘前 / 盘后采集）
 
+2026-09-20：既有20:00盘后链新增全量沪深A股 `raw_data.sector_increment`（含ST剔B股，采集时申万二级快照），展示增额/份额变化/市场净增额贡献；净增额过小不算贡献，缺口保留partial/source_failed，复盘HTML②同日只读消费。`trend-leader daily`附加前复权放量启动后回踩观察及最多12只股东户数/已披露业绩证据卡，不改变池准入/退出；只认观察日前公告。无新调度/业务表/推送开关。详见 [口径与验证](/Users/alyx/tradeSystem/docs/sector-increment-and-trend-evidence.md)。
+
 ## 使用场景
 
 当用户说：

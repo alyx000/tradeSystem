@@ -335,6 +335,8 @@ STRUCTURED_CONTRACT_ATTRIBUTES = (
     "data-board-feedback-trend",
     "data-core-feedback-trend",
     "data-sector-adjustment-risk",
+    "data-sector-increment",
+    "data-trend-review-evidence",
     "data-style-board-break-feedback",
     "data-style-market-effect",
     "data-style-low-price-effect",
@@ -6676,6 +6678,8 @@ def validate_report(
     new_high_manifest: dict | None = None,
     exposure_context: ExposureValidationContext | None = None,
     sector_adjustment_risk: dict | None = None,
+    sector_increment: dict | None = None,
+    trend_review_evidence: dict | None = None,
 ) -> ReportMetrics:
     """校验结构、Claim、折叠证据、边界声明及双层预算。"""
 
@@ -6683,6 +6687,46 @@ def validate_report(
     report_date = next(item[3] for item in parser.schema_hosts)
     _validate_exposure_context(parser, report_date, exposure_context)
     metrics = parser.metrics()
+    trend_evidence_blocks = parser.structured_contracts["data-trend-review-evidence"]
+    trend_evidence_rows = trend_evidence_chars = trend_evidence_tables = 0
+    if trend_evidence_blocks or trend_review_evidence is not None:
+        if len(trend_evidence_blocks) != 1:
+            raise ReportValidationError("invalid_trend_review_evidence", "趋势复盘证据必须恰好一处", section="s5")
+        block = trend_evidence_blocks[0]
+        if block.section != "s5" or block.default_hidden or block.value != report_date:
+            raise ReportValidationError("invalid_trend_review_evidence", "趋势复盘证据位置/日期非法", section="s5")
+        if trend_review_evidence is not None:
+            from services.trend_leader.review_evidence import render as render_trend_review_evidence, structure as trend_evidence_structure
+            expected = _ReportParser()
+            expected_html = render_trend_review_evidence(trend_review_evidence, report_date)[0]
+            expected.feed(expected_html)
+            source = expected.structured_contracts["data-trend-review-evidence"][0]
+            normalize = lambda b: re.sub(r"\s+", "", "".join(b.rendered_text))
+            if (normalize(block) != normalize(source)
+                    or trend_evidence_structure(html) != trend_evidence_structure(expected_html)):
+                raise ReportValidationError("trend_review_evidence_source_mismatch", "趋势证据与同日快照不一致", section="s5")
+            # 仅为已对账的官方证据模块增加容量，正文预算保持不变。
+            trend_evidence_rows = len(source.rows)
+            trend_evidence_chars = len(normalize(source))
+            trend_evidence_tables = 1 if source.rows else 0
+    increment_blocks = parser.structured_contracts["data-sector-increment"]
+    increment_rows = 0
+    if increment_blocks or sector_increment is not None:
+        if len(increment_blocks) != 1:
+            raise ReportValidationError("invalid_sector_increment", "板块增量归因必须恰好一处", section="s2")
+        increment = increment_blocks[0]
+        if increment.section != "s2" or increment.default_hidden or increment.value != report_date:
+            raise ReportValidationError("invalid_sector_increment", "板块增量归因位置/日期非法", section="s2")
+        if sector_increment is not None:
+            from analyzers.sector_increment import render_html as render_sector_increment
+            expected_increment = _ReportParser()
+            expected_increment.feed(render_sector_increment(sector_increment, report_date)[0])
+            source_increment = expected_increment.structured_contracts["data-sector-increment"][0]
+            normalize = lambda block: re.sub(r"\s+", "", "".join(block.rendered_text))
+            if normalize(increment) != normalize(source_increment):
+                raise ReportValidationError("sector_increment_source_mismatch", "板块增量显示与同日证据不一致", section="s2")
+            # 仅给已对账的官方全行业表预留证据行预算，chunk自建表不可借用。
+            increment_rows = len(source_increment.rows) if len(source_increment.rows) > 11 else 0
     risk_blocks = parser.structured_contracts["data-sector-adjustment-risk"]
     risk_rows = 0
     if risk_blocks:
@@ -6754,22 +6798,22 @@ def validate_report(
             f"正文 {metrics.visible_rows} 行，硬上限 {VISIBLE_ROW_LIMIT}",
         ),
         (
-            metrics.evidence_chars > EVIDENCE_CHAR_LIMIT,
+            metrics.evidence_chars > EVIDENCE_CHAR_LIMIT + trend_evidence_chars,
             "evidence_chars_exceeded",
             _largest_section(metrics, "evidence_chars"),
             f"证据层 {metrics.evidence_chars} 字，硬上限 {EVIDENCE_CHAR_LIMIT}",
         ),
         (
-            metrics.evidence_tables > EVIDENCE_TABLE_LIMIT,
+            metrics.evidence_tables > EVIDENCE_TABLE_LIMIT + trend_evidence_tables,
             "evidence_tables_exceeded",
             _largest_section(metrics, "evidence_tables"),
             f"证据层 {metrics.evidence_tables} 张表，硬上限 {EVIDENCE_TABLE_LIMIT}",
         ),
         (
-            metrics.evidence_rows > EVIDENCE_ROW_LIMIT + trend_rows + risk_rows,
+            metrics.evidence_rows > EVIDENCE_ROW_LIMIT + trend_rows + risk_rows + increment_rows + trend_evidence_rows,
             "evidence_rows_exceeded",
             _largest_section(metrics, "evidence_rows"),
-            f"证据层 {metrics.evidence_rows} 行，硬上限 {EVIDENCE_ROW_LIMIT}+趋势来源{trend_rows}行+板块风险{risk_rows}行",
+            f"证据层 {metrics.evidence_rows} 行，硬上限 {EVIDENCE_ROW_LIMIT}+趋势来源{trend_rows}行+板块风险{risk_rows}行+行业增额{increment_rows}行",
         ),
     )
     for failed, code, section, message in checks:
@@ -8784,6 +8828,8 @@ def render_report(
     include_legacy_sections: bool = False,
     feedback_trends: dict | None = None,
     sector_adjustment_risk: dict | None = None,
+    sector_increment: dict | None = None,
+    trend_review_evidence: dict | None = None,
 ) -> str:
     """读取固定 chunk，包裹静态阅读器外壳并返回 HTML 字符串。
 
@@ -8811,6 +8857,13 @@ def render_report(
     scripts_path = str(_repo_root() / "scripts")
     if scripts_path not in sys.path:
         sys.path.insert(0, scripts_path)
+    from services.trend_leader.review_evidence import render as render_trend_review_evidence
+    if any(re.search(r"\bdata-trend-review-evidence\s*=", body, re.I) for body in chunks.values()):
+        raise ReportValidationError("duplicate_trend_review_evidence", "趋势证据由组装器统一生成，chunk不得自行注入", section="s5")
+    trend_fragment, trend_gaps = render_trend_review_evidence(trend_review_evidence, report_date)
+    chunks["s456"] = _inject_section_fragment(chunks["s456"], "s5", trend_fragment)
+    if trend_gaps:
+        chunks["s8ops"] = _inject_section_fragment(chunks["s8ops"], "ops", '<p>[事实] 趋势回踩及财务证据缺口：'+escape('；'.join(trend_gaps))+'；缺失不补零。</p>')
     from services.review_feedback_trends import render_feedback_trends
 
     from services.sector_adjustment_risk.renderer import render as render_sector_risk
@@ -8820,6 +8873,14 @@ def render_report(
     chunks["s2"] = _inject_section_fragment(chunks["s2"], "s2", risk_fragment)
     if risk_gaps:
         chunks["s8ops"] = _inject_section_fragment(chunks["s8ops"], "ops", '<p>[事实] 板块调整风险缺口：'+escape('；'.join(risk_gaps))+'；未核验不代表没有风险。</p>')
+
+    from analyzers.sector_increment import render_html as render_sector_increment
+    if any(re.search(r"\bdata-sector-increment\s*=", body, re.I) for body in chunks.values()):
+        raise ReportValidationError("duplicate_sector_increment", "板块增量归因由组装器统一生成", section="s2")
+    increment_fragment, increment_gaps = render_sector_increment(sector_increment, report_date)
+    chunks["s2"] = _inject_section_fragment(chunks["s2"], "s2", increment_fragment)
+    if increment_gaps:
+        chunks["s8ops"] = _inject_section_fragment(chunks["s8ops"], "ops", '<p>[事实] 板块增量归因缺口：'+escape('；'.join(increment_gaps))+'；未计算不补零。</p>')
 
     feedback_fragment, feedback_gaps = render_feedback_trends(feedback_trends, report_date)
     chunks["s456"] = _inject_section_fragment(chunks["s456"], "s3", feedback_fragment)
@@ -9127,6 +9188,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         feedback_trends = load_feedback_trends(daily_root, emotion_history_dir, trade_db_path, args.date)
         sector_risk = load_sector_risk(daily_root, _repo_root()/"data/reports/sector-adjustment-risk", args.date)
+        from analyzers.sector_increment import load_snapshot as load_sector_increment
+        sector_increment = load_sector_increment(daily_root, args.date)
+        from services.trend_leader.review_evidence import load as load_trend_review_evidence
+        trend_review_evidence = load_trend_review_evidence(_repo_root()/"data/reports/trend-leader", args.date)
         html = render_report(
             args.tmp_dir,
             args.date,
@@ -9137,6 +9202,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             style_market_effect=style_market_effect,
             feedback_trends=feedback_trends,
             sector_adjustment_risk=sector_risk,
+            sector_increment=sector_increment,
+            trend_review_evidence=trend_review_evidence,
         )
         manifest_path = args.capacity_manifest or (
             Path(args.tmp_dir) / f"capacity_{args.date}.json"
@@ -9161,6 +9228,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             new_high_manifest=new_high_manifest,
             exposure_context=exposure_context,
             sector_adjustment_risk=sector_risk,
+            sector_increment=sector_increment,
+            trend_review_evidence=trend_review_evidence,
         )
         output = args.output or (_repo_root() / "data" / "reports" / f"复盘_{args.date}.html")
         path = _atomic_write_report(html, output)

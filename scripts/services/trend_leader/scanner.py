@@ -26,7 +26,7 @@ from services.concept_tags import (
 from services.trend_leader import constants as C
 from services.trend_leader import detectors as D
 from services.trend_leader import mainline_llm
-from services.trend_leader import pool, research_evidence
+from services.trend_leader import pool, research_evidence, observations
 from services.volume_concentration import repo as vc_repo
 from services.volume_concentration.aggregator import UNCLASSIFIED
 from utils.price_limit import is_dual_board
@@ -104,9 +104,12 @@ def _main_sectors(
     }
 
 
-def _bars(registry, code: str, start: str, date: str) -> list[dict]:
+def _bars(registry, code: str, start: str, date: str, *, observation_cache=None) -> list[dict]:
     r = registry.call("get_stock_daily_range", code, start, date)
-    return r.data if getattr(r, "success", False) and isinstance(r.data, list) else []
+    bars = r.data if getattr(r, "success", False) and isinstance(r.data, list) else []
+    if observation_cache is not None:
+        observation_cache[code] = bars
+    return bars
 
 
 def _break_reason(trend_detail: dict) -> str:
@@ -159,6 +162,7 @@ def run_daily(conn: sqlite3.Connection, registry, date: str, *,
     main_sector_list, main_sector_meta = _main_sectors(conn, date, top_k, sectors)
     main_sectors = set(main_sector_list)
     start = range_start or _lookback_start(date)
+    observation_cache = {}
 
     lu = registry.call("get_limit_up_list", date)
     lu_ok = getattr(lu, "success", False)
@@ -294,7 +298,7 @@ def run_daily(conn: sqlite3.Connection, registry, date: str, *,
         # candidates = 主线∩涨停（进入检测阶段的数量），与 entered（过检入池）故意分开：
         # 二者之差 = 漏斗的检测器过滤层，是设计意图而非统计错误。
         summary["candidates"] += 1
-        bars = _bars(registry, bare, start, date)
+        bars = _bars(registry, bare, start, date, observation_cache=observation_cache)
         if not bars:                            # 行情拉取失败/空：记错误，不误判为"无信号"
             summary["data_errors"].append(bare)
             continue
@@ -319,7 +323,7 @@ def run_daily(conn: sqlite3.Connection, registry, date: str, *,
         code = r["code"]
         if code in entered_codes:
             continue
-        bars = _bars(registry, code, start, date)
+        bars = _bars(registry, code, start, date, observation_cache=observation_cache)
         if not bars:                            # 行情缺失：不 touch 推进 last_seen/days、不退池，记错误
             summary["data_errors"].append(code)
             continue
@@ -353,10 +357,36 @@ def run_daily(conn: sqlite3.Connection, registry, date: str, *,
     summary["research_cards"] = list(cards.values())
     summary["research_coverage"] = dict(eligible=len(codes), collected=len(selected),
                                        not_collected=codes[len(selected):])
+    sector_block = observations.load_sector(conn, date)
+    summary["launch_pullbacks"] = []
     for row in active_rows:
+        code = row["code"]
+        raw_bars = observation_cache.get(code, [])
+        adjusted = []
+        observation = None
+        # 沿用 main 的既有日线窗口，不引入尚未发布的均线扩窗；不足30根明确缺失。
+        # 仅为原池转换完成后的在池对象追加复权取数，不改变准入或退出检测器输入。
+        if raw_bars:
+            factors = registry.call("get_stock_adj_factor_range", code, start, date)
+            if not getattr(factors, "success", False):
+                reason = f"get_stock_adj_factor_range[{code}]: source_failed: {getattr(factors, 'error', None) or '复权来源失败'}"
+                summary["source_errors"].append(reason)
+                observation = observations.missing(date, reason)
+            else:
+                adjusted = observations.prepare(raw_bars, factors.data, date)
+                if not adjusted:
+                    reason = f"{code} 前复权OHLCV日期/因子覆盖校验未通过"
+                    summary["data_errors"].append(reason)
+                    observation = observations.missing(date, reason)
+        industry = (sw_by_bare.get(code) or {}).get("sw_l2", UNCLASSIFIED)
+        support = observations.sector_support(sector_block, industry, date)
+        if observation is None:
+            observation = observations.analyze(adjusted, date, support)
+        summary["launch_pullbacks"].append(dict(code=code, name=row["name"], **observation))
         # 旧日或缺行情时不推进池日期；仅在本日已维护的信号中附加证据。
         if row["last_seen_date"] == date:
             signal = dict(row.get("last_signal") or {})
+            signal["launch_pullback"] = observation
             signal["research_evidence"] = cards.get(row["code"], dict(
                 status="not_collected", trade_date=date, reason="超出当日12只证据卡覆盖"))
             pool.touch(conn, row["code"], date=date, signal_json=signal)

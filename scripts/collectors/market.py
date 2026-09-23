@@ -1085,6 +1085,10 @@ class MarketCollector:
         )
         logger.info("次新股赚钱效应统计: status=%s", result["ipo_effect"].get("status"))
 
+        # 全量板块增额归因，独立失败保持盘后主链可用，随原信封双写。
+        from analyzers.sector_increment import collect as collect_sector_increment
+        result["sector_increment"] = collect_sector_increment(self.registry, date)
+
         # 11. 指数均线
         self._compute_index_ma(result, date)
 

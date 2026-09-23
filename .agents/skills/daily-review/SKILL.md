@@ -6,6 +6,8 @@ version: "1.16"
 
 # Skill: 每日复盘（八步复盘法）
 
+2026-09-20：三项观察固定进入正式HTML。②板块自动读取同日 `raw_data.sector_increment`；⑤龙头自动读取 `data/reports/trend-leader/<T>.review.json` 的放量后回踩、股东户数及已披露业绩，默认摘要＋折叠明细。趋势证据随原21:30扫描同批原子归档，并校验同日Markdown摘要SHA，禁止从当前池回填历史。缺失、错日、来源失败或覆盖不足明确进入ops；尚未生成不等于无信号。chunk不得手填这些模块，不影响容量资格、正式评分、计划层或原池状态机。详见模板「三项观察集成」。
+
 2026-09-16：复盘②板块由正式组装器自动注入「活跃板块调整风险」，读取同日盘后 `raw_data.sector_adjustment_risk`（缺键或受控补采恢复时读同日专用报告；恢复说明可见）。行业＋活跃概念，日线预警与60分钟确认分层，缺源 partial/source_failed 显式入ops；chunk不得手填模块。来源#826、候选认知及工程代理阈值见 [说明](/Users/alyx/tradeSystem/docs/sector-adjustment-risk.md)。不新增推送或计划写入。
 
 本文件为**速查**；八步中每一步的**详细提问话术、占位示例与附录说明**见 [references/eight-step-prompt-templates.md](references/eight-step-prompt-templates.md)。

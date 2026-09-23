@@ -7600,6 +7600,8 @@ def test_cli_default_output_path_remains_compatible(
         new_high_manifest=None,
         exposure_context=None,
         sector_adjustment_risk=None,
+        sector_increment=None,
+        trend_review_evidence=None,
     ):
         nonlocal calls
         calls += 1
@@ -7609,6 +7611,8 @@ def test_cli_default_output_path_remains_compatible(
             new_high_manifest=new_high_manifest,
             exposure_context=exposure_context,
             sector_adjustment_risk=sector_adjustment_risk,
+            sector_increment=sector_increment,
+            trend_review_evidence=trend_review_evidence,
         )
 
     monkeypatch.setattr(assembler, "validate_report", counted_validate)

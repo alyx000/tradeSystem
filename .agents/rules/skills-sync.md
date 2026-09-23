@@ -281,3 +281,6 @@ sector-correlation 同步核对：同日同值涨跌幅重复行折叠且审计�
 
 
 - 历史天量：`python3 scripts/main.py volume-record daily --date YYYY-MM-DD --input-by USER [--metric both|volume|amount] [--no-push] [--dry-run] [--json]`，默认成交量/成交额分别核验上市以来严格新高，随20:00盘后既有调度归档并推钉钉；简洁名单、倍数与双创结果，一句缺口提示，详细诊断留本地。`volume-record push --date YYYY-MM-DD --input-by USER`只补发归档、相同内容去重。完整契约见`.agents/skills/market-tasks/SKILL.md`历史天量章节；只写`data/reports/volume-record/`报告/基线/回执，不写业务库或池计划。
+
+
+2026-09-23：发布板块增量归因、趋势放量回踩及每日复盘HTML集成。沿用20:00盘后与21:30趋势扫描，新增按日 review.json 并绑定同日Markdown；②板块/⑤龙头由正式组装器消费，缺失与失败明确进入ops，不新增调度。说明见 docs/sector-increment-and-trend-evidence.md。

@@ -110,6 +110,7 @@ def test_daily_dry_run_does_not_persist(wired, capsys):
     assert "趋势主升观察清单" in out
     assert wired["pushes"] == []                       # 未推送
     assert not (wired["report_root"] / "2026-06-12.md").exists()
+    assert not (wired["report_root"] / "2026-06-12.review.json").exists()
     conn = get_connection(wired["db"])
     try:
         assert pool.get_active(conn, "600552") is None  # 内存副本跑，真实库无落池
@@ -120,6 +121,10 @@ def test_daily_dry_run_does_not_persist(wired, capsys):
 def test_daily_no_push_persists_without_push(wired, capsys):
     tl._run_daily({}, _daily_args(no_push=True))
     assert wired["pushes"] == []                        # 未推送
+    evidence = tl.review_evidence.load(wired["report_root"], "2026-06-12")
+    assert evidence["trade_date"] == "2026-06-12"
+    assert evidence["status"] == "partial"  # 测试源缺复权与财务，保留缺口。
+    assert evidence["coverage"]["eligible"] == 1
     assert (wired["report_root"] / "2026-06-12.md").read_text(encoding="utf-8").startswith(
         "# 趋势主升观察清单"
     )
