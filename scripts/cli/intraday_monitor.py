@@ -47,6 +47,7 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
             "2026年9月22日至10月8日（7个交易日）监控有研硅严格突破57.96元；旧46.14元规则保持下线。"
             "2026年9月23日仅一天监控南华生物断板风险；盘中未封涨停提醒，收盘低于当日涨停价才确认断板。"
             "2026年9月24日至29日（3个交易日）监控中材科技严格跌破59.00元。"
+            "2026年9月29日至10月14日（7个交易日）监控气派科技跌至37.11元或以下。"
         ),
     )
     commands = parser.add_subparsers(dest="intraday_monitor_command")
@@ -79,6 +80,7 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
             "2026年9月23日南华生物严格低于当日动态涨停价时推送；首次未封板提醒，"
             "回封后再开板可重推，收盘仍未封板另发断板确认，9月24日起停用。"
             "2026年9月24、28、29日中材科技严格低于59.00元时推送；等于不触发，首次已跌破提醒。"
+            "2026年9月29日至10月14日气派科技不高于37.11元时推送；等于也触发，首次已到线或线下提醒。"
         ),
     )
     check.add_argument("--dry-run", action="store_true", help="只预览，不写状态、不推送")
