@@ -18,6 +18,8 @@ make today-close # 跑今天的收盘后主流程
 
 盘后 `make today-close` 复用交易日20:00调度，同批采集次新股赚钱效应：上市一年（365天）/半年（183天）/90天，另列剔除上市前5交易日与沪深子组，保存上涨率、等权涨跌均值/中位、±5%尾部、开收盘表现和全市场对照；完整成分、来源与缺口保存在同日 `post-market.yaml.raw_data.ipo_effect` 及 `daily_market` 信封。
 
+每日 `macro-flash` 归档与钉钉明确区分翻页 raw、窗口内去重 window、matched、预算后 selected/omitted，并列每主题覆盖；selected 是正文计划展示数，送达另看 `push_status`。只读归纳扫描全量 `flash_raw.json.items`，按“宏观政策/信号、产业趋势、核心个股”保留来源日期、证据与缺口；规则摘录不证明趋势或核心地位。研报/trend-leader 可选增强本版未接入，显式 `not_collected`。既有 important 每主题 8 条/其他 3 条、无 important 回退全量、18KB 整块预算及工作日 20:00/周日 22:00 调度不变。v2 重推使用同代封存文本，旧版归档只读重建；`--no-push` 仍记录计划覆盖，不代表已送达。
+
 ## 按角色上手
 
 ### 开发者
