@@ -23,6 +23,7 @@ from services.intraday_monitor.rules import (
     CHIPOWER_REACH_37_11_20260929_1014,
     ROCKCHIP_BELOW_203_90_20260929_1008,
     ROCKCHIP_ABOVE_219_02_20260929_1008,
+    XIANDAO_BREAKOUT_49_72_20260929_1008,
     DAJIN_HEAVY_BREAKOUT_35_95_20260912_18,
     DAJIN_HEAVY_BREAKOUT_41_96_20260917_28,
     DEFAULT_RULES,
@@ -896,6 +897,7 @@ def test_default_sse_rule_pushes_only_after_observed_below_to_3955(tmp_path):
         CHIPOWER_REACH_37_11_20260929_1014,
         ROCKCHIP_BELOW_203_90_20260929_1008,
         ROCKCHIP_ABOVE_219_02_20260929_1008,
+        XIANDAO_BREAKOUT_49_72_20260929_1008,
     )
     assert initial_above["events"] == []
     assert below["events"] == []
