@@ -683,6 +683,23 @@ ROCKCHIP_ABOVE_219_02_20260929_1008 = MonitorRule(
 )
 
 
+# 2026-09-29 盘中新增，启用后开始观察；含当日共3个开放日。
+XIANDAO_BREAKOUT_49_72_20260929_1008 = MonitorRule(
+    rule_id="xiandao-breakout-49-72-20260929-1008",
+    instrument_name="先导基电",
+    code="600641.SH",
+    threshold=49.72,
+    direction="above",
+    inclusive=False,
+    emit_on_initial_match=True,
+    action_label="突破",
+    valid_from=date(2026, 9, 29),
+    valid_until=date(2026, 10, 8),
+    value_label="价格",
+    value_unit="元",
+)
+
+
 # 长期规则保留上证指数站上 3955；历史个股规则不再启用。
 # 动态涨停价与前收盘均线能力由 MonitorRule.threshold_mode 统一扩展。
 # 科创50 1700 与凯莱英 172.26 临时规则覆盖 8 月 21 日与 24 日两个
@@ -714,6 +731,7 @@ DEFAULT_RULES: tuple[MonitorRule, ...] = (
     CHIPOWER_REACH_37_11_20260929_1014,
     ROCKCHIP_BELOW_203_90_20260929_1008,
     ROCKCHIP_ABOVE_219_02_20260929_1008,
+    XIANDAO_BREAKOUT_49_72_20260929_1008,
 )
 
 
