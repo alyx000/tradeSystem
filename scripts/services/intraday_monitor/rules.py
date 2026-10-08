@@ -700,6 +700,23 @@ XIANDAO_BREAKOUT_49_72_20260929_1008 = MonitorRule(
 )
 
 
+# 2026-10-08 收盘后新增；从下一开放日起计满10个交易日。
+SGMICRO_BREAKOUT_103_41_20261009_22 = MonitorRule(
+    rule_id="sgmicro-breakout-103-41-20261009-22",
+    instrument_name="圣邦股份",
+    code="300661.SZ",
+    threshold=103.41,
+    direction="above",
+    inclusive=False,
+    emit_on_initial_match=True,
+    action_label="突破",
+    valid_from=date(2026, 10, 9),
+    valid_until=date(2026, 10, 22),
+    value_label="价格",
+    value_unit="元",
+)
+
+
 # 长期规则保留上证指数站上 3955；历史个股规则不再启用。
 # 动态涨停价与前收盘均线能力由 MonitorRule.threshold_mode 统一扩展。
 # 科创50 1700 与凯莱英 172.26 临时规则覆盖 8 月 21 日与 24 日两个
@@ -732,6 +749,7 @@ DEFAULT_RULES: tuple[MonitorRule, ...] = (
     ROCKCHIP_BELOW_203_90_20260929_1008,
     ROCKCHIP_ABOVE_219_02_20260929_1008,
     XIANDAO_BREAKOUT_49_72_20260929_1008,
+    SGMICRO_BREAKOUT_103_41_20261009_22,
 )
 
 
