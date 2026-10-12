@@ -815,6 +815,22 @@ FANGSHENG_REACH_11_11_20261013_21 = MonitorRule(
 )
 
 
+YILI_BELOW_27_31_20261013_26 = MonitorRule(
+    rule_id="yili-below-27-31-20261013-26",
+    instrument_name="伊利股份",
+    code="600887.SH",
+    threshold=27.31,
+    direction="below",
+    inclusive=False,
+    emit_on_initial_match=True,
+    action_label="跌破",
+    valid_from=date(2026, 10, 13),
+    valid_until=date(2026, 10, 26),
+    value_label="价格",
+    value_unit="元",
+)
+
+
 # 长期规则保留上证指数站上 3955；历史个股规则不再启用。
 # 动态涨停价与前收盘均线能力由 MonitorRule.threshold_mode 统一扩展。
 # 科创50 1700 与凯莱英 172.26 临时规则覆盖 8 月 21 日与 24 日两个
@@ -854,6 +870,7 @@ DEFAULT_RULES: tuple[MonitorRule, ...] = (
     STAR200_BREAKOUT_1400_20261012_20,
     CSI1000_BREAKOUT_7340_20261012_20,
     FANGSHENG_REACH_11_11_20261013_21,
+    YILI_BELOW_27_31_20261013_26,
 )
 
 

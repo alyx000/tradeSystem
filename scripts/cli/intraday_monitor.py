@@ -54,6 +54,7 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
             "2026年10月12日至20日（7个交易日）监控上证指数严格突破3870/3930点、"
             "创业板指3140点、科创200 1400点及中证1000 7340点。"
             "方盛制药原规则10月12日结束后，10月13日至21日接续7个交易日。"
+            "2026年10月13日至26日（10个交易日）监控伊利股份严格跌破27.31元。"
         ),
     )
     commands = parser.add_subparsers(dest="intraday_monitor_command")
@@ -94,6 +95,8 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
             "科创200 1400点、中证1000 7340点均严格高于压力位时推送，等于不触发，"
             "首次已突破提醒，持续突破去重，回落后再次突破可重推。"
             "方盛制药10月13日至21日接续7个交易日，等于11.11元仍触发，旧窗口及历史状态保留。"
+            "2026年10月13日至26日伊利股份严格低于27.31元时推送；等于不触发，"
+            "首次已跌破提醒，持续跌破去重，恢复到线或线上后再跌破可重推，10月27日起停用。"
         ),
     )
     check.add_argument("--dry-run", action="store_true", help="只预览，不写状态、不推送")
