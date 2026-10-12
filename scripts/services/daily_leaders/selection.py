@@ -8,6 +8,7 @@ from services.daily_leaders.models import (
     LEADER_ROLES,
     MAX_CONFIRMATION_CANDIDATES,
     MAX_LLM_REVIEW_CANDIDATES,
+    STATUS_ROLES,
 )
 
 
@@ -197,25 +198,32 @@ def _positive_rank(value: Any) -> int | None:
     return value if value > 0 else None
 
 
+def candidate_review_status(item: dict[str, Any]) -> str | None:
+    """Explicit downgrades survive legacy role aliases and missing run metadata."""
+    statuses = {
+        str(item.get(field) or "").strip()
+        for field in ("review_status", "llm_role", "leader_role", "attribute_type")
+    } & STATUS_ROLES
+    if "剔除" in statuses:
+        return "剔除"
+    return "备选" if "备选" in statuses else None
+
+
 def _candidate_for_selection(
     item: dict[str, Any],
     *,
     llm_ok: bool,
-) -> tuple[dict[str, Any] | None, int, int | None]:
+) -> tuple[dict[str, Any] | None, int | None]:
     candidate = dict(item)
     fallback_role = candidate["fallback_role"]
     llm_role = str(candidate.get("llm_role") or "").strip()
     parsed_llm_rank = _positive_rank(candidate.get("llm_rank")) if llm_ok else None
     effective_llm_rank = None
-    backup_penalty = 0
-
-    if llm_ok and llm_role == "剔除":
-        return None, backup_penalty, effective_llm_rank
-    if llm_ok and llm_role == "备选":
-        leader_role = fallback_role
-        selection_basis = "deterministic_fallback"
-        backup_penalty = 1
-    elif llm_ok and llm_role in LEADER_ROLES:
+    # A downgrade is an admission decision, not a ranking penalty. In particular,
+    # unused slots and a capacity-based fallback must never restore a backup.
+    if candidate_review_status(candidate):
+        return None, effective_llm_rank
+    if llm_ok and llm_role in LEADER_ROLES:
         leader_role = llm_role
         selection_basis = "llm"
         effective_llm_rank = parsed_llm_rank
@@ -228,7 +236,7 @@ def _candidate_for_selection(
     candidate["leader_role"] = leader_role
     candidate["attribute_type"] = leader_role
     candidate["selection_basis"] = selection_basis
-    return candidate, backup_penalty, effective_llm_rank
+    return candidate, effective_llm_rank
 
 
 def select_confirmation_candidates(
@@ -241,13 +249,13 @@ def select_confirmation_candidates(
         raise ValueError("max_candidates must be between 1 and 15")
     original_count = len(items)
     assigned = _ensure_fallback_roles(items)
-    sortable: list[tuple[int, int, float, int, dict[str, Any]]] = []
+    sortable: list[tuple[int, float, int, dict[str, Any]]] = []
     for index, item in enumerate(assigned):
-        candidate, backup_penalty, llm_rank = _candidate_for_selection(item, llm_ok=llm_ok)
+        candidate, llm_rank = _candidate_for_selection(item, llm_ok=llm_ok)
         if candidate is None:
             continue
         rank_key = llm_rank if llm_rank is not None else 1_000_000_000
-        sortable.append((backup_penalty, rank_key, -_selection_score(candidate), index, candidate))
+        sortable.append((rank_key, -_selection_score(candidate), index, candidate))
 
     ordered = [entry[-1] for entry in sorted(sortable, key=lambda entry: entry[:-1])]
 

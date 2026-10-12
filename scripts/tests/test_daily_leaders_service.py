@@ -1403,9 +1403,8 @@ def test_confirm_writes_step5_and_syncs_leader_tracking(conn, tmp_path):
     ("candidate_roles", "expected"),
     [
         ({"leader_role": "连板核心", "llm_role": "前排活跃", "attribute_type": "旧属性"}, "连板核心"),
-        ({"leader_role": "备选", "llm_role": "弹性前排", "attribute_type": "旧属性"}, "弹性前排"),
-        ({"leader_role": "剔除", "llm_role": "备选", "attribute_type": "10cm"}, "10cm"),
-        ({"leader_role": "备选", "llm_role": "剔除", "attribute_type": "备选"}, None),
+        ({"llm_role": "弹性前排", "attribute_type": "旧属性"}, "弹性前排"),
+        ({"attribute_type": "10cm"}, "10cm"),
     ],
 )
 def test_confirm_prefers_new_legal_roles_and_never_persists_status_roles(candidate_roles, expected):
@@ -1424,6 +1423,61 @@ def test_confirm_prefers_new_legal_roles_and_never_persists_status_roles(candida
 
     assert result[0]["attribute_type"] == expected
     assert result[0]["attribute_type"] not in {"备选", "剔除"}
+
+
+@pytest.mark.parametrize("status", ["备选", "剔除"])
+@pytest.mark.parametrize("field", ["llm_role", "leader_role", "attribute_type", "review_status"])
+def test_confirm_rejects_legacy_status_before_transaction(conn, tmp_path, field, status):
+    candidate = {"stock": "麦格米特", "stock_code": "002851", "sector": "其他电源设备Ⅱ",
+                 "leader_role": "趋势中军", "attribute_type": "趋势中军", field: status}
+    path = tmp_path / "legacy.json"
+    path.write_text(json.dumps({"date": "2026-10-12", "top_leaders": [candidate]}))
+    before = conn.total_changes
+    with pytest.raises(ValueError, match="备选|剔除"):
+        service.confirm(conn, "2026-10-12", "codex", leaders_file=path)
+    assert not conn.in_transaction
+    assert conn.total_changes == before
+    assert Q.get_daily_review(conn, "2026-10-12") is None
+    assert Q.get_active_leaders(conn) == []
+
+
+@pytest.mark.parametrize("all_backups", [False, True])
+def test_propose_separates_backups_and_confirm_only_uses_main_list(conn, tmp_path, monkeypatch, all_backups):
+    from services.daily_leaders.llm import enrich_with_llm_reason
+
+    prefill = {"market": {
+        "stock_quotes": {"data": [
+            {"code": "002851.SZ", "name": "麦格米特", "sw_l2": "其他电源设备Ⅱ",
+             "pct_chg": -0.1751, "amount_yi": 21.34},
+            {"code": "688041.SH", "name": "海光信息", "sw_l2": "半导体",
+             "pct_chg": 12.0, "amount_yi": 42.0},
+        ]},
+        "sector_moneyflow_dc": {"data": [
+            {"name": "其他电源设备Ⅲ", "buy_sm_amount_stock": "麦格米特",
+             "net_amount_yi": 0.78, "rank": 5, "pct_change": -1.7},
+        ]},
+    }}
+    def enrich(proposal, *, enabled):
+        return enrich_with_llm_reason(proposal, enabled=enabled, runner=lambda prompt: {
+            "麦格米特|其他电源设备Ⅱ": {"rank": 2, "role": "备选", "reason": "缺乏领涨证据，降级为备选。"},
+            "海光信息|半导体": {"rank": 1, "role": "备选" if all_backups else "弹性前排", "reason": "仍需人工确认。"},
+        })
+    monkeypatch.setattr(service, "enrich_with_llm_reason", enrich)
+    proposal = service.propose(conn, "2026-10-12", prefill, output_root=tmp_path)
+    assert proposal["llm_status"]["ok"] is True
+    assert [x["stock"] for x in proposal["top_leaders"]] == ([] if all_backups else ["海光信息"])
+    assert {x["stock"] for x in proposal["backup_candidates"]} == ({"麦格米特", "海光信息"} if all_backups else {"麦格米特"})
+    assert all(x["leader_role"] is None and x["attribute_type"] is None for x in proposal["backup_candidates"])
+    assert proposal["candidate_limit"]["backup_count"] == (2 if all_backups else 1)
+    saved = json.loads((tmp_path / "2026-10-12.json").read_text())
+    assert saved["backup_candidates"] == proposal["backup_candidates"]
+    if all_backups:
+        with pytest.raises(ValueError, match="no confirmable candidates"):
+            service.confirm(conn, "2026-10-12", "codex", output_root=tmp_path)
+        assert Q.get_daily_review(conn, "2026-10-12") is None
+    else:
+        service.confirm(conn, "2026-10-12", "codex", output_root=tmp_path)
+        assert [x["stock_code"] for x in Q.get_active_leaders(conn)] == ["688041"]
 
 
 @pytest.mark.parametrize(
@@ -2068,4 +2122,6 @@ def test_propose_reports_both_review_pool_and_final_sector_role_trims(
         "sector_role_trimmed_count": 1,
         "stock_duplicate_trimmed_count": 0,
         "final_count": 2,
+        "backup_count": 0,
+        "excluded_count": 0,
     }

@@ -13,11 +13,11 @@ from services.daily_leaders.models import (
     LEADER_ROLES,
     MAX_CONFIRMATION_CANDIDATES,
     MAX_LLM_REVIEW_CANDIDATES,
-    STATUS_ROLES,
 )
 from services.daily_leaders.selection import (
     # Keep this service-level re-export for callers that assemble the funnel in stages.
     assign_fallback_roles,
+    candidate_review_status,
     canonical_stock_code,
     normalize_sector_key,
     parse_stock_display_identity,
@@ -316,13 +316,21 @@ def propose(
             proposal["llm_status"] = {"ok": False, "reason": "missing_status"}
 
     llm_ok = bool((proposal.get("llm_status") or {}).get("ok"))
+    reviewed_items = proposal.get("top_leaders") or []
+    backups = [
+        {**item, "review_status": "备选", "leader_role": None,
+         "attribute_type": None, "selection_basis": "observation_only"}
+        for item in reviewed_items if candidate_review_status(item) == "备选"
+    ]
     selected, selection_stats = select_confirmation_candidates(
-        proposal.get("top_leaders") or [],
+        reviewed_items,
         max_candidates=max_candidates,
         llm_ok=llm_ok,
     )
     final_count = len(selected)
     proposal["top_leaders"] = _without_internal_fields(selected)
+    proposal["backup_candidates"] = _without_internal_fields(backups)
+    proposal.setdefault("candidate_policy", {})["backups_observation_only"] = True
     proposal["candidate_limit"] = {
         "max_candidates": max_candidates,
         "original_count": original_count,
@@ -338,6 +346,8 @@ def propose(
             "stock_duplicate_trimmed_count", 0
         ),
         "final_count": final_count,
+        "backup_count": len(backups),
+        "excluded_count": sum(candidate_review_status(item) == "剔除" for item in reviewed_items),
     }
     paths = write_proposal(proposal, root=output_root)
     proposal["paths"] = {key: str(value) for key, value in paths.items()}
@@ -358,6 +368,8 @@ def _confirmed_step5_leaders(source: dict[str, Any], date: str) -> list[dict[str
     raw_leaders = source.get("top_leaders")
     if not isinstance(raw_leaders, list):
         raise ValueError("top_leaders must be a list")
+    if not raw_leaders:
+        raise ValueError("no confirmable candidates; observation backups cannot be confirmed")
     if len(raw_leaders) > MAX_CONFIRMATION_CANDIDATES:
         raise ValueError(
             f"top_leaders must contain at most {MAX_CONFIRMATION_CANDIDATES} items"
@@ -370,6 +382,12 @@ def _confirmed_step5_leaders(source: dict[str, Any], date: str) -> list[dict[str
     for index, item in enumerate(raw_leaders, start=1):
         if not isinstance(item, dict):
             raise ValueError(f"top_leaders[{index}] must be an object")
+        review_status = candidate_review_status(item)
+        if review_status:
+            raise ValueError(
+                f"top_leaders[{index}] is {review_status}, not a confirmable leader; "
+                "regenerate the proposal before confirmation"
+            )
         stock_raw = item.get("stock")
         sector_raw = item.get("sector")
         if not isinstance(stock_raw, str) or not isinstance(sector_raw, str):
@@ -406,13 +424,10 @@ def _confirmed_step5_leaders(source: dict[str, Any], date: str) -> list[dict[str
         leader_role = str(item.get("leader_role") or "").strip()
         llm_role = str(item.get("llm_role") or "").strip()
         legacy_attribute = item.get("attribute_type")
-        legacy_text = str(legacy_attribute or "").strip()
         if leader_role in LEADER_ROLES:
             attribute_type = leader_role
         elif llm_role in LEADER_ROLES:
             attribute_type = llm_role
-        elif legacy_text in STATUS_ROLES:
-            attribute_type = None
         else:
             attribute_type = legacy_attribute
 
