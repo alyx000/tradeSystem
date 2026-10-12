@@ -12,7 +12,7 @@ from services.daily_leaders.llm import (
     is_safe_llm_reason,
     is_safe_llm_risk_flag,
 )
-from services.daily_leaders.selection import stock_identity_key
+from services.daily_leaders.selection import candidate_review_status, stock_identity_key
 
 
 KNOWN_LLM_FAILURE_REASONS = {
@@ -73,6 +73,8 @@ def _render_candidate_limit(candidate_limit: dict[str, Any]) -> str:
             ("review_pool_count", "LLM 复核池 {} 条"),
             ("sector_role_trimmed_count", "同板块同属性收敛 {} 条"),
             ("stock_duplicate_trimmed_count", "股票重复收敛 {} 条"),
+            ("backup_count", "观察备选 {} 条（不参与确认）"),
+            ("excluded_count", "复核剔除 {} 条"),
             ("final_count", "最终候选 {} 条"),
             ("max_candidates", "硬上限 {} 条"),
         )
@@ -172,7 +174,12 @@ def _has_verified_role_aware_metadata(proposal: dict[str, Any], leaders: Any) ->
 def render_markdown(proposal: dict[str, Any]) -> str:
     date = _text(proposal.get("date")).strip() or "未注明日期"
     raw_leaders = proposal.get("top_leaders")
-    leaders = raw_leaders if isinstance(raw_leaders, list) else []
+    all_leaders = raw_leaders if isinstance(raw_leaders, list) else []
+    legacy_status_items = [item for item in all_leaders if candidate_review_status(item)]
+    leaders = [item for item in all_leaders if not candidate_review_status(item)]
+    raw_backups = proposal.get("backup_candidates")
+    backups = [item for item in raw_backups if isinstance(item, dict)] if isinstance(raw_backups, list) else []
+    backups.extend(item for item in legacy_status_items if candidate_review_status(item) == "备选")
 
     lines = [
         f"# 每日最票候选确认稿 · {date}",
@@ -214,6 +221,11 @@ def render_markdown(proposal: dict[str, Any]) -> str:
         )
     candidate_limit = proposal.get("candidate_limit") if isinstance(proposal.get("candidate_limit"), dict) else {}
     summary = _render_candidate_limit(candidate_limit)
+    if legacy_status_items:
+        summary = (
+            f"> 旧稿展示隔离：候选条目 {len(leaders)} 条，"
+            f"备选或剔除 {len(legacy_status_items)} 条；原稿统计不作为当前可确认数量。"
+        )
     if summary:
         lines.extend(
             [
@@ -222,6 +234,10 @@ def render_markdown(proposal: dict[str, Any]) -> str:
             ]
         )
     lines.extend(["", "## 候选条目"])
+    if legacy_status_items:
+        lines.extend([
+            "", "> 旧稿含备选或剔除项，已在展示中隔离；整份旧稿不可直接确认，请重新生成候选稿。",
+        ])
 
     skipped = proposal.get("skipped") if isinstance(proposal.get("skipped"), dict) else {}
     if skipped:
@@ -344,14 +360,31 @@ def render_markdown(proposal: dict[str, Any]) -> str:
             text = _text(evidence_item.get("text")).strip() or "未填写"
             lines.append(f"  - {label} {text}")
 
-    lines.extend(
-        [
-            "",
-            "## 确认方式",
-            "",
-            "- 可回复：确认，全部录入",
+    if backups:
+        lines.extend(["", "## 观察备选（不参与确认）", "",
+                      "> 以下条目证据不足，仅保留观察原因，不授予最票属性，不随“全部录入”写入。"])
+        seen_backups: set[str] = set()
+        for item in backups:
+            if candidate_review_status(item) == "剔除":
+                continue
+            identity = stock_identity_key(item)
+            if identity in seen_backups:
+                continue
+            seen_backups.add(identity)
+            stock = _text(item.get("stock")).strip() or "未命名标的"
+            sector = _text(item.get("sector")).strip() or "未分类"
+            reason = item.get("llm_reason")
+            reason = reason.strip() if is_safe_llm_reason(reason) else "缺乏足够最票证据，需重新复核。"
+            lines.extend(["", f"### 观察：{stock}｜{sector}",
+                          "- 状态：[判断] 备选", f"- 降级原因：[判断] {reason}"])
+
+    if leaders and not legacy_status_items:
+        lines.extend([
+            "", "## 确认方式", "",
+            "- 可回复：确认，全部录入（仅上方候选条目，不含观察备选）",
             "- 可回复：确认录入第 1 条",
             "- 可回复：跳过，并说明原因",
-        ]
-    )
+        ])
+    elif not leaders:
+        lines.extend(["", "- 当前没有可确认的最票候选。"])
     return "\n".join(lines).rstrip() + "\n"

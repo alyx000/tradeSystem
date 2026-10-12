@@ -357,7 +357,7 @@ def test_select_confirmation_candidates_ignores_rank_from_illegal_llm_role():
     assert selected[0]["selection_basis"] == "deterministic_fallback"
 
 
-def test_select_confirmation_candidates_ignores_rank_between_backup_candidates():
+def test_select_confirmation_candidates_never_fills_vacancies_with_backups():
     selection = _selection()
     items = [
         {
@@ -380,11 +380,10 @@ def test_select_confirmation_candidates_ignores_rank_between_backup_candidates()
 
     selected, _ = selection.select_confirmation_candidates(items, llm_ok=True)
 
-    assert [item["stock"] for item in selected] == ["备选高分"]
-    assert selected[0]["selection_basis"] == "deterministic_fallback"
+    assert selected == []
 
 
-def test_select_confirmation_candidates_drops_excluded_and_downweights_backup():
+def test_select_confirmation_candidates_drops_excluded_and_backup():
     selection = _selection()
     items = [
         {
@@ -415,11 +414,22 @@ def test_select_confirmation_candidates_drops_excluded_and_downweights_backup():
 
     selected, stats = selection.select_confirmation_candidates(items, llm_ok=True)
 
-    assert [item["stock"] for item in selected] == ["正常票", "备选票"]
-    assert selected[1]["leader_role"] == "弹性前排"
-    assert selected[1]["selection_basis"] == "deterministic_fallback"
+    assert [item["stock"] for item in selected] == ["正常票"]
     assert stats["review_pool_count"] == 3
-    assert stats["trimmed_count"] == 1
+    assert stats["trimmed_count"] == 2
+
+
+@pytest.mark.parametrize("llm_ok", [True, False])
+def test_selection_does_not_restore_legacy_backup_capacity_role(llm_ok):
+    item = {
+        "stock": "麦格米特", "stock_code": "002851",
+        "sector": "其他电源设备Ⅱ", "amount_yi": 21.34, "pct_chg": -0.1751,
+        "fallback_role": "趋势中军", "leader_role": "趋势中军",
+        "attribute_type": "趋势中军", "llm_role": "备选", "llm_rank": 12,
+    }
+    selected, _ = _selection().select_confirmation_candidates([item], llm_ok=llm_ok)
+    assert selected == []
+    assert item["llm_role"] == "备选"
 
 
 def test_select_confirmation_candidates_keeps_one_stock_per_sector_role():

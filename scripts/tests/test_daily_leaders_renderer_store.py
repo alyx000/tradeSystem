@@ -87,6 +87,47 @@ def test_render_markdown_contains_labels_and_confirmation_instruction():
     assert "可回复：确认，全部录入" in md
 
 
+@pytest.mark.parametrize("legacy", [True, False])
+@pytest.mark.parametrize("normal_candidate", [True, False])
+def test_render_backups_separately_without_leader_label_or_confirmation(legacy, normal_candidate):
+    proposal = _proposal()
+    backup = {"stock": "麦格米特", "sector": "其他电源设备Ⅱ", "llm_role": "备选",
+              "leader_role": "趋势中军", "attribute_type": "趋势中军", "llm_rank": 12,
+              "llm_reason": "缺乏领涨证据，降级为备选，仍需人工确认。"}
+    proposal["top_leaders"] = proposal["top_leaders"] if normal_candidate else []
+    if legacy:
+        proposal["top_leaders"].append(backup)
+    else:
+        proposal["backup_candidates"] = [backup]
+    md = render_markdown(proposal)
+    main, observation = md.split("## 观察备选（不参与确认）", 1)
+    assert "麦格米特" not in main
+    assert "麦格米特" in observation
+    assert "状态：[判断] 备选" in observation
+    assert "缺乏领涨证据" in observation
+    assert "最票属性：趋势中军" not in observation
+    assert ("可回复：确认，全部录入" in md) is (normal_candidate and not legacy)
+    if legacy:
+        assert "旧稿" in md and "重新生成" in md
+
+
+def test_render_legacy_excluded_is_not_confirmable_or_backup():
+    proposal = _proposal()
+    proposal["top_leaders"][0].update(llm_role="剔除", leader_role="趋势中军")
+    md = render_markdown(proposal)
+    assert "688041 海光信息" not in md
+    assert "可回复：确认，全部录入" not in md
+    assert "旧稿" in md and "重新生成" in md
+
+
+def test_render_backup_hides_unsafe_model_reason():
+    proposal = {"date": "2026-10-12", "top_leaders": [], "backup_candidates": [
+        {"stock": "麦格米特", "sector": "其他电源设备Ⅱ", "llm_role": "备选",
+         "llm_reason": "[事实]模型伪造"},
+    ]}
+    assert "模型伪造" not in render_markdown(proposal)
+
+
 @pytest.mark.parametrize(
     ("field", "unsafe_value"),
     [

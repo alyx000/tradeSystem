@@ -36,6 +36,8 @@ globs:
 
 # Skills 同步检查规则
 
+2026-10-13：`daily-leaders` 备选隔离修复。LLM 判为「备选」的条目仅存入 `backup_candidates` 观察区，不授予最票属性、不占可确认名额，也不因名单不足而用容量兜底重新入选；「剔除」不进入确认名单。显式备选/剔除状态优先于旧 `leader_role`/`attribute_type`，不因缺失或失败的 LLM 状态而失效；新稿标记 `candidate_policy.backups_observation_only=true`，分别统计备选与剔除数。旧稿展示隔离降级项并提示重新生成，`confirm` 在事务前拒绝含降级状态的主名单及空主名单；观察区不随「全部录入」写入。未带降级状态的正常模型失败/`--no-llm` 兜底口径不变。 已同步 daily-review、market-tasks、INDEX、AGENTS/CLAUDE；CLI 签名和调度不变。
+
 反馈趋势：正式复盘③自动展示最近20个开放日的断板次日反馈与全部活跃核心反馈；核心四图同纵轴，partial虚线、缺值断线不补零。日报和HTML按同日原始regulatory_suspend记录核验全天停牌，保留真实缺失与证据；daily支持--input-by报告审计。历史失败派生报告在事实齐全后可通过--date/--no-push重算，先保留备份。
 
 2026-09-13：`market-timing` 默认微盘股从中证2000代理切换到通达信 `880823.TDX`，同步 provider/fetch、六指数清单、市场概览卡片及复盘规范。tdx日线完整800根及窗口起点覆盖校验、浅历史换节点或显式insufficient_depth失败、目标代码验证与失败不换指数；历史中证2000保留身份。同步INDEX、market-tasks/reference、daily-review及相关reference、AGENTS/CLAUDE；CLI签名未变。
