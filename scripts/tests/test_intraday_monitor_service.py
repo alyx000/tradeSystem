@@ -25,6 +25,12 @@ from services.intraday_monitor.rules import (
     ROCKCHIP_ABOVE_219_02_20260929_1008,
     XIANDAO_BREAKOUT_49_72_20260929_1008,
     SGMICRO_BREAKOUT_103_41_20261009_22,
+    SSE_COMPOSITE_BREAKOUT_3870_20261012_20,
+    SSE_COMPOSITE_BREAKOUT_3930_20261012_20,
+    CHINEXT_BREAKOUT_3140_20261012_20,
+    STAR200_BREAKOUT_1400_20261012_20,
+    CSI1000_BREAKOUT_7340_20261012_20,
+    FANGSHENG_REACH_11_11_20261013_21,
     DAJIN_HEAVY_BREAKOUT_35_95_20260912_18,
     DAJIN_HEAVY_BREAKOUT_41_96_20260917_28,
     DEFAULT_RULES,
@@ -531,7 +537,7 @@ def test_default_rule_batch_includes_medicilon_only_in_valid_window(
     assert ("688202.SH" in requested) is included
 
 
-@pytest.mark.parametrize("date_text,included", (("2026-09-17", False), ("2026-09-21", True), ("2026-10-12", True), ("2026-10-13", False)))
+@pytest.mark.parametrize("date_text,included", (("2026-09-17", False), ("2026-09-21", True), ("2026-10-12", True), ("2026-10-13", True), ("2026-10-21", True), ("2026-10-22", False)))
 def test_default_rule_batch_includes_fangsheng_only_in_valid_window(tmp_path, date_text, included):
     db_path = _calendar(tmp_path, dates=(date_text,))
     registry = _Registry(price=11.10)
@@ -900,6 +906,12 @@ def test_default_sse_rule_pushes_only_after_observed_below_to_3955(tmp_path):
         ROCKCHIP_ABOVE_219_02_20260929_1008,
         XIANDAO_BREAKOUT_49_72_20260929_1008,
         SGMICRO_BREAKOUT_103_41_20261009_22,
+        SSE_COMPOSITE_BREAKOUT_3870_20261012_20,
+        SSE_COMPOSITE_BREAKOUT_3930_20261012_20,
+        CHINEXT_BREAKOUT_3140_20261012_20,
+        STAR200_BREAKOUT_1400_20261012_20,
+        CSI1000_BREAKOUT_7340_20261012_20,
+        FANGSHENG_REACH_11_11_20261013_21,
     )
     assert initial_above["events"] == []
     assert below["events"] == []

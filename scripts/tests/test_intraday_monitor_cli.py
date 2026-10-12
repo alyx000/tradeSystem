@@ -334,7 +334,9 @@ def test_help_describes_current_rules_at_every_command_level():
     assert "8月31日监控国瓷材料严格跌破67.22元" in root_help
     assert "中科飞测严格跌破前5个已收盘交易日的前复权MA5" in root_help
     assert "同花顺全A（沪深）单日跌幅严格超过4.00%" in root_help
-    assert "2026年9月21日至10月12日监控方盛制药达到或高于11.11元" in root_help
+    assert "2026年9月21日至10月21日监控方盛制药达到或高于11.11元" in root_help
+    assert "2026年10月12日至20日（7个交易日）监控上证指数严格突破3870/3930点" in root_help
+    assert "创业板指3140点、科创2001400点及中证10007340点" in root_help
     assert "2026年9月9日至22日监控好想你严格突破11.24元" in root_help
     assert "品渥食品严格突破25.89元" in root_help
     assert "良品铺子严格突破10.17元" in root_help
@@ -352,7 +354,9 @@ def test_help_describes_current_rules_at_every_command_level():
     assert "国瓷材料严格低于67.22元" in check_help
     assert "中科飞测严格低于前5个已收盘交易日MA5时推送" in check_help
     assert "同花顺全A（沪深）单日涨跌幅严格低于-4.00%时推送" in check_help
-    assert "2026年9月21日至10月12日方盛制药达到或高于11.11元时推送" in check_help
+    assert "2026年9月21日至10月21日方盛制药达到或高于11.11元时推送" in check_help
+    assert "上证指数3870/3930点分档独立提醒" in check_help
+    assert "方盛制药10月13日至21日接续7个交易日" in check_help
     assert "2026年9月7日至10月6日美迪西严格低于87.65元时推送" in check_help
     assert "2026年9月9日至22日好想你严格高于11.24元" in check_help
     assert "品渥食品严格高于25.89元" in check_help
