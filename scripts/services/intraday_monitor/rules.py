@@ -717,6 +717,104 @@ SGMICRO_BREAKOUT_103_41_20261009_22 = MonitorRule(
 )
 
 
+# 2026-10-12 盘前按截图新增；7个开放日为12～16日、19日和20日。
+SSE_COMPOSITE_BREAKOUT_3870_20261012_20 = MonitorRule(
+    rule_id="sse-composite-breakout-3870-20261012-20",
+    instrument_name="上证指数",
+    code="000001.SH",
+    threshold=3870.0,
+    direction="above",
+    inclusive=False,
+    emit_on_initial_match=True,
+    action_label="突破",
+    valid_from=date(2026, 10, 12),
+    valid_until=date(2026, 10, 20),
+    value_unit="点",
+    threshold_label="压力位",
+)
+
+
+SSE_COMPOSITE_BREAKOUT_3930_20261012_20 = MonitorRule(
+    rule_id="sse-composite-breakout-3930-20261012-20",
+    instrument_name="上证指数",
+    code="000001.SH",
+    threshold=3930.0,
+    direction="above",
+    inclusive=False,
+    emit_on_initial_match=True,
+    action_label="突破",
+    valid_from=date(2026, 10, 12),
+    valid_until=date(2026, 10, 20),
+    value_unit="点",
+    threshold_label="压力位",
+)
+
+
+CHINEXT_BREAKOUT_3140_20261012_20 = MonitorRule(
+    rule_id="chinext-breakout-3140-20261012-20",
+    instrument_name="创业板指",
+    code="399006.SZ",
+    threshold=3140.0,
+    direction="above",
+    inclusive=False,
+    emit_on_initial_match=True,
+    action_label="突破",
+    valid_from=date(2026, 10, 12),
+    valid_until=date(2026, 10, 20),
+    value_unit="点",
+    threshold_label="压力位",
+)
+
+
+STAR200_BREAKOUT_1400_20261012_20 = MonitorRule(
+    rule_id="star200-breakout-1400-20261012-20",
+    instrument_name="科创200",
+    code="000699.SH",
+    threshold=1400.0,
+    direction="above",
+    inclusive=False,
+    emit_on_initial_match=True,
+    action_label="突破",
+    valid_from=date(2026, 10, 12),
+    valid_until=date(2026, 10, 20),
+    value_unit="点",
+    threshold_label="压力位",
+)
+
+
+CSI1000_BREAKOUT_7340_20261012_20 = MonitorRule(
+    rule_id="csi1000-breakout-7340-20261012-20",
+    instrument_name="中证1000",
+    code="000852.SH",
+    threshold=7340.0,
+    direction="above",
+    inclusive=False,
+    emit_on_initial_match=True,
+    action_label="突破",
+    valid_from=date(2026, 10, 12),
+    valid_until=date(2026, 10, 20),
+    value_unit="点",
+    threshold_label="压力位",
+)
+
+
+# 接续原规则10月12日到期后的7个开放日；不改旧定义或历史账本。
+FANGSHENG_REACH_11_11_20261013_21 = MonitorRule(
+    rule_id="fangsheng-reach-11-11-20261013-21",
+    instrument_name="方盛制药",
+    code="603998.SH",
+    threshold=11.11,
+    direction="above",
+    inclusive=True,
+    emit_on_initial_match=True,
+    action_label="达到或高于",
+    valid_from=date(2026, 10, 13),
+    valid_until=date(2026, 10, 21),
+    value_label="价格",
+    value_unit="元",
+)
+
+
 # 长期规则保留上证指数站上 3955；历史个股规则不再启用。
 # 动态涨停价与前收盘均线能力由 MonitorRule.threshold_mode 统一扩展。
 # 科创50 1700 与凯莱英 172.26 临时规则覆盖 8 月 21 日与 24 日两个
@@ -750,6 +848,12 @@ DEFAULT_RULES: tuple[MonitorRule, ...] = (
     ROCKCHIP_ABOVE_219_02_20260929_1008,
     XIANDAO_BREAKOUT_49_72_20260929_1008,
     SGMICRO_BREAKOUT_103_41_20261009_22,
+    SSE_COMPOSITE_BREAKOUT_3870_20261012_20,
+    SSE_COMPOSITE_BREAKOUT_3930_20261012_20,
+    CHINEXT_BREAKOUT_3140_20261012_20,
+    STAR200_BREAKOUT_1400_20261012_20,
+    CSI1000_BREAKOUT_7340_20261012_20,
+    FANGSHENG_REACH_11_11_20261013_21,
 )
 
 
