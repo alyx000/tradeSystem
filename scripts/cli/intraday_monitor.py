@@ -57,6 +57,7 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
             "2026年10月13日至26日（10个交易日）监控伊利股份严格跌破27.31元。"
             "2026年10月14日至16日（3个交易日）监控旋极信息严格突破3.76元、"
             "有研新材严格跌破42.40元。"
+            "2026年10月14日至22日（7个交易日）监控襄阳轴承严格突破11.97元。"
         ),
     )
     commands = parser.add_subparsers(dest="intraday_monitor_command")
@@ -101,6 +102,8 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
             "首次已跌破提醒，持续跌破去重，恢复到线或线上后再跌破可重推，10月27日起停用。"
             "2026年10月14日至16日旋极信息严格高于3.76元、有研新材严格低于42.40元时分别推送；"
             "等于不触发，首次已命中提醒，持续命中去重，恢复后再次命中可重推，10月17日起停用。"
+            "2026年10月14日至22日襄阳轴承严格高于11.97元时推送；等于不触发，"
+            "首次已突破提醒，持续突破去重，回落至阈值或以下后再次突破可重推，10月23日起停用。"
         ),
     )
     check.add_argument("--dry-run", action="store_true", help="只预览，不写状态、不推送")
