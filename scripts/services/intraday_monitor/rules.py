@@ -831,6 +831,38 @@ YILI_BELOW_27_31_20261013_26 = MonitorRule(
 )
 
 
+XUANJI_BREAKOUT_3_76_20261014_16 = MonitorRule(
+    rule_id="xuanji-breakout-3-76-20261014-16",
+    instrument_name="旋极信息",
+    code="300324.SZ",
+    threshold=3.76,
+    direction="above",
+    inclusive=False,
+    emit_on_initial_match=True,
+    action_label="突破",
+    valid_from=date(2026, 10, 14),
+    valid_until=date(2026, 10, 16),
+    value_label="价格",
+    value_unit="元",
+)
+
+
+GRINM_MATERIALS_BELOW_42_40_20261014_16 = MonitorRule(
+    rule_id="grinm-materials-below-42-40-20261014-16",
+    instrument_name="有研新材",
+    code="600206.SH",
+    threshold=42.40,
+    direction="below",
+    inclusive=False,
+    emit_on_initial_match=True,
+    action_label="跌破",
+    valid_from=date(2026, 10, 14),
+    valid_until=date(2026, 10, 16),
+    value_label="价格",
+    value_unit="元",
+)
+
+
 # 长期规则保留上证指数站上 3955；历史个股规则不再启用。
 # 动态涨停价与前收盘均线能力由 MonitorRule.threshold_mode 统一扩展。
 # 科创50 1700 与凯莱英 172.26 临时规则覆盖 8 月 21 日与 24 日两个
@@ -859,7 +891,6 @@ DEFAULT_RULES: tuple[MonitorRule, ...] = (
     YOUYAN_SILICON_BREAKOUT_57_96_20260922_1008,
     NANHUA_BIO_BOARD_BREAK_20260923,
     ZHONGCAI_TECH_BELOW_59_00_20260924_29,
-    CHIPOWER_REACH_37_11_20260929_1014,
     ROCKCHIP_BELOW_203_90_20260929_1008,
     ROCKCHIP_ABOVE_219_02_20260929_1008,
     XIANDAO_BREAKOUT_49_72_20260929_1008,
@@ -871,6 +902,8 @@ DEFAULT_RULES: tuple[MonitorRule, ...] = (
     CSI1000_BREAKOUT_7340_20261012_20,
     FANGSHENG_REACH_11_11_20261013_21,
     YILI_BELOW_27_31_20261013_26,
+    XUANJI_BREAKOUT_3_76_20261014_16,
+    GRINM_MATERIALS_BELOW_42_40_20261014_16,
 )
 
 
