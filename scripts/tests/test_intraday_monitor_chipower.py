@@ -1,4 +1,4 @@
-"""气派科技七交易日跌到提醒：边界、去重、有效期与失败保护。"""
+"""气派科技已下线：保留历史契约，默认取数/推送/E2E入口隔离。"""
 import argparse
 import json
 from datetime import date, datetime, timedelta
@@ -39,7 +39,7 @@ def test_identity_and_inclusive_boundary(price, matched):
     assert RULE.is_active(price) is matched
     assert RULE.valid_from == date(2026, 9, 29)
     assert RULE.valid_until == date(2026, 10, 14)
-    assert tuple(r for r in DEFAULT_RULES if r.code == RULE.code) == (RULE,)
+    assert tuple(r for r in DEFAULT_RULES if r.code == RULE.code) == ()
 
 
 @pytest.mark.parametrize("day", OPEN_DAYS)
@@ -58,17 +58,16 @@ def test_holiday_and_expiry_never_fetch_or_push(tmp_path, day):
     assert registry.call_count == 0 and not pusher.messages
 
 
-@pytest.mark.parametrize("day,included", [
-    ("2026-09-28", False), *((day, True) for day in OPEN_DAYS),
-    ("2026-10-15", False),
-])
-def test_default_batch_respects_window_and_preserves_retirement(tmp_path, day, included):
+@pytest.mark.parametrize("day", ("2026-09-28", *OPEN_DAYS, "2026-10-15"))
+def test_default_batch_never_fetches_retired_chipower(tmp_path, day):
     registry, pusher, db, state = _setup(tmp_path, day)
     result = run_check(registry, rules=tuple(r for r in DEFAULT_RULES if r.threshold_mode == "fixed"),
                        now=registry.now, db_path=db, state_path=state, pusher_factory=lambda: pusher)
     assert result["status"] == "complete"
     requested = {code for batch in registry.requested_codes for code in batch}
-    assert (RULE.code in requested) is included
+    assert RULE.code not in requested
+    assert all(event["rule_id"] != RULE.rule_id for event in result["events"])
+    assert all("气派科技" not in message[1] for message in pusher.messages)
     assert "300903.SZ" not in requested
     assert "000001.SH" in requested
 
@@ -113,9 +112,29 @@ def test_preview_and_failed_push_retry(tmp_path):
     assert failed["events"][0]["event_id"] in saved["sent_event_ids"]
 
 
-def test_cli_exposes_rule_without_sending():
+def test_cli_rejects_retired_rule_without_sending():
     parser = argparse.ArgumentParser()
     intraday_monitor.register_subparser(parser.add_subparsers())
-    parsed = parser.parse_args(["intraday-monitor", "e2e-test", "--rule-id", RULE.rule_id,
-                               "--input-by", "pytest", "--confirm-real-push"])
-    assert parsed.rule_id == RULE.rule_id
+    with pytest.raises(SystemExit) as exc:
+        parser.parse_args(["intraday-monitor", "e2e-test", "--rule-id", RULE.rule_id,
+                          "--input-by", "pytest", "--confirm-real-push"])
+    assert exc.value.code == 2
+
+
+def test_retired_pending_cannot_leak_into_other_rule_pushes(tmp_path):
+    registry, pusher, db, state = _setup(tmp_path, "2026-10-14")
+    pusher.succeed = False
+    failed = _run(registry, pusher, db, state)
+    event_id = failed["events"][0]["event_id"]
+    pusher.messages.clear()
+    pusher.succeed = True
+    registry.now += timedelta(minutes=3)
+    result = run_check(registry, rules=tuple(r for r in DEFAULT_RULES if r.threshold_mode == "fixed"),
+                       now=registry.now, db_path=db, state_path=state, pusher_factory=lambda: pusher)
+    assert result["status"] == "complete"
+    assert all(event["rule_id"] != RULE.rule_id for event in result["events"])
+    assert all("气派科技" not in message[1] for message in pusher.messages)
+    assert RULE.code not in registry.requested_codes[-1]
+    saved = json.loads(state.read_text())
+    assert event_id in saved["expired_event_ids"] and event_id not in saved["sent_event_ids"]
+    assert not saved["pending_events"]
