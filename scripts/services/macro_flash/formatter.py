@@ -108,32 +108,82 @@ def _select_important(candidates: List[FlashCandidate]) -> List[FlashCandidate]:
     return selected
 
 
-def build_push_digest(candidates: List[FlashCandidate], *,
-                      window_start: datetime, window_end: datetime,
-                      source_status: str, raw_count: int,
-                      topic_order: List[str], archive_hint: str,
-                      full_digest_md: str = None) -> str:
-    """推送体 = important 精选(每主题限量)+ 全量指引;精选为空退回全量截断。
+def build_push_plan(candidates: List[FlashCandidate], *,
+                    window_start: datetime, window_end: datetime,
+                    source_status: str, raw_count: int,
+                    topic_order: List[str], archive_hint: str,
+                    window_count: int = None, summary_md: str = "",
+                    error: str = None) -> tuple:
+    """返回预算裁剪后的正文及同口径 coverage；selected 是计划展示数，不代表送达。
 
-    归档 digest.md 恒为全量(build_digest_markdown),入库确认与回查不受影响;
-    本函数只决定钉钉里那份的密度。full_digest_md:调用方已算好的全量 digest,
-    仅精选为空的回退分支使用,免重复构建。
+    保留 important/8/3、无 important 回退全量、18KB 按主题前缀整块截断。
+    覆盖与只读归纳是保留头部；正文展示计数不包括归纳中重复引用的证据。
     """
-    selected = _select_important(candidates)
-    if not selected:
-        # 窗口内无 important 条目:退回全量(交给 18KB 整块截断),避免推空精选误导
-        full_md = full_digest_md or build_digest_markdown(
-            candidates, window_start=window_start, window_end=window_end,
-            source_status=source_status, raw_count=raw_count, topic_order=topic_order)
-        return build_push_markdown(full_md, archive_hint)
-    note = (f"📌 推送精选 {len(selected)} 条(仅金十标重要,主题内最新优先);"
-            f"全量命中 {len(candidates)} 条见 `{archive_hint}`")
-    md = build_digest_markdown(
-        selected, window_start=window_start, window_end=window_end,
-        source_status=source_status, raw_count=raw_count,
-        topic_order=topic_order, extra_note=note,
-        matched_count=len(candidates))
-    return build_push_markdown(md, archive_hint)
+    important = _select_important(candidates)
+    eligible = important or candidates
+    mode = "important" if important else "full_fallback"
+    if source_status == "source_failed":
+        eligible, mode = [], "status_only"
+    ordered = list(dict.fromkeys(topic_order + [c.topic for c in candidates]))
+    ordered = [t for t in ordered if t != OTHER_TOPIC] + [OTHER_TOPIC]
+    grouped = {t: [c for c in eligible if c.topic == t] for t in ordered}
+    blocks = [(t, f"## {t}({len(grouped[t])})\n" +
+               "\n".join(_item_line(c) for c in grouped[t]))
+              for t in ordered if grouped[t]]
+
+    def render(kept):
+        topics = {}
+        for topic in ordered:
+            matched = sum(c.topic == topic for c in candidates)
+            selected = len(grouped[topic]) if topic in kept else 0
+            topics[topic] = {"matched_count": matched, "selected_count": selected,
+                             "omitted_count": matched - selected}
+        selected = sum(t["selected_count"] for t in topics.values())
+        coverage = {"raw_count": raw_count, "window_count": window_count,
+                    "matched_count": len(candidates), "selected_count": selected,
+                    "omitted_count": len(candidates) - selected,
+                    "eligible_count": len(eligible),
+                    "budget_omitted_count": len(eligible) - selected,
+                    "selection_mode": mode, "source_status": source_status,
+                    "error": error, "topics": topics}
+        lines = [f"# 宏观快讯速读 · {window_end.date().isoformat()}", "",
+                 f"> 窗口 {window_start:%m-%d %H:%M} → {window_end:%m-%d %H:%M}"
+                 f" · 状态 {source_status} · error={_clean_text(error or 'none')[:300]}",
+                 f"> raw={raw_count}（翻页返回，含窗口外/重复）；"
+                 f"window={window_count if window_count is not None else 'unknown'}（窗口内去重）；"
+                 f"matched={len(candidates)}；selected={selected}；omitted={len(candidates) - selected}",
+                 "> selected/omitted 仅计下方快讯正文（预算裁剪后计划展示/未展示），不含归纳引用；送达见 push_status。",
+                 f"> 全量命中 {len(candidates)} 条见 `{archive_hint}`；全量原文见同目录 flash_raw.json。"]
+        if mode == "important":
+            lines.append(f"> 📌 推送精选 {selected} 条(仅金十标重要,主题内最新优先);"
+                         f"预算前 {len(eligible)} 条")
+        else:
+            lines.append(f"> selection_mode={mode}（无重要条目时回退全量；源失败仅报状态）")
+        for topic, counts in topics.items():
+            lines.append(f"> {topic}: matched={counts['matched_count']} / "
+                         f"selected={counts['selected_count']} / omitted={counts['omitted_count']}")
+        if len(kept) < len(blocks):
+            lines.append(f"> ⚠️ 超推送预算,截断 {len(blocks) - len(kept)} 个主题块;"
+                         f"完整版见 `{archive_hint}`")
+        if summary_md:
+            lines.extend(["", summary_md.rstrip()])
+        lines.extend("\n" + block for topic, block in blocks if topic in kept)
+        if not candidates:
+            lines.append("窗口内无命中宏观快讯；仅代表已采集部分。")
+        return "\n".join(lines) + "\n", coverage
+
+    # 从完整主题前缀缩短，最终头部计数与保留正文同时重算，不靠解析 Markdown 反推。
+    for size in range(len(blocks), -1, -1):
+        md, coverage = render({topic for topic, _ in blocks[:size]})
+        if len(md.encode("utf-8")) <= PUSH_BODY_MAX_BYTES:
+            return md, coverage
+    raise ValueError("macro-flash 覆盖/归纳头部超过推送预算，拒绝发送")
+
+
+def build_push_digest(candidates: List[FlashCandidate], *,
+                      full_digest_md: str = None, **kwargs) -> str:
+    """兼容既有调用；完整归档不能代替推送自身的覆盖统计。"""
+    return build_push_plan(candidates, **kwargs)[0]
 
 
 def build_status_push(source_status: str, *, window_start: datetime,
