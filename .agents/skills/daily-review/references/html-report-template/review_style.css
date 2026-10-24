@@ -295,3 +295,17 @@ a{color:inherit}
   .report-document .emotion-height-chart .emotion-height-value{fill:#ff9f98}
   .report-document .emotion-height-chart .emotion-height-gap{fill:#f6c36b}
 }
+
+/* 用户教学模板：只读分析、原文与可滚动思维导图。 */
+.review-template { margin-top: 1.5rem; border-top: 1px solid var(--line, #d9d4c7); padding-top: 1rem; }
+.template-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .8rem; }
+.template-card { min-width: 0; border: 1px solid var(--line, #d9d4c7); border-radius: 8px; padding: .85rem; overflow-wrap: anywhere; }
+.template-card h4 { margin: 0 0 .5rem; font-size: 1rem; }
+.template-prompt, .template-status { font-size: .82rem; opacity: .8; }
+.template-answer { white-space: pre-line; line-height: 1.75; }
+.template-original { border-left: 3px solid #bbaa87; padding-left: 1rem; margin: 1rem 0; overflow-wrap: anywhere; }
+.template-map-scroll { max-width: 100%; overflow: auto; background: white; padding: .5rem; }
+.template-map-scroll img { display: block; width: 1800px; max-width: none; height: auto; }
+.template-map-zoom summary { cursor: pointer; padding: .7rem 0; }
+@media (max-width: 700px) { .template-grid { grid-template-columns: 1fr; } }
+@media print { .template-grid { display: block; } .template-card { break-inside: avoid; } .template-map-scroll img { width: 100%; max-width: 100%; } }

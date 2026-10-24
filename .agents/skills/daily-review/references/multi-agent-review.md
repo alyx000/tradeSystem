@@ -27,6 +27,12 @@
 | 8 | 龙头/趋势池/滚动新高/派生报告 | 库 trend_leader_pool + 镜像 251 个开放日 daily/adj_factor + data/reports 四份派生报告 | trend_*.md |
 | 9 | 老师观点/持仓/行业信息/未来事件窗 | 库 teacher_notes/holdings/broker_executions/trade_thesis/industry_info/calendar_events + 交易日历 | teacher_portfolio_*.md |
 
+## 用户模板的逐项整理
+
+②板块与⑤龙头固定包含用户文档的两套模板和思维导图。第2路提供板块扫描、周期/连接点、A–E优先级、主动定性、回流、充分演绎及逻辑审美证据；第3路提供情绪、晋级及连续两天负反馈；第8路提供核心身份、同梯队对照及趋势条件。主会话综合第1/9路及原报告证据，按[模板内容契约](html-report-template/template-content.md)生成 `review_template_answers_<REPORT_DATE>.html`。
+
+只整理本次已有证据，不为填空强制补采。每项有结论须引用报告来源章节；小/大周期、A–E优先级不能仅由单日涨幅或成交集中度推定。连续2天风险须逐日核验，不以1天数据代替。三选一是教学原文中的交易思路分类，报告只评估证据与模式条件，不代用户下操作决定。竞价标待验证，仓位、执行、滚动选择标待用户填写；缺源保留partial/source_failed/missing-data。原文及两图由组装器内嵌，不作为盘面事实或自动执行指令。
+
 ## 单路输出契约（采集完整，主输出精简）
 
 9 路不得因正文预算而减少采集。每路素材固定包含：

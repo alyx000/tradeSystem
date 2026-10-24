@@ -1,5 +1,9 @@
 # 盘后复盘 HTML 报告模板
 
+2026-10-09：复盘 HTML 固定增加用户提供的「板块推演填空」11项与「情绪周期龙头接力」5项，分别位于②板块和⑤龙头；完整原文与两张思维导图内嵌。主会话按既有证据填写带日期、来源锚点、事实/判断标签的答案，缺项不补猜；竞价待验证、用户操作及仓位待填写。正式组装器只读注入，保持7 chunks/15 anchors；不新增采集、推送、业务写入。详见模板 `template-content.md`。
+
+实现与答案格式见 [模板内容契约](template-content.md)。历史报告原件保持不变；预览使用 `--output` 另存。
+
 2026-09-16：②板块固定增加 `data-sector-adjustment-risk`：可见风险摘要＋折叠全量证据，读取同日盘后块，缺键或受控补采恢复时读取 `data/reports/sector-adjustment-risk/YYYY-MM-DD.json`，不跨日回退。恢复说明可见，组装器重算信号并核对输出，28板块最多29表格行单独预算；缺分钟只能日线预警，缺口进ops。技术与补采入口见 [说明](/Users/alyx/tradeSystem/docs/sector-adjustment-risk.md)。
 
 反馈趋势：正式复盘③自动展示最近20个开放日的断板次日反馈与全部活跃核心反馈；核心四图同纵轴，partial虚线、缺值断线不补零。日报和HTML按同日原始regulatory_suspend记录核验全天停牌，保留真实缺失与证据；daily支持--input-by报告审计。历史失败派生报告在事实齐全后可通过--date/--no-push重算，先保留备份。

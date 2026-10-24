@@ -6687,6 +6687,19 @@ def validate_report(
     report_date = next(item[3] for item in parser.schema_hosts)
     _validate_exposure_context(parser, report_date, exposure_context)
     metrics = parser.metrics()
+    # 模板原文和16项答案独立计量，必须与官方静态资源及受控答案逐字对账。
+    # 既有正文/证据预算不变，chunk内容不能借用这部分容量。
+    scripts_path = str(_repo_root() / "scripts")
+    if scripts_path not in sys.path:
+        sys.path.insert(0, scripts_path)
+    from services.review_templates import validated_fragments
+    try:
+        verified_templates = validated_fragments(html, report_date, hidden_classes=CSS_HIDDEN_CLASSES)
+    except ValueError as exc:
+        raise ReportValidationError("invalid_review_template", str(exc), section="s2") from exc
+    template_parser = _ReportParser()
+    template_parser.feed('<article id="report-document"><section id="s2">' + verified_templates + '</section></article>')
+    template_metrics = template_parser.metrics()
     trend_evidence_blocks = parser.structured_contracts["data-trend-review-evidence"]
     trend_evidence_rows = trend_evidence_chars = trend_evidence_tables = 0
     if trend_evidence_blocks or trend_review_evidence is not None:
@@ -6780,7 +6793,7 @@ def validate_report(
             f"速览 {metrics.tldr_chars} 字，硬上限 {TLDR_CHAR_LIMIT}",
         ),
         (
-            metrics.visible_chars > VISIBLE_CHAR_LIMIT,
+            metrics.visible_chars > VISIBLE_CHAR_LIMIT + template_metrics.visible_chars,
             "visible_chars_exceeded",
             _largest_section(metrics, "visible_chars"),
             f"正文 {metrics.visible_chars} 字，硬上限 {VISIBLE_CHAR_LIMIT}",
@@ -6798,7 +6811,7 @@ def validate_report(
             f"正文 {metrics.visible_rows} 行，硬上限 {VISIBLE_ROW_LIMIT}",
         ),
         (
-            metrics.evidence_chars > EVIDENCE_CHAR_LIMIT + trend_evidence_chars,
+            metrics.evidence_chars > EVIDENCE_CHAR_LIMIT + trend_evidence_chars + template_metrics.evidence_chars,
             "evidence_chars_exceeded",
             _largest_section(metrics, "evidence_chars"),
             f"证据层 {metrics.evidence_chars} 字，硬上限 {EVIDENCE_CHAR_LIMIT}",
@@ -8857,6 +8870,18 @@ def render_report(
     scripts_path = str(_repo_root() / "scripts")
     if scripts_path not in sys.path:
         sys.path.insert(0, scripts_path)
+    if not include_legacy_sections:
+        from services.review_templates import render_templates
+        if any(re.search(r"\bdata-review-template\s*=", body, re.I) for body in chunks.values()):
+            raise ReportValidationError("duplicate_review_template", "教学模板由组装器统一生成，chunk不得自行注入", section="s2")
+        try:
+            template_fragments, template_gap = render_templates(tmp_path, report_date)
+        except (ValueError, OSError) as exc:
+            raise ReportValidationError("invalid_review_template", str(exc), section="s2") from exc
+        chunks["s2"] = _inject_section_fragment(chunks["s2"], "s2", template_fragments["sector"])
+        chunks["s456"] = _inject_section_fragment(chunks["s456"], "s5", template_fragments["relay"])
+        if template_gap:
+            chunks["s8ops"] = _inject_section_fragment(chunks["s8ops"], "ops", f'<p data-review-template-gap="v1">{escape(template_gap)}</p>')
     from services.trend_leader.review_evidence import render as render_trend_review_evidence
     if any(re.search(r"\bdata-trend-review-evidence\s*=", body, re.I) for body in chunks.values()):
         raise ReportValidationError("duplicate_trend_review_evidence", "趋势证据由组装器统一生成，chunk不得自行注入", section="s5")

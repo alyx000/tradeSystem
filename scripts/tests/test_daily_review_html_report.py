@@ -8193,3 +8193,53 @@ def test_s4_style_market_effect_missing_state_is_visible_and_never_zero_filled(
     style = _extract_section(html, "s4")[0]
     assert "非ST涨停0只" not in style
     assert "北交所涨停0只" not in style
+
+
+def test_user_templates_are_injected_without_new_sections(assembler, tmp_path):
+    _write_chunks(tmp_path)
+    html = assembler.render_report(tmp_path, DATE)
+    assert html.count('data-review-template="sector"') == 1
+    assert html.count('data-review-template="relay"') == 1
+    assert html.index('data-review-template="sector"') < html.index('id="s3"')
+    assert html.index('data-review-template="relay"') < html.index('id="s6"')
+    assembler.validate_report(html)
+
+
+def test_user_templates_reject_chunk_injection(assembler, tmp_path):
+    paths = _write_chunks(tmp_path)
+    paths["s2"].write_text(paths["s2"].read_text().replace(
+        '</section>', '<div data-review-template="sector">伪造内容</div></section>'))
+    with pytest.raises(assembler.ReportValidationError, match="教学模板"):
+        assembler.render_report(tmp_path, DATE)
+
+
+@pytest.mark.parametrize("target", ["gap", "module"])
+def test_user_templates_cannot_borrow_budget_from_outer_evidence(assembler, tmp_path, target):
+    from services.review_templates import render_templates
+
+    _write_chunks(tmp_path)
+    html = assembler.render_report(tmp_path, DATE)
+    fragments, gap = render_templates(tmp_path, DATE)
+    fragment = (f'<p data-review-template-gap="v1">{gap}</p>'
+                if target == "gap" else fragments["sector"])
+    evidence_class = ' class="evidence"' if target == "gap" else ""
+    folded = (f'<details{evidence_class} data-as-of="{DATE}" data-items="1">'
+              f'<summary>模板（1项）</summary><div class="evidence-body">{fragment}</div></details>')
+    with pytest.raises(assembler.ReportValidationError, match="默认可见直接子节点"):
+        assembler.validate_report(html.replace(fragment, folded))
+
+
+def test_user_template_budget_preserves_original_character_limit(assembler, tmp_path):
+    from services.review_templates import validated_fragments
+
+    _write_chunks(tmp_path)
+    html = assembler.render_report(tmp_path, DATE)
+    metrics = assembler.validate_report(html)
+    template_parser = assembler._ReportParser()
+    template_parser.feed('<article id="report-document"><section id="s2">'
+                         + validated_fragments(html, DATE) + '</section></article>')
+    allowance = template_parser.metrics().visible_chars
+    limit = assembler.VISIBLE_CHAR_LIMIT + allowance
+    at_limit = _visible(html, "甲" * (limit - metrics.visible_chars))
+    assert assembler.validate_report(at_limit).visible_chars == limit
+    _assert_report_error(assembler, _visible(at_limit, "乙"), "visible_chars_exceeded")
