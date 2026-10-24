@@ -416,10 +416,39 @@ def _note_ref(note: dict[str, Any] | None) -> dict[str, Any] | None:
     }
 
 
-def _history_keys(history: list[dict[str, Any]]) -> set[tuple[str, str]]:
+def _history_keys(
+    history: list[dict[str, Any]],
+    *,
+    current_items: list[dict[str, Any]],
+) -> set[tuple[str, str]]:
+    """Stock-level prior selections; current industry changes are not new stocks."""
     keys: set[tuple[str, str]] = set()
+    code_backed_names: set[str] = set()
     for item in history or []:
-        keys.update(_candidate_keys(_canonicalize_item_codes(item)))
+        codes = _candidate_codes(item)
+        names = _candidate_name_keys(item)
+        if codes:
+            code_backed_names.update(names)
+            if len(codes) == 1:
+                keys.add(("code", next(iter(codes))))
+        else:
+            keys.update(("name", name) for name in names)
+    current_name_codes: dict[str, set[str]] = {}
+    for item in current_items:
+        codes = _candidate_codes(item)
+        quote_code = canonical_stock_code(item.get("ts_code"))
+        if quote_code:
+            codes.add(quote_code)
+        for name in _candidate_name_keys(item):
+            current_name_codes.setdefault(name, set()).update(codes)
+    ambiguous_names = {
+        name for name, codes in current_name_codes.items() if len(codes) > 1
+    }
+    # Known history codes and current same-name/different-code conflicts both
+    # prevent an unbound legacy name from marking unrelated stocks as selected.
+    keys.difference_update(
+        ("name", name) for name in code_backed_names | ambiguous_names
+    )
     return keys
 
 
@@ -716,7 +745,12 @@ def _with_common_fields(
     if out.get("stock_name"):
         out["stock_name"] = normalize_stock_display(out.get("stock_name"))
     out.setdefault("clarity", CLARITY_MEDIUM)
-    out["is_new"] = not bool(_candidate_keys(item) & history_keys)
+    codes = _candidate_codes(item)
+    identity_keys: set[tuple[str, str]] = set()
+    if len(codes) <= 1:
+        identity_keys.update(("code", code) for code in codes)
+        identity_keys.update(("name", name) for name in _candidate_name_keys(item))
+    out["is_new"] = not bool(identity_keys & history_keys)
     out["teacher_alignment"] = alignment["status"]
     note_ref = _note_ref(alignment["note"])
     if note_ref:
@@ -739,10 +773,12 @@ def build_candidates(
     min_amount_yi: float | None = None,
 ) -> dict[str, Any]:
     notes = prefill.get("teacher_notes") or []
-    history_keys = _history_keys(history)
     quote_index = _StockQuoteIndex.from_prefill(prefill)
     step5 = prefill.get("step5_leaders") or {}
     step5_items = step5.get("top_leaders") or []
+    history_keys = _history_keys(
+        history, current_items=[*quote_index.rows, *step5_items]
+    )
     trusted_stock_identities = _trusted_stock_identities(history, step5_items)
     candidates: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
@@ -790,48 +826,9 @@ def build_candidates(
             )
         )
 
-    for history_item in history or []:
-        stock_name = _stock_name_text(history_item)
-        stock_codes = _candidate_codes(history_item)
-        stock_code = next(iter(stock_codes)) if len(stock_codes) == 1 else ""
-        stock = f"{stock_code} {stock_name}".strip() if stock_code else stock_name
-        sector = _text(history_item.get("sector")).strip()
-        item = {
-            "stock": stock,
-            "stock_name": stock_name,
-            "sector": sector,
-            "attribute_type": _text(history_item.get("attribute_type") or "历史最票跟踪").strip(),
-            "attribute": history_item.get("attribute"),
-            "clarity": history_item.get("clarity") or CLARITY_MEDIUM,
-            "position": history_item.get("position"),
-        }
-        if stock_code:
-            item["stock_code"] = stock_code
-        explicit_code = _text(history_item.get("code")).strip()
-        if explicit_code:
-            item["code"] = explicit_code
-        item = _with_quote_facts(quote_index, item)
-        if not item["stock"] or not item["sector"] or _is_st_candidate({
-            **item,
-            "stock_name": history_item.get("stock_name"),
-            "stock_code": history_item.get("stock_code"),
-        }):
-            continue
-        if not _passes_min_amount_yi(prefill, item, min_amount_yi, quote_index):
-            continue
-        if _seen_candidate(item, seen):
-            continue
-        _mark_seen(item, seen)
-        candidates.append(
-            _with_common_fields(
-                item,
-                score=_fact_selection_score(60.0, item),
-                history_keys=history_keys,
-                notes=notes,
-                evidence_text="来自历史最票跟踪，需用户确认是否仍属当日最票",
-            )
-        )
-
+    # History supplies identity and prior-selection context, never an admission
+    # signal. An active record has no expiry and may be months old; current-day
+    # prefill, quote strength or flow leadership must independently nominate it.
     for item in _quote_strength_items(quote_index):
         item = _with_history_stock_identity(item, trusted_stock_identities)
         if _is_st_candidate(item):
@@ -866,6 +863,15 @@ def build_candidates(
 
     for item in _market_flow_items(prefill, quote_index):
         item = _with_history_stock_identity(item, trusted_stock_identities)
+        # History may resolve an old flow alias only after the first quote
+        # lookup. Refresh facts and display identity by the now-known code.
+        item = _with_quote_facts(quote_index, item)
+        current_quote = quote_index.find(item)
+        if current_quote is not None:
+            current_name = _stock_name_text(current_quote)
+            if current_name:
+                item["stock"] = current_name
+                item["stock_name"] = current_name
         if _is_st_candidate(item):
             continue
         if not _passes_min_amount_yi(prefill, item, min_amount_yi, quote_index):
@@ -928,4 +934,8 @@ def build_candidates(
     candidates.sort(
         key=lambda item: (-item["_selection_score"], item["sector"], item["stock"])
     )
-    return {"date": date, "top_leaders": candidates}
+    return {
+        "date": date,
+        "top_leaders": candidates,
+        "candidate_policy": {"history_context_only": True},
+    }
