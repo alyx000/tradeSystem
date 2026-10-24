@@ -128,6 +128,28 @@ def test_render_backup_hides_unsafe_model_reason():
     assert "模型伪造" not in render_markdown(proposal)
 
 
+def test_render_markdown_marks_current_admission_and_capacity_label_limits():
+    proposal = _verified_new_proposal()
+    proposal["candidate_policy"] = {"history_context_only": True}
+
+    md = render_markdown(proposal)
+
+    assert "历史最票仅作身份与曾入选对照，不独立产生当日候选" in md
+    assert "同板块候选中的成交额容量领先，未验证趋势形态" in md
+
+
+def test_render_legacy_proposal_does_not_claim_new_admission_policy():
+    proposal = _proposal()
+    proposal["top_leaders"][0]["evidence"] = [
+        {"label": "[判断]", "text": "来自历史最票跟踪，需用户确认是否仍属当日最票"}
+    ]
+
+    md = render_markdown(proposal)
+
+    assert "来自历史最票跟踪" in md
+    assert "历史最票仅作身份与曾入选对照" not in md
+
+
 @pytest.mark.parametrize(
     ("field", "unsafe_value"),
     [

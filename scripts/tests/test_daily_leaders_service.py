@@ -58,6 +58,42 @@ def test_propose_fail_closed_when_active_history_unavailable(tmp_path, monkeypat
     assert proposal["paths"]["json"].endswith("2026-07-03.json")
 
 
+@pytest.mark.parametrize("no_llm", [True, False], ids=["disabled", "timeout"])
+def test_propose_excludes_history_only_stock_without_changing_tracking(
+    conn, tmp_path, monkeypatch, no_llm
+):
+    Q.upsert_leader_tracking(
+        conn, stock_code="600664", stock_name="哈药股份", sector="化学制药",
+        attribute_type="连板核心", seen_date="2026-09-22",
+    )
+    before = Q.get_active_leaders(conn)
+    prefill = {
+        "teacher_notes": [],
+        "market": {"stock_quotes": {"data": [
+            {"code": "600664.SH", "name": "哈药股份", "pct_chg": -2.1622,
+             "amount_yi": 34.52, "sw_l2": "化学制药"},
+            {"code": "688041.SH", "name": "海光信息", "pct_chg": 12.0,
+             "amount_yi": 42.0, "sw_l2": "半导体"},
+        ]}},
+    }
+    monkeypatch.setattr(
+        service, "enrich_with_llm_reason",
+        lambda proposal, enabled: {**proposal, "llm_status": {"ok": False, "reason": "timeout"}},
+    )
+
+    proposal = service.propose(
+        conn, "2026-10-08", prefill, no_llm=no_llm, output_root=tmp_path,
+    )
+
+    assert [row["stock_code"] for row in proposal["top_leaders"]] == ["688041"]
+    assert proposal["candidate_policy"]["history_context_only"] is True
+    assert proposal["top_leaders"][0]["selection_basis"] == "deterministic_fallback"
+    assert Q.get_active_leaders(conn) == before
+    saved = json.loads((tmp_path / "2026-10-08.json").read_text())
+    assert saved["candidate_policy"] == proposal["candidate_policy"]
+    assert saved["top_leaders"] == proposal["top_leaders"]
+
+
 def test_propose_does_not_read_trend_leader_pool(tmp_path, monkeypatch):
     captured = {}
 

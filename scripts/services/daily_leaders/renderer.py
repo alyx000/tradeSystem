@@ -219,6 +219,20 @@ def render_markdown(proposal: dict[str, Any]) -> str:
                 f"> 候选过滤：[判断] 已过滤成交额低于 {min_amount_yi_float:.1f} 亿或缺少可验证成交额的个股。",
             ]
         )
+    candidate_policy = proposal.get("candidate_policy") or {}
+    if isinstance(candidate_policy, dict) and candidate_policy.get("history_context_only") is True:
+        lines.extend(
+            [
+                "",
+                "> 候选依据：[判断] 历史最票仅作身份与曾入选对照，不独立产生当日候选；须重新命中当日复盘预填、涨幅强度或资金流领涨。",
+            ]
+        )
+    lines.extend(
+        [
+            "",
+            "> 属性口径：[判断] 确定性兜底的“趋势中军”仅指同板块候选中的成交额容量领先，未验证趋势形态；仍需人工确认。",
+        ]
+    )
     candidate_limit = proposal.get("candidate_limit") if isinstance(proposal.get("candidate_limit"), dict) else {}
     summary = _render_candidate_limit(candidate_limit)
     if legacy_status_items:

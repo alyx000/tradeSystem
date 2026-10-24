@@ -68,27 +68,35 @@ def test_build_candidates_ignores_trend_pool_source():
     assert result["top_leaders"] == []
 
 
-def test_active_history_candidate_added_when_not_in_prefill():
-    prefill = {"step5_leaders": None, "teacher_notes": [], "cognitions_by_step": {}}
+@pytest.mark.parametrize("pct_chg", [-2.1622, 0.0, 3.0, None])
+@pytest.mark.parametrize("last_seen_date", ["2026-09-22", "2026-10-08"])
+def test_history_and_large_turnover_cannot_independently_nominate_a_candidate(
+    pct_chg, last_seen_date
+):
+    prefill = {
+        "step5_leaders": None,
+        "teacher_notes": [],
+        "market": {"stock_quotes": {"data": [
+            {"code": "600664.SH", "name": "哈药股份", "pct_chg": pct_chg,
+             "amount_yi": 34.52, "sw_l2": "化学制药"},
+        ]}},
+    }
     history = [
         {
-            "stock_code": "601138",
-            "stock_name": "工业富联",
-            "sector": "算力",
-            "attribute_type": "容量最大",
-            "attribute": "连续两日最票",
+            "stock_code": "600664",
+            "stock_name": "哈药股份",
+            "sector": "化学制药",
+            "attribute_type": "连板核心",
+            "last_seen_date": last_seen_date,
             "clarity": "高",
         }
     ]
 
-    result = build_candidates(prefill=prefill, trend_pool=[], history=history)
+    result = build_candidates(prefill=prefill, trend_pool=[], history=history,
+                              date="2026-10-08", min_amount_yi=20.0)
 
-    item = result["top_leaders"][0]
-    assert item["stock"] == "601138 工业富联"
-    assert item["sector"] == "算力"
-    assert item["attribute_type"] == "容量最大"
-    assert item["is_new"] is False
-    assert item["evidence"] == [{"label": "[判断]", "text": "来自历史最票跟踪，需用户确认是否仍属当日最票"}]
+    assert result["top_leaders"] == []
+    assert result["candidate_policy"]["history_context_only"] is True
 
 
 def test_history_candidate_deduplicates_prefill_with_different_stock_display():
@@ -107,6 +115,146 @@ def test_history_candidate_deduplicates_prefill_with_different_stock_display():
 
     assert [item["stock"] for item in result["top_leaders"]] == ["工业富联"]
     assert result["top_leaders"][0]["is_new"] is False
+
+
+@pytest.mark.parametrize("source", ["quote", "prefill", "flow"])
+@pytest.mark.parametrize("history_sector", ["化学制药", "旧行业"])
+def test_history_can_requalify_only_through_current_evidence(source, history_sector):
+    prefill = {
+        "teacher_notes": [],
+        "market": {"stock_quotes": {"data": [
+            {"code": "600664.SH", "name": "哈药股份",
+             "pct_chg": 10.0 if source == "quote" else 3.0,
+             "amount_yi": 34.52, "sw_l2": "化学制药"},
+        ]}},
+    }
+    if source == "prefill":
+        prefill["step5_leaders"] = {"top_leaders": [
+            {"stock": "哈药股份", "sector": "化学制药", "attribute_type": "前排活跃"},
+        ]}
+    if source == "flow":
+        prefill["market"]["concept_moneyflow_ths"] = {"data": [
+            {"name": "医药概念", "lead_stock": "哈药股份", "net_amount_yi": 8.0},
+        ]}
+    history = [{"stock_code": "600664", "stock_name": "哈药股份",
+                "sector": history_sector, "attribute_type": "连板核心",
+                "last_seen_date": "2026-09-22"}]
+
+    rows = build_candidates(prefill=prefill, trend_pool=[], history=history,
+                            date="2026-10-08", min_amount_yi=20.0)["top_leaders"]
+
+    assert len(rows) == 1
+    assert rows[0]["stock_code"] == "600664"
+    assert rows[0]["sector"] == "化学制药"
+    assert rows[0]["is_new"] is False
+    assert rows[0]["attribute_type"] != "连板核心"
+    assert not any("来自历史最票跟踪" in e["text"] for e in rows[0]["evidence"])
+
+
+@pytest.mark.parametrize(
+    ("history_code", "current_name", "expected_new"),
+    [("600664.SH", "哈药股份", False),
+     ("600664", "新简称", False),
+     ("000001", "哈药股份", True),
+     (None, "哈药股份", False)],
+)
+def test_prior_selection_uses_code_first_and_legacy_name_fallback(
+    history_code, current_name, expected_new
+):
+    history = [{"stock_name": "哈药股份", "sector": "旧行业"}]
+    if history_code is not None:
+        history[0]["stock_code"] = history_code
+    prefill = {"market": {"stock_quotes": {"data": [
+        {"code": "600664.SH", "name": current_name, "pct_chg": 10.0,
+         "amount_yi": 34.52, "sw_l2": "化学制药"},
+    ]}}}
+
+    rows = build_candidates(prefill=prefill, trend_pool=[], history=history,
+                            min_amount_yi=20.0)["top_leaders"]
+
+    assert len(rows) == 1
+    assert rows[0]["stock_code"] == "600664"
+    assert rows[0]["sector"] == "化学制药"
+    assert rows[0]["is_new"] is expected_new
+
+
+def test_legacy_name_cannot_override_a_conflicting_known_history_code():
+    history = [
+        {"stock_code": "000001", "stock_name": "同名样本", "sector": "旧行业"},
+        {"stock_name": "同名样本", "sector": "另一个旧行业"},
+    ]
+    prefill = {"market": {"stock_quotes": {"data": [
+        {"code": "600001.SH", "name": "同名样本", "pct_chg": 10.0,
+         "amount_yi": 30.0, "sw_l2": "当前行业"},
+    ]}}}
+
+    rows = build_candidates(prefill=prefill, trend_pool=[], history=history)["top_leaders"]
+
+    assert len(rows) == 1
+    assert rows[0]["is_new"] is True
+
+
+@pytest.mark.parametrize(
+    ("source", "quote_code_key"),
+    [("quote", "code"), ("quote", "ts_code"),
+     ("prefill", None), ("mixed", "code")],
+)
+def test_legacy_name_does_not_match_current_same_name_different_codes(
+    source, quote_code_key
+):
+    history = [{"stock_name": "同名样本", "sector": "旧行业"}]
+    quotes = [
+        {quote_code_key: code, "name": "同名样本", "pct_chg": 10.0,
+         "amount_yi": 30.0, "sw_l2": "当前行业"}
+        for code in ("600001.SH", "000001.SZ")
+    ] if quote_code_key else []
+    prefill = {"market": {"stock_quotes": {"data": quotes}}}
+    if source == "prefill":
+        prefill["step5_leaders"] = {"top_leaders": [
+            {"stock": "同名样本", "stock_code": code, "sector": "当前行业"}
+            for code in ("600001", "000001")
+        ]}
+    elif source == "mixed":
+        prefill["market"]["stock_quotes"]["data"] = quotes[:1]
+        prefill["step5_leaders"] = {"top_leaders": [
+            {"stock": "同名样本", "stock_code": "000001", "sector": "当前行业"},
+        ]}
+
+    rows = build_candidates(prefill=prefill, trend_pool=[], history=history)["top_leaders"]
+
+    assert {row["stock_code"] for row in rows} == {"600001", "000001"}
+    assert all(row["is_new"] is True for row in rows)
+
+
+def test_flow_old_alias_resolved_by_history_refreshes_current_quote_identity():
+    history = [{"stock_code": "600519", "stock_name": "旧简称", "sector": "旧行业"}]
+    prefill = {"market": {
+        "stock_quotes": {"data": [
+            {"code": "600519.SH", "name": "新简称", "pct_chg": 3.0,
+             "amount_yi": 31.6, "sw_l2": "白酒", "limit_height": 0,
+             "sector_source": "tushare:index_member_all"},
+        ]},
+        "concept_moneyflow_ths": {"data": [
+            {"name": "高端白酒", "lead_stock": "旧简称", "net_amount_yi": 8.0},
+        ]},
+    }}
+
+    rows = build_candidates(prefill=prefill, trend_pool=[], history=history,
+                            min_amount_yi=20.0)["top_leaders"]
+
+    assert len(rows) == 1
+    item = rows[0]
+    assert item["stock"] == item["stock_name"] == "新简称"
+    assert item["stock_code"] == item["code"] == "600519"
+    assert item["sector"] == "白酒"
+    assert item["sector_source"] == "tushare:index_member_all"
+    assert item["pct_chg"] == 3.0
+    assert item["amount_yi"] == 31.6
+    assert item["board_type"] == "非涨停"
+    assert item["limit_height"] == 0
+    assert item["is_new"] is False
+    assert item["source_sector"] == "高端白酒"
+    assert any("同花顺概念资金流" in e["text"] for e in item["evidence"])
 
 
 def test_codes_are_explicit_and_history_name_code_enriches_same_name_flow():
@@ -158,13 +306,12 @@ def test_codes_are_explicit_and_history_name_code_enriches_same_name_flow():
 
     assert by_sector["白酒"]["code"] == "000858"
     assert by_sector["白酒"]["stock_code"] == "000858"
-    assert by_sector["饮料制造"]["stock_code"] == "600519"
-    assert by_sector["饮料制造"]["stock_name"] == "贵州茅台"
-    assert by_sector["饮料制造"]["source_sector"] == "高端白酒"
-    assert "高端白酒" in by_sector["饮料制造"]["source_sectors"]
+    assert by_sector["未分类"]["stock_code"] == "600519"
+    assert by_sector["未分类"]["stock_name"] == "贵州茅台"
+    assert by_sector["未分类"]["source_sector"] == "高端白酒"
     assert any(
         "同花顺概念资金流" in row["text"]
-        for row in by_sector["饮料制造"]["evidence"]
+        for row in by_sector["未分类"]["evidence"]
     )
 
 
@@ -290,7 +437,10 @@ def test_distinct_legal_codes_with_same_name_and_sector_remain_distinct():
     ]
 
     rows = build_candidates(
-        prefill={"step5_leaders": None, "teacher_notes": []},
+        prefill={"step5_leaders": {"top_leaders": [
+            {"stock": row["stock_name"], "stock_code": row["stock_code"],
+             "sector": row["sector"]} for row in history
+        ]}, "teacher_notes": []},
         trend_pool=[],
         history=history,
     )["top_leaders"]
@@ -323,7 +473,7 @@ def test_equivalent_history_codes_enrich_cross_sector_candidates_with_one_identi
         min_amount_yi=20.0,
     )["top_leaders"]
 
-    assert {item["sector"] for item in rows} == {"饮料制造"}
+    assert {item["sector"] for item in rows} == {"未分类"}
     assert {(item["stock_code"], item["code"]) for item in rows} == {
         ("600519", "600519")
     }
@@ -386,7 +536,7 @@ def test_build_candidates_filters_st_stocks_from_non_trend_sources():
 
     stocks = [item["stock"] for item in result["top_leaders"]]
     assert "ST长方" not in " ".join(stocks)
-    assert stocks == ["海光信息", "601138 工业富联"]
+    assert stocks == ["海光信息"]
 
 
 def test_build_candidates_adds_market_flow_leaders_to_llm_pool():
@@ -631,7 +781,6 @@ def test_build_candidates_filters_below_min_amount_for_confirmation_pool():
         "高额涨停",
         "容量达标",
         "高额资金",
-        "高额历史",
     ]
 
 
@@ -922,7 +1071,10 @@ def test_prefill_and_history_candidates_gain_matching_quote_facts():
                         "sector_source": "tushare:index_member_all",
                     },
                 ]
-            }
+            },
+            "concept_moneyflow_ths": {"data": [
+                {"name": "高端白酒", "lead_stock": "贵州茅台", "net_amount_yi": 20.0}
+            ]},
         },
     }
     history = [{"stock_code": "600519.SH", "stock_name": "贵州茅台", "sector": "饮料制造"}]
@@ -979,6 +1131,8 @@ def test_prefill_history_and_flow_share_matched_sw_l2_grouping_sector():
             },
             "concept_moneyflow_ths": {
                 "data": [
+                    {"name": "先进封装概念", "lead_stock": "历史芯片",
+                     "net_amount_yi": 10.0, "pct_change_stock": 7.0},
                     {
                         "name": "先进封装概念",
                         "lead_stock": "资金芯片",
@@ -1036,7 +1190,8 @@ def test_prefill_and_history_without_matching_quote_do_not_fake_market_facts():
     rows = build_candidates(prefill=prefill, trend_pool=[], history=history)["top_leaders"]
     by_name = {item["stock"].split()[-1]: item for item in rows}
 
-    for stock, sector in (("无行情预填", "半导体"), ("无行情历史", "软件开发")):
+    assert "无行情历史" not in by_name
+    for stock, sector in (("无行情预填", "半导体"),):
         item = by_name[stock]
         assert item["sector"] == sector
         assert "board_type" not in item
