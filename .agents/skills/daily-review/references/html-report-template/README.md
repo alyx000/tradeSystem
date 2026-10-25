@@ -12,6 +12,8 @@
 
 ## 文件
 
+①大势新增默认可见的`data-incremental-capital="verdict|missing-data"`及折叠`evidence`表，完整约束与来源边界见[增量资金推断](../incremental-capital.md)。主会话填判断、数值依据、来源日期、反证及覆盖局限，组装器执行结构校验；没有该模块的旧素材自动注入“无法识别”及ops缺口，不自动推断。既有归档仍可校验，不重写历史。原7 chunks/15 anchors和正文预算不变。
+
 - `review_style.css` — 报告样式 **v2「纸面档案阅读器」**：米纸底色 + 衬线大标题 + 粘性顶栏/导航 + 阅读进度 + 表格横向滚动 + 证据展开/收起 + 回到顶部，并包含 USD/CNY/1Y C-Swap 静态 SVG 在宽屏、窄屏与系统暗色模式下的样式。正文 class 语义不变（tag t-fact/t-judge / kpi / callout.note/.risk/.warn / tr.hl / up/.down/.warn / p-up/.p-mid/.p-down / twocol / mono / num / src / sub）。
 - `build_capacity_manifest.py` — 容量排名 sidecar 官方生成器：只读镜像、最多 3 个申万二级方向、全市场 `daily.amount` 排名、最近 5 个开放日连续性；禁止 Agent 手写 sidecar。
 - `build_new_high_structure_manifest.py` — 历史新高结构生成器：只读最近 251 个开放日，按 `daily.high × adj_factor` 生成滚动 60/120/250 日双日计数、行业结构与代表票；不写库。

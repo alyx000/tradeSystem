@@ -15,6 +15,8 @@
 
 ## 9 路分工
 
+主会话汇总第1/2/3/4/5路后，必须按[增量资金推断](incremental-capital.md)回答当下更可能是哪类资金渠道、支持/反证及缺口。第1路提供融资与成交，第2/3路提供板块和风格代理，第4路提供机构席位样本，第5路提供ETF净申赎；原始事实/日期/窗口/覆盖须可追溯。结果放①大势唯一`data-incremental-capital`摘要与证据表；不可把ETF、融资、龙虎榜相加，不能从风格推定投资者身份。具体候选缺少两类当日完整支持时用unknown；没有整理证据时自动missing-data，不得假装已分析。
+
 | 路 | 面 | 主要数据源 | 素材文件 |
 |---|---|---|---|
 | 1 | 大势/大类资产/外汇掉期/择时/期指/两融/多周期结构 | `daily/<T>/post-market.yaml` 的 `raw_data.global_indices / global_indices_apac / us_china_assets / commodities / risk_indicators / forex / fx_swaps`（旧归档缺跨资产块时才回退同日 `pre-market.yaml.market_data`）+ 镜像 index_daily/fut_daily + 库 market_timing_signal / margin_index_correlation_daily + pytdx 通达信直连（六指数 30/60 分钟 K 线，见「指数 30/60 分钟与日线多周期结构」小节） | market_YYYY-MM-DD.md |
