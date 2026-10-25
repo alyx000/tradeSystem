@@ -38,6 +38,8 @@ globs:
 
 # Skills 同步检查规则
 
+2026-10-25：修改`data-incremental-capital`须同步daily-review SKILL、references/incremental-capital.md、多Agent流程、HTML模板README、INDEX及test_daily_review_incremental_capital.py。核对①唯一可见摘要、折叠来源/窗口/数值/局限、两类同日完整支持且至少一类对应直接渠道、反证与缺口、失败不补零和旧素材缺口兜底；结构验证不等于事实复算，不将成交放量或ETF份额变化说成全市场净流入，不识别无直接证据的投资者身份。
+
 2026-10-09：复盘 HTML 固定增加用户提供的「板块推演填空」11项与「情绪周期龙头接力」5项，分别位于②板块和⑤龙头；完整原文与两张思维导图内嵌。主会话按既有证据填写带日期、来源锚点、事实/判断标签的答案，缺项不补猜；竞价待验证、用户操作及仓位待填写。正式组装器只读注入，保持7 chunks/15 anchors；不新增采集、推送、业务写入。详见模板 `template-content.md`。
 
 2026-10-13：`daily-leaders` 备选隔离修复。LLM 判为「备选」的条目仅存入 `backup_candidates` 观察区，不授予最票属性、不占可确认名额，也不因名单不足而用容量兜底重新入选；「剔除」不进入确认名单。显式备选/剔除状态优先于旧 `leader_role`/`attribute_type`，不因缺失或失败的 LLM 状态而失效；新稿标记 `candidate_policy.backups_observation_only=true`，分别统计备选与剔除数。旧稿展示隔离降级项并提示重新生成，`confirm` 在事务前拒绝含降级状态的主名单及空主名单；观察区不随「全部录入」写入。未带降级状态的正常模型失败/`--no-llm` 兜底口径不变。 已同步 daily-review、market-tasks、INDEX、AGENTS/CLAUDE；CLI 签名和调度不变。

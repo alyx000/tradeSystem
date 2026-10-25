@@ -325,6 +325,7 @@ CAPACITY_MISSING_TEXT = "[事实]容量排名数据不完整，本日无法判�
 CAPACITY_SOURCE_STATUSES = frozenset({"complete", "partial", "failed"})
 CAPACITY_CODE_RE = re.compile(r"^\d{6}\.(?:SH|SZ|BJ)$")
 STRUCTURED_CONTRACT_ATTRIBUTES = (
+    "data-incremental-capital",
     "data-big-picture",
     "data-cross-asset-context",
     "data-rmb-fx-observation",
@@ -2923,6 +2924,94 @@ class _ReportParser(HTMLParser):
                 "结构化数据块必须使用完整 v1、complete none 或带 ops 缺口的 missing-data",
                 section=section,
             )
+
+    def _validate_incremental_capital(self, report_date: date_type) -> None:
+        """校验推断的可审阅结构；不把 Agent 的判断包装成确定性资金识别。"""
+        blocks = self.structured_contracts["data-incremental-capital"]
+        if not blocks:  # 保留旧归档校验能力；新生成必经 render_report 的缺口兜底。
+            return
+
+        def fail(message: str) -> None:
+            raise ReportValidationError("invalid_incremental_capital", message, section="s1")
+
+        day = report_date.isoformat()
+        summaries = [b for b in blocks if b.value in {"verdict", "missing-data"}]
+        if len(summaries) != 1:
+            fail("增量资金推断必须有唯一摘要")
+        summary = summaries[0]
+        text = re.sub(r"\s+", "", "".join(summary.rendered_text))
+        if (summary.section != "s1" or summary.tag != "p" or summary.default_hidden
+                or summary.attrs.get("data-reviewed-through") != day
+                or summary.attrs.get("data-as-of") != day
+                or "[判断]" not in text or "增量资金" not in text):
+            fail("增量资金摘要须在①默认可见，标注报告日和[判断]")
+        status = summary.attrs.get("data-source-status")
+        ops = "".join(self.section_text["ops"])
+        if summary.value == "missing-data":
+            if (len(blocks) != 1 or status not in {"partial", "source_failed", "missing-data"}
+                    or "无法识别" not in text or "增量资金推断" not in ops):
+                fail("增量资金缺证必须明确无法识别并进入数据缺口")
+            return
+        candidates = {"etf": "ETF申赎渠道", "margin": "融资渠道", "institution": "机构席位局部买盘",
+                      "rotation": "存量轮动", "mixed": "多渠道迹象", "unknown": "无法识别"}
+        candidate = summary.attrs.get("data-candidate")
+        confidence = summary.attrs.get("data-confidence")
+        if (candidate not in candidates or candidates[candidate] not in text
+                or confidence not in {"low", "medium"} or status not in {"complete", "partial"}
+                or ("低" if confidence == "low" else "中") + "可信度" not in text
+                or (candidate == "unknown" and confidence != "low")):
+            fail("推断须明示候选及中/低可信度；渠道不得冒充最终资金身份")
+        evidence = [b for b in blocks if b.value == "evidence"]
+        if len(blocks) != 2 or len(evidence) != 1:
+            fail("有推断必须提供唯一证据表")
+        table = evidence[0]
+        if (table.tag != "table" or table.section != "s1" or not table.default_hidden
+                or table.attrs.get("data-as-of") != day):
+            fail("增量资金证据表须归属①折叠证据并标注报告日")
+        rows = table.rows[1:]  # 第一行为固定可见表头。
+        headers = "".join(table.rows[0].rendered_text) if table.rows else ""
+        if any(term not in headers for term in ("作用", "来源", "日期", "依据", "局限")) or not 3 <= len(rows) <= 8:
+            fail("证据表须有作用/来源/日期/依据/局限，保留3至8条关键证据")
+        supports, roles, degraded = set(), set(), False
+        source_labels = {"etf": "ETF", "margin": "融资", "institution": "机构席位",
+                         "turnover": "成交额", "style": "风格", "fund-issuance": "公募募集"}
+        for row in rows:
+            attrs = row.attrs
+            role, source = attrs.get("data-role"), attrs.get("data-source")
+            row_status = attrs.get("data-source-status")
+            start, end = attrs.get("data-window-start", ""), attrs.get("data-as-of", "")
+            visible = re.sub(r"\s+", "", "".join(row.rendered_text))
+            if (role not in {"support", "counter", "gap"} or source not in source_labels
+                    or row_status not in {"complete", "partial", "source_failed", "missing-data"}
+                    or not _valid_date(start) or not _valid_date(end) or not start <= end <= day
+                    or start not in visible or end not in visible or source_labels[source] not in visible
+                    or {"support": "支持", "counter": "反证", "gap": "缺口"}[role] not in visible
+                    or "[事实]" not in visible or "[判断]" not in visible):
+                fail("每条依据须显示作用、来源、窗口、事实与推断局限；禁止未来数据")
+            if row_status != "complete":
+                degraded = True
+                if row_status not in visible or (row_status in {"source_failed", "missing-data"} and role != "gap"):
+                    fail("失败/缺源必须作为缺口且显示原状态")
+            elif role != "gap":
+                # 排除日期数字，不能只用“上涨/放量”等形容词充当具体依据。
+                if not re.search(r"\d", visible.replace(start, "").replace(end, "")):
+                    fail("有效支持/反证须列出具体数值与口径")
+            if role == "support" and row_status == "complete" and end == day:
+                supports.add(source)
+            roles.add(role)
+        if not {"counter", "gap"} <= roles:
+            fail("必须给出反证或替代解释，以及覆盖局限")
+        if candidate != "unknown":
+            required = {"etf": {"etf"}, "margin": {"margin"}, "institution": {"institution"},
+                        "rotation": {"turnover"}, "mixed": set()}[candidate]
+            if len(supports) < 2 or not required <= supports:
+                fail("具体候选须有两类当日完整支持，含对应渠道直接证据；滞后数据仅作背景")
+            if candidate == "mixed" and len(supports & {"etf", "margin", "institution"}) < 2:
+                fail("多渠道迹象须有至少两种渠道直接证据")
+        if degraded and status != "partial":
+            fail("证据不完整不能标为complete")
+        if status == "partial" and "增量资金推断" not in ops:
+            fail("增量资金推断partial必须登记数据缺口")
 
     def _validate_big_picture_contract(self, report_date: date_type) -> None:
         """确保 s1 不会再静默丢失大类资产、人民币即期与外汇掉期。"""
@@ -5528,6 +5617,7 @@ class _ReportParser(HTMLParser):
         if not current_layout:
             self._validate_exposure_contract(report_date)
         self._validate_big_picture_contract(report_date)
+        self._validate_incremental_capital(report_date)
         self._validate_rmb_fx_chart_contract(report_date)
         self._validate_emotion_leader_contract(report_date)
         self._validate_emotion_height_chart_contract(report_date)
@@ -8865,6 +8955,16 @@ def render_report(
         raise ReportValidationError(
             "missing_chunk", f"缺少 chunk：{', '.join(missing)}"
         )
+    # 旧素材也须展示新增问题，缺证时只声明未知，不从量价强行识别投资者。
+    capital_parser = _ReportParser()
+    capital_parser.feed("\n".join(chunks.values()))
+    if not capital_parser.structured_contracts["data-incremental-capital"]:
+        chunks["s1"] = _inject_section_fragment(chunks["s1"], "s1",
+            f'<p data-incremental-capital="missing-data" data-as-of="{report_date}" '
+            f'data-reviewed-through="{report_date}" data-source-status="missing-data">'
+            '[判断] 增量资金：无法识别。尚缺渠道交叉核验证据，成交额增加不能等同场外资金净流入。</p>')
+        chunks["s8ops"] = _inject_section_fragment(chunks["s8ops"], "ops",
+            '<p>[事实] 增量资金推断：missing-data，尚未完成来源、日期、支持与反证的交叉核验；不代表没有增量资金。</p>')
     if any(re.search(r"\bdata-(?:board|core)-feedback-trend\s*=", body, re.I) for body in chunks.values()):
         raise ReportValidationError("duplicate_feedback_trend", "反馈趋势由组装器统一生成，chunk 不得自行注入", section="s3")
     scripts_path = str(_repo_root() / "scripts")

@@ -1,5 +1,7 @@
 # Skills 依赖索引
 
+2026-10-25：每日复盘HTML①新增[增量资金推断](daily-review/references/incremental-capital.md)，综合ETF/融资/机构席位与量价证据；结构硬门、具体候选最低证据要求、缺口兜底、反证与中/低可信度。没有新增CLI、采集、写库或推送。
+
 2026-10-09：复盘 HTML 固定增加用户提供的「板块推演填空」11项与「情绪周期龙头接力」5项，分别位于②板块和⑤龙头；完整原文与两张思维导图内嵌。主会话按既有证据填写带日期、来源锚点、事实/判断标签的答案，缺项不补猜；竞价待验证、用户操作及仓位待填写。正式组装器只读注入，保持7 chunks/15 anchors；不新增采集、推送、业务写入。详见模板 `template-content.md`。
 
 2026-09-21：`trend-leader daily` 同批附加股东户数／已披露业绩证据卡，标题显示“股票名称（代码）”；按代码覆盖最多12只、回看800自然日，仅引用观察日前已公告事实，保留未覆盖与 `partial/source_failed`。不改变池准入／退出，不新增调度或推送开关。见 [证据卡口径](/Users/alyx/tradeSystem/docs/trend-leader-research-evidence.md)。
