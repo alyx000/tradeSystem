@@ -34,6 +34,8 @@ from services.intraday_monitor.rules import (
     XUANJI_BREAKOUT_3_76_20261014_16,
     GRINM_MATERIALS_BELOW_42_40_20261014_16,
     XIANGYANG_BEARING_BREAKOUT_11_97_20261014_22,
+    YILI_BELOW_27_31_20261027_1109,
+    FANGSHENG_REACH_11_11_20261026_1106,
     DAJIN_HEAVY_BREAKOUT_35_95_20260912_18,
     DAJIN_HEAVY_BREAKOUT_41_96_20260917_28,
     DEFAULT_RULES,
@@ -918,6 +920,8 @@ def test_default_sse_rule_pushes_only_after_observed_below_to_3955(tmp_path):
         XUANJI_BREAKOUT_3_76_20261014_16,
         GRINM_MATERIALS_BELOW_42_40_20261014_16,
         XIANGYANG_BEARING_BREAKOUT_11_97_20261014_22,
+        YILI_BELOW_27_31_20261027_1109,
+        FANGSHENG_REACH_11_11_20261026_1106,
     )
     assert initial_above["events"] == []
     assert below["events"] == []
