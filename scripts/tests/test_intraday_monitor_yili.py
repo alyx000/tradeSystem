@@ -39,7 +39,9 @@ def test_identity_and_strict_boundary(price, matched):
     assert RULE.is_active(price) is matched
     assert RULE.valid_from == date(2026, 10, 13)
     assert RULE.valid_until == date(2026, 10, 26)
-    assert tuple(r for r in DEFAULT_RULES if r.code == RULE.code) == (RULE,)
+    # 追加续期不改变原窗口内的唯一有效规则。
+    assert tuple(r for r in DEFAULT_RULES if r.code == RULE.code
+                 and r.is_effective_on(date(2026, 10, 13))) == (RULE,)
 
 
 @pytest.mark.parametrize("day", OPEN_DAYS)
@@ -60,7 +62,8 @@ def test_holiday_and_expiry_never_fetch_or_push(tmp_path, day):
 
 @pytest.mark.parametrize("day,included", [
     ("2026-10-12", False), ("2026-10-13", True),
-    ("2026-10-23", True), ("2026-10-26", True), ("2026-10-27", False),
+    # 10月27日原规则已到期，但新增接续规则继续为同一股票取数。
+    ("2026-10-23", True), ("2026-10-26", True), ("2026-10-27", True),
 ])
 def test_default_batch_respects_window_and_preserves_retirement(tmp_path, day, included):
     registry, pusher, db, state = _setup(tmp_path, day)
