@@ -19,7 +19,7 @@ from zoneinfo import ZoneInfo
 
 import requests
 
-from services.macro_flash import collector, formatter
+from services.macro_flash import collector, formatter, summary
 from services.macro_flash import filter as flash_filter
 
 logger = logging.getLogger(__name__)
@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 TZ = ZoneInfo("Asia/Shanghai")
 DEFAULT_LOOKBACK_HOURS = 24
 WINDOW_END_TIME = time(20, 0)  # --date 补跑时窗口终点(工作日盘后档);周日档补跑用 --lookback-hours 调整
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 CANDIDATE_TEXT_LIMIT = 120
 REPO_ROOT = Path(__file__).resolve().parents[3]
 BASE_DIR = REPO_ROOT / "data" / "runs" / "macro-flash"
@@ -144,10 +144,8 @@ def run(config: dict, *, date_str: Optional[str] = None,
         # 兑现"--dry-run 不写不推,仅打印速读"契约(即使当日已有 complete 归档)。
         result = collect(window_start, window_end)
         candidates = flash_filter.filter_items(result.items, keywords)
-        digest_md = formatter.build_digest_markdown(
-            candidates, window_start=window_start, window_end=window_end,
-            source_status=result.status, raw_count=result.raw_count,
-            topic_order=list(keywords))
+        digest_md, _, _, _ = _render_archive(
+            result, candidates, window_start, window_end, list(keywords), digest_path)
         print(digest_md)
         return RunOutcome(status=result.status,
                           exit_code=EXIT_CODES.get(result.status, 1),
@@ -196,18 +194,26 @@ def run(config: dict, *, date_str: Optional[str] = None,
                                       "data": {"content": c.get("text") or ""}},
                              topic=c.get("topic"))
                          for c in latest.get("candidates") or []]
-                push_md = formatter.build_push_digest(
-                    cands,
-                    window_start=datetime.fromisoformat(latest["window_start"]),
-                    window_end=datetime.fromisoformat(latest["window_end"]),
-                    source_status=latest.get("source_status"),
-                    raw_count=latest.get("raw_count", 0),
-                    # 主题顺序优先归档快照;旧 manifest 无该键时从 candidates 按出现序推导
-                    # (不得退回当前词表:主题改名/删除后会静默丢归档主题,codex 门2 第3轮)
-                    topic_order=(latest.get("topic_order")
-                                 or list(dict.fromkeys(
-                                     c.get("topic") for c in latest.get("candidates") or []))),
-                    archive_hint=_rel(digest_path))
+                # v2 推送文本与 raw 同代封存；规则/预算更新不改变既有代重推。
+                if "push_digest" in raw_payload:
+                    push_md = raw_payload["push_digest"]
+                else:
+                    # v1 没有推送快照：只读既有全量原文，按归档主题重建。
+                    archived_summary = summary.build_summary(
+                        raw_payload.get("items") or [], source_status=latest["source_status"],
+                        error=latest.get("error"))
+                    push_md, coverage = formatter.build_push_plan(
+                        cands,
+                        window_start=datetime.fromisoformat(latest["window_start"]),
+                        window_end=datetime.fromisoformat(latest["window_end"]),
+                        source_status=latest["source_status"], raw_count=latest.get("raw_count", 0),
+                        window_count=len(raw_payload.get("items") or []),
+                        topic_order=(latest.get("topic_order") or list(dict.fromkeys(c.topic for c in cands))),
+                        archive_hint=_rel(digest_path), error=latest.get("error"),
+                        summary_md=summary.render_summary(archived_summary, compact=True))
+                    latest.update(coverage=coverage, summary=archived_summary,
+                                  selected_count=coverage["selected_count"],
+                                  omitted_count=coverage["omitted_count"])
                 ok = push(title, push_md)
                 latest["push_status"] = "success" if ok else "failed"
                 latest["pushed_at"] = _now_iso()
@@ -236,14 +242,13 @@ def run(config: dict, *, date_str: Optional[str] = None,
             try:
                 result = collect(window_start, window_end)
                 candidates = flash_filter.filter_items(result.items, keywords)
-                digest_md = formatter.build_digest_markdown(
-                    candidates, window_start=window_start, window_end=window_end,
-                    source_status=result.status, raw_count=result.raw_count,
-                    topic_order=list(keywords))
+                digest_md, planned_push, coverage, archive_summary = _render_archive(
+                    result, candidates, window_start, window_end, list(keywords), digest_path)
                 raw_payload = _dumps({
                     "schema_version": SCHEMA_VERSION,
                     "window_start": str(window_start), "window_end": str(window_end),
                     "items": result.items,
+                    "push_digest": planned_push,
                 })
                 manifest = {
                     "schema_version": SCHEMA_VERSION,
@@ -256,6 +261,11 @@ def run(config: dict, *, date_str: Optional[str] = None,
                     "raw_count": result.raw_count,
                     "dropped_count": result.dropped_count,
                     "matched_count": len(candidates),
+                    "window_count": len(result.items),
+                    "selected_count": coverage["selected_count"],
+                    "omitted_count": coverage["omitted_count"],
+                    "coverage": coverage,
+                    "summary": archive_summary,
                     "pages": result.pages,
                     "files": {
                         "flash_raw": {"path": "flash_raw.json", "sha256": _sha256(raw_payload)},
@@ -270,17 +280,7 @@ def run(config: dict, *, date_str: Optional[str] = None,
                 }
                 push_md = None
                 if not no_push:
-                    # 推送体用 important 精选(归档 digest.md 恒全量);源失败推降级提示
-                    push_md = (formatter.build_status_push(
-                                   result.status, window_start=window_start,
-                                   window_end=window_end, error=result.error)
-                               if result.status == collector.STATUS_FAILED
-                               else formatter.build_push_digest(
-                                   candidates, window_start=window_start,
-                                   window_end=window_end, source_status=result.status,
-                                   raw_count=result.raw_count, topic_order=list(keywords),
-                                   archive_hint=_rel(digest_path),
-                                   full_digest_md=digest_md))
+                    push_md = planned_push
                     manifest["push_status"] = "success" if push(title, push_md) else "failed"
                     manifest["pushed_at"] = _now_iso()
                 exit_code = EXIT_CODES.get(result.status, 1)
@@ -302,6 +302,10 @@ def run(config: dict, *, date_str: Optional[str] = None,
                     "window_start": str(window_start), "window_end": str(window_end),
                     "lookback_hours": lookback_hours,
                     "source_status": "run_error", "error": str(exc),
+                    "raw_count": None, "window_count": None, "matched_count": None,
+                    "selected_count": None, "omitted_count": None,
+                    "coverage": {"source_status": "run_error", "error": str(exc),
+                                 "topics": None},
                     "push_status": "skipped", "pushed_at": None,
                     "exit_code": EXIT_CODES["run_error"], "generated_at": _now_iso(),
                 }
@@ -312,6 +316,22 @@ def run(config: dict, *, date_str: Optional[str] = None,
         print(f"{run_date} 已有进行中的 run({exc.lock_path});确认为残留锁可删除后重试。",
               file=sys.stderr)
         return RunOutcome(status="lock_contention", exit_code=EXIT_CODES["lock_contention"])
+
+
+def _render_archive(result, candidates, window_start, window_end, topic_order, digest_path):
+    # 与即将原子归档的 flash_raw.json.items 使用同一个完整快照，绝不传精选列表。
+    archive_summary = summary.build_summary(
+        result.items, source_status=result.status, error=result.error)
+    push_md, coverage = formatter.build_push_plan(
+        candidates, window_start=window_start, window_end=window_end,
+        source_status=result.status, raw_count=result.raw_count, window_count=len(result.items),
+        topic_order=topic_order, archive_hint=_rel(digest_path), error=result.error,
+        summary_md=summary.render_summary(archive_summary, compact=True))
+    digest_md = formatter.build_digest_markdown(
+        candidates, window_start=window_start, window_end=window_end,
+        source_status=result.status, raw_count=result.raw_count, topic_order=topic_order)
+    digest_md += "\n" + summary.render_summary(archive_summary)
+    return digest_md, push_md, coverage, archive_summary
 
 
 def _candidate_row(cand) -> dict:
