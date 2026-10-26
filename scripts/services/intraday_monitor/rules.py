@@ -912,6 +912,22 @@ FANGSHENG_REACH_11_11_20261026_1106 = MonitorRule(
 )
 
 
+YUNHAN_BELOW_105_49_20261026_30 = MonitorRule(
+    rule_id="yunhan-below-105-49-20261026-30",
+    instrument_name="云汉芯城",
+    code="301563.SZ",
+    threshold=105.49,
+    direction="below",
+    inclusive=False,
+    emit_on_initial_match=True,
+    action_label="跌破",
+    valid_from=date(2026, 10, 26),
+    valid_until=date(2026, 10, 30),
+    value_label="价格",
+    value_unit="元",
+)
+
+
 # 长期规则保留上证指数站上 3955；历史个股规则不再启用。
 # 动态涨停价与前收盘均线能力由 MonitorRule.threshold_mode 统一扩展。
 # 科创50 1700 与凯莱英 172.26 临时规则覆盖 8 月 21 日与 24 日两个
@@ -956,6 +972,7 @@ DEFAULT_RULES: tuple[MonitorRule, ...] = (
     XIANGYANG_BEARING_BREAKOUT_11_97_20261014_22,
     YILI_BELOW_27_31_20261027_1109,
     FANGSHENG_REACH_11_11_20261026_1106,
+    YUNHAN_BELOW_105_49_20261026_30,
 )
 
 
