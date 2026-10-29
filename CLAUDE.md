@@ -205,3 +205,9 @@ CLI / API 依赖对照见 `.agents/skills/INDEX.md`（唯一真源）。Codex CL
 
 
 - 历史天量：`python3 scripts/main.py volume-record daily --date YYYY-MM-DD --input-by USER [--metric both|volume|amount] [--no-push] [--dry-run] [--json]`，默认成交量/成交额分别核验上市以来严格新高，随20:00盘后既有调度归档并推钉钉；简洁名单、倍数与双创结果，一句缺口提示，详细诊断留本地。`volume-record push --date YYYY-MM-DD --input-by USER`只补发归档、相同内容去重。完整契约见`.agents/skills/market-tasks/SKILL.md`历史天量章节；只写`data/reports/volume-record/`报告/基线/回执，不写业务库或池计划。
+
+- `python3 main.py no-new-low daily ...`（七天横盘不创新低盘后观察，出处 `teacher_notes#548`：每票最近 8 根有效 K 线首根为基准，后续连续 7 根前复权最低价不低于基准，相等允许、停牌日不占根数；另以总振幅≤12%、收盘相对锚点最大偏离≤8%、期末净漂移≤±5%硬性排除台阶式上涨/大幅冲高回落；全市场日线与复权因子经过唯一性、有效行、联结率和目标日宇宙覆盖硬门，剔 ST、退市及沪深 B 股；全量候选写 JSON，并按申万二级当前成分快照列板块，板块仅展示、不参与筛选/强池/PK，缺失或失败显式 `partial/source_failed`；按横盘收敛事实预截前 12 只（成交额仅最后破平）进入最多 66 场 LLM 两两循环赛，禁止奖励区间上涨/低点大幅抬高/相对强度，按胜场、同胜场组直接交手胜场、横盘事实排序，完全同证据共享名次且不按代码制造排名，熔断时不伪造名次；核心行情 `source_failed` 告警且非零退出；先原子落 `data/reports/no-new-low/YYYY-MM-DD.md/.json/.html` 再推钉钉；支持 `--no-push` / `--dry-run` / `--no-llm`；无池无状态，不写 SQLite、持仓、关注池、认知或计划层，不给买卖建议；工作日 23:20 独立 launchd，不进 `schedule`/APScheduler） 全量合格名单在 Markdown / 可搜索 HTML 按板块展示（板块内代码顺序仅供查找），极窄横盘前 12 只及 PK 单列附表；钉钉明确标记摘要，名次不代表综合质量。
+
+2026-10-29 七天横盘不创新低故障修复：Tushare 镜像客户端固定向根地址按请求体接口名路由，兼容 SDK 1.4.25 追加接口路径的变化；HTTP/协议错误不得降成空表，初始化须返回有效目标日历。证券宇宙、日线和复权接口失败保留来源错误（隐藏上游账户链接），不再被 `rows:0` 覆盖；真实空结果仍接受原数量/覆盖硬门。手工补跑使用 `no-new-low daily --date YYYY-MM-DD --no-push --input-by USER`，定时入口请求者默认 `launchd`，报告记录 `input_by`。
+
+发布审查补充：日历窗口逐自然日核验完整性；行情与复权代码在数值过滤前独立查重；模型返回非法 winner 类型按无效对局处理，不得打断报告归档。

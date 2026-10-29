@@ -1970,6 +1970,10 @@ def build_parser() -> argparse.ArgumentParser:
     from cli.string_yang import register_subparser as register_string_yang_subparser
     register_string_yang_subparser(subparsers)
 
+    # no-new-low：七天横盘不创新低扫描
+    from cli.no_new_low import register_subparser as register_no_new_low_subparser
+    register_no_new_low_subparser(subparsers)
+
     # pattern-scan (形态篇:主线板块内 多头排列+MACD零上+阳放阴缩+未加速 四条件共振)
     from cli.pattern_scan import register_subparser as register_pattern_scan_subparser
     register_pattern_scan_subparser(subparsers)
@@ -2114,6 +2118,11 @@ def main():
     elif args.command == "string-yang":
         from cli import string_yang as string_yang_module
         string_yang_module.handle_command(config, args)
+    elif args.command == "no-new-low":
+        from cli import no_new_low as no_new_low_module
+        exit_code = no_new_low_module.handle_command(config, args)
+        if exit_code:
+            raise SystemExit(exit_code)
     elif args.command == "pattern-scan":
         from cli import pattern_scan as pattern_scan_module
         pattern_scan_module.handle_command(config, args)

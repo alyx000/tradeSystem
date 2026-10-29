@@ -804,3 +804,26 @@ python3 main.py cognition-digest monthly --no-llm
 - 钉钉仅列完整命中名单、当日量额（万手/亿元）、原纪录倍数和双创名单；部分完成仅一句提示，不逐股推缺口/程序错误/覆盖统计。完整原纪录日期、来源与诊断保留本地。超长消息分片不截断名单；成功回执在`dingtalk/`，相同内容去重、失败续推跳过成功片；初始化/发送必须确认成功，不输出凭据。
 - `daily --json`分开输出`collection`与`delivery`；partial/source_failed或推送失败非零退出。不写业务SQLite、关注池、持仓、认知或计划层。
 - 验证：`python3 -m pytest scripts/tests/test_volume_record.py scripts/tests/test_volume_record_notification.py scripts/tests/test_non_trading_day.py scripts/tests/test_cli_smoke.py -q`、`make check-scripts`、`make commands-check`。
+
+## 七天横盘不创新低两两 PK（no-new-low）
+
+2026-10-29 七天横盘不创新低故障修复：Tushare 镜像客户端固定向根地址按请求体接口名路由，兼容 SDK 1.4.25 追加接口路径的变化；HTTP/协议错误不得降成空表，初始化须返回有效目标日历。证券宇宙、日线和复权接口失败保留来源错误（隐藏上游账户链接），不再被 `rows:0` 覆盖；真实空结果仍接受原数量/覆盖硬门。手工补跑使用 `no-new-low daily --date YYYY-MM-DD --no-push --input-by USER`，定时入口请求者默认 `launchd`，报告记录 `input_by`。
+
+- **名单展示（2026-09-10）**：全量合格名单在 Markdown / 可搜索 HTML 按板块展示（板块内代码顺序仅供查找），极窄横盘前 12 只及 PK 单列附表；钉钉明确标记摘要，名次不代表综合质量。 HTML 支持名称、代码、板块搜索；筛选门槛及 PK 选池算法不变。
+
+来源为 `teacher_notes#548` 的“七天不创新低”底部反击观察。这里把“横住”固定为可审计硬门：每只股票取截至目标日最近 8 根有效 K 线，首根作基准，后续连续 7 根 K 线的前复权最低价均不得低于基准最低价；并且 8 根 K 线总振幅 `<=12%`、所有收盘相对锚点收盘的最大偏离 `<=8%`、期末净漂移 `<=±5%`。停牌日不占 K 线根数，相等不算创新低。仅满足低点不破、但已经台阶式上涨或大幅冲高回落的股票必须剔除。
+
+```bash
+python3 main.py no-new-low daily
+python3 main.py no-new-low daily --date 2026-08-04 --dry-run --no-llm
+python3 main.py no-new-low daily --no-push
+```
+
+- **事实源与硬门**：一次批量读取最近 20 个完成交易日的全市场日线与复权因子，逐日检查唯一代码、有效行数、行情/因子联结率和目标日宇宙覆盖；瞬时失败最多尝试 2 次。硬源失败落 `source_failed` 报告并推告警，非零退出，绝不把未完成采集写成候选 0。
+- **候选边界**：证券身份按目标日 as-of 宇宙校验，剔除 ST、退市和沪深 B 股；全量候选写入 JSON，Markdown 展示事实排序前列。筛选与数值均为前复权 `[事实]`，不写数据库、持仓、关注池、认知或计划层。
+- **板块展示**：每只候选列出申万二级行业，口径为扫描时的当前成分快照（并非目标日历史 as-of），仅用于 Markdown/钉钉表格和完整 JSON 展示，绝不参与机械筛选、强池预截断或 LLM PK 输入。映射缺失标“未分类”；来源可用但候选覆盖不全标 `partial`，来源失败标 `source_failed` 并显示错误，但不推翻已通过行情硬门的核心扫描结果。
+- **两两 PK**：先按总振幅更窄、最大收盘偏离更小、期末净漂移更小、量能更平稳筛出最多 12 只，T 日成交额只作最后破平；使用 `itertools.combinations` 完成最多 66 场循环赛。模型只接收事实卡，不接收股票代码排序或先验分，且明确禁止把区间上涨、低点大幅抬高或“相对强度”当作优势；先按胜场，再按同胜场组直接交手胜场，最后按相同的横盘事实破平。事实完全相同则共享名次，股票代码只维持序列稳定，不制造业务排名。超时、无效输出或 runner 失败达到门槛时熔断，报告明确显示 PK 未形成有效排名；`--no-llm` 可只看机械筛选事实。
+- **输出与调度**：正常运行先原子落 `data/reports/no-new-low/YYYY-MM-DD.md/.json/.html`，再推送钉钉；推送失败非零退出但保留本地报告。`--no-push` 只落盘，`--dry-run` 只打印。工作日 23:20 独立 launchd 调度，任务内交易日守卫 fail-closed，不进 `schedule`/APScheduler。
+- **红线**：报告是盘后形态观察与相对事实比较，不给具体买卖建议、价格目标或胜率判断。
+
+发布审查补充：日历窗口逐自然日核验完整性；行情与复权代码在数值过滤前独立查重；模型返回非法 winner 类型按无效对局处理，不得打断报告归档。
