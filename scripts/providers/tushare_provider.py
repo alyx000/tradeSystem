@@ -533,10 +533,33 @@ class TushareProvider(DataProvider):
         """获取全市场复权因子快照。"""
         try:
             d = self._date_fmt(date)
-            return DataResult(
-                data=self._query_records("adj_factor", trade_date=d),
-                source="tushare:adj_factor",
-            )
+            err = self._ensure_pro("get_adj_factor")
+            if err:
+                return err
+            # 镜像默认6000行回包会在市场尾部循环补入重复行；显式分页取到空页。
+            # 不去重掩盖上游冲突/offset失效，始终保留唯一性硬门。
+            records = []
+            seen = set()
+            offset = 0
+            for _ in range(20):
+                page = self._query_records(
+                    "adj_factor", trade_date=d, limit=5000, offset=offset,
+                )
+                if not page:
+                    return DataResult(data=records, source="tushare:adj_factor")
+                for row in page:
+                    code = row.get("ts_code")
+                    factor = row.get("adj_factor")
+                    if not code or code in seen:
+                        raise ValueError("adj_factor duplicate/missing ts_code; pagination rejected")
+                    if str(row.get("trade_date", "")).replace("-", "") != d:
+                        raise ValueError("adj_factor trade_date mismatch")
+                    if factor is None or not math.isfinite(float(factor)) or float(factor) <= 0:
+                        raise ValueError("adj_factor invalid factor")
+                    seen.add(code)
+                records.extend(page)
+                offset += len(page)
+            raise ValueError("adj_factor pagination exceeded 20 pages without empty page")
         except Exception as e:
             return DataResult(data=None, source=self.name, error=str(e))
 
