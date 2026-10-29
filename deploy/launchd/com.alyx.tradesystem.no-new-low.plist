@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Sleep policy: 只读观察清单，错过可接受；不做开机补跑。 -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.alyx.tradesystem.no-new-low</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/alyx/tradeSystem/deploy/launchd/no-new-low-runner.sh</string>
+    </array>
+
+    <!-- 工作日 23:20；法定节假日仍可能被 launchd 唤起，由 Python 交易日历二次守卫。 -->
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>23</integer><key>Minute</key><integer>20</integer></dict>
+        <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>23</integer><key>Minute</key><integer>20</integer></dict>
+        <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>23</integer><key>Minute</key><integer>20</integer></dict>
+        <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>23</integer><key>Minute</key><integer>20</integer></dict>
+        <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>23</integer><key>Minute</key><integer>20</integer></dict>
+    </array>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/tradesystem-no-new-low.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/tradesystem-no-new-low.log</string>
+
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>

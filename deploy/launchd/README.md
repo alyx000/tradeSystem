@@ -654,3 +654,13 @@ rm ~/Library/LaunchAgents/com.alyx.tradesystem.board-break.plist
 `monthly-pattern facts-backfill` 是针对历史月线事实缺口的审计修复入口，不是日常定时任务。必须先运行 `--dry-run`，核对严格只读真实库所生成的内存逐项收据、未决计数和 `receipt_hash`；只有用户确认该批收据后，才可在不带 `--dry-run` 的命令中显式传入相同 `--expect-receipt-hash`。真实执行会重新拉取并重算，哈希绑定 raw/manifest/既有派生事实水位，`certified_no_trade` 还绑定全市场月线与历史宇宙的完整排序行摘要；事实水位、未决项、截断或 A 股分类守恒任一不一致即不写派生事实。确认后只在 `BEGIN IMMEDIATE` 同一事务内运行派生两表专用 schema ensure，并按 SQL 指纹验证表、索引和防改触发器，禁止调用全库 migrate；DDL、运行收据与事实行共同提交或回滚。`monitor_preview` 仅作信息性预览，不属于事实写入确认哈希。
 
 该入口只允许写 `monthly_pattern_derived_month_facts` 和追加式 `monthly_pattern_derived_fact_runs`，不覆盖原始月线五表、不修改观察池/关注池/计划层、不推送。A 股选股宇宙中的缺口才进入回补；沪深 B 股代码 `200/201/900` 单列审计，不当作 A 股缺口。日线 `vol=手`、`amount=千元` 统一换算为月线 `股`、`元` 后才允许交叉验签。`certified_no_trade` 是“在册但整月两层行情均无成交记录”的证据，不得转换为平盘月 K。由于其运行依赖人工确认且可能耗时数分钟，禁止配置 launchd、APScheduler 或其他自动重试。
+
+## 七天横盘不创新低
+
+- `python3 main.py no-new-low daily ...`（七天横盘不创新低盘后观察，出处 `teacher_notes#548`：每票最近 8 根有效 K 线首根为基准，后续连续 7 根前复权最低价不低于基准，相等允许、停牌日不占根数；另以总振幅≤12%、收盘相对锚点最大偏离≤8%、期末净漂移≤±5%硬性排除台阶式上涨/大幅冲高回落；全市场日线与复权因子经过唯一性、有效行、联结率和目标日宇宙覆盖硬门，剔 ST、退市及沪深 B 股；全量候选写 JSON，并按申万二级当前成分快照列板块，板块仅展示、不参与筛选/强池/PK，缺失或失败显式 `partial/source_failed`；按横盘收敛事实预截前 12 只（成交额仅最后破平）进入最多 66 场 LLM 两两循环赛，禁止奖励区间上涨/低点大幅抬高/相对强度，按胜场、同胜场组直接交手胜场、横盘事实排序，完全同证据共享名次且不按代码制造排名，熔断时不伪造名次；核心行情 `source_failed` 告警且非零退出；先原子落 `data/reports/no-new-low/YYYY-MM-DD.md/.json/.html` 再推钉钉；支持 `--no-push` / `--dry-run` / `--no-llm`；无池无状态，不写 SQLite、持仓、关注池、认知或计划层，不给买卖建议；工作日 23:20 独立 launchd，不进 `schedule`/APScheduler） 全量合格名单在 Markdown / 可搜索 HTML 按板块展示（板块内代码顺序仅供查找），极窄横盘前 12 只及 PK 单列附表；钉钉明确标记摘要，名次不代表综合质量。
+
+2026-10-29 七天横盘不创新低故障修复：Tushare 镜像客户端固定向根地址按请求体接口名路由，兼容 SDK 1.4.25 追加接口路径的变化；HTTP/协议错误不得降成空表，初始化须返回有效目标日历。证券宇宙、日线和复权接口失败保留来源错误（隐藏上游账户链接），不再被 `rows:0` 覆盖；真实空结果仍接受原数量/覆盖硬门。手工补跑使用 `no-new-low daily --date YYYY-MM-DD --no-push --input-by USER`，定时入口请求者默认 `launchd`，报告记录 `input_by`。
+
+模板 `com.alyx.tradesystem.no-new-low.plist` 调用 `no-new-low-runner.sh`，工作日23:20执行；日志 `/tmp/tradesystem-no-new-low.log`。
+
+发布审查补充：日历窗口逐自然日核验完整性；行情与复权代码在数值过滤前独立查重；模型返回非法 winner 类型按无效对局处理，不得打断报告归档。
