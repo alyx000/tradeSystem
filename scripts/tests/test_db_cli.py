@@ -19,12 +19,50 @@ SCRIPTS_DIR = Path(__file__).resolve().parent.parent
 MAIN_PY = SCRIPTS_DIR / "main.py"
 
 
+# 仍执行真实 main.py 参数解析和 DB 命令；只把文件边界重定向到测试工作区。
+# TRADE_DB_PATH 只隔离 SQLite，不会隔离历史 YAML、待写队列和附件目录。
+_CLI_BOOTSTRAP = """
+import importlib
+import logging
+import runpy
+import sys
+from pathlib import Path
+
+root = Path(sys.argv.pop(1)).resolve()
+main = Path(sys.argv[1]).resolve()
+sys.argv = sys.argv[1:]
+sys.path.insert(0, str(main.parent))
+for name in ("db.migrate", "db.dual_write", "db.cli"):
+    module = importlib.import_module(name)
+    module.PROJECT_ROOT = root
+importlib.import_module("db.dual_write").PENDING_WRITES_PATH = root / "data" / "pending_writes.json"
+
+real_file_handler = logging.FileHandler
+class TestFileHandler(real_file_handler):
+    def __init__(self, filename, *args, **kwargs):
+        if Path(filename).resolve() == main.parent / "trade_system.log":
+            filename = root / "trade_system.log"
+        super().__init__(filename, *args, **kwargs)
+logging.FileHandler = TestFileHandler
+runpy.run_path(str(main), run_name="__main__")
+"""
+
+
+def _cli_workspace(tmp_db: str) -> Path:
+    root = Path(tmp_db).parent / "cli-workspace"
+    for name in ("data", "tracking", "daily"):
+        (root / name).mkdir(parents=True, exist_ok=True)
+    return root
+
+
 def _run_cli(*args: str, tmp_db: str, input_text: str | None = None) -> subprocess.CompletedProcess:
     import os
+    root = _cli_workspace(tmp_db)
     env = {**os.environ, "TRADE_DB_PATH": tmp_db}
     return subprocess.run(
-        [sys.executable, str(MAIN_PY), "db", *args],
-        capture_output=True, text=True, cwd=str(SCRIPTS_DIR), env=env, input=input_text,
+        [sys.executable, "-c", _CLI_BOOTSTRAP, str(root), str(MAIN_PY), "db", *args],
+        capture_output=True, text=True, cwd=str(root), env=env, input=input_text,
+        timeout=30,
     )
 
 
@@ -123,9 +161,17 @@ def _read_user_version(path: str | Path) -> int:
 
 class TestInit:
     def test_init(self, tmp_db):
+        root = _cli_workspace(tmp_db)
+        (root / "tracking" / "calendar.yaml").write_text(
+            "events:\n  - date: '2026-04-01'\n    event: 隔离测试事件\n", encoding="utf-8"
+        )
         result = _run_cli("init", tmp_db=tmp_db)
-        assert result.returncode == 0
+        assert result.returncode == 0, result.stderr
         assert "初始化完成" in result.stdout
+        with sqlite3.connect(tmp_db) as conn:
+            assert conn.execute("SELECT event FROM calendar_events").fetchall() == [("隔离测试事件",)]
+            assert conn.execute("SELECT COUNT(*) FROM daily_market").fetchone()[0] == 0
+            assert conn.execute("SELECT COUNT(*) FROM teacher_notes").fetchone()[0] == 0
 
 
 class TestSync:
@@ -133,7 +179,22 @@ class TestSync:
         _run_cli("init", tmp_db=tmp_db)
         result = _run_cli("sync", tmp_db=tmp_db)
         assert result.returncode == 0
-        assert "重试完成" in result.stdout
+        assert "重试完成: 成功 0, 失败 0" in result.stdout
+        assert not (_cli_workspace(tmp_db) / "data" / "pending_writes.json").exists()
+
+    def test_sync_replays_only_test_workspace_pending_queue(self, tmp_db):
+        _run_cli("init", tmp_db=tmp_db)
+        pending = _cli_workspace(tmp_db) / "data" / "pending_writes.json"
+        pending.write_text(json.dumps([{
+            "table": "calendar_events", "data": {"date": "2026-04-02", "event": "隔离待写事件"},
+            "error": "test retry",
+        }]), encoding="utf-8")
+        result = _run_cli("sync", tmp_db=tmp_db)
+        assert result.returncode == 0, result.stderr
+        assert "成功 1, 失败 0" in result.stdout
+        assert json.loads(pending.read_text()) == []
+        with sqlite3.connect(tmp_db) as conn:
+            assert conn.execute("SELECT event FROM calendar_events").fetchall() == [("隔离待写事件",)]
 
 
 class TestBackupMigrate:
@@ -575,6 +636,7 @@ class TestAddNote:
         )
         assert result.returncode == 0
         assert "附件 1 个" in result.stdout
+        assert (_cli_workspace(tmp_db) / "data" / "attachments" / "2026-04-01" / "note.jpg").read_bytes() == img.read_bytes()
 
     def test_multi_attachment(self, tmp_db, tmp_path):
         imgs = []
