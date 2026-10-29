@@ -105,6 +105,7 @@ def test_daily_service_uses_same_readonly_suspension_reconciliation(monkeypatch)
     monkeypatch.setattr(service,'discover_lifecycles',lambda *a,**kw:dict(promoted=[dict(code=CODE,name='龙版传媒',launch_date='2026-09-01',last_limit_up_date='2026-09-08')],candidates=[],trade_dates=['2026-09-08',DAY],current_limit_up_codes=set(),current_down_codes=set(),height_breakthrough=dict(status='none',leaders=[])))
     monkeypatch.setattr(service,'_industry_map',lambda r:({},None,''))
     monkeypatch.setattr(service,'fetch_metrics',lambda *a:dict(metric_status='source_failed',metric_error=MISSING_QUOTE))
+    monkeypatch.setattr(service,'load_tracking_calendar',lambda *a: [{'date':DAY,'is_open':1}])
     result=service.run_daily(c,None,DAY)
     assert result['status']=='ok' and result['summary']['suspended_count']==1
     assert result['active'][0]['current_state']=='停牌'

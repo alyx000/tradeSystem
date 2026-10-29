@@ -42,6 +42,8 @@ def _result() -> dict:
             "launch_date": "2026-07-20",
             "max_height": 3,
             "current_state": "涨停",
+            "feedback_type": "强正反馈",
+            "today_pct_chg": 10.01,
             "new_peak_today": True,
         }],
         "promoted_today": [],
@@ -68,6 +70,8 @@ def test_renderer_keeps_fact_and_judgment_boundaries() -> None:
     assert "数值为 [事实]，波段为 [判断]" in text
     assert "甲公司 `000001.SZ`" in text
     assert "52.0%" in text
+    assert "+10.0% / 强正反馈（涨停）" in text
+    assert "不设 +5% 入榜门槛" in text
     assert "不构成买卖建议" in text
     assert "2026-07-23T22:00:00+08:00" in text
     assert "指标刷新：增量；本次 1/2 只；复用已归档 1 只" in text

@@ -171,3 +171,52 @@ def test_target_limit_source_failure_is_not_reported_as_empty_day() -> None:
 
     assert history["target_ok"] is False
     assert any("涨停来源失败" in error for error in history["errors"])
+
+
+
+
+def test_subsequent_single_limit_refreshes_activity_without_changing_promotion():
+    from services.emotion_leader.tracking import annotate
+    conn = _connection()
+    for day, height in [("2026-09-01", 1), ("2026-09-02", 2), ("2026-09-03", 3), ("2026-10-28", 1), ("2026-10-29", 0)]:
+        _add_day(conn, day, [_stock("000001", "甲公司", height)] if height else [])
+    discovered = discover_lifecycles(conn, load_history(conn, "2026-10-29"))
+    item = discovered["promoted"][0]
+    assert item["last_limit_up_date"] == "2026-10-28"
+    assert item["launch_date"] == "2026-09-01" and item["max_height"] == 3 and item["run_count"] == 1
+    assert annotate({**item,"metric_status":"ok","today_pct_chg":-5},"2026-10-29",["2026-10-28","2026-10-29"])["tracking_group"] == "current"
+
+
+def test_manual_only_core_single_limit_survives_confirmation_expiry():
+    from services.emotion_leader.tracking import annotate
+    conn = _connection()
+    conn.execute("INSERT INTO leader_tracking VALUES (1, '000001', '甲公司', '测试行业', '前排活跃', '2026-09-01', '2026-09-02', '', 1)")
+    _add_day(conn, "2026-09-01", [])
+    _add_day(conn, "2026-09-02", [])
+    _add_day(conn, "2026-10-28", [_stock("000001", "甲公司", 1)])
+    _add_day(conn, "2026-10-29", [])
+    item = discover_lifecycles(conn, load_history(conn, "2026-10-29"))["promoted"][0]
+    assert item["last_limit_up_date"] == "2026-10-28"
+    assert item["launch_method"] == "manual_confirmed" and item["max_height"] == 0 and item["run_count"] == 0
+    assert annotate({**item, "today_pct_chg": -4}, "2026-10-29", ["2026-10-28", "2026-10-29"])["tracking_group"] == "current"
+
+
+def test_latest_manual_confirmation_wins_across_sector_attribute_and_code_alias():
+    from services.emotion_leader.tracking import annotate
+    for automatic in (False, True):
+        conn = _connection()
+        for day, height in [("2026-09-01", 1), ("2026-09-02", 2), ("2026-09-03", 3), ("2026-10-29", 0)]:
+            _add_day(conn, day, [_stock("000001", "甲公司", height)] if automatic and height else [])
+        conn.executemany("INSERT INTO leader_tracking VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)", [
+            (1, "000001", "甲公司", "旧行业", "前排活跃", "2026-09-01", "2026-09-02", "旧阶段"),
+            (2, "000001.SZ", "甲公司", "新行业", "连板核心", "2026-10-29", "2026-10-29", "新阶段"),
+        ])
+        promoted = discover_lifecycles(conn, load_history(conn, "2026-10-29"))["promoted"]
+        assert len(promoted) == 1
+        item = promoted[0]
+        assert item["manual_last_seen_date"] == "2026-10-29"
+        assert item["manual_sector"] == "新行业" and item["manual_phase"] == "新阶段"
+        current = annotate({**item, "metric_status": "ok", "today_pct_chg": -4}, "2026-10-29", ["2026-10-29"])
+        assert current["manual_priority_active"] is True and current["manual_age_open_days"] == 0
+        assert current["tracking_group"] == "current"
+        conn.close()
