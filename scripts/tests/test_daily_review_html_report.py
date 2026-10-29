@@ -1488,6 +1488,7 @@ def _emotion_leader_report(date: str = DATE, *, status: str = "partial") -> dict
             "launch_date": "2026-07-10",
             "max_height": 5,
             "current_state": "涨停",
+            "today_pct_chg": 7.2,
         }
     ]
     return {
@@ -6092,9 +6093,11 @@ def test_s3_emotion_leader_report_is_injected_with_fact_judgment_boundary(
     )
     assembler.validate_report(html)
 
-    assert 'data-emotion-leader="v1"' in html
+    assert 'data-emotion-leader="v2"' in html
     assert "状态 partial" in html
     assert "今日晋级核心：哈药股份" in html
+    assert "7.20% / <strong>强正反馈</strong>" in html
+    assert "当期核心（含正/负反馈）：前 1 只 / 共 1 只" in html
     assert "新增二连板候选：北京文化" in html
     assert "[判断] 多波" in html
     assert "source_errors 共 1 条" in html
@@ -7571,13 +7574,18 @@ def test_guardrail_requires_exact_index_expression(assembler, tmp_path):
 
 
 def _run_cli(args: list[str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [sys.executable, str(ASSEMBLER), *args],
-        cwd=ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+    # CLI 回归仅验证临时素材；不得扫描用户真实历史归档或依赖生产数据库。
+    import tempfile
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        isolated = ["--trade-db", str(root / "missing.db"),
+                    "--emotion-history-dir", str(root), "--fx-history-dir", str(root),
+                    "--daily-dir", str(root), "--emotion-leader-report", str(root / "emotion.json"),
+                    "--shock-feedback-report", str(root / "shock.md")]
+        return subprocess.run(
+            [sys.executable, str(ASSEMBLER), *isolated, *args],
+            cwd=ROOT, text=True, capture_output=True, check=False,
+        )
 
 
 def test_cli_default_output_path_remains_compatible(
@@ -8243,3 +8251,109 @@ def test_user_template_budget_preserves_original_character_limit(assembler, tmp_
     at_limit = _visible(html, "甲" * (limit - metrics.visible_chars))
     assert assembler.validate_report(at_limit).visible_chars == limit
     _assert_report_error(assembler, _visible(at_limit, "乙"), "visible_chars_exceeded")
+
+
+def test_s3_emotion_leader_keeps_negative_feedback_core_ahead_of_five_pct_gate(
+    assembler, tmp_path
+):
+    _write_chunks(tmp_path)
+    payload = _emotion_leader_report(status="ok")
+    negative_core = {
+        **payload["active"][0],
+        "code": "001258.SZ",
+        "name": "立新能源",
+        "max_height": 6,
+        "launch_date": "2026-07-16",
+        "today_pct_chg": -2.95,
+        "current_state": "震荡",
+        "new_peak_today": False,
+    }
+    positive_lower_core = {
+        **payload["active"][0],
+        "code": "000001.SZ",
+        "name": "低辨识度涨停票",
+        "max_height": 3,
+        "launch_date": "2026-08-10",
+        "today_pct_chg": 10.0,
+        "current_state": "涨停",
+        "new_peak_today": True,
+    }
+    negative_core["last_limit_up_date"] = DATE
+    payload["tracking_calendar"] = [{"date": DATE, "is_open": 1}]
+    payload["active"] = [positive_lower_core, negative_core]
+    payload["summary"]["active_count"] = 2
+    payload["summary"]["today_limit_up_count"] = 1
+    payload["summary"]["new_peak_count"] = 1
+    payload["refresh"]["metric_refresh_count"] = 2
+
+    html = assembler.render_report(
+        tmp_path,
+        DATE,
+        emotion_leader_report=payload,
+    )
+    assembler.validate_report(html)
+
+    assert html.index("立新能源") < html.index("低辨识度涨停票")
+    assert 'data-feedback="负反馈"' in html
+    assert "-2.95% / <strong>负反馈</strong>" in html
+
+
+def test_emotion_split_has_independent_caps_and_rejects_overlap(assembler, tmp_path):
+    day = "2026-10-29"
+    def row(code, **kw):
+        return {**_emotion_leader_report(date=day)["active"][0], "code": code, "name": code,
+                "metric_as_of": day, "last_limit_up_date": day, "current_state": "震荡", **kw}
+    def calendar():
+        start = date_type(2026, 9, 1)
+        return [{"date": (start + timedelta(days=i)).isoformat(), "is_open": int((start + timedelta(days=i)).weekday() < 5)} for i in range(59)]
+    p = _emotion_leader_report(date=day, status="ok")
+    p["tracking_calendar"] = calendar()
+    p["active"] = [row(f"600{i:03d}.SH", manual_confirmed=True, manual_last_seen_date="2026-09-23", last_limit_up_date=None) for i in range(20)]
+    p["active"] += [row("603278.SH", name="大业股份"), row("002242.SZ", name="九阳股份")]
+    p["summary"]["active_count"] = 22
+    fragment = assembler._render_emotion_leader(p, day)
+    assert 'data-current-count="2"' in fragment and 'data-history-count="20"' in fragment
+    assert 'data-displayed-count="14"' in fragment
+    assert fragment.index("大业股份") < fragment.index("历史核心退潮反馈（含修复）：")
+    assert fragment.count('data-code="600019.SH"') == 1
+    parser = assembler._ReportParser()
+    parser.feed(f'<section id="s3">{fragment}</section>')
+    parser._validate_emotion_leader_contract(date_type.fromisoformat(day))
+    invalid = fragment.replace('data-code="600019.SH"', 'data-code="603278.SH"')
+    parser = assembler._ReportParser(); parser.feed(f'<section id="s3">{invalid}</section>')
+    with pytest.raises(assembler.ReportValidationError):
+        parser._validate_emotion_leader_contract(date_type.fromisoformat(day))
+
+
+def test_emotion_legacy_missing_calendar_is_unverified_not_retreat(assembler):
+    p = _emotion_leader_report(status="ok")
+    p["active"][0].update(current_state="震荡", new_peak_today=False, manual_confirmed=True)
+    fragment=assembler._render_emotion_leader(p, DATE)
+    assert 'data-unverified-count="1"' in fragment
+    assert 'data-history-count="0"' in fragment
+    assert "missing_data" in fragment
+
+
+@pytest.mark.parametrize("has_calendar", [True, False])
+def test_cli_legacy_emotion_uses_selected_calendar_without_rewriting_archive(tmp_path, has_calendar):
+    import sqlite3
+    chunks = tmp_path / "chunks"
+    _write_chunks(chunks)
+    payload = _emotion_leader_report()
+    payload["active"][0].update(current_state="震荡", manual_confirmed=True,
+                                manual_last_seen_date=DATE, new_peak_today=False)
+    archive = tmp_path / "emotion.json"
+    archive.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    before = archive.read_bytes()
+    db = tmp_path / "calendar.db"
+    if has_calendar:
+        with sqlite3.connect(db) as conn:
+            conn.execute("CREATE TABLE trade_calendar(date TEXT, is_open INTEGER)")
+            conn.execute("INSERT INTO trade_calendar VALUES (?, 1)", (DATE,))
+    output = tmp_path / "result.html"
+    result = _run_cli([str(chunks), DATE, "--trade-db", str(db),
+                       "--emotion-leader-report", str(archive), "--output", str(output)])
+    assert result.returncode == 0, result.stderr or result.stdout
+    html = output.read_text(encoding="utf-8")
+    assert ('data-current-count="1"' if has_calendar else 'data-unverified-count="1"') in html
+    assert archive.read_bytes() == before

@@ -326,3 +326,6 @@ sector-correlation 同步核对：同日同值涨跌幅重复行折叠且审计�
 | `scripts/cli/no_new_low.py` 或 `scripts/services/no_new_low/` | `market-tasks/SKILL.md`（七天横盘不创新低小节）+ `INDEX.md` 中 `no-new-low` 行 + `AGENTS.md` / `CLAUDE.md` + `deploy/launchd/README.md`；核对最近 8 根有效 K 线首根为基准、后续 7 根前复权 low 不低于基准（相等允许、停牌不占根数），并同时满足总振幅≤12%、收盘相对锚点最大偏离≤8%、期末净漂移≤±5%，排除台阶式上涨/大幅冲高回落；目标日 as-of 证券宇宙与 ST/退市/B 股排除、全市场批量行情/复权逐日唯一性/有效行/联结率/覆盖率硬门、`source_failed` 不得写成空池、申万二级当前成分快照列入 Markdown/钉钉/全量 JSON 但不进筛选/强池/PK 且缺失显式 `partial/source_failed`、全量候选 JSON 与按横盘收敛事实预截最多 12 只/66 场事实卡 PK（成交额仅最后破平）、排序按胜场→同胜场组直接交手胜场→横盘事实且完全同证据共享名次（代码只稳定序列）、PK 禁止奖励区间上涨/低点大幅抬高/相对强度、熔断不伪造名次、报告先落盘后推送、三档运行与 `--no-llm`、无池无状态不写 SQLite/持仓/关注池/认知/计划层、工作日 23:20 独立 launchd |
 
 发布审查补充：日历窗口逐自然日核验完整性；行情与复权代码在数值过滤前独立查重；模型返回非法 winner 类型按无效对局处理，不得打断报告归档。
+
+
+2026-10-30：情绪核心分区改为 current-history-v1，人工优先权含确认日起5开放日、近期涨停10开放日；HTML v2当期/历史各12只，待核验独列，复用tracking.py与完整交易日历。组内高度优先于有效人工身份，历史人工名单不再占当期名额；到期仅取消优先权、不删除确认记录。同步market-tasks、daily-review、模板README、INDEX及分区/缓存/正式校验测试；保留旧v1验收、partial/source_failed与真实缓存指标日期。该规则取代旧人工确认永久加权和混合前12口径。

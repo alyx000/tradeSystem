@@ -7,6 +7,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from services.emotion_leader import constants as C
+from services.emotion_leader.tracking import annotate, load_tracking_calendar, open_dates, rank_key, tracking_view, should_archive
 from services.emotion_leader.history import discover_lifecycles, load_history
 from services.emotion_leader.metrics import fetch_metrics
 from services.emotion_leader.state import plan_incremental_refresh
@@ -30,12 +31,6 @@ def _median(rows: list[dict], key: str) -> float | None:
     return round(statistics.median(values), 2) if values else None
 
 
-def _age_in_trade_days(trade_dates: list[str], since: str | None, target: str) -> int | None:
-    if not since or since not in trade_dates or target not in trade_dates:
-        return None
-    return max(0, trade_dates.index(target) - trade_dates.index(since))
-
-
 def _current_state(item: dict, up_codes: set[str], down_codes: set[str]) -> str:
     if item["code"] in up_codes:
         return "涨停"
@@ -49,6 +44,28 @@ def _current_state(item: dict, up_codes: set[str], down_codes: set[str]) -> str:
     if pct <= -5:
         return "明显回撤"
     return "震荡"
+
+
+def _feedback_type(item: dict, up_codes: set[str], down_codes: set[str]) -> str:
+    """把当日涨跌翻译为双向反馈，不用正涨幅门槛遮蔽核心回撤。"""
+
+    code = str(item.get("code") or "")
+    pct = item.get("today_pct_chg")
+    if code in down_codes:
+        return "跌停负反馈"
+    if not isinstance(pct, (int, float)):
+        return "未计算"
+    if pct < 0:
+        return "负反馈"
+    if pct == 0:
+        return "平盘"
+    if code in up_codes or pct >= 5:
+        return "强正反馈"
+    return "弱正反馈"
+
+
+def _active_rank_key(item: dict, _up_codes: set[str]) -> tuple:
+    return rank_key(item)
 
 
 def run_daily(
@@ -99,7 +116,12 @@ def run_daily(
     if height_breakthrough.get("status") == "missing_data":
         reason = str(height_breakthrough.get("reason") or "高度节点证据不完整")
         base["source_errors"].append(f"情绪高度节点:{reason}")
-    promoted = discovered["promoted"]
+    calendar = load_tracking_calendar(conn, target_date, lookback_days)
+    dates = open_dates(calendar, target_date)
+    base["tracking_calendar"] = calendar
+    if not dates:
+        base["source_errors"].append("核心分区:交易日历不完整，人工时效待核验")
+    promoted = [annotate(item, target_date, dates) for item in discovered["promoted"]]
     refresh_items, cached_archived, refresh = plan_incremental_refresh(
         promoted,
         previous_report,
@@ -135,27 +157,22 @@ def run_daily(
                     row["wave_source"] = "manual_step5"
                 else:
                     row["wave_source"] = "mechanical_judgment"
-                row["days_since_limit_up"] = _age_in_trade_days(
-                    discovered["trade_dates"], item.get("last_limit_up_date"), target_date)
                 row["current_state"] = _current_state(
                     row, discovered["current_limit_up_codes"], discovered["current_down_codes"])
-                row["archived"] = bool(
-                    not item.get("manual_confirmed")
-                    and isinstance(row.get("days_since_limit_up"), int)
-                    and row["days_since_limit_up"] > C.ARCHIVE_AFTER_TRADE_DAYS
-                    and isinstance(row.get("distance_from_peak_pct"), (int, float))
-                    and row["distance_from_peak_pct"] <= C.ARCHIVE_DRAWDOWN_PCT
-                )
+                row["feedback_type"] = _feedback_type(
+                    row, discovered["current_limit_up_codes"], discovered["current_down_codes"])
+                row = annotate(row, target_date, dates)
+                row["archived"] = should_archive(row)
                 enriched.append(row)
 
     active = [row for row in enriched if not row.get("archived")]
     archived = [row for row in enriched if row.get("archived")] + cached_archived
-    active.sort(key=lambda row: (
-        row["code"] in discovered["current_limit_up_codes"],
-        row.get("new_peak_today") is True,
-        row.get("max_gain_pct") if isinstance(row.get("max_gain_pct"), (int, float)) else -10_000,
-        row["code"],
-    ), reverse=True)
+    active.sort(
+        key=lambda row: _active_rank_key(
+            row, discovered["current_limit_up_codes"]
+        ),
+        reverse=True,
+    )
     archived.sort(key=lambda row: (row.get("last_limit_up_date") or "", row["code"]), reverse=True)
 
     metric_errors = [
@@ -192,4 +209,11 @@ def run_daily(
         },
     }
 
-    return reconcile_suspensions(result, load_suspensions(conn, target_date))
+    result = reconcile_suspensions(result, load_suspensions(conn, target_date))
+    view = tracking_view(result)
+    result["tracking_policy"] = {"version": view["policy_version"],
+                                 "manual_open_days": C.MANUAL_PRIORITY_OPEN_DAYS,
+                                 "current_open_days": C.CURRENT_CORE_OPEN_DAYS}
+    result["summary"].update({f"{group}_tracking_count": len(view[group])
+                              for group in ("current", "history", "unverified")})
+    return result
