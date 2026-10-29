@@ -376,7 +376,8 @@ def discover_lifecycles(conn: sqlite3.Connection, history: dict) -> dict:
             "launch_method": launch_method,
             "candidate_date": candidate_rows[0]["date"],
             "promoted_date": promotion_rows[0]["date"] if promotion_rows else None,
-            "last_limit_up_date": latest["date"],
+            # 活跃度取全部已核验涨停（含后来独立首板），高度/启动仍取合格连板段。
+            "last_limit_up_date": stock_rows[-1]["date"],
             "max_height": max(row["height"] for row in all_rows),
             "run_count": len(qualifying_runs),
             "limit_industry": industries[0] if industries else "",
@@ -386,10 +387,14 @@ def discover_lifecycles(conn: sqlite3.Connection, history: dict) -> dict:
             "manual_last_seen_date": "",
         }
 
+    # 查询已按最后确认日期/id 降序；同股跨板块、属性或代码写法可能有多行。
+    # 只消费规范身份的最新记录，避免后面的历史确认覆盖刚续期的优先权。
+    seen_manual_codes: set[str] = set()
     for manual in _manual_leaders(conn, history["start_date"], history["target_date"]):
         code = normalize_code(manual.get("stock_code"))
-        if not code:
+        if not code or code in seen_manual_codes:
             continue
+        seen_manual_codes.add(code)
         item = lifecycles.get(code)
         if item is None:
             item = {
@@ -400,7 +405,8 @@ def discover_lifecycles(conn: sqlite3.Connection, history: dict) -> dict:
                 "launch_method": "manual_confirmed",
                 "candidate_date": None,
                 "promoted_date": str(manual.get("first_seen_date") or history["target_date"]),
-                "last_limit_up_date": None,
+                # 纯人工核心也可能只有独立首板；人工身份过期不抹掉近期市场事实。
+                "last_limit_up_date": occurrences[code][-1]["date"] if occurrences.get(code) else None,
                 "max_height": 0,
                 "run_count": 0,
                 "limit_industry": "",

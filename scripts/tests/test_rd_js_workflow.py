@@ -7,6 +7,7 @@ import re
 import signal
 import sqlite3
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -1282,6 +1283,30 @@ def test_js_workflow_keeps_missing_pdf_when_llm_unavailable(tmp_path, monkeypatc
 
 
 def test_js_workflow_publish_passes_include_base_digest(tmp_path, monkeypatch):
+    # 验证 JS → Python 参数传递和真实发布合并逻辑；基础研报取数使用固定结果，
+    # 避免 --include-base-digest 在普通回归测试中初始化真实数据源并等待网络。
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    python_wrapper = bin_dir / "python3"
+    python_wrapper.write_text(
+        f"#!{sys.executable}\n"
+        "import importlib.util, os, sys\n"
+        "from pathlib import Path\n"
+        "from types import SimpleNamespace\n"
+        "if len(sys.argv) > 2 and Path(sys.argv[1]).name == 'huibo_helper.py' and sys.argv[2] == 'publish':\n"
+        "    spec = importlib.util.spec_from_file_location('isolated_huibo_helper', sys.argv[1])\n"
+        "    helper = importlib.util.module_from_spec(spec)\n"
+        "    sys.modules[spec.name] = helper\n"
+        "    spec.loader.exec_module(helper)\n"
+        "    helper._render_base_digest = lambda args: SimpleNamespace(title='固定基础研报', markdown='# 固定基础研报\\n测试数据')\n"
+        "    sys.argv = sys.argv[1:]\n"
+        "    helper.main()\n"
+        "else:\n"
+        "    os.execv(sys.executable, [sys.executable, *sys.argv[1:]])\n",
+        encoding="utf-8",
+    )
+    python_wrapper.chmod(0o700)
+    monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ['PATH']}")
     pdf = tmp_path / "source.pdf"
     pdf.write_bytes(b"%PDF-1.4\nfixture")
     snapshot = tmp_path / "hot.json"
@@ -1323,7 +1348,7 @@ def test_js_workflow_publish_passes_include_base_digest(tmp_path, monkeypatch):
         "--publish-dry-run",
         "--include-base-digest",
     ]
-    subprocess.run(cmd, text=True, capture_output=True, check=True)
+    subprocess.run(cmd, text=True, capture_output=True, check=True, timeout=30)
 
     events = [
         json.loads(line)
@@ -1331,6 +1356,9 @@ def test_js_workflow_publish_passes_include_base_digest(tmp_path, monkeypatch):
     ]
     publish = next(event for event in events if event["event"] == "stage_end" and event["stage"] == "publish")
     assert publish["result"]["include_base_digest"] is True
+    assert publish["result"]["base_digest_included"] is True
+    assert publish["result"]["base_digest_error"] == ""
+    assert publish["result"]["title"] == "固定基础研报"
 
 
 def test_js_workflow_fails_fast_on_antigravity_auth_prompt(tmp_path, monkeypatch):
