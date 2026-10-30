@@ -17,6 +17,7 @@ TMP 必须包含 7 个正式 chunk：
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import math
 import os
@@ -6783,6 +6784,7 @@ def validate_report(
     sector_adjustment_risk: dict | None = None,
     sector_increment: dict | None = None,
     trend_review_evidence: dict | None = None,
+    visual_identity_sources: dict | None = None,
 ) -> ReportMetrics:
     """校验结构、Claim、折叠证据、边界声明及双层预算。"""
 
@@ -6795,6 +6797,18 @@ def validate_report(
     scripts_path = str(_repo_root() / "scripts")
     if scripts_path not in sys.path:
         sys.path.insert(0, scripts_path)
+    from services.review_identity_flows import build_identity_flows
+    identity_blocks = re.findall(r'<script\b[^>]*\bid=["\x27]review-identity-data["\x27][^>]*>(.*?)</script>', html, re.S | re.I)
+    if identity_blocks:
+        try:
+            if len(identity_blocks) != 1:
+                raise ValueError('身份图形证据重复')
+            identity_payload = json.loads(identity_blocks[0])
+            expected_identity = build_identity_flows(new_high_manifest, visual_identity_sources, report_date)
+            if identity_payload != expected_identity:
+                raise ValueError('身份图形须与正式新高名单及双日逐股原始来源重算结果一致；有效梯队须显式提供visual_identity_sources')
+        except (ValueError, TypeError) as exc:
+            raise ReportValidationError('invalid_visual_identity', str(exc), section='s3') from exc
     from services.review_templates import validated_fragments
     try:
         verified_templates = validated_fragments(html, report_date, hidden_classes=CSS_HIDDEN_CLASSES)
@@ -8977,6 +8991,75 @@ def _strip_legacy_section(html: str, section_id: str) -> str:
     return pattern.sub("", html, count=1)
 
 
+def attach_identity_flows(html: str, report_date: str, *, new_high_manifest: dict | None = None, raw_sources: dict | None = None) -> str:
+    """Embed identity-derived display evidence without touching source facts."""
+    _validate_date(report_date)
+    scripts_path = str(_repo_root() / "scripts")
+    if scripts_path not in sys.path:
+        sys.path.insert(0, scripts_path)
+    from services.review_identity_flows import build_identity_flows
+    payload = build_identity_flows(new_high_manifest, raw_sources, report_date)
+    content = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
+    html = re.sub(r'<!-- review-identity:start -->.*?<!-- review-identity:end -->', '', html, flags=re.S)
+    block = '<!-- review-identity:start --><script type="application/json" id="review-identity-data">' + content + '</script><!-- review-identity:end -->'
+    return html.replace('</head>', block + '</head>', 1)
+
+
+def _load_visual_identity_inputs(tmp_path: Path, report_date: str) -> tuple[dict | None, dict | None]:
+    """Optional read-only raw receipts; missing sources remain explicit in charts."""
+    high = raw = None
+    high_path = tmp_path / f"new_high_{report_date}.json"
+    if high_path.is_file():
+        try:
+            high = load_new_high_structure_manifest(high_path, report_date)
+        except ReportValidationError:
+            high = {"status": "source_failed"}
+    raw_path = tmp_path / f"visual_identity_sources_{report_date}.json"
+    if raw_path.is_file():
+        try:
+            raw = json.loads(raw_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            raw = {}  # Invalid file must not masquerade as an absent or empty cohort.
+    return high, raw
+
+
+def attach_visuals(html: str, report_date: str, *, illustration_dir: Path | None = None) -> str:
+    """Attach offline, evidence-only charts; safe to repeat for an authorized report update.
+
+    Figures project existing validated source cells in the browser. They do not
+    query providers, alter source tables, add claims or bypass source validation.
+    Existing reports are never discovered or rewritten by this helper.
+    """
+    _validate_date(report_date)
+    for marker in ("styles", "script", "illustrations"):
+        html = re.sub(rf"<!-- review-visuals-{marker}:start -->.*?<!-- review-visuals-{marker}:end -->", "", html, flags=re.S)
+    root = Path(__file__).parent
+    css = (root / "review_visuals.css").read_text(encoding="utf-8")
+    js = (root / "review_visuals.js").read_text(encoding="utf-8")
+    html = html.replace("</head>", f"<!-- review-visuals-styles:start --><style>{css}</style><!-- review-visuals-styles:end --></head>", 1)
+    # Before the existing reader script: search and evidence controls see the charts.
+    script = f"<!-- review-visuals-script:start --><script>{js}</script><!-- review-visuals-script:end -->"
+    html = html.replace("<script>", script + "<script>", 1) if "<script>" in html else html.replace("</body>", script + "</body>", 1)
+    directory = illustration_dir if illustration_dir is not None else _repo_root() / "data" / "reports" / "review-images" / report_date
+    images = []
+    for name, label in (("01-复盘摘要.png", "市场变化"), ("02-结构分化.png", "结构分化"), ("03-验证条件.png", "验证条件")):
+        path = directory / name
+        if not path.is_file():
+            continue
+        content = path.read_bytes()
+        if not content.startswith(b"\x89PNG\r\n\x1a\n"):
+            continue
+        encoded = base64.b64encode(content).decode("ascii")
+        images.append(f'<img loading="lazy" alt="{escape(report_date + " 复盘图解：" + label)}" src="data:image/png;base64,{encoded}">')
+    if images:
+        more = (f'<details><summary>展开另外{len(images) - 1}张复盘图解</summary>' + ''.join(images[1:]) + '</details>') if len(images) > 1 else ''
+        illustration = ('<!-- review-visuals-illustrations:start --><figure class="rv-illustration" data-review-illustration="v1">'
+                        + images[0] + '<figcaption>复盘摘要图 · imagegen 生成；精确数据与来源见下方图表及证据。</figcaption>'
+                        + more + '</figure><!-- review-visuals-illustrations:end -->')
+        html = re.sub(r'(?=<(?:div|section)\b[^>]*\bid=[\"\x27]tldr[\"\x27])', lambda _: illustration, html, count=1)
+    return html
+
+
 def render_report(
     tmp_dir: str | os.PathLike[str],
     report_date: str,
@@ -9224,7 +9307,10 @@ def render_report(
 </body>
 </html>
 '''
-    return html
+    high, raw = _load_visual_identity_inputs(tmp_path, report_date)
+    if raw is not None:
+        html = attach_identity_flows(html, report_date, new_high_manifest=high, raw_sources=raw)
+    return attach_visuals(html, report_date)
 
 
 def _atomic_write_report(html: str, output_path: str | os.PathLike[str]) -> Path:
@@ -9254,6 +9340,7 @@ def write_report(
     capacity_manifest: dict | None = None,
     new_high_manifest: dict | None = None,
     exposure_context: ExposureValidationContext | None = None,
+    visual_identity_sources: dict | None = None,
 ) -> Path:
     """带容量和滚动新高 sidecar 校验后原子落盘；失败时不写文件。"""
 
@@ -9274,6 +9361,7 @@ def write_report(
         capacity_manifest=capacity_manifest,
         new_high_manifest=new_high_manifest,
         exposure_context=exposure_context,
+        visual_identity_sources=visual_identity_sources,
     )
     return _atomic_write_report(html, output_path)
 
@@ -9405,6 +9493,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         new_high_manifest = load_new_high_structure_manifest(
             new_high_manifest_path, args.date
         )
+        _, visual_raw = _load_visual_identity_inputs(Path(args.tmp_dir), args.date)
+        html = attach_identity_flows(html, args.date, new_high_manifest=new_high_manifest, raw_sources=visual_raw)
         exposure_context = None
         parsed = _parse_report(html)
         if _requires_exposure_validation_context(parsed):
@@ -9416,6 +9506,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             html,
             capacity_manifest=capacity_manifest,
             new_high_manifest=new_high_manifest,
+            visual_identity_sources=visual_raw,
             exposure_context=exposure_context,
             sector_adjustment_risk=sector_risk,
             sector_increment=sector_increment,
