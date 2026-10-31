@@ -7606,6 +7606,7 @@ def test_cli_default_output_path_remains_compatible(
         *,
         capacity_manifest=None,
         new_high_manifest=None,
+        visual_identity_sources=None,
         exposure_context=None,
         sector_adjustment_risk=None,
         sector_increment=None,
@@ -7617,6 +7618,7 @@ def test_cli_default_output_path_remains_compatible(
             html,
             capacity_manifest=capacity_manifest,
             new_high_manifest=new_high_manifest,
+            visual_identity_sources=visual_identity_sources,
             exposure_context=exposure_context,
             sector_adjustment_risk=sector_adjustment_risk,
             sector_increment=sector_increment,
@@ -8357,3 +8359,18 @@ def test_cli_legacy_emotion_uses_selected_calendar_without_rewriting_archive(tmp
     html = output.read_text(encoding="utf-8")
     assert ('data-current-count="1"' if has_calendar else 'data-unverified-count="1"') in html
     assert archive.read_bytes() == before
+
+
+def test_visual_identity_payload_requires_source_recalculation(assembler, tmp_path):
+    html, _ = _render_valid(assembler, tmp_path / "chunks")
+    manifest = _new_high_manifest()
+    html = assembler.attach_identity_flows(html, DATE, new_high_manifest=manifest)
+    assembler.validate_report(html, new_high_manifest=manifest)
+    match = re.search(r'(<script type="application/json" id="review-identity-data">)(.*?)(</script>)', html)
+    assert match
+    payload = json.loads(match.group(2))
+    payload['new_high']['windows']['60']['added'] = ['600000.SH']
+    tampered = html[:match.start(2)] + json.dumps(payload) + html[match.end(2):]
+    with pytest.raises(assembler.ReportValidationError) as caught:
+        assembler.validate_report(tampered, new_high_manifest=manifest)
+    assert caught.value.code == 'invalid_visual_identity'

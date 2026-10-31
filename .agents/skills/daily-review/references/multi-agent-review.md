@@ -294,3 +294,7 @@ python3 .agents/skills/daily-review/references/html-report-template/build_new_hi
 - **同类日基率判分**：前一日报告预埋的 T+1 基率方向 vs 当日实际，逐指数命中/落空 + 左尾条件是否触发。
 - **矛盾证据对齐**：龙虎榜席位 × ETF 申赎 × 相关性 × 情绪，四路独立数据的方向是否自洽（如 ETF 申赎常滞后盘面一日）。
 - **持仓 thesis 失效条件核验**：holdings active × open thesis 逐条重算失效线；残留行（active/closed 重复）标数据缺口，走 CLI 清理需用户确认。
+
+## 2026-10-30 复盘图形与逐股名单
+
+正式 HTML 组装器内嵌16类本地图形及可选的3张当日摘要配图；没有图片时正常生成。行业/热门题材五日涨停热力图、板块内部涨跌、封板时刻、梯队去向与滚动新高名单均保留股票名称和代码及来源口径。身份来源通过 `visual_identity_sources_<日期>.json` 与正式新高 manifest 逐项重算核验；来源缺失/失败、未收录、真实0分开展示。题材原榜计数不由部分名单重算：同日成员仅 `is_new=Y` 确认，N排除、缺失状态单列关联线索；涨停原因标签匹配保留原文与规则，不能称完整成员。图形服务只读，无业务写入或推送。详见 [图形规范](html-report-template/visuals.md)。

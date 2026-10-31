@@ -216,3 +216,7 @@ python3 .agents/skills/daily-review/references/html-report-template/assemble_rep
 ③情绪区固定加入两类反馈趋势（`data-board-feedback-trend` / `data-core-feedback-trend`），保留连板高度图。只读 SSE 完整自然日日历中的最近20个开放日及前2日：断板逐股重算开盘/收盘均值、收盘中位数和收涨率；核心读取全部活跃样本的涨停/跌停/创新高/新增核心计数（非连板晋级率）。完整点之间用实线；有值 partial 用空心点及虚线连接，缺值/失败/无样本才断线且不补零。核心四指标拆为同纵轴小图，桌面2列、窄屏1列，逐日样本仍见明细。逐日样本、分母与状态可展开，缺口进入 ops；不补采、不写业务库、不推送。实现：`scripts/services/review_feedback_trends.py`，由组装器自动加载，chunk 不得手写。
 
 配合 [`../multi-agent-review.md`](../multi-agent-review.md) 使用。默认产物 = `data/reports/复盘_YYYY-MM-DD.html`（只读，不写工作台/计划层）；回归样例必须用 `--output` 写非 canonical 文件，避免覆盖原报告。
+
+## 2026-10-30 复盘图形与逐股名单
+
+正式 HTML 组装器内嵌16类本地图形及可选的3张当日摘要配图；没有图片时正常生成。行业/热门题材五日涨停热力图、板块内部涨跌、封板时刻、梯队去向与滚动新高名单均保留股票名称和代码及来源口径。身份来源通过 `visual_identity_sources_<日期>.json` 与正式新高 manifest 逐项重算核验；来源缺失/失败、未收录、真实0分开展示。题材原榜计数不由部分名单重算：同日成员仅 `is_new=Y` 确认，N排除、缺失状态单列关联线索；涨停原因标签匹配保留原文与规则，不能称完整成员。图形服务只读，无业务写入或推送。详见 [图形规范](visuals.md)。
