@@ -652,6 +652,7 @@ def setup_providers(config: dict):
         TdxProvider,
         SinaProvider,
         TonghuashunProvider,
+        EastmoneyProvider,
     )
 
     registry = ProviderRegistry()
@@ -674,8 +675,7 @@ def setup_providers(config: dict):
         registry.register(ak)
 
     # Sina（新浪实时行情，仅 get_realtime_quotes；免费无 token，默认启用）
-    # priority=3 与 config 中 eastmoney 名义同级：eastmoney 从未在此注册，
-    # 无运行期冲突；若未来接回 EastmoneyProvider 再重排
+    # 与 eastmoney 同优先级时保留新浪注册在前；中证2000按明确来源直连。
     sina_config = config.get("providers", {}).get("sina", {})
     if sina_config.get("enabled", True):
         sn = SinaProvider(sina_config)
@@ -699,6 +699,13 @@ def setup_providers(config: dict):
             registry.register(tdx)
         except Exception as e:
             logger.warning("TDX provider 注册失败（平均股价 5 周线将缺失）：%s", e)
+
+    # 东方财富仅提供显式注册指数（当前中证2000），不替换新浪股票报价。
+    em_config = config.get("providers", {}).get("eastmoney", {})
+    if em_config.get("enabled", True):
+        em = EastmoneyProvider(em_config)
+        em.priority = em_config.get("priority", 5)
+        registry.register(em)
 
     return registry
 

@@ -942,6 +942,21 @@ STAR50_BELOW_1257_20261027_1109 = MonitorRule(
 )
 
 
+CSI2000_BELOW_2585_35_20261030_1109 = MonitorRule(
+    rule_id="csi2000-below-2585-35-20261030-1109",
+    instrument_name="中证2000",
+    code="932000.CSI",
+    threshold=2585.35,
+    direction="below",
+    provider="eastmoney",
+    inclusive=False,
+    emit_on_initial_match=True,
+    action_label="跌破",
+    valid_from=date(2026, 10, 30),
+    valid_until=date(2026, 11, 9),
+)
+
+
 # 长期规则保留上证指数站上 3955；历史个股规则不再启用。
 # 动态涨停价与前收盘均线能力由 MonitorRule.threshold_mode 统一扩展。
 # 科创50 1700 与凯莱英 172.26 临时规则覆盖 8 月 21 日与 24 日两个
@@ -988,6 +1003,7 @@ DEFAULT_RULES: tuple[MonitorRule, ...] = (
     FANGSHENG_REACH_11_11_20261026_1106,
     YUNHAN_BELOW_105_49_20261026_30,
     STAR50_BELOW_1257_20261027_1109,
+    CSI2000_BELOW_2585_35_20261030_1109,
 )
 
 

@@ -4,6 +4,7 @@ from .akshare_provider import AkshareProvider
 from .tdx_provider import TdxProvider
 from .sina_provider import SinaProvider
 from .tonghuashun_provider import TonghuashunProvider
+from .eastmoney_provider import EastmoneyProvider
 from .registry import ProviderRegistry
 
 __all__ = [
@@ -14,5 +15,6 @@ __all__ = [
     "TdxProvider",
     "SinaProvider",
     "TonghuashunProvider",
+    "EastmoneyProvider",
     "ProviderRegistry",
 ]
