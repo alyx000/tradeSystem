@@ -461,6 +461,13 @@ ARCHITECTURE_COMMANDS = [
     ["string-yang", "daily", "--dry-run"],
     ["string-yang", "daily", "--no-push"],
     ["string-yang", "daily", "--date", "2026-06-12", "--top-k", "8", "--top-concepts", "6", "--no-llm", "--dry-run"],
+    # no-new-low：全市场横盘观察
+    ['no-new-low', 'daily'],
+    ['no-new-low', 'daily', '--date', '2026-10-29'],
+    ['no-new-low', 'daily', '--dry-run'],
+    ['no-new-low', 'daily', '--no-push'],
+    ['no-new-low', 'daily', '--no-llm'],
+    ['no-new-low', 'daily', '--no-push', '--input-by', 'USER'],
     # pattern-scan (形态篇:主线板块内 多头排列+MACD零上+阳放阴缩+未加速 四条件共振,只读观察清单)
     ["pattern-scan", "daily"],
     ["pattern-scan", "daily", "--date", "2026-07-24"],

@@ -7,6 +7,7 @@ import tempfile
 from pathlib import Path
 
 from services.emotion_leader import constants as C
+from services.emotion_leader.tracking import tracking_view
 
 
 def _pct(value) -> str:
@@ -29,7 +30,9 @@ def render_daily(result: dict, *, max_rows: int = C.DEFAULT_MAX_ROWS) -> str:
         "## 口径",
         f"- {result.get('definition', '')}",
         "- 启动日＝本轮连板第一板；涨幅基准＝启动日前一交易日收盘；最大涨幅使用前复权最高价，区间涨幅使用前复权目标日收盘。",
-        f"- 自动归档只影响展示：最后一次涨停超过 {C.ARCHIVE_AFTER_TRADE_DAYS} 个交易日，且距峰值回撤不高于 {C.ARCHIVE_DRAWDOWN_PCT:.0f}%。",
+        "- 当期核心与历史核心退潮反馈分区，各自限额；高度优先于人工身份，当日涨跌只作双向反馈，不设 +5% 入榜门槛。",
+        f"- 人工确认含确认日起 {C.MANUAL_PRIORITY_OPEN_DAYS} 个交易日有效；最近 {C.CURRENT_CORE_OPEN_DAYS} 个交易日涨停、有效人工确认或已刷新核验的当日创新高归入当期，其余历史观察；缺日历/行情单列待核验。",
+        f"- 自动归档只影响展示（人工确认到期后也适用；无涨停记录者从最后确认日计龄）：最后一次涨停超过 {C.ARCHIVE_AFTER_TRADE_DAYS} 个交易日，且距峰值回撤不高于 {C.ARCHIVE_DRAWDOWN_PCT:.0f}%。",
         f"- 波段证据：[判断] 收盘回撤不少于 {C.WAVE_PULLBACK_PCT:.0f}% 后，收复前高确认下一波；仅自低点反弹不少于 {C.WAVE_RECOVERY_PCT:.0f}% 时标候选。",
         "",
         "## 数据状态",
@@ -66,7 +69,7 @@ def render_daily(result: dict, *, max_rows: int = C.DEFAULT_MAX_ROWS) -> str:
             f"- 区间涨幅中位数 {_pct(summary.get('interval_gain_median_pct'))}｜"
             f"距峰值中位数 {_pct(summary.get('distance_from_peak_median_pct'))}",
             "",
-            "## 活跃情绪核心",
+
         ]
         active = result.get("active") or []
         if summary.get("suspended_count"):
@@ -75,24 +78,30 @@ def render_daily(result: dict, *, max_rows: int = C.DEFAULT_MAX_ROWS) -> str:
                 if row.get("metric_status") == "suspended":
                     proof = row.get("suspension_evidence") or {}
                     lines.insert(-1, f"- 停牌核验：{row.get('name')} {row.get('code')}；{proof.get('date')}，{proof.get('source')}，原始记录 #{proof.get('raw_payload_id')}。")
-        if not active:
-            lines += ["当前无可计算的活跃情绪核心。", ""]
-        else:
+        view = tracking_view(result)
+        lines.append(f"- 分区日历：{view['calendar_status']}；另有 {view['cached_count']} 只归档缓存未刷新，不作今日反馈；缓存中未刷新标的的新高未知，可用 --full-refresh 全量核验。")
+        for group, title in (("current", "当期核心（含正/负反馈）"), ("history", "历史核心退潮反馈（含修复）"), ("unverified", "待核验（不判为退潮）")):
+            members = view[group]
+            lines += ["", f"## {title}", f"本区 {len(members)} 只，展示前 {min(len(members), max_rows)} 只。"]
+            if not members:
+                lines.append("本区无已确认条目。")
+                continue
             lines += [
-                "| 名称 | 板型/波段[判断] | 题材/行业 | 最大涨幅 | 区间涨幅 | 距峰值 | 启动日 | 高度 | 今日状态 |",
+                "| 名称 | 板型/波段[判断] | 题材/行业 | 最大涨幅 | 区间涨幅 | 距峰值 | 启动日 | 高度 | 今日涨幅/反馈 |",
                 "| --- | --- | --- | ---: | ---: | ---: | --- | ---: | --- |",
             ]
-            for row in active[:max_rows]:
-                manual = "·人工" if row.get("manual_confirmed") else ""
+            for row in members[:max_rows]:
+                manual = "·人工有效" if row.get("manual_priority_active") else "·人工已到期" if row.get("manual_priority_status") == "expired" else ""
                 lines.append(
                     f"| {row.get('name')} `{row.get('code')}` | {row.get('board_type')} / "
                     f"{row.get('wave_label', '未计算')}{manual} | {row.get('industry', '未分类')} | "
                     f"{_pct(row.get('max_gain_pct'))} | {_pct(row.get('interval_gain_pct'))} | "
                     f"{_pct(row.get('distance_from_peak_pct'))} | {_short_date(row.get('launch_date'))} | "
-                    f"{row.get('max_height') or '—'}板 | {row.get('current_state', '未计算')} |"
+                    f"{row.get('max_height') or '—'}板 | {_pct(row.get('today_pct_chg'))} / "
+                    f"{row.get('feedback_type', '未计算')}（{row.get('current_state', '未计算')}） |"
                 )
-            if len(active) > max_rows:
-                lines.append(f"\n> 仅展示前 {max_rows} 只；完整 {len(active)} 只保留在 JSON。")
+            if len(members) > max_rows:
+                lines.append(f"\n> 本区仅展示前 {max_rows} 只；完整 {len(members)} 只保留在 JSON。")
             lines.append("")
 
         lines += ["## 今日变化"]

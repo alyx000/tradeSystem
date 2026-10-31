@@ -17,6 +17,7 @@ TMP 必须包含 7 个正式 chunk：
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import math
 import os
@@ -3634,17 +3635,30 @@ class _ReportParser(HTMLParser):
             for key in int_keys
         }
         displayed = counts["data-displayed-count"]
+        is_split = contract.value == "v2"
+        data_rows = [row for row in contract.rows if row.attrs.get("data-code")] if is_split else contract.rows[1:]
+        if is_split:
+            group_counts = {g: _bounded_int_attr(contract.attrs, f"data-{g}-count", minimum=0, maximum=100_000)
+                            for g in ("current", "history", "unverified", "cached")}
+            if (any(v is None for v in group_counts.values())
+                    or sum(group_counts.values()) != (counts["data-active-count"] or 0) + (counts["data-archived-count"] or 0)
+                    or any(sum(r.attrs.get("data-tracking-group") == g for r in data_rows) != min(group_counts[g], EMOTION_LEADER_MAX_ROWS)
+                           for g in ("current", "history", "unverified"))
+                    or displayed != len(data_rows)
+                    or len(contract.rows) != len(data_rows) + sum(group_counts[g] > 0 for g in ("current", "history", "unverified"))
+                    or any(label not in compact_text for label in ("当期核心", "历史核心退潮反馈", "待核验", "5个交易日"))):
+                raise ReportValidationError("invalid_emotion_leader", "核心分区计数、时效口径或独立展示上限不一致", section="s3")
         if (
-            contract.value != "v1"
+            contract.value not in {"v1", "v2"}
             or contract.tag != "div"
             or contract.default_hidden
             or source_status not in {"ok", "partial"}
             or any(value is None for value in counts.values())
             or displayed is None
-            or not 1 <= displayed <= EMOTION_LEADER_MAX_ROWS
-            or counts["data-active-count"] < displayed
+            or not (0 if is_split else 1) <= displayed <= EMOTION_LEADER_MAX_ROWS * (3 if is_split else 1)
+            or counts["data-active-count"] + (counts["data-archived-count"] if is_split else 0) < displayed
             or counts["data-coverage-loaded"] > counts["data-coverage-expected"]
-            or len(contract.rows) != displayed + 1
+            or (not is_split and len(contract.rows) != displayed + 1)
             or not contract.attrs.get("data-refresh-mode")
             or f"状态{source_status}" not in compact_text
             or f"活跃{counts['data-active-count']}" not in compact_text
@@ -3658,7 +3672,7 @@ class _ReportParser(HTMLParser):
                 section="s3",
             )
         seen_codes: set[str] = set()
-        for row in contract.rows[1:]:
+        for row in data_rows:
             code = row.attrs.get("data-code", "").upper()
             wave = row.attrs.get("data-wave-label", "")
             metric_status = row.attrs.get("data-metric-status", "")
@@ -6770,6 +6784,7 @@ def validate_report(
     sector_adjustment_risk: dict | None = None,
     sector_increment: dict | None = None,
     trend_review_evidence: dict | None = None,
+    visual_identity_sources: dict | None = None,
 ) -> ReportMetrics:
     """校验结构、Claim、折叠证据、边界声明及双层预算。"""
 
@@ -6782,6 +6797,18 @@ def validate_report(
     scripts_path = str(_repo_root() / "scripts")
     if scripts_path not in sys.path:
         sys.path.insert(0, scripts_path)
+    from services.review_identity_flows import build_identity_flows
+    identity_blocks = re.findall(r'<script\b[^>]*\bid=["\x27]review-identity-data["\x27][^>]*>(.*?)</script>', html, re.S | re.I)
+    if identity_blocks:
+        try:
+            if len(identity_blocks) != 1:
+                raise ValueError('身份图形证据重复')
+            identity_payload = json.loads(identity_blocks[0])
+            expected_identity = build_identity_flows(new_high_manifest, visual_identity_sources, report_date)
+            if identity_payload != expected_identity:
+                raise ValueError('身份图形须与正式新高名单及双日逐股原始来源重算结果一致；有效梯队须显式提供visual_identity_sources')
+        except (ValueError, TypeError) as exc:
+            raise ReportValidationError('invalid_visual_identity', str(exc), section='s3') from exc
     from services.review_templates import validated_fragments
     try:
         verified_templates = validated_fragments(html, report_date, hidden_classes=CSS_HIDDEN_CLASSES)
@@ -7616,6 +7643,37 @@ def _format_optional_pct(value: object) -> str:
     return "未计算" if number is None else f"{number:.2f}%"
 
 
+def _emotion_tracking_module():
+    scripts_path = str(_repo_root() / "scripts")
+    if scripts_path not in sys.path:
+        sys.path.insert(0, scripts_path)
+    from services.emotion_leader import tracking
+    return tracking
+
+
+def _emotion_active_rank_key(item: Mapping[str, object]) -> tuple:
+    return _emotion_tracking_module().rank_key(dict(item))
+
+
+def _emotion_feedback_label(item: Mapping[str, object]) -> str:
+    explicit = str(item.get("feedback_type") or "")
+    if explicit in {"跌停负反馈", "负反馈", "平盘", "强正反馈", "弱正反馈", "未计算", "停牌"}:
+        return explicit
+    state = str(item.get("current_state") or "")
+    pct = _finite_float(item.get("today_pct_chg"))
+    if state == "跌停":
+        return "跌停负反馈"
+    if pct is None:
+        return "未计算"
+    if pct < 0:
+        return "负反馈"
+    if pct == 0:
+        return "平盘"
+    if state == "涨停" or pct >= 5:
+        return "强正反馈"
+    return "弱正反馈"
+
+
 def _emotion_missing_fragment(report_date: str, reason: str = "") -> str:
     note = ""
     if reason:
@@ -7670,7 +7728,7 @@ def _render_emotion_leader(payload: Mapping[str, object] | None, report_date: st
         or count_keys["loaded"] > count_keys["expected"]
     ):
         return _emotion_missing_fragment(report_date, "汇总计数无法与明细对账")
-    if not active:
+    if not active and not archived:
         if status != "ok":
             return _emotion_missing_fragment(report_date, "partial 状态不能解释为空池")
         return (
@@ -7678,16 +7736,17 @@ def _render_emotion_leader(payload: Mapping[str, object] | None, report_date: st
             f'data-source-status="ok">{EMOTION_LEADER_NONE_TEXT}</p>'
         )
 
-    displayed: list[Mapping[str, object]] = []
-    for item in active[:EMOTION_LEADER_MAX_ROWS]:
-        if not isinstance(item, Mapping):
-            return _emotion_missing_fragment(report_date, "活跃核心明细格式无效")
+    if any(not isinstance(item, dict) for item in active + archived):
+        return _emotion_missing_fragment(report_date, "核心明细格式无效")
+    view = _emotion_tracking_module().tracking_view(dict(payload))
+    group_titles = {"current": "当期核心（含正/负反馈）", "history": "历史核心退潮反馈（含修复）", "unverified": "待核验（不判为退潮）"}
+    displayed = [row for group in group_titles for row in view[group][:EMOTION_LEADER_MAX_ROWS]]
+    for item in displayed:
         code = str(item.get("code", "")).upper()
         name = str(item.get("name", "")).strip()
         wave = str(item.get("wave_label") or "未计算")
         if not EMOTION_LEADER_CODE_RE.fullmatch(code) or not name or wave not in EMOTION_LEADER_WAVE_LABELS:
             return _emotion_missing_fragment(report_date, "活跃核心身份或波段标签无效")
-        displayed.append(item)
 
     promoted_names = "、".join(
         escape(str(item.get("name", "")))
@@ -7699,7 +7758,7 @@ def _render_emotion_leader(payload: Mapping[str, object] | None, report_date: st
         for item in candidates[:10]
         if isinstance(item, Mapping) and item.get("name")
     ) or "无"
-    rows = []
+    rows_by_group = {group: [] for group in group_titles}
     for item in displayed:
         code = str(item.get("code", "")).upper()
         name = str(item.get("name", "")).strip()
@@ -7708,24 +7767,37 @@ def _render_emotion_leader(payload: Mapping[str, object] | None, report_date: st
         if metric_status not in {"ok", "source_failed", "suspended"}:
             metric_status = "source_failed"
         industry = str(item.get("industry") or item.get("limit_industry") or "未分类")
-        rows.append(
-            '<tr '
+        feedback = _emotion_feedback_label(item)
+        rows_by_group[item["tracking_group"]].append(
+            f'<tr data-tracking-group="{item["tracking_group"]}" '
             f'data-code="{escape(code)}" data-wave-label="{escape(wave)}" '
-            f'data-metric-status="{escape(metric_status)}">'
-            f'<td>{escape(name)}<br><small>{escape(code)}</small></td>'
+            f'data-metric-status="{escape(metric_status)}" data-feedback="{escape(feedback)}">'
+            f'<td>{escape(name)}<br><small>{escape(code)}；{escape(str(item.get("tracking_reason", "")))}</small></td>'
             f'<td>{escape(str(item.get("board_type") or "—"))}</td>'
             f'<td>[判断] {escape(wave)}</td><td>{escape(industry)}</td>'
             f'<td>{_format_optional_pct(item.get("max_gain_pct"))}</td>'
             f'<td>{_format_optional_pct(item.get("interval_gain_pct"))}</td>'
             f'<td>{_format_optional_pct(item.get("distance_from_peak_pct"))}</td>'
             f'<td>{escape(str(item.get("launch_date") or "—"))} / {escape(str(item.get("max_height") or "—"))}板</td>'
-            f'<td>{escape(str(item.get("current_state") or "未计算"))}</td></tr>'
+            f'<td>{_format_optional_pct(item.get("today_pct_chg"))} / '
+            f'<strong>{escape(feedback)}</strong><br><small>{escape(str(item.get("current_state") or "未计算"))}</small></td></tr>'
         )
+    tables = []
+    for group, title in group_titles.items():
+        members = view[group][:EMOTION_LEADER_MAX_ROWS]
+        if not members:
+            tables.append(f'<p>{title}：本区无已确认条目。</p>')
+            continue
+        tables.append(f'''<details class="evidence" data-as-of="{escape(report_date)}" data-items="{len(members)}" data-evidence-kind="emotion-leader">
+          <summary>{title}：前 {len(members)} 只 / 共 {len(view[group])} 只</summary>
+          <div class="evidence-body"><div class="table-scroll-shell"><table>
+          <thead><tr><th>核心</th><th>板型</th><th>波段</th><th>行业</th><th>最大涨幅</th><th>区间涨幅</th><th>距峰值</th><th>启动/高度</th><th>今日涨幅/反馈</th></tr></thead>
+          <tbody>{''.join(rows_by_group[group])}</tbody></table></div>{"<p>本区无已确认条目。</p>" if not members else ""}</div></details>''')
     error_items = "".join(
         f"<li>{escape(str(error)[:240])}</li>" for error in source_errors[:3]
     )
     errors_block = (
-        f'<p class="note">[事实] source_errors 共 {len(source_errors)} 条，前 3 条：</p><ul>{error_items}</ul>'
+        f'<details class="evidence" data-as-of="{escape(report_date)}" data-items="{min(3, len(source_errors))}"><summary>来源缺口：source_errors 共 {len(source_errors)} 条，前 3 条</summary><div class="evidence-body"><ul>{error_items}</ul></div></details>'
         if source_errors
         else '<p class="note">[事实] source_errors：0 条。</p>'
     )
@@ -7733,7 +7805,9 @@ def _render_emotion_leader(payload: Mapping[str, object] | None, report_date: st
     suspension_note = ""
     if summary.get("suspended_count"):
         suspension_note = f'<p>[事实] 有效行情 {summary.get("metric_available_count", "—")} 只；全天停牌 {summary["suspended_count"]} 只；未解决缺失 {summary.get("unresolved_count", "—")} 只。停牌依据同日原始停牌记录核验，指标不适用，不补零。</p>'
-    return f'''<div class="emotion-leader" data-emotion-leader="v1" data-as-of="{escape(report_date)}"
+    return f'''<div class="emotion-leader" data-emotion-leader="v2" data-as-of="{escape(report_date)}"
+    data-current-count="{len(view['current'])}" data-history-count="{len(view['history'])}"
+    data-unverified-count="{len(view['unverified'])}" data-cached-count="{view['cached_count']}"
     data-source-status="{escape(status)}" data-active-count="{count_keys['active']}"
     data-archived-count="{count_keys['archived']}" data-today-limit-up-count="{count_keys['limit_up']}"
     data-new-peak-count="{count_keys['new_peak']}" data-promoted-count="{len(promoted)}"
@@ -7744,12 +7818,10 @@ def _render_emotion_leader(payload: Mapping[str, object] | None, report_date: st
   <p><strong>[事实] 情绪核心生命周期：</strong>状态 {escape(status)}；历史覆盖 {count_keys['loaded']}/{count_keys['expected']}；刷新 {refresh_mode} / {count_keys['refreshed']} 只；活跃 {count_keys['active']} / 归档 {count_keys['archived']}；今日涨停 {count_keys['limit_up']} / 创新高 {count_keys['new_peak']}。</p>
   <p>[事实] 今日晋级核心：{promoted_names}；新增二连板候选：{candidate_names}。</p>
   {suspension_note}
-  <details class="evidence" data-as-of="{escape(report_date)}" data-items="{len(displayed)}" data-evidence-kind="emotion-leader">
-    <summary>活跃核心前 {len(displayed)} 只（{len(displayed)} 项）</summary>
-    <div class="evidence-body"><div class="table-scroll-shell"><table>
-      <thead><tr><th>核心</th><th>板型</th><th>波段</th><th>行业</th><th>最大涨幅</th><th>区间涨幅</th><th>距峰值</th><th>启动/高度</th><th>今日状态</th></tr></thead>
-      <tbody>{''.join(rows)}</tbody></table></div>{errors_block}</div>
-  </details>
+  <p>[判断] 当期核心：最近10个交易日内涨停、含确认日起5个交易日内人工确认，或已刷新核验的当日创生命周期新高；高度优先于人工身份。历史区保留退潮与修复反馈，两区各前12只；日历/行情不足单列待核验，不补零。</p>
+  <p>[事实] 分区日历：{view['calendar_status']}；归档缓存 {view['cached_count']} 只未刷新，不作为今日反馈；其新高未知，可用 --full-refresh 全量核验。人工确认到期只取消优先权，不删除原记录。</p>
+  {''.join(tables)}
+  {errors_block}
 </div>'''
 
 
@@ -8919,6 +8991,75 @@ def _strip_legacy_section(html: str, section_id: str) -> str:
     return pattern.sub("", html, count=1)
 
 
+def attach_identity_flows(html: str, report_date: str, *, new_high_manifest: dict | None = None, raw_sources: dict | None = None) -> str:
+    """Embed identity-derived display evidence without touching source facts."""
+    _validate_date(report_date)
+    scripts_path = str(_repo_root() / "scripts")
+    if scripts_path not in sys.path:
+        sys.path.insert(0, scripts_path)
+    from services.review_identity_flows import build_identity_flows
+    payload = build_identity_flows(new_high_manifest, raw_sources, report_date)
+    content = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
+    html = re.sub(r'<!-- review-identity:start -->.*?<!-- review-identity:end -->', '', html, flags=re.S)
+    block = '<!-- review-identity:start --><script type="application/json" id="review-identity-data">' + content + '</script><!-- review-identity:end -->'
+    return html.replace('</head>', block + '</head>', 1)
+
+
+def _load_visual_identity_inputs(tmp_path: Path, report_date: str) -> tuple[dict | None, dict | None]:
+    """Optional read-only raw receipts; missing sources remain explicit in charts."""
+    high = raw = None
+    high_path = tmp_path / f"new_high_{report_date}.json"
+    if high_path.is_file():
+        try:
+            high = load_new_high_structure_manifest(high_path, report_date)
+        except ReportValidationError:
+            high = {"status": "source_failed"}
+    raw_path = tmp_path / f"visual_identity_sources_{report_date}.json"
+    if raw_path.is_file():
+        try:
+            raw = json.loads(raw_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            raw = {}  # Invalid file must not masquerade as an absent or empty cohort.
+    return high, raw
+
+
+def attach_visuals(html: str, report_date: str, *, illustration_dir: Path | None = None) -> str:
+    """Attach offline, evidence-only charts; safe to repeat for an authorized report update.
+
+    Figures project existing validated source cells in the browser. They do not
+    query providers, alter source tables, add claims or bypass source validation.
+    Existing reports are never discovered or rewritten by this helper.
+    """
+    _validate_date(report_date)
+    for marker in ("styles", "script", "illustrations"):
+        html = re.sub(rf"<!-- review-visuals-{marker}:start -->.*?<!-- review-visuals-{marker}:end -->", "", html, flags=re.S)
+    root = Path(__file__).parent
+    css = (root / "review_visuals.css").read_text(encoding="utf-8")
+    js = (root / "review_visuals.js").read_text(encoding="utf-8")
+    html = html.replace("</head>", f"<!-- review-visuals-styles:start --><style>{css}</style><!-- review-visuals-styles:end --></head>", 1)
+    # Before the existing reader script: search and evidence controls see the charts.
+    script = f"<!-- review-visuals-script:start --><script>{js}</script><!-- review-visuals-script:end -->"
+    html = html.replace("<script>", script + "<script>", 1) if "<script>" in html else html.replace("</body>", script + "</body>", 1)
+    directory = illustration_dir if illustration_dir is not None else _repo_root() / "data" / "reports" / "review-images" / report_date
+    images = []
+    for name, label in (("01-复盘摘要.png", "市场变化"), ("02-结构分化.png", "结构分化"), ("03-验证条件.png", "验证条件")):
+        path = directory / name
+        if not path.is_file():
+            continue
+        content = path.read_bytes()
+        if not content.startswith(b"\x89PNG\r\n\x1a\n"):
+            continue
+        encoded = base64.b64encode(content).decode("ascii")
+        images.append(f'<img loading="lazy" alt="{escape(report_date + " 复盘图解：" + label)}" src="data:image/png;base64,{encoded}">')
+    if images:
+        more = (f'<details><summary>展开另外{len(images) - 1}张复盘图解</summary>' + ''.join(images[1:]) + '</details>') if len(images) > 1 else ''
+        illustration = ('<!-- review-visuals-illustrations:start --><figure class="rv-illustration" data-review-illustration="v1">'
+                        + images[0] + '<figcaption>复盘摘要图 · imagegen 生成；精确数据与来源见下方图表及证据。</figcaption>'
+                        + more + '</figure><!-- review-visuals-illustrations:end -->')
+        html = re.sub(r'(?=<(?:div|section)\b[^>]*\bid=[\"\x27]tldr[\"\x27])', lambda _: illustration, html, count=1)
+    return html
+
+
 def render_report(
     tmp_dir: str | os.PathLike[str],
     report_date: str,
@@ -9166,7 +9307,10 @@ def render_report(
 </body>
 </html>
 '''
-    return html
+    high, raw = _load_visual_identity_inputs(tmp_path, report_date)
+    if raw is not None:
+        html = attach_identity_flows(html, report_date, new_high_manifest=high, raw_sources=raw)
+    return attach_visuals(html, report_date)
 
 
 def _atomic_write_report(html: str, output_path: str | os.PathLike[str]) -> Path:
@@ -9196,6 +9340,7 @@ def write_report(
     capacity_manifest: dict | None = None,
     new_high_manifest: dict | None = None,
     exposure_context: ExposureValidationContext | None = None,
+    visual_identity_sources: dict | None = None,
 ) -> Path:
     """带容量和滚动新高 sidecar 校验后原子落盘；失败时不写文件。"""
 
@@ -9216,6 +9361,7 @@ def write_report(
         capacity_manifest=capacity_manifest,
         new_high_manifest=new_high_manifest,
         exposure_context=exposure_context,
+        visual_identity_sources=visual_identity_sources,
     )
     return _atomic_write_report(html, output_path)
 
@@ -9289,6 +9435,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         from services.review_feedback_trends import load_feedback_trends
         from services.sector_adjustment_risk.renderer import load as load_sector_risk
         emotion_report = reconcile_report_file(emotion_report, trade_db_path, args.date)
+        if emotion_report and "tracking_calendar" not in emotion_report:
+            from services.emotion_leader.tracking import load_tracking_calendar
+            try:
+                with sqlite3.connect(f"{Path(trade_db_path).resolve().as_uri()}?mode=ro", uri=True) as tracking_conn:
+                    emotion_report = {**emotion_report, "tracking_calendar": load_tracking_calendar(tracking_conn, args.date)}
+            except sqlite3.Error:
+                pass
         emotion_open_dates = load_emotion_open_dates(trade_db_path, args.date)
         fx_history_dir = args.fx_history_dir or (
             _repo_root() / "data" / "reports"
@@ -9340,6 +9493,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         new_high_manifest = load_new_high_structure_manifest(
             new_high_manifest_path, args.date
         )
+        _, visual_raw = _load_visual_identity_inputs(Path(args.tmp_dir), args.date)
+        html = attach_identity_flows(html, args.date, new_high_manifest=new_high_manifest, raw_sources=visual_raw)
         exposure_context = None
         parsed = _parse_report(html)
         if _requires_exposure_validation_context(parsed):
@@ -9351,6 +9506,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             html,
             capacity_manifest=capacity_manifest,
             new_high_manifest=new_high_manifest,
+            visual_identity_sources=visual_raw,
             exposure_context=exposure_context,
             sector_adjustment_risk=sector_risk,
             sector_increment=sector_increment,

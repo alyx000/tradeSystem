@@ -128,24 +128,31 @@ class TushareProvider(DataProvider):
     def initialize(self) -> bool:
         self._initialized = False
         self.pro = None
+        self._initialization_error = ""
         try:
-            import tushare as ts
-            import tushare.pro.client as client
-            client.DataApi._DataApi__http_url = "http://tushare.xyz"
+            from .tushare_transport import TushareMirrorClient
             token = self.config.get("token") or os.getenv("TUSHARE_TOKEN", "")
             if not token:
+                self._initialization_error = "TUSHARE_TOKEN 未配置"
                 logger.error("TUSHARE_TOKEN 未配置")
                 return False
-            ts.set_token(token)
-            self.pro = ts.pro_api()
+            # 直接传入本次进程的 token。``ts.set_token`` 会把凭据持久化到
+            # ``~/tk.csv``，既不是 provider 初始化所需，也会让只读任务产生
+            # 工作区外写入副作用。
+            self.pro = TushareMirrorClient(token)
             # 测试连接
             df = self.pro.trade_cal(exchange="SSE", start_date="20260101", end_date="20260101")
+            if (df is None or df.empty or not {"exchange", "cal_date", "is_open"}.issubset(df.columns)
+                    or not ((df["exchange"] == "SSE") & (df["cal_date"] == "20260101")
+                            & df["is_open"].isin([0, 1])).any()):
+                raise ValueError("初始化日历响应为空或缺少有效目标日期")
             self._initialized = True
             return True
         except Exception as e:
             self.pro = None
             self._initialized = False
-            logger.error(f"Tushare 初始化失败: {e}")
+            self._initialization_error = re.sub(r"https?://\S+", "[链接已隐藏]", str(e))
+            logger.error("Tushare 初始化失败: %s", self._initialization_error)
             return False
 
     def get_capabilities(self) -> list[str]:
@@ -319,7 +326,9 @@ class TushareProvider(DataProvider):
         return DataResult(
             data=None,
             source=self.name,
-            error=f"provider_not_initialized: {method_name}",
+            error=f"provider_not_initialized: {method_name}" + (
+                f"; {self._initialization_error}" if getattr(self, "_initialization_error", "") else ""
+            ),
         )
 
     def _query_records(self, api_name: str, **params) -> list[dict]:
@@ -533,10 +542,33 @@ class TushareProvider(DataProvider):
         """获取全市场复权因子快照。"""
         try:
             d = self._date_fmt(date)
-            return DataResult(
-                data=self._query_records("adj_factor", trade_date=d),
-                source="tushare:adj_factor",
-            )
+            err = self._ensure_pro("get_adj_factor")
+            if err:
+                return err
+            # 镜像默认6000行回包会在市场尾部循环补入重复行；显式分页取到空页。
+            # 不去重掩盖上游冲突/offset失效，始终保留唯一性硬门。
+            records = []
+            seen = set()
+            offset = 0
+            for _ in range(20):
+                page = self._query_records(
+                    "adj_factor", trade_date=d, limit=5000, offset=offset,
+                )
+                if not page:
+                    return DataResult(data=records, source="tushare:adj_factor")
+                for row in page:
+                    code = row.get("ts_code")
+                    factor = row.get("adj_factor")
+                    if not code or code in seen:
+                        raise ValueError("adj_factor duplicate/missing ts_code; pagination rejected")
+                    if str(row.get("trade_date", "")).replace("-", "") != d:
+                        raise ValueError("adj_factor trade_date mismatch")
+                    if factor is None or not math.isfinite(float(factor)) or float(factor) <= 0:
+                        raise ValueError("adj_factor invalid factor")
+                    seen.add(code)
+                records.extend(page)
+                offset += len(page)
+            raise ValueError("adj_factor pagination exceeded 20 pages without empty page")
         except Exception as e:
             return DataResult(data=None, source=self.name, error=str(e))
 

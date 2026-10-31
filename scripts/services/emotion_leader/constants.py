@@ -1,7 +1,9 @@
 """情绪核心生命周期监控常量。"""
 
 DEFAULT_LOOKBACK_DAYS = 90
-DEFAULT_MAX_ROWS = 20
+DEFAULT_MAX_ROWS = 12
+MANUAL_PRIORITY_OPEN_DAYS = 5  # 确认日为第1日，age 0..4
+CURRENT_CORE_OPEN_DAYS = 10  # 涨停日为第1日，age 0..9
 FETCH_WORKERS = 2
 
 # 「打开高度」不与普通晋级混用：目标日非 ST 连板最高高度

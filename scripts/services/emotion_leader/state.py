@@ -81,7 +81,9 @@ def plan_incremental_refresh(
             code in previous_active
             or code not in known_codes
             or code in current_limit_up_codes
-            or item.get("manual_confirmed")
+            or item.get("tracking_group") == "current"
+            or item.get("manual_priority_active")
+            or (item.get("manual_confirmed") and "manual_priority_status" not in item)
             or item.get("promoted_date") == target_date
         )
         if should_refresh:
@@ -97,14 +99,14 @@ def plan_incremental_refresh(
             "name", "board_type", "launch_date", "launch_method", "candidate_date",
             "promoted_date", "last_limit_up_date", "max_height", "run_count",
             "limit_industry", "manual_confirmed", "manual_sector", "manual_phase",
-            "manual_last_seen_date",
+            "manual_last_seen_date", "manual_priority_status", "manual_priority_active", "manual_age_open_days",
         ):
             carried[key] = item.get(key)
         carried.update({
             "archived": True,
             "metric_status": "cached_archived",
-            "metric_as_of": previous.get("date"),
-            "cache_note": "已归档标的复用上期指标；再次涨停或人工确认时恢复刷新",
+            "metric_as_of": prior.get("metric_as_of") or previous.get("date"),
+            "cache_note": "已归档标的复用上期指标；再次涨停或有效期内人工确认时恢复刷新",
         })
         cached_archived.append(carried)
 

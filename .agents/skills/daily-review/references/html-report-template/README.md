@@ -70,7 +70,7 @@ python3 .agents/skills/daily-review/references/html-report-template/assemble_rep
 - 每节默认「1 句裁决 + 最多 3 条证据 + 1 条证伪或缺口」；无新增只写一行，不生成空表。
 - `s1` 不能只交付境内大盘。它必须有唯一默认可见 `data-big-picture="verdict"`，以及折叠证据中的唯一 `data-cross-asset-context` 和 `data-rmb-fx-observation`；报告日休市时三者的 `data-as-of` 仍指向最近事实日，`data-reviewed-through` 等于报告日。缺源只能使用结构化 `missing-data` 并在 `ops` 可见，不得静默通过。
 - `s1` 还必须由组装器生成唯一 `data-rmb-fx-chart="v1|missing-data"`：至少 8 个、最多 15 个同日工作日点；上图即期买卖算术中值与 1Y C-Swap 全价共用汇率轴，下图单列掉期点 Pips，图后附折叠数据表。chunk 自行注入、日期乱序、数值越界或价格语义缺失均拒绝生成。
-- `s3` 的情绪核心生命周期由组装器从同日 JSON 自动注入唯一 `data-emotion-leader="v1|none|missing-data"`。`v1` 默认可见状态/覆盖/刷新/计数/晋级与二板候选，前 12 只活跃核心进入折叠证据；波段逐行标 `[判断]`。只有 `ok` 真空池允许 `none`，`partial/source_failed` 不得伪装为空池或 0。
+- `s3` 的情绪核心生命周期从同日 JSON 自动注入唯一 `data-emotion-leader="v2|none|missing-data"`；旧归档 v1 仍可校验。当期核心与历史核心退潮反馈（含修复）分区，各前12只；人工确认含确认日起5个交易日有效（age 0..4），最近10个交易日内涨停（age 0..9）、有效人工确认或已刷新核验的当日生命周期新高进入当期。组内先比较数据可判、历史最高板，再比较有效人工优先权、最近涨停日（缺失用启动日）、最大涨幅、创新高和当日绝对涨跌幅；不设正涨幅门槛。日历按逐自然日完整的 trade_calendar 验证，不用行情样本数计龄；缺日历/行情/确认日期单列待核验，不判为退潮。人工到期也适用超过20交易日且回撤≤−30%的归档规则，无涨停记录者从最后确认日计龄；归档缓存保留真实 metric_as_of，不作为今日反馈。 新日报保存 tracking_calendar 与 tracking_policy，HTML/Markdown 共用 services/emotion_leader/tracking.py；旧日报由正式 CLI 只读目标库日历后分区，源文件不改写。只有 ok 真空池允许 none，partial/source_failed 不得伪装为空池。
 - `s3` 还必须由组装器按 `trade_calendar.date` 最近最多 20 个开放日对齐情绪日报，生成唯一、默认可见的 `data-emotion-height-chart="v1|missing-data"` 静态 SVG。每点取 `height_breakthrough.source_status=complete` 的当日非 ST 二板及以上最高连板，图后附日期/高度/状态折叠表；至少 2 个有效日才画。确认无符合项才允许高度 0；日报缺失、损坏或高度不可判时保留空行、折线断开并标 `partial`，不得补 0 或插值。chunk 自行注入、日期乱序、点数/状态不一致均拒绝生成。
 - `s3` 折叠证据还必须有且仅有一份 `data-board-break-feedback="v1|none|missing-data"`。`v1` 固定保存 `T-2 连板 → T-1 断板 → T 日反馈` 时间轴、候选/断板/有效样本数、覆盖率及逐股代码、前高、断板涨幅、反馈开收盘涨幅和结果；`partial` 保留有效行并在 `ops` 披露。只有 `ok` 的完整真空样本可用 `none`，`source_failed` 或零有效覆盖必须用 `missing-data`，不得写成 0。
 - `s4` 默认可见正文必须有且仅有一个 `<p data-style-board-break-feedback="v1|none|missing-data">`，带 `[事实]`。`v1` 必须展示样本/断板数与覆盖率、开收盘均值和中位数、高开/收涨率、再涨停与跌停数；组装器从 `s3` 逐股属性重算后逐项对账。`none/missing-data` 必须与 `s3` 状态完全一致，摘要不得隐藏、重复或复制逐股表。
@@ -216,3 +216,7 @@ python3 .agents/skills/daily-review/references/html-report-template/assemble_rep
 ③情绪区固定加入两类反馈趋势（`data-board-feedback-trend` / `data-core-feedback-trend`），保留连板高度图。只读 SSE 完整自然日日历中的最近20个开放日及前2日：断板逐股重算开盘/收盘均值、收盘中位数和收涨率；核心读取全部活跃样本的涨停/跌停/创新高/新增核心计数（非连板晋级率）。完整点之间用实线；有值 partial 用空心点及虚线连接，缺值/失败/无样本才断线且不补零。核心四指标拆为同纵轴小图，桌面2列、窄屏1列，逐日样本仍见明细。逐日样本、分母与状态可展开，缺口进入 ops；不补采、不写业务库、不推送。实现：`scripts/services/review_feedback_trends.py`，由组装器自动加载，chunk 不得手写。
 
 配合 [`../multi-agent-review.md`](../multi-agent-review.md) 使用。默认产物 = `data/reports/复盘_YYYY-MM-DD.html`（只读，不写工作台/计划层）；回归样例必须用 `--output` 写非 canonical 文件，避免覆盖原报告。
+
+## 2026-10-30 复盘图形与逐股名单
+
+正式 HTML 组装器内嵌16类本地图形及可选的3张当日摘要配图；没有图片时正常生成。行业/热门题材五日涨停热力图、板块内部涨跌、封板时刻、梯队去向与滚动新高名单均保留股票名称和代码及来源口径。身份来源通过 `visual_identity_sources_<日期>.json` 与正式新高 manifest 逐项重算核验；来源缺失/失败、未收录、真实0分开展示。题材原榜计数不由部分名单重算：同日成员仅 `is_new=Y` 确认，N排除、缺失状态单列关联线索；涨停原因标签匹配保留原文与规则，不能称完整成员。图形服务只读，无业务写入或推送。详见 [图形规范](visuals.md)。
