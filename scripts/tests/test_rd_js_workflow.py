@@ -737,6 +737,11 @@ def test_js_workflow_finalize_global_failure_updates_state_and_summary_event(tmp
     assert state["llmFailureReason"] == "quota_exhausted"
     summary = json.loads((run_dir / "summary.json").read_text(encoding="utf-8"))
     assert summary["meta"]["antigravity"]["status"] == "unavailable"
+    assert summary["meta"]["ranker"]["reason"] == "quota_exhausted"
+    agents = summary["meta"]["agents"]
+    assert agents["industry_aggregator"]["status"] == "failed"
+    for role in ("trend_aggregator", "ranker"):
+        assert agents[role] == {"status": "skipped", "reason": "antigravity_unavailable"}
     events = [
         json.loads(line)
         for line in (run_dir / "events.jsonl").read_text(encoding="utf-8").splitlines()

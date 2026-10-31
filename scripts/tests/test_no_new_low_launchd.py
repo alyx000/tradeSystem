@@ -4,7 +4,10 @@ from __future__ import annotations
 import os
 import plistlib
 import subprocess
+import sys
 from pathlib import Path
+
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RUNNER = REPO_ROOT / "deploy/launchd/no-new-low-runner.sh"
@@ -22,8 +25,12 @@ def test_runner_contract_and_redacted_env():
         assert f"${variable}" not in text
 
 
-def test_plist_weekdays_at_2320_and_no_run_at_load():
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS 原生 plutil 校验；结构契约在所有平台执行")
+def test_plist_parses_with_plutil():
     subprocess.run(["plutil", "-lint", str(PLIST)], check=True, capture_output=True, text=True)
+
+
+def test_plist_weekdays_at_2320_and_no_run_at_load():
     data = plistlib.loads(PLIST.read_bytes())
     assert data["Label"] == "com.alyx.tradesystem.no-new-low"
     assert data["ProgramArguments"] == ["/Users/alyx/tradeSystem/deploy/launchd/no-new-low-runner.sh"]
