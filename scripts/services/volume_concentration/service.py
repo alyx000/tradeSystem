@@ -169,6 +169,7 @@ def run_daily(conn, registry, date: str, trend_days: int = TREND_DAYS,
         recent = sorted(recent, key=lambda r: r["date"])[-trend_days:]
 
     trend_result = trend.compute_trend(recent)
+    trend_result['capacity_view'] = capacity_trend.with_history(conn, record, date)
     return formatter.format_daily_report(record, trend_result)
 
 
@@ -179,6 +180,10 @@ def run_trend(conn, date: str, days: int = TREND_DAYS) -> str:
         return "暂无集中度数据(需先跑 volume-watch daily 累积)。"
     record = recent[-1]  # 最新一日作报告主体
     trend_result = trend.compute_trend(recent)
+    # trend的日期是截止日；所有区块统一锚定实际最近快照日，不能混入请求日。
+    # HTML的read_snapshot仍严格绑定报告当日，不回退。
+    trend_result['capacity_view'] = capacity_trend.with_history(conn, record, record['date'], days=days)
+    trend_result['capacity_full_history'] = True
     return formatter.format_daily_report(record, trend_result)
 
 

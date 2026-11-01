@@ -220,12 +220,19 @@ def read_snapshot(target_date, db_path=None):
     conn = None
     try:
         conn = get_readonly_connection(db_path) if db_path is not None else get_readonly_connection()
-        return from_record(get_concentration(conn, target_date), target_date)
+        return with_history(conn, get_concentration(conn, target_date), target_date)
     except (sqlite3.Error, ValueError, TypeError, OSError):
         return dict(status="source_failed", trade_date=target_date, rows=[], reason="目标日快照不可读")
     finally:
         if conn is not None:
             conn.close()
+
+
+def with_history(conn, record, target_date, days=10):
+    """只读派生，不把历史汇总回写逐股证据或覆盖旧审计。"""
+    from .capacity_history import build
+    return {**from_record(record, target_date),
+            'history_view': build(conn, target_date, current_record=record, days=days)}
 
 
 def _cells(row):
@@ -260,11 +267,52 @@ def _summary(block):
     return text
 
 
-def render_markdown(block):
+def _history_markdown(view, cell, budget):
+    from .capacity_history import tables, gaps
+    footer = ('[事实] 日报历史为限长摘要；完整板块历史见 '
+              f"volume-watch trend --date {view['current']['date']} --days {view['days']} 或正式复盘HTML。")
+    footer = cell(footer) if budget is not None else ''
+    parts = []
+
+    def add(text):
+        if budget is not None and len('\n'.join(['', *parts, text, footer]).encode('utf-8')) > budget:
+            return False
+        parts.append(text)
+        return True
+
+    if budget is not None and len(('\n' + footer).encode('utf-8')) > budget:
+        return []
+    add(cell(view['note']))
+    if gaps(view):
+        add(cell(gaps(view)))
+    for title, headers, rows in tables(view):
+        if budget is not None and title == '板块历史变化':
+            rows = [r for r in rows if r[0] == view['current']['date']]
+            title += '（仅最近一日对照）'
+        heading = '\n#### ' + title
+        if not rows:
+            add(heading + '\n未计算／无可展示记录。')
+            continue
+        heading += '\n| ' + ' | '.join(map(cell, headers)) + ' |\n|' + '---|' * len(headers)
+        # 表头与首行一起加入，不能留下貌似空结果的孤立表头。
+        rendered = ['| ' + ' | '.join(map(cell, row)) + ' |' for row in rows]
+        if not add(heading + '\n' + rendered[0]):
+            break
+        for row in rendered[1:]:
+            if not add(row):
+                break
+    if footer:
+        parts.append(footer)
+    return ['', *parts]
+
+
+def render_markdown(block, *, history_budget=None):
     def cell(value):
         text = escape(str(value), quote=False).replace("\n", " ").replace("\r", " ")
         return re.sub(r"([\\`*_{}\[\]()#+.!|>-])", r"\\\1", text)
-    lines = ["", "### 成交榜容量趋势（MA20）", "[事实] " + cell(_summary(block)), NOTE]
+    lines = ["", "### 成交榜容量趋势（MA20）", "观察日期：" + cell(block['trade_date']), "[事实] " + cell(_summary(block)), NOTE]
+    if block.get('history_view'):
+        lines += _history_markdown(block['history_view'], cell, history_budget)
     if block.get("rows"):
         lines += ["", "| 股票 | 申万二级 | 收盘对MA20 | MA20方向 | 近5根涨跌 | 末端连续／缺口 |",
                   "|---|---|---|---|---|---|"]
@@ -276,6 +324,24 @@ def render_html(block):
     summary = _summary(block)
     html = [f'<div data-capacity-trend="v1" data-as-of="{escape(block["trade_date"], quote=True)}" data-source-status="{escape(block["status"], quote=True)}">',
             f'<p><strong>[事实] {escape(summary)}</strong></p>']
+    history_gap = None
+    if block.get('history_view'):
+        from .capacity_history import tables, gaps
+        view = block['history_view']
+        history_gap = gaps(view)
+        html += [f'<p>{escape(view["note"])}</p>']
+        if history_gap:
+            html += [f'<p>{escape(history_gap)}</p>']
+        for title, headers, rows in tables(view):
+            html += [f'<details><summary>{escape(title)}</summary>']
+            if rows:
+                html += ['<div style="overflow-x:auto;max-width:100%"><table><thead><tr>' +
+                         ''.join(f'<th>{escape(h)}</th>' for h in headers) + '</tr></thead><tbody>']
+                html += ['<tr>' + ''.join(f'<td>{escape(str(x))}</td>' for x in row) + '</tr>' for row in rows]
+                html += ['</tbody></table></div>']
+            else:
+                html += ['<p>未计算／无可展示记录。</p>']
+            html += ['</details>']
     if block.get("rows"):
         html += ['<details><summary>成交榜容量趋势明细</summary>', f'<p>{escape(NOTE)}</p>',
                  '<table><thead><tr>' + ''.join(f'<th>{x}</th>' for x in
@@ -283,4 +349,5 @@ def render_html(block):
         html += ['<tr>' + ''.join(f'<td>{escape(str(x))}</td>' for x in _cells(row)) + '</tr>' for row in block['rows']]
         html += ['</tbody></table></details>']
     html += ['</div>']
-    return '\n'.join(html), summary if block['status'] != 'complete' else None
+    gap = '；'.join(filter(None, [summary if block['status'] != 'complete' else None, history_gap]))
+    return '\n'.join(html), gap or None

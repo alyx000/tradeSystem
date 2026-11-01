@@ -215,3 +215,9 @@ CLI / API 依赖对照见 `.agents/skills/INDEX.md`（唯一真源）。Codex CL
 发布审查补充：日历窗口逐自然日核验完整性；行情与复权代码在数值过滤前独立查重；模型返回非法 winner 类型按无效对局处理，不得打断报告归档。
 
 2026-11-01：`volume-watch daily` 必须显式提供非空 `--input-by`；Make 入口默认 USER，既有21:00 runner 固定 launchd。请求者及开始/采集完成时间写入 `source_json.audit` 与 `capacity_trend.audit`；刷新回退保留旧证据审计，本次尝试审计在 `latest_attempt.audit`。手动补采使用 `--no-push`。
+
+2026-11-01 容量板块与历史：日报/正式复盘只读派生近10个开放日的板块汇总、动态样本比例及同股同分类变化；trend沿用--days（容量上限60）。完整SSE日历锁窗，旧快照未计算/缺日/失败/回退显式展示并阻断跨日比较；换榜和改类单列，比例只代表Top20可计算样本。两市成交额及来源另列，不新增采集/落库/调度。详见 `docs/capacity-trend.md`。
+
+2026-11-01 昨日涨停股次日反馈：既有盘后任务新增 raw_data.strong_stock_feedback，严格上一开放日名单，复权高点触及/开收盘/收阴独立统计；行情与前高覆盖分开，缺源不补零。随原信封落库；正式复盘③情绪只读同日块，不改断板统计/评分/池/计划。见 docs/strong-stock-feedback.md。
+
+2026-11-02 强势股反馈历史分组：来源日首板/连板与常规10/20/30cm独立分组，未知单列；只读完整SSE日历锁定近5/10/20日，complete/empty按股票日合并，缺日不凑窗、不补零。日报摘要与正式复盘20日明细/图表共享口径，历史不补采不补写。见 docs/strong-stock-feedback.md。

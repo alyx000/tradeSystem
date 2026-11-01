@@ -1131,6 +1131,12 @@ class MarketCollector:
                 "details": [],
             }
 
+        # 昨日涨停股次日反馈：独立事实块，不混入断板样本或风格评分。
+        from analyzers.strong_stock_feedback import collect as collect_strong_stock_feedback
+        result['strong_stock_feedback'] = collect_strong_stock_feedback(
+            self.registry, date, daily_dir=BASE_DIR / 'daily',
+        )
+
         # 13b. 风格化因子分析（含上一步断板股次日赚钱效应聚合）
         try:
             from analyzers import StyleAnalyzer
