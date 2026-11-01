@@ -152,6 +152,18 @@ def _format_concept_health(record: dict) -> list[str]:
     return [text, ""]
 
 
+def _append_capacity(lines, record, trend_result):
+    block = trend_result.get('capacity_view') or capacity_trend.from_record(record, record['date'])
+    budget = None
+    if not trend_result.get('capacity_full_history'):
+        # 日报正文直接用于既有钉钉推送。只限制本次新增部分，不截断已有报告；
+        # 预留消息包装余量，且即便有大量行业/长名称也按UTF-8字节计算。
+        original = capacity_trend.render_markdown({k: v for k, v in block.items() if k != 'history_view'})
+        base_bytes = len('\n'.join([*lines, original]).encode('utf-8'))
+        budget = max(0, min(6000, 18000 - base_bytes - 1))
+    lines.append(capacity_trend.render_markdown(block, history_budget=budget))
+
+
 def format_daily_report(record: dict | None, trend_result: dict) -> str:
     if not record:
         return "当日无成交额数据,跳过。"
@@ -221,7 +233,7 @@ def format_daily_report(record: dict | None, trend_result: dict) -> str:
         lines.append(
             f"> 集中度趋势:累积交易日仅 {trend_result['days']} 天,满 ≥2 日起逐步展示(目标 30+)。"
         )
-        lines.append(capacity_trend.render_markdown(capacity_trend.from_record(record, record["date"])))
+        _append_capacity(lines, record, trend_result)
         return "\n".join(lines)
 
     # 📅 环比前一交易日(独立对比小块):头部成交额 / 占两市 / CR3 / 涨跌均值 今日 vs 昨日
@@ -292,5 +304,5 @@ def format_daily_report(record: dict | None, trend_result: dict) -> str:
     else:
         lines.append("- 无(头部当日换手充分)")
 
-    lines.append(capacity_trend.render_markdown(capacity_trend.from_record(record, record["date"])))
+    _append_capacity(lines, record, trend_result)
     return "\n".join(lines)

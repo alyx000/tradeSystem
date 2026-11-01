@@ -880,6 +880,14 @@ class ReportGenerator:
         # ---- 连板断板次日反馈 ----
         section_idx = _render_board_break_feedback(lines, raw_data, section_idx)
 
+        if 'strong_stock_feedback' in raw_data:
+            from analyzers.strong_stock_feedback import render_markdown as render_strong_feedback
+            lines.append(f"\n## {_roman(section_idx)}、昨日涨停股次日反馈 [事实·计算]\n")
+            from analyzers.strong_stock_feedback_history import build as build_strong_history
+            strong_history = build_strong_history(self.daily_dir, date, current=raw_data['strong_stock_feedback'])
+            lines.append(render_strong_feedback(raw_data['strong_stock_feedback'], date, history=strong_history))
+            section_idx += 1
+
         # ---- AI 自动分析摘要 ----
         auto = _generate_auto_analysis(raw_data)
         if auto:

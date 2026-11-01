@@ -28,6 +28,25 @@
 
 ## 验证
 
+### 板块汇总与历史变化（2026-11-01）
+
+日报、`volume-watch trend --date YYYY-MM-DD --days N` 和正式复盘HTML共享只读派生模块 `capacity_history.py`。日报/HTML默认近10个开放日，trend沿用所请求窗口（容量历史上限60日）。trend的日期为截止日，主报告与容量区统一使用截止日以内最近快照日；HTML仍严格使用报告当日。不新增采集请求、表、字段、任务或推送开关，既有每天的逐股快照自然累积为历史；不反写旧数据，也不重算历史股票的当前行业。
+
+- 当前汇总按当日申万二级列可计算/在榜数、收盘在MA20线上/线下比例、贴线数，以及线上且线向上/线下且线向下数量；比例以该组可计算数为分母，0个可计算样本的指标留空。未分类单列，所有比例只描述Top20样本，不代表全行业。
+- 历史严格按SSE完整自然日日历中的开放日排列。缺快照为 `missing-data`，旧快照无容量证据为 `not_computed`，损坏为 `source_failed`；日历缺失或目标日非开放日时保留当日汇总，历史拒算，不用星期或最近记录补齐。
+- 每日线上比例变动为动态在榜样本之间的百分点差；另列相邻开放日的同股、同分类共同样本线上比例变化，以及新进、退出、改类数量。两端均 `complete` 才发布比较；缺日、partial和fallback均阻断，窗口首日没有窗口外对照。没有共同股票时显示0只/变化未计算，行业不在榜不当作0%线上比例。
+- 回退日展示旧完整证据的汇总，但显式保留 `fallback_preserved` 与本次尝试状态，不纳入跨日变化。
+- 两市成交额只读既有 `market_total_billion`，与容量健康状态分别展示；金额和来源都可用、相邻开放日来源一致才算环比。它沿用两市来源口径，不冒充沪深北全市场，也不能由放量直接推断净流入。
+- MD与HTML共享表格值与缺口说明，HTML历史可展开且表格可横向滚动。历史缺口进入正式复盘ops区。缺口不插值、不连贯化，不输出趋势成立或买卖结论。每日推送/日报的新增部分最多6000 UTF-8字节，且受全文18000字节剩余空间限制；优先当前汇总与整体逐日表，板块历史仅最近一日对照，按完整行截取并标明限长摘要。已有正文不截断；完整历史由只读trend与HTML展示。
+
+新增验证：`python3 -m pytest scripts/tests/test_capacity_history.py scripts/tests/test_capacity_trend.py scripts/tests/test_volume_concentration_service.py scripts/tests/test_volume_concentration_formatter.py scripts/tests/test_daily_review_html_report.py -q`。覆盖换榜假改善、同股归类变化、节假日/日历缺口、来源切换、旧快照/损坏/回退、只读与dry-run、MD/HTML同源转义。
+
+双门审查第一轮：门1发现十日板块历史直接加入每日消息的长度回归，已用摘要预算修复；门2发现trend最近快照与请求日混用，已统一观察日期。增加20行业×10日、UTF-8转义预算及周末/开放日缺快照测试，修后专项716 passed。
+
+第二轮门1通过；门2的“没有生产日历写入路径”判断已反驳：隔离包未包含 `cli/volume_watch.py`、`utils/trade_date.py` 和 `db/queries.py`，完整仓库的正式daily入口先调用 `is_non_trading_day`，再由 `ensure_trade_calendar` / `upsert_trade_calendar` 保存年度日历。新增空库CLI集成测试，不直接插入任何日历行，验证该路径实际补入365行并成功生成10个开放日的历史视图。只读HTML/trend及dry-run不自行补日历；跨年缺旧年日历或源失败时保留未计算，不降低日历硬门。反驳依据亦保留在 `_open_days` 注释中。
+
+最终逻辑版本全量 `make check-scripts`：7924 passed、1 skipped、21条既有依赖警告（260.82秒）；另补上述日历集成测试。2026-10-30真实库只读验证20只/8行业，线上2只、线下18只；近10开放日有8个旧快照未计算、1日缺快照，未伪造历史变化。独立逐股数字复核、正式组装器校验、1440px/390px浏览器QA均通过。
+
 `python3 -m pytest scripts/tests/test_capacity_trend.py scripts/tests/test_volume_concentration_service.py scripts/tests/test_volume_concentration_formatter.py scripts/tests/test_daily_review_html_report.py -q`
 
 覆盖除权、涨跌/持平、混合走势、缺源、错位、旧快照、失败刷新保护、只读加载及正式复盘注入；随后执行 `make check-scripts`。
