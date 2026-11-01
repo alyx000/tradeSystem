@@ -4,6 +4,7 @@ on:
   push:
     paths:
       - 'scripts/**'
+      - 'deploy/launchd/**'
       - 'Makefile'
       - 'check.sh'
       - 'docs/commands.md'
@@ -12,6 +13,7 @@ on:
   pull_request:
     paths:
       - 'scripts/**'
+      - 'deploy/launchd/**'
       - 'Makefile'
       - 'check.sh'
       - 'docs/commands.md'
@@ -28,6 +30,21 @@ jobs:
           python-version: '3.11'
           cache: 'pip'
           cache-dependency-path: scripts/requirements.txt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
       - run: python -m pip install --upgrade pip
       - run: python -m pip install -r scripts/requirements.txt
       - run: bash check.sh --scripts
+
+  launchd-check:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install 'pytest>=8.0.0'
+      - name: Validate all launchd templates with native plutil
+        run: plutil -lint deploy/launchd/*.plist
+      - run: python -m pytest -q scripts/tests/test_*launchd.py

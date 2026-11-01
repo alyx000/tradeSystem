@@ -223,21 +223,21 @@ python3 main.py prefetch-calendar --from 2026-07-29 --days 14 --input-by manual 
 每交易日 21:00 自动跑（launchd `com.alyx.tradesystem.volume-watch`），也可手动：
 
 ```bash
-make volume-watch-daily        # = python3 main.py volume-watch daily（采集+落库+渲染+钉钉推送）
+make volume-watch-daily        # = python3 main.py volume-watch daily --input-by USER（采集+落库+渲染+钉钉推送）
 make volume-watch-daily-dry    # = ... --dry-run（仅打印,不落库不推送,预览用）
 make volume-watch-trend        # = python3 main.py volume-watch trend（只读打印最近 30 日趋势）
 # 历史回补（落库但不重推历史日报到钉钉）：三档裸/--no-push[落库+打印不推]/--dry-run[不落库]
-python3 main.py volume-watch daily --date 2026-07-07 --no-push --refetch
+python3 main.py volume-watch daily --input-by USER --date 2026-07-07 --no-push --refetch
 
 # 指定日期 / 窗口（直接调底层）
-python3 main.py volume-watch daily --date 2026-05-29 --dry-run
+python3 main.py volume-watch daily --input-by USER --date 2026-05-29 --dry-run
 python3 main.py volume-watch trend --date 2026-05-29 --days 10
 
 # 回填历史：--refetch 强制重拉，绕过 daily_market 陈旧缓存（如换算 fix 前采集的旧数据）
 #   批量回填时建议 env -u DINGTALK_* 屏蔽推送，只落库不刷屏：
 for d in 2026-05-27 2026-05-28 2026-05-29; do
   env -u DINGTALK_WEBHOOK_TOKEN -u DINGTALK_WEBHOOK_SECRET \
-    python3 main.py volume-watch daily --date "$d" --refetch
+    python3 main.py volume-watch daily --input-by USER --date "$d" --refetch
 done
 ```
 
@@ -833,3 +833,7 @@ python3 main.py no-new-low daily --no-push
 - **红线**：报告是盘后形态观察与相对事实比较，不给具体买卖建议、价格目标或胜率判断。
 
 发布审查补充：日历窗口逐自然日核验完整性；行情与复权代码在数值过滤前独立查重；模型返回非法 winner 类型按无效对局处理，不得打断报告归档。
+
+2026-11-02平均股价临近26元监控：`avg-price-near-26-20261102-27` 使用通达信独立身份 `880003.TDX`，固定26元±1%（25.74～26.26元，含边界），不是均线或同花顺全A；有效期2026-11-02～11-27首尾包含，共20个开放日，11月28日起停用。沿用盘中每3分钟、首次已在区间内提醒、持续在区间内去重、离开后再进入可重推及钉钉。`TdxProvider.get_realtime_quotes` 仅接受该身份，显式请求 `get_index_bars(8,1,'880003',0,2)`，验证两根升序唯一、交易时段原始日期时间及有限正数OHLC；采用最新1分钟K线close而非逐笔价，pytdx已还原价格、不再缩放，不将分钟量额冒充当日累计量额，不伪造昨收或以抓取时间代替行情时间。保留原日/周线能力与有限节点fallback；服务仍严格执行当日/10分钟新鲜度与未来时间守卫，缺源为source_failed（其他来源正常时partial）、不产生该规则基线或告警，不把失败解释为未临近。不改现有其他规则与两份状态账本，不写业务库、持仓、关注池或计划，不发送真实测试消息；模拟测试不代表真实源或钉钉送达已验证。
+
+平均股价发布审查补充：分钟节点验收与监控服务共享 `utils.realtime_quote` 的同一当日/10分钟/未来2分钟策略；陈旧或超前首节点必须关闭并继续尝试后续节点，全部失败不出快照。盘中单socket操作超时不超过1秒、节点尝试软预算5秒（已在途握手可能略跨预算，不是强制杀进程硬期限），日/周线原策略不变；统一入口先跑10:00即关闭的横截面扫描，避免新增慢源吞掉09:59补扫。原`guards`导出保持兼容；未取得真实分钟回包前，不猜测09:30/09:31或午休开盘标签并增加相邻分钟硬门，该契约风险与真实源/推送验收仍须如实说明。

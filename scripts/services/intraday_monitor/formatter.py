@@ -35,11 +35,12 @@ def render_alert(events: list[dict]) -> str:
         )
         if event.get("direction") == "near":
             tolerance = float(event["proximity_pct"])
-            ma = float(event["threshold"])
-            deviation = (observed_value / ma - 1.0) * 100.0
+            center = float(event["threshold"])
+            deviation = (observed_value / center - 1.0) * 100.0
+            band_label = "MA" if event.get("threshold_mode") in ("previous_close_ma", "intraday_ma") else threshold_label
             lines.append(
-                f"  - 附近范围（含边界）：MA±{tolerance:g}%，"
-                f"{ma * (1 - tolerance / 100):.4f}～{ma * (1 + tolerance / 100):.4f}元；"
+                f"  - 附近范围（含边界）：{band_label}±{tolerance:g}%，"
+                f"{center * (1 - tolerance / 100):.4f}～{center * (1 + tolerance / 100):.4f}元；"
                 f"当前偏离：{deviation:+.4f}%"
             )
         if event.get("value_mode") == "daily_pct_change":
@@ -82,6 +83,7 @@ def render_e2e_test_alert(
         event,
         threshold_mode=production_threshold_mode,
     )
+    production_band_label = "均线" if production_threshold_mode in ("previous_close_ma", "intraday_ma") else "监控价"
     observed_value = float(event.get("value", event["price"]))
     return "\n".join(
         [
@@ -101,7 +103,7 @@ def render_e2e_test_alert(
             f"**{production_threshold:.{production_digits}f}**{value_unit}，"
             "未修改正式规则或去重状态",
             *(
-                [f"- [事实] 正式触发范围为均线±{production_proximity_pct:g}%（含边界）"]
+                [f"- [事实] 正式触发范围为{production_band_label}±{production_proximity_pct:g}%（含边界）"]
                 if production_proximity_pct is not None
                 else []
             ),

@@ -172,10 +172,14 @@ def build_antigravity_runner():
 
 def _next_antigravity_log_file():
     import os
+    import tempfile
     import time
     from pathlib import Path
 
-    root = Path(os.getenv("ANTIGRAVITY_LOG_DIR", "/private/tmp/tradesystem-antigravity-logs"))
+    # Linux 无 /private/tmp；日志丢失会让 quota/auth 失败退化成 empty_stdout，无法熔断。
+    root = Path(os.getenv(
+        "ANTIGRAVITY_LOG_DIR", str(Path(tempfile.gettempdir()) / "tradesystem-antigravity-logs")
+    ))
     try:
         root.mkdir(parents=True, exist_ok=True)
     except OSError as exc:

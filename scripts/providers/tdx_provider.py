@@ -4,7 +4,8 @@
 指数体系都不收 880xxx 通达信板块指数，实测确认），唯一可达源是 pytdx 直连通达信
 行情服务器（TCP 7709，与东财 HTTP 推送服务器分属不同通道，后者在本网络被代理拦）。
 
-周线仅支持 avg_price，日线支持 avg_price/880823.TDX。其它代码拒绝，本 provider 不参与
+周线仅支持 avg_price，日线支持 avg_price/880823.TDX；盘中分钟快照仅支持880003.TDX。
+其它代码拒绝，本 provider 不参与
 沪深创科四指数的取数（那些走 tushare/akshare）。调用方用 registry.call_specific("tdx",…)
 直连本 provider，绕开「tushare 对未知 code 返回空列表也算 success」的遮蔽问题。
 """
@@ -12,7 +13,10 @@ from __future__ import annotations
 
 import logging
 import math
-from datetime import date
+from datetime import date, datetime, time
+from time import monotonic
+
+from utils.realtime_quote import quote_is_fresh, shanghai_now
 
 from .base import DataProvider, DataResult, Confidence, Timeliness
 
@@ -31,6 +35,7 @@ _DEFAULT_SERVERS = [
 ]
 
 _AVG_PRICE_CODE = "880003"  # 通达信「平均股价」
+AVG_PRICE_CODE = "880003.TDX"  # 盘中独立规范身份，不复用同花顺全A或ETF
 MICROCAP_CODE = "880823.TDX"  # 独立身份，不复用中证2000/同花顺代码
 _DAILY_CODES = {"avg_price": _AVG_PRICE_CODE, MICROCAP_CODE: "880823"}
 _TDX_MARKET_SH = 1          # 880xxx 通达信板块指数走沪市站（实测 market=0 返回 0 根）
@@ -38,6 +43,50 @@ _KLINE_WEEKLY = 5           # pytdx K 线周期：5=周线
 _KLINE_DAILY = 9            # pytdx K 线周期：9=日线（实测 880003 日线可取）
 _WEEKLY_COUNT = 20          # 取最近 20 根周线，够算 5 周均线 + 窗口冗余
 _DAILY_COUNT = 800          # 单次协议上限；覆盖当前740自然日及20月均线，非无限历史接口
+_KLINE_MINUTE = 8
+_MINUTE_COUNT = 2
+_INTRADAY_BUDGET_SECONDS = 5.0
+_INTRADAY_SOCKET_TIMEOUT = 1.0
+
+
+def _minute_quote(bars: object) -> dict:
+    """使用最新1分钟K线close及其原始时间，不伪造逐笔时间或当日累计量额。"""
+    if not isinstance(bars, list) or len(bars) != _MINUTE_COUNT:
+        raise ValueError("平均股价分钟响应须含最近2根K线")
+    previous_at = None
+    for bar in bars:
+        if not isinstance(bar, dict):
+            raise ValueError("分钟行非法")
+        if ("code" in bar and bar["code"] != _AVG_PRICE_CODE
+                or "market" in bar and (type(bar["market"]) is not int or bar["market"] != _TDX_MARKET_SH)):
+            raise ValueError("分钟行身份与请求不一致")
+        raw_time = bar.get("datetime")
+        try:
+            quoted_at = datetime.strptime(raw_time, "%Y-%m-%d %H:%M")
+            if quoted_at.strftime("%Y-%m-%d %H:%M") != raw_time:
+                raise ValueError("非规范时间")
+        except (ValueError, TypeError) as exc:
+            raise ValueError("分钟行情缺少合法原始日期时间") from exc
+        if (previous_at is not None and quoted_at <= previous_at
+                or not (time(9, 30) <= quoted_at.time() <= time(11, 30)
+                        or time(13) <= quoted_at.time() <= time(15))):
+            raise ValueError("分钟行情时间重复、倒序或非交易时段")
+        prices = {}
+        for key in ("open", "high", "low", "close"):
+            raw = bar.get(key)
+            try:
+                value = float(raw)
+            except (ValueError, TypeError, OverflowError) as exc:
+                raise ValueError("分钟行情价格缺失或非法") from exc
+            if isinstance(raw, bool) or not math.isfinite(value) or value <= 0:
+                raise ValueError("分钟行情价格非有限或非正数")
+            prices[key] = value
+        if not prices["low"] <= min(prices["open"], prices["close"]) <= max(prices["open"], prices["close"]) <= prices["high"]:
+            raise ValueError("分钟行情OHLC冲突")
+        previous_at = quoted_at
+    # pytdx已将指数价格除以1000，不再缩放；分钟时间的当日/10分钟新鲜度由服务校验。
+    return {"code": AVG_PRICE_CODE, "name": "平均股价", "price": prices["close"],
+            "quote_date": quoted_at.date().isoformat(), "quote_time": quoted_at.time().isoformat()}
 
 
 def _daily_rows(bars, index_code: str, start_date: str, end_date: str) -> list[dict]:
@@ -90,9 +139,39 @@ class TdxProvider(DataProvider):
         return True
 
     def get_capabilities(self) -> list[str]:
-        return ["get_index_weekly", "get_index_daily_range"]
+        return ["get_index_weekly", "get_index_daily_range", "get_realtime_quotes"]
 
-    def _connect(self, category: int, count: int, code: str = _AVG_PRICE_CODE, transform=None):
+    def get_realtime_quotes(self, codes: list[str], *, now: datetime | None = None) -> DataResult:
+        """平均股价最新分钟价；不提供股票替代源，也不以抓取时间填行情日期。"""
+        normalized = list(dict.fromkeys(str(raw or "").strip().upper() for raw in codes or []))
+        if normalized != [AVG_PRICE_CODE]:
+            return DataResult(None, self.name, error="tdx盘中快照仅支持880003.TDX平均股价")
+        checked_at = shanghai_now(now)
+
+        def validate(bars):
+            quote = _minute_quote(bars)
+            fresh, reason, _ = quote_is_fresh(quote, checked_at)
+            if not fresh:
+                raise ValueError(reason)
+            return quote
+
+        api, quote, error = self._connect(
+            _KLINE_MINUTE, _MINUTE_COUNT, _AVG_PRICE_CODE, transform=validate,
+            budget_seconds=_INTRADAY_BUDGET_SECONDS, socket_timeout=_INTRADAY_SOCKET_TIMEOUT,
+        )
+        if api is None:
+            return DataResult(None, "tdx:880003_1min", error=error)
+        try:
+            return DataResult([quote], "tdx:880003_1min", timeliness=Timeliness.REALTIME,
+                              note="最新1分钟K线close，并非逐笔价；不提供昨收及当日累计量额")
+        finally:
+            try:
+                api.disconnect()
+            except Exception as exc:
+                logger.debug("tdx分钟连接关闭失败: %s", exc)
+
+    def _connect(self, category: int, count: int, code: str = _AVG_PRICE_CODE, transform=None,
+                 *, budget_seconds: float | None = None, socket_timeout: float | None = None):
         """逐节点验证目标代码；可转换并校验响应，失败继续下一节点。"""
         try:
             from pytdx.hq import TdxHq_API
@@ -100,12 +179,25 @@ class TdxProvider(DataProvider):
             return None, None, "pytdx 未安装（pip install pytdx）"
         connected = False
         validation_errors = set()
+        deadline = monotonic() + budget_seconds if budget_seconds is not None else None
         for host, port in self._servers:
+            remaining = deadline - monotonic() if deadline is not None else None
+            if remaining is not None and remaining <= 0:
+                validation_errors.add("盘中节点尝试预算耗尽")
+                break
+            timeout = self._timeout if socket_timeout is None else min(self._timeout, socket_timeout)
+            if remaining is not None:
+                timeout = min(timeout, remaining)
             api = TdxHq_API(heartbeat=True)
             keep_connection = False
             try:
-                if api.connect(host, port, time_out=self._timeout):
+                if api.connect(host, port, time_out=timeout):
                     connected = True
+                    # 5秒为节点尝试软预算；每个socket操作另有<=1秒超时。
+                    # 已在途的握手可略跨预算，但不再启动下一次取数/节点尝试。
+                    if deadline is not None and monotonic() >= deadline:
+                        validation_errors.add("盘中节点尝试预算耗尽")
+                        break
                     bars = api.get_index_bars(category, _TDX_MARKET_SH, code, 0, count)
                     # 空响应无法证明节点提供此指数，可能是不支持该代码或源不可用；
                     # 保留“无有效数据”，不解释成已确认历史深度为0。非空浅历史才
@@ -131,7 +223,8 @@ class TdxProvider(DataProvider):
         if connected:
             detail = "; ".join(sorted(validation_errors))
             return None, None, f"所有可连接的通达信行情服务器均无 {code} 有效数据" + (f": {detail}" if detail else "")
-        return None, None, "所有通达信行情服务器连接失败"
+        detail = "; ".join(sorted(validation_errors))
+        return None, None, "所有通达信行情服务器连接失败" + (f": {detail}" if detail else "")
 
     def get_index_weekly(self, index_code: str, start_date: str, end_date: str) -> DataResult:
         if index_code != "avg_price":

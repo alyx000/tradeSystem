@@ -40,6 +40,8 @@ opencode.json
 docs/*
 !docs/templates/
 !docs/templates/**
+!docs/capacity-trend.md
+!docs/strong-stock-feedback.md
 
 # 每日数据（本地生成，不入仓库）
 daily/

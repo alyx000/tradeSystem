@@ -8,6 +8,8 @@ A50 与商品仅在盘后显式传入目标日期时优先使用日期化历史�
 """
 from __future__ import annotations
 
+from utils.limit_identity import positive_streak
+
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from decimal import Decimal, InvalidOperation
 import logging
@@ -2196,6 +2198,7 @@ class AkshareProvider(DataProvider):
                     "first_time": str(row.get("首次封板时间", "")),
                     "last_time": str(row.get("最后封板时间", "")),
                     "limit_times": int(row.get("连板数", 1)),
+                    "limit_times_verified": positive_streak(row.get("连板数")) is not None,
                     "seal_amount": float(row.get("封板资金", 0)),  # 东财列名为「封板资金」(原始元)，与 tushare fd_amount 同量级
                     "industry": _to_clean_str(row.get("所属行业", "")),  # 东财行业分类（题材文本归因为硬缺口，此处仅行业级）
                     "limit_stat": _to_clean_str(row.get("涨停统计", "")),  # N天M板，形如「5/3」
