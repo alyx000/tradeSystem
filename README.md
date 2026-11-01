@@ -14,6 +14,12 @@ make today-close # 跑今天的收盘后主流程
 ```
 
 更完整的命令表见下方 [Quick Commands](#quick-commands)、[commands.md](/Users/alyx/tradeSystem/docs/commands.md) 和 [commands.json](/Users/alyx/tradeSystem/docs/commands.json)。
+
+成交榜现支持[容量趋势观察](docs/capacity-trend.md)：随 `volume-watch daily` 保存前20只股票的前复权MA20位置、方向及近5根有效K线涨跌；每日复盘②板块区只读同日快照，缺失显式展示。
+
+容量趋势现可按申万二级汇总，并沿完整交易日历展示历史变化、同股同分类对照与换榜/改类数量；两市成交额独立对照，旧快照缺口不补零。日报和复盘默认展示近10个开放日。
+
+昨日涨停股现支持[次日反馈](docs/strong-stock-feedback.md)：记录复权前高是否触及、开收盘表现和K线阴阳，随盘后信封保存并在正式复盘展示，缺失与真实空样本分别标注。
 每日高频入口优先看 [commands.md#每日高频](/Users/alyx/tradeSystem/docs/commands.md)。
 
 盘后 `make today-close` 复用交易日20:00调度，同批采集次新股赚钱效应：上市一年（365天）/半年（183天）/90天，另列剔除上市前5交易日与沪深子组，保存上涨率、等权涨跌均值/中位、±5%尾部、开收盘表现和全市场对照；完整成分、来源与缺口保存在同日 `post-market.yaml.raw_data.ipo_effect` 及 `daily_market` 信封。
@@ -546,3 +552,5 @@ chmod +x .githooks/pre-push
 
 
 - 历史天量：`python3 scripts/main.py volume-record daily --date YYYY-MM-DD --input-by USER [--metric both|volume|amount] [--no-push] [--dry-run] [--json]`，默认成交量/成交额分别核验上市以来严格新高，随20:00盘后既有调度归档并推钉钉；简洁名单、倍数与双创结果，一句缺口提示，详细诊断留本地。`volume-record push --date YYYY-MM-DD --input-by USER`只补发归档、相同内容去重。完整契约见`.agents/skills/market-tasks/SKILL.md`历史天量章节；只写`data/reports/volume-record/`报告/基线/回执，不写业务库或池计划。
+
+2026-11-02 强势股反馈历史分组：来源日首板/连板与常规10/20/30cm独立分组，未知单列；只读完整SSE日历锁定近5/10/20日，complete/empty按股票日合并，缺日不凑窗、不补零。日报摘要与正式复盘20日明细/图表共享口径，历史不补采不补写。见 docs/strong-stock-feedback.md。

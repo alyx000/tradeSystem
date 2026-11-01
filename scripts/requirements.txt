@@ -1,12 +1,14 @@
 # 数据采集
 tushare>=1.4.0
 akshare>=1.12.0
+yfinance>=0.2.40       # 海外指数与美股机构评级数据源
 pytdx>=1.72            # 通达信直连，平均股价880003与微盘股880823（最近800根日线）（TdxProvider）
 
 # 工具
 pyyaml>=6.0
 python-dotenv>=1.0.0
 requests>=2.31.0
+matplotlib>=3.8.0      # 历史趋势 PNG（无界面后端）
 
 # 定时任务
 apscheduler>=3.10.0

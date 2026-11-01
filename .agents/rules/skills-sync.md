@@ -337,3 +337,9 @@ sector-correlation 同步核对：同日同值涨跌幅重复行折叠且审计�
 ## 2026-10-30 复盘图形与逐股名单
 
 正式 HTML 组装器内嵌16类本地图形及可选的3张当日摘要配图；没有图片时正常生成。行业/热门题材五日涨停热力图、板块内部涨跌、封板时刻、梯队去向与滚动新高名单均保留股票名称和代码及来源口径。身份来源通过 `visual_identity_sources_<日期>.json` 与正式新高 manifest 逐项重算核验；来源缺失/失败、未收录、真实0分开展示。题材原榜计数不由部分名单重算：同日成员仅 `is_new=Y` 确认，N排除、缺失状态单列关联线索；涨停原因标签匹配保留原文与规则，不能称完整成员。图形服务只读，无业务写入或推送。详见 [图形规范](../skills/daily-review/references/html-report-template/visuals.md)。
+
+2026-11-01：`volume-watch daily` 必须显式提供非空 `--input-by`；Make 入口默认 USER，既有21:00 runner 固定 launchd。请求者及开始/采集完成时间写入 `source_json.audit` 与 `capacity_trend.audit`；刷新回退保留旧证据审计，本次尝试审计在 `latest_attempt.audit`。手动补采使用 `--no-push`。
+
+2026-11-01 昨日涨停股次日反馈：既有盘后任务新增 raw_data.strong_stock_feedback，严格上一开放日名单，复权高点触及/开收盘/收阴独立统计；行情与前高覆盖分开，缺源不补零。随原信封落库；正式复盘③情绪只读同日块，不改断板统计/评分/池/计划。见 docs/strong-stock-feedback.md。
+
+2026-11-02 强势股反馈历史分组：来源日首板/连板与常规10/20/30cm独立分组，未知单列；只读完整SSE日历锁定近5/10/20日，complete/empty按股票日合并，缺日不凑窗、不补零。日报摘要与正式复盘20日明细/图表共享口径，历史不补采不补写。见 docs/strong-stock-feedback.md。

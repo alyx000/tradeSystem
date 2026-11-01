@@ -339,6 +339,8 @@ STRUCTURED_CONTRACT_ATTRIBUTES = (
     "data-sector-adjustment-risk",
     "data-sector-increment",
     "data-trend-review-evidence",
+    "data-strong-stock-feedback",
+    "data-strong-feedback-history",
     "data-style-board-break-feedback",
     "data-style-market-effect",
     "data-style-low-price-effect",
@@ -6785,6 +6787,8 @@ def validate_report(
     sector_increment: dict | None = None,
     trend_review_evidence: dict | None = None,
     visual_identity_sources: dict | None = None,
+    strong_stock_feedback: dict | None = None,
+    strong_stock_history: dict | None = None,
 ) -> ReportMetrics:
     """校验结构、Claim、折叠证据、边界声明及双层预算。"""
 
@@ -6817,6 +6821,29 @@ def validate_report(
     template_parser = _ReportParser()
     template_parser.feed('<article id="report-document"><section id="s2">' + verified_templates + '</section></article>')
     template_metrics = template_parser.metrics()
+    strong_metrics = None
+    strong_blocks = parser.structured_contracts["data-strong-stock-feedback"]
+    history_blocks = parser.structured_contracts["data-strong-feedback-history"]
+    if history_blocks or strong_stock_history is not None:
+        if (strong_stock_history is None or len(history_blocks) != 1
+                or history_blocks[0].section != 's3' or history_blocks[0].tag != 'div'
+                or history_blocks[0].default_hidden or history_blocks[0].value != report_date):
+            raise ReportValidationError('invalid_strong_feedback_history', '历史分组须在③唯一出现且有同日来源', section='s3')
+        # 下方整个外层模块的来源签名包含历史子模块，结合全局唯一检查确保其不能移到外层之外。
+    if strong_blocks or strong_stock_feedback is not None or strong_stock_history is not None:
+        from analyzers.strong_stock_feedback import render_html as render_strong_feedback, html_signature as strong_signature
+        expected_strong = render_strong_feedback(strong_stock_feedback, report_date, history=strong_stock_history)[0]
+        if (len(strong_blocks) != 1 or strong_blocks[0].section != 's3'
+                or strong_blocks[0].default_hidden or strong_blocks[0].tag != 'div'
+                or strong_signature(html) != strong_signature(expected_strong)):
+            raise ReportValidationError('strong_stock_feedback_source_mismatch', '昨日涨停反馈必须唯一、位于③且与同日快照逐字一致', section='s3')
+        # 只给完整匹配来源的官方折叠表增加预算；chunk或篡改后的表不能借用。
+        strong_parser = _ReportParser()
+        strong_parser.feed('<article id="report-document"><section id="s3">'+expected_strong+'</section></article>')
+        strong_metrics = strong_parser.metrics()
+    strong_chars = strong_metrics.evidence_chars if strong_metrics else 0
+    strong_tables = strong_metrics.evidence_tables if strong_metrics else 0
+    strong_rows = strong_metrics.evidence_rows if strong_metrics else 0
     trend_evidence_blocks = parser.structured_contracts["data-trend-review-evidence"]
     trend_evidence_rows = trend_evidence_chars = trend_evidence_tables = 0
     if trend_evidence_blocks or trend_review_evidence is not None:
@@ -6928,19 +6955,19 @@ def validate_report(
             f"正文 {metrics.visible_rows} 行，硬上限 {VISIBLE_ROW_LIMIT}",
         ),
         (
-            metrics.evidence_chars > EVIDENCE_CHAR_LIMIT + trend_evidence_chars + template_metrics.evidence_chars,
+            metrics.evidence_chars > EVIDENCE_CHAR_LIMIT + trend_evidence_chars + template_metrics.evidence_chars + strong_chars,
             "evidence_chars_exceeded",
             _largest_section(metrics, "evidence_chars"),
             f"证据层 {metrics.evidence_chars} 字，硬上限 {EVIDENCE_CHAR_LIMIT}",
         ),
         (
-            metrics.evidence_tables > EVIDENCE_TABLE_LIMIT + trend_evidence_tables,
+            metrics.evidence_tables > EVIDENCE_TABLE_LIMIT + trend_evidence_tables + strong_tables,
             "evidence_tables_exceeded",
             _largest_section(metrics, "evidence_tables"),
             f"证据层 {metrics.evidence_tables} 张表，硬上限 {EVIDENCE_TABLE_LIMIT}",
         ),
         (
-            metrics.evidence_rows > EVIDENCE_ROW_LIMIT + trend_rows + risk_rows + increment_rows + trend_evidence_rows,
+            metrics.evidence_rows > EVIDENCE_ROW_LIMIT + trend_rows + risk_rows + increment_rows + trend_evidence_rows + strong_rows,
             "evidence_rows_exceeded",
             _largest_section(metrics, "evidence_rows"),
             f"证据层 {metrics.evidence_rows} 行，硬上限 {EVIDENCE_ROW_LIMIT}+趋势来源{trend_rows}行+板块风险{risk_rows}行+行业增额{increment_rows}行",
@@ -9074,6 +9101,9 @@ def render_report(
     sector_adjustment_risk: dict | None = None,
     sector_increment: dict | None = None,
     trend_review_evidence: dict | None = None,
+    capacity_trend_db_path: str | os.PathLike[str] | None = None,
+    strong_stock_feedback: dict | None = None,
+    strong_stock_history: dict | None = None,
 ) -> str:
     """读取固定 chunk，包裹静态阅读器外壳并返回 HTML 字符串。
 
@@ -9131,6 +9161,24 @@ def render_report(
     if trend_gaps:
         chunks["s8ops"] = _inject_section_fragment(chunks["s8ops"], "ops", '<p>[事实] 趋势回踩及财务证据缺口：'+escape('；'.join(trend_gaps))+'；缺失不补零。</p>')
     from services.review_feedback_trends import render_feedback_trends
+
+    from analyzers.strong_stock_feedback import render_html as render_strong_feedback
+    if any(re.search(r"\bdata-(?:strong-stock-feedback|strong-feedback-history)\b", body, re.I) for body in chunks.values()):
+        raise ReportValidationError("duplicate_strong_stock_feedback", "昨日涨停股反馈由组装器只读生成", section="s3")
+    strong_fragment, strong_gap = render_strong_feedback(strong_stock_feedback, report_date, history=strong_stock_history)
+    chunks['s456'] = _inject_section_fragment(chunks['s456'], 's3', strong_fragment)
+    if strong_gap:
+        chunks['s8ops'] = _inject_section_fragment(chunks['s8ops'], 'ops', '<p>[事实] '+escape(strong_gap)+'</p>')
+
+    from services.volume_concentration.capacity_trend import read_snapshot, render_html as render_capacity_trend
+    if any(re.search(r"\bdata-capacity-trend\s*=", body, re.I) for body in chunks.values()):
+        raise ReportValidationError("duplicate_capacity_trend", "成交榜容量趋势由组装器只读生成", section="s2")
+    capacity_snapshot = (read_snapshot(report_date, capacity_trend_db_path)
+                         if capacity_trend_db_path is not None else read_snapshot(report_date))
+    capacity_fragment, capacity_gap = render_capacity_trend(capacity_snapshot)
+    chunks["s2"] = _inject_section_fragment(chunks["s2"], "s2", capacity_fragment)
+    if capacity_gap:
+        chunks["s8ops"] = _inject_section_fragment(chunks["s8ops"], "ops", '<p>[事实] '+escape(capacity_gap)+'；缺失不补零。</p>')
 
     from services.sector_adjustment_risk.renderer import render as render_sector_risk
     if any(re.search(r"\bdata-sector-adjustment-risk\s*=", body, re.I) for body in chunks.values()):
@@ -9468,6 +9516,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         sector_risk = load_sector_risk(daily_root, _repo_root()/"data/reports/sector-adjustment-risk", args.date)
         from analyzers.sector_increment import load_snapshot as load_sector_increment
         sector_increment = load_sector_increment(daily_root, args.date)
+        from analyzers.strong_stock_feedback import load_snapshot as load_strong_feedback
+        strong_stock_feedback = load_strong_feedback(daily_root, args.date)
+        from analyzers.strong_stock_feedback_history import build as build_strong_history
+        strong_stock_history = build_strong_history(daily_root, args.date, current=strong_stock_feedback, db_path=trade_db_path)
         from services.trend_leader.review_evidence import load as load_trend_review_evidence
         trend_review_evidence = load_trend_review_evidence(_repo_root()/"data/reports/trend-leader", args.date)
         html = render_report(
@@ -9482,6 +9534,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             sector_adjustment_risk=sector_risk,
             sector_increment=sector_increment,
             trend_review_evidence=trend_review_evidence,
+            capacity_trend_db_path=trade_db_path,
+            strong_stock_feedback=strong_stock_feedback,
+            strong_stock_history=strong_stock_history,
         )
         manifest_path = args.capacity_manifest or (
             Path(args.tmp_dir) / f"capacity_{args.date}.json"
@@ -9511,6 +9566,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             sector_adjustment_risk=sector_risk,
             sector_increment=sector_increment,
             trend_review_evidence=trend_review_evidence,
+            strong_stock_feedback=strong_stock_feedback,
+            strong_stock_history=strong_stock_history,
         )
         output = args.output or (_repo_root() / "data" / "reports" / f"复盘_{args.date}.html")
         path = _atomic_write_report(html, output)

@@ -1,6 +1,8 @@
 """research_digest.narrator：无 LLM 原样；三级 fallback（M3）；不改事实（H6）。"""
 from __future__ import annotations
 
+import pytest
+
 from services.research_digest import narrator
 
 US = [
@@ -156,6 +158,33 @@ def test_build_runner_passes_antigravity_model(monkeypatch):
     assert runner("prompt", []) == {"items": []}
     assert "--model" in seen["cmd"]
     assert "test-model" in seen["cmd"]
+
+
+@pytest.mark.parametrize("custom_log_dir", [False, True])
+def test_runner_preserves_quota_diagnostics_in_portable_log_dir(tmp_path, monkeypatch, custom_log_dir):
+    """默认走系统临时目录，显式配置仍优先；仅日志中的 quota 也必须触发全局诊断。"""
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))
+    monkeypatch.delenv("ANTIGRAVITY_LOG_DIR", raising=False)
+    expected = tmp_path / "tradesystem-antigravity-logs"
+    if custom_log_dir:
+        expected = tmp_path / "custom-logs"
+        monkeypatch.setenv("ANTIGRAVITY_LOG_DIR", str(expected))
+
+    def fake_run(cmd, **kwargs):
+        log_file = Path(cmd[cmd.index("--log-file") + 1])
+        assert log_file.parent == expected
+        log_file.write_text("RESOURCE_EXHAUSTED (code 429): quota\n", encoding="utf-8")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    runner = narrator.build_antigravity_runner()
+    assert runner("prompt", []) is None
+    assert runner.last_diagnostics["reason"] == "quota_exhausted"
+    assert Path(runner.last_diagnostics["log_file"]).is_file()
 
 
 # ---- _parse_json 边界（阶段3 接线后补覆盖）----

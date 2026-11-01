@@ -4,6 +4,8 @@ Tushare 数据提供者
 """
 from __future__ import annotations
 
+from utils.limit_identity import positive_streak
+
 import os
 import logging
 import math
@@ -669,6 +671,7 @@ class TushareProvider(DataProvider):
                     "first_time": row.get("first_time", ""),
                     "last_time": row.get("last_time", ""),
                     "limit_times": int(row.get("limit_times", 1)),  # 连板天数
+                    "limit_times_verified": positive_streak(row.get("limit_times")) is not None,
                     "industry": _to_clean_str(row.get("industry", "")),  # 与 akshare 降级口径对齐；字段缺失留空
                     "limit_stat": _to_clean_str(row.get("up_stat", "")),  # N天M板
                 })

@@ -212,10 +212,10 @@ recommend-weekly-dry:
 
 # 成交额 Top20 板块集中度监控
 volume-watch-daily:
-	cd scripts && python3 main.py volume-watch daily
+	cd scripts && python3 main.py volume-watch daily --input-by "$${INPUT_BY:-USER}"
 
 volume-watch-daily-dry:
-	cd scripts && python3 main.py volume-watch daily --dry-run
+	cd scripts && python3 main.py volume-watch daily --dry-run --input-by "$${INPUT_BY:-USER}"
 
 volume-watch-trend:
 	cd scripts && python3 main.py volume-watch trend

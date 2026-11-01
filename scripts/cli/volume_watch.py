@@ -1,6 +1,6 @@
 """CLI: 成交额 Top20 板块集中度监控。
 
-  volume-watch daily  [--date YYYY-MM-DD] [--dry-run] [--no-push] [--refetch]
+  volume-watch daily --input-by USER [--date YYYY-MM-DD] [--dry-run] [--no-push] [--refetch]
   volume-watch trend  [--date YYYY-MM-DD] [--days N]
 
 daily:read-through 采集 + 申万打标 + 区间涨幅榜(成交额前50→申万二级板块榜 + 同花顺概念题材榜)
@@ -24,11 +24,18 @@ logger = logging.getLogger(__name__)
 TREND_DAYS = 30
 
 
+def _input_by(value: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise argparse.ArgumentTypeError("--input-by 必须是非空请求者")
+    return value.strip()
+
+
 def register_subparser(subparsers: argparse._SubParsersAction) -> None:
     vw = subparsers.add_parser("volume-watch", help="成交额 Top20 板块集中度(日报 / 趋势)")
     sub = vw.add_subparsers(dest="volume_watch_command")
 
     daily = sub.add_parser("daily", help="采集 + 落库 + 渲染 + 推钉钉")
+    daily.add_argument("--input-by", required=True, type=_input_by, help="请求者审计：USER / launchd")
     daily.add_argument("--date", default=None, help="交易日 YYYY-MM-DD(默认今天)")
     daily.add_argument("--dry-run", action="store_true", help="不落库,仅打印 markdown,不推送")
     daily.add_argument("--no-push", action="store_true",
@@ -61,6 +68,7 @@ def _today() -> str:
 def _run_daily(config: dict, args: argparse.Namespace) -> None:
     from main import setup_providers
 
+    input_by = _input_by(getattr(args, "input_by", None))
     date = args.date or _today()
     registry = setup_providers(config)
     registry.initialize_all()  # 必须:register 不自动初始化,漏了则所有 provider 调用返 provider_not_initialized
@@ -76,7 +84,7 @@ def _run_daily(config: dict, args: argparse.Namespace) -> None:
             logger.warning("⚠️ %s 为非交易日(周末/法定假日),跳过成交额板块集中度采集(不落库、不推送)", date)
             return
         md = service.run_daily(conn, registry, date,
-                               persist=not args.dry_run, refetch=args.refetch)
+                               persist=not args.dry_run, refetch=args.refetch, input_by=input_by)
     finally:
         conn.close()
 

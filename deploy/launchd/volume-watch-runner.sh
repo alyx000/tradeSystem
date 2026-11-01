@@ -31,4 +31,4 @@ echo "===== $(date '+%Y-%m-%d %H:%M:%S') volume-watch daily start ====="
 #    看到 =set 表示注入成功；=（空）表示对应 env 未 source 到该变量。
 echo "[env] DINGTALK_WEBHOOK_TOKEN=${DINGTALK_WEBHOOK_TOKEN:+set} DINGTALK_WEBHOOK_SECRET=${DINGTALK_WEBHOOK_SECRET:+set} TUSHARE_TOKEN=${TUSHARE_TOKEN:+set}"
 
-exec /usr/bin/python3 scripts/main.py volume-watch daily
+exec /usr/bin/python3 scripts/main.py volume-watch daily --input-by launchd
