@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 
-from . import collector, formatter, ranking, repo, trend
+from . import capacity_trend, collector, formatter, ranking, repo, trend
 from .aggregator import UNCLASSIFIED
 
 logger = logging.getLogger(__name__)
@@ -143,6 +143,12 @@ def run_daily(conn, registry, date: str, trend_days: int = TREND_DAYS,
         reason=concept_reason,
     )
     record["source"] = source
+
+    capacity = capacity_trend.collect(registry, record.get("stocks") or [], date)
+    if persist and capacity["status"] != "complete":
+        previous = capacity_trend.from_record(repo.get_concentration(conn, date), date)
+        capacity = capacity_trend.preserve_complete(capacity, previous)
+    source[capacity_trend.KEY] = capacity
 
     if persist:
         repo.save_concentration(conn, record)

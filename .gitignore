@@ -40,6 +40,7 @@ opencode.json
 docs/*
 !docs/templates/
 !docs/templates/**
+!docs/capacity-trend.md
 
 # 每日数据（本地生成，不入仓库）
 daily/
