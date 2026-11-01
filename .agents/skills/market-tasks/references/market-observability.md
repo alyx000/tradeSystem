@@ -7,21 +7,21 @@
 每交易日 21:00 自动跑（launchd `com.alyx.tradesystem.volume-watch`），也可手动：
 
 ```bash
-make volume-watch-daily        # = python3 main.py volume-watch daily（采集+落库+渲染+钉钉推送）
+make volume-watch-daily        # = python3 main.py volume-watch daily --input-by USER（采集+落库+渲染+钉钉推送）
 make volume-watch-daily-dry    # = ... --dry-run（仅打印,不落库不推送,预览用）
 make volume-watch-trend        # = python3 main.py volume-watch trend（只读打印最近 30 日趋势）
 # 历史回补（落库但不重推历史日报到钉钉）：三档裸/--no-push[落库+打印不推]/--dry-run[不落库]
-python3 main.py volume-watch daily --date 2026-07-07 --no-push --refetch
+python3 main.py volume-watch daily --input-by USER --date 2026-07-07 --no-push --refetch
 
 # 指定日期 / 窗口（直接调底层）
-python3 main.py volume-watch daily --date 2026-05-29 --dry-run
+python3 main.py volume-watch daily --input-by USER --date 2026-05-29 --dry-run
 python3 main.py volume-watch trend --date 2026-05-29 --days 10
 
 # 回填历史：--refetch 强制重拉，绕过 daily_market 陈旧缓存（如换算 fix 前采集的旧数据）
 #   批量回填时建议 env -u DINGTALK_* 屏蔽推送，只落库不刷屏：
 for d in 2026-05-27 2026-05-28 2026-05-29; do
   env -u DINGTALK_WEBHOOK_TOKEN -u DINGTALK_WEBHOOK_SECRET \
-    python3 main.py volume-watch daily --date "$d" --refetch
+    python3 main.py volume-watch daily --input-by USER --date "$d" --refetch
 done
 ```
 

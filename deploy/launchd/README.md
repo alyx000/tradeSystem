@@ -9,7 +9,7 @@
 - `com.alyx.tradesystem.calendar-sync.plist` — 每天 06:30 触发，早于 07:00 盘前任务；未来 7 日覆盖不足时非零退出并写 `/tmp/tradesystem-calendar-sync.log`
 - `com.alyx.tradesystem.recommend-daily.plist` — 工作日 07:10 触发（行业日报）
 - `com.alyx.tradesystem.recommend-weekly.plist` — 周日 20:00 触发（行业周报）
-- `volume-watch-runner.sh` — 包装脚本：cd 仓库根 → source `scripts/.env`(TUSHARE_TOKEN) + `~/.config/tradeSystem.env`(钉钉) → 调 `python3 main.py volume-watch daily`
+- `volume-watch-runner.sh` — 包装脚本：cd 仓库根 → source `scripts/.env`(TUSHARE_TOKEN) + `~/.config/tradeSystem.env`(钉钉) → 调 `python3 main.py volume-watch daily --input-by launchd`
 - `com.alyx.tradesystem.volume-watch.plist` — 工作日 21:00 触发（成交额 Top20 板块集中度日报；非交易日无数据自动跳过）
 - `string-yang-runner.sh` — 包装脚本：cd 仓库根 → source `scripts/.env`(TUSHARE_TOKEN) + `~/.config/tradeSystem.env`(钉钉/ANTIGRAVITY) → 调 `python3 main.py string-yang daily`
 - `com.alyx.tradesystem.string-yang.plist` — 工作日 21:50 触发（LLM 融合主线板块/概念分支的串阳首阴股票池；只推已出现第一根阴线的确认票）

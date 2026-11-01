@@ -803,7 +803,7 @@ class TestSharedIsNonTradingDay:
 class TestVolumeWatchNonTradingDay:
     def _args(self, date, *, dry_run=False):
         import argparse
-        return argparse.Namespace(volume_watch_command="daily", date=date, dry_run=dry_run, refetch=False)
+        return argparse.Namespace(volume_watch_command="daily", date=date, dry_run=dry_run, refetch=False, input_by="USER")
 
     @patch("cli.volume_watch._push_to_dingtalk")
     @patch("cli.volume_watch.migrate")
