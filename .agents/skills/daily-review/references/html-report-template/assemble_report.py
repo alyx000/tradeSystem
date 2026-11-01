@@ -9074,6 +9074,7 @@ def render_report(
     sector_adjustment_risk: dict | None = None,
     sector_increment: dict | None = None,
     trend_review_evidence: dict | None = None,
+    capacity_trend_db_path: str | os.PathLike[str] | None = None,
 ) -> str:
     """读取固定 chunk，包裹静态阅读器外壳并返回 HTML 字符串。
 
@@ -9131,6 +9132,16 @@ def render_report(
     if trend_gaps:
         chunks["s8ops"] = _inject_section_fragment(chunks["s8ops"], "ops", '<p>[事实] 趋势回踩及财务证据缺口：'+escape('；'.join(trend_gaps))+'；缺失不补零。</p>')
     from services.review_feedback_trends import render_feedback_trends
+
+    from services.volume_concentration.capacity_trend import read_snapshot, render_html as render_capacity_trend
+    if any(re.search(r"\bdata-capacity-trend\s*=", body, re.I) for body in chunks.values()):
+        raise ReportValidationError("duplicate_capacity_trend", "成交榜容量趋势由组装器只读生成", section="s2")
+    capacity_snapshot = (read_snapshot(report_date, capacity_trend_db_path)
+                         if capacity_trend_db_path is not None else read_snapshot(report_date))
+    capacity_fragment, capacity_gap = render_capacity_trend(capacity_snapshot)
+    chunks["s2"] = _inject_section_fragment(chunks["s2"], "s2", capacity_fragment)
+    if capacity_gap:
+        chunks["s8ops"] = _inject_section_fragment(chunks["s8ops"], "ops", '<p>[事实] '+escape(capacity_gap)+'；缺失不补零。</p>')
 
     from services.sector_adjustment_risk.renderer import render as render_sector_risk
     if any(re.search(r"\bdata-sector-adjustment-risk\s*=", body, re.I) for body in chunks.values()):
@@ -9482,6 +9493,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             sector_adjustment_risk=sector_risk,
             sector_increment=sector_increment,
             trend_review_evidence=trend_review_evidence,
+            capacity_trend_db_path=trade_db_path,
         )
         manifest_path = args.capacity_manifest or (
             Path(args.tmp_dir) / f"capacity_{args.date}.json"

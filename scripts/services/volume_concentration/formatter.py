@@ -14,7 +14,7 @@
 """
 from __future__ import annotations
 
-from . import ranking
+from . import capacity_trend, ranking
 from .aggregator import UNCLASSIFIED
 
 _RETENTION_TOP_N = 8  # 连续在榜最多展示只数(超出截断,避免移动端过长)
@@ -221,6 +221,7 @@ def format_daily_report(record: dict | None, trend_result: dict) -> str:
         lines.append(
             f"> 集中度趋势:累积交易日仅 {trend_result['days']} 天,满 ≥2 日起逐步展示(目标 30+)。"
         )
+        lines.append(capacity_trend.render_markdown(capacity_trend.from_record(record, record["date"])))
         return "\n".join(lines)
 
     # 📅 环比前一交易日(独立对比小块):头部成交额 / 占两市 / CR3 / 涨跌均值 今日 vs 昨日
@@ -291,4 +292,5 @@ def format_daily_report(record: dict | None, trend_result: dict) -> str:
     else:
         lines.append("- 无(头部当日换手充分)")
 
+    lines.append(capacity_trend.render_markdown(capacity_trend.from_record(record, record["date"])))
     return "\n".join(lines)

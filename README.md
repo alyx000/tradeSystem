@@ -14,6 +14,8 @@ make today-close # 跑今天的收盘后主流程
 ```
 
 更完整的命令表见下方 [Quick Commands](#quick-commands)、[commands.md](/Users/alyx/tradeSystem/docs/commands.md) 和 [commands.json](/Users/alyx/tradeSystem/docs/commands.json)。
+
+成交榜现支持[容量趋势观察](docs/capacity-trend.md)：随 `volume-watch daily` 保存前20只股票的前复权MA20位置、方向及近5根有效K线涨跌；每日复盘②板块区只读同日快照，缺失显式展示。
 每日高频入口优先看 [commands.md#每日高频](/Users/alyx/tradeSystem/docs/commands.md)。
 
 盘后 `make today-close` 复用交易日20:00调度，同批采集次新股赚钱效应：上市一年（365天）/半年（183天）/90天，另列剔除上市前5交易日与沪深子组，保存上涨率、等权涨跌均值/中位、±5%尾部、开收盘表现和全市场对照；完整成分、来源与缺口保存在同日 `post-market.yaml.raw_data.ipo_effect` 及 `daily_market` 信封。
