@@ -647,8 +647,9 @@ def run_all_checks(registry, *, dry_run: bool = False) -> dict:
     """统一执行单标的阈值与全市场横截面监控，并保留兼容的顶层回执。"""
     from .market_scan import run_market_scan
 
-    threshold_result = run_check(registry, dry_run=dry_run)
+    # 先完成10:00即关窗的横截面扫描，避免新增慢源吞掉09:59最后补扫。
     market_result = run_market_scan(registry, dry_run=dry_run)
+    threshold_result = run_check(registry, dry_run=dry_run)
     failing = {"blocked_calendar", "source_failed", "partial", "push_failed", "state_error"}
     failures = [
         result["status"]
