@@ -4,9 +4,12 @@ from __future__ import annotations
 import os
 import plistlib
 import subprocess
+import sys
 import importlib.util
 import json
 from pathlib import Path
+
+import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -66,6 +69,7 @@ def test_plist_contract():
     assert data["StandardOutPath"] == "/tmp/tradesystem-intraday-monitor.log"
 
 
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS 原生 plutil 校验；结构契约在所有平台执行")
 def test_plist_parses_with_plutil():
     output = subprocess.run(
         ["plutil", "-lint", str(PLIST)],
@@ -101,7 +105,32 @@ DEFAULT_MARKET_SCAN_RULES = (A,)
     ) == {"scan-a"}
 
 
-def test_transition_guard_blocks_pending_unknown_to_target_commit(tmp_path):
+@pytest.fixture
+def target_repo(tmp_path):
+    """一份自包含的目标提交；无需 CI fetch 历史，也不随生产规则增删漂移。"""
+    repo = tmp_path / "target-repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", str(repo)], check=True, capture_output=True)
+    rules = repo / "scripts/services/intraday_monitor/rules.py"
+    rules.parent.mkdir(parents=True)
+    rules.write_text(
+        'A = MonitorRule(rule_id="known-rule")\nDEFAULT_RULES = (A,)\n',
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "-c", "user.name=CI", "-c", "user.email=ci@example.invalid",
+         "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null",
+         "commit", "-m", "fixture target"],
+        check=True, capture_output=True,
+    )
+    commit = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
+    # 工作区故意与提交不同，确保 guard 读取指定提交，而不是磁盘当前文件。
+    rules.write_text('DEFAULT_RULES = ()\n', encoding="utf-8")
+    return repo, commit
+
+
+def test_transition_guard_blocks_pending_unknown_to_target_commit(tmp_path, target_repo):
     state_path = tmp_path / "state.json"
     state_path.write_text(
         json.dumps({"pending_events": [{"rule_id": "future-rule"}]}),
@@ -109,12 +138,12 @@ def test_transition_guard_blocks_pending_unknown_to_target_commit(tmp_path):
     )
     result = subprocess.run(
         [
-            "/usr/bin/python3",
+            sys.executable,
             str(TRANSITION_GUARD),
             "--repo",
-            str(REPO_ROOT),
+            str(target_repo[0]),
             "--target-commit",
-            "2d9c4769",
+            target_repo[1],
             "--state-path",
             str(state_path),
         ],
@@ -127,20 +156,20 @@ def test_transition_guard_blocks_pending_unknown_to_target_commit(tmp_path):
     assert payload["unknown_rule_ids"] == ["future-rule"]
 
 
-def test_transition_guard_allows_pending_known_to_target_commit(tmp_path):
+def test_transition_guard_allows_pending_known_to_target_commit(tmp_path, target_repo):
     state_path = tmp_path / "state.json"
     state_path.write_text(
-        json.dumps({"pending_events": [{"rule_id": "sse-composite-reclaim-3955"}]}),
+        json.dumps({"pending_events": [{"rule_id": "known-rule"}]}),
         encoding="utf-8",
     )
     result = subprocess.run(
         [
-            "/usr/bin/python3",
+            sys.executable,
             str(TRANSITION_GUARD),
             "--repo",
-            str(REPO_ROOT),
+            str(target_repo[0]),
             "--target-commit",
-            "2d9c4769",
+            target_repo[1],
             "--state-path",
             str(state_path),
         ],
@@ -150,3 +179,13 @@ def test_transition_guard_allows_pending_known_to_target_commit(tmp_path):
     payload = json.loads(result.stdout)
     assert result.returncode == 0
     assert payload["status"] == "safe"
+
+
+def test_transition_guard_missing_commit_fails_closed(tmp_path, target_repo):
+    result = subprocess.run(
+        [sys.executable, str(TRANSITION_GUARD), "--repo", str(target_repo[0]),
+         "--target-commit", "missing-target", "--state-path", str(tmp_path / "absent.json")],
+        capture_output=True, text=True,
+    )
+    assert result.returncode == 2
+    assert json.loads(result.stdout)["status"] == "guard_failed"

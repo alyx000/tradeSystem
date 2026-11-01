@@ -4,7 +4,10 @@ from __future__ import annotations
 import os
 import plistlib
 import subprocess
+import sys
 from pathlib import Path
+
+import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -42,6 +45,7 @@ def test_plist_contract():
     assert data["StandardOutPath"] == data["StandardErrorPath"]
 
 
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS 原生 plutil 校验；结构契约在所有平台执行")
 def test_plist_parses_with_plutil():
     output = subprocess.run(
         ["plutil", "-lint", str(PLIST)],

@@ -5,7 +5,6 @@ env 未 source、脚本无执行位），这些只能靠文件内容断言在 CI
 """
 from __future__ import annotations
 
-import json
 import os
 import plistlib
 import re
@@ -94,20 +93,6 @@ class TestPlist:
         assert re.search(r"Sleep policy:", PLIST.read_text(encoding="utf-8"))
 
 
-def _load_via_plutil(path: Path) -> dict:
-    """用 macOS 原生解析器读 plist。
-
-    不能用 `plistlib`：它走 expat，严格拒绝 XML 注释内的 `--`（如 macro-flash.plist
-    注释里的 `run --date`），而 launchd 用的正是 plutil 这套宽容解析器——
-    以 plistlib 为准会把「launchd 能正常读」的文件误判为损坏。
-    """
-    out = subprocess.run(
-        ["plutil", "-convert", "json", "-o", "-", str(path)],
-        capture_output=True, text=True, check=True,
-    )
-    return json.loads(out.stdout)
-
-
 def test_schedule_does_not_collide_with_siblings():
     """22:45 必须与其它 per-task launchd 的触发点错开，避免并发打 Tushare。"""
     mine = (22, 45)
@@ -115,7 +100,7 @@ def test_schedule_does_not_collide_with_siblings():
     for path in sorted((REPO_ROOT / "deploy/launchd").glob("com.alyx.tradesystem.*.plist")):
         if path == PLIST:
             continue
-        raw = _load_via_plutil(path).get("StartCalendarInterval")
+        raw = plistlib.loads(path.read_bytes()).get("StartCalendarInterval")
         if raw is None:
             continue
         checked += 1

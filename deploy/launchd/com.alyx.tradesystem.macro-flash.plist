@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- Sleep policy: 宏观快讯速读错过可接受(非交易决策任务);休眠漏跑用 macro-flash run --date 手动补跑 -->
+<!-- Sleep policy: 宏观快讯速读错过可接受(非交易决策任务);休眠漏跑用 macro-flash run 的 date 参数手动补跑 -->
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
