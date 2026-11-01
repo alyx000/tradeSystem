@@ -3,6 +3,7 @@ build_trend_payload(只读 → 前端集中度趋势图 API 载荷)。"""
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 
 from . import capacity_trend, collector, formatter, ranking, repo, trend
 from .aggregator import UNCLASSIFIED
@@ -64,7 +65,7 @@ def _concept_health(
 
 
 def run_daily(conn, registry, date: str, trend_days: int = TREND_DAYS,
-              persist: bool = True, refetch: bool = False) -> str | None:
+              persist: bool = True, refetch: bool = False, input_by: str = "manual") -> str | None:
     """daily 模式:read-through 采集 + 申万打标 → (落库) → 读最近 N 日算趋势 → 渲染 Markdown。
 
     无 top20 数据(非交易日/源全挂)→ collector 返 None,本函数直接返 None,
@@ -73,6 +74,10 @@ def run_daily(conn, registry, date: str, trend_days: int = TREND_DAYS,
     保证预览含当日而不污染真实库。
     refetch=True(CLI --refetch 回填历史):强制重拉 top20,绕过 daily_market 陈旧缓存。
     """
+    # 内部旧调用保留 manual 默认值；Agent/定时 CLI 必须显式传入请求者。
+    if not isinstance(input_by, str) or not input_by.strip():
+        raise ValueError("input_by 必须是非空请求者")
+    audit = {"input_by": input_by.strip(), "started_at": datetime.now(timezone.utc).isoformat()}
     record = collector.build_record(conn, registry, date, refetch=refetch)
     if record is None:
         return None
@@ -145,6 +150,10 @@ def run_daily(conn, registry, date: str, trend_days: int = TREND_DAYS,
     record["source"] = source
 
     capacity = capacity_trend.collect(registry, record.get("stocks") or [], date)
+    audit["collected_at"] = datetime.now(timezone.utc).isoformat()
+    source["audit"] = dict(audit)
+    # 先给本次证据加审计再做回退；保留旧块时不能冒充本次新采集结果。
+    capacity["audit"] = dict(audit)
     if persist and capacity["status"] != "complete":
         previous = capacity_trend.from_record(repo.get_concentration(conn, date), date)
         capacity = capacity_trend.preserve_complete(capacity, previous)

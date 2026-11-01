@@ -213,3 +213,5 @@ CLI / API 依赖对照见 `.agents/skills/INDEX.md`（唯一真源）。Codex CL
 2026-10-29 七天横盘不创新低故障修复：Tushare 镜像客户端固定向根地址按请求体接口名路由，兼容 SDK 1.4.25 追加接口路径的变化；HTTP/协议错误不得降成空表，初始化须返回有效目标日历。证券宇宙、日线和复权接口失败保留来源错误（隐藏上游账户链接），不再被 `rows:0` 覆盖；真实空结果仍接受原数量/覆盖硬门。手工补跑使用 `no-new-low daily --date YYYY-MM-DD --no-push --input-by USER`，定时入口请求者默认 `launchd`，报告记录 `input_by`。
 
 发布审查补充：日历窗口逐自然日核验完整性；行情与复权代码在数值过滤前独立查重；模型返回非法 winner 类型按无效对局处理，不得打断报告归档。
+
+2026-11-01：`volume-watch daily` 必须显式提供非空 `--input-by`；Make 入口默认 USER，既有21:00 runner 固定 launchd。请求者及开始/采集完成时间写入 `source_json.audit` 与 `capacity_trend.audit`；刷新回退保留旧证据审计，本次尝试审计在 `latest_attempt.audit`。手动补采使用 `--no-push`。

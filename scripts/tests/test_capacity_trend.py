@@ -176,12 +176,22 @@ def test_daily_persist_dry_run_and_refresh_receipt(monkeypatch):
     preview = service.run_daily(conn, reg, reg.day, persist=False)
     assert 'MA20方向' in preview
     assert repo.get_concentration(conn, reg.day) is None
-    service.run_daily(conn, reg, reg.day)
-    assert ct.from_record(repo.get_concentration(conn, reg.day), reg.day)['status'] == 'complete'
+    service.run_daily(conn, reg, reg.day, input_by=' USER ')
+    first_record = repo.get_concentration(conn, reg.day)
+    first = ct.from_record(first_record, reg.day)
+    assert first['status'] == 'complete'
+    assert first['audit']['input_by'] == 'USER'
+    assert first_record['source']['audit'] == first['audit']
+    assert first['audit']['started_at'] <= first['audit']['collected_at']
     reg.fail = 'get_stock_adj_factor_range'
-    output = service.run_daily(conn, reg, reg.day)
+    output = service.run_daily(conn, reg, reg.day, input_by='launchd')
     assert r'fallback\_preserved' in output and r'本次刷新source\_failed' in output
-    assert ct.from_record(repo.get_concentration(conn, reg.day), reg.day)['latest_attempt']['complete_count'] == 0
+    refreshed = repo.get_concentration(conn, reg.day)
+    saved = ct.from_record(refreshed, reg.day)
+    assert saved['latest_attempt']['complete_count'] == 0
+    assert saved['audit'] == first['audit']
+    assert saved['latest_attempt']['audit']['input_by'] == 'launchd'
+    assert refreshed['source']['audit'] == saved['latest_attempt']['audit']
     conn.close()
 
 

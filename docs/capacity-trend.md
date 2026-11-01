@@ -44,3 +44,7 @@
 ### 合并 main 前的隔离验证
 
 仅提取本任务九个文件至远端 `main` 基线 `68e30227`，组装器仅适配插入位置，未带入原工作区其他任务改动。该发布版本 `make check-scripts`：**7887 passed, 1 skipped**，21 条依赖警告，281.35 秒；`git diff --check` 通过。此前 7361 项结果对应开发工作区，此处为实际发布基线的完整验证。
+
+2026-11-01：`volume-watch daily` 必须显式提供非空 `--input-by`；Make 入口默认 USER，既有21:00 runner 固定 launchd。请求者及开始/采集完成时间写入 `source_json.audit` 与 `capacity_trend.audit`；刷新回退保留旧证据审计，本次尝试审计在 `latest_attempt.audit`。手动补采使用 `--no-push`。
+
+正式运行验证（2026-11-01）：通过生产 CLI `volume-watch daily --date 2026-10-30 --input-by USER --no-push` 写入真实业务库，13:21:18 UTC 回读为 complete、20/20，所有指标与只读预览一致。`source.audit` 与容量证据 audit 均为 USER，含 UTC 开始/完成时间。实际加载的工作日21:00任务脚本已使用 `--input-by launchd`，无需新增或重载调度；下一开放日2026-11-02。全量7895 passed/1 skipped、运行目录专项45 passed，双道审查通过。
