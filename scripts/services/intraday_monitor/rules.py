@@ -37,8 +37,13 @@ class MonitorRule:
     threshold_provider: str | None = None
     value_mode: ValueMode = "price"
     proximity_pct: float | None = None
+    threshold_period: Literal["day", "week"] = "day"
 
     def __post_init__(self) -> None:
+        if self.threshold_period not in ("day", "week") or (
+            self.threshold_period == "week" and self.threshold_mode != "intraday_ma"
+        ):
+            raise ValueError("周均线仅支持动态intraday_ma，周期须为day/week")
         if self.direction == "near":
             if (
                 self.value_mode != "price"
@@ -976,6 +981,27 @@ AVG_PRICE_NEAR_26_20261102_27 = MonitorRule(
 )
 
 
+ANTU_BIO_NEAR_WEEKLY_MA5_20261103_30 = MonitorRule(
+    rule_id="antu-bio-near-weekly-ma5-20261103-30",
+    instrument_name="安图生物",
+    code="603658.SH",
+    threshold=None,
+    direction="near",
+    inclusive=True,
+    proximity_pct=1.0,
+    threshold_mode="intraday_ma",
+    threshold_window=5,
+    threshold_period="week",
+    threshold_provider="tushare",
+    threshold_label="动态五周均线",
+    action_label="临近",
+    value_label="价格",
+    value_unit="元",
+    valid_from=date(2026, 11, 3),
+    valid_until=date(2026, 11, 30),
+)
+
+
 # 长期规则保留上证指数站上 3955；历史个股规则不再启用。
 # 动态涨停价与前收盘均线能力由 MonitorRule.threshold_mode 统一扩展。
 # 科创50 1700 与凯莱英 172.26 临时规则覆盖 8 月 21 日与 24 日两个
@@ -1024,6 +1050,7 @@ DEFAULT_RULES: tuple[MonitorRule, ...] = (
     STAR50_BELOW_1257_20261027_1109,
     CSI2000_BELOW_2585_35_20261030_1109,
     AVG_PRICE_NEAR_26_20261102_27,
+    ANTU_BIO_NEAR_WEEKLY_MA5_20261103_30,
 )
 
 

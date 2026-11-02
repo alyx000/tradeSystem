@@ -40,6 +40,7 @@ from services.intraday_monitor.rules import (
     STAR50_BELOW_1257_20261027_1109,
     CSI2000_BELOW_2585_35_20261030_1109,
     AVG_PRICE_NEAR_26_20261102_27,
+    ANTU_BIO_NEAR_WEEKLY_MA5_20261103_30,
     DAJIN_HEAVY_BREAKOUT_35_95_20260912_18,
     DAJIN_HEAVY_BREAKOUT_41_96_20260917_28,
     DEFAULT_RULES,
@@ -931,6 +932,7 @@ def test_default_sse_rule_pushes_only_after_observed_below_to_3955(tmp_path):
         STAR50_BELOW_1257_20261027_1109,
         CSI2000_BELOW_2585_35_20261030_1109,
         AVG_PRICE_NEAR_26_20261102_27,
+        ANTU_BIO_NEAR_WEEKLY_MA5_20261103_30,
     )
     assert initial_above["events"] == []
     assert below["events"] == []
