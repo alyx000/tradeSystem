@@ -6,6 +6,7 @@ from datetime import date, timedelta
 from typing import Any
 
 from services.emotion_leader import constants as C
+from services.emotion_leader import wave_evidence
 from utils.qfq import OHLC_PRICE_KEYS, apply_qfq
 
 
@@ -111,10 +112,12 @@ def calculate_metrics(bars: list[dict], factors: list[dict], launch_date: str, t
         "today_pct_chg": round(today_pct, 2) if today_pct is not None else None,
         "new_peak_today": peak_date == target_date,
         **infer_wave_evidence(life_bars),
+        wave_evidence.KEY: wave_evidence.calculate(bars, factors, launch_date, target_date),
     }
 
 
 def fetch_metrics(registry, item: dict, target_date: str) -> dict:
+    # 保留既有取数窗口：新卡只用已有数据，MA不足单独降级，不能因扩窗旧缺口污染核心指标。
     start = (date.fromisoformat(item["launch_date"]) - timedelta(days=20)).isoformat()
     code = item["code"]
     try:

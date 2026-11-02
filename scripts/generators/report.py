@@ -894,6 +894,13 @@ class ReportGenerator:
         lines.append(render_core_linkage(core_linkage))
         section_idx += 1
 
+        from analyzers.market_strength import load as load_market_strength, view as strength_view
+        from analyzers.market_strength_report import render_markdown as render_market_strength
+        strength = load_market_strength(date, daily_dir=self.daily_dir, current=strength_view(raw_data.get('market_strength'), date))
+        lines.append(f"\n## {_roman(section_idx)}、大涨大跌广度与历史\n")
+        lines.append(render_market_strength(strength))
+        section_idx += 1
+
         # ---- AI 自动分析摘要 ----
         auto = _generate_auto_analysis(raw_data)
         if auto:

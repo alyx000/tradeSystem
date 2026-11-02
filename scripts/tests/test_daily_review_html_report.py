@@ -6092,7 +6092,7 @@ def test_s3_emotion_leader_report_is_injected_with_fact_judgment_boundary(
         DATE,
         emotion_leader_report=_emotion_leader_report(),
     )
-    assembler.validate_report(html)
+    assembler.validate_report(html, wave_evidence_report=_emotion_leader_report())
 
     assert 'data-emotion-leader="v2"' in html
     assert "状态 partial" in html
@@ -6125,7 +6125,7 @@ def test_s3_emotion_height_chart_renders_twenty_report_days_and_keeps_true_zero(
         emotion_history_dir=history,
         emotion_open_dates=dates,
     )
-    assembler.validate_report(html)
+    assembler.validate_report(html, wave_evidence_report=_emotion_leader_report(status="ok"))
 
     s3, _ = _extract_section(html, "s3")
     assert 'data-emotion-height-chart="v1"' in s3
@@ -6185,7 +6185,7 @@ def test_s3_emotion_height_chart_breaks_line_for_missing_day_instead_of_zero(
         emotion_history_dir=history,
         emotion_open_dates=dates,
     )
-    assembler.validate_report(html)
+    assembler.validate_report(html, wave_evidence_report=_emotion_leader_report(status="ok"))
 
     assert 'data-source-status="partial"' in _extract_section(html, "s3")[0]
     assert 'data-point-count="19"' in html
@@ -6214,7 +6214,7 @@ def test_s3_emotion_height_chart_insufficient_history_is_explicit(
         DATE,
         emotion_leader_report=_emotion_leader_report(status="ok"),
     )
-    assembler.validate_report(html)
+    assembler.validate_report(html, wave_evidence_report=_emotion_leader_report(status="ok"))
 
     s3, _ = _extract_section(html, "s3")
     assert 'data-emotion-height-chart="missing-data"' in s3
@@ -6260,7 +6260,7 @@ def test_s6_emotion_node_none_is_rendered_as_objective_non_trigger(
         DATE,
         emotion_leader_report=payload,
     )
-    assembler.validate_report(html)
+    assembler.validate_report(html, wave_evidence_report=payload)
 
     s6, _ = _extract_section(html, "s6")
     assert 'data-emotion-node="none"' in s6
@@ -6279,7 +6279,7 @@ def test_s6_emotion_node_missing_evidence_fails_closed(
         DATE,
         emotion_leader_report=payload,
     )
-    assembler.validate_report(html)
+    assembler.validate_report(html, wave_evidence_report=payload)
 
     s6, _ = _extract_section(html, "s6")
     assert 'data-emotion-node="missing-data"' in s6
@@ -6317,7 +6317,7 @@ def test_s3_emotion_leader_partial_cannot_be_rendered_as_empty_pool(
         DATE,
         emotion_leader_report=payload,
     )
-    assembler.validate_report(html)
+    assembler.validate_report(html, wave_evidence_report=payload)
 
     assert 'data-emotion-leader="missing-data"' in html
     assert assembler.EMOTION_LEADER_NONE_TEXT not in html
@@ -7619,6 +7619,8 @@ def test_cli_default_output_path_remains_compatible(
         strong_stock_feedback=None,
         strong_stock_history=None,
         sector_core_linkage=None,
+        wave_evidence_report=None,
+        market_strength_report=None,
         style_market_effect=None,
         index_intraday_manifest=None,
         visual_context=None,
@@ -7639,6 +7641,8 @@ def test_cli_default_output_path_remains_compatible(
             strong_stock_feedback=strong_stock_feedback,
             strong_stock_history=strong_stock_history,
             sector_core_linkage=sector_core_linkage,
+            wave_evidence_report=wave_evidence_report,
+            market_strength_report=market_strength_report,
             style_market_effect=style_market_effect,
             index_intraday_manifest=index_intraday_manifest,
             visual_context=visual_context,
@@ -8314,7 +8318,7 @@ def test_s3_emotion_leader_keeps_negative_feedback_core_ahead_of_five_pct_gate(
         DATE,
         emotion_leader_report=payload,
     )
-    assembler.validate_report(html)
+    assembler.validate_report(html, wave_evidence_report=payload)
 
     assert html.index("立新能源") < html.index("低辨识度涨停票")
     assert 'data-feedback="负反馈"' in html
