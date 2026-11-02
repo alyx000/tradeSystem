@@ -364,6 +364,7 @@ STRUCTURED_CONTRACT_ATTRIBUTES = (
     "data-rmb-fx-observation",
     "data-rmb-fx-chart",
     "data-emotion-leader",
+    "data-emotion-change",
     "data-emotion-height-chart",
     "data-board-break-feedback",
     "data-board-feedback-trend",
@@ -2848,6 +2849,7 @@ class _ReportParser(HTMLParser):
                     section="s5",
                 )
             seen_codes.add(code)
+
             tier = row_attrs["data-tier"].strip()
             market_text = row_attrs["data-market-rank"].strip()
             direction_text = row_attrs["data-direction-rank"].strip()
@@ -2904,6 +2906,109 @@ class _ReportParser(HTMLParser):
                     "invalid_capacity_health",
                     "容量表可见代码、方向、层级或排名必须与结构化元数据一致",
                     section="s5",
+                )
+
+    def _validate_emotion_change_contract(self, report_date: date_type) -> None:
+        contracts = self.structured_contracts["data-emotion-change"]
+        if len(contracts) != 1:
+            raise ReportValidationError(
+                "invalid_emotion_change",
+                "s3 必须且只能包含一份情绪变化五段卡",
+                section="s3",
+            )
+        contract = contracts[0]
+        attrs = contract.attrs
+        visible = re.sub(r"\s+", "", "".join(contract.rendered_text))
+        stage_labels = {
+            "退潮加剧",
+            "冰点",
+            "冰点后首次修复",
+            "修复延续",
+            "高低切分化",
+            "情绪加速",
+            "数据不足",
+        }
+        signal_labels = {"增强", "中性", "减弱", "未计算"}
+        required_titles = ("阶段结论", "止跌信号", "新周期确认", "代表个股", "数据状态")
+        if (
+            contract.section != "s3"
+            or contract.tag != "div"
+            or contract.default_hidden
+            or attrs.get("data-as-of") != report_date.isoformat()
+            or any(title not in visible for title in required_titles)
+            or attrs.get("data-stage-label") not in stage_labels
+            or attrs.get("data-stop-signal") not in signal_labels
+            or attrs.get("data-new-cycle-signal") not in signal_labels
+            or f"[判断]{attrs.get('data-stage-label', '')}" not in visible
+            or "[事实]" not in visible
+        ):
+            raise ReportValidationError(
+                "invalid_emotion_change",
+                "情绪变化卡必须在 s3 默认展示五段，并严格区分事实与判断",
+                section="s3",
+            )
+        source_status = attrs.get("data-source-status")
+        if contract.value == "missing-data":
+            if (
+                source_status != "source_failed"
+                or attrs.get("data-stage-label") != "数据不足"
+                or attrs.get("data-stop-signal") != "未计算"
+                or attrs.get("data-new-cycle-signal") != "未计算"
+                or "缺失不补0" not in visible
+            ):
+                raise ReportValidationError(
+                    "invalid_emotion_change",
+                    "情绪变化缺失态必须显示数据不足/未计算且不得补零",
+                    section="s3",
+                )
+            return
+        previous_date = attrs.get("data-prev-date", "")
+        counts = {
+            key: _bounded_int_attr(attrs, key, minimum=0, maximum=100_000)
+            for key in (
+                "data-repair-count",
+                "data-continued-negative-count",
+                "data-positive-to-negative-count",
+            )
+        }
+        board_sample = attrs.get("data-board-sample-count")
+        source_errors = attrs.get("data-source-error-count")
+        if (
+            contract.value != "v1"
+            or source_status not in {"complete", "partial"}
+            or not _valid_date(previous_date)
+            or previous_date >= report_date.isoformat()
+            or any(value is None for value in counts.values())
+            or (board_sample != "unavailable" and _nonnegative_int(board_sample) is None)
+            or (source_errors != "unavailable" and _nonnegative_int(source_errors) is None)
+            or (source_status == "partial" and "情绪变化五段卡" not in "".join(self.section_text["ops"]))
+        ):
+            raise ReportValidationError(
+                "invalid_emotion_change",
+                "情绪变化完整态必须保留严格 T-1、三类信号计数、断板样本与 partial 缺口",
+                section="s3",
+            )
+        allowed_transitions = {"repaired", "continued_negative", "positive_to_negative"}
+        allowed_board = {"weak-to-strong", "still-weak"}
+        for row in contract.rows:
+            code = row.attrs.get("data-code", "").upper()
+            if not code:
+                # 表头也会被 HTML 解析器记录为 tr；仅校验带股票身份的数据行。
+                continue
+            transition = row.attrs.get("data-transition-kind")
+            board_kind = row.attrs.get("data-board-transition")
+            row_visible = re.sub(r"\s+", "", "".join(row.rendered_text))
+            if (
+                not re.fullmatch(r"\d{6}(?:\.(?:SH|SZ|BJ))?", code)
+                or code not in row_visible
+                or (transition is not None and transition not in allowed_transitions)
+                or (board_kind is not None and board_kind not in allowed_board)
+                or (transition is None and board_kind is None)
+            ):
+                raise ReportValidationError(
+                    "invalid_emotion_change",
+                    "情绪变化代表股必须保留代码与受控的 T-1→T/断板反馈类型",
+                    section="s3",
                 )
 
     def _valid_contract_as_of(
@@ -5796,6 +5901,7 @@ class _ReportParser(HTMLParser):
         self._validate_incremental_capital(report_date)
         self._validate_rmb_fx_chart_contract(report_date)
         self._validate_emotion_leader_contract(report_date)
+        self._validate_emotion_change_contract(report_date)
         self._validate_index_intraday_contract(report_date)
         self._validate_emotion_height_chart_contract(report_date)
         fact_day = (getattr(self, 'visual_context', None) or {}).get('fact_date')
@@ -9912,6 +10018,7 @@ def render_report(
     emotion_leader_report: Mapping[str, object] | None = None,
     emotion_history_dir: str | os.PathLike[str] | None = None,
     emotion_open_dates: Sequence[str] | None = None,
+    daily_dir: str | os.PathLike[str] | None = None,
     fx_history_dir: str | os.PathLike[str] | None = None,
     style_market_effect: Mapping[str, object] | None = None,
     include_legacy_sections: bool = False,
@@ -10087,6 +10194,12 @@ def render_report(
             "s3 的情绪核心模块由组装器统一生成，chunk 不得自行注入",
             section="s3",
         )
+    if "data-emotion-change=" in chunks["s456"]:
+        raise ReportValidationError(
+            "duplicate_emotion_change",
+            "s3 的情绪变化五段卡由组装器统一生成，chunk 不得自行注入",
+            section="s3",
+        )
     if "data-emotion-height-chart=" in chunks["s456"]:
         raise ReportValidationError(
             "duplicate_emotion_height_chart",
@@ -10126,6 +10239,31 @@ def render_report(
         "s3",
         _render_emotion_leader(emotion_leader_report, report_date),
     )
+    from services.emotion_leader.review_change import (
+        build as build_emotion_change,
+        render_html as render_emotion_change,
+    )
+    emotion_change = build_emotion_change(
+        emotion_leader_report,
+        report_date,
+        emotion_dir=emotion_history_dir,
+        daily_dir=daily_dir or (_repo_root() / "daily"),
+    )
+    emotion_change_fragment, emotion_change_gap = render_emotion_change(
+        emotion_change,
+        report_date,
+    )
+    chunks["s456"] = _inject_section_fragment(
+        chunks["s456"],
+        "s3",
+        emotion_change_fragment,
+    )
+    if emotion_change_gap:
+        chunks["s8ops"] = _inject_section_fragment(
+            chunks["s8ops"],
+            "ops",
+            f'<p>[事实] {escape(emotion_change_gap)}；缺失不补零。</p>',
+        )
     emotion_height_points, emotion_height_status = _load_emotion_height_points(
         emotion_leader_report,
         report_date,
@@ -10451,6 +10589,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             emotion_leader_report=emotion_report,
             emotion_history_dir=emotion_history_dir,
             emotion_open_dates=emotion_open_dates,
+            daily_dir=daily_root,
             fx_history_dir=fx_history_dir,
             style_market_effect=style_market_effect,
             feedback_trends=feedback_trends,

@@ -6111,6 +6111,89 @@ def test_s3_emotion_leader_report_is_injected_with_fact_judgment_boundary(
     assert "该线索不替代事件日历或市场/板块结构确认" in s6
 
 
+def test_s3_emotion_change_five_part_card_is_assembler_owned(
+    assembler, tmp_path, monkeypatch
+):
+    from services.emotion_leader import review_change
+
+    _write_chunks(tmp_path)
+    change = {
+        "date": DATE,
+        "previous_date": "2026-07-15",
+        "status": "complete",
+        "stage": "冰点后首次修复",
+        "stop_signal": "增强",
+        "new_cycle_signal": "中性",
+        "facts": [
+            "涨停30→45，跌停20→5，炸板率35.0%→20.0%",
+            "首板24→36，二板及以上6→9，最高板4→5",
+        ],
+        "transitions": {
+            "status": "complete",
+            "missing": [],
+            "rows": [
+                {
+                    "code": "600664.SH",
+                    "name": "哈药股份",
+                    "previous_pct": -4.0,
+                    "previous_label": "负反馈",
+                    "current_pct": 7.2,
+                    "current_label": "强正反馈",
+                    "transition": "repaired",
+                }
+            ],
+        },
+        "board": {
+            "status": "ok",
+            "sample_count": 2,
+            "rows": [
+                {
+                    "code": "000001",
+                    "name": "弱转强代表",
+                    "open_pct": -3.0,
+                    "close_pct": 5.0,
+                    "outcome": "上涨",
+                }
+            ],
+        },
+        "errors": [],
+        "current_report_status": "ok",
+        "previous_report_status": "ok",
+        "source_error_count": 0,
+    }
+    monkeypatch.setattr(review_change, "build", lambda *args, **kwargs: change)
+
+    html = assembler.render_report(
+        tmp_path,
+        DATE,
+        emotion_leader_report=_emotion_leader_report(status="ok"),
+    )
+    assembler.validate_report(html, wave_evidence_report=_emotion_leader_report(status="ok"))
+
+    s3, _ = _extract_section(html, "s3")
+    assert 'data-emotion-change="v1"' in s3
+    assert "阶段结论" in s3 and "止跌信号" in s3 and "新周期确认" in s3
+    assert "代表个股" in s3 and "数据状态" in s3
+    assert "[判断] 冰点后首次修复" in s3
+    assert "哈药股份" in s3 and "弱转强代表" in s3
+
+
+def test_s3_emotion_change_chunk_cannot_self_inject(assembler, tmp_path):
+    paths = _write_chunks(tmp_path)
+    paths["s456"].write_text(
+        _replace_once(
+            paths["s456"].read_text(encoding="utf-8"),
+            '<section class="blk" id="s3">',
+            '<section class="blk" id="s3"><p data-emotion-change="v1">重复</p>',
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(assembler.ReportValidationError) as exc_info:
+        assembler.render_report(tmp_path, DATE)
+    assert exc_info.value.code == "duplicate_emotion_change"
+
+
 def test_s3_emotion_height_chart_renders_twenty_report_days_and_keeps_true_zero(
     assembler, tmp_path
 ):
