@@ -55,12 +55,14 @@ def render_alert(events: list[dict]) -> str:
         elif event.get("threshold_mode") in ("previous_close_ma", "intraday_ma"):
             basis_dates = list(event.get("threshold_basis_dates") or [])
             if basis_dates:
+                sample_unit = "已完成交易周" if event.get("threshold_period") == "week" else "已收盘交易日"
                 lines.append(
                     f"  - 均线样本：{basis_dates[0]} 至 {basis_dates[-1]}，"
-                    f"共 {len(basis_dates)} 个已收盘交易日（前复权）"
+                    f"共 {len(basis_dates)} 个{sample_unit}（前复权）"
                 )
             if event.get("threshold_mode") == "intraday_ma":
-                lines.append("  - 动态均线：上述历史收盘价与当日最新价共同计算，盘中随最新价更新")
+                current_label = "本周最新价" if event.get("threshold_period") == "week" else "当日最新价"
+                lines.append(f"  - 动态均线：上述历史收盘价与{current_label}共同计算，盘中随最新价更新")
             if event.get("threshold_source"):
                 lines.append(f"  - 均线数据来源：{event['threshold_source']}")
     lines.extend(["", "> 仅为条件触发提醒，不构成买卖建议。"])

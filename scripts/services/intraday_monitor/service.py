@@ -17,6 +17,7 @@ from .guards import (
     shanghai_now,
 )
 from .rules import DEFAULT_RULES, MonitorRule, should_emit
+from .weekly import weekly_history_dates
 from .state import DEFAULT_STATE_PATH, load_state, locked_state, save_state
 from utils.qfq import apply_qfq
 
@@ -74,6 +75,7 @@ def _event(
         "threshold_anchor_pre_close": threshold_anchor_pre_close,
         "threshold_label": rule.threshold_label,
         "threshold_mode": rule.threshold_mode,
+        "threshold_period": rule.threshold_period,
         "direction": rule.direction,
         "proximity_pct": rule.proximity_pct,
         "action_text": rule.action_text,
@@ -160,8 +162,14 @@ def _resolve_rule_threshold(
         return rule.resolve_threshold(quote), None, [], None
 
     window = int(rule.threshold_window or 0) - (rule.threshold_mode == "intraday_ma")
-    basis_dates = previous_open_dates(now.date().isoformat(), window, db_path=db_path)
-    if basis_dates is None:
+    weekly = rule.threshold_period == "week"
+    if weekly:
+        plan = weekly_history_dates(now.date().isoformat(), window, db_path=db_path)
+        history_dates, basis_dates = plan if plan is not None else (None, None)
+    else:
+        basis_dates = previous_open_dates(now.date().isoformat(), window, db_path=db_path)
+        history_dates = basis_dates
+    if basis_dates is None or history_dates is None:
         raise ValueError(f"前 {window} 个开放日历缺失或不可读")
 
     try:
@@ -179,7 +187,8 @@ def _resolve_rule_threshold(
         cached_anchor_value = float(cached_anchor)
     except (TypeError, ValueError):
         cached_anchor_value = float("nan")
-    if cached_dates == basis_dates and math.isclose(
+    # 周末价一周内不变，但昨收锚日期每日前移；即使昨收相同也必须逐日重验历史。
+    if (not weekly or previous.get("trade_date") == now.date().isoformat()) and cached_dates == basis_dates and math.isclose(
         cached_anchor_value,
         quote_pre_close,
         rel_tol=0.0,
@@ -211,7 +220,7 @@ def _resolve_rule_threshold(
 
     provider_name = str(rule.threshold_provider or "").strip()
     _initialized_provider(registry, provider_name)
-    start_date, end_date = basis_dates[0], basis_dates[-1]
+    start_date, end_date = history_dates[0], history_dates[-1]
     daily_result = registry.call_specific(
         provider_name,
         "get_stock_daily_range",
@@ -232,13 +241,13 @@ def _resolve_rule_threshold(
         raise ValueError(f"复权因子失败: {factor_result.error or '未知错误'}")
     bars = _exact_history_rows(
         daily_result.data,
-        basis_dates,
+        history_dates,
         value_key="close",
         label="历史日线",
     )
     factors = _exact_history_rows(
         factor_result.data,
-        basis_dates,
+        history_dates,
         value_key="adj_factor",
         label="复权因子",
     )
@@ -258,7 +267,8 @@ def _resolve_rule_threshold(
     # 新浪实时 pre_close 是今天盘口采用的官方前收盘参考价，用它把整段历史再锚到
     # 当前实时价格坐标，避免除权日把正常价格跳空误报成跌破 MA5。
     coordinate_scale = quote_pre_close / adjusted_last_close
-    historical_closes = [float(row["close"]) * coordinate_scale for row in adjusted]
+    historical_closes = [float(row["close"]) * coordinate_scale for row in adjusted
+                         if row["trade_date"] in basis_dates]
     threshold = rule.resolve_threshold(
         quote,
         historical_closes=historical_closes,
