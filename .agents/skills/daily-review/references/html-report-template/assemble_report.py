@@ -17,6 +17,7 @@ TMP 必须包含 7 个正式 chunk：
 from __future__ import annotations
 
 import argparse
+import hashlib
 import base64
 import json
 import math
@@ -325,7 +326,38 @@ CAPACITY_NONE_TEXT = "[事实]本日无可确认容量中军"
 CAPACITY_MISSING_TEXT = "[事实]容量排名数据不完整，本日无法判定"
 CAPACITY_SOURCE_STATUSES = frozenset({"complete", "partial", "failed"})
 CAPACITY_CODE_RE = re.compile(r"^\d{6}\.(?:SH|SZ|BJ)$")
+INDEX_INTRADAY_MANIFEST_SCHEMA = "index-intraday-structure-v1"
+
+INDEX_INTRADAY_EXPECTED_ROWS = 18
+
+INDEX_INTRADAY_PERIODS = ("15m", "30m", "60m")
+
+INDEX_INTRADAY_INDEXES = {
+    "shanghai": ("上证", 1, "000001", ""),
+    "shenzhen": ("深成", 0, "399001", ""),
+    "chinext": ("创业板", 0, "399006", ""),
+    "star50": ("科创50", 1, "000688", ""),
+    "cni2000-proxy": ("国证2000代理", 0, "399303", "中证2000近似代理"),
+    "average-price": ("平均股价", 1, "880003", "通达信平均股价"),
+}
+
+INDEX_INTRADAY_PERIOD_META = {
+    "15m": (1, 400),
+    "30m": (2, 300),
+    "60m": (3, 240),
+}
+
+INDEX_INTRADAY_MISSING_TEXT = (
+    "[事实]指数15/30/60分钟结构数据不完整，本日无法判定"
+)
+
+INDEX_INTRADAY_OPS_MARKER = "指数15/30/60分钟结构数据不完整"
+
 STRUCTURED_CONTRACT_ATTRIBUTES = (
+    "data-index-intraday-structure",
+    "data-index-intraday-verdict",
+    "data-teacher-core-anchors",
+    "data-teacher-index-levels",
     "data-incremental-capital",
     "data-big-picture",
     "data-cross-asset-context",
@@ -1624,7 +1656,12 @@ class _ReportParser(HTMLParser):
         if tag == "details" and "evidence" in classes:
             if current_evidence:
                 self._error("nested_evidence", "evidence 不允许嵌套", self._current_section())
-            if "open" in attrs:
+            # 用户固定要求两张老师观察表默认展开；来源原文仍折叠。
+            teacher_default_open = (
+                self._current_section() == "teachers"
+                and attrs.get("data-evidence-kind") in {"teacher-anchor", "teacher-level"}
+            )
+            if "open" in attrs and not teacher_default_open:
                 self._error(
                     "evidence_default_open",
                     "evidence 必须默认收起，不得带 open 属性",
@@ -5413,6 +5450,126 @@ class _ReportParser(HTMLParser):
                         )
                     seen_rows.add(key)
 
+    def _validate_index_intraday_contract(self, report_date: date_type) -> None:
+        contracts = self.structured_contracts["data-index-intraday-structure"]
+        verdicts = self.structured_contracts["data-index-intraday-verdict"]
+        if len(contracts) != 1:
+            raise ReportValidationError(
+                "invalid_index_intraday_structure",
+                "s1 必须且只能包含一份六指数15/30/60分钟结构模块",
+                section="s1",
+            )
+        block = contracts[0]
+        compact_text = re.sub(r"\s+", "", "".join(block.rendered_text)).rstrip("。")
+        common_valid = (
+            block.section == "s1"
+            and block.default_hidden
+            and _valid_date(block.attrs.get("data-as-of", ""))
+            and block.attrs.get("data-as-of") in {report_date.isoformat(),
+                (getattr(self, "visual_context", None) or {}).get("fact_date")}
+            and block.attrs.get("data-reviewed-through") == report_date.isoformat()
+            and block.attrs.get("data-periods") == ",".join(INDEX_INTRADAY_PERIODS)
+            and block.attrs.get("data-expected-rows")
+            == str(INDEX_INTRADAY_EXPECTED_ROWS)
+        )
+        if not common_valid:
+            raise ReportValidationError(
+                "invalid_index_intraday_structure",
+                "指数分钟结构必须位于s1折叠证据层并携带同日报告元数据",
+                section="s1",
+            )
+
+        source_status = block.attrs.get("data-source-status", "")
+        expected_verdict_value = "missing-data" if source_status == "failed" else "v1"
+        if (
+            len(verdicts) != 1
+            or verdicts[0].tag != "p"
+            or verdicts[0].section != "s1"
+            or verdicts[0].default_hidden
+            or verdicts[0].value != expected_verdict_value
+            or not _has_labeled_content(verdicts[0].rendered_text)
+        ):
+            raise ReportValidationError(
+                "invalid_index_intraday_structure",
+                "s1 必须且只能默认展示一句与分钟结构状态一致的裁决",
+                section="s1",
+            )
+        ops_text = re.sub(r"\s+", "", "".join(self.section_text["ops"]))
+        if block.value == "missing-data":
+            if (
+                block.tag != "p"
+                or source_status != "failed"
+                or compact_text != INDEX_INTRADAY_MISSING_TEXT
+                or INDEX_INTRADAY_OPS_MARKER not in ops_text
+            ):
+                raise ReportValidationError(
+                    "invalid_index_intraday_structure",
+                    "分钟结构全缺必须使用规范missing-data并在ops披露",
+                    section="s1",
+                )
+            return
+        if block.value != "v1" or block.tag != "table":
+            raise ReportValidationError(
+                "invalid_index_intraday_structure",
+                "分钟结构只能使用v1表或failed missing-data",
+                section="s1",
+            )
+
+        data_rows = [
+            row for row in block.rows if row.attrs.get("data-index-id")
+        ]
+        row_count_text = block.attrs.get("data-row-count", "")
+        if not row_count_text.isdigit() or int(row_count_text) != len(data_rows):
+            raise ReportValidationError(
+                "invalid_index_intraday_structure",
+                "分钟结构data-row-count必须与可见数据行一致",
+                section="s1",
+            )
+        expected_pairs = {
+            (index_id, period)
+            for index_id in INDEX_INTRADAY_INDEXES
+            for period in INDEX_INTRADAY_PERIODS
+        }
+        pairs: set[tuple[str, str]] = set()
+        for row in data_rows:
+            index_id = row.attrs.get("data-index-id", "")
+            period = row.attrs.get("data-period", "")
+            identity = INDEX_INTRADAY_INDEXES.get(index_id)
+            pair = (index_id, period)
+            visible = re.sub(r"\s+", "", "".join(row.rendered_text))
+            if (
+                identity is None
+                or period not in INDEX_INTRADAY_PERIODS
+                or pair in pairs
+                or row.attrs.get("data-tdx-market") != str(identity[1])
+                or row.attrs.get("data-tdx-code") != identity[2]
+                or row.attrs.get("data-last-bar-at")
+                != f"{block.attrs.get('data-as-of')} 15:00"
+                or row.attrs.get("data-status") != "ok"
+                or identity[0] not in visible
+                or period not in visible
+            ):
+                raise ReportValidationError(
+                    "invalid_index_intraday_structure",
+                    "分钟结构行必须使用固定指数/周期身份、目标日15:00末根和可见正文",
+                    section="s1",
+                )
+            pairs.add(pair)
+
+        if source_status == "complete":
+            valid = len(data_rows) == INDEX_INTRADAY_EXPECTED_ROWS and pairs == expected_pairs
+        elif source_status == "partial":
+            valid = 0 < len(data_rows) < INDEX_INTRADAY_EXPECTED_ROWS and pairs < expected_pairs
+            valid = valid and INDEX_INTRADAY_OPS_MARKER in ops_text
+        else:
+            valid = False
+        if not valid:
+            raise ReportValidationError(
+                "invalid_index_intraday_structure",
+                "完整分钟结构必须为18行；部分覆盖须保留有效行并在ops披露",
+                section="s1",
+            )
+
     def _validate_new_high_structure_contract(self, report_date: date_type) -> None:
         contracts = self.structured_contracts["data-new-high-structure"]
         verdicts = [item for item in contracts if item.value == "verdict"]
@@ -5637,9 +5794,15 @@ class _ReportParser(HTMLParser):
         self._validate_incremental_capital(report_date)
         self._validate_rmb_fx_chart_contract(report_date)
         self._validate_emotion_leader_contract(report_date)
+        self._validate_index_intraday_contract(report_date)
         self._validate_emotion_height_chart_contract(report_date)
-        self._validate_board_break_feedback_contract(report_date)
-        self._validate_style_board_break_feedback_contract(report_date)
+        fact_day = (getattr(self, 'visual_context', None) or {}).get('fact_date')
+        feedback = self.structured_contracts['data-board-break-feedback']
+        feedback_day = report_date
+        if fact_day and len(feedback) == 1 and feedback[0].attrs.get('data-as-of') == fact_day:
+            feedback_day = date_type.fromisoformat(fact_day)
+        self._validate_board_break_feedback_contract(feedback_day)
+        self._validate_style_board_break_feedback_contract(feedback_day)
         self._validate_style_market_effect_contract(report_date)
         self._validate_style_low_price_effect_contract(report_date)
         self._validate_emotion_node_contract(report_date)
@@ -5810,6 +5973,15 @@ def _parse_report(html: str) -> _ReportParser:
         raise
     except Exception as exc:  # pragma: no cover - HTMLParser 的保护边界
         raise ReportValidationError("invalid_html", str(exc)) from exc
+    blocks = re.findall(r'<script\b[^>]*\bid=["\x27]review-visual-context["\x27][^>]*>(.*?)</script>', html, re.S | re.I)
+    parser.visual_context = None
+    if blocks:
+        try:
+            if len(blocks) != 1 or len(parser.schema_hosts) != 1:
+                raise ValueError('图形日期上下文重复或报告日期缺失')
+            parser.visual_context = _checked_visual_context(json.loads(blocks[0]), parser.schema_hosts[0][3])
+        except (TypeError, ValueError) as exc:
+            raise ReportValidationError('invalid_visual_context', str(exc)) from exc
     parser.finalize()
     return parser
 
@@ -6174,6 +6346,353 @@ def load_new_high_structure_manifest(
         )
     _validate_new_high_manifest_payload(payload, report_date)
     return payload
+
+
+def load_index_intraday_manifest(
+    manifest_path: str | os.PathLike[str], report_date: str, *, visual_context: dict | None = None
+) -> dict:
+    """读取并校验六指数15/30/60分钟结构 sidecar。"""
+
+    path = Path(manifest_path)
+    if not path.is_file():
+        raise ReportValidationError(
+            "missing_index_intraday_manifest",
+            f"缺少指数分钟结构 sidecar：{path.name}",
+            section="s1",
+        )
+    try:
+        source_bytes = path.read_bytes()
+        payload = json.loads(source_bytes.decode("utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ReportValidationError(
+            "invalid_index_intraday_manifest",
+            f"指数分钟结构 sidecar 无法读取：{exc}",
+            section="s1",
+        ) from exc
+    if not isinstance(payload, dict):
+        raise ReportValidationError(
+            "invalid_index_intraday_manifest",
+            "指数分钟结构 sidecar 顶层必须是对象",
+            section="s1",
+        )
+    context = _checked_visual_context(visual_context, report_date)
+    fact_date = context['fact_date']
+    if (context['status'] == 'complete' and fact_date != report_date and
+            payload.get('report_date') == fact_date and payload.get('as_of') == fact_date):
+        # Explicit archive path only: validate the untouched fact-day source first,
+        # then bind its review envelope. Never overwrite the source receipt/date.
+        _validate_index_intraday_manifest_payload(payload, fact_date)
+        payload = dict(payload, report_date=report_date, visual_context=context,
+                       source_report_date=fact_date, source_manifest_sha256=hashlib.sha256(source_bytes).hexdigest())
+    _validate_index_intraday_manifest_payload(payload, report_date)
+    return payload
+
+
+def _index_intraday_manifest_error(message: str) -> ReportValidationError:
+    return ReportValidationError(
+        "invalid_index_intraday_manifest", message, section="s1"
+    )
+
+
+def _manifest_finite_number(row: Mapping[str, object], key: str) -> float:
+    try:
+        value = float(row.get(key))
+    except (TypeError, ValueError) as exc:
+        raise _index_intraday_manifest_error(f"分钟结构 {key} 不是有效数值") from exc
+    if not math.isfinite(value):
+        raise _index_intraday_manifest_error(f"分钟结构 {key} 不是有限数值")
+    return value
+
+
+def _index_intraday_position(left: float, right: float) -> str:
+    if math.isclose(left, right, rel_tol=1e-10, abs_tol=1e-10):
+        return "equal"
+    return "above" if left > right else "below"
+
+
+def _validate_index_intraday_row_semantics(
+    raw: Mapping[str, object], report_date: str
+) -> None:
+    numbers = {
+        key: _manifest_finite_number(raw, key)
+        for key in (
+            "close", "ma5", "ma10", "ma20", "dif", "dea", "hist",
+            "swing_high", "swing_low",
+        )
+    }
+    if any(numbers[key] <= 0 for key in ("close", "ma5", "ma10", "ma20", "swing_high", "swing_low")):
+        raise _index_intraday_manifest_error("分钟结构价格与均线必须为正数")
+    for window in (5, 10, 20):
+        if raw.get(f"close_vs_ma{window}") != _index_intraday_position(
+            numbers["close"], numbers[f"ma{window}"]
+        ):
+            raise _index_intraday_manifest_error("分钟结构收盘与均线位置关系矛盾")
+
+    if numbers["dif"] > 0 and numbers["dea"] > 0:
+        expected_axis = "above"
+    elif numbers["dif"] < 0 and numbers["dea"] < 0:
+        expected_axis = "below"
+    else:
+        expected_axis = "mixed"
+    if raw.get("macd_axis") != expected_axis:
+        raise _index_intraday_manifest_error("分钟结构 MACD 零轴状态与 DIF/DEA 矛盾")
+    if not math.isclose(
+        numbers["hist"],
+        numbers["dif"] - numbers["dea"],
+        rel_tol=0.0,
+        abs_tol=0.000002,
+    ):
+        raise _index_intraday_manifest_error("分钟结构 MACD 柱与 DIF/DEA 不对账")
+    if not numbers["swing_low"] <= numbers["close"] <= numbers["swing_high"]:
+        raise _index_intraday_manifest_error("分钟结构收盘不在近30根高低区间内")
+
+    last_bar = datetime.fromisoformat(f"{report_date} 15:00")
+    earliest_allowed = last_bar - timedelta(days=60)
+    time_fields = ("swing_high_at", "swing_low_at")
+    parsed_times: dict[str, datetime] = {}
+    for key in time_fields:
+        value = str(raw.get(key) or "")
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}", value):
+            raise _index_intraday_manifest_error("分钟结构高低点时间格式无效")
+        parsed_times[key] = datetime.fromisoformat(value)
+        if not earliest_allowed <= parsed_times[key] <= last_bar:
+            raise _index_intraday_manifest_error("分钟结构高低点时间超出近30根合理边界")
+
+    sample_count = int(raw["sample_count"])
+    for key in ("bars_since_golden_cross", "bars_since_dead_cross"):
+        value = raw.get(key)
+        if value is not None and value >= sample_count:
+            raise _index_intraday_manifest_error("分钟结构交叉距今根数超过样本窗")
+
+    points = raw.get("bottom_divergence_points")
+    if not isinstance(points, list):
+        raise _index_intraday_manifest_error("分钟结构底背离点必须是列表")
+    parsed_points: list[datetime] = []
+    for point in points:
+        value = str(point or "")
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}", value):
+            raise _index_intraday_manifest_error("分钟结构底背离点时间无效")
+        parsed = datetime.fromisoformat(value)
+        if not earliest_allowed <= parsed <= last_bar:
+            raise _index_intraday_manifest_error("分钟结构底背离点超出近30根合理边界")
+        parsed_points.append(parsed)
+    if parsed_points != sorted(set(parsed_points)):
+        raise _index_intraday_manifest_error("分钟结构底背离点必须按时间递增且不重复")
+
+
+def _validate_index_intraday_manifest_payload(payload: dict, report_date: str) -> None:
+    try:
+        context = _checked_visual_context(payload.get('visual_context'), report_date)
+        fact_date = context['fact_date'] or report_date
+    except (ValueError, TypeError) as exc:
+        raise _index_intraday_manifest_error(str(exc)) from exc
+    status = payload.get("status")
+    rows = payload.get("rows")
+    errors = payload.get("errors")
+    generated_at = str(payload.get("generated_at") or "")
+    try:
+        datetime.fromisoformat(generated_at)
+    except ValueError as exc:
+        raise _index_intraday_manifest_error("分钟结构 generated_at 无效") from exc
+    if (
+        payload.get("schema") != INDEX_INTRADAY_MANIFEST_SCHEMA
+        or payload.get("generator") != "build_index_intraday_manifest.py"
+        or payload.get("report_date") != report_date
+        or payload.get("as_of") != fact_date
+        or (context["status"] != "complete" and status != "failed")
+        or payload.get("source") != "pytdx:get_index_bars"
+        or payload.get("index_count") != len(INDEX_INTRADAY_INDEXES)
+        or payload.get("periods") != list(INDEX_INTRADAY_PERIODS)
+        or payload.get("expected_rows") != INDEX_INTRADAY_EXPECTED_ROWS
+        or status not in {"complete", "partial", "failed"}
+        or not isinstance(rows, list)
+        or not isinstance(errors, list)
+        or any(not isinstance(item, str) or not item.strip() for item in errors)
+    ):
+        raise _index_intraday_manifest_error("分钟结构 sidecar schema、日期或状态无效")
+    if payload.get("row_count") != len(rows):
+        raise _index_intraday_manifest_error("分钟结构 row_count 与 rows 不一致")
+    if payload.get("complete") is not (status == "complete"):
+        raise _index_intraday_manifest_error("分钟结构 complete 与 status 不一致")
+    if (
+        (status == "complete" and (len(rows) != INDEX_INTRADAY_EXPECTED_ROWS or errors))
+        or (status == "partial" and not (0 < len(rows) < INDEX_INTRADAY_EXPECTED_ROWS and errors))
+        or (status == "failed" and (rows or not errors))
+    ):
+        raise _index_intraday_manifest_error("分钟结构状态与行数/错误列表不一致")
+
+    expected_order = [
+        (index_id, period)
+        for index_id in INDEX_INTRADAY_INDEXES
+        for period in INDEX_INTRADAY_PERIODS
+    ]
+    actual_order: list[tuple[str, str]] = []
+    for raw in rows:
+        if not isinstance(raw, Mapping):
+            raise _index_intraday_manifest_error("分钟结构数据行必须是对象")
+        index_id = str(raw.get("index_id") or "")
+        period = str(raw.get("period") or "")
+        identity = INDEX_INTRADAY_INDEXES.get(index_id)
+        period_meta = INDEX_INTRADAY_PERIOD_META.get(period)
+        if identity is None or period_meta is None:
+            raise _index_intraday_manifest_error("分钟结构指数或周期身份不受支持")
+        pair = (index_id, period)
+        if pair in actual_order:
+            raise _index_intraday_manifest_error("分钟结构指数/周期重复")
+        actual_order.append(pair)
+        if (
+            raw.get("index_name") != identity[0]
+            or raw.get("tdx_market") != identity[1]
+            or raw.get("tdx_code") != identity[2]
+            or raw.get("proxy_note") != identity[3]
+            or raw.get("category") != period_meta[0]
+            or raw.get("requested_count") != period_meta[1]
+            or not isinstance(raw.get("sample_count"), int)
+            or raw.get("sample_count") < period_meta[1]
+            or raw.get("last_bar_at") != f"{fact_date} 15:00"
+            or raw.get("close_vs_ma5") not in {"above", "below", "equal"}
+            or raw.get("close_vs_ma10") not in {"above", "below", "equal"}
+            or raw.get("close_vs_ma20") not in {"above", "below", "equal"}
+            or raw.get("macd_axis") not in {"above", "below", "mixed"}
+            or raw.get("hist_momentum") not in {"contracting", "expanding", "flat"}
+            or not isinstance(raw.get("bottom_divergence"), bool)
+            or not isinstance(raw.get("bottom_divergence_points"), list)
+            or not str(raw.get("source_node") or "").strip()
+        ):
+            raise _index_intraday_manifest_error("分钟结构数据行身份或枚举字段无效")
+        for key in (
+            "close", "ma5", "ma10", "ma20", "dif", "dea", "hist",
+            "swing_high", "swing_low",
+        ):
+            _manifest_finite_number(raw, key)
+        for key in ("bars_since_golden_cross", "bars_since_dead_cross"):
+            value = raw.get(key)
+            if value is not None and (not isinstance(value, int) or value < 0):
+                raise _index_intraday_manifest_error("分钟结构交叉距今根数无效")
+        for key in ("swing_high_at", "swing_low_at"):
+            try:
+                datetime.fromisoformat(str(raw.get(key) or ""))
+            except ValueError as exc:
+                raise _index_intraday_manifest_error("分钟结构高低点时间无效") from exc
+        points = raw.get("bottom_divergence_points")
+        if raw.get("bottom_divergence") is True and len(points) != 2:
+            raise _index_intraday_manifest_error("底背离为真时必须保留两个确认低点")
+        if raw.get("bottom_divergence") is False and points:
+            raise _index_intraday_manifest_error("底背离为假时不得保留伪确认点")
+        _validate_index_intraday_row_semantics(raw, fact_date)
+
+    filtered_expected = [item for item in expected_order if item in actual_order]
+    if actual_order != filtered_expected:
+        raise _index_intraday_manifest_error("分钟结构行必须按固定指数与15/30/60顺序排列")
+    if status == "complete" and actual_order != expected_order:
+        raise _index_intraday_manifest_error("完整分钟结构必须覆盖固定18组")
+
+
+def _index_intraday_number_attr(value: object) -> str:
+    number = float(value)
+    rendered = f"{number:.6f}".rstrip("0").rstrip(".")
+    return rendered if rendered not in {"-0", ""} else "0"
+
+
+def _index_intraday_row_attrs(row: Mapping[str, object]) -> dict[str, str]:
+    return {
+        "data-index-id": str(row["index_id"]),
+        "data-period": str(row["period"]),
+        "data-tdx-market": str(row["tdx_market"]),
+        "data-tdx-code": str(row["tdx_code"]),
+        "data-last-bar-at": str(row["last_bar_at"]),
+        "data-status": "ok",
+        "data-close": _index_intraday_number_attr(row["close"]),
+        "data-ma5": _index_intraday_number_attr(row["ma5"]),
+        "data-ma10": _index_intraday_number_attr(row["ma10"]),
+        "data-ma20": _index_intraday_number_attr(row["ma20"]),
+        "data-close-vs-ma5": str(row["close_vs_ma5"]),
+        "data-close-vs-ma10": str(row["close_vs_ma10"]),
+        "data-close-vs-ma20": str(row["close_vs_ma20"]),
+        "data-dif": _index_intraday_number_attr(row["dif"]),
+        "data-dea": _index_intraday_number_attr(row["dea"]),
+        "data-hist": _index_intraday_number_attr(row["hist"]),
+        "data-macd-axis": str(row["macd_axis"]),
+        "data-bars-since-golden-cross": (
+            "" if row["bars_since_golden_cross"] is None
+            else str(row["bars_since_golden_cross"])
+        ),
+        "data-bars-since-dead-cross": (
+            "" if row["bars_since_dead_cross"] is None
+            else str(row["bars_since_dead_cross"])
+        ),
+        "data-hist-momentum": str(row["hist_momentum"]),
+        "data-swing-high": _index_intraday_number_attr(row["swing_high"]),
+        "data-swing-high-at": str(row["swing_high_at"]),
+        "data-swing-low": _index_intraday_number_attr(row["swing_low"]),
+        "data-swing-low-at": str(row["swing_low_at"]),
+        "data-bottom-divergence": (
+            "true" if row["bottom_divergence"] else "false"
+        ),
+        "data-bottom-divergence-points": "|".join(
+            str(item) for item in row["bottom_divergence_points"]
+        ),
+        "data-source-node": str(row["source_node"]),
+    }
+
+
+def _validate_index_intraday_manifest_match(
+    parser: _ReportParser, payload: Mapping[str, object]
+) -> None:
+    contracts = parser.structured_contracts["data-index-intraday-structure"]
+    verdicts = parser.structured_contracts["data-index-intraday-verdict"]
+    if len(contracts) != 1:
+        raise ReportValidationError(
+            "index_intraday_manifest_mismatch",
+            "HTML 缺少唯一指数分钟结构模块",
+            section="s1",
+        )
+    block = contracts[0]
+    rows = list(payload["rows"])
+    expected_value = "v1" if rows else "missing-data"
+    expected_status = str(payload["status"])
+    if (
+        block.value != expected_value
+        or block.attrs.get("data-source-status") != expected_status
+        or block.attrs.get("data-row-count") != str(len(rows))
+        or block.attrs.get("data-as-of") != payload.get("as_of")
+    ):
+        raise ReportValidationError(
+            "index_intraday_manifest_mismatch",
+            "HTML 指数分钟结构状态或覆盖数与 sidecar 不一致",
+            section="s1",
+        )
+    if (
+        len(verdicts) != 1
+        or re.sub(r"\s+", "", "".join(verdicts[0].rendered_text))
+        != re.sub(r"\s+", "", _index_intraday_verdict_text(payload))
+    ):
+        raise ReportValidationError(
+            "index_intraday_manifest_mismatch",
+            "HTML 默认可见分钟结构裁决与 sidecar 不一致",
+            section="s1",
+        )
+    html_rows = [
+        row for row in block.rows if row.attrs.get("data-index-id")
+    ]
+    if len(html_rows) != len(rows):
+        raise ReportValidationError(
+            "index_intraday_manifest_mismatch",
+            "HTML 指数分钟结构行数与 sidecar 不一致",
+            section="s1",
+        )
+    for html_row, manifest_row in zip(html_rows, rows):
+        expected_attrs = _index_intraday_row_attrs(manifest_row)
+        visible = re.sub(r"\s+", "", "".join(html_row.rendered_text))
+        if (
+            any(html_row.attrs.get(key) != value for key, value in expected_attrs.items())
+            or visible != _index_intraday_expected_row_text(manifest_row)
+        ):
+            raise ReportValidationError(
+                "index_intraday_manifest_mismatch",
+                "HTML 指数分钟结构逐行元数据或可见正文与 sidecar 不一致",
+                section="s1",
+            )
 
 
 def _validate_capacity_manifest_payload(payload: dict, report_date: str) -> None:
@@ -6791,11 +7310,24 @@ def validate_report(
     strong_stock_feedback: dict | None = None,
     strong_stock_history: dict | None = None,
     sector_core_linkage: dict | None = None,
+    market_snapshot: dict | None = None,
+    visual_context: dict | None = None,
+    teacher_anchors: dict | None = None,
+    index_intraday_manifest: dict | None = None,
+    style_market_effect: dict | None = None,
 ) -> ReportMetrics:
     """校验结构、Claim、折叠证据、边界声明及双层预算。"""
 
     parser = _parse_report(html)
     report_date = next(item[3] for item in parser.schema_hosts)
+    expected_context = _checked_visual_context(visual_context, report_date)
+    if parser.visual_context is not None and parser.visual_context != expected_context:
+        raise ReportValidationError('invalid_visual_context', '图形日期须与独立核验的交易日历一致')
+    if parser.visual_context is None and visual_context is not None:
+        raise ReportValidationError('invalid_visual_context', '缺少图形日期上下文')
+    if index_intraday_manifest and index_intraday_manifest.get('status') != 'failed':
+        if index_intraday_manifest.get('as_of') != (expected_context['fact_date'] or report_date):
+            raise ReportValidationError('invalid_visual_context', '分钟事实日不是已核验的最近开放日')
     _validate_exposure_context(parser, report_date, exposure_context)
     metrics = parser.metrics()
     # 模板原文和16项答案独立计量，必须与官方静态资源及受控答案逐字对账。
@@ -6810,11 +7342,30 @@ def validate_report(
             if len(identity_blocks) != 1:
                 raise ValueError('身份图形证据重复')
             identity_payload = json.loads(identity_blocks[0])
-            expected_identity = build_identity_flows(new_high_manifest, visual_identity_sources, report_date)
+            expected_identity = build_identity_flows(new_high_manifest, visual_identity_sources, report_date, visual_context=visual_context, market_snapshot=market_snapshot)
             if identity_payload != expected_identity:
                 raise ValueError('身份图形须与正式新高名单及双日逐股原始来源重算结果一致；有效梯队须显式提供visual_identity_sources')
         except (ValueError, TypeError) as exc:
             raise ReportValidationError('invalid_visual_identity', str(exc), section='s3') from exc
+    from services.review_teacher_anchors import validate as validate_teacher_anchors, render as render_teacher_anchors
+    try:
+        validate_teacher_anchors(html, report_date, teacher_anchors)
+        for marker in ('data-teacher-core-anchors', 'data-teacher-index-levels'):
+            blocks = parser.structured_contracts[marker]
+            if len(blocks) != 1 or blocks[0].section != 'teachers':
+                raise ValueError('两项老师观察必须唯一归属老师章节')
+    except ValueError as exc:
+        raise ReportValidationError('invalid_teacher_anchors', str(exc), section='teachers') from exc
+    teacher_parser = _ReportParser()
+    teacher_parser.feed('<article id="report-document"><section id="teachers">'+render_teacher_anchors(teacher_anchors, report_date)+'</section></article>')
+    teacher_metrics = teacher_parser.metrics()
+    teacher_kinds = {"teacher-anchor", "teacher-level"}
+    actual_teacher_kinds = [item.kind for item in parser.evidences if item.kind in teacher_kinds]
+    expected_teacher_kinds = [item.kind for item in teacher_parser.evidences if item.kind in teacher_kinds]
+    if actual_teacher_kinds != expected_teacher_kinds:
+        raise ReportValidationError('invalid_teacher_anchors', '默认展开只适用于核验后的两张老师观察表', section='teachers')
+    if teacher_metrics.evidence_chars > 8000 or teacher_metrics.evidence_rows > 40:
+        raise ReportValidationError('teacher_evidence_budget_exceeded', '老师观察独立证据预算为8000字/40行；须精简重复表述，不得删除来源条件', section='teachers')
     from services.review_templates import validated_fragments
     try:
         verified_templates = validated_fragments(html, report_date, hidden_classes=CSS_HIDDEN_CLASSES)
@@ -6823,6 +7374,17 @@ def validate_report(
     template_parser = _ReportParser()
     template_parser.feed('<article id="report-document"><section id="s2">' + verified_templates + '</section></article>')
     template_metrics = template_parser.metrics()
+    low_price_block = parser.structured_contracts["data-style-low-price-effect"][0]
+    if low_price_block.attrs.get("data-as-of") != report_date and style_market_effect is None:
+        raise ReportValidationError("invalid_style_low_price_effect", "历史低价股统计须提供已核验休市窗口及来源", section="s4")
+    if style_market_effect is not None:
+        expected_low_price = _ReportParser()
+        expected_low_price.feed(_render_style_low_price_effect(style_market_effect, report_date))
+        source_low_price = expected_low_price.structured_contracts["data-style-low-price-effect"][0]
+        normalize_low = lambda b: re.sub(r"\s+", "", "".join(b.rendered_text))
+        if (low_price_block.attrs != source_low_price.attrs
+                or normalize_low(low_price_block) != normalize_low(source_low_price)):
+            raise ReportValidationError("style_low_price_source_mismatch", "低价股显示与事实日来源不一致", section="s4")
     linkage_chars = linkage_tables = linkage_rows = 0
     linkage_blocks = parser.structured_contracts["data-sector-core-linkage"]
     if linkage_blocks or sector_core_linkage is not None:
@@ -6946,6 +7508,9 @@ def validate_report(
     if new_high_manifest is not None:
         _validate_new_high_manifest_payload(new_high_manifest, report_date)
         _validate_new_high_manifest_match(parser, new_high_manifest)
+    if index_intraday_manifest is not None:
+        _validate_index_intraday_manifest_payload(index_intraday_manifest, report_date)
+        _validate_index_intraday_manifest_match(parser, index_intraday_manifest)
     checks = (
         (
             metrics.tldr_chars > TLDR_CHAR_LIMIT,
@@ -6972,19 +7537,19 @@ def validate_report(
             f"正文 {metrics.visible_rows} 行，硬上限 {VISIBLE_ROW_LIMIT}",
         ),
         (
-            metrics.evidence_chars > EVIDENCE_CHAR_LIMIT + trend_evidence_chars + template_metrics.evidence_chars + strong_chars + linkage_chars,
+            metrics.evidence_chars > EVIDENCE_CHAR_LIMIT + trend_evidence_chars + template_metrics.evidence_chars + strong_chars + linkage_chars + teacher_metrics.evidence_chars,
             "evidence_chars_exceeded",
             _largest_section(metrics, "evidence_chars"),
             f"证据层 {metrics.evidence_chars} 字，硬上限 {EVIDENCE_CHAR_LIMIT}",
         ),
         (
-            metrics.evidence_tables > EVIDENCE_TABLE_LIMIT + trend_evidence_tables + strong_tables + linkage_tables,
+            metrics.evidence_tables > EVIDENCE_TABLE_LIMIT + trend_evidence_tables + strong_tables + linkage_tables + teacher_metrics.evidence_tables,
             "evidence_tables_exceeded",
             _largest_section(metrics, "evidence_tables"),
             f"证据层 {metrics.evidence_tables} 张表，硬上限 {EVIDENCE_TABLE_LIMIT}",
         ),
         (
-            metrics.evidence_rows > EVIDENCE_ROW_LIMIT + trend_rows + risk_rows + increment_rows + trend_evidence_rows + strong_rows + linkage_rows,
+            metrics.evidence_rows > EVIDENCE_ROW_LIMIT + trend_rows + risk_rows + increment_rows + trend_evidence_rows + strong_rows + linkage_rows + teacher_metrics.evidence_rows,
             "evidence_rows_exceeded",
             _largest_section(metrics, "evidence_rows"),
             f"证据层 {metrics.evidence_rows} 行，硬上限 {EVIDENCE_ROW_LIMIT}+趋势来源{trend_rows}行+板块风险{risk_rows}行+行业增额{increment_rows}行",
@@ -7986,6 +8551,191 @@ def _render_emotion_node(
       <tbody>{''.join(rows)}</tbody></table></div></div>
   </details>
 </div>'''
+
+
+def _index_intraday_visible_number(value: object) -> str:
+    number = float(value)
+    digits = 3 if abs(number) < 100 else 2
+    return f"{number:.{digits}f}"
+
+
+def _index_intraday_short_time(value: object) -> str:
+    raw = str(value)
+    return raw[5:] if len(raw) >= 16 else raw
+
+
+def _index_intraday_verdict_text(payload: Mapping[str, object]) -> str:
+    rows = list(payload.get("rows") or [])
+    status = str(payload.get("status") or "failed")
+    if not rows:
+        return f"{INDEX_INTRADAY_MISSING_TEXT}。"
+    counts: dict[str, tuple[int, int]] = {}
+    for period in INDEX_INTRADAY_PERIODS:
+        period_rows = [row for row in rows if row.get("period") == period]
+        counts[period] = (
+            sum(row.get("close_vs_ma5") == "above" for row in period_rows),
+            len(period_rows),
+        )
+    coverage = "、".join(
+        f"{period} {counts[period][0]}/{counts[period][1]}"
+        for period in INDEX_INTRADAY_PERIODS
+    )
+    verdict = (
+        f"[判断] 15/30/60 分钟站上各自 MA5 为 {coverage}；"
+        "是否向上级别传导，继续看 MA20 与 MACD 零轴是否同步修复。"
+    )
+    if status != "complete":
+        verdict = (
+            f"[事实] 指数分钟结构仅取得 {len(rows)}/{INDEX_INTRADAY_EXPECTED_ROWS} 组；"
+            + verdict
+        )
+    return verdict
+
+
+def _index_intraday_expected_row_text(row: Mapping[str, object]) -> str:
+    position_labels = {"above": ">", "below": "<", "equal": "="}
+    axis_labels = {"above": "双线上", "below": "双线下", "mixed": "零轴交错"}
+    momentum_labels = {"contracting": "收敛", "expanding": "放大", "flat": "持平"}
+    index_label = str(row["index_name"]) + str(row.get("proxy_note") or "")
+    ma_text = " / ".join(
+        f'{position_labels[str(row[f"close_vs_ma{window}"])]}MA{window} '
+        f'{_index_intraday_visible_number(row[f"ma{window}"])}'
+        for window in (5, 10, 20)
+    )
+    golden = row.get("bars_since_golden_cross")
+    dead = row.get("bars_since_dead_cross")
+    cross_text = (
+        f"金{golden if golden is not None else '—'} / "
+        f"死{dead if dead is not None else '—'}"
+    )
+    hist_color = "红柱" if float(row["hist"]) > 0 else (
+        "绿柱" if float(row["hist"]) < 0 else "零柱"
+    )
+    divergence = "是" if row["bottom_divergence"] else "否"
+    if row["bottom_divergence"]:
+        divergence += "（" + "→".join(
+            _index_intraday_short_time(item)
+            for item in list(row.get("bottom_divergence_points") or [])
+        ) + "）"
+    visible = (
+        f"{index_label}{row['tdx_market']}/{row['tdx_code']}"
+        f"{row['period']}"
+        f"{_index_intraday_short_time(row['last_bar_at'])}"
+        f"{_index_intraday_visible_number(row['close'])}"
+        f"{ma_text}"
+        f"{axis_labels[str(row['macd_axis'])]} "
+        f"{_index_intraday_visible_number(row['dif'])}/"
+        f"{_index_intraday_visible_number(row['dea'])}"
+        f"{cross_text}；{hist_color}{momentum_labels[str(row['hist_momentum'])]}"
+        f"H {_index_intraday_visible_number(row['swing_high'])}@"
+        f"{_index_intraday_short_time(row['swing_high_at'])}"
+        f"L {_index_intraday_visible_number(row['swing_low'])}@"
+        f"{_index_intraday_short_time(row['swing_low_at'])}"
+        f"{divergence}"
+    )
+    return re.sub(r"\s+", "", visible)
+
+
+def _render_index_intraday(
+    payload: Mapping[str, object], report_date: str
+) -> str:
+    fact_date = str(payload.get("as_of") or report_date)
+    rows = list(payload.get("rows") or [])
+    status = str(payload.get("status") or "failed")
+    common_attrs = (
+        f'data-as-of="{escape(fact_date)}" '
+        f'data-reviewed-through="{escape(report_date)}" '
+        f'data-source-status="{escape(status)}" '
+        f'data-periods="{escape(",".join(INDEX_INTRADAY_PERIODS))}" '
+        f'data-expected-rows="{INDEX_INTRADAY_EXPECTED_ROWS}" '
+        f'data-row-count="{len(rows)}"'
+    )
+    if not rows:
+        return f'''<p class="sub" data-index-intraday-verdict="missing-data">{_index_intraday_verdict_text(payload)}</p>
+<details class="evidence" data-as-of="{escape(fact_date)}" data-items="1" data-evidence-kind="index-intraday">
+  <summary>六指数 15/30/60 分钟结构（1 项缺失说明）</summary>
+  <div class="evidence-body"><p data-index-intraday-structure="missing-data" {common_attrs}>{INDEX_INTRADAY_MISSING_TEXT}</p></div>
+</details>'''
+
+    verdict = _index_intraday_verdict_text(payload)
+
+    position_labels = {"above": "&gt;", "below": "&lt;", "equal": "="}
+    axis_labels = {"above": "双线上", "below": "双线下", "mixed": "零轴交错"}
+    momentum_labels = {
+        "contracting": "收敛",
+        "expanding": "放大",
+        "flat": "持平",
+    }
+    table_rows: list[str] = []
+    for row in rows:
+        attrs = " ".join(
+            f'{key}="{escape(value, quote=True)}"'
+            for key, value in _index_intraday_row_attrs(row).items()
+        )
+        index_label = escape(str(row["index_name"]))
+        proxy_note = str(row.get("proxy_note") or "")
+        if proxy_note:
+            index_label += f"<br><small>{escape(proxy_note)}</small>"
+        ma_text = " / ".join(
+            f'{position_labels[str(row[f"close_vs_ma{window}"])]}MA{window} '
+            f'{_index_intraday_visible_number(row[f"ma{window}"])}'
+            for window in (5, 10, 20)
+        )
+        golden = row.get("bars_since_golden_cross")
+        dead = row.get("bars_since_dead_cross")
+        cross_text = (
+            f"金{golden if golden is not None else '—'} / "
+            f"死{dead if dead is not None else '—'}"
+        )
+        hist_color = "红柱" if float(row["hist"]) > 0 else (
+            "绿柱" if float(row["hist"]) < 0 else "零柱"
+        )
+        divergence = "是" if row["bottom_divergence"] else "否"
+        if row["bottom_divergence"]:
+            points = list(row.get("bottom_divergence_points") or [])
+            divergence += "（" + "→".join(_index_intraday_short_time(item) for item in points) + "）"
+        table_rows.append(
+            f"<tr {attrs}>"
+            f"<td>{index_label}<br><small>{row['tdx_market']}/{escape(str(row['tdx_code']))}</small></td>"
+            f"<td>{escape(str(row['period']))}</td>"
+            f"<td>{_index_intraday_short_time(row['last_bar_at'])}<br>"
+            f"<strong>{_index_intraday_visible_number(row['close'])}</strong></td>"
+            f"<td>{ma_text}</td>"
+            f"<td>{axis_labels[str(row['macd_axis'])]} "
+            f"{_index_intraday_visible_number(row['dif'])}/"
+            f"{_index_intraday_visible_number(row['dea'])}<br>"
+            f"{cross_text}；{hist_color}{momentum_labels[str(row['hist_momentum'])]}</td>"
+            f"<td>H {_index_intraday_visible_number(row['swing_high'])}@"
+            f"{_index_intraday_short_time(row['swing_high_at'])}<br>"
+            f"L {_index_intraday_visible_number(row['swing_low'])}@"
+            f"{_index_intraday_short_time(row['swing_low_at'])}</td>"
+            f"<td>{divergence}</td></tr>"
+        )
+    gap_note = ""
+    if payload.get('source_report_date'):
+        gap_note += '<p>[事实] 显式复用事实日分钟归档 '+escape(str(payload['source_report_date']))+'；原文件 SHA256 '+escape(str(payload.get('source_manifest_sha256', '未提供')))+'；原始生成时间 '+escape(str(payload.get('generated_at', '未提供')))+'。</p>'
+    if status != "complete":
+        errors = [escape(str(item)) for item in list(payload.get("errors") or [])[:3]]
+        gap_note += f"<p>[事实] 缺口：{'；'.join(errors)}</p>"
+    return f'''<p class="sub" data-index-intraday-verdict="v1">{verdict}</p>
+<details class="evidence" data-as-of="{escape(fact_date)}" data-items="{len(rows)}" data-evidence-kind="index-intraday">
+  <summary>六指数 15/30/60 分钟结构（{len(rows)}/{INDEX_INTRADAY_EXPECTED_ROWS} 组）</summary>
+  <div class="evidence-body"><p>[事实] 行情事实日 {escape(fact_date)}；复核日 {escape(report_date)}。</p><div class="table-scroll-shell"><table data-index-intraday-structure="v1" {common_attrs}>
+    <thead><tr><th>指数</th><th>周期</th><th>末根 / 收盘</th><th>MA5/10/20</th><th>MACD</th><th>近30根高低</th><th>底背离</th></tr></thead>
+    <tbody>{''.join(table_rows)}</tbody>
+  </table></div>{gap_note}</div>
+</details>'''
+
+
+def _index_intraday_ops_fragment(payload: Mapping[str, object]) -> str:
+    rows = list(payload.get("rows") or [])
+    errors = list(payload.get("errors") or [])
+    reason = escape(str(errors[0])) if errors else "存在未完成指数/周期"
+    return (
+        '<p data-index-intraday-ops="gap">[事实] '
+        f"{INDEX_INTRADAY_OPS_MARKER}：有效 {len(rows)}/{INDEX_INTRADAY_EXPECTED_ROWS} 组；"
+        f"{reason}。</p>"
+    )
 
 
 def _style_exact_nonnegative_int(value: object) -> int | None:
@@ -9035,14 +9785,30 @@ def _strip_legacy_section(html: str, section_id: str) -> str:
     return pattern.sub("", html, count=1)
 
 
-def attach_identity_flows(html: str, report_date: str, *, new_high_manifest: dict | None = None, raw_sources: dict | None = None) -> str:
+def _checked_visual_context(payload, report_date):
+    scripts_path = str(_repo_root() / "scripts")
+    if scripts_path not in sys.path:
+        sys.path.insert(0, scripts_path)
+    from services.review_visual_context import validate_visual_context
+    return validate_visual_context(payload, report_date)
+
+
+def attach_visual_context(html, report_date, context):
+    context = _checked_visual_context(context, report_date)
+    content = json.dumps(context, ensure_ascii=False, separators=(',', ':'), allow_nan=False).replace('<', '\\u003c')
+    html = re.sub(r'<!-- review-context:start -->.*?<!-- review-context:end -->', '', html, flags=re.S)
+    block = '<!-- review-context:start --><script type="application/json" id="review-visual-context">'+content+'</script><!-- review-context:end -->'
+    return html.replace('</head>', block+'</head>', 1)
+
+
+def attach_identity_flows(html: str, report_date: str, *, new_high_manifest: dict | None = None, raw_sources: dict | None = None, market_snapshot: dict | None = None, visual_context: dict | None = None) -> str:
     """Embed identity-derived display evidence without touching source facts."""
     _validate_date(report_date)
     scripts_path = str(_repo_root() / "scripts")
     if scripts_path not in sys.path:
         sys.path.insert(0, scripts_path)
     from services.review_identity_flows import build_identity_flows
-    payload = build_identity_flows(new_high_manifest, raw_sources, report_date)
+    payload = build_identity_flows(new_high_manifest, raw_sources, report_date, visual_context=visual_context, market_snapshot=market_snapshot)
     content = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
     html = re.sub(r'<!-- review-identity:start -->.*?<!-- review-identity:end -->', '', html, flags=re.S)
     block = '<!-- review-identity:start --><script type="application/json" id="review-identity-data">' + content + '</script><!-- review-identity:end -->'
@@ -9067,7 +9833,7 @@ def _load_visual_identity_inputs(tmp_path: Path, report_date: str) -> tuple[dict
     return high, raw
 
 
-def attach_visuals(html: str, report_date: str, *, illustration_dir: Path | None = None) -> str:
+def attach_visuals(html: str, report_date: str, *, illustration_dir: Path | None = None, visual_context: dict | None = None) -> str:
     """Attach offline, evidence-only charts; safe to repeat for an authorized report update.
 
     Figures project existing validated source cells in the browser. They do not
@@ -9075,6 +9841,8 @@ def attach_visuals(html: str, report_date: str, *, illustration_dir: Path | None
     Existing reports are never discovered or rewritten by this helper.
     """
     _validate_date(report_date)
+    if visual_context is not None:
+        html = attach_visual_context(html, report_date, visual_context)
     for marker in ("styles", "script", "illustrations"):
         html = re.sub(rf"<!-- review-visuals-{marker}:start -->.*?<!-- review-visuals-{marker}:end -->", "", html, flags=re.S)
     root = Path(__file__).parent
@@ -9122,6 +9890,10 @@ def render_report(
     strong_stock_feedback: dict | None = None,
     strong_stock_history: dict | None = None,
     sector_core_linkage: dict | None = None,
+    market_snapshot: dict | None = None,
+    visual_context: dict | None = None,
+    teacher_anchors: dict | None = None,
+    index_intraday_manifest: dict | None = None,
 ) -> str:
     """读取固定 chunk，包裹静态阅读器外壳并返回 HTML 字符串。
 
@@ -9144,6 +9916,19 @@ def render_report(
         raise ReportValidationError(
             "missing_chunk", f"缺少 chunk：{', '.join(missing)}"
         )
+    scripts_path = str(_repo_root() / "scripts")
+    if scripts_path not in sys.path:
+        sys.path.insert(0, scripts_path)
+    from services.review_teacher_anchors import load as load_teacher_anchors, render as render_teacher_anchors
+    if teacher_anchors is None:
+        teacher_anchors = load_teacher_anchors(tmp_path / f"teacher_anchors_{report_date}.html", report_date,
+            capacity_trend_db_path or (_repo_root() / "data/trade.db"))
+    if any(re.search(r"data-teacher-(?:observations|core-anchors|index-levels)\s*=", body) for body in chunks.values()):
+        raise ReportValidationError("duplicate_teacher_anchors", "老师锚点由正式组装器注入，chunk 不得手写", section="teachers")
+    chunks["s7t"] = _inject_section_fragment(chunks["s7t"], "teachers", render_teacher_anchors(teacher_anchors, report_date))
+    if teacher_anchors['status'] in {'missing-data', 'source_failed'}:
+        chunks["s8ops"] = _inject_section_fragment(chunks["s8ops"], "ops",
+            '<p>[事实] 老师核心锚点与指数关键点位：'+escape(teacher_anchors['status'])+'；'+escape(teacher_anchors['reason'])+'。</p>')
     # 旧素材也须展示新增问题，缺证时只声明未知，不从量价强行识别投资者。
     capital_parser = _ReportParser()
     capital_parser.feed("\n".join(chunks.values()))
@@ -9227,6 +10012,17 @@ def render_report(
     chunks["s456"] = _inject_section_fragment(chunks["s456"], "s3", feedback_fragment)
     for gap in feedback_gaps:
         chunks["s8ops"] = _inject_section_fragment(chunks["s8ops"], "ops", f'<p>[事实] {escape(gap)}；缺失不补零。</p>')
+    if index_intraday_manifest is None:
+        index_intraday_payload = load_index_intraday_manifest(
+            tmp_path / f"index_intraday_{report_date}.json", report_date, visual_context=visual_context
+        )
+    else:
+        index_intraday_payload = dict(index_intraday_manifest)
+        _validate_index_intraday_manifest_payload(
+            index_intraday_payload, report_date
+        )
+    if "data-index-intraday-structure=" in chunks["s1"]:
+        raise ReportValidationError("duplicate_index_intraday_structure", "指数分钟结构由组装器生成", section="s1")
     if "data-rmb-fx-chart=" in chunks["s1"]:
         raise ReportValidationError(
             "duplicate_rmb_fx_chart",
@@ -9270,6 +10066,9 @@ def render_report(
         "s1",
         _render_fx_chart(fx_points, report_date, fx_status),
     )
+    chunks["s1"] = _inject_section_fragment(chunks["s1"], "s1", _render_index_intraday(index_intraday_payload, report_date))
+    if index_intraday_payload.get("status") != "complete":
+        chunks["s8ops"] = _inject_section_fragment(chunks["s8ops"], "ops", _index_intraday_ops_fragment(index_intraday_payload))
     chunks["s456"] = _inject_section_fragment(
         chunks["s456"],
         "s3",
@@ -9383,9 +10182,12 @@ def render_report(
 </html>
 '''
     high, raw = _load_visual_identity_inputs(tmp_path, report_date)
-    if raw is not None:
-        html = attach_identity_flows(html, report_date, new_high_manifest=high, raw_sources=raw)
-    return attach_visuals(html, report_date)
+    # Standalone render remains a structural preview; the CLI attaches the
+    # final verified manifest before write_report. Opt in here when raw
+    # identity receipts are supplied alongside the chunks.
+    if raw is not None or market_snapshot is not None:
+        html = attach_identity_flows(html, report_date, new_high_manifest=high, raw_sources=raw, visual_context=visual_context, market_snapshot=market_snapshot)
+    return attach_visuals(html, report_date, visual_context=visual_context)
 
 
 def _atomic_write_report(html: str, output_path: str | os.PathLike[str]) -> Path:
@@ -9416,6 +10218,11 @@ def write_report(
     new_high_manifest: dict | None = None,
     exposure_context: ExposureValidationContext | None = None,
     visual_identity_sources: dict | None = None,
+    market_snapshot: dict | None = None,
+    visual_context: dict | None = None,
+    teacher_anchors: dict | None = None,
+    index_intraday_manifest: dict | None = None,
+    style_market_effect: dict | None = None,
 ) -> Path:
     """带容量和滚动新高 sidecar 校验后原子落盘；失败时不写文件。"""
 
@@ -9431,12 +10238,21 @@ def write_report(
             "write_report 落盘必须显式提供滚动新高 sidecar",
             section="s5",
         )
+    if index_intraday_manifest is None:
+        minute_blocks = _parse_report(html).structured_contracts["data-index-intraday-structure"]
+        if any(block.attrs.get("data-source-status") != "failed" for block in minute_blocks):
+            raise ReportValidationError("missing_index_intraday_manifest", "有效分钟结构须提供 sidecar 复核", section="s1")
     validate_report(
         html,
         capacity_manifest=capacity_manifest,
         new_high_manifest=new_high_manifest,
+        index_intraday_manifest=index_intraday_manifest,
         exposure_context=exposure_context,
         visual_identity_sources=visual_identity_sources,
+        visual_context=visual_context,
+        market_snapshot=market_snapshot,
+        teacher_anchors=teacher_anchors,
+        style_market_effect=style_market_effect,
     )
     return _atomic_write_report(html, output_path)
 
@@ -9491,6 +10307,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--shock-feedback-report",
         help="严重异动反馈 Markdown；省略时读取 data/reports/shock-feedback/<DATE>.md",
     )
+    parser.add_argument("--index-intraday-manifest", help="指数分钟结构 sidecar；默认 TMP/index_intraday_<DATE>.json")
     return parser
 
 
@@ -9506,6 +10323,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         scripts_path = str(_repo_root() / "scripts")
         if scripts_path not in sys.path:
             sys.path.insert(0, scripts_path)
+        from services.review_visual_context import load_visual_context
+        visual_context = load_visual_context(trade_db_path, args.date)
         from services.emotion_leader.suspensions import reconcile_report_file
         from services.review_feedback_trends import load_feedback_trends
         from services.sector_adjustment_risk.renderer import load as load_sector_risk
@@ -9521,7 +10340,22 @@ def main(argv: Sequence[str] | None = None) -> int:
         fx_history_dir = args.fx_history_dir or (
             _repo_root() / "data" / "reports"
         )
+        index_intraday_manifest_path = args.index_intraday_manifest or (
+            Path(args.tmp_dir) / f"index_intraday_{args.date}.json"
+        )
+        index_intraday_manifest = load_index_intraday_manifest(
+            index_intraday_manifest_path, args.date, visual_context=visual_context
+        )
         daily_root = args.daily_dir or (_repo_root() / "daily")
+        new_high_manifest_path = args.new_high_manifest or (
+            Path(args.tmp_dir) / f"new_high_{args.date}.json"
+        )
+        new_high_manifest = load_new_high_structure_manifest(
+            new_high_manifest_path, args.date
+        )
+        from services.review_chart_market import load_chart_market
+        market_snapshot = load_chart_market(daily_root, visual_context['fact_date'],
+            previous_date=(new_high_manifest.get('trade_dates') or [None, None])[-2])
         shock_feedback_report = args.shock_feedback_report or (
             _repo_root()
             / "data"
@@ -9551,6 +10385,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         sector_core_linkage = build_core_linkage(daily_root, args.date, db_path=trade_db_path)
         from services.trend_leader.review_evidence import load as load_trend_review_evidence
         trend_review_evidence = load_trend_review_evidence(_repo_root()/"data/reports/trend-leader", args.date)
+        from services.review_teacher_anchors import load as load_teacher_anchors
+        teacher_anchors = load_teacher_anchors(Path(args.tmp_dir) / f"teacher_anchors_{args.date}.html", args.date, trade_db_path)
         html = render_report(
             args.tmp_dir,
             args.date,
@@ -9567,19 +10403,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             strong_stock_feedback=strong_stock_feedback,
             strong_stock_history=strong_stock_history,
             sector_core_linkage=sector_core_linkage,
+            visual_context=visual_context,
+            market_snapshot=market_snapshot,
+            teacher_anchors=teacher_anchors,
+            index_intraday_manifest=index_intraday_manifest,
         )
         manifest_path = args.capacity_manifest or (
             Path(args.tmp_dir) / f"capacity_{args.date}.json"
         )
         capacity_manifest = load_capacity_manifest(manifest_path, args.date)
-        new_high_manifest_path = args.new_high_manifest or (
-            Path(args.tmp_dir) / f"new_high_{args.date}.json"
-        )
-        new_high_manifest = load_new_high_structure_manifest(
-            new_high_manifest_path, args.date
-        )
+        # Respect --new-high-manifest overrides as well as the default scratch path.
         _, visual_raw = _load_visual_identity_inputs(Path(args.tmp_dir), args.date)
-        html = attach_identity_flows(html, args.date, new_high_manifest=new_high_manifest, raw_sources=visual_raw)
+        html = attach_identity_flows(html, args.date, new_high_manifest=new_high_manifest, raw_sources=visual_raw, visual_context=visual_context, market_snapshot=market_snapshot)
         exposure_context = None
         parsed = _parse_report(html)
         if _requires_exposure_validation_context(parsed):
@@ -9599,6 +10434,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             strong_stock_feedback=strong_stock_feedback,
             strong_stock_history=strong_stock_history,
             sector_core_linkage=sector_core_linkage,
+            visual_context=visual_context,
+            market_snapshot=market_snapshot,
+            teacher_anchors=teacher_anchors,
+            index_intraday_manifest=index_intraday_manifest,
+            style_market_effect=style_market_effect,
         )
         output = args.output or (_repo_root() / "data" / "reports" / f"复盘_{args.date}.html")
         path = _atomic_write_report(html, output)

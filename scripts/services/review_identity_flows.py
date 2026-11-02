@@ -15,15 +15,16 @@ def _codes(values):
     return set(values)
 
 
-def high_flows(manifest, report_date):
+def high_flows(manifest, report_date, *, fact_date=None):
+    fact_date = fact_date or report_date
     if not isinstance(manifest, dict):
         return {'status': 'missing-data', 'reason': '缺少滚动新高身份清单'}
     try:
         previous = manifest['prev_as_of']
         if (manifest.get('status') != 'complete' or manifest.get('complete') is not True or
-                manifest.get('as_of') != report_date or manifest.get('report_date') != report_date or
-                manifest.get('basis') != 'rolling-adjusted-high' or previous >= report_date or
-                manifest.get('trade_dates', [])[-2:] != [previous, report_date]):
+                manifest.get('as_of') != fact_date or manifest.get('report_date') != report_date or
+                manifest.get('basis') != 'rolling-adjusted-high' or previous >= fact_date or
+                manifest.get('trade_dates', [])[-2:] != [previous, fact_date]):
             raise ValueError('日期、窗口或完整性不符')
         windows = {}
         for window in ('60', '120', '250'):
@@ -34,7 +35,7 @@ def high_flows(manifest, report_date):
             windows[window] = dict(previous=sorted(before), current=sorted(after), retained=sorted(before & after), exited=sorted(before - after), added=sorted(after - before))
         if manifest.get('sixty_day_overlap') != len(windows['60']['retained']):
             raise ValueError('60日交集与正式统计不一致')
-        return dict(status='complete', date=report_date, previous_date=previous, windows=windows)
+        return dict(status='complete', date=fact_date, previous_date=previous, windows=windows)
     except (KeyError, TypeError, ValueError) as exc:
         return {'status': 'source_failed', 'reason': str(exc)}
 
@@ -167,7 +168,7 @@ def ladder_flows(raw, manifest, report_date):
         return {'status': 'source_failed', 'reason': str(exc)}
 
 
-def sector_limit_counts(raw, manifest, report_date):
+def sector_limit_counts(raw, manifest, report_date, *, classification_date=None):
     """Disjoint SW L2 counts, both days mapped through the same dated snapshot."""
     if not isinstance(raw, dict):
         return {'status': 'missing-data', 'reason': '缺少涨停明细与同日申万二级成分快照'}
@@ -176,8 +177,10 @@ def sector_limit_counts(raw, manifest, report_date):
         if manifest.get('trade_dates', [])[-2:] != [previous, report_date]:
             raise ValueError('板块统计日期非相邻开放日')
         day = report_date.replace('-', '')
-        _identity_names(raw, day, report_date)
-        identity = raw.get(day + '_identity')
+        classification_date = classification_date or report_date
+        classification_day = classification_date.replace('-', '')
+        _identity_names(raw, classification_day, classification_date)
+        identity = raw.get(classification_day + '_identity')
         if identity is None:
             raise ValueError('缺少同日申万二级成分快照')
         mapping = {}
@@ -214,29 +217,50 @@ def sector_limit_counts(raw, manifest, report_date):
                                first_count=sum(r['height'] == 1 for r in sector['current']),
                                consecutive_count=sum(r['height'] >= 2 for r in sector['current'])))
         result.sort(key=lambda s: (-s['current_count'], s['name'], s['code']))
-        return dict(status='partial' if any(unknown.values()) else 'complete', date=report_date, previous_date=previous,
-                    classification_as_of=report_date, totals=totals, unclassified=unknown, sectors=result)
+        return dict(status='partial' if any(unknown.values()) or classification_date != report_date else 'complete', date=report_date, previous_date=previous,
+                    classification_as_of=classification_date, totals=totals, unclassified=unknown, sectors=result)
     except (KeyError, TypeError, ValueError, AttributeError) as exc:
         return {'status': 'source_failed', 'reason': str(exc)}
 
 
-def build_identity_flows(manifest, raw, report_date):
-    high = high_flows(manifest, report_date)
+def build_identity_flows(manifest, raw, report_date, *, visual_context=None, market_snapshot=None):
+    from services.review_visual_context import validate_visual_context
+    context = validate_visual_context(visual_context, report_date)
+    day = context['fact_date']
+    if context['status'] != 'complete':
+        failure = dict(status='source_failed', reason='复盘日历未核验：'+context['reason'])
+        return dict(schema='review-identity-flows-v1', report_date=report_date, fact_date=None,
+                    classification_as_of=None, **{key:dict(failure) for key in
+                    ('new_high','ladder','sector_limits','sector_heatmap','sector_breadth','limit_timeline','theme_heatmap')})
+    # Prefer an actual fact-day snapshot. An existing invalid snapshot never falls
+    # through to a newer one. Only a verified closed-day review may use its own
+    # current classification, visibly marked partial and never backdated.
+    classification = day
+    if day != report_date and isinstance(raw, dict) and day.replace('-','')+'_identity' not in raw:
+        classification = report_date
+    high = high_flows(manifest, report_date, fact_date=day)
     if high['status'] == 'complete':
         codes = {code for window in high['windows'].values() for key in ('previous', 'current') for code in window[key]}
         try:
-            source_names = _identity_names(raw if isinstance(raw, dict) else {}, report_date.replace('-', ''), report_date)
+            source_names = _identity_names(raw if isinstance(raw, dict) else {}, classification.replace('-', ''), classification)
             high['names'] = {code: next(iter(source_names[code])) for code in sorted(codes) if len(source_names.get(code, set())) == 1}
             high['name_status'] = 'complete' if len(high['names']) == len(codes) else 'partial'
-            high['name_reason'] = '' if high['name_status'] == 'complete' else '部分当日名称缺失或冲突，保留代码并标名称待核'
+            high['name_reason'] = '' if high['name_status'] == 'complete' else '部分名称缺失或冲突，保留代码并标名称待核'
         except (KeyError, TypeError, ValueError, AttributeError) as exc:
             high.update(names={}, name_status='source_failed', name_reason=str(exc))
-    ladder = ladder_flows(raw, manifest, report_date) if high['status'] == 'complete' else {'status': 'missing-data', 'reason': '严格开放日依据未通过核验'}
-    sectors = sector_limit_counts(raw, manifest, report_date) if high['status'] == 'complete' else {'status': 'missing-data', 'reason': '严格开放日依据未通过核验'}
+        high['name_as_of'] = classification
+    gap = {'status': 'missing-data', 'reason': '严格开放日依据未通过核验'}
+    # Historical cohort eligibility requires fact-day names; current classification
+    # cannot prove whether a historical missing-U stock was delisted or renamed.
+    ladder = ladder_flows(raw, manifest, day) if high['status'] == 'complete' else dict(gap)
+    sectors = sector_limit_counts(raw, manifest, day, classification_date=classification) if high['status'] == 'complete' else dict(gap)
     from services.review_sector_visuals import build_sector_visuals
     from services.review_theme_visuals import theme_heatmap
-    visuals = build_sector_visuals(raw, manifest, report_date) if high['status'] == 'complete' else {
-        key: dict(status='missing-data', reason='严格开放日依据未通过核验')
-        for key in ('sector_heatmap', 'sector_breadth', 'limit_timeline')}
-    themes = theme_heatmap(raw, manifest, report_date) if high['status'] == 'complete' else dict(status='missing-data',reason='严格开放日依据未通过核验')
-    return dict(schema='review-identity-flows-v1', report_date=report_date, new_high=high, ladder=ladder, sector_limits=sectors, theme_heatmap=themes, **visuals)
+    visuals = build_sector_visuals(raw, manifest, day, classification_date=classification) if high['status'] == 'complete' else {
+        key: dict(gap) for key in ('sector_heatmap', 'sector_breadth', 'limit_timeline')}
+    themes = theme_heatmap(raw, manifest, day) if high['status'] == 'complete' else dict(gap)
+    from services.review_chart_market import build_chart_market
+    market = build_chart_market(market_snapshot, manifest, day)
+    return dict(schema='review-identity-flows-v1', report_date=report_date, fact_date=day,
+                classification_as_of=classification, new_high=high, ladder=ladder,
+                sector_limits=sectors, theme_heatmap=themes, **visuals, **market)

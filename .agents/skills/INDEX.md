@@ -1,5 +1,10 @@
 # Skills 依赖索引
 
+2026-11-02 每日老师锚点与指数点位（两表默认展开，原文折叠）：同步 daily-review、多 Agent 流程、HTML组装器、只读来源核验和回归测试；缺源不省略，保留日期及条件。[规范](daily-review/references/html-report-template/teacher-anchors.md)。
+
+2026-11-02：复盘图形区分报告日、完整 SSE 日历核验的事实日与成分快照日，覆盖旧“同日报告日”约束。同步 `review_visual_context.py`、`review_chart_market.py`、身份/板块投影、分钟生成器与正式组装器；容量解析保留缺值，风格图独立核验溢价回填日期。更新 daily-review / multi-agent-review / README 及 `test_review_weekend_visuals.py`，用16面板浏览器验收防回归。[日期契约与流程](daily-review/references/html-report-template/visuals.md)。
+
+
 2026-10-25：每日复盘HTML①新增[增量资金推断](daily-review/references/incremental-capital.md)，综合ETF/融资/机构席位与量价证据；结构硬门、具体候选最低证据要求、缺口兜底、反证与中/低可信度。没有新增CLI、采集、写库或推送。
 
 2026-10-09：复盘 HTML 固定增加用户提供的「板块推演填空」11项与「情绪周期龙头接力」5项，分别位于②板块和⑤龙头；完整原文与两张思维导图内嵌。主会话按既有证据填写带日期、来源锚点、事实/判断标签的答案，缺项不补猜；竞价待验证、用户操作及仓位待填写。正式组装器只读注入，保持7 chunks/15 anchors；不新增采集、推送、业务写入。详见模板 `template-content.md`。
