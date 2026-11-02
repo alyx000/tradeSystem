@@ -2011,6 +2011,24 @@ def test_model_or_input_change_invalidates_cache(conn, monkeypatch) -> None:
     assert len(runner.calls) == 6
 
 
+def test_openai_provider_change_invalidates_existing_cache(conn, monkeypatch) -> None:
+    monkeypatch.setenv("LLM_MODEL", "same-model")
+    monkeypatch.setenv("LLM_PROVIDER", "antigravity")
+    pair = [
+        _run_result(status="success", parsed_output=_factor_scores(), raw={"factor": []}),
+        _run_result(status="success", parsed_output=[], raw={"sectors": []}),
+    ]
+    runner = FakeRunner(pair * 2)
+    service = TrinityFactorService(runner=runner)
+    first = service.score(conn, trade_date="2026-07-10", prefill=_prefill(),
+                          review_steps=_steps(), input_by="test")
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    second = service.score(conn, trade_date="2026-07-10", prefill=_prefill(),
+                           review_steps=_steps(), input_by="test")
+    assert first["score_run_id"] != second["score_run_id"]
+    assert len(runner.calls) == 4
+
+
 def test_prompt_or_ruleset_change_invalidates_cache(conn, monkeypatch) -> None:
     monkeypatch.setenv("LLM_MODEL", "model-a")
     pair = [

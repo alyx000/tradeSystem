@@ -1179,7 +1179,9 @@ def _run_antigravity_pdf_reader(payload: dict[str, Any]) -> dict[str, Any] | Non
     from utils.antigravity_diagnostics import build_diagnostics
     from utils.llm_cli import build_prompt_command, resolve_config
 
-    config = resolve_config(default_timeout=180)
+    # 此入口需要 CLI 实际读取本地 PDF；不能将路径发送给纯文本 API 冒充已读。
+    # 全局切 OpenAI 时 PDF 仍用 Antigravity 自己的模型，避免传入 OpenAI 模型名。
+    config = resolve_config(default_timeout=180, provider="antigravity")
     timeout = config.timeout_seconds
     from services.research_digest import narrator as _narrator
 

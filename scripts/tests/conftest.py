@@ -14,6 +14,13 @@ if str(_SCRIPTS_DIR) not in sys.path:
 collect_ignore = ["test_pushers.py"]
 
 
+@pytest.fixture(autouse=True)
+def isolate_llm_provider(monkeypatch):
+    """本机切换 API 不能改变旧测试默认供应商；OpenAI 用例逐项显式覆盖并 mock。"""
+    monkeypatch.setenv("LLM_PROVIDER", "antigravity")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key-not-for-network")
+
+
 @pytest.fixture
 def api_client(tmp_path, monkeypatch):
     """共享 API 测试客户端 fixture：隔离库 + FastAPI TestClient。
