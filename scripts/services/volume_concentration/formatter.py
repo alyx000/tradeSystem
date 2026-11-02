@@ -154,14 +154,8 @@ def _format_concept_health(record: dict) -> list[str]:
 
 def _append_capacity(lines, record, trend_result):
     block = trend_result.get('capacity_view') or capacity_trend.from_record(record, record['date'])
-    budget = None
-    if not trend_result.get('capacity_full_history'):
-        # 日报正文直接用于既有钉钉推送。只限制本次新增部分，不截断已有报告；
-        # 预留消息包装余量，且即便有大量行业/长名称也按UTF-8字节计算。
-        original = capacity_trend.render_markdown({k: v for k, v in block.items() if k != 'history_view'})
-        base_bytes = len('\n'.join([*lines, original]).encode('utf-8'))
-        budget = max(0, min(6000, 18000 - base_bytes - 1))
-    lines.append(capacity_trend.render_markdown(block, history_budget=budget))
+    compact = not trend_result.get('capacity_full_history')
+    lines.append(capacity_trend.render_markdown(block, compact=compact))
 
 
 def format_daily_report(record: dict | None, trend_result: dict) -> str:

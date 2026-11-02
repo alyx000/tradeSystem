@@ -246,23 +246,28 @@ def _cells(row):
             f"{row['end_run_direction']}{row['end_run_bars']}根"]
 
 
-def _summary(block):
+def _summary(block, *, compact=False):
     status = block["status"]
     if status == "not_computed":
         return "成交榜容量趋势：未计算，旧快照没有此项，不代表趋势不成立。"
     if 'total_count' not in block:
         return f"成交榜容量趋势：{status}，数据不可用（{block.get('reason', '未核验')}）。"
-    text = f"成交榜容量趋势：{status}，可计算 {block.get('complete_count', 0)}/{block.get('total_count', 0)}。"
+    label = {'complete': '可计算', 'partial': '部分覆盖（partial），可计算',
+             'source_failed': '来源失败（source_failed），可计算',
+             'fallback_preserved': '沿用旧结果（fallback_preserved），可计算'}.get(status, status)
+    prefix = label if compact else f'成交榜容量趋势：{status}，可计算'
+    text = f"{prefix} {block.get('complete_count', 0)}/{block.get('total_count', 0)}。"
     valid = [r for r in block.get('rows', []) if r.get('status') == 'complete']
     if valid:
         rising = sum(r['ma20_position'] == '上方' and r['ma20_direction'] == '向上' for r in valid)
         falling = sum(r['ma20_position'] == '下方' and r['ma20_direction'] == '向下' for r in valid)
-        text += f"可计算样本中，线上且线向上{rising}只，线下且线向下{falling}只。"
+        text += (f"MA20线上且向上{rising}只｜线下且向下{falling}只。" if compact else
+                 f"可计算样本中，线上且线向上{rising}只，线下且线向下{falling}只。")
     if status == "fallback_preserved":
         attempt = block.get("latest_attempt") or {}
         text += f"本次刷新{attempt.get('status', '失败')}，展示同日已有完整结果；本次可计算{attempt.get('complete_count', 0)}/{attempt.get('total_count', 0)}。"
         failed = [str(r.get('code') or '代码缺失') for r in attempt.get('rows', []) if r.get('status') != 'complete']
-        if failed:
+        if failed and not compact:
             text += "本次缺口：" + "、".join(failed) + "。"
     return text
 
@@ -306,11 +311,25 @@ def _history_markdown(view, cell, budget):
     return ['', *parts]
 
 
-def render_markdown(block, *, history_budget=None):
+def render_markdown(block, *, history_budget=None, compact=False):
     def cell(value):
         text = escape(str(value), quote=False).replace("\n", " ").replace("\r", " ")
         return re.sub(r"([\\`*_{}\[\]()#+.!|>-])", r"\\\1", text)
-    lines = ["", "### 成交榜容量趋势（MA20）", "观察日期：" + cell(block['trade_date']), "[事实] " + cell(_summary(block)), NOTE]
+    if compact:
+        from .capacity_digest import observations
+        lines = ['', '### 成交榜容量股变化（MA20）', '', '- 观察日期：' + cell(block['trade_date'])]
+        if block['status'] != 'complete':
+            lines += ['- ⚠ ' + cell(_summary(block, compact=True))]
+        lines += ['- ' + cell(line) for line in observations(block)]
+        days = (block.get('history_view') or {}).get('days', 10)
+        lines += ['', '仅成交榜样本、前复权口径；每类最多3只，新变化优先，其余按成交榜顺序。完整变化见复盘HTML或：',
+                  cell(f"volume-watch trend --date {block['trade_date']} --days {days}")]
+        return '\n'.join(lines)
+    lines = ["", "### 成交榜容量趋势（MA20）", "", "- 观察日期：" + cell(block['trade_date']),
+             "- [事实] " + cell(_summary(block, compact=compact))]
+    lines += [NOTE]
+    from .capacity_digest import observations
+    lines += ['', '#### 完整个股变化', *['- ' + cell(line) for line in observations(block, limit=None)]]
     if block.get('history_view'):
         lines += _history_markdown(block['history_view'], cell, history_budget)
     if block.get("rows"):
@@ -321,17 +340,24 @@ def render_markdown(block, *, history_budget=None):
 
 
 def render_html(block):
-    summary = _summary(block)
+    from .capacity_digest import observations
+    summary = _summary(block, compact=True)
     html = [f'<div data-capacity-trend="v1" data-as-of="{escape(block["trade_date"], quote=True)}" data-source-status="{escape(block["status"], quote=True)}">',
-            f'<p><strong>[事实] {escape(summary)}</strong></p>']
+            '<p><strong>成交榜容量股变化（MA20）</strong></p>',
+            f'<p>观察日期：{escape(block["trade_date"])}</p>']
+    if block['status'] != 'complete':
+        html += [f'<p>⚠ {escape(summary)}</p>']
+    html += ['<ul>' + ''.join(f'<li>{escape(line)}</li>' for line in observations(block)) + '</ul>',
+             '<p>仅成交榜样本、前复权口径；每类最多3只，新变化优先，其余按成交榜顺序。完整变化可展开。</p>']
+    html += ['<details><summary>完整个股变化</summary><ul>' +
+             ''.join(f'<li>{escape(line)}</li>' for line in observations(block, limit=None)) + '</ul></details>']
     history_gap = None
+    history_warning = None
     if block.get('history_view'):
-        from .capacity_history import tables, gaps
+        from .capacity_history import tables, gaps, gap_summary
         view = block['history_view']
         history_gap = gaps(view)
-        html += [f'<p>{escape(view["note"])}</p>']
-        if history_gap:
-            html += [f'<p>{escape(history_gap)}</p>']
+        history_warning = gap_summary(view)
         for title, headers, rows in tables(view):
             html += [f'<details><summary>{escape(title)}</summary>']
             if rows:
@@ -343,11 +369,19 @@ def render_html(block):
                 html += ['<p>未计算／无可展示记录。</p>']
             html += ['</details>']
     if block.get("rows"):
-        html += ['<details><summary>成交榜容量趋势明细</summary>', f'<p>{escape(NOTE)}</p>',
-                 '<table><thead><tr>' + ''.join(f'<th>{x}</th>' for x in
+        html += [f'<details><summary>成交榜容量趋势明细（{len(block["rows"])}只）</summary>',
+                 '<div style="overflow-x:auto;max-width:100%"><table><thead><tr>' + ''.join(f'<th>{x}</th>' for x in
                  ('股票', '申万二级', '收盘对MA20', 'MA20方向', '近5根涨跌', '末端连续／缺口')) + '</tr></thead><tbody>']
         html += ['<tr>' + ''.join(f'<td>{escape(str(x))}</td>' for x in _cells(row)) + '</tr>' for row in block['rows']]
-        html += ['</tbody></table></details>']
+        html += ['</tbody></table></div></details>']
+    html += ['<details><summary>历史缺口、口径与来源</summary>']
+    html += [f'<p>{escape(_summary(block))}</p>']
+    if history_gap:
+        html += [f'<p>{escape(history_gap)}</p>']
+    html += [f'<p>{escape(NOTE)}</p>']
+    if block.get('history_view'):
+        html += [f'<p>{escape(block["history_view"]["note"])}</p>']
+    html += ['</details>']
     html += ['</div>']
-    gap = '；'.join(filter(None, [summary if block['status'] != 'complete' else None, history_gap]))
+    gap = '；'.join(filter(None, [summary if block['status'] != 'complete' else None, history_warning]))
     return '\n'.join(html), gap or None

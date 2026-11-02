@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
+from collections import Counter
 import math
 import sqlite3
 
@@ -209,4 +210,22 @@ def gaps(view):
     market_missing = [p['date'] for p in view['history'] if p['market_total_billion'] is None or not p['market_source']]
     if market_missing:
         messages.append('两市成交额或来源缺口：' + '、'.join(market_missing))
+    return '；'.join(messages) or None
+
+
+def gap_summary(view):
+    """正文按状态计数；逐日清单仍由 gaps 提供，不把缺口合并成无数据。"""
+    if view['calendar_status'] != 'complete':
+        return view['reason']
+    counts = Counter(p['status'] for p in view['history'] if p['status'] != 'complete')
+    labels = {'not_computed': '未计算', 'missing-data': '缺快照',
+              'source_failed': '来源失败', 'partial': '部分覆盖',
+              'fallback_preserved': '沿用旧结果'}
+    messages = []
+    if counts:
+        states = '、'.join(f'{n}日{labels.get(status, status)}' for status, n in counts.items())
+        messages.append(f'历史窗口：{states}；这些日期不参与跨日比较')
+    market_missing = sum(p['market_total_billion'] is None or not p['market_source'] for p in view['history'])
+    if market_missing:
+        messages.append(f'两市成交额或来源缺口{market_missing}日')
     return '；'.join(messages) or None

@@ -178,7 +178,7 @@ def test_readonly_html_md_share_results_and_escape(conn, tmp_path):
     assert '<script>' not in html and '<script>' not in md
     assert '[链接](' not in md and '&lt;script&gt;' in html
     assert 'overflow-x:auto' in html
-    assert gap and 'missing-data' in gap
+    assert gap and '缺快照' in gap
     assert ct.read_snapshot('2026-11-02', path)['history_view']['current']['overall'] is None
 
 
@@ -189,7 +189,7 @@ def test_daily_preview_and_trend_use_history_without_persisting_it(conn, monkeyp
     monkeypatch.setattr(service.collector, 'build_gain_universe', lambda *a: [])
     monkeypatch.setattr(ct, 'collect', lambda *a: deepcopy(r['source'][ct.KEY]))
     md = service.run_daily(conn, None, DAY, persist=False, input_by='USER')
-    assert '容量板块汇总' in md and '同股数/线上变化' in md
+    assert '容量股变化' in md and '同股数/线上变化' not in md and '容量板块汇总' not in md
     assert repo.get_concentration(conn, DAY) is None
     service.run_daily(conn, None, DAY, input_by='USER')
     saved = repo.get_concentration(conn, DAY)
@@ -219,7 +219,7 @@ def test_ten_day_sector_history_is_bounded_in_daily_but_complete_in_trend(conn, 
     daily = service.run_daily(conn, None, DAY, persist=False, input_by='USER')
     assert len(full.encode('utf-8')) > 20000
     assert len(daily.encode('utf-8')) <= 18000
-    assert '日报历史为限长摘要' in daily
+    assert '每类最多3只' in daily
     assert '日报历史为限长摘要' not in full
     assert '测试行业20' in full
 
@@ -231,6 +231,183 @@ def test_history_budget_counts_escaped_utf8_text(conn, budget):
     original = ct.render_markdown({k: v for k, v in block.items() if k != 'history_view'})
     bounded = ct.render_markdown(block, history_budget=budget)
     assert len(bounded.encode('utf-8')) - len(original.encode('utf-8')) <= budget + 1
+
+
+def test_compact_daily_preserves_gaps_without_methodology_or_detail_tables(conn):
+    repo.save_concentration(conn, dict(date=PREV, total_amount_billion=10, source={}))
+    block = ct.with_history(conn, record(), DAY, days=3)
+    md = ct.render_markdown(block, compact=True, history_budget=6000)
+    assert '当前线上且均线向上' in md and '股票000001' in md
+    assert '跨日变化未计算' in md and '1日缺快照' not in md
+    assert '容量板块汇总' not in md
+    assert '容量历史变化' not in md and '末端连续' not in md and '逐行身份' not in md
+    assert '2026\\-10\\-28:missing' not in md
+    full = ct.render_markdown(block)
+    assert '容量历史变化' in full and '末端连续' in full and '逐行身份' in full
+    # 极小预算只能省略板块表，不得吞掉失败提示或详情入口。
+    tiny = ct.render_markdown(block, compact=True, history_budget=0)
+    assert '跨日变化未计算' in tiny and 'volume\\-watch trend' in tiny
+
+
+def _visible_html_text(html):
+    from html.parser import HTMLParser
+
+    class Visible(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.depth = 0
+            self.text = []
+
+        def handle_starttag(self, tag, attrs):
+            if tag == 'details':
+                assert 'open' not in dict(attrs)
+                self.depth += 1
+
+        def handle_endtag(self, tag):
+            if tag == 'details':
+                self.depth -= 1
+
+        def handle_data(self, data):
+            if not self.depth:
+                self.text.append(data)
+
+    parser = Visible()
+    parser.feed(html)
+    return ''.join(parser.text)
+
+
+def test_html_default_view_is_short_but_preserves_full_evidence(conn):
+    block = ct.with_history(conn, record(), DAY)
+    html, gap = ct.render_html(block)
+    visible = _visible_html_text(html)
+    assert len(visible) < 350
+    assert DAY in visible and '股票000001' in visible and '跨日变化未计算' in visible
+    assert '9日缺快照' not in visible
+    assert '逐行身份' not in visible and '2026-10-29' not in visible
+    assert '逐行身份' in html and '2026-10-29:missing-data' in html
+    assert '9日缺快照' in gap and '2026-10-29' not in gap
+
+
+@pytest.mark.parametrize('status', ['partial', 'source_failed', 'fallback_preserved', 'not_computed'])
+def test_compact_failure_states_remain_visible(conn, status):
+    good = record()['source'][ct.KEY]
+    failed = deepcopy(good)
+    failed.update(status=status, complete_count=0)
+    failed['rows'] = [dict(code=r['code'], name=r['name'], industry=r['industry'],
+                           status='source_failed', reason='<源失败>') for r in good['rows']]
+    if status == 'partial':
+        failed['rows'][0] = good['rows'][0]
+        failed['complete_count'] = 1
+    elif status == 'fallback_preserved':
+        failed['status'] = 'source_failed'
+        failed = {**good, 'status': status, 'latest_attempt': failed}
+    elif status == 'not_computed':
+        failed = ct.from_record(None, DAY)
+    html, gap = ct.render_html(failed)
+    visible = _visible_html_text(html)
+    md = ct.render_markdown(failed, compact=True, history_budget=0)
+    if status == 'not_computed':
+        assert '未计算' in visible and '未计算' in md and '0/0' not in md
+    else:
+        assert status in visible and status.replace('_', r'\_') in md
+    if status == 'fallback_preserved':
+        assert '本次刷新source_failed' in visible and '同日已有完整结果' in visible
+        assert '本次缺口：000001.SZ、000002.SZ' in html
+    assert gap
+
+
+def test_gap_summary_keeps_calendar_and_market_failure_separate(conn):
+    view = ch.build(conn, DAY, current_record=record(), days=1)
+    assert ch.gap_summary(view) is None
+    view['history'][0]['market_source'] = None
+    assert ch.gap_summary(view) == '两市成交额或来源缺口1日'
+    view['calendar_status'] = 'source_failed'
+    view['reason'] = '交易日历缺失，历史变化未计算'
+    assert ch.gap_summary(view) == view['reason']
+
+
+def test_stock_digest_separates_common_changes_from_entrants_and_reclassification(conn):
+    from services.volume_concentration.capacity_digest import observations
+    before = record(PREV, (('000001', '甲', '上方'), ('000002', '甲', '下方'),
+                           ('000003', '甲', '上方'), ('000004', '甲', '下方'),
+                           ('000006', '乙', '下方')))
+    today = record(DAY, (('000001', '甲', '上方'), ('000002', '甲', '上方'),
+                         ('000003', '甲', '下方'), ('000004', '甲', '下方'),
+                         ('000005', '甲', '上方'), ('000006', '丙', '上方')))
+    rows = today['source'][ct.KEY]['rows']
+    rows[1]['ma20_direction'] = '向下'
+    rows[3]['ma20_distance_pct'] -= 2
+    repo.save_concentration(conn, before)
+    block = ct.with_history(conn, today, DAY)
+    lines = observations(block, limit=None)
+    kept = next(x for x in lines if x.startswith('保持'))
+    better = next(x for x in lines if x.startswith('改善'))
+    worse = next(x for x in lines if x.startswith('走坏'))
+    new = next(x for x in lines if x.startswith('新进'))
+    assert '同股同分类4只' in lines[0]
+    assert '000001' in kept and '000005' not in kept
+    assert '000002' in better and '新站上MA20' in better and '均线向下' in better
+    assert '000005' not in better and '000006' not in better
+    assert '000003' in worse and '新跌破MA20' in worse and '000004' in worse and '距线' in worse
+    assert '000005' in new and '000006' not in new
+    # 较早缺口不能阻断已有相邻开放日比较，也不再占据推送正文。
+    md = ct.render_markdown(block, compact=True)
+    assert '跨日变化未计算' not in md and '历史窗口' not in md
+
+
+@pytest.mark.parametrize('previous_kind', ['missing', 'old', 'corrupt', 'partial', 'fallback'])
+def test_stock_digest_does_not_claim_new_changes_without_complete_adjacent_day(conn, previous_kind):
+    from services.volume_concentration.capacity_digest import observations
+    r = record(PREV)
+    if previous_kind == 'old':
+        r['source'] = {}
+    elif previous_kind == 'corrupt':
+        r['source'][ct.KEY] = None
+    elif previous_kind in ('partial', 'fallback'):
+        good = deepcopy(r['source'][ct.KEY])
+        bad = r['source'][ct.KEY]
+        bad['rows'][0] = {**bad['rows'][0], 'status': 'source_failed', 'reason': '缺因子'}
+        bad.update(status='partial', complete_count=1)
+        if previous_kind == 'fallback':
+            r['source'][ct.KEY] = {**good, 'status': 'fallback_preserved', 'latest_attempt': bad}
+    if previous_kind != 'missing':
+        repo.save_concentration(conn, r)
+    lines = observations(ct.with_history(conn, record(), DAY))
+    assert any('跨日变化未计算' in line for line in lines)
+    assert not any(line.startswith(('保持', '改善', '走坏', '新进')) for line in lines)
+
+
+def test_stock_digest_new_break_prioritized_and_omitted_changes_available_in_full(conn):
+    from services.volume_concentration.capacity_digest import observations
+    specs = tuple((f'{n:06d}', '甲', '下方') for n in range(1, 6))
+    before, today = record(PREV, specs), record(DAY, specs)
+    before['source'][ct.KEY]['rows'][-1]['ma20_position'] = '上方'
+    for row in today['source'][ct.KEY]['rows']:
+        row['ma20_distance_pct'] -= 2
+    repo.save_concentration(conn, before)
+    block = ct.with_history(conn, today, DAY)
+    brief = next(x for x in observations(block) if x.startswith('走坏'))
+    assert brief.index('000005') < brief.index('000001')
+    assert '另有2只' in brief and '000004' not in brief
+    full = ct.render_markdown(block)
+    assert '完整个股变化' in full and '股票000004（000004）：距线' in full
+    html = ct.render_html(block)[0]
+    assert '股票000004（000004）：距线' in html
+
+
+def test_stock_digest_escapes_stock_names_and_ignores_invisible_rounding_changes(conn):
+    before, today = record(PREV), record()
+    today['source'][ct.KEY]['rows'][0]['name'] = '<script>[链接](x)</script>'
+    row = today['source'][ct.KEY]['rows'][1]
+    row['ma20_distance_pct'] = round(row['ma20_distance_pct'], 2) - 0.000001
+    before['source'][ct.KEY]['rows'][1]['ma20_distance_pct'] = round(row['ma20_distance_pct'], 2)
+    repo.save_concentration(conn, before)
+    block = ct.with_history(conn, today, DAY)
+    md = ct.render_markdown(block, compact=True)
+    html = ct.render_html(block)[0]
+    assert '<script>' not in html and '<script>' not in md and '[链接](' not in md
+    assert '&lt;script&gt;' in html and r'\[链接\]\(' in md
+    assert '无新跌破' in md
 
 
 def test_fresh_database_daily_cli_populates_calendar_via_existing_guard(tmp_path, monkeypatch, capsys):

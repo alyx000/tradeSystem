@@ -174,7 +174,7 @@ def test_daily_persist_dry_run_and_refresh_receipt(monkeypatch):
     monkeypatch.setattr(service.collector, 'build_record', record)
     monkeypatch.setattr(service.collector, 'build_gain_universe', lambda *a: [])
     preview = service.run_daily(conn, reg, reg.day, persist=False)
-    assert 'MA20方向' in preview
+    assert '当前线上且均线向上' in preview and 'MA20方向' not in preview
     assert repo.get_concentration(conn, reg.day) is None
     service.run_daily(conn, reg, reg.day, input_by=' USER ')
     first_record = repo.get_concentration(conn, reg.day)
