@@ -76,6 +76,7 @@ def _event(
         "threshold_label": rule.threshold_label,
         "threshold_mode": rule.threshold_mode,
         "threshold_period": rule.threshold_period,
+        "threshold_history_mode": rule.threshold_history_mode,
         "direction": rule.direction,
         "proximity_pct": rule.proximity_pct,
         "action_text": rule.action_text,
@@ -129,13 +130,15 @@ def _exact_history_rows(
     return [by_date[trade_date] for trade_date in expected_dates]
 
 
-def _initialized_provider(registry, provider_name: str):
+def _initialized_provider(registry, provider_name: str, *, index_history: bool = False):
     provider = registry.get_provider(provider_name)
     if provider is None:
         raise ValueError(f"{provider_name}: 动态阈值 provider 未注册")
-    if not provider.supports("get_stock_daily_range"):
+    if index_history and not provider.supports("get_index_daily_range"):
+        raise ValueError(f"{provider_name}: 不支持指数区间日线")
+    if not index_history and not provider.supports("get_stock_daily_range"):
         raise ValueError(f"{provider_name}: 不支持个股区间日线")
-    if not provider.supports("get_stock_adj_factor_range"):
+    if not index_history and not provider.supports("get_stock_adj_factor_range"):
         raise ValueError(f"{provider_name}: 不支持个股复权因子")
     if not bool(getattr(provider, "_initialized", False)):
         try:
@@ -172,12 +175,15 @@ def _resolve_rule_threshold(
     if basis_dates is None or history_dates is None:
         raise ValueError(f"前 {window} 个开放日历缺失或不可读")
 
-    try:
-        quote_pre_close = float(quote.get("pre_close"))
-    except (TypeError, ValueError) as exc:
-        raise ValueError("实时前收盘价无法用于均线坐标锚定") from exc
-    if not math.isfinite(quote_pre_close) or quote_pre_close <= 0:
-        raise ValueError("实时前收盘价非法")
+    index_history = rule.threshold_history_mode == "index"
+    quote_pre_close = None
+    if not index_history:
+        try:
+            quote_pre_close = float(quote.get("pre_close"))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("实时前收盘价无法用于均线坐标锚定") from exc
+        if not math.isfinite(quote_pre_close) or quote_pre_close <= 0:
+            raise ValueError("实时前收盘价非法")
 
     previous = previous_state or {}
     cached_dates = previous.get("threshold_basis_dates")
@@ -188,12 +194,10 @@ def _resolve_rule_threshold(
     except (TypeError, ValueError):
         cached_anchor_value = float("nan")
     # 周末价一周内不变，但昨收锚日期每日前移；即使昨收相同也必须逐日重验历史。
-    if (not weekly or previous.get("trade_date") == now.date().isoformat()) and cached_dates == basis_dates and math.isclose(
-        cached_anchor_value,
-        quote_pre_close,
-        rel_tol=0.0,
-        abs_tol=1e-6,
-    ):
+    anchor_matches = cached_anchor is None if index_history else math.isclose(
+        cached_anchor_value, quote_pre_close, rel_tol=0.0, abs_tol=1e-6,
+    )
+    if (not weekly or previous.get("trade_date") == now.date().isoformat()) and cached_dates == basis_dates and anchor_matches:
         try:
             cached_value = float(cached_threshold)
         except (TypeError, ValueError):
@@ -219,8 +223,29 @@ def _resolve_rule_threshold(
             )
 
     provider_name = str(rule.threshold_provider or "").strip()
-    _initialized_provider(registry, provider_name)
+    _initialized_provider(registry, provider_name, index_history=index_history)
     start_date, end_date = history_dates[0], history_dates[-1]
+    if index_history:
+        result = registry.call_specific(provider_name, "get_index_daily_range", rule.code,
+                                        start_date, end_date)
+        if not result.success:
+            raise ValueError(f"指数历史日线失败: {result.error or '未知错误'}")
+        bars = _exact_history_rows(result.data, history_dates, value_key="close", label="指数日线")
+        for row in bars:
+            if str(row.get("ts_code") or "").upper() != rule.code.upper():
+                raise ValueError("指数历史日线身份不一致")
+            raw = row["close"]
+            try:
+                close = float(raw)
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise ValueError("指数收盘点位非法") from exc
+            if isinstance(raw, bool) or not math.isfinite(close) or close <= 0:
+                raise ValueError("指数收盘点位非有限或非正数")
+        # 指数点位不是股票前复权价格；不得使用股票因子或按昨收重缩放。
+        threshold = rule.resolve_threshold(
+            quote, historical_closes=[row["close"] for row in bars if row["trade_date"] in basis_dates],
+        )
+        return threshold, result.source, basis_dates, None
     daily_result = registry.call_specific(
         provider_name,
         "get_stock_daily_range",
