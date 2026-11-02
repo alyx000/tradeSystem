@@ -888,6 +888,12 @@ class ReportGenerator:
             lines.append(render_strong_feedback(raw_data['strong_stock_feedback'], date, history=strong_history))
             section_idx += 1
 
+        from analyzers.sector_core_linkage import build as build_core_linkage, render_markdown as render_core_linkage
+        core_linkage = build_core_linkage(self.daily_dir, date, current_raw=raw_data)
+        lines.append(f"\n## {_roman(section_idx)}、板块核心联动观察\n")
+        lines.append(render_core_linkage(core_linkage))
+        section_idx += 1
+
         # ---- AI 自动分析摘要 ----
         auto = _generate_auto_analysis(raw_data)
         if auto:

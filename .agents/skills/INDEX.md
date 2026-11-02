@@ -476,3 +476,5 @@ Raindrop 的 `instrument-agent` / `setup-agent-replay` 是官方 `raindrop-ai/wo
 2026-11-01 昨日涨停股次日反馈：既有盘后任务新增 raw_data.strong_stock_feedback，严格上一开放日名单，复权高点触及/开收盘/收阴独立统计；行情与前高覆盖分开，缺源不补零。随原信封落库；正式复盘③情绪只读同日块，不改断板统计/评分/池/计划。见 docs/strong-stock-feedback.md。
 
 2026-11-02 强势股反馈历史分组：来源日首板/连板与常规10/20/30cm独立分组，未知单列；只读完整SSE日历锁定近5/10/20日，complete/empty按股票日合并，缺日不凑窗、不补零。日报摘要与正式复盘20日明细/图表共享口径，历史不补采不补写。见 docs/strong-stock-feedback.md。
+
+- 2026-11-02：正式复盘②接入板块核心联动，只读既有复盘身份与同日容量/涨停反馈，日期、身份缺口及来源签名独立校验；盘后Markdown同源摘要，无新CLI/API或写入入口。详见 `docs/sector-core-linkage.md`。

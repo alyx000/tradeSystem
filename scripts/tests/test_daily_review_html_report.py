@@ -7613,6 +7613,7 @@ def test_cli_default_output_path_remains_compatible(
         trend_review_evidence=None,
         strong_stock_feedback=None,
         strong_stock_history=None,
+        sector_core_linkage=None,
     ):
         nonlocal calls
         calls += 1
@@ -7627,6 +7628,7 @@ def test_cli_default_output_path_remains_compatible(
             trend_review_evidence=trend_review_evidence,
             strong_stock_feedback=strong_stock_feedback,
             strong_stock_history=strong_stock_history,
+            sector_core_linkage=sector_core_linkage,
         )
 
     monkeypatch.setattr(assembler, "validate_report", counted_validate)
