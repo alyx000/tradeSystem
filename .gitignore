@@ -42,6 +42,7 @@ docs/*
 !docs/templates/**
 !docs/capacity-trend.md
 !docs/strong-stock-feedback.md
+!docs/sector-core-linkage.md
 
 # 每日数据（本地生成，不入仓库）
 daily/
@@ -55,3 +56,5 @@ data/
 # 前端构建产物
 web/node_modules/
 web/dist/
+
+!docs/openai-api.md

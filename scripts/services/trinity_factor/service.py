@@ -11,6 +11,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from db import queries as Q
+from utils.llm_cli import resolve_provider
 
 from .constants import FACTOR_SCHEMA_VERSION, SECTOR_SCHEMA_VERSION
 from .evidence import (
@@ -87,7 +88,7 @@ class TrinityFactorService:
         cache_key = _json_digest({
             "trade_date": trade_date,
             "input_digest": input_digest,
-            "provider": "rules" if no_llm else "antigravity",
+            "provider": "rules" if no_llm else resolve_provider(),
             "requested_model": requested_model,
             "prompt_versions": prompt_versions,
             "prompt_hashes": prompt_hashes,

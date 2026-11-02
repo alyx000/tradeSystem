@@ -392,7 +392,7 @@ def render_html(block, day, *, history=None):
     return '\n'.join(html), '；'.join(gaps) if gaps else None
 
 
-def html_signature(html):
+def html_signature(html, marker="data-strong-stock-feedback"):
     """只签名解析器实际遇到的模块；注释/script中的原文不能替代显示模块。"""
     class Parser(HTMLParser):
         def __init__(self):
@@ -400,7 +400,7 @@ def html_signature(html):
             self.blocks, self.active, self.depth = [], None, 0
 
         def handle_starttag(self, tag, attrs):
-            if self.active is None and any(k == 'data-strong-stock-feedback' for k, _ in attrs):
+            if self.active is None and any(k == marker for k, _ in attrs):
                 self.active = []
                 self.blocks.append(self.active)
             if self.active is not None:

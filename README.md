@@ -411,6 +411,8 @@ export LLM_TIMEOUT_SECONDS=90                  # 默认 90s，硬上限 180s
 export LLM_MODEL=<model-name>                  # 可选，留空走 Antigravity 默认模型
 ```
 
+纯文本 AI 分析也支持 OpenAI 官方 API：在本机 `scripts/.env` 配置 `LLM_PROVIDER=openai`、`OPENAI_API_KEY` 和明确的 `LLM_MODEL`。接入范围、验证与回滚见 [OpenAI API 接入](docs/openai-api.md)；慧博本地 PDF 读取保留 Antigravity 通道。
+
 手动入口（CLI / Makefile）：
 
 ```bash
@@ -554,3 +556,5 @@ chmod +x .githooks/pre-push
 - 历史天量：`python3 scripts/main.py volume-record daily --date YYYY-MM-DD --input-by USER [--metric both|volume|amount] [--no-push] [--dry-run] [--json]`，默认成交量/成交额分别核验上市以来严格新高，随20:00盘后既有调度归档并推钉钉；简洁名单、倍数与双创结果，一句缺口提示，详细诊断留本地。`volume-record push --date YYYY-MM-DD --input-by USER`只补发归档、相同内容去重。完整契约见`.agents/skills/market-tasks/SKILL.md`历史天量章节；只写`data/reports/volume-record/`报告/基线/回执，不写业务库或池计划。
 
 2026-11-02 强势股反馈历史分组：来源日首板/连板与常规10/20/30cm独立分组，未知单列；只读完整SSE日历锁定近5/10/20日，complete/empty按股票日合并，缺日不凑窗、不补零。日报摘要与正式复盘20日明细/图表共享口径，历史不补采不补写。见 docs/strong-stock-feedback.md。
+
+- 板块核心联动观察：只读前5开放日最新已保存复盘最票身份、同日容量趋势与昨日涨停反馈，区分多角色同日弱项、已见弱项待核验及新增涨停样本；未知身份/缺行情不补位，不认定接力或退潮。随既有盘后报告与正式复盘②展示，不新增采集/业务写入/调度。见 [口径](docs/sector-core-linkage.md)。

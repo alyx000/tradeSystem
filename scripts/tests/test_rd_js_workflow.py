@@ -22,7 +22,13 @@ def _disable_real_dingtalk(monkeypatch):
     monkeypatch.delenv("DINGTALK_WEBHOOK_SECRET", raising=False)
 
 
-def test_js_workflow_runs_and_resumes_without_rereading(tmp_path, monkeypatch):
+@pytest.mark.parametrize("provider,expected_model", [
+    ("antigravity", "legacy-model"), ("openai", "pdf-model"),
+])
+def test_js_workflow_runs_and_resumes_without_rereading(tmp_path, monkeypatch, provider, expected_model):
+    monkeypatch.setenv("LLM_PROVIDER", provider)
+    monkeypatch.setenv("LLM_MODEL", "legacy-model" if provider == "antigravity" else "gpt-6.1-sol")
+    monkeypatch.setenv("ANTIGRAVITY_MODEL", "pdf-model")
     pdf_dir = tmp_path / "pdfs"
     pdf_dir.mkdir()
     rows = []
@@ -87,6 +93,10 @@ def test_js_workflow_runs_and_resumes_without_rereading(tmp_path, monkeypatch):
     assert summary_events[-1]["published"] is False
     assert summary_events[-1]["pushed"] is False
     assert len(calls.read_text(encoding="utf-8").splitlines()) == 3
+
+    for line in calls.read_text(encoding="utf-8").splitlines():
+        argv = json.loads(line)
+        assert argv[argv.index("--model") + 1] == expected_model
 
     subprocess.run([*cmd, "--resume"], text=True, capture_output=True, check=True)
     assert len(calls.read_text(encoding="utf-8").splitlines()) == 3
