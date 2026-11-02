@@ -1114,7 +1114,7 @@ class TestSectionNumbering:
         nums = [h[0] for h in headings]
         assert len(nums) == len(set(nums)), f"章节编号重复: {nums}"
         assert "板块核心联动观察" in md
-        expected_labels = ["一", "二", "三", "四", "五"]
+        expected_labels = ["一", "二", "三", "四", "五", "六"]
         assert nums == expected_labels, (
             f"北向/融资缺失时章节应为 {expected_labels}，实际: {nums}"
         )

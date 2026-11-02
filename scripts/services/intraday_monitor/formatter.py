@@ -56,9 +56,10 @@ def render_alert(events: list[dict]) -> str:
             basis_dates = list(event.get("threshold_basis_dates") or [])
             if basis_dates:
                 sample_unit = "已完成交易周" if event.get("threshold_period") == "week" else "已收盘交易日"
+                basis_label = "指数原始点位" if event.get("threshold_history_mode") == "index" else "前复权"
                 lines.append(
                     f"  - 均线样本：{basis_dates[0]} 至 {basis_dates[-1]}，"
-                    f"共 {len(basis_dates)} 个{sample_unit}（前复权）"
+                    f"共 {len(basis_dates)} 个{sample_unit}（{basis_label}）"
                 )
             if event.get("threshold_mode") == "intraday_ma":
                 current_label = "本周最新价" if event.get("threshold_period") == "week" else "当日最新价"

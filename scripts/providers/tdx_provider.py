@@ -1,10 +1,11 @@
-"""通达信行情 provider：平均股价 880003 与微盘股 880823。
+"""通达信行情 provider：平均股价、微盘股与研究行业银行881385。
 
 为什么单独一个 provider：平均股价不是标准市值指数（akshare/tushare/新浪/东财的
 指数体系都不收 880xxx 通达信板块指数，实测确认），唯一可达源是 pytdx 直连通达信
 行情服务器（TCP 7709，与东财 HTTP 推送服务器分属不同通道，后者在本网络被代理拦）。
 
-周线仅支持 avg_price，日线支持 avg_price/880823.TDX；盘中分钟快照仅支持880003.TDX。
+周线仅支持 avg_price，日线支持 avg_price/880823.TDX/881385.TDX；
+盘中分钟快照支持880003.TDX与881385.TDX。
 其它代码拒绝，本 provider 不参与
 沪深创科四指数的取数（那些走 tushare/akshare）。调用方用 registry.call_specific("tdx",…)
 直连本 provider，绕开「tushare 对未知 code 返回空列表也算 success」的遮蔽问题。
@@ -37,7 +38,10 @@ _DEFAULT_SERVERS = [
 _AVG_PRICE_CODE = "880003"  # 通达信「平均股价」
 AVG_PRICE_CODE = "880003.TDX"  # 盘中独立规范身份，不复用同花顺全A或ETF
 MICROCAP_CODE = "880823.TDX"  # 独立身份，不复用中证2000/同花顺代码
-_DAILY_CODES = {"avg_price": _AVG_PRICE_CODE, MICROCAP_CODE: "880823"}
+BANK_CODE = "881385.TDX"  # 通达信研究行业银行，不是同花顺881155或申万801780
+_INTRADAY_CODES = {AVG_PRICE_CODE: (_AVG_PRICE_CODE, "平均股价"),
+                   BANK_CODE: ("881385", "银行（通达信研究行业）")}
+_DAILY_CODES = {"avg_price": _AVG_PRICE_CODE, MICROCAP_CODE: "880823", BANK_CODE: "881385"}
 _TDX_MARKET_SH = 1          # 880xxx 通达信板块指数走沪市站（实测 market=0 返回 0 根）
 _KLINE_WEEKLY = 5           # pytdx K 线周期：5=周线
 _KLINE_DAILY = 9            # pytdx K 线周期：9=日线（实测 880003 日线可取）
@@ -49,15 +53,16 @@ _INTRADAY_BUDGET_SECONDS = 5.0
 _INTRADAY_SOCKET_TIMEOUT = 1.0
 
 
-def _minute_quote(bars: object) -> dict:
+def _minute_quote(bars: object, code: str = AVG_PRICE_CODE) -> dict:
     """使用最新1分钟K线close及其原始时间，不伪造逐笔时间或当日累计量额。"""
     if not isinstance(bars, list) or len(bars) != _MINUTE_COUNT:
-        raise ValueError("平均股价分钟响应须含最近2根K线")
+        raise ValueError("分钟响应须含最近2根K线")
+    raw_code, name = _INTRADAY_CODES[code]
     previous_at = None
     for bar in bars:
         if not isinstance(bar, dict):
             raise ValueError("分钟行非法")
-        if ("code" in bar and bar["code"] != _AVG_PRICE_CODE
+        if ("code" in bar and bar["code"] != raw_code
                 or "market" in bar and (type(bar["market"]) is not int or bar["market"] != _TDX_MARKET_SH)):
             raise ValueError("分钟行身份与请求不一致")
         raw_time = bar.get("datetime")
@@ -85,7 +90,7 @@ def _minute_quote(bars: object) -> dict:
             raise ValueError("分钟行情OHLC冲突")
         previous_at = quoted_at
     # pytdx已将指数价格除以1000，不再缩放；分钟时间的当日/10分钟新鲜度由服务校验。
-    return {"code": AVG_PRICE_CODE, "name": "平均股价", "price": prices["close"],
+    return {"code": code, "name": name, "price": prices["close"],
             "quote_date": quoted_at.date().isoformat(), "quote_time": quoted_at.time().isoformat()}
 
 
@@ -97,6 +102,9 @@ def _daily_rows(bars, index_code: str, start_date: str, end_date: str) -> list[d
     rows = []
     seen = set()
     for bar in bars:
+        if ("code" in bar and bar["code"] != _DAILY_CODES[index_code]
+                or "market" in bar and (type(bar["market"]) is not int or bar["market"] != _TDX_MARKET_SH)):
+            raise ValueError("日线行身份与请求不一致")
         td = date.fromisoformat(str(bar.get("datetime", "")).split()[0]).isoformat()
         prices = {key: float(bar[key]) for key in ("open", "high", "low", "close")}
         if (td in seen or not all(math.isfinite(v) and v > 0 for v in prices.values())
@@ -142,33 +150,39 @@ class TdxProvider(DataProvider):
         return ["get_index_weekly", "get_index_daily_range", "get_realtime_quotes"]
 
     def get_realtime_quotes(self, codes: list[str], *, now: datetime | None = None) -> DataResult:
-        """平均股价最新分钟价；不提供股票替代源，也不以抓取时间填行情日期。"""
+        """白名单指数最新分钟价；不以抓取时间填行情日期，不伪造昨收。"""
         normalized = list(dict.fromkeys(str(raw or "").strip().upper() for raw in codes or []))
-        if normalized != [AVG_PRICE_CODE]:
-            return DataResult(None, self.name, error="tdx盘中快照仅支持880003.TDX平均股价")
+        if not normalized or any(code not in _INTRADAY_CODES for code in normalized):
+            return DataResult(None, self.name, error="tdx盘中快照仅支持880003.TDX平均股价 / 881385.TDX银行")
         checked_at = shanghai_now(now)
+        quotes, errors = [], []
+        for code in normalized:
+            def validate(bars):
+                quote = _minute_quote(bars, code)
+                fresh, reason, _ = quote_is_fresh(quote, checked_at)
+                if not fresh:
+                    raise ValueError(reason)
+                return quote
 
-        def validate(bars):
-            quote = _minute_quote(bars)
-            fresh, reason, _ = quote_is_fresh(quote, checked_at)
-            if not fresh:
-                raise ValueError(reason)
-            return quote
-
-        api, quote, error = self._connect(
-            _KLINE_MINUTE, _MINUTE_COUNT, _AVG_PRICE_CODE, transform=validate,
-            budget_seconds=_INTRADAY_BUDGET_SECONDS, socket_timeout=_INTRADAY_SOCKET_TIMEOUT,
-        )
-        if api is None:
-            return DataResult(None, "tdx:880003_1min", error=error)
-        try:
-            return DataResult([quote], "tdx:880003_1min", timeliness=Timeliness.REALTIME,
-                              note="最新1分钟K线close，并非逐笔价；不提供昨收及当日累计量额")
-        finally:
+            api, quote, error = self._connect(
+                _KLINE_MINUTE, _MINUTE_COUNT, _INTRADAY_CODES[code][0], transform=validate,
+                budget_seconds=_INTRADAY_BUDGET_SECONDS, socket_timeout=_INTRADAY_SOCKET_TIMEOUT,
+            )
+            if api is None:
+                errors.append(f"{code}: {error}")
+                continue
             try:
-                api.disconnect()
-            except Exception as exc:
-                logger.debug("tdx分钟连接关闭失败: %s", exc)
+                quotes.append(quote)
+            finally:
+                try:
+                    api.disconnect()
+                except Exception as exc:
+                    logger.debug("tdx分钟连接关闭失败: %s", exc)
+        source = f"tdx:{normalized[0][:6]}_1min" if len(normalized) == 1 else "tdx:index_1min"
+        return DataResult(quotes or None, source, timeliness=Timeliness.REALTIME,
+                          error="; ".join(errors) if not quotes else "",
+                          note="最新1分钟K线close，并非逐笔价；不提供昨收及当日累计量额" +
+                               ("; " + "; ".join(errors) if errors else ""))
 
     def _connect(self, category: int, count: int, code: str = _AVG_PRICE_CODE, transform=None,
                  *, budget_seconds: float | None = None, socket_timeout: float | None = None):
@@ -275,7 +289,7 @@ class TdxProvider(DataProvider):
         code = _DAILY_CODES.get(index_code)
         if code is None:
             return DataResult(data=None, source=self.name,
-                              error="tdx 日线仅支持 avg_price / 880823.TDX")
+                              error="tdx 日线仅支持 avg_price / 880823.TDX / 881385.TDX")
         source = f"tdx:{code}_daily"
         try:
             sd = date.fromisoformat(start_date).isoformat()
@@ -287,6 +301,8 @@ class TdxProvider(DataProvider):
         api, rows, err = self._connect(
             _KLINE_DAILY, _DAILY_COUNT, code,
             transform=lambda bars: _daily_rows(bars, index_code, sd, ed),
+            **({"budget_seconds": _INTRADAY_BUDGET_SECONDS,
+                "socket_timeout": _INTRADAY_SOCKET_TIMEOUT} if index_code == BANK_CODE else {}),
         )
         if api is None:
             return DataResult(data=None, source=source, error=err)

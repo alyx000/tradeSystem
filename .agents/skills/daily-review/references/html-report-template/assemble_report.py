@@ -374,6 +374,8 @@ STRUCTURED_CONTRACT_ATTRIBUTES = (
     "data-strong-stock-feedback",
     "data-strong-feedback-history",
     "data-sector-core-linkage",
+    "data-wave-evidence",
+    "data-market-strength",
     "data-style-board-break-feedback",
     "data-style-market-effect",
     "data-style-low-price-effect",
@@ -7310,6 +7312,8 @@ def validate_report(
     strong_stock_feedback: dict | None = None,
     strong_stock_history: dict | None = None,
     sector_core_linkage: dict | None = None,
+    wave_evidence_report: dict | None = None,
+    market_strength_report: dict | None = None,
     market_snapshot: dict | None = None,
     visual_context: dict | None = None,
     teacher_anchors: dict | None = None,
@@ -7400,6 +7404,35 @@ def validate_report(
         linkage_parser.feed('<article id="report-document"><section id="s2">'+expected_linkage+'</section></article>')
         linkage_metrics = linkage_parser.metrics()
         linkage_chars, linkage_tables, linkage_rows = linkage_metrics.evidence_chars, linkage_metrics.evidence_tables, linkage_metrics.evidence_rows
+    wave_chars = 0
+    wave_blocks = parser.structured_contracts["data-wave-evidence"]
+    if wave_blocks or wave_evidence_report is not None:
+        from services.emotion_leader.wave_evidence import render_html as render_wave, MARKER as WAVE_MARKER
+        from analyzers.strong_stock_feedback import html_signature
+        expected_wave = render_wave(wave_evidence_report, report_date)[0]
+        if (len(wave_blocks) != 1 or wave_blocks[0].section != 's3'
+                or wave_blocks[0].tag != 'div' or wave_blocks[0].default_hidden
+                or wave_blocks[0].value != report_date
+                or html_signature(html, WAVE_MARKER) != html_signature(expected_wave, WAVE_MARKER)):
+            raise ReportValidationError('wave_evidence_source_mismatch', '波段证据卡须在③唯一出现且与同日来源一致', section='s3')
+        wave_parser = _ReportParser()
+        wave_parser.feed('<article id="report-document"><section id="s3">'+expected_wave+'</section></article>')
+        wave_chars = wave_parser.metrics().evidence_chars
+    strength_chars = strength_rows = strength_tables = 0
+    strength_blocks = parser.structured_contracts["data-market-strength"]
+    if strength_blocks or market_strength_report is not None:
+        from analyzers.market_strength_report import render_html as render_strength, MARKER as STRENGTH_MARKER
+        from analyzers.strong_stock_feedback import html_signature
+        expected_strength = render_strength(market_strength_report, report_date)[0] if market_strength_report is not None else ''
+        if (market_strength_report is None or len(strength_blocks) != 1 or strength_blocks[0].section != 's2'
+                or strength_blocks[0].tag != 'div' or strength_blocks[0].default_hidden
+                or strength_blocks[0].value != report_date
+                or html_signature(html, STRENGTH_MARKER) != html_signature(expected_strength, STRENGTH_MARKER)):
+            raise ReportValidationError('market_strength_source_mismatch', '涨跌广度须在②唯一出现且与同日来源一致', section='s2')
+        strength_parser = _ReportParser()
+        strength_parser.feed('<article id="report-document"><section id="s2">'+expected_strength+'</section></article>')
+        strength_metrics = strength_parser.metrics()
+        strength_chars, strength_rows, strength_tables = strength_metrics.evidence_chars, strength_metrics.evidence_rows, strength_metrics.evidence_tables
     strong_metrics = None
     strong_blocks = parser.structured_contracts["data-strong-stock-feedback"]
     history_blocks = parser.structured_contracts["data-strong-feedback-history"]
@@ -7537,19 +7570,19 @@ def validate_report(
             f"正文 {metrics.visible_rows} 行，硬上限 {VISIBLE_ROW_LIMIT}",
         ),
         (
-            metrics.evidence_chars > EVIDENCE_CHAR_LIMIT + trend_evidence_chars + template_metrics.evidence_chars + strong_chars + linkage_chars + teacher_metrics.evidence_chars,
+            metrics.evidence_chars > EVIDENCE_CHAR_LIMIT + trend_evidence_chars + template_metrics.evidence_chars + strong_chars + linkage_chars + wave_chars + strength_chars + teacher_metrics.evidence_chars,
             "evidence_chars_exceeded",
             _largest_section(metrics, "evidence_chars"),
             f"证据层 {metrics.evidence_chars} 字，硬上限 {EVIDENCE_CHAR_LIMIT}",
         ),
         (
-            metrics.evidence_tables > EVIDENCE_TABLE_LIMIT + trend_evidence_tables + strong_tables + linkage_tables + teacher_metrics.evidence_tables,
+            metrics.evidence_tables > EVIDENCE_TABLE_LIMIT + trend_evidence_tables + strong_tables + linkage_tables + strength_tables + teacher_metrics.evidence_tables,
             "evidence_tables_exceeded",
             _largest_section(metrics, "evidence_tables"),
             f"证据层 {metrics.evidence_tables} 张表，硬上限 {EVIDENCE_TABLE_LIMIT}",
         ),
         (
-            metrics.evidence_rows > EVIDENCE_ROW_LIMIT + trend_rows + risk_rows + increment_rows + trend_evidence_rows + strong_rows + linkage_rows + teacher_metrics.evidence_rows,
+            metrics.evidence_rows > EVIDENCE_ROW_LIMIT + trend_rows + risk_rows + increment_rows + trend_evidence_rows + strong_rows + linkage_rows + strength_rows + teacher_metrics.evidence_rows,
             "evidence_rows_exceeded",
             _largest_section(metrics, "evidence_rows"),
             f"证据层 {metrics.evidence_rows} 行，硬上限 {EVIDENCE_ROW_LIMIT}+趋势来源{trend_rows}行+板块风险{risk_rows}行+行业增额{increment_rows}行",
@@ -9890,6 +9923,7 @@ def render_report(
     strong_stock_feedback: dict | None = None,
     strong_stock_history: dict | None = None,
     sector_core_linkage: dict | None = None,
+    market_strength_report: dict | None = None,
     market_snapshot: dict | None = None,
     visual_context: dict | None = None,
     teacher_anchors: dict | None = None,
@@ -9981,6 +10015,24 @@ def render_report(
         chunks['s2'] = _inject_section_fragment(chunks['s2'], 's2', linkage_fragment)
         if linkage_gap:
             chunks['s8ops'] = _inject_section_fragment(chunks['s8ops'], 'ops', '<p>[事实] 板块核心联动缺口：'+escape(linkage_gap)+'</p>')
+
+    from services.emotion_leader.wave_evidence import render_html as render_wave_evidence
+    if any(re.search(r"\bdata-wave-evidence\b", body, re.I) for body in chunks.values()):
+        raise ReportValidationError("duplicate_wave_evidence", "波段证据卡由正式组装器生成", section="s3")
+    if emotion_leader_report is not None:
+        wave_fragment, wave_gap = render_wave_evidence(emotion_leader_report, report_date)
+        chunks['s456'] = _inject_section_fragment(chunks['s456'], 's3', wave_fragment)
+        if wave_gap:
+            chunks['s8ops'] = _inject_section_fragment(chunks['s8ops'], 'ops', '<p>[事实] '+escape(wave_gap)+'</p>')
+
+    from analyzers.market_strength_report import render_html as render_market_strength
+    if any(re.search(r"\bdata-market-strength\b", body, re.I) for body in chunks.values()):
+        raise ReportValidationError("duplicate_market_strength", "涨跌广度由正式组装器生成", section="s2")
+    if market_strength_report is not None:
+        strength_fragment, strength_gap = render_market_strength(market_strength_report, report_date)
+        chunks['s2'] = _inject_section_fragment(chunks['s2'], 's2', strength_fragment)
+        if strength_gap:
+            chunks['s8ops'] = _inject_section_fragment(chunks['s8ops'], 'ops', '<p>[事实] '+escape(strength_gap)+'</p>')
 
     from services.volume_concentration.capacity_trend import read_snapshot, render_html as render_capacity_trend
     if any(re.search(r"\bdata-capacity-trend\s*=", body, re.I) for body in chunks.values()):
@@ -10218,6 +10270,8 @@ def write_report(
     new_high_manifest: dict | None = None,
     exposure_context: ExposureValidationContext | None = None,
     visual_identity_sources: dict | None = None,
+    wave_evidence_report: dict | None = None,
+    market_strength_report: dict | None = None,
     market_snapshot: dict | None = None,
     visual_context: dict | None = None,
     teacher_anchors: dict | None = None,
@@ -10249,6 +10303,8 @@ def write_report(
         index_intraday_manifest=index_intraday_manifest,
         exposure_context=exposure_context,
         visual_identity_sources=visual_identity_sources,
+        wave_evidence_report=wave_evidence_report,
+        market_strength_report=market_strength_report,
         visual_context=visual_context,
         market_snapshot=market_snapshot,
         teacher_anchors=teacher_anchors,
@@ -10383,6 +10439,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         strong_stock_history = build_strong_history(daily_root, args.date, current=strong_stock_feedback, db_path=trade_db_path)
         from analyzers.sector_core_linkage import build as build_core_linkage
         sector_core_linkage = build_core_linkage(daily_root, args.date, db_path=trade_db_path)
+        from analyzers.market_strength import load as load_market_strength
+        market_strength_report = load_market_strength(args.date, daily_dir=daily_root, db_path=trade_db_path)
         from services.trend_leader.review_evidence import load as load_trend_review_evidence
         trend_review_evidence = load_trend_review_evidence(_repo_root()/"data/reports/trend-leader", args.date)
         from services.review_teacher_anchors import load as load_teacher_anchors
@@ -10403,6 +10461,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             strong_stock_feedback=strong_stock_feedback,
             strong_stock_history=strong_stock_history,
             sector_core_linkage=sector_core_linkage,
+            market_strength_report=market_strength_report,
             visual_context=visual_context,
             market_snapshot=market_snapshot,
             teacher_anchors=teacher_anchors,
@@ -10434,6 +10493,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             strong_stock_feedback=strong_stock_feedback,
             strong_stock_history=strong_stock_history,
             sector_core_linkage=sector_core_linkage,
+            market_strength_report=market_strength_report,
+            wave_evidence_report=emotion_report,
             visual_context=visual_context,
             market_snapshot=market_snapshot,
             teacher_anchors=teacher_anchors,

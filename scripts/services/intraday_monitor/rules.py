@@ -38,8 +38,13 @@ class MonitorRule:
     value_mode: ValueMode = "price"
     proximity_pct: float | None = None
     threshold_period: Literal["day", "week"] = "day"
+    threshold_history_mode: Literal["stock_qfq", "index"] = "stock_qfq"
 
     def __post_init__(self) -> None:
+        if self.threshold_history_mode not in ("stock_qfq", "index") or (
+            self.threshold_history_mode == "index" and self.threshold_mode != "intraday_ma"
+        ):
+            raise ValueError("指数历史口径仅支持动态intraday_ma")
         if self.threshold_period not in ("day", "week") or (
             self.threshold_period == "week" and self.threshold_mode != "intraday_ma"
         ):
@@ -1002,6 +1007,25 @@ ANTU_BIO_NEAR_WEEKLY_MA5_20261103_30 = MonitorRule(
 )
 
 
+BANK_BELOW_WEEKLY_MA5_20261103_16 = MonitorRule(
+    rule_id="bank-below-weekly-ma5-20261103-16",
+    instrument_name="银行（通达信研究行业）",
+    code="881385.TDX",
+    threshold=None,
+    direction="below",
+    provider="tdx",
+    threshold_mode="intraday_ma",
+    threshold_window=5,
+    threshold_period="week",
+    threshold_history_mode="index",
+    threshold_provider="tdx",
+    threshold_label="动态五周均线",
+    action_label="跌破",
+    valid_from=date(2026, 11, 3),
+    valid_until=date(2026, 11, 16),
+)
+
+
 # 长期规则保留上证指数站上 3955；历史个股规则不再启用。
 # 动态涨停价与前收盘均线能力由 MonitorRule.threshold_mode 统一扩展。
 # 科创50 1700 与凯莱英 172.26 临时规则覆盖 8 月 21 日与 24 日两个
@@ -1051,6 +1075,7 @@ DEFAULT_RULES: tuple[MonitorRule, ...] = (
     CSI2000_BELOW_2585_35_20261030_1109,
     AVG_PRICE_NEAR_26_20261102_27,
     ANTU_BIO_NEAR_WEEKLY_MA5_20261103_30,
+    BANK_BELOW_WEEKLY_MA5_20261103_16,
 )
 
 

@@ -1048,8 +1048,14 @@ class MarketCollector:
             else:
                 logger.debug("%s 获取失败: %s", method_name, r.error)
 
+        # 同批共享日线，新增广度不能再次请求或覆盖低价股原统计。
+        from providers.base import DataResult
+        try:
+            shared_daily_quotes = self.registry.call("get_market_daily_quotes", date)
+        except Exception as exc:
+            shared_daily_quotes = DataResult(data=None, source="", error=f"全市场日线调用异常:{exc}")
         # 10c. 低价股赚钱效应：收盘价≤10元，分≤5元/5～10元；只做客观横截面统计。
-        # 复用本批已取得的 ST 与涨跌停事实，另拉一次日期键控的全市场日线；来源失败
+        # 复用本批已取得的 ST、涨跌停事实与共享的日期键控全市场日线；来源失败
         # 必须显式保存 source_failed，不能把“未取得数据”写成低价股样本为 0。
         try:
             from analyzers.low_price_effect import collect_low_price_effect
@@ -1060,6 +1066,7 @@ class MarketCollector:
                 stock_st_result=stock_st_result,
                 limit_up_section=result.get("limit_up"),
                 limit_down_section=result.get("limit_down"),
+                quote_result=shared_daily_quotes,
             )
             logger.info(
                 "低价股赚钱效应统计完成: status=%s sample=%s",
@@ -1076,6 +1083,10 @@ class MarketCollector:
                 "error": f"统计异常:{e}",
                 "gaps": [],
             }
+
+        from analyzers.market_strength import collect as collect_market_strength
+        result['market_strength'] = collect_market_strength(
+            self.registry, date, quote_result=shared_daily_quotes, stock_st_result=stock_st_result)
 
         # 10d. 次新股赚钱效应：严格交易日/收盘闸门，独立失败不影响其他盘后块。
         from analyzers.ipo_effect import collect_ipo_effect
