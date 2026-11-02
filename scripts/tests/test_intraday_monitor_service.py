@@ -37,6 +37,9 @@ from services.intraday_monitor.rules import (
     YILI_BELOW_27_31_20261027_1109,
     FANGSHENG_REACH_11_11_20261026_1106,
     YUNHAN_BELOW_105_49_20261026_30,
+    STAR50_BELOW_1257_20261027_1109,
+    CSI2000_BELOW_2585_35_20261030_1109,
+    AVG_PRICE_NEAR_26_20261102_27,
     DAJIN_HEAVY_BREAKOUT_35_95_20260912_18,
     DAJIN_HEAVY_BREAKOUT_41_96_20260917_28,
     DEFAULT_RULES,
@@ -196,10 +199,10 @@ class _Registry:
         self.requested_codes = []
 
     def get_provider(self, name):
-        return self.provider if name in {"sina", "tonghuashun"} else None
+        return self.provider if name in {"sina", "tonghuashun", "eastmoney", "tdx"} else None
 
     def call_specific(self, provider, capability, codes):
-        assert provider in {"sina", "tonghuashun"}
+        assert provider in {"sina", "tonghuashun", "eastmoney", "tdx"}
         assert capability == "get_realtime_quotes"
         self.call_count += 1
         self.requested_codes.append(list(codes))
@@ -215,7 +218,8 @@ class _Registry:
             }
             row.update(self.quote_overrides.get(code, {}))
             rows.append(row)
-        return _Result(rows, source="sina" if provider == "sina" else "tonghuashun:realhead_v6")
+        return _Result(rows, source={"sina": "sina", "tonghuashun": "tonghuashun:realhead_v6",
+                                    "eastmoney": "eastmoney:quote", "tdx": "tdx:880003_1min"}[provider])
 
 
 class _ThsRegistry(_Registry):
@@ -924,6 +928,9 @@ def test_default_sse_rule_pushes_only_after_observed_below_to_3955(tmp_path):
         YILI_BELOW_27_31_20261027_1109,
         FANGSHENG_REACH_11_11_20261026_1106,
         YUNHAN_BELOW_105_49_20261026_30,
+        STAR50_BELOW_1257_20261027_1109,
+        CSI2000_BELOW_2585_35_20261030_1109,
+        AVG_PRICE_NEAR_26_20261102_27,
     )
     assert initial_above["events"] == []
     assert below["events"] == []

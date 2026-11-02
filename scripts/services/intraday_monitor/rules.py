@@ -928,6 +928,54 @@ YUNHAN_BELOW_105_49_20261026_30 = MonitorRule(
 )
 
 
+STAR50_BELOW_1257_20261027_1109 = MonitorRule(
+    rule_id="star50-below-1257-20261027-1109",
+    instrument_name="科创50",
+    code="000688.SH",
+    threshold=1257.0,
+    direction="below",
+    inclusive=False,
+    emit_on_initial_match=True,
+    action_label="跌破",
+    valid_from=date(2026, 10, 27),
+    valid_until=date(2026, 11, 9),
+)
+
+
+CSI2000_BELOW_2585_35_20261030_1109 = MonitorRule(
+    rule_id="csi2000-below-2585-35-20261030-1109",
+    instrument_name="中证2000",
+    code="932000.CSI",
+    threshold=2585.35,
+    direction="below",
+    provider="eastmoney",
+    inclusive=False,
+    emit_on_initial_match=True,
+    action_label="跌破",
+    valid_from=date(2026, 10, 30),
+    valid_until=date(2026, 11, 9),
+)
+
+
+AVG_PRICE_NEAR_26_20261102_27 = MonitorRule(
+    rule_id="avg-price-near-26-20261102-27",
+    instrument_name="平均股价",
+    code="880003.TDX",
+    threshold=26.0,
+    direction="near",
+    provider="tdx",
+    inclusive=True,
+    proximity_pct=1.0,
+    emit_on_initial_match=True,
+    action_label="临近",
+    threshold_label="监控价",
+    value_label="分钟价",
+    value_unit="元",
+    valid_from=date(2026, 11, 2),
+    valid_until=date(2026, 11, 27),
+)
+
+
 # 长期规则保留上证指数站上 3955；历史个股规则不再启用。
 # 动态涨停价与前收盘均线能力由 MonitorRule.threshold_mode 统一扩展。
 # 科创50 1700 与凯莱英 172.26 临时规则覆盖 8 月 21 日与 24 日两个
@@ -973,6 +1021,9 @@ DEFAULT_RULES: tuple[MonitorRule, ...] = (
     YILI_BELOW_27_31_20261027_1109,
     FANGSHENG_REACH_11_11_20261026_1106,
     YUNHAN_BELOW_105_49_20261026_30,
+    STAR50_BELOW_1257_20261027_1109,
+    CSI2000_BELOW_2585_35_20261030_1109,
+    AVG_PRICE_NEAR_26_20261102_27,
 )
 
 
