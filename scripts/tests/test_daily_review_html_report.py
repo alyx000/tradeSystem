@@ -1415,6 +1415,7 @@ def _write_chunks(directory: Path, date: str = DATE) -> dict[str, Path]:
         path = directory / f"b{date}_{chunk}.html"
         path.write_text(body, encoding="utf-8")
         paths[chunk] = path
+    _write_index_intraday_manifest(directory, date=date, payload=_index_intraday_manifest(report_date=date, status="failed", keep_rows=0))
     _write_capacity_manifest(directory, date=date)
     _write_new_high_manifest(directory, date=date)
     return paths
@@ -7439,22 +7440,26 @@ def test_appendix_character_budget_accepts_boundary_and_rejects_one_over(
 
 def test_visible_table_budget_accepts_boundary_and_rejects_one_over(assembler, tmp_path):
     html, _ = _render_valid(assembler, tmp_path / "chunks")
-    at_limit = _visible(html, "".join(_table(1, str(i)) for i in range(12)))
+    base = assembler.validate_report(html)
+    remaining_tables = 12 - base.visible_tables
+    at_limit = _visible(html, "".join(_table(1, str(i)) for i in range(remaining_tables)))
     metrics = assembler.validate_report(at_limit)
     assert metrics.visible_tables == 12
-    assert metrics.visible_rows == 12
+    assert metrics.visible_rows == base.visible_rows + remaining_tables
 
     _assert_report_error(assembler, _visible(at_limit, _table(1, "extra")))
 
 
 def test_visible_row_budget_accepts_boundary_and_rejects_one_over(assembler, tmp_path):
     html, _ = _render_valid(assembler, tmp_path / "chunks")
-    at_limit = _visible(html, _table(80))
+    base = assembler.validate_report(html)
+    remaining_rows = 80 - base.visible_rows
+    at_limit = _visible(html, _table(remaining_rows))
     metrics = assembler.validate_report(at_limit)
-    assert metrics.visible_tables == 1
+    assert metrics.visible_tables == base.visible_tables + 1
     assert metrics.visible_rows == 80
 
-    _assert_report_error(assembler, _visible(html, _table(81)))
+    _assert_report_error(assembler, _visible(html, _table(remaining_rows + 1)))
 
 
 def test_appendix_table_budget_accepts_boundary_and_rejects_one_over(
@@ -7469,8 +7474,8 @@ def test_appendix_table_budget_accepts_boundary_and_rejects_one_over(
         "".join(_table(1, str(i)) for i in range(remaining_tables)),
     )
     metrics = assembler.validate_report(at_limit)
-    assert metrics.visible_tables == 0
-    assert metrics.visible_rows == 0
+    assert metrics.visible_tables == base.visible_tables
+    assert metrics.visible_rows == base.visible_rows
     assert metrics.appendix_tables == 60
     assert metrics.appendix_rows == base.appendix_rows + remaining_tables
 
@@ -7484,8 +7489,8 @@ def test_appendix_row_budget_accepts_boundary_and_rejects_one_over(assembler, tm
     assert remaining_rows > 0
     at_limit = _appendix(html, _table(remaining_rows))
     metrics = assembler.validate_report(at_limit)
-    assert metrics.visible_tables == 0
-    assert metrics.visible_rows == 0
+    assert metrics.visible_tables == base.visible_tables
+    assert metrics.visible_rows == base.visible_rows
     assert metrics.appendix_tables == base.appendix_tables + 1
     assert metrics.appendix_rows == 400
 
@@ -7616,6 +7621,11 @@ def test_cli_default_output_path_remains_compatible(
         sector_core_linkage=None,
         wave_evidence_report=None,
         market_strength_report=None,
+        style_market_effect=None,
+        index_intraday_manifest=None,
+        visual_context=None,
+        market_snapshot=None,
+        teacher_anchors=None,
     ):
         nonlocal calls
         calls += 1
@@ -7633,6 +7643,11 @@ def test_cli_default_output_path_remains_compatible(
             sector_core_linkage=sector_core_linkage,
             wave_evidence_report=wave_evidence_report,
             market_strength_report=market_strength_report,
+            style_market_effect=style_market_effect,
+            index_intraday_manifest=index_intraday_manifest,
+            visual_context=visual_context,
+            market_snapshot=market_snapshot,
+            teacher_anchors=teacher_anchors,
         )
 
     monkeypatch.setattr(assembler, "validate_report", counted_validate)
@@ -8384,3 +8399,102 @@ def test_visual_identity_payload_requires_source_recalculation(assembler, tmp_pa
     with pytest.raises(assembler.ReportValidationError) as caught:
         assembler.validate_report(tampered, new_high_manifest=manifest)
     assert caught.value.code == 'invalid_visual_identity'
+
+
+def _index_intraday_manifest(
+    *,
+    report_date: str = DATE,
+    status: str = "complete",
+    keep_rows: int = 18,
+) -> dict:
+    indexes = (
+        ("shanghai", "上证", 1, "000001", ""),
+        ("shenzhen", "深成", 0, "399001", ""),
+        ("chinext", "创业板", 0, "399006", ""),
+        ("star50", "科创50", 1, "000688", ""),
+        ("cni2000-proxy", "国证2000代理", 0, "399303", "中证2000近似代理"),
+        ("average-price", "平均股价", 1, "880003", "通达信平均股价"),
+    )
+    periods = (("15m", 1, 400), ("30m", 2, 300), ("60m", 3, 240))
+    rows: list[dict] = []
+    for index_position, (index_id, name, market, code, note) in enumerate(indexes):
+        for period_position, (period, category, count) in enumerate(periods):
+            base = 1000.0 + index_position * 100 + period_position * 10
+            rows.append(
+                {
+                    "index_id": index_id,
+                    "index_name": name,
+                    "tdx_market": market,
+                    "tdx_code": code,
+                    "proxy_note": note,
+                    "period": period,
+                    "category": category,
+                    "requested_count": count,
+                    "sample_count": count,
+                    "last_bar_at": f"{report_date} 15:00",
+                    "close": base + 5,
+                    "ma5": base + 4,
+                    "ma10": base + 6,
+                    "ma20": base + 8,
+                    "close_vs_ma5": "above",
+                    "close_vs_ma10": "below",
+                    "close_vs_ma20": "below",
+                    "dif": -2.0,
+                    "dea": -1.5,
+                    "hist": -0.5,
+                    "macd_axis": "below",
+                    "bars_since_golden_cross": 12,
+                    "bars_since_dead_cross": 4,
+                    "hist_momentum": "contracting",
+                    "swing_high": base + 20,
+                    "swing_high_at": f"{report_date} 10:30",
+                    "swing_low": base - 20,
+                    "swing_low_at": f"{report_date} 14:00",
+                    "bottom_divergence": False,
+                    "bottom_divergence_points": [],
+                    "source_node": "fixture:7709",
+                }
+            )
+    if status == "failed":
+        rows = []
+    else:
+        rows = rows[:keep_rows]
+    complete = status == "complete"
+    return {
+        "schema": "index-intraday-structure-v1",
+        "generator": "build_index_intraday_manifest.py",
+        "report_date": report_date,
+        "as_of": report_date,
+        "generated_at": f"{report_date}T16:00:00+08:00",
+        "status": status,
+        "complete": complete,
+        "source": "pytdx:get_index_bars",
+        "index_count": 6,
+        "periods": ["15m", "30m", "60m"],
+        "expected_rows": 18,
+        "row_count": len(rows),
+        "rows": rows,
+        "errors": [] if complete else ["fixture source gap"],
+    }
+
+
+def _write_index_intraday_manifest(
+    directory: Path,
+    *,
+    date: str = DATE,
+    payload: dict | None = None,
+    name: str | None = None,
+) -> Path:
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / (name or f"index_intraday_{date}.json")
+    path.write_text(
+        json.dumps(
+            payload if payload is not None else _index_intraday_manifest(report_date=date),
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return path

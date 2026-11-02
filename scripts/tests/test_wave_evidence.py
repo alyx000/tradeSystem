@@ -243,6 +243,9 @@ def test_standard_write_requires_matching_wave_source(tmp_path,monkeypatch):
     # 运行目录可能已有额外标准sidecar契约，保留其校验，不绕过。
     if hasattr(f, '_index_intraday_manifest'):
         kwargs['index_intraday_manifest']=f._index_intraday_manifest()
+    import inspect
+    render_kwargs={k:v for k,v in kwargs.items() if k in inspect.signature(a.render_report).parameters}
+    html=a.render_report(tmp_path,d,emotion_leader_report=p,**render_kwargs)
     out=tmp_path/'valid.html'
     assert a.write_report(html,out,wave_evidence_report=p,**kwargs)==out and out.read_text()==html
     out.write_text('保留原文件')

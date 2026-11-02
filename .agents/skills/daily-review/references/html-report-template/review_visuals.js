@@ -41,18 +41,48 @@
   const coverageState = states => states.some(s => s === 'complete' || s === 'partial') ?
     (states.every(s => s === 'complete') ? 'ready' : 'partial') :
     (states.includes('source_failed') ? 'source_failed' : 'missing-data');
-  const api = {num, fmt, compare, compareDisplayed, percentItems, sectorFacts, scale, stats, coverageState};
+  // Report date governs calendars/plans; market charts require a proven fact date.
+  const chartDate = (context, reportDate) => {
+    if (context == null) return reportDate;
+    if (context.schema !== 'review-visual-context-v1' || context.report_date !== reportDate || context.status !== 'complete') return null;
+    const fact = context.fact_date;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(fact || '')) return null;
+    if (fact === reportDate) return context.review_context == null ? fact : null;
+    const span = (Date.parse(reportDate + 'T00:00:00Z') - Date.parse(fact + 'T00:00:00Z')) / 86400000;
+    const proof = context.review_context;
+    if (!Number.isInteger(span) || span < 1 || span > 31 || proof?.report_date !== reportDate || proof.calendar?.length !== span + 1) return null;
+    return proof.calendar.every((r, i) => Array.isArray(r) && r.length === 2 &&
+      r[0] === new Date(Date.parse(fact + 'T00:00:00Z') + i * 86400000).toISOString().slice(0, 10) && r[1] === (i === 0 ? 1 : 0)) ? fact : null;
+  };
+  const capacityChange = value => {
+    const text = String(value || '');
+    const match = text.includes('→') ? text.match(/→\s*([+\-−]?[\d.]+)%/) : text.match(/^\s*([+\-−]?[\d.]+)%/);
+    return match ? num(match[1]) : null;
+  };
+  const capacityValues = value => {
+    const parts = String(value || '').split(/[；;]/);
+    const close = num(parts[0].trim().replace(/^收盘\s*/, ''));
+    const averages = (parts[1] || '').split('/');
+    return {close, averages: [5,10,20,60,144,233].map((window, i) =>
+      num((averages[i] || '').trim().replace(new RegExp('^MA' + window + '\\s+'), '')))};
+  };
+  const api = {num, fmt, compare, compareDisplayed, percentItems, sectorFacts, scale, stats, coverageState, chartDate, capacityValues, capacityChange};
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   if (typeof document === 'undefined') return;
   const doc = document.querySelector('.report-document');
   if (!doc || doc.dataset.visualsReady) return;
   doc.dataset.visualsReady = 'v1';
-  const date = doc.dataset.reportDate;
+  const reportDate = doc.dataset.reportDate;
+  let context;
+  try { context = JSON.parse(document.getElementById('review-visual-context')?.textContent || 'null'); }
+  catch (_) { context = {}; }
+  const date = chartDate(context, reportDate);
   let identity = {};
   try {
     const parsed = JSON.parse(document.getElementById('review-identity-data')?.textContent || '{}');
-    if (parsed.schema === 'review-identity-flows-v1' && parsed.report_date === date) identity = parsed;
+    if (parsed.schema === 'review-identity-flows-v1' && parsed.report_date === reportDate && (parsed.fact_date || reportDate) === date) identity = parsed;
   } catch (_) { /* Missing evidence is displayed per panel below. */ }
+  const classificationDate = identity.classification_as_of || date;
   const text = el => el ? el.textContent.replace(/\s+/g, ' ').trim() : '';
   const q = (selector, root = doc) => root.querySelector(selector);
   const qa = (selector, root = doc) => Array.from(root.querySelectorAll(selector));
@@ -63,7 +93,7 @@
     return e;
   };
   const rows = table => table ? qa('tbody > tr', table).map(r => ({node: r, cells: Array.from(r.cells).map(text)})) : [];
-  const valid = e => !!e && e.dataset.asOf === date && ['complete', 'partial', 'ok'].includes(e.dataset.sourceStatus);
+  const valid = e => !!e && date != null && e.dataset.asOf === date && ['complete', 'partial', 'ok'].includes(e.dataset.sourceStatus);
   const tableWith = (section, headers) => qa(section + ' table').find(t => {
     const h = qa('thead th', t).map(text); return headers.every((v, i) => h[i] === v);
   });
@@ -92,6 +122,12 @@
     }
     const card = el('figure', 'rv-card'); card.dataset.reviewVisual = key;
     card.append(el('figcaption', 'rv-title', title), el('p', 'rv-note', note));
+    if (!['calendar','checks','coverage'].includes(key)) {
+      card.append(el('p','rv-note',date ? '行情事实日 '+date+' · 复核日 '+reportDate : '交易日历未核验，未采用历史行情。'));
+    }
+    if (classificationDate && classificationDate !== date && ['sector-limits','sector-heatmap','sector-breadth','limit-timeline'].includes(key)) {
+      card.append(el('p','rv-note','行业按 '+classificationDate+' 成分快照回看，非历史成分回放；分类时点差异标记 partial。'));
+    }
     if (source?.dataset.sourceStatus) card.append(el('p', 'rv-note', '来源状态：' + source.dataset.sourceStatus + ' · 事实日 ' + (source.dataset.asOf || '未提供')));
     try {
       const content = build();
@@ -173,6 +209,7 @@
   const stateCell = state => ({state, text: ({above: '↑ 线上', below: '↓ 线下', equal: '= 贴线', 'rounded-equal': '≈ 待核原值', missing: '— 未计算'})[state] || '— 未计算'});
   const kpi = name => qa('#tldr .kpi').find(e => text(q('.k', e)) === name);
   panel('tldr', 'breadth', '市场宽度与量能', '[事实] 昨日与今日对照；上涨占比采用固定 0–100% 刻度，数量与成交额分别展示。', q('#tldr .tldr-grid'), () => {
+    if (!date) return null;
     const advance = kpi('上涨家数'), up = kpi('非ST涨停'), down = kpi('非ST跌停');
     const rate = text(advance).match(/占([\d.]+)%.*昨([\d.]+)%/);
     const pair = e => {
@@ -209,7 +246,7 @@
     const box = el('div');
     box.append(matrix(['指数', '15分钟', '30分钟', '60分钟'], Array.from(records.values()).map(r =>
       [r.label, ...['15m', '30m', '60m'].map(p => r.periods[p] || stateCell('missing'))])));
-    const daily = tableWith('#s1', ['指数', '收盘/涨跌', '今日MA5/10']);
+    const daily = tableWith('#s1', ['指数', '收盘/涨跌', '今日MA5/10']) || tableWith('#s1', ['指数', '收盘/涨跌%', 'MA5/MA10']);
     if (daily && daily.closest('details')?.dataset.asOf === date) {
       const dailyRows = rows(daily).map(({cells}) => {
         const m = cells[2].split('/').map(num);
@@ -240,10 +277,10 @@
   const sectorLimits = identity.sector_limits;
   panel('s2', 'sector-limits', '热门板块：涨停数量前10', '[事实] 申万二级；按当日非ST、非退市涨停数量降序，同数并列按名称显示。“热门”只表示涨停数量，不等于主线判断。', null, () => {
     if (!sectorLimits || !['complete','partial'].includes(sectorLimits.status)) return unavailable(sectorLimits);
-    if (sectorLimits.date !== date || sectorLimits.classification_as_of !== date) return unavailable({status:'source_failed',reason:'板块涨停统计日期不符'});
+    if (sectorLimits.date !== date || sectorLimits.classification_as_of !== classificationDate) return unavailable({status:'source_failed',reason:'板块涨停统计日期不符'});
     const box=el('div','rv-sector-limits'); box.dataset.visualStatus=sectorLimits.status==='partial'?'partial':'ready';
     box.append(el('p','rv-statline', sectorLimits.previous_date+' → '+date+' · 全市场涨停 '+sectorLimits.totals.previous+' → '+sectorLimits.totals.current+'只'));
-    box.append(el('p','rv-note','两日均按'+date+'申万二级成分快照归类，非历史成分回放；昨日为空心条，今日实心条分为首板（青色）与连板（金色）。'));
+    box.append(el('p','rv-note','两日均按'+classificationDate+'申万二级成分快照归类，非历史成分回放；昨日为空心条，今日实心条分为首板（青色）与连板（金色）。'));
     const selected=sectorLimits.sectors.filter(s=>s.code!=='UNCLASSIFIED' && s.current_count>0).slice(0,10);
     const max=Math.max(1,...selected.flatMap(s=>[s.previous_count,s.current_count]));
     selected.forEach(s=>{
@@ -270,15 +307,15 @@
   panel('s2', 'sector-heatmap', '行业与热门题材：近5日涨停热力图', '[事实] 行业与题材使用各自来源。题材可以重叠，不能把各行相加作为全市场涨停数；未进入题材归档榜单不等于0。', null, () => {
     const box=el('div'), holder=el('div');
     const state=(data,isTheme)=>!data?'missing-data':!['complete','partial'].includes(data.status)?data.status:
-      data.date!==date||data.dates?.length!==5||(!isTheme&&data.classification_as_of!==date)?'source_failed':data.status;
+      data.date!==date||data.dates?.length!==5||(!isTheme&&data.classification_as_of!==classificationDate)?'source_failed':data.status;
     box.dataset.visualStatus=coverageState([state(heat,false),state(themeHeat,true)]);
     function drawKind(kind){
       holder.replaceChildren();holder.dataset.heatKind=kind;
       const isTheme=kind==='theme',data=isTheme?themeHeat:heat;
       if(!data||!['complete','partial'].includes(data.status)){holder.append(unavailable(data));return;}
-      if(data.date!==date||data.dates?.length!==5||(!isTheme&&data.classification_as_of!==date)){holder.append(unavailable({status:'source_failed',reason:'热力图日期或五日窗口不符'}));return;}
+      if(data.date!==date||data.dates?.length!==5||(!isTheme&&data.classification_as_of!==classificationDate)){holder.append(unavailable({status:'source_failed',reason:'热力图日期或五日窗口不符'}));return;}
       holder.append(el('p','rv-statline',isTheme?'热门题材榜 · 今日原榜'+data.sectors.length+'项':'申万二级行业 · 固定今日涨停靠前板块'));
-      holder.append(el('p','rv-note',isTheme?'题材使用各日原榜的涨停家数，未重算非ST口径；原榜包含泛概念及少量行业，与申万行业图统计口径不同。点击格子查看股票名称与代码。当日成员快照确认的部分名单、涨停原因涉及的股票分别列示；原因标签不是完整题材归属，名单不能用于重算原榜总数。':'统一按'+date+'申万二级成分快照回看五日，不是逐日历史成分；默认固定今日涨停数前10板块。点击格子查看股票名称与代码。'));
+      holder.append(el('p','rv-note',isTheme?'题材使用各日原榜的涨停家数，未重算非ST口径；原榜包含泛概念及少量行业，与申万行业图统计口径不同。点击格子查看股票名称与代码。当日成员快照确认的部分名单、涨停原因涉及的股票分别列示；原因标签不是完整题材归属，名单不能用于重算原榜总数。':'统一按'+classificationDate+'申万二级成分快照回看五日，不是逐日历史成分；默认固定今日涨停数前10板块。点击格子查看股票名称与代码。'));
       const maximum=Math.max(1,...data.days.flatMap(d=>Object.values(d.counts||{})));
       holder.append(el('p','rv-note','统一色阶 0–'+maximum+'只；颜色越深表示涨停数越多。'+(isTheme?'“未录”表示当日归档榜单未收录、数量未知；“缺”表示来源失败。':'灰色“缺”表示来源失败；“≥”表示存在未分类股票，只能确认已归类数量。')));
       const content=el('div'),detail=el('div','rv-picked-detail',isTheme?'点击格子查看原榜统计及有来源的股票名称。':'点击格子查看股票名称与代码。');
@@ -342,9 +379,9 @@
   panel('s2','sector-breadth','板块内部：上涨、平盘与下跌','[事实] 涨跌方向由当日收盘相对昨收计算；比例分母仅为价格、成交量和成交额有效的交易样本。无有效行情单列，不算平盘。',null,()=>{
     const data=breadthBySector;
     if(!data||!['complete','partial'].includes(data.status))return unavailable(data);
-    if(data.date!==date||data.classification_as_of!==date)return unavailable({status:'source_failed',reason:'板块分布日期不符'});
+    if(data.date!==date||data.classification_as_of!==classificationDate)return unavailable({status:'source_failed',reason:'板块分布日期不符'});
     const box=el('div');box.dataset.visualStatus=data.status==='complete'?'ready':'partial';const content=el('div');
-    box.append(el('p','rv-note','剔除当日ST名单、当日成员名称含ST/退市标识及B股；使用同日成员快照，不能据无行情断定停牌或退市。青＝上涨、灰＝平盘、红＝下跌；涨停数是独立计数，不另叠加到比例。'));
+    box.append(el('p','rv-note','剔除事实日ST名单、成员名称含ST/退市标识及B股；成员快照日 '+classificationDate+'，行情日 '+date+'，不能据无行情断定停牌或退市。青＝上涨、灰＝平盘、红＝下跌；涨停数是独立计数，不另叠加到比例。'));
     box.append(el('p','rv-note','全量覆盖：有效交易'+data.sectors.reduce((n,s)=>n+s.valid,0)+'只；快照成员中无有效行情'+data.sectors.reduce((n,s)=>n+s.unknown,0)+'只；ST名单与名称标识差异'+(data.eligibility.st_list_only.length+data.eligibility.name_st_only.length)+'只，已按并集排除。'));
     function draw(mode){
       content.replaceChildren();
@@ -399,15 +436,20 @@
   });
   const feedback = q('table[data-board-break-feedback=v1]');
   panel('s3', 'break-distribution', '断板股：个股收益分布', '[事实] 每行一只股票，点位表示反馈涨跌幅；可切换开盘/收盘，固定同一横轴范围。均值与中位数仅统计有值样本。', feedback, () => {
-    if (!valid(feedback) || feedback.dataset.outcomeDate !== date) return null;
-    const points = rows(feedback).map(({node, cells}) => ({code: node.dataset.code, label: cells[0], open: num(node.dataset.feedbackOpenPct), close: num(node.dataset.feedbackClosePct)}));
-    if (!points.length || points.length !== num(feedback.dataset.sampleCount) || new Set(points.map(r => r.code)).size !== points.length) return null;
+    const archived = identity.board_feedback;
+    const useTable = valid(feedback) && feedback.dataset.outcomeDate === date;
+    if (!useTable && (!date || !archived || archived.date !== date || !['complete','partial'].includes(archived.status))) return unavailable(archived);
+    const points = useTable ? rows(feedback).map(({node, cells}) => ({code: node.dataset.code, label: cells[0], open: num(node.dataset.feedbackOpenPct), close: num(node.dataset.feedbackClosePct)})) : archived.points;
+    const sampleCount = useTable ? num(feedback.dataset.sampleCount) : archived.sample;
+    if (!useTable && archived.empty === true && points.length === 0) return el('p','rv-note',archived.note+' · 完整来源确认无断板反馈样本；未计算收益分布。');
+    if (!points.length) return unavailable({status:'missing-data',reason:'来源部分覆盖，尚无可核验的逐股反馈'});
+    if (!points.length || points.length !== sampleCount || new Set(points.map(r => r.code)).size !== points.length) return null;
     const all = points.flatMap(r => [r.open, r.close]).filter(v => v != null);
     if (!all.length) return null;
     const lo = Math.floor(Math.min(0, ...all)) - 1, hi = Math.ceil(Math.max(0, ...all)) + 1;
     const pct = v => 100 * (v - lo) / (hi - lo);
     const box = el('div');
-    if (points.some(r => r.open == null || r.close == null)) box.dataset.visualStatus = 'partial';
+    if (points.some(r => r.open == null || r.close == null) || (useTable ? feedback.dataset.sourceStatus === 'partial' : archived.status === 'partial')) box.dataset.visualStatus = 'partial';
     const content = el('div', 'rv-distribution');
     function draw(mode) {
       content.replaceChildren(); content.dataset.feedbackMode = mode;
@@ -429,7 +471,7 @@
         row.append(track, el('strong', 'rv-number', fmt(r[mode], 2, true) + (r[mode] == null ? '' : '%'))); content.append(row);
       });
     }
-    box.append(el('p', 'rv-note', text(q('caption', feedback))), choices([['close','收盘反馈'],['open','开盘反馈']], 'close', draw), content);
+    box.append(el('p', 'rv-note', useTable ? text(q('caption', feedback)) : archived.note+' · 来源：'+archived.source), choices([['close','收盘反馈'],['open','开盘反馈']], 'close', draw), content);
     draw('close'); return box;
   });
   const ladder = identity.ladder;
@@ -452,18 +494,20 @@
       ladder.records.filter(r => r.previous_height === group.height).forEach(r => list.append(el('li','', r.name + ' ' + r.code + ' · ' + names[r.outcome] + (r.current_height ? '（今日'+r.current_height+'板）' : '') + ' · ' + r.reason)));
       detail.append(list); box.append(detail);
     });
-    box.append(el('p','rv-note','来源：双日涨停/ST完整分页、当日日线及同日成员名称快照；有效日线要求量、额及价格有效。名称身份未核实保留待核。断板表示未继续涨停，不等于下跌。今日新首板不混入昨日样本；箭头宽度不表示数量。'));
+    box.append(el('p','rv-note','来源：双日涨停/ST完整分页、事实日日线及可核验的事实日名称；有效日线要求量、额及价格有效。名称身份未核实保留待核。断板表示未继续涨停，不等于下跌。今日新首板不混入昨日样本；箭头宽度不表示数量。'));
     return box;
   });
   const style = tableWith('#s4', ['组别', '样本', '开盘均值', '中位', '高开率']);
   const labels = {capacity_top10: '容量前10', first_board_10cm: '10cm 首板', first_board_20cm: '20cm 首板', first_board_30cm: '30cm 首板', second_board: '二板', third_board_plus: '三板及以上'};
   panel('s4', 'style-feedback', '不同风格的隔夜承接', '[事实] ● 开盘均值 / ◇ 开盘中位数；共享零轴。样本少的组仅作样本描述，开盘反馈不是收盘收益。', style, () => {
-    if (!style || style.closest('details')?.dataset.asOf !== date) return null;
-    const items = rows(style).map(({cells}) => ({label: labels[cells[0]] || cells[0], n: num(cells[1]), mean: num(cells[2]), median: num(cells[3])}));
+    const archived = identity.style_feedback;
+    const useTable = date && style && style.closest('details')?.dataset.asOf === date;
+    if (!useTable && (!date || !archived || archived.date !== date || !['complete','partial'].includes(archived.status))) return unavailable(archived);
+    const items = useTable ? rows(style).map(({cells}) => ({label: labels[cells[0]] || cells[0], n: num(cells[1]), mean: num(cells[2]), median: num(cells[3])})) : archived.rows.map(r => ({...r, label: labels[r.key] || r.key}));
     if (!items.some(r => r.mean != null || r.median != null)) return null;
     const bounds = scale(items.flatMap(r => [r.mean, r.median]), true);
-    const box = el('div', 'rv-dots');
-    box.append(el('p', 'rv-note', text(q('caption', style))));
+    const box = el('div', 'rv-dots'); if (items.some(r => r.mean == null || r.median == null)) box.dataset.visualStatus = 'partial';
+    box.append(el('p', 'rv-note', useTable ? text(q('caption', style)) : archived.note+' · 来源：'+archived.source));
     const axis = el('div', 'rv-axis'); axis.append(el('span', '', fmt(bounds.min, 2) + '%'), el('span', '', '0'), el('span', '', fmt(bounds.max, 2) + '%')); box.append(axis);
     items.forEach(r => {
       const row = el('div', 'rv-dot-row'); row.append(el('span', 'rv-label', r.label + ' · n=' + fmt(r.n, 0)));
@@ -480,10 +524,9 @@
   panel('s5', 'capacity', '容量核心健康矩阵', '[事实] 前复权收盘与均线比较；↑ 线上 / ↓ 线下 / — 未计算。显示值相等用≈待核原值，不断言精确贴线。Top50 为近5日入榜次数，不是趋势分。', capacity, () => {
     if (!valid(capacity)) return null;
     const records = rows(capacity).filter(r => r.node.dataset.tier === 'core').map(({node, cells}) => {
-      const values = cells[7].split(/[；;]/); const close = num(values[0]);
-      const averages = (values[1] || '').split('/').map(num);
-      const pct = cells[5].match(/→\s*([+\-−]?[\d.]+)%/);
-      return [cells[2], {text: pct ? fmt(num(pct[1]), 2, true) + '%' : '未计算', state: pct ? compare(num(pct[1]), 0) : 'missing'},
+      const {close, averages} = capacityValues(cells[7]);
+      const pct = capacityChange(cells[5]);
+      return [cells[2].includes(node.dataset.code) ? cells[2] : cells[2] + ' ' + (node.dataset.code || '代码待核'), {text: pct == null ? '未计算' : fmt(pct, 2, true) + '%', state: compare(pct, 0)},
         ...Array.from({length: 6}, (_, i) => stateCell(compareDisplayed(close, averages[i] ?? null))),
         {text: cells[4], state: 'neutral'}];
     });
@@ -525,13 +568,13 @@
       }); content.append(branches);
       content.append(el('p','rv-note','昨日 = 延续 + 退出；今日 = 延续 + 新增。节点面积与箭头宽度不编码数量。'));
       content.append(codeList('延续名单',data.retained,highFlow.names),codeList('退出名单',data.exited,highFlow.names),codeList('新增名单',data.added,highFlow.names));
-      content.append(el('p','rv-note','股票名称使用'+date+'当日成员快照；'+(highFlow.name_status==='complete'?'名称覆盖完整。':(highFlow.name_reason || '名称未核实，保留代码。'))));
+      content.append(el('p','rv-note','股票名称使用'+(highFlow.name_as_of || date)+'成员快照；'+(highFlow.name_status==='complete'?'名称覆盖完整。':(highFlow.name_reason || '名称未核实，保留代码。'))));
     }
     box.append(choices([['60','60日窗口'],['120','120日窗口'],['250','250日窗口']], '60', draw), content); draw('60'); return box;
   });
   const events = q('table[data-event-window=v1]');
   panel('s6', 'calendar', '未来七日事件时间轴', '[事实] 沿用来源日历展示的每日最多3项；时间按原归档保留。计划与报道不代表已发生，发布后仍需核验。', events, () => {
-    if (!valid(events)) return null;
+    if (!events || events.dataset.asOf !== reportDate || !['complete','partial','ok'].includes(events.dataset.sourceStatus)) return null;
     const list = el('ol', 'rv-timeline');
     rows(events).forEach(({node, cells}) => {
       const item = el('li', 'rv-event ' + (node.dataset.marketStatus === 'closed' ? 'rv-closed' : ''));
@@ -565,7 +608,7 @@
     const grid = el('div', 'rv-coverage');
     specs.forEach(([name, selector]) => {
       const e = q(selector); const state = e?.dataset.sourceStatus || 'missing-data';
-      const stale = e?.dataset.asOf && e.dataset.asOf !== date;
+      const stale = e?.dataset.asOf && e.dataset.asOf !== reportDate;
       const card = el('div', 'rv-coverage-item ' + (['complete', 'ok'].includes(state) && !stale ? 'rv-above' : 'rv-missing'));
       card.append(el('span', '', name), el('strong', '', stale ? '历史 · ' + e.dataset.asOf : states[state] || state));
       sourceLink(card, e); grid.append(card);

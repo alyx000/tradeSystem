@@ -7,15 +7,16 @@ from collections import Counter
 from services.review_identity_flows import _codes, _eligible, _height, _identity_names, _number, _source
 
 
-def _context(raw, manifest, day):
+def _context(raw, manifest, day, classification_date=None):
     if not isinstance(raw, dict):
         raise ValueError('缺少板块图形原始回执')
     dates = manifest.get('trade_dates', [])
     if (manifest.get('as_of') != day or len(dates) < 5 or dates[-1] != day or
             dates != sorted(set(dates))):
         raise ValueError('缺少截至报告日的严格五个开放日依据')
-    compact = day.replace('-', '')
-    names = _identity_names(raw, compact, day)
+    classification_date = classification_date or day
+    compact = classification_date.replace('-', '')
+    names = _identity_names(raw, compact, classification_date)
     identity = raw.get(compact + '_identity')
     if not identity or not names:
         raise ValueError('缺少同日申万成分与名称快照')
@@ -53,8 +54,8 @@ def _rank_current(ups, mapping):
     return sorted(counts, key=lambda code: (-counts[code], labels[code], code))
 
 
-def sector_heatmap(raw, manifest, day):
-    dates, _, mapping, labels = _context(raw, manifest, day)
+def sector_heatmap(raw, manifest, day, *, classification_date=None):
+    dates, _, mapping, labels = _context(raw, manifest, day, classification_date)
     current, _ = _limits(raw, day)
     ranked = _rank_current(current, mapping)
     days = []
@@ -68,13 +69,13 @@ def sector_heatmap(raw, manifest, day):
                              unclassified=unknown, counts=dict(counts), records=records))
         except (ValueError, KeyError, TypeError, AttributeError) as exc:
             days.append(dict(date=target, status='source_failed', reason=str(exc), counts=None, total=None))
-    return dict(status='complete' if all(d['status'] == 'complete' for d in days) else 'partial',
-                date=day, classification_as_of=day, dates=dates, days=days,
+    return dict(status='complete' if all(d['status'] == 'complete' for d in days) and (classification_date or day) == day else 'partial',
+                date=day, classification_as_of=classification_date or day, dates=dates, days=days,
                 sectors=[dict(code=c, name=labels[c]) for c in ranked], selected=ranked[:10])
 
 
-def sector_breadth(raw, manifest, day):
-    _, names, mapping, labels = _context(raw, manifest, day)
+def sector_breadth(raw, manifest, day, *, classification_date=None):
+    _, names, mapping, labels = _context(raw, manifest, day, classification_date)
     ups, st = _limits(raw, day)
     compact = day.replace('-', '')
     quotes = _source(raw, compact + '_daily', 'daily', compact, allow_empty=False)
@@ -108,8 +109,8 @@ def sector_breadth(raw, manifest, day):
     # A quote outside the named classification cannot be silently treated as covered.
     unmapped = sorted(r['ts_code'] for r in quotes if r['ts_code'] not in mapping and _eligible(r, st))
     result.sort(key=lambda s: (-s['limit_up'], s['name'], s['code']))
-    return dict(status='partial' if unmapped or eligibility['st_list_only'] or eligibility['name_st_only'] or any(s['unknown'] for s in result) else 'complete', date=day,
-                classification_as_of=day, selected=_rank_current(ups, mapping)[:10], unmapped_quotes=unmapped,
+    return dict(status='partial' if (classification_date or day) != day or unmapped or eligibility['st_list_only'] or eligibility['name_st_only'] or any(s['unknown'] for s in result) else 'complete', date=day,
+                classification_as_of=classification_date or day, selected=_rank_current(ups, mapping)[:10], unmapped_quotes=unmapped,
                 sectors=result, quote_count=len(quotes), eligibility=eligibility)
 
 
@@ -128,8 +129,8 @@ def _seal_time(value):
     return total
 
 
-def limit_timeline(raw, manifest, day):
-    _, _, mapping, labels = _context(raw, manifest, day)
+def limit_timeline(raw, manifest, day, *, classification_date=None):
+    _, _, mapping, labels = _context(raw, manifest, day, classification_date)
     ups, _ = _limits(raw, day)
     records = []
     for row in ups:
@@ -153,18 +154,19 @@ def limit_timeline(raw, manifest, day):
                             first=first, last=last, open_times=opened, height=_height(row['limit_times']), issues=issues))
     records.sort(key=lambda r: (r['first'] is None, r['first'] or 0, r['code']))
     ranked = _rank_current(ups, mapping)
-    return dict(status='partial' if any(r['issues'] for r in records) else 'complete', date=day,
+    return dict(status='partial' if any(r['issues'] for r in records) or (classification_date or day) != day else 'complete', date=day,
+                classification_as_of=classification_date or day,
                 selected=ranked[:10], sectors=[dict(code=c,name=labels[c]) for c in ranked], records=records, sample=len(records))
 
 
-def build_sector_visuals(raw, manifest, day):
+def build_sector_visuals(raw, manifest, day, *, classification_date=None):
     result = {}
     for key, build in [('sector_heatmap',sector_heatmap),('sector_breadth',sector_breadth),('limit_timeline',limit_timeline)]:
         if not isinstance(raw, dict):
             result[key] = dict(status='missing-data',reason='缺少板块图形原始回执')
             continue
         try:
-            result[key] = build(raw, manifest, day)
+            result[key] = build(raw, manifest, day, classification_date=classification_date)
         except (ValueError, KeyError, TypeError, AttributeError) as exc:
             result[key] = dict(status='source_failed',reason=str(exc))
     return result

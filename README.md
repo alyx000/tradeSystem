@@ -411,6 +411,8 @@ export LLM_TIMEOUT_SECONDS=90                  # 默认 90s，硬上限 180s
 export LLM_MODEL=<model-name>                  # 可选，留空走 Antigravity 默认模型
 ```
 
+纯文本 AI 分析也支持 OpenAI 官方 API：在本机 `scripts/.env` 配置 `LLM_PROVIDER=openai`、`OPENAI_API_KEY` 和明确的 `LLM_MODEL`。接入范围、验证与回滚见 [OpenAI API 接入](docs/openai-api.md)；慧博本地 PDF 读取保留 Antigravity 通道。
+
 手动入口（CLI / Makefile）：
 
 ```bash

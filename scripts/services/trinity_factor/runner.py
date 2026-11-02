@@ -1,7 +1,8 @@
-"""三位一体双层评分专用 Antigravity 结构化 runner。
+"""三位一体双层评分专用结构化 runner（Antigravity / OpenAI）。
 
 这个 runner 不改变仓库现有业务 LLM 调用：它要求显式 ``LLM_MODEL``，在空临时
-目录的 sandbox/plan 模式运行，并只接受由调用方 validator 验证通过的严格 JSON。
+目录的 sandbox/plan 模式运行 CLI，或通过无工具的 OpenAI 文本 API 调用；
+只接受由调用方 validator 验证通过的严格 JSON。
 """
 from __future__ import annotations
 
@@ -22,7 +23,7 @@ from typing import Any
 
 from services.recommend.formatter import REDLINE_KEYWORDS
 from utils.antigravity_diagnostics import read_text_if_exists
-from utils.llm_cli import LlmCliConfig, build_prompt_command, resolve_config
+from utils.llm_cli import LlmCliConfig, build_prompt_command, resolve_config, resolve_provider
 
 FACTOR_PROMPT_VERSION = "trinity_factor_score_v1"
 SECTOR_PROMPT_VERSION = "trinity_sector_score_v1"
@@ -158,6 +159,7 @@ class AntigravityStructuredRunner:
             bin_path=resolved.bin_path,
             model=requested_model,
             timeout_seconds=resolved.timeout_seconds,
+            provider=resolved.provider,
         )
         cli_version = self._read_cli_version(config)
         last_sha: str | None = None
@@ -295,7 +297,7 @@ class AntigravityStructuredRunner:
                         diagnostics=_safe_diagnostics(
                             {
                                 "reason": "runtime_failed",
-                                "message": f"Antigravity exited with returncode {returncode}",
+                                "message": f"{config.provider} exited with returncode {returncode}",
                                 "returncode": returncode,
                             },
                             log_file,
@@ -304,7 +306,7 @@ class AntigravityStructuredRunner:
 
                 if not stdout.strip():
                     last_diagnostics = _safe_diagnostics(
-                        {"reason": "empty_output", "message": "Antigravity stdout was empty"},
+                        {"reason": "empty_output", "message": f"{config.provider} stdout was empty"},
                         log_file,
                     )
                     if attempt == 1:
@@ -353,6 +355,8 @@ class AntigravityStructuredRunner:
         raise AssertionError("unreachable")
 
     def _read_cli_version(self, config: LlmCliConfig) -> str | None:
+        if config.provider != "antigravity":
+            return "openai-responses-v1" if config.provider == "openai" else None
         try:
             completed = self._run_command(
                 [config.bin_path, "--version"],
@@ -390,7 +394,7 @@ class AntigravityStructuredRunner:
         duration_ms = max(0, int((self._clock() - started) * 1000))
         return StructuredRunResult(
             status=status,
-            provider="antigravity",
+            provider=resolve_provider(),
             requested_model=requested_model,
             actual_model=None,
             cli_version=cli_version,

@@ -838,7 +838,11 @@ function buildAntigravityCommand(prompt, options = {}) {
     args.push("--add-dir", addDir);
   }
   args.push("--dangerously-skip-permissions");
-  const model = process.env.LLM_MODEL || process.env.ANTIGRAVITY_MODEL || "";
+  // 本地 PDF workflow 仍走 Antigravity；全局 OpenAI 模型不能传给 agy。
+  const provider = (process.env.LLM_PROVIDER || "antigravity").trim().toLowerCase();
+  const model = provider === "antigravity"
+    ? (process.env.LLM_MODEL || process.env.ANTIGRAVITY_MODEL || "")
+    : (process.env.ANTIGRAVITY_MODEL || "");
   if (model) args.push("--model", model);
   if (options.logFile) args.push("--log-file", options.logFile);
   args.push("--prompt", prompt);
