@@ -134,6 +134,8 @@ def render_daily(result: dict, *, max_rows: int = C.DEFAULT_MAX_ROWS) -> str:
             )
         lines.append("")
 
+    from services.emotion_leader.wave_evidence import render_markdown as render_wave_evidence
+    lines += [render_wave_evidence(result, str(date), max_rows=max_rows)]
     errors = result.get("source_errors") or []
     if errors:
         lines += ["## 数据提示"]

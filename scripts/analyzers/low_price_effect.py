@@ -389,10 +389,12 @@ def collect_low_price_effect(
     stock_st_result: Any,
     limit_up_section: Any,
     limit_down_section: Any,
+    quote_result: Any = None,
 ) -> dict:
     """从 provider 拉取全市场日线，并复用盘后已取得的 ST/涨跌停事实。"""
     try:
-        quote_result = registry.call("get_market_daily_quotes", trade_date)
+        if quote_result is None:
+            quote_result = registry.call("get_market_daily_quotes", trade_date)
     except Exception as exc:  # noqa: BLE001 - 外部源异常归一为状态，不阻断盘后主链。
         return {
             "status": "source_failed",

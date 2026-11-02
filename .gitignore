@@ -56,3 +56,6 @@ data/
 # 前端构建产物
 web/node_modules/
 web/dist/
+
+!docs/wave-evidence.md
+!docs/market-strength.md

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import statistics
+import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -130,6 +131,15 @@ def run_daily(
         full_refresh=full_refresh,
     )
     base["refresh"] = refresh
+    from services.emotion_leader import wave_evidence
+    from services.volume_concentration.capacity_history import build as build_capacity_history
+    # 一次只读5日背景；缺表/缺日历仅降级证据卡，不改变核心发现和排序。
+    try:
+        capacity_background = build_capacity_history(conn, target_date, days=5)
+    except (ValueError, TypeError, AttributeError, sqlite3.Error):
+        capacity_background = {'calendar_status': 'source_failed', 'history': []}
+    from analyzers.market_strength import history as strength_history, card_context as strength_context
+    strength_background = strength_history(conn, target_date)
     sw_map, sw_error, sw_source = _industry_map(registry)
     if sw_error:
         base["source_errors"].append(sw_error)
@@ -157,6 +167,10 @@ def run_daily(
                     row["wave_source"] = "manual_step5"
                 else:
                     row["wave_source"] = "mechanical_judgment"
+                row[wave_evidence.KEY] = wave_evidence.attach_sector(
+                    row.get(wave_evidence.KEY) or wave_evidence.missing(target_date, '行情或复权不可用'),
+                    capacity_background, sw_l2)
+                row[wave_evidence.KEY]['breadth'] = strength_context(strength_background, sw_l2)
                 row["current_state"] = _current_state(
                     row, discovered["current_limit_up_codes"], discovered["current_down_codes"])
                 row["feedback_type"] = _feedback_type(
