@@ -259,9 +259,58 @@ def render_html(view, day):
     view = view if view is not None else {**_base(day), 'gaps':['尚未计算']}
     if view.get('schema') != SCHEMA or view.get('date') != day:
         raise ValueError('板块核心联动日期或口径错误')
-    title = (f"[事实] 板块核心联动观察：{view['status']}；观察日{day}；身份归档日{view['identity_date'] or '未核验'}"
-             f"（距观察日{view['identity_age'] if view['identity_age'] is not None else '—'}个开放日）。")
-    out = [f'<div {MARKER}="{escape(day,quote=True)}"><p>{escape(title)}</p>', '<p>'+escape(NOTE)+'</p>']
+    members = view['members']
+    known = sum(r['weak'] is not None for r in members)
+    weak = [r for r in members if r['weak'] is True]
+    if not members:
+        summary = ('[事实] 最近保存的最票名单为空，本日没有可跟踪的核心。' if view['status'] == 'empty' else
+                   '[事实] 核心名单或行情尚未核验，本日暂无法判断板块核心联动。')
+    out = [f'<div {MARKER}="{escape(day,quote=True)}"><h3>板块核心联动</h3>']
+    if members:
+        identity_date = view['identity_date'] or '未核验'
+        short_identity = identity_date[5:] if identity_date[:4] == day[:4] else identity_date
+        out.append('<p style="margin-bottom:8px">[事实] 观察'+escape(day[5:])+' · 核心名单归档'+escape(short_identity)+
+                   f' · 已核验{known}/{len(members)}只归档核心</p>')
+        # 色块只表示已归档成员的证据覆盖，不扩张为板块强弱评分。
+        states = {
+            True: ('weak', '已核验走弱', '#9f3038', '#fff1f2', '▼'),
+            False: ('clear', '已核验未触发', '#245986', '#edf5fc', '○'),
+            None: ('unknown', '待核验', '#596474', '#f3f4f6', '?'),
+        }
+        counts = (len(weak), known-len(weak), len(members)-known)
+        coverage_label = f'已核验{known}/{len(members)}只；走弱{counts[0]}只，未触发{counts[1]}只，待核验{counts[2]}只'
+        out.append('<div role="img" aria-label="'+escape(coverage_label,quote=True)+
+                   '" style="display:flex;gap:3px;height:12px;margin:8px 0;border-radius:6px;overflow:hidden">')
+        for r in members:
+            state, label, color, background, symbol = states[r['weak']]
+            out.append(f'<span data-core-coverage="{state}" style="flex:1;min-width:0;background:{color}"></span>')
+        out.append('</div><div style="display:flex;flex-wrap:wrap;gap:6px 16px;font-size:13px;margin-bottom:12px">')
+        for value, count in zip((True, False, None), counts):
+            _, label, color, _, symbol = states[value]
+            out.append(f'<span style="color:{color}">{symbol} {label} {count}只</span>')
+        out.append('</div>')
+        for sector in dict.fromkeys(r['sector'] for r in members):
+            group = [r for r in members if r['sector'] == sector]
+            covered = sum(r['weak'] is not None for r in group)
+            out.append('<div role="group" data-core-sector="'+escape(sector,quote=True)+'" style="margin:12px 0">'+
+                       '<h4 style="margin:0 0 8px">'+escape(sector)+
+                       f' <small style="font-weight:400">已核验{covered}/{len(group)}</small></h4>'+
+                       '<div role="list" style="display:flex;flex-wrap:wrap;gap:8px">')
+            for r in group:
+                state, label, color, background, symbol = states[r['weak']]
+                out.append(f'<div role="listitem" data-core-state="{state}" '+
+                           f'style="flex:1 1 180px;min-width:0;max-width:100%;box-sizing:border-box;overflow-wrap:anywhere;'+
+                           f'border:1px solid {color};border-left:4px solid {color};border-radius:8px;padding:10px 12px;background:{background};color:#253246">')
+                out.append('<div style="font-size:12px">'+escape(r['role'])+'</div><strong>'+escape(r['name'])+
+                           '</strong><div style="font-size:12px">'+escape(r['code'] or '代码未核验')+'</div>')
+                out.append(f'<div style="color:{color};font-weight:600;margin-top:6px">'+
+                           ('[判断] ' if r['weak'] is not None else '')+symbol+' '+label+'</div>')
+                if r['weak'] is not None:
+                    out.append('<div style="font-size:12px;margin-top:4px">[事实] '+escape(r['evidence'])+'</div>')
+                out.append('</div>')
+            out.append('</div></div>')
+    else:
+        out.append('<p>'+escape(summary)+'</p>')
     for label, headers, rows in tables(view):
         if not rows:
             continue
@@ -269,8 +318,12 @@ def render_html(view, day):
         out += ['<tr>'+''.join('<td>'+escape(str(x))+'</td>' for x in r)+'</tr>' for r in rows]
         out += ['</tbody></table></div></details>']
     gap = '；'.join(view['gaps']) or None
-    if gap:
-        out.append('<p>[事实] 缺口：'+escape(gap)+'</p>')
+    items = len(view['gaps']) + 2
+    out.append(f'<details class="evidence" data-as-of="{escape(day,quote=True)}" data-items="{items}" data-evidence-kind="sector-core-linkage"><summary>来源、缺口与判断口径（{items}项）</summary>')
+    out.append('<p>'+escape(NOTE)+'</p>')
+    out.append('<p>'+escape(f"状态：{view['status']}；观察日{day}；身份归档日{view['identity_date'] or '未核验'}；距观察日{view['identity_age'] if view['identity_age'] is not None else '未核验'}个开放日。")+'</p>')
+    out.extend('<p>[事实] 缺口：'+escape(g)+'</p>' for g in view['gaps'])
+    out.append('</details>')
     return '\n'.join(out+['</div>']), gap
 
 

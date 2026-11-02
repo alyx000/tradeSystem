@@ -138,6 +138,34 @@ def test_sector_partition_conserves_both_days_and_board_types():
     assert out['status']=='complete' and out['totals']=={'previous':4,'current':3}
     assert [(s['name'],s['previous_count'],s['current_count'],s['first_count'],s['consecutive_count']) for s in out['sectors']]==[('行业甲',2,2,0,2),('行业乙',2,1,1,0)]
     assert out['classification_as_of']==DAY
+    assert out['board_totals']=={'previous':{'10':4,'20':0,'30':0,'unknown':0},'current':{'10':3,'20':0,'30':0,'unknown':0}}
+
+
+def test_sector_board_split_counts_source_members_not_percentage_and_preserves_unclassified():
+    r=classified_raw()
+    replace={'600000.SH':'300001.SZ','600001.SH':'688001.SH','600002.SH':'920001.BJ','600003.SH':'500001.SH','600004.SH':'500002.SH'}
+    for receipt in r.values():
+        for row in receipt.get('rows',[]):
+            row['ts_code']=replace.get(row.get('ts_code'),row.get('ts_code'))
+    # No industry mapping: keep the board fact in the unclassified bucket.
+    r['20261029_identity']['rows']=[row for row in r['20261029_identity']['rows'] if row['ts_code']!='920001.BJ']
+    out=sector_limit_counts(r,manifest(),DAY)
+    assert out['status']=='partial'
+    assert out['board_totals']['current']=={'10':0,'20':2,'30':0,'unknown':1}
+    assert out['board_totals']['previous']=={'10':0,'20':2,'30':1,'unknown':1}
+    assert out['unclassified']['previous']==['920001.BJ']
+    for slot,field in [('previous','previous_board_counts'),('current','board_counts')]:
+        assert sum(out['board_totals'][slot].values())==out['totals'][slot]
+        assert sum(s[slot+'_count'] for s in out['sectors'])==out['totals'][slot]
+        for s in out['sectors']:
+            assert sum(s[field].values())==s[slot+'_count']
+            assert all(row['board'] in ('10','20','30','unknown') for row in s[slot])
+
+
+@pytest.mark.parametrize('code,expected',[('600001.SH','10'),('003001.SZ','10'),('300001.SZ','20'),('301001.SZ','20'),('688001.SH','20'),('689001.SH','20'),('430001.BJ','30'),('830001.BJ','30'),('920001.BJ','30'),('300001.SH','unknown'),('600001.SZ','unknown'),('500001.SH','unknown'),('999999.SH','unknown'),(None,'unknown')])
+def test_board_identity_uses_shared_nominal_limit_and_keeps_unsupported_unknown(code,expected):
+    from services.review_identity_flows import _limit_board
+    assert _limit_board(code)==expected
 
 
 def test_sector_mapping_conflict_is_once_unclassified_not_dropped():

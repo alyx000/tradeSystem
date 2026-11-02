@@ -66,7 +66,114 @@
     return {close, averages: [5,10,20,60,144,233].map((window, i) =>
       num((averages[i] || '').trim().replace(new RegExp('^MA' + window + '\\s+'), '')))};
   };
-  const api = {num, fmt, compare, compareDisplayed, percentItems, sectorFacts, scale, stats, coverageState, chartDate, capacityValues, capacityChange};
+  // Only the institution main table is accepted; do not infer net flow from a missing leg.
+  const institutionFlow = (meta, headers, records, factDate) => {
+    const empty = reason => ({status: 'missing-data', groups: {single: [], multi: []}, issues: [reason]});
+    const clean = value => String(value ?? '').replace(/\s+/g, ' ').trim();
+    const expected = ['榜段/股票', '机构买／卖／净亿', '当日涨幅%／换手%／成交亿'];
+    if (!factDate || meta?.institutionFlow !== 'v1' || meta.asOf !== factDate ||
+        (meta.sourceCount != null && meta.sourceCount !== 1) ||
+        (meta.sourceStatus != null && !['complete', 'partial', 'ok'].includes(meta.sourceStatus)) ||
+        !Array.isArray(headers) || expected.some((value, i) => clean(headers[i]) !== value) || !Array.isArray(records)) {
+      return empty('机构主表缺失、日期不符或字段契约不完整');
+    }
+    const missing = /^(?:—|–|-|未计算|未留存|买卖分项未留存)$/;
+    const scalar = token => {
+      const s = clean(token).replace(/−/g, '-');
+      if (!s || missing.test(s)) return {value: null, tolerance: 0};
+      if (!/^[+-]?(?:\d+(?:\.\d+)?|\.\d+)$/.test(s)) return null;
+      const value = Number(s);
+      return Number.isFinite(value) ? {value, tolerance: .5 * 10 ** -(s.split('.')[1]?.length || 0)} : null;
+    };
+    const triple = value => {
+      const parts = clean(value).split(/[／/]/);
+      if (parts.length !== 3) return null;
+      const values = parts.map(scalar);
+      return values.every(v => v !== null) ? values : null;
+    };
+    const parsed = [], issues = [];
+    records.forEach((cells, rowIndex) => {
+      if (!Array.isArray(cells) || cells.length < 3) {issues.push('第' + (rowIndex + 1) + '行字段不足'); return;}
+      const match = clean(cells[0]).match(/^(单日|多日)[／/]\s*(.+?)\s+(\d{6}\.(?:SH|SZ|BJ))$/);
+      if (!match || /\d{6}(?:\.(?:SH|SZ|BJ))?|[／/]/.test(match[2])) {issues.push('第' + (rowIndex + 1) + '行榜段或股票身份不明确'); return;}
+      const flow = triple(cells[1]), market = triple(cells[2]);
+      if (!flow || !market) {issues.push(match[2] + '：字段格式不明确，未绘制'); return;}
+      const [buy, sell, net] = flow.map(v => v.value);
+      const [change, turnover, amount] = market.map(v => v.value);
+      if ((buy != null && buy < 0) || (sell != null && sell < 0) ||
+          (turnover != null && turnover < 0) || (amount != null && amount < 0) ||
+          (flow.every(v => v.value != null) && Math.abs(buy - sell - net) > flow.reduce((sum, v) => sum + v.tolerance, 0) + 1e-9)) {
+        issues.push(match[2] + '：买卖净额或行情字段冲突，未绘制'); return;
+      }
+      parsed.push({segment: match[1] === '单日' ? 'single' : 'multi', name: match[2], code: match[3],
+        buy, sell, net, change, turnover, amount, rowIndex,
+        incomplete: [...flow, ...market].some(v => v.value == null)});
+    });
+    const counts = new Map();
+    parsed.forEach(r => {const key = r.segment + ':' + r.code; counts.set(key, (counts.get(key) || 0) + 1);});
+    const groups = {single: [], multi: []};
+    parsed.forEach(r => {
+      if (counts.get(r.segment + ':' + r.code) !== 1) {issues.push(r.name + '：同榜段身份重复，未绘制'); return;}
+      groups[r.segment].push(r);
+    });
+    const all = [...groups.single, ...groups.multi];
+    const status = !all.some(r => r.net != null) ? 'missing-data' :
+      (issues.length || all.some(r => r.incomplete) || !groups.single.length || meta.sourceStatus === 'partial' ? 'partial' : 'ready');
+    return {status, groups, issues};
+  };
+
+  // Board labels are source facts: never infer them from a stock code here.
+  const sectorBoardCounts = data => {
+    const keys = ['10', '20', '30', 'unknown'];
+    const integer = n => Number.isInteger(n) && n >= 0;
+    const counts = (value, total) => value && integer(total) &&
+      keys.every(k => integer(value[k])) && keys.reduce((n,k) => n + value[k], 0) === total;
+    const sectors = Array.isArray(data?.sectors) ? data.sectors : [];
+    const result = {current: {valid: false}, previous: {valid: false}, sectors: []};
+    result.sectors = sectors.map(s => {
+      const out = {code: s.code};
+      for (const day of ['current', 'previous']) {
+        const c = s[day === 'current' ? 'board_counts' : 'previous_board_counts'];
+        const list = s[day], n = s[day + '_count'];
+        const tally = Object.fromEntries(keys.map(k => [k, 0]));
+        const seen = new Set();
+        const rowsValid = Array.isArray(list) && list.length === n && list.every(r => {
+          if (!r || !keys.includes(r.board) || !r.code || seen.has(r.code)) return false;
+          seen.add(r.code); tally[r.board]++; return true;
+        });
+        const valid = !!(counts(c, n) && rowsValid && keys.every(k => tally[k] === c[k]));
+        out[day] = {valid, counts: valid ? {...c} : null};
+      }
+      return out;
+    });
+    for (const day of ['current', 'previous']) {
+      const sum = Object.fromEntries(keys.map(k => [k, 0]));
+      const codes = new Set(), stocks = new Set();
+      let valid = counts(data?.board_totals?.[day], data?.totals?.[day]) && sectors.length > 0;
+      sectors.forEach((s,i) => {
+        if (!s.code || codes.has(s.code) || !result.sectors[i][day].valid) valid = false;
+        codes.add(s.code);
+        if (result.sectors[i][day].valid) keys.forEach(k => {sum[k] += result.sectors[i][day].counts[k];});
+        if (Array.isArray(s[day])) s[day].forEach(r => {if (stocks.has(r?.code)) valid = false; stocks.add(r?.code);});
+      });
+      valid = !!(valid && keys.every(k => sum[k] === data.board_totals[day][k]));
+      result[day] = {valid, counts: valid ? sum : null};
+    }
+    return result;
+  };
+  // Read only the exact, dated comparison sentence in the verified emotion evidence.
+  const emotionComparison = (value, asOf, factDate, previousDate) => {
+    if (!factDate || asOf !== factDate || !/^\d{4}-\d{2}-\d{2}$/.test(previousDate || '') || previousDate >= factDate) return null;
+    const m = String(value || '').match(/^\[事实\] 非ST (\d{1,2})月(\d{1,2})日→(\d{1,2})月(\d{1,2})日：涨停(\d+)→(\d+)；跌停(\d+)→(\d+)；炸板(\d+)→(\d+)；首板(\d+)→(\d+)；连板(\d+)→(\d+)；最高板(\d+)→(\d+)；封板率([\d.]+)%→([\d.]+)%[。；]/);
+    if (!m || Number(previousDate.slice(5,7)) !== +m[1] || Number(previousDate.slice(8)) !== +m[2] || Number(factDate.slice(5,7)) !== +m[3] || Number(factDate.slice(8)) !== +m[4]) return null;
+    const values=m.slice(5).map(Number);
+    if (values.some(v=>!Number.isFinite(v)) || values.slice(0,12).some(v=>!Number.isSafeInteger(v))) return null;
+    if (values[0] !== values[6]+values[8] || values[1] !== values[7]+values[9]) return null;
+    for (let i=0;i<2;i++) if (values[12+i]<0 || values[12+i]>100 || values[i]+values[4+i]<=0 || Math.abs(100*values[i]/(values[i]+values[4+i])-values[12+i])>.011) return null;
+    return {previousDate, factDate, rows:['涨停','跌停','炸板','首板','连板','最高板'].map((label,i)=>({label,before:values[i*2],after:values[i*2+1],unit:i===5?'板':'只'})), seal:values.slice(12)};
+  };
+  const visualStatus = (contentStatus, sourceStatus) => contentStatus && contentStatus !== 'ready' ? contentStatus : sourceStatus === 'partial' ? 'partial' : 'ready';
+  const api = {visualStatus, emotionComparison, num, fmt, compare, compareDisplayed, percentItems, sectorFacts, scale, stats, coverageState, chartDate, capacityValues, capacityChange, institutionFlow, sectorBoardCounts};
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   if (typeof document === 'undefined') return;
   const doc = document.querySelector('.report-document');
@@ -121,24 +228,39 @@
       (heading || parent.firstElementChild).after(host);
     }
     const card = el('figure', 'rv-card'); card.dataset.reviewVisual = key;
-    card.append(el('figcaption', 'rv-title', title), el('p', 'rv-note', note));
+    card.append(el('figcaption', 'rv-title', title));
+    const legend = {
+      'index-matrix':'分钟：收盘比 MA5；日线：MA5 比 MA10。↑ 上方 · ↓ 下方 · — 未计算',
+      'sector-heatmap':'颜色深浅表示数量；未录＝未进入榜单，缺＝数据缺失。题材可重叠，不可相加。',
+      'style-feedback':'● 开盘均值 / ◇ 开盘中位数（%）；仅为开盘反馈。',
+      'institution-flow':'已列机构席位净额（亿元）；单日与多日分开看。',
+      'capacity':'↑ 线上 · ↓ 线下 · ≈ 显示值相等 · — 未计算',
+      'new-highs':'60 / 120 / 250 日窗口独立统计，名单重叠。',
+      'new-high-flow':'退出＝今日未再次创新高；并非趋势破坏。',
+      'calendar':'计划事件，发布后仍需核验。',
+      'checks':'[判断] 待验证条件',
+    }[key];
+    if (legend) card.append(el('p','rv-note',legend));
+    const method=el('details','rv-subdetail rv-method');
+    method.append(el('summary','','统计口径与来源'),el('p','rv-note',note));
     if (!['calendar','checks','coverage'].includes(key)) {
-      card.append(el('p','rv-note',date ? '行情事实日 '+date+' · 复核日 '+reportDate : '交易日历未核验，未采用历史行情。'));
+      card.append(el('p','rv-note',date ? '[事实] '+date+(date===reportDate?'':' · 复核 '+reportDate) : '交易日历未核验，未采用历史行情。'));
     }
-    if (classificationDate && classificationDate !== date && ['sector-limits','sector-heatmap','sector-breadth','limit-timeline'].includes(key)) {
+    if (classificationDate && classificationDate !== date && ['sector-limits','sector-heatmap','sector-breadth'].includes(key)) {
       card.append(el('p','rv-note','行业按 '+classificationDate+' 成分快照回看，非历史成分回放；分类时点差异标记 partial。'));
     }
-    if (source?.dataset.sourceStatus) card.append(el('p', 'rv-note', '来源状态：' + source.dataset.sourceStatus + ' · 事实日 ' + (source.dataset.asOf || '未提供')));
+    if (source?.dataset.sourceStatus) method.append(el('p', 'rv-note', '来源状态：' + source.dataset.sourceStatus + ' · 事实日 ' + (source.dataset.asOf || '未提供')));
     try {
       const content = build();
       if (!content) throw new Error('missing-data');
-      card.append(content); card.dataset.visualStatus = content.dataset.visualStatus || 'ready';
+      card.append(content); card.dataset.visualStatus = visualStatus(content.dataset.visualStatus, source?.dataset.sourceStatus);
       if (card.dataset.visualStatus !== 'ready') gaps.push(title + '（' + card.dataset.visualStatus + '）');
     } catch (_) {
       card.append(el('p', 'rv-empty', '未生成图形：来源缺失、日期不符或字段不完整。请查看原始证据；缺失不等于零。'));
       card.dataset.visualStatus = 'missing-data'; gaps.push(title);
     }
-    sourceLink(card, source); host.append(card); return card;
+    if (card.dataset.visualStatus === 'partial') card.append(el('p','rv-note','部分数据缺失，图中保留可核验值。'));
+    sourceLink(method, source); card.append(method); host.append(card); return card;
   }
   function bars(items, {unit = '%', signed = true, digits = 2, limit = null} = {}) {
     if (!items.length || !items.some(r => r.value != null)) return null;
@@ -275,32 +397,48 @@
     box.append(left, right); return box;
   });
   const sectorLimits = identity.sector_limits;
-  panel('s2', 'sector-limits', '热门板块：涨停数量前10', '[事实] 申万二级；按当日非ST、非退市涨停数量降序，同数并列按名称显示。“热门”只表示涨停数量，不等于主线判断。', null, () => {
+  panel('s2', 'sector-limits', '热门板块：涨停数量前10', '[事实] 申万二级·非ST、非退市涨停前10；按今日数量排序。', null, () => {
     if (!sectorLimits || !['complete','partial'].includes(sectorLimits.status)) return unavailable(sectorLimits);
     if (sectorLimits.date !== date || sectorLimits.classification_as_of !== classificationDate) return unavailable({status:'source_failed',reason:'板块涨停统计日期不符'});
     const box=el('div','rv-sector-limits'); box.dataset.visualStatus=sectorLimits.status==='partial'?'partial':'ready';
-    box.append(el('p','rv-statline', sectorLimits.previous_date+' → '+date+' · 全市场涨停 '+sectorLimits.totals.previous+' → '+sectorLimits.totals.current+'只'));
-    box.append(el('p','rv-note','两日均按'+classificationDate+'申万二级成分快照归类，非历史成分回放；昨日为空心条，今日实心条分为首板（青色）与连板（金色）。'));
+    box.append(el('p','rv-statline', sectorLimits.previous_date+' → '+date+' · 来源涨停样本 '+sectorLimits.totals.previous+' → '+sectorLimits.totals.current+'只'));
+    box.append(el('p','rv-note','空心：昨日；实心：今日板型。仅统计原始涨停名单。'));
+    const boards=sectorBoardCounts(sectorLimits), boardKeys=['10','20','30','unknown'];
+    const boardLabel=k=>k==='unknown'?'未知':k+'cm';
+    const boardText=c=>boardKeys.filter(k=>k==='10'||k==='20'||c[k]>0).map(k=>boardLabel(k)+' '+c[k]+'只').join(' · ');
+    if(boards.current.valid) box.append(el('p','rv-statline','今日名单：'+boardText(boards.current.counts)));
+    const legend=el('div','rv-board-legend');boardKeys.forEach(k=>{const item=el('span','');item.append(el('i','rv-board-'+k),document.createTextNode(boardLabel(k)));legend.append(item);});box.append(legend);
+    if(!boards.current.valid||!boards.previous.valid){box.dataset.visualStatus='partial';box.append(el('p','rv-note',(boards.current.valid?'':'今日板型未核验；')+(boards.previous.valid?'':'昨日板型未核验；')+'缺字段或合计不一致，不按代码推定板型。'));}
     const selected=sectorLimits.sectors.filter(s=>s.code!=='UNCLASSIFIED' && s.current_count>0).slice(0,10);
     const max=Math.max(1,...selected.flatMap(s=>[s.previous_count,s.current_count]));
     selected.forEach(s=>{
+      const verified=boards.sectors.find(r=>r.code===s.code);
+      const currentOK=boards.current.valid&&verified?.current.valid, previousOK=boards.previous.valid&&verified?.previous.valid;
       const row=el('div','rv-sector-count-row'); row.dataset.sector=s.code;
       row.dataset.currentCount=s.current_count;row.dataset.previousCount=s.previous_count;
-      const name=el('div','rv-label',s.name); name.append(el('small','','首板'+s.first_count+' / 连板'+s.consecutive_count));
+      row.dataset.boardStatus=currentOK?'verified':'unverified';
+      const name=el('div','rv-label',s.name);
+      name.append(el('span','rv-board-counts',currentOK?boardText(verified.current.counts):'板型未核验'));
+      name.append(el('small','','首板'+s.first_count+' / 连板'+s.consecutive_count));
       const tracks=el('div','rv-count-tracks');
       const previous=el('div','rv-track');const old=el('i','rv-count-previous');old.style.width=100*s.previous_count/max+'%';previous.append(old);
-      const current=el('div','rv-track');const first=el('i','rv-count-first');first.style.width=100*s.first_count/max+'%';
-      const next=el('i','rv-count-consecutive');next.style.left=100*s.first_count/max+'%';next.style.width=100*s.consecutive_count/max+'%';current.append(first,next);
+      previous.title='昨日 '+s.previous_count+'只 · '+(previousOK?boardText(verified.previous.counts):'板型未核验');
+      const current=el('div','rv-track');
+      if(currentOK){let offset=0;boardKeys.forEach(k=>{const n=verified.current.counts[k];if(n){const mark=el('i','rv-count-board rv-board-'+k);mark.dataset.board=k;mark.dataset.count=n;mark.style.left=100*offset/max+'%';mark.style.width=100*n/max+'%';mark.title=boardLabel(k)+' '+n+'只';current.append(mark);}offset+=n;});}
+      else current.append(el('span','rv-no-value','板型未核验'));
+      current.setAttribute('aria-label','今日 '+s.current_count+'只 · '+(currentOK?boardText(verified.current.counts):'板型未核验'));
       tracks.append(previous,current);row.append(name,tracks,el('strong','rv-number',s.previous_count+' → '+s.current_count+'只'));box.append(row);
     });
     if(!selected.length) box.append(el('p','rv-empty','完整来源中没有可归类的当日涨停板块；未分类样本见下方。'));
     const missing=sectorLimits.unclassified;
     box.append(el('p','rv-note','未分类/分类冲突：昨日'+missing.previous.length+'只、今日'+missing.current.length+'只；不重复分配到多个行业。'));
     const all=el('details','rv-subdetail');all.append(el('summary','','展开全部板块统计与逐股名单（含昨日有、今日为0的板块）'));
+    all.append(el('p','rv-note','两日均按'+classificationDate+'申万二级成分快照归类，非历史成分回放；同数按名称排序。热门只表示涨停数量，不等于主线判断。10/20/30cm为常规板型，涨停由原始名单认定，不按涨幅阈值筛选；30cm为0仅指现有样本，不证明全市场无30cm涨停。'));
+    for(const day of ['previous','current']) all.append(el('p','rv-note',(day==='current'?'今日':'昨日')+'名单：'+(boards[day].valid?boardKeys.map(k=>boardLabel(k)+' '+boards[day].counts[k]+'只').join(' · '):'板型未核验')));
     sectorLimits.sectors.forEach(s=>{
       const d=el('details','rv-subdetail');d.append(el('summary','',s.name+' · '+s.previous_count+' → '+s.current_count+'只 · 今日首板'+s.first_count+'/连板'+s.consecutive_count));
-      d.append(el('p','rv-code-list','今日：'+(s.current.map(r=>r.name+' '+r.code+'（'+r.height+'板）').join(' · ')||'0只（来源完整）')));
-      d.append(el('p','rv-code-list','昨日：'+(s.previous.map(r=>r.name+' '+r.code+'（'+r.height+'板）').join(' · ')||'0只（来源完整）')));all.append(d);
+      d.append(el('p','rv-code-list','今日：'+(s.current.map(r=>r.name+' '+r.code+'（'+r.height+'板；'+(boardKeys.includes(r.board)?boardLabel(r.board):'板型未核验')+'）').join(' · ')||'0只（来源完整）')));
+      d.append(el('p','rv-code-list','昨日：'+(s.previous.map(r=>r.name+' '+r.code+'（'+r.height+'板；'+(boardKeys.includes(r.board)?boardLabel(r.board):'板型未核验')+'）').join(' · ')||'0只（来源完整）')));all.append(d);
     });box.append(all);sourceLink(box, all.querySelector('summary'));return box;
   });
   const heat = identity.sector_heatmap, themeHeat = identity.theme_heatmap;
@@ -381,8 +519,9 @@
     if(!data||!['complete','partial'].includes(data.status))return unavailable(data);
     if(data.date!==date||data.classification_as_of!==classificationDate)return unavailable({status:'source_failed',reason:'板块分布日期不符'});
     const box=el('div');box.dataset.visualStatus=data.status==='complete'?'ready':'partial';const content=el('div');
-    box.append(el('p','rv-note','剔除事实日ST名单、成员名称含ST/退市标识及B股；成员快照日 '+classificationDate+'，行情日 '+date+'，不能据无行情断定停牌或退市。青＝上涨、灰＝平盘、红＝下跌；涨停数是独立计数，不另叠加到比例。'));
-    box.append(el('p','rv-note','全量覆盖：有效交易'+data.sectors.reduce((n,s)=>n+s.valid,0)+'只；快照成员中无有效行情'+data.sectors.reduce((n,s)=>n+s.unknown,0)+'只；ST名单与名称标识差异'+(data.eligibility.st_list_only.length+data.eligibility.name_st_only.length)+'只，已按并集排除。'));
+    box.append(el('p','rv-note','青＝上涨 · 灰＝平盘 · 红＝下跌；仅有效交易样本。'));
+    const missing=data.sectors.reduce((n,s)=>n+s.unknown,0);
+    if(missing) box.append(el('p','rv-note',missing+'只无有效行情，未计入比例。'));
     function draw(mode){
       content.replaceChildren();
       data.sectors.filter(s=>mode==='all'?(s.sample>0):data.selected.includes(s.code)).forEach(s=>{
@@ -392,47 +531,21 @@
         if(s.valid) ['up','flat','down'].forEach(k=>{const seg=el('span','rv-breadth-'+k);seg.style.width=100*s[k]/s.valid+'%';track.append(seg);});
         else track.append(el('span','rv-no-value','无有效样本'));
         row.append(track,el('strong','rv-number',s.valid?'上涨 '+(100*s.up/s.valid).toFixed(1)+'%':'比例未计算'));summary.append(row);
-        summary.append(el('small','rv-note','上涨'+s.up+' / 平盘'+s.flat+' / 下跌'+s.down+' · 涨停'+s.limit_up+'只 · 无有效行情'+s.unknown+'只'));
-        d.append(summary,el('p','rv-note','快照符合过滤口径的成员'+s.sample+'只；其中有效交易'+s.valid+'只。展开名单按股票代码排列，不代表优先级。'));
+        summary.append(el('small','rv-note','涨停 '+s.limit_up+'只'+(s.unknown?' · 无行情 '+s.unknown+'只':'')));
+        const counts=el('p','rv-note','上涨'+s.up+' / 平盘'+s.flat+' / 下跌'+s.down+' · 有效样本'+s.valid+'只');
+        d.append(summary,counts,el('p','rv-note','快照符合过滤口径的成员'+s.sample+'只；其中有效交易'+s.valid+'只。展开名单按股票代码排列，不代表优先级。'));
         const states={up:'上涨',flat:'平盘',down:'下跌',unknown:'无有效行情，原因未核实'};
         d.append(el('p','rv-code-list',s.records.map(r=>r.name+' '+r.code+' · '+states[r.outcome]+(r.pct===null?'':' '+fmt(r.pct,2,true)+'%')+(r.limit_up?'（涨停）':'')).join('；')));content.append(d);
       });
     }
     box.append(choices([['top','今日涨停前10板块'],['all','全部有成员板块']], 'top',draw),content);draw('top');
     const receipt=el('details','rv-subdetail'), summary=el('summary','','查看过滤口径与覆盖缺口');receipt.append(summary);
+    receipt.append(el('p','rv-note','剔除事实日ST名单、成员名称含ST/退市标识及B股；成员快照日 '+classificationDate+'，行情日 '+date+'，不能据无行情断定停牌或退市。青＝上涨、灰＝平盘、红＝下跌；涨停数是独立计数，不另叠加到比例。'));
+    receipt.append(el('p','rv-note','全量覆盖：有效交易'+data.sectors.reduce((n,s)=>n+s.valid,0)+'只；快照成员中无有效行情'+data.sectors.reduce((n,s)=>n+s.unknown,0)+'只；ST名单与名称标识差异'+(data.eligibility.st_list_only.length+data.eligibility.name_st_only.length)+'只，已按并集排除。'));
     const e=data.eligibility;
     receipt.append(el('p','rv-note','当日日线'+data.quote_count+'只；ST名单与名称标识取并集剔除'+e.st_union_count+'只，其中仅ST名单命中'+e.st_list_only.length+'只、仅名称ST命中'+e.name_st_only.length+'只；来源身份存在差异，采用并集保守排除。未成功归类行情'+data.unmapped_quotes.length+'只。'));
     receipt.append(el('p','rv-code-list','仅ST名单：'+(e.st_list_only.join(' · ')||'0只')+'；仅名称ST：'+(e.name_st_only.join(' · ')||'0只')+'；未归类：'+(data.unmapped_quotes.join(' · ')||'0只')));
     box.append(receipt);sourceLink(box,summary);return box;
-  });
-  const seal=identity.limit_timeline;
-  panel('s2','limit-timeline','涨停时间轴：首次与最后封板','[事实] ● 首次封板 / ◆ 最后封板；虚线只连接两个时刻，不表示期间持续封板。开板次数来自当日涨停接口，没有逐次开板的事件时刻。',null,()=>{
-    if(!seal||!['complete','partial'].includes(seal.status))return unavailable(seal);
-    if(seal.date!==date)return unavailable({status:'source_failed',reason:'封板时刻日期不符'});
-    const box=el('div');box.dataset.visualStatus=seal.status==='complete'?'ready':'partial';
-    const select=el('select','rv-sector-select');select.setAttribute('aria-label','选择涨停时间轴板块');
-    [['top','今日涨停前10板块'],['all','全部涨停股票（'+seal.sample+'只）'],...seal.sectors.map(s=>[s.code,s.name])].forEach(([value,label])=>{const option=el('option','',label);option.value=value;select.append(option);});
-    const content=el('div');const start=9*3600+25*60,end=15*3600;const position=t=>100*(t-start)/(end-start);
-    const time=t=>t===null?'未核实':[Math.floor(t/3600),Math.floor(t%3600/60),t%60].map(x=>String(x).padStart(2,'0')).join(':');
-    function draw(){
-      content.replaceChildren();const records=seal.records.filter(r=>select.value==='all'||(select.value==='top'?seal.selected.includes(r.sector):r.sector===select.value));
-      content.append(el('p','rv-statline',date+' · 当前显示'+records.length+' / 全部'+seal.sample+'只 · 按首次封板时刻排序'));
-      const axis=el('div','rv-time-axis');[start,11*3600+30*60,13*3600,end].forEach(t=>{const tick=el('span','',time(t).slice(0,5));tick.style.left=position(t)+'%';axis.append(tick);});content.append(axis);
-      records.forEach(r=>{
-        const row=el('div','rv-time-row');row.dataset.code=r.code;row.dataset.first=r.first===null?'':r.first;row.dataset.last=r.last===null?'':r.last;
-        const label=el('div','rv-label',r.name+' '+r.code);label.append(el('small','',r.sector_name+' · '+r.height+'板'));row.append(label);
-        const track=el('div','rv-time-track');const noon=el('i','rv-time-noon');noon.style.left=position(11*3600+30*60)+'%';noon.style.width=position(13*3600)-position(11*3600+30*60)+'%';track.append(noon);
-        if(r.first!==null&&r.last!==null){const line=el('i','rv-time-span');line.style.left=position(r.first)+'%';line.style.width=position(r.last)-position(r.first)+'%';track.append(line);}
-        [['first','●'],['last','◆']].forEach(([key,symbol])=>{if(r[key]===null)return;const point=el('span','rv-time-point rv-time-'+key,symbol);point.style.left=position(r[key])+'%';track.append(point);});
-        if(r.first===null&&r.last===null)track.append(el('span','rv-no-value','时刻未核实'));
-        row.append(track,el('strong','rv-number','开板 '+(r.open_times===null?'未核实':r.open_times+'次')));
-        row.append(el('small','rv-time-detail','首次 '+time(r.first)+' → 最后 '+time(r.last)+(r.first!==null&&r.first<9*3600+30*60?' · 竞价/开盘前接口记录':'')+(r.issues.length?' · '+r.issues.join('；'):'')));content.append(row);
-      });
-      const search=document.querySelector('.reader-search input');if(search?.value)search.dispatchEvent(new Event('input',{bubbles:true}));
-    }
-    select.addEventListener('change',draw);box.append(select,el('p','rv-note','横轴使用实际钟表时间，阴影为11:30–13:00午休；09:25–09:30为竞价/开盘前接口记录。首末同刻时两个符号上下错开；只包含收盘涨停股票，盘中触板后未封住的股票不在本图。'),content);draw();
-    const receipt=el('details','rv-subdetail'), summary=el('summary','','查看全部股票的封板原始字段');receipt.append(summary);
-    seal.records.forEach(r=>receipt.append(el('p','rv-note',r.name+' '+r.code+' · '+r.sector_name+' · 首次'+time(r.first)+' / 最后'+time(r.last)+' / 开板'+(r.open_times===null?'未核实':r.open_times+'次')+(r.issues.length?' · '+r.issues.join('；'):''))));box.append(receipt);sourceLink(box,summary);return box;
   });
   const feedback = q('table[data-board-break-feedback=v1]');
   panel('s3', 'break-distribution', '断板股：个股收益分布', '[事实] 每行一只股票，点位表示反馈涨跌幅；可切换开盘/收盘，固定同一横轴范围。均值与中位数仅统计有值样本。', feedback, () => {
@@ -475,11 +588,11 @@
     draw('close'); return box;
   });
   const ladder = identity.ladder;
-  panel('s3', 'ladder-flow', '连板梯队：逐股晋级与断板', '[事实] 固定昨日非ST、非退市涨停名单，按同股身份追踪；晋级须当日涨停且高度加一。缺行情或高度冲突保留待核，资格变化另列。', tableWith('#s3', ['日期','层级','晋级/分母']), () => {
+  panel('s3', 'ladder-flow', '连板晋级：各梯队成功延续比例', '[事实] 固定昨日非ST、非退市涨停名单，按同股身份追踪；晋级须当日涨停且高度加一。缺行情或高度冲突保留待核，资格变化另列。', tableWith('#s3', ['日期','层级','晋级/分母']), () => {
     if (!ladder || !['complete','partial'].includes(ladder.status)) return unavailable(ladder);
     if (ladder.date !== date || !Array.isArray(ladder.records)) return unavailable({status:'source_failed',reason:'梯队日期或逐股记录不符'});
     const box = el('div', 'rv-ladder'); box.dataset.visualStatus = ladder.status === 'partial' ? 'partial' : 'ready';
-    box.append(el('p', 'rv-statline', ladder.previous_date + ' → ' + date + ' · 固定样本 ' + ladder.sample + '只 · ' + ladder.status));
+    box.append(el('p', 'rv-statline', ladder.previous_date + ' → ' + date + ' · 固定样本 ' + ladder.sample + '只' + (ladder.status==='partial'?' · 部分待核':'')));
     const names = {promoted:'晋级',broken:'断板',unknown:'待核',excluded:'资格变化'};
     ladder.groups.forEach(group => {
       const row = el('div', 'rv-ladder-row'); row.dataset.height = group.height;
@@ -488,15 +601,37 @@
       Object.keys(names).forEach(key => {
         const cell = el('div', 'rv-flow-outcome rv-flow-' + key); cell.dataset.outcome = key; cell.dataset.count = group[key];
         cell.append(el('span', '', names[key]), el('strong', '', group[key] + '只')); outcomes.append(cell);
-      }); row.append(start, el('span','rv-flow-arrow','→'), outcomes); box.append(row);
-      const detail = el('details', 'rv-subdetail'); detail.append(el('summary', '', '查看昨日' + group.height + '板的逐股去向'));
+      }); row.append(start, el('span','rv-flow-arrow','→'), outcomes);
+      const detail = el('details', 'rv-subdetail');
+      const summary=el('summary','rv-promotion');summary.dataset.height=group.height;
+      const ratio=group.total>0?100*group.promoted/group.total:null;
+      summary.append(el('span','',group.height+'进'+(group.height+1)));
+      const track=el('span','rv-promotion-track');const fill=el('i');fill.style.width=(ratio||0)+'%';track.append(fill);
+      summary.append(track,el('strong','',group.promoted+'/'+group.total+' · '+(ratio===null?'未计算':ratio.toFixed(1)+'%')));
+      if(group.unknown||group.excluded) summary.append(el('small','rv-note','待核'+group.unknown+' · 资格变化'+group.excluded));
+      detail.append(summary,row);
       const list = el('ul', 'rv-identity-list');
       ladder.records.filter(r => r.previous_height === group.height).forEach(r => list.append(el('li','', r.name + ' ' + r.code + ' · ' + names[r.outcome] + (r.current_height ? '（今日'+r.current_height+'板）' : '') + ' · ' + r.reason)));
       detail.append(list); box.append(detail);
     });
-    box.append(el('p','rv-note','来源：双日涨停/ST完整分页、事实日日线及可核验的事实日名称；有效日线要求量、额及价格有效。名称身份未核实保留待核。断板表示未继续涨停，不等于下跌。今日新首板不混入昨日样本；箭头宽度不表示数量。'));
+    box.append(el('p','rv-note','点击各梯队查看名单。未晋级不等于下跌；今日新首板不计入分母。'));
     return box;
   });
+  const emotionSources=qa('#s3 > details.evidence[data-as-of] > .evidence-body > p').map(p=>({p,data:emotionComparison(text(p),p.closest('details').dataset.asOf,date,identity.ladder?.previous_date)})).filter(x=>x.data);
+  if(emotionSources.length===1){
+    const {p,data}=emotionSources[0],card=el('figure','rv-card rv-emotion-comparison');card.dataset.emotionComparison='v1';
+    card.append(el('figcaption','rv-title','情绪变化：前一交易日 → 今日'),el('p','rv-note','[事实] '+data.previousDate+' → '+data.factDate+' · 空心＝前日，实心＝今日；每项独立刻度。'));
+    const grid=el('div','rv-comparison-grid');
+    data.rows.forEach(r=>{const cell=el('div','rv-comparison-cell');cell.dataset.metric=r.label;cell.dataset.before=r.before;cell.dataset.after=r.after;
+      cell.append(el('span','',r.label),el('strong','',r.before+' → '+r.after+r.unit));
+      const bound=Math.max(1,r.before,r.after);
+      [r.before,r.after].forEach((value,i)=>{const track=el('div','rv-compare-track');const bar=el('i',i?'rv-compare-today':'rv-compare-before');bar.style.width=100*value/bound+'%';track.append(bar);cell.append(track);});grid.append(cell);
+    });card.append(grid);sourceLink(card,p);
+    const anchor=q('#claim-emotion');if(anchor)anchor.before(card);else q('#s3').append(card);
+    // Only fold the duplicate factual list after the replacement chart exists.
+    const list=anchor?.nextElementSibling;
+    if(list?.tagName==='UL'&&Array.from(list.children).every(li=>text(li).startsWith('[事实]'))){const detail=el('details','rv-subdetail');detail.append(el('summary','','查看变化与晋级原始文字'));list.before(detail);detail.append(list);}
+  }
   const style = tableWith('#s4', ['组别', '样本', '开盘均值', '中位', '高开率']);
   const labels = {capacity_top10: '容量前10', first_board_10cm: '10cm 首板', first_board_20cm: '20cm 首板', first_board_30cm: '30cm 首板', second_board: '二板', third_board_plus: '三板及以上'};
   panel('s4', 'style-feedback', '不同风格的隔夜承接', '[事实] ● 开盘均值 / ◇ 开盘中位数；共享零轴。样本少的组仅作样本描述，开盘反馈不是收盘收益。', style, () => {
@@ -519,6 +654,45 @@
       });
       row.append(track, el('strong', 'rv-number', fmt(r.mean, 2, true) + '% / ' + fmt(r.median, 2, true) + '%')); box.append(row);
     }); return box;
+  });
+  const institutionTables = qa('#s4 table[data-institution-flow=v1]');
+  const institution = institutionTables[0];
+  panel('s4', 'institution-flow', '机构席位：净买与净卖', '[事实] 仅展示机构主表已列股票，不代表全机构合计。“机构专用”是席位标签，不是可识别的机构家数。', institution, () => {
+    const data = institutionFlow({...institution?.dataset, sourceCount: institutionTables.length},
+      institution ? qa('thead th', institution).map(text) : [], rows(institution).map(r => r.cells), date);
+    const box = el('div', 'rv-institution'); box.dataset.visualStatus = data.status;
+    const body = el('div'), detail = el('div', 'rv-picked-detail');
+    detail.setAttribute('aria-live', 'polite'); detail.setAttribute('aria-atomic', 'true');
+    const describe = r => r.name + '（' + r.code + '） · 机构买入 ' + fmt(r.buy, 3) + ' 亿 / 卖出 ' + fmt(r.sell, 3) +
+      ' 亿 / 净额 ' + fmt(r.net, 3, true) + ' 亿；当日涨跌 ' + fmt(r.change, 2, true) + '% / 换手 ' +
+      fmt(r.turnover, 2) + '% / 成交 ' + fmt(r.amount, 3) + ' 亿。';
+    const draw = segment => {
+      const selected = data.groups[segment]; body.replaceChildren();
+      body.append(el('p', 'rv-statline', segment === 'single' ? '单日榜 · 机构净额（亿元）' : '多日累计榜 · 与单日榜分开阅读，不可相加'));
+      detail.textContent = '悬停、点选或用键盘选择股票，查看机构买入、卖出和净额。';
+      const chart = bars(selected.map(r => ({label: r.name + ' ' + r.code, value: r.net})), {unit: '亿', digits: 3});
+      if (chart) {
+        qa('.rv-bar-row', chart).forEach((row, i) => {
+          const r = selected[i]; row.tabIndex = 0; row.setAttribute('role', 'button');
+          row.dataset.stockCode = r.code; row.dataset.segment = segment;
+          row.title = describe(r); row.setAttribute('aria-label', describe(r));
+          const show = () => {detail.textContent = describe(r);};
+          row.addEventListener('mouseenter', show); row.addEventListener('focus', show); row.addEventListener('click', show);
+          row.addEventListener('keydown', event => {if (event.key === 'Enter' || event.key === ' ') {event.preventDefault(); show();}});
+        });
+        body.append(chart);
+      } else {
+        body.append(el('p', 'rv-empty', '本榜段净额未计算或没有可核验行；不记为零。'));
+        if (selected.length) {
+          const list = el('ul', 'rv-institution-missing');
+          selected.forEach(r => list.append(el('li', '', describe(r)))); body.append(list);
+        }
+      }
+      if (selected.some(r => r.incomplete)) body.append(el('p', 'rv-note', '部分字段未计算；仅绘制原表明确给出的净额，不根据买卖单侧金额补算。'));
+    };
+    box.append(choices([['single', '单日榜'], ['multi', '多日累计榜']], 'single', draw), body, detail);
+    if (data.issues.length) box.append(el('p', 'rv-note', '未绘制的歧义或缺口：' + [...new Set(data.issues)].join('；')));
+    draw('single'); return box;
   });
   const capacity = q('table[data-capacity-health=v1]');
   panel('s5', 'capacity', '容量核心健康矩阵', '[事实] 前复权收盘与均线比较；↑ 线上 / ↓ 线下 / — 未计算。显示值相等用≈待核原值，不断言精确贴线。Top50 为近5日入榜次数，不是趋势分。', capacity, () => {

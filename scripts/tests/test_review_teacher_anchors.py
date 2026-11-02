@@ -35,8 +35,8 @@ def test_source_attribution_old_date_and_exact_quote(tmp_path):
     p=write_input(tmp_path,attrs);payload=load(p,DAY,db)
     assert payload['status']=='partial'
     html=render(payload,DAY);validate(html,DAY,payload)
-    assert '<details class="evidence" open data-evidence-kind="teacher-level"' in html
-    assert html.count('<details class="evidence" open') == 1
+    assert '<details class="evidence" data-evidence-kind="teacher-level"' in html
+    assert html.count('<details class="evidence" open') == 0
     assert '历史观点' in html and '2026-10-30' in html and '老师甲' in html
     assert 'teacher_notes#10' in html and QUOTE in html
     assert 'data-teacher-core-anchors' in html and '本次来源未整理此项' not in html
@@ -110,3 +110,72 @@ def test_authorized_payload_reaches_formal_validator(tmp_path):
     too_long=asm.render_report(tmp_path,DAY,teacher_anchors=payload)
     with pytest.raises(asm.ReportValidationError,match='独立证据预算'):
         asm.validate_report(too_long,teacher_anchors=payload)
+
+
+def _default_teacher_text(fragment):
+    import re
+    from html import unescape
+    return unescape(re.sub('<[^>]+>','',re.sub(r'<details\b.*?</details>','',fragment,flags=re.S)))
+
+
+def test_default_summary_retains_actual_conditions_status_and_folded_sources(tmp_path):
+    from copy import deepcopy
+    db,attrs=source(tmp_path,day='2026-10-30')
+    condition='需突破3574且持续放量；未满足前不能视为已确认。'
+    payload=load(write_input(tmp_path,attrs,condition),DAY,db);before=deepcopy(payload)
+    html=render(payload,DAY);visible=_default_teacher_text(html)
+    assert '上证指数' in visible and '3574' in visible and condition in visible
+    assert '老师甲' in visible and '待盘面验证' in visible and '历史归档 2026-10-30' in visible
+    assert QUOTE not in visible and QUOTE in html and 'teacher_notes#10' not in visible
+    assert '归档日不等于原始发言日' not in visible and '归档日不等于原始发言日' in html
+    assert html.count('data-teacher-index-levels=')==1 and html.count('data-teacher-core-anchors=')==1
+    assert '<details class="evidence" open' not in html
+    assert f'data-as-of="{DAY}" data-items="1"' in html
+    assert payload==before
+    validate(html,DAY,payload)
+    with pytest.raises(ValueError):validate(html.replace('持续放量','无需放量',1),DAY,payload)
+
+
+@pytest.mark.parametrize('status,label',[
+    ('pending','待盘面验证'),('historical','历史观点'),('uncertain','待核原文'),('not-stated','未给具体点位'),
+])
+def test_default_teacher_summary_preserves_each_source_status(tmp_path,status,label):
+    db,attrs=source(tmp_path);attrs.update(status=status,kind='anchor',level='')
+    payload=load(write_input(tmp_path,attrs,'只观察条件，不认定已兑现。'),DAY,db)
+    html=render(payload,DAY);visible=_default_teacher_text(html)
+    assert label in visible and '只观察条件，不认定已兑现' in visible
+    assert 'data-teacher-summary="anchor"' in html and 'flex-wrap:wrap' in html
+    assert '<script' not in html and '<link' not in html
+
+
+def test_summary_keeps_conflicting_index_sources_separate(tmp_path):
+    db,attrs=source(tmp_path);payload=load(write_input(tmp_path,attrs),DAY,db)
+    payload['rows'].append(dict(payload['rows'][0],teacher='老师乙',subject='上证指数·另一来源',level='3680',summary='仅当再次放量才验证；不能与3574合并。',status='uncertain'))
+    html=render(payload,DAY);visible=_default_teacher_text(html)
+    assert '老师甲' in visible and '老师乙' in visible and '3574' in visible and '3680' not in visible
+    assert '3680' in html and '摘录1/2条' in visible and '另1条来源观察' in visible
+    assert '不能与3574合并' in html and '待核原文' in html and '不合并点位或确认条件' in visible
+    assert html.count('id="teacher-anchor-source-10"')==1
+    validate(html,DAY,payload)
+
+
+def test_teacher_summary_groups_by_teacher_without_claiming_full_consensus(tmp_path):
+    db,attrs=source(tmp_path);attrs.update(kind='anchor',level='')
+    payload=load(write_input(tmp_path,attrs,'首条完整条件；还须量能确认。'),DAY,db)
+    payload['rows'].append(dict(payload['rows'][0],subject='另一个对象',summary='第二条完整条件，不能略去。'))
+    html=render(payload,DAY);visible=_default_teacher_text(html)
+    assert '首条完整条件；还须量能确认' in visible
+    assert '第二条完整条件' not in visible and '第二条完整条件' in html
+    assert '摘录1/2条' in visible and '摘录不代表全部观点' in visible
+    validate(html,DAY,payload)
+
+
+def test_unstated_levels_share_one_visible_line_but_keep_all_source_conditions(tmp_path):
+    db,attrs=source(tmp_path);attrs.update(status='not-stated',level='未提供具体点位')
+    payload=load(write_input(tmp_path,attrs,'没有给出明确数字，不将估值作为点位。'),DAY,db)
+    payload['rows'].append(dict(payload['rows'][0],teacher='老师乙',subject='另一老师指数',summary='只说观察条件，暂无具体点位。'))
+    html=render(payload,DAY);visible=_default_teacher_text(html)
+    assert '老师甲、老师乙：所列来源未给具体点位（2条' in visible
+    assert '没有给出明确数字' not in visible and '没有给出明确数字' in html
+    assert '只说观察条件' in html
+    validate(html,DAY,payload)

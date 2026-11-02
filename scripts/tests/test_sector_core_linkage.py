@@ -39,6 +39,54 @@ def test_two_roles_are_weak_and_new_limit_is_not_new_core():
     assert len(v['members'])==4
 
 
+def _html_default_text(fragment):
+    import re
+    from html import unescape
+    return unescape(re.sub('<[^>]+>', '', re.sub(r'<details\b.*?</details>', '', fragment, flags=re.S)))
+
+
+def test_html_puts_verified_weaknesses_before_folded_rules_without_mutating_view():
+    view=link.calculate(**inputs());before=deepcopy(view);markdown=link.render_markdown(view)
+    fragment,gap=link.render_html(view,DAY);visible=_html_default_text(fragment)
+    assert '已核验4/4只归档核心' in visible and '已核验走弱 2只' in visible
+    assert '000001.SZ' in visible and 'MA20下方' in visible and '000002.SZ' in visible
+    assert '核心名单归档10-29' in visible
+    assert link.NOTE not in visible and link.NOTE in fragment
+    assert 'complete' not in visible and '状态：complete' in fragment
+    assert '<summary>来源、缺口与判断口径（2项）</summary>' in fragment
+    assert f'data-as-of="{DAY}" data-items="2"' in fragment
+    assert view==before and link.render_markdown(view)==markdown and not gap
+
+
+def test_html_partial_preserves_verified_weakness_and_unknown_coverage():
+    x=inputs();x['raw'].pop(sf.KEY);view=link.calculate(**x)
+    fragment,gap=link.render_html(view,DAY);visible=_html_default_text(fragment)
+    assert view['status']=='partial' and '已核验1/4只归档核心' in visible
+    assert '已核验走弱 1只' in visible and 'MA20下方' in visible
+    assert '待核验 3只' in visible and 'partial' not in visible
+    assert all(g in fragment for g in view['gaps']) and gap
+
+
+def test_html_unknown_weakness_is_not_rendered_as_no_weakness():
+    x=inputs();x['raw'].pop(sf.KEY);x['capacity']={'status':'not_computed'}
+    view=link.calculate(**x);fragment,_=link.render_html(view,DAY);visible=_html_default_text(fragment)
+    assert '已核验0/4只归档核心' in visible and '待核验 4只' in visible
+    assert '未触发本模块弱项' not in visible and '0只出现走弱信号' not in visible
+    assert link.NOTE not in visible and link.NOTE in fragment
+
+
+@pytest.mark.parametrize('status,expected',[
+    ('empty','最票名单为空'),('missing-data','核心名单或行情尚未核验'),
+    ('source_failed','核心名单或行情尚未核验'),
+])
+def test_html_empty_and_failed_identity_remain_distinct(status,expected):
+    view={**link._base(DAY),'status':status,'gaps':['完整来源缺口']}
+    fragment,_=link.render_html(view,DAY);visible=_html_default_text(fragment)
+    assert expected in visible and status not in visible
+    assert '完整来源缺口' not in visible and '完整来源缺口' in fragment
+    assert link.NOTE not in visible and link.NOTE in fragment
+
+
 @pytest.mark.parametrize('mode',['missing_current','missing_prior','unknown_height','missing_quote','wrong_feedback_date'])
 def test_break_requires_valid_prior_height_full_list_and_trading(mode):
     x=inputs()
@@ -194,3 +242,42 @@ def test_report_generator_accepts_batch_without_embedded_date(tmp_path,monkeypat
     markdown,_=generator.generate_post_market(DAY,x['raw'])
     assert results[0]['status']=='complete'
     assert '多类核心同日弱项' in markdown
+
+
+def test_html_visual_cards_keep_three_states_and_sector_identity():
+    x=inputs()
+    x['roster'].append(dict(code='000006.SZ',name='另一板块核心',sector='行业乙',role='趋势中军'))
+    view=link.calculate(**x)
+    fragment,_=link.render_html(view,DAY);visible=_html_default_text(fragment)
+    # 卡片逐一保留已保存身份；缺失角色不生成假股票或零值。
+    assert fragment.count('data-core-state="weak"')==2
+    assert fragment.count('data-core-state="clear"')==2
+    assert fragment.count('data-core-state="unknown"')==1
+    assert 'data-core-sector="行业甲"' in fragment and 'data-core-sector="行业乙"' in fragment
+    assert '已核验4/5只归档核心' in visible and '另一板块核心' in visible and '000006.SZ' in visible
+    assert '▼ 已核验走弱' in visible and '○ 已核验未触发' in visible and '? 待核验' in visible
+    assert 'aria-label="已核验4/5只；走弱2只，未触发2只，待核验1只"' in fragment
+    assert fragment.count('data-core-coverage=')==5
+    assert 'flex-wrap:wrap' in fragment and 'min-width:0' in fragment and 'overflow-wrap:anywhere' in fragment
+    assert '<script' not in fragment and '<svg' not in fragment and '<link' not in fragment
+
+
+def test_html_one_of_five_coverage_does_not_imply_four_healthy_members():
+    x=inputs();x['raw'].pop(sf.KEY)
+    x['roster'].append(dict(code='000006.SZ',name='待核验核心',sector='行业乙',role='趋势中军'))
+    fragment,_=link.render_html(link.calculate(**x),DAY);visible=_html_default_text(fragment)
+    assert '已核验1/5只归档核心' in visible and '待核验 4只' in visible
+    assert fragment.count('data-core-state="weak"')==1
+    assert fragment.count('data-core-state="unknown"')==4
+    assert 'data-core-state="clear"' not in fragment
+    assert 'aria-label="已核验1/5只；走弱1只，未触发0只，待核验4只"' in fragment
+
+
+def test_html_visual_identity_is_escaped_and_date_remains_explicit():
+    view=link.calculate(**inputs())
+    view['members'][0].update(name='<img src=x onerror=alert(1)>',sector='行业"<乙>')
+    view['identity_date']='2025-12-31'
+    fragment,_=link.render_html(view,DAY)
+    assert '<img' not in fragment and '&lt;img' in fragment
+    assert 'data-core-sector="行业&quot;&lt;乙&gt;"' in fragment
+    assert '核心名单归档2025-12-31' in _html_default_text(fragment)

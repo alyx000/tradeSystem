@@ -257,9 +257,23 @@ def render_html(result):
     tables=_tables(result)
     items=sum(len(rows) for _,_,rows in tables)
     gap=_gap(result)
-    parts=[f'<div data-strong-feedback-history="{escape(result["date"])}"><p>{escape(NOTE)}</p>']
-    if gap: parts.append('<p>[事实] '+escape(gap)+'</p>')
+    parts=[f'<div data-strong-feedback-history="{escape(result["date"])}" style="min-width:0;max-width:100%"><h4>反馈历史 · 已核验覆盖</h4>']
+    if result['calendar_status'] != 'complete':
+        parts.append('<p>历史窗口未计算：开放日日历未核验。</p>')
+    else:
+        parts.append('<p style="font-size:12px">仅统计已覆盖日期；缺日不补零，不代表完整趋势。</p>')
+        parts.append('<div data-feedback-windows="v1" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,180px),1fr));gap:12px">')
+        for w in result['windows']:
+            parts.append('<div style="min-width:0;padding:10px;border:1px solid rgba(128,128,128,.25)">')
+            parts.append(sf._visual_progress(f"近{w['days']}日 · 完整日", w['valid_days'], w['days'], key=f"coverage-{w['days']}", suffix='日'))
+            g=w['groups']['all'] if w['groups'] else None
+            parts.append('<p style="font-size:12px">'+(f"已覆盖 {g['sample_count']} 股票日 · 收盘均值 {_fmt(g['close_mean_pct'],True,signed=True)}" if g else '样本与反馈未计算')+'</p></div>')
+        parts.append('</div>')
+        w=result['windows'][-1]
+        parts.append('<p style="font-size:12px">来源身份完整 '+f"{w['classified_days']}/{w['valid_days']}日"+'；未知身份单列。</p>')
     parts.append(f'<details class="evidence" data-as-of="{escape(result["date"])}" data-items="{items}" data-evidence-kind="strong-feedback-history"><summary>强势股反馈历史与分组（{items}项）</summary>')
+    parts.append('<p>'+escape(NOTE)+'</p>')
+    if gap: parts.append('<p>[事实] '+escape(gap)+'</p>')
     parts.append(_chart(result['history'],(('touched_rate_pct','触及前高率','#b54a40'),('bearish_rate_pct','收阴率','#286e9e')),'触及前高率与收阴率'))
     parts.append(_chart(result['history'],(('close_mean_pct','收盘涨跌均值','#667d36'),),'收盘表现'))
     for title,headers,rows in tables:

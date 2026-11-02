@@ -283,3 +283,95 @@ def test_existing_report_and_dual_write_preserve_breadth(tmp_path,monkeypatch):
     with get_db(path) as conn:
         saved=m._db_block(conn,DAY)
     assert saved==value and saved['rows']==value['rows']
+
+
+def _visible_strength_html(fragment):
+    import re
+    from html import unescape
+    return unescape(re.sub('<[^>]+>','',re.sub(r'<details\b.*?</details>','',fragment,flags=re.S)))
+
+
+
+def test_strength_visual_current_counts_and_stock_day_windows_stay_separate():
+    conn,days=db()
+    for i,d in enumerate(days):put(conn,d,block(d,50 if i%2 else 100))
+    report=m.history(conn,DAY);before=deepcopy(report);markdown=r.render_markdown(report)
+    fragment,gap=r.render_html(report,DAY);visible=_visible_strength_html(fragment)
+    assert '当日有效样本 100只' in visible and '20只' in visible and '占当日样本 20.00%' in visible
+    assert '股票日占比' not in visible and r.NOTE not in visible and r.NOTE in fragment
+    assert '分母为窗口内有效样本累计股票日，不是当日股票数' in fragment
+    assert str(report['windows']['20']['market']['stock_days']) in fragment
+    assert fragment.count('data-strength-series=')==2
+    assert fragment.count('data-strength-point=')==40
+    assert 'data-strength-gap=' not in fragment
+    assert 'stroke-dasharray="4 3"' in fragment and '<circle ' in fragment and '<rect ' in fragment
+    assert 'role="img"' in fragment and '完整数值见近20开放日全市场表' in fragment
+    assert report==before and r.render_markdown(report)==markdown and not gap
+    conn.close()
+
+
+
+def test_strength_visual_breaks_lines_at_missing_days_and_labels_partial_coverage():
+    import re
+    conn,days=db()
+    for i,d in enumerate(days):
+        if i==19:continue
+        value=block(d)
+        if i==18:
+            value['rows'][0]['industry']='未分类';value['market'],value['sectors']=m._aggregate(value['rows'])
+            value['coverage']['unclassified_count']=1;value['status']='partial';value['gaps']=['未分类']
+        put(conn,d,value)
+    report=m.history(conn,DAY);fragment,gap=r.render_html(report,DAY);visible=_visible_strength_html(fragment)
+    assert '可绘 19/20日，其中 1日仅为已覆盖样本；缺日留空，不连线' in visible
+    assert f'data-strength-gap="{days[19]}"' in fragment
+    assert not re.search(r'data-strength-point="[^"]+" data-date="'+days[19]+'"',fragment)
+    paths=re.findall(r'data-strength-series="[^"]+" d="([^"]*)"',fragment)
+    assert len(paths)==2 and all(path.count('M')==2 for path in paths)
+    assert fragment.count('data-strength-point=')==38
+    assert 'partial' not in visible and gap
+    conn.close()
+
+
+
+def test_strength_visual_true_zero_is_a_point_but_no_history_has_no_chart():
+    conn,days=db();q,b,st,sw=sources()
+    for row in q:row.update(pct_chg=0.,close=100.)
+    zero=m.calculate(q,b,st,sw,DAY,min_count=1)
+    report=m.history(conn,DAY,current=zero);fragment,_=r.render_html(report,DAY)
+    assert fragment.count('data-value="0"')==2
+    assert 'data-strength-current="up"' in fragment and '0只' in _visible_strength_html(fragment)
+    failed=m.history(conn,DAY,current=m.failed(DAY,'<坏源>'))
+    fragment,_=r.render_html(failed,DAY);visible=_visible_strength_html(fragment)
+    assert '<svg' not in fragment and '暂无可展示的广度计数' in visible
+    assert '历史来源尚未核验' in visible and 'source_failed' not in visible
+    assert '<坏源>' not in fragment and '&lt;坏源&gt;' in fragment
+    conn.close()
+
+
+
+def test_strength_visual_retains_both_complete_tables_and_closed_evidence():
+    conn,_=db();report=m.history(conn,DAY,current=block())
+    fragment,_=r.render_html(report,DAY)
+    for title,headers,rows in r.tables(report):
+        assert f'<summary>{title}（{len(rows)}项）</summary>' in fragment
+        for header in headers:assert header in fragment
+    assert '<details open' not in fragment and ' open=' not in fragment
+    assert 'width:100%' in fragment and 'viewBox="0 0 360 210"' in fragment
+    assert '<script' not in fragment and '<link' not in fragment
+    with pytest.raises(ValueError):r.render_html(report,'2026-11-02')
+    conn.close()
+
+
+
+def test_strength_points_expose_values_on_keyboard_focus_without_duplicate_title_text():
+    import re
+    conn,days=db()
+    for d in days:put(conn,d,block(d))
+    fragment,_=r.render_html(m.history(conn,DAY),DAY)
+    points=re.findall(r'<(?:circle|rect) data-strength-point=.*?</(?:circle|rect)>',fragment)
+    assert len(points)==40
+    assert all('tabindex="0"' in point and 'aria-label="' in point for point in points)
+    assert all('<title>' not in point and '有效样本100只' in point for point in points)
+    assert '<title>近20开放日大涨大跌数量</title>' in fragment
+    assert '<desc>' in fragment and '逐日数值可展开下方全市场表查看' in fragment
+    conn.close()

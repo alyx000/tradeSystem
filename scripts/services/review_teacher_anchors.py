@@ -109,7 +109,7 @@ def render(payload, report_date):
         raise ValueError('老师锚点复核日不符')
     rows = payload.get('rows', [])
     out = [START, '<div class="teacher-observations" data-teacher-observations="v1">',
-           '<p class="sub">[老师观点] 以下保留来源条件，未视为已兑现事实；归档日不等于原始发言日。点位是来源观察，不是系统目标价。</p>']
+           '<p class="sub">[老师观点] '+escape(report_date)+' 复核摘要；条件尚待验证，点位仅为来源观察。</p>']
     for kind, title in KINDS.items():
         selected = [row for row in rows if row['kind'] == kind]
         marker = 'data-teacher-core-anchors' if kind == 'anchor' else 'data-teacher-index-levels'
@@ -120,8 +120,41 @@ def render(payload, report_date):
             reason = '本次尚未整理此项来源' if rows else payload.get('reason') or '本次来源未整理此项'
             out.append(f'<p {attrs}>[事实] '+escape(reason)+'；缺失不等于老师没有观点或没有关键点位。</p>')
             continue
+        # 按来源顺序摘录每组首条完整摘要，不截断条件，也不宣称代表全部观点。
+        groups = {}
+        unstated = []
+        for row in selected:
+            if kind == 'level' and row['status'] == 'not-stated':
+                unstated.append(row)
+                continue
+            key = row['teacher'] if kind == 'anchor' else row['subject'].split('·', 1)[0]
+            groups.setdefault(key, []).append(row)
+        out.append('<div role="list" data-teacher-summary="'+kind+'">')
+        for group, observations in groups.items():
+            row = observations[0]
+            source_label = row['teacher']+' · '+STATUSES[row['status']]
+            if row['date'] != report_date:
+                source_label += ' · 历史归档 '+row['date']
+            out.append('<div role="listitem" style="display:flex;flex-wrap:wrap;gap:4px 16px;padding:8px 0;border-bottom:1px solid #cbd5e1;overflow-wrap:anywhere">'+
+                       '<div style="flex:1 1 170px;min-width:0"><strong>'+escape(group)+
+                       '</strong><div style="font-size:12px">'+escape(source_label)+
+                       f' · 摘录1/{len(observations)}条</div></div>'+
+                       '<div style="flex:3 1 280px;min-width:0"><strong>'+escape(row['subject'])+'</strong><br>')
+            if kind == 'level':
+                out.append('<strong>'+escape(row['level'])+'</strong><br>')
+            out.append(escape(row['summary']))
+            if len(observations) > 1:
+                others = '、'.join(dict.fromkeys(r['teacher'] for r in observations[1:]))
+                out.append('<div style="font-size:12px">'+escape(f'另{len(observations)-1}条来源观察（{others}），可展开完整对照；'+
+                           ('不合并点位或确认条件。' if kind == 'level' else '摘录不代表全部观点。'))+'</div>')
+            out.append('</div></div>')
+        if unstated:
+            names = '、'.join(dict.fromkeys(row['teacher'] for row in unstated))
+            out.append('<div role="listitem" style="padding:8px 0">'+escape(names)+
+                       f'：所列来源未给具体点位（{len(unstated)}条，原因见完整对照）。</div>')
+        out.append('</div>')
         headers = ['老师 / 归档日', '观察对象', '核心锚点与确认条件'] if kind == 'anchor' else ['老师 / 归档日', '指数 / 点位', '性质、条件与状态']
-        out.append(f'<details class="evidence" open data-evidence-kind="teacher-{kind}" data-as-of="{report_date}" data-items="{len(selected)}"><summary>{title}（{len(selected)}项；含出处与确认条件）</summary><div class="evidence-body">')
+        out.append(f'<details class="evidence" data-evidence-kind="teacher-{kind}" data-as-of="{report_date}" data-items="{len(selected)}"><summary>{title}完整出处（{len(selected)}项）</summary><div class="evidence-body">')
         out.append(f'<div class="table-scroll-shell"><table {attrs}><thead><tr>'+''.join('<th>'+h+'</th>' for h in headers)+'</tr></thead><tbody>')
         for row in selected:
             ref = f'teacher-anchor-source-{row["note_id"]}'
@@ -133,6 +166,7 @@ def render(payload, report_date):
         out.append('</tbody></table></div></div></details>')
     if rows:
         out.append(f'<details class="evidence" data-as-of="{report_date}" data-items="{len(rows)}"><summary>老师锚点原文依据（{len(rows)}项）</summary><div class="evidence-body">')
+        out.append('<p>[老师观点] 以下保留来源条件，未视为已兑现事实；归档日不等于原始发言日。点位是来源观察，不是系统目标价。</p>')
         ids = set()
         for row in rows:
             ident = '' if row['note_id'] in ids else f' id="teacher-anchor-source-{row["note_id"]}"'

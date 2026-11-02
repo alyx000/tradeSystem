@@ -1659,7 +1659,7 @@ class _ReportParser(HTMLParser):
         if tag == "details" and "evidence" in classes:
             if current_evidence:
                 self._error("nested_evidence", "evidence 不允许嵌套", self._current_section())
-            # 用户固定要求两张老师观察表默认展开；来源原文仍折叠。
+            # 兼容已核验的旧版展开表；现行使用分组摘要和折叠完整来源。
             teacher_default_open = (
                 self._current_section() == "teachers"
                 and attrs.get("data-evidence-kind") in {"teacher-anchor", "teacher-level"}
@@ -9573,7 +9573,7 @@ def _render_style_low_price_effect(
         return missing_fragment(status)
 
     partial_note = "本模块为部分覆盖，缺口见数据缺口。" if status == "partial" else ""
-    return f'''<div class="style-low-price-effect" data-style-low-price-effect="v1"
+    html = f'''<div class="style-low-price-effect" data-style-low-price-effect="v1"
     data-as-of="{escape(report_date)}" data-reviewed-through="{escape(report_date)}"
     data-source-status="{status}" data-definition-version="v1"
     data-low-price-max-yuan="10.0" data-very-low-price-max-yuan="5.0"
@@ -9586,6 +9586,9 @@ def _render_style_low_price_effect(
   <p><strong>[事实] 低价股赚钱效应：</strong>样本{int(low_price['sample_count'])}只，中位{_style_low_price_signed_pct(low_price['pct_chg_median'])}、均值{_style_low_price_signed_pct(low_price['pct_chg_mean'])}、上涨率{_style_low_price_rate_pct(low_price['advance_rate'])}；全市场中位{_style_low_price_signed_pct(market['pct_chg_median'])}，中位超额{float(low_price['median_excess_vs_market_pp']):+.2f}个百分点；{amount_text}；≥5%占{_style_low_price_rate_pct(low_price['strong_gain_rate'])}、≤-5%占{_style_low_price_rate_pct(low_price['strong_loss_rate'])}、{'、'.join(limit_texts)}。</p>
   <p><strong>[事实] 价格分层：</strong>{band_visible}。口径为当日未复权收盘价、沪深北A股剔除ST/退市及沪深B股、个股等权。{partial_note}</p>
 </div>'''
+
+    from services.review_style_charts import low_price as render_low_price_chart
+    return render_low_price_chart(html, snapshot, report_date)
 
 
 
@@ -9800,7 +9803,7 @@ def _render_style_market_effect(
         + (f"等{len(bse)}只" if len(bse) > len(displayed) else "")
     )
     as_of_note = "" if as_of == report_date else f"（最新可用 {as_of}）"
-    return f'''<div class="style-market-effect" data-style-market-effect="v1"
+    html = f'''<div class="style-market-effect" data-style-market-effect="v1"
     data-as-of="{escape(as_of)}" data-reviewed-through="{escape(report_date)}"
     data-source-status="{escape(status)}" data-limit-up-count="{count}"
     data-first-board-count="{first}" data-consecutive-board-count="{continuation}"
@@ -9819,6 +9822,9 @@ def _render_style_market_effect(
   <p><strong>[事实] 北交所 / 30cm：</strong>{bse_text}；最近{len(history_dates)}份可用盘后归档按“总涨停/首板/连板/10cm/20cm/30cm”为 {'，'.join(history_visible)}。</p>
   {shock_fragment}
 </div>'''
+
+    from services.review_style_charts import market_effect
+    return market_effect(html, market, shock if isinstance(shock, Mapping) else {}, report_date)
 
 
 def _style_market_effect_ops_fragments(

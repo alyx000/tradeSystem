@@ -6,6 +6,8 @@ import re
 from collections import Counter
 from datetime import date
 
+from utils.price_limit import limit_pct_for
+
 
 def _codes(values):
     if not isinstance(values, list) or any(not isinstance(v, str) or not re.fullmatch(r'\d{6}\.(SH|SZ|BJ)', v) for v in values):
@@ -168,6 +170,16 @@ def ladder_flows(raw, manifest, report_date):
         return {'status': 'source_failed', 'reason': str(exc)}
 
 
+def _limit_board(code):
+    """常规板型分组；仅对来源已确认涨停的非ST个股分类，不重算涨停价。"""
+    if not isinstance(code, str) or not re.fullmatch(
+        r'(?:(?:60\d{4}|68[89]\d{3})\.SH|(?:00\d{4}|30[01]\d{3})\.SZ|(?:[48]\d{5}|92\d{4})\.BJ)', code
+    ):
+        return 'unknown'
+    pct = limit_pct_for(code, is_st=False)
+    return str(int(pct)) if pct in (10, 20, 30) else 'unknown'
+
+
 def sector_limit_counts(raw, manifest, report_date, *, classification_date=None):
     """Disjoint SW L2 counts, both days mapped through the same dated snapshot."""
     if not isinstance(raw, dict):
@@ -210,15 +222,22 @@ def sector_limit_counts(raw, manifest, report_date, *, classification_date=None)
                 sector = sectors.setdefault(sector_code, dict(code=sector_code, name=sector_name, previous=[], current=[]))
                 if sector['name'] != sector_name:
                     raise ValueError('同一行业代码名称冲突')
-                sector[slot].append(dict(code=row['ts_code'], name=row['name'], height=height))
+                sector[slot].append(dict(code=row['ts_code'], name=row['name'], height=height, board=_limit_board(row['ts_code'])))
         result = []
+        board_totals = {slot: dict.fromkeys(('10', '20', '30', 'unknown'), 0) for slot in ('previous', 'current')}
         for sector in sectors.values():
+            counts = {slot: {board: sum(r['board'] == board for r in sector[slot]) for board in board_totals[slot]}
+                      for slot in ('previous', 'current')}
+            for slot in board_totals:
+                for board, count in counts[slot].items():
+                    board_totals[slot][board] += count
             result.append(dict(**sector, previous_count=len(sector['previous']), current_count=len(sector['current']),
+                               board_counts=counts['current'], previous_board_counts=counts['previous'],
                                first_count=sum(r['height'] == 1 for r in sector['current']),
                                consecutive_count=sum(r['height'] >= 2 for r in sector['current'])))
         result.sort(key=lambda s: (-s['current_count'], s['name'], s['code']))
-        return dict(status='partial' if any(unknown.values()) or classification_date != report_date else 'complete', date=report_date, previous_date=previous,
-                    classification_as_of=classification_date, totals=totals, unclassified=unknown, sectors=result)
+        return dict(status='partial' if any(unknown.values()) or any(c['unknown'] for c in board_totals.values()) or classification_date != report_date else 'complete', date=report_date, previous_date=previous,
+                    classification_as_of=classification_date, totals=totals, board_totals=board_totals, unclassified=unknown, sectors=result)
     except (KeyError, TypeError, ValueError, AttributeError) as exc:
         return {'status': 'source_failed', 'reason': str(exc)}
 

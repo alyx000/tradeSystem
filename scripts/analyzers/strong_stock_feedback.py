@@ -368,20 +368,75 @@ def render_markdown(block, day, *, history=None):
     return '\n'.join(lines)
 
 
+def _visual_progress(label, numerator, denominator, *, key, suffix='只'):
+    """Independent denominator per measure; no filled bar for an unknown rate."""
+    known = (type(numerator) is int and type(denominator) is int
+             and denominator > 0 and 0 <= numerator <= denominator)
+    pct = 100 * numerator / denominator if known else None
+    value = f'{numerator}/{denominator}{suffix} · {pct:.1f}%' if known else '未计算'
+    attrs = (f' role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{pct:.6f}"'
+             f' aria-label="{escape(label, quote=True)}"' if known else '')
+    mark = f'<span style="display:block;height:100%;width:{pct:.6f}%;background:#287b79"></span>' if known else ''
+    return (f'<div data-feedback-metric="{escape(key, quote=True)}" data-numerator="{numerator if numerator is not None else ""}" '
+            f'data-denominator="{denominator if denominator is not None else ""}" style="min-width:0;margin:10px 0">'
+            f'<div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap"><span>{escape(label)}</span><strong>{value}</strong></div>'
+            f'<div{attrs} style="height:9px;background:rgba(128,128,128,.14);margin-top:6px">{mark}</div></div>')
+
+
+def _visual_returns(summary):
+    metrics = [('open_mean_pct', '开盘均值'), ('close_mean_pct', '收盘均值'),
+               ('open_median_pct', '开盘中位'), ('close_median_pct', '收盘中位')]
+    values = [summary.get(key) for key, _ in metrics]
+    bound = max(1, *(abs(v) for v in values if v is not None))
+    parts = ['<div data-feedback-returns="v1" style="min-width:0;margin-top:16px"><strong>开盘 / 收盘涨跌</strong>',
+             f'<div style="display:flex;justify-content:space-between;font-size:11px;margin-top:7px"><span>−{bound:.2f}%</span><span>0</span><span>+{bound:.2f}%</span></div>']
+    for key, label in metrics:
+        value = summary.get(key)
+        display = '未计算' if value is None else f'{value:+.2f}%'
+        attr = '' if value is None else f' data-value="{value:.10f}"'
+        mark = ''
+        if value is not None:
+            endpoint = 50 + 50 * value / bound
+            color = '#4c6fa9' if key.startswith('open') else '#287b79'
+            mark = (f'<span style="position:absolute;left:{min(50, endpoint):.6f}%;width:{abs(endpoint-50):.6f}%;height:100%;background:{color}"></span>')
+        parts.append(f'<div data-feedback-return="{key}"{attr} style="margin:8px 0">'
+                     f'<div style="display:flex;justify-content:space-between;gap:8px"><span>{label}</span><strong>{display}</strong></div>'
+                     '<div style="position:relative;height:9px;background:rgba(128,128,128,.14);margin-top:4px">'
+                     +mark+'<span style="position:absolute;left:50%;height:100%;border-left:1px solid #777"></span></div></div>')
+    return ''.join(parts)+'</div>'
+
+
 def render_html(block, day, *, history=None):
     if history is not None and history.get('date') != day:
         raise ValueError('历史统计观察日与报告日期不一致')
     block = _view(block, day)
     description = _description(block)
-    html = [f'<div data-strong-stock-feedback="v1" data-as-of="{escape(day,quote=True)}" data-source-status="{block["status"]}"><p>{escape(description)}</p>',
-            f'<p>{escape(NOTE)}</p>']
+    html = [f'<div data-strong-stock-feedback="v1" data-as-of="{escape(day,quote=True)}" data-source-status="{block["status"]}" style="min-width:0;max-width:100%">',
+            '<h4>昨日涨停股 · 次日反馈</h4>',
+            f'<p style="font-size:12px">观察日 {escape(day)} · 名单来源日 {escape(block.get("source_date") or "未核验")}</p>']
+    summary = block.get('summary')
+    if block['status'] in {'complete', 'partial'} and summary:
+        n = block['cohort_count']
+        html.append(f'<p>已核验行情 {summary["quote_count"]}/{n}只 · 前高比较 {summary["touch_count"]}/{n}只</p>')
+        html.append(_visual_progress('触及前高（含等于）', summary['touched_count'], summary['touch_count'], key='touched'))
+        html.append(_visual_progress('收阴（收盘低于开盘）', summary['bearish_count'], summary['quote_count'], key='bearish'))
+        html.append('<p style="font-size:12px">两项分母独立；收阴不等于当日下跌。</p>')
+        html.append(_visual_returns(summary))
+        if block['status'] == 'partial':
+            html.append(f'<p>待核验：行情 {n-summary["quote_count"]}只 · 前高 {n-summary["touch_count"]}只；其他来源缺口见依据。</p>')
+    else:
+        html.append('<p>名单已核验，符合口径样本为0。</p>' if block['status'] == 'empty' else '<p>反馈未计算，来源尚未核验。</p>')
+    headers, rows = _table(block)
+    disclosure = (f'<details class="evidence" data-as-of="{escape(day,quote=True)}" data-items="{len(rows)}" data-evidence-kind="strong-stock-feedback"><summary>逐股反馈与统计依据（{len(rows)}项）</summary>'
+                  if rows else '<details class="rv-subdetail"><summary>来源与统计依据</summary>')
+    html += [disclosure, f'<p>{escape(description)}</p><p>{escape(NOTE)}</p>']
     if block.get('errors'):
         html += ['<p>'+escape('；'.join(block['errors']))+'</p>']
-    headers, rows = _table(block)
     if rows:
-        html += [f'<details class="evidence" data-as-of="{escape(day,quote=True)}" data-items="{len(rows)}" data-evidence-kind="strong-stock-feedback"><summary>昨日涨停股次日逐股反馈（{len(rows)}项）</summary><div style="overflow-x:auto;max-width:100%"><table><thead><tr>'+''.join('<th>'+escape(h)+'</th>' for h in headers)+'</tr></thead><tbody>']
+        html += ['<div style="overflow-x:auto;max-width:100%"><table><thead><tr>'+''.join('<th>'+escape(h)+'</th>' for h in headers)+'</tr></thead><tbody>']
         html += ['<tr>'+''.join('<td>'+escape(str(x))+'</td>' for x in row)+'</tr>' for row in rows]
-        html += ['</tbody></table></div></details>']
+        html += ['</tbody></table></div>']
+    html.append('</details>')
     history_gap = None
     if history is not None:
         from analyzers.strong_stock_feedback_history import render_html as render_history

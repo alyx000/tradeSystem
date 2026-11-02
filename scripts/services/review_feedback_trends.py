@@ -3,9 +3,10 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import sqlite3
 from datetime import date, timedelta
-from html import escape
+from html import escape, unescape
 from pathlib import Path
 from statistics import mean, median
 
@@ -270,4 +271,39 @@ def render_feedback_trends(payload, report_date):
 <p class="feedback-line-legend"><span class="feedback-solid-key">实线＋实心点：完整</span><span class="feedback-dashed-key">虚线＋空心点：部分覆盖的观测值</span><span>缺值才断线，不补零</span></p>
 <div class="feedback-plots{grid_class}">{charts}</div>{sample_note}{suspension_note}
 <details class="evidence" data-as-of="{report_date}" data-items="{len(points)}" data-evidence-kind="{kind}-feedback-trend"><summary>查看逐日数值与覆盖（{len(points)} 项）</summary><div class="evidence-body"><div class="table-scroll-shell"><table><thead><tr><th>交易日</th><th>状态</th><th>样本/分母</th>{''.join(f'<th>{label}（{unit}）</th>' for _, label in columns)}{"<th>停牌</th><th>指标缺失</th><th>核验证据</th>" if compact else ""}</tr></thead><tbody>{rows}</tbody></table></div></div></details></figure>''')
-    return "\n".join(fragments), gaps
+    return compact_fragment("\n".join(fragments)), gaps
+
+
+def compact_fragment(html):
+    """Fold only known history figures, preserving original SVG/table source bytes."""
+    pattern = r'<figure\b[^>]*data-(top20|board|core)-feedback-trend="v1"[^>]*>.*?</figure>'
+    def fold(match):
+        figure = match[0]
+        if 'data-feedback-compact="v1"' in figure:
+            return figure
+        caption_end = figure.find('</figcaption>') + len('</figcaption>')
+        disclosure = re.search(r'<details\b[^>]*class="evidence"[^>]*>\s*<summary>.*?</summary>', figure, re.S)
+        if caption_end < len('</figcaption>') or disclosure is None:
+            raise ValueError('反馈历史图缺少既有标题或证据容器')
+        rows = re.findall(r'<tr\b[^>]*>(.*?)</tr>', figure[disclosure.end():], re.S)
+        cells = re.findall(r'<td\b[^>]*>(.*?)</td>', rows[-1], re.S) if rows else []
+        if len(cells) < 7:
+            raise ValueError('反馈历史图缺少最新日原表证据')
+        clean = lambda value: unescape(re.sub(r'<[^>]+>', '', value)).strip()
+        cells = [clean(c) for c in cells]
+        labels = ('涨停核心', '跌停核心', '触及区间高点', '新增核心') if match[1] == 'core' else ('开盘均值', '收盘均值', '收盘中位', '收涨率')
+        unit = '只' if match[1] == 'core' else '%'
+        values = '；'.join(label + ('未计算' if value == '—' else value + unit) for label,value in zip(labels,cells[3:7]))
+        state = {'ok':'已核验','partial':'部分覆盖','source_failed':'来源失败','empty':'无样本','missing-data':'缺少来源'}.get(cells[1],cells[1])
+        latest = '<p class="feedback-latest">[事实] 最新'+escape(cells[0])+' · '+escape(state)+' · 样本/分母 '+escape(cells[2])+'；'+escape(values)+'。</p>'
+        # Move original chart/method bytes into the existing single evidence layer.
+        items = re.search(r'data-items="(\d+)"', disclosure[0])
+        if items is None:
+            raise ValueError('反馈历史图缺少原条目数量')
+        opening = disclosure[0].split('<summary>',1)[0] + f'<summary>展开历史趋势与逐日数据（{items[1]}项）</summary>'
+        return (figure[:caption_end].replace('<figure ', '<figure data-feedback-compact="v1" ',1)
+                + latest + opening + '<div style="max-width:100%;overflow-x:auto">'
+                + figure[caption_end:disclosure.start()] + '</div>'
+                + figure[disclosure.end():].replace('<div class="table-scroll-shell">',
+                    '<div class="table-scroll-shell" style="max-width:100%;overflow-x:auto">'))
+    return re.sub(pattern, fold, html, flags=re.S)

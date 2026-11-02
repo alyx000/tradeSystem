@@ -188,3 +188,45 @@ def test_automatic_tables_preserve_full_original_400_row_budget(tmp_path):
     assert assembler.validate_report(at_limit).evidence_rows == 404
     with pytest.raises(assembler.ReportValidationError, match="evidence_rows_exceeded"):
         assembler.validate_report(_appendix(at_limit, _table(1)))
+
+
+def test_compact_history_keeps_latest_fact_and_moves_original_svg_inside_one_evidence():
+    import re
+    from services.review_feedback_trends import compact_fragment
+    point = _board_point(board(), DAYS)
+    points = [point, {**point, 'date': DAYS[2], 'status': 'source_failed', 'values': {}, 'sample': None, 'total': None}]
+    html, _ = render_feedback_trends({'board': points}, DAYS[2])
+    assert 'data-board-feedback-trend="v1"' in html
+    assert 'data-feedback-compact="v1"' in html
+    assert html.count('<details') == 1 and ' open' not in html
+    assert 'data-items="2"' in html
+    assert '展开历史趋势与逐日数据' in html
+    assert html.index('<details') < html.index('<svg')
+    default = html[:html.index('<details')]
+    assert '来源失败' in default and '样本/分母 —/—' in default
+    assert '收盘均值未计算' in default and '收盘均值0%' not in default
+    assert compact_fragment(html) == html
+    # Restoring old layout only for the regression proves the decorator moves bytes.
+    body = re.search(r'<details[^>]*><summary>.*?</summary>(.*?)</details>',html,re.S)[1]
+    assert '<svg' in body and '<table' in body and 'T-2 非ST连板' in body
+
+
+
+def test_compact_history_empty_day_is_not_inferred_zero_return():
+    points = [{'date': DAYS[2], 'status': 'empty', 'sample': 0, 'total': 0, 'values': {}}]
+    html, _ = render_feedback_trends({'board': points}, DAYS[2])
+    default = html[:html.index('<details')]
+    assert '无样本' in default and '样本/分母 0/0' in default
+    assert '开盘均值未计算' in default
+
+
+
+def test_compact_summary_first_number_is_actual_item_count_and_formal_contract_accepts(tmp_path):
+    import re
+    assembler = _load_assembler()
+    _write_chunks(tmp_path)
+    point = _board_point(board(), DAYS); point['date'] = DATE
+    html = assembler.render_report(tmp_path, DATE, feedback_trends={'board':[point], 'core':[point]})
+    summaries = re.findall(r'<summary>展开历史趋势与逐日数据（(\d+)项）</summary>', html)
+    assert summaries == ['1', '1']
+    assembler.validate_report(html)

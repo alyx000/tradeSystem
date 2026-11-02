@@ -129,3 +129,40 @@
 .rv-time-span{position:absolute;top:16px;border-top:1px dashed #82958e}.rv-time-point{position:absolute;transform:translateX(-50%);font-size:14px;line-height:14px;z-index:1}.rv-time-first{top:2px;color:#007c69}.rv-time-last{top:17px;color:#996411}
 .rv-time-detail{grid-column:1/-1;color:var(--muted,#66717a);font-size:11px;line-height:1.6}.rv-time-row .rv-number{font-size:12px}
 @media(max-width:600px){.rv-heat-grid{gap:3px;grid-template-columns:minmax(74px,1.6fr) repeat(5,minmax(29px,1fr))}.rv-heat-label{font-size:11px}.rv-heat-head{font-size:10px}.rv-heat-cell{font-size:12px;min-height:34px}.rv-breadth-row{grid-template-columns:1fr 100px;gap:8px}.rv-breadth-track{grid-row:2;grid-column:1/-1}.rv-breadth-row .rv-label{font-size:12px}.rv-breadth-row .rv-number{font-size:11px}.rv-time-axis{margin:15px 3px 5px}.rv-time-row{grid-template-columns:minmax(100px,1fr) 85px}.rv-time-track{grid-row:2;grid-column:1/-1}.rv-time-detail{font-size:10px}.rv-time-row .rv-label{font-size:11px}.rv-time-row .rv-number{font-size:11px}}
+
+/* Institution rows retain stock identity and stay inside narrow report cards. */
+.rv-institution .rv-bar-row{grid-template-columns:minmax(125px,170px) minmax(40px,1fr) 91px;cursor:pointer;padding:7px 0;min-width:0}
+.rv-institution .rv-axis{margin-left:178px;margin-right:99px}
+.rv-institution .rv-bar-row:focus-visible{outline:2px solid var(--judgment);outline-offset:2px}
+.rv-institution .rv-picked-detail,.rv-institution-missing{overflow-wrap:anywhere}
+@media(max-width:700px){
+ .rv-institution .rv-bar-row{grid-template-columns:minmax(0,1fr) auto;gap:7px 12px;padding:10px 0}
+ .rv-institution .rv-bar-row .rv-track{grid-column:1/-1;grid-row:2}
+ .rv-institution .rv-bar-row .rv-number{grid-column:2;grid-row:1}
+ .rv-institution .rv-axis{margin-left:0;margin-right:0}
+}
+
+/* Board width is counted from verified source labels, independently of board height. */
+.rv-board-legend{display:flex;flex-wrap:wrap;gap:15px;font-size:12px;margin:12px 0}
+.rv-board-legend span{display:flex;align-items:center;gap:5px}.rv-board-legend i{width:11px;height:11px;display:inline-block}
+.rv-board-10{background:var(--positive)}.rv-board-20{background:#4c6fa9}.rv-board-30{background:#9673aa}.rv-board-unknown{background:#8b8b85}
+.rv-count-board{position:absolute;top:1px;height:11px}
+.rv-sector-count-row .rv-board-counts{display:block;font-size:11px;line-height:1.6;margin-top:5px;overflow-wrap:anywhere}
+@media(max-width:700px){.rv-sector-limits .rv-sector-count-row{grid-template-columns:minmax(0,1fr) 80px;gap:5px}.rv-sector-limits .rv-count-tracks{grid-column:1/-1;grid-row:2}.rv-sector-limits .rv-number{grid-column:2;grid-row:1}.rv-sector-limits .rv-label{min-width:0}}
+
+/* Compact reading: verified numbers first; full methods remain in native disclosures. */
+.rv-method{border-top:1px solid var(--line);margin-top:15px}
+.report-document .rv-card>.rv-note{margin:8px 0 12px;font-size:12px;line-height:1.6}
+.rv-promotion{display:grid;grid-template-columns:55px minmax(40px,1fr) 115px;gap:12px;align-items:center}
+.rv-promotion-track{height:12px;background:color-mix(in srgb,var(--line) 30%,var(--surface));display:block}
+.rv-promotion-track i{display:block;height:100%;background:var(--positive)}
+.rv-promotion strong{text-align:right;font-size:13px;color:var(--ink)}
+.rv-promotion small{grid-column:1/-1}
+.rv-comparison-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px}
+.rv-comparison-cell{display:grid;gap:7px;min-width:0;padding:12px;background:color-mix(in srgb,var(--line) 13%,var(--surface));font-size:13px}
+.rv-comparison-cell strong{font-size:21px;font-variant-numeric:tabular-nums}
+.rv-compare-track{height:9px;position:relative}
+.rv-compare-track i{display:block;height:100%;box-sizing:border-box}
+.rv-compare-before{border:1px solid var(--muted)}
+.rv-compare-today{background:var(--nav)}
+@media(max-width:700px){.rv-comparison-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.rv-comparison-cell{padding:9px}.rv-comparison-cell strong{font-size:17px}.rv-promotion{grid-template-columns:42px minmax(30px,1fr) 95px;gap:6px}.rv-promotion strong{font-size:11px}}
