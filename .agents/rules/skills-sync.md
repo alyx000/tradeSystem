@@ -38,6 +38,11 @@ globs:
 
 # Skills 同步检查规则
 
+2026-11-02 每日老师锚点与指数点位（两表默认展开，原文折叠）：同步 daily-review、多 Agent 流程、HTML组装器、只读来源核验和回归测试；缺源不省略，保留日期及条件。[规范](../skills/daily-review/references/html-report-template/teacher-anchors.md)。
+
+2026-11-02：复盘图形区分报告日、完整 SSE 日历核验的事实日与成分快照日，覆盖旧“同日报告日”约束。同步 `review_visual_context.py`、`review_chart_market.py`、身份/板块投影、分钟生成器与正式组装器；容量解析保留缺值，风格图独立核验溢价回填日期。更新 daily-review / multi-agent-review / README 及 `test_review_weekend_visuals.py`，用16面板浏览器验收防回归。[日期契约与流程](../skills/daily-review/references/html-report-template/visuals.md)。
+
+
 2026-10-25：修改`data-incremental-capital`须同步daily-review SKILL、references/incremental-capital.md、多Agent流程、HTML模板README、INDEX及test_daily_review_incremental_capital.py。核对①唯一可见摘要、折叠来源/窗口/数值/局限、两类同日完整支持且至少一类对应直接渠道、反证与缺口、失败不补零和旧素材缺口兜底；结构验证不等于事实复算，不将成交放量或ETF份额变化说成全市场净流入，不识别无直接证据的投资者身份。
 
 2026-10-09：复盘 HTML 固定增加用户提供的「板块推演填空」11项与「情绪周期龙头接力」5项，分别位于②板块和⑤龙头；完整原文与两张思维导图内嵌。主会话按既有证据填写带日期、来源锚点、事实/判断标签的答案，缺项不补猜；竞价待验证、用户操作及仓位待填写。正式组装器只读注入，保持7 chunks/15 anchors；不新增采集、推送、业务写入。详见模板 `template-content.md`。

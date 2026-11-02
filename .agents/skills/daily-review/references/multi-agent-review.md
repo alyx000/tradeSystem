@@ -1,5 +1,10 @@
 # 多 Agent 盘后复盘（9 路并行采集 → HTML 报告）
 
+2026-11-02 用户固定要求：每日 HTML 必须生成“老师核心锚点”和“老师提到的指数关键点位”。第9路读取本次原文、主会话准备 `teacher_anchors_<REPORT_DATE>.html`；正式组装器核对所选数据库的 note ID、归档日和引文后，在老师章节生成两张默认展开、可手动收起的表及来源依据。保留确认条件、观点日期、不同老师分歧与转写待核；缺源明确显示，不把旧观点冒充今日事实。详见 [老师锚点与指数点位规范](html-report-template/teacher-anchors.md)。
+
+2026-11-02 周末/休市图形修复（优先于下方“同日报告日”旧描述）：正式组装器和分钟 sidecar 生成器通过 `services.review_visual_context` 只读核验完整 SSE 交易日历，区分报告日 R、最近事实日 F、成分快照日 C。开放日 F=R，来源失败不回退；只有逐自然日完整证明 F 开放、(F,R] 全休市，才展示 F 的历史行情。日历缺失不猜测。分钟/容量/板块/新高/反馈图按 F 校验，事件日历与待验证清单仍按 R。行业优先 F 快照，缺失才允许采用 R 快照回看并显式 partial/非历史成分回放；已存在的失败 F 快照不得被覆盖，当前名称不能补证历史梯队资格。正式归档与原始回执日期不改写。容量兼容带“收盘/MA5”等标签的均线数值，并显示名称＋代码。断板分布读取 F 盘后归档；风格图读取严格上一开放日的 premium_backfill 并核验其自身来源/反馈日期，不依赖人气股回执，缺失组不补零。交付需检查16面板实际数据和交互，不只检查面板数量；详见 `visuals.md` 的日期契约与验收。
+
+
 > 本文档沉淀「9 路 subagent 并行采集 → 主会话汇总裁决 → 固定章节 HTML 报告」的复盘工作流，
 > 与 SKILL.md 主流程（单 Agent 表单式 review workbench + 写库）互补：**当用户要求「像之前那样出
 > HTML 复盘」「用多 agent 复盘 YYYY-MM-DD」时走本文档**。产物是只读 HTML（`data/reports/复盘_YYYY-MM-DD.html`），
@@ -9,9 +14,11 @@
 
 1. **9 路 subagent 并行发车**：每路一个数据面，仍执行完整采集和计算；各自把结构化主输出与完整证据写到 scratchpad（`<job>/tmp/<面>_<date>.md`）。
 2. **主会话汇总裁决**：读 9 份素材，做口径仲裁、第 0 节判分和跨面冲突对齐；完成八步复盘与认知对照的综合后再生成重点因子裁决。正文只接收变化、冲突、会改变总裁决或直接影响持仓检视的内容。
-3. **生成确定性容量 sidecar**：主会话从板块结论中选定 1～3 个申万二级方向，调用模板内 `build_capacity_manifest.py` 从只读镜像生成 `capacity_<REPORT_DATE>.json`；Agent 不得自行计算后手写排名。
-4. **生成滚动新高 sidecar**：调用 `build_new_high_structure_manifest.py` 对最近 251 个开放日的 `daily.high × adj_factor` 只读重算 60/120/250 日结构；不得用 `daily_new_high_stats` 的全历史高水位口径替代。
-5. **分块渲染 HTML**：固定 7 个 body chunk（见下）→ 结构、Claim、证据、预算、容量 sidecar、滚动新高契约和外部依赖校验 → 与 `review_style.css` 组装 → 只读落盘。任何硬门不通过都拒绝生成，不自动删字。
+3. **生成分钟图 sidecar**：先按 [模板说明](html-report-template/README.md#指数分钟图与周末事实日) 生成 `index_intraday_<REPORT_DATE>.json`，与组装器共用只读交易日历，缺源保留失败状态。
+4. **生成确定性容量 sidecar**：主会话从板块结论中选定 1～3 个申万二级方向，调用模板内 `build_capacity_manifest.py` 从只读镜像生成 `capacity_<REPORT_DATE>.json`；Agent 不得自行计算后手写排名。
+5. **生成滚动新高 sidecar**：调用 `build_new_high_structure_manifest.py` 对最近 251 个开放日的 `daily.high × adj_factor` 只读重算 60/120/250 日结构；不得用 `daily_new_high_stats` 的全历史高水位口径替代。
+6. **每日老师观察表**：第9路与主会话按 [固定规范](html-report-template/teacher-anchors.md) 整理核心锚点和指数点位，两表默认展开，保留原文与条件。
+7. **分块渲染 HTML**：固定 7 个 body chunk（见下）→ 结构、Claim、证据、预算、容量 sidecar、滚动新高契约和外部依赖校验 → 与 `review_style.css` 组装 → 只读落盘。任何硬门不通过都拒绝生成，不自动删字。
 
 ## 9 路分工
 
