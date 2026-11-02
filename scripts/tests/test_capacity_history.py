@@ -410,6 +410,70 @@ def test_stock_digest_escapes_stock_names_and_ignores_invisible_rounding_changes
     assert '无新跌破' in md
 
 
+def test_sector_digest_names_real_changes_without_treating_replacements_as_improvement(conn):
+    from services.volume_concentration.capacity_digest import sector_observations
+    repo.save_concentration(conn, record(PREV, (('000001', '甲', '下方'), ('000002', '甲', '下方'),
+                                               ('000003', '乙', '下方'), ('000006', '退出组', '上方'))))
+    today = record(DAY, (('000001', '甲', '上方'), ('000002', '甲', '下方'),
+                         ('000004', '乙', '上方'), ('000005', '新增组', '上方')))
+    today['source'][ct.KEY]['rows'][0]['ma20_direction'] = '向下'
+    block = ct.with_history(conn, today, DAY)
+    lines = sector_observations(block, limit=None)
+    first = next(x for x in lines if x.startswith('甲：'))
+    assert '同股2只' in first and '线上0→1只' in first and '均线向上0→0只' in first
+    assert '股票000001（000001）：新站上' in first
+    replaced = next(x for x in lines if x.startswith('乙：'))
+    assert '在榜1→1只' in replaced and '无同股可比' in replaced and '当前线上1/1' in replaced
+    assert '无同股可比' in next(x for x in lines if x.startswith('新增组：'))
+    assert '退出成交榜不等于板块走弱' in next(x for x in lines if x.startswith('退出组：'))
+    brief = sector_observations(block, limit=1)
+    assert brief[0] == first and '另有3个板块' in brief[1]
+    assert '完整板块变化' in ct.render_html(block)[0]
+    assert '完整板块变化' in ct.render_markdown(block)
+
+
+def test_sector_digest_preserves_offsetting_changes_and_reclassification(conn):
+    from services.volume_concentration.capacity_digest import sector_observations
+    repo.save_concentration(conn, record(PREV, (('000001', '甲', '上方'), ('000002', '甲', '下方'),
+                                               ('000003', '甲', '下方'))))
+    block = ct.with_history(conn, record(DAY, (('000001', '甲', '下方'), ('000002', '甲', '上方'),
+                                              ('000003', '乙', '上方'))), DAY)
+    lines = sector_observations(block, limit=None)
+    line = next(x for x in lines if x.startswith('甲：'))
+    assert '同股2只' in line and '线上1→1只' in line
+    assert '股票000001（000001）：新跌破' in line and '股票000002（000002）：新站上' in line
+    assert '在榜3→2只' in line and '改类不计入' in line
+    assert '无同股可比' in next(x for x in lines if x.startswith('乙：'))
+
+
+@pytest.mark.parametrize('damage', ['missing', 'calendar', 'partial', 'fallback'])
+def test_sector_digest_never_reports_unchanged_when_comparison_unavailable(conn, damage):
+    from services.volume_concentration.capacity_digest import sector_observations
+    if damage != 'missing':
+        repo.save_concentration(conn, record(PREV))
+    block = ct.with_history(conn, record(), DAY)
+    if damage == 'calendar':
+        block['history_view']['calendar_status'] = 'source_failed'
+    elif damage in ('partial', 'fallback'):
+        block['status'] = 'partial' if damage == 'partial' else 'fallback_preserved'
+    assert sector_observations(block) == ['板块变化未计算：相邻开放日证据不完整。']
+
+
+def test_sector_digest_keeps_unknowns_separate_and_escapes_industry_names(conn):
+    from services.volume_concentration.capacity_digest import sector_observations
+    name = '<script>[板块](x)</script>'
+    specs = (('000001', name, '下方'), ('000002', '', '上方'))
+    repo.save_concentration(conn, record(PREV, specs))
+    block = ct.with_history(conn, record(DAY, specs), DAY)
+    lines = sector_observations(block)
+    assert '1只仍在线下且均线向下' in lines[0]
+    assert lines[-1] == '未分类：在榜1→1只，不纳入板块变化。'
+    html = ct.render_html(block)[0]
+    md = ct.render_markdown(block, compact=True)
+    assert '<script>' not in html and '<script>' not in md
+    assert '[板块](' not in md and '&lt;script&gt;' in html
+
+
 def test_fresh_database_daily_cli_populates_calendar_via_existing_guard(tmp_path, monkeypatch, capsys):
     """不得直接插入日历：验证正式CLI冷启动已有的日历维护链。"""
     import argparse

@@ -316,11 +316,13 @@ def render_markdown(block, *, history_budget=None, compact=False):
         text = escape(str(value), quote=False).replace("\n", " ").replace("\r", " ")
         return re.sub(r"([\\`*_{}\[\]()#+.!|>-])", r"\\\1", text)
     if compact:
-        from .capacity_digest import observations
+        from .capacity_digest import observations, sector_observations
         lines = ['', '### 成交榜容量股变化（MA20）', '', '- 观察日期：' + cell(block['trade_date'])]
         if block['status'] != 'complete':
             lines += ['- ⚠ ' + cell(_summary(block, compact=True))]
         lines += ['- ' + cell(line) for line in observations(block)]
+        lines += ['', '#### 板块容量变化（成交榜样本）',
+                  *['- ' + cell(line) for line in sector_observations(block)]]
         days = (block.get('history_view') or {}).get('days', 10)
         lines += ['', '仅成交榜样本、前复权口径；每类最多3只，新变化优先，其余按成交榜顺序。完整变化见复盘HTML或：',
                   cell(f"volume-watch trend --date {block['trade_date']} --days {days}")]
@@ -328,8 +330,10 @@ def render_markdown(block, *, history_budget=None, compact=False):
     lines = ["", "### 成交榜容量趋势（MA20）", "", "- 观察日期：" + cell(block['trade_date']),
              "- [事实] " + cell(_summary(block, compact=compact))]
     lines += [NOTE]
-    from .capacity_digest import observations
+    from .capacity_digest import observations, sector_observations
     lines += ['', '#### 完整个股变化', *['- ' + cell(line) for line in observations(block, limit=None)]]
+    lines += ['', '#### 完整板块变化（成交榜样本）',
+              *['- ' + cell(line) for line in sector_observations(block, limit=None)]]
     if block.get('history_view'):
         lines += _history_markdown(block['history_view'], cell, history_budget)
     if block.get("rows"):
@@ -340,7 +344,7 @@ def render_markdown(block, *, history_budget=None, compact=False):
 
 
 def render_html(block):
-    from .capacity_digest import observations
+    from .capacity_digest import observations, sector_observations
     summary = _summary(block, compact=True)
     html = [f'<div data-capacity-trend="v1" data-as-of="{escape(block["trade_date"], quote=True)}" data-source-status="{escape(block["status"], quote=True)}">',
             '<p><strong>成交榜容量股变化（MA20）</strong></p>',
@@ -349,6 +353,10 @@ def render_html(block):
         html += [f'<p>⚠ {escape(summary)}</p>']
     html += ['<ul>' + ''.join(f'<li>{escape(line)}</li>' for line in observations(block)) + '</ul>',
              '<p>仅成交榜样本、前复权口径；每类最多3只，新变化优先，其余按成交榜顺序。完整变化可展开。</p>']
+    html += ['<p><strong>板块容量变化（成交榜样本）</strong></p><ul>' +
+             ''.join(f'<li>{escape(line)}</li>' for line in sector_observations(block)) + '</ul>',
+             '<details><summary>完整板块变化</summary><ul>' +
+             ''.join(f'<li>{escape(line)}</li>' for line in sector_observations(block, limit=None)) + '</ul></details>']
     html += ['<details><summary>完整个股变化</summary><ul>' +
              ''.join(f'<li>{escape(line)}</li>' for line in observations(block, limit=None)) + '</ul></details>']
     history_gap = None
