@@ -199,7 +199,7 @@ def test_old_archive_missing_launch_and_closed_day_projection(tmp_path):
     with sqlite3.connect(db) as c:c.execute('INSERT INTO trade_calendar VALUES ("2026-11-04","SSE",0)')
     b=f.load_for_review(tmp_path,'2026-11-04',db,now=NOW.replace(day=4))
     html,gap=f.render_html(b,'2026-11-04')
-    assert not gap and 'data-as-of="2026-11-03"' in html and '休市展示' in html
+    assert '量能背景对照不完整' in gap and 'data-as-of="2026-11-03"' in html and '休市展示' in html
     save(tmp_path,SOURCE,{'limit_up':raw['limit_up']})
     assert f.build(tmp_path,DAY,db_path=db,now=NOW)['status']=='not_computed'
 

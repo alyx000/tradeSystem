@@ -7519,7 +7519,7 @@ def validate_report(
     if feedback_blocks or theme_feedback is not None:
         from analyzers.theme_feedback import render_html as render_theme_feedback, MARKER as FEEDBACK_MARKER
         from analyzers.strong_stock_feedback import html_signature
-        expected_feedback = render_theme_feedback(theme_feedback, report_date)[0]
+        expected_feedback = render_theme_feedback(theme_feedback, report_date, current_launch=theme_launch)[0]
         if (theme_feedback is None or len(feedback_blocks) != 1
                 or feedback_blocks[0].section != 's2' or feedback_blocks[0].tag != 'div'
                 or feedback_blocks[0].default_hidden or feedback_blocks[0].value != report_date
@@ -10168,7 +10168,7 @@ def render_report(
     if any(re.search(r"\bdata-theme-feedback\b", body, re.I) for body in chunks.values()):
         raise ReportValidationError("duplicate_theme_feedback", "同题材次日反馈由正式组装器生成", section="s2")
     if theme_feedback is not None:
-        feedback_fragment, feedback_gap = render_theme_feedback(theme_feedback, report_date)
+        feedback_fragment, feedback_gap = render_theme_feedback(theme_feedback, report_date, current_launch=theme_launch)
         chunks['s2'] = _inject_section_fragment(chunks['s2'], 's2', feedback_fragment)
         if feedback_gap:
             chunks['s8ops'] = _inject_section_fragment(chunks['s8ops'], 'ops', '<p>[事实] '+escape(feedback_gap)+'</p>')

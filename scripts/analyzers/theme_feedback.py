@@ -302,22 +302,117 @@ GROUP_HEADERS = ['来源题材', '来源板型', '固定样本', '行情覆盖',
 STOCK_HEADERS = ['来源题材', '来源股票', '板型', '开盘(%)', '收盘(%)', '再次涨停', '连板核验', '缺口']
 
 
-def render_markdown(block, day):
+CONTEXT_HEADERS = ['来源题材', '昨日涨停分布（只）', '固定样本今日反馈', '当日成员量能背景']
+CONTEXT_NOTE = ('观察方式来源：鞠磊 teacher_notes#1108。昨日分布及次日反馈固定使用来源日样本；'
+                '量能按反馈日已归档成员的同一集合比较两日，不回填或更换昨日反馈样本。'
+                '再次涨停说明样本仍有延续，不能单独证明板块整体加强；无事前预期，不判超预期。'
+                '市场与题材成交额均为沪深口径，成交额不是净流入；份额增加仅表示成交占比提高。'
+                '分板型及不同覆盖分母见下表，题材不可相加。')
+
+
+def _amount_change(number):
+    if number is None:
+        return '未计算'
+    rounded = round(number, 2)
+    if number != 0 and rounded == 0:
+        return '变化不足0.01%'
+    direction = '放量' if rounded > 0 else '缩量' if rounded < 0 else '持平'
+    return direction + f'（{rounded:+.2f}%）'
+
+
+def _percent(number):
+    return '未计算' if number is None else tl._fmt(number, True) + '%'
+
+
+def _continuity(value, current_launch, day, fact):
+    """只组合已重算的独立证据；不生成强弱评分，也不把换榜当成转弱。"""
+    from analyzers import sector_increment as si
+    current, current_fact = tl._view(current_launch, day)
+    gaps = []
+    aligned = (current_fact == fact and current.get('previous_date') == value.get('source_date')
+               and current.get('evidence') is not None)
+    if not aligned:
+        gaps.append('当日题材量能来源或比较日期未核验')
+    current_rows = {r['code']: r for r in current['rows']} if aligned else {}
+    increment = si.validate(current.get('evidence', {}).get('increment'), fact) if aligned else {}
+    market = current.get('market') if aligned and increment.get('status') == 'complete' else None
+    market_text = '沪深市场成交额：' + (_amount_change(market['change_pct']) if market else '未完整核验')
+    if market is None:
+        gaps.append('市场量能未完整核验，不判断市场放量或缩量')
+    # value 来自 _view/validate，来源日 evidence.launch 已由 calculate 重新核验。
+    previous = value.get('evidence', {}).get('launch', {})
+    old_rows = {r['code']: r for r in previous.get('rows', [])}
+    rows = []
+    for row in value['rows']:
+        old = old_rows.get(row['code'], {})
+        counts = old.get('counts')
+        distribution = ('未核验' if counts is None else
+                        '、'.join(f"{board}cm {counts[str(board)]}" for board in (10, 20, 30)))
+        g = row['groups']['all'] if row['groups'] is not None else None
+        if g is None:
+            feedback = '昨日样本未核验，今日反馈未计算'
+        elif g['sample_count'] == 0:
+            feedback = '昨日已核验涨停样本0只，无次日样本反馈'
+        else:
+            feedback = (f"固定样本{g['sample_count']}只；行情{g['quote_count']}/{g['sample_count']}；"
+                        f"开盘/收盘中位{_percent(g['open_median_pct'])} / {_percent(g['close_median_pct'])}；"
+                        f"收涨{_coverage(g['positive_count'], g['quote_count'])}；"
+                        f"收阴{_coverage(g['bearish_count'], g['quote_count'])}；"
+                        f"再次涨停{_coverage(g['again_limit_count'], g['limit_checked_count'])}；"
+                        f"连板核验{_coverage(g['continuation_count'], g['continuation_checked_count'])}（各自已核验分母）")
+        today = current_rows.get(row['code'])
+        if not aligned:
+            amount_text = '量能未计算：当日来源或比较日期未核验'
+        elif today is None:
+            amount_text = '当日前十未收录或榜单未取得，不据此判转弱；量能未计算'
+        elif today['name'] != row['name']:
+            amount_text = '同代码题材名称变化，待核验后比较量能'
+        elif today['amount'] is None:
+            amount_text = '当日题材成员或两日成交额不完整，量能未计算'
+        else:
+            amount = today['amount']
+            share = amount['share_delta_pp']
+            amount_text = ('题材' + _amount_change(amount['change_pct']) + '；成交份额变化' +
+                           ('未计算' if share is None else tl._fmt(share, True) + '个百分点'))
+            if share is None:
+                gaps.append(row['name']+'成交份额变化未计算')
+            if amount['change_pct'] is None:
+                gaps.append(row['name']+'昨日成交额为0，放缩量比例未计算')
+        if today is None or today['name'] != row['name'] or today['amount'] is None:
+            gaps.append(row['name']+'：'+amount_text)
+        rows.append([row['name'], distribution, feedback, amount_text])
+    dates = (f"反馈日{fact}；固定样本日{value.get('source_date') or '未核验'}；"
+             f"量能成员日{current.get('membership_date') if aligned and current.get('membership_date') else '未取得'}；"
+             f"量能比较日{current.get('previous_date') if aligned else '未核验'}→{fact}")
+    return dict(rows=rows, market=market_text, dates=dates, gaps=list(dict.fromkeys(gaps)),
+                source_status=current['status'])
+
+
+def render_markdown(block, day, *, current_launch=None):
     value, fact = _view(block, day)
     lines = ['### 同题材次日反馈', f"[事实] 来源日：{value.get('source_date') or '未核验'}；反馈日：{fact}；报告日：{day}；状态：{value['status']}", NOTE]
     clean = lambda x: str(x).replace('|', '｜').replace('\n', ' ').replace('\r', ' ')
+    context = _continuity(value, current_launch, day, fact)
+    lines += ['#### 板块延续与量能背景', '[事实] '+context['market'], context['dates'], CONTEXT_NOTE]
+    if context['rows']:
+        lines += ['', '| '+' | '.join(CONTEXT_HEADERS)+' |', '| '+' | '.join(['---']*len(CONTEXT_HEADERS))+' |']
+        lines += ['| '+' | '.join(clean(c) for c in r)+' |' for r in context['rows']]
+    lines.append('')
+    lines.extend('量能对照缺口：'+clean(g) for g in context['gaps'])
     rows, _ = _tables(value)
     if rows:
-        lines += ['| '+' | '.join(GROUP_HEADERS)+' |', '| '+' | '.join(['---']*len(GROUP_HEADERS))+' |']
+        lines += ['', '| '+' | '.join(GROUP_HEADERS)+' |', '| '+' | '.join(['---']*len(GROUP_HEADERS))+' |']
         lines += ['| '+' | '.join(clean(c) for c in r)+' |' for r in rows]
+    lines.append('')
     lines.extend('缺口：'+clean(g) for g in value['gaps'])
     for row in value['rows']:
         lines.extend(clean(row['name'])+'缺口：'+clean(g) for g in row['gaps'])
     return '\n\n'.join(lines[:3])+'\n\n'+'\n'.join(lines[3:])
 
 
-def render_html(block, day):
+def render_html(block, day, *, current_launch=None):
     value, fact = _view(block, day)
+    context = _continuity(value, current_launch, day, fact)
     usable = [r for r in value['rows'] if r['groups'] is not None]
     summary = '[事实] 来源日题材快照或反馈数据尚未核验，暂不能判断同题材次日表现。'
     if usable:
@@ -327,18 +422,24 @@ def render_html(block, day):
     parts = [f'<div {MARKER}="{escape(day)}" data-as-of="{escape(fact)}"><h3>同题材次日反馈</h3><p>{escape(summary)}</p>']
     if fact != day:
         parts.append('<p>[事实] 休市展示'+escape(fact)+'最近开放日历史，非当日新增。</p>')
-    for row in usable:
-        g = row['groups']['all']
-        text = (f"{row['name']}：固定样本{g['sample_count']}只，行情覆盖{g['quote_count']}只；"
-                f"开盘/收盘中位{tl._fmt(g['open_median_pct'], True)}% / {tl._fmt(g['close_median_pct'], True)}%；"
-                f"再次涨停{_coverage(g['again_limit_count'], g['limit_checked_count'])}（已核验分母）。")
-        parts.append('<p>'+escape(text)+'</p>')
+    parts.append('<h4>板块延续与量能背景</h4><p>[事实] '+escape(context['market'])+'。</p>')
+    parts.append('<p class="sub">'+escape(context['dates'])+'。反馈只代表昨日涨停样本，量能使用当日成员。</p>')
+    for name, distribution, feedback, amount in context['rows'][:3]:
+        parts.append('<div style="margin:12px 0;padding:10px 12px;border-left:3px solid #64748b;overflow-wrap:anywhere">'
+                     '<p><strong>'+escape(name)+'</strong> · 昨日'+escape(distribution)+'。</p>'
+                     '<p>[事实] '+escape(feedback)+'。</p><p>[事实] '+escape(amount)+'。</p></div>')
+    if len(context['rows']) > 3:
+        parts.append('<p>另'+str(len(context['rows'])-3)+'个题材见下方完整对照；按来源日榜单顺序展示，不代表强弱排序。</p>')
+    if context['rows']:
+        parts.append('<p class="sub">延续与加强分开看：再次涨停、收涨分布和量能须共同核对，单项不判整体加强或超预期。</p>')
     grouped, stocks = _tables(value)
-    items = 2 + len(grouped) + len(stocks) + len(value['gaps']) + sum(len(r['gaps']) for r in value['rows'])
-    parts.append(f'<details class="evidence" data-as-of="{escape(fact)}" data-items="{items}"><summary>分板型、逐股反馈与来源（{items}项）</summary>')
+    items = 3 + len(context['rows']) + len(context['gaps']) + len(grouped) + len(stocks) + len(value['gaps']) + sum(len(r['gaps']) for r in value['rows'])
+    parts.append(f'<details class="evidence" data-as-of="{escape(fact)}" data-items="{items}"><summary>完整量能对照、分板型、逐股反馈与来源（{items}项）</summary>')
     parts.append('<p>'+escape(f"状态：{value['status']}；预期来源日：{value.get('source_date') or '未核验'}；成员快照日：{value.get('membership_date') or '未取得'}；反馈日：{fact}；报告日：{day}")+'</p>')
     parts.append('<p>'+escape(NOTE)+'</p>')
-    for headers, rows in ((GROUP_HEADERS, grouped), (STOCK_HEADERS, stocks)):
+    parts.append('<p>'+escape(CONTEXT_NOTE)+' 量能来源状态：'+escape(context['source_status'])+'。</p>')
+    parts.extend('<p>量能对照缺口：'+escape(g)+'</p>' for g in context['gaps'])
+    for headers, rows in ((CONTEXT_HEADERS, context['rows']), (GROUP_HEADERS, grouped), (STOCK_HEADERS, stocks)):
         if rows:
             parts.append('<div style="overflow-x:auto"><table><thead><tr>'+''.join('<th>'+escape(h)+'</th>' for h in headers)+'</tr></thead><tbody>')
             parts.extend('<tr>'+''.join('<td>'+escape(str(c))+'</td>' for c in r)+'</tr>' for r in rows)
@@ -347,4 +448,7 @@ def render_html(block, day):
     for row in value['rows']:
         parts.extend('<p>'+escape(row['name']+'缺口：'+g)+'</p>' for g in row['gaps'])
     parts.append('</details></div>')
-    return ''.join(parts), '' if value['status'] == 'complete' else '同题材次日反馈存在缺口，缺失不补0；详见②。'
+    gap = '' if value['status'] == 'complete' else '同题材次日反馈存在缺口，缺失不补0；详见②。'
+    if context['gaps']:
+        gap += '板块延续与量能背景对照不完整；详见②。'
+    return ''.join(parts), gap

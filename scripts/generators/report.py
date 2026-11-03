@@ -870,7 +870,7 @@ class ReportGenerator:
 
         from analyzers.theme_feedback import build as build_theme_feedback, render_markdown as render_theme_feedback
         theme_feedback = build_theme_feedback(self.daily_dir, date, current_raw=raw_data)
-        lines.append(render_theme_feedback(theme_feedback, date))
+        lines.append(render_theme_feedback(theme_feedback, date, current_launch=raw_data.get('theme_launch')))
 
         # ---- 风格化赚钱效应 ----
         section_idx = _render_style_factors(lines, raw_data, section_idx)
