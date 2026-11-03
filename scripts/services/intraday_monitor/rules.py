@@ -1044,6 +1044,22 @@ FANYA_MICRO_NEAR_46_56_20261104_10 = MonitorRule(
 )
 
 
+GOODIX_BREAKOUT_60_90_20261104_17 = MonitorRule(
+    rule_id="goodix-breakout-60-90-20261104-17",
+    instrument_name="汇顶科技",
+    code="603160.SH",
+    threshold=60.90,
+    direction="above",
+    inclusive=False,
+    emit_on_initial_match=True,
+    action_label="突破",
+    valid_from=date(2026, 11, 4),
+    valid_until=date(2026, 11, 17),
+    value_label="价格",
+    value_unit="元",
+)
+
+
 # 长期规则保留上证指数站上 3955；历史个股规则不再启用。
 # 动态涨停价与前收盘均线能力由 MonitorRule.threshold_mode 统一扩展。
 # 科创50 1700 与凯莱英 172.26 临时规则覆盖 8 月 21 日与 24 日两个
@@ -1095,6 +1111,7 @@ DEFAULT_RULES: tuple[MonitorRule, ...] = (
     ANTU_BIO_NEAR_WEEKLY_MA5_20261103_30,
     BANK_BELOW_WEEKLY_MA5_20261103_16,
     FANYA_MICRO_NEAR_46_56_20261104_10,
+    GOODIX_BREAKOUT_60_90_20261104_17,
 )
 
 
