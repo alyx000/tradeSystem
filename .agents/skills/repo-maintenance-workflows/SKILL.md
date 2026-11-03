@@ -15,7 +15,7 @@ description: 排查与维护 tradeSystem：代码审查、跨入口语义对齐�
 1. 读取 `AGENTS.md`；操作文件/命令时补读 `.cursor/agent-context/30-runtime-and-ops.md`，涉及 CLI/API/DB/业务写入时补读 `10-agent-collaboration.md`（同目录）。用 `git status --short --branch` 与 `git diff --name-only` 记录工作树基线。
 2. 按任务读取[维护检查清单](references/maintenance-checklist.md)对应章节，从真实入口追踪 service、schema、状态流转、写入目标与测试，取得根因或不一致证据。涉及 `teacher_notes` v40 备份/迁移时先读[受控迁移流程](references/teacher-notes-v40-migration.md)。
 3. 修改前确定验证命令与完成标准，再做最小修复。按 [skills-sync.md](../../rules/skills-sync.md) 同步 `INDEX.md`、受影响的 Skill/reference 与命令索引，并核对 `agents/openai.yaml`。
-4. 按下表验证；实质性代码改动再按 [post-dev-review.md](../../rules/post-dev-review.md) 完成对应审查门或说明豁免。结束时运行 `git diff --check`，对比工作树基线，检查运行时业务数据有无意外修改。
+4. 按下表验证；实质性代码改动再按 [post-dev-review.md](../../rules/post-dev-review.md) 完成会话内独立审查或说明豁免。按2026-11-02用户偏好，不再调用外部审查服务，也不为旧外部审查门请求授权。结束时运行 `git diff --check`，对比工作树基线，检查运行时业务数据有无意外修改。
 
 ## 验证
 

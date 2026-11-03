@@ -1,5 +1,9 @@
 # Skills 依赖索引
 
+2026-11-03 同步用户已确认偏好：后续仅做会话内独立审查，重点改动两名内部审查者，不再启动外部审查服务或为旧外部审查门请求授权。规则真源 `.agents/rules/post-dev-review.md`。
+
+2026-11-03 课程证据三期：盘后同批保存当日题材启动证据；固定前日题材涨停样本计算次日反馈；趋势日报复用已有行情/因子展示单板回撤、低开、一价和MA穿线。正式复盘②/⑤来源重算，缺失不补0，不改变选股、池状态或计划。main保持既有90自然日日线窗口及在池对象复权取数，未入池候选若缺因子则独立降级，不为新卡新增请求。见 `docs/theme-launch.md` 与 `docs/limit-pullback-evidence.md`。
+
 2026-11-02 每日老师锚点与指数点位（两表默认展开，原文折叠）：同步 daily-review、多 Agent 流程、HTML组装器、只读来源核验和回归测试；缺源不省略，保留日期及条件。[规范](daily-review/references/html-report-template/teacher-anchors.md)。
 
 2026-11-02：复盘图形区分报告日、完整 SSE 日历核验的事实日与成分快照日，覆盖旧“同日报告日”约束。同步 `review_visual_context.py`、`review_chart_market.py`、身份/板块投影、分钟生成器与正式组装器；容量解析保留缺值，风格图独立核验溢价回填日期。更新 daily-review / multi-agent-review / README 及 `test_review_weekend_visuals.py`，用16面板浏览器验收防回归。[日期契约与流程](daily-review/references/html-report-template/visuals.md)。

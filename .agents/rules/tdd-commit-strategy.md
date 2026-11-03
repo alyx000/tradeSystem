@@ -83,5 +83,5 @@ T8 窗口上界 + T9 sectors 去重 + T10 snippets 倒序。模块覆盖率 95%�
 
 - 单元测试覆盖与三阶段验证：`dev-workflow.md`
 - 实施前范围与验证方案：`implementation-plan.md`
-- 实施后代码审查：`post-dev-review.md`（按档跑门1 `/code-review` ∥ 门2 codex，findings 合并处置）
+- 实施后代码审查：`post-dev-review.md`（按档完成会话内独立审查，问题合并处置；不调用外部审查服务）
 - 文档同步：`skills-sync.md`

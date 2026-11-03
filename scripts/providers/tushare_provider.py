@@ -173,6 +173,7 @@ class TushareProvider(DataProvider):
             "get_stock_limit_prices",
             "get_limit_step",
             "get_limit_cpt_list",
+            "get_theme_member_snapshot",
             "get_sector_rankings",
             "get_sector_moneyflow_ths",
             "get_concept_moneyflow_ths",
@@ -436,6 +437,7 @@ class TushareProvider(DataProvider):
             row = df.iloc[0]
             data = {
                 "code": ts_code,
+                "trade_date": _normalize_trade_date(row.get("trade_date")),
                 "open": float(row["open"]),
                 "high": float(row["high"]),
                 "low": float(row["low"]),
@@ -737,6 +739,62 @@ class TushareProvider(DataProvider):
             )
         except Exception as e:
             return DataResult(data=None, source=self.name, error=str(e))
+
+    def get_theme_member_snapshot(self, date: str, theme_codes: list[str]) -> DataResult:
+        """独立于旧概念缓存，逐题材分页至空页；失败不伪装成空成员。"""
+        from zoneinfo import ZoneInfo
+        from time import monotonic
+        source = "tushare:ths_member:snapshot"
+        now = datetime.now(ZoneInfo("Asia/Shanghai"))
+        if (date != now.date().isoformat() or not isinstance(theme_codes, list)
+                or not 1 <= len(theme_codes) <= 10 or len(set(theme_codes)) != len(theme_codes)
+                or any(not isinstance(c, str) or not re.fullmatch(r"[0-9]{6}\.TI", c) for c in theme_codes)):
+            return DataResult(data=None, source=source, error="仅支持当日1至10个唯一题材代码，不以当前成分回填历史")
+        if self.pro is None:
+            return DataResult(data=None, source=source, error="成员数据源未初始化")
+        # 时间预算属于采集工程约束，不是课程参数。每次请求只缩短超时，不改变共享客户端配置。
+        deadline = monotonic() + 120
+        result = dict(date=date, fetched_at=now.isoformat(), themes={}, budget_seconds=120)
+        for code in theme_codes:
+            rows, pages, seen = [], [], set()
+            try:
+                for _ in range(10):
+                    remaining = deadline - monotonic()
+                    if remaining <= 0:
+                        raise TimeoutError("theme batch deadline exceeded")
+                    frame = self.pro.query("ths_member", ts_code=code, limit=2000, offset=len(rows),
+                                           fields="ts_code,con_code,con_name,is_new", _request_timeout=min(15, remaining))
+                    if monotonic() > deadline:
+                        raise TimeoutError("theme batch deadline exceeded")
+                    if frame is None:
+                        raise ValueError("empty response")
+                    page = self._df_to_records(frame)
+                    pages.append(len(page))
+                    if not page:
+                        break
+                    if len(page) > 2000:
+                        raise ValueError("page overflow")
+                    for row in page:
+                        member = row.get("con_code")
+                        if (row.get("ts_code") != code or not isinstance(member, str)
+                                or not re.fullmatch(r"[0-9]{6}\.(SH|SZ|BJ)", member) or member in seen
+                                or row.get("is_new") not in {"Y", "N"}
+                                or not _to_clean_str(row.get("con_name"))):
+                            raise ValueError("invalid member identity or status")
+                        seen.add(member)
+                    rows.extend(page)
+                else:
+                    raise ValueError("pagination not closed")
+                if not rows or not any(r["is_new"] == "Y" for r in rows):
+                    raise ValueError("no verified current members")
+                if datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat() != date:
+                    raise ValueError("capture crossed date")
+                result["themes"][code] = dict(status="complete", rows=rows, pages=pages)
+            except Exception as exc:
+                # 不回显上游异常中的账户地址或凭据，失败类型与分页收据足以定位。
+                result["themes"][code] = dict(status="source_failed", rows=[], pages=pages,
+                                               error=f"成员分页或身份核验失败:{type(exc).__name__}")
+        return DataResult(data=result, source=source)
 
     # ---- 市场宽度 ----
 

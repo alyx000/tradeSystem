@@ -52,3 +52,25 @@ def test_valid_empty_query_and_source_error_are_distinct(monkeypatch):
     assert client.query("stock_basic", list_status="P").empty
     with pytest.raises(RuntimeError, match="Token已过期"):
         client.query("stock_basic", list_status="L")
+
+
+def test_per_request_timeout_never_changes_shared_client_or_provider_params(monkeypatch):
+    response = Mock()
+    response.json.return_value = {"code": 0, "data": {"fields": [], "items": []}}
+    post = Mock(return_value=response)
+    monkeypatch.setattr('providers.tushare_transport.requests.post', post)
+    client = TushareMirrorClient('fake')
+    client.query('ths_member', _request_timeout=2.5, limit=2000)
+    assert post.call_args.kwargs['timeout'] == 2.5
+    assert post.call_args.kwargs['json']['params'] == {'limit': 2000}
+    client.query('trade_cal')
+    assert post.call_args.kwargs['timeout'] == 30
+
+
+@pytest.mark.parametrize('value', [0, -1, True, 31, float('nan'), float('inf'), '5'])
+def test_invalid_override_never_reaches_transport(value, monkeypatch):
+    post = Mock()
+    monkeypatch.setattr('providers.tushare_transport.requests.post', post)
+    with pytest.raises(ValueError):
+        TushareMirrorClient('fake').query('ths_member', _request_timeout=value)
+    post.assert_not_called()

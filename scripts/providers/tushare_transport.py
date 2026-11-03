@@ -12,13 +12,16 @@ class TushareMirrorClient:
         self._token = token
         self._timeout = timeout
 
-    def query(self, api_name: str, fields: str = "", **kwargs) -> pd.DataFrame:
+    def query(self, api_name: str, fields: str = "", *, _request_timeout: float | None = None, **kwargs) -> pd.DataFrame:
+        timeout = self._timeout if _request_timeout is None else _request_timeout
+        if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not 0 < timeout <= self._timeout:
+            raise ValueError("request timeout must be positive and no greater than configured timeout")
         # 该镜像按 body.api_name 路由；SDK 1.4.25 追加 /api_name 会失败。
         response = requests.post(
             "http://tushare.xyz",
             json={"api_name": api_name, "token": self._token,
                   "params": kwargs, "fields": fields},
-            timeout=self._timeout,
+            timeout=timeout,
         )
         response.raise_for_status()
         payload = response.json()

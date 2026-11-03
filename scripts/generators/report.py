@@ -864,6 +864,14 @@ class ReportGenerator:
             lines.extend(render_sector_increment(raw_data["sector_increment"]))
             section_idx += 1
 
+        if 'theme_launch' in raw_data:
+            from analyzers.theme_launch import render_markdown as render_theme_launch
+            lines.append(render_theme_launch(raw_data['theme_launch'], date))
+
+        from analyzers.theme_feedback import build as build_theme_feedback, render_markdown as render_theme_feedback
+        theme_feedback = build_theme_feedback(self.daily_dir, date, current_raw=raw_data)
+        lines.append(render_theme_feedback(theme_feedback, date))
+
         # ---- 风格化赚钱效应 ----
         section_idx = _render_style_factors(lines, raw_data, section_idx)
 

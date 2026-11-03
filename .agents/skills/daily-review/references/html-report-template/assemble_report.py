@@ -375,6 +375,8 @@ STRUCTURED_CONTRACT_ATTRIBUTES = (
     "data-strong-stock-feedback",
     "data-strong-feedback-history",
     "data-sector-core-linkage",
+    "data-theme-launch",
+    "data-theme-feedback",
     "data-wave-evidence",
     "data-market-strength",
     "data-style-board-break-feedback",
@@ -7418,6 +7420,8 @@ def validate_report(
     strong_stock_feedback: dict | None = None,
     strong_stock_history: dict | None = None,
     sector_core_linkage: dict | None = None,
+    theme_launch: dict | None = None,
+    theme_feedback: dict | None = None,
     wave_evidence_report: dict | None = None,
     market_strength_report: dict | None = None,
     market_snapshot: dict | None = None,
@@ -7495,6 +7499,36 @@ def validate_report(
         if (low_price_block.attrs != source_low_price.attrs
                 or normalize_low(low_price_block) != normalize_low(source_low_price)):
             raise ReportValidationError("style_low_price_source_mismatch", "低价股显示与事实日来源不一致", section="s4")
+    theme_chars = theme_tables = theme_rows = 0
+    theme_blocks = parser.structured_contracts['data-theme-launch']
+    if theme_blocks or theme_launch is not None:
+        from analyzers.theme_launch import render_html as render_theme, MARKER as THEME_MARKER
+        from analyzers.strong_stock_feedback import html_signature
+        expected_theme = render_theme(theme_launch, report_date)[0]
+        if (theme_launch is None or len(theme_blocks) != 1
+                or theme_blocks[0].section != 's2' or theme_blocks[0].tag != 'div'
+                or theme_blocks[0].default_hidden or theme_blocks[0].value != report_date
+                or html_signature(html, THEME_MARKER) != html_signature(expected_theme, THEME_MARKER)):
+            raise ReportValidationError('theme_launch_source_mismatch', '题材启动证据须在②唯一出现且与同日来源一致', section='s2')
+        theme_parser = _ReportParser()
+        theme_parser.feed('<article id="report-document"><section id="s2">'+expected_theme+'</section></article>')
+        theme_metrics = theme_parser.metrics()
+        theme_chars, theme_tables, theme_rows = theme_metrics.evidence_chars, theme_metrics.evidence_tables, theme_metrics.evidence_rows
+    theme_feedback_chars = theme_feedback_tables = theme_feedback_rows = 0
+    feedback_blocks = parser.structured_contracts['data-theme-feedback']
+    if feedback_blocks or theme_feedback is not None:
+        from analyzers.theme_feedback import render_html as render_theme_feedback, MARKER as FEEDBACK_MARKER
+        from analyzers.strong_stock_feedback import html_signature
+        expected_feedback = render_theme_feedback(theme_feedback, report_date)[0]
+        if (theme_feedback is None or len(feedback_blocks) != 1
+                or feedback_blocks[0].section != 's2' or feedback_blocks[0].tag != 'div'
+                or feedback_blocks[0].default_hidden or feedback_blocks[0].value != report_date
+                or html_signature(html, FEEDBACK_MARKER) != html_signature(expected_feedback, FEEDBACK_MARKER)):
+            raise ReportValidationError('theme_feedback_source_mismatch', '同题材次日反馈须在②唯一出现且与只读来源一致', section='s2')
+        feedback_parser = _ReportParser()
+        feedback_parser.feed('<article id="report-document"><section id="s2">'+expected_feedback+'</section></article>')
+        feedback_metrics = feedback_parser.metrics()
+        theme_feedback_chars, theme_feedback_tables, theme_feedback_rows = feedback_metrics.evidence_chars, feedback_metrics.evidence_tables, feedback_metrics.evidence_rows
     linkage_chars = linkage_tables = linkage_rows = 0
     linkage_blocks = parser.structured_contracts["data-sector-core-linkage"]
     if linkage_blocks or sector_core_linkage is not None:
@@ -7676,19 +7710,19 @@ def validate_report(
             f"正文 {metrics.visible_rows} 行，硬上限 {VISIBLE_ROW_LIMIT}",
         ),
         (
-            metrics.evidence_chars > EVIDENCE_CHAR_LIMIT + trend_evidence_chars + template_metrics.evidence_chars + strong_chars + linkage_chars + wave_chars + strength_chars + teacher_metrics.evidence_chars,
+            metrics.evidence_chars > EVIDENCE_CHAR_LIMIT + trend_evidence_chars + template_metrics.evidence_chars + strong_chars + linkage_chars + theme_chars + theme_feedback_chars + wave_chars + strength_chars + teacher_metrics.evidence_chars,
             "evidence_chars_exceeded",
             _largest_section(metrics, "evidence_chars"),
             f"证据层 {metrics.evidence_chars} 字，硬上限 {EVIDENCE_CHAR_LIMIT}",
         ),
         (
-            metrics.evidence_tables > EVIDENCE_TABLE_LIMIT + trend_evidence_tables + strong_tables + linkage_tables + strength_tables + teacher_metrics.evidence_tables,
+            metrics.evidence_tables > EVIDENCE_TABLE_LIMIT + trend_evidence_tables + strong_tables + linkage_tables + theme_tables + theme_feedback_tables + strength_tables + teacher_metrics.evidence_tables,
             "evidence_tables_exceeded",
             _largest_section(metrics, "evidence_tables"),
             f"证据层 {metrics.evidence_tables} 张表，硬上限 {EVIDENCE_TABLE_LIMIT}",
         ),
         (
-            metrics.evidence_rows > EVIDENCE_ROW_LIMIT + trend_rows + risk_rows + increment_rows + trend_evidence_rows + strong_rows + linkage_rows + strength_rows + teacher_metrics.evidence_rows,
+            metrics.evidence_rows > EVIDENCE_ROW_LIMIT + trend_rows + risk_rows + increment_rows + trend_evidence_rows + strong_rows + linkage_rows + theme_rows + theme_feedback_rows + strength_rows + teacher_metrics.evidence_rows,
             "evidence_rows_exceeded",
             _largest_section(metrics, "evidence_rows"),
             f"证据层 {metrics.evidence_rows} 行，硬上限 {EVIDENCE_ROW_LIMIT}+趋势来源{trend_rows}行+板块风险{risk_rows}行+行业增额{increment_rows}行",
@@ -10036,6 +10070,8 @@ def render_report(
     strong_stock_feedback: dict | None = None,
     strong_stock_history: dict | None = None,
     sector_core_linkage: dict | None = None,
+    theme_launch: dict | None = None,
+    theme_feedback: dict | None = None,
     market_strength_report: dict | None = None,
     market_snapshot: dict | None = None,
     visual_context: dict | None = None,
@@ -10119,6 +10155,23 @@ def render_report(
     chunks['s456'] = _inject_section_fragment(chunks['s456'], 's3', strong_fragment)
     if strong_gap:
         chunks['s8ops'] = _inject_section_fragment(chunks['s8ops'], 'ops', '<p>[事实] '+escape(strong_gap)+'</p>')
+
+    from analyzers.theme_launch import render_html as render_theme_launch
+    if any(re.search(r"\bdata-theme-launch\b", body, re.I) for body in chunks.values()):
+        raise ReportValidationError("duplicate_theme_launch", "题材启动证据由正式组装器生成", section="s2")
+    if theme_launch is not None:
+        theme_fragment, theme_gap = render_theme_launch(theme_launch, report_date)
+        chunks['s2'] = _inject_section_fragment(chunks['s2'], 's2', theme_fragment)
+        if theme_gap:
+            chunks['s8ops'] = _inject_section_fragment(chunks['s8ops'], 'ops', '<p>[事实] '+escape(theme_gap)+'</p>')
+    from analyzers.theme_feedback import render_html as render_theme_feedback
+    if any(re.search(r"\bdata-theme-feedback\b", body, re.I) for body in chunks.values()):
+        raise ReportValidationError("duplicate_theme_feedback", "同题材次日反馈由正式组装器生成", section="s2")
+    if theme_feedback is not None:
+        feedback_fragment, feedback_gap = render_theme_feedback(theme_feedback, report_date)
+        chunks['s2'] = _inject_section_fragment(chunks['s2'], 's2', feedback_fragment)
+        if feedback_gap:
+            chunks['s8ops'] = _inject_section_fragment(chunks['s8ops'], 'ops', '<p>[事实] '+escape(feedback_gap)+'</p>')
 
     from analyzers.sector_core_linkage import render_html as render_core_linkage
     if any(re.search(r"\bdata-sector-core-linkage\b", body, re.I) for body in chunks.values()):
@@ -10421,6 +10474,8 @@ def write_report(
     teacher_anchors: dict | None = None,
     index_intraday_manifest: dict | None = None,
     style_market_effect: dict | None = None,
+    theme_launch: dict | None = None,
+    theme_feedback: dict | None = None,
 ) -> Path:
     """带容量和滚动新高 sidecar 校验后原子落盘；失败时不写文件。"""
 
@@ -10453,6 +10508,8 @@ def write_report(
         market_snapshot=market_snapshot,
         teacher_anchors=teacher_anchors,
         style_market_effect=style_market_effect,
+        theme_launch=theme_launch,
+        theme_feedback=theme_feedback,
     )
     return _atomic_write_report(html, output_path)
 
@@ -10585,6 +10642,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         sector_core_linkage = build_core_linkage(daily_root, args.date, db_path=trade_db_path)
         from analyzers.market_strength import load as load_market_strength
         market_strength_report = load_market_strength(args.date, daily_dir=daily_root, db_path=trade_db_path)
+        from analyzers.theme_launch import load_for_review as load_theme_launch
+        theme_launch = load_theme_launch(daily_root, args.date, trade_db_path)
+        from analyzers.theme_feedback import load_for_review as load_theme_feedback
+        theme_feedback = load_theme_feedback(daily_root, args.date, trade_db_path)
         from services.trend_leader.review_evidence import load as load_trend_review_evidence
         trend_review_evidence = load_trend_review_evidence(_repo_root()/"data/reports/trend-leader", args.date)
         from services.review_teacher_anchors import load as load_teacher_anchors
@@ -10606,6 +10667,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             strong_stock_feedback=strong_stock_feedback,
             strong_stock_history=strong_stock_history,
             sector_core_linkage=sector_core_linkage,
+            theme_launch=theme_launch,
+            theme_feedback=theme_feedback,
             market_strength_report=market_strength_report,
             visual_context=visual_context,
             market_snapshot=market_snapshot,
@@ -10638,6 +10701,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             strong_stock_feedback=strong_stock_feedback,
             strong_stock_history=strong_stock_history,
             sector_core_linkage=sector_core_linkage,
+            theme_launch=theme_launch,
+            theme_feedback=theme_feedback,
             market_strength_report=market_strength_report,
             wave_evidence_report=emotion_report,
             visual_context=visual_context,

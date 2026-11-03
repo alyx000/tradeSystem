@@ -16,6 +16,7 @@ import tempfile
 
 from services.trend_leader.observations import LABELS
 from services.trend_leader.research_evidence import MAX_CARDS
+from services.trend_leader import limit_pullback
 
 SCHEMA = "trend-review-evidence-v1"
 MARKER = "data-trend-review-evidence"
@@ -156,7 +157,12 @@ def validate(payload, day):
         expected = "partial" if gaps else "complete"
         if payload.get("status") != expected:
             raise ValueError("快照完整状态与覆盖不符")
-        return {**payload, "gaps": gaps}
+        # 新形态块独立重算/降级；不能污染原有回踩、财务证据的完整状态。
+        checked = {**payload, "gaps": gaps}
+        if "limit_pullback" in payload:
+            checked["limit_pullback"] = limit_pullback.validate(payload["limit_pullback"], day)
+        return checked
+
     except (KeyError, TypeError, ValueError, AttributeError, OverflowError) as exc:
         return missing(day, str(exc), "source_failed")
 
@@ -173,6 +179,8 @@ def build(summary, markdown):
                    source_gaps=[str(x) for key in ("source_errors", "data_errors") for x in summary.get(key, [])])
     payload["status"] = "partial" if (payload["source_gaps"] or payload["coverage"]["not_collected"]
         or any(r.get("status") != "complete" for r in payload["observations"]+payload["cards"])) else "complete"
+    if "limit_pullback" in summary:
+        payload["limit_pullback"] = deepcopy(summary["limit_pullback"])
     return validate(payload, day)
 
 
@@ -238,6 +246,10 @@ def render(payload, day):
     text = f'<div {MARKER}="{escape(day)}"><h3>放量回踩与股东户数、业绩证据</h3>'
     if p["status"] not in {"complete", "partial"}:
         return text+f'<p>[事实] {escape(p["status"])}：{escape("；".join(p["gaps"]))}。</p></div>', p["gaps"]
+    if "limit_pullback" in p:
+        extra, extra_gaps = limit_pullback.render_html(p["limit_pullback"], day)
+        text += extra
+        p["gaps"] = list(p["gaps"]) + ["涨停回撤证据："+g for g in extra_gaps]
     obs, cards = p["observations"], p["cards"]
     counts = Counter(r["state"] for r in obs)
     labels = "；".join(f'{LABELS[k]}{v}只' for k,v in counts.items()) or "同日扫描无在池观察对象"

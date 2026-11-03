@@ -1100,6 +1100,10 @@ class MarketCollector:
         from analyzers.sector_increment import collect as collect_sector_increment
         result["sector_increment"] = collect_sector_increment(self.registry, date)
 
+        # 题材启动只展示事实证据；当前成员不回填历史，失败独立隔离。
+        from analyzers.theme_launch import collect as collect_theme_launch
+        result['theme_launch'] = collect_theme_launch(self.registry, date, result, daily_dir=BASE_DIR / 'daily')
+
         # 11. 指数均线
         self._compute_index_ma(result, date)
 

@@ -149,6 +149,10 @@ class DataProvider(ABC):
     def get_limit_cpt_list(self, date: str) -> DataResult:
         return DataResult(data=None, source=self.name, error="not implemented")
 
+    def get_theme_member_snapshot(self, date: str, theme_codes: list[str]) -> DataResult:
+        """当日题材成员完整分页收据；不可用当前成分回填历史。"""
+        return DataResult(data=None, source=self.name, error="not implemented")
+
     # ---- 板块数据 ----
     def get_sector_rankings(self, date: str, sector_type: str = "industry") -> DataResult:
         return DataResult(data=None, source=self.name, error="not implemented")
