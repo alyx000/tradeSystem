@@ -83,6 +83,7 @@ def calculate(quotes, identities, st_rows, industry_map, day, *, sources=None, m
         covered=eligible & valid.keys();missing=sorted(eligible-covered)
         result['coverage']=dict(raw_count=len(quotes),valid_count=len(valid),eligible_count=len(eligible),
                                 sample_count=len(covered),invalid_codes=invalid,missing_codes=missing,
+                                missing_names={c:basic[c]['name'] for c in missing},
                                 quote_coverage=len(covered)/len(eligible) if eligible else None,
                                 valid_ratio=len(valid)/len(quotes),minimum_count=min_count)
         if (len(valid)<min_count or len(eligible)<min_count or len(valid)/len(quotes)<.98
