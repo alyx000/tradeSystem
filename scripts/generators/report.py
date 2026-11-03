@@ -877,6 +877,9 @@ class ReportGenerator:
 
         # ---- 低价股赚钱效应 ----
         section_idx = _render_low_price_effect(lines, raw_data, section_idx)
+        if 'zhong_prefix_effect' in raw_data:
+            from analyzers.zhong_prefix_effect import render_markdown as render_zhong_prefix_effect
+            lines.append(render_zhong_prefix_effect(raw_data['zhong_prefix_effect'], date))
         ipo_effect = raw_data.get("ipo_effect")
         if isinstance(ipo_effect, dict):
             from analyzers.ipo_effect import render_ipo_effect

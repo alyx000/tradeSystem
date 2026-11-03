@@ -379,6 +379,7 @@ STRUCTURED_CONTRACT_ATTRIBUTES = (
     "data-theme-feedback",
     "data-wave-evidence",
     "data-market-strength",
+    "data-zhong-prefix-effect",
     "data-style-board-break-feedback",
     "data-style-market-effect",
     "data-style-low-price-effect",
@@ -7424,6 +7425,7 @@ def validate_report(
     theme_feedback: dict | None = None,
     wave_evidence_report: dict | None = None,
     market_strength_report: dict | None = None,
+    zhong_prefix_effect: dict | None = None,
     market_snapshot: dict | None = None,
     visual_context: dict | None = None,
     teacher_anchors: dict | None = None,
@@ -7558,6 +7560,21 @@ def validate_report(
         wave_parser = _ReportParser()
         wave_parser.feed('<article id="report-document"><section id="s3">'+expected_wave+'</section></article>')
         wave_chars = wave_parser.metrics().evidence_chars
+    zhong_chars = zhong_rows = zhong_tables = 0
+    zhong_blocks = parser.structured_contracts["data-zhong-prefix-effect"]
+    if zhong_blocks or zhong_prefix_effect is not None:
+        from analyzers.zhong_prefix_effect import render_html as render_zhong, MARKER as ZHONG_MARKER
+        from analyzers.strong_stock_feedback import html_signature
+        expected_zhong = render_zhong(zhong_prefix_effect, report_date)[0]
+        if (zhong_prefix_effect is None or len(zhong_blocks) != 1 or zhong_blocks[0].section != 's4'
+                or zhong_blocks[0].tag != 'div' or zhong_blocks[0].default_hidden
+                or zhong_blocks[0].value != report_date
+                or html_signature(html, ZHONG_MARKER) != html_signature(expected_zhong, ZHONG_MARKER)):
+            raise ReportValidationError('zhong_prefix_source_mismatch', '中字头统计须在④唯一出现且与来源重算一致', section='s4')
+        zhong_parser = _ReportParser()
+        zhong_parser.feed('<article id="report-document"><section id="s4">'+expected_zhong+'</section></article>')
+        zhong_metrics = zhong_parser.metrics()
+        zhong_chars, zhong_rows, zhong_tables = zhong_metrics.evidence_chars, zhong_metrics.evidence_rows, zhong_metrics.evidence_tables
     strength_chars = strength_rows = strength_tables = 0
     strength_blocks = parser.structured_contracts["data-market-strength"]
     if strength_blocks or market_strength_report is not None:
@@ -7710,19 +7727,19 @@ def validate_report(
             f"正文 {metrics.visible_rows} 行，硬上限 {VISIBLE_ROW_LIMIT}",
         ),
         (
-            metrics.evidence_chars > EVIDENCE_CHAR_LIMIT + trend_evidence_chars + template_metrics.evidence_chars + strong_chars + linkage_chars + theme_chars + theme_feedback_chars + wave_chars + strength_chars + teacher_metrics.evidence_chars,
+            metrics.evidence_chars > EVIDENCE_CHAR_LIMIT + trend_evidence_chars + template_metrics.evidence_chars + strong_chars + linkage_chars + theme_chars + theme_feedback_chars + wave_chars + strength_chars + zhong_chars + teacher_metrics.evidence_chars,
             "evidence_chars_exceeded",
             _largest_section(metrics, "evidence_chars"),
             f"证据层 {metrics.evidence_chars} 字，硬上限 {EVIDENCE_CHAR_LIMIT}",
         ),
         (
-            metrics.evidence_tables > EVIDENCE_TABLE_LIMIT + trend_evidence_tables + strong_tables + linkage_tables + theme_tables + theme_feedback_tables + strength_tables + teacher_metrics.evidence_tables,
+            metrics.evidence_tables > EVIDENCE_TABLE_LIMIT + trend_evidence_tables + strong_tables + linkage_tables + theme_tables + theme_feedback_tables + strength_tables + zhong_tables + teacher_metrics.evidence_tables,
             "evidence_tables_exceeded",
             _largest_section(metrics, "evidence_tables"),
             f"证据层 {metrics.evidence_tables} 张表，硬上限 {EVIDENCE_TABLE_LIMIT}",
         ),
         (
-            metrics.evidence_rows > EVIDENCE_ROW_LIMIT + trend_rows + risk_rows + increment_rows + trend_evidence_rows + strong_rows + linkage_rows + theme_rows + theme_feedback_rows + strength_rows + teacher_metrics.evidence_rows,
+            metrics.evidence_rows > EVIDENCE_ROW_LIMIT + trend_rows + risk_rows + increment_rows + trend_evidence_rows + strong_rows + linkage_rows + theme_rows + theme_feedback_rows + strength_rows + zhong_rows + teacher_metrics.evidence_rows,
             "evidence_rows_exceeded",
             _largest_section(metrics, "evidence_rows"),
             f"证据层 {metrics.evidence_rows} 行，硬上限 {EVIDENCE_ROW_LIMIT}+趋势来源{trend_rows}行+板块风险{risk_rows}行+行业增额{increment_rows}行",
@@ -10073,6 +10090,7 @@ def render_report(
     theme_launch: dict | None = None,
     theme_feedback: dict | None = None,
     market_strength_report: dict | None = None,
+    zhong_prefix_effect: dict | None = None,
     market_snapshot: dict | None = None,
     visual_context: dict | None = None,
     teacher_anchors: dict | None = None,
@@ -10190,6 +10208,15 @@ def render_report(
         chunks['s456'] = _inject_section_fragment(chunks['s456'], 's3', wave_fragment)
         if wave_gap:
             chunks['s8ops'] = _inject_section_fragment(chunks['s8ops'], 'ops', '<p>[事实] '+escape(wave_gap)+'</p>')
+
+    from analyzers.zhong_prefix_effect import render_html as render_zhong_prefix
+    if any(re.search(r"\bdata-zhong-prefix-effect\b", body, re.I) for body in chunks.values()):
+        raise ReportValidationError("duplicate_zhong_prefix", "中字头统计由正式组装器生成", section="s4")
+    if zhong_prefix_effect is not None:
+        zhong_fragment, zhong_gap = render_zhong_prefix(zhong_prefix_effect, report_date)
+        chunks['s456'] = _inject_section_fragment(chunks['s456'], 's4', zhong_fragment)
+        if zhong_gap:
+            chunks['s8ops'] = _inject_section_fragment(chunks['s8ops'], 'ops', '<p>[事实] '+escape(zhong_gap)+'</p>')
 
     from analyzers.market_strength_report import render_html as render_market_strength
     if any(re.search(r"\bdata-market-strength\b", body, re.I) for body in chunks.values()):
@@ -10469,6 +10496,7 @@ def write_report(
     visual_identity_sources: dict | None = None,
     wave_evidence_report: dict | None = None,
     market_strength_report: dict | None = None,
+    zhong_prefix_effect: dict | None = None,
     market_snapshot: dict | None = None,
     visual_context: dict | None = None,
     teacher_anchors: dict | None = None,
@@ -10504,6 +10532,7 @@ def write_report(
         visual_identity_sources=visual_identity_sources,
         wave_evidence_report=wave_evidence_report,
         market_strength_report=market_strength_report,
+        zhong_prefix_effect=zhong_prefix_effect,
         visual_context=visual_context,
         market_snapshot=market_snapshot,
         teacher_anchors=teacher_anchors,
@@ -10640,6 +10669,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         strong_stock_history = build_strong_history(daily_root, args.date, current=strong_stock_feedback, db_path=trade_db_path)
         from analyzers.sector_core_linkage import build as build_core_linkage
         sector_core_linkage = build_core_linkage(daily_root, args.date, db_path=trade_db_path)
+        from analyzers.zhong_prefix_effect import load_for_review as load_zhong_prefix
+        zhong_prefix_effect = load_zhong_prefix(daily_root, args.date, trade_db_path)
         from analyzers.market_strength import load as load_market_strength
         market_strength_report = load_market_strength(args.date, daily_dir=daily_root, db_path=trade_db_path)
         from analyzers.theme_launch import load_for_review as load_theme_launch
@@ -10670,6 +10701,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             theme_launch=theme_launch,
             theme_feedback=theme_feedback,
             market_strength_report=market_strength_report,
+            zhong_prefix_effect=zhong_prefix_effect,
             visual_context=visual_context,
             market_snapshot=market_snapshot,
             teacher_anchors=teacher_anchors,
@@ -10704,6 +10736,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             theme_launch=theme_launch,
             theme_feedback=theme_feedback,
             market_strength_report=market_strength_report,
+            zhong_prefix_effect=zhong_prefix_effect,
             wave_evidence_report=emotion_report,
             visual_context=visual_context,
             market_snapshot=market_snapshot,

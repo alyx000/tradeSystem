@@ -1088,6 +1088,10 @@ class MarketCollector:
         result['market_strength'] = collect_market_strength(
             self.registry, date, quote_result=shared_daily_quotes, stock_st_result=stock_st_result)
 
+        from analyzers.zhong_prefix_effect import collect as collect_zhong_prefix_effect
+        result['zhong_prefix_effect'] = collect_zhong_prefix_effect(
+            date, market_strength=result['market_strength'], quote_result=shared_daily_quotes)
+
         # 10d. 次新股赚钱效应：严格交易日/收盘闸门，独立失败不影响其他盘后块。
         from analyzers.ipo_effect import collect_ipo_effect
 
