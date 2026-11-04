@@ -38,6 +38,8 @@ globs:
 
 # Skills 同步检查规则
 
+2026-11-04 指数分时放量：上证指数、深证成指、创业板指、科创50长期监控固定已完成15/30分钟成交额，严格上一交易日同窗增加≥50%推钉钉，未命中静默。东方财富原生15分钟金额（元）、30分钟同一交易时段两根合计；缺日历/行情/零基数不补0。复用180秒任务，独立第三账本`index-volume-state.json`，收盘后1～5分钟窗口内重试、过期不补发；切换guard保护三账本，不改原价格规则。见`docs/index-volume-monitor.md`。 同步market-tasks、INDEX、AGENTS/CLAUDE、README及launchd说明；新增Provider能力和check --input-by（人工默认USER，runner显式launchd），无API/SQLite变化。market-tasks无agents/openai.yaml，保留现状。
+
 2026-11-04 中字头赚钱效应：既有20:00 post复用全市场行情和事实日名称快照，统计简称以“中”开头的非ST/退市/B股；强势前三与上涨容量前三作为[判断]核心观察，同值并列、缺源暂停排名。随原盘后信封保存并在正式复盘④来源重算展示；不自动写人工最票/关注池/计划、不新增调度或推送。见 `docs/zhong-prefix-effect.md`。
 
 2026-11-03 板块延续与量能背景：同步`theme_feedback`渲染、日报与正式HTML传入的当日`theme_launch`、双来源签名、模板README、INDEX及`docs/theme-launch.md`。不同日期/成员口径/覆盖分母保持独立；新增`test_theme_continuity.py`验证只读组合、源值篡改和部分覆盖。无CLI/API/schema变化。
