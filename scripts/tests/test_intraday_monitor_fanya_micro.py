@@ -1,4 +1,4 @@
-"""泛亚微透固定价格附近：5个开放日，传输与推送完全隔离。"""
+"""已下线泛亚微透的历史规则回归：显式指定规则仅用于隔离测试。"""
 import json
 from datetime import date, datetime, timedelta
 
@@ -36,7 +36,7 @@ def test_identity_fixed_band_and_exact_inclusive_edges(price, matched):
     assert RULE.threshold == 46.56 and RULE.direction == "near"
     assert RULE.proximity_pct == 1 and RULE.inclusive and RULE.emit_on_initial_match
     assert RULE.valid_from == date(2026,11,4) and RULE.valid_until == date(2026,11,10)
-    assert RULE in DEFAULT_RULES
+    assert RULE not in DEFAULT_RULES
     assert RULE.is_active(price) is matched
     assert len([d for d in OPEN if "2026-11-04" <= d <= "2026-11-10"]) == 5
 
