@@ -38,6 +38,7 @@ def test_runner_contract():
     assert "TZ=Asia/Shanghai /bin/date '+%u'" in text
     assert "TZ=Asia/Shanghai /bin/date '+%H%M'" in text
     assert "-lt 930" in text and "-ge 1506" in text
+    assert "-ge 1136" in text and "--input-by launchd" in text
     assert 'if [ "$SHANGHAI_WEEKDAY" -gt 5 ]; then' in text
     assert "DINGTALK_WEBHOOK_TOKEN=${DINGTALK_WEBHOOK_TOKEN:+set}" in text
     assert "DINGTALK_WEBHOOK_SECRET=${DINGTALK_WEBHOOK_SECRET:+set}" in text
@@ -103,6 +104,22 @@ DEFAULT_MARKET_SCAN_RULES = (A,)
         constructor_name="MarketScanRule",
         collection_name="DEFAULT_MARKET_SCAN_RULES",
     ) == {"scan-a"}
+
+
+def test_transition_guard_recognizes_index_volume_rules():
+    guard = _load_transition_guard()
+    source = (REPO_ROOT / "scripts/services/index_volume_monitor/rules.py").read_text()
+    assert guard.default_rule_ids(source,
+        rules_path="scripts/services/index_volume_monitor/rules.py",
+        constructor_name="IndexVolumeRule", collection_name="DEFAULT_INDEX_VOLUME_RULES") == {"index-volume-growth-50pct"}
+    assert any(s[1] == "IndexVolumeRule" and not s[3] for s in guard.RULE_SOURCES)
+
+
+def test_deploy_example_never_restarts_unverified_switched_runtime():
+    text = (REPO_ROOT / "deploy/launchd/README.md").read_text()
+    section = text[text.index("RUNTIME_ROOT=/Users/alyx/tradeSystem/.worktrees/intraday-monitor-runtime"):]
+    assert section.index("trap - EXIT") < section.index('git -C "$RUNTIME_ROOT" switch --detach')
+    assert section.index('--state-path "$INDEX_VOLUME_STATE_PATH"') < section.index("trap - EXIT")
 
 
 @pytest.fixture

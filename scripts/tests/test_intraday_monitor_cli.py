@@ -67,8 +67,8 @@ def test_check_cli_initializes_provider_for_active_rule(monkeypatch, capsys):
     monkeypatch.setattr(main, "setup_providers", lambda config: registry)
     calls = []
 
-    def fake_run_all_checks(registry, *, dry_run):
-        calls.append((registry, dry_run))
+    def fake_run_all_checks(registry, *, dry_run, input_by):
+        calls.append((registry, dry_run, input_by))
         return {
             "status": "complete",
             "events": [],
@@ -84,7 +84,7 @@ def test_check_cli_initializes_provider_for_active_rule(monkeypatch, capsys):
     output = capsys.readouterr().out
     assert '"status": "complete"' in output
     assert '"pushed": false' in output
-    assert calls == [(registry, False)]
+    assert calls == [(registry, False, "USER")]
 
 
 def test_e2e_cli_initializes_provider_for_active_rule(monkeypatch, capsys):
@@ -434,7 +434,7 @@ def test_check_cli_returns_nonzero_for_partial_monitoring(monkeypatch, capsys):
     monkeypatch.setattr(
         intraday_monitor,
         "run_all_checks",
-        lambda registry, dry_run: {
+        lambda registry, dry_run, input_by: {
             "status": "partial",
             "events": [],
             "errors": ["目标行情缺失"],

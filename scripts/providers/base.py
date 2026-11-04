@@ -305,6 +305,10 @@ class DataProvider(ABC):
         """获取指数周线数据"""
         return DataResult(data=None, source=self.name, error="not implemented")
 
+    def get_index_intraday_bars(self, index_code: str, start_date: str, end_date: str) -> DataResult:
+        """15分钟指数K线：trade_time为上海收盘标签，amount为十进制字符串（元）。"""
+        return DataResult(data=None, source=self.name, error="not implemented")
+
     # ---- 外盘 ----
     def get_global_index(
         self,

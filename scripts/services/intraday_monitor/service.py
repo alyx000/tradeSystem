@@ -678,44 +678,55 @@ def run_check(
         return {"status": "state_error", "events": [], "errors": [str(exc)]}
 
 
-def run_all_checks(registry, *, dry_run: bool = False) -> dict:
-    """统一执行单标的阈值与全市场横截面监控，并保留兼容的顶层回执。"""
+def run_all_checks(registry, *, dry_run: bool = False, input_by: str = "USER") -> dict:
+    """统一执行独立监控，横截面优先，保留兼容的顶层回执。"""
     from .market_scan import run_market_scan
+    from services.index_volume_monitor import run_index_volume
+
+    if not isinstance(input_by, str) or not input_by.strip():
+        return {"status": "invalid_request", "events": [], "errors": ["input_by不能为空"], "pushed": False}
 
     # 先完成10:00即关窗的横截面扫描，避免新增慢源吞掉09:59最后补扫。
     market_result = run_market_scan(registry, dry_run=dry_run)
+    try:
+        volume_result = run_index_volume(registry, dry_run=dry_run, input_by=input_by)
+    except Exception as exc:
+        # 新能力异常不得吞掉既有价格监控；失败仍显式进入总回执。
+        volume_result = {"status": "state_error", "events": [], "errors": [f"{type(exc).__name__}: {exc}"], "pushed": False}
     threshold_result = run_check(registry, dry_run=dry_run)
-    failing = {"blocked_calendar", "source_failed", "partial", "push_failed", "state_error"}
+    results = (threshold_result, market_result, volume_result)
+    failing = {"blocked_calendar", "source_failed", "partial", "push_failed", "state_error", "expired_window", "invalid_request"}
     failures = [
         result["status"]
-        for result in (threshold_result, market_result)
+        for result in results
         if result.get("status") in failing
     ]
     if failures:
         unique_failures = set(failures)
         status = failures[0] if len(unique_failures) == 1 else "partial"
     elif dry_run and any(
-        result.get("status") == "dry_run" for result in (threshold_result, market_result)
+        result.get("status") == "dry_run" for result in results
     ):
         status = "dry_run"
     else:
         # 窗口外/非交易日属于预期无动作；优先保留阈值监控原有状态语义。
         status = str(threshold_result.get("status") or market_result.get("status") or "complete")
-    events = list(threshold_result.get("events") or []) + list(market_result.get("events") or [])
+    events = [event for result in results for event in result.get("events") or []]
     errors = [
         f"threshold: {error}" for error in threshold_result.get("errors") or []
-    ] + [f"market_scan: {error}" for error in market_result.get("errors") or []]
+    ] + [f"market_scan: {error}" for error in market_result.get("errors") or []] + [
+        f"index_volume: {error}" for error in volume_result.get("errors") or []
+    ]
     return {
         "status": status,
         "events": events,
         "errors": errors,
-        "quotes_checked": int(threshold_result.get("quotes_checked") or 0)
-        + int(market_result.get("quotes_checked") or 0),
-        "pending_count": int(threshold_result.get("pending_count") or 0)
-        + int(market_result.get("pending_count") or 0),
-        "pushed": bool(threshold_result.get("pushed") or market_result.get("pushed")),
+        "quotes_checked": sum(int(result.get("quotes_checked") or 0) for result in results),
+        "pending_count": sum(int(result.get("pending_count") or 0) for result in results),
+        "pushed": any(result.get("pushed") for result in results),
         "threshold_monitor": threshold_result,
         "market_scan": market_result,
+        "index_volume_monitor": volume_result,
     }
 
 

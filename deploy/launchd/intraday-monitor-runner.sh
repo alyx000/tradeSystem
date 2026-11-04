@@ -11,7 +11,8 @@ if [ "$SHANGHAI_WEEKDAY" -gt 5 ]; then
     echo "[intraday-monitor] skip outside Shanghai sessions; weekday=$SHANGHAI_WEEKDAY hhmm=$SHANGHAI_HHMM"
     exit 0
 fi
-if { [ "$HHMM" -lt 930 ] || [ "$HHMM" -ge 1131 ]; } \
+# 11:30收盘窗口允许1～5分钟发布延迟；价格监控仍自行遵守原时段守卫。
+if { [ "$HHMM" -lt 930 ] || [ "$HHMM" -ge 1136 ]; } \
     && { [ "$HHMM" -lt 1300 ] || [ "$HHMM" -ge 1506 ]; }; then
     echo "[intraday-monitor] skip outside Shanghai sessions; weekday=$SHANGHAI_WEEKDAY hhmm=$SHANGHAI_HHMM"
     exit 0
@@ -35,4 +36,4 @@ set +a
 echo "===== $(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M:%S %Z') intraday-monitor start ====="
 echo "[env] DINGTALK_WEBHOOK_TOKEN=${DINGTALK_WEBHOOK_TOKEN:+set} DINGTALK_WEBHOOK_SECRET=${DINGTALK_WEBHOOK_SECRET:+set}"
 
-exec /usr/bin/python3 scripts/main.py intraday-monitor check --json
+exec /usr/bin/python3 scripts/main.py intraday-monitor check --json --input-by launchd

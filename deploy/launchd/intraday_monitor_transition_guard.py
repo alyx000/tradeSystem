@@ -17,6 +17,12 @@ RULE_SOURCES = (
         "DEFAULT_MARKET_SCAN_RULES",
         False,
     ),
+    (
+        "scripts/services/index_volume_monitor/rules.py",
+        "IndexVolumeRule",
+        "DEFAULT_INDEX_VOLUME_RULES",
+        False,
+    ),
 )
 
 

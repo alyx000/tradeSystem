@@ -181,6 +181,8 @@ def test_e2e_choice_and_mock_message_does_not_call_a_real_pusher(tmp_path):
 
 
 def test_0959_scan_runs_before_slow_threshold_sources(monkeypatch):
+    import services.index_volume_monitor as volume
+    monkeypatch.setattr(volume, "run_index_volume", lambda *a, **k: {"status": "outside_slot"})
     from services.intraday_monitor import service, market_scan
     clock = [datetime(2026, 11, 2, 9, 59, 58, tzinfo=TZ)]
     calls = []

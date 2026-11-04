@@ -140,10 +140,13 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
             "新价格规则均等于不触发，每个交易日首次已在线上提醒、当日持续在线上去重、回落后再突破可重推。"
             "春立医疗A股688236.SH于2026年11月5日至18日（10个交易日）严格高于14.04元时提醒，等于不触发，11月19日起停用；"
             "沿用每个交易日首次新鲜行情已在线上提醒、当日持续在线上去重、回落后再突破可重推。"
+            "四指数（上证/深成/创业板/科创50）长期监控完整15/30分钟成交额相对严格上一交易日同窗增加至少50%，"
+            "收盘后1～5分钟比较，缺数据不补零，独立去重、窗口过期不补发。"
         ),
     )
     check.add_argument("--dry-run", action="store_true", help="只预览，不写状态、不推送")
     check.add_argument("--json", action="store_true", help="输出 JSON 结果")
+    check.add_argument("--input-by", default="USER", help="检查请求者（自动任务显式传launchd）")
     e2e = commands.add_parser(
         "e2e-test",
         help="对指定生产规则做真实链路测试",
@@ -214,8 +217,14 @@ def handle_command(config: dict, args: argparse.Namespace) -> int:
                 rule=selected_rule,
             )
     else:
-        registry = setup_providers(config) if (DEFAULT_RULES or DEFAULT_MARKET_SCAN_RULES) else None
-        result = run_all_checks(registry, dry_run=bool(args.dry_run))
+        from services.index_volume_monitor.rules import DEFAULT_INDEX_VOLUME_RULES
+
+        input_by = getattr(args, "input_by", "USER")
+        if not isinstance(input_by, str) or not input_by.strip():
+            result = {"status": "invalid_request", "events": [], "errors": ["--input-by不能为空"], "pushed": False}
+        else:
+            registry = setup_providers(config) if (DEFAULT_RULES or DEFAULT_MARKET_SCAN_RULES or DEFAULT_INDEX_VOLUME_RULES) else None
+            result = run_all_checks(registry, dry_run=bool(args.dry_run), input_by=input_by.strip())
     if args.json:
         print(json.dumps(result, ensure_ascii=False, indent=2))
     else:
@@ -235,6 +244,8 @@ def handle_command(config: dict, args: argparse.Namespace) -> int:
         "partial",
         "push_failed",
         "state_error",
+        "invalid_request",
+        "expired_window",
     }:
         return 1
     return 0

@@ -44,7 +44,7 @@ def test_empty_or_error_envelope_rejected(body):
 
 def test_provider_returns_source_and_rejects_unknown_codes_before_network(monkeypatch):
     p = EastmoneyProvider()
-    assert p.initialize() and p.get_capabilities() == ["get_realtime_quotes"]
+    assert p.initialize() and p.get_capabilities() == ["get_realtime_quotes", "get_index_intraday_bars"]
     calls = []
     monkeypatch.setattr(p, "_fetch_one", lambda session, secid: calls.append(secid) or payload())
     r = p.get_realtime_quotes(["932000.CSI", "932000.CSI"])
