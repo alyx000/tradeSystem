@@ -45,6 +45,7 @@ from services.intraday_monitor.rules import (
     GOODIX_BREAKOUT_60_90_20261104_17,
     JUNDA_BREAKOUT_42_15_20261105_18,
     ANTU_BIO_BREAKOUT_39_44_20261105_1202,
+    CHUNLI_MEDICAL_BREAKOUT_14_04_20261105_18,
     DAJIN_HEAVY_BREAKOUT_35_95_20260912_18,
     DAJIN_HEAVY_BREAKOUT_41_96_20260917_28,
     DEFAULT_RULES,
@@ -941,6 +942,7 @@ def test_default_sse_rule_pushes_only_after_observed_below_to_3955(tmp_path):
         GOODIX_BREAKOUT_60_90_20261104_17,
         JUNDA_BREAKOUT_42_15_20261105_18,
         ANTU_BIO_BREAKOUT_39_44_20261105_1202,
+        CHUNLI_MEDICAL_BREAKOUT_14_04_20261105_18,
     )
     assert initial_above["events"] == []
     assert below["events"] == []

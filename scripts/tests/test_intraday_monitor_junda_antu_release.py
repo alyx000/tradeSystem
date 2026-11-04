@@ -1,4 +1,4 @@
-"""钧达/安图价格规则与泛亚下线；临时日历、行情和推送均隔离。"""
+"""价格突破规则与泛亚下线；临时日历、行情和推送均隔离。"""
 import json
 from datetime import date, datetime, timedelta
 
@@ -8,6 +8,7 @@ import services.intraday_monitor.service as service
 from services.intraday_monitor import (
     JUNDA_BREAKOUT_42_15_20261105_18 as JUNDA,
     ANTU_BIO_BREAKOUT_39_44_20261105_1202 as ANTU,
+    CHUNLI_MEDICAL_BREAKOUT_14_04_20261105_18 as CHUNLI,
     ANTU_BIO_NEAR_WEEKLY_MA5_20261103_30 as WEEKLY,
     FANYA_MICRO_NEAR_46_56_20261104_10 as RETIRED,
 )
@@ -19,7 +20,9 @@ DAYS = tuple(date(2026,11,4) + timedelta(days=i) for i in range(30))
 OPEN = tuple(d.isoformat() for d in DAYS if d.weekday() < 5)
 CLOSED = tuple(d.isoformat() for d in DAYS if d.weekday() >= 5)
 SPECS = ((JUNDA, "002865.SZ", "钧达股份", 42.15, 10, date(2026,11,18)),
-         (ANTU, "603658.SH", "安图生物", 39.44, 20, date(2026,12,2)))
+         (ANTU, "603658.SH", "安图生物", 39.44, 20, date(2026,12,2)),
+         (CHUNLI, "688236.SH", "春立医疗", 14.04, 10, date(2026,11,18)))
+RULES = tuple(spec[0] for spec in SPECS)
 
 
 def _setup(tmp_path, rule, day="2026-11-05"):
@@ -57,7 +60,7 @@ def test_every_effective_open_day_including_last(tmp_path,rule,day):
     assert setup[0].requested_codes == [[rule.code]]
 
 
-@pytest.mark.parametrize("rule", [JUNDA,ANTU])
+@pytest.mark.parametrize("rule", RULES)
 @pytest.mark.parametrize("kind", ["before", "weekend", "after"])
 def test_inactive_dates_never_fetch_or_push(tmp_path,rule,kind):
     day = {"before":"2026-11-04", "weekend":"2026-11-07",
@@ -68,7 +71,7 @@ def test_inactive_dates_never_fetch_or_push(tmp_path,rule,kind):
     assert not setup[0].requested_codes and not setup[1].messages
 
 
-@pytest.mark.parametrize("rule", [JUNDA,ANTU])
+@pytest.mark.parametrize("rule", RULES)
 def test_equality_dedupe_reentry_next_day_and_wording(tmp_path,rule):
     setup = _setup(tmp_path,rule)
     r,p,db,state = setup
@@ -87,7 +90,7 @@ def test_equality_dedupe_reentry_next_day_and_wording(tmp_path,rule):
     assert _run(setup,rule)["pushed"]
 
 
-@pytest.mark.parametrize("rule", [JUNDA,ANTU])
+@pytest.mark.parametrize("rule", RULES)
 @pytest.mark.parametrize("bad", ["calendar", "source", "stale_day", "stale_minute", "future"])
 def test_failed_evidence_never_builds_rule_baseline(tmp_path,rule,bad):
     setup = _setup(tmp_path,rule)
@@ -106,7 +109,7 @@ def test_failed_evidence_never_builds_rule_baseline(tmp_path,rule,bad):
     if state.exists(): assert rule.rule_id not in json.loads(state.read_text())["rules"]
 
 
-@pytest.mark.parametrize("rule", [JUNDA,ANTU])
+@pytest.mark.parametrize("rule", RULES)
 def test_preview_push_retry_and_expired_pending(tmp_path,rule):
     setup = _setup(tmp_path,rule,str(rule.valid_until))
     r,p,db,state = setup
