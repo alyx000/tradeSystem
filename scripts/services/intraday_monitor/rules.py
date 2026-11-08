@@ -1108,6 +1108,39 @@ CHUNLI_MEDICAL_BREAKOUT_14_04_20261105_18 = MonitorRule(
 )
 
 
+# 2026-11-08（休市）新增，下一开放日起5个交易日：11月9～13日。
+ROCKCHIP_BELOW_209_47_20261109_13 = MonitorRule(
+    rule_id="rockchip-below-209-47-20261109-13",
+    instrument_name="瑞芯微",
+    code="603893.SH",
+    threshold=209.47,
+    direction="below",
+    inclusive=False,
+    emit_on_initial_match=True,
+    action_label="跌破",
+    valid_from=date(2026, 11, 9),
+    valid_until=date(2026, 11, 13),
+    value_label="价格",
+    value_unit="元",
+)
+
+
+SHUNHAO_BREAKOUT_10_41_20261109_13 = MonitorRule(
+    rule_id="shunhao-breakout-10-41-20261109-13",
+    instrument_name="顺灏股份",
+    code="002565.SZ",
+    threshold=10.41,
+    direction="above",
+    inclusive=False,
+    emit_on_initial_match=True,
+    action_label="突破",
+    valid_from=date(2026, 11, 9),
+    valid_until=date(2026, 11, 13),
+    value_label="价格",
+    value_unit="元",
+)
+
+
 # 长期规则保留上证指数站上 3955；历史个股规则不再启用。
 # 动态涨停价与前收盘均线能力由 MonitorRule.threshold_mode 统一扩展。
 # 科创50 1700 与凯莱英 172.26 临时规则覆盖 8 月 21 日与 24 日两个
@@ -1162,6 +1195,8 @@ DEFAULT_RULES: tuple[MonitorRule, ...] = (
     JUNDA_BREAKOUT_42_15_20261105_18,
     ANTU_BIO_BREAKOUT_39_44_20261105_1202,
     CHUNLI_MEDICAL_BREAKOUT_14_04_20261105_18,
+    ROCKCHIP_BELOW_209_47_20261109_13,
+    SHUNHAO_BREAKOUT_10_41_20261109_13,
 )
 
 

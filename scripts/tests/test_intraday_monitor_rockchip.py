@@ -44,7 +44,9 @@ def test_identity_and_strict_boundary(rule, offset, matched):
     assert rule.is_active(price) is matched
     assert rule.valid_from == date(2026, 9, 29)
     assert rule.valid_until == date(2026, 10, 8)
-    assert tuple(r for r in DEFAULT_RULES if r.code == rule.code) == (BELOW, ABOVE)
+    # 核对旧观察窗口的默认规则；后续新窗口可以追加同股独立规则。
+    assert tuple(r for r in DEFAULT_RULES if r.code == rule.code
+                 and r.is_effective_on(rule.valid_from)) == (BELOW, ABOVE)
 
 
 @pytest.mark.parametrize("day", OPEN_DAYS)
