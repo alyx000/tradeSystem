@@ -66,6 +66,10 @@
     return {close, averages: [5,10,20,60,144,233].map((window, i) =>
       num((averages[i] || '').trim().replace(new RegExp('^MA' + window + '\\s+'), '')))};
   };
+  const capacityColumn = headers => {
+    const index = headers.findIndex(h => /前复权.*MA|收盘.*MA/.test(String(h)));
+    return index >= 0 ? index : 7; // Legacy template's documented fixed column.
+  };
   // Only the institution main table is accepted; do not infer net flow from a missing leg.
   const institutionFlow = (meta, headers, records, factDate) => {
     const empty = reason => ({status: 'missing-data', groups: {single: [], multi: []}, issues: [reason]});
@@ -173,7 +177,7 @@
     return {previousDate, factDate, rows:['涨停','跌停','炸板','首板','连板','最高板'].map((label,i)=>({label,before:values[i*2],after:values[i*2+1],unit:i===5?'板':'只'})), seal:values.slice(12)};
   };
   const visualStatus = (contentStatus, sourceStatus) => contentStatus && contentStatus !== 'ready' ? contentStatus : sourceStatus === 'partial' ? 'partial' : 'ready';
-  const api = {visualStatus, emotionComparison, num, fmt, compare, compareDisplayed, percentItems, sectorFacts, scale, stats, coverageState, chartDate, capacityValues, capacityChange, institutionFlow, sectorBoardCounts};
+  const api = {visualStatus, emotionComparison, num, fmt, compare, compareDisplayed, percentItems, sectorFacts, scale, stats, coverageState, chartDate, capacityValues, capacityChange, capacityColumn, institutionFlow, sectorBoardCounts};
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   if (typeof document === 'undefined') return;
   const doc = document.querySelector('.report-document');
@@ -384,20 +388,37 @@
     if (!valid(concentration)) return null;
     const box = el('div', 'rv-grid-two');
     const returns = scan ? sectorFacts(scan.dataset, text(scan), date) : [];
-    const left = el('div'); left.append(el('h4', '', '当日涨跌 · 原文方向摘录'));
-    left.append(bars(returns.sort((a, b) => b.value - a.value)) || el('p', 'rv-empty', '未提供可核验的板块当日涨跌，未绘制。'));
+    const left = el('div'); left.append(el('h4', '', '当日涨跌 · 涨跌各前5'));
+    returns.sort((a, b) => b.value - a.value);
+    const leaders = returns.filter(r => r.value > 0).slice(0,5);
+    const laggards = returns.filter(r => r.value < 0).reverse().slice(0,5);
+    const preview = [...leaders, ...laggards];
+    const returnScale = scale(returns.map(r => r.value), true);
+    left.append(bars(preview, {limit:returnScale}) || el('p', 'rv-empty', returns.length ? '已核验板块均收平，完整名单见展开。' : '未提供可核验的板块当日涨跌，未绘制。'));
+    const remaining = returns.filter(r => !preview.includes(r));
+    if (remaining.length) {
+      const more = el('details','rv-subdetail');
+      more.append(el('summary','',`展开其余${remaining.length}个板块`), bars(remaining,{limit:returnScale})); left.append(more);
+    }
     if (!returns.length) {gaps.push('板块当日涨跌'); box.dataset.visualStatus = 'partial';}
     if (scan?.dataset.vizSourceStatus === 'partial') {
       left.append(el('p', 'rv-note', '板块涨跌来源：partial，部分覆盖。')); box.dataset.visualStatus = 'partial';
     }
     if (scan) sourceLink(left, scan);
-    const right = el('div'); right.append(el('h4', '', 'Top20 内部份额变化'));
+    const right = el('div'); right.append(el('h4', '', 'Top20 内部份额 · 变化最大6项'));
     const items = rows(concentration).map(({cells}) => ({label: cells[0], value: num(cells[5])}));
-    right.append(bars(items, {unit: 'pp'}) || el('p', 'rv-empty', '份额变化未计算'));
+    items.sort((a,b) => (b.value == null ? -Infinity : Math.abs(b.value)) - (a.value == null ? -Infinity : Math.abs(a.value)));
+    const changeScale = scale(items.map(r => r.value), true);
+    right.append(bars(items.slice(0,6), {unit:'pp',limit:changeScale}) || el('p', 'rv-empty', items.length ? items.slice(0,6).map(r=>r.label+'：未计算').join('；') : '份额变化未计算'));
+    if (items.length > 6) {
+      const more = el('details','rv-subdetail');
+      const rest = bars(items.slice(6),{unit:'pp',limit:changeScale});
+      more.append(el('summary','',`展开其余${items.length-6}项`),rest || el('p','rv-empty',items.slice(6).map(r=>r.label+'：未计算').join('；'))); right.append(more);
+    }
     box.append(left, right); return box;
   });
   const sectorLimits = identity.sector_limits;
-  panel('s2', 'sector-limits', '热门板块：涨停数量前10', '[事实] 申万二级·非ST、非退市涨停前10；按今日数量排序。', null, () => {
+  panel('s2', 'sector-limits', '热门板块：涨停数量前5', '[事实] 申万二级·非ST、非退市涨停前5；按今日数量排序，全部板块可展开查看。', null, () => {
     if (!sectorLimits || !['complete','partial'].includes(sectorLimits.status)) return unavailable(sectorLimits);
     if (sectorLimits.date !== date || sectorLimits.classification_as_of !== classificationDate) return unavailable({status:'source_failed',reason:'板块涨停统计日期不符'});
     const box=el('div','rv-sector-limits'); box.dataset.visualStatus=sectorLimits.status==='partial'?'partial':'ready';
@@ -409,7 +430,7 @@
     if(boards.current.valid) box.append(el('p','rv-statline','今日名单：'+boardText(boards.current.counts)));
     const legend=el('div','rv-board-legend');boardKeys.forEach(k=>{const item=el('span','');item.append(el('i','rv-board-'+k),document.createTextNode(boardLabel(k)));legend.append(item);});box.append(legend);
     if(!boards.current.valid||!boards.previous.valid){box.dataset.visualStatus='partial';box.append(el('p','rv-note',(boards.current.valid?'':'今日板型未核验；')+(boards.previous.valid?'':'昨日板型未核验；')+'缺字段或合计不一致，不按代码推定板型。'));}
-    const selected=sectorLimits.sectors.filter(s=>s.code!=='UNCLASSIFIED' && s.current_count>0).slice(0,10);
+    const selected=sectorLimits.sectors.filter(s=>s.code!=='UNCLASSIFIED' && s.current_count>0).slice(0,5);
     const max=Math.max(1,...selected.flatMap(s=>[s.previous_count,s.current_count]));
     selected.forEach(s=>{
       const verified=boards.sectors.find(r=>r.code===s.code);
@@ -698,13 +719,24 @@
   panel('s5', 'capacity', '容量核心健康矩阵', '[事实] 前复权收盘与均线比较；↑ 线上 / ↓ 线下 / — 未计算。显示值相等用≈待核原值，不断言精确贴线。Top50 为近5日入榜次数，不是趋势分。', capacity, () => {
     if (!valid(capacity)) return null;
     const records = rows(capacity).filter(r => r.node.dataset.tier === 'core').map(({node, cells}) => {
-      const {close, averages} = capacityValues(cells[7]);
+      const column = capacityColumn(qa('thead th', capacity).map(text));
+      const {close, averages} = capacityValues(cells[column]);
       const pct = capacityChange(cells[5]);
       return [cells[2].includes(node.dataset.code) ? cells[2] : cells[2] + ' ' + (node.dataset.code || '代码待核'), {text: pct == null ? '未计算' : fmt(pct, 2, true) + '%', state: compare(pct, 0)},
-        ...Array.from({length: 6}, (_, i) => stateCell(compareDisplayed(close, averages[i] ?? null))),
+        ...Array.from({length: 6}, (_, i) => {
+          const cell = stateCell(compareDisplayed(close, averages[i] ?? null));
+          if (cell.state === 'missing' && /历史不足/.test(cells.join(' '))) cell.text = '— 历史不足';
+          return cell;
+        }),
         {text: cells[4], state: 'neutral'}];
     });
-    return matrix(['股票', '今日涨跌', 'MA5', 'MA10', 'MA20', 'MA60', 'MA144', 'MA233', 'Top50'], records);
+    const chart = matrix(['股票', '今日涨跌', 'MA5', 'MA10', 'MA20', 'MA60', 'MA144', 'MA233', 'Top50'], records);
+    if (!chart) return null;
+    if (records.some(r => r.some(c => c?.state === 'missing'))) chart.dataset.visualStatus = 'partial';
+    const reasons = rows(capacity).filter(r => r.node.dataset.tier === 'core' && /历史不足/.test(r.cells.join(' ')))
+      .map(r => r.cells[2] + '：' + r.cells.filter(c => /历史不足/.test(c)).join('；'));
+    if (reasons.length) chart.append(el('p','rv-note',reasons.join('；')));
+    return chart;
   });
   const highs = q('table[data-new-high-structure=v1]');
   panel('s5', 'new-highs', '滚动新高：短窗与长窗', '[事实] 前复权盘中高点突破此前窗口最高值；三个窗口分别统计、名单重叠，不能相加。', highs, () => {

@@ -121,8 +121,15 @@ def _ranking(source, day):
         if consecutive > count or rank < 1:
             raise ValueError('题材连板数或排名冲突')
         records.append(dict(code=code,name=name.strip(),count=count,consecutive=consecutive,rank=rank))
-    if len({r['code'] for r in records}) != len(records) or sorted(r['rank'] for r in records) != list(range(1,len(records)+1)):
+    ranks = sorted({r['rank'] for r in records})
+    if len({r['code'] for r in records}) != len(records) or ranks != list(range(1, len(ranks)+1)):
         raise ValueError('题材榜重复身份或排名不连续')
+    # The archived source can assign one rank to multiple distinct themes.
+    # Preserve those rows/ranks, but reject conflicting counts within a tie.
+    for rank in ranks:
+        tied = {(r['count'], r['consecutive']) for r in records if r['rank'] == rank}
+        if len(tied) != 1:
+            raise ValueError('题材榜同名次计数冲突')
     return sorted(records,key=lambda r:r['rank'])
 
 

@@ -422,6 +422,20 @@ def _stage_and_signals(
     return stage, stop_signal, new_cycle_signal
 
 
+def _observed_count(rows: list, source_status: object) -> str:
+    if source_status in {"complete", "ok", "empty"}:
+        return f"{len(rows)}只"
+    if source_status == "partial" and rows:
+        return f"已核验{len(rows)}只（部分覆盖）"
+    return "未计算（部分覆盖）" if source_status == "partial" else "未计算"
+
+
+def _empty_observation(source_status: object) -> str:
+    if source_status in {"complete", "ok", "empty"}:
+        return "正常计算后为0"
+    return "未计算（部分覆盖）" if source_status == "partial" else "未计算"
+
+
 def build(
     current_report: Mapping[str, object] | None,
     report_date: str,
@@ -431,7 +445,14 @@ def build(
 ) -> dict[str, object]:
     """构建五段卡数据；不补采、不写盘。"""
 
-    def missing(reason: str, *, previous_date: str = "") -> dict[str, object]:
+    # 断板反馈有独立同日来源，不因生命周期或基线缺失而丢弃有效事实。
+    board = (
+        _load_board_feedback(Path(daily_dir) / report_date / "post-market.yaml", report_date)
+        if daily_dir is not None
+        else {"status": "source_failed", "rows": [], "errors": []}
+    )
+
+    def missing(reason: str, *, previous_date: str = "", transitions=None) -> dict[str, object]:
         return {
             "date": report_date,
             "previous_date": previous_date,
@@ -440,8 +461,8 @@ def build(
             "stop_signal": "未计算",
             "new_cycle_signal": "未计算",
             "facts": [],
-            "transitions": {"status": "source_failed", "rows": [], "missing": []},
-            "board": {"status": "source_failed", "rows": [], "errors": []},
+            "transitions": transitions or {"status": "source_failed", "rows": [], "missing": []},
+            "board": board,
             "errors": [reason],
         }
 
@@ -462,14 +483,13 @@ def build(
     if previous_report.get("status") not in {"ok", "partial"}:
         return missing("严格上一开放日情绪日报状态无效或 source_failed", previous_date=previous_date)
 
+    transitions = _core_transitions(previous_report, current_report, report_date)
     current_market = _load_market_snapshot(Path(daily_dir) / report_date / "post-market.yaml", report_date)
     previous_market = _load_market_snapshot(Path(daily_dir) / previous_date / "post-market.yaml", previous_date)
     if current_market is None or previous_market is None:
-        return missing("T/T-1 盘后市场事实缺失或无法对账", previous_date=previous_date)
+        return missing("T/T-1 盘后市场事实缺失或无法对账", previous_date=previous_date, transitions=transitions)
     if current_market["promotion"].get("prev_date") != previous_date:
         return missing("当日晋级事实未绑定严格 T-1", previous_date=previous_date)
-    transitions = _core_transitions(previous_report, current_report, report_date)
-    board = _load_board_feedback(Path(daily_dir) / report_date / "post-market.yaml", report_date)
     height_event = _valid_height_event(current_report.get("height_breakthrough"), report_date)
     stage, stop_signal, new_cycle_signal = _stage_and_signals(
         current_market,
@@ -521,10 +541,12 @@ def build(
         f"涨停{previous_market['limit_up']}→{current_market['limit_up']}，跌停{previous_market['limit_down']}→{current_market['limit_down']}，炸板率{previous_market['broken_rate']:.1f}%→{current_market['broken_rate']:.1f}%",
         f"首板{previous_market['first']}→{current_market['first']}，二板及以上{previous_market['continuation']}→{current_market['continuation']}，最高板{previous_market['highest']}→{current_market['highest']}",
         f"首板→二板{previous_p['first_to_second']['rate']:.1%}→{current_p['first_to_second']['rate']:.1%}，二板→三板{previous_p['second_to_third']['rate']:.1%}→{current_p['second_to_third']['rate']:.1%}",
-        f"旧核心修复{len(repaired)}只、继续负反馈{len(continued)}只、由正转负{len(reversed_rows)}只；断板低开转收涨{len(weak_to_strong)}只；{board_fact}",
+        f"旧核心修复{_observed_count(repaired, transitions.get('status'))}、继续负反馈{_observed_count(continued, transitions.get('status'))}、由正转负{_observed_count(reversed_rows, transitions.get('status'))}；断板低开转收涨{_observed_count(weak_to_strong, board.get('status'))}；{board_fact}",
     ]
     errors = []
-    if transitions.get("status") != "complete":
+    if transitions.get("status") == "source_failed":
+        errors.append("T-1前12只核心反馈来源失败，未计算")
+    elif transitions.get("status") != "complete":
         errors.append(f"T-1前12只核心有{len(transitions.get('missing') or [])}只反馈未计算")
     if board.get("status") == "partial":
         errors.append("断板反馈为 partial")
@@ -604,8 +626,8 @@ def render_html(payload: Mapping[str, object] | None, report_date: str) -> tuple
     errors = [str(item) for item in payload.get("errors", []) if str(item)] if isinstance(payload.get("errors"), list) else []
     facts = [str(item) for item in payload.get("facts", []) if str(item)] if isinstance(payload.get("facts"), list) else []
 
-    transition_names = lambda rows: "、".join(escape(str(row.get("name") or row.get("code") or "")) for row in rows[:5]) or "正常计算后为0"
-    board_names = lambda rows: "、".join(escape(str(row.get("name") or row.get("code") or "")) for row in rows[:5]) or "正常计算后为0"
+    transition_names = lambda rows: "、".join(escape(str(row.get("name") or row.get("code") or "")) for row in rows[:5]) or _empty_observation(transitions.get("status"))
+    board_names = lambda rows: "、".join(escape(str(row.get("name") or row.get("code") or "")) for row in rows[:5]) or _empty_observation(board.get("status"))
     fact_html = "".join(f"<li>[事实] {escape(item)}</li>" for item in facts[:4])
     if not fact_html:
         fact_html = "<li>[事实] T/T-1 可比事实未计算。</li>"
@@ -632,15 +654,15 @@ def render_html(payload: Mapping[str, object] | None, report_date: str) -> tuple
     transition_details = (
         f'<details class="evidence" data-as-of="{escape(report_date)}" data-items="{len(repaired) + len(continued) + len(reversed_rows)}" data-evidence-kind="emotion-change-core"><summary>辨识度个股负反馈修复明细（{len(repaired) + len(continued) + len(reversed_rows)}只）</summary><div class="evidence-body"><div class="table-scroll-shell"><table><thead><tr><th>股票</th><th>T-1反馈</th><th>T反馈</th><th>变化</th></tr></thead><tbody>{transition_table_rows}</tbody></table></div></div></details>'
         if transition_table_rows
-        else '<p class="note">[事实] 辨识度个股负反馈修复：' + ("未计算/partial。" if status == "source_failed" else "正常计算后为0。") + "</p>"
+        else '<p class="note">[事实] 辨识度个股负反馈修复：' + (_empty_observation(transitions.get("status")) + "。") + "</p>"
     )
     board_details = (
         f'<details class="evidence" data-as-of="{escape(report_date)}" data-items="{len(weak_to_strong) + len(still_weak)}" data-evidence-kind="emotion-change-board"><summary>断板股盘中弱转强代表（{len(weak_to_strong) + len(still_weak)}只）</summary><div class="evidence-body"><div class="table-scroll-shell"><table><thead><tr><th>股票</th><th>开盘</th><th>收盘</th><th>结果</th></tr></thead><tbody>{board_table_rows}</tbody></table></div><p>{sample_note}</p></div></details>'
         if board_table_rows
-        else '<p class="note">[事实] 断板股盘中弱转强：' + ("未计算/partial。" if board.get("status") == "source_failed" else "正常计算后为0。") + "</p>"
+        else '<p class="note">[事实] 断板股盘中弱转强：' + (_empty_observation(board.get("status")) + "。") + "</p>"
     )
     value = "v1" if status in {"complete", "partial"} and stage != "数据不足" else "missing-data"
-    normalized_status = status if status in {"complete", "partial"} else "source_failed"
+    normalized_status = status if value == "v1" else "source_failed"
     error_text = "；".join(errors[:4]) or "无新增缺口"
     current_status = escape(str(payload.get("current_report_status") or "未计算"))
     previous_status = escape(str(payload.get("previous_report_status") or "未计算"))
@@ -649,14 +671,14 @@ def render_html(payload: Mapping[str, object] | None, report_date: str) -> tuple
     fragment = f'''<div class="emotion-change" data-emotion-change="{value}" data-as-of="{escape(report_date)}"
     data-prev-date="{escape(previous_date)}" data-source-status="{escape(normalized_status)}"
     data-stage-label="{escape(stage)}" data-stop-signal="{escape(stop_signal)}"
-    data-new-cycle-signal="{escape(cycle_signal)}" data-repair-count="{len(repaired)}"
-    data-continued-negative-count="{len(continued)}" data-positive-to-negative-count="{len(reversed_rows)}"
+    data-new-cycle-signal="{escape(cycle_signal)}" data-repair-count="{len(repaired) if transitions.get("status") in {"complete", "partial"} else "unavailable"}"
+    data-continued-negative-count="{len(continued) if transitions.get("status") in {"complete", "partial"} else "unavailable"}" data-positive-to-negative-count="{len(reversed_rows) if transitions.get("status") in {"complete", "partial"} else "unavailable"}"
     data-board-sample-count="{"unavailable" if sample_count is None else sample_count}"
     data-source-error-count="{source_error_attr}">
   <h3>今日相对 T-1 的情绪变化</h3>
   <div class="template-grid emotion-change-grid">
     <div class="template-card"><h4>阶段结论</h4><p><strong>[判断] {escape(stage)}</strong></p><ul>{fact_html}</ul></div>
-    <div class="template-card"><h4>止跌信号</h4><p data-signal-class="{_signal_class(stop_signal)}">[判断] {escape(stop_signal)}</p><p>[事实] 旧核心修复{len(repaired)}只；断板低开转收涨{len(weak_to_strong)}只。</p></div>
+    <div class="template-card"><h4>止跌信号</h4><p data-signal-class="{_signal_class(stop_signal)}">[判断] {escape(stop_signal)}</p><p>[事实] 旧核心修复{_observed_count(repaired, transitions.get("status"))}；断板低开转收涨{_observed_count(weak_to_strong, board.get("status"))}。</p></div>
     <div class="template-card"><h4>新周期确认</h4><p data-signal-class="{_signal_class(cycle_signal)}">[判断] {escape(cycle_signal)}</p><p>[事实] {escape(height_fact)}；中间梯队、晋级率与封板质量按同日归档联合核验。</p></div>
     <div class="template-card"><h4>代表个股</h4><p>[事实] 修复：{transition_names(repaired)}；继续负反馈：{transition_names(continued)}；由正转负：{transition_names(reversed_rows)}。</p><p>[事实] 断板低开转收涨：{board_names(weak_to_strong)}；继续走弱：{board_names(still_weak)}。</p></div>
     <div class="template-card"><h4>数据状态</h4><p>[事实] T={current_status}；T-1（{escape(previous_date or '未计算')}）={previous_status}；断板反馈={escape(str(board.get('status') or 'source_failed'))}；source_errors={source_error_attr}。</p><p class="note">[事实] {escape(error_text)}；缺失不补0。</p></div>

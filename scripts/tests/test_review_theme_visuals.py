@@ -42,7 +42,28 @@ def test_absent_theme_is_absent_key_not_zero_and_failed_day_is_null():
     assert out['days'][-1]['counts']['885002.TI']==0
 
 
-@pytest.mark.parametrize('change',['hash','date','provider','count','duplicate','rank','negative','bool','consecutive'])
+def test_historical_tied_rank_preserves_both_themes_and_source():
+    raw,m=fixture();day=m['trade_dates'][0];key=day.replace('-','')+'_theme_ranking'
+    rows=json.loads(raw[key]['payload_json'])['rows']
+    rows.insert(1,dict(rows[0],ts_code='885003.TI',name='并列题材'))
+    raw[key]=receipt(day,rows);before=deepcopy(raw)
+    point=theme_heatmap(raw,m,DAY)['days'][0]
+    assert point['status']=='complete' and point['row_count']==3
+    assert point['counts']=={'885001.TI':5,'885003.TI':5,'885002.TI':0}
+    assert point['entries']['885001.TI']['rank']==point['entries']['885003.TI']['rank']==1
+    assert raw==before
+
+
+@pytest.mark.parametrize('field,value',[('up_nums',4),('cons_nums',1)])
+def test_tied_rank_with_conflicting_counts_still_fails_closed(field,value):
+    raw,m=fixture();key=DAY.replace('-','')+'_theme_ranking'
+    rows=json.loads(raw[key]['payload_json'])['rows']
+    tied=dict(rows[0],ts_code='885003.TI',name='冲突题材');tied[field]=value;rows.insert(1,tied)
+    raw[key]=receipt(DAY,rows)
+    assert theme_heatmap(raw,m,DAY)['status']=='source_failed'
+
+
+@pytest.mark.parametrize('change',['hash','date','provider','count','duplicate','rank','huge_rank','negative','bool','consecutive'])
 def test_corrupt_current_ranking_fails_closed(change):
     raw,m=fixture();key='20261029_theme_ranking';r=raw[key];payload=json.loads(r['payload_json'])
     if change=='hash':r['payload_hash']='0'*64
@@ -52,6 +73,7 @@ def test_corrupt_current_ranking_fails_closed(change):
     else:
         if change=='duplicate':payload['rows'][1]['ts_code']='885001.TI'
         if change=='rank':payload['rows'][1]['rank']='3'
+        if change=='huge_rank':payload['rows'][1]['rank']=10**30
         if change=='negative':payload['rows'][0]['up_nums']=-1
         if change=='bool':payload['rows'][0]['up_nums']=True
         if change=='consecutive':payload['rows'][0]['cons_nums']=6

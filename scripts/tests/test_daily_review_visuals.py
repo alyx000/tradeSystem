@@ -122,3 +122,12 @@ def test_illustrations_are_optional_and_invalid_files_not_embedded(assembler, tm
     assert 'data-review-illustration="v1"' in out
     assert '另外0张' not in out
     assert assembler.attach_visuals(out, '2026-10-29', illustration_dir=tmp_path) == out
+
+
+def test_capacity_column_follows_labeled_header_instead_of_health_comment():
+    headers = ['层级','方向','股票','排名','近5日Top50','涨跌／成交额','前复权MA5/10','健康观察','代码']
+    assert js('v.capacityColumn('+json.dumps(headers)+')') == 6
+    assert js('v.capacityColumn(["old template"])') == 7
+    assert js('v.capacityColumn('+json.dumps(["序号"]+headers)+')') == 7
+    value='收盘448.000；MA5 500.982 / MA10 544.776'
+    assert js('v.capacityValues('+json.dumps(value)+')') == dict(close=448,averages=[500.982,544.776,None,None,None,None])

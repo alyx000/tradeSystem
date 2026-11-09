@@ -288,3 +288,107 @@ def test_missing_strict_previous_report_is_data_insufficient(tmp_path):
     assert 'data-emotion-change="missing-data"' in fragment
     assert "缺失不补0" in fragment
     assert gap is not None
+
+
+def test_missing_sources_never_render_zero_as_a_computed_result(tmp_path):
+    result = build(None, "2026-07-16", emotion_dir=tmp_path, daily_dir=tmp_path)
+    for payload in (None, result):
+        fragment, gap = render_html(payload, "2026-07-16")
+        assert "旧核心修复未计算" in fragment
+        assert "断板低开转收涨未计算" in fragment
+        assert "正常计算后为0" not in fragment
+        assert 'data-repair-count="unavailable"' in fragment
+        assert gap is not None
+
+
+def test_complete_empty_sources_keep_real_zero_even_if_other_sources_fail():
+    fragment, _ = render_html({
+        "date": "2026-07-16", "status": "source_failed",
+        "transitions": {"status": "complete", "rows": []},
+        "board": {"status": "empty", "rows": [], "sample_count": 0},
+    }, "2026-07-16")
+    assert "旧核心修复0只" in fragment
+    assert "断板低开转收涨0只" in fragment
+    assert "修复：正常计算后为0" in fragment
+    assert "断板股盘中弱转强：正常计算后为0" in fragment
+
+
+def test_partial_empty_categories_do_not_claim_complete_zero():
+    fragment, _ = render_html({
+        "date": "2026-07-16", "status": "partial",
+        "transitions": {"status": "partial", "rows": [], "missing": ["缺失票"]},
+        "board": {"status": "partial", "rows": [], "sample_count": 0},
+    }, "2026-07-16")
+    assert "正常计算后为0" not in fragment
+    assert "旧核心修复未计算（部分覆盖）" in fragment
+    assert "断板低开转收涨未计算（部分覆盖）" in fragment
+
+
+def test_partial_observations_retain_verified_nonzero_counts():
+    fragment, _ = render_html({
+        "date": "2026-07-16", "status": "partial",
+        "transitions": {"status": "partial", "rows": [
+            {"code": "000001.SZ", "name": "已核验修复票", "transition": "repaired"},
+        ]},
+        "board": {"status": "partial", "rows": [
+            {"code": "000002", "name": "已核验断板票", "open_pct": -1, "close_pct": 2},
+        ], "sample_count": 1},
+    }, "2026-07-16")
+    assert "旧核心修复已核验1只（部分覆盖）" in fragment
+    assert "断板低开转收涨已核验1只（部分覆盖）" in fragment
+    assert "已核验修复票" in fragment and "已核验断板票" in fragment
+    assert "正常计算后为0" not in fragment
+
+
+def test_missing_core_report_preserves_independent_valid_board_feedback(tmp_path):
+    _write_daily(
+        tmp_path, "2026-07-16", limit_up=10, limit_down=2,
+        continuation=3, highest=4, broken_rate=20, mid_count=2,
+        promotion=_promotion("2026-07-16", "2026-07-15", (10, 2), (4, 1)),
+        board={"status": "ok", "outcome_date": "2026-07-16", "sample_count": 1,
+               "relimit_count": 0, "limit_down_count": 0, "details": [
+                   {"code": "000002", "name": "独立有效票", "feedback_open_pct": -2,
+                    "feedback_close_pct": 3, "outcome": "上涨"}]},
+    )
+    result = build(None, "2026-07-16", emotion_dir=tmp_path, daily_dir=tmp_path)
+    fragment, gap = render_html(result, "2026-07-16")
+    assert result["status"] == "source_failed"
+    assert "旧核心修复未计算" in fragment
+    assert "断板低开转收涨1只" in fragment
+    assert "独立有效票" in fragment
+    assert gap is not None
+
+
+def test_failed_core_with_valid_market_and_board_passes_missing_contract(tmp_path, monkeypatch):
+    from datetime import date
+    import importlib.util
+    import sys
+    from services.emotion_leader import review_change
+
+    previous = _report("2026-07-15", [])
+    (tmp_path / "2026-07-15.json").write_text(json.dumps(previous))
+    current = _report("2026-07-16", [])
+    current["active"] = None  # Cannot compute transitions from a malformed core source.
+    market = {"limit_up": 10, "limit_down": 2, "first": 7, "continuation": 3,
+              "highest": 4, "broken_rate": 20,
+              "promotion": _promotion("2026-07-16", "2026-07-15", (10, 2), (4, 1))}
+    monkeypatch.setattr(review_change, "_load_market_snapshot", lambda *args: market)
+    monkeypatch.setattr(review_change, "_load_board_feedback", lambda *args: {
+        "status": "empty", "rows": [], "sample_count": 0, "errors": []})
+    result = build(current, "2026-07-16", emotion_dir=tmp_path, daily_dir=tmp_path)
+    assert result["transitions"]["status"] == "source_failed"
+    assert "旧核心修复未计算" in result["facts"][-1]
+    assert "断板低开转收涨0只" in result["facts"][-1]
+    fragment, gap = render_html(result, "2026-07-16")
+    assert 'data-source-status="source_failed"' in fragment
+    assert 'data-repair-count="unavailable"' in fragment
+    assert gap is not None
+
+    path = Path(__file__).resolve().parents[2] / ".agents/skills/daily-review/references/html-report-template/assemble_report.py"
+    spec = importlib.util.spec_from_file_location("emotion_change_contract_assembler", path)
+    assembler = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, spec.name, assembler)
+    spec.loader.exec_module(assembler)
+    parser = assembler._ReportParser()
+    parser.feed('<section id="s3">' + fragment + '</section>')
+    parser._validate_emotion_change_contract(date(2026, 7, 16))
