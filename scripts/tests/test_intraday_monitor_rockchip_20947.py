@@ -1,4 +1,4 @@
-"""瑞芯微严格跌破209.47元，11月9～13日；临时状态与模拟推送隔离。"""
+"""瑞芯微209.47元历史规则回归与生产下线保护。"""
 import argparse
 import json
 from datetime import date, datetime, timedelta
@@ -38,7 +38,7 @@ def test_identity_threshold_dates_export_and_strict_boundary(price,matched):
     assert RULE.direction == "below" and not RULE.inclusive and RULE.emit_on_initial_match
     assert (RULE.valid_from,RULE.valid_until) == (date(2026,11,9),date(2026,11,13))
     assert RULE.value_label == "价格" and RULE.value_unit == "元" and RULE.action_text == "跌破"
-    assert RULE in DEFAULT_RULES and len(ACTIVE) == 5
+    assert RULE not in DEFAULT_RULES and len(ACTIVE) == 5
     assert RULE.is_active(price) is matched
     assert (OLD_BELOW.threshold,OLD_ABOVE.threshold) == (203.90,219.02)
     assert OLD_BELOW.valid_until == OLD_ABOVE.valid_until == date(2026,10,8)
@@ -131,13 +131,39 @@ def test_old_expired_rockchip_rules_do_not_share_new_state(tmp_path):
     assert set(json.loads(state.read_text())["rules"]) == {RULE.rule_id}
 
 
-def test_cli_selection_and_no_implicit_real_test_authorization(monkeypatch,capsys):
+def test_cli_cannot_select_retired_rule():
     from cli import intraday_monitor
-    import main
     parser = argparse.ArgumentParser()
     intraday_monitor.register_subparser(parser.add_subparsers())
-    args = parser.parse_args(["intraday-monitor","e2e-test","--rule-id",RULE.rule_id,
-                              "--input-by","pytest","--json"])
-    monkeypatch.setattr(main,"setup_providers",lambda *a: pytest.fail("未授权不得初始化真实源"))
-    assert intraday_monitor.handle_command({},args) == 1
-    assert '"status": "authorization_required"' in capsys.readouterr().out
+    with pytest.raises(SystemExit):
+        parser.parse_args(["intraday-monitor", "e2e-test", "--rule-id", RULE.rule_id,
+                           "--input-by", "pytest", "--json"])
+
+
+def test_retired_rockchip_not_fetched_or_sent_and_history_preserved(tmp_path):
+    from services.intraday_monitor import SHUNHAO_BREAKOUT_10_41_20261109_13 as shunhao
+
+    setup = _setup(tmp_path, "2026-11-10")
+    r, p, db, state = setup
+    p.succeed = False
+    assert _run(setup)["status"] == "push_failed"
+    saved = json.loads(state.read_text())
+    retired_event = saved["pending_events"][0]["event_id"]
+    old_state = saved["rules"][RULE.rule_id]
+    r.now += timedelta(minutes=3)
+    r.price = 10.42
+    r.requested_codes.clear()
+    p.messages.clear()  # 模拟推送器也记录前一次失败尝试。
+    p.succeed = True
+    out = run_check(
+        r, rules=tuple(rule for rule in DEFAULT_RULES if rule.code in (RULE.code, shunhao.code)),
+        now=r.now, db_path=db, state_path=state, pusher_factory=lambda: p,
+    )
+    assert out["status"] == "complete" and out["pushed"]
+    assert r.requested_codes == [[shunhao.code]]
+    assert [event["rule_id"] for event in out["events"]] == [shunhao.rule_id]
+    assert all("瑞芯微" not in msg for _, msg in p.messages)
+    saved = json.loads(state.read_text())
+    assert saved["rules"][RULE.rule_id] == old_state
+    assert retired_event in saved["expired_event_ids"]
+    assert retired_event not in saved["sent_event_ids"]
