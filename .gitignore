@@ -42,6 +42,7 @@ docs/*
 !docs/templates/**
 !docs/capacity-trend.md
 !docs/index-volume-monitor.md
+!docs/opening-environment.md
 !docs/strong-stock-feedback.md
 !docs/sector-core-linkage.md
 
