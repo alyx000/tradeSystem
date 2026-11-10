@@ -10080,6 +10080,7 @@ def render_report(
     style_market_effect: Mapping[str, object] | None = None,
     include_legacy_sections: bool = False,
     feedback_trends: dict | None = None,
+    consecutive_pool_trend: dict | None = None,
     sector_adjustment_risk: dict | None = None,
     sector_increment: dict | None = None,
     trend_review_evidence: dict | None = None,
@@ -10254,6 +10255,13 @@ def render_report(
         chunks["s8ops"] = _inject_section_fragment(chunks["s8ops"], "ops", '<p>[事实] 板块增量归因缺口：'+escape('；'.join(increment_gaps))+'；未计算不补零。</p>')
 
     feedback_fragment, feedback_gaps = render_feedback_trends(feedback_trends, report_date)
+    from services.review_consecutive_pool import render as render_consecutive_pool
+    if any(re.search(r"\bdata-consecutive-pool-trend\s*=", body, re.I) for body in chunks.values()):
+        raise ReportValidationError("duplicate_consecutive_pool_trend", "连板池趋势由组装器统一生成", section="s3")
+    pool_fragment, pool_gaps = render_consecutive_pool(consecutive_pool_trend, report_date)
+    chunks["s456"] = _inject_section_fragment(chunks["s456"], "s3", pool_fragment)
+    for gap in pool_gaps:
+        chunks["s8ops"] = _inject_section_fragment(chunks["s8ops"], "ops", f'<p>[事实] 连板池趋势：{escape(gap)}。</p>')
     chunks["s456"] = _inject_section_fragment(chunks["s456"], "s3", feedback_fragment)
     for gap in feedback_gaps:
         chunks["s8ops"] = _inject_section_fragment(chunks["s8ops"], "ops", f'<p>[事实] {escape(gap)}；缺失不补零。</p>')
@@ -10660,6 +10668,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             ),
         )
         feedback_trends = load_feedback_trends(daily_root, emotion_history_dir, trade_db_path, args.date)
+        from services.review_consecutive_pool import load as load_consecutive_pool
+        consecutive_pool_trend = load_consecutive_pool(daily_root, trade_db_path, args.date)
         sector_risk = load_sector_risk(daily_root, _repo_root()/"data/reports/sector-adjustment-risk", args.date)
         from analyzers.sector_increment import load_snapshot as load_sector_increment
         sector_increment = load_sector_increment(daily_root, args.date)
@@ -10691,6 +10701,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             fx_history_dir=fx_history_dir,
             style_market_effect=style_market_effect,
             feedback_trends=feedback_trends,
+            consecutive_pool_trend=consecutive_pool_trend,
             sector_adjustment_risk=sector_risk,
             sector_increment=sector_increment,
             trend_review_evidence=trend_review_evidence,

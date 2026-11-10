@@ -1055,6 +1055,10 @@ class MarketCollector:
         except Exception as exc:
             shared_daily_quotes = DataResult(data=None, source="", error=f"全市场日线调用异常:{exc}")
         # 10c. 低价股赚钱效应：收盘价≤10元，分≤5元/5～10元；只做客观横截面统计。
+        from analyzers.consecutive_pool import collect as collect_consecutive_pool
+        result['consecutive_pool'] = collect_consecutive_pool(
+            date, limit_up=result.get('limit_up'), quote_result=shared_daily_quotes)
+
         # 复用本批已取得的 ST、涨跌停事实与共享的日期键控全市场日线；来源失败
         # 必须显式保存 source_failed，不能把“未取得数据”写成低价股样本为 0。
         try:

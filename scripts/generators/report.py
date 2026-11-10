@@ -677,6 +677,12 @@ class ReportGenerator:
         section_idx += 1
         lu = raw_data.get("limit_up", {})
         ld = raw_data.get("limit_down", {})
+        if 'consecutive_pool' in raw_data:
+            from analyzers.consecutive_pool import from_archive, summary
+            pool = from_archive({'date': date, 'raw_data': raw_data}, date)
+            lines.append(f"- [事实] **{summary(pool)}**（连续≥2板，非ST；日线成交额）")
+            if pool['gaps']:
+                lines.append('- 连板池数据缺口：' + '；'.join(pool['gaps']))
         if "count" in lu:
             # 「连板」类指标统一用排除 ST 的口径（_ex_st 由 collector 算好；老归档缺该字段时回退含 ST 值）。
             # 涨停家数 / 首板细分 / 封板率仍为含 ST 口径（非连板指标，不受本次调整影响）。
