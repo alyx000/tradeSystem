@@ -40,6 +40,8 @@ globs:
 
 # Skills 同步检查规则
 
+2026-11-10收盘后新增昭衍新药A股（603127.SH）严格跌破动态前复权MA5：`joinn-below-ma5-20261111-17`，11月11～17日含首尾5个开放日（11、12、13、16、17日），11月18日起停用。用前4个开放日Tushare日线与复权因子、按新浪昨收锚定，再加当日最新价计算；严格低于才提醒，等于不触发。每3分钟检查，首次新鲜行情已在线下可提醒、持续去重、恢复后再跌破可重推；缺数据不生成新告警。沿用钉钉与三账本，不改其他规则或调度，不发送真实测试消息。
+
 2026-11-10 连板池补采入口`tools/consecutive_pool_backfill.py`及`services/consecutive_pool_history.py`须同步INDEX与`docs/consecutive-pool.md`；测试覆盖日期区间完整日历、原归档备份、仅改目标块、并发变化拒写、幂等和双写失败恢复。
 
 2026-11-10 连板股票池数量/成交额：`collectors/market.py` → `analyzers/consecutive_pool.py` → 原盘后信封；`services/review_consecutive_pool.py` → 正式HTML③。变更须同步daily-review、INDEX及`docs/consecutive-pool.md`，验证缺值断线、单位、日期、覆盖与不新增请求/推送。
