@@ -1161,6 +1161,26 @@ STAR50_BELOW_MA5_20261110_1207 = MonitorRule(
 )
 
 
+# 2026-11-10盘中新增，含当日共5个开放日。
+CHINEXT_BELOW_MA5_20261110_16 = MonitorRule(
+    rule_id="chinext-below-ma5-20261110-16",
+    instrument_name="创业板指",
+    code="399006.SZ",
+    threshold=None,
+    direction="below",
+    inclusive=False,
+    emit_on_initial_match=True,
+    action_label="跌破",
+    valid_from=date(2026, 11, 10),
+    valid_until=date(2026, 11, 16),
+    threshold_mode="intraday_ma",
+    threshold_window=5,
+    threshold_history_mode="index",
+    threshold_provider="tushare",
+    threshold_label="动态5日均线",
+)
+
+
 # 长期规则保留上证指数站上 3955；历史个股规则不再启用。
 # 动态涨停价与前收盘均线能力由 MonitorRule.threshold_mode 统一扩展。
 # 科创50 1700 与凯莱英 172.26 临时规则覆盖 8 月 21 日与 24 日两个
@@ -1217,6 +1237,7 @@ DEFAULT_RULES: tuple[MonitorRule, ...] = (
     CHUNLI_MEDICAL_BREAKOUT_14_04_20261105_18,
     SHUNHAO_BREAKOUT_10_41_20261109_13,
     STAR50_BELOW_MA5_20261110_1207,
+    CHINEXT_BELOW_MA5_20261110_16,
 )
 
 
