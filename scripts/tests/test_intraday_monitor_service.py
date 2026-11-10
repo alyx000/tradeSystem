@@ -50,6 +50,7 @@ from services.intraday_monitor.rules import (
     STAR50_BELOW_MA5_20261110_1207,
     CHINEXT_BELOW_MA5_20261110_16,
     DENGKANG_TOUCH_MA20_20261111_24,
+    JOINN_BELOW_MA5_20261111_17,
     DAJIN_HEAVY_BREAKOUT_35_95_20260912_18,
     DAJIN_HEAVY_BREAKOUT_41_96_20260917_28,
     DEFAULT_RULES,
@@ -951,6 +952,7 @@ def test_default_sse_rule_pushes_only_after_observed_below_to_3955(tmp_path):
         STAR50_BELOW_MA5_20261110_1207,
         CHINEXT_BELOW_MA5_20261110_16,
         DENGKANG_TOUCH_MA20_20261111_24,
+        JOINN_BELOW_MA5_20261111_17,
     )
     assert initial_above["events"] == []
     assert below["events"] == []
