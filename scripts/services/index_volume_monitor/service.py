@@ -9,6 +9,7 @@ from services.intraday_monitor.state import locked_state, load_state, save_state
 from .core import calendar_basis, windows_at, compare_window, event_id, render_alert, money, meets_growth, MIN_DELAY, MAX_DELAY
 from .rules import INDEX_NAMES
 from . import rules as rule_config
+from .opening_environment import opening_observation
 
 ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_STATE_PATH = ROOT / "data/runs/intraday-monitor/index-volume-state.json"
@@ -88,6 +89,7 @@ def _run_locked(registry, state, path, reports, slots, now, previous, input_by, 
     checked = set(state.get("checked_event_ids",[]))
     needed = [code for code in rule.codes if any(event_id(code,p,e,rule.rule_id) not in checked for p,e in slots)]
     evaluations,errors,events = [],[],[]
+    results = {}
     provider_error = None
     if needed:
         try:
@@ -129,16 +131,23 @@ def _run_locked(registry, state, path, reports, slots, now, previous, input_by, 
         return {"status":"expired_window","events":[],"errors":["取数完成时已超过窗口，未告警/未推进检查基线"],"pushed":False}
     covered = len(checked & allowed)
     status = "complete" if covered == len(allowed) else ("partial" if covered else "source_failed")
+    # 只在已完成10点30分钟槽位复用本轮行情；不入pending、不追加请求。
+    opening = {}
+    opening_end = next((end for period,end in slots if period == 30 and end.strftime("%H:%M") == "10:00"), None)
+    if opening_end is not None:
+        opening["opening_environment"] = opening_observation(
+            results, rule.codes, opening_end, previous, rule=rule,
+            input_by=input_by, captured_at=now.isoformat())
     if dry_run:
         return {"status":"dry_run","data_status":status,"events":events,"errors":errors,
-                "evaluations":evaluations,"pushed":False,"previous_trade_date":previous}
+                "evaluations":evaluations,"pushed":False,"previous_trade_date":previous,**opening}
     if not needed and not state["pending_events"]:
         save_state(path,state)  # 仅可能退休之前窗口的pending。
-        return {"status":"already_checked","events":[],"errors":[],"pushed":False,"pending_count":0}
+        return {"status":"already_checked","events":[],"errors":[],"pushed":False,"pending_count":0,**opening}
     end = slots[0][1]
     report_path = reports / now.date().isoformat() / f"{end.strftime('%H%M')}-{uuid4().hex}.json"
     receipt = {"status":status,"input_by":input_by,"captured_at":now.isoformat(),
-               "previous_trade_date":previous,"evaluations":evaluations,"errors":errors}
+               "previous_trade_date":previous,"evaluations":evaluations,"errors":errors,**opening}
     save_state(report_path,receipt)  # 复用0600/同目录原子JSON写；每次attempt独立。
     state["checked_event_ids"] = list(dict.fromkeys([*state.get("checked_event_ids",[]),
                                                     *(e["event_id"] for e in evaluations)]))[-HISTORY_LIMIT:]
@@ -175,7 +184,7 @@ def _run_locked(registry, state, path, reports, slots, now, previous, input_by, 
         save_state(path,state)
     return {"status":status,"events":events,"errors":errors,"pushed":pushed,
             "pending_count":len(state["pending_events"]),"evaluations":evaluations,
-            "previous_trade_date":previous,"report_path":str(report_path),"quotes_checked":len(needed)}
+            "previous_trade_date":previous,"report_path":str(report_path),"quotes_checked":len(needed),**opening}
 
 
 def run_index_volume(registry, *, input_by="USER", dry_run=False, state_path=DEFAULT_STATE_PATH,
