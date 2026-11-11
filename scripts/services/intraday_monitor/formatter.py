@@ -45,7 +45,9 @@ def render_alert(events: list[dict]) -> str:
             )
         if event.get("value_mode") == "daily_pct_change":
             lines.append(f"  - 最新点位：{event['price']:.3f}")
-        if event.get("threshold_mode") == "daily_up_limit":
+        if event.get("threshold_mode") == "daily_up_limit_break":
+            lines.append(f"  - [事实·炸板] 当日最高价 **{event['session_high']:.2f}**元已触及涨停，最新价已跌离")
+        elif event.get("threshold_mode") == "daily_up_limit":
             if event.get("observation_phase") == "close":
                 lines.append("  - [事实·收盘] 收盘价低于当日涨停价，按本监控口径确认为当日断板")
             else:

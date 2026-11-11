@@ -462,6 +462,36 @@ def _run_locked(
             else None
         )
         active = rule.is_active(value, threshold=threshold)
+        is_board_break = rule.threshold_mode == "daily_up_limit_break"
+        if is_board_break:
+            # 当日最高价能证明检查间隔内成交触板；不能把全天未触板误报为炸板。
+            try:
+                session_high = float(quote.get("high"))
+            except (TypeError, ValueError, OverflowError):
+                session_high = math.nan
+            if not math.isfinite(session_high) or not price <= session_high <= threshold:
+                errors.append(f"{rule.rule_id}: 日内最高价缺失或与现价、涨停价不一致")
+                continue
+            last_quote_at = _parse_iso_datetime(previous.get("last_quote_at")) if same_trade_date else None
+            if last_quote_at is not None and last_quote_at.tzinfo is not None:
+                previous_high = previous.get("last_session_high")
+                if quoted_at < last_quote_at:
+                    errors.append(f"{rule.rule_id}: 行情时间早于已处理快照")
+                    continue
+                # 同一交易日涨停价固定、累计日高不能降低；冲突不能清除炸板状态。
+                if threshold != previous.get("last_threshold"):
+                    errors.append(f"{rule.rule_id}: 同日涨停价与已处理快照不一致")
+                    continue
+                if previous_high is not None and session_high < previous_high:
+                    errors.append(f"{rule.rule_id}: 日内最高价低于已处理快照")
+                    continue
+                if quoted_at == last_quote_at and (
+                    price != previous.get("last_price")
+                    or (previous_high is not None and session_high != previous_high)
+                ):
+                    errors.append(f"{rule.rule_id}: 同时间戳行情字段冲突")
+                    continue
+            active = active and session_high == threshold
         local_time = now.time().replace(tzinfo=None)
         quote_time = quoted_at.time().replace(tzinfo=None)
         close_phase = local_time >= time(15, 0)
@@ -493,8 +523,10 @@ def _run_locked(
                 threshold_source=threshold_source,
                 threshold_basis_dates=threshold_basis_dates,
                 threshold_anchor_pre_close=threshold_anchor_pre_close,
-                observation_phase="close" if closing_snapshot else "intraday",
+                observation_phase="close" if closing_snapshot or (is_board_break and close_phase) else "intraday",
             )
+            if is_board_break:
+                event["session_high"] = session_high
             if event["event_id"] not in sent_ids and event["event_id"] not in pending_ids:
                 events.append(event)
                 pending_ids.add(event["event_id"])
@@ -514,6 +546,8 @@ def _run_locked(
             "updated_at": now.isoformat(),
             "close_confirmed": close_confirmed_before or close_event_recorded,
         }
+        if is_board_break:
+            rule_states[rule.rule_id]["last_session_high"] = session_high
 
     if not valid_quote_codes:
         if dry_run:

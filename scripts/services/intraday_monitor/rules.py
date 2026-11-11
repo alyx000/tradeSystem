@@ -10,7 +10,7 @@ from utils.price_limit import compute_limit_prices
 
 
 Direction = Literal["below", "above", "near"]
-ThresholdMode = Literal["fixed", "daily_up_limit", "previous_close_ma", "intraday_ma"]
+ThresholdMode = Literal["fixed", "daily_up_limit", "daily_up_limit_break", "previous_close_ma", "intraday_ma"]
 ValueMode = Literal["price", "daily_pct_change"]
 
 
@@ -65,9 +65,13 @@ class MonitorRule:
         if self.threshold_mode == "fixed":
             if self.threshold is None:
                 raise ValueError("固定阈值规则必须提供 threshold")
-        elif self.threshold_mode == "daily_up_limit":
+        elif self.threshold_mode in ("daily_up_limit", "daily_up_limit_break"):
             if self.threshold is not None:
                 raise ValueError("每日涨停价规则不得同时提供固定 threshold")
+            if self.threshold_mode == "daily_up_limit_break" and (
+                self.direction != "below" or self.inclusive
+            ):
+                raise ValueError("炸板规则必须严格低于涨停价")
         elif self.threshold_mode in ("previous_close_ma", "intraday_ma"):
             if self.threshold is not None:
                 raise ValueError("前收盘均线规则不得同时提供固定 threshold")
@@ -1223,6 +1227,25 @@ JOINN_BELOW_MA5_20261111_17 = MonitorRule(
 )
 
 
+# 2026-11-11盘中新增，覆盖当日及下一开放日。
+RICHU_BOARD_BREAK_20261111_12 = MonitorRule(
+    rule_id="richu-board-break-20261111-12",
+    instrument_name="日出东方",
+    code="603366.SH",
+    threshold=None,
+    direction="below",
+    inclusive=False,
+    emit_on_initial_match=True,
+    action_label="跌离",
+    valid_from=date(2026, 11, 11),
+    valid_until=date(2026, 11, 12),
+    value_label="价格",
+    value_unit="元",
+    threshold_mode="daily_up_limit_break",
+    threshold_label="当日涨停价",
+)
+
+
 # 长期规则保留上证指数站上 3955；历史个股规则不再启用。
 # 动态涨停价与前收盘均线能力由 MonitorRule.threshold_mode 统一扩展。
 # 科创50 1700 与凯莱英 172.26 临时规则覆盖 8 月 21 日与 24 日两个
@@ -1282,6 +1305,7 @@ DEFAULT_RULES: tuple[MonitorRule, ...] = (
     CHINEXT_BELOW_MA5_20261110_16,
     DENGKANG_TOUCH_MA20_20261111_24,
     JOINN_BELOW_MA5_20261111_17,
+    RICHU_BOARD_BREAK_20261111_12,
 )
 
 
