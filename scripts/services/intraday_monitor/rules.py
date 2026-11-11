@@ -1165,6 +1165,26 @@ STAR50_BELOW_MA5_20261110_1207 = MonitorRule(
 )
 
 
+# 2026-11-12开盘前追加独立MA20，不替换既有MA5。
+STAR50_BELOW_MA20_20261112_1209 = MonitorRule(
+    rule_id="star50-below-ma20-20261112-1209",
+    instrument_name="科创50",
+    code="000688.SH",
+    threshold=None,
+    direction="below",
+    inclusive=False,
+    emit_on_initial_match=True,
+    action_label="跌破",
+    valid_from=date(2026, 11, 12),
+    valid_until=date(2026, 12, 9),
+    threshold_mode="intraday_ma",
+    threshold_window=20,
+    threshold_history_mode="index",
+    threshold_provider="tushare",
+    threshold_label="动态20日均线",
+)
+
+
 # 2026-11-10盘中新增，含当日共5个开放日。
 CHINEXT_BELOW_MA5_20261110_16 = MonitorRule(
     rule_id="chinext-below-ma5-20261110-16",
@@ -1306,6 +1326,7 @@ DEFAULT_RULES: tuple[MonitorRule, ...] = (
     DENGKANG_TOUCH_MA20_20261111_24,
     JOINN_BELOW_MA5_20261111_17,
     RICHU_BOARD_BREAK_20261111_12,
+    STAR50_BELOW_MA20_20261112_1209,
 )
 
 
