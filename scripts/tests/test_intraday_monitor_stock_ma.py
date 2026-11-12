@@ -6,6 +6,7 @@ from datetime import date, datetime, timedelta
 import pytest
 
 from services.intraday_monitor import (
+    BESTECHNIC_TOUCH_MA20_20261113_16 as BESTECHNIC,
     DENGKANG_TOUCH_MA20_20261111_24 as DENGKANG,
     JOINN_BELOW_MA5_20261111_17 as JOINN,
 )
@@ -21,12 +22,13 @@ ACTIVE = ("2026-11-11", "2026-11-12", "2026-11-13", "2026-11-16", "2026-11-17",
           "2026-11-18", "2026-11-19", "2026-11-20", "2026-11-23", "2026-11-24")
 
 
-@pytest.fixture(params=[DENGKANG, JOINN], ids=["dengkang", "joinn"])
+@pytest.fixture(params=[DENGKANG, JOINN, BESTECHNIC], ids=["dengkang", "joinn", "bestechnic"])
 def rule(request):
     return request.param
 
 
-def _setup(tmp_path, rule, day=ACTIVE[0]):
+def _setup(tmp_path, rule, day=None):
+    day = day or rule.valid_from.isoformat()
     db = _calendar(tmp_path, dates=OPEN, closed_dates=CLOSED)
     r = _DynamicRegistry(price=10.0)
     r.pre_close = 10.0
@@ -45,14 +47,15 @@ def _run(setup, rule, **kwargs):
 
 
 def test_registered_identity_and_open_day_window(rule):
-    expected = ("001328.SZ", "登康口腔", date(2026, 11, 24), 10, 20, True) if rule is DENGKANG else (
-        "603127.SH", "昭衍新药", date(2026, 11, 17), 5, 5, False,
-    )
-    code, name, until, days, window, inclusive = expected
+    code, name, active, window, inclusive = {
+        DENGKANG: ("001328.SZ", "登康口腔", ACTIVE, 20, True),
+        JOINN: ("603127.SH", "昭衍新药", ACTIVE[:5], 5, False),
+        BESTECHNIC: ("688608.SH", "恒玄科技", ("2026-11-13", "2026-11-16"), 20, True),
+    }[rule]
     assert rule in DEFAULT_RULES
     assert (rule.code, rule.instrument_name, rule.provider) == (code, name, "sina")
-    assert (rule.valid_from, rule.valid_until) == (date(2026, 11, 11), until)
-    assert tuple(d for d in OPEN if rule.is_effective_on(date.fromisoformat(d))) == ACTIVE[:days]
+    assert (rule.valid_from.isoformat(), rule.valid_until.isoformat()) == (active[0], active[-1])
+    assert tuple(d for d in OPEN if rule.is_effective_on(date.fromisoformat(d))) == active
     assert rule.direction == "below" and rule.inclusive is inclusive and rule.emit_on_initial_match
     assert (rule.threshold_mode, rule.threshold_history_mode, rule.threshold_window) == ("intraday_ma", "stock_qfq", window)
     assert rule.threshold is None and rule.threshold_provider == "tushare"
@@ -70,10 +73,14 @@ def test_threshold_boundary_reentry_and_qfq_ma_updates(tmp_path, rule):
         saved = json.loads(state.read_text())["rules"][rule.rule_id]
         assert saved["last_threshold"] == pytest.approx((10 * (rule.threshold_window - 1) + price) / rule.threshold_window)
         r.now += timedelta(minutes=3)
-    assert counts == ([0, 1, 0, 0, 0, 1] if rule is DENGKANG else [0, 0, 1, 0, 0, 1])
+    assert counts == ([0, 1, 0, 0, 0, 1] if rule.inclusive else [0, 0, 1, 0, 0, 1])
     assert len(r.history_calls) == 2
-    first_date = "2026-10-15" if rule is DENGKANG else "2026-11-05"
-    assert all(args == (rule.code, first_date, "2026-11-10") for _, args in r.history_calls)
+    first_date, last_date = {
+        DENGKANG: ("2026-10-15", "2026-11-10"),
+        JOINN: ("2026-11-05", "2026-11-10"),
+        BESTECHNIC: ("2026-10-19", "2026-11-12"),
+    }[rule]
+    assert all(args == (rule.code, first_date, last_date) for _, args in r.history_calls)
     assert rule.instrument_name in p.messages[0][1] and f"前复权MA{rule.threshold_window}" in p.messages[0][1]
 
 
@@ -99,10 +106,10 @@ def test_missing_or_bad_evidence_no_alert_or_baseline(tmp_path, rule, bad):
 
 @pytest.mark.parametrize("phase", ["before", "weekend", "after"])
 def test_outside_window_no_fetch_or_push(tmp_path, rule, phase):
-    day = {"before": "2026-11-10", "weekend": "2026-11-14",
+    day = {"before": (rule.valid_from - timedelta(days=1)).isoformat(), "weekend": "2026-11-14",
            "after": (rule.valid_until + timedelta(days=1)).isoformat()}[phase]
     setup = _setup(tmp_path, rule, day)
-    assert _run(setup, rule)["status"] in {"no_active_rules", "non_trade_day"}
+    assert _run(setup, rule)["status"] == ("non_trade_day" if phase == "weekend" else "no_active_rules")
     assert not setup[0].requested_codes and not setup[0].history_calls and not setup[1].messages
 
 
@@ -110,7 +117,7 @@ def test_last_day_dry_run_reanchor_and_pending_expiry(tmp_path, rule):
     setup = _setup(tmp_path, rule, rule.valid_until.isoformat())
     r, p, _, state = setup
     r.pre_close = 5.0
-    r.price = 5.0 if rule is DENGKANG else 4.99
+    r.price = 5.0 if rule.inclusive else 4.99
     out = _run(setup, rule, dry_run=True)
     expected_ma = (5 * (rule.threshold_window - 1) + r.price) / rule.threshold_window
     assert out["status"] == "dry_run" and out["events"][0]["threshold"] == pytest.approx(expected_ma)

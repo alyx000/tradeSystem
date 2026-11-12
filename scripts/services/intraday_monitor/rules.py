@@ -1226,6 +1226,27 @@ DENGKANG_TOUCH_MA20_20261111_24 = MonitorRule(
 )
 
 
+# 2026-11-12收盘后新增，从下一开放日起监控两个交易日，触及均线也提醒。
+BESTECHNIC_TOUCH_MA20_20261113_16 = MonitorRule(
+    rule_id="bestechnic-touch-ma20-20261113-16",
+    instrument_name="恒玄科技",
+    code="688608.SH",
+    threshold=None,
+    direction="below",
+    inclusive=True,
+    emit_on_initial_match=True,
+    action_label="触及或跌破",
+    valid_from=date(2026, 11, 13),
+    valid_until=date(2026, 11, 16),
+    value_label="价格",
+    value_unit="元",
+    threshold_mode="intraday_ma",
+    threshold_window=20,
+    threshold_provider="tushare",
+    threshold_label="动态前复权MA20",
+)
+
+
 # 2026-11-10收盘后新增，从下一开放日起监控5个交易日。
 JOINN_BELOW_MA5_20261111_17 = MonitorRule(
     rule_id="joinn-below-ma5-20261111-17",
@@ -1327,6 +1348,7 @@ DEFAULT_RULES: tuple[MonitorRule, ...] = (
     JOINN_BELOW_MA5_20261111_17,
     RICHU_BOARD_BREAK_20261111_12,
     STAR50_BELOW_MA20_20261112_1209,
+    BESTECHNIC_TOUCH_MA20_20261113_16,
 )
 
 
