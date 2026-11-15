@@ -44,7 +44,7 @@ def test_identity_strict_boundary_open_day_count_and_default(rule,code,name,thre
     assert rule.provider == "sina" and rule.threshold_mode == "fixed"
     assert rule.direction == "above" and not rule.inclusive and rule.emit_on_initial_match
     assert rule.valid_from == date(2026,11,5) and rule.valid_until == end
-    assert rule in DEFAULT_RULES
+    assert (rule in DEFAULT_RULES) is (rule is not JUNDA)
     assert not rule.is_active(threshold - 0.01) and not rule.is_active(threshold)
     assert rule.is_active(threshold + 0.01)
     assert len([d for d in OPEN if str(rule.valid_from) <= d <= str(end)]) == count
@@ -175,14 +175,14 @@ def test_production_default_retires_fanya_pending_without_erasing_history(tmp_pa
     requested = []
     def quotes(registry,rules):
         requested.extend(rule.code for rule in rules)
-        return {JUNDA.code:{"code":JUNDA.code,"price":42.16,"_source":"sina",
+        return {CHUNLI.code:{"code":CHUNLI.code,"price":14.05,"_source":"sina",
                             "quote_date":"2026-11-05","quote_time":"10:03:00"}},[]
     monkeypatch.setattr(service,"_fetch_quotes",quotes)
     p = _Pusher()
     r.now += timedelta(minutes=3)
     out = service.run_check(r,now=r.now,db_path=db,state_path=state,pusher_factory=lambda:p)
     assert out["status"] == "partial"  # 其他行情缺失不冒充全部检查成功。
-    assert RETIRED.code not in requested and JUNDA.code in requested
+    assert RETIRED.code not in requested and CHUNLI.code in requested
     assert out["pushed"] and all(e["rule_id"] != RETIRED.rule_id for e in out["events"])
     saved = json.loads(state.read_text())
     assert saved["rules"][RETIRED.rule_id] == before["rules"][RETIRED.rule_id]

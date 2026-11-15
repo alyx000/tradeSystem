@@ -52,6 +52,9 @@ def _check_args() -> argparse.Namespace:
     "fulongma-breakout-14-15-20260916-24",
     "dajin-heavy-breakout-35-95-20260912-18",
     "fangsheng-reach-11-11-20260903-16",
+    "goodix-breakout-60-90-20261104-17",
+    "joinn-below-ma5-20261111-17",
+    "junda-breakout-42-15-20261105-18",
 ])
 def test_retired_rule_is_not_selectable_for_real_e2e(rule_id):
     parser = argparse.ArgumentParser()

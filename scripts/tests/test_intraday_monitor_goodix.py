@@ -34,7 +34,7 @@ def test_identity_strict_boundary_and_window(price, matched):
     assert RULE.threshold == 60.90 and RULE.threshold_mode == "fixed"
     assert RULE.direction == "above" and not RULE.inclusive and RULE.emit_on_initial_match
     assert RULE.valid_from == date(2026,11,4) and RULE.valid_until == date(2026,11,17)
-    assert RULE in DEFAULT_RULES and len(ACTIVE) == 10
+    assert RULE not in DEFAULT_RULES and len(ACTIVE) == 10
     assert RULE.is_active(price) is matched
 
 

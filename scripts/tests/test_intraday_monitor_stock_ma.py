@@ -52,7 +52,7 @@ def test_registered_identity_and_open_day_window(rule):
         JOINN: ("603127.SH", "昭衍新药", ACTIVE[:5], 5, False),
         BESTECHNIC: ("688608.SH", "恒玄科技", ("2026-11-13", "2026-11-16"), 20, True),
     }[rule]
-    assert rule in DEFAULT_RULES
+    assert (rule in DEFAULT_RULES) is (rule is not JOINN)
     assert (rule.code, rule.instrument_name, rule.provider) == (code, name, "sina")
     assert (rule.valid_from.isoformat(), rule.valid_until.isoformat()) == (active[0], active[-1])
     assert tuple(d for d in OPEN if rule.is_effective_on(date.fromisoformat(d))) == active
