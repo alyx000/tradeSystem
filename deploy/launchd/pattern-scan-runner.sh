@@ -7,8 +7,7 @@
 # 出处 teacher_notes#444（鞠磊《形态篇》），认知 cog_3b32e660。
 set -e
 
-# launchd 默认 PATH 不含 ~/.local/bin。本任务不调 LLM，但保持与兄弟任务同一份 PATH，
-# 避免将来加依赖时再踩一次「命令找不到且静默降级」。
+# 定时运行复用同日串阳首阴报告。保留统一 PATH 供本地工具使用。
 export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
 
 REPO_ROOT="/Users/alyx/tradeSystem"

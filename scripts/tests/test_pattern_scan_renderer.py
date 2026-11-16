@@ -34,7 +34,7 @@ def _result(**over) -> dict:
         "status": "ok",
         "date": "2026-06-09",
         "main_sectors": ["半导体"],
-        "mainline": {"status": "disabled", "main_concepts": []},
+        "mainline": {"status": "llm", "main_concepts": []},
         "main_sector_degraded": False,
         "candidates": [_candidate()],
         "rejects": {"not_main_sector": 5000, "ma_not_aligned": 12},
@@ -98,6 +98,15 @@ class TestKouJing:
 
 
 class TestBranches:
+    def test_archived_llm_status_and_coverage_are_visible(self):
+        md = renderer.render_daily(_result(
+            mainline={"status": "llm", "main_concepts": ["CPO"]},
+            source_errors=["同花顺概念成分缺失（CPO）"],
+        ))
+        assert "复用串阳首阴同日归档（2026-06-09） · LLM融合判断" in md
+        assert "概念成员按扫描时可取的同花顺成分核对" in md
+        assert "同花顺概念成分缺失（CPO）" in md
+
     def test_candidate_row_rendered(self):
         md = renderer.render_daily(_result())
         assert "600001" in md and "形态A" in md

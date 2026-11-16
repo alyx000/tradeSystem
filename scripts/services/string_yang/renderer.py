@@ -1,12 +1,17 @@
 """串阳首阴观察清单 Markdown 渲染。"""
 from __future__ import annotations
 
+from datetime import date as calendar_date
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 
 from services.string_yang import constants as C
+from services.string_yang.mainline import MainlineJudgment
 
 _REDLINE = ("> 盘后只读观察清单 · 全部为 [判断] · "
             "不构成买卖建议、不含价位、不预测点位、不写交易计划层。")
+_MAINLINE_DATA_ERRORS = ("concept_flow", "ths_member", "concept_coverage")
+_MAINLINE_DATA_LABEL = "- 主线数据提示："
 
 
 def _fmt_ratio(v) -> str:
@@ -17,7 +22,7 @@ def _fmt_pct(v) -> str:
     return f"{float(v):+.2f}%" if v is not None else "-"
 
 
-def _status_label(mainline: dict) -> str:
+def mainline_status_label(mainline: dict) -> str:
     """主线来源文案。llm_fallback 按 source_errors 细分调用失败与有效空裁决。"""
     if mainline.get("status") == "llm_fallback":
         errors = set(mainline.get("source_errors") or [])
@@ -25,7 +30,9 @@ def _status_label(mainline: dict) -> str:
             return "LLM调用失败，降级成交额集中度"
         if "llm_error" in errors:
             return "LLM调用异常，降级成交额集中度"
-        return "LLM判无有效主线，降级成交额集中度"
+        if "llm_mainline_empty" in errors:
+            return "LLM判无有效主线，降级成交额集中度"
+        return "LLM不可用/无有效主线，降级成交额集中度"
     return {
         "llm": "LLM融合判断",
         "fallback": "成交额集中度兜底",
@@ -41,7 +48,7 @@ def render_daily(result: dict) -> str:
     concepts = mainline.get("main_concepts") or []
     degraded = "（当日主线缺失，已回退最近一日）" if result.get("main_sector_degraded") else ""
     candidates = result.get("candidates") or []
-    status_label = _status_label(mainline)
+    status_label = mainline_status_label(mainline)
     confidence = mainline.get("confidence")
     confidence_text = f"{float(confidence):.2f}" if confidence is not None else "-"
     lines += [
@@ -56,6 +63,10 @@ def render_daily(result: dict) -> str:
         f"- 主线板块{degraded}：{'、'.join(sectors) or '（无）'}",
         f"- 主线概念分支：{'、'.join(concepts) or '（无）'}",
     ]
+    data_errors = mainline.get("source_errors") or []
+    mainline_gaps = [error for error in _MAINLINE_DATA_ERRORS if error in data_errors]
+    if mainline_gaps:
+        lines.append(f"{_MAINLINE_DATA_LABEL}{'、'.join(mainline_gaps)}")
     if result.get("status") == "source_failed":
         lines += ["- 扫描状态：数据源失败，未完成扫描", ""]
     else:
@@ -115,10 +126,72 @@ def render_daily(result: dict) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
-def write_report(markdown: str, date: str, *, root: Path | None = None) -> Path:
+def _report_path(date: str, root: Path | None) -> Path:
+    if calendar_date.fromisoformat(date).isoformat() != date:
+        raise ValueError("交易日须为 YYYY-MM-DD")
     repo_root = root or Path(__file__).resolve().parents[3]
-    out_dir = repo_root / C.REPORT_DIR
-    out_dir.mkdir(parents=True, exist_ok=True)
-    path = out_dir / f"{date}.md"
-    path.write_text(markdown, encoding="utf-8")
+    return repo_root / C.REPORT_DIR / f"{date}.md"
+
+
+def read_report_mainline(date: str, *, root: Path | None = None) -> MainlineJudgment:
+    """从同日已落盘报告读取裁决，兼容既有 Markdown 归档。"""
+    markdown = _report_path(date, root).read_text(encoding="utf-8")
+    if not markdown.startswith(f"# 串阳首阴股票池 · {date}  [判断]\n"):
+        raise ValueError("串阳首阴报告日期或标题不符")
+    _, heading, results = markdown.partition("\n## 今日结果\n")
+    fields = {}
+    result_lines = results.split("\n## ", 1)[0].splitlines()
+    for line in result_lines:
+        label, separator, value = line.partition("：")
+        if separator and label.startswith(("- 主线来源", "- 主线板块", "- 主线概念分支")):
+            field = label.split("（", 1)[0]
+            if field in fields or not value.strip():
+                raise ValueError("串阳首阴报告主线字段重复或为空")
+            fields[field] = (label, value.strip())
+    if not heading or set(fields) != {"- 主线来源", "- 主线板块", "- 主线概念分支"}:
+        raise ValueError("串阳首阴报告缺少主线字段")
+
+    label, _, confidence = fields["- 主线来源"][1].partition("；置信度：")
+    if label == "LLM融合判断":
+        status, errors = "llm", []
+    elif label.startswith("LLM") and label.endswith("降级成交额集中度"):
+        status = "llm_fallback"
+        errors = [reason for prefix, reason in (
+            ("LLM调用失败", "llm_call_failed"),
+            ("LLM调用异常", "llm_error"),
+            ("LLM判无有效主线", "llm_mainline_empty"),
+        ) if label.startswith(prefix)]
+    else:
+        raise ValueError("串阳首阴报告没有 LLM 裁决或降级记录")
+    data_errors = {
+        error for line in result_lines if line.startswith(_MAINLINE_DATA_LABEL)
+        for error in line[len(_MAINLINE_DATA_LABEL):].split("、")
+    }
+    errors.extend(error for error in _MAINLINE_DATA_ERRORS if error in data_errors)
+
+    sector_label, sector_text = fields["- 主线板块"]
+    concept_text = fields["- 主线概念分支"][1]
+    sectors = [] if sector_text == "（无）" else sector_text.split("、")
+    concepts = [] if concept_text == "（无）" else concept_text.split("、")
+    if status == "llm" and not (sectors or concepts):
+        raise ValueError("串阳首阴报告标为 LLM 裁决，但无有效主线")
+    return MainlineJudgment(
+        date=date, main_sectors=sectors, main_concepts=concepts, status=status,
+        degraded="已回退" in sector_label,
+        confidence=float(confidence) if confidence not in {"", "-"} else None,
+        source_errors=errors,
+    )
+
+
+def write_report(markdown: str, date: str, *, root: Path | None = None) -> Path:
+    path = _report_path(date, root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent, delete=False) as handle:
+        temporary = Path(handle.name)
+        try:
+            handle.write(markdown)
+            handle.close()
+            temporary.replace(path)
+        finally:
+            temporary.unlink(missing_ok=True)
     return path

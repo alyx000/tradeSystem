@@ -4,7 +4,7 @@
                      [--dry-run] [--no-push]
 
 主线板块内筛「均线多头排列 + MACD 零上金叉/运行 + 阳放阴缩 + 未加速」四条件共振。
-不接 LLM（四条件全是机械判定）；全部输出为 [判断]，不写计划层、不入关注池。
+复用串阳首阴同日主线裁决，四条个股条件按行情计算。
 """
 from __future__ import annotations
 
@@ -14,7 +14,6 @@ import logging
 import sys
 
 from db.connection import get_connection
-from services.pattern_scan import constants as C
 from services.pattern_scan import renderer, scanner
 
 logger = logging.getLogger(__name__)
@@ -36,10 +35,10 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
 
     daily = sub.add_parser("daily", help="扫描主线板块内四条件共振的个股")
     daily.add_argument("--date", default=None, help="交易日 YYYY-MM-DD（默认今天）")
-    daily.add_argument("--top-k", type=_positive_int, default=C.DEFAULT_TOP_K_SECTORS,
-                       help=f"主线取成交额集中度 Top-K 申万二级（默认 {C.DEFAULT_TOP_K_SECTORS}）")
-    daily.add_argument("--top-concepts", type=_positive_int, default=C.DEFAULT_TOP_CONCEPTS,
-                       help=f"同花顺概念资金流分支 Top-N（默认 {C.DEFAULT_TOP_CONCEPTS}）")
+    daily.add_argument("--top-k", type=_positive_int,
+                       help="按串阳首阴报告顺序最多取 K 个入选行业（默认全取）")
+    daily.add_argument("--top-concepts", type=_positive_int,
+                       help="按串阳首阴报告顺序最多取 N 个入选概念（默认全取）")
     daily.add_argument("--dry-run", action="store_true", help="仅打印，不落报告、不推送")
     daily.add_argument("--no-push", action="store_true", help="落报告但不推送")
 
@@ -72,7 +71,7 @@ def _run_daily(config: dict, args: argparse.Namespace) -> None:
                 logger.warning("⚠️ %s 为非交易日，跳过形态扫描（不落报告、不推送）", date)
                 return
             result = scanner.run_daily(
-                conn, registry, date,
+                registry, date,
                 top_k=args.top_k,
                 top_concepts=args.top_concepts,
             )

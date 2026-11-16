@@ -5,11 +5,6 @@
 各自注明依据；调阈值只改这里，scanner / detectors 不得内联魔法数。
 """
 
-# 主线口径与 string-yang 对齐（复用同一 `judge_mainline`），故默认值也保持一致，
-# 避免两个扫描器对「什么是主线」给出不同答案。
-DEFAULT_TOP_K_SECTORS = 5
-DEFAULT_TOP_CONCEPTS = 8
-
 # MACD 需 120 根交易日（`utils.pattern.MIN_BARS_MACD`）。实测交易日/自然日 ≈ 0.66
 # （`utils.ma_position` 的 400 自然日→269 根校准），120/0.66 ≈ 182 自然日；
 # 取 300 自然日（≈198 根）留足春节/国庆长假余量。

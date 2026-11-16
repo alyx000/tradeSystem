@@ -4,6 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from services.pattern_scan import constants as C
+from services.string_yang.renderer import mainline_status_label
 from utils.pattern import MA_ALIGNMENT_WINDOWS, VOLUME_MA_WINDOWS
 
 _REDLINE = ("> 盘后只读观察清单 · 全部为 [判断] · "
@@ -47,13 +48,6 @@ def _rhythm_cell(c: dict) -> str:
     return f"{c.get('rhythm_groups', '-')}组 阳{yang} 阴{yin}"
 
 
-def _mainline_label(mainline: dict) -> str:
-    return {
-        "fallback": "成交额集中度兜底",
-        "disabled": "未启用LLM，使用成交额集中度",
-    }.get(mainline.get("status"), mainline.get("status") or "成交额集中度")
-
-
 def render_daily(result: dict) -> str:
     date = result.get("date", "")
     mainline = result.get("mainline") or {}
@@ -67,7 +61,7 @@ def render_daily(result: dict) -> str:
     lines = [f"# 形态篇选股观察清单 · {date}  [判断]", "", _REDLINE, "", _SOURCE, ""]
     lines += [
         "## 扫描口径",
-        "- 板块优先：先取主线板块（成交额集中度 Top-K ∪ 同花顺概念分支，不接 LLM），再在板块内翻个股",
+        "- 板块优先：复用同日串阳首阴的主线板块与概念裁决，个股按以下四条行情规则筛选",
         f"- 条件① 均线多头排列：MA{win} 严格递减",
         "- 条件② MACD：零轴上方金叉或零上运行（DIF 与 DEA 同时 > 0 且 DIF >= DEA）",
         f"- 条件③ 量能节奏：近 {C.RHYTHM_LOOKBACK} 个交易日内，放量阳线（量站上 MA{vwin} 量）占阳线"
@@ -77,11 +71,19 @@ def render_daily(result: dict) -> str:
         "- 排序：今日成交额降序（[事实]），非形态强弱排名",
         "",
         "## 今日结果",
-        f"- 主线来源：{_mainline_label(mainline)}",
-        f"- 主线板块{degraded}：{'、'.join(sectors) or '（无）'}",
-        f"- 主线概念分支：{'、'.join(concepts) or '（无）'}",
-        f"- 候选宇宙：{result.get('universe_count', 0)} 只",
     ]
+    if mainline:
+        lines += [
+            f"- 主线来源：复用串阳首阴同日归档（{date}） · {mainline_status_label(mainline)}",
+            f"- 主线板块{degraded}：{'、'.join(sectors) or '（无）'}",
+            f"- 主线概念分支：{'、'.join(concepts) or '（无）'}",
+        ]
+        if result.get("mainline_limited"):
+            lines.append("- 扫描范围按手动指定上限从归档裁决中截取")
+        if concepts:
+            lines.append("- 概念成员按扫描时可取的同花顺成分核对")
+    if "universe_count" in result:
+        lines.append(f"- 候选宇宙：{result['universe_count']} 只")
     if result.get("status") == "source_failed":
         lines += ["- 扫描状态：数据源失败，未完成扫描", ""]
         lines += [
@@ -118,7 +120,8 @@ def render_daily(result: dict) -> str:
 
     rejects = result.get("rejects") or {}
     data_errors = result.get("data_errors") or []
-    if rejects or data_errors:
+    source_errors = result.get("source_errors") or []
+    if rejects or data_errors or source_errors:
         lines += ["## 过滤与数据提示"]
         brief = "、".join(f"{k}:{v}" for k, v in rejects.items() if v)
         lines.append(f"- 过滤计数：{brief or '无'}")
@@ -133,6 +136,8 @@ def render_daily(result: dict) -> str:
             shown = data_errors[:20]
             more = f"（另有 {len(data_errors) - len(shown)} 只未列出）" if len(data_errors) > len(shown) else ""
             lines.append(f"- 行情/复权因子缺失：{'、'.join(shown)}{more}")
+        if source_errors:
+            lines.append(f"- 主线来源提示：{'、'.join(source_errors)}")
         lines.append("")
 
     return "\n".join(lines).rstrip() + "\n"

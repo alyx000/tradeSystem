@@ -5,14 +5,31 @@
 """
 from __future__ import annotations
 
-import sqlite3
 import threading
 from types import SimpleNamespace
 
-from db.migrate import migrate
-from services.volume_concentration import repo as vc_repo
+import pytest
+
+from services.string_yang import renderer as string_yang_reports
 
 DATE = "2026-06-09"
+
+
+@pytest.fixture(autouse=True)
+def _archived_mainline(monkeypatch, tmp_path):
+    _write_judgment(tmp_path, ["半导体"], [])
+    read = string_yang_reports.read_report_mainline
+    monkeypatch.setattr(string_yang_reports, "read_report_mainline",
+                        lambda date: read(date, root=tmp_path))
+
+
+def _write_judgment(root, sectors, concepts, status="llm"):
+    md = string_yang_reports.render_daily({
+        "date": DATE,
+        "main_sectors": sectors,
+        "mainline": {"status": status, "confidence": 0.82, "main_concepts": concepts},
+    })
+    return string_yang_reports.write_report(md, DATE, root=root)
 
 
 def _bars(
@@ -94,31 +111,9 @@ class _Registry:
         raise AssertionError(f"unexpected provider call: {name}")
 
 
-def _conn_with_main_sector() -> sqlite3.Connection:
-    conn = sqlite3.connect(":memory:")
-    conn.row_factory = sqlite3.Row
-    migrate(conn)
-    vc_repo.save_concentration(conn, {
-        "date": DATE,
-        "top_n": 20,
-        "total_amount_billion": 1000,
-        "sector_summary": [
-            {"industry": "半导体", "amount_billion": 120},
-            {"industry": "银行", "amount_billion": 10},
-        ],
-        "stocks": [],
-        "source": {"provider": "pytest"},
-    })
-    return conn
-
-
-def _run(registry, conn=None, top_k: int = 1):
+def _run(registry, **limits):
     from services.pattern_scan import scanner
-    conn = conn or _conn_with_main_sector()
-    try:
-        return scanner.run_daily(conn, registry, DATE, top_k=top_k)
-    finally:
-        conn.close()
+    return scanner.run_daily(registry, DATE, **limits)
 
 
 class TestFunnel:
@@ -175,23 +170,20 @@ class TestFunnel:
             ("get_stock_daily_range", "600002"),
         ]
 
-    def test_no_mainline_returns_empty_without_fetching(self):
-        conn = sqlite3.connect(":memory:")
-        conn.row_factory = sqlite3.Row
-        migrate(conn)  # 无 volume_concentration 记录 → 无主线
-        registry = _Registry({"600001": _bars()})
-        result = _run(registry, conn=conn)
-        assert result["status"] == "ok"
+    def test_no_mainline_reports_unavailable(self, tmp_path):
+        _write_judgment(tmp_path, [], [], status="llm_fallback")
+        result = _run(None)
+        assert result["status"] == "source_failed"
         assert result["candidates"] == []
-        assert result["rejects"] == {"no_main_sector": 1}
+        assert "串阳首阴裁决及兜底均无可扫描板块" in result["source_errors"]
 
 
 class TestConceptBranch:
-    """概念分支必须真正进入候选宇宙。
+    """主线裁决选中的概念必须真正进入候选宇宙。"""
 
-    `judge_mainline(use_llm=False)` 只出申万二级、概念图恒空（门2 high），
-    故 scanner 自建机械分支；若回退成依赖 judgment.main_concepts，下面两个用例会红。
-    """
+    @pytest.fixture(autouse=True)
+    def _archived_concept(self, _archived_mainline, tmp_path):
+        _write_judgment(tmp_path, ["半导体"], ["CPO"])
 
     class _WithConcept(_Registry):
         def call(self, name, *args, **kwargs):
@@ -213,22 +205,51 @@ class TestConceptBranch:
         assert result["candidates"][0]["branch_concepts"] == ["CPO"]
 
     def test_main_concepts_reported_in_payload(self):
-        """报告里的「主线概念分支」必须反映机械分支结果，不能恒空。"""
         result = _run(self._WithConcept({"600003": _bars()}))
         assert result["mainline"]["main_concepts"] == ["CPO"]
+        assert result["mainline"]["status"] == "llm"
 
-    def test_concept_flow_failure_degrades_to_l2_only(self):
-        """概念资金流失败只降级为纯申万二级，不打掉整批扫描。"""
-        class _NoFlow(_Registry):
+    def test_default_reuses_archived_concept_only_decision(self, tmp_path):
+        _write_judgment(tmp_path, [], ["CPO"])
+
+        class _ArchivedConcept(self._WithConcept):
             def call(self, name, *args, **kwargs):
-                if name == "get_concept_moneyflow_ths":
-                    return SimpleNamespace(success=False, data=None)
+                assert name != "get_concept_moneyflow_ths"
+                if name == "get_ths_member":
+                    assert args == (DATE,)
+                    assert kwargs == {"concept_names": ["CPO"]}
                 return super().call(name, *args, **kwargs)
 
-        result = _run(_NoFlow({"600001": _bars()}))
+        registry = _ArchivedConcept({"600001": _bars(), "600003": _bars()})
+        result = _run(registry)
+        assert result["mainline_limited"] is False
+        assert result["main_sectors"] == []
+        assert result["mainline"]["main_concepts"] == ["CPO"]
+        assert result["mainline"]["confidence"] == 0.82
+        assert [c["code"] for c in result["candidates"]] == ["600003"]
+
+        result_without_members = _run(_Registry({"600003": _bars()}))
+        assert result_without_members["status"] == "source_failed"
+        assert "同花顺概念成分缺失（CPO）" in result_without_members["source_errors"]
+
+    def test_missing_same_day_archive_fails_before_scan(self, tmp_path):
+        _write_judgment(tmp_path, [], ["CPO"]).unlink()
+        result = _run(None)
+        assert result["status"] == "source_failed"
+        assert result["source_errors"] == ["串阳首阴同日主线归档不可用"]
+
+    def test_missing_members_preserves_available_sector_scan(self):
+        result = _run(_Registry({"600001": _bars()}))
         assert result["status"] == "ok"
         assert [c["code"] for c in result["candidates"]] == ["600001"]
-        assert "concept_flow" in result["source_errors"]
+        assert "同花顺概念成分缺失（CPO）" in result["source_errors"]
+
+    def test_explicit_limits_only_narrow_the_archived_decision(self, tmp_path):
+        _write_judgment(tmp_path, ["半导体", "银行"], ["CPO", "芯片"])
+        result = _run(self._WithConcept({"600003": _bars()}), top_k=1, top_concepts=1)
+        assert result["mainline_limited"] is True
+        assert result["main_sectors"] == ["半导体"]
+        assert result["mainline"]["main_concepts"] == ["CPO"]
 
 
 class TestRejectReasons:

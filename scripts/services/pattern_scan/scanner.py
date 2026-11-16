@@ -1,17 +1,13 @@
 """形态篇选股形态扫描编排。
 
-漏斗：主线板块（成交额集中度 Top-K ∪ 同花顺概念分支）→ 板块内全量个股（剔 ST）
+漏斗：复用同日串阳首阴主线（申万二级 ∪ 同花顺概念分支）→ 板块内全量个股（剔 ST）
 → 逐票拉 300 自然日 OHLCV + 复权因子 → 前复权 → 四条件共振 → 盘后只读观察清单。
 
 出处 `teacher_notes#444`，认知 `cog_3b32e660`。输出全部属于 [判断]，不写计划层、
 不入关注池、不出价位、不给买卖建议。
 
-设计取舍（都有实测依据，不是猜的）：
-- **不接 LLM**：四条件全是机械判定，接 LLM 只会引入幻觉面。申万二级主线复用
-  `string_yang.mainline.judge_mainline(use_llm=False)`——主线口径必须与 string-yang
-  一致，各写一份必然给出两个「什么是主线」的答案。**但概念分支必须自建**
-  （`_mechanical_concept_branch`）：judge_mainline 的概念图只在 `use_llm` 分支内构建，
-  不接 LLM 时恒返回空，直接依赖会让 `--top-concepts` 变成死参数。
+设计取舍：
+- 沿用同日串阳首阴归档的裁决。显式指定范围上限时按归档顺序截取。
 - **有界双工取数而非批量粗筛**：每只股票仍保持「行情成功后才取复权因子」的原有
   调用与失败语义，但用两个 worker 并行处理两只股票；`executor.map` 保持输入顺序，
   因而结果、日志序号和确定性排序不变。它只重叠网络等待，不改变筛选口径，也避免
@@ -22,14 +18,13 @@
 from __future__ import annotations
 
 import logging
-import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 
 from services.pattern_scan import constants as C
 from services.pattern_scan import detectors
 from services.concept_tags import build_stock_concept_map
-from services.string_yang import mainline
+from services.string_yang import renderer as string_yang_reports
 from services.volume_concentration.aggregator import UNCLASSIFIED
 from utils import is_st_stock
 from utils.qfq import OHLC_PRICE_KEYS, apply_qfq
@@ -81,38 +76,6 @@ def _candidate_universe(
             "branch_concepts": branch_concepts,
         })
     return out, st_or_delist
-
-
-def _mechanical_concept_branch(
-    registry, date: str, top_concepts: int,
-) -> tuple[set[str], dict[str, set[str]], list[str]]:
-    """不接 LLM 时的同花顺概念分支（资金流 Top-M + 容器概念过滤）。
-
-    `judge_mainline(use_llm=False)` **只出申万二级**：概念图仅在 `use_llm` 分支内构建，
-    fallback 恒返回 `main_concepts=[]`（门2 high）。若直接依赖它，`--top-concepts`
-    会是死参数，而报告仍宣称「∪ 同花顺概念分支」——文档与实现不符。
-
-    这里复用 mainline 的三个现成函数（不复制口径：容器过滤阈值、预取条数、资金流排序
-    都必须与 string-yang 一致），只补「不接 LLM 时如何选概念」这段编排：
-    LLM 版是让模型从热概念里裁决，机械版直接取资金流前 M 个非容器概念。
-    """
-    from services.string_yang.mainline import (
-        _concept_prefetch_limit, _filter_hot_concept_rows, _ranked_concept_rows,
-    )
-
-    errors: list[str] = []
-    ranked, ok = _ranked_concept_rows(registry, date)
-    if not ok:
-        return set(), {}, ["concept_flow"]
-    prefetch = [row["name"] for row in ranked[:_concept_prefetch_limit(top_concepts)]]
-    concept_map, member_count, member_ok = build_stock_concept_map(
-        registry, date, concept_names=prefetch)
-    if not member_ok:
-        errors.append("ths_member")
-    hot, coverage_ok = _filter_hot_concept_rows(ranked, top_concepts, member_count)
-    if member_ok and not coverage_ok:
-        errors.append("concept_coverage")
-    return {row["name"] for row in hot}, concept_map, errors
 
 
 def _fetch_bars(registry, code: str, start: str, end: str) -> list[dict]:
@@ -171,34 +134,44 @@ def _flatten(item: dict, bars: list[dict], detail: dict) -> dict:
 
 
 def run_daily(
-    conn: sqlite3.Connection,
     registry,
     date: str,
     *,
-    top_k: int = C.DEFAULT_TOP_K_SECTORS,
-    top_concepts: int = C.DEFAULT_TOP_CONCEPTS,
+    top_k: int | None = None,
+    top_concepts: int | None = None,
 ) -> dict:
-    judgment = mainline.judge_mainline(
-        conn, registry, date,
-        top_k=top_k, top_concepts=top_concepts, use_llm=False,
-    )
-    main_sectors = set(judgment.main_sectors)
-    main_concepts, concept_map, concept_errors = _mechanical_concept_branch(
-        registry, date, top_concepts)
-    source_errors = judgment.source_errors + concept_errors
+    try:
+        judgment = string_yang_reports.read_report_mainline(date)
+    except (OSError, ValueError) as exc:
+        logger.warning("[pattern-scan] %s 串阳首阴主线归档不可用：%s", date, exc)
+        return {"date": date, "status": "source_failed", "candidates": [],
+                "source_errors": ["串阳首阴同日主线归档不可用"]}
+
+    sectors = judgment.main_sectors[:top_k]
+    concepts = judgment.main_concepts[:top_concepts]
+    main_sectors = set(sectors)
+    main_concepts = set(concepts)
+    concept_map: dict[str, set[str]] = {}
+    source_errors = list(judgment.source_errors)
+    if concepts:
+        concept_map, member_count, _ = build_stock_concept_map(
+            registry, date, concept_names=concepts)
+        missing = sorted(main_concepts - member_count.keys())
+        if missing:
+            source_errors.append(f"同花顺概念成分缺失（{'、'.join(missing)}）")
 
     payload = judgment.public_payload()
-    payload["main_concepts"] = sorted(main_concepts)  # 机械分支补齐，非 judgment 的空列表
+    payload.update(main_sectors=sectors, main_concepts=concepts)
     base = {
         "date": date,
-        "main_sectors": sorted(main_sectors),
+        "main_sectors": sectors,
         "mainline": payload,
+        "mainline_limited": sectors != judgment.main_sectors or concepts != judgment.main_concepts,
         "main_sector_degraded": judgment.degraded,
     }
     if not main_sectors and not main_concepts:
-        return {**base, "status": "ok", "candidates": [],
-                "rejects": {"no_main_sector": 1}, "data_errors": [],
-                "source_errors": source_errors, "universe_count": 0}
+        return {**base, "status": "source_failed", "candidates": [],
+                "source_errors": source_errors + ["串阳首阴裁决及兜底均无可扫描板块"]}
 
     sw = registry.call("get_stock_sw_industry_map")
     if not (getattr(sw, "success", False) and isinstance(sw.data, dict)) or not sw.data:

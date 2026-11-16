@@ -457,7 +457,7 @@ python3 main.py pattern-scan daily --no-push                      # 落报告不
 python3 main.py pattern-scan daily --top-k 8 --top-concepts 6
 ```
 
-- **板块优先**：课程原则是「先发现板块，再在板块里找个股」。主线判断直接复用 `string_yang.mainline.judge_mainline(use_llm=False)`——主线口径必须与 string-yang 一致，各写一份会给出两个「什么是主线」的答案。**本命令不接 LLM**：四条件全是机械判定，接 LLM 只会引入幻觉面。
+- **板块优先**：默认读取同日 `data/reports/string-yang/YYYY-MM-DD.md`，沿用串阳首阴的 LLM 裁决及报告中标注的降级状态。候选取裁决的申万二级或同花顺概念成分，概念成分按扫描时可取的快照核对。报告缺失、日期不符或没有可扫描范围时标记 `source_failed`。串阳首阴报告附可识别的主线数据缺口，形态篇一并继承。显式传入 `--top-k` 或 `--top-concepts` 时，仅按归档顺序限制已入选范围。
 - **四条件共振**（`utils.pattern`，缺一不可）：
   1. **均线多头排列**：MA5 > MA10 > MA20 > MA30 > MA55 严格递减。严格大于是设计选择（与 `ma_position` 的「站上」同口径），恰好相等不算排列。
   2. **MACD 零轴上方**：金叉**或零上运行**（课程原话「不管是金叉还是运行，都要在零轴上方」），判定字段是 `zero_axis_bullish` = DIF 与 DEA 同时 > 0 且 DIF >= DEA。只看 DIF 会把「DIF 刚翻正、DEA 仍在零下」的纠结段误判成零上，与课程「零下金叉难成主升浪」相悖。
@@ -470,7 +470,7 @@ python3 main.py pattern-scan daily --top-k 8 --top-concepts 6
 - **口径诊断**：报告附「多头排列断点分布」（哪一对均线断得最多，按计数降序）。五线严格递减是最强的门——2026-07-24 实测 883 只里 842 只栽在这里，命中仅 1 只。该分布**纯观测、不参与筛选**，用途是等真实分布积累够了再决定课程「基本上要多头排列」该怎么放宽，避免拍脑袋改阈值。
 - **三档运行**：裸 `daily`（写 `data/reports/pattern-scan/YYYY-MM-DD.md` + 推钉钉）/ `--no-push`（落报告不推送）/ `--dry-run`（仅打印）。非交易日守卫仅在非 dry-run 时生效。
 - **守红线**：全标 `[判断]`，不出价位、不给买卖建议、不写交易计划层、不入关注池，不写库（无池无状态）。报告显式声明「形态成立只说明资金进场且空间未透支，不等于应当买入」。课程举例个股（甘李、蓝思、水晶光电等）只作认知实例的历史验证样本，不进任何推送。
-- 依赖 env：`TUSHARE_TOKEN` + 钉钉（`DINGTALK_WEBHOOK_TOKEN` / `DINGTALK_WEBHOOK_SECRET`）。不依赖 LLM env。
+- 依赖 `TUSHARE_TOKEN`；推送依赖钉钉配置。主线裁决读取同日串阳首阴归档。
 
 ## 断板反包盘后扫描（board-break）
 
