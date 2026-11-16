@@ -55,18 +55,32 @@ class TestRunPk:
                            lambda p, pl: '{"winner": "A", "reason": "r"}', clock=clock)
         assert result["status"] == "melted"
 
-    def test_pool_truncated_to_top12(self):
+    def test_all_candidates_play_without_weighted_truncation(self):
         cards = _cards(15)
         result = pk.run_pk(cards, _scored(cards), lambda p, pl: '{"winner": "A", "reason": "r"}')
-        assert result["total"] == 66 and len(result["excluded"]) == 3
+        assert result["total"] == 105 and result["excluded"] == [] and len(result["ranks"]) == 15
 
-    def test_tie_broken_by_score_then_code(self):
-        # 构造 2 票循环互胜不可能（单场），用 3 票让 wins 并列后按加权分破平
+    def test_cycle_shared_rank_ignores_scores(self):
+        # 三票循环互胜，总胜场及直接交手均相同；不同加权分仍共享第一。
         cards = _cards(3)
         seq = iter(['{"winner": "A", "reason": "r"}', '{"winner": "B", "reason": "r"}',
-                    '{"winner": "B", "reason": "r"}'])
+                    '{"winner": "A", "reason": "r"}'])
         result = pk.run_pk(cards, _scored(cards), lambda p, pl: next(seq))
-        assert list(result["ranks"].values()) == sorted(result["ranks"].values())
+        assert set(result["ranks"].values()) == {1}
+
+    def test_tied_wins_use_direct_matches_only(self):
+        matches = [dict(a="a", b="b", winner="a", state="valid")]
+        assert pk.rank_matches(["a", "b", "c"], dict(a=2, b=2, c=0), matches) == dict(a=1, b=2, c=3)
+        assert pk.rank_matches(["a", "b", "c"], dict(a=2, b=2, c=0), []) == dict(a=1, b=1, c=3)
+
+    def test_score_permutation_does_not_change_pairs_or_ranking(self):
+        cards = _cards(14)
+        calls = []
+        def run(scores):
+            return pk.run_pk(cards, scores, lambda p, pl: calls.append((pl['A']['code'], pl['B']['code'])) or '{"winner":"A","reason":"r"}')
+        left = run(_scored(cards)); first = list(calls); calls.clear()
+        right = run([dict(code=c['code'], total=i*100) for i,c in enumerate(cards)])
+        assert first == calls and left['ranks'] == right['ranks'] and len(calls) == 91
 
     def test_timeout_not_retried(self):
         calls = []

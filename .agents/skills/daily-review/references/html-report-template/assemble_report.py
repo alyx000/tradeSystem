@@ -4162,13 +4162,15 @@ class _ReportParser(HTMLParser):
             return
         if (contract.value != "v1" or contract.tag != "table" or status not in {"ok", "partial"}
                 or not count or len(contract.rows) != count + 1
-                or any(header not in visible for header in _BOARD_BREAK_HEADERS)):
+                or any(header not in visible for header in (_BOARD_BREAK_PK_HEADERS if attrs.get("data-ranking-mode") == "pk_only" else _BOARD_BREAK_HEADERS))):
             fail("断板反包排名候选数量、状态或表头异常")
         try:
             rows = []
             for item in contract.rows[1:]:
                 row = _board_break_row([item.attrs.get(f"data-{key}", "") for key in _BOARD_BREAK_FIELDS],
                                        item.attrs.get("data-branch", "连续板断板"))
+                if (attrs.get("data-ranking-mode") == "pk_only") != (row["score_rank"] is None):
+                    raise ValueError("HTML排名口径与分数格式不一致")
                 expected = re.sub(r"\s+", "", "".join(_board_break_visible_cells(row, attrs.get("data-pk-status", ""))))
                 actual = re.sub(r"\s+", "", "".join(item.rendered_text))
                 if actual != expected:
@@ -10007,6 +10009,7 @@ def _style_market_effect_ops_fragments(
 
 _BOARD_BREAK_FIELDS = ("code", "name", "height", "change", "industry", "weighted", "pk", "divergence")
 _BOARD_BREAK_HEADERS = ("代码", "股票", "连板[事实]", "断板日涨幅[事实]", "行业", "加权分及排名[判断]", "PK胜场及排名[判断]", "分歧[判断]")
+_BOARD_BREAK_PK_HEADERS = ("代码", "股票", "连板[事实]", "断板日涨幅[事实]", "行业", "PK胜场及排名[判断]", "加权分[参考]")
 _BOARD_BREAK_GAP = "断板反包排名数据不完整"
 
 
@@ -10017,7 +10020,7 @@ def _board_break_row(cells: Sequence[str], branch: str = "连续板断板") -> d
     rebreak = re.fullmatch(r"反包后再断板（前段([1-9]\d*)板）", branch)
     if branch != "连续板断板" and (not rebreak or not 2 <= int(rebreak[1]) <= 100):
         raise ValueError("断板分支或前段连板高度异常")
-    weighted = re.fullmatch(r"([+-]?\d+(?:\.\d+)?)（第([1-9]\d*)名）", row["weighted"])
+    weighted = re.fullmatch(r"([+-]?\d+(?:\.\d+)?)(?:（第([1-9]\d*)名）)?", row["weighted"])
     pk = re.fullmatch(r"(\d+)胜（第([1-9]\d*)名）", row["pk"])
     if (
         not re.fullmatch(r"\d{6}", row["code"])
@@ -10032,7 +10035,7 @@ def _board_break_row(cells: Sequence[str], branch: str = "连续板断板") -> d
         or row["divergence"] not in {"", "⚠"}
     ):
         raise ValueError("候选身份、数值或排名格式异常")
-    row.update(score=float(weighted[1]), score_rank=int(weighted[2]),
+    row.update(score=float(weighted[1]), score_rank=int(weighted[2]) if weighted[2] else None,
                pk_wins=int(pk[1]) if pk else None, pk_rank=int(pk[2]) if pk else None, branch=branch)
     return row
 
@@ -10040,10 +10043,13 @@ def _board_break_row(cells: Sequence[str], branch: str = "连续板断板") -> d
 def _check_board_break_rows(rows: list[dict], pk_status: str, attempted: int | None,
                             total: int | None, invalid: int | None, excluded: list[str]) -> None:
     codes = [row["code"] for row in rows]
-    if len(set(codes)) != len(codes) or [r["score_rank"] for r in rows] != list(range(1, len(rows) + 1)):
+    pk_only = bool(rows) and all(r["score_rank"] is None for r in rows)
+    if len(set(codes)) != len(codes) or (not pk_only and [r["score_rank"] for r in rows] != list(range(1, len(rows) + 1))):
         raise ValueError("候选重复或加权排名不连续")
-    if [r["score"] for r in rows] != sorted((r["score"] for r in rows), reverse=True):
+    if not pk_only and [r["score"] for r in rows] != sorted((r["score"] for r in rows), reverse=True):
         raise ValueError("加权分顺序异常")
+    if pk_only and (excluded or (pk_status == "ok" and [r["pk_rank"] for r in rows] != sorted(r["pk_rank"] or 0 for r in rows))):
+        raise ValueError("PK唯一排名必须全员参赛并按PK排列")
     if len(set(excluded)) != len(excluded) or not set(excluded) <= set(codes):
         raise ValueError("PK 未进池名单不属于候选")
     if pk_status != "not_run":
@@ -10054,7 +10060,8 @@ def _check_board_break_rows(rows: list[dict], pk_status: str, attempted: int | N
         size = len(ranked)
         if (
             size < 2 or attempted != total or total != size * (size - 1) // 2
-            or sorted(r["pk_rank"] for r in ranked) != list(range(1, size + 1))
+            or (not pk_only and sorted(r["pk_rank"] for r in ranked) != list(range(1, size + 1)))
+            or (pk_only and any(r["pk_rank"] != 1 + sum(other["pk_rank"] < r["pk_rank"] for other in ranked) for r in ranked))
             or set(excluded) != {r["code"] for r in rows if r["pk_rank"] is None}
             or any(not 0 <= r["pk_wins"] < size for r in ranked)
             or sum(r["pk_wins"] for r in ranked) != attempted - invalid
@@ -10066,7 +10073,7 @@ def _check_board_break_rows(rows: list[dict], pk_status: str, attempted: int | N
     if pk_status == "skipped" and (len(rows) >= 2 or (attempted, total, invalid) != (0, 0, 0)):
         raise ValueError("PK skipped 与候选或场次不一致")
     for row in rows:
-        expected = "⚠" if row["pk_rank"] is not None and abs(row["score_rank"] - row["pk_rank"]) >= 3 else ""
+        expected = "⚠" if not pk_only and row["pk_rank"] is not None and abs(row["score_rank"] - row["pk_rank"]) >= 3 else ""
         if row["divergence"] != expected:
             raise ValueError("双榜分歧标记不一致")
 
@@ -10104,8 +10111,10 @@ def _parse_board_break_ranking(text: str | None, report_date: str) -> dict:
             pk_status, invalid, attempted, total = "not_run", None, None, None
         else:
             raise ValueError("PK 收据格式未知")
-        sections = re.findall(r"^## 候选清单（按加权分降序）\s*\n(.*?)(?=^## |\Z)", text, re.M | re.S)
-        if len(sections) != 1:
+        pk_only = "## 候选清单（按PK排名；加权分仅供参考）" in text
+        section_title = "按PK排名；加权分仅供参考" if pk_only else "按加权分降序"
+        sections = re.findall(r"^## 候选清单（" + section_title + r"）\s*\n(.*?)(?=^## |\Z)", text, re.M | re.S)
+        if len(sections) != 1 or len(re.findall(r"^## 候选清单（", text, re.M)) != 1:
             raise ValueError("候选区缺失或重复")
         lines = [line.strip() for line in sections[0].splitlines() if line.strip()]
         table_lines = [line for line in lines if line.startswith("|")]
@@ -10116,7 +10125,8 @@ def _parse_board_break_ranking(text: str | None, report_date: str) -> dict:
                 raise ValueError("候选表被截断")
             headers = [c.strip() for c in table_lines[0].strip("|").split("|")]
             legacy_headers = ["代码", "名称", "连板", "断板日涨幅", "收盘", "6%参考位", "行业", "加权分及排名[判断]", "PK胜场及排名[判断]", "分歧⚠"]
-            if headers not in (legacy_headers, legacy_headers + ["入选分支"]):
+            pk_headers = legacy_headers[:7] + ["PK胜场及排名[判断]", "加权分[参考]", "入选分支"]
+            if headers not in ([pk_headers] if pk_only else [legacy_headers, legacy_headers + ["入选分支"]]):
                 raise ValueError("候选表头不匹配")
             column_count = len(headers)
             new_format = new_format or column_count == 11
@@ -10126,12 +10136,17 @@ def _parse_board_break_ranking(text: str | None, report_date: str) -> dict:
                 cells = [c.strip() for c in line.strip("|").split("|")]
                 if len(cells) != column_count:
                     raise ValueError("候选表列数异常")
-                rows.append(_board_break_row([cells[i] for i in (0, 1, 2, 3, 6, 7, 8, 9)],
-                                              cells[10] if column_count == 11 else "连续板断板"))
+                if pk_only:
+                    rows.append(_board_break_row([cells[i] for i in (0, 1, 2, 3, 6, 8, 7)] + [""], cells[9]))
+                else:
+                    rows.append(_board_break_row([cells[i] for i in (0, 1, 2, 3, 6, 7, 8, 9)],
+                                                  cells[10] if column_count == 11 else "连续板断板"))
+                if pk_only != (rows[-1]["score_rank"] is None):
+                    raise ValueError("候选排名口径与分数格式不一致")
         elif not ("今日无断板反包候选" in sections[0] and "核心数据源全部成功，本次为真实空候选（非采集故障）。" in sections[0]):
             raise ValueError("空榜没有健康空候选收据")
         branch_lines = re.findall(r"^- 反包后再断板分支：(.*)$", footer, re.M)
-        if new_format or branch_lines:
+        if new_format or pk_only or branch_lines or any(row["branch"] != "连续板断板" for row in rows):
             receipt = re.fullmatch(r"(complete|partial|source_failed)；日期链：(.*)", branch_lines[0]) if len(branch_lines) == 1 else None
             if receipt is None:
                 raise ValueError("新分支完整性收据缺失、重复或非法")
@@ -10154,21 +10169,47 @@ def _parse_board_break_ranking(text: str | None, report_date: str) -> dict:
             raise ValueError("PK 未进池收据重复")
         excluded = excluded_lines[0].strip().split("、") if excluded_lines else []
         _check_board_break_rows(rows, pk_status, attempted, total, invalid, excluded)
+        if pk_only:
+            if re.findall(r"^- 排名口径：(.*)$", footer, re.M) != ["all-candidates-pk-only-v1"]:
+                raise ValueError("PK唯一排名缺少口径收据")
+            if pk_status == "ok":
+                scripts_path = str(_repo_root() / "scripts")
+                if scripts_path not in sys.path:
+                    sys.path.insert(0, scripts_path)
+                from services.board_break.pk import rank_matches
+                matches = []
+                seen_pairs = set()
+                counts = {row["code"]: 0 for row in rows}
+                for a, b, winner, loser in re.findall(r"^- (\d{6}) vs (\d{6}) → 胜者 (\d{6})（负 (\d{6})）：", text, re.M):
+                    pair = tuple(sorted((a, b)))
+                    if a == b or pair in seen_pairs or not {a, b} <= counts.keys() or {winner, loser} != {a, b}:
+                        raise ValueError("PK交手记录非法或重复")
+                    seen_pairs.add(pair); counts[winner] += 1
+                    matches.append(dict(a=a, b=b, winner=winner, state="valid"))
+                expected_ranks = rank_matches(list(counts), counts, matches)
+                if len(matches) != attempted-invalid or any(r["pk_wins"] != counts[r["code"]] or r["pk_rank"] != expected_ranks[r["code"]] for r in rows):
+                    raise ValueError("PK名次与逐场交手重算不一致")
         dimensions = re.findall(r"^- 维度缺失/源失败：(.*)$", footer, re.M)
         if not dimensions or ("无" in dimensions and dimensions != ["无"]):
             raise ValueError("维度完整性收据缺失或冲突")
+        pk_context_receipts = re.findall(r"^- PK附加证据覆盖：(.*)$", footer, re.M)
+        if len(pk_context_receipts) > 1 or any(not r.strip() for r in pk_context_receipts):
+            raise ValueError("PK附加证据覆盖收据重复或空白")
+        if any(f"评价口径：{v}；" in text for v in ("sector-first-traded-board-v2", "industry-bounds-sector-priority-v3")) and rows and not pk_context_receipts:
+            raise ValueError("新口径缺少PK附加证据覆盖收据")
         notes = [line.removeprefix("- ") for line in footer.splitlines()
                  if line.startswith(("- 主线板块：", "- 长周期乖离", "- 维度缺失/源失败："))
                  and line != "- 维度缺失/源失败：无"]
         notes.extend(line.strip().removeprefix("- ") for line in footer.splitlines()
                      if line.startswith(("- 反包后再断板分支：partial", "- 反包后再断板分支：source_failed", "  - 新分支缺口：")))
+        notes.extend("PK附加证据覆盖：" + r for r in pk_context_receipts if r != "完整")
         if pk_status == "melted" or (invalid or 0) > 0:
             notes.append(f"PK 状态={pk_status}，已打 {attempted}/{total}，无效 {invalid}")
         if not rows and notes:
             raise ValueError("不完整来源不能证明空榜")
         return dict(state="v1" if rows else "none", status="partial" if notes else "ok",
                     rows=rows, prev_date=prev[1], pk_status=pk_status, attempted=attempted,
-                    total=total, invalid=invalid, excluded=excluded, notes=notes, digest=digest)
+                    total=total, invalid=invalid, excluded=excluded, notes=notes, digest=digest, pk_only=pk_only)
     except (ValueError, OverflowError) as exc:
         failed["notes"] = [str(exc)]
         return failed
@@ -10180,7 +10221,7 @@ def _board_break_visible_cells(row: dict, pk_status: str) -> list[str]:
         cells[2] = f"昨日{row['height']}板；{row['branch']}"
     if cells[6] == "—":
         cells[6] = "—（未进PK池）" if pk_status == "ok" else "—（PK未计算）"
-    return cells
+    return cells[:5] + [cells[6], cells[5]] if row["score_rank"] is None else cells
 
 
 def _render_board_break_ranking(payload: dict, report_date: str) -> str:
@@ -10191,16 +10232,19 @@ def _render_board_break_ranking(payload: dict, report_date: str) -> str:
         "data-source-sha256": payload["digest"], "data-prev-date": payload["prev_date"],
         "data-candidate-count": len(rows) if payload["state"] != "missing-data" else "unavailable",
         "data-pk-status": payload["pk_status"], "data-pk-excluded": ",".join(payload["excluded"]),
+        "data-ranking-mode": "pk_only" if payload.get("pk_only") else "legacy",
         **{f"data-pk-{key}": payload[key] if payload[key] is not None else "unavailable" for key in ("attempted", "total", "invalid")},
     }
     attrs_text = " ".join(f'{key}="{escape(str(value), quote=True)}"' for key, value in attrs.items())
     count = len(rows)
     items = count if count else 1
     label = f"{count} 只" if count else ("0 只；1 项状态" if payload["state"] == "none" else "1 项缺口")
-    parts = [f'<details class="evidence" data-as-of="{report_date}" data-items="{items}"><summary>断板反包候选双排名（{label}；PK {payload["pk_status"]}）</summary><div class="evidence-body">']
+    ranking_label = "PK排名；加权分仅参考" if payload.get("pk_only") else "候选双排名"
+    parts = [f'<details class="evidence" data-as-of="{report_date}" data-items="{items}"><summary>断板反包{ranking_label}（{label}；PK {payload["pk_status"]}）</summary><div class="evidence-body">']
     if payload["state"] == "v1":
-        parts.append(f'<table {attrs_text}><caption>[事实] {report_date} 断板反包候选 {count} 只，前一交易日 {payload["prev_date"]}；来源 board-break。[判断] 原始加权分与 PK 双榜，不是反包成功概率，不构成买卖建议。</caption>')
-        parts.append("<thead><tr>" + "".join(f"<th>{header}</th>" for header in _BOARD_BREAK_HEADERS) + "</tr></thead><tbody>")
+        parts.append(f'<table {attrs_text}><caption>[事实] {report_date} 断板反包候选 {count} 只，前一交易日 {payload["prev_date"]}；来源 board-break。[判断] {ranking_label}，不是反包成功概率，不构成买卖建议。</caption>')
+        headers = _BOARD_BREAK_PK_HEADERS if payload.get("pk_only") else _BOARD_BREAK_HEADERS
+        parts.append("<thead><tr>" + "".join(f"<th>{header}</th>" for header in headers) + "</tr></thead><tbody>")
         for row in rows:
             row_attrs = " ".join(f'data-{key}="{escape(row[key], quote=True)}"' for key in _BOARD_BREAK_FIELDS)
             row_attrs += f' data-branch="{escape(row["branch"], quote=True)}"'

@@ -52,12 +52,12 @@ KW_BAD = ("质押", "违规", "警示", "立案", "问询")
 KW_EXCLUDE = ("中标候选人",)   # 未定标不算利好
 
 # —— PK（方式二）——
-PK_POOL_MAX = 12
 PK_BUDGET_SECONDS = 1200       # 熔断硬上限
 PK_INVALID_RATIO_MAX = 0.30    # 无效场占比熔断
 PK_VALID_RATIO_MIN = 0.70      # 有效场占比 >= 0.70 才渲染 PK 排名
-PK_REASON_MAX_CHARS = 120      # 留出辨识度与当日表现冲突时的取舍解释
-PK_POLICY_VERSION = "recognition-neutral-branch-v1"
-PK_POLICY_SUMMARY = "近期涨幅只作正向辨识度证据；反包后再断板为中性形态；胜负须依据具体事实解释。"
+PK_REASON_MAX_CHARS = 240      # 留出板块、涨停路径及个股取舍依据
+PK_POLICY_VERSION = "industry-bounds-sector-priority-v3"
+PK_POLICY_SUMMARY = "行业缺口逐项核验；中位涨幅与上涨占比最不利范围同向分离时程序执行板块优先；一价占比下限可参与比较；辨识度正向、分支中性。"
+PK_RANKING_VERSION = "all-candidates-pk-only-v1"
 FACT_CARD_ANN_MAX = 5          # 事实卡公告标题最多 5 条
 FACT_CARD_ANN_CHARS = 40       # 每条截断 40 字

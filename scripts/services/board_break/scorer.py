@@ -315,6 +315,8 @@ def build_fact_cards(conn, registry, result: dict) -> list[dict]:
     ann_window_start = window_start(date, C.ANNOUNCE_WINDOW_DAYS)
     adj_window_start = window_start(date, C.LOOKBACK_NATURAL_DAYS)
     earnings_rows = _fetch_earnings_rows(registry, date)
+    from services.board_break.pk_context import build_contexts
+    contexts = build_contexts(conn, candidates, date, result.get("prev_trade_date"))
 
     cards = []
     for cand in candidates:
@@ -332,6 +334,7 @@ def build_fact_cards(conn, registry, result: dict) -> list[dict]:
             adj_factors=adj_factors,
             main_sector_degraded=main_sector_degraded,
         )
+        card.update(contexts.get(code, {}))
         cards.append(card)
     return cards
 

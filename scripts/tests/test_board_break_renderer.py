@@ -103,7 +103,7 @@ def test_source_failed_report():
     assert "数据失败" in md and "不产出候选清单" in md
 
 
-def test_push_preserves_both_ranks_without_repeating_stocks_or_including_evidence():
+def test_push_only_pk_no_weighted_ranking_or_selection():
     scored = [{"code": str(600000 + i), "name": f"样本{i}", "rank_score": i,
                "total": 8 - i, "pct_chg": -1.25, "evidences": [{"detail": "完整依据"}]}
               for i in range(1, 8)]
@@ -112,15 +112,15 @@ def test_push_preserves_both_ranks_without_repeating_stocks_or_including_evidenc
         "status": "ok", "ranks": ranks, "wins": {"600004": 2}, "invalid": 1,
     })
 
-    assert "已核验候选 7 只" in result and "展示 5/7 只" in result
+    assert "已核验候选 7 只" in result and "展示 3/7 只" in result
     assert result.count("样本2") == 1
-    assert result.index("样本4") < result.index("样本1")
-    assert "加权第 4 · 4.0 分 · PK 第 1 · 2 胜" in result
+    assert "样本1" not in result and "加权第" not in result
+    assert "PK 第 1 · 2 胜 · 加权分参考 4.0 分" in result
     assert "PK 有 1 场无效" in result
     assert "样本6" not in result and "完整依据" not in result
 
 
-def test_push_flags_partial_and_missing_pk_evidence_and_keeps_weighted_rank():
+def test_push_flags_partial_and_never_falls_back_to_weighted_rank():
     scored = _scored_one()
     scored[0].update(branch="rebreak", board_path={"status": "partial"})
     scan = dict(_result(scored), status="partial", main_sector_degraded=True)
@@ -129,8 +129,18 @@ def test_push_flags_partial_and_missing_pk_evidence_and_keeps_weighted_rank():
     assert "反包后再断板分支覆盖不全" in result
     assert "当日主线快照缺失" in result
     assert "部分评分维度缺数据" in result and "PK 板块或涨停路径证据不全" in result
-    assert "加权第 1" in result and "PK 未完赛" in result and "PK 第" not in result
+    assert "加权第" not in result and "PK 未完赛" in result and "PK 第" not in result
+    assert "不生成替代排名" in result
     assert "已核验候选 0 只" in renderer.render_push(scan, [], None)
+
+
+def test_push_includes_every_tie_at_boundary():
+    cards = [dict(code=f"60000{i}", name=f"样本{i}", total=99-i, rank_score=i+1) for i in range(5)]
+    p = dict(status="ok", ranks=dict(zip([c["code"] for c in cards], [1,2,2,2,5])), wins={})
+    text = renderer.render_push(_result(cards), list(reversed(cards)), p)
+    assert "展示 4/5 只" in text
+    assert text.index("样本1") < text.index("样本2") < text.index("样本3")
+    assert "样本4" not in text and "加权第" not in text
 
 
 def test_save_report_out_root_injectable(tmp_path):

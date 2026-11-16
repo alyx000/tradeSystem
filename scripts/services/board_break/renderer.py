@@ -2,8 +2,7 @@
 
 五段结构（spec「报告结构」）：
 ① 头部（日期+prev_trade_date+用户规则转述+红线声明）
-② 候选表（双排名：加权分排名[判断] + PK 胜场排名[判断]，PK 无效显 `—`，
-   分歧标注仅在 PK `status=="ok"` 时按 `abs(rank_score-rank_pk)>=3` 计算）
+② 候选表（仅PK排名，加权分只参考；未完赛无排名，同名次代码仅供查找）
 ③ 每票打分依据明细（八维度 `维度|得分|依据` 全列，含 0 分维度，`evidence.detail` 原样使用；
    末行附「长周期乖离」[事实] 展示项——不计分，文案由 scorer 拼好同"原样使用"契约）
 ④ PK 理由段（红线过滤后的 reason；熔断/未跑/未运行分别标注原因）
@@ -119,9 +118,11 @@ def _pk_stats_phrase(attempted: int, total: int, invalid: int, valid_ratio: floa
 
 def _pk_summary_lines(pk_result: dict | None) -> list[str]:
     """④ PK 理由段：区分未运行/熔断/未打/正常四态，正常态列每场有效理由。"""
-    lines = ["## PK 理由（LLM 两两裁判，[判断]）", ""]
+    version = (pk_result or {}).get("policy_version", "")
+    mode = "板块规则优先，其余LLM两两裁判" if version == "industry-bounds-sector-priority-v3" else "LLM 两两裁判"
+    lines = [f"## PK 理由（{mode}，[判断]）", ""]
     if pk_result is None:
-        lines.append("PK 未运行（`--no-llm` 或 LLM runner 不可用），仅出加权分排序。")
+        lines.append("PK 未运行（`--no-llm` 或 LLM runner 不可用），无排名；加权分仅作参考。")
         return lines
     if pk_result.get("policy_version"):
         lines.append(f"评价口径：{_cell(pk_result['policy_version'])}；"
@@ -139,7 +140,7 @@ def _pk_summary_lines(pk_result: dict | None) -> list[str]:
         lines.append(
             f"PK 因预算超时或无效场占比过高熔断，未完赛（"
             f"{_pk_stats_phrase(attempted, total, invalid, valid_ratio)}）；"
-            "本报告不渲染 PK 排名列，只出加权分排序。"
+            "本报告无正式排名，加权分仅作参考。"
         )
         return lines
     matches = pk_result.get("matches") or []
@@ -176,6 +177,7 @@ def render_daily(result: dict, scored: list, pk_result: dict | None) -> str:
         f"> 上一交易日（T-1）：{prev_date}",
         _RULE_NOTE,
         _REDLINE,
+        "> 排名口径：全部候选参赛；总胜场→同胜场组完整交手胜场，仍相同则并列；同名次内代码仅供查找。PK未完成时无排名，加权分只作参考。",
         "",
     ]
 
@@ -184,7 +186,7 @@ def render_daily(result: dict, scored: list, pk_result: dict | None) -> str:
     wins = pk_result.get("wins") if pk_result else {}
 
     # —— ② 候选表 ——
-    lines.append("## 候选清单（按加权分降序）")
+    lines.append("## 候选清单（按PK排名；加权分仅供参考）")
     if not scored:
         # 核心源失败由CLI分流；此处同时接受ok与新分支缺源的partial，后者不能报健康空榜。
         if result.get("status") == "partial":
@@ -198,23 +200,20 @@ def render_daily(result: dict, scored: list, pk_result: dict | None) -> str:
     else:
         lines += [
             "| 代码 | 名称 | 连板 | 断板日涨幅 | 收盘 | 6%参考位 | 行业 "
-            "| 加权分及排名[判断] | PK胜场及排名[判断] | 分歧⚠ | 入选分支 |",
-            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+            "| PK胜场及排名[判断] | 加权分[参考] | 入选分支 |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
         ]
+        scored = sorted(scored, key=lambda c: ((ranks or {}).get(c.get("code"), float("inf")), c.get("code", "")))
         for c in scored:
             code = c.get("code", "")
-            rank_score = c.get("rank_score")
             pct_chg = _fmt_num(c.get("pct_chg"), ".2f")
             close = _fmt_num(c.get("close"), ".2f")
             ref_price = c.get("ref_price")
             ref_price_cell = _fmt_num(ref_price, ".2f") if isinstance(ref_price, (int, float)) else (ref_price or "—")
-            total_cell = f"{c.get('total', 0.0):.1f}（第{rank_score}名）"
-            diverge = ""
+            total_cell = f"{c.get('total', 0.0):.1f}"
             if ranks is not None and code in ranks:
                 rank_pk = ranks[code]
                 pk_cell = f"{wins.get(code, 0)}胜（第{rank_pk}名）"
-                if rank_score is not None and abs(rank_score - rank_pk) >= 3:
-                    diverge = "⚠"
             else:
                 pk_cell = "—"
             branch_label = "连续板断板"
@@ -224,7 +223,7 @@ def render_daily(result: dict, scored: list, pk_result: dict | None) -> str:
             lines.append(
                 f"| {code} | {_cell(c.get('name', ''))} | {c.get('limit_times', '—')} | {pct_chg}% "
                 f"| {close} | {ref_price_cell} | {_cell(c.get('industry', ''))} "
-                f"| {total_cell} | {pk_cell} | {diverge} | "
+                f"| {pk_cell} | {total_cell} | "
                 f"{branch_label} |"
             )
         lines.append("")
@@ -240,6 +239,11 @@ def render_daily(result: dict, scored: list, pk_result: dict | None) -> str:
             lines.append(f"[事实] 反包后再断板：前段{evidence.get('prior_limit_times', '—')}板，"
                          f"昨日{c.get('limit_times', '—')}板；日期链："
                          + " → ".join(evidence.get("dates") or []) + "。")
+        if "board_path" in c or "sector_context" in c:
+            from services.board_break.pk_context import describe
+            path_detail, sector_detail = describe(c)
+            lines.append("[事实] PK涨停路径：" + _cell(path_detail))
+            lines.append("[事实] PK板块证据：" + _cell(sector_detail))
         lines.append("| 维度 | 得分 | 依据 |")
         lines.append("| --- | --- | --- |")
         for ev in c.get("evidences") or []:
@@ -285,11 +289,20 @@ def render_daily(result: dict, scored: list, pk_result: dict | None) -> str:
     if result.get("main_sector_degraded"):
         lines.append("- 主线板块：当日成交额集中度快照缺失，已回退最近一日（degraded）")
     missing_counts = _dimension_missing_counts(scored)
+    lines.append("- 排名口径：all-candidates-pk-only-v1")
     if missing_counts:
         for dim, n in missing_counts.items():
             lines.append(f"- 维度缺失/源失败：{_DIMENSION_LABELS.get(dim, dim)} × {n} 只")
     else:
         lines.append("- 维度缺失/源失败：无")
+    if any("board_path" in c or "sector_context" in c for c in scored):
+        gaps = []
+        for key, label in (("board_path", "涨停路径"), ("sector_context", "板块强弱")):
+            affected = [str(c.get("code", "")) for c in scored
+                        if (c.get(key) or {}).get("status") != "complete"]
+            if affected:
+                gaps.append(f"{label}部分覆盖/缺失 {len(affected)}只（{'、'.join(affected)}）")
+        lines.append("- PK附加证据覆盖：" + ("；".join(gaps) if gaps else "完整"))
     # 长周期乖离是展示项（不入 evidences），缺失率不会进上面的维度统计——单列两行，
     # 让它与八维度处在同一可观测水位（次新股批量短样本/qfq 大面积失败时脚注可见）。
     # "单窗口缺失"用异或做全划分：正常契约下只有长窗口样本不足一种（bias60 缺 ⟹ bias120 必缺），
@@ -307,7 +320,7 @@ def render_daily(result: dict, scored: list, pk_result: dict | None) -> str:
         )
         excluded = pk_result.get("excluded") or []
         if excluded:
-            lines.append(f"- PK 未进池（超 Top-K 截断，不参与分歧标注）：{'、'.join(excluded)}")
+            lines.append(f"- PK 未进池（历史结果）：{'、'.join(excluded)}")
     else:
         lines.append("- PK：未运行")
 
@@ -335,7 +348,7 @@ def render_source_failed(result: dict) -> str:
 
 
 def render_push(result: dict, scored: list[dict], pk_result: dict | None) -> str:
-    """钉钉摘要复用两榜名次，完整证据留在本地报告。"""
+    """既有摘要只展示PK前三名（含并列），无正式PK名次不生成替代榜。"""
     date = result["date"]
     if result.get("status") == "source_failed":
         sources = "、".join(_cell(name) for name in (result.get("failed_sources") or {}))
@@ -348,28 +361,28 @@ def render_push(result: dict, scored: list[dict], pk_result: dict | None) -> str
     ranks = (pk.get("ranks") or {}) if status == "ok" else {}
     wins = pk.get("wins") or {}
     by_code = {card["code"]: card for card in scored}
-    pk_top = sorted(by_code.keys() & ranks.keys(), key=ranks.__getitem__)[:3]
-    preview = list(dict.fromkeys(pk_top + [card["code"] for card in scored[:3]]))
+    preview = sorted((c for c in by_code.keys() & ranks.keys() if ranks[c] <= 3),
+                     key=lambda c: (ranks[c], c))
 
     if preview:
-        scope = "两榜各取前 3" if pk_top else "加权榜取前 3"
-        lines += ["", f"{scope} · 展示 {len(preview)}/{len(scored)} 只", ""]
+        lines += ["", f"PK 前3名（含并列，同名次代码仅供查找） · 展示 {len(preview)}/{len(scored)} 只", ""]
         for code in preview:
             card = by_code[code]
             name = _cell(card.get("name")) or code
             parts = [f"**{name}**（{code}）"]
             if card.get("pct_chg") is not None:
                 parts.append(f"断板日 {_fmt_num(card['pct_chg'], '+.2f')}%")
-            if card.get("rank_score") is not None:
-                parts.append(f"加权第 {card['rank_score']} · {_fmt_num(card.get('total'), '.1f')} 分")
             if code in ranks:
                 pk_label = f"PK 第 {ranks[code]}"
                 if code in wins:
                     pk_label += f" · {wins[code]} 胜"
                 parts.append(pk_label)
+            parts.append(f"加权分参考 {_fmt_num(card.get('total'), '.1f')} 分")
             if card.get("branch") == "rebreak":
                 parts.append("反包后再断板")
             lines.append("- " + " · ".join(parts))
+    elif scored:
+        lines += ["", "PK尚无正式名次，不生成替代排名；加权分仅在完整报告中作参考。"]
 
     notes = []
     if result.get("status") == "partial":

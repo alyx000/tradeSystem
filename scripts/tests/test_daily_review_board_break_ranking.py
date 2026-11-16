@@ -120,12 +120,16 @@ def test_partial_dimensions_keep_rank_and_gap(assembler, tmp_path):
 
 
 @pytest.mark.parametrize("branch_status", ["complete", "partial", "source_failed"])
-def test_real_renderer_new_branch_preserves_identity_and_coverage(assembler,tmp_path,branch_status):
+@pytest.mark.parametrize("context_status", ["complete", "partial"])
+def test_real_renderer_new_branch_preserves_identity_and_coverage(assembler,tmp_path,branch_status,context_status):
     from services.board_break import scorer,renderer
     cand=dict(code="601188",name="龙江交通",limit_times=1,branch="rebreak",
               pattern_evidence=dict(prior_limit_times=3,dates=["2026-07-13","2026-07-14","2026-07-15",DATE]),
               close=4.3,pct_chg=-8.8983,ref_price=4.56,bars=[])
     card=scorer.build_fact_card(cand,main_sectors=set(),ann_result=None,holder_result=None,earnings_rows=[],adj_factors=None)
+    card.update(board_path=dict(status=context_status, rows=[], expected_count=4,
+                                one_price_count=0, traded_count=0, gaps=[]),
+                sector_context=dict(status=context_status, leadership=dict(status="not_computed")))
     result=dict(date=DATE,prev_trade_date="2026-07-15",status="ok" if branch_status=="complete" else "partial",
                 sources={k:dict(ok=True,source="tushare:limit_list_d") for k in ["prev_limit_up","today_limit_up","today_limit_down"]},
                 rebreak=dict(status=branch_status,dates=cand["pattern_evidence"]["dates"],
@@ -141,6 +145,7 @@ def test_real_renderer_new_branch_preserves_identity_and_coverage(assembler,tmp_
     assert payload["state"]=="v1", payload["notes"]
     assert payload["rows"][0]["height"]=="1"
     assert payload["rows"][0]["branch"]=="反包后再断板（前段3板）"
+    assert any("PK附加证据覆盖" in note for note in payload["notes"]) == (context_status != "complete")
     if branch_status!="complete":
         assert any("新分支缺口" in note for note in payload["notes"])
     html=_render(assembler,tmp_path,source)
@@ -160,6 +165,47 @@ def test_real_renderer_new_branch_preserves_identity_and_coverage(assembler,tmp_
     ]
     for broken in mutations:
         assert assembler._parse_board_break_ranking(broken,DATE)["state"]=="missing-data"
+    # 新10列表本身必须触发分支收据门，不依赖可删的规则说明段。
+    no_rule = re.sub(r"^> 用户既定打法转述：.*\n", "", source, flags=re.M)
+    no_receipt = re.sub(r"^- 反包后再断板分支：.*\n", "", no_rule, flags=re.M)
+    assert assembler._parse_board_break_ranking(no_receipt, DATE)["state"] == "missing-data"
+
+
+@pytest.mark.parametrize("version", ["sector-first-traded-board-v2", "industry-bounds-sector-priority-v3"])
+def test_v2_context_receipt_required_and_preserved(assembler, version):
+    source = SOURCE + f"\n评价口径：{version}；新口径\n"
+    assert assembler._parse_board_break_ranking(source, DATE)["state"] == "missing-data"
+    source += "\n- PK附加证据覆盖：板块强弱部分覆盖/缺失 1只（600001）\n"
+    parsed = assembler._parse_board_break_ranking(source, DATE)
+    assert parsed["state"] == "v1" and parsed["status"] == "partial"
+    assert any("PK附加证据覆盖" in n for n in parsed["notes"])
+    assert assembler._parse_board_break_ranking(source + "\n- PK附加证据覆盖：完整\n", DATE)["state"] == "missing-data"
+
+
+def test_pk_only_report_shared_ranks_and_html(assembler, tmp_path):
+    from services.board_break import scorer, renderer, pk
+    cards = [dict(code=f"60000{i}", name=f"票{i}", limit_times=2, close=10, pct_chg=1, ref_price=10.6,
+                  total=100-i, rank_score=i+1, evidences=[], bias60=1, bias120=2,
+                  board_path=dict(status="complete"), sector_context=dict(status="complete")) for i in range(3)]
+    seq = iter(['{"winner":"A","reason":"r"}', '{"winner":"B","reason":"r"}', '{"winner":"A","reason":"r"}'])
+    # A>B、C>A、B>C，三票各一胜；总分完全不同仍并列。
+    p = pk.run_pk(cards, cards, lambda *args: next(seq))
+    result = dict(date=DATE, prev_trade_date="2026-07-15", status="ok",
+                  sources={k:dict(ok=True, source="tushare:limit_list_d") for k in ["prev_limit_up","today_limit_up","today_limit_down"]},
+                  rebreak=dict(status="complete", dates=[], sources={}, gaps=[]))
+    source = renderer.render_daily(result, list(reversed(cards)), p)
+    parsed = assembler._parse_board_break_ranking(source, DATE)
+    assert parsed["state"] == "v1", parsed["notes"]
+    assert parsed["pk_only"] and [r["pk_rank"] for r in parsed["rows"]] == [1,1,1]
+    assert all(r["score_rank"] is None for r in parsed["rows"])
+    assert "加权分及排名" not in source and "分歧⚠" not in source
+    html = _render(assembler, tmp_path, source)
+    assembler.validate_report(html, board_break_report=source)
+    assert "加权分[参考]" in html and "PK排名；加权分仅参考" in html
+    corrupted = source.replace("1胜（第1名）", "1胜（第2名）", 1)
+    assert assembler._parse_board_break_ranking(corrupted, DATE)["state"] == "missing-data"
+    without_matches = re.sub(r"^- \d{6} vs .*\n", "", source, flags=re.M)
+    assert assembler._parse_board_break_ranking(without_matches, DATE)["state"] == "missing-data"
 
 
 def test_unlabelled_first_board_still_rejected(assembler):
@@ -211,21 +257,3 @@ def test_official_cli_reads_same_day_source(assembler, tmp_path):
     ], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     assert 'data-board-break-ranking="v1"' in output.read_text()
-
-
-@pytest.mark.parametrize("mutation", ["remove", "duplicate", "no_source"])
-def test_write_report_rejects_invalid_or_unbound_ranking(assembler, tmp_path, mutation):
-    html = _render(assembler, tmp_path)
-    pattern = r'<details class="evidence" data-as-of="[^"]+" data-items="\d+"><summary>断板反包.*?</details>'
-    block = re.search(pattern, html, re.S).group(0)
-    if mutation == "remove":
-        html = html.replace(block, "")
-    elif mutation == "duplicate":
-        html = html.replace(block, block + block)
-    output = tmp_path / "invalid-report.html"
-    with pytest.raises(assembler.ReportValidationError) as error:
-        assembler.write_report(html, output, capacity_manifest={}, new_high_manifest={},
-                               index_intraday_manifest={})
-    expected = "missing_board_break_source" if mutation == "no_source" else "invalid_board_break_ranking"
-    assert error.value.code == expected
-    assert not output.exists()

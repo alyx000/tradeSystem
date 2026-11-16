@@ -5,7 +5,7 @@
   · 裸 daily：MD 落盘 data/reports/board-break/ + 推钉钉。
   · --no-push：落盘 + 打印，不推。
   · --dry-run：只打印，不落盘不推（历史校准）。
-  · --no-llm：跳过两两 PK，只出加权分排序。
+  · --no-llm：跳过两两 PK，无排名；加权分仅作参考。
 
 红线：筛选 [事实] / 打分 [判断]，非买卖建议；6% 参考位为用户既定规则机械换算。
 """
@@ -30,6 +30,7 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
     daily.add_argument("--dry-run", action="store_true", help="只打印，不落盘不推送")
     daily.add_argument("--no-push", action="store_true", help="落盘但不推送")
     daily.add_argument("--no-llm", action="store_true", help="跳过 LLM 两两 PK")
+    daily.add_argument("--input-by", default="launchd", help="请求者；Agent手动运行须显式USER")
 
 
 def handle_command(config: dict, args: argparse.Namespace) -> None:
@@ -44,6 +45,10 @@ def _run_daily(config: dict, args: argparse.Namespace) -> None:
     from main import setup_providers
     from utils.trade_date import is_non_trading_day
 
+    input_by = getattr(args, "input_by", "launchd")
+    if not isinstance(input_by, str) or not input_by.strip():
+        raise SystemExit("--input-by不能为空")
+    logger.info("[board-break daily] input_by=%s", input_by)
     date = args.date or datetime.date.today().isoformat()
     registry = setup_providers(config)
     registry.initialize_all()
@@ -57,6 +62,7 @@ def _run_daily(config: dict, args: argparse.Namespace) -> None:
             # source_failed 不产出/不推「正常清单」，但失败报告本身必须可观测（门2 S4 R1）：
             # launchd 场景 stdout 不可见,只打印会退化成「静默成功」——落盘失败报告+推失败告警+非零退出。
             md = renderer.render_source_failed(result)
+            md += "\n\n请求者：" + input_by + "\n"
             print(md)
             logger.error("[board-break] 核心源失败，不产出候选清单：%s", result.get("failed_sources"))
             if not args.dry_run:
@@ -77,12 +83,13 @@ def _run_daily(config: dict, args: argparse.Namespace) -> None:
         # 门1 效率复查：候选 <2 只时 run_pk 必短路 skipped、根本不碰 llm_runner，
         # 此时不再构造 runner（build_llm_runner 内部 resolve_config 会做一次
         # shutil.which("agy") 的 PATH 扫描，空候选日没必要白扫）；只按 len(scored)
-        # 门槛跳过构造，不改 run_pk 签名/契约，run_pk 自身的池截断逻辑不变。
+        # 门槛跳过构造，不改 run_pk 签名/契约，run_pk 仍让全部候选参赛。
         pk_result = None
         if not args.no_llm:
             llm_runner = pk.build_llm_runner() if len(scored) >= 2 else None
             pk_result = pk.run_pk(fact_cards, scored, llm_runner)
         md = renderer.render_daily(result, scored, pk_result)
+        md += "\n\n请求者：" + (getattr(args, "input_by", None) or "launchd") + "\n"
     finally:
         conn.close()
 

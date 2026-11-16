@@ -1,15 +1,15 @@
 """断板反包 PK 层（方式二：LLM 两两循环赛）。
 
 与打分层（方式一，`scorer.score_all`）完全独立：PK 只喂 [事实] 卡（不含加权分），
-让 LLM 只依据事实判断两票反包强度谁更优；加权分只用来做池截断与并列破平，不进 prompt。
+板块规则优先，其余让LLM只依据事实判断；加权分不参与准入、排名或prompt。
 
 - `parse_verdict`：严格校验 LLM 输出（`winner` 必须是 "A"/"B"、`reason` 必须是 str），
   容忍模型在 JSON 前后包一层自然语言（提取首个 `{...}` 结构再 `json.loads`）。
-- `run_pk`：候选按加权分 `total` 截断到 `PK_POOL_MAX` 强池，`itertools.combinations`
+- `run_pk`：全部唯一候选参赛，`itertools.combinations`惰性枚举，
   跑循环赛（字典序小者固定为 A，spec 已知局限：不做双向去位置偏置）；单场失败区分
   「超时」（`llm_runner.last_diagnostics.reason == "timeout"`，不重试直接记无效场）与
   「其它失败」（重试 1 次后仍失败才记无效场）；预算超时 / 无效场占比超阈值 → 熔断
-  （`status="melted"`，`ranks=None`）；正常收尾按 胜场→加权分→裸码字典序 破平出名次。
+  （`status="melted"`，`ranks=None`）；正常收尾按胜场→同胜场组完整交手胜场，仍同则并列。
 """
 from __future__ import annotations
 
@@ -19,6 +19,7 @@ import json
 import time
 
 from services.board_break import constants as C
+from services.board_break.sector_priority import decide as sector_decision
 from services.recommend.formatter import REDLINE_KEYWORDS
 
 logger = logging.getLogger(__name__)
@@ -32,6 +33,7 @@ _FACT_FIELDS = (
     "earnings_status", "earnings_type", "earnings_direction",
     "gain10", "gain10_status", "dif", "dif_status",
     "position_value", "position_state", "position_bar_count",
+    "board_path", "sector_context",
 )
 
 _PROMPT = (
@@ -51,7 +53,29 @@ _PROMPT = (
     "当日收涨或跌幅较小可作为当日表现证据，但不得冒称已核验分时承接、成交量或次日走势。"
     "区间位置仅作背景，不能把低位置当作低涨幅的替代奖励；独立风险须引用具体事件证据。"
     "MACD优先比较零轴状态，不直接用不同股价股票的DIF绝对大小判强弱。缺失数据不视作利空或零。"
-    "4.reason须指出双方具体数值或事件；若辨识度与当日表现方向冲突，"
+    "4.先评所属板块强弱，再评个股：sector_context为事实日申万二级、剔除自身的同业样本。"
+    "板块评价的重要性高于个股评价；结合中位涨幅、上涨占比、强弱尾部交叉判断，"
+    "中位涨幅与上涨占比在缺口最不利补全后仍同向严格分离时，程序直接执行板块优先，"
+    "不再调用模型；你收到的是未满足该硬条件的对局。强弱尾部为补充，不能暗中否定已成立的硬条件。"
+    "板块接近、指标冲突或不可比时，说明原因后用个股证据决定；不编造数值评分或固定权重。"
+    "只比较同一事实日同一口径的有效证据；coverage_audit按行业定位缺口、"
+    "用归属未知对象全归入本行业的最不利情形计算范围。partial不等于禁止比较；"
+    "范围重叠或核心指标冲突时再结合个股事实判断。板块缺失不计零、不判弱，不能因另一方有数据就奖励它。"
+    "全市场缺行情数量不得写成每个行业各缺相同数量。"
+    "不得把成交额Top5归属等同完整板块评分，回退主线不能冒充当日板块强度；行业归属本身不代表带动。"
+    "5.带动板块为独立正向加分项：必须有可核验的个股先启动、板块后跟随及广度扩散证据，"
+    "理由列明来源、日期和先后。只有领涨、自己涨停或同日板块上涨，均不能认定带动；"
+    "leadership为not_computed/missing时不加分也不扣分，不能编造因果。"
+    "6.比较涨停路径board_path：一路非一价涨停（换手代理）优于已确定一字板占比超过一半。"
+    "分母须denominator_status=verified；one_price_pct_lower/upper把未知日分别视为全非一价/全一价，"
+    "下限>50%（majority_one_price=true）即可确认一价居多，即使status=partial也必须参与比较；"
+    "例如已确认3次一价/总4板，即使另1日未知，一价占比至少75%。"
+    "原连续段与反包分支前段+首板分别列日期，"
+    "合计仅比较涨停路径，不拼接为连续板数。优先引用占比与样本数，不因板数不同直接比较数量。"
+    "OHLC一价不是盘中封单记录，非一价只是日内有价格变化的换手代理，不等于充分换手。"
+    "分母未核验或范围跨过50%时不得断言一价居多；只有全段非一价才能称一路换手代理。"
+    "不把未知日补为非一字，不因另一方覆盖完整就额外奖励；已确定的占比界限参与比较，不能因partial整体弃用。"
+    "7.reason按板块→涨停路径→个股取舍组织，须指出双方具体数值或事件；若辨识度与当日表现方向冲突，"
     "说明两侧各自优势以及哪项独立证据决定胜负，不能只重复分支标签。"
     f"只输出 JSON：{{\"winner\": \"A\"|\"B\", \"reason\": \"<={C.PK_REASON_MAX_CHARS}字\"}}，不要输出其它文字，"
     "不给出具体买卖建议，不给出价位预测。"
@@ -129,7 +153,11 @@ def _safe_call(llm_runner, payload):
 
 
 def _play_match(card_a: dict, card_b: dict, llm_runner) -> tuple[str | None, str | None]:
-    """单场：失败区分超时（不重试）与其它失败（重试 1 次）。返回 (winner_code, reason)；无效场为 (None, None)。"""
+    """单场：可确定的板块优先由程序裁决，其余LLM（非超时失败重试1次）。"""
+    priority = sector_decision(card_a, card_b)
+    if priority:
+        winner = card_a if priority["winner"] == "A" else card_b
+        return winner.get("code"), priority["reason"]
     payload = _build_payload(card_a, card_b)
     text, raised = _safe_call(llm_runner, payload)
     verdict = parse_verdict(text)
@@ -146,7 +174,7 @@ def _play_match(card_a: dict, card_b: dict, llm_runner) -> tuple[str | None, str
 
 
 def _pool_and_excluded(fact_cards: list[dict], score_map: dict) -> tuple[list[str], list[str]]:
-    """按加权分 total 截断到 PK_POOL_MAX 强池；不足则全入池、excluded 为空。"""
+    """全部唯一非空候选参赛；兼容旧签名，score_map不再影响准入。"""
     # 去重去空（门2 S3 R2）：重复码会造成自我对局/胜场膨胀,空码会污染配对
     seen = set()
     codes_all = []
@@ -155,10 +183,21 @@ def _pool_and_excluded(fact_cards: list[dict], score_map: dict) -> tuple[list[st
         if code and code not in seen:
             seen.add(code)
             codes_all.append(code)
-    if len(codes_all) <= C.PK_POOL_MAX:
-        return codes_all, []
-    ranked = sorted(codes_all, key=lambda code: (-score_map.get(code, 0.0), code))
-    return ranked[: C.PK_POOL_MAX], sorted(ranked[C.PK_POOL_MAX :])
+    return codes_all, []
+
+
+def rank_matches(codes, wins, matches):
+    """总胜场→同胜场完整小循环胜场；仍相同共享竞赛名次（1,2,2,4）。"""
+    direct = {code: 0 for code in codes}
+    for count in set(wins.values()):
+        group = {c for c in codes if wins[c] == count}
+        mutual = [m for m in matches if m.get("state") == "valid" and m["a"] in group and m["b"] in group]
+        if len(mutual) == len(group)*(len(group)-1)//2:
+            for match in mutual:
+                direct[match["winner"]] += 1
+        # 组内交手不全时不奖励缺口，直接共享总胜场名次。
+    keys = {c: (wins[c], direct[c]) for c in codes}
+    return {c: 1 + sum(keys[other] > keys[c] for other in codes) for c in codes}
 
 
 def _result(
@@ -179,6 +218,7 @@ def _result(
         "invalid": invalid, "total": total, "attempted": attempted,
         "valid_ratio": valid_ratio, "excluded": excluded,
         "policy_version": C.PK_POLICY_VERSION, "policy_summary": C.PK_POLICY_SUMMARY,
+        "ranking_version": C.PK_RANKING_VERSION,
     }
 
 
@@ -290,22 +330,20 @@ def run_pk(
     budget_seconds: float = C.PK_BUDGET_SECONDS,
     clock=time.monotonic,
 ) -> dict:
-    """LLM 两两循环赛：预算熔断 + 无效场率熔断 + 胜场/加权分/裸码破平出名次。"""
+    """全部候选循环赛；仅按PK排名，预算与失败熔断保留。scored仅兼容调用签名。"""
     # first-wins：与 _pool_and_excluded 的去重顺序对齐（同 code 多卡时取第一条参赛）
     card_map: dict = {}
     for c in fact_cards:
         card_map.setdefault(c.get("code"), c)
-    score_map = {s.get("code"): s.get("total", 0.0) for s in scored}
-
-    pool, excluded = _pool_and_excluded(fact_cards, score_map)
+    pool, excluded = _pool_and_excluded(fact_cards, {})
     if len(pool) < 2:
         return _result(
             "skipped", wins={}, ranks=None, matches=[],
             invalid=0, total=0, attempted=0, valid_ratio=0.0, excluded=excluded,
         )
 
-    pairs = list(itertools.combinations(sorted(pool), 2))
-    total = len(pairs)
+    pairs = itertools.combinations(sorted(pool), 2)
+    total = len(pool)*(len(pool)-1)//2
     wins = {code: 0 for code in pool}
     matches: list[dict] = []
     invalid = 0
@@ -348,8 +386,7 @@ def run_pk(
             valid_ratio=valid_ratio, excluded=excluded,
         )
 
-    ordered = sorted(pool, key=lambda code: (-wins[code], -score_map.get(code, 0.0), code))
-    ranks = {code: i for i, code in enumerate(ordered, start=1)}
+    ranks = rank_matches(pool, wins, matches)
 
     return _result(
         "ok", wins=wins, ranks=ranks, matches=matches,
