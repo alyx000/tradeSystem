@@ -10377,8 +10377,8 @@ def attach_visuals(html: str, report_date: str, *, illustration_dir: Path | None
     for marker in ("styles", "script", "illustrations"):
         html = re.sub(rf"<!-- review-visuals-{marker}:start -->.*?<!-- review-visuals-{marker}:end -->", "", html, flags=re.S)
     root = Path(__file__).parent
-    css = (root / "review_visuals.css").read_text(encoding="utf-8")
-    js = (root / "review_visuals.js").read_text(encoding="utf-8")
+    css = (root / "review_visuals.css").read_text(encoding="utf-8") + "\n" + (root / "review_reading.css").read_text(encoding="utf-8")
+    js = (root / "review_visuals.js").read_text(encoding="utf-8") + "\n" + (root / "review_reading.js").read_text(encoding="utf-8")
     html = html.replace("</head>", f"<!-- review-visuals-styles:start --><style>{css}</style><!-- review-visuals-styles:end --></head>", 1)
     # Before the existing reader script: search and evidence controls see the charts.
     script = f"<!-- review-visuals-script:start --><script>{js}</script><!-- review-visuals-script:end -->"

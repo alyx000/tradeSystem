@@ -248,6 +248,11 @@ def render_markdown(block, day):
 def render_html(block, day):
     value, fact = _view(block, day)
     html = f'<div {MARKER}="{day}"><h3>中字头赚钱效应与核心观察</h3><p>{escape(_summary(value))}</p>'
+    if value['metrics']:
+        m, market = value['metrics'], value['market']
+        html += (f'<p class="sub">本模块市场基准：沪深北A股剔ST、退市及B股，有效行情{market["sample_count"]}只；'
+                 f'上涨分母为各自有效样本：中字头{m["advance_count"]}/{m["sample_count"]}，'
+                 f'市场基准{market["advance_count"]}/{market["sample_count"]}。不同筛选范围的上涨比例不可混用。</p>')
     html += ''.join('<p>'+escape(s)+'</p>' for s in _core_lines(value)[:6])
     if len(value['core']) > 6:
         html += f'<p>另有{len(value["core"])-6}只并列观察票，见完整依据；代码顺序仅供查找。</p>'

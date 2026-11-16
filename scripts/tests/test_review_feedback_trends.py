@@ -161,8 +161,11 @@ def test_formal_assembler_injects_both_and_rejects_chunk_override(tmp_path):
     for points in payload.values():
         points[0]["date"] = DATE
     html = assembler.render_report(tmp_path, DATE, feedback_trends=payload)
-    assert html.count('data-board-feedback-trend="v1"') == 1
-    assert html.count('data-core-feedback-trend="v1"') == 1
+    # Selectors in inline JS are not duplicate report modules.
+    parsed = assembler._ReportParser()
+    parsed.feed(html)
+    assert len(parsed.structured_contracts['data-board-feedback-trend']) == 1
+    assert len(parsed.structured_contracts['data-core-feedback-trend']) == 1
     assembler.validate_report(html)
     chunk = tmp_path / f"b{DATE}_s456.html"
     chunk.write_text(chunk.read_text() + '<p data-core-feedback-trend="v1">伪造</p>')

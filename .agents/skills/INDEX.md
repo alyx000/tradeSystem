@@ -4,6 +4,10 @@
 
 # Skills 依赖索引
 
+2026-11-17 每日复盘阅读优化续：daily-review及模板增加`review_reading.js/.css`，组装器内嵌跨日状态分组、缺口影响卡和手机单指标趋势；原条件/日期/来源和未映射缺口保留。七类趋势仅用本页逐日表，缺失断线，来源差异保留，桌面原图不替换。同步SKILL、README、skills-sync及离线DOM/数值测试，不改采集、评分、业务数据或推送。
+
+2026-11-16 每日复盘阅读优化：daily-review与HTML模板规定首屏“一句判断/三项变化/一项反证/三项次日核验”，唯一归属章节详解；theme_feedback正式渲染器生成全题材简表，量能/逐股证据折叠，部分覆盖与子集核验保留；中字头/低价统计明确市场基准和分母。同步`references/theme-feedback-display.md`与测试，不改采集、业务数据、评分或推送。
+
 2026-11-16 每日最票保留工作日21:00；`propose --push`必须通过当日数据就绪检查，定时入口增加`--wait-ready --input-by launchd`，未就绪每5分钟重试至23:00、超时不推送，仍发精简稿。见 `docs/daily-leaders-readiness.md`。
 
 

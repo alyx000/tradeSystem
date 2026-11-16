@@ -78,6 +78,25 @@ a{color:inherit}
 .report-document .tldr>ul{margin:22px 0 0;padding-left:1.25em}
 .report-document .tldr>ul li{margin:12px 0;font-size:14px;line-height:1.85}
 
+/* 首屏只摘要已核验的正文结论；完整证据仍归属原章节。 */
+.report-document .reading-verdict{font-size:18px;font-weight:650;line-height:1.7;margin:12px 0 20px}
+.report-document .reading-focus{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin-top:20px}
+.report-document .reading-focus>div{min-width:0;border-top:2px solid var(--line);padding-top:10px}
+.report-document .reading-focus h3{border:0;padding:0;margin:0 0 8px;font-size:15px}
+.report-document .reading-focus ul{padding-left:1.2em;margin:0}
+.report-document .reading-focus li,.report-document .reading-focus p{font-size:13px;line-height:1.8;margin:6px 0}
+.report-document .theme-feedback-compact table{width:100%;min-width:0;table-layout:fixed}
+.report-document .theme-feedback-compact th,.report-document .theme-feedback-compact td{white-space:normal;overflow-wrap:anywhere;padding:9px 6px}
+.report-document .theme-feedback-compact th:first-child{width:29%}
+.report-document .theme-feedback-compact th:nth-child(2){width:16%}
+.report-document .theme-feedback-track{display:block;height:5px;background:var(--line);margin-top:6px;border-radius:3px;overflow:hidden}
+.report-document .theme-feedback-track>span{display:block;height:100%;background:#547a70}
+@media(max-width:700px){
+ .report-document .reading-focus{grid-template-columns:1fr;gap:12px}
+ .report-document .reading-verdict{font-size:16px}
+ .report-document .theme-feedback-compact th,.report-document .theme-feedback-compact td{font-size:12px;padding:8px 4px}
+}
+
 /* 章节 */
 .report-document section.blk{border-top:1px solid var(--line);margin:64px 0 0;
   padding-top:12px;scroll-margin-top:110px;max-width:100%;overflow-x:auto}

@@ -1,4 +1,5 @@
 from datetime import date, timedelta
+from html.parser import HTMLParser
 import sqlite3
 
 import pytest
@@ -55,7 +56,17 @@ def test_formal_assembler_injects_into_emotion_and_rejects_duplicate(tmp_path):
     _write_chunks(tmp_path)
     html = assembler.render_report(tmp_path, DATE, consecutive_pool_trend=payload)
     assert '连板股票池（2只）（6.23亿元）' in html
-    assert html.count('data-consecutive-pool-trend="v1"') == 1
+    # Inline JS also contains the selector; count actual elements, not source text.
+    class PoolElements(HTMLParser):
+        count = 0
+
+        def handle_starttag(self, tag, attrs):
+            if dict(attrs).get('data-consecutive-pool-trend') == 'v1':
+                self.count += 1
+
+    elements = PoolElements()
+    elements.feed(html)
+    assert elements.count == 1
     assembler.validate_report(html)
     chunk = tmp_path/f's456_{DATE}.html'
     if not chunk.exists():

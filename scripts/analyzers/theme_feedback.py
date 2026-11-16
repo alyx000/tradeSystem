@@ -410,6 +410,53 @@ def render_markdown(block, day, *, current_launch=None):
     return '\n\n'.join(lines[:3])+'\n\n'+'\n'.join(lines[3:])
 
 
+def _compact_feedback_table(rows):
+    """Project verified fixed cohorts; unknown coverage never becomes zero."""
+    def subset_verified(row):
+        group = (row.get('groups') or {}).get('all')
+        if group is None:
+            return False
+        n = group['sample_count']
+        stocks = row['stocks']
+        return (group['quote_count'] == group['limit_checked_count'] == n
+                and len(stocks) == len({s['code'] for s in stocks}) == n
+                and all(s['close_pct'] is not None and s['again_limit_up'] is not None
+                        and (not s['again_limit_up'] or s['close_pct'] > 0) for s in stocks))
+
+    subset = bool(rows) and all(subset_verified(row) for row in rows)
+    headers = ['题材', '昨天涨停', '今天上涨', '其中再涨停' if subset else '再次涨停']
+    out = ['<div class="theme-feedback-compact"><table><thead><tr>',
+           ''.join('<th scope="col">'+h+'</th>' for h in headers), '</tr></thead><tbody>']
+
+    def count_cell(count, checked, n):
+        if not n:
+            return '无样本'
+        if count is None or not checked:
+            return f'待核（覆盖{checked}/{n}）'
+        return str(count) if checked == n else f'已核验{count}只，覆盖{checked}/{n}'
+
+    for row in rows:
+        group = (row.get('groups') or {}).get('all')
+        if group is None:
+            cells = ['待核', '待核', '待核']
+        else:
+            n = group['sample_count']
+            positive = count_cell(group['positive_count'], group['quote_count'], n)
+            if n and group['quote_count'] == n and group['positive_count'] is not None:
+                width = 100 * group['positive_count'] / n
+                positive += (f'<span class="theme-feedback-track" aria-hidden="true">'
+                             f'<span style="width:{width:.4f}%"></span></span>')
+            cells = [str(n), positive,
+                     count_cell(group['again_limit_count'], group['limit_checked_count'], n)]
+        out.append('<tr><th scope="row">'+escape(row['name'])+'</th>'
+                   + ''.join('<td>'+c+'</td>' for c in cells) + '</tr>')
+    note = ('再涨停含在上涨内' if subset else
+            '行情与涨停分别核验，覆盖见各格；未确认再涨停为上涨子集')
+    out.append('</tbody></table></div><p class="sub">条长＝上涨数÷昨日固定样本数（0～100%）；'
+               + note + '；题材不相加。</p>')
+    return ''.join(out)
+
+
 def render_html(block, day, *, current_launch=None):
     value, fact = _view(block, day)
     context = _continuity(value, current_launch, day, fact)
@@ -419,22 +466,17 @@ def render_html(block, day, *, current_launch=None):
         summary = f"[事实] 固定{value['source_date']}题材内的涨停样本，观察{fact}次日表现；各题材不可相加。"
     elif value['status'] == 'skipped':
         summary = '[事实] 尚未取得完整交易日反馈，暂不计算。'
-    parts = [f'<div {MARKER}="{escape(day)}" data-as-of="{escape(fact)}"><h3>同题材次日反馈</h3><p>{escape(summary)}</p>']
+    parts = [f'<div {MARKER}="{escape(day)}" data-as-of="{escape(fact)}"><h3>昨日涨停股今日表现</h3><p>{escape(summary)}</p>']
     if fact != day:
         parts.append('<p>[事实] 休市展示'+escape(fact)+'最近开放日历史，非当日新增。</p>')
-    parts.append('<h4>板块延续与量能背景</h4><p>[事实] '+escape(context['market'])+'。</p>')
-    parts.append('<p class="sub">'+escape(context['dates'])+'。反馈只代表昨日涨停样本，量能使用当日成员。</p>')
-    for name, distribution, feedback, amount in context['rows'][:3]:
-        parts.append('<div style="margin:12px 0;padding:10px 12px;border-left:3px solid #64748b;overflow-wrap:anywhere">'
-                     '<p><strong>'+escape(name)+'</strong> · 昨日'+escape(distribution)+'。</p>'
-                     '<p>[事实] '+escape(feedback)+'。</p><p>[事实] '+escape(amount)+'。</p></div>')
-    if len(context['rows']) > 3:
-        parts.append('<p>另'+str(len(context['rows'])-3)+'个题材见下方完整对照；按来源日榜单顺序展示，不代表强弱排序。</p>')
-    if context['rows']:
-        parts.append('<p class="sub">延续与加强分开看：再次涨停、收涨分布和量能须共同核对，单项不判整体加强或超预期。</p>')
+    if value['rows']:
+        parts.append('<p class="sub">'+escape(str(value.get('source_date') or '来源日待核'))+' → '+escape(fact)+' · 单位：只；按来源榜单顺序。</p>')
+        parts.append(_compact_feedback_table(value['rows']))
     grouped, stocks = _tables(value)
     items = 3 + len(context['rows']) + len(context['gaps']) + len(grouped) + len(stocks) + len(value['gaps']) + sum(len(r['gaps']) for r in value['rows'])
     parts.append(f'<details class="evidence" data-as-of="{escape(fact)}" data-items="{items}"><summary>完整量能对照、分板型、逐股反馈与来源（{items}项）</summary>')
+    parts.append('<h4>板块延续与量能背景</h4><p>[事实] '+escape(context['market'])+'。</p>')
+    parts.append('<p>'+escape(context['dates'])+'。反馈只代表昨日涨停样本，量能使用当日成员。</p>')
     parts.append('<p>'+escape(f"状态：{value['status']}；预期来源日：{value.get('source_date') or '未核验'}；成员快照日：{value.get('membership_date') or '未取得'}；反馈日：{fact}；报告日：{day}")+'</p>')
     parts.append('<p>'+escape(NOTE)+'</p>')
     parts.append('<p>'+escape(CONTEXT_NOTE)+' 量能来源状态：'+escape(context['source_status'])+'。</p>')

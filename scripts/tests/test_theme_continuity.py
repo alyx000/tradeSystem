@@ -171,7 +171,8 @@ def test_html_and_markdown_escape_names_and_limit_only_visible_summary():
     b, launch = calculate(e), tl.calculate(DAY, SOURCE, current)
     html, gap = f.render_html(b, DAY, current_launch=launch)
     visible = html.split('<details')[0]
-    assert not gap and '另2个题材' in visible and '题材4' not in visible and '题材4' in html
+    assert not gap and '另2个题材' not in visible and '题材4' in visible
+    assert '固定样本3只' not in visible and '固定样本3只' in html
     assert '题材1&lt;&gt;&amp;|' in html and '题材1<>' not in html
     assert '题材1<>&｜' in f.render_markdown(b, DAY, current_launch=launch)
 

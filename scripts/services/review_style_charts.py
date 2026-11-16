@@ -45,6 +45,7 @@ def low_price(html, snapshot, report_date):
     bound = max(1, *[abs(_number(r.get('pct_chg_median')) or 0) for _, r in rows])
     status = snapshot['status']
     out = [head, f'<p>[事实] 来源日{escape(day)}'+(f' · 复核日{escape(report_date)}' if day != report_date else '')+f' · {escape(STATUS.get(status, status))} · 低价样本{snapshot["low_price"]["sample_count"]}只</p>',
+           '<p class="sub">本模块市场基准：沪深北A股剔ST、退市及沪深B股；上涨比例分母为各组当日有效样本（n）。每日按未复权收盘价重新分组。</p>',
            '<div data-style-chart="low-price" style="display:flex;flex-wrap:wrap;gap:16px">']
     for metric in ('median', 'advance'):
         out.append('<div style="flex:1 1 240px;min-width:0">')
