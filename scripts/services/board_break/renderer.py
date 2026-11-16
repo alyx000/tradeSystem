@@ -29,6 +29,8 @@ _REDLINE = (
 _RULE_NOTE = (
     "> 用户既定打法转述：断板日涨幅 ≤6% 视为候选断板；隔日突破 6%、回踩后重新突破 6% "
     "为用户隔日盘中交易动作，本清单**不跟踪、不建池、不保留状态**，仅供次日观察参考。"
+    "盘后筛选保留昨日连板≥2的原分支，另含连续四个开放日的"
+    "“连板≥2→断板→反包首板→再断板”独立分支；两次断板均≤6%且未跌停。"
 )
 
 _DIMENSION_LABELS = {
@@ -75,7 +77,7 @@ def _fmt_num(value, spec: str = ".2f") -> str:
 
 def _render_source_status_lines(sources: dict) -> list[str]:
     """数据完整性脚注用：`sources` 恒为 scanner 产出的 `{"ok": bool, "source": str}` 形状
-    （scanner._run_daily 状态机中，走到这里的 status 必为 "ok"，不存在裸字符串兼容需求）。"""
+    （正常报告可为ok或新分支降级的partial；核心source_failed由CLI单独渲染）。"""
     lines = []
     for name, v in (sources or {}).items():
         status = "成功" if v.get("ok") else "失败"
@@ -121,6 +123,10 @@ def _pk_summary_lines(pk_result: dict | None) -> list[str]:
     if pk_result is None:
         lines.append("PK 未运行（`--no-llm` 或 LLM runner 不可用），仅出加权分排序。")
         return lines
+    if pk_result.get("policy_version"):
+        lines.append(f"评价口径：{_cell(pk_result['policy_version'])}；"
+                     f"{_cell(pk_result.get('policy_summary', ''))}")
+        lines.append("")
     status = pk_result.get("status")
     attempted = pk_result.get("attempted", 0)
     total = pk_result.get("total", 0)
@@ -180,17 +186,20 @@ def render_daily(result: dict, scored: list, pk_result: dict | None) -> str:
     # —— ② 候选表 ——
     lines.append("## 候选清单（按加权分降序）")
     if not scored:
-        # 走到 render_daily 说明 status=="ok"（source_failed 在 CLI 层已分流到
-        # render_source_failed），核心数据源必然全部成功——原先包一层
-        # `if _sources_all_ok(...)` 判断恒为真，是死代码，直接无条件输出该行。
-        empty_msg = _EMPTY_KIND_MESSAGES.get(result.get("empty_kind"), _DEFAULT_EMPTY_MSG)
-        lines += _blank_wrapped(
-            empty_msg, "核心数据源全部成功，本次为真实空候选（非采集故障）。")
+        # 核心源失败由CLI分流；此处同时接受ok与新分支缺源的partial，后者不能报健康空榜。
+        if result.get("status") == "partial":
+            lines += _blank_wrapped("已核验范围暂无候选；反包后再断板分支存在缺口，不能认定全量无候选。")
+        else:
+            empty_msg = _EMPTY_KIND_MESSAGES.get(result.get("empty_kind"), _DEFAULT_EMPTY_MSG)
+            if result.get("rebreak") is not None:
+                empty_msg = "今日无断板反包候选（两分支已核验，筛选统计见脚注）。"
+            lines += _blank_wrapped(
+                empty_msg, "核心数据源全部成功，本次为真实空候选（非采集故障）。")
     else:
         lines += [
             "| 代码 | 名称 | 连板 | 断板日涨幅 | 收盘 | 6%参考位 | 行业 "
-            "| 加权分及排名[判断] | PK胜场及排名[判断] | 分歧⚠ |",
-            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+            "| 加权分及排名[判断] | PK胜场及排名[判断] | 分歧⚠ | 入选分支 |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
         ]
         for c in scored:
             code = c.get("code", "")
@@ -208,10 +217,15 @@ def render_daily(result: dict, scored: list, pk_result: dict | None) -> str:
                     diverge = "⚠"
             else:
                 pk_cell = "—"
+            branch_label = "连续板断板"
+            if c.get("branch") == "rebreak":
+                prior = (c.get("pattern_evidence") or {}).get("prior_limit_times", "—")
+                branch_label = f"反包后再断板（前段{prior}板）"
             lines.append(
                 f"| {code} | {_cell(c.get('name', ''))} | {c.get('limit_times', '—')} | {pct_chg}% "
                 f"| {close} | {ref_price_cell} | {_cell(c.get('industry', ''))} "
-                f"| {total_cell} | {pk_cell} | {diverge} |"
+                f"| {total_cell} | {pk_cell} | {diverge} | "
+                f"{branch_label} |"
             )
         lines.append("")
 
@@ -221,6 +235,11 @@ def render_daily(result: dict, scored: list, pk_result: dict | None) -> str:
         lines += _blank_wrapped("（无候选，无需展示打分依据）")
     for c in scored:
         lines.append(f"### {c.get('code', '')} {_cell(c.get('name', ''))}")
+        evidence = c.get("pattern_evidence") or {}
+        if c.get("branch") == "rebreak":
+            lines.append(f"[事实] 反包后再断板：前段{evidence.get('prior_limit_times', '—')}板，"
+                         f"昨日{c.get('limit_times', '—')}板；日期链："
+                         + " → ".join(evidence.get("dates") or []) + "。")
         lines.append("| 维度 | 得分 | 依据 |")
         lines.append("| --- | --- | --- |")
         for ev in c.get("evidences") or []:
@@ -242,13 +261,27 @@ def render_daily(result: dict, scored: list, pk_result: dict | None) -> str:
         lines.append("（无剔除记录）")
     else:
         for k, v in rejects.items():
-            lines.append(f"- {_REJECT_LABELS.get(k, k)}：{v} 只")
+            label = _REJECT_LABELS.get(k, k)
+            if k == "lt_below_min" and result.get("rebreak") is not None:
+                label = "原分支连板数<2（另由新分支核验，非最终剔除数）"
+            lines.append(f"- {label}：{v} 只")
     lines.append("")
 
     # —— ⑤ 脚注二：数据完整性 ——
     lines.append("## 脚注二：数据完整性")
     lines.append(f"- 上一交易日（prev_trade_date）：{prev_date}")
     lines += _render_source_status_lines(result.get("sources") or {})
+    repeated = result.get("rebreak")
+    if repeated is not None:
+        lines.append(f"- 反包后再断板分支：{repeated['status']}；"
+                     f"日期链：{' → '.join(repeated.get('dates') or []) or '无需历史核验或日期缺口'}")
+        for name, src in repeated.get("sources", {}).items():
+            lines.append(f"  - {name}：{src.get('date')} / {src.get('source')} / "
+                         + ("成功" if src.get("ok") else "失败"))
+        for reason, count in repeated.get("rejects", {}).items():
+            lines.append(f"  - 新分支筛除：{reason} × {count} 只")
+        for gap in repeated.get("gaps", []):
+            lines.append(f"  - 新分支缺口：{_cell(gap)}")
     if result.get("main_sector_degraded"):
         lines.append("- 主线板块：当日成交额集中度快照缺失，已回退最近一日（degraded）")
     missing_counts = _dimension_missing_counts(scored)

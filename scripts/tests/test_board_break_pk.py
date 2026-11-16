@@ -180,6 +180,75 @@ class TestRunPk:
         pk.run_pk(cards, _scored(cards[:1] + cards[2:]), runner)
         assert captured_payloads[0]["A"]["name"] == "第一条"
 
+    def test_payload_includes_recognition_facts_but_not_weighted_score(self):
+        """PK 独立读取连板高度和近期涨幅辨识度，不读取方式一的加权分。"""
+        cards = [
+            {"code": "600000", "name": "高辨识度", "limit_times": 4,
+             "pct_chg": -4.55, "gain10": 64.7, "gain10_status": "ok"},
+            {"code": "600001", "name": "普通辨识度", "limit_times": 2,
+             "pct_chg": -7.00, "gain10": 10.0, "gain10_status": "ok"},
+        ]
+        captured_payloads = []
+
+        def runner(prompt, payload):
+            captured_payloads.append(payload)
+            return '{"winner": "A", "reason": "连板高度与近期涨幅辨识度更高"}'
+
+        pk.run_pk(cards, _scored(cards), runner)
+        high = captured_payloads[0]["A"]
+        assert high["limit_times"] == 4
+        assert high["pct_chg"] == -4.55
+        assert high["gain10"] == 64.7
+        assert "total" not in high and "evidences" not in high
+
+
+class TestUnifiedPkPolicy:
+    def test_every_match_receives_same_direction_and_branch_neutral_policy(self):
+        cards = [
+            dict(code="601188", name="龙江交通", branch="rebreak", limit_times=1,
+                 pattern_evidence=dict(prior_limit_times=3), gain10=31.9, gain10_status="ok", pct_chg=-8.9),
+            dict(code="002593", name="日上集团", branch="consecutive_break", limit_times=2,
+                 gain10=17.6, gain10_status="ok", pct_chg=-9.18),
+            dict(code="603725", name="天安新材", branch="consecutive_break", limit_times=2,
+                 gain10=24.0, gain10_status="ok", pct_chg=-5.93),
+        ]
+        calls = []
+        def runner(prompt,payload):
+            calls.append((prompt,payload))
+            return '{"winner":"B","reason":"本场依据所给当日表现判断，分支不预设强弱。"}'
+        result=pk.run_pk(cards,_scored(cards),runner)
+        assert len(calls)==3 and len({prompt for prompt,_ in calls})==1
+        prompt=calls[0][0]
+        assert "涨幅更高表示该维度辨识度更高" in prompt
+        assert "不得因为涨幅较小" in prompt and "也不得仅因涨幅较大" in prompt
+        assert "反包后再断板不天然判弱" in prompt and "不能仅以昨日1板小于2板" in prompt
+        assert "哪项独立证据决定胜负" in prompt
+        assert result["policy_version"]==C.PK_POLICY_VERSION
+        for _,payload in calls:
+            for card in payload.values():
+                assert "total" not in card and "evidences" not in card
+                if card["code"]=="601188":
+                    assert card["limit_times"]==1 and card["pattern_evidence"]["prior_limit_times"]==3
+
+    def test_lower_recognition_can_win_with_independent_evidence_and_full_explanation(self):
+        import json
+        from services.board_break import renderer
+        cards=[dict(code="600000",gain10=31.9,branch="rebreak",pct_chg=-8.9),
+               dict(code="600001",gain10=24.0,branch="consecutive_break",pct_chg=-5.93)]
+        reason=("A近10日涨31.9%，辨识度高于B的24.0%；B当日跌5.93%，较A跌8.90%更小。"
+                "本场重视当日表现而选择B，已承认A辨识度优势；不因低涨幅或反包后再断板标签判胜负。")
+        assert 60 < len(reason) <= C.PK_REASON_MAX_CHARS
+        result=pk.run_pk(cards,_scored(cards),lambda *_:json.dumps(dict(winner="B",reason=reason),ensure_ascii=False))
+        assert result["matches"][0]["reason"]==reason
+        assert result["wins"]["600001"]==1
+        md="\n".join(renderer._pk_summary_lines(result))
+        assert reason in md and C.PK_POLICY_VERSION in md and C.PK_POLICY_SUMMARY in md
+
+    def test_historical_result_does_not_claim_new_policy(self):
+        from services.board_break import renderer
+        old=dict(status="skipped",attempted=0,total=0,invalid=0,valid_ratio=0)
+        assert C.PK_POLICY_VERSION not in "\n".join(renderer._pk_summary_lines(old))
+
 
 class TestBuildLlmRunner:
     """`build_llm_runner`：mock `subprocess.run`（不真调 LLM CLI）。"""

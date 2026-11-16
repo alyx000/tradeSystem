@@ -239,6 +239,8 @@ def build_fact_card(
         "code": code,
         "name": cand.get("name", ""),
         "limit_times": cand.get("limit_times"),
+        "branch": cand.get("branch", "consecutive_break"),
+        "pattern_evidence": cand.get("pattern_evidence"),
         "pct_chg": cand.get("pct_chg"),
         "close": cand.get("close"),
         "ref_price": cand.get("ref_price"),

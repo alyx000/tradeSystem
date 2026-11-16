@@ -1,7 +1,7 @@
-"""断板反包筛选层（[事实]）：昨日连板>=2 → 今日断板 → <=6% 未跌停 → 10cm 主板非 ST。
+"""断板反包筛选层：原连续板断板 + 独立反包后再断板分支。
 
-无状态：不建池不落库。源状态三分（source_failed / source_ok_empty / rule_filtered_empty），
-任一核心源失败不得输出正常候选（spec v2 严重1）。
+无状态：不建池不落库。原核心源失败不得输出正常候选；新分支缺源独立降级为partial，
+保留已核验候选。只有覆盖完整时才可判source_ok_empty / rule_filtered_empty。
 """
 from __future__ import annotations
 
@@ -155,7 +155,7 @@ def _classify_empty_kind(has_candidates: bool, entrance_count: int) -> str | Non
 
 
 def run_daily(conn: sqlite3.Connection, registry, date: str) -> dict:
-    """编排：三源状态检查 → 筛选层 → 打分数据窗口读取（main_sectors）。
+    """编排：三核心源检查 → 原分支 → 新分支独立核验 → 主线读取。
 
     实现顺序硬约束：三源检查失败必须先 return source_failed，conn 相关读取只在源 ok 后执行。
     """
@@ -226,12 +226,19 @@ def run_daily(conn: sqlite3.Connection, registry, date: str) -> dict:
             "main_sector_degraded": False,
         }
 
+    from services.board_break import rebreak
+    repeated = rebreak.scan(conn, registry, date, prev_date, prev_lu, today_lu, today_ld, fetch_range)
+    for cand in enriched:
+        cand["branch"] = "consecutive_break"
+    enriched.extend(repeated.pop("candidates"))  # lt>=2 与 lt=1 两入口互斥
     empty_kind = _classify_empty_kind(bool(enriched), entrance_count)
+    if repeated["status"] != "complete" and not enriched:
+        empty_kind = None  # 新分支缺源时不能把全局空集宣称为真实无候选
 
     main_sectors, main_sector_degraded = _main_sectors(conn, date, C.MAIN_SECTOR_TOP_K)
 
     return {
-        "status": "ok",
+        "status": "ok" if repeated["status"] == "complete" else "partial",
         "date": date,
         "prev_trade_date": prev_date,
         "candidates": enriched,
@@ -241,4 +248,5 @@ def run_daily(conn: sqlite3.Connection, registry, date: str) -> dict:
         # 对外返回 sorted list(JSON-safe+顺序稳定,对齐 trend_leader 惯例);内部 membership 用 set
         "main_sectors": sorted(main_sectors),
         "main_sector_degraded": main_sector_degraded,
+        "rebreak": repeated,
     }

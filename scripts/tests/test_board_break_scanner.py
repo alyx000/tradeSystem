@@ -216,10 +216,17 @@ class TestEmptySemantics:
     def _registry(self, prev_rows):
         return _make_registry(prev_rows=prev_rows)
 
-    def test_source_ok_empty(self, monkeypatch, conn):
+    def test_first_board_without_history_is_not_global_empty(self, monkeypatch, conn):
         monkeypatch.setattr(scanner, "_prev_trade_date", lambda registry, d: "2026-07-03")
         prev_rows = [_lu("600002.SH", lt=1)]  # 全场未达连板门槛
         result = scanner.run_daily(conn, self._registry(prev_rows), "2026-07-04")
+        assert result["status"] == "partial"
+        assert result["empty_kind"] is None
+        assert result["rebreak"]["gaps"]
+
+    def test_source_ok_empty(self, monkeypatch, conn):
+        monkeypatch.setattr(scanner, "_prev_trade_date", lambda registry, d: "2026-07-03")
+        result = scanner.run_daily(conn, self._registry([]), "2026-07-04")
         assert result["status"] == "ok"
         assert result["empty_kind"] == "source_ok_empty"
 

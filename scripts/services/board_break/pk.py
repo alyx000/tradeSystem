@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 # 事实卡中喂给 LLM 的 [事实] 字段（不含加权分/evidence，两法独立，见 task-s2-report.md 字段清单）
 _FACT_FIELDS = (
     "code", "name", "limit_times", "pct_chg", "close", "industry",
+    "branch", "pattern_evidence",
     "in_main_sector", "main_sector_status", "main_sector_degraded",
     "ann_status", "ann_events", "ann_titles", "holder_status", "holder_source",
     "earnings_status", "earnings_type", "earnings_direction",
@@ -36,7 +37,23 @@ _FACT_FIELDS = (
 _PROMPT = (
     "你是断板反包评审员。下面给出两只个股（A/B）的[事实]卡（不含任何加权分数），"
     "请仅依据事实判断反包强度更优者。"
-    "只输出 JSON：{\"winner\": \"A\"|\"B\", \"reason\": \"<=60字\"}，不要输出其它文字，"
+    f"统一评价口径版本：{C.PK_POLICY_VERSION}。{C.PK_POLICY_SUMMARY}"
+    "每一场都遵守以下相同规则，不得根据预想胜者切换评价方向："
+    "1.近期涨幅gain10只衡量辨识度：在两侧数据有效时，涨幅更高表示该维度辨识度更高；"
+    "不得因为涨幅较小、涨得少、补涨空间、位置低而奖励较低涨幅的一方，"
+    "也不得仅因涨幅较大就判透支、过热或扣分。辨识度较高不等于整场必胜。"
+    "2.分支标签branch本身不加分、不扣分。反包后再断板不天然判弱，连续板断板也不天然判强。"
+    "branch=rebreak表示连板后断板、反包首板后再断板；limit_times是昨日实际连续板数，"
+    "pattern_evidence.prior_limit_times是断板前一段的高度，两者不得相加或视为当前连板。"
+    "跨分支比较须同时考虑前段高度与近期涨幅辨识度，不能仅以昨日1板小于2板、"
+    "再次断板或分支名称就判连续性弱。缺少前段信息不能编造。"
+    "3.再比较断板当日pct_chg及已核验的主线、公告、业绩等独立事实；"
+    "当日收涨或跌幅较小可作为当日表现证据，但不得冒称已核验分时承接、成交量或次日走势。"
+    "区间位置仅作背景，不能把低位置当作低涨幅的替代奖励；独立风险须引用具体事件证据。"
+    "MACD优先比较零轴状态，不直接用不同股价股票的DIF绝对大小判强弱。缺失数据不视作利空或零。"
+    "4.reason须指出双方具体数值或事件；若辨识度与当日表现方向冲突，"
+    "说明两侧各自优势以及哪项独立证据决定胜负，不能只重复分支标签。"
+    f"只输出 JSON：{{\"winner\": \"A\"|\"B\", \"reason\": \"<={C.PK_REASON_MAX_CHARS}字\"}}，不要输出其它文字，"
     "不给出具体买卖建议，不给出价位预测。"
 )
 
@@ -161,6 +178,7 @@ def _result(
         "status": status, "wins": wins, "ranks": ranks, "matches": matches,
         "invalid": invalid, "total": total, "attempted": attempted,
         "valid_ratio": valid_ratio, "excluded": excluded,
+        "policy_version": C.PK_POLICY_VERSION, "policy_summary": C.PK_POLICY_SUMMARY,
     }
 
 

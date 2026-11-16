@@ -56,6 +56,8 @@ PK_POOL_MAX = 12
 PK_BUDGET_SECONDS = 1200       # 熔断硬上限
 PK_INVALID_RATIO_MAX = 0.30    # 无效场占比熔断
 PK_VALID_RATIO_MIN = 0.70      # 有效场占比 >= 0.70 才渲染 PK 排名
-PK_REASON_MAX_CHARS = 60
+PK_REASON_MAX_CHARS = 120      # 留出辨识度与当日表现冲突时的取舍解释
+PK_POLICY_VERSION = "recognition-neutral-branch-v1"
+PK_POLICY_SUMMARY = "近期涨幅只作正向辨识度证据；反包后再断板为中性形态；胜负须依据具体事实解释。"
 FACT_CARD_ANN_MAX = 5          # 事实卡公告标题最多 5 条
 FACT_CARD_ANN_CHARS = 40       # 每条截断 40 字

@@ -7712,6 +7712,7 @@ def test_cli_default_output_path_remains_compatible(
         visual_context=None,
         market_snapshot=None,
         teacher_anchors=None,
+        board_break_report=None,
     ):
         nonlocal calls
         calls += 1
@@ -7737,6 +7738,7 @@ def test_cli_default_output_path_remains_compatible(
             visual_context=visual_context,
             market_snapshot=market_snapshot,
             teacher_anchors=teacher_anchors,
+            board_break_report=board_break_report,
         )
 
     monkeypatch.setattr(assembler, "validate_report", counted_validate)

@@ -367,6 +367,7 @@ STRUCTURED_CONTRACT_ATTRIBUTES = (
     "data-emotion-change",
     "data-emotion-height-chart",
     "data-board-break-feedback",
+    "data-board-break-ranking",
     "data-board-feedback-trend",
     "data-core-feedback-trend",
     "data-sector-adjustment-risk",
@@ -4127,6 +4128,58 @@ class _ReportParser(HTMLParser):
                 )
             seen_codes.add(code)
 
+    def _validate_board_break_ranking_contract(self, report_date: date_type) -> None:
+        contracts = self.structured_contracts["data-board-break-ranking"]
+        def fail(message: str) -> None:
+            raise ReportValidationError("invalid_board_break_ranking", message, section="s3")
+        if len(contracts) != 1:
+            fail("s3 必须且只能包含一份独立断板反包候选排名")
+        contract = contracts[0]
+        attrs = contract.attrs
+        visible = re.sub(r"\s+", "", "".join(contract.rendered_text))
+        status = attrs.get("data-source-status")
+        if (contract.section != "s3" or not contract.default_hidden
+                or attrs.get("data-as-of") != report_date.isoformat()
+                or attrs.get("data-source") != "board-break" or "断板反包" not in visible):
+            fail("断板反包排名必须同日、位于 s3 折叠证据并保留可见内容")
+        if status in {"partial", "source_failed"} and _BOARD_BREAK_GAP not in "".join(self.section_text["ops"]):
+            fail("断板反包排名不完整必须登记 ops")
+        if contract.value == "missing-data":
+            if (contract.tag != "p" or status != "source_failed"
+                    or attrs.get("data-candidate-count") != "unavailable"
+                    or visible != f"[事实]{_BOARD_BREAK_GAP}，本日无法判定。"):
+                fail("断板反包失败不能伪装成零候选")
+            return
+        if (not _valid_date(attrs.get("data-prev-date", ""))
+                or attrs["data-prev-date"] >= report_date.isoformat()
+                or not re.fullmatch(r"[0-9a-f]{64}", attrs.get("data-source-sha256", ""))):
+            fail("断板反包排名缺少合法日期或来源摘要")
+        count = _nonnegative_int(attrs.get("data-candidate-count"))
+        if contract.value == "none":
+            if (contract.tag != "p" or status != "ok" or count != 0
+                    or visible != "[事实]本日无断板反包候选，核心来源完整。"):
+                fail("断板反包空榜必须来自健康空候选")
+            return
+        if (contract.value != "v1" or contract.tag != "table" or status not in {"ok", "partial"}
+                or not count or len(contract.rows) != count + 1
+                or any(header not in visible for header in _BOARD_BREAK_HEADERS)):
+            fail("断板反包排名候选数量、状态或表头异常")
+        try:
+            rows = []
+            for item in contract.rows[1:]:
+                row = _board_break_row([item.attrs.get(f"data-{key}", "") for key in _BOARD_BREAK_FIELDS],
+                                       item.attrs.get("data-branch", "连续板断板"))
+                expected = re.sub(r"\s+", "", "".join(_board_break_visible_cells(row, attrs.get("data-pk-status", ""))))
+                actual = re.sub(r"\s+", "", "".join(item.rendered_text))
+                if actual != expected:
+                    raise ValueError("可见排名与逐行元数据不一致")
+                rows.append(row)
+            counters = [_nonnegative_int(attrs.get(f"data-pk-{key}")) for key in ("attempted", "total", "invalid")]
+            _check_board_break_rows(rows, attrs.get("data-pk-status", ""), *counters,
+                                   [c for c in attrs.get("data-pk-excluded", "").split(",") if c])
+        except ValueError as exc:
+            fail(str(exc))
+
     def _validate_style_board_break_feedback_contract(
         self,
         report_date: date_type,
@@ -5913,6 +5966,7 @@ class _ReportParser(HTMLParser):
         if fact_day and len(feedback) == 1 and feedback[0].attrs.get('data-as-of') == fact_day:
             feedback_day = date_type.fromisoformat(fact_day)
         self._validate_board_break_feedback_contract(feedback_day)
+        self._validate_board_break_ranking_contract(date_type.fromisoformat(fact_day) if fact_day else report_date)
         self._validate_style_board_break_feedback_contract(feedback_day)
         self._validate_style_market_effect_contract(report_date)
         self._validate_style_low_price_effect_contract(report_date)
@@ -7431,6 +7485,7 @@ def validate_report(
     teacher_anchors: dict | None = None,
     index_intraday_manifest: dict | None = None,
     style_market_effect: dict | None = None,
+    board_break_report: str | None = None,
 ) -> ReportMetrics:
     """校验结构、Claim、折叠证据、边界声明及双层预算。"""
 
@@ -7692,6 +7747,20 @@ def validate_report(
                     or block.attrs.get("data-source-status") not in {"complete", "partial"}):
                 raise ReportValidationError("invalid_feedback_trend", "反馈趋势日期或数据行非法", section="s3")
             trend_rows += len(block.rows)
+    fact_date = expected_context.get("fact_date") or report_date
+    if board_break_report is not None:
+        # 对账同一读取快照，不重新取数，也不允许把正文和元数据一起改成另一份排名。
+        expected = _ReportParser()
+        expected.feed(_render_board_break_ranking(
+            _parse_board_break_ranking(board_break_report, fact_date), fact_date
+        ))
+        actual_contract = parser.structured_contracts["data-board-break-ranking"][0]
+        expected_contract = expected.structured_contracts["data-board-break-ranking"][0]
+        signature = lambda block: (block.tag, block.value, block.attrs,
+                                   re.sub(r"\s+", "", "".join(block.rendered_text)))
+        if signature(actual_contract) != signature(expected_contract):
+            raise ReportValidationError("board_break_ranking_source_mismatch",
+                                        "断板反包排名与同日报告不一致", section="s3")
     if capacity_manifest is not None:
         _validate_capacity_manifest_payload(capacity_manifest, report_date)
         _validate_capacity_manifest_match(parser, capacity_manifest)
@@ -9936,6 +10005,228 @@ def _style_market_effect_ops_fragments(
     return tuple(fragments)
 
 
+_BOARD_BREAK_FIELDS = ("code", "name", "height", "change", "industry", "weighted", "pk", "divergence")
+_BOARD_BREAK_HEADERS = ("代码", "股票", "连板[事实]", "断板日涨幅[事实]", "行业", "加权分及排名[判断]", "PK胜场及排名[判断]", "分歧[判断]")
+_BOARD_BREAK_GAP = "断板反包排名数据不完整"
+
+
+def _board_break_row(cells: Sequence[str], branch: str = "连续板断板") -> dict:
+    if len(cells) != 8:
+        raise ValueError("候选表列数异常")
+    row = dict(zip(_BOARD_BREAK_FIELDS, cells))
+    rebreak = re.fullmatch(r"反包后再断板（前段([1-9]\d*)板）", branch)
+    if branch != "连续板断板" and (not rebreak or not 2 <= int(rebreak[1]) <= 100):
+        raise ValueError("断板分支或前段连板高度异常")
+    weighted = re.fullmatch(r"([+-]?\d+(?:\.\d+)?)（第([1-9]\d*)名）", row["weighted"])
+    pk = re.fullmatch(r"(\d+)胜（第([1-9]\d*)名）", row["pk"])
+    if (
+        not re.fullmatch(r"\d{6}", row["code"])
+        or not row["name"]
+        or not re.fullmatch(r"[1-9]\d*", row["height"])
+        or (int(row["height"]) != 1 if rebreak else not 2 <= int(row["height"]) <= 100)
+        or not re.fullmatch(r"[+-]?\d+(?:\.\d+)?%", row["change"])
+        or not -100 <= float(row["change"][:-1]) <= 100
+        or weighted is None
+        or not math.isfinite(float(weighted[1]))
+        or (pk is None and row["pk"] != "—")
+        or row["divergence"] not in {"", "⚠"}
+    ):
+        raise ValueError("候选身份、数值或排名格式异常")
+    row.update(score=float(weighted[1]), score_rank=int(weighted[2]),
+               pk_wins=int(pk[1]) if pk else None, pk_rank=int(pk[2]) if pk else None, branch=branch)
+    return row
+
+
+def _check_board_break_rows(rows: list[dict], pk_status: str, attempted: int | None,
+                            total: int | None, invalid: int | None, excluded: list[str]) -> None:
+    codes = [row["code"] for row in rows]
+    if len(set(codes)) != len(codes) or [r["score_rank"] for r in rows] != list(range(1, len(rows) + 1)):
+        raise ValueError("候选重复或加权排名不连续")
+    if [r["score"] for r in rows] != sorted((r["score"] for r in rows), reverse=True):
+        raise ValueError("加权分顺序异常")
+    if len(set(excluded)) != len(excluded) or not set(excluded) <= set(codes):
+        raise ValueError("PK 未进池名单不属于候选")
+    if pk_status != "not_run":
+        if None in (attempted, total, invalid) or not 0 <= invalid <= attempted <= total:
+            raise ValueError("PK 场次异常")
+    if pk_status == "ok":
+        ranked = [r for r in rows if r["pk_rank"] is not None]
+        size = len(ranked)
+        if (
+            size < 2 or attempted != total or total != size * (size - 1) // 2
+            or sorted(r["pk_rank"] for r in ranked) != list(range(1, size + 1))
+            or set(excluded) != {r["code"] for r in rows if r["pk_rank"] is None}
+            or any(not 0 <= r["pk_wins"] < size for r in ranked)
+            or sum(r["pk_wins"] for r in ranked) != attempted - invalid
+            or [r["pk_wins"] for r in sorted(ranked, key=lambda r: r["pk_rank"])] != sorted((r["pk_wins"] for r in ranked), reverse=True)
+        ):
+            raise ValueError("PK 排名、胜场或完赛收据不一致")
+    elif pk_status not in {"not_run", "skipped", "melted"} or any(r["pk_rank"] is not None for r in rows):
+        raise ValueError("PK 未完成却存在排名")
+    if pk_status == "skipped" and (len(rows) >= 2 or (attempted, total, invalid) != (0, 0, 0)):
+        raise ValueError("PK skipped 与候选或场次不一致")
+    for row in rows:
+        expected = "⚠" if row["pk_rank"] is not None and abs(row["score_rank"] - row["pk_rank"]) >= 3 else ""
+        if row["divergence"] != expected:
+            raise ValueError("双榜分歧标记不一致")
+
+
+def _parse_board_break_ranking(text: str | None, report_date: str) -> dict:
+    """只消费正式 Markdown 的候选表与完整性收据，不重新评分或调用 LLM。"""
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest() if text else "unavailable"
+    failed = dict(state="missing-data", status="source_failed", rows=[], prev_date="",
+                  pk_status="missing", attempted=None, total=None, invalid=None,
+                  excluded=[], notes=["同日报告缺失、失败或格式不完整"], digest=digest)
+    if not text:
+        return failed
+    try:
+        title = re.search(r"^# 断板反包观察清单 · (\d{4}-\d{2}-\d{2})\s+\[判断\]\s*$", text, re.M)
+        prev = re.search(r"^> 上一交易日（T-1）：(\d{4}-\d{2}-\d{2})\s*$", text, re.M)
+        if not title or title[1] != report_date or not prev or not _valid_date(prev[1]) or prev[1] >= report_date:
+            raise ValueError("报告日期或上一交易日不匹配")
+        footer_parts = text.split("## 脚注二：数据完整性")
+        if len(footer_parts) != 2:
+            raise ValueError("缺少唯一数据完整性收据")
+        footer = footer_parts[1]
+        if f"- 上一交易日（prev_trade_date）：{prev[1]}" not in footer:
+            raise ValueError("上一交易日收据不一致")
+        for source in ("prev_limit_up", "today_limit_up", "today_limit_down"):
+            statuses = re.findall(rf"^\s*- {source}：(成功|失败)(?:（[^\n]*）)?\s*$", footer, re.M)
+            if statuses != ["成功"]:
+                raise ValueError("核心来源未全部成功")
+        pk_lines = re.findall(r"^- PK：(.*)$", footer, re.M)
+        if len(pk_lines) != 1:
+            raise ValueError("PK 收据缺失或重复")
+        match = re.fullmatch(r"状态=(ok|melted|skipped)，无效场=(\d+)，已打场次=(\d+)/(\d+)", pk_lines[0].strip())
+        if match:
+            pk_status, invalid, attempted, total = match[1], int(match[2]), int(match[3]), int(match[4])
+        elif pk_lines[0].strip() == "未运行":
+            pk_status, invalid, attempted, total = "not_run", None, None, None
+        else:
+            raise ValueError("PK 收据格式未知")
+        sections = re.findall(r"^## 候选清单（按加权分降序）\s*\n(.*?)(?=^## |\Z)", text, re.M | re.S)
+        if len(sections) != 1:
+            raise ValueError("候选区缺失或重复")
+        lines = [line.strip() for line in sections[0].splitlines() if line.strip()]
+        table_lines = [line for line in lines if line.startswith("|")]
+        new_format = "另含连续四个开放日" in text
+        rows = []
+        if table_lines:
+            if len(table_lines) < 3 or len(table_lines) != len(lines):
+                raise ValueError("候选表被截断")
+            headers = [c.strip() for c in table_lines[0].strip("|").split("|")]
+            legacy_headers = ["代码", "名称", "连板", "断板日涨幅", "收盘", "6%参考位", "行业", "加权分及排名[判断]", "PK胜场及排名[判断]", "分歧⚠"]
+            if headers not in (legacy_headers, legacy_headers + ["入选分支"]):
+                raise ValueError("候选表头不匹配")
+            column_count = len(headers)
+            new_format = new_format or column_count == 11
+            if not re.fullmatch(r"\|(?:\s*:?-+:?\s*\|){" + str(column_count) + r"}", table_lines[1]):
+                raise ValueError("候选表分隔符异常")
+            for line in table_lines[2:]:
+                cells = [c.strip() for c in line.strip("|").split("|")]
+                if len(cells) != column_count:
+                    raise ValueError("候选表列数异常")
+                rows.append(_board_break_row([cells[i] for i in (0, 1, 2, 3, 6, 7, 8, 9)],
+                                              cells[10] if column_count == 11 else "连续板断板"))
+        elif not ("今日无断板反包候选" in sections[0] and "核心数据源全部成功，本次为真实空候选（非采集故障）。" in sections[0]):
+            raise ValueError("空榜没有健康空候选收据")
+        branch_lines = re.findall(r"^- 反包后再断板分支：(.*)$", footer, re.M)
+        if new_format or branch_lines:
+            receipt = re.fullmatch(r"(complete|partial|source_failed)；日期链：(.*)", branch_lines[0]) if len(branch_lines) == 1 else None
+            if receipt is None:
+                raise ValueError("新分支完整性收据缺失、重复或非法")
+            if receipt[1] == "complete" and "新分支缺口：" in footer:
+                raise ValueError("新分支complete与缺口收据冲突")
+            if any(row["branch"] != "连续板断板" for row in rows):
+                dates = [d.strip() for d in receipt[2].split("→")]
+                if (len(dates) != 4 or any(not _valid_date(d) for d in dates)
+                        or dates != sorted(set(dates)) or dates[-2:] != [prev[1], report_date]):
+                    raise ValueError("反包候选四日日期链不完整或错位")
+                source_dates = {"prior_limit_up": dates[0], "first_break_limit_up": dates[1],
+                                "first_break_limit_down": dates[1], "rebound_limit_up": dates[2],
+                                "today_limit_up": dates[3], "today_limit_down": dates[3]}
+                for source, source_day in source_dates.items():
+                    receipts = re.findall(rf"^  - {source}：(\d{{4}}-\d{{2}}-\d{{2}}) / ([^\n]+?) / (成功|失败)$", footer, re.M)
+                    if len(receipts) != 1 or receipts[0][0] != source_day or receipts[0][2] != "成功":
+                        raise ValueError("反包候选缺少成功且同日的历史/当日来源收据")
+        excluded_lines = re.findall(r"^- PK 未进池[^：]*：(.*)$", footer, re.M)
+        if len(excluded_lines) > 1:
+            raise ValueError("PK 未进池收据重复")
+        excluded = excluded_lines[0].strip().split("、") if excluded_lines else []
+        _check_board_break_rows(rows, pk_status, attempted, total, invalid, excluded)
+        dimensions = re.findall(r"^- 维度缺失/源失败：(.*)$", footer, re.M)
+        if not dimensions or ("无" in dimensions and dimensions != ["无"]):
+            raise ValueError("维度完整性收据缺失或冲突")
+        notes = [line.removeprefix("- ") for line in footer.splitlines()
+                 if line.startswith(("- 主线板块：", "- 长周期乖离", "- 维度缺失/源失败："))
+                 and line != "- 维度缺失/源失败：无"]
+        notes.extend(line.strip().removeprefix("- ") for line in footer.splitlines()
+                     if line.startswith(("- 反包后再断板分支：partial", "- 反包后再断板分支：source_failed", "  - 新分支缺口：")))
+        if pk_status == "melted" or (invalid or 0) > 0:
+            notes.append(f"PK 状态={pk_status}，已打 {attempted}/{total}，无效 {invalid}")
+        if not rows and notes:
+            raise ValueError("不完整来源不能证明空榜")
+        return dict(state="v1" if rows else "none", status="partial" if notes else "ok",
+                    rows=rows, prev_date=prev[1], pk_status=pk_status, attempted=attempted,
+                    total=total, invalid=invalid, excluded=excluded, notes=notes, digest=digest)
+    except (ValueError, OverflowError) as exc:
+        failed["notes"] = [str(exc)]
+        return failed
+
+
+def _board_break_visible_cells(row: dict, pk_status: str) -> list[str]:
+    cells = [row[key] for key in _BOARD_BREAK_FIELDS]
+    if row.get("branch", "连续板断板") != "连续板断板":
+        cells[2] = f"昨日{row['height']}板；{row['branch']}"
+    if cells[6] == "—":
+        cells[6] = "—（未进PK池）" if pk_status == "ok" else "—（PK未计算）"
+    return cells
+
+
+def _render_board_break_ranking(payload: dict, report_date: str) -> str:
+    rows = payload["rows"]
+    attrs = {
+        "data-board-break-ranking": payload["state"], "data-as-of": report_date,
+        "data-source": "board-break", "data-source-status": payload["status"],
+        "data-source-sha256": payload["digest"], "data-prev-date": payload["prev_date"],
+        "data-candidate-count": len(rows) if payload["state"] != "missing-data" else "unavailable",
+        "data-pk-status": payload["pk_status"], "data-pk-excluded": ",".join(payload["excluded"]),
+        **{f"data-pk-{key}": payload[key] if payload[key] is not None else "unavailable" for key in ("attempted", "total", "invalid")},
+    }
+    attrs_text = " ".join(f'{key}="{escape(str(value), quote=True)}"' for key, value in attrs.items())
+    count = len(rows)
+    items = count if count else 1
+    label = f"{count} 只" if count else ("0 只；1 项状态" if payload["state"] == "none" else "1 项缺口")
+    parts = [f'<details class="evidence" data-as-of="{report_date}" data-items="{items}"><summary>断板反包候选双排名（{label}；PK {payload["pk_status"]}）</summary><div class="evidence-body">']
+    if payload["state"] == "v1":
+        parts.append(f'<table {attrs_text}><caption>[事实] {report_date} 断板反包候选 {count} 只，前一交易日 {payload["prev_date"]}；来源 board-break。[判断] 原始加权分与 PK 双榜，不是反包成功概率，不构成买卖建议。</caption>')
+        parts.append("<thead><tr>" + "".join(f"<th>{header}</th>" for header in _BOARD_BREAK_HEADERS) + "</tr></thead><tbody>")
+        for row in rows:
+            row_attrs = " ".join(f'data-{key}="{escape(row[key], quote=True)}"' for key in _BOARD_BREAK_FIELDS)
+            row_attrs += f' data-branch="{escape(row["branch"], quote=True)}"'
+            parts.append(f"<tr {row_attrs}>" + "".join(f"<td>{escape(cell)}</td>" for cell in _board_break_visible_cells(row, payload["pk_status"])) + "</tr>")
+        parts.append("</tbody></table>")
+    else:
+        message = "[事实] 本日无断板反包候选，核心来源完整。" if payload["state"] == "none" else f"[事实] {_BOARD_BREAK_GAP}，本日无法判定。"
+        parts.append(f"<p {attrs_text}>{message}</p>")
+    if payload["attempted"] is not None:
+        parts.append(f'<p>[事实] PK 状态={payload["pk_status"]}；已打 {payload["attempted"]}/{payload["total"]} 场，无效 {payload["invalid"]} 场。</p>')
+    elif payload["pk_status"] == "not_run":
+        parts.append("<p>[事实] PK 未运行，仅保留加权分；PK未计算。</p>")
+    if payload["excluded"]:
+        parts.append("<p>[事实] 未进 PK 池：" + escape("、".join(payload["excluded"])) + "；仍保留加权排名。</p>")
+    parts.extend(f"<p>[事实] {escape(note)}</p>" for note in payload["notes"])
+    parts.append("</div></details>")
+    return "\n".join(parts)
+
+
+def load_board_break_report(path: str | os.PathLike[str]) -> str | None:
+    try:
+        return Path(path).read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        return None
+
+
 def _inject_section_fragment(html: str, section_id: str, fragment: str) -> str:
     pattern = re.compile(
         rf'(<section\b[^>]*\bid=["\']{re.escape(section_id)}["\'][^>]*>)(.*?)(</section>)',
@@ -10096,6 +10387,7 @@ def render_report(
     visual_context: dict | None = None,
     teacher_anchors: dict | None = None,
     index_intraday_manifest: dict | None = None,
+    board_break_report: str | None = None,
 ) -> str:
     """读取固定 chunk，包裹静态阅读器外壳并返回 HTML 字符串。
 
@@ -10265,6 +10557,19 @@ def render_report(
     chunks["s456"] = _inject_section_fragment(chunks["s456"], "s3", feedback_fragment)
     for gap in feedback_gaps:
         chunks["s8ops"] = _inject_section_fragment(chunks["s8ops"], "ops", f'<p>[事实] {escape(gap)}；缺失不补零。</p>')
+    fact_date = (visual_context or {}).get("fact_date") or report_date
+    if any(re.search(r"\bdata-board-break-ranking\s*=", body, re.I) for body in chunks.values()):
+        raise ReportValidationError("duplicate_board_break_ranking",
+                                    "断板反包排名由组装器统一生成，chunk 不得自行注入", section="s3")
+    board_ranking = _parse_board_break_ranking(board_break_report, fact_date)
+    chunks["s456"] = _inject_section_fragment(
+        chunks["s456"], "s3", _render_board_break_ranking(board_ranking, fact_date)
+    )
+    if board_ranking["status"] != "ok":
+        chunks["s8ops"] = _inject_section_fragment(
+            chunks["s8ops"], "ops",
+            f'<p>[事实] {_BOARD_BREAK_GAP}：{escape("；".join(board_ranking["notes"]))}；有效候选不代替缺失项。</p>',
+        )
     if index_intraday_manifest is None:
         index_intraday_payload = load_index_intraday_manifest(
             tmp_path / f"index_intraday_{report_date}.json", report_date, visual_context=visual_context
@@ -10512,6 +10817,7 @@ def write_report(
     style_market_effect: dict | None = None,
     theme_launch: dict | None = None,
     theme_feedback: dict | None = None,
+    board_break_report: str | None = None,
 ) -> Path:
     """带容量和滚动新高 sidecar 校验后原子落盘；失败时不写文件。"""
 
@@ -10531,8 +10837,16 @@ def write_report(
         minute_blocks = _parse_report(html).structured_contracts["data-index-intraday-structure"]
         if any(block.attrs.get("data-source-status") != "failed" for block in minute_blocks):
             raise ReportValidationError("missing_index_intraday_manifest", "有效分钟结构须提供 sidecar 复核", section="s1")
+    if board_break_report is None:
+        parsed = _parse_report(html)
+        ranking = parsed.structured_contracts["data-board-break-ranking"]
+        if len(ranking) != 1:
+            raise ReportValidationError("invalid_board_break_ranking", "断板反包排名块缺失或重复", section="s3")
+        if ranking[0].value != "missing-data":
+            raise ReportValidationError("missing_board_break_source", "有效断板反包榜落盘必须提供同日报告原文", section="s3")
     validate_report(
         html,
+        board_break_report=board_break_report,
         capacity_manifest=capacity_manifest,
         new_high_manifest=new_high_manifest,
         index_intraday_manifest=index_intraday_manifest,
@@ -10563,6 +10877,7 @@ class _ArgumentParser(argparse.ArgumentParser):
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = _ArgumentParser(description=__doc__)
+    parser.add_argument("--board-break-report", help="断板反包排名 Markdown；默认读取同事实日报告")
     parser.add_argument("tmp_dir", help="包含 7 个正式 HTML chunk 的临时目录")
     parser.add_argument("date", help="复盘交易日，YYYY-MM-DD")
     parser.add_argument(
@@ -10640,6 +10955,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         index_intraday_manifest = load_index_intraday_manifest(
             index_intraday_manifest_path, args.date, visual_context=visual_context
         )
+        fact_date = visual_context.get("fact_date") or args.date
+        board_break_report = load_board_break_report(args.board_break_report or (
+            _repo_root() / "data" / "reports" / "board-break" / f"{fact_date}.md"
+        ))
         daily_root = args.daily_dir or (_repo_root() / "daily")
         new_high_manifest_path = args.new_high_manifest or (
             Path(args.tmp_dir) / f"new_high_{args.date}.json"
@@ -10694,6 +11013,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         html = render_report(
             args.tmp_dir,
             args.date,
+            board_break_report=board_break_report,
             emotion_leader_report=emotion_report,
             emotion_history_dir=emotion_history_dir,
             emotion_open_dates=emotion_open_dates,
@@ -10734,6 +11054,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         metrics = validate_report(
             html,
+            board_break_report=board_break_report,
             capacity_manifest=capacity_manifest,
             new_high_manifest=new_high_manifest,
             visual_identity_sources=visual_raw,
