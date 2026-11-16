@@ -1,5 +1,7 @@
 # Skills 依赖索引
 
+2026-11-16 宽幅震荡定时任务使用 `scripts/tools/tgb_wide_range_prepare.py` 应用最新前复权收盘不低于 MA30 的过滤。`scripts/tools/tgb_wide_range_notify.py` 在候选增减时发送全量候选、申万二级、退出及筛选规则，采集失败提醒、无变化静默。两个入口均需 `--input-by`，仅写本地任务归档及钉钉回执。见 [宽幅震荡任务说明](../../docs/tgb-wide-range.md)。
+
 2026-11-16 每日最票定时任务改为每个工作日21:00（本机Asia/Shanghai），继续按精简确认稿推送；只调整既有launchd时间，不新增任务、不改其他调度。
 
 2026-11-16 断板反包PK固定口径：近期涨幅只按正向辨识度看待，不奖励涨得少、不仅因涨得多扣分；反包后再断板为中性形态，结合前段高度，不以当前首板或再次断板标签天然判弱。辨识度与当日表现冲突须解释独立证据；版本`recognition-neutral-branch-v1`，报告保留版本及最长120字理由。见`docs/board-break-rebreak.md`。

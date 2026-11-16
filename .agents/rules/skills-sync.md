@@ -40,6 +40,8 @@ globs:
 
 # Skills 同步检查规则
 
+宽幅震荡 MA30 筛选与钉钉摘要的独立入口 `scripts/tools/tgb_wide_range_*.py` 有变更时，同步 `docs/tgb-wide-range.md`、Skills 索引和专项验证，覆盖筛选边界、全名单、静默、失败提醒及送达去重。
+
 2026-11-16 每日最票定时任务改为每个工作日21:00（本机Asia/Shanghai），继续按精简确认稿推送；只调整既有launchd时间，不新增任务、不改其他调度。
 
 2026-11-16 断板反包PK固定口径：近期涨幅只按正向辨识度看待，不奖励涨得少、不仅因涨得多扣分；反包后再断板为中性形态，结合前段高度，不以当前首板或再次断板标签天然判弱。辨识度与当日表现冲突须解释独立证据；版本`recognition-neutral-branch-v1`，报告保留版本及最长120字理由。见`docs/board-break-rebreak.md`。
