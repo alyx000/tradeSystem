@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from db import queries as Q
+from services.daily_leaders.readiness import CheckedRegistry, check_post_market
 from services.daily_leaders.candidates import build_candidates
 from services.daily_leaders.llm import enrich_with_llm_reason
 from services.daily_leaders.models import (
@@ -272,8 +273,13 @@ def propose(
     output_root: str | Path | None = None,
     registry: Any | None = None,
     max_candidates: int = DEFAULT_MAX_CONFIRMATION_CANDIDATES,
+    require_ready: bool = False,
+    input_by: str = "USER",
 ) -> dict[str, Any]:
     max_candidates = _validate_max_candidates(max_candidates)
+    readiness = check_post_market(conn, date, prefill) if require_ready else None
+    if require_ready:
+        registry = CheckedRegistry(registry)
     if prefill.get("is_trading_day") is False:
         proposal = {
             "date": date,
@@ -288,6 +294,8 @@ def propose(
         return proposal
 
     prefill = attach_market_quotes(prefill, date, registry)
+    if require_ready:
+        readiness.update(registry.validate(date, prefill))
     proposal = build_candidates(
         prefill=prefill,
         trend_pool=[],
@@ -295,6 +303,9 @@ def propose(
         date=date,
         min_amount_yi=DEFAULT_MIN_CONFIRMATION_AMOUNT_YI,
     )
+    proposal["input_by"] = input_by
+    if readiness is not None:
+        proposal["readiness"] = readiness
     proposal["candidate_filters"] = {
         "min_amount_yi": DEFAULT_MIN_CONFIRMATION_AMOUNT_YI,
     }

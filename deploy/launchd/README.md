@@ -30,7 +30,7 @@
 - `com.alyx.tradesystem.ma-breakout.plist` — 工作日 14:50 触发（4日均线二波尾盘实时快照；CLI 仅允许上海当日 14:45～15:00，休眠补触发会跳过；日志 `/tmp/tradesystem-ma-breakout.log`）
 - `value-watch-runner.sh` — 包装脚本：cd 仓库根 → source `~/.config/tradeSystem.env`(钉钉；TUSHARE_TOKEN 由 `scripts/.env` 在 Python 侧加载) → 调 `python3 main.py value-watch daily`
 - `com.alyx.tradesystem.value-watch.plist` — 工作日 21:45 触发（价值投资条件监控：红利回撤/卖出阶梯/稀缺周线，事件首发才推钉钉[sent_events 账本去重]；日志 `/tmp/tradesystem-value-watch.log`；Sleep policy: 错过可接受——次日运行按事件账本自动补齐）
-- `daily-leaders-runner.sh` — 包装脚本：cd 仓库根 → source `~/.config/tradeSystem.env`(钉钉/LLM) → 调 `/usr/bin/python3 scripts/main.py daily-leaders propose --push`
+- `daily-leaders-runner.sh` — 包装脚本：cd 仓库根 → source `~/.config/tradeSystem.env`(钉钉/LLM) → 调 `/usr/bin/python3 scripts/main.py daily-leaders propose --push --wait-ready --input-by launchd`
 - `com.alyx.tradesystem.daily-leaders.plist` — 工作日 21:00 触发（每日最票候选确认稿；stdout `/tmp/tradesystem-daily-leaders.out.log`，stderr `/tmp/tradesystem-daily-leaders.err.log`）
 - `monthly-pattern-runner.sh` — 包装脚本：设置 PATH、cd 仓库根、source `scripts/.env` + `~/.config/tradeSystem.env`、打印脱敏环境诊断 → 调 `/usr/bin/python3 scripts/main.py monthly-pattern daily --input-by launchd`
 - `com.alyx.tradesystem.monthly-pattern.plist` — 每月 2 日 23:10 单次触发（只使用带 certified 覆盖收据的完成月前复权月线 + 公告日 as-of 财务，维护三策略观察池；休眠错过可接受；日志 `/tmp/tradesystem-monthly-pattern.log`）
@@ -294,7 +294,9 @@ rm ~/Library/LaunchAgents/com.alyx.tradesystem.ma-breakout.plist
 
 ## 每日最票候选确认稿（工作日 21:00）
 
-汇总复盘预填、趋势池、历史最票、老师观点与认知证据 → 生成复盘第 5 步「龙头 / 最票」候选确认稿 → 落本地 Markdown/JSON → 推送钉钉 Markdown。v1 只支持钉钉草稿 + Codex/CLI 确认；钉钉按钮 callback / 直接写回 deferred 到 v2。
+21:00先检查当日关键数据，未就绪每5分钟重试至当晚23:00，超过截止不推送；成功后发送精简稿。手工`--push`也必须通过检查。详见[数据就绪与重试](../../docs/daily-leaders-readiness.md)。
+
+读取复盘预填、当日行情与历史最票上下文 → 生成复盘第 5 步「龙头 / 最票」候选确认稿（未接入断板报告或趋势池） → 落本地 Markdown/JSON → 推送钉钉 Markdown。v1 只支持钉钉草稿 + Codex/CLI 确认；钉钉按钮 callback / 直接写回 deferred 到 v2。
 
 ```bash
 # 1. 包装脚本可执行

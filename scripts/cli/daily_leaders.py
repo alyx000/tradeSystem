@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import argparse
-import datetime
 import json
+import logging
 import sys
 
 from db.connection import get_connection
 from services.daily_leaders import renderer, service
 from services.daily_leaders.models import MAX_CONFIRMATION_CANDIDATES
+from services.daily_leaders.readiness import DataNotReady, is_open_day, now_shanghai
+from services.daily_leaders.retry import check_window, run_when_ready
 
 
 def _candidate_limit(value: str) -> int:
@@ -29,6 +31,8 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
     propose = sub.add_parser("propose", help="生成每日最票候选确认稿")
     propose.add_argument("--date", default=None, help="交易日 YYYY-MM-DD（默认今天）")
     propose.add_argument("--push", action="store_true", help="生成后推送钉钉")
+    propose.add_argument("--wait-ready", action="store_true", help="当日21:00至23:00每5分钟重试数据就绪检查，须配合--push")
+    propose.add_argument("--input-by", default="USER", help="生成请求者（定时任务为launchd）")
     propose.add_argument("--no-llm", action="store_true", help="跳过 LLM 辅助理由")
     propose.add_argument(
         "--max-candidates",
@@ -64,25 +68,46 @@ def _handle_propose(args: argparse.Namespace) -> None:
     from api.routes.review import get_prefill
     from api.deps import get_provider_registry
 
-    date = args.date or datetime.date.today().isoformat()
-    conn = get_connection()
-    try:
-        prefill = get_prefill(date, conn=conn)
-        proposal = service.propose(
-            conn,
-            date,
-            prefill,
-            no_llm=args.no_llm,
-            registry=get_provider_registry(),
-            max_candidates=args.max_candidates,
-        )
-    finally:
-        conn.close()
+    date = args.date or now_shanghai().date().isoformat()
+    logging.getLogger(__name__).info(
+        "[daily-leaders propose] date=%s input_by=%s", date, getattr(args, "input_by", "USER")
+    )
+    wait = getattr(args, "wait_ready", False)
+    if wait and not args.push:
+        raise SystemExit("--wait-ready 必须与 --push 一起使用")
 
+    def attempt():
+        # A fresh connection/prefill/registry per attempt observes late arrivals;
+        # do not hold a transaction or reuse failed provider caches while waiting.
+        conn = get_connection()
+        try:
+            if args.push and not is_open_day(conn, date):
+                print(f"[daily-leaders] {date}非开放日，跳过生成与推送")
+                return None
+            prefill = get_prefill(date, conn=conn)
+            return service.propose(
+                conn, date, prefill, no_llm=args.no_llm,
+                registry=get_provider_registry(), max_candidates=args.max_candidates,
+                require_ready=args.push, input_by=getattr(args, "input_by", "USER"),
+            )
+        finally:
+            conn.close()
+
+    try:
+        proposal = run_when_ready(attempt, date, wait=wait)
+        if proposal is None:
+            return
+        # Generation itself may take us beyond the same-day send window.
+        if wait:
+            check_window(date)
+    except (DataNotReady, TimeoutError) as exc:
+        print(f"[daily-leaders] 停止：{exc}；未推送", file=sys.stderr)
+        raise SystemExit(75) from exc
     markdown = renderer.render_markdown(proposal, compact=True)
     print(markdown)
-    if args.push:
-        _push_to_dingtalk(f"每日最票候选确认稿 · {date}", markdown)
+    if args.push and not _push_to_dingtalk(f"每日最票候选确认稿 · {date}", markdown):
+        # Delivery is not a readiness failure; avoid retrying an ambiguous send.
+        raise SystemExit(1)
 
 
 def _handle_confirm(args: argparse.Namespace) -> None:

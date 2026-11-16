@@ -1,5 +1,8 @@
 # Skills 依赖索引
 
+2026-11-16 每日最票保留工作日21:00；`propose --push`必须通过当日数据就绪检查，定时入口增加`--wait-ready --input-by launchd`，未就绪每5分钟重试至23:00、超时不推送，仍发精简稿。见 `docs/daily-leaders-readiness.md`。
+
+
 2026-11-16 宽幅震荡定时任务使用 `scripts/tools/tgb_wide_range_prepare.py` 应用最新前复权收盘不低于 MA30 的过滤。`scripts/tools/tgb_wide_range_notify.py` 在候选增减时发送全量候选、申万二级、退出及筛选规则，采集失败提醒、无变化静默。两个入口均需 `--input-by`，仅写本地任务归档及钉钉回执。见 [宽幅震荡任务说明](../../docs/tgb-wide-range.md)。
 
 2026-11-16 每日最票定时任务改为每个工作日21:00（本机Asia/Shanghai），继续按精简确认稿推送；只调整既有launchd时间，不新增任务、不改其他调度。

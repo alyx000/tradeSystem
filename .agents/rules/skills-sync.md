@@ -40,6 +40,9 @@ globs:
 
 # Skills 同步检查规则
 
+2026-11-16 每日最票保留工作日21:00；`propose --push`必须通过当日数据就绪检查，定时入口增加`--wait-ready --input-by launchd`，未就绪每5分钟重试至23:00、超时不推送，仍发精简稿。见 `docs/daily-leaders-readiness.md`。
+
+
 宽幅震荡 MA30 筛选与钉钉摘要的独立入口 `scripts/tools/tgb_wide_range_*.py` 有变更时，同步 `docs/tgb-wide-range.md`、Skills 索引和专项验证，覆盖筛选边界、全名单、静默、失败提醒及送达去重。
 
 2026-11-16 每日最票定时任务改为每个工作日21:00（本机Asia/Shanghai），继续按精简确认稿推送；只调整既有launchd时间，不新增任务、不改其他调度。

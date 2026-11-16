@@ -144,3 +144,97 @@ def test_push_to_dingtalk_skip_when_not_configured(monkeypatch, capsys):
 
     assert ok is False
     assert "DingTalk pusher 未启用，跳过推送" in capsys.readouterr().err
+
+
+def _mock_attempt_dependencies(monkeypatch):
+    from unittest.mock import Mock
+    import api.routes.review as review
+    import api.deps as deps
+    connection = Mock()
+    monkeypatch.setattr(daily_leaders, 'get_connection', lambda: connection)
+    # The deployed checkout has a market-only prefill entry; support both while
+    # exercising the actual CLI on each checkout.
+    prefill = Mock(return_value={'market': {'date': '2026-11-16'}})
+    monkeypatch.setattr(review, 'get_prefill', prefill)
+    if hasattr(review, 'build_daily_leaders_prefill'):
+        monkeypatch.setattr(review, 'build_daily_leaders_prefill', prefill)
+    monkeypatch.setattr(deps, 'get_provider_registry', lambda: object())
+    monkeypatch.setattr(daily_leaders, 'is_open_day', lambda conn,date: True)
+    monkeypatch.setattr(daily_leaders, 'check_window', lambda date: None)
+    monkeypatch.setattr(daily_leaders.renderer, 'render_markdown', lambda proposal,compact: 'compact')
+    push = Mock(return_value=True)
+    monkeypatch.setattr(daily_leaders, '_push_to_dingtalk', push)
+    return connection, prefill, push
+
+
+def test_cli_push_missing_inputs_does_not_send(monkeypatch):
+    from unittest.mock import Mock
+    from services.daily_leaders.readiness import DataNotReady
+    conn, prefill, push = _mock_attempt_dependencies(monkeypatch)
+    propose = Mock(side_effect=DataNotReady('missing'))
+    monkeypatch.setattr(daily_leaders.service, 'propose', propose)
+    args = _parser().parse_args(['daily-leaders','propose','--date','2026-11-16','--push'])
+    with pytest.raises(SystemExit) as exc:
+        daily_leaders._handle_propose(args)
+    assert exc.value.code == 75
+    assert propose.call_args.kwargs['require_ready'] is True
+    push.assert_not_called(); conn.close.assert_called_once()
+
+
+def test_cli_retry_refreshes_inputs_and_sends_once(monkeypatch):
+    import datetime as dt
+    from unittest.mock import Mock
+    from services.daily_leaders import retry
+    from services.daily_leaders.readiness import DataNotReady, SHANGHAI
+    conn, prefill, push = _mock_attempt_dependencies(monkeypatch)
+    propose = Mock(side_effect=[DataNotReady('missing'), {'date':'2026-11-16'}])
+    monkeypatch.setattr(daily_leaders.service, 'propose', propose)
+    monkeypatch.setattr(daily_leaders, 'run_when_ready', lambda attempt,date,wait: retry.run_when_ready(
+        attempt,date,wait=wait,now=lambda:dt.datetime(2026,11,16,21,tzinfo=SHANGHAI),sleep=lambda _:None))
+    args = _parser().parse_args(['daily-leaders','propose','--date','2026-11-16','--push','--wait-ready','--input-by','launchd'])
+    daily_leaders._handle_propose(args)
+    assert prefill.call_count == 2 and conn.close.call_count == 2
+    push.assert_called_once_with('每日最票候选确认稿 · 2026-11-16', 'compact')
+
+
+def test_cli_closed_day_never_generates_or_pushes(monkeypatch):
+    from unittest.mock import Mock
+    conn, prefill, push = _mock_attempt_dependencies(monkeypatch)
+    monkeypatch.setattr(daily_leaders, 'is_open_day', lambda conn,date: False)
+    propose = Mock(); monkeypatch.setattr(daily_leaders.service, 'propose', propose)
+    args = _parser().parse_args(['daily-leaders','propose','--date','2026-11-16','--push'])
+    daily_leaders._handle_propose(args)
+    propose.assert_not_called(); push.assert_not_called(); prefill.assert_not_called()
+
+
+def test_cli_deadline_after_generation_never_pushes(monkeypatch):
+    from unittest.mock import Mock
+    conn, prefill, push = _mock_attempt_dependencies(monkeypatch)
+    monkeypatch.setattr(daily_leaders.service, 'propose', Mock(return_value={'date':'2026-11-16'}))
+    monkeypatch.setattr(daily_leaders, 'run_when_ready', lambda attempt,date,wait:attempt())
+    monkeypatch.setattr(daily_leaders, 'check_window', Mock(side_effect=TimeoutError('deadline')))
+    args = _parser().parse_args(['daily-leaders','propose','--date','2026-11-16','--push','--wait-ready'])
+    with pytest.raises(SystemExit) as exc: daily_leaders._handle_propose(args)
+    assert exc.value.code == 75; push.assert_not_called()
+
+
+def test_cli_send_failure_is_not_retried(monkeypatch):
+    from unittest.mock import Mock
+    conn, prefill, push = _mock_attempt_dependencies(monkeypatch)
+    monkeypatch.setattr(daily_leaders.service, 'propose', Mock(return_value={'date':'2026-11-16'}))
+    push.return_value = False
+    args = _parser().parse_args(['daily-leaders','propose','--date','2026-11-16','--push'])
+    with pytest.raises(SystemExit) as exc: daily_leaders._handle_propose(args)
+    assert exc.value.code == 1; assert push.call_count == 1
+
+
+def test_blocked_attempt_logs_requester_and_date(monkeypatch, caplog):
+    import logging
+    from unittest.mock import Mock
+    from services.daily_leaders.readiness import DataNotReady
+    _mock_attempt_dependencies(monkeypatch)
+    monkeypatch.setattr(daily_leaders.service, 'propose', Mock(side_effect=DataNotReady('missing')))
+    args = _parser().parse_args(['daily-leaders','propose','--date','2026-11-16','--push','--input-by','launchd'])
+    with caplog.at_level(logging.INFO), pytest.raises(SystemExit):
+        daily_leaders._handle_propose(args)
+    assert 'date=2026-11-16 input_by=launchd' in caplog.text

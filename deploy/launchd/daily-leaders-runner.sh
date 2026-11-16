@@ -27,4 +27,4 @@ echo "===== $(date '+%Y-%m-%d %H:%M:%S') daily-leaders propose start ====="
 # 5. 凭据存在性诊断（${VAR:+set} 只判存在不打值，规避 /tmp/*.log 泄漏）
 echo "[env] DINGTALK_WEBHOOK_TOKEN=${DINGTALK_WEBHOOK_TOKEN:+set} DINGTALK_WEBHOOK_SECRET=${DINGTALK_WEBHOOK_SECRET:+set} ANTIGRAVITY_BIN=${ANTIGRAVITY_BIN:+set} AGY_BIN=${AGY_BIN:+set} LLM_MODEL=${LLM_MODEL:+set}"
 
-exec /usr/bin/python3 scripts/main.py daily-leaders propose --push
+exec /usr/bin/python3 scripts/main.py daily-leaders propose --push --wait-ready --input-by launchd
