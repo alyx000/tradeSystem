@@ -31,7 +31,7 @@
 - `value-watch-runner.sh` — 包装脚本：cd 仓库根 → source `~/.config/tradeSystem.env`(钉钉；TUSHARE_TOKEN 由 `scripts/.env` 在 Python 侧加载) → 调 `python3 main.py value-watch daily`
 - `com.alyx.tradesystem.value-watch.plist` — 工作日 21:45 触发（价值投资条件监控：红利回撤/卖出阶梯/稀缺周线，事件首发才推钉钉[sent_events 账本去重]；日志 `/tmp/tradesystem-value-watch.log`；Sleep policy: 错过可接受——次日运行按事件账本自动补齐）
 - `daily-leaders-runner.sh` — 包装脚本：cd 仓库根 → source `~/.config/tradeSystem.env`(钉钉/LLM) → 调 `/usr/bin/python3 scripts/main.py daily-leaders propose --push`
-- `com.alyx.tradesystem.daily-leaders.plist` — 工作日 22:30 触发（每日最票候选确认稿；stdout `/tmp/tradesystem-daily-leaders.out.log`，stderr `/tmp/tradesystem-daily-leaders.err.log`）
+- `com.alyx.tradesystem.daily-leaders.plist` — 工作日 21:00 触发（每日最票候选确认稿；stdout `/tmp/tradesystem-daily-leaders.out.log`，stderr `/tmp/tradesystem-daily-leaders.err.log`）
 - `monthly-pattern-runner.sh` — 包装脚本：设置 PATH、cd 仓库根、source `scripts/.env` + `~/.config/tradeSystem.env`、打印脱敏环境诊断 → 调 `/usr/bin/python3 scripts/main.py monthly-pattern daily --input-by launchd`
 - `com.alyx.tradesystem.monthly-pattern.plist` — 每月 2 日 23:10 单次触发（只使用带 certified 覆盖收据的完成月前复权月线 + 公告日 as-of 财务，维护三策略观察池；休眠错过可接受；日志 `/tmp/tradesystem-monthly-pattern.log`）
 - `monthly-pattern-monitor-runner.sh` — 包装脚本：source 行情/钉钉 env → 调 `/usr/bin/python3 scripts/main.py monthly-pattern monitor-daily`
@@ -292,7 +292,7 @@ rm ~/Library/LaunchAgents/com.alyx.tradesystem.ma-breakout.plist
 
 **时段**：目标业务时间为中国时间 14:50，晚间不再重复运行。macOS launchd 按系统时区触发，本机应保持 Asia/Shanghai；runner 同时显式设置 `TZ=Asia/Shanghai`，CLI 再以该时区校验当日与 14:45～15:00 时间窗。
 
-## 每日最票候选确认稿（工作日 22:30）
+## 每日最票候选确认稿（工作日 21:00）
 
 汇总复盘预填、趋势池、历史最票、老师观点与认知证据 → 生成复盘第 5 步「龙头 / 最票」候选确认稿 → 落本地 Markdown/JSON → 推送钉钉 Markdown。v1 只支持钉钉草稿 + Codex/CLI 确认；钉钉按钮 callback / 直接写回 deferred 到 v2。
 
@@ -323,7 +323,7 @@ launchctl unload ~/Library/LaunchAgents/com.alyx.tradesystem.daily-leaders.plist
 rm ~/Library/LaunchAgents/com.alyx.tradesystem.daily-leaders.plist
 ```
 
-**时段**：22:30 在 `board-break`(21:20)、`trend-leader`(21:30)、`market-timing`(21:40) 等盘后派生任务之后；`ma-breakout` 已提前到 14:50 尾盘快照。供用户在 Codex 中确认后执行 `python3 main.py daily-leaders confirm --date YYYY-MM-DD --input-by codex`。本任务不自动写复盘、不写交易计划、不提供买卖建议或价位目标。
+**时段**：每个工作日 21:00（本机 Asia/Shanghai），使用届时可用资料生成精简确认稿；`board-break`(21:20)、`trend-leader`(21:30)、`market-timing`(21:40) 当晚稍后执行。供用户在 Codex 中确认后执行 `python3 main.py daily-leaders confirm --date YYYY-MM-DD --input-by codex`。本任务不自动写复盘、不写交易计划、不提供买卖建议或价位目标。
 
 ## 完成月月线模式观察池（每月 2 日 23:10）
 

@@ -1,7 +1,7 @@
 #!/bin/bash
 # 每日最票候选确认稿定时入口（launchd 调用）。
 #
-# 由 ~/Library/LaunchAgents/com.alyx.tradesystem.daily-leaders.plist 触发（工作日 22:30）。
+# 由 ~/Library/LaunchAgents/com.alyx.tradesystem.daily-leaders.plist 触发（工作日 21:00）。
 # 生成复盘第 5 步「龙头 / 最票」候选确认稿，落本地报告并推送钉钉 Markdown；
 # v1 仅支持 Codex/CLI 确认后写回，不实现钉钉按钮回调。
 set -e

@@ -448,7 +448,7 @@ python3 main.py string-yang daily --no-llm --dry-run
 
 出处：`teacher_notes#444` 鞠磊《形态篇（第一节技术课程）· 牛市板块内选股形态标准》，认知 `cog_3b32e660`。
 
-每交易日 22:45 自动跑（launchd `com.alyx.tradesystem.pattern-scan`，排在 daily-leaders 22:30 之后；本任务以两个 worker 有界并发处理股票，单票仍保持“行情成功后才取复权因子”的原调用语义，并按输入顺序消费结果，避免全市场突发并发；单独占窗口避开 string-yang 21:50 / earnings-digest 22:00），也可手动：
+每交易日 22:45 自动跑（launchd `com.alyx.tradesystem.pattern-scan`，排在 daily-leaders 21:00 之后；本任务以两个 worker 有界并发处理股票，单票仍保持“行情成功后才取复权因子”的原调用语义，并按输入顺序消费结果，避免全市场突发并发；单独占窗口避开 string-yang 21:50 / earnings-digest 22:00），也可手动：
 
 ```bash
 python3 main.py pattern-scan daily
@@ -685,7 +685,7 @@ python3 main.py ma-breakout daily --json
 
 2026-11-16 每日最票确认稿默认精简：每票保留板块、属性、简短要点、风险和证据缺口；备选仅列名称和板块，完整证据留在同日 JSON。CLI 展示、Markdown 归档与既有推送一致，选股与人工确认逻辑不变。见 `docs/daily-leaders-compact.md`。
 
-工作日 22:30 自动跑（launchd `com.alyx.tradesystem.daily-leaders`，排在 post-market 派生任务之后），生成复盘第 5 步「龙头 / 最票」候选确认稿并推送钉钉 Markdown，也可手动：
+工作日 21:00 自动跑（launchd `com.alyx.tradesystem.daily-leaders`，使用届时可用资料），生成复盘第 5 步「龙头 / 最票」候选确认稿并推送钉钉 Markdown，也可手动：
 
 ```bash
 python3 main.py daily-leaders propose --push
@@ -699,7 +699,7 @@ python3 main.py daily-leaders confirm --date 2026-07-03 --input-by codex
 - **备选隔离（2026-10-13）**：LLM 判为「备选」的条目仅存入 `backup_candidates` 观察区，不授予最票属性、不占可确认名额，也不因名单不足而用容量兜底重新入选；「剔除」不进入确认名单。显式备选/剔除状态优先于旧 `leader_role`/`attribute_type`，不因缺失或失败的 LLM 状态而失效；新稿标记 `candidate_policy.backups_observation_only=true`，分别统计备选与剔除数。旧稿展示隔离降级项并提示重新生成，`confirm` 在事务前拒绝含降级状态的主名单及空主名单；观察区不随「全部录入」写入。未带降级状态的正常模型失败/`--no-llm` 兜底口径不变。
 - **确认写入护栏**：`confirm` 复用提案层的 Unicode 空白压缩板块键，并在开启事务前重新校验最多 15 只、股票规范身份全局唯一、同板块同属性唯一；旧确认稿若不满足新约束会显式拒绝，不做静默裁剪。展示内股票代码支持有/无空白及 `.SH/.SZ/.BJ` 后缀；六位代码后的非法后缀、展示代码与显式 `stock_code` 冲突均 fail-closed。合法 `stock_code` 以裸 6 位代码写入第 5 步并由 `leader_tracking` 优先作为身份；仅旧 payload 缺失代码时回退展示名称。同股、同规范板块属性的旧名称型 tracking 行仅在全库及同批名称代码映射唯一时于同一事务内迁移或与既有代码行合并，避免历史误归与分叉。
 - **确认流**：v1 是钉钉 Markdown 草稿 + Codex/CLI 确认；用户确认后再执行 `confirm` 写入复盘第 5 步并同步 `leader_tracking`。钉钉按钮 callback / 直接写回属于 v2，不要当成已实现能力。
-- **调度**：`daily-leaders propose --push` 是 per-task launchd，工作日 22:30，接在 `board-break` / `trend-leader` / `ma-breakout` / `market-timing` 等盘后派生任务之后；不进 `main.py schedule`/APScheduler。
+- **调度**：`daily-leaders propose --push` 是 per-task launchd，工作日 21:00，使用届时可用资料生成精简确认稿；不进 `main.py schedule`/APScheduler。
 
 ## 研报速读（research-digest）
 
