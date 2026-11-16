@@ -79,7 +79,7 @@ def _handle_propose(args: argparse.Namespace) -> None:
     finally:
         conn.close()
 
-    markdown = renderer.render_markdown(proposal)
+    markdown = renderer.render_markdown(proposal, compact=True)
     print(markdown)
     if args.push:
         _push_to_dingtalk(f"每日最票候选确认稿 · {date}", markdown)
@@ -104,7 +104,7 @@ def _handle_show(args: argparse.Namespace) -> None:
     if args.json:
         print(json.dumps(proposal, ensure_ascii=False, indent=2))
     else:
-        print(renderer.render_markdown(proposal))
+        print(renderer.render_markdown(proposal, compact=True))
 
 
 def _push_to_dingtalk(title: str, markdown: str) -> bool:

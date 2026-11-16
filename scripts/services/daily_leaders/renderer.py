@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 from typing import Any
 
 from services.daily_leaders.models import (
@@ -56,6 +57,13 @@ def _count(value: Any) -> int | None:
     except (TypeError, ValueError):
         return None
     return count if count >= 0 else None
+
+
+def _plain_evidence(value: Any) -> str:
+    text = html.escape(" ".join(str(value or "").split()))
+    for char in ("\\", "`", "*", "_", "[", "]", "!"):
+        text = text.replace(char, "\\" + char)
+    return text
 
 
 def _render_candidate_limit(candidate_limit: dict[str, Any]) -> str:
@@ -171,7 +179,7 @@ def _has_verified_role_aware_metadata(proposal: dict[str, Any], leaders: Any) ->
     return True
 
 
-def render_markdown(proposal: dict[str, Any]) -> str:
+def render_markdown(proposal: dict[str, Any], *, compact: bool = False) -> str:
     date = _text(proposal.get("date")).strip() or "未注明日期"
     raw_leaders = proposal.get("top_leaders")
     all_leaders = raw_leaders if isinstance(raw_leaders, list) else []
@@ -184,9 +192,15 @@ def render_markdown(proposal: dict[str, Any]) -> str:
     lines = [
         f"# 每日最票候选确认稿 · {date}",
         "",
-        "> 风险提示：以下内容仅用于复盘确认与资料整理，不构成买卖建议，不提供价格目标或仓位建议；是否录入由用户人工确认。",
+        ("> 待人工确认，仅供复盘。" if compact else
+         "> 风险提示：以下内容仅用于复盘确认与资料整理，不构成买卖建议，不提供价格目标或仓位建议；是否录入由用户人工确认。"),
     ]
     llm_status = proposal.get("llm_status") if isinstance(proposal.get("llm_status"), dict) else {}
+    reuse = proposal.get("llm_reuse") or {}
+    if reuse.get("status") == "reused":
+        lines.extend(["", "> 评选复用：市场输入、模型配置与规则相同，复用已验证结果；本次未重新调用模型，老师对照按本次资料更新。"])
+    elif reuse.get("refresh_requested"):
+        lines.extend(["", "> 重新评选：本次显式请求重新调用模型，结果可能变化；旧版本已保留。"])
     if llm_status and not llm_status.get("ok"):
         raw_reason = _text(llm_status.get("reason")).strip()
         reason = raw_reason if raw_reason in KNOWN_LLM_FAILURE_REASONS else "unknown_error"
@@ -212,7 +226,7 @@ def render_markdown(proposal: dict[str, Any]) -> str:
         min_amount_yi_float = float(min_amount_yi)
     except (TypeError, ValueError):
         min_amount_yi_float = None
-    if min_amount_yi_float is not None:
+    if min_amount_yi_float is not None and not compact:
         lines.extend(
             [
                 "",
@@ -220,7 +234,8 @@ def render_markdown(proposal: dict[str, Any]) -> str:
             ]
         )
     candidate_policy = proposal.get("candidate_policy") or {}
-    if isinstance(candidate_policy, dict) and candidate_policy.get("history_context_only") is True:
+    teacher_context_only = isinstance(candidate_policy, dict) and candidate_policy.get("teacher_context_only") is True
+    if not compact and isinstance(candidate_policy, dict) and candidate_policy.get("history_context_only") is True:
         lines.extend(
             [
                 "",
@@ -230,7 +245,9 @@ def render_markdown(proposal: dict[str, Any]) -> str:
     lines.extend(
         [
             "",
-            "> 属性口径：[判断] 确定性兜底的“趋势中军”仅指同板块候选中的成交额容量领先，未验证趋势形态；仍需人工确认。",
+            ("> 属性口径：[判断] 容量领先仅为同板块已准入候选内比较，不代表全板块第一；多日趋势未计算，不授予趋势中军。"
+             if compact and isinstance(candidate_policy, dict) and candidate_policy.get("evidence_version") == 1 else
+             "> 属性口径：[判断] 确定性兜底的“趋势中军”仅指同板块候选中的成交额容量领先，未验证趋势形态；仍需人工确认。"),
         ]
     )
     candidate_limit = proposal.get("candidate_limit") if isinstance(proposal.get("candidate_limit"), dict) else {}
@@ -240,7 +257,7 @@ def render_markdown(proposal: dict[str, Any]) -> str:
             f"> 旧稿展示隔离：候选条目 {len(leaders)} 条，"
             f"备选或剔除 {len(legacy_status_items)} 条；原稿统计不作为当前可确认数量。"
         )
-    if summary:
+    if summary and not compact:
         lines.extend(
             [
                 "",
@@ -280,7 +297,8 @@ def render_markdown(proposal: dict[str, Any]) -> str:
                     llm_role,
                     attribute_type,
                 )
-                if role in LEADER_ROLES
+                if role in LEADER_ROLES or (compact and role == "容量领先"
+                    and isinstance(candidate_policy, dict) and candidate_policy.get("evidence_version") == 1)
             ),
             "未注明",
         )
@@ -332,6 +350,26 @@ def render_markdown(proposal: dict[str, Any]) -> str:
         )
         unsafe_risk_flags = bool(raw_risk_flags) and not risk_flags_valid
 
+        if compact:
+            indent = " " * (len(str(index)) + 2)
+            lines.extend([
+                "",
+                f"{index}. **{_plain_evidence(stock)}｜{_plain_evidence(sector)}｜[判断] {leader_role}**",
+            ])
+            # Long model explanations remain intact in JSON. Use the existing
+            # short attribute summary instead of truncating a qualification.
+            reason = llm_reason if llm_reason and len(llm_reason) <= 80 else attribute
+            lines.append(f"{indent}- 要点：[判断] {_plain_evidence(reason)}")
+            if unsafe_llm_reason:
+                lines.append(f"{indent}- 旧稿理由格式不安全，已隐藏。")
+            if risk_flags:
+                lines.append(f"{indent}- 风险：[判断] {_plain_evidence('、'.join(risk_flags))}")
+            elif unsafe_risk_flags:
+                lines.append(f"{indent}- 风险：[判断] 旧稿内容格式不安全，已隐藏。")
+            if item.get("role_evidence_gap"):
+                lines.append(f"{indent}- 证据缺口：[判断] {_plain_evidence(item['role_evidence_gap'])}")
+            continue
+
         lines.extend(
             [
                 "",
@@ -376,7 +414,8 @@ def render_markdown(proposal: dict[str, Any]) -> str:
 
     if backups:
         lines.extend(["", "## 观察备选（不参与确认）", "",
-                      "> 以下条目证据不足，仅保留观察原因，不授予最票属性，不随“全部录入”写入。"])
+                      ("> 仅供观察，原因详见完整证据。" if compact else
+                       "> 以下条目证据不足，仅保留观察原因，不授予最票属性，不随“全部录入”写入。"), ""])
         seen_backups: set[str] = set()
         for item in backups:
             if candidate_review_status(item) == "剔除":
@@ -389,10 +428,21 @@ def render_markdown(proposal: dict[str, Any]) -> str:
             sector = _text(item.get("sector")).strip() or "未分类"
             reason = item.get("llm_reason")
             reason = reason.strip() if is_safe_llm_reason(reason) else "缺乏足够最票证据，需重新复核。"
-            lines.extend(["", f"### 观察：{stock}｜{sector}",
-                          "- 状态：[判断] 备选", f"- 降级原因：[判断] {reason}"])
+            if compact:
+                lines.append(f"- {_plain_evidence(stock)}｜{_plain_evidence(sector)}")
+            else:
+                lines.extend(["", f"### 观察：{stock}｜{sector}",
+                              "- 状态：[判断] 备选", f"- 降级原因：[判断] {reason}"])
 
-    if leaders and not legacy_status_items:
+    if compact:
+        comparison = proposal.get("teacher_comparison") or {}
+        if teacher_context_only and comparison.get("status") != "complete":
+            lines.extend(["", "> 老师对照资料缺失或读取失败；不影响市场评选。"])
+        lines.extend(["", "完整证据、老师对照与筛选记录保留在同日 JSON（daily-leaders show --date " + date + " --json）。"])
+
+    if leaders and not legacy_status_items and compact:
+        lines.extend(["", "可回复：确认，全部录入／确认录入第 N 条／跳过（备选不录入）。"])
+    elif leaders and not legacy_status_items:
         lines.extend([
             "", "## 确认方式", "",
             "- 可回复：确认，全部录入（仅上方候选条目，不含观察备选）",

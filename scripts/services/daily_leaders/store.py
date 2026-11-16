@@ -35,7 +35,7 @@ def write_proposal(proposal: dict[str, Any], *, root: str | Path | None = None) 
     json_path = output_root / f"{date}.json"
     markdown_path = output_root / f"{date}.md"
     json_path.write_text(json.dumps(proposal, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    markdown_path.write_text(render_markdown(proposal), encoding="utf-8")
+    markdown_path.write_text(render_markdown(proposal, compact=True), encoding="utf-8")
     return {"json": json_path, "markdown": markdown_path}
 
 

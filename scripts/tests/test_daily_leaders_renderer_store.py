@@ -66,6 +66,49 @@ def _verified_new_proposal():
     return proposal
 
 
+def test_compact_confirmation_keeps_risks_and_full_evidence_in_json(tmp_path):
+    proposal = _verified_new_proposal()
+    item = proposal["top_leaders"][0]
+    item["llm_reason"] = "候选内比较尚不完整，仍需人工确认。" * 6
+    item["risk_flags"] = ["容量需复核"]
+    proposal["backup_candidates"] = [{"stock": "观察票", "sector": "半导体", "llm_role": "备选"}]
+    proposal["candidate_policy"] = {"teacher_context_only": True, "evidence_version": 1}
+    proposal["teacher_comparison"] = {"status": "source_failed"}
+    paths = write_proposal(proposal, root=tmp_path)
+    md = paths["markdown"].read_text()
+    assert md == render_markdown(proposal, compact=True)
+    assert "688041 海光信息｜半导体" in md
+    assert "启动日主动引领" in md
+    assert "容量需复核" in md
+    assert "对照资料缺失或读取失败" in md
+    assert "清晰度：" not in md and "LLM裁判" not in md
+    assert item["llm_reason"] not in md
+    assert read_proposal(proposal["date"], root=tmp_path)["top_leaders"][0]["llm_reason"] == item["llm_reason"]
+    main, backups = md.split("## 观察备选（不参与确认）")
+    assert "观察票" not in main and "观察票" in backups
+    assert "备选不录入" in md
+
+
+@pytest.mark.parametrize("legacy", [True, False])
+def test_compact_confirmation_preserves_unconfirmable_states(legacy):
+    proposal = _proposal()
+    proposal["llm_status"] = {"ok": False, "reason": "timeout"}
+    proposal["top_leaders"] = [{**proposal["top_leaders"][0], "llm_role": "备选"}] if legacy else []
+    md = render_markdown(proposal, compact=True)
+    assert "timeout" in md
+    assert "当前没有可确认" in md
+    assert "可回复：确认" not in md
+    if legacy:
+        assert "请重新生成候选稿" in md
+
+
+def test_compact_preserves_capacity_role_from_evidence_versioned_archive():
+    proposal = _proposal()
+    proposal["candidate_policy"] = {"evidence_version": 1}
+    proposal["top_leaders"][0]["leader_role"] = "容量领先"
+    assert "｜[判断] 容量领先**" in render_markdown(proposal, compact=True)
+
+
 def test_render_markdown_contains_labels_and_confirmation_instruction():
     proposal = _proposal()
     proposal["top_leaders"][0]["llm_rank"] = 1
