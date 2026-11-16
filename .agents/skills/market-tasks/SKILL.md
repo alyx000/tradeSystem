@@ -4,6 +4,12 @@ description: 手动触发或自动定时执行盘前/盘后行情采集任务、
 version: "1.14"
 ---
 
+2026-11-16 断板反包PK固定口径：近期涨幅只按正向辨识度看待，不奖励涨得少、不仅因涨得多扣分；反包后再断板为中性形态，结合前段高度，不以当前首板或再次断板标签天然判弱。辨识度与当日表现冲突须解释独立证据；版本`recognition-neutral-branch-v1`，报告保留版本及最长120字理由。见`docs/board-break-rebreak.md`。
+
+2026-11-16 断板反包盘后增加独立“连板≥2→断板→反包首板→再断板”分支，严格四个相邻开放日，原分支不变。报告和复盘保留昨日1板与前段高度，六项同日成功来源回执必备；缺源独立降级，不伪报空榜。详见 `docs/board-break-rebreak.md`。
+
+
+
 2026-09-21：`trend-leader daily` 同批附加股东户数／已披露业绩证据卡，标题显示“股票名称（代码）”；按代码覆盖最多12只、回看800自然日，仅引用观察日前已公告事实，保留未覆盖与 `partial/source_failed`。不改变池准入／退出，不新增调度或推送开关。见 [证据卡口径](/Users/alyx/tradeSystem/docs/trend-leader-research-evidence.md)。
 
 
@@ -676,6 +682,8 @@ python3 main.py ma-breakout daily --json
 - **依赖 env**：`TUSHARE_TOKEN` + 钉钉 `DINGTALK_WEBHOOK_TOKEN/SECRET`。
 
 ## 每日最票候选确认稿（daily-leaders）
+
+2026-11-16 每日最票确认稿默认精简：每票保留板块、属性、简短要点、风险和证据缺口；备选仅列名称和板块，完整证据留在同日 JSON。CLI 展示、Markdown 归档与既有推送一致，选股与人工确认逻辑不变。见 `docs/daily-leaders-compact.md`。
 
 工作日 22:30 自动跑（launchd `com.alyx.tradesystem.daily-leaders`，排在 post-market 派生任务之后），生成复盘第 5 步「龙头 / 最票」候选确认稿并推送钉钉 Markdown，也可手动：
 
