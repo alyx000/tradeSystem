@@ -103,6 +103,8 @@ def test_source_failed_saves_alert_pushes_and_returns_nonzero(monkeypatch):
     assert cli._run_daily({}, _args()) == 1
     assert len(wired["saves"]) == 1 and len(wired["pushes"]) == 1
     assert "数据失败" in wired["pushes"][0][0]
+    assert wired["saves"][0][0] == "# failed"
+    assert wired["pushes"][0][1] == "# push"
 
 
 def test_non_trading_day_returns_before_scanner(monkeypatch):

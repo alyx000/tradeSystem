@@ -186,10 +186,49 @@ def render_source_failed(result: dict) -> str:
 
 
 def render_push(result: dict, pk_result: dict | None) -> str:
-    compact = render_daily(result, pk_result, include_match_reasons=False, include_candidates=False)
+    date = result["date"]
+    if result.get("status") == "source_failed":
+        sources = "、".join(_cell(source) for source in (result.get("failed_sources") or {}))
+        detail = f"\n\n失败环节 · {sources}" if sources else ""
+        return f"# 七天横盘不创新低 · {date}\n\n**数据源失败，未完成筛选**{detail}\n"
+
+    lines = [f"# 七天横盘不创新低摘要 · {date}", "", f"**机械筛选命中 {result['candidate_count']} 只**"]
+    pool = _ordered_pool(result, pk_result)
+    status = (pk_result or {}).get("status")
+    ranks = (pk_result or {}).get("ranks") or {}
+    show_pk = status == "ok" and bool(ranks)
+    if not show_pk and pool:
+        pk_status = {
+            "skipped": "候选不足 2 只，PK 跳过",
+            "melted": "PK 未完成，名次待核",
+        }.get(status, "PK 未运行" if pk_result is None else "PK 名次缺失")
+        lines += ["", pk_status]
+
+    if pool:
+        preview = pool[:3]
+        label = "横盘形态 PK [判断]" if show_pk else "极窄横盘 [事实]"
+        scope = f" · 摘录 {len(preview)}/{len(pool)} 只" if len(preview) < len(pool) else ""
+        lines += ["", f"**{label}**{scope}", ""]
+        wins = (pk_result or {}).get("wins") or {}
+        for item in preview:
+            code = item.get("code", "")
+            stock = f"{_cell(item.get('name'))}（{code}）"
+            amplitude = (f"{C.REQUIRED_STOCK_BARS} 根 K 线总振幅 "
+                         f"{_num(item.get('base_range_pct'), suffix='%')}")
+            rank = f"第 {ranks[code]} · " if show_pk and code in ranks else ""
+            win_count = f" · {wins[code]} 胜" if show_pk and code in wins else ""
+            lines.append(f"- {rank}{stock}{win_count} · {amplitude}")
+
+    industry = result.get("industry") or {}
+    if industry.get("status") == "source_failed":
+        lines += ["", "板块标签缺失"]
+    elif industry.get("status") == "partial":
+        lines += ["", f"板块标签覆盖 {industry['matched_rows']}/{industry['candidate_rows']} 只"]
+    lines += ["", f"完整名单及 PK 明细见本地 `data/reports/no-new-low/{date}.html`"]
+    compact = "\n".join(lines) + "\n"
     if len(compact.encode("utf-8")) <= C.PUSH_BODY_MAX_BYTES:
         return compact
-    # 理论上 12 行强池远低于预算；防未来列扩张时整块截断并明确指向本地全量产物。
+    # 防异常长的外部名称撑破消息预算。
     suffix = "\n\n> 钉钉正文超过预算已截断；完整报告见 data/reports/no-new-low/。"
     budget = C.PUSH_BODY_MAX_BYTES - len(suffix.encode("utf-8"))
     encoded = compact.encode("utf-8")[:budget]

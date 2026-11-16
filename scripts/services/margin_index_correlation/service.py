@@ -39,6 +39,7 @@ def run_daily(
     date: str,
     *,
     persist: bool = True,
+    compact: bool = False,
     windows: list[int] | None = None,
     divergence_windows: list[int] | None = None,
     min_gap: float | None = None,
@@ -67,6 +68,8 @@ def run_daily(
         return None
     if persist:
         repo.save(conn, record)
+    if compact:
+        return formatter.format_dingtalk(record)
     return formatter.format_daily_report(record)
 
 

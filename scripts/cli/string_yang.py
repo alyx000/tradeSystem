@@ -101,19 +101,19 @@ def _run_daily(config: dict, args: argparse.Namespace) -> None:
     except Exception:  # noqa: BLE001 - source_failed needs alert even if disk write fails.
         logger.exception("[string-yang daily] 报告落盘失败")
         if source_failed and not args.no_push:
-            _push_to_dingtalk(f"串阳首阴数据源失败 · {date}", md)
+            _push_to_dingtalk(f"串阳首阴数据源失败 · {date}", renderer.render_dingtalk(result))
         raise
     if source_failed:
         logger.error("[string-yang daily] %s 数据源失败，未完成扫描", date)
         if args.no_push:
             logger.info("[string-yang daily] --no-push：失败报告已落盘，未推送")
             raise SystemExit(1)
-        _push_to_dingtalk(f"串阳首阴数据源失败 · {date}", md)
+        _push_to_dingtalk(f"串阳首阴数据源失败 · {date}", renderer.render_dingtalk(result))
         raise SystemExit(1)
     if args.no_push:
         logger.info("[string-yang daily] --no-push：已落报告，未推送")
         return
-    ok = _push_to_dingtalk(f"串阳首阴股票池 · {date}", md)
+    ok = _push_to_dingtalk(f"串阳首阴股票池 · {date}", renderer.render_dingtalk(result))
     if not ok:
         logger.error("[string-yang daily] %s 推送失败", date)
         raise SystemExit(1)

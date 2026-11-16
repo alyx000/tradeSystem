@@ -115,6 +115,18 @@ def test_stale_flag_when_data_date_before_request():
     assert rec["meta"]["stale"] is True
 
 
+def test_index_coverage_counts_series_without_data_by_margin_date():
+    future_only = pd.DataFrame([{"trade_date": "20260630", "pct_chg": 1.0}])
+    pro = SimpleNamespace(index_daily=lambda ts_code, **kw: (
+        future_only if ts_code == "399006.SZ" else _index_df(1.0)
+    ))
+
+    rec = collector.build_record(_fake_registry(), pro, date="2026-06-30", **_KW)
+
+    assert rec["meta"]["fetch_failures"]["indices"] == ["399006.SZ"]
+    assert "total:399006.SZ" not in rec["divergence"]
+
+
 def test_index_truncated_to_margin_spine_on_stale():
     """T-1 脊柱回归（codex round2 #1）：两融止于 T-1、指数含 T，请求日为 T。
 

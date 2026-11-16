@@ -44,3 +44,25 @@ def test_daily_no_push_persists_but_no_push(monkeypatch):
                           "divergence_gap": None, "max_lag": None})()
     cli._run_daily({}, args)
     assert seen == {"persist": True, "push": False}
+
+
+def test_post_pushes_summary_after_saving_record(monkeypatch):
+    from types import SimpleNamespace
+
+    from utils import trade_date
+
+    date = "2026-06-19"
+    record = {"date": date, "data_trade_date": "2026-06-18"}
+    events = []
+    monkeypatch.setattr(cli, "get_connection", lambda: SimpleNamespace(close=lambda: None))
+    monkeypatch.setattr(cli, "_setup_tushare", lambda _: (object(), SimpleNamespace(pro=object())))
+    monkeypatch.setattr(trade_date, "is_non_trading_day", lambda *a: False)
+    monkeypatch.setattr(cli.service.collector, "build_record", lambda *a, **k: record)
+    monkeypatch.setattr(cli.repo, "save", lambda conn, row: events.append(row))
+    monkeypatch.setattr(cli, "_push_to_dingtalk", lambda title, md: events.append(md))
+
+    summary = cli.run_for_post({}, date)
+
+    assert events == [record, summary]
+    assert "2026-06-18（数据滞后）" in summary
+    assert "同步相关" not in summary

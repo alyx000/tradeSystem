@@ -138,3 +138,27 @@ def test_all_unevaluated_no_false_calm():
     md = formatter.format_daily_report(rec)
     assert "未见背离" not in md
     assert "未评估" in md
+
+
+def test_dingtalk_summary_leads_with_risk_and_flags_data_coverage():
+    rec = _record(stale=True)
+    rec["meta"].update(market_scope="SSE+SZSE", fetch_failures={"indices": ["399006.SZ"]})
+    rec["divergence"]["total:000001.SH"]["20"] = {"type": "日期缺口", "diverged": False}
+
+    md = formatter.format_dingtalk(rec)
+
+    assert md.index("低风险") < md.index("两融数据日")
+    assert "涨指两融降" in md
+    assert "2026-06-18（数据滞后） · 仅沪深" in md
+    assert "18,000.00 亿元 · 日环比 +0.50%" in md
+    assert "1 个窗口未评估" in md and "1 个指数缺数据" in md
+    assert len(md) < len(formatter.format_daily_report(rec))
+
+
+def test_dingtalk_summary_distinguishes_unevaluated_from_no_alert():
+    rec = _record(diverged=False)
+    assert "未触发" in formatter.format_dingtalk(rec)
+    rec["divergence"]["total:000001.SH"]["5"]["type"] = "样本不足"
+    md = formatter.format_dingtalk(rec)
+    assert "数据不足" in md and "1 个窗口未评估" in md
+    assert "未触发" not in md

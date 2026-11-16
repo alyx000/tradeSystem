@@ -67,7 +67,7 @@ def _run_daily(config: dict, args: argparse.Namespace) -> None:
                     # 落盘失败（磁盘满/权限）不得挡掉告警——告警是本分支的核心可观测性（门2 S4 R2）
                     logger.error("[board-break daily] 失败报告落盘异常，继续尝试推送告警", exc_info=True)
                 if not args.no_push:
-                    _push_to_dingtalk(f"⚠️ 断板反包·数据失败 · {date}", md)
+                    _push_to_dingtalk(f"⚠️ 断板反包·数据失败 · {date}", renderer.render_push(result, [], None))
             sys.exit(1)  # 让调度层可观测（log 里能看到非零退出）
         fact_cards = scorer.build_fact_cards(conn, registry, result)
         scored = scorer.score_all(fact_cards)
@@ -94,7 +94,7 @@ def _run_daily(config: dict, args: argparse.Namespace) -> None:
     logger.info("[board-break daily] 报告已落盘 %s", path)
     if args.no_push:
         return
-    _push_to_dingtalk(f"断板反包观察清单 · {date}", md)
+    _push_to_dingtalk(f"断板反包观察清单 · {date}", renderer.render_push(result, scored, pk_result))
 
 
 def _push_to_dingtalk(title: str, markdown: str) -> None:

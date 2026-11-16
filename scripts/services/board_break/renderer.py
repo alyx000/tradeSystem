@@ -334,6 +334,64 @@ def render_source_failed(result: dict) -> str:
     return "\n".join(lines)
 
 
+def render_push(result: dict, scored: list[dict], pk_result: dict | None) -> str:
+    """钉钉摘要复用两榜名次，完整证据留在本地报告。"""
+    date = result["date"]
+    if result.get("status") == "source_failed":
+        sources = "、".join(_cell(name) for name in (result.get("failed_sources") or {}))
+        detail = f"\n\n失败环节 · {sources}" if sources else ""
+        return f"# 断板反包 · {date}\n\n**数据源失败，未完成筛选**{detail}\n"
+
+    lines = [f"# 断板反包摘要 · {date} [判断]", "", f"**已核验候选 {len(scored)} 只**"]
+    pk = pk_result or {}
+    status = pk.get("status")
+    ranks = (pk.get("ranks") or {}) if status == "ok" else {}
+    wins = pk.get("wins") or {}
+    by_code = {card["code"]: card for card in scored}
+    pk_top = sorted(by_code.keys() & ranks.keys(), key=ranks.__getitem__)[:3]
+    preview = list(dict.fromkeys(pk_top + [card["code"] for card in scored[:3]]))
+
+    if preview:
+        scope = "两榜各取前 3" if pk_top else "加权榜取前 3"
+        lines += ["", f"{scope} · 展示 {len(preview)}/{len(scored)} 只", ""]
+        for code in preview:
+            card = by_code[code]
+            name = _cell(card.get("name")) or code
+            parts = [f"**{name}**（{code}）"]
+            if card.get("pct_chg") is not None:
+                parts.append(f"断板日 {_fmt_num(card['pct_chg'], '+.2f')}%")
+            if card.get("rank_score") is not None:
+                parts.append(f"加权第 {card['rank_score']} · {_fmt_num(card.get('total'), '.1f')} 分")
+            if code in ranks:
+                pk_label = f"PK 第 {ranks[code]}"
+                if code in wins:
+                    pk_label += f" · {wins[code]} 胜"
+                parts.append(pk_label)
+            if card.get("branch") == "rebreak":
+                parts.append("反包后再断板")
+            lines.append("- " + " · ".join(parts))
+
+    notes = []
+    if result.get("status") == "partial":
+        notes.append("反包后再断板分支覆盖不全")
+    if result.get("main_sector_degraded"):
+        notes.append("当日主线快照缺失")
+    if _dimension_missing_counts(scored):
+        notes.append("部分评分维度缺数据")
+    if any((card.get(key) or {}).get("status") != "complete"
+           for card in scored if "board_path" in card or "sector_context" in card
+           for key in ("board_path", "sector_context")):
+        notes.append("PK 板块或涨停路径证据不全")
+    if scored and not ranks:
+        notes.append({"skipped": "候选不足 2 只，PK 跳过", "melted": "PK 未完赛"}.get(status, "PK 未出名次"))
+    elif ranks and pk.get("invalid"):
+        notes.append(f"PK 有 {pk['invalid']} 场无效")
+    if notes:
+        lines += ["", "提示 · " + "；".join(notes)]
+    lines += ["", f"全量榜单与依据见本地 `data/reports/board-break/{date}.md`"]
+    return "\n".join(lines) + "\n"
+
+
 def save_report(md: str, date: str, out_root: str = "data/reports/board-break") -> pathlib.Path:
     """落盘 `<out_root>/<date>.md`；`out_root` 可注入供测试使用 `tmp_path`。
 

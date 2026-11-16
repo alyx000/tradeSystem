@@ -168,6 +168,33 @@ def format_daily_report(record: dict) -> str:
     return "\n\n".join("\n".join(b) for b in blocks)
 
 
+def format_dingtalk(record: dict) -> str:
+    """钉钉摘要保留预警、合计余额和数据覆盖。"""
+    alert = _risk_alert(record)
+    lines = [f"# 两融×指数联动 · {record['date']} [判断]", "", f"**{alert['headline']}**", ""]
+    reasons = alert.get("reasons") or []
+    if reasons:
+        lines.append(f"- 触发 {alert['hit_count']} 处 · {'；'.join(reasons[:2])}")
+
+    meta = record.get("meta") or {}
+    data_date = record.get("data_trade_date")
+    date_label = data_date or "待核"
+    if data_date and data_date != record["date"]:
+        date_label += "（数据滞后）"
+    scope_label = " · 仅沪深" if meta.get("market_scope") == "SSE+SZSE" else ""
+    lines.append(f"- 两融数据日 {date_label}{scope_label}")
+    total = (record.get("balance") or {}).get("total") or {}
+    latest = total.get("latest_yi")
+    if latest is not None:
+        lines.append(f"- 两融余额 {latest:,.2f} 亿元 · 日环比 {_fmt_pct(total.get('dod_pct'))}")
+    if alert.get("unevaluated_count"):
+        lines.append(f"- {alert['unevaluated_count']} 个窗口未评估")
+    missing_indices = (meta.get("fetch_failures") or {}).get("indices") or []
+    if missing_indices:
+        lines.append(f"- {len(missing_indices)} 个指数缺数据")
+    return "\n".join(lines) + "\n"
+
+
 def format_signals(records: list[dict]) -> str:
     """只读回看：最近 N 日两融×指数联动摘要（背离命中 + 合计余额趋势）。"""
     if not records:

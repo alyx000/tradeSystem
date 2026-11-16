@@ -66,15 +66,30 @@ def test_save_artifacts_rejects_date_path_traversal(tmp_path):
         )
 
 
-def test_push_body_respects_byte_budget():
+def test_push_summarizes_first_three_pk_entries_with_original_ranks():
     result = _result()
-    result["pk_pool"] = [_candidate(str(600000 + index)) for index in range(12)]
-    result["pk_pool_count"] = 12
-    pushed = renderer.render_push(result, None)
+    pool = [_candidate(str(600000 + index)) for index in range(12)]
+    result.update(pk_pool=pool, pk_pool_count=len(pool), candidate_count=227)
+    order = [item["code"] for item in reversed(pool)]
+    pushed = renderer.render_push(result, {
+        "status": "ok", "order": order,
+        "ranks": dict(zip(order, [1, 1, 3, 3])), "wins": {order[0]: 11},
+    })
     assert len(pushed.encode("utf-8")) <= constants.PUSH_BODY_MAX_BYTES
-    assert "申万二级[事实]" in pushed
-    assert "当前成分快照" in pushed
-    assert "电力" in pushed
+    assert "机械筛选命中 227 只" in pushed
+    assert "横盘形态 PK [判断]" in pushed and "摘录 3/12 只" in pushed
+    assert "第 1 · 示例（600011） · 11 胜 · 8 根 K 线总振幅 8.00%" in pushed
+    assert "第 1 · 示例（600010）" in pushed and "第 3 · 示例（600009）" in pushed
+    assert "600008" not in pushed
+    assert "数据完整性" not in pushed and "附表" not in pushed
+
+
+def test_push_melted_pk_shows_facts_without_guessing_ranks_or_wins():
+    pushed = renderer.render_push(_result(), {"status": "melted", "wins": {"600001": 0}})
+    assert "PK 未完成，名次待核" in pushed
+    assert "极窄横盘 [事实]" in pushed
+    assert "示例（600001） · 8 根 K 线总振幅 8.00%" in pushed
+    assert "第 1" not in pushed and "0 胜" not in pushed
 
 
 def test_source_failed_says_not_empty():
@@ -96,8 +111,8 @@ def test_industry_failure_is_rendered_as_auxiliary_degradation():
     assert "未分类" in markdown
     assert "industry timeout" in markdown
     pushed = renderer.render_push(result, None)
-    assert "板块标签：source_failed" in pushed
-    assert "未分类" in pushed
+    assert "板块标签缺失" in pushed
+    assert "industry timeout" not in pushed
 
 
 def test_full_candidates_outside_pool_are_visible_before_appendix():
@@ -115,8 +130,9 @@ def test_full_candidates_outside_pool_are_visible_before_appendix():
     assert "显示 2 / 2 只" in page
     assert json.dumps(result, sort_keys=True) == original
     pushed = renderer.render_push(result, None)
-    assert "本文为摘要，未列出全量候选" in pushed
-    assert "其余 1 只仍属合格候选" in pushed
+    assert "机械筛选命中 2 只" in pushed
+    assert "完整名单及 PK 明细" in pushed
+    assert "药明康德" not in pushed
 
 
 def test_html_escapes_source_text_and_keeps_unknown_sector():
@@ -137,6 +153,9 @@ def test_failed_html_does_not_claim_empty_or_show_stale_candidates():
     assert 'id="search"' not in page
     assert '<tr data-search=' not in page
     assert "真实空候选" not in page
+    pushed = renderer.render_push(result, None)
+    assert "未完成筛选" in pushed and "失败环节 · daily" in pushed
+    assert "timeout" not in pushed and "命中" not in pushed and "600001" not in pushed
 
 
 def test_sector_order_is_for_lookup_not_horizontal_rank():

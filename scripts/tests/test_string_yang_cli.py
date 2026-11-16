@@ -71,6 +71,9 @@ def test_source_failed_saves_failure_report_pushes_alert_and_exits(monkeypatch, 
     assert len(wired["saves"]) == 1
     assert len(wired["pushes"]) == 1
     assert "数据源失败" in wired["pushes"][0][0]
+    summary = wired["pushes"][0][1]
+    assert "未完成扫描" in summary and "sw_map" in summary
+    assert "扫描口径" not in summary and "命中" not in summary
 
 
 def test_source_failed_dry_run_does_not_save_or_push_but_exits(monkeypatch, capsys):
@@ -93,3 +96,42 @@ def test_source_failed_dry_run_does_not_save_or_push_but_exits(monkeypatch, caps
     assert "数据源失败" in capsys.readouterr().out
     assert wired["saves"] == []
     assert wired["pushes"] == []
+
+
+def test_push_limits_preview_and_keeps_full_archive(monkeypatch):
+    candidates = [
+        {"name": f"样本{i}", "code": f"60000{i}.SH", "yang_count": 6,
+         "today_pct_chg": -1.2, "amount_ratio_vs_prev5_max": 1.5}
+        for i in range(6)
+    ]
+    wired = _wire(monkeypatch, result={
+        "status": "ok", "date": "2026-07-06", "main_sectors": ["半导体"],
+        "mainline": {"status": "llm", "evidence": ["完整证据"]},
+        "candidates": candidates, "data_errors": ["600007.SH"],
+    })
+
+    sy._run_daily({}, _args())
+
+    summary = wired["pushes"][0][1]
+    assert "命中 6 只（已核验样本）" in summary
+    assert "1 只行情缺失" in summary
+    assert "样本0" in summary and "样本4" in summary
+    assert "6 阳 · -1.20% · 1.50x" in summary
+    assert "另有 1 只" in summary and "样本5" not in summary
+    assert "完整证据" not in summary
+    archive = wired["saves"][0][0]
+    assert "完整证据" in archive and "样本5" in archive
+
+
+def test_empty_summary_flags_incomplete_mainline_data(monkeypatch):
+    wired = _wire(monkeypatch, result={
+        "status": "ok", "date": "2026-07-06", "main_sector_degraded": True,
+        "mainline": {"status": "llm", "main_concepts": ["半导体"], "source_errors": ["ths_member"]},
+    })
+
+    sy._run_daily({}, _args())
+
+    summary = wired["pushes"][0][1]
+    assert "命中 0 只（已核验样本）" in summary
+    assert "概念数据覆盖不全" in summary
+    assert "当日板块成交额数据缺失" in summary

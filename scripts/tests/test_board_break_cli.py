@@ -104,6 +104,9 @@ def test_default_saves_and_pushes(monkeypatch, capsys):
     assert len(w["saves"]) == 1
     assert len(w["pushes"]) == 1
     assert w["pushes"][0][0] == "断板反包观察清单 · 2026-07-04"
+    assert "观察清单 md" in w["saves"][0][0]
+    assert "已核验候选 1 只" in w["pushes"][0][1]
+    assert "观察清单 md" not in w["pushes"][0][1]
 
 
 def test_source_failed_saves_failure_report_pushes_alert_and_exits(monkeypatch, capsys):
@@ -121,6 +124,8 @@ def test_source_failed_saves_failure_report_pushes_alert_and_exits(monkeypatch, 
     assert len(w["saves"]) == 1          # 落盘的是失败报告
     assert len(w["pushes"]) == 1
     assert "数据失败" in w["pushes"][0][0]  # 告警标题,非正常清单标题
+    assert "未完成筛选" in w["pushes"][0][1] and "today_limit_up" in w["pushes"][0][1]
+    assert "数据失败 md" in w["saves"][0][0]
 
 
 def test_source_failed_alert_pushed_even_if_save_raises(monkeypatch, capsys):

@@ -126,6 +126,51 @@ def render_daily(result: dict) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
+def render_dingtalk(result: dict) -> str:
+    """手机端摘要，沿用扫描排序，完整明细留在本地报告。"""
+    date = result["date"]
+    if result.get("status") == "source_failed":
+        errors = "、".join(result.get("source_errors") or [])
+        detail = f" · {errors}" if errors else ""
+        return f"# 串阳首阴数据源失败 · {date}\n\n**未完成扫描**{detail}\n"
+
+    mainline = result.get("mainline") or {}
+    main_groups = (result.get("main_sectors") or []) + (mainline.get("main_concepts") or [])
+    candidates = result.get("candidates") or []
+    missing = len(result.get("data_errors") or [])
+    concept_gap = bool(set(_MAINLINE_DATA_ERRORS).intersection(mainline.get("source_errors") or []))
+    if main_groups:
+        coverage = "（已核验样本）" if missing or concept_gap else ""
+        outcome = f"命中 {len(candidates)} 只{coverage}"
+    else:
+        outcome = "暂无可扫描主线"
+    lines = [f"# 串阳首阴股票池 · {date} [判断]", "", f"**{outcome}**", ""]
+    if main_groups:
+        lines.append(f"- 主线 · {'、'.join(main_groups)}")
+    if mainline.get("status") != "llm":
+        lines.append(f"- {mainline_status_label(mainline)}")
+    if result.get("main_sector_degraded"):
+        lines.append("- 板块成交额沿用最近一日" if mainline.get("volume_sectors") else "- 当日板块成交额数据缺失")
+    if concept_gap:
+        lines.append("- 概念数据覆盖不全")
+    if missing:
+        lines.append(f"- {missing} 只行情缺失")
+    if candidates:
+        lines += ["", "连阳天数 · 当日涨跌 · 成交额/前5日最高", ""]
+        preview = candidates[:5]
+        for c in preview:
+            lines.append(
+                f"- **{c.get('name', '')}**（{c.get('code', '')}）"
+                f" · {c.get('yang_count', '—')} 阳 · {_fmt_pct(c.get('today_pct_chg'))}"
+                f" · {_fmt_ratio(c.get('amount_ratio_vs_prev5_max'))}"
+            )
+        remaining = len(candidates) - len(preview)
+        if remaining:
+            lines += ["", f"另有 {remaining} 只见本地报告。"]
+    lines += ["", f"本地报告 `{C.REPORT_DIR}/{date}.md`"]
+    return "\n".join(lines) + "\n"
+
+
 def _report_path(date: str, root: Path | None) -> Path:
     if calendar_date.fromisoformat(date).isoformat() != date:
         raise ValueError("交易日须为 YYYY-MM-DD")

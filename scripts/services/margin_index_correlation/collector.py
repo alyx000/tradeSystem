@@ -82,7 +82,7 @@ def build_record(
                          "margin_label": mlabel})
 
     index_codes = sorted({p["index_code"] for p in pairings})
-    index_series, index_fails = fetch_index_series(pro, index_codes, start, end)
+    index_series, _ = fetch_index_series(pro, index_codes, start, end)
     if not index_series:
         logger.info("[margin-index] %s 无任何指数数据，跳过", date)
         return None
@@ -150,7 +150,7 @@ def build_record(
             "min_gap": min_gap,
             "max_lag": max_lag,
             "lag_min_sample": lag_min_sample,
-            "fetch_failures": {"indices": index_fails},
+            "fetch_failures": {"indices": [code for code in index_codes if code not in index_series]},
             "caliber_note": "两融余额转日变化率(%)后与指数 pct_chg 做 Pearson；背离用复利累计比率",
         },
     }

@@ -95,7 +95,7 @@ def _execute(
     """采集→（落库）→（推送）的核心流程，CLI daily 与盘后折入 (run_for_post) 共用。
 
     返回渲染好的 markdown（无足够数据返 None）。`persist` 时才挂非交易日守卫（dry-run 豁免，
-    免守卫日历预取写真实库）；`push` 控制是否推钉钉。
+    免守卫日历预取写真实库）；推钉钉时返回摘要。
     """
     from utils.network_env import without_standard_http_proxy
 
@@ -112,7 +112,7 @@ def _execute(
                 return None
             md = service.run_daily(
                 conn, registry, provider, date,
-                persist=persist, windows=windows, divergence_windows=divergence_windows,
+                persist=persist, compact=push, windows=windows, divergence_windows=divergence_windows,
                 min_gap=min_gap, max_lag=max_lag,
             )
     finally:

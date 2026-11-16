@@ -74,7 +74,7 @@ def _run_daily(config: dict, args: argparse.Namespace) -> int:
             except OSError:
                 logger.error("[no-new-low] 失败报告落盘异常，继续尝试告警", exc_info=True)
             if not args.no_push:
-                _push_to_dingtalk(f"⚠️ 七天横盘不创新低·数据失败 · {date}", markdown)
+                _push_to_dingtalk(f"⚠️ 七天横盘不创新低·数据失败 · {date}", renderer.render_push(result, None))
         return 1
 
     pk_result = None
