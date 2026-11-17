@@ -29,12 +29,16 @@ SCREEN_RULES = (
 )
 
 
-def checked_artifact(run, name):
+def checked_bytes(run, name):
     manifest = dict(line.split("  ", 1)[::-1] for line in (run / "SHA256SUMS").read_text().splitlines())
     raw = (run / name).read_bytes()
     if hashlib.sha256(raw).hexdigest() != manifest.get(name):
         raise ValueError("归档校验失败")
-    return raw.decode("utf-8")
+    return raw
+
+
+def checked_artifact(run, name):
+    return checked_bytes(run, name).decode("utf-8")
 
 
 def read_receipt(run):
@@ -60,6 +64,37 @@ def read_candidates(run, *, require_ma30=False):
                 raise ValueError("候选未通过MA30核验")
         candidates[code] = name
     return candidates
+
+
+def apply_ma30_to_legacy_candidates(run, candidates, market_date):
+    """Replay the added MA30 requirement against the sealed, earlier market date."""
+    if not candidates:
+        return {}
+    import pandas as pd
+
+    daily = pd.read_pickle(io.BytesIO(checked_bytes(run, "daily.pkl")))
+    if daily.trade_date.max() != market_date:
+        raise ValueError("基线日线与行情日期不一致")
+    bars = daily[daily.ts_code.isin(candidates)].sort_values(["ts_code", "trade_date"])
+    if bars.duplicated(["ts_code", "trade_date"]).any():
+        raise ValueError("基线日线存在重复记录")
+    eligible = {}
+    for code, group in bars.groupby("ts_code"):
+        window = group.tail(30)
+        if len(window) != 30 or window.trade_date.iloc[-1] != market_date:
+            raise ValueError("基线候选缺少MA30行情证据")
+        factor = window.adj_factor.iloc[-1]
+        if not all(math.isfinite(value) and value > 0 for value in window.adj_factor):
+            raise ValueError("基线候选的复权因子无效")
+        closes = window.close * window.adj_factor / factor
+        if not all(math.isfinite(value) and value > 0 for value in closes):
+            raise ValueError("基线候选的前复权收盘价无效")
+        close, ma30 = closes.iloc[-1], math.fsum(closes) / 30
+        if close >= ma30 or math.isclose(close, ma30, rel_tol=1e-12):
+            eligible[code] = candidates[code]
+    if set(bars.ts_code) != set(candidates):
+        raise ValueError("基线候选缺少日线，无法同口径比较")
+    return eligible
 
 
 def current_industry_mapping():
@@ -173,7 +208,7 @@ def stock_list(codes, names, labels, *, added=()):
     ) or "无"
 
 
-def plan(run, run_date, *, archive_industry_by=None, require_ma30=False):
+def plan(run, run_date, *, archive_industry_by=None, require_ma30=False, previous_policy_events=None):
     receipt = read_receipt(run)
     if receipt["run_date"] != run_date:
         raise ValueError("运行日期不一致")
@@ -200,20 +235,29 @@ def plan(run, run_date, *, archive_industry_by=None, require_ma30=False):
     base_date = date.fromisoformat(receipt["comparison_baseline_run"]).isoformat()
     base_run = REPORTS / "runs" / base_date
     baseline = read_receipt(base_run)
-    baseline_market = date.fromisoformat(baseline["market_date"]).isoformat()
-    if (base_date >= run_date or market_date > run_date or baseline_market > min(base_date, market_date)
+    base_market = date.fromisoformat(baseline["market_date"]).isoformat()
+    if (base_date >= run_date or market_date > run_date or base_market > min(base_date, market_date)
             or baseline["run_date"] != base_date
             or baseline["status"] not in {"complete", "partial"}
-            or baseline_market != receipt["comparison_baseline_market"]):
+            or base_market != receipt["comparison_baseline_market"]):
         raise ValueError("候选对比基线无效")
-    ma30_applied = receipt.get("screen_rules") == "ma30_v1"
+    rule, base_rule = receipt.get("screen_rules", "legacy"), baseline.get("screen_rules", "legacy")
+    ma30_applied = rule == "ma30_v1"
     current = read_candidates(run, require_ma30=ma30_applied)
-    previous = read_candidates(base_run)
-    added, removed = sorted(current.keys() - previous.keys()), sorted(previous.keys() - current.keys())
-    if (len(current), len(added), len(removed)) != tuple(
+    previous = read_candidates(base_run, require_ma30=base_rule == "ma30_v1")
+    archived_added = sorted(current.keys() - previous.keys())
+    archived_removed = sorted(previous.keys() - current.keys())
+    if (len(current), len(archived_added), len(archived_removed)) != tuple(
         int(receipt[field]) for field in ("candidates", "candidates_added", "candidates_removed")
     ) or len(previous) != int(baseline["candidates"]):
         raise ValueError("候选名单与归档计数不一致")
+    if rule != base_rule:
+        if (base_rule, rule) != ("legacy", "ma30_v1"):
+            raise ValueError("两个日期的规则不同，缺少可验证的同口径回算")
+        previous = apply_ma30_to_legacy_candidates(base_run, previous, base_market)
+        if previous_policy_events is not None:
+            previous_policy_events.append(["delta", market_date, archived_added, archived_removed])
+    added, removed = sorted(current.keys() - previous.keys()), sorted(previous.keys() - current.keys())
     if not (added or removed):
         return None
     if require_ma30 and not ma30_applied:
@@ -228,14 +272,9 @@ def plan(run, run_date, *, archive_industry_by=None, require_ma30=False):
         rules += ("- 30日均线：最新前复权收盘价须不低于含当日的近 30 根有效日线收盘均值。"
                   "这是额外筛选条件。\n")
     title = f"宽幅震荡候选变动｜{market_date}"
-    if ma30_applied and baseline.get("screen_rules") != "ma30_v1":
-        comparison_note = "本次启用30日均线筛选，基线采用当时的筛选条件。\n\n"
-    else:
-        comparison_note = ""
     total_label = "全部通过MA30的候选" if ma30_applied else "全部候选"
-    body = (f"### {title}\n\n与 {baseline['market_date']} 行情相比，"
-            f"本次初筛 {len(current)} 只，新增 {len(added)} 只，退出 {len(removed)} 只。\n\n"
-            f"{comparison_note}"
+    body = (f"### {title}\n\n与 {base_market} 按同一套筛选条件比较，"
+            f"上次 {len(previous)} 只，本次 {len(current)} 只，新增 {len(added)} 只，退出 {len(removed)} 只。\n\n"
             f"**{total_label} · 申万二级行业**\n\n{stock_list(current, current, labels, added=set(added))}\n\n"
             f"**退出 {len(removed)} 只**\n\n{stock_list(removed, previous, labels)}\n\n"
             f"板块口径为 {market_date} 申万二级行业。\n\n"
@@ -271,7 +310,7 @@ def message_parts(body, limit=12000):
     return [*parts, "".join(lines)]
 
 
-def deliver(event, title, body, run_date, input_by):
+def deliver(event, title, body, run_date, input_by, *, previous_policy_events=()):
     parts = message_parts(body)
     directory = REPORTS / "dingtalk"
     directory.mkdir(exist_ok=True)
@@ -279,11 +318,17 @@ def deliver(event, title, body, run_date, input_by):
     path = directory / f"{event_hash}.json"
     with (directory / ".lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        if path.exists():
-            saved = json.loads(path.read_text())
+        candidates_for_dedup = [path]
+        for earlier_event in previous_policy_events:
+            digest = hashlib.sha256(json.dumps(earlier_event).encode()).hexdigest()
+            candidates_for_dedup.append(directory / f"{digest}.json")
+        for receipt_path in candidates_for_dedup:
+            if not receipt_path.exists():
+                continue
+            saved = json.loads(receipt_path.read_text())
             if saved["status"] != "configuration_failed":
                 return {"status": "already_sent" if saved["status"] == "sent" else "delivery_unconfirmed",
-                        "receipt": str(path)}
+                        "receipt": str(receipt_path)}
 
         confirmed_parts = []
 
@@ -322,12 +367,13 @@ def main():
         if not args.input_by.strip() or (args.send and args.run_date != datetime.now(SHANGHAI).date()):
             raise ValueError("发送只接受当天运行及明确请求者")
         archive_by = args.input_by if args.send or args.archive_industry else None
+        previous_policy_events = []
         payload = plan(REPORTS / "runs" / run_date, run_date, archive_industry_by=archive_by,
-                       require_ma30=args.send)
+                       require_ma30=args.send, previous_policy_events=previous_policy_events)
         if payload is None:
             result = {"status": "not_eligible"}
         elif args.send:
-            result = deliver(*payload, run_date, args.input_by)
+            result = deliver(*payload, run_date, args.input_by, previous_policy_events=previous_policy_events)
         else:
             result = {"status": "preview", "title": payload[1], "message": payload[2]}
     except Exception as exc:
