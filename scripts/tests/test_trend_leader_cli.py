@@ -140,6 +140,12 @@ def test_daily_persists_and_pushes(wired, capsys):
     assert len(wired["pushes"]) == 1                    # 推送一次
     assert "趋势主升观察清单 · 2026-06-12" == wired["pushes"][0][0]
     assert (wired["report_root"] / "2026-06-12.md").exists()
+    pushed = wired["pushes"][0][1]
+    archived = (wired["report_root"] / "2026-06-12.md").read_text(encoding="utf-8")
+    assert "新增 1" in pushed
+    assert "漏斗概览" not in pushed
+    assert "漏斗概览" in archived
+    assert len(pushed) < len(archived)
     conn = get_connection(wired["db"])
     try:
         assert pool.get_active(conn, "600552") is not None

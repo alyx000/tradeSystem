@@ -87,6 +87,71 @@ def _main_sector_label(summary: dict) -> str:
     return f"{label}{''.join(f'（{note}）' for note in notes)}"
 
 
+def render_brief(conn: sqlite3.Connection, summary: dict) -> str:
+    """推送摘要只列结果；完整方法与附加证据由 render_daily 留在本地。"""
+    active = {r["code"]: r for r in pool.list_pool(conn, status="active")}
+    exited = {r["code"]: r for r in pool.list_pool(conn, status="exited")}
+    rows = {**exited, **active}
+    todays = list(dict.fromkeys((summary.get("entered") or []) + (summary.get("refreshed") or [])))
+    exits = summary.get("exited") or []
+    signals = [s for s in (summary.get("in_pool_signals") or [])
+               if any(s.get(key) for key, _ in _SIGNAL_LABELS)]
+    lines = [f"# 趋势主升 · {summary.get('date', '')}", "",
+             f"新增 {len(todays)} · 信号 {len(signals)} · 退池 {len(exits)}", ""]
+    sectors = summary.get("main_sectors") or []
+    concepts = summary.get("main_concepts") or []
+    if sectors:
+        lines += [f"主线：{'、'.join(sectors)}", ""]
+    if concepts:
+        lines += [f"概念：{'、'.join(concepts)}", ""]
+    for heading, codes in (("新增", todays), ("退池", exits)):
+        if not codes:
+            continue
+        lines += [f"**{heading}**"]
+        for code in codes:
+            row = rows.get(code, {})
+            detail = (row.get("exit_reason") or "原因待核验") if heading == "退池" else (
+                f"{row.get('sw_l2') or '行业待核验'} · "
+                f"{(row.get('last_signal') or {}).get('entry_trigger', '涨停')}")
+            lines.append(f"- {row.get('name') or code}（{code}）：{detail}")
+        lines.append("")
+    if signals:
+        lines += ["**在池信号**"]
+        for sig in signals:
+            code = sig.get("code", "")
+            labels = "、".join(label for key, label in _SIGNAL_LABELS if sig.get(key))
+            lines.append(f"- {rows.get(code, {}).get('name') or code}（{code}）：{labels}")
+        lines.append("")
+    # 无启动的常规检查不占正文；异常状态仍须显式呈现。
+    observations = [obs for obs in (summary.get("launch_pullbacks") or [])
+                    if obs.get("state") != "no_launch" or obs.get("status") != "complete"]
+    if observations:
+        lines += ["**结构观察**"]
+    for obs in observations:
+        code = obs["code"]
+        name = obs.get("name") or rows.get(code, {}).get("name") or code
+        gap = "（数据不全）" if obs.get("status") != "complete" else ""
+        lines.append(f"- {name}（{code}）：{obs.get('label', '状态待核验')}{gap}")
+    warnings = []
+    if summary.get("degraded_main") or summary.get("main_sector_status") in {"fallback", "missing"}:
+        warnings.append(_main_sector_label(summary))
+    llm = summary.get("mainline_llm") or {}
+    llm_warning = None
+    if summary.get("main_line") == "hybrid" and llm.get("status") in {"fallback_l2", "fallback", "disabled"}:
+        llm_warning = _llm_status_text(llm)
+        warnings.append(llm_warning)
+    source_errors = [str(e) for e in (summary.get("source_errors") or [])
+                     if e != "mainline_llm" or not llm_warning]
+    if source_errors:
+        warnings.append("数据源失败：" + "、".join(source_errors))
+    if summary.get("data_errors"):
+        warnings.append("行情缺失，未更新：" + "、".join(summary["data_errors"]))
+    if warnings:
+        lines += ["", "数据提示：" + "；".join(warnings)]
+    lines += ["", "[判断] 观察摘要；完整证据见本地同日报告。"]
+    return "\n".join(lines).rstrip() + "\n"
+
+
 def render_daily(conn: sqlite3.Connection, summary: dict) -> str:
     """渲染当日趋势主升观察清单。"""
     active = {r["code"]: r for r in pool.list_pool(conn, status="active")}

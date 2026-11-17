@@ -144,6 +144,7 @@ def _run_daily(config: dict, args: argparse.Namespace) -> None:
                                         main_line=args.main_line, top_concepts=args.top_concepts,
                                         mainline_llm_runner=mainline_llm_runner)
             md = renderer.render_daily(real_conn, summary)
+            brief = renderer.render_brief(real_conn, summary)
     finally:
         real_conn.close()
 
@@ -157,7 +158,7 @@ def _run_daily(config: dict, args: argparse.Namespace) -> None:
     if args.no_push:
         logger.info("[trend-leader daily] --no-push：已落池/报告，未推送")
         return
-    _push_to_dingtalk(f"趋势主升观察清单 · {date}", md)
+    _push_to_dingtalk(f"趋势主升观察清单 · {date}", brief)
 
 
 def _write_report(date: str, markdown: str, *, root: Path | None = None) -> Path:

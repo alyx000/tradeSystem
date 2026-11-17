@@ -58,6 +58,45 @@ def test_render_daily_has_judgment_marker_and_redline(conn):
     assert "不构成买卖建议" in md  # 红线声明
 
 
+def test_brief_keeps_results_and_omits_empty_signals_and_methods(conn):
+    _seed(conn)
+    summary = _summary(in_pool_signals=[
+        {"code": "600552", "near_ma5": False},
+        {"code": "300750", "near_ma5": True},
+    ], refreshed=["600552"])
+    brief = renderer.render_brief(conn, summary)
+    assert "新增 1 · 信号 1 · 退池 1" in brief
+    assert "凯盛科技（600552）" in brief
+    assert "宁德时代（300750）：贴MA5" in brief
+    assert "平安银行（000001）：收盘跌破MA10" in brief
+    signal_part = brief.split("**在池信号**")[1]
+    assert "600552" not in signal_part
+    assert "漏斗概览" not in brief
+    assert "不写交易计划层" not in brief
+    assert "[判断]" in brief
+    assert "漏斗概览" in renderer.render_daily(conn, summary)
+
+
+def test_brief_retains_incomplete_observations_and_failure_context(conn):
+    _seed(conn)
+    brief = renderer.render_brief(conn, _summary(
+        entered=[], exited=["000001"], in_pool_signals=[], main_line="hybrid",
+        mainline_llm={"status": "fallback_l2", "reason": "invalid_output"},
+        source_errors=["mainline_llm", "limit_up"], data_errors=["300750"],
+        main_sector_status="fallback", main_sector_source_date="2026-06-11",
+        launch_pullbacks=[{"code": "600552", "label": "启动结构已破坏",
+                           "state": "invalidated", "status": "partial"}],
+    ))
+    assert "新增 0 · 信号 0 · 退池 1" in brief
+    assert "凯盛科技（600552）：启动结构已破坏（数据不全）" in brief
+    assert "凯盛科技" not in brief.split("**退池**")[1].split("**结构观察**")[0]
+    assert "概念分支已关闭" in brief
+    assert "数据源失败：limit_up" in brief
+    assert "行情缺失，未更新：300750" in brief
+    assert "使用2026-06-11快照" in brief
+    assert "今日无候选" not in brief
+
+
 def test_render_daily_candidate_label_covers_dual15(conn):
     """概览候选标签为「加速∩主线候选（涨停∪双创15%）」，不再误导为「涨停∩主线候选」。"""
     md = renderer.render_daily(conn, _summary(
