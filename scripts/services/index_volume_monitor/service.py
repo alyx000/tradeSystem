@@ -1,4 +1,4 @@
-"""四指数15/30分钟成交额同比，独立状态与限窗outbox；不依赖股票全市场覆盖。"""
+"""四指数5/15分钟成交额同比，独立状态与限窗outbox；不依赖股票全市场覆盖。"""
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -35,7 +35,7 @@ def _validate(state, rule):
         if previous <= 0:
             raise ValueError("待发事件比较基数必须为正数")
         if (end.tzinfo is None or end.utcoffset() != timedelta(hours=8)
-                or type(period) is not int or (period,end) not in windows_at(end+MIN_DELAY,periods=(15,30))
+                or type(period) is not int or (period,end) not in windows_at(end+MIN_DELAY,periods=rule.periods)
                 or e["rule_id"] != rule.rule_id or code not in INDEX_NAMES
                 or e["name"] != INDEX_NAMES[code] or e["event_id"] != event_id(code,period,end,rule.rule_id)
                 or e["trade_date"] != end.date().isoformat()
@@ -45,7 +45,7 @@ def _validate(state, rule):
                 or e["matched"] is not True or e["threshold_pct"] != rule.growth_pct
                 or str((current/previous-1)*100) != e["growth_pct"]
                 or datetime.fromisoformat(e["expires_at"]) != end+MAX_DELAY
-                or e["source"] != "eastmoney:index_15min" or e["amount_unit"] != "CNY"
+                or e["source"] != "eastmoney:index_5min" or e["amount_unit"] != "CNY"
                 or not meets_growth(current,previous,rule.growth_pct)):
             raise ValueError("待发指数成交额事件损坏")
         if e["event_id"] in state["sent_event_ids"] or e["event_id"] in pending_ids:
@@ -71,9 +71,14 @@ def _default_pusher():
 
 def _fetch(registry, code, previous, day):
     try:
-        result = registry.call_specific("eastmoney","get_index_intraday_bars",code,previous,day)
-        if not result.success or result.source != "eastmoney:index_15min":
+        result = registry.call_specific("eastmoney","get_index_intraday_bars",code,previous,day,period_minutes=5)
+        if not result.success or result.source != "eastmoney:index_5min":
             raise ValueError(getattr(result,"error","") or "指数K线来源非法")
+        if not isinstance(result.data,list) or not result.data or any(
+            not isinstance(row,dict) or type(row.get("period_minutes")) is not int
+            or row["period_minutes"] != 5 for row in result.data
+        ):
+            raise ValueError("指数成交额监控必须使用原生5分钟K线")
         return result.data,None
     except Exception as exc:
         return None,f"{code}: {type(exc).__name__}: {exc}"
@@ -131,9 +136,9 @@ def _run_locked(registry, state, path, reports, slots, now, previous, input_by, 
         return {"status":"expired_window","events":[],"errors":["取数完成时已超过窗口，未告警/未推进检查基线"],"pushed":False}
     covered = len(checked & allowed)
     status = "complete" if covered == len(allowed) else ("partial" if covered else "source_failed")
-    # 只在已完成10点30分钟槽位复用本轮行情；不入pending、不追加请求。
+    # 10点仍用本轮5分钟行情计算前半小时环境；与5/15分钟提醒周期独立。
     opening = {}
-    opening_end = next((end for period,end in slots if period == 30 and end.strftime("%H:%M") == "10:00"), None)
+    opening_end = next((end for period,end in slots if end.strftime("%H:%M") == "10:00"), None)
     if opening_end is not None:
         opening["opening_environment"] = opening_observation(
             results, rule.codes, opening_end, previous, rule=rule,

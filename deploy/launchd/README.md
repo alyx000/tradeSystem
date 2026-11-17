@@ -621,7 +621,7 @@ rm ~/Library/LaunchAgents/com.alyx.tradesystem.intraday-monitor.plist
 
 模板固定把 `ProgramArguments` 指向 `.worktrees/intraday-monitor-runtime`。该目录必须是从已审查 commit 创建的 detached worktree，并把生产 `data/` 目录链接进去，以复用只读交易日历和正式 pending/sent 状态。runner 会从自身文件位置推导代码根目录，不能把模板改回仍含未提交代码的主工作区。`launchctl enable` 用于清除 macOS 持久化的 disabled 覆盖，仅执行 `load` 不足以证明任务已启用。
 
-`data/runs/intraday-monitor/state.json`用于价格，`market-scan-state.json`用于横截面；这两类发送失败沿用同日重试/跨日过期。新增`index-volume-state.json`用于四指数15/30分钟同比≥50%长期监控，独立报告先落盘再pending；仅在当前完成窗口后1～5分钟内重试，过期不补发。切换前先停任务，再用新版本transition guard逐个检查三份状态，目标提交必须认识全部pending；上面首次升级若旧guard尚无第三类能力，仅允许其pending为空。切换前后核对三份SHA256（不存在则保持不存在），不能删状态绕过守卫。见[详细口径](../../docs/index-volume-monitor.md)。全链路不写SQLite、持仓、关注池或计划层。**Mac休眠时launchd不执行**，需要覆盖整个交易时段须配置盘中唤醒或迁VPS。
+`data/runs/intraday-monitor/state.json`用于价格，`market-scan-state.json`用于横截面；这两类发送失败沿用同日重试/跨日过期。新增`index-volume-state.json`用于四指数5/15分钟同比≥30%长期监控（2026-11-17调整），独立报告先落盘再pending；仅在当前完成窗口后1～5分钟内重试，过期不补发。切换前先停任务，再用新版本transition guard逐个检查三份状态，目标提交必须认识全部pending；上面首次升级若旧guard尚无第三类能力，仅允许其pending为空。切换前后核对三份SHA256（不存在则保持不存在），不能删状态绕过守卫。见[详细口径](../../docs/index-volume-monitor.md)。全链路不写SQLite、持仓、关注池或计划层。**Mac休眠时launchd不执行**，需要覆盖整个交易时段须配置盘中唤醒或迁VPS。
 
 注册新的生产规则并经用户授权做真实链路验收时，只在交易时段执行一次：
 

@@ -24,7 +24,9 @@ INTRADAY_INSTRUMENTS = {
 }
 
 
-def _parse_index_bars(payload: object, code: str, start_date: str, end_date: str) -> list[dict]:
+def _parse_index_bars(payload: object, code: str, start_date: str, end_date: str, *, period_minutes: int = 15) -> list[dict]:
+    if type(period_minutes) is not int or period_minutes not in (5,15):
+        raise ValueError("指数K线周期仅支持5/15分钟")
     if not isinstance(payload, dict) or type(payload.get("rc")) is not int or payload["rc"] != 0:
         raise ValueError("指数K线信封非法")
     data = payload.get("data")
@@ -43,20 +45,20 @@ def _parse_index_bars(payload: object, code: str, start_date: str, end_date: str
         stamp, *values = line.split(",")
         dt = datetime.strptime(stamp, "%Y-%m-%d %H:%M")
         t = dt.time()
-        if (dt.strftime("%Y-%m-%d %H:%M") != stamp or dt.minute % 15
-                or not (time(9,45) <= t <= time(11,30) or time(13,15) <= t <= time(15))
+        if (dt.strftime("%Y-%m-%d %H:%M") != stamp or dt.minute % period_minutes
+                or not (time(9,30+period_minutes) <= t <= time(11,30) or time(13,period_minutes) <= t <= time(15))
                 or previous is not None and dt <= previous):
-            raise ValueError("指数K线时间重复、倒序或不在15分钟收盘网格")
+            raise ValueError("指数K线时间重复、倒序或不在指定周期收盘网格")
         previous = dt
         open_, close, high, low, volume = [_number(v) for v in values[:5]]
         amount = values[5]
-        # 货币保留源十进制值，不用二进制浮点数判断50%的严格边界。
+        # 货币保留源十进制值，不用二进制浮点数判断放量的严格边界。
         if not re.fullmatch(r"\d{1,18}(?:\.\d{1,8})?", amount):
             raise ValueError("指数成交额非法")
         if min(open_,close,high,low) <= 0 or volume < 0 or not low <= min(open_,close) <= max(open_,close) <= high:
             raise ValueError("指数K线OHLC或成交量非法")
         if start_date <= dt.date().isoformat() <= end_date:
-            out.append({"ts_code":code, "trade_time":stamp, "period_minutes":15,
+            out.append({"ts_code":code, "trade_time":stamp, "period_minutes":period_minutes,
                         "amount":amount, "amount_unit":"CNY", "open":open_,
                         "close":close, "high":high, "low":low, "volume":volume})
     if not out:
@@ -132,12 +134,14 @@ class EastmoneyProvider(DataProvider):
     def get_capabilities(self) -> list[str]:
         return ["get_realtime_quotes", "get_index_intraday_bars"]
 
-    def get_index_intraday_bars(self, index_code: str, start_date: str, end_date: str) -> DataResult:
+    def get_index_intraday_bars(self, index_code: str, start_date: str, end_date: str, *, period_minutes: int = 15) -> DataResult:
         code = str(index_code or "").strip().upper()
         if code not in INTRADAY_INSTRUMENTS:
             return DataResult(None, self.name, error="未注册的盘中宽基指数")
-        source = "eastmoney:index_15min"
+        source = f"eastmoney:index_{period_minutes}min"
         try:
+            if type(period_minutes) is not int or period_minutes not in (5,15):
+                raise ValueError("指数K线周期仅支持5/15分钟")
             sd, ed = date.fromisoformat(start_date), date.fromisoformat(end_date)
             if sd > ed:
                 raise ValueError("指数K线起止日期倒置")
@@ -145,7 +149,7 @@ class EastmoneyProvider(DataProvider):
                 for attempt in range(MAX_ATTEMPTS):
                     try:
                         response = session.get(INDEX_KLINE_URL, params={
-                            "secid": INTRADAY_INSTRUMENTS[code][0], "klt":"15", "fqt":"0",
+                            "secid": INTRADAY_INSTRUMENTS[code][0], "klt":str(period_minutes), "fqt":"0",
                             "lmt":"128", "end":"20500101", "fields1":"f1,f2,f3,f4,f5,f6",
                             "fields2":"f51,f52,f53,f54,f55,f56,f57",
                         }, timeout=(2,3))
@@ -155,7 +159,7 @@ class EastmoneyProvider(DataProvider):
                     except Exception:
                         if attempt == MAX_ATTEMPTS-1:
                             raise RuntimeError("指数K线两次有界请求失败")
-            rows = _parse_index_bars(payload,code,str(sd),str(ed))
+            rows = _parse_index_bars(payload,code,str(sd),str(ed),period_minutes=period_minutes)
             return DataResult(rows,source,source_url=INDEX_KLINE_URL,timeliness=Timeliness.RECENT)
         except Exception as exc:
             return DataResult(None,source,source_url=INDEX_KLINE_URL,

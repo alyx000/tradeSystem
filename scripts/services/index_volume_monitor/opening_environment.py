@@ -1,10 +1,12 @@
 """10点环境证据：只复用本次已取K线，不产生告警或交易信号。"""
 from decimal import Decimal, localcontext
+from dataclasses import replace
+from datetime import timedelta
 
 from .core import compare_window, money
 from .rules import INDEX_NAMES
 
-RULE_VERSION = "opening-environment-v1"
+RULE_VERSION = "opening-environment-v2-5min"
 FLAT_TOLERANCE_PCT = 5  # 工程观察范围，课程未定义数值；不能称为验证过的交易阈值。
 
 
@@ -12,10 +14,13 @@ def evaluate_opening(code, end, previous, rows, *, rule):
     if end.strftime("%H:%M:%S.%f") != "10:00:00.000000":
         raise ValueError("环境观察只接受10:00完成窗口")
     # 复用身份、单位、时间网格、重复行、严格日期及完整30分钟金额契约。
-    amount = compare_window(code, 30, end, previous, rows, rule=rule)
+    amount = compare_window(code, 30, end, previous, rows, rule=replace(rule, periods=(30,)))
     day = end.date().isoformat()
-    keys = [f"{previous} 09:45", f"{previous} 10:00", f"{previous} 15:00",
-            f"{day} 09:45", f"{day} 10:00"]
+    base_minutes = rows[0]["period_minutes"]
+    count = 30 // base_minutes
+    labels = [(end-timedelta(minutes=base_minutes*i)).strftime("%H:%M") for i in reversed(range(count))]
+    keys = ([f"{previous} {label}" for label in labels] + [f"{previous} 15:00"]
+            + [f"{day} {label}" for label in labels])
     indexed = {r["trade_time"]: r for r in rows}
     evidence = []
     for key in keys:
@@ -28,20 +33,20 @@ def evaluate_opening(code, end, previous, rows, *, rule):
                 <= max(prices["open"], prices["close"]) <= prices["high"]):
             raise ValueError(f"环境观察OHLC非法：{key}")
         volume = money(row.get("volume"))
-        evidence.append({"trade_time": key, "ts_code": code, "period_minutes": 15,
+        evidence.append({"trade_time": key, "ts_code": code, "period_minutes": base_minutes,
                          **{k: format(v, "f") for k, v in prices.items()}, "volume": format(volume, "f"),
                          "amount": format(money(row.get("amount")), "f"), "amount_unit": "CNY"})
     with localcontext() as ctx:
         ctx.prec = 64
-        old_volume = sum((Decimal(r["volume"]) for r in evidence[:2]), Decimal(0))
-        new_volume = sum((Decimal(r["volume"]) for r in evidence[3:]), Decimal(0))
+        old_volume = sum((Decimal(r["volume"]) for r in evidence[:count]), Decimal(0))
+        new_volume = sum((Decimal(r["volume"]) for r in evidence[count+1:]), Decimal(0))
         if old_volume <= 0:
             raise ValueError("上一交易日前半小时成交量为0，不能计算同比")
         growth = (new_volume / old_volume - 1) * 100
         near_flat = old_volume * (100-FLAT_TOLERANCE_PCT) <= new_volume * 100 <= old_volume * (100+FLAT_TOLERANCE_PCT)
         volume_state = "near_flat" if near_flat else ("contracted" if new_volume < old_volume else "expanded")
-        prev_close = Decimal(evidence[2]["close"])
-        opening, at_ten = Decimal(evidence[3]["open"]), Decimal(evidence[4]["close"])
+        prev_close = Decimal(evidence[count]["close"])
+        opening, at_ten = Decimal(evidence[count+1]["open"]), Decimal(evidence[-1]["close"])
         high_open, below_open = opening > prev_close, at_ten < opening
         candidate = high_open and below_open and new_volume * 100 <= old_volume * (100+FLAT_TOLERANCE_PCT)
     return {"status": "complete", "code": code, "name": INDEX_NAMES[code],
@@ -79,7 +84,7 @@ def opening_observation(results, codes, end, previous, *, rule, input_by, captur
     return {"version": RULE_VERSION, "status": status, "teacher_note_id": 1178,
             "trade_date": end.date().isoformat(), "previous_trade_date": previous,
             "window": "09:30–10:00", "captured_at": captured_at, "input_by": input_by,
-            "source": "eastmoney:index_15min", "complete_count": complete, "expected_count": len(items),
+            "source": "eastmoney:index_5min", "complete_count": complete, "expected_count": len(items),
             "items": items,
             "method": "课程为大盘案例；四指数分别观察，不合并成全市场结论。±5%是工程定义的近似平量范围，未验证交易效果。",
             "limitations": "成交量保留东方财富原生单位，仅比较同一指数同源同窗，不跨指数相加。缺源不补0。只随原成交额取数尝试计算；金额检查成功后环境缺口不单独重试。无记录不代表未命中。"}

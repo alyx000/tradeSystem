@@ -18,13 +18,12 @@ def windows_at(now: datetime, *, periods=None) -> list[tuple[int,datetime]]:
     out = []
     for hour, minute in ((9,30),(13,0)):
         start = now.replace(hour=hour,minute=minute,second=0,microsecond=0)
-        for step in range(1,9):
-            end = start + timedelta(minutes=15*step)
+        for step in range(1,25):
+            end = start + timedelta(minutes=5*step)
             if MIN_DELAY <= now-end <= MAX_DELAY:
-                if 15 in periods:
-                    out.append((15,end))
-                if step % 2 == 0 and 30 in periods:
-                    out.append((30,end))
+                for period in periods:
+                    if 5*step % period == 0:
+                        out.append((period,end))
     return out
 
 
@@ -71,24 +70,27 @@ def meets_growth(current, previous, growth_pct):
 
 def compare_window(code: str, minutes: int, end: datetime, previous_day: str, rows: object,
                    *, rule=INDEX_VOLUME_GROWTH) -> dict:
-    if (code not in rule.codes or type(minutes) is not int or not isinstance(rows,list)
+    if (code not in rule.codes or type(minutes) is not int or not isinstance(rows,list) or not rows
             or end.tzinfo is None or end.utcoffset() != timedelta(hours=8)
             or (minutes,end) not in windows_at(end+MIN_DELAY,periods=rule.periods)
             or date.fromisoformat(previous_day) >= end.date()):
         raise ValueError("指数成交额输入契约非法")
     by_time = {}
+    base_minutes = rows[0].get("period_minutes") if isinstance(rows[0], dict) else None
+    if type(base_minutes) is not int or base_minutes not in (5,15) or minutes % base_minutes:
+        raise ValueError("指数成交额基础周期非法")
     for row in rows:
         if (not isinstance(row,dict) or row.get("ts_code") != code
-                or type(row.get("period_minutes")) is not int or row["period_minutes"] != 15
+                or type(row.get("period_minutes")) is not int or row["period_minutes"] != base_minutes
                 or row.get("amount_unit") != "CNY"):
             raise ValueError("指数成交额身份/周期/单位错位")
         stamp = row.get("trade_time")
         dt = datetime.strptime(stamp,"%Y-%m-%d %H:%M")
         if (dt.strftime("%Y-%m-%d %H:%M") != stamp or stamp in by_time
-                or (15,shanghai_now(dt)) not in windows_at(shanghai_now(dt)+MIN_DELAY,periods=(15,30))):
+                or (base_minutes,shanghai_now(dt)) not in windows_at(shanghai_now(dt)+MIN_DELAY,periods=(base_minutes,))):
             raise ValueError("指数成交额时间非法或重复")
         by_time[stamp] = money(row.get("amount"))
-    labels = [(end-timedelta(minutes=15*i)).strftime("%H:%M") for i in reversed(range(minutes//15))]
+    labels = [(end-timedelta(minutes=base_minutes*i)).strftime("%H:%M") for i in reversed(range(minutes//base_minutes))]
     def total(day):
         keys = [f"{day} {label}" for label in labels]
         if any(key not in by_time for key in keys):
@@ -106,7 +108,8 @@ def compare_window(code: str, minutes: int, end: datetime, previous_day: str, ro
             "growth_pct":str(growth),"threshold_pct":rule.growth_pct,
             "matched":meets_growth(current,baseline,rule.growth_pct),
             "window_end":end.isoformat(),"expires_at":(end+MAX_DELAY).isoformat(),
-            "source":"eastmoney:index_15min","calculation":"15分钟原值；30分钟为同一交易时段内相邻两根15分钟合计"}
+            "source":f"eastmoney:index_{base_minutes}min",
+            "calculation":f"{base_minutes}分钟原值；{minutes}分钟为同一交易时段内相邻{minutes//base_minutes}根合计"}
 
 
 def render_alert(events: list[dict]) -> str:
@@ -116,6 +119,6 @@ def render_alert(events: list[dict]) -> str:
         lines.extend([f"- [事实] **{e['name']}（{e['code']}） {e['period_minutes']}分钟** {e['start_time']}～{e['end_time']}",
                       f"  - {e['trade_date']}：{current/Decimal('1e8'):.4f}亿元；上一交易日 {e['previous_trade_date']} 同窗：{previous/Decimal('1e8'):.4f}亿元",
                       f"  - 增加 **{Decimal(e['growth_pct']):+.2f}%**（触发条件≥{e['threshold_pct']}%）"])
-    lines.extend(["","来源：东方财富指数15分钟K线成交额（元）；30分钟为相邻两根合计。不同指数口径可重叠，不相加冒充全市场成交额。",
+    lines.extend(["","来源：东方财富指数5分钟K线成交额（元）；15分钟为相邻三根合计。不同指数口径可重叠，不相加冒充全市场成交额。",
                   "仅在完整收盘窗口后比较，不含未完成K线；仅为条件提醒，不构成买卖建议。"])
     return "\n".join(lines)

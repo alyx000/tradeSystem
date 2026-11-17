@@ -1,8 +1,8 @@
-"""四指数固定15/30分钟成交额同比；全部合成数据，禁止真实推送。"""
+"""四指数固定5/15分钟成交额同比；全部合成数据，禁止真实推送。"""
 import argparse
 import json
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
@@ -24,11 +24,12 @@ def moment(hm="10:03", day="2026-11-04"):
     return datetime.fromisoformat(f"{day}T{hm}:00").replace(tzinfo=TZ)
 
 
-def bars(code=CODE, current="150.00", previous="100.00"):
-    return [{"ts_code": code, "trade_time": f"{day} {hm}", "period_minutes": 15,
+def bars(code=CODE, current="130.00", previous="100.00"):
+    return [{"ts_code": code, "trade_time": f"{day} {hm}", "period_minutes": 5,
              "amount": amount, "amount_unit": "CNY"}
             for day, amount in (("2026-11-03", previous), ("2026-11-04", current))
-            for hm in ("09:45", "10:00", "10:15", "10:30", "11:15", "11:30", "13:15", "13:30", "14:45", "15:00")]
+            for start in ("09:30", "13:00")
+            for hm in [(moment(start)+timedelta(minutes=5*i)).strftime("%H:%M") for i in range(1,25)]]
 
 
 def envelope(code=CODE, lines=None):
@@ -88,7 +89,8 @@ def test_source_duplicates_reverse_zero_and_absent_range():
         _parse_index_bars(envelope(), CODE, "2026-11-05", "2026-11-05")
 
 
-def test_provider_http_bounded_and_query_contract(monkeypatch):
+@pytest.mark.parametrize("period", [5, 15])
+def test_provider_http_bounded_and_query_contract(monkeypatch, period):
     p = EastmoneyProvider()
     class Session:
         def __init__(self):
@@ -104,11 +106,12 @@ def test_provider_http_bounded_and_query_contract(monkeypatch):
             return SimpleNamespace(raise_for_status=lambda: None, json=lambda: envelope())
     s = Session()
     monkeypatch.setattr(p, "_make_session", lambda: s)
-    result = p.get_index_intraday_bars(CODE, "2026-11-03", "2026-11-04")
-    assert result.success and result.source == "eastmoney:index_15min" and s.closed
+    result = p.get_index_intraday_bars(CODE, "2026-11-03", "2026-11-04", period_minutes=period)
+    assert result.success and result.source == f"eastmoney:index_{period}min" and s.closed
+    assert all(row["period_minutes"] == period for row in result.data)
     assert len(s.calls) == 2 and s.calls[-1][2] == (2, 3)
     assert s.calls[-1][1]["secid"] == "1.000001"
-    assert s.calls[-1][1]["klt"] == "15" and s.calls[-1][1]["fqt"] == "0"
+    assert s.calls[-1][1]["klt"] == str(period) and s.calls[-1][1]["fqt"] == "0"
     assert s.calls[-1][1]["fields2"] == "f51,f52,f53,f54,f55,f56,f57"
     assert not p.get_index_intraday_bars("bad", "2026-11-03", "2026-11-04").success
     assert len(s.calls) == 2
@@ -117,22 +120,66 @@ def test_provider_http_bounded_and_query_contract(monkeypatch):
 
 
 @pytest.mark.parametrize("hm,periods", [
-    ("09:45", []), ("09:46", [15]), ("09:48", [15]), ("09:50", [15]),
-    ("09:51", []), ("10:03", [15, 30]), ("11:33", [15, 30]),
-    ("13:00", []), ("13:18", [15]), ("13:33", [15, 30]),
-    ("15:03", [15, 30]), ("15:06", []), ("22:00", []),
+    ("09:35", []), ("09:36", [5]), ("09:38", [5]),
+    ("09:45", [5]), ("09:46", [5, 15]), ("09:48", [5, 15]), ("09:50", [5, 15]),
+    ("09:51", [5]), ("10:03", [5, 15]), ("11:33", [5, 15]),
+    ("13:00", []), ("13:06", [5]), ("13:18", [5, 15]), ("13:33", [5, 15]),
+    ("15:03", [5, 15]), ("15:06", []), ("22:00", []),
 ])
 def test_completed_fixed_slot_grid(hm, periods):
     assert [p for p, _ in windows_at(moment(hm))] == periods
 
 
-@pytest.mark.parametrize("minutes", [15, 30])
-@pytest.mark.parametrize("current,matched", [("150", True), ("149.99999999", False), ("0", False), ("151", True)])
-def test_exact_fifty_boundary_and_30min_sum(minutes, current, matched):
+@pytest.mark.parametrize("minutes", [5, 15])
+@pytest.mark.parametrize("current,matched", [("130", True), ("129.99999999", False), ("0", False), ("131", True), ("149", True)])
+def test_exact_thirty_boundary_and_15min_sum(minutes, current, matched):
     result = compare_window(CODE, minutes, moment("10:00"), "2026-11-03", bars(current=current))
     assert result["matched"] is matched
-    assert float(result["current_amount"]) == float(current)*(minutes//15)
+    assert float(result["current_amount"]) == float(current)*(minutes//5)
     assert "2026-11-03" in render_alert([result])
+
+
+@pytest.mark.parametrize("stamp,valid", [
+    ("09:30", False), ("09:35", True), ("09:36", False),
+    ("11:30", True), ("11:35", False), ("13:00", False),
+    ("13:05", True), ("15:00", True), ("15:05", False),
+])
+def test_native_five_minute_source_session_grid(stamp, valid):
+    payload = envelope(lines=[f"2026-11-04 {stamp},100,101,102,99,123,100.00"])
+    if valid:
+        rows = _parse_index_bars(payload, CODE, "2026-11-04", "2026-11-04", period_minutes=5)
+        assert rows[0]["period_minutes"] == 5
+    else:
+        with pytest.raises(ValueError):
+            _parse_index_bars(payload, CODE, "2026-11-04", "2026-11-04", period_minutes=5)
+
+
+def test_fifteen_minutes_uses_exactly_three_adjacent_bars():
+    rows = bars()
+    amounts = {"2026-11-03": ("10", "20", "70"), "2026-11-04": ("20", "40", "70")}
+    labels = ("09:50", "09:55", "10:00")
+    for row in rows:
+        day, hm = row["trade_time"].split()
+        if hm in labels:
+            row["amount"] = amounts[day][labels.index(hm)]
+    fifteen = compare_window(CODE, 15, moment("10:00"), "2026-11-03", rows)
+    five = compare_window(CODE, 5, moment("10:00"), "2026-11-03", rows)
+    assert fifteen["current_amount"] == "130" and fifteen["previous_amount"] == "100"
+    assert fifteen["matched"] and not five["matched"]
+    for label in labels:
+        incomplete = [r for r in rows if r["trade_time"] != f"2026-11-03 {label}"]
+        with pytest.raises(ValueError):
+            compare_window(CODE, 15, moment("10:00"), "2026-11-03", incomplete)
+
+
+@pytest.mark.parametrize("phase", [0, 1, 2])
+def test_three_minute_polling_can_cover_every_five_and_fifteen_minute_window(phase):
+    covered = set()
+    for offset in range(phase, 337, 3):
+        covered.update(windows_at(moment("09:30")+timedelta(minutes=offset)))
+    assert len([item for item in covered if item[0] == 5]) == 48
+    assert len([item for item in covered if item[0] == 15]) == 16
+    assert all(item[0] in (5, 15) for item in covered)
 
 
 @pytest.mark.parametrize("field,value", [("amount", "NaN"), ("amount", True), ("amount", -1),
@@ -145,11 +192,11 @@ def test_bad_data_not_zero_or_wrong_identity(field, value):
         compare_window(CODE, 15, moment("10:00"), "2026-11-03", rows)
 
 
-def test_missing_half_does_not_substitute_cumulative_or_nearest_day():
-    rows = [r for r in bars() if r["trade_time"] != "2026-11-03 09:45"]
-    assert compare_window(CODE, 15, moment("10:00"), "2026-11-03", rows)["matched"]
+def test_missing_five_minute_bar_does_not_substitute_cumulative_or_nearest_day():
+    rows = [r for r in bars() if r["trade_time"] != "2026-11-03 09:55"]
+    assert compare_window(CODE, 5, moment("10:00"), "2026-11-03", rows)["matched"]
     for period, end, prev, data in [
-        (30, moment("10:00"), "2026-11-03", rows),
+        (15, moment("10:00"), "2026-11-03", rows),
         (15, moment("10:00"), "2026-11-02", bars()),
         (15, moment("10:00"), "2026-11-03", bars(previous="0")),
         (30, moment("13:15"), "2026-11-03", bars()),
@@ -190,11 +237,12 @@ class Registry:
     def get_provider(self, name):
         assert name == "eastmoney"
         return SimpleNamespace(_initialized=True, supports=lambda c: c == "get_index_intraday_bars")
-    def call_specific(self, provider, method, code, previous, today):
+    def call_specific(self, provider, method, code, previous, today, *, period_minutes):
+        assert period_minutes == 5
         self.calls.append((provider, method, code, previous, today))
         if code in self.failures:
-            return DataResult(None, "eastmoney:index_15min", error="source failed")
-        return DataResult(self.dirty.get(code, bars(code)), "eastmoney:index_15min")
+            return DataResult(None, "eastmoney:index_5min", error="source failed")
+        return DataResult(self.dirty.get(code, bars(code)), "eastmoney:index_5min")
 
 
 class Pusher:
@@ -220,6 +268,9 @@ def test_full_four_index_eight_events_single_delivery_and_dedup(setup):
     result = run_index_volume(registry, **kw)
     assert result["status"] == "complete" and result["pushed"]
     assert len(result["events"]) == 8 and len(pusher.messages) == 1
+    assert all(e["threshold_pct"] == 30 for e in result["events"])
+    assert {e["period_minutes"] for e in result["events"]} == {5, 15}
+    assert "触发条件≥30%" in pusher.messages[0]["content"]
     assert len(registry.calls) == 4 and all(c[3:] == ("2026-11-03", "2026-11-04") for c in registry.calls)
     state = json.loads(kw["state_path"].read_text())
     assert len(state["sent_event_ids"]) == 8 and not state["pending_events"]
@@ -233,7 +284,7 @@ def test_nonmatch_and_partial_failure_preserve_truth(setup):
     registry, pusher, kw = setup
     registry.failures.add(CODE)
     for code in list(INDEX_NAMES)[1:]:
-        registry.dirty[code] = bars(code, current="149")
+        registry.dirty[code] = bars(code, current="129")
     result = run_index_volume(registry, **kw)
     assert result["status"] == "partial" and not result["pushed"] and not pusher.messages
     assert len(result["evaluations"]) == 6 and len(result["errors"]) == 2
@@ -249,6 +300,15 @@ def test_all_sources_fail_no_checked_advance_or_push(setup):
     result = run_index_volume(registry, **kw)
     assert result["status"] == "source_failed" and not pusher.messages
     assert json.loads(kw["state_path"].read_text())["checked_event_ids"] == []
+
+
+def test_source_cannot_label_fifteen_minute_rows_as_five(setup):
+    registry, pusher, kw = setup
+    for code in INDEX_NAMES:
+        registry.dirty[code] = [{**row, "period_minutes": 15} for row in bars(code)]
+    result = run_index_volume(registry, **kw)
+    assert result["status"] == "source_failed" and not pusher.messages
+    assert not result["evaluations"]
 
 
 def test_push_retry_same_window_no_refetch(setup):
@@ -268,7 +328,7 @@ def test_pending_expires_at_new_slot_not_resent(setup):
     run_index_volume(registry, **kw)
     old_ids = json.loads(kw["state_path"].read_text())["checked_event_ids"]
     pusher.ok = True
-    kw["clock"] = lambda: moment("10:18")
+    kw["clock"] = lambda: moment("10:08")
     result = run_index_volume(registry, **kw)
     assert len(result["events"]) == 4 and result["pushed"]
     state = json.loads(kw["state_path"].read_text())

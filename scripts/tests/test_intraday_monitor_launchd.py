@@ -111,7 +111,7 @@ def test_transition_guard_recognizes_index_volume_rules():
     source = (REPO_ROOT / "scripts/services/index_volume_monitor/rules.py").read_text()
     assert guard.default_rule_ids(source,
         rules_path="scripts/services/index_volume_monitor/rules.py",
-        constructor_name="IndexVolumeRule", collection_name="DEFAULT_INDEX_VOLUME_RULES") == {"index-volume-growth-50pct"}
+        constructor_name="IndexVolumeRule", collection_name="DEFAULT_INDEX_VOLUME_RULES") == {"index-volume-growth-30pct-5m-15m"}
     assert any(s[1] == "IndexVolumeRule" and not s[3] for s in guard.RULE_SOURCES)
 
 

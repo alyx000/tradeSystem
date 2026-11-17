@@ -31,7 +31,7 @@ def test_volume_boundaries_are_exact_and_amount_is_separate(volume, state, match
     item = evaluate(source(volume=volume, amount='200'))
     assert item['volume_state'] == state and item['weak_environment_candidate'] is matched
     assert item['amount_growth_pct'] == '100'
-    assert len(item['source_bars']) == 5
+    assert len(item['source_bars']) == 13
     assert item['previous_close'] == '100' and item['price_at_1000'] == '100.5'
     assert item['flat_tolerance_pct'] == 5
 
@@ -46,8 +46,9 @@ def test_price_equality_not_high_open_or_below(opening, close, high, below):
     assert '不据此判定强势' in item['summary']
 
 
-@pytest.mark.parametrize('stamp', ['2026-11-03 09:45', '2026-11-03 10:00',
-                                   '2026-11-03 15:00', '2026-11-04 09:45', '2026-11-04 10:00'])
+@pytest.mark.parametrize('stamp', [f'{day} {hm}'
+    for day in ('2026-11-03', '2026-11-04')
+    for hm in ('09:35', '09:40', '09:45', '09:50', '09:55', '10:00')] + ['2026-11-03 15:00'])
 def test_every_required_bar_is_mandatory(stamp):
     with pytest.raises(ValueError):
         evaluate([r for r in source() if r['trade_time'] != stamp])
