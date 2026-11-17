@@ -21,7 +21,12 @@ PUSH_BODY_MAX_BYTES = 18_000
 _CANDIDATE_HEADING = "\n## 候选（按 PK 名次 / 粗分排序；排序为 [判断]，主营/催化按行内标签）\n"
 
 _DISCLAIMER = (
-    "> [判断] 盘中单次快照观察清单（尾盘前触发），仅供复盘参考，不构成买卖建议、不含价位。\n"
+    "> 盘中实时快照；主线/热概念参考上一交易日。[判断] 排序仅供观察。\n"
+)
+
+_DATA_NOTES = (
+    "\n## 数据口径\n\n"
+    "> [判断] 盘中单次快照观察清单，仅供复盘参考，不构成买卖建议、不含价位。\n"
     "> 数据时效：涨幅/成交额/尾盘强度为 **T 实时快照**；主线为 **T-1** 口径；"
     "归属概念为扫描时当前快照（不是历史 as-of 快照）；T-1热概念命中为上一交易日资金流口径；"
     "主营是扫描时当前公开静态资料（不是历史 as-of 快照）；催化为截至扫描日近30自然日的本地证据；"
@@ -244,6 +249,7 @@ def render_daily(scan_result: dict, scored: list, pk_result: dict | None) -> str
     lines = _report_prefix(scan_result, pk_result)
     if not scored:
         lines.append("\n本次无满足条件个股。\n")
+        lines.append(_DATA_NOTES)
         return "".join(lines)
     lines.append(_CANDIDATE_HEADING)
     for c in _display_order(scored, pk_result):
@@ -251,6 +257,7 @@ def render_daily(scan_result: dict, scored: list, pk_result: dict | None) -> str
 
     lines.append(_degradation_note(scored))
     lines.append(_render_pk_detail(pk_result, scored))
+    lines.append(_DATA_NOTES)
     return "".join(lines)
 
 
@@ -263,8 +270,10 @@ def render_push_summary(
     report_path: str,
 ) -> str:
     """生成钉钉预算内摘要；候选只按完整块追加，绝不按字符截断候选内容。"""
-    if len(full_md.encode("utf-8")) <= PUSH_BODY_MAX_BYTES:
-        return full_md
+    # 详细口径留在本地附录；即使短报告未超预算，推送也不重复大段说明。
+    push_md = full_md.removesuffix(_DATA_NOTES)
+    if len(push_md.encode("utf-8")) <= PUSH_BODY_MAX_BYTES:
+        return push_md
 
     ordered = _display_order(scored, pk_result)[: C.PK_POOL_MAX]
     prefix = "".join(_report_prefix(scan_result, pk_result)) + _CANDIDATE_HEADING

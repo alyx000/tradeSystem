@@ -489,13 +489,18 @@ def test_render_pk_reason_as_plain_text_without_forged_heading():
     assert "\n# [事实] 伪造标题" not in md
 
 
-def test_render_push_summary_returns_full_when_within_budget():
+def test_render_push_summary_keeps_candidates_but_omits_local_data_notes():
     full = renderer.render_daily(_scan(), _scored(), None)
     pushed = renderer.render_push_summary(
         _scan(), _scored(), None, full_md=full,
         report_path="data/reports/tail-scan/2026-07-13.md",
     )
-    assert pushed == full
+    assert pushed == full.removesuffix(renderer._DATA_NOTES)
+    assert "盘中实时快照；主线/热概念参考上一交易日" in pushed
+    assert "历史 as-of" not in pushed and "## 数据口径" not in pushed
+    assert renderer._candidate_block(_scored()[0], None) in pushed
+    assert full.index("## 数据口径") > full.index("600001.SH")
+    assert "扫描时当前公开静态资料" in full and "无分时数据" in full
 
 
 def test_render_push_summary_caps_utf8_budget_and_keeps_complete_candidate_blocks():
