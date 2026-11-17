@@ -89,7 +89,8 @@ def test_html_failed_theme_never_shows_zero_counts():
     evidence=inputs();evidence['membership']['themes'][THEME]['status']='source_failed'
     fragment,gap=t.render_html(calc(evidence),DAY);visible=_html_default_text(fragment)
     assert '题材成员或行情来源未核验' in visible and '0只' not in visible
-    assert '题材甲' not in visible and '题材甲' in fragment
+    # 已核验题材榜涨跌可独立展示；成员失败不能产生量能结论。
+    assert '题材甲' in visible and '量能对照待核验' in visible
     assert 'source_failed' not in visible and 'source_failed' in fragment and gap
 
 
@@ -100,7 +101,7 @@ def test_html_partial_keeps_known_counts_and_folds_failed_theme_rows():
     fragment,gap=t.render_html(calc(evidence),DAY);visible=_html_default_text(fragment)
     assert '2个题材中1个完整核验' in visible
     assert '题材甲：10cm 1只、20cm 2只、30cm 0只' in visible
-    assert '未核验题材' not in visible and '未核验题材' in fragment and gap
+    assert '未核验题材' in visible and '量能对照待核验' in visible and gap
 
 
 @pytest.mark.parametrize('mutation',[

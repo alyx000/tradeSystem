@@ -343,7 +343,7 @@ def render_markdown(block, day):
     clean = lambda s: str(s).replace('|', '｜').replace('\n', ' ')
     member_date = value.get('membership_date') or '未取得'
     lines = ['### 题材启动证据卡', f"状态：{value['status']}；事实日：{fact}；成员快照日：{member_date}（逐题材覆盖见下表）；报告日：{day}", NOTE]
-    if value.get('market'):
+    if value.get('market') and value.get('evidence', {}).get('increment', {}).get('status') == 'complete':
         lines.append('沪深市场成交额变化：'+_fmt(value['market']['change_pct'], True)+'%')
     lines.extend(f"{r['name']}：{_fmt(r['change_pct'], True)}%" for r in value.get('indices', []))
     if value['rows']:
@@ -372,10 +372,12 @@ def render_html(block, day):
         summary = f'[事实] {len(rows)}个题材中{complete}个完整核验；以下保留已取得结果，其余待核验。'
     parts = [f'<div {MARKER}="{escape(day)}" data-as-of="{escape(fact)}"><h3>题材启动证据卡</h3>',
              '<p>'+escape(summary)+'</p>']
+    from analyzers.theme_volume_context import render_html as render_volume_context
+    parts.append(render_volume_context(value))
     if fact != day:
         parts.append('<p>[事实] 休市展示'+escape(fact)+'最近开放日历史，非当日新增。</p>')
     market = value.get('market')
-    if market:
+    if market and value.get('evidence', {}).get('increment', {}).get('status') == 'complete':
         parts.append('<p>[事实] 沪深市场成交额变化：'+_fmt(market['change_pct'], True)+'%。</p>')
     for r in value.get('indices', []):
         parts.append('<p>[事实] '+escape(r['name'])+'：'+_fmt(r['change_pct'], True)+'%</p>')

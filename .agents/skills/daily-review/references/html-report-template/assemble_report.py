@@ -376,6 +376,7 @@ STRUCTURED_CONTRACT_ATTRIBUTES = (
     "data-strong-stock-feedback",
     "data-strong-feedback-history",
     "data-sector-core-linkage",
+    "data-index-repair",
     "data-theme-launch",
     "data-theme-feedback",
     "data-wave-evidence",
@@ -7477,6 +7478,7 @@ def validate_report(
     strong_stock_feedback: dict | None = None,
     strong_stock_history: dict | None = None,
     sector_core_linkage: dict | None = None,
+    index_repair: dict | None = None,
     theme_launch: dict | None = None,
     theme_feedback: dict | None = None,
     wave_evidence_report: dict | None = None,
@@ -7558,6 +7560,28 @@ def validate_report(
         if (low_price_block.attrs != source_low_price.attrs
                 or normalize_low(low_price_block) != normalize_low(source_low_price)):
             raise ReportValidationError("style_low_price_source_mismatch", "低价股显示与事实日来源不一致", section="s4")
+    repair_metrics = None
+    repair_blocks = parser.structured_contracts['data-index-repair']
+    if repair_blocks or index_repair is not None:
+        from services.market_timing.index_repair import render_html as render_repair, MARKER as REPAIR_MARKER
+        from analyzers.strong_stock_feedback import html_signature
+        try:
+            if index_repair is None or index_repair['context'] != expected_context:
+                raise ValueError('缺口来源与报告事实日历不符')
+            expected_repair = render_repair(index_repair, report_date)[0]
+        except (ValueError, KeyError, TypeError) as exc:
+            raise ReportValidationError('index_repair_source_mismatch', str(exc), section='s1') from exc
+        if (len(repair_blocks) != 1 or repair_blocks[0].section != 's1'
+                or repair_blocks[0].tag != 'div' or repair_blocks[0].default_hidden
+                or repair_blocks[0].value != report_date
+                or html_signature(html, REPAIR_MARKER) != html_signature(expected_repair, REPAIR_MARKER)):
+            raise ReportValidationError('index_repair_source_mismatch', '指数缺口修复须在①唯一展示且与来源一致', section='s1')
+        repair_parser = _ReportParser()
+        repair_parser.feed('<article id="report-document"><section id="s1">'+expected_repair+'</section></article>')
+        repair_metrics = repair_parser.metrics()
+    repair_chars = repair_metrics.evidence_chars if repair_metrics else 0
+    repair_visible = repair_metrics.visible_chars if repair_metrics else 0
+    volume_metrics = None
     theme_chars = theme_tables = theme_rows = 0
     theme_blocks = parser.structured_contracts['data-theme-launch']
     if theme_blocks or theme_launch is not None:
@@ -7573,6 +7597,11 @@ def validate_report(
         theme_parser.feed('<article id="report-document"><section id="s2">'+expected_theme+'</section></article>')
         theme_metrics = theme_parser.metrics()
         theme_chars, theme_tables, theme_rows = theme_metrics.evidence_chars, theme_metrics.evidence_tables, theme_metrics.evidence_rows
+        from analyzers.theme_volume_context import render_html as render_volume_context
+        from analyzers.theme_launch import _view as theme_view
+        volume_parser = _ReportParser()
+        volume_parser.feed('<article id="report-document"><section id="s2">'+render_volume_context(theme_view(theme_launch, report_date)[0])+'</section></article>')
+        volume_metrics = volume_parser.metrics()
     theme_feedback_chars = theme_feedback_tables = theme_feedback_rows = 0
     feedback_blocks = parser.structured_contracts['data-theme-feedback']
     if feedback_blocks or theme_feedback is not None:
@@ -7780,25 +7809,25 @@ def validate_report(
             f"速览 {metrics.tldr_chars} 字，硬上限 {TLDR_CHAR_LIMIT}",
         ),
         (
-            metrics.visible_chars > VISIBLE_CHAR_LIMIT + template_metrics.visible_chars,
+            metrics.visible_chars > VISIBLE_CHAR_LIMIT + template_metrics.visible_chars + repair_visible + (volume_metrics.visible_chars if volume_metrics else 0),
             "visible_chars_exceeded",
             _largest_section(metrics, "visible_chars"),
             f"正文 {metrics.visible_chars} 字，硬上限 {VISIBLE_CHAR_LIMIT}",
         ),
         (
-            metrics.visible_tables > VISIBLE_TABLE_LIMIT,
+            metrics.visible_tables > VISIBLE_TABLE_LIMIT + (volume_metrics.visible_tables if volume_metrics else 0),
             "visible_tables_exceeded",
             _largest_section(metrics, "visible_tables"),
             f"正文 {metrics.visible_tables} 张表，硬上限 {VISIBLE_TABLE_LIMIT}",
         ),
         (
-            metrics.visible_rows > VISIBLE_ROW_LIMIT,
+            metrics.visible_rows > VISIBLE_ROW_LIMIT + (volume_metrics.visible_rows if volume_metrics else 0),
             "visible_rows_exceeded",
             _largest_section(metrics, "visible_rows"),
             f"正文 {metrics.visible_rows} 行，硬上限 {VISIBLE_ROW_LIMIT}",
         ),
         (
-            metrics.evidence_chars > EVIDENCE_CHAR_LIMIT + trend_evidence_chars + template_metrics.evidence_chars + strong_chars + linkage_chars + theme_chars + theme_feedback_chars + wave_chars + strength_chars + zhong_chars + teacher_metrics.evidence_chars,
+            metrics.evidence_chars > EVIDENCE_CHAR_LIMIT + repair_chars + trend_evidence_chars + template_metrics.evidence_chars + strong_chars + linkage_chars + theme_chars + theme_feedback_chars + wave_chars + strength_chars + zhong_chars + teacher_metrics.evidence_chars,
             "evidence_chars_exceeded",
             _largest_section(metrics, "evidence_chars"),
             f"证据层 {metrics.evidence_chars} 字，硬上限 {EVIDENCE_CHAR_LIMIT}",
@@ -10423,6 +10452,7 @@ def render_report(
     strong_stock_feedback: dict | None = None,
     strong_stock_history: dict | None = None,
     sector_core_linkage: dict | None = None,
+    index_repair: dict | None = None,
     theme_launch: dict | None = None,
     theme_feedback: dict | None = None,
     market_strength_report: dict | None = None,
@@ -10519,6 +10549,15 @@ def render_report(
         chunks['s2'] = _inject_section_fragment(chunks['s2'], 's2', theme_fragment)
         if theme_gap:
             chunks['s8ops'] = _inject_section_fragment(chunks['s8ops'], 'ops', '<p>[事实] '+escape(theme_gap)+'</p>')
+    from services.market_timing.index_repair import render_html as render_index_repair
+    if any(re.search(r"\bdata-index-repair\b", body, re.I) for body in chunks.values()):
+        raise ReportValidationError('duplicate_index_repair', '指数缺口修复由正式组装器生成', section='s1')
+    if index_repair is not None:
+        repair_fragment, repair_gap = render_index_repair(index_repair, report_date)
+        chunks['s1'] = _inject_section_fragment(chunks['s1'], 's1', repair_fragment)
+        if repair_gap:
+            chunks['s8ops'] = _inject_section_fragment(chunks['s8ops'], 'ops', '<p>[事实] '+escape(repair_gap)+'</p>')
+
     from analyzers.theme_feedback import render_html as render_theme_feedback
     if any(re.search(r"\bdata-theme-feedback\b", body, re.I) for body in chunks.values()):
         raise ReportValidationError("duplicate_theme_feedback", "同题材次日反馈由正式组装器生成", section="s2")
@@ -10859,6 +10898,7 @@ def write_report(
     teacher_anchors: dict | None = None,
     index_intraday_manifest: dict | None = None,
     style_market_effect: dict | None = None,
+    index_repair: dict | None = None,
     theme_launch: dict | None = None,
     theme_feedback: dict | None = None,
     board_break_report: str | None = None,
@@ -10903,6 +10943,7 @@ def write_report(
         market_snapshot=market_snapshot,
         teacher_anchors=teacher_anchors,
         style_market_effect=style_market_effect,
+        index_repair=index_repair,
         theme_launch=theme_launch,
         theme_feedback=theme_feedback,
     )
@@ -11050,6 +11091,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         theme_launch = load_theme_launch(daily_root, args.date, trade_db_path)
         from analyzers.theme_feedback import load_for_review as load_theme_feedback
         theme_feedback = load_theme_feedback(daily_root, args.date, trade_db_path)
+        from services.market_timing.index_repair import load_for_review as load_index_repair
+        index_repair = load_index_repair(trade_db_path, args.date)
         from services.trend_leader.review_evidence import load as load_trend_review_evidence
         trend_review_evidence = load_trend_review_evidence(_repo_root()/"data/reports/trend-leader", args.date)
         from services.review_teacher_anchors import load as load_teacher_anchors
@@ -11073,6 +11116,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             strong_stock_feedback=strong_stock_feedback,
             strong_stock_history=strong_stock_history,
             sector_core_linkage=sector_core_linkage,
+            index_repair=index_repair,
             theme_launch=theme_launch,
             theme_feedback=theme_feedback,
             market_strength_report=market_strength_report,
@@ -11109,6 +11153,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             strong_stock_feedback=strong_stock_feedback,
             strong_stock_history=strong_stock_history,
             sector_core_linkage=sector_core_linkage,
+            index_repair=index_repair,
             theme_launch=theme_launch,
             theme_feedback=theme_feedback,
             market_strength_report=market_strength_report,

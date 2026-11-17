@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 from . import constants as C
 from . import detectors as D
 from . import repo
+from . import index_repair
 from .fetch import fetch_index_daily
 
 
@@ -182,7 +183,8 @@ def run_daily(conn: sqlite3.Connection, registry, date: str, *, dry_run: bool = 
         close, change_pct = _today_quote(bars)
         per_index.append({"code": code, "name": name, "skipped": False, "source": source,
                           "pivot": pivot, "tp": tp, "fractal": fractal,
-                          "close": close, "change_pct": change_pct})
+                          "close": close, "change_pct": change_pct,
+                          index_repair.KEY: index_repair.capture(conn, bars, date, code, source)})
 
     resonance = D.count_resonance(turning_points)
     # 量能脊柱指数不必在扫描清单内（399106 深证综指只供两市成交额口径、不产信号行），
@@ -199,10 +201,11 @@ def run_daily(conn: sqlite3.Connection, registry, date: str, *, dry_run: bool = 
         if item.get("skipped"):
             continue
         pivot, tp, fr = item["pivot"], item["tp"], item["fractal"]
-        fractal_json = (
-            json.dumps({k: fr[k] for k in ("low_date", "low_price", "left_high", "right_high", "right_date")})
-            if fr["status"] != "none" else None
-        )
+        fractal_evidence = ({k: fr[k] for k in ("low_date", "low_price", "left_high", "right_high", "right_date")}
+                            if fr["status"] != "none" else {})
+        # Keep the legacy JSON-string type and fractal fields; presence is not a fractal signal.
+        fractal_evidence[index_repair.KEY] = item[index_repair.KEY]
+        fractal_json = json.dumps(fractal_evidence, ensure_ascii=False)
         row = {
             "trade_date": date, "index_code": item["code"], "index_name": item["name"],
             "close": item.get("close"), "change_pct": item.get("change_pct"),
