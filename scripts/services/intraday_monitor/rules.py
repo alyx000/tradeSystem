@@ -1287,6 +1287,25 @@ RICHU_BOARD_BREAK_20261111_12 = MonitorRule(
 )
 
 
+# 2026-11-17盘中新增，仅当日有效。
+SHUNNA_BOARD_BREAK_20261117 = MonitorRule(
+    rule_id="shunna-board-break-20261117",
+    instrument_name="顺钠股份",
+    code="000533.SZ",
+    threshold=None,
+    direction="below",
+    inclusive=False,
+    emit_on_initial_match=True,
+    action_label="跌离",
+    valid_from=date(2026, 11, 17),
+    valid_until=date(2026, 11, 17),
+    value_label="价格",
+    value_unit="元",
+    threshold_mode="daily_up_limit_break",
+    threshold_label="当日涨停价",
+)
+
+
 # 长期规则保留上证指数站上 3955；历史个股规则不再启用。
 # 动态涨停价与前收盘均线能力由 MonitorRule.threshold_mode 统一扩展。
 # 科创50 1700 与凯莱英 172.26 临时规则覆盖 8 月 21 日与 24 日两个
@@ -1346,6 +1365,7 @@ DEFAULT_RULES: tuple[MonitorRule, ...] = (
     RICHU_BOARD_BREAK_20261111_12,
     STAR50_BELOW_MA20_20261112_1209,
     BESTECHNIC_TOUCH_MA20_20261113_16,
+    SHUNNA_BOARD_BREAK_20261117,
 )
 
 
