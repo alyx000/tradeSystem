@@ -721,7 +721,10 @@ class ReportGenerator:
                 lines.append(f"- 涨停行业分布: {', '.join(parts)}")
         if "count" in ld:
             lines.append(f"- 跌停: **{ld['count']}家**")
-        down_ladder = ld.get("down_ladder", {})
+        if "consecutive_limit_down" in raw_data:
+            from analyzers.consecutive_limit_down import render as render_consecutive_down
+            lines.extend(render_consecutive_down(raw_data["consecutive_limit_down"]))
+        down_ladder = {} if "consecutive_limit_down" in raw_data else ld.get("down_ladder", {})
         if down_ladder:
             lines.append("- 连续跌停梯队:")
             for streak, names in sorted(down_ladder.items(), key=lambda x: -int(x[0])):

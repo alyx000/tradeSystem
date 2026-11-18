@@ -64,3 +64,5 @@ web/dist/
 !docs/openai-api.md
 
 !docs/zhong-prefix-effect.md
+
+!docs/consecutive-limit-down.md

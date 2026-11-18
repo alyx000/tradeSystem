@@ -46,6 +46,8 @@ globs:
 
 # Skills 同步检查规则
 
+2026-11-18 连续跌停个股数随既有20:00 `post` 自动采集：严格SSE连续开放日，复用当日及只读历史跌停名单，非ST连续≥2日数量与ST已核验数量分开；缺日不跨越、未知不补0，天数下界不冒充精确起始日。`raw_data.consecutive_limit_down`随原盘后信封双写并在盘后摘要展示；来源范围内数量不代表全市场总数，ST/北交所覆盖未核验显式partial。无新调度/推送，不回写历史。见`docs/consecutive-limit-down.md`。
+
 2026-11-17 每日复盘阅读优化续：`review_reading.js/.css`随`attach_visuals`内嵌，跨日验证来源独立分组、缺口说明影响、模板细分状态、七类手机趋势图按日期选值；同步daily-review、模板README、INDEX。验收原表/来源不变、复合/待核不误判、未知缺口保留、缺值断线、部分覆盖、外汇来源与共同基准、低价图一致线型、幂等及离线交互；源表不在本页时保留原图，不能猜数。无需CLI/API/schema或调度变更。
 
 2026-11-16 每日复盘阅读优化：同步`theme_feedback`、`zhong_prefix_effect`、`review_style_charts`渲染器、HTML样式、daily-review及模板/题材说明和INDEX。测试全量/部分/失败/空样本、逐股子集关系、独立分母和来源签名；首屏重点由主会话依据原正文编排，非自动推断。预览独立输出、历史报告保留，不新增取数或业务写入。
