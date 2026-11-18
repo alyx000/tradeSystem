@@ -5838,6 +5838,49 @@ def test_s1_big_picture_verdict_must_name_all_required_dimensions(
     )
 
 
+@pytest.mark.parametrize(("xau_symbol", "xau_time"), [
+    ("fx_sxauusd", f"{DATE}T19:59:00+08:00"),
+    ("hf_GC", f"{DATE}T19:59:00+08:00"),
+    ("fx_sxauusd", "2026-07-17T19:59:00+08:00"),
+])
+def test_post_asset_quotes_are_read_from_fact_day_inside_cross_asset_evidence(assembler, tmp_path, xau_symbol, xau_time):
+    import yaml
+
+    paths = _write_chunks(tmp_path / "chunks")
+    daily = tmp_path / "daily"
+    path = daily / DATE / "post-market.yaml"
+    path.parent.mkdir(parents=True)
+    brent = {
+        "status": "ok", "as_of": DATE, "quote_time": f"{DATE}T19:59:00+08:00",
+        "symbol": "hf_OIL", "price": 83.4567, "change_pct": 1.24,
+    }
+    path.write_text(yaml.safe_dump({"date": DATE, "raw_data": {"cross_asset_quotes": {
+        "_source": "sina:hq:post_asset_quotes",
+        "_fetched_at": f"{DATE}T20:00:00+08:00",
+        "brent": brent,
+        "usd_index": dict(brent, symbol="DINIW", price=103.42, change_pct=-0.11),
+        "xau_usd": dict(brent, symbol=xau_symbol, quote_time=xau_time, price=3700.11),
+    }}}), encoding="utf-8")
+
+    html = assembler.render_report(paths["head"].parent, DATE, daily_dir=daily)
+    assembler.validate_report(html)
+    section, _ = _extract_section(html, "s1")
+    assert section.count('data-post-asset-quotes="v1"') == 1
+    assert re.search(r'data-cross-asset-context="v1".*?</table>\s*<table data-post-asset-quotes=', section, re.S)
+    assert "83.4567 美元/桶" in section
+    assert "103.42 点" in section
+    assert "COMEX铜" in section
+    ops, _ = _extract_section(html, "ops")
+    if xau_symbol == "fx_sxauusd" and xau_time.startswith(DATE):
+        assert "现货黄金（XAU/USD）</th><td>3,700.11 美元/盎司</td>" in section
+        assert "大类资产盘后报价缺口" not in ops
+    else:
+        assert "现货黄金（XAU/USD）</th><td>缺失</td>" in section
+        assert "3,700.11" not in section
+        assert "大类资产盘后报价缺口" in ops
+        assert "现货黄金（XAU/USD）" in ops
+
+
 def test_s1_cross_asset_fetch_only_rows_cannot_forge_source_dates(
     assembler, tmp_path
 ):

@@ -1,5 +1,7 @@
 """SinaProvider 实时行情单测（mock 隔离真网）"""
 import os
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -85,7 +87,7 @@ def test_unsupported_codes_rejected_into_note(prov, monkeypatch):
 # --- capability 声明 / 基类默认桩 ---
 
 def test_capabilities_declared(prov):
-    assert prov.get_capabilities() == ["get_realtime_quotes"]
+    assert set(prov.get_capabilities()) == {"get_realtime_quotes", "get_post_asset_quotes"}
     assert prov.supports("get_realtime_quotes")
 
 
@@ -286,3 +288,73 @@ def test_real_network_smoke():
     assert idx["price"] > 0
     assert idx["quote_date"] and idx["quote_time"]
     assert all(r["price"] > 0 for r in result.data)
+
+
+@pytest.fixture
+def post_asset_lines(monkeypatch):
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 7, 27, 20, 0, 10, tzinfo=ZoneInfo("Asia/Shanghai"))
+
+    monkeypatch.setattr("providers.sina_provider.datetime", FixedDateTime)
+    return [
+        'var hq_str_hf_OIL="91.069,,91.150,91.170,93.540,90.340,20:00:09,93.140,93.360,0,2,3,2026-07-27,布伦特原油,216872";',
+        'var hq_str_DINIW="20:00:00,103.7457,103.7457,103.5625,3747,103.5632,103.9117,103.5370,103.7457,美元指数,2026-07-27";',
+        'var hq_str_fx_sxauusd="19:59:59,3741.58,3741.58,3850.10,0,3852.08,3859.01,3727.92,3741.58,黄金盎司兑美元,-2.8187,-108.52,0,此行情由新浪财经计算得出,0,0,,2026-07-27";',
+    ]
+
+
+def test_post_asset_quotes_intact(prov, monkeypatch, post_asset_lines):
+    def fetch(symbols):
+        assert symbols == ["hf_OIL", "DINIW", "fx_sxauusd"]
+        return post_asset_lines
+
+    monkeypatch.setattr(prov, "_fetch_raw", fetch)
+    result = prov.get_post_asset_quotes("2026-07-27")
+    assert result.success
+    assert result.fetched_at == "2026-07-27T20:00:10+08:00"
+    assert set(result.data) == {"brent", "usd_index", "xau_usd"}
+    assert all(quote["status"] == "ok" for quote in result.data.values())
+    assert result.data["brent"]["price"] == 91.069
+    assert result.data["brent"]["change_pct"] == pytest.approx((91.069 / 93.140 - 1) * 100, abs=0.00005)
+    assert result.data["usd_index"]["price"] == 103.7457
+    assert result.data["xau_usd"]["price"] == 3741.58
+    assert result.data["xau_usd"]["quote_time"] == "2026-07-27T19:59:59+08:00"
+
+
+@pytest.mark.parametrize(("bad_line", "status"), [
+    ('var hq_str_hf_OIL="";', "missing_data"),
+    ('var hq_str_hf_CL="91.069,,,,,,20:00:09,93.14,,,,,2026-07-27,纽约原油";', "missing_data"),
+    ('var hq_str_hf_OIL="91.069,,,,,,20:00:11,93.14,,,,,2026-07-27,布伦特原油";', "stale_snapshot"),
+    ('var hq_str_hf_OIL="91.069,,,,,,19:28:00,93.14,,,,,2026-07-27,布伦特原油";', "stale_snapshot"),
+    ('var hq_str_hf_OIL="91.069,,,,,,20:00:09,93.14,,,,,2026-07-26,布伦特原油";', "missing_data"),
+    ('var hq_str_hf_OIL="NaN,,,,,,20:00:09,93.14,,,,,2026-07-27,布伦特原油";', "missing_data"),
+])
+def test_post_asset_bad_brent_keeps_other_quotes(prov, monkeypatch, post_asset_lines, bad_line, status):
+    monkeypatch.setattr(prov, "_fetch_raw", lambda symbols: [bad_line, *post_asset_lines[1:]])
+    result = prov.get_post_asset_quotes("2026-07-27")
+    assert result.success
+    assert result.data["brent"]["status"] == status
+    assert "price" not in result.data["brent"]
+    assert result.data["usd_index"]["status"] == result.data["xau_usd"]["status"] == "ok"
+
+
+def test_post_asset_historical_date_never_fetches(prov, monkeypatch, post_asset_lines):
+    monkeypatch.setattr(prov, "_fetch_raw", lambda _: pytest.fail("历史日禁止取当前快照"))
+    result = prov.get_post_asset_quotes("2026-07-24")
+    assert result.success
+    assert {quote["status"] for quote in result.data.values()} == {"historical_not_supported"}
+
+
+def test_post_asset_before_20_never_fetches(prov, monkeypatch):
+    class EarlyDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 7, 27, 19, 59, 59, tzinfo=ZoneInfo("Asia/Shanghai"))
+
+    monkeypatch.setattr("providers.sina_provider.datetime", EarlyDateTime)
+    monkeypatch.setattr(prov, "_fetch_raw", lambda _: pytest.fail("20:00前禁止取盘后快照"))
+    result = prov.get_post_asset_quotes("2026-07-27")
+    assert result.success
+    assert {quote["status"] for quote in result.data.values()} == {"not_ready"}

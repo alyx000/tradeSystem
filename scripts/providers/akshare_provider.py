@@ -1590,7 +1590,7 @@ class AkshareProvider(DataProvider):
                 return dated
         plans: dict[str, list[str]] = {
             "gold": ["迷你黄金当月连续", "迷你黄金", "COMEX黄金", "微型黄金"],
-            "crude_oil": ["迷你原油当月连续", "迷你原油", "布伦特原油"],
+            "crude_oil": ["迷你原油当月连续", "迷你原油"],
             "copper": ["COMEX铜"],
         }
         keywords = plans.get(name, [name])

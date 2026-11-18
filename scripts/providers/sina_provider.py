@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import logging
 import math
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from .base import DataProvider, DataResult, Timeliness
 
@@ -34,6 +36,17 @@ _HEADERS = {
 }
 _EXCHANGE_PREFIX = {"SH": "sh", "SZ": "sz", "BJ": "bj"}
 _LINE_PREFIX = "var hq_str_"
+_SHANGHAI = ZoneInfo("Asia/Shanghai")
+POST_ASSET_MAX_AGE = timedelta(minutes=30)
+POST_ASSET_SOURCE = "sina:hq:post_asset_quotes"
+
+# 代码、源名称、最新价、参考价、日期、时间和名称字段。
+_POST_ASSET_FEEDS = {
+    "brent": ("hf_OIL", "布伦特原油", 0, 7, 12, 6, 13),
+    "usd_index": ("DINIW", "美元指数", 8, 3, 10, 0, 9),
+    "xau_usd": ("fx_sxauusd", "黄金盎司兑美元", 8, 3, 17, 0, 9),
+}
+POST_ASSET_SYMBOLS = {key: feed[0] for key, feed in _POST_ASSET_FEEDS.items()}
 
 
 def _normalize_code(raw: str) -> str:
@@ -94,7 +107,7 @@ class SinaProvider(DataProvider):
         return True
 
     def get_capabilities(self) -> list[str]:
-        return ["get_realtime_quotes"]
+        return ["get_realtime_quotes", "get_post_asset_quotes"]
 
     def _make_session(self):
         import requests
@@ -116,6 +129,77 @@ class SinaProvider(DataProvider):
                 raise RuntimeError(f"分片 {idx}/{len(chunks)} 请求失败: {e}") from e
             lines.extend(resp.content.decode("gbk", errors="replace").splitlines())
         return lines
+
+    def get_post_asset_quotes(self, trade_date: str) -> DataResult:
+        """同批取布伦特、DXY、XAU/USD 的新浪参考报价。"""
+        source = POST_ASSET_SOURCE
+        symbols = list(POST_ASSET_SYMBOLS.values())
+        source_url = SINA_HQ_URL + ",".join(symbols)
+        fetched_at = datetime.now(_SHANGHAI)
+        if trade_date != fetched_at.date().isoformat():
+            status, reason = "historical_not_supported", "实时源无法回取目标日快照"
+        elif fetched_at.hour < 20:
+            status, reason = "not_ready", "北京时间未到20:00"
+        else:
+            status, reason = "ok", ""
+        if reason:
+            return DataResult(
+                {key: {"status": status, "error": reason} for key in POST_ASSET_SYMBOLS},
+                source, source_url=source_url, fetched_at=fetched_at.isoformat(),
+            )
+        try:
+            lines = self._fetch_raw(symbols)
+        except Exception as exc:
+            return DataResult(
+                None, source, source_url=source_url,
+                error=f"新浪跨资产报价请求失败：{type(exc).__name__}",
+            )
+
+        fetched_at = datetime.now(_SHANGHAI)
+        fields_by_symbol = {}
+        for line in lines:
+            parsed = _parse_line(line)
+            if parsed is None or parsed[0] not in symbols:
+                continue
+            symbol, body = parsed
+            # 重复代码视为响应异常。
+            fields_by_symbol[symbol] = [] if symbol in fields_by_symbol else body.split(",")
+
+        quotes = {}
+        for key, (symbol, name, price_i, ref_i, day_i, time_i, name_i) in _POST_ASSET_FEEDS.items():
+            try:
+                fields = fields_by_symbol[symbol]
+                if fields[name_i] != name:
+                    raise ValueError("identity")
+                price, reference = float(fields[price_i]), float(fields[ref_i])
+                if not all(math.isfinite(value) and value > 0 for value in (price, reference)):
+                    raise ValueError("price")
+                stamp = datetime.fromisoformat(f"{fields[day_i]}T{fields[time_i]}")
+                if stamp.tzinfo is not None or stamp.date() != fetched_at.date() or fields[day_i] != trade_date:
+                    raise ValueError("date")
+            except (KeyError, IndexError, ValueError):
+                quotes[key] = {"status": "missing_data", "error": "报价缺失、品种不符或源日期不匹配"}
+                continue
+
+            stamp = stamp.replace(tzinfo=_SHANGHAI)
+            if not timedelta(0) <= fetched_at - stamp <= POST_ASSET_MAX_AGE:
+                quotes[key] = {"status": "stale_snapshot", "error": "源报价时间晚于抓取时间或滞后超过30分钟"}
+                continue
+
+            change_pct = (price / reference - 1) * 100
+            if not math.isfinite(change_pct):
+                quotes[key] = {"status": "missing_data", "error": "参考价无法计算涨跌幅"}
+                continue
+            quotes[key] = {
+                "status": "ok",
+                "symbol": symbol,
+                "as_of": trade_date,
+                "quote_time": stamp.isoformat(),
+                "price": price,
+                "reference_price": reference,
+                "change_pct": round(change_pct, 4),
+            }
+        return DataResult(quotes, source, source_url=source_url, fetched_at=fetched_at.isoformat())
 
     def get_realtime_quotes(self, codes: list[str]) -> DataResult:
         """批量获取实时行情。

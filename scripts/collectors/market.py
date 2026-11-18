@@ -799,6 +799,10 @@ class MarketCollector:
             "swap_expected_date": date,
         }
 
+        result["cross_asset_quotes"] = self._snapshot_payload(
+            self.registry.call("get_post_asset_quotes", date), "盘后跨资产报价"
+        )
+
         # 盘后统一沉淀复盘所需的跨资产五类证据。盘前仍保留同类取数服务早间简报；
         # 新复盘以本文件为主来源，避免 07:00 抓取时间与报告日/源交易日混用。
         result.update(

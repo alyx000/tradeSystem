@@ -124,6 +124,8 @@
 
 ### 大势、大类资产与外汇掉期（第 1 路 → `s1` 硬契约）
 
+第 1 路额外读取同一事实日的 `raw_data.cross_asset_quotes`。组装器将布伦特（CFD）、美元指数（DXY）、XAU/USD（新浪计算的现货参考价）从该块自动附在大类资产表后，展示北京时间和单位。保留原表中的 WTI 与 COMEX 黄金，生成 `s1` 素材时无需再手写新增三项的表格。缺源逐项写入 `ops`。
+
 “大势”同时包含境内市场结构和外部资产背景，不能只交付 A 股指数、期指、两融。第 1 路必须读取报告窗口最近开放日的盘后归档：
 
 - 大类资产：`daily/<T>/post-market.yaml.raw_data` 中的 `global_indices / global_indices_apac / us_china_assets / commodities / risk_indicators`，由工作日 20:00 的 `main.py post` 同批采集。逐项区分 provider 的 `as_of` 与本地 `_fetched_at`；原字段没有来源交易日时使用 `fetch-only`，可见文字固定披露“源交易日缺失”，禁止把抓取日或 `expected_date` 冒充市场日。2026-07-27 以前或盘后跨资产块确实缺失的旧归档才允许回退同日 `pre-market.yaml.market_data`，并在 `conflicts_or_gaps` 与 `ops` 明示“历史盘前回退”。

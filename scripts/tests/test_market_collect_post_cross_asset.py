@@ -21,7 +21,16 @@ def _success(data: dict, source: str = "mock") -> DataResult:
 
 
 def test_collect_post_market_persists_cross_asset_snapshot(tmp_path, monkeypatch):
+    asset_quotes = {
+        "brent": {"status": "ok", "price": 84.2},
+        "usd_index": {"status": "ok", "price": 104.5},
+        "xau_usd": {"status": "missing_data", "error": "报价缺失"},
+    }
+
     def fake_call(method: str, *args, **kwargs):
+        if method == "get_post_asset_quotes":
+            assert args == ("2026-07-27",)
+            return _success(asset_quotes, "sina:hq:post_asset_quotes")
         if method == "get_forex":
             return _success(
                 {
@@ -127,6 +136,10 @@ def test_collect_post_market_persists_cross_asset_snapshot(tmp_path, monkeypatch
     assert persisted["commodities"]["gold"]["as_of"] == "2026-07-27"
     assert persisted["commodities"]["gold"]["_fetched_at"] == "2026-07-27T20:00:00"
     assert persisted["_cross_asset_context"]["phase"] == "post"
+    for key, quote in asset_quotes.items():
+        assert persisted["cross_asset_quotes"][key] == quote
+    assert persisted["cross_asset_quotes"]["_source"] == "sina:hq:post_asset_quotes"
+    assert persisted["commodities"]["crude_oil"]["as_of"] == "2026-07-27"
 
 
 def test_cross_asset_historical_backfill_rejects_latest_only_snapshots():

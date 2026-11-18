@@ -10641,6 +10641,23 @@ def render_report(
     for gap in feedback_gaps:
         chunks["s8ops"] = _inject_section_fragment(chunks["s8ops"], "ops", f'<p>[事实] {escape(gap)}；缺失不补零。</p>')
     fact_date = (visual_context or {}).get("fact_date") or report_date
+    from services.review_post_asset_quotes import render as render_post_asset_quotes
+
+    if any("data-post-asset-quotes" in body for body in chunks.values()):
+        raise ReportValidationError("duplicate_post_asset_quotes", "盘后报价由组装器从归档生成", section="s1")
+    asset_fragment, asset_gaps = render_post_asset_quotes(daily_dir or (_repo_root() / "daily"), fact_date)
+    if asset_fragment:
+        chunks["s1"], count = re.subn(
+            r"""(<(table|p)\b[^>]*\bdata-cross-asset-context\s*=\s*["'](?:v1|missing-data)["'][^>]*>.*?</\2\s*>)""",
+            lambda match: match.group(1) + "\n" + asset_fragment,
+            chunks["s1"], flags=re.I | re.S,
+        )
+        if count != 1:
+            raise ReportValidationError("invalid_injection_target", "盘后报价要求唯一大类资产证据", section="s1")
+    if asset_gaps:
+        chunks["s8ops"] = _inject_section_fragment(
+            chunks["s8ops"], "ops", f'<p>[事实] 大类资产盘后报价缺口：{escape("；".join(asset_gaps))}。</p>'
+        )
     if any(re.search(r"\bdata-board-break-ranking\s*=", body, re.I) for body in chunks.values()):
         raise ReportValidationError("duplicate_board_break_ranking",
                                     "断板反包排名由组装器统一生成，chunk 不得自行注入", section="s3")

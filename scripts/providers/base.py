@@ -329,6 +329,10 @@ class DataProvider(ABC):
         """获取商品行情；as_of_date 可用于选择不晚于目标日的日期化快照。"""
         return DataResult(data=None, source=self.name, error="not implemented")
 
+    def get_post_asset_quotes(self, trade_date: str) -> DataResult:
+        """获取目标日的布伦特、美元指数和 XAU/USD 报价快照。"""
+        return DataResult(data=None, source=self.name, error="not implemented")
+
     def get_forex(self, pair: str) -> DataResult:
         return DataResult(data=None, source=self.name, error="not implemented")
 

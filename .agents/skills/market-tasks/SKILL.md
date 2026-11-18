@@ -75,6 +75,8 @@ python3 main.py post --date YYYY-MM-DD
 
 来源日期语义保持严格分离：A50、黄金、原油、铜优先读取不晚于目标日的日期化日线并保存真实 `as_of`，避免北京时间晚间把下一期货交易日快照并入当日复盘；A50 先取东财期货日期化日线并做有限重试，失败后仅在盘后目标日场景取 Tushare `index_global/XIN9` 且明确标注为 `index_proxy` 的富时中国 A50 指数日期化代理（不得冒充期指），商品在东财失败时再取新浪日期化日线；日期化历史源均失败才降级实时快照，仅保存 `_fetched_at` 并按 `fetch-only` 使用，禁止把目标日或抓取日冒充市场交易日。单个外部源失败只在对应块写 `source_failed`，不阻断 A 股盘后主链。
 
+同批追加独立的 `raw_data.cross_asset_quotes`。新浪布伦特原油 CFD、美元指数 DXY、现货黄金 XAU/USD 参考报价分别保留源代码、北京时间及抓取时间，并随原盘后信封写入 YAML 与 `daily_market`。北京时间 20:00 起取数，只接受目标日且抓取前 30 分钟内的报价，逐项记录缺口。原 WTI、COMEX 黄金仍走各自的商品期货链路。
+
 ## 次新股赚钱效应盘后统计
 
 `main.py post` 复用已启用的交易日20:00盘后调度，在 `post-market.yaml.raw_data.ipo_effect` 与既有 `daily_market` 保存统计、完整次新成分和来源收据，盘后 Markdown 展示同日统计。不新增独立任务、业务表或计划/关注池写入。
