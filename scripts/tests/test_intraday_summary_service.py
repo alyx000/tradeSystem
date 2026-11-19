@@ -126,10 +126,17 @@ def test_baseline_then_half_hour_summary_pushes_once(tmp_path):
     assert duplicate["status"] == "already_sent"
     assert registry.realtime_calls == calls_before_retry
     assert len(pusher.messages) == 1
-    assert "09:30 → 10:00" in pusher.messages[0][1]
-    assert "上涨 2000 / 下跌 2000" in pusher.messages[0][1]
+    assert "09:30—10:00" in pusher.messages[0][1]
+    assert "#### 核心变化" in pusher.messages[0][1]
+    assert "<details" not in pusher.messages[0][1]
+    assert "| 指标 |" not in pusher.messages[0][1]
+    assert "#### 个股波动榜" in pusher.messages[0][1]
+    assert pusher.messages[0][1].count("：半小时 ") == 10
     report = Path(summary["report_path"])
     assert report.exists()
+    assert "上涨 2000 / 下跌 2000" in report.read_text()
+    assert report.with_suffix(".html").exists()
+    assert "<details>" in report.with_suffix(".html").read_text()
     state = json.loads((tmp_path / "state.json").read_text(encoding="utf-8"))
     assert state["pending_reports"] == []
     assert "2026-08-31T10:00" in state["sent_slot_ids"]
@@ -147,6 +154,38 @@ def test_baseline_slot_is_captured_only_once(tmp_path):
     assert first["status"] == "baseline_saved"
     assert second["status"] == "already_captured"
     assert registry.realtime_calls == 1
+
+
+def test_next_report_reads_previous_archive_without_pushing(tmp_path):
+    db_path = _calendar(tmp_path)
+    registry, pusher = _Registry(), _Pusher()
+    for hour, minute in ((9, 30), (10, 0), (10, 30)):
+        result = _run(tmp_path, registry, pusher, datetime(2026, 8, 31, hour, minute, tzinfo=TZ), db_path=db_path, no_push=True)
+    text = Path(result["report_path"]).read_text()
+    assert "本期 10:00—10:30 · 对照 09:30—10:00" in text
+    assert "｜连续两期上榜" in text
+    assert pusher.messages == []
+
+
+def test_html_archive_failure_does_not_send_or_advance_snapshot(tmp_path, monkeypatch):
+    from services.intraday_summary import service
+    db_path = _calendar(tmp_path)
+    registry, pusher = _Registry(), _Pusher()
+    _run(tmp_path, registry, pusher, datetime(2026, 8, 31, 9, 30, tzinfo=TZ), db_path=db_path)
+    original = service.atomic_write_text
+
+    def fail_html(path, text):
+        if path.suffix == ".html":
+            raise OSError("HTML归档失败")
+        original(path, text)
+
+    monkeypatch.setattr(service, "atomic_write_text", fail_html)
+    result = _run(tmp_path, registry, pusher, datetime(2026, 8, 31, 10, 0, tzinfo=TZ), db_path=db_path)
+    state = json.loads((tmp_path / "state.json").read_text())
+    assert result["status"] == "state_error"
+    assert not pusher.messages
+    assert not state["sent_slot_ids"] and not state["pending_reports"]
+    assert state["last_snapshot"]["slot_id"] == "2026-08-31T09:30"
 
 
 def test_missing_baseline_pushes_partial_current_snapshot(tmp_path):

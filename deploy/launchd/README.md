@@ -650,7 +650,7 @@ launchctl list | grep tradesystem.intraday-summary
 tail -f /tmp/tradesystem-intraday-summary.log
 ```
 
-滚动状态/outbox 为 `data/runs/intraday-summary/state.json`，报告为 `data/reports/intraday-summary/YYYY-MM-DD/HHMM.md`。钉钉失败会在同槽位 5 分钟窗口内重试；成功后同槽位不重复抓取或推送。Mac 休眠或错过 5 分钟窗口时不补发陈旧摘要。
+滚动状态/outbox 为 `data/runs/intraday-summary/state.json`，报告为 `data/reports/intraday-summary/YYYY-MM-DD/HHMM.md/.html`。钉钉失败会在同槽位 5 分钟窗口内重试；成功后同槽位不重复抓取或推送。Mac 休眠或错过 5 分钟窗口时不补发陈旧摘要。 本地 HTML 展开完整明细，钉钉精简版附个股波动榜。HTML 报告依赖 `scripts/requirements.txt` 中的 Markdown 包。
 
 ## 断板反包盘后扫描（工作日 21:20）
 

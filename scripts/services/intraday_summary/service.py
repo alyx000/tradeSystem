@@ -9,7 +9,9 @@ from typing import Callable
 from services.intraday_monitor.guards import confirmed_trade_day, quote_is_fresh, shanghai_now
 
 from .analytics import analyze_interval, current_breadth
-from .formatter import render_report
+from .archive import read_previous_report
+from .preview import render_compact_preview, render_channel_summary
+from .html_report import render_html_report
 from .schedule import ScanSlot, slot_for_time
 from .state import (
     DEFAULT_REPORT_ROOT,
@@ -311,12 +313,16 @@ def _run_locked(
         "gap": gap,
         "source_gaps": source_gaps,
     }
-    markdown = render_report(payload)
+    previous_report = read_previous_report(report_root, day=day, slot=slot.previous_label)
+    markdown = render_compact_preview(payload, previous_report, "- 生成方式：本槽位实时快照；精简正文与完整明细同源。")
+    channel_markdown = render_channel_summary(markdown, interval=interval)
     report_path = report_root / day / f"{slot.label.replace(':', '')}.md"
     if dry_run:
-        return {**payload, "status": "dry_run", "data_status": data_status, "markdown": markdown, "report_path": None, "pushed": False, "errors": source_gaps}
+        return {**payload, "status": "dry_run", "data_status": data_status, "markdown": channel_markdown, "report_path": None, "pushed": False, "errors": source_gaps}
 
+    html = render_html_report(markdown)
     atomic_write_text(report_path, markdown + "\n")
+    atomic_write_text(report_path.with_suffix(".html"), html)
     state["last_snapshot"] = snapshot
     title = f"A股盘中半小时扫描 {day} {slot.label}"
     if no_push:
@@ -329,7 +335,7 @@ def _run_locked(
         "item_id": f"summary:{slot.slot_id(day)}",
         "slot_id": slot.slot_id(day),
         "title": title,
-        "content": markdown,
+        "content": channel_markdown,
         "report_path": str(report_path),
         "created_at": now.isoformat(),
         "data_status": data_status,

@@ -8,6 +8,7 @@ pytdx>=1.72            # 通达信直连，平均股价880003与微盘股880823�
 pyyaml>=6.0
 python-dotenv>=1.0.0
 requests>=2.31.0
+Markdown>=3.5         # 盘中扫描本地 HTML 报告
 matplotlib>=3.8.0      # 历史趋势 PNG（无界面后端）
 
 # 定时任务
