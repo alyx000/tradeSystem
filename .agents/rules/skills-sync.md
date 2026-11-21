@@ -1,34 +1,6 @@
 ---
 description: 当修改 CLI 或 API 文件时，提醒同步更新 skills 文档
-globs:
-  - scripts/db/cli.py
-  - scripts/db/migrate.py
-  - scripts/db/schema.py
-  - scripts/main.py
-  - scripts/cli/low_price_effect.py
-  - scripts/analyzers/ipo_effect.py
-  - scripts/analyzers/low_price_effect.py
-  - scripts/cli/emotion_leader.py
-  - scripts/cli/wechat_teacher_feed.py
-  - scripts/cli/review_factors.py
-  - scripts/cli/tail_scan.py
-  - scripts/cli/daily_leaders.py
-  - scripts/cli/value_watch.py
-  - scripts/cli/sector_crowding.py
-  - scripts/cli/monthly_pattern.py
-  - scripts/services/trinity_factor/*.py
-  - scripts/services/tail_scan/*.py
-  - scripts/services/daily_leaders/*.py
-  - scripts/services/value_watch/*.py
-  - scripts/services/sector_crowding/*.py
-  - scripts/services/monthly_pattern/*.py
-  - scripts/services/low_price_effect_history.py
-  - scripts/services/emotion_leader/*.py
-  - scripts/providers/base.py
-  - scripts/providers/tushare_provider.py
-  - scripts/api/routes/*.py
-  - .agents/skills/**/*.md
-  - .cursor/skills/**/*.md
+globs: "scripts/db/cli.py, scripts/db/migrate.py, scripts/db/schema.py, scripts/main.py, scripts/cli/low_price_effect.py, scripts/analyzers/ipo_effect.py, scripts/analyzers/low_price_effect.py, scripts/cli/emotion_leader.py, scripts/cli/wechat_teacher_feed.py, scripts/cli/review_factors.py, scripts/cli/tail_scan.py, scripts/cli/daily_leaders.py, scripts/cli/value_watch.py, scripts/cli/sector_crowding.py, scripts/cli/monthly_pattern.py, scripts/services/trinity_factor/*.py, scripts/services/tail_scan/*.py, scripts/services/daily_leaders/*.py, scripts/services/value_watch/*.py, scripts/services/sector_crowding/*.py, scripts/services/monthly_pattern/*.py, scripts/services/low_price_effect_history.py, scripts/services/emotion_leader/*.py, scripts/providers/base.py, scripts/providers/tushare_provider.py, scripts/api/routes/*.py, .agents/skills/**/*.md, .cursor/skills/**/*.md"
 ---
 
 2026-11-17 大金重工类量价观察：最近5个SSE开放日逐日重算A，允许第三根阴线在最高/最低价均严格上移时通过价格结构，量能/涨停门与B原规则保留。最终名单统一排除北交所及事实日收盘跌停，缺价单列待核验。手机一股一行，旧名单/详细持续性留完整稿；按股票保留全部出现日期及当前状态，历史缺口不补0；`scripts/tools/volume_buildup_recent.py`只读可信归档，`volume_buildup_prepare.py`以SHA守卫接入既有每日交付，不新增调度或业务写入。见 `docs/volume-buildup.md`。
