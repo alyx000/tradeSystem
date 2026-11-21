@@ -225,7 +225,7 @@
 | `implementation-plan.md`  | 实施计划必须含范围、分层测试、验收命令与完成标准；不强制固定多 Agent 分组                         |
 | `solution-format.md`      | 技术方案 / 执行计划 / 业务逻辑解析默认使用结构化章节、表格与纯 Mermaid 图表输出                       |
 | `test-design.md`          | 分层测试设计：金字塔原则、隔离原则、自底向上执行                                              |
-| `post-dev-review.md` | 实质性代码改动后的审查门：先按触碰路径**定档**（双门 / 单门 / 单门+前端），高风险面才跑 `/code-review`（门1）∥ codex adversarial-review（门2）**并行**，findings 合并后一次性修；3 条结束条件 + 2 轮上限 |
+| `post-dev-review.md` | Codex MCP 轻量只读审查（2026-11-21精简）：仅高风险改动触发单路 Codex MCP 只读审查（不可用时退回 1 名会话内审查者），最多两轮；常规/UI 改动免强制审查 |
 | `skills-sync.md`          | CLI / API / Skills 变更后同步 `INDEX.md`、跑 `test_cli_smoke`、检查受影响 SKILL.md；新增顶层 subparser 必加 `ARCHITECTURE_COMMANDS` 参数化 |
 | `launchd-deploy.md`       | macOS launchd 定时任务部署规范：包装脚本必须 set PATH + source env；安装后必须 launchctl start 真触发验证；LLM 任务超时建议 180s+ |
 | `tdd-commit-strategy.md`  | TDD 实施完成后按功能层次切 commit（不每个 R/G 一个、不全 squash）；commit message 标 What/Why/TDD 轮数；`git add` 用具体路径不用 `-A` |

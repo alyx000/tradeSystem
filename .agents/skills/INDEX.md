@@ -8,6 +8,8 @@
 
 # Skills 依赖索引
 
+2026-11-21 审查规则精简（优先于下方 2026-11-02 旧条）：`post-dev-review.md` 瘦身为 Codex MCP 轻量门禁——仅高风险改动自动触发 Codex MCP（`codex` / `codex-reply`）单路只读审查（不可用时退回 1 名会话内审查者），最多 2 轮；常规/UI 改动免强制审查，用户点名可随时追加。已同步 `implementation-plan.md`、`tdd-commit-strategy.md`、`repo-maintenance-workflows` 及检查清单、AGENTS/CLAUDE。
+
 2026-11-17盘中新增顺钠股份（000533.SZ）涨停炸板提醒：`shunna-board-break-20261117`，仅11月17日一个开放日有效，18日起停用。沿用每3分钟新浪行情和钉钉；日内最高价触及按当日昨收和板型计算的涨停价、且最新价严格低于该价时提醒，持续炸板去重，观察到回封后再炸可重推。缺失、陈旧或矛盾行情不告警；其他监控、调度不变。
 
 2026-11-17 每日复盘阅读优化续：daily-review及模板增加`review_reading.js/.css`，组装器内嵌跨日状态分组、缺口影响卡和手机单指标趋势；原条件/日期/来源和未映射缺口保留。七类趋势仅用本页逐日表，缺失断线，来源差异保留，桌面原图不替换。同步SKILL、README、skills-sync及离线DOM/数值测试，不改采集、评分、业务数据或推送。

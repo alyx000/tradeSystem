@@ -90,7 +90,7 @@
 
 1. 运行目标模块的最小有效测试，逻辑改动不得只跑 CLI smoke。
 2. 按影响范围运行 `make check-scripts`、`make check-web` 或 `make check`。
-3. 实质性代码改动按 `post-dev-review.md` 定档并完成审查（重点改动两名会话内审查者，常规改动一名，问题合并处置；不启动外部审查服务或为其请求授权）；豁免或降档时说明原因。
+3. 触碰 `post-dev-review.md` 所列高风险改动时触发 Codex MCP 单路只读审查（不可用时退回 1 名会话内审查者并说明原因），常规改动免强制审查。
 4. 运行 `git diff --check`。
 5. 再次运行 `git status --short --branch`，与初始基线对比。
 6. 检查 `data/`、`daily/`、`tracking/` 等运行时路径是否出现非预期修改。
