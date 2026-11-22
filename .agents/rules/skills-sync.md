@@ -18,6 +18,8 @@ globs: "scripts/db/cli.py, scripts/db/migrate.py, scripts/db/schema.py, scripts/
 
 # Skills 同步检查规则
 
+2026-11-23 安图生物（603658.SH）新增独立动态前复权五个月均线监控：`antu-bio-near-monthly-ma5-20261123-1218`，11月23日至12月18日（20个SSE开放日），12月19日起停用；盘中每3分钟，最新价进入均线±1%（含边界）时钉钉提醒，持续命中去重、离开后重新进入可再提醒。按完整SSE日历取前4个已完成自然月最后开放日的前复权收盘价，与本月最新价一起平均；Tushare日线/因子须齐全，按新浪实时昨收锚定当前价格坐标，缺日历、数据或新鲜行情时不触发。本月不另计已发生的日收盘；原五周线和39.44元规则不变。
+
 2026-11-21 审查规则精简（优先于下方 2026-11-02 旧条）：`post-dev-review.md` 瘦身为 Codex MCP 轻量门禁——仅高风险改动（schema/迁移、写库与状态流转、调度/推送出口、CLI/API/provider/共享契约变更、凭据路径）自动触发 Codex MCP 单路只读审查（不可用时退回 1 名会话内审查者），最多 2 轮；常规/UI/文档改动免强制审查，移除三档并行与“反驳写进代码注释”。已同步 `implementation-plan.md`、`tdd-commit-strategy.md`、`repo-maintenance-workflows`、`INDEX.md` 及 `AGENTS.md`/`CLAUDE.md`。
 
 2026-11-18 连续跌停个股数随既有20:00 `post` 自动采集：严格SSE连续开放日，复用当日及只读历史跌停名单，非ST连续≥2日数量与ST已核验数量分开；缺日不跨越、未知不补0，天数下界不冒充精确起始日。`raw_data.consecutive_limit_down`随原盘后信封双写并在盘后摘要展示；来源范围内数量不代表全市场总数，ST/北交所覆盖未核验显式partial。无新调度/推送，不回写历史。见`docs/consecutive-limit-down.md`。
