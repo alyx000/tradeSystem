@@ -55,16 +55,17 @@ def render_alert(events: list[dict]) -> str:
                     "  - [判断·盘中] 当前未封涨停；盘中仍可能回封，最终是否断板以收盘为准"
                 )
         elif event.get("threshold_mode") in ("previous_close_ma", "intraday_ma"):
+            period = event.get("threshold_period")
             basis_dates = list(event.get("threshold_basis_dates") or [])
             if basis_dates:
-                sample_unit = "已完成交易周" if event.get("threshold_period") == "week" else "已收盘交易日"
+                sample_unit = {"week": "已完成交易周", "month": "已完成交易月"}.get(period, "已收盘交易日")
                 basis_label = "指数原始点位" if event.get("threshold_history_mode") == "index" else "前复权"
                 lines.append(
                     f"  - 均线样本：{basis_dates[0]} 至 {basis_dates[-1]}，"
                     f"共 {len(basis_dates)} 个{sample_unit}（{basis_label}）"
                 )
             if event.get("threshold_mode") == "intraday_ma":
-                current_label = "本周最新价" if event.get("threshold_period") == "week" else "当日最新价"
+                current_label = {"week": "本周最新价", "month": "本月最新价"}.get(period, "当日最新价")
                 lines.append(f"  - 动态均线：上述历史收盘价与{current_label}共同计算，盘中随最新价更新")
             if event.get("threshold_source"):
                 lines.append(f"  - 均线数据来源：{event['threshold_source']}")

@@ -54,7 +54,7 @@ def test_identity_window_and_period_configuration():
     assert RULE.valid_from == date(2026, 11, 3) and RULE.valid_until == date(2026, 11, 30)
     assert RULE in DEFAULT_RULES
     assert len([d for d in OPEN if "2026-11-03" <= d <= "2026-11-30"]) == 20
-    for change in ({"threshold_period": "month"}, {"threshold_mode": "previous_close_ma"},
+    for change in ({"threshold_period": "quarter"}, {"threshold_mode": "previous_close_ma"},
                    {"threshold_mode": "fixed", "threshold": 26}, {"threshold_window": 1}):
         with pytest.raises(ValueError):
             replace(RULE, **change)

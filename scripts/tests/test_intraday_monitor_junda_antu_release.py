@@ -146,7 +146,7 @@ def test_antu_price_and_weekly_rules_coexist_with_one_quote_and_separate_states(
     r.history_closes = [39.45]*len(r.history_dates)
     r.history_factors = [1]*len(r.history_dates)
     assert WEEKLY in DEFAULT_RULES and ANTU in DEFAULT_RULES
-    assert len([rule for rule in DEFAULT_RULES if rule.code == ANTU.code]) == 2
+    assert {rule for rule in DEFAULT_RULES if rule.code == ANTU.code and rule.is_effective_on(r.now.date())} == {WEEKLY, ANTU}
     out = service.run_check(r,rules=(WEEKLY,ANTU),now=r.now,db_path=db,
                             state_path=state,pusher_factory=lambda:p)
     assert out["status"] == "complete" and len(out["events"]) == 2

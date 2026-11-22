@@ -41,6 +41,7 @@ from services.intraday_monitor.rules import (
     CSI2000_BELOW_2585_35_20261030_1109,
     AVG_PRICE_NEAR_26_20261102_27,
     ANTU_BIO_NEAR_WEEKLY_MA5_20261103_30,
+    ANTU_BIO_NEAR_MONTHLY_MA5_20261123_1218,
     BANK_BELOW_WEEKLY_MA5_20261103_16,
     ANTU_BIO_BREAKOUT_39_44_20261105_1202,
     CHUNLI_MEDICAL_BREAKOUT_14_04_20261105_18,
@@ -955,6 +956,7 @@ def test_default_sse_rule_pushes_only_after_observed_below_to_3955(tmp_path):
         STAR50_BELOW_MA20_20261112_1209,
         BESTECHNIC_TOUCH_MA20_20261113_16,
         SHUNNA_BOARD_BREAK_20261117,
+        ANTU_BIO_NEAR_MONTHLY_MA5_20261123_1218,
     )
     assert initial_above["events"] == []
     assert below["events"] == []

@@ -16,6 +16,7 @@ from .guards import (
     quote_is_fresh,
     shanghai_now,
 )
+from .monthly import monthly_history_dates
 from .rules import DEFAULT_RULES, MonitorRule, should_emit
 from .weekly import weekly_history_dates
 from .state import DEFAULT_STATE_PATH, load_state, locked_state, save_state
@@ -165,14 +166,18 @@ def _resolve_rule_threshold(
         return rule.resolve_threshold(quote), None, [], None
 
     window = int(rule.threshold_window or 0) - (rule.threshold_mode == "intraday_ma")
-    weekly = rule.threshold_period == "week"
-    if weekly:
-        plan = weekly_history_dates(now.date().isoformat(), window, db_path=db_path)
+    period = rule.threshold_period
+    day = now.date().isoformat()
+    if period != "day":
+        calendar = weekly_history_dates if period == "week" else monthly_history_dates
+        plan = calendar(day, window, db_path=db_path)
         history_dates, basis_dates = plan if plan is not None else (None, None)
     else:
-        basis_dates = previous_open_dates(now.date().isoformat(), window, db_path=db_path)
+        basis_dates = previous_open_dates(day, window, db_path=db_path)
         history_dates = basis_dates
     if basis_dates is None or history_dates is None:
+        if period == "month":
+            raise ValueError(f"前 {window} 个已完成交易月的开放日历缺失或不可读")
         raise ValueError(f"前 {window} 个开放日历缺失或不可读")
 
     index_history = rule.threshold_history_mode == "index"
@@ -193,11 +198,12 @@ def _resolve_rule_threshold(
         cached_anchor_value = float(cached_anchor)
     except (TypeError, ValueError):
         cached_anchor_value = float("nan")
-    # 周末价一周内不变，但昨收锚日期每日前移；即使昨收相同也必须逐日重验历史。
+    # 周/月末价在当前周期内不变，但昨收锚日期每日前移，仍必须逐日重验历史。
     anchor_matches = cached_anchor is None if index_history else math.isclose(
         cached_anchor_value, quote_pre_close, rel_tol=0.0, abs_tol=1e-6,
     )
-    if (not weekly or previous.get("trade_date") == now.date().isoformat()) and cached_dates == basis_dates and anchor_matches:
+    cache_day_matches = period == "day" or previous.get("trade_date") == day
+    if cache_day_matches and cached_dates == basis_dates and anchor_matches:
         try:
             cached_value = float(cached_threshold)
         except (TypeError, ValueError):

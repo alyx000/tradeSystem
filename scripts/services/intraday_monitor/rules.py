@@ -37,7 +37,7 @@ class MonitorRule:
     threshold_provider: str | None = None
     value_mode: ValueMode = "price"
     proximity_pct: float | None = None
-    threshold_period: Literal["day", "week"] = "day"
+    threshold_period: Literal["day", "week", "month"] = "day"
     threshold_history_mode: Literal["stock_qfq", "index"] = "stock_qfq"
 
     def __post_init__(self) -> None:
@@ -45,10 +45,10 @@ class MonitorRule:
             self.threshold_history_mode == "index" and self.threshold_mode != "intraday_ma"
         ):
             raise ValueError("指数历史口径仅支持动态intraday_ma")
-        if self.threshold_period not in ("day", "week") or (
-            self.threshold_period == "week" and self.threshold_mode != "intraday_ma"
+        if self.threshold_period not in ("day", "week", "month") or (
+            self.threshold_period != "day" and self.threshold_mode != "intraday_ma"
         ):
-            raise ValueError("周均线仅支持动态intraday_ma，周期须为day/week")
+            raise ValueError("周/月均线仅支持动态intraday_ma，周期须为day/week/month")
         if self.direction == "near":
             if (
                 self.value_mode != "price"
@@ -1011,6 +1011,27 @@ ANTU_BIO_NEAR_WEEKLY_MA5_20261103_30 = MonitorRule(
 )
 
 
+ANTU_BIO_NEAR_MONTHLY_MA5_20261123_1218 = MonitorRule(
+    rule_id="antu-bio-near-monthly-ma5-20261123-1218",
+    instrument_name="安图生物",
+    code="603658.SH",
+    threshold=None,
+    direction="near",
+    inclusive=True,
+    proximity_pct=1.0,
+    threshold_mode="intraday_ma",
+    threshold_window=5,
+    threshold_period="month",
+    threshold_provider="tushare",
+    threshold_label="动态五个月均线",
+    action_label="临近",
+    value_label="价格",
+    value_unit="元",
+    valid_from=date(2026, 11, 23),
+    valid_until=date(2026, 12, 18),
+)
+
+
 BANK_BELOW_WEEKLY_MA5_20261103_16 = MonitorRule(
     rule_id="bank-below-weekly-ma5-20261103-16",
     instrument_name="银行（通达信研究行业）",
@@ -1366,6 +1387,7 @@ DEFAULT_RULES: tuple[MonitorRule, ...] = (
     STAR50_BELOW_MA20_20261112_1209,
     BESTECHNIC_TOUCH_MA20_20261113_16,
     SHUNNA_BOARD_BREAK_20261117,
+    ANTU_BIO_NEAR_MONTHLY_MA5_20261123_1218,
 )
 
 
