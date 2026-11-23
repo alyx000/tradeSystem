@@ -20,6 +20,7 @@ import sqlite3
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 RUN_TZ = ZoneInfo("Asia/Shanghai")
 PUSH_STATUS_HEADING = "## 钉钉推送状态"
+DINGTALK_PUSH_PAUSED = True
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -2584,6 +2585,7 @@ def main() -> None:
     else:
         run_date = datetime.now(RUN_TZ).date()
 
+    push_paused = args.push and DINGTALK_PUSH_PAUSED
     report_path = _report_path(run_date)
     report_path.parent.mkdir(parents=True, exist_ok=True)
     with report_path.open("a+", encoding="utf-8") as lock_file:
@@ -2593,8 +2595,10 @@ def main() -> None:
             run_date=run_date,
             account=args.account,
             limit=args.limit,
-            push=bool(args.push),
+            push=args.push and not push_paused,
         )
+    if push_paused:
+        result["push_paused"] = True
     print(json.dumps(result, ensure_ascii=False))
 
 

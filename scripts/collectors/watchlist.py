@@ -24,6 +24,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent.parent
 WATCHLIST_FILE = BASE_DIR / "tracking" / "watchlist.yaml"
 
 ALERT_THRESHOLD = 0.02  # 2%
+TIER2_SURGE_ALERT_PAUSED = True
 
 
 class WatchlistCollector:
@@ -321,7 +322,7 @@ class WatchlistCollector:
             }
 
             surge_threshold = _get_limit_pct(code, name) * 0.5
-            if change_pct >= surge_threshold:
+            if not TIER2_SURGE_ALERT_PAUSED and change_pct >= surge_threshold:
                 alert = {
                     "type": "tier2_surge",
                     "code": code,

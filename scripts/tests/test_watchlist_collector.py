@@ -347,19 +347,23 @@ class TestCollect:
         methods = [call.args[0] for call in reg.call.call_args_list]
         assert "get_stock_announcements" not in methods
 
-    def test_tier2_updates_sqlite_fields(self, sqlite_db):
+    def test_tier2_updates_sqlite_fields_while_surge_alert_is_paused(self, sqlite_db):
         _seed_watchlist_db(
             sqlite_db,
             stocks_t2=[{"stock_code": "300750.SZ", "stock_name": "宁德时代"}],
         )
 
-        reg = _mock_registry({"300750.SZ": {"close": 220.0, "change_pct": 2.5, "turnover_rate": 3.0}})
+        reg = _mock_registry({"300750.SZ": {"close": 220.0, "change_pct": 12.0, "turnover_rate": 3.0}})
         col = WatchlistCollector(reg, db_path=sqlite_db)
         result = col.collect("2026-03-30")
 
         assert len(result["tier2"]) == 1
         entry = result["tier2"][0]
         assert entry["close"] == 220.0
+        assert result["alerts"] == []
+        report = col.format_report(result)
+        assert "宁德时代 220.00 (+12.0%)" in report
+        assert "⚠️" not in report
 
         from db.connection import get_db
         with get_db(sqlite_db) as conn:
@@ -368,10 +372,11 @@ class TestCollect:
                 ("300750.SZ",),
             ).fetchone()
         assert saved["current_price"] == 220.0
-        assert saved["current_change_pct"] == 2.5
+        assert saved["current_change_pct"] == 12.0
 
-    def test_tier2_surge_alert_main_board(self, sqlite_db):
+    def test_tier2_surge_alert_main_board(self, sqlite_db, monkeypatch):
         """主板 10cm 异动阈值 = 10*0.5 = 5%，7% 触发"""
+        monkeypatch.setattr("collectors.watchlist.TIER2_SURGE_ALERT_PAUSED", False)
         _seed_watchlist_db(
             sqlite_db,
             stocks_t2=[{"stock_code": "600000.SH", "stock_name": "浦发银行"}],
@@ -383,8 +388,9 @@ class TestCollect:
         assert len(result["alerts"]) == 1
         assert result["alerts"][0]["type"] == "tier2_surge"
 
-    def test_tier2_no_surge_chinext_at_7(self, sqlite_db):
+    def test_tier2_no_surge_chinext_at_7(self, sqlite_db, monkeypatch):
         """创业板 20cm 异动阈值 = 20*0.5 = 10%，7% 不触发"""
+        monkeypatch.setattr("collectors.watchlist.TIER2_SURGE_ALERT_PAUSED", False)
         _seed_watchlist_db(
             sqlite_db,
             stocks_t2=[{"stock_code": "300750.SZ", "stock_name": "宁德时代"}],
@@ -395,8 +401,9 @@ class TestCollect:
         result = col.collect("2026-03-30")
         assert len(result["alerts"]) == 0
 
-    def test_tier2_surge_chinext_at_12(self, sqlite_db):
+    def test_tier2_surge_chinext_at_12(self, sqlite_db, monkeypatch):
         """创业板 20cm 异动阈值 = 10%，12% 触发"""
+        monkeypatch.setattr("collectors.watchlist.TIER2_SURGE_ALERT_PAUSED", False)
         _seed_watchlist_db(
             sqlite_db,
             stocks_t2=[{"stock_code": "300750.SZ", "stock_name": "宁德时代"}],

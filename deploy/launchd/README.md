@@ -156,6 +156,9 @@ sudo pmset repeat cancel
 `scripts/automations/four_trading_day_review.py`。本目录不再提供第二套 launchd 入口；
 调整运行时间或任务说明时应更新现有 Codex 自动化，不要新增并行调度。
 
+2026-11-23 暂停四交易日复盘钉钉推送。22:30 调度继续生成本地 Markdown。脚本的
+`DINGTALK_PUSH_PAUSED` 开关会拦截定时命令中的 `--push`，并返回 `push_paused: true`。
+
 ## 成交额 Top20 板块集中度（工作日 21:00）
 
 盘后 20:00 任务之后、tushare 日线落地后,出当日 top20 板块集中度 + 趋势,推钉钉。

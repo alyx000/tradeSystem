@@ -2143,6 +2143,42 @@ def test_previous_window_unclosed_and_first_day_next_day_flip_are_computed(
     )
 
 
+def test_scheduled_command_generates_local_report_while_push_is_paused(
+    tmp_path, monkeypatch, capsys
+):
+    calendar_days = [
+        "2026-05-12", "2026-05-13", "2026-05-14", "2026-05-15", "2026-05-18",
+        "2026-05-19", "2026-05-20", "2026-05-21", "2026-05-22",
+    ]
+
+    class ForbiddenPusher:
+        def __init__(self, config):
+            pytest.fail("paused push must not construct the DingTalk pusher")
+
+    monkeypatch.setattr(review, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(review, "_try_get_last_n_trade_days", lambda n, as_of: calendar_days)
+    monkeypatch.setattr(review, "_load_holding_snapshots", lambda days: {})
+    monkeypatch.setattr(review, "_run_json", lambda cmd: [])
+    fake_dingtalk_module = ModuleType("scripts.pushers.dingtalk_pusher")
+    fake_dingtalk_module.DingTalkPusher = ForbiddenPusher
+    monkeypatch.setitem(sys.modules, "scripts.pushers.dingtalk_pusher", fake_dingtalk_module)
+    monkeypatch.setattr(
+        sys, "argv",
+        ["four_trading_day_review.py", "--date", calendar_days[-1], "--push"],
+    )
+
+    review.main()
+
+    result = json.loads(capsys.readouterr().out)
+    assert result["push_paused"] is True
+    assert result["push_ok"] is False
+    assert result["push_err"] is None
+    assert result["current_days"] == calendar_days[-4:]
+    report = Path(result["report_path"]).read_text(encoding="utf-8")
+    assert "## 按交易日拆分节奏" in report
+    assert "## 钉钉推送状态" not in report
+
+
 def test_main_same_day_push_receipt_does_not_generate_or_resend(
     tmp_path, monkeypatch, capsys
 ):
