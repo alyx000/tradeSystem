@@ -1029,6 +1029,23 @@ ANTU_BIO_NEAR_WEEKLY_MA5_20261103_30 = MonitorRule(
 )
 
 
+ICBC_BELOW_8_88_20261125_1201 = MonitorRule(
+    rule_id="icbc-below-8-88-20261125-1201",
+    instrument_name="工商银行",
+    code="601398.SH",
+    threshold=8.88,
+    direction="below",
+    provider="sina",
+    inclusive=False,
+    emit_on_initial_match=True,
+    action_label="跌破",
+    value_label="价格",
+    value_unit="元",
+    valid_from=date(2026, 11, 25),
+    valid_until=date(2026, 12, 1),
+)
+
+
 ANTU_BIO_NEAR_MONTHLY_MA5_20261123_1218 = MonitorRule(
     rule_id="antu-bio-near-monthly-ma5-20261123-1218",
     instrument_name="安图生物",
@@ -1407,6 +1424,7 @@ DEFAULT_RULES: tuple[MonitorRule, ...] = (
     SHUNNA_BOARD_BREAK_20261117,
     ANTU_BIO_NEAR_MONTHLY_MA5_20261123_1218,
     AVG_PRICE_BELOW_20_40_20261125_26,
+    ICBC_BELOW_8_88_20261125_1201,
 )
 
 
