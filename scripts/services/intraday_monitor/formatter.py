@@ -6,6 +6,10 @@ def _display_digits(event: dict, *, threshold_mode: str | None = None) -> int:
     """百分比严格边界保留计算精度，避免触发值与阈值显示成相等。"""
     if event.get("value_mode") == "daily_pct_change":
         return 8
+    if (threshold_mode is None and event.get("threshold_mode") == "fixed"
+            and event.get("value_label") == "分钟价" and event.get("direction") in ("below", "above")):
+        # 通达信分钟价可带三位小数，保留行情精度以免跌破价四舍五入成监控线。
+        return 3
     if threshold_mode in ("previous_close_ma", "intraday_ma"):
         return 3
     return 2

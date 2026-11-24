@@ -1,4 +1,4 @@
-"""平均股价26元±1%区间及20个交易日；所有行情/推送均隔离。"""
+"""通达信平均股价提醒的边界、有效期与去重；所有行情/推送均隔离。"""
 import argparse
 import json
 from datetime import date, datetime, timedelta
@@ -9,6 +9,7 @@ from cli import intraday_monitor
 from providers.registry import ProviderRegistry
 from providers.tdx_provider import TdxProvider
 from services.intraday_monitor import AVG_PRICE_NEAR_26_20261102_27 as RULE
+from services.intraday_monitor import AVG_PRICE_BELOW_20_40_20261125_26 as BELOW
 from services.intraday_monitor.rules import DEFAULT_RULES, SSE_COMPOSITE_RECLAIM_3955
 from services.intraday_monitor.service import run_check, run_e2e_test
 from tests.test_intraday_monitor_service import _Registry, _Pusher, _calendar, TZ
@@ -198,3 +199,58 @@ def test_0959_scan_runs_before_slow_threshold_sources(monkeypatch):
     monkeypatch.setattr(service, "run_check", threshold)
     result = service.run_all_checks(object())
     assert calls == ["scan", "threshold"] and result["market_scan"]["status"] == "complete"
+
+
+def test_two_day_strict_break_and_proximity_rules_coexist(tmp_path):
+    assert BELOW.code == RULE.code == "880003.TDX" and BELOW.provider == "tdx"
+    assert BELOW.threshold_mode == "fixed" and BELOW.threshold == 20.40
+    assert BELOW.direction == "below" and not BELOW.inclusive and BELOW.emit_on_initial_match
+    assert BELOW in DEFAULT_RULES and RULE in DEFAULT_RULES and BELOW.rule_id != RULE.rule_id
+    assert tuple(day for day in OPEN_DAYS if BELOW.is_effective_on(date.fromisoformat(day))) == (
+        "2026-11-25", "2026-11-26",
+    )
+
+    registry, pusher, db, state_path, _ = _setup(tmp_path, "2026-11-25")
+    provider = registry.get_provider("tdx")
+    sent_rule_ids = []
+    calls = []
+
+    def tick(day, hhmm, price, expected):
+        now = datetime.fromisoformat(f"{day}T{hhmm}:00").replace(tzinfo=TZ)
+        rows = minute_bars()
+        rows[0]["datetime"] = (now - timedelta(minutes=1)).strftime("%Y-%m-%d %H:%M")
+        rows[1].update(datetime=now.strftime("%Y-%m-%d %H:%M"), close=price, low=20)
+
+        def connect(*args, **kwargs):
+            calls.append(args[2])
+            return _Api(), kwargs["transform"](rows), ""
+
+        provider._connect = connect
+        provider.get_realtime_quotes = lambda codes: TdxProvider.get_realtime_quotes(
+            provider, codes, now=now,
+        )
+        before = len(calls)
+        result = run_check(registry, rules=(RULE, BELOW), now=now, db_path=db,
+                           state_path=state_path, pusher_factory=lambda: pusher)
+        assert result["status"] == "complete"
+        assert calls[before:] == ["880003"]  # 两条规则共用同一笔原始行情。
+        actual = [event["rule_id"] for event in result["events"]]
+        assert actual == ([expected.rule_id] if expected else [])
+        sent_rule_ids.extend(actual)
+
+    tick("2026-11-24", "10:00", 20.39, None)  # 未开始
+    tick("2026-11-25", "10:00", 20.40, None)  # 等于不触发
+    tick("2026-11-25", "10:03", 20.399, BELOW)
+    tick("2026-11-25", "10:06", 20.38, None)
+    tick("2026-11-25", "10:09", 20.40, None)  # 回到阈值后可再次跌破
+    tick("2026-11-25", "10:12", 20.38, BELOW)
+    tick("2026-11-25", "10:15", 26.00, RULE)
+    tick("2026-11-26", "10:00", 20.39, BELOW)  # 末日首次已跌破也提醒
+    tick("2026-11-27", "10:00", 20.39, None)
+    tick("2026-11-27", "10:03", 26.00, RULE)  # 新规则到期不影响原规则
+    assert len(pusher.messages) == len(sent_rule_ids) == 5
+    first_message = pusher.messages[0][1]
+    assert "跌破" in first_message and "**20.399**元" in first_message and "**20.40**元" in first_message
+    saved = json.loads(state_path.read_text())["rules"]
+    assert saved[BELOW.rule_id]["trade_date"] == "2026-11-26"
+    assert saved[RULE.rule_id]["trade_date"] == "2026-11-27"

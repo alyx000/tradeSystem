@@ -990,6 +990,24 @@ AVG_PRICE_NEAR_26_20261102_27 = MonitorRule(
 )
 
 
+AVG_PRICE_BELOW_20_40_20261125_26 = MonitorRule(
+    rule_id="avg-price-below-20-40-20261125-26",
+    instrument_name="平均股价",
+    code="880003.TDX",
+    threshold=20.40,
+    direction="below",
+    provider="tdx",
+    inclusive=False,
+    emit_on_initial_match=True,
+    action_label="跌破",
+    threshold_label="监控价",
+    value_label="分钟价",
+    value_unit="元",
+    valid_from=date(2026, 11, 25),
+    valid_until=date(2026, 11, 26),
+)
+
+
 ANTU_BIO_NEAR_WEEKLY_MA5_20261103_30 = MonitorRule(
     rule_id="antu-bio-near-weekly-ma5-20261103-30",
     instrument_name="安图生物",
@@ -1388,6 +1406,7 @@ DEFAULT_RULES: tuple[MonitorRule, ...] = (
     BESTECHNIC_TOUCH_MA20_20261113_16,
     SHUNNA_BOARD_BREAK_20261117,
     ANTU_BIO_NEAR_MONTHLY_MA5_20261123_1218,
+    AVG_PRICE_BELOW_20_40_20261125_26,
 )
 
 
