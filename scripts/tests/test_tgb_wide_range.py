@@ -13,7 +13,15 @@ from tools import tgb_wide_range_notify as notify
 from tools import tgb_wide_range_prepare as prepare
 
 
-def seal(run, *, rows=None, daily=None, **receipt):
+def csv_bytes(columns, rows):
+    stream = io.StringIO(newline="")
+    writer = csv.writer(stream)
+    writer.writerow(columns)
+    writer.writerows(rows)
+    return stream.getvalue().encode()
+
+
+def seal(run, *, rows=None, daily=None, candidate_fields=(), attachments=None, **receipt):
     run.mkdir(parents=True, exist_ok=True)
     if rows is not None:
         receipt["candidates"] = len(rows)
@@ -22,11 +30,10 @@ def seal(run, *, rows=None, daily=None, **receipt):
         "verification.txt": "".join(f"{key}={value}\n" for key, value in receipt.items()).encode(),
     }
     if rows is not None:
-        stream = io.StringIO(newline="")
-        writer = csv.writer(stream)
-        writer.writerow(["code", "name", "close_qfq", "ma30_qfq", "ma30_pass"])
-        writer.writerows(rows)
-        artifacts["candidates.csv"] = stream.getvalue().encode()
+        artifacts["candidates.csv"] = csv_bytes(
+            ["code", "name", "close_qfq", "ma30_qfq", "ma30_pass", *candidate_fields], rows,
+        )
+    artifacts.update(attachments or {})
     if daily is not None:
         buffer = io.BytesIO()
         daily.to_pickle(buffer)
@@ -212,3 +219,156 @@ def test_ma30_transition_compares_with_rescreened_baseline(tmp_path, monkeypatch
         "status": "already_sent", "receipt": str(receipt),
     }
     assert receipt.read_text() == saved
+
+
+def test_retry_baseline_uses_the_sealed_archive_and_keeps_failure(tmp_path, monkeypatch):
+    monkeypatch.setattr(notify, "REPORTS", tmp_path)
+    old, day = "2026-11-18", "2026-11-19"
+    failed, run = (tmp_path / "runs" / date for date in (old, day))
+    seal(failed, run_date=old, status="source_failed", market_date_target=old)
+    original = (failed / "verification.txt").read_bytes()
+    before = [(str(i), f"原候选{i}", 11, 10, True) for i in range(14)]
+    after = before[:2] + [(str(i), f"新候选{i}", 11, 10, True) for i in range(14, 24)]
+    retry = failed / "retry-230739"
+    seal(retry, rows=before, run_date=old, market_date=old, status="partial", screen_rules="ma30_v1")
+    fields = dict(run_date=day, market_date=day, status="partial", screen_rules="ma30_v1",
+                  candidates_added=10, candidates_removed=12, comparison_baseline_run=old,
+                  comparison_baseline_market=old, comparison_baseline_archive=f"{old}/retry-230739")
+    seal(run, rows=after, **fields)
+    event, _, body = notify.plan(run, day, require_ma30=True)
+    assert event == ["delta", day, sorted(r[0] for r in after[2:]), sorted(r[0] for r in before[2:])]
+    assert "上次 14 只，本次 12 只，新增 10 只，退出 12 只" in body
+    assert "保留 2 只" in body and (failed / "verification.txt").read_bytes() == original
+
+    (failed / "outside").symlink_to(run, target_is_directory=True)
+    for wrong in (f"{old}/outside", f"{old}/../{day}", str(retry), day, old):
+        seal(run, rows=after, **{**fields, "comparison_baseline_archive": wrong})
+        with pytest.raises(ValueError, match="基线"):
+            notify.plan(run, day)
+    seal(run, rows=after, **{**fields, "comparison_baseline_market": "2026-11-17"})
+    with pytest.raises(ValueError, match="基线"):
+        notify.plan(run, day)
+    seal(run, rows=after, **fields)
+    (retry / "candidates.csv").write_text("corrupt\n")
+    with pytest.raises(ValueError, match="归档校验"):
+        notify.plan(run, day)
+
+
+def test_summary_explains_changes_and_reentry_without_filtering_candidates(tmp_path, monkeypatch):
+    monkeypatch.setattr(notify, "REPORTS", tmp_path)
+    first, middle, previous, day = "2026-11-20", "2026-11-22", "2026-11-26", "2026-11-27"
+    runs = tmp_path / "runs"
+    rules = dict(status="partial", screen_rules="ma30_v1")
+    back = ("A", "重新入选甲", 12, 10, True)
+    held = ("B", "保留乙", 12, 10, True)
+    fresh = ("C", "新增丙", 12, 10, True)
+    out = ("D", "退出丁", 12, 10, True)
+    suspended = ("E", "停牌戊", 12, 10, True)
+    seal(runs / first, rows=[back, held], run_date=first, market_date=first, **rules)
+    seal(runs / middle, rows=[back, held], run_date=middle, market_date=first,
+         comparison_baseline_run=first, comparison_baseline_market=first, **rules)
+    columns = ["code", "match", "drift", "ma30_pass", "exclusion_reason"]
+    seal(runs / previous, rows=[held, out, suspended], run_date=previous, market_date=previous,
+         comparison_baseline_run=middle, comparison_baseline_market=first, **rules, attachments={
+             "full-screen.csv": csv_bytes(columns, [["A", False, 0, False, "收盘低于30日均线；修复不足2次"],
+                                                    ["C", False, -23, True, "20日涨跌超出±20%"]]),
+         })
+    seal(runs / day, rows=[(*back, first, False, "4.0"), (*held, previous, True, 2),
+                           (*fresh, previous, False, 1)], candidate_fields=["onset", "left_censored", "post_rebounds"],
+         run_date=day, market_date=day, comparison_baseline_run=previous, comparison_baseline_market=previous,
+         candidates_added=2, candidates_removed=2, **rules, attachments={
+             "full-screen.csv": csv_bytes(columns, [["D", False, 25, True, "20日涨跌超出±20%"]]),
+             "exits.csv": csv_bytes(["code", "reason"], [["D", "20日涨跌超出±20%"],
+                                                         ["E", "suspend_d_reported_no_daily_quote"]]),
+         })
+    event, _, body = notify.plan(runs / day, day, require_ma30=True)
+    assert event == ["delta", day, ["A", "C"], ["D", "E"]]
+    lines = {code: next(line for line in body.splitlines() if f"（{code}｜" in line) for code in "ABCDE"}
+    assert f"重新入选（上次 {first}）" in lines["A"] and "新增" in lines["A"]
+    assert "堆量后修复 4 次" in lines["A"] and "收盘低于MA30" in lines["A"]
+    assert "堆量起点待核" in lines["B"] and "修复 2 次" not in lines["B"]
+    assert "堆量后修复 1 次" in lines["C"] and "20日跌幅超过20%" in lines["C"]
+    assert "20日涨幅超过20%" in lines["D"] and "停牌" in lines["E"]
+    assert "收盘低于MA30 0只" not in body  # One exit has no quote.
+    assert "修复至少2次 1只" in body and "修复1次 1只" in body and "起点待核 1只" in body
+    (runs / previous / "full-screen.csv").write_text("bad\n")
+    with pytest.raises(ValueError, match="归档校验"):
+        notify.plan(runs / day, day)
+
+
+def test_preview_industries_use_only_matching_verified_evidence(tmp_path, monkeypatch):
+    day = "2026-11-27"
+    monkeypatch.setattr(notify, "REPORTS", tmp_path)
+    industry = tmp_path / "industry"
+    industry.mkdir()
+    columns = ["market_date", "fetched_at", "status", "source", "code", "sw_l2"]
+    valid = [day, day + "T20:00:00+08:00", "verified", "tushare:index_member_all"]
+    for rows in (
+        [[*valid, "A", "行业甲"], [*valid, "B", "行业乙"],
+         ["2026-11-28", *valid[1:], "C", "跨日标签"],
+         [day, *valid[1:2], "unverified", valid[3], "D", "待核验"],
+         [day, "2026-11-28T08:00:00+08:00", *valid[2:], "E", "错日取数"]],
+        [[*valid, "B", "行业丙"]],
+    ):
+        raw = csv_bytes(columns, rows)
+        (industry / f"{day}-{hashlib.sha256(raw).hexdigest()[:16]}.csv").write_bytes(raw)
+    (industry / f"{day}-0000000000000000.csv").write_bytes(csv_bytes(columns, [[*valid, "A", "损坏附件"]]))
+    assert notify.saved_industries(day, day) == {"A": ("行业甲", (valid[3], valid[1], "", ""))}
+    previous = "2026-11-26"
+    old, run = (tmp_path / "runs" / date for date in (previous, day))
+    seal(old, rows=[], run_date=previous, market_date=previous, status="partial", screen_rules="ma30_v1")
+    seal(run, rows=[("A", "甲", 10, 10, True), ("F", "己", 10, 10, True)], run_date=day, market_date=day,
+         status="partial", screen_rules="ma30_v1", comparison_baseline_run=previous,
+         comparison_baseline_market=previous, candidates_added=2, candidates_removed=0)
+    new_source = ("同日全市场归档", day + "T21:00:00+08:00", "other-hash", "archived")
+    monkeypatch.setattr(notify, "read_industries", lambda *a, **kw: ({"F": {"sw_l2": "行业己"}}, *new_source))
+    before = set(industry.iterdir())
+    event = notify.plan(run, day)
+    assert set(industry.iterdir()) == before and "A｜行业甲" in event[2]
+    assert notify.plan(run, day, archive_industry_by="test") == event
+    saved, = set(industry.iterdir()) - before
+    with saved.open() as f:
+        rows = {r["code"]: r for r in csv.DictReader(f)}
+    assert rows["A"]["source"] == valid[3] and rows["A"]["fetched_at"] == valid[1]
+    assert rows["F"]["source"] == new_source[0] and rows["F"]["source_sha256"] == new_source[2]
+
+
+def test_entry_exit_coverage_and_partial_repair_evidence(tmp_path):
+    columns = ["code", "match", "drift", "ma30_pass", "exclusion_reason"]
+    seal(tmp_path, attachments={"full-screen.csv": csv_bytes(columns, [
+        ["D", False, 25, True, "20日涨跌超出±20%；收盘处于前15根范围外"],
+        ["E", False, -23, True, "20日涨跌超出±20%"],
+    ])})
+    notes, summary = notify.change_evidence(tmp_path, ["D", "E"], additions=False, ma30=True)
+    assert summary.count("收盘低于MA30 0只") == 1
+    assert notes == {"D": "20日涨幅超过20%、收盘处于前15根范围外", "E": "20日跌幅超过20%"}
+    notes, summary = notify.change_evidence(tmp_path, ["A", "X"], additions=True, ma30=True, legacy_filtered={"A"})
+    assert notes == {"A": "收盘低于MA30", "X": "原因待核"} and "原因待核 1只" in summary
+
+    row = dict(onset="2026-11-20", left_censored="False", post_rebounds="0.0")
+    assert notify.repair_count(row, "2026-11-27") == 0
+    for missing in ("", "NaN", "-1", "1.5"):
+        assert notify.repair_count(dict(row, post_rebounds=missing), "2026-11-27") == "修复次数待核"
+    assert notify.repair_count(dict(row, onset="2026-11-28"), "2026-11-27") == "起点待核"
+
+
+def test_reentry_replays_the_first_comparable_ma30_baseline(tmp_path, monkeypatch):
+    monkeypatch.setattr(notify, "REPORTS", tmp_path)
+    first, middle, previous = "2026-11-16", "2026-11-17", "2026-11-26"
+    runs = tmp_path / "runs"
+    dates = pd.bdate_range(end=first, periods=30).strftime("%Y-%m-%d")
+    prices = pd.DataFrame([
+        (code, day, last if day == first else 10, 1)
+        for code, last in (("A", 11), ("B", 9)) for day in dates
+    ], columns=["ts_code", "trade_date", "close", "adj_factor"])
+    rows = [("A", "甲", 11, 10, True), ("B", "乙", 9, 10, False)]
+    seal(runs / first, run_date=first, market_date=first, rows=rows, daily=prices, status="partial")
+    seal(runs / middle, run_date=middle, market_date=middle, rows=[], status="partial", screen_rules="ma30_v1",
+         comparison_baseline_run=first, comparison_baseline_market=first)
+    baseline = dict(run_date=previous, market_date=previous, comparison_baseline_run=middle,
+                    comparison_baseline_market=middle)
+    reentries, coverage = notify.previous_appearances(baseline, ["A", "B"], "ma30_v1")
+    assert reentries == {"A": first} and first in coverage
+    (runs / first / "daily.pkl").write_bytes(b"corrupt")
+    reentries, coverage = notify.previous_appearances(baseline, ["A", "B"], "ma30_v1")
+    assert reentries == {} and "缺少可核验归档" in coverage
