@@ -89,7 +89,7 @@ def _aggregate(bars, conflicts, fields):
     return blocks
 
 
-def _merge_day(old, day, cutoff, results, captured_at, input_by, origin, spec, per_code_origin):
+def _merge_day(old, day, cutoff, results, captured_at, input_by, origin, spec, per_code_origin, fill_missing):
     through = max(cutoff, old.get("observed_through", ""))
     due = [end for end in ENDS if end <= through]
     indices = {}
@@ -110,7 +110,7 @@ def _merge_day(old, day, cutoff, results, captured_at, input_by, origin, spec, p
                             provenance["source_time"] = f"{day} {end}"
                         if end not in bars:
                             bars[end] = {**values, **provenance}
-                        elif end not in conflicts and any(bars[end][key] != values[key] for key in spec.fields):
+                        elif not fill_missing and end not in conflicts and any(bars[end][key] != values[key] for key in spec.fields):
                             conflicts[end] = {**values, **provenance}
                 except (AttributeError, TypeError, KeyError, ValueError) as exc:
                     error = str(exc)
@@ -134,7 +134,7 @@ def _merge_day(old, day, cutoff, results, captured_at, input_by, origin, spec, p
 
 
 def archive_fetched(root, results, *, previous, end, captured_at, input_by, origin=None, spec=EASTMONEY,
-                    per_code_origin=None):
+                    per_code_origin=None, fill_missing=False):
     """日期由调用方已通过的严格SSE日历给出。只从最新完成槽及更早的K线取证。"""
     receipts = {}
     days = [(end.date().isoformat(), end.strftime("%H:%M"))]
@@ -147,7 +147,8 @@ def archive_fetched(root, results, *, previous, end, captured_at, input_by, orig
             with path.with_suffix(".lock").open("a") as lock:
                 fcntl.flock(lock, fcntl.LOCK_EX)
                 old = load_archive(path, day, spec)
-                data = _merge_day(old, day, cutoff, results, captured_at, input_by, origin or {}, spec, per_code_origin or {})
+                data = _merge_day(old, day, cutoff, results, captured_at, input_by, origin or {}, spec,
+                                  per_code_origin or {}, fill_missing)
                 if data != old:
                     save_state(path, {**data, "sha256": _digest(data)})
             receipts[day] = {key: data[key] for key in ("status", "valid_count", "expected_full_day")}

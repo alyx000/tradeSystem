@@ -11,12 +11,12 @@ from typing import Callable
 from services.tail_scan.scanner import (
     _load_no_limit_codes,
     _possible_no_limit_codes,
-    _stock_universe,
 )
 from utils.price_limit import compute_limit_prices
 
 from .guards import confirmed_trade_day, quote_is_fresh, shanghai_now
-from .state import load_state, locked_state, save_state
+from .market_universe import STOCK, load_listings
+from .state import locked_state, save_state
 
 
 DEFAULT_MARKET_SCAN_STATE_PATH = (
@@ -56,6 +56,8 @@ DEFAULT_MARKET_SCAN_RULES = (LIMIT_UP_AMOUNT_100B_BEFORE_1000,)
 
 
 def _number(value: object) -> float | None:
+    if isinstance(value, bool):
+        return None
     try:
         parsed = float(value)
     except (TypeError, ValueError):
@@ -153,89 +155,64 @@ def _expire_old_pending(state: dict, today: str) -> int:
     return len(expired)
 
 
-def _fetch_universe_quotes(registry, rule: MarketScanRule, day: str):
-    providers = list(getattr(registry, "providers", []) or [])
-    quote_provider_ready = False
-    universe_provider_ready = False
-    for provider in providers:
-        supports_universe = bool(provider.supports("get_stock_basic_list"))
-        is_quote_provider = provider.name == rule.provider
-        if not supports_universe and not is_quote_provider:
-            continue
-        initialized = bool(getattr(provider, "_initialized", False))
-        if not initialized:
-            try:
-                initialized = bool(provider.initialize())
-            except Exception:
-                initialized = False
-        if supports_universe and initialized:
-            universe_provider_ready = True
-        if is_quote_provider and initialized:
-            quote_provider_ready = True
-    # 测试 registry/兼容调用方可不暴露 providers；真实 ProviderRegistry 必须证明初始化。
-    if providers and not universe_provider_ready:
-        return None, None, None, "全市场代码清单数据源初始化失败"
-    if providers and not quote_provider_ready:
-        return None, None, None, f"实时行情数据源初始化失败（{rule.provider}）"
-    codes, listing_dates = _stock_universe(registry, day)
-    if not codes:
-        return None, None, None, "全市场代码清单获取失败（get_stock_basic_list）"
-    result = registry.call_specific(rule.provider, "get_realtime_quotes", codes)
-    if not getattr(result, "success", False) or not isinstance(result.data, list):
-        result = registry.call_specific(rule.provider, "get_realtime_quotes", codes)
-    if not getattr(result, "success", False) or not isinstance(result.data, list):
-        return None, None, None, f"实时行情获取失败（含重试）：{getattr(result, 'error', '未知')}"
-    return result, listing_dates, codes, None
+def _fetch_quotes(registry, provider, codes):
+    providers = getattr(registry, "providers", [])
+    if providers and not any(p.name == provider and (getattr(p, "_initialized", False) or p.initialize())
+                             for p in providers):
+        raise ValueError(f"实时行情数据源初始化失败（{provider}）")
+    error = "无有效行情"
+    for _ in range(2):
+        try:
+            result = registry.call_specific(provider, "get_realtime_quotes", codes)
+            if result.success and result.source == provider and isinstance(result.data, list) and result.data:
+                return result
+            error = result.error or "行情来源或数据无效"
+        except Exception as exc:
+            error = str(exc)
+    raise ValueError(f"实时行情获取失败（含重试）：{error}")
 
 
-def _uncertain_missing_codes(requested_codes: list[str], result) -> set[str]:
-    """区分确定不可能触发的停牌/无数据与可能被新浪静默漏掉的响应。"""
-    returned = {
-        str(quote.get("code") or "").strip().upper()
-        for quote in result.data
-        if isinstance(quote, dict)
-    }
-    benign_missing: set[str] = set()
-    for item in str(getattr(result, "note", "") or "").split(";"):
-        text = item.strip()
-        if "(" not in text:
-            continue
-        code = text.split("(", 1)[0].strip().upper()
-        if "停牌或无最新价" in text:
-            benign_missing.add(code)
-    return set(requested_codes) - returned - benign_missing
-
-
-def _scan(
-    registry,
-    rule: MarketScanRule,
-    now: datetime,
-) -> dict:
+def _scan(registry, rule: MarketScanRule, now: datetime, listing_dates: dict) -> dict:
     day = now.date().isoformat()
-    result, listing_dates, requested_codes, fetch_error = _fetch_universe_quotes(
-        registry, rule, day
-    )
-    if fetch_error:
-        return {"status": "source_failed", "events": [], "errors": [fetch_error]}
+    try:
+        result = _fetch_quotes(registry, rule.provider, sorted(listing_dates))
+    except Exception as exc:
+        return {"status": "source_failed", "events": [], "errors": [str(exc)]}
 
-    uncertain_codes = _uncertain_missing_codes(requested_codes, result)
-    valid_quotes: list[tuple[dict, datetime]] = []
-    invalid_time_codes: set[str] = set()
+    by_code = {}
+    conflicts = set()
+    unexpected = 0
     for quote in result.data:
-        fresh, _reason, quoted_at = quote_is_fresh(quote, now)
-        if not fresh or quoted_at is None:
-            invalid_time_codes.add(str(quote.get("code") or "").strip().upper())
+        code = quote.get("code") if isinstance(quote, dict) else None
+        if not isinstance(code, str) or code not in listing_dates:
+            unexpected += 1
             continue
-        quote_clock = quoted_at.time().replace(tzinfo=None)
-        if not rule.start_time <= quote_clock < rule.end_time:
-            invalid_time_codes.add(str(quote.get("code") or "").strip().upper())
+        if code in by_code and by_code[code] != quote:
+            conflicts.add(code)
+        else:
+            by_code[code] = quote
+    valid_quotes = []
+    for code, quote in by_code.items():
+        if (code in conflicts or not STOCK.fullmatch(code)
+                or quote.get("ts_code", code) != code
+                or quote.get("symbol", code[:6]) not in (code, code[:6])):
+            continue
+        fresh, _reason, quoted_at = quote_is_fresh(quote, now)
+        if not fresh or quoted_at is None or not rule.is_in_window(quoted_at):
+            continue
+        price, previous, amount = (_number(quote.get(k)) for k in ("price", "pre_close", "amount"))
+        if (price is None or price <= 0 or previous is None or previous <= 0 or amount is None
+                or amount < 0 or not isinstance(quote.get("name"), str) or not quote["name"].strip()):
             continue
         valid_quotes.append((quote, quoted_at))
+    # 行情供应方的“停牌或无最新价”不能证明当日全天停牌，缺报价的成员仍计入分母。
+    uncertain_codes = set(listing_dates) - {q["code"] for q, _ in valid_quotes}
     if not valid_quotes:
         return {
             "status": "source_failed",
             "events": [],
-            "errors": ["全市场实时行情日期、时间或新鲜度不满足监控窗口"],
+            "quotes_checked": 0,
+            "errors": [f"全市场实时行情无可判记录（请求{len(listing_dates)}只，身份、价格或行情时点未核验）"],
         }
 
     potential: list[tuple[dict, datetime, dict]] = []
@@ -245,14 +222,6 @@ def _scan(
             potential.append((quote, quoted_at, matched))
 
     possible_no_limit = _possible_no_limit_codes(listing_dates, day)
-    missing_listing = {match["code"] for _, _, match in potential} - set(listing_dates)
-    if missing_listing:
-        sample = ",".join(sorted(missing_listing)[:3])
-        return {
-            "status": "source_failed",
-            "events": [],
-            "errors": [f"新股无涨跌幅限制日判定失败：上市日期缺失（{sample}）"],
-        }
     recent_candidates = {match["code"] for _, _, match in potential} & possible_no_limit
     no_limit_codes: set[str] = set()
     if recent_candidates:
@@ -270,6 +239,7 @@ def _scan(
             return {
                 "status": "source_failed",
                 "events": [],
+                "quotes_checked": len(valid_quotes),
                 "errors": [f"新股无涨跌幅限制日判定失败：{calendar_error}"],
             }
 
@@ -280,9 +250,11 @@ def _scan(
         event = _event(rule, matched, quoted_at, str(result.source or rule.provider))
         events_by_id[event["event_id"]] = event
     events = list(events_by_id.values())
-    uncertain_codes.update(code for code in invalid_time_codes if code)
     errors: list[str] = []
     status = "complete"
+    if unexpected:
+        errors.append(f"实时行情含名单外或无身份记录（{unexpected} 行）")
+        status = "partial"
     if uncertain_codes:
         sample = ",".join(sorted(uncertain_codes)[:5])
         errors.append(
@@ -294,7 +266,8 @@ def _scan(
         "events": events,
         "errors": errors,
         "quotes_checked": len(valid_quotes),
-        "matched": len(events),
+        "matched": len(events) if status == "complete" else None,
+        "verified_matches": len(events),
         "source": str(result.source or rule.provider),
     }
 
@@ -356,13 +329,19 @@ def run_market_scan(
     if not trade_day:
         return {"status": "non_trade_day", "events": [], "errors": []}
 
-    scan_results = [_scan(registry, rule, local_now) for rule in active_rules]
+    try:
+        listings = load_listings(registry, today, path, dry_run, db_path)
+    except Exception as exc:
+        return {"status": "source_failed", "events": [], "errors": [f"全市场清单未核验：{exc}"],
+                "matched": None, "pushed": False}
+    scan_results = [_scan(registry, rule, local_now, listings) for rule in active_rules]
     hard_failures = [result for result in scan_results if result["status"] == "source_failed"]
     successful = [result for result in scan_results if result["status"] in {"complete", "partial"}]
     if not successful:
         return {
             "status": "source_failed",
             "events": [],
+            "universe_count": len(listings), "matched": None,
             "errors": [error for result in hard_failures for error in result.get("errors") or []],
             "pushed": False,
         }
@@ -373,7 +352,14 @@ def run_market_scan(
         "events": [event for result in successful for event in result.get("events") or []],
         "errors": [error for result in scan_results for error in result.get("errors") or []],
         "quotes_checked": sum(int(result.get("quotes_checked") or 0) for result in successful),
-        "matched": sum(int(result.get("matched") or 0) for result in successful),
+        "universe_count": len(listings),
+        "coverage_by_rule": {
+            rule.rule_id: {"requested": len(listings), "checked": result.get("quotes_checked")}
+            for rule, result in zip(active_rules, scan_results)
+        },
+        "verified_matches": sum(result["verified_matches"] for result in successful),
+        "matched": (sum(result["matched"] for result in successful)
+                    if all(result["status"] == "complete" for result in scan_results) else None),
     }
     if dry_run:
         scanned["status"] = "dry_run" if scanned["status"] == "complete" else scanned["status"]

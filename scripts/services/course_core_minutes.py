@@ -7,6 +7,7 @@ from datetime import date, datetime, time
 import hashlib
 import io
 import json
+import os
 import pickle
 from pathlib import Path
 import re
@@ -17,6 +18,7 @@ from providers.base import DataResult
 from providers.sina_provider import SinaProvider
 from providers.tdx_provider import TdxProvider
 from providers.tushare_provider import TushareProvider
+from providers.tushare_transport import TushareMirrorClient
 from services.board_break_intraday import data, eastmoney, store
 from services.volume_record.service import atomic_write
 
@@ -159,7 +161,12 @@ class ClosedMarketSource(data.MarketSource):
     """日线辅助源独立失败时，新浪/通达信/东方财富的完整分钟仍可保留。"""
     def __init__(self):
         self.provider = TushareProvider({})
-        self.has_daily = self.provider.initialize()
+        # 开放日已从本地完整日历核验。分钟、日线和停牌接口各自验收，
+        # 不以另一日期的远程 trade_cal 探针决定这些接口能否调用。
+        token = os.environ.get("TUSHARE_TOKEN")
+        self.has_daily = bool(token)
+        if token:
+            self.provider.pro = TushareMirrorClient(token, timeout=12)
         self.sina = SinaProvider({})
         self.sina.initialize()
         self.tdx = TdxProvider({"timeout": 3})
@@ -168,7 +175,7 @@ class ClosedMarketSource(data.MarketSource):
 
     def _tushare_minutes(self, code, day, cutoff, mode):
         if not self.has_daily:
-            raise data.EvidenceError("Tushare未连接")
+            raise data.EvidenceError("Tushare分钟凭据缺失")
         return super()._tushare_minutes(code, day, cutoff, mode)
 
     def contexts(self, day, codes):
@@ -200,6 +207,16 @@ class ClosedMarketSource(data.MarketSource):
         return contexts, gaps
 
 
+def _check_window(rows, reference=None):
+    if any((r["vol"] == 0) != (r["amount"] == 0) for r in rows):
+        raise data.EvidenceError("分钟成交额和成交量的零值冲突")
+    if not any(r["vol"] > 0 for r in rows):
+        raise data.EvidenceError("全天没有可验证的交易分钟")
+    if (reference and rows[-1]["time"].endswith("15:00:00")
+            and abs(rows[-1]["close"] - reference["close"]) > 0.005):
+        raise data.EvidenceError("分钟尾盘收盘与同日日线收盘不符")
+
+
 def _check_minutes(block, code, day):
     if (not isinstance(block, dict) or block.get("status") != "complete" or block.get("source") not in SOURCES
             or block.get("volume_unit") != "share" or block.get("amount_unit") != "CNY"
@@ -210,11 +227,7 @@ def _check_minutes(block, code, day):
     checked = data.normalize_minutes([dict(row, ts_code=code) for row in rows], code, day, "15:00")
     if rows != checked["rows"]:
         raise data.EvidenceError("分钟顺序或数据规范不一致")
-    for r in rows:
-        if (r["vol"] == 0) != (r["amount"] == 0):
-            raise data.EvidenceError("分钟成交额和成交量的零值冲突")
-    if not any(r["vol"] > 0 for r in rows):
-        raise data.EvidenceError("全天没有可验证的交易分钟")
+    _check_window(rows)
 
 
 def _collect(code, day, prior, ctx, market):
@@ -234,17 +247,26 @@ def _collect(code, day, prior, ctx, market):
         try:
             if market is None:
                 raise data.EvidenceError("分钟来源未连接")
-            bars = market.minutes(code, day, "15:00", "history", keep_partial=True)
+            bars = market.minutes(code, day, "15:00", "history", keep_partial=True,
+                                  verify_rows=lambda rows: _check_window(rows, row.get("reference")))
             _check_minutes(bars, code, day)
             bars.setdefault("adjust", "none")
             bars.setdefault("identity", "response_ts_code" if bars["source"] == "tushare:stk_mins"
                             else "single_symbol_request")
+            acquired = datetime.now(data.TZ)
+            bars.update(acquired_at=acquired.isoformat(), acquisition=(
+                "post_close" if acquired.date().isoformat() == day else "historical_replay"))
             row["minutes"] = bars
-        except (ValueError, OSError, KeyError, TypeError) as exc:
+        except (ValueError, OSError, KeyError, TypeError, RuntimeError, AttributeError) as exc:
             partial = getattr(exc, "partial_minutes", None)
             if (partial and partial.get("source") in SOURCES and
                     len(partial["rows"]) > len(row.get("partial_minutes", {}).get("rows", []))):
-                row["partial_minutes"] = partial
+                try:
+                    _check_window(partial["rows"], row.get("reference"))
+                except data.EvidenceError as problem:
+                    row["gaps"].append("候选分钟片段未通过交易校验：" + str(problem))
+                else:
+                    row["partial_minutes"] = partial
             row["gaps"].append("分钟：" + (str(exc) if isinstance(exc, data.EvidenceError) else type(exc).__name__))
     if not row.get("reference"):
         row["gaps"].append("当日行情的除权除息参考昨收缺失")
@@ -338,12 +360,19 @@ def capture_day(day, input_by, *, dry_run=False, root=DEFAULT_ROOT, db_path=None
             market, contexts = None, {}
             try:
                 market = source_factory()
-                contexts, new_gaps = market.contexts(day, set(pending))
-                gaps.extend(new_gaps)
-            except (OSError, RuntimeError, ValueError, ImportError, TypeError) as exc:
+                missing_context = {c for c in pending if any(
+                    not local[c].get(k) and not rows.get(c, {}).get(k)
+                    for k in ("reference", "limits", "suspension"))}
+                if missing_context:
+                    contexts, new_gaps = market.contexts(day, missing_context)
+                    gaps.extend(new_gaps)
+            except (OSError, RuntimeError, ValueError, ImportError, TypeError, AttributeError, KeyError) as exc:
                 gaps.append("上游初始化或日期来源失败（" + type(exc).__name__ + "）")
             def fetch(code):
-                context = {**local[code], **contexts.get(code, {})}
+                context = {**contexts.get(code, {}), **local[code]}
+                for key in ("reference", "limits", "suspension"):
+                    if rows.get(code, {}).get(key):
+                        context.pop(key, None)
                 return _collect(code, day, rows.get(code, {}), context, market)
             with ThreadPoolExecutor(max_workers=4) as pool:
                 for item in pool.map(fetch, pending):

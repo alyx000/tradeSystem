@@ -26,6 +26,11 @@ catalyst_pid=$!
 cross_market_pid=$!
 /usr/bin/python3 scripts/tools/broad_etf_minutes.py --scheduled-at "$planned" --input-by launchd &
 etf_pid=$!
+auction_pid=""
+if [ "$hour" = "09" ] && [ "$slot_minute" -eq 32 ]; then
+    /usr/bin/python3 scripts/tools/course_opening_auction.py --date "$day" --scheduled-at "$planned" --input-by launchd &
+    auction_pid=$!
+fi
 
 market_exit=0
 catalyst_exit=0
@@ -35,6 +40,11 @@ wait "$market_pid" || market_exit=$?
 wait "$catalyst_pid" || catalyst_exit=$?
 wait "$cross_market_pid" || cross_market_exit=$?
 wait "$etf_pid" || etf_exit=$?
+if [ -n "$auction_pid" ]; then
+    auction_exit=0
+    wait "$auction_pid" || auction_exit=$?
+    echo "[intraday-events] opening_auction=$auction_exit"
+fi
 echo "[intraday-events] slot=$planned market=$market_exit catalysts=$catalyst_exit cross_market=$cross_market_exit broad_etf=$etf_exit"
 for status in "$market_exit" "$catalyst_exit" "$cross_market_exit" "$etf_exit"; do
     if [ "$status" -ne 0 ]; then exit "$status"; fi

@@ -153,7 +153,11 @@ def calculate(day, previous, evidence):
                        status='source_failed', groups=None, stocks=[], gaps=[])
             result['rows'].append(row)
             if theme['counts'] is None:
-                row['gaps'].append('来源日题材成员或涨停名单未核验，不能确认为零样本')
+                if theme.get('count_coverage'):
+                    conflicts = len(theme['count_coverage']['name_conflicts'])
+                    row['gaps'].append(f'来源日已核涨停{len(theme["limit_stocks"])}只，另{conflicts}只简称待核，固定样本未核全')
+                else:
+                    row['gaps'].append('来源日题材成员或涨停名单未核验，不能确认为零样本')
                 continue
             for old in theme['limit_stocks']:
                 code, q, cur = old['code'], quotes.get(old['code']), current.get(old['code'])
@@ -213,7 +217,7 @@ def build(daily_dir, day, *, current_raw=None, db_path=None, now=None):
         prior = _envelope(daily_dir, days[-2], {})
         if isinstance(prior, str):
             return missing(day, '来源日盘后归档未取得', 'not_computed' if prior == 'missing-data' else 'source_failed', days[-2])
-        launch = tl.validate(prior['raw_data'].get(tl.KEY), days[-2])
+        launch = tl.project_counts(tl.validate(prior['raw_data'].get(tl.KEY), days[-2]))
         if launch.get('evidence') and launch.get('previous_date') != days[-3]:
             return missing(day, '来源日题材比较日与完整日历不符', previous=days[-2])
         if current_raw is None:
@@ -326,7 +330,7 @@ def _percent(number):
 
 def _continuity(value, current_launch, day, fact):
     """只组合已重算的独立证据；不生成强弱评分，也不把换榜当成转弱。"""
-    from analyzers import sector_increment as si
+    from analyzers.theme_volume_context import verified_market
     current, current_fact = tl._view(current_launch, day)
     gaps = []
     aligned = (current_fact == fact and current.get('previous_date') == value.get('source_date')
@@ -334,20 +338,18 @@ def _continuity(value, current_launch, day, fact):
     if not aligned:
         gaps.append('当日题材量能来源或比较日期未核验')
     current_rows = {r['code']: r for r in current['rows']} if aligned else {}
-    increment = si.validate(current.get('evidence', {}).get('increment'), fact) if aligned else {}
-    market = current.get('market') if aligned and increment.get('status') == 'complete' else None
+    market = verified_market(current) if aligned else None
     market_text = '沪深市场成交额：' + (_amount_change(market['change_pct']) if market else '未完整核验')
     if market is None:
         gaps.append('市场量能未完整核验，不判断市场放量或缩量')
     # value 来自 _view/validate，来源日 evidence.launch 已由 calculate 重新核验。
-    previous = value.get('evidence', {}).get('launch', {})
+    previous = tl.project_counts(value.get('evidence', {}).get('launch', {}))
     old_rows = {r['code']: r for r in previous.get('rows', [])}
     rows = []
     for row in value['rows']:
         old = old_rows.get(row['code'], {})
-        counts = old.get('counts')
-        distribution = ('未核验' if counts is None else
-                        '、'.join(f"{board}cm {counts[str(board)]}" for board in (10, 20, 30)))
+        distribution = ('、'.join(f"{board}cm {tl.count_text(old, str(board))}" for board in (10, 20, 30))
+                        if old.get('counts') is not None or old.get('count_coverage') else '未核验')
         g = row['groups']['all'] if row['groups'] is not None else None
         if g is None:
             feedback = '昨日样本未核验，今日反馈未计算'

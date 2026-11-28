@@ -168,6 +168,10 @@ class EastmoneyProvider(DataProvider):
             return DataResult(None, source, error="指数K线日期格式非法")
         if sd > ed:
             return DataResult(None, source, error="指数K线起止日期倒置")
+        # 盘中保持已验证的滚动请求。历史补采则让服务端按目标日取数，再核验回包日期。
+        date_params = {"end": "20500101"}
+        if ed < datetime.now(SHANGHAI).date():
+            date_params = {"beg": sd.strftime("%Y%m%d"), "end": ed.strftime("%Y%m%d")}
         try:
             with self._make_session() as session:
                 failures = []
@@ -175,7 +179,8 @@ class EastmoneyProvider(DataProvider):
                     try:
                         response = session.get(INDEX_KLINE_URL, params={
                             "secid": INTRADAY_INSTRUMENTS[code][0], "klt":str(period_minutes), "fqt":"0",
-                            "lmt":"128", "end":"20500101", "fields1":"f1,f2,f3,f4,f5,f6",
+                            "lmt":"128", **date_params,
+                            "fields1":"f1,f2,f3,f4,f5,f6",
                             "fields2":"f51,f52,f53,f54,f55,f56,f57",
                         }, timeout=(2,3))
                         response.raise_for_status()

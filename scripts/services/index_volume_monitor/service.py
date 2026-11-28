@@ -157,11 +157,13 @@ def _run_locked(registry, state, path, reports, slots, now, previous, input_by, 
                 except (ValueError,TypeError,KeyError,OverflowError) as exc:
                     errors.append(f"{code}/{period}分钟: {exc}")
     finished = shanghai_now(clock())
-    # 超时、跨槽、跨日一律不得把刚取回的旧窗口补发；也不推进其已检查基线。
-    if windows_at(finished,periods=rule.periods) != slots:
-        return {"status":"expired_window","events":[],"errors":["取数完成时已超过窗口，未告警/未推进检查基线"],"pushed":False}
+    expired = windows_at(finished,periods=rule.periods) != slots
     if fetched is not None and results:
-        fetched.update(rows=results, captured_at=finished.isoformat())
+        fetched.update(rows=results, captured_at=finished.isoformat(),
+                       acquisition="delayed_monitor_fetch" if expired else "monitor_fetch")
+    # 迟到的原值按实际取得时间进入侧档；已过期的窗口不发送、不推进已检查基线。
+    if expired:
+        return {"status":"expired_window","events":[],"errors":["取数完成时已超过窗口，未告警/未推进检查基线"],"pushed":False}
     covered = len(checked & allowed)
     status = "complete" if covered == len(allowed) else ("partial" if covered else "source_failed")
     # 10点仍用本轮5分钟行情计算前半小时环境；与5/15分钟提醒周期独立。
@@ -253,7 +255,8 @@ def run_index_volume(registry, *, input_by="USER", dry_run=False, state_path=DEF
                 # 原账本及发送流程先完成；归档失败独立留痕，不触发新的请求或投递。
                 result["ohlcv_archive"] = archive_fetched(
                     Path(report_root) / "ohlcv-5m", fetched["rows"], previous=previous, end=slots[0][1],
-                    captured_at=fetched["captured_at"], input_by=input_by.strip())
+                    captured_at=fetched["captured_at"], input_by=input_by.strip(),
+                    origin={"acquisition": fetched["acquisition"]})
         if slots[0][1].strftime("%H:%M") == "15:00":
             from .coverage import FIRST_5M_DAY, receipt_coverage
             if now.date() >= FIRST_5M_DAY:

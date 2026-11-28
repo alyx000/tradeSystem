@@ -406,7 +406,7 @@ class IngestService:
                 """,
                 tuple(params),
             ).fetchall()
-        return [self._enrich_retry_group(dict(row)) for row in rows]
+        return [self._enrich_retry_group(dict(row)) for row in rows if get_interface(row["interface_name"])]
 
     def _resolve_retryable_errors(self, *, interface_name: str, target_date: str, stage: str | None) -> int:
         with get_db(self.db_path) as conn:
@@ -757,6 +757,22 @@ class IngestService:
             source_meta["query"] = {"request": dict(params), "snapshot_date": target_date}
         with get_db(self.db_path) as conn:
             migrate(conn)
+            payload_status = "success" if rows else "empty"
+            if interface["interface_name"] == "margin_detail":
+                from providers.margin_detail import preserve_previous_rows, verified_receipt
+                note = verified_receipt(rows, source_meta, target_date)
+                if not note:
+                    raise ValueError("逐证券两融回执未核验")
+                if note["status"] == "partial":
+                    payload_status = "partial"
+                if not conn.in_transaction:
+                    conn.execute("BEGIN IMMEDIATE")
+                prior = conn.execute(
+                    "SELECT payload_json,payload_hash,source_meta_json FROM raw_interface_payloads WHERE interface_name=? AND dedupe_key=?",
+                    ("margin_detail", dedupe_key),
+                ).fetchone()
+                if prior and preserve_previous_rows(prior[0], prior[1], prior[2], rows, target_date):
+                    return dedupe_key, len(rows)
             conn.execute(
                 f"""
                 INSERT INTO raw_interface_payloads
@@ -783,7 +799,7 @@ class IngestService:
                     payload_json,
                     payload_hash,
                     len(rows),
-                    "success" if rows else "empty",
+                    payload_status,
                     json.dumps(params, ensure_ascii=False),
                     json.dumps(source_meta, ensure_ascii=False),
                 ),
@@ -1255,7 +1271,12 @@ class IngestService:
                 start_date=params["start_date"],
                 end_date=params["end_date"],
             )
-        return self.registry.call(method_name, target_date)
+        result = self.registry.call(method_name, target_date)
+        if interface["interface_name"] == "margin_detail" and result.success:
+            from providers.margin_detail import verified_receipt
+            if not verified_receipt(result.data, result.to_dict(), target_date):
+                return DataResult(None, result.source, error="逐证券两融来源、日期或分页回执未核验")
+        return result
 
     def execute_stage(
         self,
@@ -1369,12 +1390,18 @@ class IngestService:
         snapshot_ids = self._derive_snapshots(interface, target_date=target_date, result=result)
         entity_count = self._derive_fact_entities(interface, target_date=target_date, result=result)
         status = "success" if row_count > 0 else "empty"
+        notes = "provider execution complete"
+        if interface["interface_name"] == "margin_detail":
+            detail = json.loads(result.note)
+            if detail["status"] == "partial":
+                status = "partial"
+            notes = f"逐证券披露状态={detail['status']}；交易所明细条数={detail['exchanges']}"
         self._finalize_run(
             run_id,
             provider=provider,
             status=status,
             row_count=row_count,
-            notes="provider execution complete",
+            notes=notes,
             started_at=started_at,
         )
         return self._enrich_run_record({

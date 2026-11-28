@@ -42,6 +42,8 @@ class _StubPro:
                 {"ts_code": "300750.SZ", "trade_date": "20260403", "turnover_rate": 3.2},
             ])
         if api_name == "margin_detail":
+            if params.get("offset"):
+                return pd.DataFrame()
             return pd.DataFrame([
                 {"ts_code": "300750.SZ", "trade_date": "20260403", "rzmre": 123456789.0},
             ])

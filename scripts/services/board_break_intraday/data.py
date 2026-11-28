@@ -404,21 +404,38 @@ class MarketSource:
         self.tdx.initialize()
         self.eastmoney = eastmoney
 
-    def minutes(self, code, day, cutoff, mode, *, realtime_diagnostic=False, cutoff_exclusion=None, keep_partial=False):
+    def minutes(self, code, day, cutoff, mode, *, realtime_diagnostic=False, cutoff_exclusion=None,
+                keep_partial=False, verify_rows=None):
         enforce_window = mode == 'live' and not realtime_diagnostic
         if enforce_window and not self._retry_allowed(day, cutoff, mode):
             raise EvidenceError('不在正式采集窗口，未发起分钟请求')
         try:
-            return self._tushare_minutes(code, day, cutoff, mode)
+            result = self._tushare_minutes(code, day, cutoff, mode)
+            if verify_rows:
+                verify_rows(result['rows'])
+            return result
         except EvidenceError as primary:
             attempts = [dict(source='tushare:rt_min_daily' if mode=='live' else 'tushare:stk_mins',
                              status='source_failed',reason=str(primary))]
             fragment = getattr(primary, 'partial_minutes', None) if keep_partial else None
 
+        def usable_partial(partial):
+            if not keep_partial or not partial:
+                return False
+            try:
+                if verify_rows:
+                    verify_rows(partial['rows'])
+            except EvidenceError:
+                return False
+            return True
+
+        if not usable_partial(fragment):
+            fragment = None
+
         def remember_partial(exc, source, raw, requested_at, note=None):
             nonlocal fragment
             partial = getattr(exc, 'partial_rows', None)
-            if not keep_partial or not partial or len(partial['rows']) <= len((fragment or {}).get('rows', [])):
+            if not usable_partial(partial) or len(partial['rows']) <= len((fragment or {}).get('rows', [])):
                 return
             fragment = dict(partial, source=source, raw_sha256=digest(raw), requested_at=requested_at,
                             source_note=note, identity='single_symbol_request', adjust='none', cutoff=cutoff)
@@ -437,18 +454,26 @@ class MarketSource:
                 if provider is None:
                     continue
                 requested_at = self._minute_now().isoformat()
-                if name == 'tdx':
-                    def validate_node(rows):
-                        try:
-                            return normalize_minutes(rows, code, day, cutoff)
-                        except EvidenceError as exc:
-                            remember_partial(exc, 'tdx:get_security_bars:1min', rows, requested_at)
-                            raise
-                    fallback = provider.get_stock_minutes(
-                        code, day, validate=validate_node,
-                        can_request=lambda: not (enforce_window or round_no == 2) or self._retry_allowed(day, cutoff, mode))
-                else:
-                    fallback = provider.get_stock_minutes(code, day)
+                try:
+                    if name == 'tdx':
+                        def validate_node(rows):
+                            try:
+                                block = normalize_minutes(rows, code, day, cutoff)
+                                if verify_rows:
+                                    verify_rows(block['rows'])
+                                return block
+                            except EvidenceError as exc:
+                                remember_partial(exc, 'tdx:get_security_bars:1min', rows, requested_at)
+                                raise
+                        fallback = provider.get_stock_minutes(
+                            code, day, validate=validate_node,
+                            can_request=lambda: not (enforce_window or round_no == 2) or self._retry_allowed(day, cutoff, mode))
+                    else:
+                        fallback = provider.get_stock_minutes(code, day)
+                except (OSError, RuntimeError, ValueError, TypeError, KeyError, AttributeError) as exc:
+                    attempts.append(dict(source=name, status='source_failed', reason=type(exc).__name__,
+                                         attempt=round_no, requested_at=requested_at))
+                    continue
                 try:
                     raw_hash = digest(fallback.data) if fallback.data is not None else None
                 except (ValueError, TypeError):
@@ -461,6 +486,8 @@ class MarketSource:
                     result = normalize_minutes(
                         fallback.data, code, day, cutoff,
                         cutoff_exclusion=cutoff_exclusion if name == 'sina' and cutoff == '14:50' else None)
+                    if verify_rows:
+                        verify_rows(result['rows'])
                 except EvidenceError as exc:
                     if raw_hash and fallback.success:
                         remember_partial(exc, fallback.source, fallback.data, requested_at, fallback.note)
@@ -506,6 +533,7 @@ class MarketSource:
             params.update(start_date=day+' 09:30:00', end_date=day+' '+cutoff+':00')
         try:
             df = self.provider.pro.query(api, **params)
+            records = df.to_dict('records')
         except Exception as exc:
             # 白名单分类，不能让镜像错误携带账户链接/密钥进日志。
             msg = str(exc).lower()
@@ -513,7 +541,6 @@ class MarketSource:
             if kind == '权限不足':
                 self._minute_permission_denied = True
             raise EvidenceError(f'{api}来源失败：{kind}') from None
-        records = df.to_dict('records')
         try:
             result = normalize_minutes(records, code, day, cutoff)
         except EvidenceError as exc:

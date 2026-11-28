@@ -145,3 +145,71 @@ def test_later_conflicting_daily_context_preserves_original_for_finished_stock(a
     args["load_references"]=lambda *a:{CODE:{"open":10.,"pre_close":8.}}
     final=svc.capture(DAY,"USER",query=lambda _:pytest.fail("已有成交不能为刷新参考而重新请求"),**args)
     assert final["status"]=="complete" and not final["reference_conflicts"]
+
+
+
+@pytest.mark.parametrize("day_rows", [[row()], [row()] + [row("600999.SH")] * 7999])
+def test_missing_or_truncated_daily_reply_requests_only_unobserved_code(args, day_rows):
+    calls = []
+    def one(day, code):
+        calls.append((day, code))
+        return [row(code)]
+    result = svc.capture(DAY, "USER", query=lambda _: day_rows, query_code=one, **args)
+    assert calls == [(DAY, PEER)] and result["coverage"]["observed"] == 2
+    assert result["latest_attempt"]["requests"][1] == {
+        "params": {"trade_date": "20261127", "ts_code": PEER}, "rows": 1, "status": "received"}
+    assert result["latest_attempt"]["day_response_at_limit"] == (len(day_rows) == 8000)
+
+
+@pytest.mark.parametrize("reply", [None, [], [row("600999.SH")], [row(trade_date="20261126")]])
+def test_day_failure_or_empty_does_not_multiply_outbound_calls(args, reply):
+    def day(_):
+        if reply is None:
+            raise svc.data.EvidenceError("镜像域名解析失败")
+        return reply
+    result = svc.capture(DAY, "USER", query=day, query_code=lambda *a:pytest.fail("不应逐股请求"), **args)
+    assert result["coverage"]["observed"] == 0
+    assert len(result["latest_attempt"]["requests"]) == 1
+    assert result["latest_attempt"]["requests"][0]["rows"] == (None if reply is None else len(reply))
+
+
+def test_wrong_targeted_identity_does_not_replace_a_real_observation(args):
+    result = svc.capture(DAY,"USER",query=lambda _:[row()],query_code=lambda *_:[row(CODE)],**args)
+    assert set(result["observations"]) == {CODE} and "代码不符" in result["stock_gaps"][PEER]
+
+
+def test_morning_receipt_freezes_list_and_evening_only_checks_daily_reference(args):
+    stamp = DAY+"T09:32:00+08:00"
+    args["now"] = datetime.fromisoformat(stamp)
+    first = svc.capture(DAY,"launchd",scheduled_at=stamp,query=lambda _:[row(),row(PEER)],**args)
+    assert first["coverage"]["observed"] == 2 and first["post_reference_pending"] == sorted([CODE, PEER])
+    assert first["observations"][CODE]["auction_session_end_at"] == DAY+"T09:25:00+08:00"
+    assert svc.capture(DAY,"launchd",scheduled_at=stamp,query=lambda _:pytest.fail("重复槽"),**args) == first
+    args["now"] = datetime.fromisoformat(DAY+"T20:15:00+08:00")
+    args["load_references"] = lambda *_:{code:dict(open=10,pre_close=8) for code in (CODE, PEER)}
+    later = svc.capture(DAY,"launchd",query=lambda _:pytest.fail("完整竞价不重拉"),**args)
+    assert later["coverage"]["observed"] == 2 and not later["post_reference_pending"]
+    for code in (CODE,PEER):
+        assert later["observations"][code]["raw"] == first["observations"][code]["raw"]
+        assert later["observations"][code]["acquired_at"] == first["observations"][code]["acquired_at"]
+    assert later["previous_sha256"] == first["sha256"]
+    assert svc._read(args["root"]/"revisions"/DAY/(first["sha256"]+".json"), DAY) == first
+
+
+def test_not_live_slot_cannot_claim_a_scheduled_observation(args):
+    result = svc.capture(DAY,"launchd",scheduled_at=DAY+"T09:32:00+08:00",
+                         query=lambda _:pytest.fail("不能补跑过期时段"),**args)
+    assert result["status"] == "skipped" and not args["root"].exists()
+
+
+def test_fetch_requests_date_and_canonical_code_without_logging_credentials(monkeypatch):
+    import pandas as pd
+    from providers.tushare_transport import TushareMirrorClient
+    calls = []
+    def query(self, name, **params):
+        calls.append((name, params))
+        return pd.DataFrame([row()])
+    monkeypatch.setenv("TUSHARE_TOKEN","fixture")
+    monkeypatch.setattr(TushareMirrorClient, "query", query)
+    assert svc.fetch(DAY, CODE) == [row()] and calls == [
+        ("stk_auction", dict(fields=svc.FIELDS, trade_date="20261127", ts_code=CODE))]

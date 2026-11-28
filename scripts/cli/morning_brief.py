@@ -1,9 +1,9 @@
-"""CLI: 盘前早报(隔夜行情 + 海外/国内要闻 + 上市公司公告)。
+"""CLI: 盘前早报(隔夜行情 + 海外/国内要闻)。
 
   morning-brief daily [--date YYYY-MM-DD] [--dry-run|--no-push]
 
 三档:裸(落报告+推钉钉)/--no-push(落报告不推)/--dry-run(仅打印,不落不推,豁免非交易日守卫)。
-金十源失败 = source_failed:落失败报告+推告警+非零退出;公告/行情单源失败只降级对应段(partial)。
+金十源失败 = source_failed:落失败报告+推告警+非零退出;行情单源失败只降级对应段(partial)。
 不写 SQLite 业务表/计划层/关注池,不构成买卖建议。
 """
 from __future__ import annotations
@@ -32,7 +32,7 @@ def _iso_date(value: str) -> str:
 
 
 def register_subparser(subparsers: argparse._SubParsersAction) -> None:
-    mb = subparsers.add_parser("morning-brief", help="盘前早报(隔夜行情+要闻+公告:报告+钉钉)")
+    mb = subparsers.add_parser("morning-brief", help="盘前早报(隔夜行情+要闻:报告+钉钉)")
     sub = mb.add_subparsers(dest="morning_brief_command")
 
     daily = sub.add_parser("daily", help="采集→分类→落报告→推送")
@@ -64,7 +64,7 @@ def _run_daily(config: dict, args: argparse.Namespace) -> None:
     try:
         migrate(conn)  # 连库即迁移(全仓库约定):fresh 库缺 trade_calendar 时守卫才不会静默 fail-open
         # 金十采集也在 without_standard_http_proxy 内跑,与 macro-flash 独立 CLI(沿用系统
-        # 代理)行为分叉——这是有意的:早报还要经 akshare/巨潮取行情与公告,须统一直连;
+        # 代理)行为分叉——这是有意的:早报还要经行情源取数,须统一直连;
         # 金十国内直连可达。若 08:00 档金十连续 source_failed 而 20:00 macro-flash 档
         # 正常,先查本机代理 env 差异再怀疑源。
         with without_standard_http_proxy():

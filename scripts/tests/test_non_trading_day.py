@@ -208,10 +208,6 @@ class TestPostCommandIngestAudit:
         multi._pushers = []
         mock_setup_pushers.return_value = multi
 
-        exporter = MagicMock()
-        exporter.export_post_market.return_value = None
-        mock_obsidian_exporter_cls.return_value = exporter
-
         proxy_tracker = _ProxyTracker()
         observed_active: list[bool] = []
 
@@ -238,6 +234,8 @@ class TestPostCommandIngestAudit:
              patch("cli.margin_index_correlation.run_for_post"), \
              caplog.at_level(logging.INFO):
             cmd_post({}, "2026-04-17")
+
+        mock_obsidian_exporter_cls.assert_not_called()
 
         mock_volume_record_for_post.assert_called_once_with("2026-04-17", registry)
         assert ingest_service.execute_stage.call_count == 2
@@ -941,3 +939,22 @@ class TestSectorCorrelationNonTradingDay:
             _run_daily({}, self._args("2026-04-06", dry_run=True))
         assert "非交易日" not in caplog.text
         mock_service.run_daily.assert_called_once()
+
+
+def test_evening_updates_watchlist_without_exporting_obsidian(monkeypatch):
+    from main import cmd_evening
+
+    monkeypatch.setattr("main.setup_providers", lambda config: MagicMock())
+    monkeypatch.setattr("db.connection.get_connection", MagicMock())
+    monkeypatch.setattr("utils.trade_date.ensure_trade_calendar", lambda *a: None)
+    monkeypatch.setattr("utils.trade_date.is_trade_day", lambda *a, **kw: True)
+    monkeypatch.setattr("utils.trade_date.get_prev_trade_date", lambda *a: "2026-09-14")
+    monkeypatch.setattr("collectors.PremiumCollector", MagicMock())
+    watchlist = MagicMock()
+    watchlist.collect.return_value = {"alerts": []}
+    monkeypatch.setattr("collectors.WatchlistCollector", lambda *a: watchlist)
+    monkeypatch.setattr("main.setup_pushers", MagicMock())
+    with patch("generators.obsidian_export.ObsidianExporter") as exporter:
+        cmd_evening({}, "2026-09-15")
+    watchlist.collect.assert_called_once_with("2026-09-15")
+    exporter.assert_not_called()

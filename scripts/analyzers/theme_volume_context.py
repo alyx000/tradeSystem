@@ -8,14 +8,34 @@ def direction(value):
     return ('放量' if value > 0 else '缩量' if value < 0 else '持平') + f'（{value:+.2f}%）'
 
 
-def build(value):
-    # 调用方必须先用theme_launch.validate重算。partial总额不可当完整市场背景。
-    evidence = value.get('evidence')
-    evidence = evidence if isinstance(evidence, dict) else {}
+def verified_market(value):
+    market = value.get('market')
+    if not isinstance(market, dict):
+        return None
+    if 'denominator_coverage' in market:
+        return market if market['denominator_coverage']['status'] == 'complete' else None
+    # 旧快照仅在归因块完整时核实过分母，继续按原口径展示。
+    evidence = value.get('evidence') or {}
     increment = evidence.get('increment')
-    # Failed sources retain their raw shape in otherwise valid partial snapshots.
-    increment = increment if isinstance(increment, dict) else {}
-    market = value.get('market') if increment.get('status') == 'complete' else None
+    return market if isinstance(increment, dict) and increment.get('status') == 'complete' else None
+
+
+def denominator_note(value):
+    coverage = (value.get('market') or {}).get('denominator_coverage', {})
+    if coverage.get('reason'):
+        return '沪深成交额分母待核验：'+coverage['reason']
+    days = []
+    for day, item in coverage.get('dates', {}).items():
+        days.append(f"{day} 行情{item['quote_count']}/{item['universe_count']}只，"
+                    f"已核全天停牌{len(item['confirmed_halts'])}只，未解释缺行情{len(item['unexplained_codes'])}只，"
+                    f"停牌与行情或宇宙冲突{len(item['conflicting_codes'])}只")
+        if item.get('receipt_error'):
+            days[-1] += '，停牌证据待核：'+item['receipt_error']
+    return '沪深成交额分母：'+'；'.join(days) if days else ''
+
+
+def build(value):
+    market = verified_market(value)
     market_change = market.get('change_pct') if market else None
     indices = {r['name']: r['change_pct'] for r in value.get('indices', [])}
     index_text = '；'.join(name+' '+(f'{indices[name]:+.2f}%' if name in indices else '未核验')

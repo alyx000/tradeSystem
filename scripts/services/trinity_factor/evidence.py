@@ -45,8 +45,6 @@ _SECTOR_LLM_FACT_FIELDS = (
     "pct_chg",
     "limit_up_count",
     "net_amount_yi",
-    "cumulative_pct_5d",
-    "cumulative_pct_10d",
 )
 
 _FACTOR_STEP_MAP = {
@@ -273,12 +271,26 @@ def _llm_evidence_projection(candidate: Mapping[str, Any]) -> dict[str, Any]:
 def _sector_llm_facts(value: Any) -> dict[str, Any]:
     """只投影无个股名称、无规则身份的板块客观字段。"""
     if not isinstance(value, Mapping):
-        return {}
-    return {
+        facts = {}
+    facts = {
         field: value[field]
         for field in _SECTOR_LLM_FACT_FIELDS
         if field in value and _has_content(value[field])
     }
+    for window in ("5d", "10d"):
+        fields = (f"period_return_{window}_pct", f"top30_sum_{window}_pct",
+                  f"top30_days_{window}", f"ranking_covered_days_{window}")
+        if any(field in value for field in fields):
+            for field in fields:
+                number = value.get(field)
+                if type(number) in (int, float) and isfinite(number):
+                    facts[field] = number
+        else:
+            # 旧档按当时可用榜单窗口计算，仅作历史上榜日涨幅合计。
+            old_sum = value.get(f"cumulative_pct_{window}")
+            if type(old_sum) in (int, float) and isfinite(old_sum):
+                facts[f"legacy_ranked_day_change_sum_{window}_pct"] = old_sum
+    return facts
 
 
 def _prepare_sector_candidates(

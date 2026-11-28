@@ -609,3 +609,47 @@ def test_expiry_during_push_initialization_never_sends(setup, monkeypatch):
     result = run_index_volume(registry, **kw)
     assert result["status"] == "expired_window" and not pusher.messages
     assert not json.loads(kw["state_path"].read_text())["pending_events"]
+
+
+def test_index_archive_retains_late_fetch_without_alert_or_realtime_credit(setup):
+    registry, pusher, options = setup
+    for code in INDEX_NAMES:
+        registry.dirty[code] = [dict(row, open=100, close=101, high=102, low=99, volume=2)
+                                for row in bars(code)]
+    times = iter(["10:03", "10:06"])
+    options["clock"] = lambda: moment(next(times))
+    result = run_index_volume(registry, **options)
+    assert result["status"] == "expired_window" and not pusher.messages
+    assert result["ohlcv_archive"]["2026-11-04"]["valid_count"] == 24
+    archive = json.loads((options["report_root"] / "ohlcv-5m" / "2026-11-04.json").read_text())
+    bar = archive["indices"][CODE]["bars"]["10:00"]
+    assert bar["captured_at"] == moment("10:06").isoformat() and bar["acquisition"] == "delayed_monitor_fetch"
+    assert not (options["report_root"] / "2026-11-04").exists()
+
+
+
+def test_provider_requests_historical_dates_without_changing_intraday_window(monkeypatch):
+    from providers import eastmoney_provider as em
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return moment("10:03", "2026-11-27")
+
+    captured = []
+    class Session:
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+        def get(self, url, *, params, timeout):
+            captured.append(params)
+            return SimpleNamespace(raise_for_status=lambda: None, json=lambda: envelope())
+    monkeypatch.setattr(em, "datetime", Clock)
+    provider = EastmoneyProvider()
+    monkeypatch.setattr(provider, "_make_session", Session)
+    provider.get_index_intraday_bars(CODE, "2026-11-03", "2026-11-04", period_minutes=5)
+    provider.get_index_intraday_bars(CODE, "2026-11-26", "2026-11-27", period_minutes=5)
+    assert (captured[0]["beg"], captured[0]["end"]) == ("20261103", "20261104")
+    assert captured[1]["end"] == "20500101" and "beg" not in captured[1]
+    assert all(request["lmt"] == "128" for request in captured)

@@ -37,7 +37,7 @@ def run_entry(tmp_path, entry, clock, exits, *, args=(), concurrent=False):
     runner.write_text(script)
     tools = tmp_path / "scripts/tools"
     tools.mkdir(parents=True)
-    for name in STEPS:
+    for name in (*STEPS, "course_opening_auction"):
         (tools / (name + ".py")).write_text(STUB)
     (tools.parent / "main.py").write_text(STUB)
     invocations = tmp_path / "invocations"
@@ -45,7 +45,7 @@ def run_entry(tmp_path, entry, clock, exits, *, args=(), concurrent=False):
     env = {
         "HOME": os.environ["HOME"], "TEST_INVOCATIONS": str(invocations),
         "TEST_EXITS": json.dumps(exits), "CHECK_CONCURRENT": str(int(concurrent)),
-        "TEST_EXPECTED_CALLS": str(len(STEPS)),
+        "TEST_EXPECTED_CALLS": str(len(STEPS) + int(clock.endswith("09 34"))),
     }
     run = subprocess.run(["/bin/bash", str(runner), *args], env=env, capture_output=True,
                          text=True, timeout=12)
@@ -53,7 +53,8 @@ def run_entry(tmp_path, entry, clock, exits, *, args=(), concurrent=False):
 
 
 @pytest.mark.parametrize("exits,expected", [({}, 0), ({"intraday_events": 4, "theme_catalysts": 3}, 4),
-                                          ({"course_cross_market": 2}, 2), ({"broad_etf_minutes": 2}, 2)])
+                                          ({"course_cross_market": 2}, 2), ({"broad_etf_minutes": 2}, 2),
+                                          ({"course_opening_auction": 2}, 0)])
 def test_same_slot_collectors_start_independently(tmp_path, exits, expected):
     result, calls = run_entry(tmp_path, "intraday-events-runner.sh", "2026-11-27 5 09 34",
                               exits, concurrent=True)
@@ -61,6 +62,7 @@ def test_same_slot_collectors_start_independently(tmp_path, exits, expected):
     stamp = "2026-11-27T09:32:00+08:00"
     assert calls["intraday_events"] == ["--interval-minutes", "10", "--push", "--input-by",
                                         "launchd", "--scheduled-at", stamp]
+    assert calls["course_opening_auction"] == ["--date", "2026-11-27", "--scheduled-at", stamp, "--input-by", "launchd"]
     for name in STEPS[1:]:
         assert calls[name] == ["--scheduled-at", stamp, "--input-by", "launchd"]
 
@@ -84,3 +86,9 @@ def test_macro_replay_uses_completed_weekday_archive(tmp_path, clock, args, exit
     assert ("theme_catalysts" in calls) == follow
     if follow:
         assert calls["theme_catalysts"] == ["--archive", "--date", "2026-11-27", "--input-by", "launchd"]
+
+
+
+def test_opening_auction_only_runs_in_first_intraday_slot(tmp_path):
+    result, calls = run_entry(tmp_path, "intraday-events-runner.sh", "2026-11-27 5 09 42", {})
+    assert result == 0 and set(calls) == set(STEPS)

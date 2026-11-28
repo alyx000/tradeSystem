@@ -734,3 +734,169 @@ class TestEmptyDaysSkipped:
         }
         results = analyzer.analyze(today_raw, "industry", today_date="2026-03-31")
         assert results[0]["consecutive_in_top30"] == 4  # 25,26,27,31 连续（28被跳过）
+
+
+def _calendar_and_boards(root, as_of, *, missing=(), bad_concept=()):
+    """归档比 20 日窗口稍长，另存一个未来日，以检验日期筛选发生在截取之前。"""
+    import sqlite3
+    from datetime import date, timedelta
+
+    day = date.fromisoformat(as_of)
+    (root / "data").mkdir()
+    conn = sqlite3.connect(root / "data" / "trade.db")
+    days = [day - timedelta(days=i) for i in reversed(range(-1, 46))]
+    with conn:
+        conn.execute("CREATE TABLE trade_calendar (date TEXT PRIMARY KEY, exchange TEXT, is_open INTEGER)")
+        conn.executemany("INSERT INTO trade_calendar VALUES (?, 'SSE', ?)",
+                         [(d.isoformat(), int(d.weekday() < 5)) for d in days])
+    conn.close()
+    opens = [d.isoformat() for d in days if d.weekday() < 5]
+    today = None
+    for d in opens + [(day + timedelta(days=3)).isoformat()]:
+        raw = {"date": d}
+        for stype, name in (("industry", "行业甲"), ("concept", "概念甲")):
+            block = {"_source": "test", "data": [_make_sector_entry(name, 1, 2.0)]}
+            if stype == "concept" and d in bad_concept:
+                block["error"] = "排名来源失败"
+            raw[f"sector_{stype}"] = block
+        if d == as_of:
+            today = raw
+        if d in missing:
+            continue
+        folder = root / "daily" / d
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "post-market.yaml").write_text(yaml.safe_dump({"date": d, "generated_at": d + "T20:00:00+08:00", "raw_data": raw}))
+    return [d for d in opens if d <= as_of][-20:], today
+
+
+def test_window_as_of_shares_reads_and_counts_unarchived_today_once(tmp_path, monkeypatch):
+    from analyzers import sector_rhythm as rhythm
+
+    day = "2026-10-30"
+    days, today = _calendar_and_boards(tmp_path, day, missing={day})
+    reads = []
+    read = rhythm.read_archive
+
+    def tracked(path):
+        reads.append(path.parent.name)
+        return read(path)
+
+    monkeypatch.setattr(rhythm, "read_archive", tracked)
+    analyzer = _build_analyzer(tmp_path)
+    window = analyzer.load_ranking_window(day, today)
+    for stype in ("industry", "concept"):
+        row = analyzer.analyze(today, stype, window=window)[0]
+        assert row["signals"]["days_in_top30_of_20"] == 20
+        assert row["history_coverage"]["observed"] == 20
+        assert row["history_coverage"]["missing_dates"] == []
+    assert window.dates == days
+    assert reads == days[:-1]
+    with pytest.raises(ValueError, match="日期"):
+        analyzer.load_ranking_window(day, {**today, "date": "2026-11-02"})
+    with pytest.raises(ValueError, match="目标日"):
+        analyzer.analyze({**today, "date": "2026-11-02"}, "industry", window=window)
+
+
+def test_missing_session_and_failed_board_keep_their_window_slots(tmp_path):
+    day, missing, bad = "2026-10-30", "2026-10-27", "2026-10-29"
+    days, today = _calendar_and_boards(tmp_path, day, missing={missing}, bad_concept={bad})
+    analyzer = _build_analyzer(tmp_path)
+    window = analyzer.load_ranking_window(day, today)
+    assert window.dates == days and len(days) == 20
+    industry = analyzer.analyze(today, "industry", window=window)[0]
+    concept = analyzer.analyze(today, "concept", window=window)[0]
+    assert industry["history_coverage"]["missing_dates"] == [missing]
+    assert industry["history_coverage"]["observed"] == 19
+    assert concept["history_coverage"]["missing_dates"] == [missing, bad]
+    assert concept["history_coverage"]["observed"] == 18
+    assert industry["signals"]["days_in_top30_of_20"] == 19
+    assert concept["signals"]["days_in_top30_of_20"] == 18
+    assert industry["consecutive_in_top30"] == 3
+    assert concept["consecutive_in_top30"] == 1
+    assert concept["signals"]["consecutive_is_lower_bound"]
+    assert not any("首次" in e or "近期中断" in e for e in concept["evidence"])
+
+
+def test_history_rejects_wrong_dated_envelope_and_uses_target_dated_theme(tmp_path):
+    day = "2026-10-30"
+    days, today = _calendar_and_boards(tmp_path, day)
+    path = tmp_path / "daily" / days[-2] / "post-market.yaml"
+    flipped = yaml.safe_load(path.read_text())
+    flipped["raw_data"]["date"] = day
+    path.write_text(yaml.safe_dump(flipped))
+    analyzer = _build_analyzer(tmp_path)
+    row = analyzer.analyze(today, "industry")[0]
+    assert row["history_coverage"]["missing_dates"] == [days[-2]]
+    tracking = tmp_path / "tracking"
+    tracking.mkdir()
+    (tracking / "main-theme.yaml").write_text(yaml.safe_dump({
+        "current_main_theme": {"name": "未来行业"},
+        "potential_themes": [{"name": "未来概念"}],
+        "history": [{"date": day, "main_theme": "当日行业"}],
+    }))
+    assert analyzer.load_main_theme_names(as_of=day) == ["当日行业"]
+    assert analyzer.load_main_theme_names(as_of=days[0]) == []
+
+
+
+def test_old_missing_day_does_not_discard_verified_recent_phase(tmp_path):
+    day = "2026-10-30"
+    days, today = _calendar_and_boards(tmp_path, day, missing={"2026-10-07"})
+    analyzer = _build_analyzer(tmp_path)
+    row = analyzer.analyze(today, "industry")[0]
+    assert days[-5:] == ["2026-10-26", "2026-10-27", "2026-10-28", "2026-10-29", day]
+    assert row["history_coverage"]["observed"] == 19
+    assert row["phase"] == PHASE_FERMENT
+    assert row["signals"]["five_day_ranks_observed"]
+
+
+def test_today_source_failure_cannot_be_interpreted_as_falling_off_rank(tmp_path):
+    day = "2026-10-30"
+    days, today = _calendar_and_boards(tmp_path, day)
+    today["sector_industry"] = {"error": "当日目标榜失败"}
+    row = _build_analyzer(tmp_path).analyze(today, "industry", extra_names=["行业甲"])[0]
+    assert row["history_coverage"]["missing_dates"] == [day]
+    assert row["rank_today"] is None and row["consecutive_in_top30"] is None
+    assert row["phase"] == PHASE_WATCH
+    assert "目标日板块榜缺失" in row["evidence"][0]
+
+
+@pytest.mark.parametrize("evidence, expected_status, observed", [
+    ({"error": "来源失败"}, "unavailable", 19),
+    ({"_source": "test", "data": []}, "unavailable", 19),
+    ({"_source": "test", "data": [], "row_count": 0, "status": "empty", "trade_date": "20261030"}, "empty", 20),
+    ({"_source": "test", "data": [], "row_count": 0, "status": "empty", "trade_date": "20261029"}, "unavailable", 19),
+])
+def test_empty_result_keeps_day_and_window_receipt(tmp_path, evidence, expected_status, observed):
+    day = "2026-10-30"
+    _, today = _calendar_and_boards(tmp_path, day)
+    today["sector_concept"] = evidence
+    analyzer = _build_analyzer(tmp_path)
+    window = analyzer.load_ranking_window(day, today)
+    assert analyzer.analyze(today, "concept", window=window) == []
+    assert window.coverage["concept"]["today_status"] == expected_status
+    assert window.coverage["concept"]["observed"] == observed
+    assert window.coverage["concept"]["missing_dates"] == ([day] if observed == 19 else [])
+
+
+
+@pytest.mark.parametrize("stamp", ["2026-11-02T20:00:00+08:00", "2026-10-29T06:59:59Z", None])
+def test_rank_archive_must_be_visible_after_its_own_close(tmp_path, stamp):
+    day = "2026-10-30"
+    days, today = _calendar_and_boards(tmp_path, day)
+    path = tmp_path / "daily" / days[-2] / "post-market.yaml"
+    envelope = yaml.safe_load(path.read_text())
+    envelope["generated_at"] = stamp
+    path.write_text(yaml.safe_dump(envelope))
+    window = _build_analyzer(tmp_path).load_ranking_window(day, today)
+    assert days[-2] not in window.rankings
+
+
+
+def test_unquoted_current_move_stays_unknown_in_report_fields(tmp_path):
+    day = "2026-10-30"
+    _, today = _calendar_and_boards(tmp_path, day)
+    today["sector_industry"]["data"][0]["change_pct"] = None
+    row = _build_analyzer(tmp_path).analyze(today, "industry")[0]
+    assert row["rank_today"] == 1
+    assert row["change_today"] is None and row["signals"]["change_today"] is None

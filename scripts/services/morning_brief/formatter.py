@@ -70,7 +70,7 @@ def render(result: dict) -> str:
     ]
     for gap in result.get("gaps") or []:
         lines.append(f"> ⚠️ {gap}")
-    lines.append("> 新闻与公告为转述事实层；不构成投资建议。")
+    lines.append("> 以下为已采集的公开信息；不构成投资建议。")
     lines.append("")
 
     # 隔夜行情
@@ -101,23 +101,24 @@ def render(result: dict) -> str:
     if grouped.get(OTHER_TOPIC):
         _news_section(lines, OTHER_TOPIC, grouped[OTHER_TOPIC], C.NEWS_OTHER_TOPIC_LIMIT)
 
-    # 上市公司公告（巨潮）
-    ann = result.get("announcements") or {}
-    ann_start, ann_end = result["ann_window"]
-    lines.append(f"## 上市公司公告（{ann_start:%m-%d %H:%M} → {ann_end:%m-%d %H:%M}）")
-    lines.append("")
-    if ann.get("error"):
-        lines.append(f"公告源失败：{ann['error']}")
-    else:
-        ann_grouped = ann.get("grouped") or {}
-        if ann.get("status") == "truncated":
-            lines.append("> ⚠️ 公告采集触达预算被截断，以下为部分结果")
-        if not ann_grouped:
-            lines.append(f"窗口内无命中重点公告（原始 {ann.get('raw_count', 0)} 条）。")
-        for group, rows in ann_grouped.items():
-            lines.append(f"### {group}（{min(len(rows), C.ANN_PER_GROUP_LIMIT)}/{len(rows)}）")
-            lines.extend(_ann_line(r) for r in rows[:C.ANN_PER_GROUP_LIMIT])
-            lines.append("")
+    # 兼容停采前已经保存的早报内容。
+    if "announcements" in result and "ann_window" in result:
+        ann = result["announcements"]
+        ann_start, ann_end = result["ann_window"]
+        lines.append(f"## 上市公司公告（{ann_start:%m-%d %H:%M} → {ann_end:%m-%d %H:%M}）")
+        lines.append("")
+        if ann.get("error"):
+            lines.append(f"公告源失败：{ann['error']}")
+        else:
+            ann_grouped = ann.get("grouped") or {}
+            if ann.get("status") == "truncated":
+                lines.append("> ⚠️ 公告采集触达预算被截断，以下为部分结果")
+            if not ann_grouped:
+                lines.append(f"窗口内无命中重点公告（原始 {ann.get('raw_count', 0)} 条）。")
+            for group, rows in ann_grouped.items():
+                lines.append(f"### {group}（{min(len(rows), C.ANN_PER_GROUP_LIMIT)}/{len(rows)}）")
+                lines.extend(_ann_line(r) for r in rows[:C.ANN_PER_GROUP_LIMIT])
+                lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 
 

@@ -55,10 +55,16 @@ def save_state(path: Path, payload: dict) -> None:
 
 
 @contextmanager
-def locked_state(path: Path) -> Iterator[dict]:
+def state_lock(path: Path) -> Iterator[None]:
     path.parent.mkdir(parents=True, exist_ok=True)
     lock_path = path.with_suffix(path.suffix + ".lock")
     with lock_path.open("a+", encoding="utf-8") as lock_file:
         os.chmod(lock_path, 0o600)
         fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        yield
+
+
+@contextmanager
+def locked_state(path: Path) -> Iterator[dict]:
+    with state_lock(path):
         yield load_state(path)
