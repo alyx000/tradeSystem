@@ -87,8 +87,8 @@ def verified_list(day, **inputs):
     return closed_list(day, aligned(day, **inputs))
 
 
-def _inputs(registry, day, quotes, st):
-    supplied = dict(quotes=quotes, st=st)
+def _inputs(registry, day, quotes, st, suspended=None):
+    supplied = dict(quotes=quotes, st=st, suspended=suspended)
     inputs, sources = {}, {}
     for key, method in METHODS.items():
         response = supplied.get(key)
@@ -109,11 +109,11 @@ def collect(registry, day, *, quotes=None, st=None):
         return dict(_source=SOURCE, trade_date=day, status='source_failed', error=str(exc))
 
 
-def collect_session(registry, day, *, quotes, st, db_path):
+def collect_session(registry, day, *, quotes, st, db_path, suspended=None):
     """同一批五项原始请求供收盘跌停和盘中曾触跌停两个独立结果消费。"""
     from analyzers import limit_down_touch as touch
     try:
-        inputs, sources = _inputs(registry, day, quotes, st)
+        inputs, sources = _inputs(registry, day, quotes, st, suspended)
         aligned_inputs = aligned(day, **inputs)
         closed = closed_list(day, aligned_inputs)
     except (ValueError, TypeError, KeyError, AttributeError, RuntimeError, OSError) as exc:

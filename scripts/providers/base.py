@@ -396,7 +396,7 @@ class DataProvider(ABC):
     def get_stock_basic_list(self, date: str) -> DataResult:
         return DataResult(data=None, source=self.name, error="not implemented")
 
-    def get_stock_universe_as_of(self, date: str) -> DataResult:
+    def get_stock_universe_as_of(self, date: str, *, exact_day: bool = False) -> DataResult:
         """目标月份曾处于上市状态的 A 股代码宇宙（含后续退市股）。"""
         return DataResult(data=None, source=self.name, error="not implemented")
 

@@ -12,7 +12,7 @@ import yaml
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from api.deps import get_db_conn, get_readonly_db_conn
-from api.market_enrich import enrich_daily_market_row
+from api.market_enrich import enrich_daily_market_row, rhythm_archive_projection
 from db import queries as Q
 from services.holding_signals import build_holding_signals
 from services.teacher_note_service import (
@@ -803,6 +803,7 @@ def get_post_market_envelope(date: str, conn: sqlite3.Connection = Depends(get_r
     for section in (out, out.get("raw_data")):
         if isinstance(section, dict):
             section.pop("northbound", None)
+            section.update(rhythm_archive_projection(section, date, conn, out.get("date")))
             if "sector_fund_flow" in section:
                 section["sector_fund_flow"] = fund_flow_rows_view(section["sector_fund_flow"])
             if isinstance(section.get("hk_indices"), dict):

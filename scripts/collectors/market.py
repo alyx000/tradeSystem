@@ -918,6 +918,7 @@ class MarketCollector:
                         "data": raw["top"],
                         "bottom": raw.get("bottom", []),
                         "_source": r.source,
+                        **{k: raw[k] for k in ("trade_date", "status", "row_count") if k in raw},
                     }
                 else:
                     result[f"sector_{stype}"] = {"data": raw, "_source": r.source}
@@ -1027,9 +1028,14 @@ class MarketCollector:
             shared_daily_quotes = self.registry.call("get_market_daily_quotes", date)
         except Exception as exc:
             shared_daily_quotes = DataResult(data=None, source="", error=f"全市场日线调用异常:{exc}")
+        try:
+            shared_suspensions = self.registry.call("get_suspend_list", date)
+        except Exception as exc:
+            shared_suspensions = DataResult(data=None, source="", error=f"停牌名单调用异常:{exc}")
         from analyzers.verified_limit_down import collect_session
         result["limit_down"], result["limit_down_touch"] = collect_session(
             self.registry, date, quotes=shared_daily_quotes, st=stock_st_result,
+            suspended=shared_suspensions,
             db_path=BASE_DIR / "data" / "trade.db")
         from analyzers.limit_down_touch import retain_previous
         result["limit_down_touch"] = retain_previous(result["limit_down_touch"], BASE_DIR / "daily")
@@ -1091,28 +1097,14 @@ class MarketCollector:
 
         # 题材启动只展示事实证据；当前成员不回填历史，失败独立隔离。
         from analyzers.theme_launch import collect as collect_theme_launch
-        result['theme_launch'] = collect_theme_launch(self.registry, date, result, daily_dir=BASE_DIR / 'daily')
+        result['theme_launch'] = collect_theme_launch(
+            self.registry, date, result, daily_dir=BASE_DIR / 'daily', suspended=shared_suspensions)
         from analyzers.tracked_theme_members import KEY as tracked_theme_key, collect as collect_tracked_themes
         result[tracked_theme_key] = collect_tracked_themes(
             self.registry, date, result, daily_dir=BASE_DIR / 'daily')
 
         # 11. 指数均线
         self._compute_index_ma(result, date)
-
-        # 12. 板块节奏分析
-        try:
-            extra_names = self._rhythm_analyzer.load_main_theme_names()
-            for stype in ["industry", "concept"]:
-                rhythm = self._rhythm_analyzer.analyze(
-                    today_raw_data=result,
-                    sector_type=stype,
-                    extra_names=extra_names,
-                    today_date=date,
-                )
-                result[f"sector_rhythm_{stype}"] = rhythm
-            logger.info("板块节奏分析完成")
-        except Exception as e:
-            logger.warning(f"板块节奏分析失败，已跳过: {e}")
 
         # 13. 连板股断板后的下一交易日反馈（纯事实统计，不复用 board-break 选股门槛）
         try:
@@ -1228,6 +1220,19 @@ class MarketCollector:
             from services.sector_adjustment_risk.collector import failed as sector_risk_failed
             result["sector_adjustment_risk"] = sector_risk_failed(date, "板块风险采集异常，未判断")
             logger.warning("板块风险采集异常，已隔离，不影响盘后主流程")
+
+        # 两榜共享截止事实日的归档，并复用本轮已有的申万行业日线。
+        try:
+            extra_names = self._rhythm_analyzer.load_main_theme_names(as_of=date)
+            window = self._rhythm_analyzer.load_ranking_window(date, result)
+            for stype in ("industry", "concept"):
+                result[f"sector_rhythm_{stype}"] = self._rhythm_analyzer.analyze(
+                    result, stype, extra_names=extra_names, today_date=date, window=window,
+                )
+            result["sector_rhythm_coverage"] = dict(window.coverage)
+            logger.info("板块节奏分析完成")
+        except Exception as exc:
+            logger.warning("板块节奏分析失败，已跳过: %s", exc)
 
         logger.info(f"盘后数据采集完成: {date}")
         return result

@@ -26,6 +26,8 @@ from pathlib import Path
 
 import yaml
 
+from generators.sector_rhythm import rhythm_streak, rhythm_window_cells
+
 warnings.filterwarnings("ignore")
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -196,19 +198,18 @@ def print_rhythm_results(results: list[dict], sector_type: str) -> None:
     print(f"\n{'='*80}")
     print(f"  {label}板块节奏分析结果")
     print(f"{'='*80}")
-    header = f"{'板块名':15s} {'今日排名':8s} {'连续上榜':8s} {'5日累计':8s} {'阶段':8s} {'置信度':6s} 关键信号"
+    header = f"{'板块名':15s} {'今日排名':8s} {'连续上榜':8s} {'5日区间收益':10s} {'5日上榜日涨幅合计':12s} {'5日上榜天数':8s} {'阶段':8s} {'置信度':6s} 关键信号"
     print(header)
     print("-" * 100)
     for r in results:
         rank = f"#{r['rank_today']}" if r.get("rank_today") else "-"
-        consec = f"{r.get('consecutive_in_top30', 0)}天"
-        cumul = r.get("cumulative_pct_5d", 0) or 0
-        cumul_str = f"+{cumul:.1f}%" if cumul >= 0 else f"{cumul:.1f}%"
+        consec = rhythm_streak(r)
+        period, listed_sum, listed_days = rhythm_window_cells(r)
         phase = r.get("phase", "?")
         conf = r.get("confidence", "?")
         ev = r.get("evidence", [])
         signal_str = ev[0] if ev else "-"
-        print(f"{r['name']:15s} {rank:8s} {consec:8s} {cumul_str:8s} {phase:8s} {conf:6s} {signal_str}")
+        print(f"{r['name']:15s} {rank:8s} {consec:8s} {period:10s} {listed_sum:12s} {listed_days:8s} {phase:8s} {conf:6s} {signal_str}")
 
 
 # -----------------------------------------------------------------------
@@ -304,7 +305,7 @@ def main():
         }
 
         # 读取 main-theme 额外追踪板块
-        extra_names = analyzer.load_main_theme_names()
+        extra_names = analyzer.load_main_theme_names(as_of=last_date)
         results = analyzer.analyze(today_raw, sector_type, extra_names=extra_names)
         print_rhythm_results(results, sector_type)
 

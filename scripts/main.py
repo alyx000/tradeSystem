@@ -7,7 +7,7 @@
     # 运行盘前简报
     python main.py pre
 
-    # 运行盘后报告（会先执行晚间任务：溢价回填、关注池、复盘 Obsidian，再生成全日盘后数据）
+    # 运行盘后报告（先做溢价回填和关注池更新，再生成全日盘后数据）
     python main.py post
 
     # 指定日期
@@ -16,7 +16,7 @@
     # 仅重跑晚间任务（定时任务请用 post，无需单独跑 evening）
     python main.py evening
 
-    # 关注池 / Obsidian 导出（也可通过 post、evening 间接执行）
+    # 手动更新关注池或导出到 Obsidian
     python main.py watchlist
     python main.py obsidian [--sync-all]
 
@@ -1021,7 +1021,7 @@ def _run_regulatory_overview_for_post(
 
 
 def cmd_post(config: dict, target_date: str):
-    """执行盘后报告：先晚间任务（溢价/关注池/复盘 Obsidian），再全日盘后采集与推送。"""
+    """执行晚间任务、全日盘后采集与推送。"""
     cmd_evening(config, target_date)
 
     dt = datetime.strptime(target_date, "%Y-%m-%d")
@@ -1132,16 +1132,6 @@ def cmd_post(config: dict, target_date: str):
     multi = setup_pushers(config)
     if multi._pushers:
         multi.send_report("post_market", f"盘后数据报告 {target_date}", md_text)
-
-    # 盘后数据写入完成后，同步导出到 Obsidian（post-market.yaml 此时已存在）
-    try:
-        from generators.obsidian_export import ObsidianExporter
-        exporter = ObsidianExporter()
-        post_path = exporter.export_post_market(target_date)
-        if post_path:
-            logger.info(f"Obsidian 导出完成（盘后数据）：{post_path}")
-    except Exception as e:
-        logger.warning(f"Obsidian 盘后数据导出失败：{e}")
 
     # IngestService 快照采集：写入 market_fact_snapshots / raw_interface_payloads。
     # 必须重新进入 without_standard_http_proxy()：provider 的 HTTP 调用在「调用时」读 os.environ，
@@ -1276,7 +1266,6 @@ def cmd_evening(config: dict, target_date: str):
     晚间任务（由 post 在定时流程中自动先执行，也可手动单独运行）：
     1. 溢价率回填（T-1 涨停→T 开盘溢价）
     2. 关注池行情更新 + 到价提醒
-    3. Obsidian 导出 review.yaml（post-market 在随后 post 阶段导出）
     """
     logger.info(f"=== 晚间任务 {target_date} ===")
 
@@ -1350,18 +1339,6 @@ def cmd_evening(config: dict, target_date: str):
         for a in wl_alerts:
             alert_lines.append(f"• {a.get('message', '(无消息)')}")
         multi.send_alert("\n".join(alert_lines))
-
-    # 3. Obsidian 导出 review.yaml（post-market 在同次 post 流程后半段导出）
-    try:
-        from generators.obsidian_export import ObsidianExporter
-        exporter = ObsidianExporter()
-        review_path = exporter.export_daily_review(target_date)
-        if review_path:
-            logger.info(f"Obsidian 导出完成（复盘）：{review_path}")
-        else:
-            logger.info(f"Obsidian 复盘导出跳过：{target_date}/review.yaml 不存在或尚未填写")
-    except Exception as e:
-        logger.error(f"Obsidian 导出失败：{e}")
 
 
 def cmd_watchlist(config: dict, target_date: str):
@@ -1449,7 +1426,7 @@ def cmd_schedule(config: dict):
         name="盘前简报",
     )
 
-    # 盘后: 每个工作日 20:00（内含晚间任务：溢价回填/关注池/复盘 Obsidian）
+    # 工作日 20:00 盘后任务同时处理溢价回填和关注池更新
     scheduler.add_job(
         lambda: cmd_post(config, date.today().isoformat()),
         CronTrigger(day_of_week="mon-fri", hour=20, minute=0),

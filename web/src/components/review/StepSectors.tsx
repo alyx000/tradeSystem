@@ -13,6 +13,8 @@ import type {
   ReviewSectorProjection,
   SectorIndustryPrefill,
   SectorRhythmItem,
+  SectorRhythmMetrics,
+  SectorRhythmCoverage,
   TeacherNote,
 } from '../../lib/types'
 
@@ -70,37 +72,75 @@ function phaseClass(phase: string) {
   return PHASE_COLOR[phase] ?? 'bg-gray-50 text-gray-600'
 }
 
-type RhythmSortKey = 'change_today' | 'cumulative_pct_5d' | 'cumulative_pct_10d'
+type RhythmDays = 5 | 10
+type RhythmSortKey = 'change_today' | 'period_return_5d_pct' | 'period_return_10d_pct' | 'top30_sum_5d_pct' | 'top30_sum_10d_pct'
 
 const RHYTHM_SORT_OPTIONS: { key: RhythmSortKey; label: string }[] = [
   { key: 'change_today', label: '当日' },
-  { key: 'cumulative_pct_5d', label: '5日' },
-  { key: 'cumulative_pct_10d', label: '10日' },
+  { key: 'period_return_5d_pct', label: '5日区间收益' },
+  { key: 'period_return_10d_pct', label: '10日区间收益' },
+  { key: 'top30_sum_5d_pct', label: '5日上榜合计' },
+  { key: 'top30_sum_10d_pct', label: '10日上榜合计' },
 ]
 
-function sortRhythm(items: SectorRhythmItem[], key: RhythmSortKey): SectorRhythmItem[] {
-  return [...items].sort((a, b) => {
-    const av = a[key] ?? -Infinity
-    const bv = b[key] ?? -Infinity
-    return (bv as number) - (av as number)
-  })
+function rhythmPct(value?: number | null) {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? `${value > 0 ? '+' : ''}${value.toFixed(2)}%` : '待核'
+}
+
+function listedSum(row: SectorRhythmMetrics, days: RhythmDays) {
+  const key = `top30_sum_${days}d_pct` as const
+  return { value: row[key], legacy: row[key] == null ? row[`cumulative_pct_${days}d`] : null }
+}
+
+function sortRhythm(items: SectorRhythmItem[], key: RhythmSortKey) {
+  return [...items].sort((a, b) => (b[key] ?? -Infinity) - (a[key] ?? -Infinity))
+}
+
+function RhythmWindow({ row, days }: { row: SectorRhythmMetrics; days: RhythmDays }) {
+  const evidence = row.rhythm_window_evidence?.[`${days}d`]
+  const period = row[`period_return_${days}d_pct`]
+  const listed = listedSum(row, days)
+  const count = row[`top30_days_${days}d`]
+  const covered = row[`ranking_covered_days_${days}d`]
+  const partial = covered != null && covered < days
+  return (
+    <div className="text-xs text-gray-600">
+      <div className="flex flex-wrap gap-x-3">
+        <span>{days}日区间收益 {rhythmPct(period)}</span>
+        <span>{days}日上榜日涨幅合计 {rhythmPct(listed.value)}{listed.value != null && partial && '（已核部分）'}{listed.legacy != null && `（旧归档窗口上榜日合计 ${rhythmPct(listed.legacy)}）`}</span>
+        <span>{days}日上榜天数 {count == null ? '待核' : `${count}/${days}`}{partial && `（榜单覆盖 ${covered}/${days}）`}</span>
+      </div>
+      {evidence && (
+        <div className="text-gray-500">
+          {[evidence.source, evidence.ts_code, evidence.start_date && evidence.end_date && `${evidence.start_date} 至 ${evidence.end_date}`,
+            evidence.observed_closes != null && evidence.expected_closes != null && `收盘覆盖 ${evidence.observed_closes}/${evidence.expected_closes}`,
+            period == null && evidence.reason, evidence.ranking_missing_dates?.length && `缺榜单 ${evidence.ranking_missing_dates.join('、')}`,
+          ].filter(Boolean).join(' · ')}
+        </div>
+      )}
+    </div>
+  )
 }
 
 function RhythmSortedBlock({
-  sectorRhythm,
+  sectorRhythm, coverage,
   title = '行业节奏信号（当日前列）',
 }: {
   sectorRhythm: SectorRhythmItem[]
+  coverage?: SectorRhythmCoverage
   title?: string
 }) {
   const [sortKey, setSortKey] = useState<RhythmSortKey>('change_today')
   const sorted = sortRhythm(sectorRhythm, sortKey).slice(0, 10)
+  const validCounts = coverage && Number.isInteger(coverage.observed) && Number.isInteger(coverage.expected)
+    && coverage.expected > 0 && coverage.observed >= 0 && coverage.observed <= coverage.expected
 
   return (
     <>
       <div className="flex items-center justify-between mb-2">
         <span className="text-xs font-medium text-gray-600">{title}</span>
-        <div className="flex gap-1">
+        {sectorRhythm.length > 0 && <div className="flex gap-1">
           {RHYTHM_SORT_OPTIONS.map(opt => (
             <button
               key={opt.key}
@@ -114,33 +154,35 @@ function RhythmSortedBlock({
               {opt.label}
             </button>
           ))}
-        </div>
+        </div>}
       </div>
+      <div className="mb-2 text-xs text-gray-500">
+        {validCounts ? `历史榜单覆盖 ${coverage.observed}/${coverage.expected} 个开放日` : '历史榜单覆盖待核'}
+        {Array.isArray(coverage?.missing_dates) && coverage.missing_dates.length ? ` · 缺榜单 ${coverage.missing_dates.join('、')}` : ''}
+        {coverage?.calendar_issue && ` · ${coverage.calendar_issue}`}
+      </div>
+      {coverage?.today_status === 'unavailable' && <div className="text-xs text-gray-500">当日榜单待核</div>}
+      {coverage?.today_status === 'empty' && <div className="text-xs text-gray-500">来源已确认当日空榜</div>}
+      {!sectorRhythm.length && (!coverage || coverage.today_status === 'covered') && (
+        <div className="text-xs text-gray-500">{coverage ? '当日榜单已核验，未列出节奏对象' : '旧档未记录当日榜单覆盖，无法核验空榜'}</div>
+      )}
       <div className="space-y-1.5">
         {sorted.map((item, i) => (
-          <div key={i} className="flex flex-wrap items-center gap-2 text-xs">
+          <div key={item.name || i} className="flex flex-wrap items-center gap-2 text-xs">
             <span className="font-medium text-gray-800 min-w-[5rem]">{item.name}</span>
             <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${phaseClass(item.phase ?? '')}`}>{item.phase}</span>
-            <span className={`font-medium ${Number(item.change_today) >= 0 ? 'text-green-600' : 'text-red-500'}`}>
-              {Number(item.change_today) >= 0 ? '+' : ''}{Number(item.change_today ?? 0).toFixed(2)}%
-            </span>
-            <span className="text-gray-400">#{item.rank_today}</span>
+            <span>当日 {rhythmPct(item.change_today)}</span>
+            {item.rank_today != null && <span className="text-gray-400">#{item.rank_today}</span>}
             {item.confidence && (
               <span className={`${CONFIDENCE_COLOR[item.confidence] ?? 'text-gray-400'}`}>置信:{item.confidence}</span>
             )}
-            {item.cumulative_pct_5d != null && (
-              <span className={`font-medium ${item.cumulative_pct_5d >= 0 ? 'text-green-600' : 'text-red-500'}`}>
-                5日{item.cumulative_pct_5d >= 0 ? '+' : ''}{item.cumulative_pct_5d.toFixed(2)}%
-              </span>
-            )}
-            {item.cumulative_pct_10d != null && (
-              <span className={`font-medium ${item.cumulative_pct_10d >= 0 ? 'text-green-600' : 'text-red-500'}`}>
-                10日{item.cumulative_pct_10d >= 0 ? '+' : ''}{item.cumulative_pct_10d.toFixed(2)}%
-              </span>
-            )}
             {item.consecutive_in_top30 != null && item.consecutive_in_top30 > 0 && (
-              <span className="text-gray-500">连榜{item.consecutive_in_top30}日</span>
+              <span className="text-gray-500">连榜{item.signals?.consecutive_is_lower_bound ? '至少' : ''}{item.consecutive_in_top30}日</span>
             )}
+            <div className="basis-full space-y-1">
+              <RhythmWindow row={item} days={5} />
+              <details><summary className="cursor-pointer text-gray-500">10日窗口</summary><RhythmWindow row={item} days={10} /></details>
+            </div>
           </div>
         ))}
       </div>
@@ -481,21 +523,16 @@ export default function StepSectors({ data, onChange, prefill, factorScore }: St
         })()
       )}
 
-      {/* ── 行业节奏分析（sector_rhythm_industry） ── */}
-      {sectorRhythm && sectorRhythm.length > 0 && (
-        <PrefillBanner>
-          <RhythmSortedBlock sectorRhythm={sectorRhythm} />
-        </PrefillBanner>
-      )}
-
-      {conceptRhythm && conceptRhythm.length > 0 && (
-        <PrefillBanner>
-          <RhythmSortedBlock
-            sectorRhythm={conceptRhythm}
-            title="概念节奏信号（当日前列）"
-          />
-        </PrefillBanner>
-      )}
+      {([['industry', sectorRhythm, '行业节奏信号（当日前列）'], ['concept', conceptRhythm, '概念节奏信号（当日前列）']] as const)
+        .map(([kind, rows, title]) => {
+          const receipt = prefill?.market?.sector_rhythm_coverage?.[kind]
+          const coverage = receipt?.as_of === prefill?.date ? receipt : undefined
+          return Array.isArray(rows) || coverage ? (
+            <PrefillBanner key={kind}>
+              <RhythmSortedBlock sectorRhythm={rows ?? []} title={title} coverage={coverage} />
+            </PrefillBanner>
+          ) : null
+        })}
 
       {((sectorSignals?.industry_moneyflow_rows?.length ?? 0) > 0 || (sectorSignals?.concept_moneyflow_rows?.length ?? 0) > 0) && (
         <PrefillBanner>
@@ -643,11 +680,11 @@ export default function StepSectors({ data, onChange, prefill, factorScore }: St
                     <div>阶段提示：{candidate.facts?.phase_hint || '-'}</div>
                     <div>持续天数：{candidate.facts?.duration_days ?? '-'}</div>
                     <div>涨跌幅：{fmtPct(candidate.facts?.pct_chg ?? null)}</div>
-                    {candidate.facts?.cumulative_pct_5d != null && (
-                      <div>5日累计：{candidate.facts.cumulative_pct_5d >= 0 ? '+' : ''}{candidate.facts.cumulative_pct_5d.toFixed(2)}%</div>
-                    )}
-                    {candidate.facts?.cumulative_pct_10d != null && (
-                      <div>10日累计：{candidate.facts.cumulative_pct_10d >= 0 ? '+' : ''}{candidate.facts.cumulative_pct_10d.toFixed(2)}%</div>
+                    {candidate.source_tags.includes('rhythm') && candidate.facts && (
+                      <div className="col-span-2 space-y-1">
+                        <RhythmWindow row={candidate.facts} days={5} />
+                        <details><summary className="cursor-pointer text-gray-500">10日窗口</summary><RhythmWindow row={candidate.facts} days={10} /></details>
+                      </div>
                     )}
                     <div>涨停家数：{candidate.facts?.limit_up_count ?? '-'}</div>
                     <div>资金流：{fmtYi(candidate.facts?.net_amount_yi ?? null)}</div>

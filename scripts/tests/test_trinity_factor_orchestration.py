@@ -890,9 +890,31 @@ def test_sector_llm_facts_remove_heuristic_leader_side_channel() -> None:
         "pct_chg": 1.5,
         "limit_up_count": 3,
         "net_amount_yi": 8.5,
-        "cumulative_pct_5d": 4.0,
-        "cumulative_pct_10d": 7.5,
+        "legacy_ranked_day_change_sum_5d_pct": 4.0,
+        "legacy_ranked_day_change_sum_10d_pct": 7.5,
     }
+
+
+def test_sector_llm_input_separates_returns_ranked_moves_and_missing_evidence() -> None:
+    candidate = _candidate(1)
+    candidate["facts"].update({
+        "period_return_5d_pct": -2.0, "top30_sum_5d_pct": 3.2,
+        "top30_days_5d": 2, "ranking_covered_days_5d": 4,
+        "period_return_10d_pct": None, "top30_sum_10d_pct": None,
+        "top30_days_10d": 0, "ranking_covered_days_10d": 6,
+        "cumulative_pct_5d": 9.0, "cumulative_pct_10d": 20.0,
+    })
+    payload = build_sector_llm_input(
+        build_evidence_snapshot("2026-07-10", _prefill([candidate]), {}),
+        primary_factor_code="sector_rhythm",
+    )
+    facts = payload["sectors"][0]["facts"]
+    assert facts["period_return_5d_pct"] == -2.0
+    assert facts["top30_sum_5d_pct"] == 3.2
+    assert facts["top30_days_5d"] == 2 and facts["ranking_covered_days_5d"] == 4
+    assert facts["top30_days_10d"] == 0 and facts["ranking_covered_days_10d"] == 6
+    assert "period_return_10d_pct" not in facts and "top30_sum_10d_pct" not in facts
+    assert not any(k.startswith(("cumulative_pct_", "legacy_ranked_day_")) for k in facts)
 
 
 def test_empty_objective_sector_cards_are_audit_only() -> None:

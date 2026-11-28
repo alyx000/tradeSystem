@@ -126,6 +126,16 @@ def test_partial_market_does_not_publish_partial_total_as_full_direction():
     assert c['gaps']
 
 
+def test_independent_market_denominator_survives_industry_gap():
+    raw = current_launch()['evidence']
+    raw['increment'].update(status='partial', gaps=['行业映射有缺口'], sources=[
+        dict(source='tushare:daily'), dict(source='tushare:daily'), dict(source='tushare:stock_basic:L+D+P:as_of')])
+    raw['amount_suspensions'] = {}
+    launch = tl.calculate(DAY, SOURCE, raw)
+    assert '缩量（-25.00%）' in context(launch=launch)['market']
+    assert '+41.67个百分点' in context(launch=launch)['rows'][0][3]
+
+
 def test_coverage_denominators_stay_separate():
     e = evidence(); b = e['feedback']; stock = b['details'][2]
     stock.update(quote_status='source_failed', touched_previous_high=None, errors=['missing'])

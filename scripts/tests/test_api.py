@@ -2777,6 +2777,36 @@ class TestEnrichMarketRow:
         assert data["sector_rhythm_industry"][0]["name"] == "油服工程"
         assert "sector_rhythm_concept" in data, "sector_rhythm_concept 未展开"
 
+    def test_legacy_rhythm_candidates_keep_old_sums_separate_when_prices_unavailable(self, client, db_path):
+        day = "2026-05-20"
+        self._seed(db_path, {"date": day, "raw_data": {"date": day, "sector_rhythm_industry": [
+            {"name": "旧档样本", "phase": "启动", "confidence": "高", "cumulative_pct_5d": 7.3},
+        ]}})
+        data = client.get(f"/api/review/{day}/prefill").json()
+        row = data["market"]["sector_rhythm_industry"][0]
+        facts = next(c["facts"] for c in data["review_signals"]["sectors"]["projection_candidates"]
+                     if c["sector_name"] == "旧档样本")
+        for item in [row, facts]:
+            assert item["period_return_5d_pct"] is None
+            assert item["top30_sum_5d_pct"] is None and item["top30_days_5d"] is None
+            assert item["cumulative_pct_5d"] == 7.3
+            assert item["rhythm_window_evidence"]["5d"]["reason"]
+        assert client.get(f"/api/market/{day}").json()["sector_rhythm_industry"] == [row]
+        assert client.get(f"/api/post-market/{day}").json()["raw_data"]["sector_rhythm_industry"] == [row]
+
+    def test_rhythm_coverage_survives_empty_rows_and_rejects_other_dates(self, client, db_path):
+        day = "2026-05-20"
+        receipt = {"as_of": day, "expected": 20, "observed": 17, "missing_dates": ["2026-05-08"],
+                   "calendar_issue": None, "today_status": "covered"}
+        self._seed(db_path, {"date": day, "raw_data": {"date": day, "sector_rhythm_industry": [],
+            "sector_rhythm_concept": [], "sector_rhythm_coverage": {
+                "industry": receipt, "concept": {**receipt, "as_of": "2026-05-19"}}}})
+        for row in (client.get(f"/api/market/{day}").json(),
+                    client.get(f"/api/review/{day}/prefill").json()["market"],
+                    client.get(f"/api/post-market/{day}").json()["raw_data"]):
+            assert row["sector_rhythm_coverage"] == {"industry": receipt}
+            assert row["sector_rhythm_industry"] == [] and row["sector_rhythm_concept"] == []
+
     def test_market_existing_keys_not_regressed(self, client, db_path):
         """/api/market 原有 sector_industry / indices 展开行为不应回退。"""
         self._seed(db_path)
