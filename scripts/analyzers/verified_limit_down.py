@@ -77,8 +77,8 @@ def verified_list(day, *, quotes, limits, universe, st, suspended):
                 coverage=dict(active=len(active), quoted=len(quotes), suspended_without_quote=len(missing)))
 
 
-def collect(registry, day, *, quotes=None, st=None):
-    supplied = dict(quotes=quotes, st=st)
+def collect(registry, day, *, quotes=None, st=None, suspended=None):
+    supplied = dict(quotes=quotes, st=st, suspended=suspended)
     try:
         inputs = {}
         for key, method in METHODS.items():

@@ -855,7 +855,12 @@ export interface StyleFactorSeriesItem {
   date?: string
   metric?: string
   value?: number | null
-  [key: string]: string | number | null | undefined
+  premium_first_open?: number | null
+  premium_first_open_basis?: 'legacy_unsplit' | 'opened_only' | 'unverified'
+  premium_first_open_count?: number | null
+  premium_first_open_partial?: boolean
+  premium_first_open_break_before?: boolean
+  [key: string]: string | number | boolean | null | undefined
 }
 
 export interface SearchEntityItem {

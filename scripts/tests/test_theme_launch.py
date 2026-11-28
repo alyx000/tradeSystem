@@ -202,6 +202,8 @@ def save(daily,day,raw):
 def test_collect_and_history_do_not_backfill_current_members(tmp_path):
     db=calendar(tmp_path);e=inputs();calls=[]
     reg=SimpleNamespace(call=lambda *args: (calls.append(args) or DataResult(data=e['membership'],source=t.SOURCE)))
+    e['increment']['sources'] = [dict(source=s) for s in ('tushare:daily', 'tushare:daily',
+                                 'tushare:stock_basic:L+D+P:as_of', 'sw', 'tushare:stock_basic:L+D+P:as_of')]
     raw=dict(date=DAY,limit_cpt_list=e['ranking'],limit_up=e['limit_up'],sector_increment=e['increment'],indices=e['indices'])
     save(tmp_path,PREV,dict(limit_up=e['previous_limit_up']))
     now=datetime(2026,11,2,20,tzinfo=ZoneInfo('Asia/Shanghai'));before=db.read_bytes()
@@ -288,7 +290,7 @@ def test_collection_and_report_entry_wired(tmp_path, monkeypatch):
     sentinel=t.missing(DAY,'test_member_failure')
     calls=[]
     def collect(registry,day,raw,**kwargs):
-        calls.append((registry,day,raw.get('date')))
+        calls.append((registry,day,raw.get('date'),kwargs.get('suspended')))
         return sentinel
     monkeypatch.setattr(t,'collect',collect)
     collector=MarketCollector(reg)
@@ -296,7 +298,8 @@ def test_collection_and_report_entry_wired(tmp_path, monkeypatch):
     collector._rhythm_analyzer.load_main_theme_names.return_value=[]
     collector._rhythm_analyzer.analyze.return_value=[]
     raw=collector.collect_post_market(DAY)
-    assert calls==[(reg,DAY,DAY)] and raw[t.KEY] is sentinel
+    assert calls==[(reg,DAY,DAY,reg.call.return_value)] and raw[t.KEY] is sentinel
+    assert sum(call.args == ('get_suspend_list', DAY) for call in reg.call.call_args_list) == 1
     assert 'strong_stock_feedback' in raw  # 后续采集继续执行，单块失败不阻断。
     gen=ReportGenerator();gen.daily_dir=tmp_path/'daily'
     markdown,path=gen.generate_post_market(DAY,raw)
@@ -342,3 +345,123 @@ def test_provider_batch_deadline_preserves_completed_themes(monkeypatch):
     assert r.data['themes']['885002.TI']['status']=='source_failed'
     assert r.data['themes']['885003.TI']['status']=='source_failed'
     assert len(calls)==3 and all(0<x['_request_timeout']<=15 for x in calls)
+
+
+def halted_market():
+    evidence = inputs()
+    extra = [f'{600100+i}.SH' for i in range(102)]
+    codes = CODES + extra
+    gaps = {PREV: extra[:1], DAY: extra[:2]}
+    def quotes(day):
+        return [dict(ts_code=c, trade_date=day, amount=(i+1)*1e5) for i,c in enumerate(codes) if c not in gaps[day]]
+    increment = si.calculate(quotes(DAY), quotes(PREV), [dict(ts_code=c, list_date='20000101') for c in codes],
+                             {c: {'sw_l2':'行业'} for c in codes}, DAY, PREV, min_count=100)
+    assert increment['status'] == 'partial'
+    increment['sources'] = [dict(source=s) for s in ('tushare:daily', 'tushare:daily',
+                                 'tushare:stock_basic:L+D+P:as_of', 'sw', 'tushare:stock_basic:L+D+P:as_of')]
+    evidence['increment'] = increment
+    evidence['amount_suspensions'] = {
+        d: dict(trade_date=d, received_at=d+'T20:00:00+08:00', source='tushare:suspend_d',
+                rows=[dict(ts_code=c, trade_date=d.replace('-', ''), suspend_type='S', suspend_timing=None)
+                      for c in gaps[d]]) for d in (PREV,DAY)}
+    evidence['amount_suspensions'][PREV]['raw_payload_id'] = 12
+    return evidence
+
+
+def test_halted_market_reconciles_only_denominator_and_replays():
+    e = halted_market()
+    block = calc(e)
+    r = block['rows'][0]
+    coverage = block['market']['denominator_coverage']
+    assert r['amount']['share_delta_pp'] > 0 and coverage['status'] == 'complete'
+    assert coverage['dates'][DAY]['confirmed_halts'] == ['600100.SH','600101.SH']
+    assert t.validate(block, DAY) == block
+    assert '已核全天停牌2只' in t.render_markdown(block, DAY)
+    assert '沪深市场成交额变化' in t.render_html(block, DAY)[0]
+    assert e['increment']['status'] == 'partial'
+    old = deepcopy(e); old.pop('amount_suspensions')
+    legacy = calc(old)
+    assert legacy['rows'][0]['amount']['share_delta_pp'] is None and t.validate(legacy,DAY) == legacy
+    assert 'denominator_coverage' not in legacy['market']
+    members = e['membership']['themes'][THEME]
+    members['rows'].append(dict(ts_code=THEME,con_code='600101.SH',con_name='当日停牌',is_new='Y'))
+    members['pages'] = [4,0]
+    row = calc(e)['rows'][0]
+    assert row['amount'] is None and row['status'] == 'partial' and row['amount_coverage']['missing'] == ['600101.SH']
+
+
+@pytest.mark.parametrize('mutate', [
+    lambda e:e['amount_suspensions'].pop(PREV),
+    lambda e:e['amount_suspensions'][PREV].pop('raw_payload_id'),
+    lambda e:e['amount_suspensions'][PREV].update(received_at=DAY+'T20:00:00+08:00'),
+    lambda e:e['amount_suspensions'][DAY]['rows'][0].update(suspend_timing='09:30-10:30'),
+    lambda e:e['amount_suspensions'][DAY]['rows'][0].pop('suspend_timing'),
+    lambda e:e['amount_suspensions'][DAY]['rows'][0].update(suspend_type='R'),
+    lambda e:e['amount_suspensions'][DAY]['rows'][0].update(code='600999.SH'),
+    lambda e:e['amount_suspensions'][DAY]['rows'].append(e['amount_suspensions'][DAY]['rows'][0]),
+    lambda e:e['amount_suspensions'][DAY]['rows'].append(dict(ts_code=CODES[0],trade_date='20261102',suspend_type='S',suspend_timing=None)),
+    lambda e:e['amount_suspensions'][DAY].update(source='unknown'),
+    lambda e:e['increment']['coverage'][DAY].update(quote_count=4),
+    lambda e:e['increment']['sources'][0].update(source='unknown'),
+    lambda e:e['increment']['sources'][2].update(source='unknown'),
+    lambda e:e['increment']['sources'].pop(),
+])
+def test_unexplained_or_conflicting_market_does_not_discard_theme_numerator(mutate):
+    e = halted_market(); mutate(e)
+    block = calc(e); row = block['rows'][0]
+    assert row['amount']['current_yi'] == 6 and row['amount']['share_delta_pp'] is None
+    assert block['market']['denominator_coverage']['status'] == 'partial'
+    assert '沪深市场成交额变化' not in t.render_markdown(block, DAY)
+
+
+def test_collect_uses_exact_previous_session_and_shared_current_response(tmp_path):
+    import hashlib
+    import json
+    e = halted_market(); receipts = e['amount_suspensions']; db = calendar(tmp_path)
+    raw = dict(date=DAY, limit_cpt_list=e['ranking'], limit_up=e['limit_up'], sector_increment=e['increment'], indices=e['indices'])
+    save(tmp_path, PREV, dict(limit_up=e['previous_limit_up']))
+    calls = []
+    reg = SimpleNamespace(call=lambda *args: (calls.append(args) or DataResult(data=e['membership'],source=t.SOURCE)))
+    now = datetime.fromisoformat(DAY+'T20:05:00+08:00')
+    suspended = DataResult(data=receipts[DAY]['rows'],source='tushare:suspend_d',fetched_at=receipts[DAY]['received_at'])
+    with sqlite3.connect(db) as conn:
+        conn.execute('CREATE TABLE raw_interface_payloads(id,provider,status,inserted_at,row_count,payload_json,interface_name,biz_date,target_date,payload_hash)')
+        payload = dict(provider='tushare:suspend_d', interface_name='regulatory_suspend', biz_date=PREV,
+                       params={'trade_date':PREV.replace('-','')}, rows=receipts[PREV]['rows'])
+        serialized = json.dumps(payload)
+        digest = hashlib.sha256(serialized.encode('utf-8')).hexdigest()
+        for identifier,stamp in [(12,PREV+' 12:00:00'),(13,DAY+' 12:00:00')]:
+            conn.execute('INSERT INTO raw_interface_payloads VALUES(?,?,?,?,?,?,?,?,?,?)',
+                         (identifier, payload['provider'], 'success', stamp, 1, serialized,payload['interface_name'],PREV,PREV,digest))
+    def run():
+        return t.collect(reg,DAY,raw,daily_dir=tmp_path,db_path=db,now=now,suspended=suspended)
+    block = run()
+    assert block['rows'][0]['amount']['share_delta_pp'] > 0
+    assert block['evidence']['amount_suspensions'][PREV]['raw_payload_id'] == 12
+    assert [c[0] for c in calls] == ['get_theme_member_snapshot']
+    with sqlite3.connect(db) as conn:
+        conn.execute('UPDATE raw_interface_payloads SET row_count=0 WHERE id=12')
+    assert run()['rows'][0]['amount']['share_delta_pp'] is None
+    with sqlite3.connect(db) as conn:
+        conn.execute("UPDATE raw_interface_payloads SET row_count=1,payload_hash='wrong' WHERE id=12")
+    assert run()['rows'][0]['amount']['share_delta_pp'] is None
+    assert '时间错位' in t.theme_market_amount.current_receipt(suspended,DAY,now.replace(hour=19))['error']
+
+
+@pytest.mark.parametrize('invalid', ['duplicate', 'wrong_day'])
+def test_invalid_receipt_cannot_erase_halt_on_a_quoted_stock(invalid):
+    e = inputs()
+    e['increment']['sources'] = halted_market()['increment']['sources']
+    e['amount_suspensions'] = {}
+    assert calc(e)['market']['denominator_coverage']['status'] == 'complete'
+    row = dict(ts_code=CODES[0], trade_date=DAY.replace('-', ''), suspend_type='S', suspend_timing=None)
+    receipt = dict(source='tushare:suspend_d', trade_date=DAY, received_at=DAY+'T20:00:00+08:00', rows=[row])
+    e['amount_suspensions'][DAY] = receipt
+    coverage = calc(e)['market']['denominator_coverage']
+    assert coverage['status'] == 'partial' and coverage['dates'][DAY]['conflicting_codes'] == [CODES[0]]
+    extra = row.copy() if invalid == 'duplicate' else dict(row, ts_code=CODES[1], trade_date=PREV.replace('-', ''))
+    receipt['rows'].append(extra)
+    block = calc(e)
+    coverage = block['market']['denominator_coverage']
+    assert coverage['status'] == 'partial' and coverage['dates'][DAY]['receipt_error']
+    assert block['rows'][0]['amount']['share_delta_pp'] is None and '停牌证据待核' in t.render_markdown(block, DAY)

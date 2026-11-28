@@ -326,7 +326,7 @@ def _percent(number):
 
 def _continuity(value, current_launch, day, fact):
     """只组合已重算的独立证据；不生成强弱评分，也不把换榜当成转弱。"""
-    from analyzers import sector_increment as si
+    from analyzers.theme_volume_context import verified_market
     current, current_fact = tl._view(current_launch, day)
     gaps = []
     aligned = (current_fact == fact and current.get('previous_date') == value.get('source_date')
@@ -334,8 +334,7 @@ def _continuity(value, current_launch, day, fact):
     if not aligned:
         gaps.append('当日题材量能来源或比较日期未核验')
     current_rows = {r['code']: r for r in current['rows']} if aligned else {}
-    increment = si.validate(current.get('evidence', {}).get('increment'), fact) if aligned else {}
-    market = current.get('market') if aligned and increment.get('status') == 'complete' else None
+    market = verified_market(current) if aligned else None
     market_text = '沪深市场成交额：' + (_amount_change(market['change_pct']) if market else '未完整核验')
     if market is None:
         gaps.append('市场量能未完整核验，不判断市场放量或缩量')

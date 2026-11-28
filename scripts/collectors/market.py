@@ -1042,9 +1042,13 @@ class MarketCollector:
             shared_daily_quotes = self.registry.call("get_market_daily_quotes", date)
         except Exception as exc:
             shared_daily_quotes = DataResult(data=None, source="", error=f"全市场日线调用异常:{exc}")
+        try:
+            shared_suspensions = self.registry.call("get_suspend_list", date)
+        except Exception as exc:
+            shared_suspensions = DataResult(data=None, source="", error=f"停牌名单调用异常:{exc}")
         from analyzers.verified_limit_down import collect as verified_down
         result["limit_down"] = verified_down(
-            self.registry, date, quotes=shared_daily_quotes, st=stock_st_result)
+            self.registry, date, quotes=shared_daily_quotes, st=stock_st_result, suspended=shared_suspensions)
         self._enrich_limit_down_structure(result, date)
         # 10c. 低价股赚钱效应：收盘价≤10元，分≤5元/5～10元；只做客观横截面统计。
         from analyzers.consecutive_pool import collect as collect_consecutive_pool
@@ -1102,7 +1106,8 @@ class MarketCollector:
 
         # 题材启动只展示事实证据；当前成员不回填历史，失败独立隔离。
         from analyzers.theme_launch import collect as collect_theme_launch
-        result['theme_launch'] = collect_theme_launch(self.registry, date, result, daily_dir=BASE_DIR / 'daily')
+        result['theme_launch'] = collect_theme_launch(
+            self.registry, date, result, daily_dir=BASE_DIR / 'daily', suspended=shared_suspensions)
 
         # 11. 指数均线
         self._compute_index_ma(result, date)

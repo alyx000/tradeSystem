@@ -8,6 +8,8 @@ import re
 from zoneinfo import ZoneInfo
 
 from analyzers import sector_increment as si
+from analyzers import theme_market_amount
+from analyzers.theme_volume_context import denominator_note, verified_market
 from analyzers import strong_stock_feedback as sf
 from analyzers.strong_stock_feedback_history import _envelope
 from services.volume_concentration.capacity_history import _open_days
@@ -149,6 +151,11 @@ def calculate(day, previous, evidence):
             prior, prior_error = {}, str(exc)
         try:
             amounts, market, amount_status = _amounts(evidence.get('increment'), day, previous)
+            if 'amount_suspensions' in evidence:
+                coverage = theme_market_amount.denominator_coverage(
+                    evidence['increment'], amounts, evidence['amount_suspensions'], previous, day)
+                market['denominator_coverage'] = coverage
+                amount_status = coverage['status']
             result['market'] = market
             amount_error = None
             if amount_status != 'complete':
@@ -230,7 +237,7 @@ def calculate(day, previous, evidence):
         return missing(day, str(exc))
 
 
-def collect(registry, day, raw, *, daily_dir, db_path=None, now=None):
+def collect(registry, day, raw, *, daily_dir, db_path=None, now=None, suspended=None):
     """随原盘后单一入口收集；完整日历+当日16:00门，历史只读取已存快照。"""
     try:
         now = now or datetime.now(ZoneInfo('Asia/Shanghai'))
@@ -246,6 +253,8 @@ def collect(registry, day, raw, *, daily_dir, db_path=None, now=None):
             if target is not None and target[0] == 0:
                 return missing(day, '休市日不采集', 'skipped')
             days = _open_days(conn, day, 2)
+            if day == now.date().isoformat() and now.hour >= 16:
+                previous_suspension = theme_market_amount.previous_receipt(conn, days[-2])
         finally:
             conn.close()
         if day != now.date().isoformat():
@@ -264,6 +273,8 @@ def collect(registry, day, raw, *, daily_dir, db_path=None, now=None):
                         membership_source=response.source, limit_up=raw.get('limit_up'),
                         limit_up_date=day, previous_limit_up_date=days[-2],
                         previous_limit_up=prior_raw.get('limit_up'), increment=raw.get('sector_increment'),
+                        amount_suspensions={days[-2]: previous_suspension,
+                                            day: theme_market_amount.current_receipt(suspended, day, now)},
                         indices={k: raw.get('indices', {}).get(k, {}) for k in ('shanghai', 'chinext')})
         return calculate(day, days[-2], evidence)
     except Exception as exc:
@@ -343,8 +354,10 @@ def render_markdown(block, day):
     clean = lambda s: str(s).replace('|', '｜').replace('\n', ' ')
     member_date = value.get('membership_date') or '未取得'
     lines = ['### 题材启动证据卡', f"状态：{value['status']}；事实日：{fact}；成员快照日：{member_date}（逐题材覆盖见下表）；报告日：{day}", NOTE]
-    if value.get('market') and value.get('evidence', {}).get('increment', {}).get('status') == 'complete':
+    if verified_market(value):
         lines.append('沪深市场成交额变化：'+_fmt(value['market']['change_pct'], True)+'%')
+    if note := denominator_note(value):
+        lines.append(note)
     lines.extend(f"{r['name']}：{_fmt(r['change_pct'], True)}%" for r in value.get('indices', []))
     if value['rows']:
         lines += ['| '+' | '.join(HEADERS)+' |', '| '+' | '.join(['---']*len(HEADERS))+' |']
@@ -376,8 +389,8 @@ def render_html(block, day):
     parts.append(render_volume_context(value))
     if fact != day:
         parts.append('<p>[事实] 休市展示'+escape(fact)+'最近开放日历史，非当日新增。</p>')
-    market = value.get('market')
-    if market and value.get('evidence', {}).get('increment', {}).get('status') == 'complete':
+    market = verified_market(value)
+    if market:
         parts.append('<p>[事实] 沪深市场成交额变化：'+_fmt(market['change_pct'], True)+'%。</p>')
     for r in value.get('indices', []):
         parts.append('<p>[事实] '+escape(r['name'])+'：'+_fmt(r['change_pct'], True)+'%</p>')
@@ -394,6 +407,8 @@ def render_html(block, day):
     parts.append(f'<details class="evidence" data-as-of="{escape(fact)}" data-items="{items}"><summary>完整证据、来源与计算口径（{items}项）</summary>')
     parts.append(f"<p>状态：{escape(status)}；报告日{escape(day)}；事实日{escape(fact)}；成员快照日：{escape(member_date)}（逐题材覆盖见下表）。</p>")
     parts.append('<p>'+escape(NOTE)+'</p>')
+    if note := denominator_note(value):
+        parts.append('<p>'+escape(note)+'</p>')
     if rows:
         parts.append('<div style="overflow-x:auto"><table><thead><tr>')
         parts.extend('<th>'+escape(h)+'</th>' for h in HEADERS)

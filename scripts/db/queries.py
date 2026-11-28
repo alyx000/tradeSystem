@@ -1119,7 +1119,11 @@ def get_style_factors_series(conn: sqlite3.Connection, metrics: list[str],
         return []
     cols_str = ", ".join(safe_cols)
     sql = f"SELECT date, {cols_str} FROM daily_market WHERE date >= ? AND date <= ? ORDER BY date"
-    return _rows_to_list(conn.execute(sql, (date_from, date_to)).fetchall())
+    rows = _rows_to_list(conn.execute(sql, (date_from, date_to)).fetchall())
+    if "premium_first_open" in safe_cols:
+        from services.first_open_premium import add_first_open_evidence
+        add_first_open_evidence(conn, rows)
+    return rows
 
 
 # ──────────────────────────────────────────────────────────────
