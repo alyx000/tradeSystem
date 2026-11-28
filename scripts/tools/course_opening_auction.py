@@ -19,13 +19,14 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--date", default=datetime.now(TZ).date().isoformat())
     parser.add_argument("--input-by", required=True)
+    parser.add_argument("--scheduled-at", help="既有盘中 09:32 槽的上海计划时刻")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
     load_dotenv(SCRIPTS / ".env")
     try:
         with without_standard_http_proxy():
-            result = summary(capture(args.date, args.input_by, dry_run=args.dry_run))
+            result = summary(capture(args.date, args.input_by, dry_run=args.dry_run, scheduled_at=args.scheduled_at))
     except (ValueError, OSError, RuntimeError, sqlite3.Error) as exc:
         result = dict(trade_date=args.date, status="source_failed", gaps=[str(exc)])
     print(json.dumps(result, ensure_ascii=False, indent=2 if args.json else None))

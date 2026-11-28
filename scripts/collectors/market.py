@@ -998,20 +998,15 @@ class MarketCollector:
                 # 低价股赚钱效应需要完整 ST 名单做硬剔除；报告中的 stock_st 仍沿用
                 # 既有最多 100 行展示契约，避免扩大盘后 YAML 的兼容块。
                 stock_st_result = r
-            if r.success and r.data:
-                if result_key == "margin_detail" and isinstance(r.data, list):
-                    rows = r.data
-                    top_rows = sorted(
-                        rows,
-                        key=lambda item: float(item.get("rzmre", 0) or 0),
-                        reverse=True,
-                    )[:20]
-                    result[result_key] = {
-                        "count": len(rows),
-                        "top_rzmre": top_rows,
-                        "_source": r.source,
-                    }
-                elif result_key == "stock_st" and isinstance(r.data, list):
+            if result_key == "margin_detail":
+                from providers.margin_detail import summary
+                from services.margin_detail_refresh import prefer_stored_margin_summary
+                block = (summary(r.data, r.to_dict(), date) if r.success else
+                         dict(status="source_failed", requested_date=date, trade_date=None,
+                              count=None, reason="逐证券两融来源请求失败"))
+                result[result_key] = prefer_stored_margin_summary(block, date, rows=r.data if r.success else None)
+            elif r.success and r.data:
+                if result_key == "stock_st" and isinstance(r.data, list):
                     result[result_key] = {
                         "count": len(r.data),
                         "stocks": r.data[:100],

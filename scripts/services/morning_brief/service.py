@@ -1,8 +1,8 @@
-"""morning-brief 编排：窗口解析 → 金十/公告/隔夜行情采集 → 分类 → 状态合并。
+"""morning-brief 编排：窗口解析 → 金十要闻及隔夜行情采集 → 分类 → 状态合并。
 
 状态语义:
 - source_failed: 金十(核心新闻源)请求失败;报告仍含其余可用段,推告警版,CLI 非零退出
-- partial: 金十非 complete(截断/停滞/漂移) 或 公告失败/截断 或 任一隔夜标的失败
+- partial: 金十非 complete(截断/停滞/漂移) 或 任一隔夜标的失败
   或 上一交易日无法核实(窗口锚点存疑);正常推送,缺口在报告头显式列出
 - complete: 全部段落无缺口
 """
@@ -26,8 +26,6 @@ TZ = ZoneInfo("Asia/Shanghai")
 STATUS_COMPLETE = "complete"
 STATUS_PARTIAL = "partial"
 STATUS_FAILED = "source_failed"
-
-TIME_FMT = "%Y-%m-%d %H:%M:%S"
 
 _PREV_SCAN_DAYS = 15  # 与 utils.trade_date 同口径,覆盖 A 股长假
 
@@ -125,7 +123,6 @@ def build_brief(config: dict, registry, *, date_str: Optional[str] = None,
     keywords = classify.load_news_keywords(config)
     windows = resolve_windows(registry, date_str, now, conn)
     news_start, news_end = windows["news_window"]
-    ann_start, ann_end = windows["ann_window"]
     target_date = windows["date"]
     gaps: List[str] = list(windows["gaps"])
 
@@ -152,9 +149,6 @@ def build_brief(config: dict, registry, *, date_str: Optional[str] = None,
     if failed_quotes:
         gaps.append(f"隔夜行情缺口：{'、'.join(failed_quotes)}")
 
-    # 全市场公告
-    announcements = _collect_announcements(registry, ann_start, ann_end, gaps)
-
     if flash_failed:
         status = STATUS_FAILED
     elif gaps:
@@ -170,7 +164,6 @@ def build_brief(config: dict, registry, *, date_str: Optional[str] = None,
         # "最新已收盘场次"即正确隔夜场次不受影响,故只做诚实标注不做日期化改造
         "backfill": bool(date_str),
         "news_window": windows["news_window"],
-        "ann_window": windows["ann_window"],
         "overnight": overnight,
         "news": {
             "candidates": candidates,
@@ -178,26 +171,6 @@ def build_brief(config: dict, registry, *, date_str: Optional[str] = None,
             "source_status": flash_result.status,
             "raw_count": flash_result.raw_count,
         },
-        "announcements": announcements,
     }
     return BriefResult(status=status, date=target_date, payload=payload,
                        error=flash_result.error if flash_failed else None)
-
-
-def _collect_announcements(registry, start: datetime, end: datetime,
-                           gaps: List[str]) -> dict:
-    r = registry.call("get_market_announcements_range",
-                      start.strftime(TIME_FMT), end.strftime(TIME_FMT))
-    if not r.success or not isinstance(r.data, dict):
-        gaps.append(f"公告源失败：{r.error}")
-        return {"grouped": {}, "status": "failed", "raw_count": 0, "error": r.error}
-    data = r.data
-    if data.get("status") == "truncated":
-        gaps.append("公告采集触达预算被截断（部分结果）")
-    grouped = classify.classify_announcements(data.get("items") or [])
-    return {
-        "grouped": grouped,
-        "status": data.get("status"),
-        "raw_count": data.get("raw_count", 0),
-        "error": None,
-    }

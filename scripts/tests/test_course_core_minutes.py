@@ -216,3 +216,94 @@ def test_checked_sparse_source_kept_without_combining_sources(monkeypatch):
     with pytest.raises(data.EvidenceError) as normal:
         market.minutes(code, DAY, "15:00", "history")
     assert not hasattr(normal.value, "partial_minutes")
+
+
+def test_minute_request_independent_of_calendar_probe_and_daily_context(monkeypatch):
+    from types import SimpleNamespace
+    calls = []
+    def client(token, *, timeout):
+        assert timeout == 12
+        def query(api, **kwargs):
+            calls.append(api)
+            rows = [dict(r, ts_code=CORE) for r in complete_minutes(CORE)["rows"]]
+            return SimpleNamespace(to_dict=lambda _: rows)
+        return SimpleNamespace(query=query)
+    monkeypatch.setenv("TUSHARE_TOKEN", "test-only")
+    monkeypatch.setattr(service, "TushareMirrorClient", client)
+    monkeypatch.setattr(service.TushareProvider, "initialize", lambda *_: pytest.fail("重复日历探针"))
+    source = service.ClosedMarketSource()
+    block = source.minutes(CORE, DAY, "15:00", "history", keep_partial=True)
+    assert calls == ["stk_mins"] and len(block["rows"]) == 240
+
+
+def test_bad_closing_price_and_broken_provider_use_next_whole_source(monkeypatch):
+    from types import SimpleNamespace
+    market = object.__new__(service.ClosedMarketSource)
+    bad = complete_minutes(CORE)
+    bad["rows"][-1].update(close=12, high=12)
+    monkeypatch.setattr(market, "_tushare_minutes", lambda *_: bad)
+    def timeout(*args):
+        raise TimeoutError()
+    rows = [dict(r, ts_code=CORE) for r in complete_minutes(CORE)["rows"]]
+    market.sina = SimpleNamespace(get_stock_minutes=timeout)
+    market.tdx = None
+    market.eastmoney = SimpleNamespace(get_stock_minutes=lambda *_: DataResult(rows, service.eastmoney.SOURCE))
+    row = service._collect(CORE, DAY, {}, {
+        "reference": {"close": 10}, "limits": {"up_limit": 11}, "suspension": {"full_day": False}}, market)
+    assert row["status"] == "complete"
+    block = row["minutes"]
+    assert block["source"] == service.eastmoney.SOURCE and len(block["rows"]) == 240
+    assert len(block["attempts"]) == 2 and block["acquisition"] in ("post_close", "historical_replay")
+
+
+def test_failure_of_one_stock_preserves_peers_and_cached_reference(args, monkeypatch):
+    market = Market()
+    real_minutes = market.minutes
+    def faulty(code, *rest, **kwargs):
+        if code == PEER:
+            raise RuntimeError("该票服务失败")
+        return real_minutes(code, *rest, **kwargs)
+    market.minutes = faulty
+    first = service.capture_day(DAY, "USER", source_factory=lambda: market, **args)
+    assert first["stocks"][PEER]["status"] == "source_failed"
+    assert first["stocks"][CORE]["status"] == "complete"
+    market.minutes = real_minutes
+    market.missing.clear()
+    monkeypatch.setattr(market, "contexts", lambda *_: pytest.fail("参考数据已全部留存"))
+    second = service.capture_day(DAY, "USER", source_factory=lambda: market, **args)
+    assert second["coverage"]["complete"] == 2 and second["stocks"][CORE] == first["stocks"][CORE]
+
+
+def test_longer_fragment_with_wrong_close_preserves_verified_window():
+    from types import SimpleNamespace
+    rows = complete_minutes(CORE)["rows"]
+    old = {"source": SOURCE, "rows": rows[:230]}
+    longer = [dict(row) for row in rows[1:]]
+    longer[-1].update(high=12, close=12)
+    def fail(*args, **kwargs):
+        err = data.EvidenceError("仍缺1根")
+        err.partial_minutes = {"source": SOURCE, "rows": longer}
+        raise err
+    row = service._collect(CORE, DAY, {"partial_minutes": old}, {"reference": {"close": 10}},
+                           SimpleNamespace(minutes=fail))
+    assert row["partial_minutes"] == old and any("收盘不符" in s for s in row["gaps"])
+
+
+@pytest.mark.parametrize("bad_source", ["tushare", "sina", "eastmoney"])
+def test_bad_partial_never_displaces_shorter_traded_fragment(bad_source):
+    import pandas as pd
+    from types import SimpleNamespace
+    good = [dict(r, ts_code=CORE) for r in complete_minutes(CORE)["rows"][:2]]
+    bad = [dict(r, ts_code=CORE, vol=0, amount=0) for r in complete_minutes(CORE)["rows"][:3]]
+    market = object.__new__(service.ClosedMarketSource)
+    market.has_daily = True
+    market.provider = SimpleNamespace(pro=SimpleNamespace(query=lambda *a, **kw: pd.DataFrame(
+        bad if bad_source == "tushare" else [])))
+    market.sina = SimpleNamespace(get_stock_minutes=lambda *_: DataResult(
+        bad if bad_source == "sina" else good, SOURCE))
+    market.tdx = None
+    market.eastmoney = SimpleNamespace(get_stock_minutes=lambda *_: DataResult(
+        bad if bad_source == "eastmoney" else good, service.eastmoney.SOURCE))
+    row = service._collect(CORE, DAY, {}, {"reference": {"close": 10}}, market)
+    assert row["status"] == "partial"
+    assert [r["vol"] for r in row["partial_minutes"]["rows"]] == [100, 100]

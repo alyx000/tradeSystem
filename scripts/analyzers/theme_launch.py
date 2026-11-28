@@ -5,6 +5,7 @@ from datetime import date, datetime
 from html import escape
 import math
 import re
+import unicodedata
 from zoneinfo import ZoneInfo
 
 from analyzers import sector_increment as si
@@ -13,10 +14,12 @@ from analyzers.theme_volume_context import denominator_note, verified_market
 from analyzers import strong_stock_feedback as sf
 from analyzers.strong_stock_feedback_history import _envelope
 from services.volume_concentration.capacity_history import _open_days
+from utils import is_st_stock
 from utils.price_limit import limit_pct_for
 
 KEY = 'theme_launch'
-SCHEMA = 'theme-launch-v1'
+LEGACY_SCHEMA = 'theme-launch-v1'
+SCHEMA = 'theme-launch-v2'
 MARKER = 'data-theme-launch'
 SOURCE = 'tushare:ths_member:snapshot'
 NOTE = ('[事实] 仅观察当日题材榜前10名，榜单不代表首次启动；同股可属于多个题材，各题材不能相加。'
@@ -27,8 +30,8 @@ NOTE = ('[事实] 仅观察当日题材榜前10名，榜单不代表首次启动
         '出处：用户提供《10月31正课1》15:40—27:11、47:23—48:15；未绑定已入库笔记。')
 
 
-def missing(day, reason, status='source_failed'):
-    return dict(schema=SCHEMA, trade_date=day, status=status, rows=[], gaps=[reason])
+def missing(day, reason, status='source_failed', *, schema=SCHEMA):
+    return dict(schema=schema, trade_date=day, status=status, rows=[], gaps=[reason])
 
 
 def _number(value):
@@ -127,9 +130,70 @@ def _amounts(block, day, previous):
     return by_code, market, value['status']
 
 
-def calculate(day, previous, evidence):
+def _name_key(name):
+    # 仅收敛全角 ASCII 与水平空格，保留 -U、-W、ST、XD 及其他名称字符。
+    return ''.join(chr(ord(ch) - 0xFEE0) if '！' <= ch <= '～' else ch
+                   for ch in name if unicodedata.category(ch) != 'Zs')
+
+
+def _limit_distribution(stocks):
+    counts = {str(b): sum(s['board'] == b for s in stocks) for b in (10, 20, 30)}
+    counts['10+20'] = counts['10'] + counts['20']
+    return counts
+
+
+def _count_limits(row, members, up, prior, schema):
+    matched, conflicts = [], []
+    for code, stock in up.items():
+        if code not in members:
+            continue
+        member_name, limit_name = members[code], stock['name']
+        if schema == LEGACY_SCHEMA:
+            if member_name != limit_name:
+                row['gaps'].append('成员与涨停名称冲突，计数未计算')
+                return
+            board = int(limit_pct_for(code, limit_name))
+        else:
+            key = _name_key(limit_name)
+            if is_st_stock(key) or '退' in key:
+                continue
+            board = int(limit_pct_for(code, is_st=False))
+            if _name_key(member_name) != key:
+                conflicts.append(dict(code=code, member_name=member_name, limit_name=limit_name, board=board))
+                continue
+        matched.append(dict(stock, board=board))
+    row['limit_stocks'] = sorted(matched, key=lambda s: (s['board'], s['code']))
+    confirmed = _limit_distribution(matched)
+    if conflicts:
+        pending = _limit_distribution(conflicts)
+        row['count_coverage'] = dict(
+            boards={b: dict(confirmed=n, unresolved=pending[b]) for b, n in confirmed.items()},
+            name_conflicts=sorted(conflicts, key=lambda s: s['code']))
+        row['gaps'].append(f'同代码简称待核{len(conflicts)}只，已核涨停{len(matched)}只')
+    else:
+        row['counts'] = confirmed
+
+    leaders = []
+    unknown = [s['code'] for s in conflicts if s['board'] == 10]
+    for stock in matched:
+        if stock['board'] != 10 or stock['limit_times'] == 1:
+            continue
+        code, height = stock['code'], stock['limit_times']
+        old = prior.get(code)
+        if (height is not None and height >= 2 and old is not None and old['limit_times'] is not None
+                and old['limit_times'] + 1 == height
+                and (schema == LEGACY_SCHEMA or _name_key(old['name']) == _name_key(stock['name']))):
+            leaders.append(dict(code=code, name=stock['name'], height=height))
+        else:
+            unknown.append(code)
+    row.update(lead_10cm=leaders, lead_unknown=unknown)
+    if unknown:
+        row['gaps'].append(f'10cm身位待核验{len(unknown)}只')
+
+
+def calculate(day, previous, evidence, *, schema=SCHEMA):
     """所有派生值可由同一证据重算；错误不转成0，也不猜历史成员。"""
-    result = dict(schema=SCHEMA, trade_date=day, previous_date=previous, status='partial',
+    result = dict(schema=schema, trade_date=day, previous_date=previous, status='partial',
                   membership_date=None, rows=[], market=None, indices=[], gaps=[], evidence=evidence)
     try:
         if date.fromisoformat(previous) >= date.fromisoformat(day) or day < '2022-01-01':
@@ -146,9 +210,8 @@ def calculate(day, previous, evidence):
             up, up_error = {}, str(exc)
         try:
             prior = {r['code']: r for r in sf._cohort(evidence.get('previous_limit_up'))}
-            prior_error = None
-        except (ValueError, TypeError, KeyError, AttributeError) as exc:
-            prior, prior_error = {}, str(exc)
+        except (ValueError, TypeError, KeyError, AttributeError):
+            prior = {}
         try:
             amounts, market, amount_status = _amounts(evidence.get('increment'), day, previous)
             if 'amount_suspensions' in evidence:
@@ -189,28 +252,7 @@ def calculate(day, previous, evidence):
             if up_error:
                 r['gaps'].append('涨停名单未核验：'+up_error)
             else:
-                matched = [dict(v, board=int(limit_pct_for(c, v['name']))) for c, v in up.items() if c in members]
-                if any(members[s['code']] != s['name'] for s in matched):
-                    r['gaps'].append('成员与涨停名称冲突，计数未计算')
-                else:
-                    r['limit_stocks'] = sorted(matched, key=lambda s: (s['board'], s['code']))
-                    r['counts'] = {str(b): sum(s['board'] == b for s in matched) for b in (10, 20, 30)}
-                    r['counts']['10+20'] = r['counts']['10']+r['counts']['20']
-                    # 身位只核验“前日已涨停且今日连续板数前后一致”，不是领先关系或龙头身份。
-                    candidates = [s for s in matched if s['board'] == 10]
-                    leaders, unknown = [], []
-                    for s in candidates:
-                        h, old = s['limit_times'], prior.get(s['code'])
-                        if h == 1:
-                            continue
-                        if (h is not None and h >= 2 and not prior_error and old is not None
-                                and old['limit_times'] is not None and old['limit_times']+1 == h):
-                            leaders.append(dict(code=s['code'], name=s['name'], height=h))
-                        else:
-                            unknown.append(s['code'])
-                    r.update(lead_10cm=leaders, lead_unknown=unknown)
-                    if unknown:
-                        r['gaps'].append(f'10cm身位待核验{len(unknown)}只')
+                _count_limits(r, members, up, prior, schema)
             if amount_error:
                 r['gaps'].append('成交额未计算：'+amount_error)
             else:
@@ -234,7 +276,7 @@ def calculate(day, previous, evidence):
             result['status'] = 'complete'
         return result
     except (ValueError, TypeError, KeyError, AttributeError, OverflowError) as exc:
-        return missing(day, str(exc))
+        return missing(day, str(exc), schema=schema)
 
 
 def collect(registry, day, raw, *, daily_dir, db_path=None, now=None, suspended=None):
@@ -286,7 +328,8 @@ def validate(block, day):
     if block is None:
         return missing(day, '旧快照未计算题材启动证据', 'not_computed')
     try:
-        if block.get('schema') != SCHEMA or block.get('trade_date') != day:
+        schema = block.get('schema')
+        if schema not in (LEGACY_SCHEMA, SCHEMA) or block.get('trade_date') != day:
             raise ValueError('题材启动来源日期或版本不符')
         if 'evidence' not in block:
             if block.get('status') not in {'not_computed', 'source_failed', 'skipped'} or block.get('rows') != []:
@@ -294,13 +337,20 @@ def validate(block, day):
             if not isinstance(block.get('gaps'), list) or any(not isinstance(g, str) for g in block['gaps']):
                 raise ValueError('缺口非法')
             # 失败信封只保留规范状态和缺口，绝不接受夹带的market/indices数值。
-            return missing(day, '', block['status']) | {'gaps': block['gaps']}
-        expected = calculate(day, block['previous_date'], block['evidence'])
+            return missing(day, '', block['status'], schema=schema) | {'gaps': block['gaps']}
+        expected = calculate(day, block['previous_date'], block['evidence'], schema=schema)
         if {k: v for k, v in block.items() if k != 'review_context'} != expected:
             raise ValueError('题材启动计算值与原始证据不符')
         return expected
     except (ValueError, TypeError, KeyError, AttributeError):
         return missing(day, '题材启动快照损坏或与证据不符')
+
+
+def project_counts(checked):
+    """仅对已通过原版本验真的旧块作内存投影；归档及反馈原样本留存。"""
+    if checked.get('schema') == LEGACY_SCHEMA and checked.get('rows') and checked.get('evidence'):
+        return calculate(checked['trade_date'], checked['previous_date'], checked['evidence'])
+    return checked
 
 
 def load_snapshot(daily_dir, day):
@@ -314,7 +364,7 @@ def load_for_review(daily_dir, day, db_path):
     from services.review_calendar import load_review_context
     try:
         fact, context = load_review_context(db_path, day)
-        block = load_snapshot(daily_dir, fact)
+        block = project_counts(load_snapshot(daily_dir, fact))
         return {**block, 'review_context': context} if context else block
     except Exception:
         return missing(day, '复盘日历未核验，不跨日猜测')
@@ -324,7 +374,7 @@ def _view(block, day):
     from services.review_calendar import review_fact_date
     try:
         fact = review_fact_date({**(block or {}), 'date': (block or {}).get('trade_date')}, day)
-        return validate(block, fact), fact
+        return project_counts(validate(block, fact)), fact
     except (ValueError, TypeError, AttributeError):
         return missing(day, '复盘日期证据不符'), day
 
@@ -335,15 +385,31 @@ def _fmt(value, signed=False):
     return f'{value:+.2f}' if signed else f'{value:.2f}'
 
 
+def count_text(row, board):
+    if row.get('counts') is not None:
+        return str(row['counts'][board])
+    part = row.get('count_coverage', {}).get('boards', {}).get(board)
+    if not part:
+        return '未计算'
+    if not part['unresolved']:
+        return str(part['confirmed'])
+    known = f"至少{part['confirmed']}" if part['confirmed'] else '未定'
+    return f"{known}（{part['unresolved']}只待核）"
+
+
+def _conflict_text(row):
+    return '；'.join(f"{s['code']} 成员简称「{s['member_name']}」、涨停简称「{s['limit_name']}」"
+                    for s in row.get('count_coverage', {}).get('name_conflicts', []))
+
+
 def _cells(r):
-    counts, amount = r['counts'] or {}, r['amount'] or {}
+    amount = r['amount'] or {}
     lead = ('未计算' if r['lead_10cm'] is None else
             '；'.join(f"{s['name']}（{s['code']}）{s['height']}板" for s in r['lead_10cm']) or '已核验0只')
     if r.get('lead_unknown'):
-        lead += f"；待核验{len(r['lead_unknown'])}只"
+        lead = (lead+'；' if r['lead_10cm'] else '') + f"待核验{len(r['lead_unknown'])}只"
     return [r['name'], r['status'], str(r['member_count']) if r['member_count'] is not None else '未计算',
-            str(counts.get('10', '未计算')), str(counts.get('20', '未计算')), str(counts.get('30', '未计算')),
-            str(counts.get('10+20', '未计算')), lead, _fmt(r['change_pct'], True), _fmt(amount.get('delta_yi'), True), _fmt(amount.get('share_delta_pp'), True)]
+            *(count_text(r, b) for b in ('10', '20', '30', '10+20')), lead, _fmt(r['change_pct'], True), _fmt(amount.get('delta_yi'), True), _fmt(amount.get('share_delta_pp'), True)]
 
 
 HEADERS = ['题材', '覆盖状态', '成员数', '10cm涨停', '20cm涨停', '30cm涨停', '10+20合计', '10cm身位证据', '题材涨跌(%)', '增额(亿)', '份额变化(pp)']
@@ -365,6 +431,8 @@ def render_markdown(block, day):
     lines.extend('缺口：'+clean(g) for g in value.get('gaps', []))
     for r in value['rows']:
         lines.extend(clean(r['name'])+'缺口：'+clean(g) for g in r['gaps'])
+        if conflicts := _conflict_text(r):
+            lines.append(clean(r['name'])+'简称待核：'+clean(conflicts))
     return '\n\n'.join(lines[:3])+'\n\n'+'\n'.join(lines[3:])
 
 
@@ -376,7 +444,7 @@ def render_html(block, day):
         summary = '[事实] 本日未计算，暂无可判断的题材启动证据。'
     elif status == 'skipped':
         summary = '[事实] 本日未采集题材启动证据。'
-    elif not rows or not any(r['counts'] is not None for r in rows):
+    elif not rows or not any(r['counts'] is not None or r.get('count_coverage') for r in rows):
         summary = '[事实] 题材成员或行情来源未核验，暂无可判断的题材启动证据。'
     elif status == 'complete':
         summary = f'[事实] 已完整核验{len(rows)}个题材，涨停分布如下。'
@@ -397,6 +465,9 @@ def render_html(block, day):
     for r in rows:
         counts = r['counts']
         if counts is None:
+            if r.get('count_coverage'):
+                covered = '、'.join(b+'cm '+count_text(r,b) for b in ('10','20','30'))
+                parts.append('<p>[事实] '+escape(r['name']+'：'+covered+'；10+20cm合计'+count_text(r,'10+20'))+'。</p>')
             continue
         result = (f"10cm {counts['10']}只、20cm {counts['20']}只、30cm {counts['30']}只"
                   f"；10+20cm合计{counts['10+20']}只")
@@ -420,6 +491,8 @@ def render_html(block, day):
             stocks = '；'.join(f"{s['name']}（{s['code']}）{s['board']}cm" for s in r['limit_stocks'])
             parts.append('<p>'+escape(r['name'])+'涨停明细：'+escape(stocks or ('已核验0只' if r['counts'] is not None else '未计算'))+'</p>')
             parts.extend('<p>'+escape(r['name']+'缺口：'+g)+'</p>' for g in r['gaps'])
+            if conflicts := _conflict_text(r):
+                parts.append('<p>'+escape(r['name']+'简称待核：'+conflicts)+'</p>')
     parts.extend('<p>缺口：'+escape(g)+'</p>' for g in value.get('gaps', []))
     parts.append('</details></div>')
     gap = '' if value['status'] == 'complete' else '题材启动证据为'+value['status']+'，缺失不补0；详见②。'

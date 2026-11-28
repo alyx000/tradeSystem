@@ -45,7 +45,7 @@
 - `monthly-pattern-monitor-runner.sh` — 包装脚本：source 行情/钉钉 env → 调 `/usr/bin/python3 scripts/main.py monthly-pattern monitor-daily`
 - `com.alyx.tradesystem.monthly-pattern-monitor.plist` — 每 15 分钟轻量 tick，runner 仅在上海工作日 19:10（含）至 19:25（不含）执行一次重任务（月线种子日频动态 5 月线 + 日/周 MACD 变化监控；不受 Mac 本机时区切换影响；日志 `/tmp/tradesystem-monthly-pattern-monitor.log`）
 - `morning-brief-runner.sh` — 包装脚本：cd 仓库根 → source `~/.config/tradeSystem.env`(钉钉；TUSHARE_TOKEN 由 `scripts/.env` 在 Python 侧加载) → 调 `python3 main.py morning-brief daily`
-- `com.alyx.tradesystem.morning-brief.plist` — 工作日 08:00 触发（盘前早报：隔夜行情+海外/国内要闻[金十]+上市公司公告[巨潮]；非交易日 CLI 内守卫跳过；日志 `/tmp/tradesystem-morning-brief.log`；Sleep policy: 错过可接受——可手动 `morning-brief daily` 补跑）
+- `com.alyx.tradesystem.morning-brief.plist` — 工作日 08:00 触发（盘前早报：隔夜行情+海外/国内要闻[金十]；非交易日 CLI 内守卫跳过；日志 `/tmp/tradesystem-morning-brief.log`；Sleep policy: 错过可接受——可手动 `morning-brief daily` 补跑）
 - 在实际运行目录执行 `python3 scripts/main.py intraday-monitor status` 可读取当前有效期内的阈值规则。每条列出最近成功计算时间和当时采用的行情时间；失败批次不会刷新这两个时间。缺证据显示“未核验”。`--all` 包含配置内已过期和尚未开始的规则，`--json` 提供结构化结果。
 - `intraday-monitor-runner.sh` — 每3分钟tick；上海09:30～11:35/13:00～15:05进入Python，新增11:30指数成交额收盘窗口发布宽限；价格服务原有时段守卫不变。
 - `com.alyx.tradesystem.intraday-monitor.plist` — 单标的阈值 + 09:30～10:00（不含10:00）百亿成交额涨停板横截面监控；除相对 180 秒节拍外固定 09:59 做最后补扫，日志 `/tmp/tradesystem-intraday-monitor.log`

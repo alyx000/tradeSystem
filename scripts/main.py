@@ -1052,8 +1052,12 @@ def cmd_post(config: dict, target_date: str):
         from generators import ReportGenerator
 
         # 采集市场数据
+        from services.margin_detail_refresh import prepare_margin_detail_for_post
+        previous_margin_detail = prepare_margin_detail_for_post(registry, target_date, input_by="cmd_post")
         market_collector = MarketCollector(registry)
         raw_data = market_collector.collect_post_market(target_date)
+        if previous_margin_detail and isinstance(raw_data.get("margin_detail"), dict):
+            raw_data["margin_detail"]["previous_disclosure"] = previous_margin_detail
 
         # 采集持仓数据 + 盘后公告（持仓来自 SQLite active）
         holdings_collector = HoldingsCollector(registry)

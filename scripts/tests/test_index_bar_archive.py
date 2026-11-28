@@ -121,3 +121,39 @@ def test_concurrent_disjoint_writers_merge_the_same_day(tmp_path):
         for job in jobs:
             job.result()
     assert day(tmp_path)["status"] == "complete" and day(tmp_path)["valid_count"] == 192
+
+
+def test_replay_queries_only_missing_indices_and_preserves_earlier_values(tmp_path, monkeypatch):
+    import sys
+    from types import SimpleNamespace
+    from tools import index_bar_archive as cli
+
+    rows = quotes()
+    codes = list(INDEX_NAMES)
+    limited = {code: (data[:-1] if code in codes[:2] else data, err) for code, (data, err) in rows.items()}
+    save(tmp_path / "ohlcv-5m", limited, "15:00")
+    monkeypatch.setattr(cli, "DEFAULT_REPORT_ROOT", tmp_path)
+    monkeypatch.setattr(cli, "calendar_basis", lambda _: ("complete", PREV))
+    monkeypatch.setattr(sys, "argv", ["index_bar_archive.py", "--date", TODAY, "--input-by", "USER"])
+    calls = []
+    def request(self, code, start, end, *, period_minutes):
+        calls.append(code)
+        assert (start, end, period_minutes) == (TODAY, TODAY, 5)
+        if code == codes[0]:
+            raise RuntimeError("index unavailable")
+        data = deepcopy(rows[code][0])
+        data[48]["amount"] = "999"
+        return SimpleNamespace(success=True, source="eastmoney:index_5min", data=data)
+    monkeypatch.setattr(cli.EastmoneyProvider, "get_index_intraday_bars", request)
+    assert cli.main() == 2
+    assert sorted(calls) == sorted(codes[:2])
+    archived = day(tmp_path / "ohlcv-5m")["indices"]
+    assert archived[codes[0]]["valid_count"] == 47
+    second = archived[codes[1]]
+    assert second["valid_count"] == 48 and not second["conflicts"]
+    assert second["bars"]["09:35"]["amount"] == "12.3"
+    assert second["bars"]["15:00"]["acquisition"] == "post_close_replay"
+    assert second["bars"]["15:00"]["input_by"] == "USER"
+    # A later retry asks only the index that is still missing a bar.
+    calls.clear()
+    assert cli.main() == 2 and calls == [codes[0]]

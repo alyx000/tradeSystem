@@ -848,14 +848,19 @@ class ReportGenerator:
 
         # ---- 融资融券 ----
         margin = raw_data.get("margin_data", {})
-        if margin.get("trade_date"):
+        detail = raw_data.get("margin_detail") or {}
+        if margin.get("trade_date") or detail.get("status"):
             lines.append(f"\n## {_roman(section_idx)}、融资融券\n")
             section_idx += 1
+        if margin.get("trade_date"):
             lines.append(
-                f"- 融资余额: {margin.get('total_rzye_yi', '-')}亿　"
+                f"- 汇总事实日 {margin['trade_date']}，融资余额: {margin.get('total_rzye_yi', '-')}亿　"
                 f"融券余额: {margin.get('total_rqye_yi', '-')}亿　"
                 f"合计: {margin.get('total_rzrqye_yi', '-')}亿"
             )
+        if detail.get("status"):
+            from providers.margin_detail import report_lines
+            lines.extend(report_lines(detail))
 
         # ---- P0 情绪 / 资金增强 ----
         section_idx = _render_p0_market_enhancements(lines, raw_data, section_idx)

@@ -49,7 +49,8 @@ def test_list_interfaces_returns_registry_entries(tmp_path):
     assert "moneyflow_ind_dc" in names
     assert "moneyflow_mkt_dc" in names
     assert "margin_detail" in names
-    assert "anns_d" in names
+    assert "anns_d" not in names
+    assert service.execute_interface("anns_d", "2026-04-04", input_by="USER")["status"] == "not_found"
     assert "macro_china_indicators" in names
     assert {"stk_alert", "stk_shock", "stk_high_shock"} <= names
     assert any(item["enabled_by_default"] is False for item in interfaces)
@@ -150,6 +151,28 @@ def test_inspect_marks_permission_restricted_errors(tmp_path):
     assert error["restriction_label"] == "权限受限"
     assert error["restriction_reason"] == "当前账号对该接口没有调用权限，或积分不足。"
     assert error["retryable_label"] == "不可重试"
+
+
+def test_bulk_retry_ignores_retired_announcements(tmp_path):
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    migrate(conn)
+    conn.execute(
+        """INSERT INTO ingest_runs
+           (run_id, interface_name, provider, stage, biz_date, params_json, status, row_count, started_at, triggered_by)
+           VALUES ('old_anns', 'anns_d', 'tushare', 'post_extended', '2026-04-03', '{}', 'failed', 0, datetime('now'), 'cli')"""
+    )
+    conn.execute(
+        """INSERT INTO ingest_errors
+           (run_id, interface_name, biz_date, stage, error_type, error_message, retryable)
+           VALUES ('old_anns', 'anns_d', '2026-04-03', 'post_extended', 'network', 'timeout', 1)"""
+    )
+    conn.commit()
+    conn.close()
+
+    service = IngestService(str(db_path))
+    assert service.retry_unresolved_groups(input_by="USER")["runs"] == []
+    assert service.inspect("2026-04-03", interface_name="anns_d")["error_count"] == 1
 
 
 def test_inspect_and_retry_summary_support_interface_filter(tmp_path):
@@ -569,9 +592,9 @@ def test_execute_interface_marks_permission_error_non_retryable(tmp_path):
     db_path = tmp_path / "test.db"
     registry = _FakeRegistry(
         _FakeProvider(
-            {"get_market_announcements"},
+            {"get_block_trade"},
             {
-                "get_market_announcements": DataResult(
+                "get_block_trade": DataResult(
                     data=None,
                     source="registry",
                     error="所有数据源均失败: tushare: 您的权限不足",
@@ -581,7 +604,7 @@ def test_execute_interface_marks_permission_error_non_retryable(tmp_path):
     )
     service = IngestService(str(db_path), registry=registry)
 
-    result = service.execute_interface("anns_d", "2026-04-04", input_by="cursor")
+    result = service.execute_interface("block_trade", "2026-04-04", input_by="cursor")
 
     assert result["status"] == "failed"
     conn = get_connection(db_path)

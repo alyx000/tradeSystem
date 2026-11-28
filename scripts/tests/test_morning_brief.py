@@ -256,7 +256,8 @@ class TestBuildBrief:
         assert brief.status == "complete"
         assert brief.payload["gaps"] == []
         assert brief.payload["news"]["candidates"][0].topic == "海外要闻"
-        assert list(brief.payload["announcements"]["grouped"]) == ["停复牌"]
+        assert "announcements" not in brief.payload
+        assert "上市公司公告" not in formatter.render(brief.payload)
 
     def test_jin10_failed_is_source_failed(self):
         reg = _full_registry()
@@ -286,13 +287,13 @@ class TestBuildBrief:
             collect_fn=_collect_ok(status=flash_collector.STATUS_TRUNCATED))
         assert brief.status == "partial"
 
-    def test_ann_failure_is_partial_not_fatal(self):
+    def test_retired_announcements_are_never_requested(self):
         reg = _full_registry()
         reg.responses["get_market_announcements_range"] = None  # 未配置 → 失败
         brief = service.build_brief(
             CONFIG, reg, date_str="2026-08-14", collect_fn=_collect_ok())
-        assert brief.status == "partial"
-        assert brief.payload["announcements"]["error"]
+        assert brief.status == "complete"
+        assert "get_market_announcements_range" not in [name for name, _ in reg.calls]
 
     def test_backfill_flag_and_note(self):
         reg = _full_registry()

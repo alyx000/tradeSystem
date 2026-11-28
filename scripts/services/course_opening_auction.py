@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import sqlite3
+import socket
 
 from analyzers import tracked_theme_members
 from db.connection import get_readonly_connection
@@ -110,7 +111,7 @@ def select(conn, day, cal):
     return seal()
 
 
-def fetch(day):
+def fetch(day, code=None):
     """沿用项目固定镜像传输，不将异常响应、账号或密钥写入回执。"""
     from providers.tushare_transport import TushareMirrorClient
     from requests import RequestException
@@ -118,12 +119,75 @@ def fetch(day):
     if not token:
         raise data.EvidenceError("TUSHARE_TOKEN 未配置")
     try:
-        df = TushareMirrorClient(token, timeout=15).query("stk_auction", fields=FIELDS,
-                                                          trade_date=day.replace("-", ""))
+        params = {"trade_date": day.replace("-", "")}
+        if code is not None:
+            params["ts_code"] = code
+        df = TushareMirrorClient(token, timeout=15).query("stk_auction", fields=FIELDS, **params)
         return df.to_dict("records")
     except (RequestException, RuntimeError, ValueError, KeyError) as exc:
         reason = "当日竞价接口权限未开通" if any(t in str(exc).lower() for t in ("权限","积分","permission")) else type(exc).__name__
+        causes = [exc]
+        for cause in causes:
+            for nested in (cause.__cause__, cause.__context__, getattr(cause, "reason", None)):
+                if isinstance(nested, BaseException) and nested not in causes:
+                    causes.append(nested)
+        if any(isinstance(cause, socket.gaierror) for cause in causes):
+            reason = "镜像域名解析失败"
         raise data.EvidenceError(f"stk_auction 请求失败（{reason}）") from None
+
+
+def _query_scope(day, pending, query, query_code, attempt, problems):
+    requests = attempt["requests"] = []
+    trading_day = day.replace("-", "")
+
+    def request(code=None):
+        params = {"trade_date": trading_day}
+        if code:
+            params["ts_code"] = code
+        receipt = {"params": params, "rows": None, "status": "source_failed"}
+        requests.append(receipt)
+        try:
+            rows = query(day) if code is None else query_code(day, code)
+            if not isinstance(rows, list):
+                raise data.EvidenceError("集合竞价回复结构异常")
+            receipt["rows"] = len(rows)
+            for row in rows:
+                if not isinstance(row, dict) or row.get("trade_date") != trading_day or not row.get("ts_code"):
+                    raise data.EvidenceError("集合竞价响应日期或结构不符")
+                if code and row.get("ts_code") != code:
+                    raise data.EvidenceError("定向竞价响应代码不符")
+            receipt["status"] = "received" if rows else "empty"
+            return rows
+        except (ValueError, OSError, RuntimeError) as exc:
+            receipt["reason"] = str(exc)
+            raise
+
+    rows = request()
+    attempt["source_rows"] = len(rows)
+    selected = {}
+    for row in rows:
+        code = row.get("ts_code")
+        if code in pending:
+            if code in selected:
+                problems[code] = "同一证券记录重复"
+            selected[code] = row
+    # 达到接口上限也不丢已到且唯一的观察。整源失败/空回复不会放大成逐股调用。
+    attempt["day_response_at_limit"] = len(rows) >= 8000
+    if (selected or attempt["day_response_at_limit"]) and query_code is not None:
+        for code in sorted(pending - selected.keys()):
+            try:
+                reply = request(code)
+            except (ValueError, OSError, RuntimeError) as exc:
+                problems[code] = str(exc)
+                attempt["targeted_stop_reason"] = str(exc)
+                break
+            if reply:
+                selected[code] = reply[0]
+                if len(reply) != 1:
+                    problems[code] = "同一证券记录重复"
+    attempt["matched_scope_rows"] = len(selected)
+    attempt["status"] = "received" if rows else "empty"
+    return selected
 
 
 def _decimal(value):
@@ -220,10 +284,17 @@ def summary(result):
 
 
 def capture(day, input_by, *, dry_run=False, root=ROOT, db_path=None, now=None,
-            build_selection=select, query=fetch, load_references=_references):
+            build_selection=select, query=None, query_code=None, load_references=_references, scheduled_at=None):
     if date.fromisoformat(day).isoformat() != day or not input_by or not input_by.strip():
         raise ValueError("需有效日期和请求者")
     clock = (now or datetime.now(data.TZ)).astimezone(data.TZ)
+    if query is None:
+        query = fetch
+        query_code = fetch if query_code is None else query_code
+    if scheduled_at is not None:
+        planned = datetime.combine(date.fromisoformat(day), time(9, 32), data.TZ)
+        if scheduled_at != planned.isoformat() or not 0 <= (clock - planned).total_seconds() < 180:
+            return dict(trade_date=day, status="skipped", gaps=["超出当日 09:32 采样时段"])
     if date.fromisoformat(day) > clock.date():
         return dict(trade_date=day, status="skipped", gaps=["未来日期"])
     root = Path(root)
@@ -234,7 +305,8 @@ def capture(day, input_by, *, dry_run=False, root=ROOT, db_path=None, now=None,
             return dict(trade_date=day, status="skipped", gaps=["休市或竞价数据尚未到达可用时段"])
         with (nullcontext() if dry_run else store.lock(root, day)):
             old = _read(path, day) or {}
-            if old.get("status") == "complete":
+            same_slot = scheduled_at and old.get("latest_attempt", {}).get("scheduled_at") == scheduled_at
+            if same_slot or (old.get("status") == "complete" and not old.get("post_reference_pending")):
                 return old
             roster = old.get("selection") if old.get("selection", {}).get("members") else build_selection(conn, day, cal)
             members = roster["members"]
@@ -246,7 +318,7 @@ def capture(day, input_by, *, dry_run=False, root=ROOT, db_path=None, now=None,
                 raise data.EvidenceError("样本来源日期、摘要、截止或代码冲突")
             facts = dict(old.get("observations", {}))
             pending = {c for c in codes if c not in facts or facts[c].get("pre_close") is None}
-            if old and codes and not pending and not old.get("reference_conflicts"):
+            if old and codes and not pending and not old.get("reference_conflicts") and not old.get("post_reference_pending"):
                 return old
             gaps = list(roster.get("gaps", []))
             refs = dict(old.get("independent_daily_reference", {}))
@@ -263,34 +335,28 @@ def capture(day, input_by, *, dry_run=False, root=ROOT, db_path=None, now=None,
             except ERRORS:
                 gaps.append("同日独立日线参考未核验")
             attempt = dict(source=SOURCE, trade_date=day, input_by=input_by, requested_at=clock.isoformat(),
-                           source_rows=None, matched_scope_rows=0, documentary_source=DOC)
+                           source_rows=None, matched_scope_rows=0, documentary_source=DOC,
+                           scheduled_at=scheduled_at, auction_session_end_at=day+"T09:25:00+08:00",
+                           source_timestamp_precision="trade_date",
+                           mode="same_day" if day == clock.date().isoformat() else "historical_replay")
             problems = {c:"同日独立日线参考刷新值与旧依据冲突，保留原值" for c in reference_conflicts}
             # An observed auction can acquire its reference on a retry even if the auction source is temporarily down.
-            for code in sorted(pending & facts.keys() & refs.keys()):
+            for code in sorted((pending | set(old.get("post_reference_pending", []))) & facts.keys() & refs.keys()):
                 try:
                     enriched = observation(facts[code]["raw"], day, refs[code])
-                    facts[code] = _attach_reference(facts[code], enriched, clock.isoformat())
+                    if facts[code].get("pre_close") is None:
+                        facts[code] = _attach_reference(facts[code], enriched, clock.isoformat())
+                    else:
+                        facts[code] = {**facts[code], "daily_reference_verified_at": clock.isoformat()}
                     pending.discard(code)
                 except data.EvidenceError as exc:
                     problems[code] = str(exc)
             try:
-                records = query(day) if pending else []
-                if not isinstance(records, list):
-                    raise data.EvidenceError("集合竞价回复结构异常")
-                if pending:
-                    attempt["source_rows"] = len(records)
-                if len(records) >= 8000:
-                    raise data.EvidenceError("集合竞价回复达到单次上限")
-                selected = {}
-                for row in records:
-                    if not isinstance(row,dict) or str(row.get("trade_date")) != day.replace("-", ""):
-                        raise data.EvidenceError("集合竞价响应日期或结构不符")
-                    code = row.get("ts_code")
-                    if code in pending:
-                        if code in selected:
-                            problems[code] = "同一证券记录重复"
-                        selected[code] = row
-                attempt["matched_scope_rows"] = len(selected)
+                selected = _query_scope(day, pending, query, query_code, attempt, problems) if pending else {}
+                received = clock if now is not None else datetime.now(data.TZ)
+                attempt["finished_at"] = received.isoformat()
+                if not pending:
+                    attempt["status"] = "not_requested"
                 for code, row in selected.items():
                     if code in problems:
                         continue
@@ -298,19 +364,21 @@ def capture(day, input_by, *, dry_run=False, root=ROOT, db_path=None, now=None,
                         item = observation(row, day, refs.get(code))
                         prior = facts.get(code)
                         if prior:
-                            facts[code] = _attach_reference(prior, item, clock.isoformat())
+                            facts[code] = _attach_reference(prior, item, received.isoformat())
                         else:
-                            item["acquired_at"] = clock.isoformat()
-                            item["reference_verified_at"] = clock.isoformat() if item["pre_close"] else None
+                            item["acquired_at"] = received.isoformat()
+                            item["auction_session_end_at"] = attempt["auction_session_end_at"]
+                            item["source_timestamp_precision"] = "trade_date"
+                            item["reference_verified_at"] = received.isoformat() if item["pre_close"] else None
                             facts[code] = item
                     except ERRORS as exc:
                         problems[code] = str(exc)
-                attempt["status"] = "received" if records else "empty" if pending else "not_requested"
             except (ValueError, OSError, RuntimeError) as exc:
-                attempt.update(status="source_failed", reason=str(exc))
+                finished = clock if now is not None else datetime.now(data.TZ)
+                attempt.update(status="source_failed", reason=str(exc), finished_at=finished.isoformat())
                 gaps.append(str(exc))
             for code in pending - facts.keys() - problems.keys():
-                problems[code] = "没有日期代码匹配的有效竞价成交记录"
+                problems[code] = attempt.get("reason") or "没有日期代码匹配的有效竞价成交记录"
             for code, fact in facts.items():
                 if fact["pre_close"] is None:
                     problems.setdefault(code,"成交事实已取得，除权参考昨收待核验")
@@ -328,6 +396,19 @@ def capture(day, input_by, *, dry_run=False, root=ROOT, db_path=None, now=None,
                           path=str(path), selection=roster, observations=facts, independent_daily_reference=refs,
                           coverage=coverage, stock_gaps=problems, reference_conflicts=reference_conflicts,
                           gaps=gaps, latest_attempt=attempt)
+            if scheduled_at or old.get("post_reference_pending"):
+                # 早盘日线可能尚未生成。保留竞价原始回执，盘后只补参考核验。
+                result["post_reference_pending"] = sorted(
+                    code for code in facts if code not in refs or code in problems)
+            if old:
+                revision = root / "revisions" / day / (old["sha256"] + ".json")
+                result["previous_sha256"] = old["sha256"]
+                if not dry_run:
+                    if revision.exists():
+                        if _read(revision, day)["sha256"] != old["sha256"]:
+                            raise data.EvidenceError("竞价旧版本备份摘要冲突")
+                    else:
+                        atomic_write(revision, path.read_text(encoding="utf-8"))
             result["sha256"] = data.digest(result)
             if not dry_run:
                 atomic_write(path, json.dumps(result, ensure_ascii=False, allow_nan=False, separators=(",", ":"))+"\n")

@@ -6,7 +6,7 @@
 | 前夜核心与同题材对照股 | 使用上一开放日资料和本日开盘前可核验的版本确定名单。原 20:00 定时入口在常规盘后采集结束后，逐只采集 09:31—11:30、13:01—15:00 的闭合分钟。保存开高低收、成交量、成交额及单股来源，分别核验同日参考昨收、涨跌停价和停牌记录。 | `data/reports/course-core-minutes/YYYY-MM-DD.json` |
 | 前夜重点细分题材 | 常规盘后任务从前夜有效的手写复盘选题，通过同花顺概念身份核验后留存当日成员。优先复用同日已有成员，掉出当日前十仍跟踪前夜选定的对象。比较基准取严格上一开放日。 | `daily/YYYY-MM-DD/post-market.yaml` 中的 `raw_data.tracked_theme_members`，随原报告双写 |
 | 逐股炸板明细 | 常规盘后任务保存东财炸板池的代码、首次封板时间、炸板次数、金额和价格。来源失败时封板率与炸板率保留缺口。 | `raw_data.broken_board_pool`，独立查验可存至 `data/reports/broken-board-pool/YYYY-MM-DD.json` |
-| 前夜核心股与同题材昨日涨停股的 09:25 竞价 | 盘后按事实日查询 Tushare 开盘前最终集合竞价成交，逐只保存竞价成交价、成交量和成交额。实际撮合时点、上游返回和本机取得时点分开。 | `data/reports/course-opening-auction/YYYY-MM-DD.json` |
+| 前夜核心股与同题材昨日涨停股的 09:25 竞价 | 复用 09:32 盘中槽查询 Tushare 当日最终竞价成交，20:00 按事实日补缺并核验日线参考，逐只保存竞价成交价、成交量和成交额。实际撮合时点、上游返回和本机取得时点分开。 | `data/reports/course-opening-auction/YYYY-MM-DD.json` |
 | 通达信平均股价、微盘股 | 盘中按已有时槽查询 880003、880823 各自 5 分钟的开高低收，记录原始行情时间。每个指数的缺口和取数尝试可独立查验。 | `data/reports/tdx-index-5m/YYYY-MM-DD.json` |
 | 题材盘中扩散 | 盘后使用前夜已知的成分与同日逐股报价快照。每批按实际采样时刻计算上涨占比、涨跌幅中位数；相邻同半场快照可核验时计算区间成交额。手写点名样本单列覆盖范围。 | `data/reports/theme-intraday-breadth/YYYY-MM-DD.json` |
 | 非 ST 跌停触价与收盘状态 | 复用盘后日线、实际跌停价、事实日身份及停牌资料，统计最低成交价触及跌停后，多少只收盘仍在跌停、多少只已离开。 | `raw_data.limit_down_touch`；独立复核归档在 `data/reports/limit-down-touch/` |

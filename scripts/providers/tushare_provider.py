@@ -1617,14 +1617,15 @@ class TushareProvider(DataProvider):
 
     def get_margin_detail(self, date: str) -> DataResult:
         """获取逐股融资融券明细。"""
-        try:
-            d = self._date_fmt(date)
-            records = self._query_records("margin_detail", trade_date=d)
-            for item in records:
-                item.setdefault("code", item.get("ts_code"))
-            return DataResult(data=records, source="tushare:margin_detail")
-        except Exception as e:
-            return DataResult(data=None, source=self.name, error=str(e))
+        from providers.margin_detail import fetch
+
+        def query_page(api_name, **params):
+            frame = self.pro.query(api_name, **params)
+            if frame is None:
+                raise ValueError("逐证券两融明细未取得有效响应")
+            return self._df_to_records(frame)
+
+        return fetch(query_page, date)
 
     def get_northbound_top_stocks(self, date: str) -> DataResult:
         """北向资金十大活跃股（按成交额排序）"""

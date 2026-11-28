@@ -10,7 +10,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from providers.eastmoney_provider import EastmoneyProvider
-from services.index_volume_monitor.bar_archive import load_archive, archive_fetched
+from services.index_volume_monitor.bar_archive import ENDS, load_archive, archive_fetched
 from services.index_volume_monitor.core import calendar_basis
 from services.index_volume_monitor.rules import INDEX_NAMES
 from services.index_volume_monitor.service import DEFAULT_REPORT_ROOT
@@ -62,9 +62,10 @@ def recover_opening(root, day, previous, end, input_by):
             except (AttributeError, TypeError, ValueError, KeyError) as exc:
                 errors.append(f"{path.name} item[{pos}]: {exc}")
         if results:
-            origin = {"source_receipt": path.name, "source_sha256": hashlib.sha256(raw).hexdigest()}
+            origin = {"acquisition": "intraday_receipt", "source_receipt": path.name,
+                      "source_sha256": hashlib.sha256(raw).hexdigest()}
             evidence.append(archive_fetched(root / "ohlcv-5m", results, previous=None, end=end,
-                            captured_at=env["captured_at"], input_by=input_by, origin=origin))
+                            captured_at=env["captured_at"], input_by=input_by, origin=origin, fill_missing=True))
     return evidence, errors
 
 def main():
@@ -99,26 +100,31 @@ def main():
         return 2
     local, errors = recover_opening(DEFAULT_REPORT_ROOT, day, previous, end, opts.input_by)
     summary = {"trade_date": day, "local_receipts": len(local), "local_errors": errors}
-    if opts.local_only:
-        path = DEFAULT_REPORT_ROOT / "ohlcv-5m" / f"{day}.json"
-        try:
-            saved = load_archive(path, day)
-            final = ({**{k: saved[k] for k in ("status", "valid_count", "expected_full_day")},
-                      "path": str(path)} if saved else {"status": "no_evidence"})
-        except (OSError, ValueError, KeyError, TypeError) as exc:
-            final = {"status": "archive_error", "error": str(exc), "path": str(path)}
-    else:
+    path = DEFAULT_REPORT_ROOT / "ohlcv-5m" / f"{day}.json"
+    try:
+        saved = load_archive(path, day)
+        final = ({**{k: saved[k] for k in ("status", "valid_count", "expected_full_day")},
+                  "path": str(path)} if saved else {"status": "no_evidence"})
+        needed = [code for code in INDEX_NAMES
+                  if set(ENDS).difference(saved.get("indices", {}).get(code, {}).get("bars", {}))]
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+        final = {"status": "archive_error", "error": str(exc), "path": str(path)}
+        needed = []
+    if not opts.local_only and needed:
         def fetch(code):
-            result = EastmoneyProvider().get_index_intraday_bars(code, day, day, period_minutes=5)
-            if not result.success or result.source != "eastmoney:index_5min":
-                return code, ([], result.error or "指数5分钟来源不符")
-            return code, (result.data, None)
+            try:
+                result = EastmoneyProvider().get_index_intraday_bars(code, day, day, period_minutes=5)
+                if not result.success or result.source != "eastmoney:index_5min":
+                    return code, ([], result.error or "指数5分钟来源不符")
+                return code, (result.data, None)
+            except Exception as exc:
+                return code, ([], f"指数5分钟调用异常：{type(exc).__name__}")
         with ThreadPoolExecutor(max_workers=4) as pool:
-            results = dict(pool.map(fetch, INDEX_NAMES))
+            results = dict(pool.map(fetch, needed))
         summary["provider_errors"] = {c: err for c, (_, err) in results.items() if err}
-        final = archive_fetched(DEFAULT_REPORT_ROOT / "ohlcv-5m", results, previous=None,
-                                end=end, captured_at=shanghai_now().isoformat(),
-                                input_by=opts.input_by.strip())[day]
+        final = archive_fetched(path.parent, results, previous=None, end=end, captured_at=shanghai_now().isoformat(),
+                                input_by=opts.input_by.strip(), origin={"acquisition": "post_close_replay"},
+                                fill_missing=True)[day]
     print(json.dumps({**summary, **final}, ensure_ascii=False))
     return 0 if final["status"] == "complete" else 2
 

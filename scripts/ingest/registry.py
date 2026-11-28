@@ -220,7 +220,7 @@ INTERFACE_REGISTRY: dict[str, InterfaceConfig] = {
         "dedupe_keys": ["trade_date"],
         "raw_table": "raw_margin_detail",
         "enabled_by_default": True,
-        "notes": "逐股融资融券明细，补容量核心和趋势中军观察。",
+        "notes": "按事实日保存逐证券两融披露，分市核验分页与股票范围，下一开放日盘后对已有缺口重查。",
     },
     "block_trade": {
         "interface_name": "block_trade",
@@ -254,17 +254,6 @@ INTERFACE_REGISTRY: dict[str, InterfaceConfig] = {
         "raw_table": "raw_stock_st",
         "enabled_by_default": True,
         "notes": "ST 列表，供风控与样本清洗使用。",
-    },
-    "anns_d": {
-        "interface_name": "anns_d",
-        "provider_method": "get_market_announcements",
-        "stage": "post_extended",
-        "use_cases": ["watchlist_context", "research", "history_compare"],
-        "params_policy": "trade_date",
-        "dedupe_keys": ["ann_date"],
-        "raw_table": "raw_anns_d",
-        "enabled_by_default": True,
-        "notes": "全市场公告原始层，补公告回溯和关注池事件筛查。",
     },
     "disclosure_date": {
         "interface_name": "disclosure_date",
