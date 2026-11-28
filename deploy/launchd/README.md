@@ -2,6 +2,12 @@
 
 适用：用户本机长期开机的 macOS。如果在 VPS 上跑，看仓库 `deploy/systemd/`。
 
+## 盘中异动采样
+
+`com.alyx.tradesystem.intraday-events.plist` 调用同目录的 `intraday-events-runner.sh`。系统时区使用上海时间，周一至周五每半场 12 槽。runner 传入计划时点，采样 CLI 核验当日 SSE 日历。使用本机 LaunchAgent 时停用其他自动采样入口，登录用户的 Mac 在采样时保持唤醒。
+
+部署时核对 plist 中的仓库路径以及 runner 的执行权限。可用 `plutil -lint deploy/launchd/com.alyx.tradesystem.intraday-events.plist` 和 `bash -n deploy/launchd/intraday-events-runner.sh` 检查模板。已安装状态用 `launchctl print gui/$(id -u)/com.alyx.tradesystem.intraday-events` 查看。实际采样查当日批次回执，实际发送查投递回执，runner 日志在 `/tmp/tradesystem-intraday-events.log`。见[采样、关键位与提醒口径](../../docs/intraday-events.md)。
+
 ## 文件
 
 - `recommend-runner.sh` — 包装脚本：cd 仓库根 → source 项目 env → 调 `python3 main.py recommend`
