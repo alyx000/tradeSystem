@@ -45,7 +45,7 @@ python3 scripts/automations/kaipanla_daily.py calendar --date "$date_to_check"
 python3 scripts/automations/kaipanla_checkpoint.py status --date "$date_to_check" --day-dir "$stage"
 ```
 
-按 `remaining_slots` 续采，复用 `completed_slots`。商品单入口空值只对 `pending_commodity` 剩余项批量复核。每批用 `record` 保存，包含独立批次编号、明确的事实日、读取时间和证据。数据保存在临时日期目录，批次日志以哈希核验，原始 CSV 可在中断后重建。
+按 `remaining_slots` 续采，复用 `completed_slots`。ETF 的 `field_issues` 在批次落盘后列出页面、代码或方向、字段及原因，与定稿共用字段校验。已有页尾但有字段待核时，只回读对应行。商品单入口空值只对 `pending_commodity` 剩余项批量复核。每批用 `record` 保存，包含独立批次编号、明确的事实日、读取时间和证据。数据保存在临时日期目录，批次日志以哈希核验，原始 CSV 可在中断后重建。
 
 ```bash
 python3 scripts/automations/kaipanla_checkpoint.py record --date "$date_to_check" --day-dir "$stage" \
@@ -63,7 +63,7 @@ python3 scripts/automations/kaipanla_daily.py finalize --date "$date_to_check" -
 python3 scripts/automations/kaipanla_daily.py publish --date "$date_to_check" --input-by codex_automation
 ```
 
-`finalize` 从批次日志重建原值并验收四个模块，再生成正式归档。已存前日快照先核验后比较，缺前日快照时标不可比，异动历史以可核实的本月边界验收。缺少的商品历史日期在计算中保留空位。`publish` 只接受 21:00 后的当日正式归档，重复成功回执直接跳过。尝试与成功回执独立于归档哈希保存，发送结果不明时先核对钉钉。回放采用 `replay --date YYYY-MM-DD --input-by USER --output <新目录>`，新版预览保留在指定目录，回执标记无发布资格。
+`finalize` 从批次日志重建原值并验收四个模块，再生成正式归档。已存前日快照先核验后比较，缺前日快照时标不可比，异动历史以可核实的本月边界验收。缺少的商品历史日期在计算中保留空位。`publish` 只接受 21:00 后的当日正式归档，重复成功回执直接跳过。尝试与成功回执独立于归档哈希保存，发送结果不明时先核对钉钉。回放采用 `replay --date YYYY-MM-DD --input-by USER --output <新目录>`，新版预览保留在指定目录，回执标记无发布资格。 核验和成功发送回执均记录运行脚本的 `runtime_sha256`，用于核对定稿和发送时使用的版本。
 
 ## 百日新高口径
 
@@ -134,6 +134,17 @@ python3 scripts/automations/kaipanla_daily.py publish --date "$date_to_check" --
 
 分别记录价格是否存在、涨幅是否显示、来源是否加载完成、是否已经复核。缺失突然增加时优先排查漏页、漏分类和加载问题，逐项补核后再下结论。每次报告给出样本总数、实际核验数、有效日涨幅数、各窗口完整数及未核验名单，并与前日比较。
 
+### 优先补回完整窗口
+
+历史短缺优先检查近 20 日只缺一天的品种，按日期和分类成批查源。分类页未见的少量品种再核对详情标题、日期和明确涨幅。可见的 `0.00%` 按原值保存。
+
+```bash
+python3 scripts/automations/kaipanla_daily.py repair-history \
+  --date "$date_to_check" --input-by USER --repair-input "verified-history.csv"
+```
+
+`--date` 是已结束的参考事实日，修订对象属于此前 19 个已核实开放日。输入 CSV 包含 `date,name,category,raw_pct,view,read_at,evidence`，证据记录日期按钮、品种和涨幅原值。只接受已验收历史快照中的缺值行。修订按输入哈希写到独立目录，绑定原始快照哈希，重跑同证据批次自动去重。后续日报与离线回放读取原快照和修订，旧日报及其发送回执保持归档状态。
+
 ## 持久化与交付
 
 以下路径均相对仓库根目录，运行数据位于被 Git 忽略的 `data/reports/kaipanla-daily/`。
@@ -146,6 +157,7 @@ python3 scripts/automations/kaipanla_daily.py publish --date "$date_to_check" --
 | `history/before-quote-repair/` | 本次修复前的历史备份 |
 | `history/2026-11-16-rechecked.csv` | 当天分类页复核数值 |
 | `history/detail-history-rechecked.csv` | 分类独有品种的详情历史补采依据 |
+| `history/repairs/<输入哈希>/` | 批次修订原值、采集证据、基线哈希及核验回执 |
 | `日期/commodity-screening.csv` | 全量品种计算结果，保留未命中与覆盖缺口 |
 | `日期/sector-snapshots.csv`、`commodity-snapshots.csv` | 本次板块与商品页面摘录，使用时核对版本与事实日期 |
 | `日期/market-alerts.csv`、`market-alert-coverage.md` | 异动提醒原值、结构化字段、核验覆盖与历史增量边界 |

@@ -152,3 +152,44 @@ def test_replacing_batch_resolves_conflict_and_preserves_prior_evidence(tmp_path
     rc, status = submit('04-correction', new_rows, *next_args)
     assert rc == 0 and status['pending_commodity'] == []
     assert status['batch_corrections']['03-correction']['replacement'] == '04-correction'
+
+
+def test_etf_status_and_final_gate_reject_the_same_missing_price(monkeypatch):
+    import pytest
+    from automations import kaipanla_evidence as evidence
+
+    scope = '宽基、行业'
+    header = dict(date=FACT, scope=scope, read_at=TIME)
+    data = {
+        'etf-market': [
+            dict(header, bucket='涨幅高', name='科创芯片ETF', code='589190', price_raw='', change_pct_raw='6.00%', turnover_raw='1亿'),
+            dict(header, bucket='涨幅低', name='银行ETF', code='512800', price_raw='1.20', change_pct_raw='-3.00%', turnover_raw='2亿'),
+        ],
+        'etf-flows': [],
+        'etf-trends': [],
+        'etf-meta': [
+            dict(header, view='涨幅榜', boundary='分页条数:1/1 已核对到尾页'),
+            dict(header, view='11月27日申赎列', boundary='分页条数:0/0/0/0 来源未披露'),
+            dict(header, view='跨境参考', boundary='已核实来源未披露'),
+            dict(header, view='动向', boundary='今天21:00更新，连续净申购0条、连续净赎回0条，已验收尾页'),
+        ],
+    }
+    status = checkpoint.resume_status(data, {}, {}, FACT)
+    assert 'ETF:涨幅榜' in status['remaining_slots']
+    assert 'ETF:涨幅榜' not in status['completed_slots']
+    issue, = status['field_issues']
+    assert (issue['page'], issue['identity'], issue['field']) == ('涨幅榜', '589190', 'price_raw')
+    assert 'ETF:动向' in status['completed_slots']
+
+    from pathlib import Path
+    monkeypatch.setattr(evidence, 'read', lambda path: data[path.stem])
+    with pytest.raises(ValueError, match='涨幅榜/589190/price_raw'):
+        evidence.etf_gate(Path('.'), FACT, '2026-11-26', '2026-11-25')
+
+    data['etf-meta'][0]['boundary'] += ' 源缺字段 589190/price_raw_extra'
+    assert checkpoint.resume_status(data, {}, {}, FACT)['field_issues']
+    data['etf-meta'][0]['boundary'] += ' 源缺字段 589190/price_raw 价格栏源页显示--'
+    status = checkpoint.resume_status(data, {}, {}, FACT)
+    assert 'ETF:涨幅榜' in status['completed_slots']
+    assert not status['field_issues']
+    assert evidence.etf_gate(Path('.'), FACT, '2026-11-26', '2026-11-25') == 2

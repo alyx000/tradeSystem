@@ -212,6 +212,89 @@ def alert_facts(ui, fact, next_open, prior):
     return data
 
 
+def etf_flow_key(fact):
+    return f"{int(fact[5:7])}月{int(fact[8:10])}日申赎列"
+
+
+def etf_field_issues(data, fact, cross_reference=None):
+    """Validate collected ETF rows before the UI is closed, using the same rules as finalization."""
+    metadata = {row["view"]: row for row in data.get("etf-meta", [])}
+    flow_key = etf_flow_key(fact)
+    issues = []
+
+    def add(slot, page, row, field, reason):
+        identity = row.get("code") or row.get("name") or ""
+        issues.append({
+            "slot": f"ETF:{slot}", "page": page, "identity": identity, "name": row.get("name", ""),
+            "field": field, "reason": reason, "read_at": row.get("read_at", ""),
+        })
+
+    def numeric(slot, page, row, field, parse, proof, *, required=False):
+        value = row.get(field)
+        if value in {None, "", "--"}:
+            identity = row.get("code") or row.get("name")
+            marker = re.escape(f"源缺字段 {identity}/{field}")
+            explicit_gap = identity and re.search(rf"{marker}(?:[\s，。；、]|$)", proof)
+            if required or not explicit_gap:
+                add(slot, page, row, field, "缺少明确原值或已核实来源缺值证据")
+            return
+        try:
+            require(parse(value).is_finite(), "数值非有限")
+        except (ArithmeticError, ValueError):
+            add(slot, page, row, field, "原值格式不符")
+
+    def positive_int(slot, page, row, field):
+        value = row.get(field) or ""
+        if not (value.isdecimal() and int(value) > 0):
+            add(slot, page, row, field, "须核实正整数")
+
+    market_page = "涨幅榜"
+    market_proof = metadata.get(market_page, {}).get("boundary", "")
+    for row in data.get("etf-market", []):
+        if not re.fullmatch(r"\d{6}", row["code"]):
+            add(market_page, market_page, row, "code", "基金代码不完整")
+        numeric(market_page, market_page, row, "change_pct_raw", pct, market_proof, required=True)
+        numeric(market_page, market_page, row, "price_raw", Decimal, market_proof)
+        numeric(market_page, market_page, row, "turnover_raw", flow_amount, market_proof)
+
+    for row in data.get("etf-flows", []):
+        page = row["view"]
+        cross = (row["flow_date"] == cross_reference if cross_reference is not None
+                 else "跨境T+2" in row["disclosure_status"])
+        slot, fallback = ("跨境参考", "跨境参考") if cross else ("申赎列", flow_key)
+        if page not in {"方向汇总", "申购赎回"}:
+            add(slot, page, row, "view", "申赎视图未知")
+            continue
+        proof = metadata.get(page, metadata.get(fallback, {})).get("boundary", "")
+        ranked = not cross and row["bucket"] in {"净申购", "净赎回"}
+        numeric(slot, page, row, "flow_amount_raw", flow_amount, proof, required=ranked)
+        numeric(slot, page, row, "return_pct_raw", pct, proof)
+        if page == "方向汇总":
+            positive_int(slot, page, row, "constituent_count")
+            numeric(slot, page, row, "size_raw", flow_amount, proof)
+        else:
+            if not re.fullmatch(r"\d{6}", row["code"]):
+                add(slot, page, row, "code", "基金代码不完整")
+            numeric(slot, page, row, "flow_shares_raw", flow_amount, proof)
+
+    motion = metadata.get("动向", {})
+    update = None
+    if motion:
+        try:
+            update = verify_update(motion, "boundary", fact).isoformat(sep=" ", timespec="minutes")
+        except ValueError as exc:
+            add("动向", "动向", motion, "updated_at", str(exc))
+    for row in data.get("etf-trends", []):
+        if not row["updated_at"] or (update and row["updated_at"] != update):
+            add("动向", "动向", row, "updated_at", "与事实日动向表头时间不符")
+        for field in ("duration_days", "constituent_count"):
+            positive_int("动向", "动向", row, field)
+        proof = motion.get("boundary", "")
+        numeric("动向", "动向", row, "interval_change_pct_raw", pct, proof)
+        numeric("动向", "动向", row, "interval_flow_raw", flow_amount, proof)
+    return issues
+
+
 def etf_gate(ui, fact, previous, cross_reference):
     market = dated(read(ui / "etf-market.csv"), fact, "ETF行情")
     flows = dated(read(ui / "etf-flows.csv"), fact, "ETF申赎")
@@ -220,8 +303,14 @@ def etf_gate(ui, fact, previous, cross_reference):
     meta = {row["view"]: row for row in all_meta}
     require(len(all_meta) == len(meta) and all(row["boundary"] and row["scope"] for row in all_meta),
             "ETF验收边界不完整")
-    flow_key = f"{int(fact[5:7])}月{int(fact[8:10])}日申赎列"
+    flow_key = etf_flow_key(fact)
     require({"涨幅榜", "动向", "跨境参考", flow_key} <= meta.keys(), "ETF未验收行情、申赎或动向")
+    issues = etf_field_issues({"etf-market": market, "etf-flows": flows, "etf-trends": trends,
+                               "etf-meta": all_meta}, fact, cross_reference)
+    if issues:
+        details = "、".join(f'{row["page"]}/{row["identity"]}/{row["field"]} {row["reason"]}'
+                           for row in issues[:5])
+        raise ValueError(f"ETF有{len(issues)}个字段待核：{details}")
     # 旧归档按标准前五验收。短榜的元数据须含实际条数和页尾或空榜依据。
     expected_by_view = {}
     for group in ("涨幅榜", flow_key):
@@ -255,53 +344,17 @@ def etf_gate(ui, fact, previous, cross_reference):
                 require(all((value > 0 if bucket == high else value < 0) for value in numbers),
                         f"{view} {bucket} 申赎符号不一致")
     require(len({r["code"] for r in market}) == len(market), "ETF行情名单重复")
-    require(all(re.fullmatch(r"\d{6}", r["code"]) for r in market + [r for r in flows if r["view"] == "申购赎回"]),
-            "ETF代码不完整")
     require(len({(r["view"], r["flow_date"], r["code"] or r["name"]) for r in flows}) == len(flows),
             "ETF申赎记录重复")
     require(all(r["flow_date"] in {previous, cross_reference} for r in flows), "ETF申赎数据日异常")
     require(any(r["flow_date"] == cross_reference for r in flows) or "来源未披露" in meta["跨境参考"]["boundary"],
             "ETF跨境参考未核实")
 
-    def present(row, field, parse, proof):
-        value = row[field]
-        if value in {"", "--"}:
-            require(f"源缺字段 {row['code'] or row['name']}/{field}" in proof,
-                    f"ETF {row['name']} {field} 未核实")
-        else:
-            require(parse(value).is_finite(), f"ETF {row['name']} {field}格式不符")
-
-    for row in market:
-        present(row, "price_raw", Decimal, meta["涨幅榜"]["boundary"])
-        present(row, "turnover_raw", flow_amount, meta["涨幅榜"]["boundary"])
-    for row in flows:
-        fallback = "跨境参考" if row["flow_date"] == cross_reference else flow_key
-        proof = meta.get(row["view"], meta[fallback])["boundary"]
-        present(row, "flow_amount_raw", flow_amount, proof)
-        present(row, "return_pct_raw", pct, proof)
-        if row["view"] == "方向汇总":
-            require(row["constituent_count"].isdecimal() and int(row["constituent_count"]) > 0, "ETF方向基金只数未核实")
-            present(row, "size_raw", flow_amount, proof)
-        elif row["view"] == "申购赎回":
-            present(row, "flow_shares_raw", flow_amount, proof)
-        else:
-            raise ValueError("ETF申赎视图未知")
     motion = meta["动向"]["boundary"]
     require("尾" in motion, "ETF动向未验收页尾")
     require(len({r["name"] for r in trends}) == len(trends), "ETF动向记录重复")
     trend_counts = Counter(r["bucket"] for r in trends)
     require(set(trend_counts) <= {"连续净申购", "连续净赎回"}, "ETF动向出现未知分区")
-    update = verify_update(meta["动向"], "boundary", fact)
-    require(all(r["updated_at"] == update.isoformat(sep=" ", timespec="minutes") for r in trends),
-            "ETF动向更新时间未核齐")
-    for row in trends:
-        require(row["duration_days"].isdecimal() and int(row["duration_days"]) > 0 and
-                row["constituent_count"].isdecimal() and int(row["constituent_count"]) > 0,
-                "ETF动向持续天数或只数缺失")
-        # The motion table has a direction name instead of a fund code.
-        evidence = dict(row, code="")
-        present(evidence, "interval_change_pct_raw", pct, motion)
-        present(evidence, "interval_flow_raw", flow_amount, motion)
     for bucket in ("连续净申购", "连续净赎回"):
         match = re.search(rf"{bucket}(\d+)条|(\d+)条(?:{bucket}|{bucket[2:]})", motion)
         require(match and trend_counts[bucket] == int(match[1] or match[2]), f"ETF动向 {bucket} 行数未核齐")

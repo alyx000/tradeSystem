@@ -98,10 +98,15 @@ def make_handler(token: str, day: Path, fact: str, actor: str, input_format: str
                 self.response(422, result.stderr.strip()[-500:] or '批次保存失败')
                 return
             state = json.loads(result.stdout)
-            self.response(200, (
+            fields = state.get('field_issues', [])
+            message = (
                 f"批次 {batch} 已保存，已验收 {len(state['completed_slots'])} 个视图，"
-                f"待采 {len(state['remaining_slots'])} 个视图，待核商品 {len(state['pending_commodity'])} 项。"
-            ))
+                f"待补 {len(state['remaining_slots'])} 个视图，待核商品 {len(state['pending_commodity'])} 项。"
+            )
+            if fields:
+                details = "、".join(f"{row['page']}/{row['identity']}/{row['field']}" for row in fields[:5])
+                message += f" ETF 待核字段 {len(fields)} 个。{details}。"
+            self.response(200, message)
 
     return CaptureHandler
 

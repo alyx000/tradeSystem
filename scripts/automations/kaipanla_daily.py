@@ -5,12 +5,14 @@ from __future__ import annotations
 import argparse
 import csv
 import fcntl
+import hashlib
 import math
 import os
 import re
 import shutil
 import sqlite3
 import sys
+import unicodedata
 from contextlib import contextmanager
 from datetime import date, datetime
 from decimal import Decimal
@@ -22,7 +24,7 @@ from kaipanla_checkpoint import checkpoint_data, commodity_reconcile, commodity_
 from kaipanla_etf import analyze_etf
 from kaipanla_evidence import (
     ALERT_FIELDS, SHANGHAI, alert_facts, calendar, dated, digest, etf_gate, pct, read,
-    require, stock_facts, verify_manifest,
+    require, shanghai, stock_facts, verify_manifest,
 )
 
 REPO = Path(__file__).resolve().parents[2]
@@ -41,6 +43,17 @@ GATES = {
     "commodity_verification=complete", "pending_verification=0", "publication_eligible=true",
 }
 PENDING_FIELDS = ["date", "name", "category", "reason"]
+REPAIR_FIELDS = ["date", "name", "category", "raw_pct", "view", "read_at", "evidence"]
+RUNTIME_FILES = (
+    "kaipanla_capture_bridge.py", "kaipanla_checkpoint.py", "kaipanla_daily.py",
+    "kaipanla_etf.py", "kaipanla_evidence.py",
+)
+
+
+def runtime_sha256():
+    scripts = Path(__file__).resolve().parent
+    manifest = "".join(f"{name} {digest(scripts / name)}\n" for name in RUNTIME_FILES)
+    return hashlib.sha256(manifest.encode()).hexdigest()
 
 
 def now():
@@ -110,17 +123,59 @@ def earlier_etf_archives(root, days):
         yield folder
 
 
+def read_history_revision(revision, input_hash):
+    manifest = verify_manifest(revision, "artifact-sha256.txt", {"source.csv", "corrections.csv", "receipt.md"})
+    receipt = set((revision / "receipt.md").read_text(encoding="utf-8").splitlines())
+    require(manifest["source.csv"] == input_hash and f"input_sha256={input_hash}" in receipt,
+            f"历史修订输入哈希与修订编号不符：{revision.name}")
+    corrected = read(revision / "corrections.csv")
+    original = read(revision / "source.csv")
+    require(f"repaired_count={len(corrected)}" in receipt and
+            [{key: row[key] for key in REPAIR_FIELDS} for row in corrected] == original,
+            f"历史修订的原值及行数与输入不符：{revision.name}")
+    return corrected
+
+
+def history_repairs(folder):
+    """Read sealed revisions. Each repair retains the original day's snapshot and its hash."""
+    revisions = folder / "repairs"
+    repairs = {}
+    if revisions.is_dir():
+        for revision in sorted(revisions.iterdir()):
+            if not re.fullmatch(r"[0-9a-f]{64}", revision.name):
+                continue
+            for row in read_history_revision(revision, revision.name):
+                repairs.setdefault(row["date"], []).append((row, revision.name))
+    return repairs
+
+
+def repair_identity(row):
+    return row["name"], row["category"]
+
+
+def repaired_row(base, repair):
+    require(base.get("status") == "source_pct_unavailable" and not base.get("pct"),
+            f"{repair['date']} {repair['name']} 原始行不是已核实缺值")
+    detail = repair["view"] == "详情"
+    return dict(base, pct=str(pct(repair["raw_pct"])), raw_pct=repair["raw_pct"],
+                status="detail_observed" if detail else "observed",
+                source=f"开盘啦历史复核 · {repair['view']}", views=repair["view"], read_at=repair["read_at"])
+
+
 def history_inputs(root, days):
     folder = root / "history"
     receipt = (folder / "coverage-receipt.txt").read_text(encoding="utf-8")
     baseline_path = folder / "commodity-baseline-20d.csv"
     baseline = None
     snapshots, hashes = [], []
+    repairs = history_repairs(folder)
     for day in days:
         path = folder / f"{day}.csv"
         if not path.is_file():
+            require(not repairs.get(day), f"{day}修订所绑定的原始快照缺失")
             snapshots.append({})
-            hashes.append({"date": day, "sha256": "", "source": "历史快照缺失，所涉窗口留空"})
+            hashes.append({"date": day, "sha256": "", "repair_revisions": "", "repair_count": 0,
+                           "source": "历史快照缺失，所涉窗口留空"})
             continue
         sha = digest(path)
         rows = read(path)
@@ -138,9 +193,74 @@ def history_inputs(root, days):
                         f"{day}历史与已核实基线不一致")
         require(all(r["date"] == day for r in rows) and len({r["name"] for r in rows}) == len(rows),
                 f"{day}历史日期或品种身份无效")
-        snapshots.append({(r["name"], r["category"]): r for r in rows})
-        hashes.append({"date": day, "sha256": sha, "source": "开盘啦已验收历史快照"})
+        values = {repair_identity(row): row for row in rows}
+        revisions = set()
+        for repair, revision in repairs.get(day, ()):
+            require(repair["base_sha256"] == sha, f"{day}历史修订所绑定的基线哈希不符")
+            key = repair_identity(repair)
+            values[key] = repaired_row(values.get(key, {}), repair)
+            revisions.add(revision)
+        snapshots.append(values)
+        hashes.append({"date": day, "sha256": sha, "repair_revisions": "、".join(sorted(revisions)),
+                       "repair_count": len(repairs.get(day, ())), "source": "开盘啦已验收历史快照"})
     return snapshots, hashes
+
+
+def repair_history(root, input_path, fact, days, actor):
+    require(input_path and input_path.is_file(), "历史修订须提供 --repair-input CSV")
+    require(fact < now().date().isoformat(), "历史修订须使用已结束的参考事实日")
+    input_hash = digest(input_path)
+    folder = root / "history"
+    revisions = folder / "repairs"
+    output = revisions / input_hash
+    if output.exists():
+        read_history_revision(output, input_hash)
+        print(f"同样修订证据已保存 {output}")
+        return
+    rows = read(input_path)
+    require(bool(rows) and all(set(row) == set(REPAIR_FIELDS) for row in rows), "历史修订 CSV 列或记录有误")
+    identities = {(row["date"], *repair_identity(row)) for row in rows}
+    require(len(identities) == len(rows), "历史修订批次出现同日同品种重复")
+    used_days = sorted({row["date"] for row in rows})
+    require(set(used_days) <= set(days), "修订日期须为参考事实日前 19 个已核实开放日")
+    snapshots, hashes = history_inputs(root, used_days)
+    priors = dict(zip(used_days, snapshots))
+    known_hashes = {row["date"]: row["sha256"] for row in hashes}
+    updates = []
+    for row in rows:
+        day = row["date"]
+        require(all((row[field] or "").strip() for field in REPAIR_FIELDS),
+                f"{day} {row['name']} 修订缺少证据")
+        require(row["view"] in {row["category"], "精选", "详情"},
+                f"{day} {row['name']} 分类身份未核实")
+        require(re.fullmatch(r"[+-]?[0-9]+(?:\.[0-9]+)?%", row["raw_pct"]),
+                f"{day} {row['name']} 涨幅须为页面明确百分比")
+        require(shanghai(row["read_at"]).date().isoformat() > day and
+                shanghai(row["read_at"]) <= now(), "历史回读时刻未核实")
+        excerpt = unicodedata.normalize("NFKC", row["evidence"]).replace("−", "-")
+        percentages = re.findall(r"(?<![\d.+-])[+-]?[0-9]+(?:\.[0-9]+)?%", excerpt)
+        require(day in row["evidence"] and row["name"] in row["evidence"] and row["raw_pct"] in percentages,
+                f"{day} {row['name']} 证据须包含事实日、品种及完整涨幅原值")
+        repaired_row(priors[day].get(repair_identity(row), {}), row)
+        updates.append({**row, "base_sha256": known_hashes[day]})
+    require(digest(input_path) == input_hash, "修订输入在读取期间变化")
+    revisions.mkdir(exist_ok=True)
+    with TemporaryDirectory(dir=folder) as temp:
+        staged = Path(temp) / "revision"
+        staged.mkdir()
+        shutil.copy2(input_path, staged / "source.csv")
+        write_csv(staged / "corrections.csv", updates, REPAIR_FIELDS + ["base_sha256"])
+        save(staged / "receipt.md", (
+            "# 开盘啦商品历史修订\n\n"
+            f"reference_date={fact}\ninput_by={actor}\ninput_sha256={input_hash}\n"
+            f"verified_at={now().isoformat(timespec='seconds')}\nrepaired_count={len(updates)}\n"
+            f"runtime_sha256={runtime_sha256()}\n"
+            "\n来源为开盘啦历史分类或详情。只使用页面明确涨幅，援引原始快照哈希。旧日报及发送回执保留。\n"
+        ))
+        seal(staged)
+        read_history_revision(staged, input_hash)
+        staged.rename(output)
+    print(f"已保存 {len(updates)} 项历史修订 {output}")
 
 
 def compound(values):
@@ -374,6 +494,7 @@ def build_output(folder, root, source, fact, days, next_open, actor, *, mode):
     gaps = [r for r in current if r["status"] == "source_pct_unavailable"]
     coverage = {n: sum(r[f"complete_{n}"] for r in screen) for n in (5, 10, 20)}
     historical_gaps = sum(not r["sha256"] for r in history_sha)
+    repaired_count = sum(r["repair_count"] for r in history_sha)
     compare, old_total = group_comparison(root, days, groups, fact)
     mappings = mapping_index(root, days, fact, source)
     hit_maps = [mappings[r["name"]] for r in hits if r["name"] in mappings]
@@ -444,6 +565,7 @@ def build_output(folder, root, source, fact, days, next_open, actor, *, mode):
 input_by={actor}
 fact_date={fact}
 run_mode={mode}
+runtime_sha256={runtime_sha256()}
 verified_at={now().isoformat(timespec="seconds")}
 {summary}
 stock_unique={stock_total}
@@ -458,6 +580,7 @@ complete_10d={coverage[10]}
 complete_20d={coverage[20]}
 confirmed_hits={len(hits)}
 commodity_history_missing_days={historical_gaps}
+commodity_history_repair_rows={repaired_count}
 {delivery_field}
 
 商品复用{len(days)-historical_gaps}个前开放日的已验收归档。{single_view}项单入口空值有同日批量复核记录。来源未显示涨幅保留原值，跨缺口的窗口留空。
@@ -513,24 +636,28 @@ def publish(root, folder, fact, actor, db_path):
     load_dotenv(REPO / "scripts" / ".env")
     sender = DingTalkPusher()
     require(sender.initialize(), "钉钉配置尚未就绪")
-    save(attempt, f"{now().isoformat()} input_by={actor} fact_date={fact} sha256={sha} status=send_started\n")
+    runtime = runtime_sha256()
+    save(attempt, (f"{now().isoformat()} input_by={actor} fact_date={fact} sha256={sha} "
+                   f"status=send_started runtime_sha256={runtime}\n"))
     body = report.read_text(encoding="utf-8")
     accepted = sender.send_markdown(body.splitlines()[0].removeprefix("# "), body)
     if not accepted:
         raise ValueError("钉钉结果未确认，尝试已记录")
-    save(receipt, f"{now().isoformat()} input_by={actor} fact_date={fact} success=true sha256={sha}\n")
+    save(receipt, (f"{now().isoformat()} input_by={actor} fact_date={fact} success=true sha256={sha} "
+                   f"runtime_sha256={runtime}\n"))
     check_archive(folder, fact)
     print("钉钉接口确认成功")
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=["calendar", "replay", "finalize", "publish"])
+    parser.add_argument("action", choices=["calendar", "replay", "finalize", "publish", "repair-history"])
     parser.add_argument("--date", required=True)
     parser.add_argument("--input-by")
     parser.add_argument("--root", type=Path, default=REPO / "data" / "reports" / "kaipanla-daily")
     parser.add_argument("--calendar-db", type=Path, default=REPO / "data" / "trade.db")
     parser.add_argument("--output", type=Path, help="新建回放预览路径")
+    parser.add_argument("--repair-input", type=Path, help="已核验历史原值 CSV")
     args = parser.parse_args()
     args.root = args.root.resolve()
     try:
@@ -558,7 +685,9 @@ def main():
             print(f"本地预览已核验 {output / 'report.html'}")
         else:
             with archive_lock(args.root):
-                if args.action == "publish":
+                if args.action == "repair-history":
+                    repair_history(args.root, args.repair_input, fact, days, args.input_by)
+                elif args.action == "publish":
                     require(args.root == (REPO / "data" / "reports" / "kaipanla-daily").resolve(),
                             "发布仅接受正式报告目录")
                     publish(args.root, archive, fact, args.input_by, args.calendar_db)

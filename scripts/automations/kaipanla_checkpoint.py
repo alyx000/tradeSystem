@@ -18,6 +18,11 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 from zoneinfo import ZoneInfo
 
+if __package__:
+    from .kaipanla_evidence import etf_field_issues, etf_flow_key
+else:
+    from kaipanla_evidence import etf_field_issues, etf_flow_key
+
 
 FIELDS = {
     'commodity': 'date view name category raw_pct read_at',
@@ -307,12 +312,12 @@ def alert_slots(data: dict, completed: set[str]) -> set[str]:
     return slots
 
 
-def etf_slots(data: dict, completed: set[str]) -> set[str]:
+def etf_slots(data: dict, completed: set[str], fact: str) -> set[str]:
     wanted = {'涨幅榜', '申赎列', '动向', '跨境参考'}
     meta = defaultdict(list)
     for row in data.get('etf-meta', []):
         if row['scope'] and row['boundary']:
-            key = '申赎列' if row['view'].endswith('申赎列') else row['view']
+            key = '申赎列' if row['view'] == etf_flow_key(fact) else row['view']
             meta[key].append(row)
     for key in ('涨幅榜', '申赎列'):
         if len(meta[key]) != 1:
@@ -365,7 +370,9 @@ def resume_status(data: dict, receipts: dict, corrections: dict, fact: str) -> d
         completed.add('商品:分类列表')
     wanted.update(stock_slots(data, completed))
     wanted.update(alert_slots(data, completed))
-    wanted.update(etf_slots(data, completed))
+    wanted.update(etf_slots(data, completed, fact))
+    field_issues = etf_field_issues(data, fact)
+    completed.difference_update(issue['slot'] for issue in field_issues)
     return {
         'fact_date': fact,
         'recorded_batches': receipts,
@@ -373,6 +380,7 @@ def resume_status(data: dict, receipts: dict, corrections: dict, fact: str) -> d
         'completed_slots': sorted(completed),
         'remaining_slots': sorted(wanted - completed),
         'pending_commodity': pending,
+        'field_issues': field_issues,
         'single_view_verified_count': verified,
         'row_counts': {key: len(rows) for key, rows in data.items()},
     }
