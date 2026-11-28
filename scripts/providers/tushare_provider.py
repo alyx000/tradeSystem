@@ -200,6 +200,7 @@ class TushareProvider(DataProvider):
             "get_limit_step",
             "get_limit_cpt_list",
             "get_theme_member_snapshot",
+            "get_concept_catalog_snapshot",
             "get_sector_rankings",
             "get_sector_moneyflow_ths",
             "get_concept_moneyflow_ths",

@@ -295,6 +295,7 @@ def _run(registry, conn, cal, actor, root, now, clock, dry_run, interval_minutes
     if scheduled_at is not None:
         payload.update(scheduled_at=scheduled_at.isoformat(), started_at=now.isoformat())
     history_error = None
+    books = {} if scheduled_at is not None and interval_minutes == 10 and not dry_run else None
     try:
         context = previous.get('context') if previous else None
         if not context:
@@ -302,7 +303,7 @@ def _run(registry, conn, cal, actor, root, now, clock, dry_run, interval_minutes
         else:
             context = repair_formatted_anchors(context)
         payload['context'] = context
-        snapshot = capture(registry, context, now, clock=clock)
+        snapshot = capture(registry, context, now, clock=clock, **({'books': books} if books is not None else {}))
         snapshot['interval_minutes'] = interval_minutes
         captured = datetime.fromisoformat(snapshot['captured_at'])
         if captured.date().isoformat() != day or not in_sampling_session(captured):
@@ -339,6 +340,19 @@ def _run(registry, conn, cal, actor, root, now, clock, dry_run, interval_minutes
         reason = str(exc) if isinstance(exc, ValueError) else type(exc).__name__
         payload.update(status='source_failed', error=f'采样失败：{reason}', snapshot=None, analysis=None)
     path = None if dry_run else persist(root, payload)
+    book_stage_error = None
+    up_book_stage_error = None
+    if path and books:
+        try:
+            from .limit_down_book import stage_books
+            stage_books(root.parent/'limit-down-orderbook', conn, Path(path).parent, payload, cal, books)
+        except Exception as exc:
+            book_stage_error = type(exc).__name__
+        try:
+            from .limit_up_book import stage_books as stage_up_books
+            stage_up_books(root.parent/'limit-up-orderbook', conn, Path(path).parent, payload, cal, books)
+        except Exception as exc:
+            up_book_stage_error = type(exc).__name__
     delivery = _deliver(Path(path).parent, payload, clock) if push else None
     level_status = None
     summary_path, summary_error = None, None
@@ -352,7 +366,26 @@ def _run(registry, conn, cal, actor, root, now, clock, dry_run, interval_minutes
             summary_path = str(write_day_summary(root/day, actor, history_days=cal.get('history', ()), now=clock()))
         except (ValueError, OSError, KeyError, TypeError) as exc:
             summary_error = f'本地关键位合并摘要生成失败（{type(exc).__name__}）'
-    return dict(status=payload['status'], pushed=delivery == 'accepted', delivery=delivery, dry_run=dry_run,
+    orderbook = up_orderbook = None
+    if path and books is not None:
+        try:
+            from .limit_down_book import collect
+            orderbook = collect(root.parent/'limit-down-orderbook', conn, day, cal, [Path(path).parent],
+                                actor, registry=registry, books=books, now=clock())
+        except Exception as exc:
+            orderbook = dict(status='source_failed', error=type(exc).__name__)
+        if book_stage_error:
+            orderbook['early_book_archive_error'] = book_stage_error
+        try:
+            from .limit_up_book import collect as collect_up_book
+            up_orderbook = collect_up_book(root.parent/'limit-up-orderbook', conn, day, cal, [Path(path).parent],
+                                           actor, books=books, now=clock())
+        except Exception as exc:
+            up_orderbook = dict(status='source_failed', error=type(exc).__name__)
+        if up_book_stage_error:
+            up_orderbook['early_book_archive_error'] = up_book_stage_error
+    return dict(status=payload['status'], limit_down_orderbook=orderbook, limit_up_orderbook=up_orderbook,
+                pushed=delivery == 'accepted', delivery=delivery, dry_run=dry_run,
                 report_path=path, level_watch_status=level_status, level_summary_path=summary_path,
                 event_count=len((payload['analysis'] or {}).get('events', [])) if payload['analysis'] else None,
                 baseline_only=(payload['analysis'] or {}).get('baseline_only'),

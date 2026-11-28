@@ -156,7 +156,7 @@ def test_post_reuses_existing_quote_call_and_report_renders(tmp_path):
         stack.enter_context(patch('analyzers.StyleAnalyzer'))
         stack.enter_context(patch('analyzers.NodeSignalAnalyzer'))
         c = MarketCollector(reg)
-        c._get_broken_board_count = MagicMock(return_value=0)
+        c._get_broken_board_pool = MagicMock(return_value={"count": 0, "count_ex_st": 0, "stocks": []})
         c._rhythm_analyzer = MagicMock()
         c._rhythm_analyzer.analyze.return_value = []
         raw = c.collect_post_market(DAY)

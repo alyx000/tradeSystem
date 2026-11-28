@@ -56,17 +56,19 @@ class CollectResult:
 
 
 def _fetch_page(session: requests.Session, max_time: str,
-                sleep_fn: Callable[[float], None] = time_mod.sleep) -> List[dict]:
+                sleep_fn: Callable[[float], None] = time_mod.sleep, *,
+                max_retries: int = MAX_RETRIES,
+                timeout: tuple = (CONNECT_TIMEOUT, READ_TIMEOUT)) -> List[dict]:
     """取一页;重试耗尽抛 Jin10FetchError。doctor 亦复用。
 
     退避 sleep 走可注入的 sleep_fn:单测注入空函数,避免错误路径真睡 1s+2s。
     """
     params = {"channel": JIN10_CHANNEL, "vip": "1", "max_time": max_time}
     last_err: Optional[Exception] = None
-    for attempt in range(MAX_RETRIES + 1):
+    for attempt in range(max_retries + 1):
         try:
             resp = session.get(JIN10_URL, params=params, headers=JIN10_HEADERS,
-                               timeout=(CONNECT_TIMEOUT, READ_TIMEOUT))
+                               timeout=timeout)
             resp.raise_for_status()
             data = resp.json().get("data")
             if not isinstance(data, list):
@@ -74,7 +76,7 @@ def _fetch_page(session: requests.Session, max_time: str,
             return data
         except Exception as exc:  # noqa: BLE001 — 网络/JSON/schema 统一按源失败重试
             last_err = exc
-            if attempt < MAX_RETRIES:
+            if attempt < max_retries:
                 sleep_fn(attempt + 1)  # 退避 1s / 2s
     raise Jin10FetchError(str(last_err))
 
@@ -103,7 +105,9 @@ def _parse_item(item: dict) -> Optional[datetime]:
 def collect_window(window_start: datetime, window_end: datetime, *,
                    session: Optional[requests.Session] = None,
                    sleep_fn: Callable[[float], None] = time_mod.sleep,
-                   clock: Callable[[], float] = time_mod.monotonic) -> CollectResult:
+                   clock: Callable[[], float] = time_mod.monotonic,
+                   max_pages: Optional[int] = None, max_runtime_seconds: Optional[float] = None,
+                   fetch_page: Optional[Callable] = None, on_page: Optional[Callable] = None) -> CollectResult:
     """按窗口翻页采集。窗口为 naive 上海时间(与 API 返回一致)。"""
     if session is None:
         session = requests.Session()
@@ -116,16 +120,21 @@ def collect_window(window_start: datetime, window_end: datetime, *,
     error: Optional[str] = None
     started = clock()
 
-    while pages < MAX_PAGES:
-        if clock() - started > MAX_RUNTIME_SECONDS:
+    page_limit = MAX_PAGES if max_pages is None else max_pages
+    time_limit = MAX_RUNTIME_SECONDS if max_runtime_seconds is None else max_runtime_seconds
+    read_page = fetch_page or _fetch_page
+    while pages < page_limit:
+        if clock() - started > time_limit:
             status = STATUS_TRUNCATED
             break
         try:
-            page = _fetch_page(session, anchor, sleep_fn)
+            page = read_page(session, anchor, sleep_fn)
         except Jin10FetchError as exc:
             status, error = STATUS_FAILED, str(exc)
             break
         pages += 1
+        if on_page is not None:
+            on_page(page)
         raw_count += len(page)
         if not page:
             status = STATUS_STALLED  # 空页且未触底:锚点无法前进

@@ -11092,8 +11092,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         from services.review_consecutive_pool import load as load_consecutive_pool
         consecutive_pool_trend = load_consecutive_pool(daily_root, trade_db_path, args.date)
         sector_risk = load_sector_risk(daily_root, _repo_root()/"data/reports/sector-adjustment-risk", args.date)
-        from analyzers.sector_increment import load_snapshot as load_sector_increment
-        sector_increment = load_sector_increment(daily_root, args.date)
+        from analyzers.sector_increment import load_for_review as load_sector_increment
+        sector_increment = load_sector_increment(daily_root, args.date, trade_db_path)
         from analyzers.strong_stock_feedback import load_snapshot as load_strong_feedback
         strong_stock_feedback = load_strong_feedback(daily_root, args.date)
         from analyzers.strong_stock_feedback_history import build as build_strong_history
@@ -11110,8 +11110,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         theme_feedback = load_theme_feedback(daily_root, args.date, trade_db_path)
         from services.market_timing.index_repair import load_for_review as load_index_repair
         index_repair = load_index_repair(trade_db_path, args.date)
-        from services.trend_leader.review_evidence import load as load_trend_review_evidence
-        trend_review_evidence = load_trend_review_evidence(_repo_root()/"data/reports/trend-leader", args.date)
+        from services.trend_leader.review_evidence import load_for_review as load_trend_review_evidence
+        trend_review_evidence = load_trend_review_evidence(_repo_root()/"data/reports/trend-leader", args.date, trade_db_path)
         from services.review_teacher_anchors import load as load_teacher_anchors
         teacher_anchors = load_teacher_anchors(Path(args.tmp_dir) / f"teacher_anchors_{args.date}.html", args.date, trade_db_path)
         html = render_report(

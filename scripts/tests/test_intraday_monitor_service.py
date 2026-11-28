@@ -2449,6 +2449,8 @@ def test_e2e_test_uses_first_registered_rule_when_monitoring_is_reenabled(
 
 
 def test_run_all_checks_combines_receipts_and_surfaces_market_failure(monkeypatch):
+    import services.tdx_index_archive as tdx
+    monkeypatch.setattr(tdx, "run_archive", lambda *a, **kw: {"status": "outside_slot"})
     import services.index_volume_monitor as volume
     monkeypatch.setattr(volume, "run_index_volume", lambda *a, **k: {"status": "outside_slot"})
     import services.intraday_monitor.market_scan as market_scan
@@ -2485,6 +2487,8 @@ def test_run_all_checks_combines_receipts_and_surfaces_market_failure(monkeypatc
 
 
 def test_run_all_checks_keeps_matching_calendar_failure_status(monkeypatch):
+    import services.tdx_index_archive as tdx
+    monkeypatch.setattr(tdx, "run_archive", lambda *a, **kw: {"status": "outside_slot"})
     import services.index_volume_monitor as volume
     monkeypatch.setattr(volume, "run_index_volume", lambda *a, **k: {"status": "outside_slot"})
     import services.intraday_monitor.market_scan as market_scan

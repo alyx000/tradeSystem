@@ -4,6 +4,8 @@
 
 ## 盘中异动采样
 
+盘中异动的 24 个工作日槽位并行运行 A 股盘中采样、前夜题材快讯、外盘报价和宽基 ETF 的 5 分钟行情。各项使用同一上海计划时刻，保留各自实际取得时间和退出状态。涨跌停盘口复用本批新浪行情，只落观察样本。工作日正常 20:00 宏观快讯归档完成后，复用原始归档登记题材催化的可见时间。详见[技术课盘面采集说明](../../docs/course-market-collection.md)。
+
 `com.alyx.tradesystem.intraday-events.plist` 调用同目录的 `intraday-events-runner.sh`。系统时区使用上海时间，周一至周五每半场 12 槽。runner 传入计划时点，采样 CLI 核验当日 SSE 日历。使用本机 LaunchAgent 时停用其他自动采样入口，登录用户的 Mac 在采样时保持唤醒。
 
 部署时核对 plist 中的仓库路径以及 runner 的执行权限。可用 `plutil -lint deploy/launchd/com.alyx.tradesystem.intraday-events.plist` 和 `bash -n deploy/launchd/intraday-events-runner.sh` 检查模板。已安装状态用 `launchctl print gui/$(id -u)/com.alyx.tradesystem.intraday-events` 查看。实际采样查当日批次回执，实际发送查投递回执，runner 日志在 `/tmp/tradesystem-intraday-events.log`。见[采样、关键位与提醒口径](../../docs/intraday-events.md)。
@@ -102,6 +104,8 @@ rm ~/Library/LaunchAgents/com.alyx.tradesystem.recommend-*.plist
 ```
 
 ## 今日盘前/盘后定时（工作日 07:00 / 20:00）
+
+工作日 20:00 的 `today-runner.sh post` 先运行常规盘后采集，归档炸板明细和前夜重点题材的同花顺成分。随后依次运行核心股全天分钟、09:25 最终竞价、题材盘中扩散、外盘三品种回放、宽基 ETF 分钟回放、境内股指期货和银行券商盘中对照。各步使用启动时的上海日期，分别记录退出状态，前一步失败后继续运行，最后返回首个非零状态。核心股分钟任务会再试严格上一开放日已留档的缺口。各项的来源、日档与重试命令见[技术课采集说明](../../docs/course-market-collection.md)。
 
 行业推荐之外，独立挂载工作日盘前/盘后任务。两者共用同一 `~/.config/tradeSystem.env`、同一钉钉 webhook。
 

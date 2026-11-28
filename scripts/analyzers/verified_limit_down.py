@@ -28,7 +28,7 @@ def _rows(items, day, *, dated=True, allow_empty=False):
     return result
 
 
-def verified_list(day, *, quotes, limits, universe, st, suspended):
+def aligned(day, *, quotes, limits, universe, st, suspended):
     date = day.replace('-', '')
     quotes = _rows(quotes, date)
     if not isinstance(limits, list):
@@ -57,6 +57,12 @@ def verified_list(day, *, quotes, limits, universe, st, suspended):
     if any(c in quotes and r.get('suspend_type') == 'S' and not r.get('suspend_timing')
            for c, r in suspended.items()):
         raise ValueError('全天停牌股票存在当日行情')
+    return quotes, limits, active, st
+
+
+def closed_list(day, aligned_inputs):
+    quotes, limits, active, st = aligned_inputs
+    missing = set(active) - set(quotes)
     stocks = []
     for code, quote in sorted(quotes.items()):
         name = active[code].get('name')
@@ -77,17 +83,44 @@ def verified_list(day, *, quotes, limits, universe, st, suspended):
                 coverage=dict(active=len(active), quoted=len(quotes), suspended_without_quote=len(missing)))
 
 
-def collect(registry, day, *, quotes=None, st=None):
+def verified_list(day, **inputs):
+    return closed_list(day, aligned(day, **inputs))
+
+
+def _inputs(registry, day, quotes, st):
     supplied = dict(quotes=quotes, st=st)
+    inputs, sources = {}, {}
+    for key, method in METHODS.items():
+        response = supplied.get(key)
+        if response is None:
+            response = registry.call(method, day)
+        if not response.success:
+            raise ValueError(f'{method} 来源失败')
+        inputs[key] = response.data
+        sources[key] = response.source
+    return inputs, sources
+
+
+def collect(registry, day, *, quotes=None, st=None):
     try:
-        inputs = {}
-        for key, method in METHODS.items():
-            response = supplied.get(key)
-            if response is None:
-                response = registry.call(method, day)
-            if not response.success:
-                raise ValueError(f'{method} 来源失败')
-            inputs[key] = response.data
+        inputs, _ = _inputs(registry, day, quotes, st)
         return verified_list(day, **inputs)
     except (ValueError, TypeError, KeyError, AttributeError, RuntimeError, OSError) as exc:
         return dict(_source=SOURCE, trade_date=day, status='source_failed', error=str(exc))
+
+
+def collect_session(registry, day, *, quotes, st, db_path):
+    """同一批五项原始请求供收盘跌停和盘中曾触跌停两个独立结果消费。"""
+    from analyzers import limit_down_touch as touch
+    try:
+        inputs, sources = _inputs(registry, day, quotes, st)
+        aligned_inputs = aligned(day, **inputs)
+        closed = closed_list(day, aligned_inputs)
+    except (ValueError, TypeError, KeyError, AttributeError, RuntimeError, OSError) as exc:
+        return (dict(_source=SOURCE, trade_date=day, status='source_failed', error=str(exc)),
+                touch.unavailable(day, str(exc)))
+    try:
+        touch.closed_session(day, db_path, same_day=True)
+        return closed, touch.calculate(day, aligned_inputs, closed, sources)
+    except (ValueError, TypeError, KeyError, AttributeError, RuntimeError, OSError) as exc:
+        return closed, touch.unavailable(day, str(exc))

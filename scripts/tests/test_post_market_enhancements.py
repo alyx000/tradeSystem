@@ -106,7 +106,7 @@ class TestSealBrokenRate:
         with tempfile.TemporaryDirectory() as tmp:
             with patch("collectors.market.BASE_DIR", Path(tmp)):
                 collector = MarketCollector(reg)
-                collector._get_broken_board_count = MagicMock(return_value=3)
+                collector._get_broken_board_pool = MagicMock(return_value={"count": 3, "count_ex_st": 3, "stocks": []})
                 collector._rhythm_analyzer = MagicMock()
                 collector._rhythm_analyzer.load_main_theme_names = MagicMock(return_value=[])
                 collector._rhythm_analyzer.analyze = MagicMock(return_value=[])
@@ -122,7 +122,7 @@ class TestSealBrokenRate:
         """无炸板时封板率 100%"""
         reg = _mock_registry()
         limit_data = {"count": 5, "stocks": [
-            {"code": f"0000{i}.SZ", "name": f"股票{i}", "pct_chg": 10.0,
+            {"code": f"{i + 1:06d}.SZ", "name": f"股票{i}", "pct_chg": 10.0,
              "limit_times": 1, "first_time": "93000", "last_time": "93000", "close": 10.0}
             for i in range(5)
         ]}
@@ -139,7 +139,7 @@ class TestSealBrokenRate:
         with tempfile.TemporaryDirectory() as tmp:
             with patch("collectors.market.BASE_DIR", Path(tmp)):
                 collector = MarketCollector(reg)
-                collector._get_broken_board_count = MagicMock(return_value=0)
+                collector._get_broken_board_pool = MagicMock(return_value={"count": 0, "count_ex_st": 0, "stocks": []})
                 collector._rhythm_analyzer = MagicMock()
                 collector._rhythm_analyzer.load_main_theme_names = MagicMock(return_value=[])
                 collector._rhythm_analyzer.analyze = MagicMock(return_value=[])
@@ -218,7 +218,7 @@ class TestLimitTypeSplit:
         with tempfile.TemporaryDirectory() as tmp:
             with patch("collectors.market.BASE_DIR", Path(tmp)):
                 collector = MarketCollector(reg)
-                collector._get_broken_board_count = MagicMock(return_value=0)
+                collector._get_broken_board_pool = MagicMock(return_value={"count": 0, "count_ex_st": 0, "stocks": []})
                 collector._rhythm_analyzer = MagicMock()
                 collector._rhythm_analyzer.load_main_theme_names = MagicMock(return_value=[])
                 collector._rhythm_analyzer.analyze = MagicMock(return_value=[])
@@ -1762,7 +1762,7 @@ class TestIndustryRankingAggregation:
         with tempfile.TemporaryDirectory() as tmp:
             with patch("collectors.market.BASE_DIR", Path(tmp)):
                 collector = MarketCollector(reg)
-                collector._get_broken_board_count = MagicMock(return_value=0)
+                collector._get_broken_board_pool = MagicMock(return_value={"count": 0, "count_ex_st": 0, "stocks": []})
                 collector._rhythm_analyzer = MagicMock()
                 collector._rhythm_analyzer.load_main_theme_names = MagicMock(return_value=[])
                 collector._rhythm_analyzer.analyze = MagicMock(return_value=[])

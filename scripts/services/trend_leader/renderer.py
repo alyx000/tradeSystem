@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import sqlite3
 
-from services.trend_leader import pool, limit_pullback
+from services.trend_leader import pool, limit_pullback, volume_cluster
 
 # 在池信号 → 展示标签（顺序即列顺序）。
 # 红线：只描述客观技术状态，禁用可操作买卖动作词（低吸/买点/了结/见顶/止盈…）；
@@ -263,6 +263,8 @@ def render_daily(conn: sqlite3.Connection, summary: dict) -> str:
             lines.append(f"- 个股行情缺失：{'、'.join(data_errors)}（未推进/未退池，待补采）")
         lines.append("")
 
+    if "volume_cluster" in summary:
+        lines += volume_cluster.render_markdown(summary["volume_cluster"], date)
     if "limit_pullback" in summary:
         evidence_lines, _ = limit_pullback.lines(summary["limit_pullback"], date)
         lines += ["## " + evidence_lines[0], "", *evidence_lines[1:], ""]

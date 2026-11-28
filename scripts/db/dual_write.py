@@ -322,16 +322,20 @@ def _extract_market_row(date_str: str, envelope: dict) -> dict:
         limit_up_count = emotion.get("limit_up_count")
 
     limit_down_count = None if ld_bad else _first_non_none(limit_down.get("count_ex_st"), limit_down.get("count"))
-    if limit_down_count is None:
+    if limit_down_count is None and limit_down.get("_source") != "tushare:daily+stk_limit":
         limit_down_count = emotion.get("limit_down_count")
 
-    seal_rate = None if lu_bad else _first_non_none(limit_up.get("seal_rate_pct_ex_st"), limit_up.get("seal_rate_pct"))
-    if seal_rate is None:
-        seal_rate = emotion.get("seal_rate")
-
-    broken_rate = None if lu_bad else _first_non_none(limit_up.get("broken_rate_pct_ex_st"), limit_up.get("broken_rate_pct"))
-    if broken_rate is None:
-        broken_rate = emotion.get("broken_rate")
+    if "broken_board_pool" in source:
+        # 逐股池已声明新口径：非ST分母未核齐时保留空值，禁止借用情绪栏/含ST百分比。
+        seal_rate = None if lu_bad else limit_up.get("seal_rate_pct_ex_st")
+        broken_rate = None if lu_bad else limit_up.get("broken_rate_pct_ex_st")
+    else:
+        seal_rate = None if lu_bad else _first_non_none(limit_up.get("seal_rate_pct_ex_st"), limit_up.get("seal_rate_pct"))
+        if seal_rate is None:
+            seal_rate = emotion.get("seal_rate")
+        broken_rate = None if lu_bad else _first_non_none(limit_up.get("broken_rate_pct_ex_st"), limit_up.get("broken_rate_pct"))
+        if broken_rate is None:
+            broken_rate = emotion.get("broken_rate")
 
     highest_board = None if lu_bad else _first_non_none(limit_up.get("highest_board_ex_st"), limit_up.get("highest_board"))
     if highest_board is None:

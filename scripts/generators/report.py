@@ -758,7 +758,15 @@ class ReportGenerator:
             if seal is not None:
                 lines.append(
                     f"- 封板率: **{seal}%**　炸板: {broken}家 ({lu.get('broken_rate_pct', 0)}%)"
+                    + ("（来源榜单范围）" if lu.get("seal_rate_scope") else "")
                 )
+            elif "broken_board_pool" in raw_data:
+                block = raw_data["broken_board_pool"]
+                reason = lu.get("seal_rate_gap") or "、".join(block.get("gaps") or []) or "无可比的触板样本"
+                count_text = f"{broken}家" if broken is not None else "待核"
+                rate = lu.get("seal_rate_pct_ex_st")
+                filtered = f"；剔ST封板率 {rate}%（炸板 {lu.get('broken_count_ex_st')}家）" if rate is not None else ""
+                lines.append(f"- 炸板: {count_text}　封板率待核（{reason}）{filtered}")
             # 用 .get(key, fallback) 而非 `or`：board_ladder_ex_st 为空 dict（当日连板全是 ST）时
             # 代表"无 ex-ST 连板"，应渲染空梯队，绝不能 `or` 回退到含 ST 的 board_ladder（否则 ST 又冒出来）。
             # 仅当老归档完全缺该字段时才回退含 ST 版本。
@@ -775,7 +783,19 @@ class ReportGenerator:
                 ]
                 lines.append(f"- 涨停行业分布: {', '.join(parts)}")
         if "count" in ld:
-            lines.append(f"- 跌停: **{ld['count']}家**")
+            if ld.get('_source') == 'tushare:daily+stk_limit':
+                lines.append(f"- 跌停（非ST）: **{ld['count_ex_st']}家**，含ST共{ld['count']}家")
+            else:
+                lines.append(f"- 跌停: **{ld['count']}家**")
+        elif ld.get('error'):
+            lines.append("- 跌停家数：待核")
+        if "limit_down_touch" in raw_data:
+            from analyzers import limit_down_touch
+            try:
+                touch = limit_down_touch.verified(raw_data["limit_down_touch"], date)
+                lines.append("- [事实] " + limit_down_touch.summary(touch))
+            except (ValueError, TypeError, KeyError, IndexError) as exc:
+                lines.append(f"- [事实] 非ST跌停触价待核（{exc}）。")
         if "consecutive_limit_down" in raw_data:
             from analyzers.consecutive_limit_down import render as render_consecutive_down
             lines.extend(render_consecutive_down(raw_data["consecutive_limit_down"]))

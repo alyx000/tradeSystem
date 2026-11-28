@@ -14,6 +14,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 import yaml
 
+from analyzers import broken_board_pool
 from analyzers.sector_rhythm import SectorRhythmAnalyzer
 from providers.registry import ProviderRegistry
 
@@ -843,6 +844,8 @@ class MarketCollector:
             result["total_volume"] = {"error": vol.error}
 
         # 3. 涨停数据 + 封板率/炸板率 + 按涨幅分类
+        broken_pool = self._get_broken_board_pool(date)
+        result[broken_board_pool.KEY] = broken_pool
         limit_up = self.registry.call("get_limit_up_list", date)
         if limit_up.success:
             data = limit_up.data
@@ -874,17 +877,6 @@ class MarketCollector:
                 k: [s["name"] for s in v] for k, v in sorted(board_ladder.items(), reverse=True)
             }
 
-            # 封板率/炸板率：涨停数 vs（涨停数 + 炸板数）
-            broken_count = self._get_broken_board_count(date)
-            total_touched = len(stocks) + broken_count
-            data["broken_count"] = broken_count
-            if total_touched > 0:
-                data["seal_rate_pct"] = round(len(stocks) / total_touched * 100, 1)
-                data["broken_rate_pct"] = round(broken_count / total_touched * 100, 1)
-            else:
-                data["seal_rate_pct"] = 0
-                data["broken_rate_pct"] = 0
-
             # 排除 ST 后的统计
             stocks_ex_st = [s for s in stocks if not _is_st_stock(s.get("name", ""))]
             board_ladder_ex_st: dict[int, list] = {}
@@ -902,18 +894,12 @@ class MarketCollector:
                 k: [s.get("name", "") for s in v] for k, v in sorted(board_ladder_ex_st.items(), reverse=True)
             }
 
-            total_touched_ex_st = len(stocks_ex_st) + broken_count
-            if total_touched_ex_st > 0:
-                data["seal_rate_pct_ex_st"] = round(len(stocks_ex_st) / total_touched_ex_st * 100, 1)
-                data["broken_rate_pct_ex_st"] = round(broken_count / total_touched_ex_st * 100, 1)
-            else:
-                data["seal_rate_pct_ex_st"] = 0
-                data["broken_rate_pct_ex_st"] = 0
+            broken_board_pool.apply_rates(data, broken_pool, stocks_ex_st, sealed_source=limit_up.source)
 
             # 涨停行业分布：按东财所属行业聚合（count 降序、同 count 按最高连板降序），过滤空/非字符串行业。
             # 含 ST 与 _ex_st 两套口径均入库，供报告/下游按各自指标选用：
             # 报告「连板」类指标（连板数/最高连板/连板梯队/连板天梯）用 ex-ST，
-            # 涨停家数/首板细分/封板率/涨停行业分布仍用含 ST。
+            # 涨停家数、首板细分和涨停行业分布沿用各自源榜；封板率以已核验的同范围分母计算。
             data["industry_ranking"] = self._aggregate_limit_up_industry(stocks)
             data["industry_ranking_ex_st"] = self._aggregate_limit_up_industry(stocks_ex_st)
 
@@ -1041,10 +1027,14 @@ class MarketCollector:
             shared_daily_quotes = self.registry.call("get_market_daily_quotes", date)
         except Exception as exc:
             shared_daily_quotes = DataResult(data=None, source="", error=f"全市场日线调用异常:{exc}")
-        from analyzers.verified_limit_down import collect as verified_down
-        result["limit_down"] = verified_down(
-            self.registry, date, quotes=shared_daily_quotes, st=stock_st_result)
+        from analyzers.verified_limit_down import collect_session
+        result["limit_down"], result["limit_down_touch"] = collect_session(
+            self.registry, date, quotes=shared_daily_quotes, st=stock_st_result,
+            db_path=BASE_DIR / "data" / "trade.db")
+        from analyzers.limit_down_touch import retain_previous
+        result["limit_down_touch"] = retain_previous(result["limit_down_touch"], BASE_DIR / "daily")
         self._enrich_limit_down_structure(result, date)
+
         # 10c. 低价股赚钱效应：收盘价≤10元，分≤5元/5～10元；只做客观横截面统计。
         from analyzers.consecutive_pool import collect as collect_consecutive_pool
         result['consecutive_pool'] = collect_consecutive_pool(
@@ -1102,6 +1092,9 @@ class MarketCollector:
         # 题材启动只展示事实证据；当前成员不回填历史，失败独立隔离。
         from analyzers.theme_launch import collect as collect_theme_launch
         result['theme_launch'] = collect_theme_launch(self.registry, date, result, daily_dir=BASE_DIR / 'daily')
+        from analyzers.tracked_theme_members import KEY as tracked_theme_key, collect as collect_tracked_themes
+        result[tracked_theme_key] = collect_tracked_themes(
+            self.registry, date, result, daily_dir=BASE_DIR / 'daily')
 
         # 11. 指数均线
         self._compute_index_ma(result, date)
@@ -1283,15 +1276,12 @@ class MarketCollector:
         # 第三键 industry 名做确定性 tie-break：同家数同最高板时顺序稳定，避免报告抖动
         return sorted(agg.values(), key=lambda x: (-x["count"], -x["max_board"], x["industry"]))
 
-    def _get_broken_board_count(self, date: str) -> int:
-        """获取炸板数量（曾触及涨停但收盘未封住的股票数）"""
-        try:
-            import akshare as ak
-            df = ak.stock_zt_pool_zbgc_em(date=date.replace("-", ""))
-            return len(df) if df is not None and not df.empty else 0
-        except Exception as e:
-            logger.debug(f"炸板数据获取失败: {e}")
-            return 0
+    def _get_broken_board_pool(self, date: str) -> dict:
+        attempt = broken_board_pool.collect(date)
+        if attempt["status"] == "complete":
+            return attempt
+        old = broken_board_pool.archived_post(BASE_DIR, date)
+        return broken_board_pool.prefer_verified(attempt, old.get(broken_board_pool.KEY))
 
     def _enrich_limit_down_structure(self, result: dict, date: str) -> None:
         """连续跌停统计由严格日历驱动；缺失不视为单日或零。"""

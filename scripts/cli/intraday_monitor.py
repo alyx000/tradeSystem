@@ -269,12 +269,14 @@ def handle_command(config: dict, args: argparse.Namespace) -> int:
             )
     else:
         from services.index_volume_monitor.rules import DEFAULT_INDEX_VOLUME_RULES
+        from services.tdx_index_archive import NAMES as TDX_ARCHIVED_INDICES
 
         input_by = getattr(args, "input_by", "USER")
         if not isinstance(input_by, str) or not input_by.strip():
             result = {"status": "invalid_request", "events": [], "errors": ["--input-by不能为空"], "pushed": False}
         else:
-            registry = setup_providers(config) if (DEFAULT_RULES or DEFAULT_MARKET_SCAN_RULES or DEFAULT_INDEX_VOLUME_RULES) else None
+            enabled = any((DEFAULT_RULES, DEFAULT_MARKET_SCAN_RULES, DEFAULT_INDEX_VOLUME_RULES, TDX_ARCHIVED_INDICES))
+            registry = setup_providers(config) if enabled else None
             result = run_all_checks(registry, dry_run=bool(args.dry_run), input_by=input_by.strip())
     if args.json:
         print(json.dumps(result, ensure_ascii=False, indent=2))

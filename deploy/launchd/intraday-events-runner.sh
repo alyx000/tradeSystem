@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
-cd /Users/alyx/tradeSystem
+cd "$(dirname "${BASH_SOURCE[0]}")/../.."
 
 read -r day weekday hour minute <<< "$(TZ=Asia/Shanghai /bin/date '+%F %u %H %M')"
 slot_minute=$((10#$minute / 10 * 10 + 2))
@@ -17,4 +17,25 @@ if [ -f "$HOME/.config/tradeSystem.env" ]; then
 fi
 set +a
 echo "[intraday-events] 计划 $planned；DingTalk token=${DINGTALK_WEBHOOK_TOKEN:+set} secret=${DINGTALK_WEBHOOK_SECRET:+set}"
-exec /usr/bin/python3 scripts/tools/intraday_events.py --interval-minutes 10 --push --input-by launchd --scheduled-at "$planned"
+# 同槽采样并行发起，各自记录实际收到行情的时间。
+/usr/bin/python3 scripts/tools/intraday_events.py --interval-minutes 10 --push --input-by launchd --scheduled-at "$planned" &
+market_pid=$!
+/usr/bin/python3 scripts/tools/theme_catalysts.py --scheduled-at "$planned" --input-by launchd &
+catalyst_pid=$!
+/usr/bin/python3 scripts/tools/course_cross_market.py --scheduled-at "$planned" --input-by launchd &
+cross_market_pid=$!
+/usr/bin/python3 scripts/tools/broad_etf_minutes.py --scheduled-at "$planned" --input-by launchd &
+etf_pid=$!
+
+market_exit=0
+catalyst_exit=0
+cross_market_exit=0
+etf_exit=0
+wait "$market_pid" || market_exit=$?
+wait "$catalyst_pid" || catalyst_exit=$?
+wait "$cross_market_pid" || cross_market_exit=$?
+wait "$etf_pid" || etf_exit=$?
+echo "[intraday-events] slot=$planned market=$market_exit catalysts=$catalyst_exit cross_market=$cross_market_exit broad_etf=$etf_exit"
+for status in "$market_exit" "$catalyst_exit" "$cross_market_exit" "$etf_exit"; do
+    if [ "$status" -ne 0 ]; then exit "$status"; fi
+done

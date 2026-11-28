@@ -213,18 +213,28 @@ def render(block):
 
 
 def render_html(block, day):
-    block = validate(block, day)
+    from services.review_calendar import review_fact_date
+    from services.bank_broker_intraday import render as render_bank_broker
+    intraday = (block or {}).get("bank_broker_intraday") if isinstance(block, dict) else None
+    try:
+        fact_day = review_fact_date({**(block or {}), "date": (block or {}).get("trade_date")}, day)
+        block = validate(block, fact_day)
+    except (ValueError, TypeError, AttributeError):
+        fact_day = day
+        block = failed(day, "板块增量复盘日期证据无效，不跨日猜测")
     body = f'<p>状态：{escape(block["status"])}；{escape(DEFINITION)}</p>'
+    if fact_day != day:
+        body += f'<p>[事实] {escape(day)}休市；展示最近开放日{escape(fact_day)}历史，非当日新增。</p>'
     body += ''.join(f'<p>缺口：{escape(g)}</p>' for g in block.get("gaps", []))
     if block["status"] in {"complete", "partial"}:
         expanded_table = len(block["rows"]) > 10
-        body += (f'<p>{escape(block["previous_date"])} → {escape(day)}；'
+        body += (f'<p>{escape(block["previous_date"])} → {escape(fact_day)}；'
                  f'市场增额{block["market"]["delta_yi"]:+.2f}亿元；净增额不足昨日市场额0.5%时贡献率未计算。</p>'
                  )
         if expanded_table:
             top = '；'.join(f'{escape(r["industry"])} {r["delta_yi"]:+.2f}亿' for r in block["rows"][:3])
             body += (f'<p>成交额增额排序前三：{top}。</p>'
-                     f'<details class="evidence" data-as-of="{escape(day)}" data-items="{len(block["rows"])}">'
+                     f'<details class="evidence" data-as-of="{escape(fact_day)}" data-items="{len(block["rows"])}">'
                      f'<summary>全量{len(block["rows"])}个行业增额证据</summary>')
         body += ('<div style="overflow-x:auto"><table><thead><tr><th>申万二级</th><th>成交额(亿)</th>'
                  '<th>增额(亿)</th><th>份额变化(pp)</th><th>净增额贡献(%)</th></tr></thead><tbody>')
@@ -235,8 +245,10 @@ def render_html(block, day):
         body += '</tbody></table></div>'
         if expanded_table:
             body += '</details>'
-    return (f'<section data-sector-increment="{escape(day)}"><h3>板块增量归因 [事实·计算]</h3>{body}</section>',
-            block.get("gaps", []) if block.get("status") != "complete" else [])
+    contrast, contrast_gaps = render_bank_broker(intraday, fact_day)
+    gaps = block.get("gaps", []) if block.get("status") != "complete" else []
+    return (f'<section data-sector-increment="{escape(day)}" data-as-of="{escape(fact_day)}"><h3>板块增量归因 [事实·计算]</h3>{body}{contrast}</section>',
+            gaps + contrast_gaps)
 
 
 def validate(block, day):
@@ -288,5 +300,23 @@ def load_snapshot(daily_root, day):
         if not isinstance(envelope, dict) or str(envelope.get("date")) != day:
             raise ValueError("盘后信封日期错位")
         return validate(envelope.get("raw_data", {}).get("sector_increment"), day)
+    except FileNotFoundError:
+        return failed(day, f"{day}盘后归档缺失，板块增量未计算")
     except (OSError, ValueError, TypeError, AttributeError, yaml.YAMLError) as exc:
         return failed(day, exc)
+
+
+def load_for_review(daily_root, report_date, db_path):
+    """仅在完整日历确认休市时读取最近开放日；开放日缺源不得回退。"""
+    import sqlite3
+    from services.review_calendar import load_review_context
+    from services.bank_broker_intraday import FOLDER, load_review
+    try:
+        fact_day, context = load_review_context(db_path, report_date)
+        result = load_snapshot(daily_root, fact_day)
+        reports = Path(db_path).parent / "reports"
+        if (reports / FOLDER / (fact_day + ".json")).exists() or (reports / "intraday-events" / fact_day).is_dir():
+            result["bank_broker_intraday"] = load_review(reports, fact_day)
+        return {**result, "review_context": context} if context is not None else result
+    except (OSError, sqlite3.Error, ValueError, TypeError):
+        return failed(report_date, "板块增量复盘日历未核验，不跨日猜测")

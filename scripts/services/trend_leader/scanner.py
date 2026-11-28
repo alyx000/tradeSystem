@@ -26,10 +26,13 @@ from services.concept_tags import (
 from services.trend_leader import constants as C
 from services.trend_leader import detectors as D
 from services.trend_leader import mainline_llm
-from services.trend_leader import pool, research_evidence, observations, limit_pullback
+from services.trend_leader import pool, research_evidence, observations, limit_pullback, volume_cluster
 from services.volume_concentration import repo as vc_repo
 from services.volume_concentration.aggregator import UNCLASSIFIED
 from utils.price_limit import is_dual_board
+
+
+CLUSTER_LOOKBACK_DAYS = 400
 
 
 def _lookback_start(date: str) -> str:
@@ -104,11 +107,26 @@ def _main_sectors(
     }
 
 
-def _bars(registry, code: str, start: str, date: str, *, observation_cache=None, quote_sources=None) -> list[dict]:
-    r = registry.call("get_stock_daily_range", code, start, date)
-    bars = r.data if getattr(r, "success", False) and isinstance(r.data, list) else []
+def _bars(registry, code: str, start: str, date: str, *, observation_cache=None,
+          quote_sources=None, cluster_cache=None) -> list[dict]:
+    # 门内候选和原在池对象共享长窗。原入退池检测器仍只消费原短窗。
+    requested_start = start
+    if cluster_cache is not None:
+        history_start = datetime.strptime(date, "%Y-%m-%d") - timedelta(days=CLUSTER_LOOKBACK_DAYS)
+        requested_start = min(start, history_start.date().isoformat())
+    result = registry.call("get_stock_daily_range", code, requested_start, date)
+    bars = result.data if getattr(result, "success", False) and isinstance(result.data, list) else []
+    if cluster_cache is not None:
+        cluster_cache[code] = dict(code=code, trade_date=date, error="本次长窗行情未核验")
+        if bars:
+            cluster_cache[code] = dict(start=requested_start, bars=bars, quote_source=getattr(result, "source", None))
+        elif requested_start != start:
+            # 长窗源失败，既有信号仍可使用原请求范围重试。
+            result = registry.call("get_stock_daily_range", code, start, date)
+            bars = result.data if getattr(result, "success", False) and isinstance(result.data, list) else []
+        bars = [row for row in bars if isinstance(row, dict) and (row.get("trade_date") or "") >= start]
     if quote_sources is not None:
-        quote_sources[code] = getattr(r, "source", None)
+        quote_sources[code] = getattr(result, "source", None)
     if observation_cache is not None:
         observation_cache[code] = bars
     return bars
@@ -165,6 +183,7 @@ def run_daily(conn: sqlite3.Connection, registry, date: str, *,
     main_sectors = set(main_sector_list)
     start = range_start or _lookback_start(date)
     observation_cache = {}
+    cluster_history, cluster_candidates, cluster_quotes = {}, {}, {}
     limit_candidates, limit_cache, limit_quote_sources = [], {}, {}
 
     lu = registry.call("get_limit_up_list", date)
@@ -303,7 +322,10 @@ def run_daily(conn: sqlite3.Connection, registry, date: str, *,
         summary["candidates"] += 1
         if bare in limit_bares:
             limit_candidates.append(dict(code=bare, name=st.get("name") or sw_entry.get("name", "")))
-        bars = _bars(registry, bare, start, date, observation_cache=observation_cache, quote_sources=limit_quote_sources)
+        cluster_candidates[bare] = dict(code=bare, name=st.get("name") or sw_entry.get("name") or "名称待核验",
+                                        industry=sw_l2)
+        bars = _bars(registry, bare, start, date, observation_cache=observation_cache,
+                     quote_sources=limit_quote_sources, cluster_cache=cluster_history)
         if not bars:                            # 行情拉取失败/空：记错误，不误判为"无信号"
             summary["data_errors"].append(bare)
             continue
@@ -328,9 +350,12 @@ def run_daily(conn: sqlite3.Connection, registry, date: str, *,
         code = r["code"]
         if code in entered_codes:
             continue
+        cluster_candidates[code] = dict(code=code, name=r.get("name") or "名称待核验",
+                                        industry=(sw_by_bare.get(code) or {}).get("sw_l2", UNCLASSIFIED))
         # 同一候选在维护阶段可能重取行情；来源必须随这批行情一起更新。
         bars = _bars(registry, code, start, date, observation_cache=observation_cache,
-                     quote_sources=limit_quote_sources if code in limit_quote_sources else None)
+                     quote_sources=limit_quote_sources if code in limit_quote_sources else None,
+                     cluster_cache=cluster_history)
         if not bars:                            # 行情缺失：不 touch 推进 last_seen/days、不退池，记错误
             summary["data_errors"].append(code)
             continue
@@ -371,10 +396,20 @@ def run_daily(conn: sqlite3.Connection, registry, date: str, *,
         raw_bars = observation_cache.get(code, [])
         adjusted = []
         observation = None
-        # 沿用 main 的既有日线窗口，不引入尚未发布的均线扩窗；不足30根明确缺失。
-        # 仅为原池转换完成后的在池对象追加复权取数，不改变准入或退出检测器输入。
+        # 保持原有在池证据请求时序；同一份复权同时给长窗观察。
         if raw_bars:
-            factors = registry.call("get_stock_adj_factor_range", code, start, date)
+            history = cluster_history.get(code, {})
+            full_window = (history.get("quote_source") == "tushare:daily" and
+                           len(history.get("bars", [])) >= volume_cluster.PARAMETERS["history_bars"])
+            factor_start = history["start"] if full_window else start
+            factors = registry.call("get_stock_adj_factor_range", code, factor_start, date)
+            if "bars" in history:
+                cluster_quotes[code] = volume_cluster.capture(
+                    history["bars"], factors.data if getattr(factors, "success", False) else None,
+                    code, date, history["quote_source"], getattr(factors, "source", None))
+            if factor_start < start and not getattr(factors, "success", False):
+                # 堆量因子长窗失败时，原先的短窗观察按原请求范围降级。
+                factors = registry.call("get_stock_adj_factor_range", code, start, date)
             if code in limit_quote_sources:
                 limit_cache[code] = limit_pullback.capture(
                     raw_bars, factors.data if getattr(factors, "success", False) else None, code, date,
@@ -403,6 +438,20 @@ def run_daily(conn: sqlite3.Connection, registry, date: str, *,
             pool.touch(conn, row["code"], date=date, signal_json=signal)
     summary["limit_pullback"] = limit_pullback.collect(
         conn, date, lu, limit_candidates, limit_cache, source_errors=summary["source_errors"])
+    # 未入池和当日退池者只在本次长窗足够且来源可核验时补齐因子，避免重复请求或伪造阴性。
+    for code, history in cluster_history.items():
+        if code in cluster_quotes:
+            continue
+        if history.get("quote_source") != "tushare:daily" or len(history["bars"]) < volume_cluster.PARAMETERS["history_bars"]:
+            cluster_quotes[code] = dict(code=code, trade_date=date, error="可核验的长窗行情不足")
+            continue
+        factors = registry.call("get_stock_adj_factor_range", code, history["start"], date)
+        cluster_quotes[code] = volume_cluster.capture(
+            history["bars"], factors.data if getattr(factors, "success", False) else None,
+            code, date, history["quote_source"], getattr(factors, "source", None))
+    summary["volume_cluster"] = volume_cluster.collect(
+        date, [cluster_candidates[c] for c in sorted(cluster_candidates)], cluster_quotes,
+        sector_block, [str(x) for x in summary["source_errors"]])
     return summary
 
 

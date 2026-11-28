@@ -138,3 +138,40 @@ def test_large_html_table_is_folded():
     assert '<details class="evidence"' in html and "全量12个行业" in html and not gaps
     assert 'data-as-of="2026-09-18" data-items="12"' in html
     assert " open" not in html
+
+
+def test_review_closed_day_loads_verified_last_open_day(tmp_path):
+    import yaml
+    db = tmp_path / "calendar.db"
+    with sqlite3.connect(db) as conn:
+        conn.execute("CREATE TABLE trade_calendar(date TEXT, is_open INTEGER)")
+        conn.executemany("INSERT INTO trade_calendar VALUES (?,?)", [
+            ("2026-09-18", 1), ("2026-09-19", 0), ("2026-09-20", 0)])
+    folder = tmp_path / "2026-09-18"
+    folder.mkdir()
+    (folder / "post-market.yaml").write_text(yaml.safe_dump({
+        "date": "2026-09-18", "raw_data": {"sector_increment": calc()}}))
+    result = S.load_for_review(tmp_path, "2026-09-20", db)
+    assert result["trade_date"] == "2026-09-18"
+    html, gaps = S.render_html(result, "2026-09-20")
+    assert not gaps
+    assert 'data-sector-increment="2026-09-20" data-as-of="2026-09-18"' in html
+    assert "2026-09-17 → 2026-09-18" in html and "休市" in html
+    # A missing calendar day cannot silently reuse the old snapshot.
+    with sqlite3.connect(db) as conn:
+        conn.execute("DELETE FROM trade_calendar WHERE date='2026-09-19'")
+    assert S.load_for_review(tmp_path, "2026-09-20", db)["status"] == "source_failed"
+    result["review_context"]["calendar"][1][1] = 1
+    assert "source_failed" in S.render_html(result, "2026-09-20")[0]
+
+
+def test_review_open_day_missing_does_not_fallback(tmp_path):
+    db = tmp_path / "calendar.db"
+    with sqlite3.connect(db) as conn:
+        conn.execute("CREATE TABLE trade_calendar(date TEXT, is_open INTEGER)")
+        conn.executemany("INSERT INTO trade_calendar VALUES (?,?)", [
+            ("2026-09-17", 1), ("2026-09-18", 1)])
+    result = S.load_for_review(tmp_path, "2026-09-18", db)
+    assert result["trade_date"] == "2026-09-18"
+    assert result["status"] == "source_failed"
+    assert "No such file" not in str(result)

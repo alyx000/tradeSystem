@@ -78,7 +78,7 @@ class TestLimitUpExSt:
         with tempfile.TemporaryDirectory() as tmp:
             with patch("collectors.market.BASE_DIR", Path(tmp)):
                 collector = MarketCollector(reg)
-                collector._get_broken_board_count = MagicMock(return_value=2)
+                collector._get_broken_board_pool = MagicMock(return_value={"count": 2, "count_ex_st": 2, "stocks": []})
                 collector._rhythm_analyzer = MagicMock()
                 collector._rhythm_analyzer.load_main_theme_names = MagicMock(return_value=[])
                 collector._rhythm_analyzer.analyze = MagicMock(return_value=[])

@@ -1,7 +1,6 @@
 """放量启动后的回踩证据。纯观察，不参与原池准入/退出，不产生操作指令。"""
 from __future__ import annotations
 
-import json
 import sqlite3
 from datetime import date
 from statistics import mean
@@ -9,6 +8,8 @@ from statistics import mean
 from analyzers.low_price_effect import _finite_float
 from analyzers.sector_increment import SCHEMA as SECTOR_SCHEMA
 from analyzers.sector_increment import validate as validate_sector
+from db.dual_write import parse_post_market_envelope
+from services.emotion_leader.suspensions import load_suspensions
 from services.trend_leader import detectors as D
 from utils.qfq import apply_qfq, OHLC_PRICE_KEYS
 
@@ -43,13 +44,25 @@ def load_sector(conn, day):
     """只认同日事实块，不以最近历史行情替代。"""
     try:
         row = conn.execute("SELECT raw_data FROM daily_market WHERE date=?", (day,)).fetchone()
-        raw = json.loads(row[0]) if row and isinstance(row[0], str) else {}
-        # 正式双写保存完整盘后信封；仅无 raw_data 键的旧记录使用扁平兼容。
-        # 嵌套来源存在但损坏时不回退另一份旧块。
-        source = raw["raw_data"] if "raw_data" in raw else raw
-        block = source.get("sector_increment") if isinstance(source, dict) else None
+        envelope = parse_post_market_envelope(row[0]) if row else None
+        if not envelope or ("date" in envelope and envelope["date"] != day):
+            return None
+        raw = envelope.get("raw_data", envelope)
+        if not isinstance(raw, dict):
+            return None
+        block = raw.get("sector_increment")
         if isinstance(block, dict) and block.get("trade_date") == day and block.get("schema") == SECTOR_SCHEMA:
-            return validate_sector(block, day)
+            block = validate_sector(block, day)
+            if block["status"] == "partial":
+                receipts = {}
+                coverage = block.get("coverage") or {}
+                for d in (block["previous_date"], day):
+                    missing = (coverage.get(d) or {}).get("missing_codes")
+                    if isinstance(missing, list) and missing:
+                        confirmed = load_suspensions(conn, d)
+                        receipts[d] = [confirmed[c] for c in missing if c in confirmed]
+                block = dict(block, missing_quote_suspensions=receipts)
+            return block
     except (ValueError, TypeError, AttributeError, sqlite3.Error):
         pass
     return None

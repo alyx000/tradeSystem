@@ -52,6 +52,16 @@ _POST_ASSET_FEEDS = {
 POST_ASSET_SYMBOLS = {key: feed[0] for key, feed in _POST_ASSET_FEEDS.items()}
 
 
+# 人民币普通股代码段。指数、基金、B股、存托凭证和北交所均无本口径盘口。
+_L1_STOCK_PREFIXES = (
+    "sh600", "sh601", "sh603", "sh605", "sh688",
+    "sz000", "sz001", "sz002", "sz003", "sz300", "sz301",
+)
+# Tushare 1.4.25 stock/rtq.py::get_realtime_quotes_sina 将五档原始数量去掉
+# 末两位转换为手（realtime_quote 文档 315）。此处直接保留股，零股也不截尾。
+_L1_UNIT_EVIDENCE = "tushare:1.4.25:rtq.get_realtime_quotes_sina+doc315"
+
+
 def _normalize_code(raw: str) -> str:
     """兼容不带交易所后缀的 6 位代码（规则同 TushareProvider._normalize_stock_code）。"""
     code = str(raw or "").strip().upper()
@@ -91,8 +101,22 @@ def _parse_line(line: str) -> tuple[str, str] | None:
     return head.strip(), body
 
 
+def _book_level(fields: list[str], size_index: int) -> tuple[float | None, int | None]:
+    size_text = fields[size_index].strip()
+    if not size_text.isascii() or not size_text.isdigit():
+        return None, None
+    try:
+        size = int(size_text)
+        price = float(fields[size_index + 1])
+    except ValueError:
+        return None, None
+    if not math.isfinite(price) or price < 0 or (price == 0) != (size == 0):
+        return None, None
+    return price, size
+
+
 class SinaProvider(DataProvider):
-    """新浪实时行情（仅 get_realtime_quotes；日线/历史仍走 tushare/akshare）"""
+    """新浪实时报价及近期未复权1分钟数据；非无限历史行情接口。"""
 
     name = "sina"
     priority = 3
@@ -110,7 +134,7 @@ class SinaProvider(DataProvider):
         return True
 
     def get_capabilities(self) -> list[str]:
-        return ["get_realtime_quotes", "get_post_asset_quotes"]
+        return ["get_realtime_quotes", "get_stock_minutes", "get_post_asset_quotes"]
 
     def _make_session(self):
         import requests
@@ -263,10 +287,12 @@ class SinaProvider(DataProvider):
             # 只输出类型，避免代理异常泄露地址中的账户信息。
             return DataResult(None,source,error='新浪分钟来源失败或目标日不可用：'+type(exc).__name__)
 
-    def get_realtime_quotes(self, codes: list[str]) -> DataResult:
+    def get_realtime_quotes(self, codes: list[str], include_book: bool = False) -> DataResult:
         """批量获取实时行情。
 
         codes: ts_code 风格（600519.SH / 000001.SH），兼容裸 6 位码。
+        include_book: 沪深人民币普通股可附买卖一档，报价元、原始委托量股。
+        同侧价格和数量都为零表示空档，同侧字段不完整则两者均为 None。
         成功: data=list[dict]，跳过/缺失的代码逐一记入 note。
         失败（HTTP 异常 / 无有效代码 / 全部无数据）: error 非空。
         """
@@ -336,7 +362,7 @@ class SinaProvider(DataProvider):
                 if pre_close > 0
                 else None
             )
-            quotes.append({
+            quote = {
                 "code": ts_code,
                 "name": fields[0],
                 "price": price,
@@ -349,7 +375,16 @@ class SinaProvider(DataProvider):
                 "amount": amount,
                 "quote_date": fields[30],
                 "quote_time": fields[31],
-            })
+            }
+            if include_book and symbol.startswith(_L1_STOCK_PREFIXES):
+                bid_price, bid_size = _book_level(fields, 10)
+                ask_price, ask_size = _book_level(fields, 20)
+                quote["book"] = {
+                    "bid1_price": bid_price, "bid1_size": bid_size,
+                    "ask1_price": ask_price, "ask1_size": ask_size,
+                    "size_unit": "shares", "unit_evidence": _L1_UNIT_EVIDENCE,
+                }
+            quotes.append(quote)
 
         # 限流/异常可能静默少返某些行：请求了但响应没出现的码不允许被吞掉
         for symbol, ts_code in symbol_map.items():

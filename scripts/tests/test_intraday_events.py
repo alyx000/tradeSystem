@@ -293,7 +293,7 @@ def service_env(monkeypatch):
     monkeypatch.setattr(svc,'get_readonly_connection',lambda path:SimpleNamespace(close=lambda:None))
     monkeypatch.setattr(svc,'calendar',lambda conn,day:dict(is_open=True,previous='2026-11-13'))
     monkeypatch.setattr(svc,'load_context',lambda *args:context())
-    monkeypatch.setattr(svc,'capture',lambda registry,ctx,now,clock:snapshot(now,changes={c:(now-NOW).total_seconds()/300 for c in CODES},ctx=ctx))
+    monkeypatch.setattr(svc,'capture',lambda registry,ctx,now,clock,**kwargs:snapshot(now,changes={c:(now-NOW).total_seconds()/300 for c in CODES},ctx=ctx))
 
 
 def test_run_archives_freezes_dedupes_and_dry_run_does_not_write(service_env,tmp_path,monkeypatch):

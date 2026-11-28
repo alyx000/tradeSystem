@@ -112,6 +112,10 @@ class DataProvider(ABC):
     def get_realtime_quotes(self, codes: list[str]) -> DataResult:
         return DataResult(data=None, source=self.name, error="not implemented")
 
+    def get_stock_minutes(self, stock_code: str, trade_date: str) -> DataResult:
+        """近期未复权1分钟原值；消费者必须核验目标时点与完整覆盖。"""
+        return DataResult(data=None, source=self.name, error="not implemented")
+
     def get_daily_basic(self, date: str) -> DataResult:
         return DataResult(data=None, source=self.name, error="not implemented")
 
@@ -151,6 +155,10 @@ class DataProvider(ABC):
 
     def get_theme_member_snapshot(self, date: str, theme_codes: list[str]) -> DataResult:
         """当日题材成员完整分页收据；不可用当前成分回填历史。"""
+        return DataResult(data=None, source=self.name, error="not implemented")
+
+    def get_concept_catalog_snapshot(self, date: str) -> DataResult:
+        """同花顺当日 A 股 type=N 概念目录，包含末尾空页收据。"""
         return DataResult(data=None, source=self.name, error="not implemented")
 
     # ---- 板块数据 ----

@@ -87,7 +87,7 @@ def test_unsupported_codes_rejected_into_note(prov, monkeypatch):
 # --- capability 声明 / 基类默认桩 ---
 
 def test_capabilities_declared(prov):
-    assert set(prov.get_capabilities()) == {"get_realtime_quotes", "get_post_asset_quotes"}
+    assert set(prov.get_capabilities()) == {"get_realtime_quotes", "get_stock_minutes", "get_post_asset_quotes"}
     assert prov.supports("get_realtime_quotes")
 
 
@@ -119,6 +119,55 @@ def test_quotes_parse_success(prov, monkeypatch):
     assert idx["price"] == pytest.approx(3996.1616)
     assert result.source == "sina"
     assert result.timeliness.value == "[实时]"
+
+
+def _book_line(symbol, bid_size, bid_price, ask_size, ask_price):
+    fields = MAOTAI.split("=", 1)[1].strip('";').split(",")
+    fields[10:12] = [bid_size, bid_price]
+    fields[20:22] = [ask_size, ask_price]
+    return f'var hq_str_{symbol}="{",".join(fields)}";'
+
+
+@pytest.mark.parametrize(("code", "symbol"), [("600519.SH", "sh600519"), ("300469.SZ", "sz300469")])
+def test_l1_opt_in_preserves_raw_shares(prov, monkeypatch, code, symbol):
+    line = _book_line(symbol, "4695", "26.91", "3100", "26.92")
+    monkeypatch.setattr(prov, "_fetch_raw", lambda symbols: [line])
+    plain, = prov.get_realtime_quotes([code]).data
+    book_quote, = prov.get_realtime_quotes([code], True).data
+    book = book_quote.pop("book")
+    assert book_quote == plain
+    assert "book" not in plain
+    assert book["bid1_price"] == 26.91 and book["bid1_size"] == 4695
+    assert book["ask1_price"] == 26.92 and book["ask1_size"] == 3100
+    assert book["size_unit"] == "shares"
+    assert book["unit_evidence"]
+
+
+@pytest.mark.parametrize(("ask_size", "ask_price", "expected"), [
+    ("0", "0.00", (0.0, 0)), ("0", "16.00", (None, None)),
+    ("100", "0", (None, None)), ("", "0", (None, None)), ("100", "", (None, None)),
+    ("-10", "16.00", (None, None)), ("1.4", "16.00", (None, None)),
+    ("100", "nan", (None, None)), ("100", "inf", (None, None)),
+])
+def test_l1_empty_and_malformed_side_independent(prov, monkeypatch, ask_size, ask_price, expected):
+    line = _book_line("sh600519", "100", "15.99", ask_size, ask_price)
+    monkeypatch.setattr(prov, "_fetch_raw", lambda symbols: [line])
+    quote, = prov.get_realtime_quotes(["600519.SH"], True).data
+    book = quote["book"]
+    assert (book["ask1_price"], book["ask1_size"]) == expected
+    assert (book["bid1_price"], book["bid1_size"]) == (15.99, 100)
+
+
+@pytest.mark.parametrize(("code", "symbol"), [
+    ("000001.SH", "sh000001"), ("399006.SZ", "sz399006"),
+    ("510300.SH", "sh510300"), ("200012.SZ", "sz200012"),
+    ("920593.BJ", "bj920593"), ("689009.SH", "sh689009"),
+])
+def test_l1_excludes_other_security_layouts(prov, monkeypatch, code, symbol):
+    line = _book_line(symbol, "100", "15.99", "200", "16.00")
+    monkeypatch.setattr(prov, "_fetch_raw", lambda symbols: [line])
+    quote, = prov.get_realtime_quotes([code], True).data
+    assert quote["code"] == code and "book" not in quote
 
 
 def test_bare_code_input_normalized(prov, monkeypatch):

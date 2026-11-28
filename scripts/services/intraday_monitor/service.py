@@ -769,6 +769,12 @@ def run_all_checks(registry, *, dry_run: bool = False, input_by: str = "USER") -
         # 新能力异常不得吞掉既有价格监控；失败仍显式进入总回执。
         volume_result = {"status": "state_error", "events": [], "errors": [f"{type(exc).__name__}: {exc}"], "pushed": False}
     threshold_result = run_check(registry, dry_run=dry_run)
+    from services.tdx_index_archive import run_archive
+    try:
+        provider = registry.get_provider("tdx") if hasattr(registry, "get_provider") else None
+        tdx_archive = run_archive(provider, input_by=input_by, dry_run=dry_run)
+    except Exception as exc:
+        tdx_archive = {"status":"archive_error", "error":f"{type(exc).__name__}: {exc}"}
     results = (threshold_result, market_result, volume_result)
     failing = {"blocked_calendar", "source_failed", "partial", "push_failed", "state_error", "expired_window", "invalid_request"}
     failures = [
@@ -802,6 +808,7 @@ def run_all_checks(registry, *, dry_run: bool = False, input_by: str = "USER") -
         "threshold_monitor": threshold_result,
         "market_scan": market_result,
         "index_volume_monitor": volume_result,
+        "tdx_index_5m_archive": tdx_archive,
     }
 
 

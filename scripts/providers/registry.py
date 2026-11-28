@@ -54,7 +54,7 @@ class ProviderRegistry:
                 logger.error(f"  ✗ {p.name} 初始化异常: {e}")
         return results
 
-    def call(self, method_name: str, *args, **kwargs) -> DataResult:
+    def call(self, method_name: str, *args, provider_kwargs=None, **kwargs) -> DataResult:
         """
         按优先级调用 provider 的方法，自动降级。
 
@@ -68,7 +68,8 @@ class ProviderRegistry:
             if method is None:
                 continue
             try:
-                result = method(*args, **kwargs)
+                options = (provider_kwargs or {}).get(provider.name, {})
+                result = method(*args, **kwargs, **options)
                 if result.success:
                     logger.debug(f"{method_name} 成功 (来源: {provider.name})")
                     return result

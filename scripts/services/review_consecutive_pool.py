@@ -32,11 +32,16 @@ def load(daily_dir, db_path, report_date, *, days=20):
     try:
         with closing(sqlite3.connect(Path(db_path).resolve().as_uri()+'?mode=ro', uri=True)) as conn:
             rows = conn.execute("SELECT date,is_open FROM trade_calendar WHERE exchange='SSE' AND date<=? ORDER BY date DESC LIMIT 120", (report_date,)).fetchall()
-        days = _days(rows, report_date, days)
+        from services.review_limit_down_touch import load as load_touch
         result['calendar'] = rows
-        result['fact_date'] = days[0]
+        fact_date = _days(rows, report_date, 1)[0]
+        result['fact_date'] = fact_date
+        current = _read(Path(daily_dir)/fact_date/'post-market.yaml', yaml_file=True)
+        result['limit_down_touch'] = load_touch(daily_dir, fact_date, current)
+        days = _days(rows, report_date, days)
         for day in reversed(days):
-            block = from_archive(_read(Path(daily_dir)/day/'post-market.yaml', yaml_file=True), day)
+            archive = current if day == fact_date else _read(Path(daily_dir)/day/'post-market.yaml', yaml_file=True)
+            block = from_archive(archive, day)
             result['points'].append(block)
         incomplete = sum(p['status'] != 'complete' for p in result['points'])
         if incomplete:
@@ -81,6 +86,23 @@ def _chart(points, key, label, unit, color):
 
 
 def render(payload, report_date):
+    from analyzers import limit_down_touch as touch
+    trend_html, gaps = _render_trend(payload, report_date)
+    if not isinstance(payload, dict) or touch.KEY not in payload:
+        return trend_html, gaps
+    fact_date = report_date
+    try:
+        fact_date = _days(payload.get("calendar") or [], report_date, 1)[0]
+        if payload.get("report_date") != report_date or payload.get("fact_date") != fact_date:
+            raise ValueError("跌停触价日期与复盘截面错位")
+        block = touch.verified(payload[touch.KEY], fact_date)
+    except (ValueError, TypeError, KeyError, IndexError) as exc:
+        block = touch.unavailable(fact_date, str(exc))
+        gaps = [*gaps, "跌停触价：" + str(exc)]
+    return trend_html + touch.html(block, fact_date), gaps
+
+
+def _render_trend(payload, report_date):
     payload = payload or {}
     points = payload.get('points') or []
     if payload.get('report_date') != report_date or not points:

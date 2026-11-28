@@ -3,7 +3,7 @@
 #
 # 由 ~/Library/LaunchAgents/com.alyx.tradesystem.macro-flash.plist 触发
 # (工作日盘后 20:00 回溯 24h + 周日 22:00 回溯 54h 覆盖周末,进周日复盘)。
-# 金十快讯采集 → 关键词筛宏观政策类 → 归档 data/runs/macro-flash/ + 推钉钉。
+# 金十快讯采集 → 关键词筛宏观政策类 → 归档 data/runs/macro-flash/，不推钉钉。
 set -e
 
 # 1. PATH(launchd 默认不含 /opt/homebrew/bin)
@@ -13,7 +13,7 @@ export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
 export TZ="Asia/Shanghai"
 
 # 2. 仓库根(python import 解析)
-REPO_ROOT="/Users/alyx/tradeSystem"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_ROOT"
 
 # 3. env:~/.config/tradeSystem.env(DingTalk 凭据)
@@ -29,10 +29,14 @@ echo "===== $(date '+%Y-%m-%d %H:%M:%S') macro-flash start ====="
 echo "[env] DINGTALK_WEBHOOK_TOKEN=${DINGTALK_WEBHOOK_TOKEN:+set} DINGTALK_WEBHOOK_SECRET=${DINGTALK_WEBHOOK_SECRET:+set}"
 
 # 周日档回溯 54h(周五 16:00 起,覆盖周五晚+周末);工作日档 24h
-if [ "$(date +%u)" = "7" ]; then
+read -r trade_date weekday <<< "$(/bin/date '+%F %u')"
+if [ "$weekday" = "7" ]; then
     LOOKBACK=54
 else
     LOOKBACK=24
 fi
 
-exec /usr/bin/python3 scripts/main.py macro-flash run --lookback-hours "$LOOKBACK" "$@"
+/usr/bin/python3 scripts/main.py macro-flash run --no-push --lookback-hours "$LOOKBACK" "$@"
+if [ "$#" -eq 0 ] && [ "$weekday" -le 5 ]; then
+    /usr/bin/python3 scripts/tools/theme_catalysts.py --archive --date "$trade_date" --input-by launchd
+fi

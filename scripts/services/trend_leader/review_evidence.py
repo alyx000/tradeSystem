@@ -12,11 +12,13 @@ import math
 import os
 from pathlib import Path
 import re
+import sqlite3
 import tempfile
 
+from services.review_calendar import load_review_context, review_fact_date
 from services.trend_leader.observations import LABELS
 from services.trend_leader.research_evidence import MAX_CARDS
-from services.trend_leader import limit_pullback
+from services.trend_leader import limit_pullback, volume_cluster
 
 SCHEMA = "trend-review-evidence-v1"
 MARKER = "data-trend-review-evidence"
@@ -161,8 +163,9 @@ def validate(payload, day):
         checked = {**payload, "gaps": gaps}
         if "limit_pullback" in payload:
             checked["limit_pullback"] = limit_pullback.validate(payload["limit_pullback"], day)
+        if "volume_cluster" in payload:
+            checked["volume_cluster"] = volume_cluster.validate(payload["volume_cluster"], day)
         return checked
-
     except (KeyError, TypeError, ValueError, AttributeError, OverflowError) as exc:
         return missing(day, str(exc), "source_failed")
 
@@ -181,6 +184,8 @@ def build(summary, markdown):
         or any(r.get("status") != "complete" for r in payload["observations"]+payload["cards"])) else "complete"
     if "limit_pullback" in summary:
         payload["limit_pullback"] = deepcopy(summary["limit_pullback"])
+    if "volume_cluster" in summary:
+        payload["volume_cluster"] = deepcopy(summary["volume_cluster"])
     return validate(payload, day)
 
 
@@ -218,6 +223,16 @@ def load(root, day):
         return missing(day, "趋势证据读取失败："+str(exc), "source_failed")
 
 
+def load_for_review(root, report_date, db_path):
+    """只读复盘：完整日历证明休市时，保留最近开放日的原始归档日期。"""
+    try:
+        fact_date, context = load_review_context(db_path, report_date)
+        payload = load(root, fact_date)
+        return {**payload, "review_context": context} if context is not None else payload
+    except (OSError, sqlite3.Error, ValueError, TypeError):
+        return missing(report_date, "休市复盘日历未核验，趋势证据未判断；不跨日猜测", "source_failed")
+
+
 def structure(html):
     """提取官方模块完整标签/属性序列，避免纯文字对账放过折叠元数据漂移。"""
     class Parser(HTMLParser):
@@ -242,22 +257,39 @@ def structure(html):
 def render(payload, day):
     if payload is None:
         payload = missing(day, "同日趋势扫描证据尚未提供，不回退旧日或读取当前池")
-    p = validate(payload, day)
-    text = f'<div {MARKER}="{escape(day)}"><h3>放量回踩与股东户数、业绩证据</h3>'
+    try:
+        dated = {"date": payload.get("trade_date")}
+        if "review_context" in payload:
+            dated["review_context"] = payload["review_context"]
+        fact_date = review_fact_date(dated, day)
+        p = validate(payload, fact_date)
+    except (ValueError, TypeError, KeyError, AttributeError):
+        fact_date = day
+        p = missing(day, "趋势证据休市复核日期非法；不跨日猜测", "source_failed")
+    historical = fact_date != day
+    gaps = [f"截至{fact_date}：{gap}" for gap in p["gaps"]] if historical else p["gaps"]
+    text = (f'<div {MARKER}="{escape(day)}" data-as-of="{escape(fact_date)}" '
+            f'data-reviewed-through="{escape(day)}" data-review-calendar="{"closed" if historical else "same-day"}">'
+            '<h3>放量回踩与股东户数、业绩证据</h3>')
+    if historical:
+        text += f'<p>[事实] {escape(day)}休市，当日不扫描；以下为截至{escape(fact_date)}的历史归档，状态{escape(p["status"])}，不代表休市日新增信号。</p>'
     if p["status"] not in {"complete", "partial"}:
-        return text+f'<p>[事实] {escape(p["status"])}：{escape("；".join(p["gaps"]))}。</p></div>', p["gaps"]
+        return text+f'<p>[事实] {escape(p["status"])}：{escape("；".join(gaps))}。</p></div>', gaps
     if "limit_pullback" in p:
-        extra, extra_gaps = limit_pullback.render_html(p["limit_pullback"], day)
+        extra, extra_gaps = limit_pullback.render_html(p["limit_pullback"], fact_date)
         text += extra
-        p["gaps"] = list(p["gaps"]) + ["涨停回撤证据："+g for g in extra_gaps]
+        gaps += [f"涨停回撤证据（{fact_date}）：{g}" for g in extra_gaps]
+    extra, extra_gaps = volume_cluster.render_html(p.get("volume_cluster"), fact_date)
+    text += extra
+    gaps += [(f"截至{fact_date}：" if historical else "")+f"低位连续堆量（{fact_date}）：{g}" for g in extra_gaps]
     obs, cards = p["observations"], p["cards"]
     counts = Counter(r["state"] for r in obs)
     labels = "；".join(f'{LABELS[k]}{v}只' for k,v in counts.items()) or "同日扫描无在池观察对象"
     text += f'<p>[判断] {escape(labels)}。[事实] 观察{len(obs)}只；证据卡{len(cards)}/{p["coverage"]["eligible"]}；状态{p["status"]}。趋势池观察不代表容量资格或交易动作。</p>'
     if not obs:
-        return text+'</div>', p['gaps']
+        return text+'</div>', gaps
     items = len(obs)+len(cards)
-    text += f'<details class="evidence" data-as-of="{escape(day)}" data-items="{items}" data-evidence-kind="trend-review"><summary>展开{items}项回踩观察与财务证据</summary><p>[事实] 同日趋势扫描归档；不读取当前池。前复权OHLC；户数与业绩均只引用观察日前可见公告。股东户数变化不证明机构持仓，已披露业绩不代表未来表现。</p>'
+    text += f'<details class="evidence" data-as-of="{escape(fact_date)}" data-items="{items}" data-evidence-kind="trend-review"><summary>展开{items}项回踩观察与财务证据</summary><p>[事实] {escape(fact_date)}同日趋势扫描归档；不读取当前池。前复权OHLC；户数与业绩均只引用观察日前可见公告。股东户数变化不证明机构持仓，已披露业绩不代表未来表现。</p>'
     if obs:
         text += '<div class="table-wrap"><table><thead><tr><th>代码/名称</th><th>启动日</th><th>观察 [判断]</th><th>状态 [事实]</th></tr></thead><tbody>'
         for r in obs:
@@ -276,5 +308,5 @@ def render(payload, day):
                 v=part.get(change); detail+='；'+('同比' if key=='income' else '较上期')+('未计算' if v is None else f'{v:+.2f}%')
             if part.get('invalid_rows'): detail+=f'；无效记录{part["invalid_rows"]}行已排除'
             text += f'<p>[事实] {label}：{escape(detail)}；{escape(part["status"])}；来源{escape(str(part.get("source","未核验")))}。</p>'
-    if p['gaps']: text+='<p>[事实] 缺口：'+escape('；'.join(p['gaps']))+'。</p>'
-    return text+'</details></div>',p['gaps']
+    if gaps: text+='<p>[事实] 缺口：'+escape('；'.join(gaps))+'。</p>'
+    return text+'</details></div>',gaps

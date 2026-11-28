@@ -48,10 +48,10 @@ def anchors_for_level_watch(context):
     return dict(anchors, key_levels=[*index_levels, *stock_levels], level_parser_version=LEVEL_PARSER_VERSION)
 
 
-def call(registry, capability, *args):
+def call(registry, capability, *args, **kwargs):
     _initialize_capability(registry, capability)
     try:
-        result = registry.call(capability, *args)
+        result = registry.call(capability, *args, **kwargs)
     except Exception as exc:
         raise ValueError(f'{capability} 调用失败（{type(exc).__name__}）') from None
     if not result.success:
@@ -257,8 +257,9 @@ def capture_level_indices(registry, targets, now, clock):
     return result
 
 
-def capture(registry, context, now, *, clock=None):
-    rows, source = call(registry, 'get_realtime_quotes', context['universe'])
+def capture(registry, context, now, *, clock=None, books=None):
+    options = {'provider_kwargs': {'sina': {'include_book': True}}} if books is not None else {}
+    rows, source = call(registry, 'get_realtime_quotes', context['universe'], **options)
     now = clock() if clock else now
     if not isinstance(rows, list):
         raise ValueError('实时行情结构非法')
@@ -267,6 +268,11 @@ def capture(registry, context, now, *, clock=None):
     for raw in rows:
         if not isinstance(raw, dict):
             raise ValueError('实时行情记录结构非法')
+        if books is not None and 'book' in raw:
+            # 同一笔报价的临时盘口仅供本槽小样本归档。全市场回执仍保留原有字段。
+            book = raw.pop('book')
+            if source == 'sina' and isinstance(book, dict):
+                books[raw.get('code')] = book
         try:
             code = _code(raw.get('code'))
             if code not in universe:

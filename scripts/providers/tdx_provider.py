@@ -151,7 +151,7 @@ class TdxProvider(DataProvider):
         return True
 
     def get_capabilities(self) -> list[str]:
-        return ["get_index_weekly", "get_index_daily_range", "get_realtime_quotes"]
+        return ["get_index_weekly", "get_index_daily_range", "get_realtime_quotes", "get_tdx_index_5m"]
 
     def get_stock_minutes(self, stock_code: str, trade_date: str, *, validate=None, can_request=None) -> DataResult:
         """沪深个股最近800根未复权1分钟（category=8），不与指数身份混用。
@@ -280,8 +280,71 @@ class TdxProvider(DataProvider):
                           note="最新1分钟K线close，并非逐笔价；不提供昨收及当日累计量额" +
                                ("; " + "; ".join(errors) if errors else ""))
 
+    def get_tdx_index_5m(self, code, days, cutoff):
+        """取同一节点、沪市market=1的原生5分钟指数行情。保留请求身份和响应时间。"""
+        from services.index_volume_monitor.bar_archive import ENDS
+        if code not in (AVG_PRICE_CODE, MICROCAP_CODE) or not days or cutoff not in ENDS:
+            return DataResult(None, self.name, error="通达信5分钟请求身份或截止时间无效")
+        day = days[-1]
+        wanted = {d + " " + t for d in days for t in ENDS if d != day or t <= cutoff}
+        raw_code = code[:6]
+        source = "tdx:index_5min"
+        best = []
+        best_score = (0, False, 0)
+
+        def parse(bars, node):
+            nonlocal best_score
+            seen = set()
+            selected = []
+            previous = ""
+            for row in bars:
+                if (not isinstance(row, dict) or row.get("code", raw_code) != raw_code
+                        or type(row.get("market", 1)) is not int or row.get("market", 1) != 1):
+                    raise ValueError("通达信5分钟行身份与独立请求不符")
+                stamp = row.get("datetime")
+                if not isinstance(stamp, str):
+                    raise ValueError("通达信5分钟源无时间")
+                dt = datetime.strptime(stamp, "%Y-%m-%d %H:%M")
+                if (dt.strftime("%Y-%m-%d %H:%M") != stamp or previous >= stamp
+                        or dt.strftime("%H:%M") not in ENDS):
+                    raise ValueError("通达信5分钟时间重复、倒序或非收盘网格")
+                previous = stamp
+                if stamp not in wanted:
+                    continue
+                vals = {}
+                for field in ("open", "high", "low", "close"):
+                    v = row.get(field)
+                    if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) or v <= 0:
+                        raise ValueError("通达信5分钟OHLC非正或非有限")
+                    vals[field] = v
+                if not vals["low"] <= min(vals["open"], vals["close"]) <= max(vals["open"], vals["close"]) <= vals["high"]:
+                    raise ValueError("通达信5分钟OHLC范围错误")
+                seen.add(stamp)
+                selected.append({"ts_code":code, "trade_time":stamp, "period_minutes":5, "node":node, **vals})
+            score = (sum(stamp.startswith(day + " ") for stamp in seen), day + " " + cutoff in seen,
+                     len(selected))
+            if score > best_score:
+                best_score = score
+                best[:] = selected
+            if seen != wanted:
+                raise ValueError(f"覆盖{len(seen)}/{len(wanted)}个应到槽")
+            return selected
+
+        # 800根为协议的有界近端深度；同一代码不混拼不同节点的即时回包。
+        api, rows, error = self._connect(0, 800, raw_code, transform=parse, with_node=True,
+                                         budget_seconds=_INTRADAY_BUDGET_SECONDS,
+                                         socket_timeout=_INTRADAY_SOCKET_TIMEOUT)
+        if api is not None:
+            try:
+                api.disconnect()
+            except Exception as exc:
+                logger.debug("tdx disconnect 失败: %s", exc)
+        if rows or best:
+            return DataResult(rows or best, source, note=error or "通达信原生5分钟K线")
+        return DataResult(None, source, error=error or "通达信无已闭合5分钟K线")
+
     def _connect(self, category: int, count: int, code: str = _AVG_PRICE_CODE, transform=None,
-                 *, budget_seconds: float | None = None, socket_timeout: float | None = None):
+                 *, budget_seconds: float | None = None, socket_timeout: float | None = None, with_node=False):
         """逐节点验证目标代码；可转换并校验响应，失败继续下一节点。"""
         try:
             from pytdx.hq import TdxHq_API
@@ -314,7 +377,7 @@ class TdxProvider(DataProvider):
                     # 标 insufficient_depth；两者都会换节点且全部失败时绝不返回成功。
                     if bars and transform is not None:
                         try:
-                            bars = transform(bars)
+                            bars = transform(bars, f"{host}:{port}") if with_node else transform(bars)
                         except ValueError as exc:
                             validation_errors.add(str(exc))
                             raise
