@@ -254,6 +254,21 @@ def _motion_summary(changes, update, *, limit):
     return "动向" + update[5:16].replace("-", "/") + "，本期无可展示记录"
 
 
+def _membership_summary(changes):
+    for bucket in (BUY, SELL):
+        parts = []
+        for action in ("新进", "退出"):
+            names = [row["name"].removesuffix("ETF") for row in changes
+                     if row["classification"] == f"{action}{bucket}榜"]
+            if names:
+                listed = "、".join(names[:2])
+                remainder = f"等{len(names)}个方向" if len(names) > 2 else ""
+                parts.append(f"{action}{listed}{remainder}")
+        if parts:
+            return f"{bucket}榜" + "，".join(parts)
+    return ""
+
+
 def _summary(current, changes, comparisons):
     pieces = [f"{_short_date(current['date'])}行情{_market_summary(current['market'])}"]
     turns = [row for row in comparisons if row["status"] in {"净申购转净赎回", "净赎回转净申购"}]
@@ -281,6 +296,9 @@ def _summary(current, changes, comparisons):
         pieces.append(f"申赎金额列{_short_date(current['flow_date'])}")
     if current["update"]:
         pieces.append(_motion_summary(changes, current["update"], limit=1 if turns or comparable else 2))
+        membership = _membership_summary(changes)
+        if membership:
+            pieces.append(membership)
     if current["reference_date"]:
         pieces.append(f"跨境参考{_short_date(current['reference_date'])}")
     return "。".join(pieces) + "。"
