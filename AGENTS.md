@@ -12,6 +12,8 @@
 
 # 交易系统 - AI 协作入口
 
+盘中固定价位走 `intraday-monitor rule add|extend|disable --input-by USER`，预览加 `--dry-run`；逐规则结果走只读 `intraday-monitor status [--all] [--json]`。不手改登记簿，不更改既有发送语义。见[价位规则](docs/intraday-price-rules.md)。
+
 2026-11-28 用户已停用盘后和晚间任务的 Obsidian 自动导出。显式手工入口为 `python3 scripts/main.py obsidian`。板块节奏以所选日为截止，分别展示指数区间收益、上榜日涨幅合计、上榜天数及各自覆盖。
 
 宽基 ETF 的 5 分钟行情沿用现有盘中采样时钟，区分实时取得与盘后回放。重点涨停股按同批买一挂量留存封单变化。20:00 归档境内 IF、IM 具体合约行情和公开会员持仓，并复用当日逐股快照计算银行与券商的盘中对照，供正式复盘核查。见[技术课盘面采集](docs/course-market-collection.md)。

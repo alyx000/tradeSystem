@@ -22,6 +22,8 @@ globs: "scripts/db/cli.py, scripts/db/migrate.py, scripts/db/schema.py, scripts/
 
 # Skills 同步检查规则
 
+盘中价位管理变更须对齐 `intraday-monitor rule add|extend|disable`、`status`、市场任务指引和[规则手册](../../docs/intraday-price-rules.md)。新规则沿用原阈值引擎；核验无正式写入的预览、逐规则缺口与发送回执。
+
 2026-11-28 回归核对择时页盘后核验值与原快照、均线窗口和缺口、历史持仓及信号的来源、港股指数与代理的证券身份及单位，以及个股提醒最后成功时间。资金流向以亿元为单位；盘中行业排名、广度分母和 ETF 披露比较须对照原始回执。
 
 2026-11-28 行情回看与盘后反馈接口变更时，核对所选日期对趋势查询、缓存及情绪预填的约束，以及 T+1 三块的原日和观察日。行业和概念跌榜取归档 `bottom`。形态扫描、指数分钟回执及每日最票的缺源状态须与用户可见摘要一致。同步核对 [README](../../README.md#复盘日期与信号覆盖) 和 [每日最票就绪检查](../../docs/daily-leaders-readiness.md)。

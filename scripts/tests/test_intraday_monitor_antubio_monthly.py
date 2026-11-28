@@ -190,7 +190,13 @@ def test_live_rule_replays_factor_duplicates_through_production_provider(monitor
         assert result["status"] == "complete" and status["last_success_at"] == registry.now.isoformat()
         assert result["events"][0]["threshold"] == pytest.approx(10)
     else:
-        assert result["status"] == "source_failed" and not result["events"] and status == last_good
+        assert result["status"] == "source_failed" and not result["events"]
+        assert status["last_success_at"] == last_good["last_success_at"]
+        assert status["last_quote_at"] == last_good["last_quote_at"]
+        assert status["last_valid_quote_at"] == registry.now.isoformat()
+        assert status["today"]["last_result"] == "calculation_gap"
+        assert status["today"]["day"] == registry.now.date().isoformat()
+        assert status["today"]["calculation_gaps"] == 1 and status["today"]["quote_gaps"] == 0
 
 
 def test_status_readonly_for_missing_old_and_future_fields(monitor):

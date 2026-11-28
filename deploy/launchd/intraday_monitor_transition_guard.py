@@ -6,6 +6,8 @@ import argparse
 import ast
 import json
 import subprocess
+import sys
+from datetime import date
 from pathlib import Path
 
 
@@ -44,6 +46,8 @@ def default_rule_ids(
     declared: dict[str, str] = {}
     default_names: list[str] | None = None
     for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue
         if isinstance(node, ast.Assign):
             targets = node.targets
             value = node.value
@@ -51,8 +55,18 @@ def default_rule_ids(
             targets = [node.target]
             value = node.value
         else:
+            if any(isinstance(n, ast.Name) and n.id == collection_name for n in ast.walk(node)):
+                raise ValueError(f"目标提交 {collection_name} 包含非静态声明")
             continue
         names = [target.id for target in targets if isinstance(target, ast.Name)]
+        if collection_name in names:
+            if (len(targets) != 1 or default_names is not None or not isinstance(value, (ast.Tuple, ast.List))
+                    or not all(isinstance(item, ast.Name) for item in value.elts)):
+                raise ValueError(f"目标提交 {collection_name} 必须是唯一声明的具名规则列表")
+            default_names = [item.id for item in value.elts]
+            continue
+        if any(isinstance(n, ast.Name) and n.id == collection_name for n in ast.walk(node)):
+            raise ValueError(f"目标提交 {collection_name} 包含非静态声明")
         if not names or value is None:
             continue
         name = names[0]
@@ -67,10 +81,6 @@ def default_rule_ids(
                     rule_id = _literal_string(keyword.value)
             if rule_id:
                 declared[name] = rule_id
-        if name == collection_name and isinstance(value, (ast.Tuple, ast.List)):
-            default_names = [
-                item.id for item in value.elts if isinstance(item, ast.Name)
-            ]
     if default_names is None:
         raise ValueError(f"目标提交缺少可解析的 {collection_name}")
     missing = [name for name in default_names if name not in declared]
@@ -105,6 +115,60 @@ def rules_at_commit(repo: Path, commit: str) -> set[str]:
     return rule_ids
 
 
+def _show(repo, commit, path):
+    return subprocess.check_output(["git", "-C", str(repo), "show", f"{commit}:{path}"],
+                                   stderr=subprocess.PIPE, text=True)
+
+
+def _book_target_rules(repo, commit, book_path, static_ids):
+    """有登记时才读取目标版契约，用当前可信验证器回放；从不导入/执行目标提交。"""
+    if not book_path.exists():
+        return static_ids
+    scripts = str(Path(__file__).resolve().parents[2] / "scripts")
+    if scripts not in sys.path:
+        sys.path.insert(0, scripts)
+    from services.intraday_monitor.catalog import CATALOG_VERSION, RuleBook, _changes
+    from services.intraday_monitor.rules import MonitorRule
+
+    changes = _changes(book_path)
+    if not changes:
+        return static_ids
+    try:
+        tree = ast.parse(_show(repo, commit, "scripts/services/intraday_monitor/catalog.py"))
+    except subprocess.CalledProcessError as exc:
+        raise ValueError("目标版本不支持现有非空规则登记簿；禁止回滚") from exc
+    versions = [node.value for node in tree.body if isinstance(node, ast.Assign) and
+                any(isinstance(t, ast.Name) and t.id == "CATALOG_VERSION" for t in node.targets)]
+    if (len(versions) != 1 or not isinstance(versions[0], ast.Constant)
+            or type(versions[0].value) is not int or versions[0].value != CATALOG_VERSION):
+        raise ValueError("目标规则登记簿版本不兼容")
+    source = _show(repo, commit, RULE_SOURCES[0][0])
+    price_ids = default_rule_ids(source)
+
+    def literal(node):
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "date"
+                and not node.keywords and len(node.args) == 3):
+            return date(*(ast.literal_eval(arg) for arg in node.args))
+        return ast.literal_eval(node)
+
+    defaults = {}
+    for node in ast.parse(source).body:
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+            continue
+        call = node.value
+        if not (isinstance(call, ast.Call) and isinstance(call.func, ast.Name) and call.func.id == "MonitorRule"):
+            continue
+        key = next((_literal_string(k.value) for k in call.keywords if k.arg == "rule_id"),
+                   _literal_string(call.args[0]) if call.args else None)
+        if key in price_ids:
+            defaults[key] = MonitorRule(*(literal(arg) for arg in call.args),
+                                        **{kw.arg: literal(kw.value) for kw in call.keywords})
+    if defaults.keys() != price_ids:
+        raise ValueError("无法静态核验目标提交中的阈值规则")
+    book = RuleBook(defaults.values(), changes)
+    return (static_ids - price_ids) | {r.rule_id for r in book.enabled()}
+
+
 def pending_rule_ids(state_path: Path) -> set[str]:
     if not state_path.exists():
         return set()
@@ -130,12 +194,17 @@ def main() -> int:
     try:
         target_rule_ids = rules_at_commit(args.repo, args.target_commit)
         pending_ids: set[str] = set()
+        unknown_ids: set[str] = set()
         for state_path in args.state_path:
-            pending_ids.update(pending_rule_ids(state_path))
-    except (OSError, ValueError, json.JSONDecodeError, subprocess.CalledProcessError) as exc:
+            allowed = _book_target_rules(args.repo, args.target_commit,
+                                         state_path.with_name("price-rules.json"), target_rule_ids)
+            ids = pending_rule_ids(state_path)
+            pending_ids.update(ids)
+            unknown_ids.update(ids - allowed)
+    except (OSError, ValueError, TypeError, OverflowError, SyntaxError, ImportError, subprocess.CalledProcessError) as exc:
         print(json.dumps({"status": "guard_failed", "error": str(exc)}, ensure_ascii=False))
         return 2
-    unknown = sorted(pending_ids - target_rule_ids)
+    unknown = sorted(unknown_ids)
     if unknown:
         print(
             json.dumps(

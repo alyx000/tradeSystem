@@ -1,5 +1,7 @@
 # macOS launchd 部署（盘前/盘后 + 行业推荐定时推送）
 
+盘中价位登记与回执复用当前 180 秒 runner，无新任务。请保留共享数据目录中的 `price-rules.json` 和既有 `state.json`；正式检查才累计观测。操作见[盘中价位规则](../../docs/intraday-price-rules.md)。
+
 适用：用户本机长期开机的 macOS。如果在 VPS 上跑，看仓库 `deploy/systemd/`。
 
 ## 盘中异动采样

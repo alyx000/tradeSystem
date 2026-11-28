@@ -92,6 +92,18 @@ DEFAULT_RULES: tuple[MonitorRule, ...] = (A, B)
     assert guard.default_rule_ids(source) == {"rule-a", "rule-b"}
 
 
+@pytest.mark.parametrize("definitions", [
+    "DEFAULT_RULES = (A, MonitorRule('inline', 'b', '2', 2))",
+    "DEFAULT_RULES = (A,)\nDEFAULT_RULES += (A,)",
+    "DEFAULT_RULES = (A,)\nif True:\n    DEFAULT_RULES = ()",
+    "DEFAULT_RULES = (A,)\nDEFAULT_RULES = ()",
+])
+def test_guard_rejects_unverifiable_rule_collections(definitions):
+    guard = _load_transition_guard()
+    with pytest.raises(ValueError, match="DEFAULT_RULES"):
+        guard.default_rule_ids("A = MonitorRule('known', 'A', '1', 1)\n" + definitions)
+
+
 def test_transition_guard_parses_market_scan_rule_ids_without_executing_source():
     guard = _load_transition_guard()
     source = '''
