@@ -12,9 +12,21 @@ from services.intraday_monitor import (
     run_e2e_test,
 )
 from services.intraday_monitor.guards import shanghai_now
+from services.intraday_monitor.catalog import catalog_path, read_book
+from cli import intraday_rule_management
 
 
 logger = logging.getLogger(__name__)
+
+
+def _known_rule_id(key):
+    try:
+        book = read_book(catalog_path(), DEFAULT_RULES)
+        if key in book.rules and key not in book.disabled:
+            return key
+    except (ValueError, OSError, TypeError, OverflowError) as exc:
+        raise argparse.ArgumentTypeError(f"规则登记簿不可读：{exc}") from exc
+    raise argparse.ArgumentTypeError(f"规则不存在或已下线：{key}")
 
 
 def register_subparser(subparsers: argparse._SubParsersAction) -> None:
@@ -181,7 +193,8 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
     check.add_argument("--dry-run", action="store_true", help="只预览，不写状态、不推送")
     check.add_argument("--json", action="store_true", help="输出 JSON 结果")
     check.add_argument("--input-by", default="USER", help="检查请求者（自动任务显式传launchd）")
-    status = commands.add_parser("status", help="只读查看阈值提醒及每条规则的最近成功计算时间")
+    intraday_rule_management.register(commands)
+    status = commands.add_parser("status", help="只读查看阈值、当天逐规则检查、缺口与发送回执")
     status.add_argument("--all", action="store_true", help="包括当前配置内尚未生效和已过期的规则")
     status.add_argument("--json", action="store_true", help="输出 JSON 结果")
     e2e = commands.add_parser(
@@ -200,8 +213,7 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
     )
     e2e.add_argument(
         "--rule-id",
-        choices=[rule.rule_id for rule in DEFAULT_RULES],
-        default=DEFAULT_RULES[0].rule_id if DEFAULT_RULES else None,
+        type=_known_rule_id,
         help="选择要验证的生产规则；默认验证上证指数3955规则",
     )
     e2e.add_argument("--json", action="store_true", help="输出 JSON 结果")
@@ -209,6 +221,8 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
 
 def handle_command(config: dict, args: argparse.Namespace) -> int:
     command = getattr(args, "intraday_monitor_command", None)
+    if command == "rule":
+        return intraday_rule_management.handle(args)
     if command == "status":
         from services.intraday_monitor.service import rule_status
         result = rule_status(include_inactive=args.all)
@@ -217,11 +231,7 @@ def handle_command(config: dict, args: argparse.Namespace) -> int:
         elif result["status"] != "ok":
             print(result["error"])
         else:
-            print("名称 / 代码｜规则｜最近成功计算（上海时间）｜最近有效行情｜有效至")
-            for row in result["rules"]:
-                print(f"{row['name']} / {row['code']}｜{row['rule_id']}｜"
-                      f"{row['last_success_at'] or '未核验'}｜{row['last_quote_at'] or '未核验'}｜"
-                      f"{row['valid_until'] or '长期'}")
+            intraday_rule_management.display(result["rules"])
         return 0 if result["status"] == "ok" else 1
     if command not in {"check", "e2e-test"}:
         logger.error(
@@ -234,14 +244,16 @@ def handle_command(config: dict, args: argparse.Namespace) -> int:
     from main import setup_providers
 
     if command == "e2e-test":
-        selected_rule = next(
-            (
-                rule
-                for rule in DEFAULT_RULES
-                if rule.rule_id == getattr(args, "rule_id", None)
-            ),
-            DEFAULT_RULES[0] if DEFAULT_RULES else None,
-        )
+        key = getattr(args, "rule_id", None) or (DEFAULT_RULES[0].rule_id if DEFAULT_RULES else None)
+        try:
+            book = read_book(catalog_path(), DEFAULT_RULES)
+            if key not in book.rules or key in book.disabled:
+                raise ValueError("指定规则不存在或已下线；不会测试其他标的")
+            selected_rule = book.rules[key]
+        except (ValueError, OSError, TypeError, OverflowError) as exc:
+            result = {"status": "inactive_rule", "events": [], "errors": [str(exc)], "pushed": False}
+            print(json.dumps(result, ensure_ascii=False) if args.json else result["errors"][0])
+            return 1
         confirm_real_push = getattr(args, "confirm_real_push", False)
         if confirm_real_push is not True:
             result = run_e2e_test(
@@ -260,7 +272,7 @@ def handle_command(config: dict, args: argparse.Namespace) -> int:
                 rule=selected_rule,
             )
         else:
-            registry = setup_providers(config) if DEFAULT_RULES else None
+            registry = setup_providers(config)
             result = run_e2e_test(
                 registry,
                 input_by=str(args.input_by),
@@ -275,7 +287,7 @@ def handle_command(config: dict, args: argparse.Namespace) -> int:
         if not isinstance(input_by, str) or not input_by.strip():
             result = {"status": "invalid_request", "events": [], "errors": ["--input-by不能为空"], "pushed": False}
         else:
-            enabled = any((DEFAULT_RULES, DEFAULT_MARKET_SCAN_RULES, DEFAULT_INDEX_VOLUME_RULES, TDX_ARCHIVED_INDICES))
+            enabled = any((DEFAULT_RULES, DEFAULT_MARKET_SCAN_RULES, DEFAULT_INDEX_VOLUME_RULES, TDX_ARCHIVED_INDICES)) or catalog_path().is_file()
             registry = setup_providers(config) if enabled else None
             result = run_all_checks(registry, dry_run=bool(args.dry_run), input_by=input_by.strip())
     if args.json:

@@ -3,11 +3,14 @@ from __future__ import annotations
 
 import hashlib
 import math
+from contextlib import nullcontext
 from datetime import datetime, time, timedelta
 from pathlib import Path
 from typing import Callable, Iterable
 
 from .formatter import render_alert, render_e2e_test_alert
+from .catalog import catalog_path, read_book
+from . import health
 from .guards import (
     confirmed_trade_day,
     is_close_finalization_window,
@@ -19,7 +22,7 @@ from .guards import (
 from .monthly import monthly_history_dates
 from .rules import DEFAULT_RULES, MonitorRule, should_emit
 from .weekly import weekly_history_dates
-from .state import DEFAULT_STATE_PATH, load_state, locked_state, save_state
+from .state import DEFAULT_STATE_PATH, load_state, locked_state, save_state, state_lock
 from utils.qfq import apply_qfq
 
 
@@ -37,18 +40,22 @@ def _parse_iso_datetime(raw: object) -> datetime | None:
         return None
 
 
-def rule_status(*, rules=DEFAULT_RULES, now=None, state_path=DEFAULT_STATE_PATH, include_inactive=False):
+def rule_status(*, rules=None, now=None, state_path=DEFAULT_STATE_PATH, include_inactive=False):
     """只读当前规则状态。每条规则的 updated_at 仅在其成功完成计算后写入。"""
     now = shanghai_now(now)
     day = now.date()
     try:
         state = load_state(Path(state_path))
-    except (OSError, TypeError, ValueError):
+        book = read_book(catalog_path(state_path)) if rules is None else None
+        if book is not None:
+            rules = book.rules.values()
+    except (OSError, TypeError, ValueError, OverflowError):
         return {"status": "state_error", "as_of": now.isoformat(), "rules": [],
-                "error": "盘中监控状态不可读或结构异常"}
+                "error": "盘中监控状态或规则登记簿不可读、结构异常"}
     rows = []
     for rule in rules:
-        effective = rule.is_effective_on(day)
+        disabled = book is not None and rule.rule_id in book.disabled
+        effective = not disabled and rule.is_effective_on(day)
         if not effective and not include_inactive:
             continue
         previous = state["rules"].get(rule.rule_id, {})
@@ -63,7 +70,17 @@ def rule_status(*, rules=DEFAULT_RULES, now=None, state_path=DEFAULT_STATE_PATH,
         if (quote is None or quote.tzinfo is None or quote > now
                 or shanghai_now(quote).date().isoformat() != previous.get("trade_date")):
             quote = None
+        today = health.for_status(state, rule.rule_id, now)
+        if today and not effective and today.get("last_delivery") in {"pending", "failed"}:
+            today = {**today, "last_delivery": "retired"}
+        valid_quote = health.last_valid_quote(state, rule.rule_id, now) or quote
         rows.append({"rule_id": rule.rule_id, "code": rule.code, "name": rule.instrument_name,
+                     "direction": rule.direction, "threshold": rule.threshold,
+                     "action": rule.action_text, "unit": rule.value_unit,
+                     "threshold_mode": rule.threshold_mode, "threshold_label": rule.threshold_label,
+                     "inclusive": rule.inclusive, "proximity_pct": rule.proximity_pct,
+                     "disabled": disabled, "today": today,
+                     "last_valid_quote_at": shanghai_now(valid_quote).isoformat() if valid_quote else None,
                      "valid_from": str(rule.valid_from) if rule.valid_from else None,
                      "valid_until": str(rule.valid_until) if rule.valid_until else None,
                      "effective_on_date": effective,
@@ -458,20 +475,25 @@ def _run_locked(
     state["pending_events"] = current_pending
     pending_ids = {event.get("event_id") for event in current_pending}
 
+    def gap(rule, reason, *, calculation=False, valid_quote=None):
+        errors.append(f"{rule.rule_id}: {reason}")
+        health.observe(state, rule.rule_id, now, "calculation_gap" if calculation else "quote_gap",
+                       reason=str(reason), quote_at=valid_quote)
+
     for rule in rules:
         quote = quotes.get(rule.code.upper())
         if quote is None:
-            errors.append(f"{rule.rule_id}: 实时行情缺失")
+            gap(rule, "实时行情缺失")
             continue
         fresh, reason, quoted_at = quote_is_fresh(quote, now)
         if not fresh or quoted_at is None:
-            errors.append(f"{rule.rule_id}: {reason}")
+            gap(rule, reason)
             continue
         try:
             price = float(quote.get("price"))
             value = rule.resolve_value(quote)
         except (TypeError, ValueError) as exc:
-            errors.append(f"{rule.rule_id}: {exc}")
+            gap(rule, exc)
             continue
         previous = rule_states.get(rule.rule_id) or {}
         same_trade_date = previous.get("trade_date") == now.date().isoformat()
@@ -490,12 +512,12 @@ def _run_locked(
                 previous_state=previous if same_trade_date else None,
             )
         except (TypeError, ValueError) as exc:
-            errors.append(f"{rule.rule_id}: {exc}")
+            gap(rule, exc, calculation=True, valid_quote=quoted_at)
             continue
         if not math.isfinite(threshold) or (
             rule.value_mode == "price" and threshold <= 0
         ):
-            errors.append(f"{rule.rule_id}: 比较阈值非法")
+            gap(rule, "比较阈值非法", calculation=True, valid_quote=quoted_at)
             continue
         previous_active = (
             bool(previous.get("active"))
@@ -511,33 +533,33 @@ def _run_locked(
             except (TypeError, ValueError, OverflowError):
                 session_high = math.nan
             if not math.isfinite(session_high) or not price <= session_high <= threshold:
-                errors.append(f"{rule.rule_id}: 日内最高价缺失或与现价、涨停价不一致")
+                gap(rule, "日内最高价缺失或与现价、涨停价不一致")
                 continue
             last_quote_at = _parse_iso_datetime(previous.get("last_quote_at")) if same_trade_date else None
             if last_quote_at is not None and last_quote_at.tzinfo is not None:
                 previous_high = previous.get("last_session_high")
                 if quoted_at < last_quote_at:
-                    errors.append(f"{rule.rule_id}: 行情时间早于已处理快照")
+                    gap(rule, "行情时间早于已处理快照")
                     continue
                 # 同一交易日涨停价固定、累计日高不能降低；冲突不能清除炸板状态。
                 if threshold != previous.get("last_threshold"):
-                    errors.append(f"{rule.rule_id}: 同日涨停价与已处理快照不一致")
+                    gap(rule, "同日涨停价与已处理快照不一致")
                     continue
                 if previous_high is not None and session_high < previous_high:
-                    errors.append(f"{rule.rule_id}: 日内最高价低于已处理快照")
+                    gap(rule, "日内最高价低于已处理快照")
                     continue
                 if quoted_at == last_quote_at and (
                     price != previous.get("last_price")
                     or (previous_high is not None and session_high != previous_high)
                 ):
-                    errors.append(f"{rule.rule_id}: 同时间戳行情字段冲突")
+                    gap(rule, "同时间戳行情字段冲突")
                     continue
             active = active and session_high == threshold
         local_time = now.time().replace(tzinfo=None)
         quote_time = quoted_at.time().replace(tzinfo=None)
         close_phase = local_time >= time(15, 0)
         if close_phase and quote_time < CLOSING_SNAPSHOT_MIN_QUOTE_TIME:
-            errors.append(f"{rule.rule_id}: 收盘行情尚未就绪（行情时间 {quote_time.isoformat()}）")
+            gap(rule, f"收盘行情尚未就绪（行情时间 {quote_time.isoformat()}）")
             continue
         closing_snapshot = (
             rule.threshold_mode == "daily_up_limit"
@@ -553,6 +575,7 @@ def _run_locked(
         )
         close_confirmation_alert = active and closing_snapshot and not close_confirmed_before
         close_event_recorded = False
+        check_result = "matched_no_event" if active else "not_triggered"
         if transition_alert or close_confirmation_alert:
             event = _event(
                 rule,
@@ -570,10 +593,12 @@ def _run_locked(
                 event["session_high"] = session_high
             if event["event_id"] not in sent_ids and event["event_id"] not in pending_ids:
                 events.append(event)
+                check_result = "triggered"
                 pending_ids.add(event["event_id"])
                 close_event_recorded = closing_snapshot
             elif closing_snapshot:
                 close_event_recorded = True
+        health.observe(state, rule.rule_id, now, check_result, quote_at=quoted_at)
         rule_states[rule.rule_id] = {
             "trade_date": today,
             "active": active,
@@ -596,8 +621,10 @@ def _run_locked(
         # 已确认并落盘的 pending 不依赖本轮行情继续成立；数据源故障时仍应重试
         # 钉钉，否则“首轮推送失败 + 后续行情源失败”会让事件跨日静默过期。
         save_state(state_path, state)
-        pending_before_send = len(state.get("pending_events") or [])
+        to_send = list(state.get("pending_events") or [])
+        pending_before_send = len(to_send)
         push_ok, push_error = _send_pending(state, pusher_factory)
+        health.record_delivery(state, to_send, now, push_ok)
         save_state(state_path, state)
         status = "source_failed"
         if not push_ok:
@@ -623,8 +650,10 @@ def _run_locked(
     if events:
         state.setdefault("pending_events", []).extend(events)
     save_state(state_path, state)
-    pending_before_send = len(state.get("pending_events") or [])
+    to_send = list(state.get("pending_events") or [])
+    pending_before_send = len(to_send)
     push_ok, push_error = _send_pending(state, pusher_factory)
+    health.record_delivery(state, to_send, now, push_ok)
     save_state(state_path, state)
     status = "partial" if errors else "complete"
     if not push_ok:
@@ -640,7 +669,27 @@ def _run_locked(
     }
 
 
-def run_check(
+def run_check(registry, *, rules=None, now=None, state_path=DEFAULT_STATE_PATH, db_path=None,
+              dry_run=False, pusher_factory=None) -> dict:
+    args = dict(now=now, state_path=state_path, db_path=db_path, dry_run=dry_run,
+                pusher_factory=pusher_factory)
+    if rules is not None:  # 显式注入的规则（如隔离演练）不消费正式登记簿。
+        return _check_rules(registry, rules=rules, **args)
+    path = catalog_path(state_path)
+    try:
+        # 在登记与检查间串行化；下线命令返回后不再有旧快照发送。
+        local = shanghai_now(now)
+        read_only = dry_run or (not is_intraday_session(local) and not is_close_finalization_window(local)
+                                and not Path(state_path).exists())
+        with nullcontext() if read_only else state_lock(path):
+            args["now"] = shanghai_now(now)
+            rules = read_book(path).enabled()
+            return _check_rules(registry, rules=rules, **args)
+    except (OSError, ValueError, TypeError, OverflowError) as exc:
+        return {"status": "state_error", "events": [], "errors": [f"规则或状态异常：{exc}"], "pushed": False}
+
+
+def _check_rules(
     registry,
     *,
     rules: tuple[MonitorRule, ...] = DEFAULT_RULES,

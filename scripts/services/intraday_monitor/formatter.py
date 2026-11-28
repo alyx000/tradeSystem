@@ -44,7 +44,7 @@ def render_alert(events: list[dict]) -> str:
             band_label = "MA" if event.get("threshold_mode") in ("previous_close_ma", "intraday_ma") else threshold_label
             lines.append(
                 f"  - 附近范围（含边界）：{band_label}±{tolerance:g}%，"
-                f"{center * (1 - tolerance / 100):.4f}～{center * (1 + tolerance / 100):.4f}元；"
+                f"{center * (1 - tolerance / 100):.4f}～{center * (1 + tolerance / 100):.4f}{value_unit}；"
                 f"当前偏离：{deviation:+.4f}%"
             )
         if event.get("value_mode") == "daily_pct_change":
