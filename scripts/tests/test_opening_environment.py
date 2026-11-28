@@ -177,4 +177,10 @@ def test_expired_fetch_does_not_publish_opening_card(setup):
     kw['clock'] = lambda: next(times)
     result = run_index_volume(registry, **kw)
     assert result['status'] == 'expired_window' and 'opening_environment' not in result
-    assert not kw['report_root'].exists() and not pusher.messages
+    assert result['events'] == [] and result['pushed'] is False and not pusher.messages
+    # 窗口过期不出提醒报告；同轮取得的原始 K 线仍按实际取得时间留档。
+    root = kw['report_root']
+    assert {entry.name for entry in root.iterdir()} == {'ohlcv-5m'}
+    archive = json.loads((root / 'ohlcv-5m' / '2026-11-04.json').read_text())
+    late = archive['indices'][CODE]['bars']['10:00']
+    assert (late['acquisition'], late['captured_at']) == ('delayed_monitor_fetch', moment('10:06').isoformat())
