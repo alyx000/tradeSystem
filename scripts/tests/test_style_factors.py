@@ -78,7 +78,9 @@ class TestPremiumCollectorEnhanced:
 
         registry = _make_registry_with_open(open_map)
 
-        with patch("collectors.premium.DAILY_DIR", tmp_path):
+        with patch("collectors.premium.DAILY_DIR", tmp_path), patch(
+            "collectors.premium.publish_feedback", side_effect=lambda path, old, blocks: blocks["premium_backfill"]
+        ):
             pc = PremiumCollector(registry)
             return pc.collect(trade_date, prev_date)
 

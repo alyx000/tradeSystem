@@ -103,19 +103,25 @@ class TestLimitDownExSt:
     def test_ex_st_count(self):
         """跌停统计包含排除 ST 后的 count"""
         reg = MagicMock(spec=ProviderRegistry)
-        limit_down_data = {
-            "count": 4,
-            "stocks": [
-                {"code": "000001.SZ", "name": "万科A", "pct_chg": -10.0},
-                {"code": "000002.SZ", "name": "*ST步森", "pct_chg": -5.0},
-                {"code": "000003.SZ", "name": "ST中天", "pct_chg": -5.0},
-                {"code": "000004.SZ", "name": "特锐德", "pct_chg": -20.0},
-            ],
+        day = "20260410"
+        universe = [
+            dict(ts_code=f"00000{i}.SZ", name=name, list_date="20200101")
+            for i, name in enumerate(["普通甲", "*ST乙", "普通简称丙", "普通丁", "未跌停戊"], 1)
+        ]
+        sources = {
+            "get_stock_universe_as_of": universe,
+            "get_market_daily_quotes": [dict(r, trade_date=day, close=9 if i < 4 else 10)
+                                        for i, r in enumerate(universe)],
+            "get_stock_limit_prices": [dict(r, trade_date=day, down_limit=9) for r in universe],
+            "get_stock_st": [dict(r, trade_date=day) for r in universe[1:3]],
+            "get_suspend_list": [],
         }
 
         def mock_call(method, *args, **kwargs):
             if method == "get_limit_down_list":
-                return DataResult(data=limit_down_data, source="test")
+                raise AssertionError("盘后跌停数应复用同日价格和ST身份核验")
+            if method in sources:
+                return DataResult(data=sources[method], source="test")
             if method == "get_limit_up_list":
                 return DataResult(data={"count": 0, "stocks": []}, source="test")
             return DataResult(data=None, source="test", error="skip")
@@ -132,6 +138,9 @@ class TestLimitDownExSt:
                 result = collector.collect_post_market("2026-04-10")
 
         ld = result["limit_down"]
+        assert ld["status"] == "complete"
+        assert ld["_source"] == "tushare:daily+stk_limit"
+        assert ld["coverage"]["quoted"] == 5
         assert ld["count"] == 4
         assert ld["count_ex_st"] == 2
 
