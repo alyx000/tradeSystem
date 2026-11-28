@@ -21,6 +21,8 @@ version: "1.14"
 
 # Skill: 市场数据任务（盘前 / 盘后采集）
 
+盘中普通固定价位无需改代码：用 `intraday-monitor rule add|extend|disable --input-by USER`，可先加 `--dry-run --json`。用 `status --all` 读取规则 ID、当日检查/缺口/发送及有效期。见[价位登记与检查](../../../docs/intraday-price-rules.md)。
+
 2026-11-16 每日最票保留工作日21:00；`propose --push`必须通过当日数据就绪检查，定时入口增加`--wait-ready --input-by launchd`，未就绪每5分钟重试至23:00、超时不推送，仍发精简稿。见 `docs/daily-leaders-readiness.md`。
 
 

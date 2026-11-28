@@ -10,6 +10,8 @@
 
 # Skills 依赖索引
 
+盘中普通价位：`intraday-monitor rule add|extend|disable --input-by USER [--dry-run] [--json]`；只读 `intraday-monitor status [--all] [--json]` 逐规则展示实查、缺口和发送。见[使用说明](../../docs/intraday-price-rules.md)。
+
 2026-11-28 板块节奏按报告事实日对齐开放日，分别展示 5/10 日指数区间收益、上榜日涨幅合计与各自覆盖。模型读取同一口径，旧档合计保留原口径标识。盘后和晚间任务停用 Obsidian 自动导出，手工使用 `obsidian` 或 `make today-obsidian`。
 
 盘中断板复核由现有自动化在北京时间 09:33 唤醒，计时器到 09:40 后交给原 `board-break open-review`。10 点前百亿扫描复用当日核验的沪深北股票名单，每轮独立取实时报价，缺行情时列已核验命中并标明覆盖不足。
