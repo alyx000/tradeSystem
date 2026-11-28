@@ -46,6 +46,8 @@ def default_rule_ids(
     declared: dict[str, str] = {}
     default_names: list[str] | None = None
     for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue
         if isinstance(node, ast.Assign):
             targets = node.targets
             value = node.value
@@ -53,8 +55,18 @@ def default_rule_ids(
             targets = [node.target]
             value = node.value
         else:
+            if any(isinstance(n, ast.Name) and n.id == collection_name for n in ast.walk(node)):
+                raise ValueError(f"目标提交 {collection_name} 包含非静态声明")
             continue
         names = [target.id for target in targets if isinstance(target, ast.Name)]
+        if collection_name in names:
+            if (len(targets) != 1 or default_names is not None or not isinstance(value, (ast.Tuple, ast.List))
+                    or not all(isinstance(item, ast.Name) for item in value.elts)):
+                raise ValueError(f"目标提交 {collection_name} 必须是唯一声明的具名规则列表")
+            default_names = [item.id for item in value.elts]
+            continue
+        if any(isinstance(n, ast.Name) and n.id == collection_name for n in ast.walk(node)):
+            raise ValueError(f"目标提交 {collection_name} 包含非静态声明")
         if not names or value is None:
             continue
         name = names[0]
@@ -69,10 +81,6 @@ def default_rule_ids(
                     rule_id = _literal_string(keyword.value)
             if rule_id:
                 declared[name] = rule_id
-        if name == collection_name and isinstance(value, (ast.Tuple, ast.List)):
-            default_names = [
-                item.id for item in value.elts if isinstance(item, ast.Name)
-            ]
     if default_names is None:
         raise ValueError(f"目标提交缺少可解析的 {collection_name}")
     missing = [name for name in default_names if name not in declared]
