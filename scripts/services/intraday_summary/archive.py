@@ -40,7 +40,7 @@ def parse_report(text: str, *, day: str, slot: str) -> dict:
         raise ValueError("报告区间尾部计数不一致")
     if int(breadth[4]) > daily_counts[0] or int(breadth[5]) > daily_counts[1]:
         raise ValueError("报告当日尾部计数不一致")
-    sector_blocks = one(r"\*\*走强居前（按成分股半小时涨幅中位数）\*\*\n([\s\S]*?)\*\*走弱居前（同口径）\*\*\n([\s\S]*?)#### 个股波动居前")
+    sector_blocks = one(r"\*\*(?:走强居前（按成分股半小时涨幅中位数）|涨跌幅排名前五（按成分股半小时涨跌幅中位数）)\*\*\n([\s\S]*?)\*\*(?:走弱居前|涨跌幅排名后五)（同口径）\*\*\n([\s\S]*?)#### 个股波动居前")
     sectors = {}
     for key, block in zip(("strongest", "weakest"), sector_blocks.groups()):
         rows = re.findall(r"^- (.+?)：中位 (" + NUMBER + r")%，上涨占比 (" + NUMBER + r")%，区间成交额 (" + NUMBER + r"亿|—)(?:｜[^\n]*)?$", block, re.M)

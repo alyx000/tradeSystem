@@ -307,7 +307,7 @@ describe('StepMarket', () => {
     // range 分支：异步加载后渲染 res.industry + res.items（驱动三元 + res.industry ?? [] 兜底）
     expect(await screen.findByText('食品饮料')).toBeInTheDocument()
     expect(screen.getByText('贵州茅台')).toBeInTheDocument()
-    expect(spy).toHaveBeenCalledWith(5)
+    expect(spy).toHaveBeenCalledWith(5, '2026-04-03')
   })
 })
 

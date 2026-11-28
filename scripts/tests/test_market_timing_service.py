@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import datetime, timedelta
 
@@ -12,7 +13,7 @@ import pytest
 
 from db.schema import init_schema
 from providers.base import DataResult
-from services.market_timing import repo, scanner
+from services.market_timing import formatter, limit_down, repo, scanner, web_payload
 
 
 # ── fixtures / helpers ──
@@ -202,6 +203,22 @@ def test_today_quote_change_pct_none_without_prior_bar(conn):
 
 # ── 市场级上下文 ──
 
+def _down_block(day, *, empty=False):
+    rows = [] if empty else [
+        dict(code="600000.SH", name="浦发银行", is_st=False, close=10, down_limit=10),
+        dict(code="000001.SZ", name="*ST样本", is_st=True, close=5.0, down_limit=5.0),
+    ]
+    return dict(_source="tushare:daily+stk_limit", trade_date=day, status="complete",
+                count=len(rows), count_ex_st=sum(not r["is_st"] for r in rows), stocks=rows,
+                coverage=dict(quoted=10, active=12, suspended_without_quote=2))
+
+
+def _save_down(conn, day, block, *, inner_day=None, outer_day=None):
+    envelope = dict(date=outer_day or day, raw_data=dict(date=inner_day or day, limit_down=block))
+    conn.execute("INSERT OR REPLACE INTO daily_market(date,raw_data) VALUES (?,?)",
+                 (day, json.dumps(envelope)))
+
+
 def test_market_context_written(conn):
     flat = [(100, 100, 1000, 400000.0)] * 11
     # 今日成交额最低（地量）：上证+深证综指各 100000 千元 → 合计 200000 千元 = 2 亿。
@@ -210,23 +227,32 @@ def test_market_context_written(conn):
     sz = _bars("2026-06-13", flat + [(100, 100, 1000, 100000.0)])
     reg = FakeRegistry(
         {"000001.SH": sh, "399106.SZ": sz},
-        # provider 真实契约：limit_down=dict{count,stocks}、changes=逐股 list（平盘不计入涨跌）
+        # 旧榜单数与核验的非 ST 家数不同，生产择时不应请求旧榜。
         limit_down={"count": 3, "stocks": [{"code": "a"}, {"code": "b"}, {"code": "c"}]},
         changes=[{"pct_chg": 2.0}, {"pct_chg": 0.5}, {"pct_chg": 3.1},
                  {"pct_chg": -1.0}, {"pct_chg": -0.2}, {"pct_chg": 0.0}, {"pct_chg": None}],
     )
+    day = "2026-06-13"
+    _save_down(conn, day, _down_block(day))
     idx = [{"code": "000001.SH", "name": "上证综指"}]
-    r = scanner.run_daily(conn, reg, "2026-06-13", indices=idx)
+    r = scanner.run_daily(conn, reg, day, indices=idx)
     sig = r["signals"][0]
     assert sig["market_amount_yi"] == 2.0
     assert sig["amount_pctile_20d"] == pytest.approx(1 / 12, abs=0.01)  # 今日地量→低分位
-    assert sig["limit_down_count"] == 3
+    assert sig["limit_down_count"] == 1
+    assert r["context"]["limit_down_fact"]["coverage"]["quoted"] == 10
+    assert "非 ST 收盘跌停：1 家" in formatter.render_daily(r)
+    # 后续归档变更时，运行时的事实留存不随最新归档重写。
+    _save_down(conn, day, _down_block(day, empty=True))
+    ctx = web_payload.build_daily_payload(conn, day)["context"]
+    assert ctx["limit_down_count"] == 0
+    assert ctx["recorded_limit_down"] == r["context"]["limit_down_fact"]
     assert sig["advance"] == 3 and sig["decline"] == 2  # 平盘(0.0)与 pct_chg 缺失不计入
     assert r["resonance_count"] == 0  # 平盘无变盘点命中
 
 
 def test_market_context_legacy_shapes_still_supported(conn):
-    """契约兼容兜底：limit_down 传 list、changes 传聚合 dict 也能消费（防 provider 形态漂移）。"""
+    """涨跌家数兼容聚合，未核验的跌停榜单不填盘后缺口。"""
     flat = [(100, 100, 1000, 400000.0)] * 12
     sh = _bars("2026-06-13", flat)
     sz = _bars("2026-06-13", flat)
@@ -237,8 +263,75 @@ def test_market_context_legacy_shapes_still_supported(conn):
     )
     r = scanner.run_daily(conn, reg, "2026-06-13", indices=[{"code": "000001.SH", "name": "上证综指"}])
     sig = r["signals"][0]
-    assert sig["limit_down_count"] == 2
+    assert sig["limit_down_count"] is None
+    assert "非 ST 收盘跌停：待核验" in formatter.render_daily(r)
     assert sig["advance"] == 4500 and sig["decline"] == 900
+
+
+def test_rerun_adds_indices_without_rewriting_earliest_market_observation(conn):
+    day = "2026-06-13"
+    # 早期只完成了一个指数，旧榜数为0；重跑时已具有同日价格核验。
+    repo.upsert_signal(conn, dict(trade_date=day, index_code="000001.SH", index_name="上证",
+                                  fractal_status="none", limit_down_count=0))
+    _save_down(conn, day, _down_block(day))
+    bars = _bars(day, [(100, 100, 1000, 400000.0)] * 12)
+    indices = [dict(code="000001.SH", name="上证"), dict(code="399001.SZ", name="深成")]
+    registry = FakeRegistry({i["code"]: bars for i in indices})
+    for _ in range(2):
+        result = scanner.run_daily(conn, registry, day, indices=indices)
+        assert [r["limit_down_count"] for r in result["signals"]] == [1, 1]
+        ctx = web_payload.build_daily_payload(conn, day)["context"]
+        assert ctx["recorded_limit_down"] == dict(status="legacy", count=0, trade_date=day)
+        assert ctx["limit_down_count"] == 1
+
+
+def test_failed_rerun_rolls_back_all_index_rows(conn, monkeypatch):
+    day = "2026-06-13"
+    bars = _bars(day, [(100, 100, 1000, 400000.0)] * 12)
+    indices = [dict(code="000001.SH", name="上证"), dict(code="399001.SZ", name="深成")]
+    registry = FakeRegistry({i["code"]: bars for i in indices})
+    _save_down(conn, day, _down_block(day))
+    conn.commit()
+    upsert = repo.upsert_signal
+
+    def fail_second(db, row):
+        if row["index_code"] == "399001.SZ":
+            raise sqlite3.OperationalError("simulated failure")
+        upsert(db, row)
+
+    monkeypatch.setattr(repo, "upsert_signal", fail_second)
+    with pytest.raises(sqlite3.OperationalError, match="simulated failure"):
+        scanner.run_daily(conn, registry, day, indices=indices)
+    assert not repo.list_signals(conn, date=day)
+    assert not conn.in_transaction
+
+
+@pytest.mark.parametrize("change", [
+    {"coverage": {"active": 13, "quoted": 10, "suspended_without_quote": 2}},
+    {"count_ex_st": 0}, {"count": 3}, {"trade_date": "2026-06-12"},
+    {"status": "partial"}, {"_source": "tushare:limit_list_d"},
+    {"stocks": []}, {"count_ex_st": True},
+])
+def test_unverified_daily_limit_down_is_unknown(conn, change):
+    day = "2026-06-13"
+    block = dict(_down_block(day), **change)
+    _save_down(conn, day, block)
+    assert limit_down.archive_fact(conn, day)["count"] is None
+
+
+@pytest.mark.parametrize("inner,outer", [("2026-06-12", None), (None, "2026-06-12")])
+def test_limit_down_rejects_wrong_envelope_date(conn, inner, outer):
+    day = "2026-06-13"
+    _save_down(conn, day, _down_block(day), inner_day=inner, outer_day=outer)
+    assert limit_down.archive_fact(conn, day)["status"] == "unknown"
+
+
+def test_limit_down_legacy_db_and_malformed_json_readonly(conn):
+    conn.execute("INSERT INTO daily_market(date,raw_data) VALUES ('2026-06-13', 'invalid')")
+    assert limit_down.archive_fact(conn, "2026-06-13")["count"] is None
+    conn.execute("DROP TABLE daily_market")
+    conn.execute("PRAGMA query_only = ON")
+    assert limit_down.archive_fact(conn, "2026-06-13")["status"] == "unknown"
 
 
 def test_market_amount_none_when_one_side_missing(conn):

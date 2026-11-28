@@ -146,3 +146,67 @@ def test_last_open_day_and_expiry(monitor):
     assert not r.requested_codes and not p.messages
     saved = json.loads(state.read_text())
     assert not saved["pending_events"] and saved["expired_event_ids"]
+
+
+@pytest.mark.parametrize("kind", ["identical", "certified", "unverified", "wrong_stock", "dirty_date"])
+def test_live_rule_replays_factor_duplicates_through_production_provider(monitor, monkeypatch, kind):
+    from providers.tushare_provider import TushareProvider
+    from services.intraday_monitor.service import rule_status
+
+    registry, pusher, db, state = monitor
+    # Establish an older successful state first; failed attempts must leave its clock unchanged.
+    assert tick(monitor)["status"] == "complete"
+    last_good = rule_status(rules=(RULE,), now=registry.now, state_path=state)["rules"][0]
+    set_history(registry, "2026-11-25")
+    provider = TushareProvider({})
+    provider._initialized = True
+    provider.pro = object()
+    bars = [{"ts_code": RULE.code, "trade_date": d.replace("-", ""), "adj_factor": f}
+            for d, f in zip(registry.history_dates, registry.history_factors)]
+    base = next(row for row in bars if row["trade_date"] == "20260930")
+    extra = {**base, "adj_factor": "2.0000", "vendor_sequence": 2}
+    if kind in ("certified", "unverified"):
+        extra["adj_factor"] = 9
+    elif kind == "wrong_stock":
+        extra["ts_code"] = "603659.SH"
+    elif kind == "dirty_date":
+        extra["trade_date"] += "-bad"
+    bars.append(extra)
+    def archive(day, cutoff):
+        assert (day, cutoff) == ("2026-09-30", "2026-11-24")
+        return {"603658": 2} if kind == "certified" else {}
+    monkeypatch.setattr("providers.adj_factor_evidence.archived_factors", archive)
+    monkeypatch.setattr(provider, "_query_records", lambda *args, **kwargs: bars)
+    monkeypatch.setattr(provider, "get_adj_factor", lambda *args: pytest.fail("禁止取未来证据"))
+    original = registry.call_specific
+    def routed(source, method, *args):
+        if method == "get_stock_adj_factor_range":
+            return provider.get_stock_adj_factor_range(*args)
+        return original(source, method, *args)
+    monkeypatch.setattr(registry, "call_specific", routed)
+    result = tick(monitor)
+    status = rule_status(rules=(RULE,), now=registry.now, state_path=state)["rules"][0]
+    if kind in ("identical", "certified"):
+        assert result["status"] == "complete" and status["last_success_at"] == registry.now.isoformat()
+        assert result["events"][0]["threshold"] == pytest.approx(10)
+    else:
+        assert result["status"] == "source_failed" and not result["events"] and status == last_good
+
+
+def test_status_readonly_for_missing_old_and_future_fields(monitor):
+    from services.intraday_monitor.service import rule_status
+
+    registry, _, db, path = monitor
+    assert rule_status(rules=(RULE,), now=registry.now, state_path=path)["rules"][0]["last_success_at"] is None
+    assert not path.exists() and not path.with_suffix(".json.lock").exists()
+    assert tick(monitor)["status"] == "complete"
+    saved = json.loads(path.read_text())
+    del saved["rules"][RULE.rule_id]["updated_at"]
+    path.write_text(json.dumps(saved))
+    before = path.read_bytes()
+    row = rule_status(rules=(RULE,), now=registry.now, state_path=path)["rules"][0]
+    assert row["last_success_at"] is None and row["last_quote_at"] == registry.now.isoformat()
+    expired = registry.now.replace(month=12, day=21)
+    assert rule_status(rules=(RULE,), now=expired, state_path=path)["rules"] == []
+    assert rule_status(rules=(RULE,), now=expired, state_path=path, include_inactive=True)["rules"]
+    assert path.read_bytes() == before

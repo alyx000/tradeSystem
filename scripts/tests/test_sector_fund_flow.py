@@ -48,3 +48,21 @@ def test_get_sector_fund_flow_falls_back_to_ths_industry_flow():
     assert r.data[0]["name"] == "元件"
     assert r.data[0]["net_inflow_billion"] == pytest.approx(64.10, abs=0.01)
     assert r.data[0]["change_pct"] == pytest.approx(3.35, abs=0.01)
+
+
+def test_small_eastmoney_amount_uses_yuan_and_unavailable_values_stay_unknown():
+    p = _make_provider()
+    p.ak.stock_sector_fund_flow_rank.return_value = pd.DataFrame({
+        "名称": ["小额净流出", "小额净流入", "真实零", "缺失", "无穷", "同义列冲突", "旧列"],
+        "今日主力净流入-净额": [-490_000, 490_000, 0, None, float("inf"), 0, None],
+        "主力净流入-净额": [-490_000, None, None, None, None, -1, 200],
+    })
+    rows = p.get_sector_fund_flow("2026-11-27").data
+    assert [row["net_inflow_billion"] for row in rows] == [-0.0049, 0.0049, 0.0, None, None, None, 0.000002]
+    assert all(row["change_pct"] is None for row in rows)
+
+
+def test_unrecognized_source_amount_column_is_not_assigned_a_unit():
+    p = _make_provider()
+    p.ak.stock_sector_fund_flow_rank.return_value = pd.DataFrame({"名称": ["未识别"], "净额": [200]})
+    assert p.get_sector_fund_flow("2026-11-27").data[0]["net_inflow_billion"] is None

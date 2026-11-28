@@ -72,8 +72,8 @@ class TestGetHkIndices:
         assert r.success
         assert r.data["hsi"]["change_pct"] == pytest.approx(-1.23, abs=0.01)
 
-    def test_date_mismatch_uses_latest(self):
-        """请求日期不存在时，应取 DataFrame 最新一行"""
+    def test_date_mismatch_keeps_target_day_missing(self):
+        """当前日线缺失，不以较早的报价补当天收盘。"""
         df = pd.DataFrame({
             "日期": ["2026-03-28", "2026-03-31"],
             "收盘": [20100.0, 20200.0],
@@ -85,8 +85,7 @@ class TestGetHkIndices:
         p = _make_provider()
         p.ak.stock_hk_index_daily_em = MagicMock(return_value=df)
         r = p.get_hk_indices("2026-04-01")
-        assert r.success
-        assert r.data["hsi"]["close"] == pytest.approx(20200.0, abs=0.01)
+        assert not r.success
 
     def test_empty_dataframe_returns_error(self):
         p = _make_provider()
@@ -189,7 +188,7 @@ class TestGetHkIndices:
             "HSTECH": {
                 "code": "HSTECH",
                 "name": "恒生科技指数",
-                "close": 4963.94,
+                "close": 3.56,
                 "change_pct": -1.98,
                 "open": 5009.76,
                 "high": 5009.76,
@@ -207,4 +206,82 @@ class TestGetHkIndices:
 
         assert r.success
         assert r.data["hsi"]["close"] == pytest.approx(26163.24, abs=0.01)
-        assert r.data["hstech"]["_source"] == "yfinance:3033.HK"
+        assert r.data["hstech"]["close"] is None
+        assert r.data["hstech"]["status"] == "missing"
+        assert r.data["hstech_etf_proxy"]["close"] == 3.56
+        assert r.data["hstech_etf_proxy"]["code"] == "3033.HK"
+        assert r.data["hstech_etf_proxy"]["trade_date"] is None
+
+
+def test_installed_akshare_daily_shape_and_target_only():
+    p = _make_provider()
+    p.ak.stock_hk_index_daily_em.return_value = pd.DataFrame({
+        "date": ["2026-11-27", "2026-11-26", "2026-11-30"],
+        "latest": [5200, 5000, 4800], "涨跌额": [200, 0, -400],
+    })
+    result = p.get_hk_indices("2026-11-27")
+    assert [call.kwargs["symbol"] for call in p.ak.stock_hk_index_daily_em.call_args_list] == ["HSI", "HSTECH"]
+    quote = result.data["hstech"]
+    assert (quote["close"], quote["change_pct"], quote["trade_date"], quote["unit"]) == (5200, 4.0, "2026-11-27", "points")
+    assert "hstech_etf_proxy" not in result.data
+    assert not p.get_hk_indices("2026-11-25").success
+
+
+def test_date_keyed_ticker_fallback_prefers_spot_over_more_complete_proxy(monkeypatch):
+    p = AkshareProvider()
+    p.ak = MagicMock()
+    p.ak.stock_hk_index_daily_em.side_effect = ValueError("offline")
+    histories = {
+        "^HSI": pd.DataFrame(),
+        "HSTECH.HK": pd.DataFrame({"Close": [5100]}, index=pd.to_datetime(["2026-11-27"])),
+        "3033.HK": pd.DataFrame({"Close": [3.35, 3.56]}, index=pd.to_datetime(["2026-11-26", "2026-11-27"])),
+    }
+    seen = []
+
+    def ticker(symbol):
+        seen.append(symbol)
+        mock = MagicMock()
+        mock.history.return_value = histories[symbol]
+        return mock
+
+    monkeypatch.setattr("yfinance.Ticker", ticker)
+    got = p.get_hk_indices("2026-11-27").data
+    assert got["hstech"]["close"] == 5100
+    assert got["hstech"]["change_pct"] is None
+    assert "3033.HK" not in seen
+
+    histories["HSTECH.HK"].index = pd.to_datetime(["2026-11-30"])
+    got = p.get_hk_indices("2026-11-27").data
+    assert got["hstech"]["close"] is None
+    proxy = got["hstech_etf_proxy"]
+    assert (proxy["code"], proxy["unit"], proxy["close"], proxy["trade_date"]) == ("3033.HK", "HKD", 3.56, "2026-11-27")
+    assert proxy["change_pct"] == 6.27
+
+
+def test_legacy_proxy_identity_in_public_summary_and_daily_report(tmp_path):
+    import json
+    from api.market_enrich import enrich_daily_market_row
+    from generators.report import ReportGenerator
+
+    section = {"hstech": {"code": "HSTECH", "_source": "yfinance:3033.HK", "name": "恒生科技指数", "close": 3.56}}
+    row = {"date": "2026-11-27", "hk_indices": json.dumps(section)}
+    view = json.loads(enrich_daily_market_row(row)["hk_indices"])
+    assert view["hstech"]["close"] is None
+    assert view["hstech_etf_proxy"]["trade_date"] is None
+    generator = ReportGenerator()
+    generator.daily_dir = tmp_path
+    text, _ = generator.generate_post_market("2026-11-27", {"hk_indices": section})
+    assert "恒生科技指数：当日行情缺失" in text
+    assert "（3033.HK）：3.56 港元，涨跌幅未核验，行情日未核验" in text
+
+
+def test_conflicting_hk_symbol_or_lookalike_spot_cannot_supply_index(monkeypatch):
+    from utils.hk_indices import hk_indices_view
+    wrong = hk_indices_view({"hstech": {"code": "HSI", "close": 26000, "_source": "yfinance:^HSI"}})
+    assert wrong["hstech"]["close"] is None
+    p = _make_provider()
+    p._index_from_yfinance = MagicMock(return_value=None)
+    p.ak.index_global_spot_em.return_value = pd.DataFrame({
+        "名称": ["恒生科技指数两倍杠杆"], "代码": ["HSTEC2L"], "最新价": [42],
+        "最新行情时间": ["2026-11-27 16:00:00"]})
+    assert not p.get_global_index("hstech").success

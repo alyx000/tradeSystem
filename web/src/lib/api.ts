@@ -216,9 +216,10 @@ export const api = {
 
   // Market
   getMarket: (date: string) => request<MarketFullData>(`/market/${date}`),
-  getMarketHistory: (days: number = 20) => request<MarketChartItem[]>(`/market/history?days=${days}`),
-  getConcentrationHistory: (days: number = 30) =>
-    request<ConcentrationTrendPayload>(`/market/concentration/history?days=${days}`),
+  getMarketHistory: (days: number = 20, toDate?: string) =>
+    request<MarketChartItem[]>(`/market/history?days=${days}${toDate ? `&to_date=${toDate}` : ''}`),
+  getConcentrationHistory: (days: number = 30, toDate?: string) =>
+    request<ConcentrationTrendPayload>(`/market/concentration/history?days=${days}${toDate ? `&to_date=${toDate}` : ''}`),
   getSectorGainRanking: (date: string) =>
     request<SectorGainRankingPayload>(`/market/sector-gain-ranking/${date}`),
   getSectorLabels: (date: string) =>
@@ -230,9 +231,9 @@ export const api = {
     request<MarketTimingHistoryPayload>(
       `/market/timing/history?days=${days}${toDate ? `&to_date=${toDate}` : ''}`,
     ),
-  getResearchCoverage: (days: number = 5) => request<{ days: number; covered_days: number; items: Array<{ stock_code: string; stock_name: string; report_count: number }>; industry: ResearchCoverageIndustryRow[] }>(`/market/research-coverage?days=${days}`),
+  getResearchCoverage: (days: number = 5, toDate?: string) => request<{ days: number; covered_days: number; items: Array<{ stock_code: string; stock_name: string; report_count: number }>; industry: ResearchCoverageIndustryRow[] }>(`/market/research-coverage?days=${days}${toDate ? `&to_date=${toDate}` : ''}`),
   getPostMarket: (date: string) => request<PostMarketPayload>(`/post-market/${date}`),
-  getMainThemes: () => request<MainThemeItem[]>('/main-themes'),
+  getMainThemes: (toDate?: string) => request<MainThemeItem[]>(`/main-themes${toDate ? `?to_date=${toDate}` : ''}`),
 
   // Industry info
   getIndustryInfo: (params?: Record<string, string>) => {

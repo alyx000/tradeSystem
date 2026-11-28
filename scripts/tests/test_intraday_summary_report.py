@@ -42,7 +42,7 @@ def test_ranking_continuity_is_direction_specific_and_does_not_infer_reversal():
     text = render_report(current, previous)
     assert "strongest0：中位 +0.20%，上涨占比 50.0%，区间成交额 10.0亿｜本期新上榜" in text
     assert "strongest1：中位 +0.20%，上涨占比 50.0%，区间成交额 10.0亿｜连续两期上榜" in text
-    assert "退出本方向前五：此前强榜。退出不代表转强或转弱。" in text
+    assert "退出本榜：此前强榜。退出不代表转强或转弱。" in text
     assert "不代表连续上涨/下跌" in text
 
 
@@ -66,7 +66,7 @@ def test_unavailable_comparison_never_makes_new_or_exit_claims(case):
     assert "板块持续性未计算" in text
     assert "｜连续两期上榜" not in text
     assert "｜本期新上榜" not in text
-    assert "退出本方向前五：" not in text
+    assert "退出本榜：" not in text
     assert "| 区间上涨占比 |" not in text
 
 
@@ -189,10 +189,10 @@ def test_compact_preview_preserves_facts_and_hides_repetition():
     assert "多数个股走弱，上证基本持平" in visible
     assert "区间涨幅居前" not in visible
     assert visible.count("区间涨幅中位数") == 1
-    assert "连续两期在走强前五" in visible
+    assert "连续两期位列涨跌幅排名前五" in visible
     assert "涨0" not in visible
     assert "本期市场事实" not in visible
-    assert "退出前五：" not in visible
+    assert "退出涨跌幅排名前五：" not in visible
     assert "- 请求者：USER" in text
     assert parse_report(text, day="2026-11-16", slot="15:00") == current
 
@@ -235,7 +235,7 @@ def test_default_channel_is_compact_without_html_or_tables():
     for i in range(5):
         assert f"涨{i}（00000{i}.SZ）：半小时 +2.00%，当日 +3.00%" in up
         assert f"跌{i}（60000{i}.SH）：半小时 -2.00%，当日 -3.00%" in down
-    for omitted in ("<details", "<summary", "| 指标 |", "私有来源路径", "退出前五名单"):
+    for omitted in ("<details", "<summary", "| 指标 |", "私有来源路径", "本期退出榜单"):
         assert omitted not in text
 
 
@@ -258,3 +258,20 @@ def test_partial_channel_keeps_available_stock_ranking_once():
     assert "指数覆盖缺口" in text
     assert text.count("涨0（000000.SZ）") == 1
     assert text.count("跌4（600004.SH）") == 1
+
+
+def test_all_rising_sectors_still_use_relative_rank_labels_for_local_and_push():
+    from services.intraday_summary.preview import render_channel_summary, render_compact_preview
+
+    current = _payload()
+    for row in current["interval"]["sectors"]["weakest"]:
+        row["median_pct"] = 0.82
+    text = render_compact_preview(current, _payload("14:30"), "来源")
+    for view in (text, render_channel_summary(text, interval=current["interval"])):
+        assert "涨跌幅排名后五" in view and "+0.82%" in view and "走弱前五" not in view
+    detail = render_report(current)
+    for version in (detail, detail.replace("涨跌幅排名前五（按成分股半小时涨跌幅中位数）",
+                                          "走强居前（按成分股半小时涨幅中位数）")
+                                  .replace("涨跌幅排名后五（同口径）", "走弱居前（同口径）")):
+        parsed = parse_report(version, day=current["trade_date"], slot=current["slot"])
+        assert parsed["interval"]["sectors"]["weakest"][0]["median_pct"] == 0.82

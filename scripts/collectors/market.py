@@ -922,23 +922,6 @@ class MarketCollector:
         else:
             result["limit_up"] = {"error": limit_up.error}
 
-        # 4. 跌停数据
-        limit_down = self.registry.call("get_limit_down_list", date)
-        if limit_down.success:
-            data = limit_down.data
-            if isinstance(data, list):
-                data = {"count": len(data), "stocks": data}
-            if isinstance(data.get("stocks"), list):
-                stocks_ex_st_down = [s for s in data["stocks"] if not _is_st_stock(s.get("name", ""))]
-                data["count_ex_st"] = len(stocks_ex_st_down)
-            data["_source"] = limit_down.source
-            result["limit_down"] = data
-        else:
-            result["limit_down"] = {"error": limit_down.error}
-
-        # 4b. 跌停结构：连续跌停天数（多日 yaml join；天地板因缺分时数据不做）
-        self._enrich_limit_down_structure(result, date)
-
         # 5. 板块排名（涨幅前30 + 跌幅前5）
         for stype in ["industry", "concept"]:
             r = self.registry.call("get_sector_rankings", date, stype)
@@ -1058,6 +1041,10 @@ class MarketCollector:
             shared_daily_quotes = self.registry.call("get_market_daily_quotes", date)
         except Exception as exc:
             shared_daily_quotes = DataResult(data=None, source="", error=f"全市场日线调用异常:{exc}")
+        from analyzers.verified_limit_down import collect as verified_down
+        result["limit_down"] = verified_down(
+            self.registry, date, quotes=shared_daily_quotes, st=stock_st_result)
+        self._enrich_limit_down_structure(result, date)
         # 10c. 低价股赚钱效应：收盘价≤10元，分≤5元/5～10元；只做客观横截面统计。
         from analyzers.consecutive_pool import collect as collect_consecutive_pool
         result['consecutive_pool'] = collect_consecutive_pool(
@@ -1309,7 +1296,15 @@ class MarketCollector:
     def _enrich_limit_down_structure(self, result: dict, date: str) -> None:
         """连续跌停统计由严格日历驱动；缺失不视为单日或零。"""
         from analyzers.consecutive_limit_down import collect
-        block = collect(date, limit_down=result.get("limit_down"), daily_dir=BASE_DIR / "daily")
+        from analyzers.verified_limit_down import SOURCE, collect as verified_down
+        history = {}
+        if (result.get("limit_down") or {}).get("_source") == SOURCE:
+            history["history_loader"] = lambda day: verified_down(self.registry, day)
+        block = collect(date, limit_down=result.get("limit_down"), daily_dir=BASE_DIR / "daily", **history)
+        self._apply_limit_down_structure(result, block)
+
+    @staticmethod
+    def _apply_limit_down_structure(result: dict, block: dict) -> None:
         result["consecutive_limit_down"] = block
         ld = result.get("limit_down")
         if not isinstance(ld, dict):
@@ -1618,48 +1613,11 @@ class MarketCollector:
 
     def _compute_index_ma(self, result: dict, date: str) -> None:
         """计算上证指数日线均线（MA5/10/20/60）和四大指数（沪/深/创业板/科创50）5 周均线"""
-        daily_dir = BASE_DIR / "daily"
+        from analyzers.shanghai_ma import collect as collect_shanghai_ma, positive_close
 
         sh_data = result.get("indices", {}).get("shanghai", {})
-        sh_close_raw = sh_data.get("close")
-        today_close = float(sh_close_raw) if sh_close_raw else None
-
-        ma_data: dict = {}
-        # 日线 MA5/10/20/60：仅在上证 close 可用时计算。
-        # 上证缺失不再整体 return，避免连带深证/创业板的 5 周线一起丢（2026-05-25 实测缺口）。
-        if today_close is not None:
-            closes: list[float] = [today_close]
-            try:
-                dirs = sorted(
-                    [d for d in daily_dir.iterdir()
-                     if d.is_dir() and d.name != "example" and d.name < date],
-                    key=lambda d: d.name,
-                    reverse=True,
-                )
-            except FileNotFoundError:
-                dirs = []
-
-            for d in dirs[:70]:
-                pm_file = d / "post-market.yaml"
-                if not pm_file.exists():
-                    continue
-                try:
-                    with open(pm_file, encoding="utf-8") as f:
-                        data = yaml.safe_load(f) or {}
-                    raw = data.get("raw_data", data)
-                    sh = raw.get("indices", {}).get("shanghai", {})
-                    c = sh.get("close", 0)
-                    if c and c > 0:
-                        closes.append(float(c))
-                except Exception:
-                    continue
-
-            if len(closes) >= 5:
-                for period in [5, 10, 20, 60]:
-                    if len(closes) >= period:
-                        ma_val = round(sum(closes[:period]) / period, 2)
-                        ma_data[f"ma{period}"] = ma_val
-                        ma_data[f"above_ma{period}"] = today_close > ma_val
+        today_close = positive_close(sh_data.get("close"))
+        ma_data = collect_shanghai_ma(date, sh_data, BASE_DIR, self.registry)
 
         # 5 周均线：调用 get_index_weekly 获取真实周线，并用 _augment_weekly_closes
         # 把当周走动收盘补进序列（修「周内冻结」根因，详见该函数 docstring）。
@@ -1673,10 +1631,9 @@ class MarketCollector:
         for idx_key, day_close, target_dict in ma5w_indices:
             if day_close is None:
                 idx_data = result.get("indices", {}).get(idx_key, {})
-                day_close = idx_data.get("close")
-                if not day_close:
+                day_close = positive_close(idx_data.get("close"))
+                if day_close is None:
                     continue
-                day_close = float(day_close)
             try:
                 r = self.registry.call("get_index_weekly", idx_key, start_date, date)
                 if r.success and r.data:

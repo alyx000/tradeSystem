@@ -5,10 +5,11 @@
 """
 from __future__ import annotations
 
+import json
+import sqlite3
 from unittest.mock import MagicMock
 
 import pytest
-import yaml
 
 from collectors.market import MarketCollector
 from providers.base import DataResult
@@ -23,6 +24,10 @@ def _weekly_result(closes: list[float]) -> DataResult:
 
 
 class TestComputeIndexMaDecoupling:
+    @pytest.fixture(autouse=True)
+    def isolate_calendar(self, monkeypatch, tmp_path):
+        monkeypatch.setattr("collectors.market.BASE_DIR", tmp_path)
+
     def test_shanghai_missing_still_computes_other_indices_5w(self):
         """上证 close 缺失时，深证/创业板 5 周线仍应计算。"""
         registry = MagicMock()
@@ -42,18 +47,21 @@ class TestComputeIndexMaDecoupling:
         ma = result["moving_averages"]
         assert "shenzhen" in ma and "ma5w" in ma["shenzhen"]
         assert "chinext" in ma and "ma5w" in ma["chinext"]
-        # 上证 close 缺失 → 上证不应出现
-        assert "shanghai" not in ma
+        # 上证仅记录缺口；深、创周线按各自的收盘独立完成。
+        sh = ma["shanghai"]
+        assert "ma5w" not in sh and "ma5" not in sh
+        assert sh["daily_ma_evidence"]["windows"]["ma5"]["observed"] == 0
 
-    def test_all_indices_missing_no_moving_averages_key(self):
-        """全部指数 close 缺失时，不写 moving_averages（保持与历史行为一致）。"""
+    def test_all_indices_missing_records_only_daily_coverage(self):
+        """全部指数 close 缺失时，只有上证日线覆盖回执。"""
         registry = MagicMock()
         registry.call.return_value = _weekly_result([13000, 13100, 13200, 13300, 13400])
         collector = MarketCollector(registry)
 
         result = {"indices": {"shanghai": {"error": "x"}, "shenzhen": {"error": "x"}, "chinext": {"error": "x"}}}
         collector._compute_index_ma(result, "2026-05-26")
-        assert "moving_averages" not in result
+        assert set(result["moving_averages"]) == {"shanghai"}
+        assert set(result["moving_averages"]["shanghai"]) == {"daily_ma_evidence"}
 
     def test_star50_5w_computed_when_close_present(self):
         """科创50 日收盘在 indices 时，应算出 moving_averages['star50'] 的 ma5w/above_ma5w。"""
@@ -143,22 +151,36 @@ class TestComputeIndexMaDailyPath:
         """上证 close 存在时，日线 MA5/MA20 正常计算（防解耦改动回归 daily 路径）。"""
         import collectors.market as market_mod
         monkeypatch.setattr(market_mod, "BASE_DIR", tmp_path)
-        daily = tmp_path / "daily"
-        # 写 6 天历史，上证 close 递增
-        for i in range(6):
-            d = daily / f"2026-05-1{i}"
-            d.mkdir(parents=True)
-            with open(d / "post-market.yaml", "w", encoding="utf-8") as f:
-                yaml.dump({"raw_data": {"indices": {"shanghai": {"close": 4000.0 + i * 10}}}}, f, allow_unicode=True)
+        folder = tmp_path / "data"
+        folder.mkdir()
+        sh_quote = {"code": "000001.SH", "trade_date": "2026-05-26",
+                    "_source": "tushare:index_daily", "close": 4200.0}
+        with sqlite3.connect(folder / "trade.db") as db:
+            db.executescript("""
+                CREATE TABLE trade_calendar (exchange, date, is_open);
+                CREATE TABLE market_timing_signal (index_code, trade_date, close, data_source, updated_at);
+                CREATE TABLE daily_market (date, raw_data);
+            """)
+            for n in range(20, 27):
+                day = f"2026-05-{n}"
+                db.execute("INSERT INTO trade_calendar VALUES ('SSE', ?, ?)", (day, int(n not in (23, 24))))
+                if n < 26 and n not in (23, 24):
+                    db.execute("INSERT INTO market_timing_signal VALUES ('000001.SH', ?, ?, 'tushare:index_daily', ?)",
+                               (day, 4000 + n, day + " 12:00:00"))
+            db.execute("INSERT INTO daily_market VALUES ('2026-05-26', ?)", (json.dumps({
+                "date": "2026-05-26", "generated_at": "2026-05-26T20:00:00",
+                "raw_data": {"date": "2026-05-26", "indices": {"shanghai": sh_quote}}
+            }),))
 
         registry = MagicMock()
         registry.call.return_value = _weekly_result([4100, 4110, 4120, 4130, 4140])
         collector = MarketCollector(registry)
 
-        result = {"indices": {"shanghai": {"close": 4200.0}}}
+        result = {"indices": {"shanghai": sh_quote}}
         collector._compute_index_ma(result, "2026-05-26")
 
         assert "moving_averages" in result
         sh = result["moving_averages"]["shanghai"]
         assert "ma5" in sh and "above_ma5" in sh
-        assert sh["above_ma5"] is True  # 今日 4200 高于历史均值
+        assert sh["ma5"] == (4020 + 4021 + 4022 + 4025 + 4200) / 5
+        assert sh["above_ma5"] is True and "ma10" not in sh

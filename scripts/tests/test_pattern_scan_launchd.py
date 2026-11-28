@@ -108,3 +108,28 @@ def test_schedule_does_not_collide_with_siblings():
             slot = (item.get("Hour"), item.get("Minute"))
             assert slot != mine, f"{path.name} 与 pattern-scan 同在 {mine}"
     assert checked > 0, "未读到任何兄弟 plist，冲突检查形同虚设"
+
+
+def test_partial_cli_keeps_verified_report_and_labels_delivery(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+    from cli import pattern_scan
+    import main
+
+    result = dict(status="partial", universe_count=580, evaluated_count=106, unevaluated_count=474,
+                  date="2026-11-26", rejects=dict(bar_missing=11, qfq_failed=450, insufficient_history=13))
+    monkeypatch.setattr(pattern_scan, "get_connection", MagicMock())
+    monkeypatch.setattr(main, "setup_providers", MagicMock())
+    monkeypatch.setattr("utils.trade_date.is_non_trading_day", lambda *_: False)
+    monkeypatch.setattr(pattern_scan.scanner, "run_daily", lambda *args, **kwargs: result)
+    reports = []
+    monkeypatch.setattr(pattern_scan.renderer, "write_report", lambda md, date: reports.append(md))
+    push = MagicMock(return_value=True)
+    monkeypatch.setattr(pattern_scan, "_push_to_dingtalk", push)
+    args = SimpleNamespace(date="2026-11-26", dry_run=False, no_push=True, top_k=None, top_concepts=None)
+    pattern_scan._run_daily({}, args)
+    push.assert_not_called()
+    args.no_push = False
+    pattern_scan._run_daily({}, args)
+    push.assert_called_once_with("形态篇扫描部分覆盖 · 2026-11-26", reports[-1])
+    assert len(reports) == 2 and "106/580" in reports[-1] and "今日无命中" not in reports[-1]

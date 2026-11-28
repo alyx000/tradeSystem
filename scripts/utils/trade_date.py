@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +25,24 @@ def get_prev_trade_date(registry, today: str) -> str:
         if r.success and r.data:
             return candidate
     return (datetime.strptime(today, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
+
+
+def verified_previous_session(conn: sqlite3.Connection, trade_date: str) -> str | None:
+    """只在 SSE 日历证明两个开放日之间逐日休市时返回上一开放日。"""
+    from db import queries as Q
+
+    previous = Q.get_prev_trade_date_from_db(conn, trade_date)
+    if previous is None:
+        return None
+    start, end = date.fromisoformat(previous), date.fromisoformat(trade_date)
+    days = (end - start).days
+    expected = [((start + timedelta(days=i)).isoformat(), int(i in (0, days)), "SSE")
+                for i in range(days + 1)]
+    rows = conn.execute(
+        "SELECT date, is_open, exchange FROM trade_calendar WHERE date BETWEEN ? AND ? ORDER BY date",
+        (previous, trade_date),
+    )
+    return previous if [tuple(row) for row in rows] == expected else None
 
 
 def is_trade_day(date: str, *, conn: sqlite3.Connection | None = None, registry=None) -> bool | None:

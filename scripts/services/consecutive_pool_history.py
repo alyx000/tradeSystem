@@ -11,6 +11,8 @@ from zoneinfo import ZoneInfo
 
 import yaml
 
+from utils.post_archive import archive_lock
+
 from analyzers import consecutive_pool as pool
 from db.connection import get_readonly_connection
 from services.low_price_effect_history import _atomic_text, DEFAULT_DAILY_DIR
@@ -61,9 +63,10 @@ def backfill(registry, start_date, end_date, *, input_by, daily_dir=DEFAULT_DAIL
                 raise ValueError('既有盘后归档日期或结构无效，拒绝构造或替换')
             old = pool.from_archive(envelope, day)
             if old['status'] == 'complete' and pool.KEY in envelope['raw_data']:
-                if path.read_bytes() != original:
-                    raise ValueError('归档已并发变化，拒绝同步')
-                synced = bool(sync_fn(day, envelope))
+                with archive_lock(path):
+                    if path.read_bytes() != original:
+                        raise ValueError('归档已并发变化，拒绝同步')
+                    synced = bool(sync_fn(day, envelope))
                 receipt.update(status='already_complete' if synced else 'sync_failed', db_synced=synced,
                                source_status='complete', count=old['count'], amount_yi=old['amount_yi'])
             else:
@@ -95,14 +98,15 @@ def backfill(registry, start_date, end_date, *, input_by, daily_dir=DEFAULT_DAIL
                           {r['code'] for r in snapshot['rows'] if r['amount_yi'] is not None})):
                     receipt['status'] = 'fallback_preserved'
                 else:
-                    if path.read_bytes() != original:
-                        raise ValueError('归档在补采期间变化，拒绝覆盖，请重试')
-                    backup = run_dir/f'{day}.post-market.before.yaml'
-                    _atomic_text(backup, original.decode('utf-8'))
-                    updated = deepcopy(envelope)
-                    updated['raw_data'][pool.KEY] = snapshot
-                    _atomic_text(path, yaml.dump(updated, Dumper=yaml.CSafeDumper, allow_unicode=True, sort_keys=False))
-                    synced = bool(sync_fn(day, updated))
+                    with archive_lock(path):
+                        if path.read_bytes() != original:
+                            raise ValueError('归档在补采期间变化，拒绝覆盖，请重试')
+                        backup = run_dir/f'{day}.post-market.before.yaml'
+                        _atomic_text(backup, original.decode('utf-8'))
+                        updated = deepcopy(envelope)
+                        updated['raw_data'][pool.KEY] = snapshot
+                        _atomic_text(path, yaml.dump(updated, Dumper=yaml.CSafeDumper, allow_unicode=True, sort_keys=False))
+                        synced = bool(sync_fn(day, updated))
                     receipt.update(status='persisted' if synced else 'sync_failed', db_synced=synced,
                                    backup_path=str(backup), original_sha256=hashlib.sha256(original).hexdigest(),
                                    count=snapshot['count'], amount_yi=snapshot['amount_yi'])

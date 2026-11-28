@@ -415,7 +415,6 @@ class TestPrefillIsTradingDay:
         with patch("api.routes.review.Q") as mock_q, \
              patch("api.routes.review.build_holding_signals", return_value={"date": date, "items": []}), \
              patch("api.routes.review.parse_post_market_envelope", return_value=None), \
-             patch("api.routes.review.holdings_quote_details_from_envelope", return_value={}), \
              patch("api.routes.review.enrich_daily_market_row"):
             mock_q.get_daily_market.return_value = market
             mock_q.get_prev_daily_market.return_value = None
@@ -454,7 +453,6 @@ class TestPrefillIsTradingDay:
         with patch("api.routes.review.Q") as mock_q, \
              patch("api.routes.review.build_holding_signals", return_value={"date": "2026-05-01", "items": []}), \
              patch("api.routes.review.parse_post_market_envelope", return_value=None), \
-             patch("api.routes.review.holdings_quote_details_from_envelope", return_value={}), \
              patch("api.routes.review.enrich_daily_market_row"):
             mock_q.get_daily_market.return_value = None
             mock_q.get_prev_daily_market.return_value = None
@@ -588,7 +586,6 @@ class TestPrefillNoteDateRange:
     def _call_prefill(self, date, conn):
         with patch("api.routes.review.build_holding_signals", return_value={"date": date, "items": []}), \
              patch("api.routes.review.parse_post_market_envelope", return_value=None), \
-             patch("api.routes.review.holdings_quote_details_from_envelope", return_value={}), \
              patch("api.routes.review.enrich_daily_market_row"):
             from api.routes.review import get_prefill
             return get_prefill(date, conn=conn)

@@ -37,6 +37,41 @@ def _parse_iso_datetime(raw: object) -> datetime | None:
         return None
 
 
+def rule_status(*, rules=DEFAULT_RULES, now=None, state_path=DEFAULT_STATE_PATH, include_inactive=False):
+    """只读当前规则状态。每条规则的 updated_at 仅在其成功完成计算后写入。"""
+    now = shanghai_now(now)
+    day = now.date()
+    try:
+        state = load_state(Path(state_path))
+    except (OSError, TypeError, ValueError):
+        return {"status": "state_error", "as_of": now.isoformat(), "rules": [],
+                "error": "盘中监控状态不可读或结构异常"}
+    rows = []
+    for rule in rules:
+        effective = rule.is_effective_on(day)
+        if not effective and not include_inactive:
+            continue
+        previous = state["rules"].get(rule.rule_id, {})
+        if not isinstance(previous, dict):
+            return {"status": "state_error", "as_of": now.isoformat(), "rules": [],
+                    "error": "盘中规则状态结构异常"}
+        captured = _parse_iso_datetime(previous.get("updated_at"))
+        quote = _parse_iso_datetime(previous.get("last_quote_at"))
+        if (captured is None or captured.tzinfo is None or captured > now
+                or shanghai_now(captured).date().isoformat() != previous.get("trade_date")):
+            captured = None
+        if (quote is None or quote.tzinfo is None or quote > now
+                or shanghai_now(quote).date().isoformat() != previous.get("trade_date")):
+            quote = None
+        rows.append({"rule_id": rule.rule_id, "code": rule.code, "name": rule.instrument_name,
+                     "valid_from": str(rule.valid_from) if rule.valid_from else None,
+                     "valid_until": str(rule.valid_until) if rule.valid_until else None,
+                     "effective_on_date": effective,
+                     "last_success_at": shanghai_now(captured).isoformat() if captured else None,
+                     "last_quote_at": shanghai_now(quote).isoformat() if quote else None})
+    return {"status": "ok", "as_of": now.isoformat(), "rules": rows}
+
+
 def _event_id(
     rule: MonitorRule,
     quote_at: str,

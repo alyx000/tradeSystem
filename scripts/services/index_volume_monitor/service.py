@@ -10,6 +10,8 @@ from .core import calendar_basis, windows_at, compare_window, event_id, render_a
 from .rules import INDEX_NAMES
 from . import rules as rule_config
 from .opening_environment import opening_observation
+from .bar_archive import archive_fetched
+from .archive_fallback import ArchiveFallback
 
 ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_STATE_PATH = ROOT / "data/runs/intraday-monitor/index-volume-state.json"
@@ -72,19 +74,42 @@ def _default_pusher():
 def _fetch(registry, code, previous, day):
     try:
         result = registry.call_specific("eastmoney","get_index_intraday_bars",code,previous,day,period_minutes=5)
-        if not result.success or result.source != "eastmoney:index_5min":
-            raise ValueError(getattr(result,"error","") or "指数K线来源非法")
+        if result.source != "eastmoney:index_5min":
+            return None,"指数K线来源非法"
+        if not result.success:
+            return None,result.error
         if not isinstance(result.data,list) or not result.data or any(
             not isinstance(row,dict) or type(row.get("period_minutes")) is not int
             or row["period_minutes"] != 5 for row in result.data
         ):
-            raise ValueError("指数成交额监控必须使用原生5分钟K线")
+            return None,"指数成交额监控必须使用原生5分钟K线"
         return result.data,None
     except Exception as exc:
-        return None,f"{code}: {type(exc).__name__}: {exc}"
+        return None,f"{code}: 指数K线调用异常 {type(exc).__name__}"
 
 
-def _run_locked(registry, state, path, reports, slots, now, previous, input_by, dry_run, factory, clock, rule):
+
+def _compare_with_fallback(code, period, end, previous, rows, error, rule, fallback):
+    if error:
+        if error.startswith(("payload_invalid", "指数K线来源非法", "指数成交额监控必须")):
+            raise ValueError(error)
+        primary_error = error
+    else:
+        try:
+            return compare_window(code, period, end, previous, rows, rule=rule)
+        except ValueError as exc:
+            # 本次身份、单位或重复行错误保留失败，只对缺少完整比较窗补根。
+            primary_error = str(exc)
+            if not primary_error.startswith("缺少完整"):
+                raise
+    try:
+        return fallback.compare(code, period, end, previous, rows or [], primary_error, rule)
+    except (ValueError, TypeError, KeyError, AttributeError, OverflowError) as exc:
+        raise ValueError(f"{primary_error}；同源归档不可用：{exc}") from None
+
+
+def _run_locked(registry, state, path, reports, slots, now, previous, input_by, dry_run, factory, clock, rule,
+                fetched=None):
     _validate(state,rule)
     state["kind"] = "index-volume"
     allowed = {event_id(code,period,end,rule.rule_id) for period,end in slots for code in rule.codes}
@@ -97,14 +122,15 @@ def _run_locked(registry, state, path, reports, slots, now, previous, input_by, 
     results = {}
     provider_error = None
     if needed:
+        fallback = ArchiveFallback(reports / "ohlcv-5m", now)
         try:
             provider = registry.get_provider("eastmoney")
             if provider is None or not provider.supports("get_index_intraday_bars"):
-                raise ValueError("东方财富指数分时能力未启用")
-            if not getattr(provider,"_initialized",False) and not provider.initialize():
-                raise ValueError("东方财富指数分时初始化失败")
+                provider_error = "东方财富指数分时能力未启用"
+            elif not getattr(provider,"_initialized",False) and not provider.initialize():
+                provider_error = "东方财富指数分时初始化失败"
         except Exception as exc:
-            provider_error = f"{type(exc).__name__}: {exc}"
+            provider_error = f"东方财富指数分时初始化异常 {type(exc).__name__}"
         if provider_error:
             results = {code:(None,provider_error) for code in needed}
         else:
@@ -119,9 +145,9 @@ def _run_locked(registry, state, path, reports, slots, now, previous, input_by, 
                 if key in checked:
                     continue
                 try:
-                    if error:
-                        raise ValueError(error)
-                    e = compare_window(code,period,end,previous,rows,rule=rule)
+                    if provider_error:
+                        raise ValueError(provider_error)
+                    e = _compare_with_fallback(code, period, end, previous, rows, error, rule, fallback)
                     e["input_by"] = input_by
                     e["captured_at"] = now.isoformat()
                     evaluations.append(e)
@@ -134,6 +160,8 @@ def _run_locked(registry, state, path, reports, slots, now, previous, input_by, 
     # 超时、跨槽、跨日一律不得把刚取回的旧窗口补发；也不推进其已检查基线。
     if windows_at(finished,periods=rule.periods) != slots:
         return {"status":"expired_window","events":[],"errors":["取数完成时已超过窗口，未告警/未推进检查基线"],"pushed":False}
+    if fetched is not None and results:
+        fetched.update(rows=results, captured_at=finished.isoformat())
     covered = len(checked & allowed)
     status = "complete" if covered == len(allowed) else ("partial" if covered else "source_failed")
     # 10点仍用本轮5分钟行情计算前半小时环境；与5/15分钟提醒周期独立。
@@ -219,6 +247,18 @@ def run_index_volume(registry, *, input_by="USER", dry_run=False, state_path=DEF
             state = load_state(path)
             return _run_locked(state=state,**kwargs)
         with locked_state(path) as state:
-            return _run_locked(state=state,**kwargs)
+            fetched = {}
+            result = _run_locked(state=state, fetched=fetched, **kwargs)
+            if fetched:
+                # 原账本及发送流程先完成；归档失败独立留痕，不触发新的请求或投递。
+                result["ohlcv_archive"] = archive_fetched(
+                    Path(report_root) / "ohlcv-5m", fetched["rows"], previous=previous, end=slots[0][1],
+                    captured_at=fetched["captured_at"], input_by=input_by.strip())
+        if slots[0][1].strftime("%H:%M") == "15:00":
+            from .coverage import FIRST_5M_DAY, receipt_coverage
+            if now.date() >= FIRST_5M_DAY:
+                summary = receipt_coverage(Path(report_root), now.date(), now.date(), now=now, db_path=db_path)
+                result["realtime_coverage"] = {key: value for key, value in summary.items() if key != "days"}
+        return result
     except (OSError,ValueError,TypeError,KeyError,OverflowError) as exc:
         return {"status":"state_error","events":[],"errors":[f"{type(exc).__name__}: {exc}"],"pushed":False}

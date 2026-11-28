@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { type StepProps, Section, Row, PrefillBanner, Metric, SelectField, TextField, NumberField, TextareaField, TeacherNotesPanel } from './widgets'
 import CognitionPanel from './CognitionPanel'
@@ -107,27 +107,34 @@ function IndustryHeatBar({ rows }: { rows: ResearchCoverageIndustryRow[] }) {
   )
 }
 
-function ResearchCoveragePanel({ todayItems, todayIndustry }: { todayItems?: ResearchCoverageRow[]; todayIndustry?: ResearchCoverageIndustryRow[] }) {
+function ResearchCoveragePanel({ date, todayItems, todayIndustry }: {
+  date: string
+  todayItems?: ResearchCoverageRow[]
+  todayIndustry?: ResearchCoverageIndustryRow[]
+}) {
   const [rangeDays, setRangeDays] = useState(0)
-  const [rangeData, setRangeData] = useState<{ covered_days: number; items: ResearchCoverageRow[]; industry: ResearchCoverageIndustryRow[] } | null>(null)
-  const [loading, setLoading] = useState(false)
+  const [result, setResult] = useState<{
+    date: string
+    days: number
+    data: Awaited<ReturnType<typeof api.getResearchCoverage>> | null
+  } | null>(null)
+  useEffect(() => {
+    if (rangeDays === 0) return
+    let cancelled = false
+    api.getResearchCoverage(rangeDays, date)
+      .then(data => { if (!cancelled) setResult({ date, days: rangeDays, data }) })
+      .catch(() => { if (!cancelled) setResult({ date, days: rangeDays, data: null }) })
+    return () => { cancelled = true }
+  }, [date, rangeDays])
+  const current = result?.date === date && result.days === rangeDays ? result : null
+  const rangeData = current?.data
+  const loading = rangeDays > 0 && !current
 
-  const handleRangeChange = (days: number) => {
-    setRangeDays(days)
-    if (days === 0) { setRangeData(null); return }
-    setRangeData(null)  // 先清旧 range 数据：避免新 tab 请求失败时复用上一轮的 items/industry（在新标题下展示错数据）
-    setLoading(true)
-    api.getResearchCoverage(days)
-      .then((res) => setRangeData({ covered_days: res.covered_days, items: res.items, industry: res.industry ?? [] }))
-      .catch(() => {})
-      .finally(() => setLoading(false))
-  }
-
-  const items = rangeDays === 0 ? (todayItems || []) : (rangeData?.items || [])
+  const items: ResearchCoverageRow[] = rangeDays === 0 ? (todayItems || []) : (rangeData?.items || [])
   const industry = rangeDays === 0 ? (todayIndustry || []) : (rangeData?.industry || [])
   const subtitle = rangeDays === 0
     ? '当日'
-    : `近${rangeDays}日（${rangeData?.covered_days ?? 0}日有数据）`
+    : `近${rangeDays}日${rangeData ? `（${rangeData.covered_days}日有数据）` : ''}`
 
   if (rangeDays === 0 && !items.length) return null
 
@@ -142,7 +149,7 @@ function ResearchCoveragePanel({ todayItems, todayIndustry }: { todayItems?: Res
           {RANGE_OPTIONS.map(opt => (
             <button
               key={opt.days}
-              onClick={() => handleRangeChange(opt.days)}
+              onClick={() => setRangeDays(opt.days)}
               className={`px-2 py-0.5 text-xs rounded ${rangeDays === opt.days ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}
             >
               {opt.label}
@@ -152,6 +159,8 @@ function ResearchCoveragePanel({ todayItems, todayIndustry }: { todayItems?: Res
       </div>
       {loading ? (
         <div className="text-xs text-gray-400 py-2">加载中...</div>
+      ) : current && !rangeData ? (
+        <div className="text-xs text-gray-400 py-2">研报覆盖数据暂不可用</div>
       ) : items.length ? (
         (() => {
           // 仅「当日」tab 富化：展开项（评级方向徽章+观点）排前，长尾仍是紧凑药丸。
@@ -325,10 +334,11 @@ export default function StepMarket({ data, onChange, prefill }: StepProps) {
         </PrefillBanner>
       )}
 
-      <ResearchCoveragePanel
+      {prefill?.date && <ResearchCoveragePanel
+        date={prefill.date}
         todayItems={marketSignals?.research_coverage_top}
         todayIndustry={marketSignals?.research_coverage_industry}
-      />
+      />}
 
       <MarginIndexCorrelation date={prefill?.date} />
 

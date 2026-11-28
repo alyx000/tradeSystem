@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
@@ -103,6 +103,17 @@ beforeEach(() => {
 })
 
 describe('MarketOverview', () => {
+  it('labels the original session and the later session used for feedback in the archived envelope', async () => {
+    vi.mocked(api.getMarket).mockResolvedValue({ available: false } as MarketFullData)
+    vi.mocked(api.getPostMarket).mockResolvedValue({
+      available: true,
+      t1_feedback_dates: { source_trade_date: '2026-11-20', outcome_trade_date: '2026-11-23' },
+    })
+    renderPage('2026-11-20')
+    fireEvent.click(await screen.findByRole('button', { name: '盘后信封' }))
+    expect(await screen.findByText('次日反馈使用 2026-11-23 的行情，核验 2026-11-20 的观察对象。')).toBeInTheDocument()
+  })
+
   it('renders market status, emotion status, limit_step, strongest sectors and dual-source sector moneyflow sections in summary view', async () => {
     const market: MarketFullData = {
       available: true,
@@ -130,9 +141,14 @@ describe('MarketOverview', () => {
       premium_20cm: 3.4,
       premium_30cm: 1.2,
       premium_second_board: 4.5,
-      sector_industry: { data: [{ name: '算力', change_pct: 5.1 }] },
+      sector_industry: { data: [{ name: '算力', change_pct: 5.1 }], bottom: [{ name: '渔业', change_pct: -2.78 }] },
       sector_concept: { data: [{ name: 'AI应用', change_pct: 6.2 }] },
-      sector_fund_flow: { data: [{ name: '软件开发', change_pct: 4.8, net_inflow: 22.5 }] },
+      sector_fund_flow: { data: [
+        { name: '电子', net_inflow_billion: 461.9 }, { name: '半导体', net_inflow_billion: 0, net_inflow: 0 },
+        { name: '归档金额冲突', net_inflow_billion: 0, net_inflow: 7 },
+        { name: '微流入', net_inflow_billion: 0.0049 }, { name: '旧微流出', net_inflow: -0.0049 },
+        { name: '旧档资金', net_inflow: -22.5 }, { name: '缺值行业' },
+      ] },
       sector_moneyflow_ths: {
         data: [
           { ts_code: '881001.TI', industry: '软件开发', net_amount: 22.5, pct_change: 4.8, lead_stock: '高标A' },
@@ -199,6 +215,34 @@ describe('MarketOverview', () => {
     expect(screen.getByText('THS 行业资金流前列')).toBeInTheDocument()
     expect(screen.getByText('DC 板块资金流前列')).toBeInTheDocument()
     expect(screen.getAllByText('软件开发').length).toBeGreaterThan(0)
+    fireEvent.click(screen.getByRole('button', { name: '跌幅↓' }))
+    expect(screen.getByText('渔业')).toBeInTheDocument()
+    expect(screen.getByText('-2.78%')).toBeInTheDocument()
+    expect(screen.queryByText('算力')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '概念' }))
+    expect(screen.getByText('当日归档缺少板块跌幅榜')).toBeInTheDocument()
+    expect(screen.queryByText('AI应用')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '资金流向' }))
+    expect(screen.queryByRole('button', { name: '跌幅↓' })).not.toBeInTheDocument()
+    const table = screen.getByText('来源顺序').closest('table')
+    expect(table?.querySelector('tbody tr')?.textContent).toContain('电子')
+    for (const [sector, amount] of [['电子', '461.90'], ['半导体', '0.00'], ['归档金额冲突', '-'], ['微流入', '0.0049'], ['旧微流出', '-0.0049'], ['旧档资金', '-22.50'], ['缺值行业', '-']]) {
+      expect(screen.getByText(sector).closest('tr')?.lastElementChild?.textContent).toBe(amount)
+    }
+  })
+
+  it('anchors histories to the selected date and keeps later dates available for navigation', async () => {
+    vi.mocked(api.getMarket).mockResolvedValue({ available: false } as MarketFullData)
+    renderPage('2026-03-27')
+    expect(await screen.findByRole('option', { name: '历史 2026-03-27' })).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: '历史 2026-04-03' })).toBeInTheDocument()
+    expect(api.getMarketHistory).toHaveBeenCalledWith(20)
+    expect(api.getMarketHistory).toHaveBeenCalledWith(20, '2026-03-27')
+    expect(api.getConcentrationHistory).toHaveBeenCalledWith(30, '2026-03-27')
+    expect(api.getMainThemes).toHaveBeenCalledWith('2026-03-27')
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: '2026-04-02' } })
+    await waitFor(() => expect(api.getMarketHistory).toHaveBeenCalledWith(20, '2026-04-02'))
+    expect(api.getConcentrationHistory).toHaveBeenCalledWith(30, '2026-04-02')
   })
 
   it('中证2000 / 平均股价：daily_market 未采集，卡片点位取自 market-timing payload', async () => {

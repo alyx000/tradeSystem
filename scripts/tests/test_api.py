@@ -274,7 +274,7 @@ class TestReview:
             conn,
             stock_code="300750",
             stock_name="宁德时代",
-            entry_price=170.0,
+            entry_price=170.0, current_price=999.0,
             status="active",
         )
         conn.commit()
@@ -285,7 +285,59 @@ class TestReview:
         h = r.json()["holdings"]
         assert len(h) == 1
         assert h[0]["current_price"] == 180.5
+        assert h[0]["entry_price"] is None  # 当日成本缺失，不得采用活跃持仓成本
+        assert r.json()["holding_signals"]["items"][0]["price_snapshot"]["current_price"] == 180.5
         assert h[0]["prefill_pnl_pct"] == 3.25
+
+    def test_historical_holdings_keep_failed_members_and_exclude_future_positions(self, client, db_path):
+        conn = get_connection(db_path)
+        Q.upsert_daily_market(conn, {"date": "2026-06-12", "raw_data": {"date": "2026-06-12",
+            "holdings_data": [{"code": "000001.SZ", "name": "有行情", "cost": 10, "close": 11, "pnl_pct": 10},
+                              {"code": "000002.SZ", "name": "缺行情", "error": "无报价"}]}})
+        Q.upsert_holding(conn, stock_code="000003", stock_name="后来建仓", entry_date="2026-08-27", status="active")
+        Q.upsert_holding_quote_snapshot(conn, trade_date="2026-06-11",stock_code="000002",close=99,ma5=90)
+        conn.commit()
+        conn.close()
+        data = client.get("/api/review/2026-06-12/prefill").json()
+        archived, missing = data["holdings"]
+        assert [archived["stock_code"], missing["stock_code"]] == ["000001.SZ", "000002.SZ"]
+        assert archived["current_price"] == 11 and archived["entry_price"] == 10
+        assert missing["current_price"] is None and missing["prefill_pnl_pct"] is None
+        signals = data["holding_signals"]["items"]
+        assert [s["stock_code"] for s in signals] == ["000001.SZ", "000002.SZ"]
+        assert signals[1]["price_snapshot"]["current_price"] is None
+        assert signals[1]["technical_signals"]["ma5"] is None
+        assert signals[0]["price_snapshot"]["pre_close"] is None
+
+    def test_mismatched_holdings_quotes_do_not_supply_historical_prices_or_signals(self, client, db_path):
+        conn = get_connection(db_path)
+        Q.upsert_daily_market(conn, {"date": "2026-06-12", "raw_data": {"date": "2026-06-12",
+            "holdings_data": [{"code": "000001.SZ", "name": "错日", "trade_date": "20260615",
+                               "cost": 11, "close": 12, "pnl_pct": 9, "ma5": 10}]}})
+        conn.commit()
+        conn.close()
+        data = client.get("/api/review/2026-06-12/prefill").json()
+        assert len(data["holdings"]) == 1
+        assert data["holdings"][0]["current_price"] is None
+        sig = data["holding_signals"]["items"][0]
+        assert sig["price_snapshot"]["pnl_pct"] is None
+        assert sig["technical_signals"]["above_ma5"] is None
+        assert sig["theme_signals"]["is_main_theme"] is None
+
+    def test_today_preopen_never_uses_previous_close_as_today_quote(self, client, db_path, monkeypatch):
+        import datetime
+        from zoneinfo import ZoneInfo
+        monkeypatch.setattr("services.holding_signals._shanghai_now",
+                            lambda: datetime.datetime(2026, 6, 15, 8, tzinfo=ZoneInfo("Asia/Shanghai")))
+        conn = get_connection(db_path)
+        Q.upsert_holding(conn, stock_code="000001", stock_name="当前", current_price=100.0, status="active")
+        Q.upsert_holding_quote_snapshot(conn, trade_date="2026-06-12", stock_code="000001", close=100.0)
+        conn.commit()
+        conn.close()
+        data = client.get("/api/review/2026-06-15/prefill").json()
+        assert data["holdings"] == [] and data["holdings_source"] == "missing"
+        signal = client.get("/api/holdings/signals?date=2026-06-15").json()["items"][0]
+        assert signal["price_snapshot"]["current_price"] is None
 
     def test_prefill_prev_market_scrubs_legacy_northbound(self, client, db_path):
         """北向净额下线（口径存疑）：复盘预填 prev_market 不得外泄前一日 raw_data.northbound。
@@ -324,6 +376,8 @@ class TestReview:
 
     def test_prefill_includes_holding_signals(self, client, db_path):
         conn = get_connection(db_path)
+        conn.executemany("INSERT OR REPLACE INTO trade_calendar(date,is_open,exchange) VALUES (?,1,'SSE')",
+                         [("2026-04-02",), ("2026-04-03",)])
         Q.upsert_daily_market(conn, {
             "date": "2026-04-03",
             "sh_index_close": 3210.0,
@@ -333,7 +387,7 @@ class TestReview:
                 "holdings_data": [
                     {
                         "code": "300750.SZ",
-                        "name": "宁德时代",
+                        "name": "宁德时代", "sector": "电池", "cost": 180.0,
                         "close": 192.0,
                         "pnl_pct": 6.67,
                         "ma5": 188.0,
@@ -459,7 +513,7 @@ class TestReview:
         labels = {flag["label"] for flag in item["risk_flags"]}
         assert "财报临近" in labels
         assert "ST" in labels
-        assert "临近止盈" in labels
+        assert "临近止盈" not in labels  # 活跃池中可变目标价未随事实日归档
         assert "info_signals" in item
         assert item["info_signals"]["investor_qa"] == []
         assert item["info_signals"]["research_reports"] == []
@@ -530,18 +584,9 @@ class TestReview:
         r = client.get("/api/review/2026-04-03/prefill")
         assert r.status_code == 200
         data = r.json()
-        item = data["holding_signals"]["items"][0]
-        assert item["stock_code"] == "300750"
-        assert item["price_snapshot"]["current_price"] == 181.0
-        assert item["event_signals"]["recent_announcements"] == []
-        assert item["event_signals"]["disclosure_dates"] == []
-        assert item["event_signals"]["share_float_upcoming"] == []
-        assert item["theme_signals"]["is_main_theme"] is False
-        assert item["risk_flags"] == []
-        assert "info_signals" in item
-        assert item["info_signals"]["investor_qa"] == []
-        assert item["info_signals"]["research_reports"] == []
-        assert item["info_signals"]["news"] == []
+        assert data["holdings"] == []
+        assert data["holding_signals"]["items"] == []
+        assert data["holdings_source"] == "missing"
 
     def test_prefill_holding_signals_include_stop_loss_and_target_alerts(self, client, db_path):
         conn = get_connection(db_path)
@@ -555,6 +600,9 @@ class TestReview:
             target_price=100.0,
             status="active",
         )
+        Q.upsert_daily_market(conn, {"date": "2026-04-03", "raw_data": {
+            "date": "2026-04-03", "holdings_data": [{"code": "300750", "name": "宁德时代",
+            "cost": 180.0, "close": 100.0, "stop_loss": 101.0, "target_price": 100.0}]}})
         conn.commit()
         conn.close()
 
@@ -2061,12 +2109,17 @@ class TestPlanningAndKnowledgeAPI:
 
     def test_holdings_signals_api(self, client, db_path):
         conn = get_connection(db_path)
+        conn.executemany("INSERT OR REPLACE INTO trade_calendar(date,is_open,exchange) VALUES (?,1,'SSE')",
+                         [("2026-04-02",), ("2026-04-03",)])
         Q.upsert_daily_market(conn, {
             "date": "2026-04-03",
             "raw_data": json.dumps({
                 "holdings_data": [
                     {
                         "code": "300750.SZ",
+                        "name": "宁德时代",
+                        "sector": "电池",
+                        "cost": 180.0,
                         "close": 192.0,
                         "pnl_pct": 6.67,
                         "ma5": 188.0,
@@ -2121,7 +2174,7 @@ class TestPlanningAndKnowledgeAPI:
         assert data["date"] == "2026-04-03"
         assert len(data["items"]) == 1
         item = data["items"][0]
-        assert item["stock_code"] == "300750"
+        assert item["stock_code"] == "300750.SZ"
         assert item["price_snapshot"]["current_price"] == 192.0
         # 涨跌停价按板块比例实时算（创业板 300xxx → 20%），基准来自 daily_basic 收盘 192.0：
         # down = 192 × 0.8 = 153.6；上面那份 stk_limit 快照（171.0，错按 10% 塞）已不再被读取。
@@ -2276,6 +2329,9 @@ class TestPlanningAndKnowledgeAPI:
             "raw_data": {
                 "sector_industry": {"data": [{"name": "电力", "pct_change": 2.5}]},
                 "sector_concept": {"data": [{"name": "AI算力", "pct_change": 3.1}]},
+                "sector_fund_flow": [{"net_inflow_billion": 0.0049}, {"net_inflow": -0.0049},
+                                    {"net_inflow_billion": 0, "net_inflow": 0},
+                                    {"net_inflow_billion": 0, "net_inflow": 7}, {"name": "缺额"}],
             },
         })
         conn.commit()
@@ -2286,6 +2342,10 @@ class TestPlanningAndKnowledgeAPI:
         assert data["available"] is True
         assert data["sector_industry"]["data"][0]["name"] == "电力"
         assert data["sector_concept"]["data"][0]["name"] == "AI算力"
+        rows = data["sector_fund_flow"]
+        assert [r["net_inflow_billion"] for r in rows] == [0.0049, -0.0049, 0, None, None]
+        assert rows[1]["net_inflow"] == -0.0049 and rows[3]["net_inflow"] is None
+        assert client.get("/api/post-market/2026-05-01").json()["sector_fund_flow"] == rows
 
     def test_market_nested_envelope_raw_data(self, client, db_path):
         """post-market 信封：indices/板块仅在内层 raw_data 时也应展开到 API。"""
@@ -2346,6 +2406,10 @@ class TestPlanningAndKnowledgeAPI:
         data = r.json()
         assert len(data) >= 2
         assert "raw_data" not in data[0]
+        response = seeded_client.get("/api/market/history", params={"days": 1, "to_date": "2026-04-01"})
+        assert [row["date"] for row in response.json()] == ["2026-04-01"]
+        assert seeded_client.get("/api/market/history?to_date=2026-03-31").json() == []
+        assert seeded_client.get("/api/market/history?to_date=2026-02-30").status_code == 422
 
     def _seed_concentration(self, db_path, days):
         """days=[(date, total, [(行业,share)], [stocks])]。"""
@@ -2379,6 +2443,9 @@ class TestPlanningAndKnowledgeAPI:
         assert p["snapshot"]["date"] == "2026-05-29"
         assert p["snapshot"]["rotation"]["new"] == [{"name": "乙", "industry": "通信", "change_pct": -3.5}]
         assert p["snapshot"]["rotation"]["dropped"] == [{"name": "甲"}]
+        past = client.get("/api/market/concentration/history?days=1&to_date=2026-05-28").json()
+        assert [s["date"] for s in past["series"]] == ["2026-05-28"]
+        assert past["snapshot"]["date"] == "2026-05-28"
 
     def test_concentration_history_empty(self, client):
         r = client.get("/api/market/concentration/history")
@@ -3006,6 +3073,8 @@ class TestEnrichMarketRow:
             conn,
             {"date": "2026-05-21", "theme_name": "未来主线", "status": "active"},
         )
+        Q.upsert_emotion_cycle(conn, {"date": "2026-05-18", "phase": "启动"})
+        Q.upsert_emotion_cycle(conn, {"date": "2026-05-21", "phase": "分歧"})
         conn.commit()
         conn.close()
 
@@ -3014,6 +3083,8 @@ class TestEnrichMarketRow:
         assert [(item["theme_name"], item["date"]) for item in data["main_themes"]] == [
             ("电池", "2026-05-18"),
         ]
+        assert client.get("/api/main-themes?to_date=2026-05-20").json() == data["main_themes"]
+        assert data["emotion_cycle"]["date"] == "2026-05-18"
         candidate_names = {
             item["sector_name"]
             for item in data["review_signals"]["sectors"]["projection_candidates"]
@@ -3485,13 +3556,36 @@ def test_market_timing_by_date_returns_signals_and_context(client, db_path):
     assert data["resonance_count"] == 3
     assert data["context"]["market_amount_yi"] == 32150.0
     assert data["context"]["amount_pctile_20d"] == 0.8
-    assert data["context"]["limit_down_count"] == 12
+    assert data["context"]["limit_down_count"] is None
+    assert data["context"]["limit_down_fact"]["status"] == "unknown"
+    assert data["context"]["recorded_limit_down"] == {
+        "status": "legacy", "count": 12, "trade_date": "2026-06-12",
+    }
     assert len(data["signals"]) == 2
     sh = next(s for s in data["signals"] if s["index_code"] == "000001.SH")
     assert sh["fib_hit"] == 21 and sh["swing_pivot_price"] == 4258.86
     assert sh["fractal_status"] == "forming"
     # 市场级列不混进逐指数行
     assert "resonance_count" not in sh
+
+
+def test_market_timing_archived_count_preserves_historical_snapshot(client, db_path):
+    day = "2026-11-18"
+    with get_connection(db_path) as conn:
+        _seed_timing(conn, day, indices=[("000001.SH", "上证综指", {})],
+                     resonance=0, amount_yi=None, pctile=None, limit_down=0)
+        block = dict(_source="tushare:daily+stk_limit", trade_date=day, status="complete",
+                     count=1, count_ex_st=1, coverage=dict(active=1, quoted=1, suspended_without_quote=0),
+                     stocks=[dict(code="600000.SH", name="浦发银行", close=13, down_limit=13, is_st=False)])
+        envelope = dict(date=day, raw_data=dict(date=day, limit_down=block))
+        conn.execute("INSERT INTO daily_market(date,raw_data) VALUES (?,?)", (day, json.dumps(envelope)))
+    resp = client.get(f"/api/market/timing/{day}")
+    assert resp.status_code == 200
+    ctx = resp.json()["context"]
+    assert ctx["limit_down_count"] == 1 and ctx["limit_down_fact"]["status"] == "verified"
+    assert ctx["recorded_limit_down"] == dict(trade_date=day, status="legacy", count=0)
+    with get_connection(db_path) as conn:
+        assert conn.execute("SELECT limit_down_count FROM market_timing_signal").fetchone()[0] == 0
 
 
 def test_market_timing_empty_returns_available_false(client):

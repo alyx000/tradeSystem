@@ -20,6 +20,8 @@ from zoneinfo import ZoneInfo
 
 import yaml
 
+from utils.post_archive import archive_lock, atomic_text as _atomic_text
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DAILY_DIR = PROJECT_ROOT / "daily"
@@ -121,23 +123,6 @@ def load_post_market_envelope(
     return path, envelope
 
 
-def _atomic_text(path: Path, text: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(text)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(tmp_name, path)
-    except Exception:
-        try:
-            os.unlink(tmp_name)
-        except FileNotFoundError:
-            pass
-        raise
-
-
 def _sync_daily_market(
     trade_date: str,
     envelope: dict[str, Any],
@@ -148,6 +133,13 @@ def _sync_daily_market(
 
         sync_fn = sync_daily_market_to_db
     return bool(sync_fn(trade_date, envelope))
+
+
+def _sync_current(trade_date, daily_dir, sync_fn):
+    path = Path(daily_dir) / trade_date / "post-market.yaml"
+    with archive_lock(path):
+        _, envelope = load_post_market_envelope(trade_date, daily_dir=daily_dir)
+        return _sync_daily_market(trade_date, envelope, sync_fn)
 
 
 def persist_date_snapshot(
@@ -164,24 +156,26 @@ def persist_date_snapshot(
     if str(snapshot.get("trade_date") or trade_date) != trade_date:
         raise ValueError("snapshot.trade_date 与目标日不一致")
 
-    path, envelope = load_post_market_envelope(trade_date, daily_dir=daily_dir)
-    stored = deepcopy(snapshot)
-    stored["trade_date"] = trade_date
-    stored["collection_receipt"] = {
-        "mode": "historical_backfill",
-        "input_by": input_by.strip(),
-        "collected_at": datetime.now(TZ).isoformat(),
-    }
-    envelope["raw_data"]["low_price_effect"] = stored
-    body = yaml.safe_dump(
-        envelope,
-        allow_unicode=True,
-        default_flow_style=False,
-        sort_keys=False,
-    )
-    _atomic_text(path, body)
+    path = Path(daily_dir) / trade_date / "post-market.yaml"
+    with archive_lock(path):
+        path, envelope = load_post_market_envelope(trade_date, daily_dir=daily_dir)
+        stored = deepcopy(snapshot)
+        stored["trade_date"] = trade_date
+        stored["collection_receipt"] = {
+            "mode": "historical_backfill",
+            "input_by": input_by.strip(),
+            "collected_at": datetime.now(TZ).isoformat(),
+        }
+        envelope["raw_data"]["low_price_effect"] = stored
+        body = yaml.safe_dump(
+            envelope,
+            allow_unicode=True,
+            default_flow_style=False,
+            sort_keys=False,
+        )
+        _atomic_text(path, body)
 
-    db_synced = _sync_daily_market(trade_date, envelope, sync_fn)
+        db_synced = _sync_daily_market(trade_date, envelope, sync_fn)
     return {
         "status": "persisted" if db_synced else "yaml_only",
         "trade_date": trade_date,
@@ -227,7 +221,7 @@ def backfill_history(
         )
         if existing_status == "complete" and not refetch:
             try:
-                db_synced = _sync_daily_market(trade_date, envelope, sync_fn)
+                db_synced = _sync_current(trade_date, daily_dir, sync_fn)
             except Exception as exc:  # noqa: BLE001 - 单日双写失败不能中断后续日期。
                 receipts.append({
                     "status": "sync_failed",
@@ -259,9 +253,7 @@ def backfill_history(
                 "error": snapshot.get("error"),
             }
             try:
-                receipt["db_synced"] = _sync_daily_market(
-                    trade_date, envelope, sync_fn
-                )
+                receipt["db_synced"] = _sync_current(trade_date, daily_dir, sync_fn)
             except Exception as exc:  # noqa: BLE001 - 保留事实仍可继续处理其他日期。
                 receipt["db_synced"] = False
                 receipt["sync_error"] = str(exc)

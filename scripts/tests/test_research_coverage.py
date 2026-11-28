@@ -359,6 +359,9 @@ class TestRangeApiIndustry:
         # 600519 跨两日合计 5 篇
         assert ind["食品饮料"] == {"industry": "食品饮料", "stock_count": 1, "report_count": 5}
         assert ind["非银金融"] == {"industry": "非银金融", "stock_count": 1, "report_count": 1}
+        past = client.get("/api/market/research-coverage?days=1&to_date=2026-05-28").json()
+        assert past["covered_days"] == 1
+        assert past["items"][0]["report_count"] == 2
 
     def test_old_envelope_without_industry_degrades_unclassified(self, api_client):
         client, db_path = api_client

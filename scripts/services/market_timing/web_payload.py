@@ -2,13 +2,13 @@
 
 build_daily_payload：某交易日 6 指数信号 + 市场级上下文（表格/卡片）。
 build_history_payload：市场级序列（共振数 / 成交额地量分位 随时间，趋势图）。
-全部读 market_timing_signal；市场级列在 scanner 落库时冗余写各行（同日各指数一致）。
+非ST收盘跌停读取同日盘后归档；另列择时快照留存的结果，供对照旧报告。
 """
 from __future__ import annotations
 
 import sqlite3
 
-from . import repo
+from . import limit_down, repo
 
 # 表格用的逐指数字段（市场级列单独放 context，不在每行重复）
 _SIGNAL_FIELDS = (
@@ -21,17 +21,25 @@ _SIGNAL_FIELDS = (
 
 def build_daily_payload(conn: sqlite3.Connection, date: str) -> dict:
     """某交易日 payload。无数据 → available=False（前端优雅显示"暂无"）。"""
-    rows = repo.list_signals(conn, date=date)
+    try:
+        rows = repo.list_signals(conn, date=date)
+    except sqlite3.OperationalError as exc:
+        if str(exc) != "no such table: market_timing_signal":
+            raise
+        rows = []
     if not rows:
         return {"date": date, "available": False, "resonance_count": 0,
                 "context": {}, "signals": []}
     head = rows[0]  # 市场级列冗余写各行，取首行即可
+    down_fact = limit_down.archive_fact(conn, date)
     context = {
         "market_amount_yi": head.get("market_amount_yi"),
         "amount_pctile_20d": head.get("amount_pctile_20d"),
         "advance": head.get("advance"),
         "decline": head.get("decline"),
-        "limit_down_count": head.get("limit_down_count"),
+        "limit_down_count": down_fact["count"],
+        "limit_down_fact": down_fact,
+        "recorded_limit_down": limit_down.recorded_fact(rows, date),
     }
     signals = [{k: r.get(k) for k in _SIGNAL_FIELDS} for r in rows]
     return {

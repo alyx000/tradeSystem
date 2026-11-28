@@ -8,6 +8,7 @@ import type {
   SectorMoneyflowThsRow,
   SectorSnapshotRow,
   SectorTab,
+  SortOrder,
   StrongestSectorRow,
 } from '../../lib/types'
 
@@ -59,11 +60,14 @@ export function parseBoardCounts(raw: unknown): BoardCountItem[] {
   return []
 }
 
-export function getSectorData(m: MarketSelectorSource, tab: SectorTab): SectorSnapshotRow[] {
-  const key = tab === 'industry' ? 'sector_industry'
-    : tab === 'concept' ? 'sector_concept'
-    : 'sector_fund_flow'
-  return extractRows(m[key])
+export function getSectorData(m: MarketSelectorSource, tab: SectorTab, order: SortOrder): SectorSnapshotRow[] {
+  if (tab === 'fund_flow') {
+    return extractRows(m.sector_fund_flow)
+  }
+  const section = tab === 'industry' ? m.sector_industry : m.sector_concept
+  if (Array.isArray(section)) return order === 'gain' ? section : []
+  const rows = order === 'loss' ? section?.bottom : section?.data
+  return Array.isArray(rows) ? rows : []
 }
 
 // ST/*ST/退市股判定: 镜像后端 utils.is_st_stock，保持 web 与采集端同口径。

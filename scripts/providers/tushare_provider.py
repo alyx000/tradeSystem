@@ -10,7 +10,9 @@ import os
 import logging
 import math
 import re
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
+from requests import HTTPError
+from .adj_factor_evidence import FactorDayEvidence, positive_factor
 from .base import DataProvider, DataResult, DataType, Confidence, Timeliness
 
 logger = logging.getLogger(__name__)
@@ -36,6 +38,29 @@ def _normalize_trade_date(raw) -> str | None:
         d = digits[:8]
         return f"{d[:4]}-{d[4:6]}-{d[6:8]}"
     return None
+
+
+def _verify_shanghai_index_rows(frame, start, end):
+    """上证综指回包必须自己带出对应代码和唯一事实日，才可交给均线等消费者。"""
+    from datetime import date as calendar_date
+
+    seen = set()
+    for _, row in frame.iterrows():
+        raw = row["trade_date"]
+        if isinstance(raw, calendar_date):
+            day = raw.strftime("%Y%m%d")
+        else:
+            day = str(raw)
+            if re.fullmatch(r"\d{4}-\d{2}-\d{2}", day):
+                day = day.replace("-", "")
+        if (row["ts_code"] != "000001.SH" or not re.fullmatch(r"\d{8}", day)
+                or not start <= day <= end or day in seen):
+            raise ValueError("上证综指行情的代码、事实日或唯一性未通过核验")
+        datetime.strptime(day, "%Y%m%d")
+        close = float(row["close"])
+        if not math.isfinite(close) or close <= 0:
+            raise ValueError("上证综指收盘无效")
+        seen.add(day)
 
 
 # 业绩预告/快报分页参数（STEP0 2026-06-12 实测：镜像 *_vip 接口 period 拉满 4404 行
@@ -120,6 +145,7 @@ class TushareProvider(DataProvider):
     def __init__(self, config: dict | None = None):
         super().__init__(config)
         self.pro = None
+        self._factor_day_evidence = FactorDayEvidence()
         self._sw_l1_codes: set | None = None
         self._sw_l1_parent_map: dict | None = None
         self._sw_l2_codes: set | None = None
@@ -337,6 +363,61 @@ class TushareProvider(DataProvider):
     def _query_records(self, api_name: str, **params) -> list[dict]:
         return self._df_to_records(self.pro.query(api_name, **params))
 
+    def _stock_range_records(self, api_name, ts_code, start_date, end_date, *, factor_checks=None):
+        """归并区间接口的相同回包，拒绝冲突、错票及超出区间的记录。"""
+        params = dict(ts_code=ts_code, start_date=self._date_fmt(start_date),
+                      end_date=self._date_fmt(end_date))
+        try:
+            records = self._query_records(api_name, **params)
+        except HTTPError as exc:
+            if exc.response is None or exc.response.status_code not in {502, 503, 504}:
+                raise
+            records = self._query_records(api_name, **params)
+        by_date = {}
+        conflicts = {}
+        identical = 0
+        for item in records:
+            raw_day = item.get("trade_date")
+            if isinstance(raw_day, str) and not re.fullmatch(r"(?:[0-9]{8}|[0-9]{4}-[0-9]{2}-[0-9]{2})", raw_day):
+                raise ValueError(f"{api_name} 无有效交易日")
+            day = _normalize_trade_date(raw_day)
+            if day is None or date.fromisoformat(day).isoformat() != day:
+                raise ValueError(f"{api_name} 无有效交易日")
+            if not params["start_date"] <= self._date_fmt(day) <= params["end_date"]:
+                raise ValueError(f"{api_name} 返回日期超出请求范围: {day}")
+            if item.get("ts_code") != ts_code:
+                raise ValueError(f"{api_name} 返回证券身份不匹配: {ts_code} {day}")
+            normalized = {**item, "trade_date": day}
+            if api_name == "adj_factor":
+                normalized = {"ts_code": ts_code, "trade_date": day,
+                              "adj_factor": positive_factor(item.get("adj_factor"))}
+            previous = by_date.get(day)
+            if previous is None:
+                by_date[day] = normalized
+            elif previous == normalized:
+                identical += 1
+            elif api_name == "adj_factor" and factor_checks is not None:
+                values = conflicts.setdefault(day, set())
+                values.update(positive_factor(row.get("adj_factor")) for row in (previous, normalized))
+            else:
+                raise ValueError(f"{api_name} 同日记录冲突: {ts_code} {day}")
+        for day, alternatives in conflicts.items():
+            try:
+                value, source = self._factor_day_evidence.for_stock(
+                    self, day, _normalize_trade_date(end_date), ts_code)
+                if value not in alternatives:
+                    raise ValueError("同日证据与所有区间值均不一致")
+            except ValueError as exc:
+                raise ValueError(f"{api_name} 同日记录冲突: {ts_code} {day}，{exc}") from exc
+            by_date[day] = {"trade_date": day, "ts_code": ts_code, "adj_factor": value}
+            check = f"{ts_code} {day} 区间因子{sorted(alternatives)}，{source}核验为{value}"
+            logger.info("%s", check)
+            factor_checks.append(check)
+        if identical:
+            logger.info("%s %s 合并 %d 条完全一致的重复记录",
+                        api_name, ts_code, identical)
+        return [by_date[day] for day in sorted(by_date)]
+
     # ---- 国际指数（index_global，需约 6000 积分）----
 
     def get_global_index(
@@ -434,6 +515,8 @@ class TushareProvider(DataProvider):
             df = self.pro.index_daily(ts_code=ts_code, start_date=d, end_date=d)
             if df.empty:
                 return DataResult(data=None, source=self.name, error=f"无数据: {ts_code} {date}")
+            if ts_code == "000001.SH":
+                _verify_shanghai_index_rows(df, d, d)
             row = df.iloc[0]
             data = {
                 "code": ts_code,
@@ -593,19 +676,12 @@ class TushareProvider(DataProvider):
             if not ts_code:
                 return DataResult(data=None, source=self.name,
                                   error="stock_code 为空（空 ts_code 会被接口当成全市场查询）")
-            records = self._query_records(
-                "adj_factor", ts_code=ts_code,
-                start_date=self._date_fmt(start_date), end_date=self._date_fmt(end_date))
-            out = []
-            for item in records:
-                td = item.get("trade_date")
-                if td is None:
-                    continue
-                s = str(td).replace("-", "")[:8]
-                norm = f"{s[:4]}-{s[4:6]}-{s[6:8]}" if len(s) == 8 else str(td)
-                out.append({"trade_date": norm, "adj_factor": item.get("adj_factor")})
-            out.sort(key=lambda r: r["trade_date"])
-            return DataResult(data=out, source="tushare:adj_factor")
+            checks = []
+            records = self._stock_range_records("adj_factor", ts_code, start_date, end_date,
+                                                factor_checks=checks)
+            out = [{"trade_date": item["trade_date"], "adj_factor": item.get("adj_factor")}
+                   for item in records]
+            return DataResult(data=out, source="tushare:adj_factor", note="；".join(checks))
         except Exception as e:
             return DataResult(data=None, source=self.name, error=str(e))
 
@@ -739,6 +815,41 @@ class TushareProvider(DataProvider):
             )
         except Exception as e:
             return DataResult(data=None, source=self.name, error=str(e))
+
+    def get_concept_catalog_snapshot(self, date: str) -> DataResult:
+        from zoneinfo import ZoneInfo
+        source = "tushare:ths_index:concept_snapshot"
+        now = datetime.now(ZoneInfo("Asia/Shanghai"))
+        if date != now.date().isoformat() or self.pro is None:
+            return DataResult(data=None, source=source, error="仅采集当日概念目录")
+        rows, pages, seen = [], [], set()
+        try:
+            for _ in range(6):
+                frame = self.pro.query("ths_index", exchange="A", type="N", fields="ts_code,name,exchange,type",
+                                       limit=1000, offset=len(rows), _request_timeout=12)
+                if frame is None:
+                    raise ValueError("目录无响应")
+                page = self._df_to_records(frame)
+                pages.append(len(page))
+                if not page:
+                    break
+                if len(page) > 1000:
+                    raise ValueError("目录页超限")
+                for row in page:
+                    code = row.get("ts_code")
+                    if (not isinstance(code, str) or not re.fullmatch(r"[0-9]{6}\.TI", code)
+                            or code in seen or row.get("exchange") != "A" or row.get("type") != "N"
+                            or not isinstance(row.get("name"), str) or not row["name"].strip()):
+                        raise ValueError("目录身份冲突")
+                    seen.add(code)
+                rows.extend(page)
+            else:
+                raise ValueError("目录分页未闭合")
+            if not rows or datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat() != date:
+                raise ValueError("目录为空或采集跨日")
+            return DataResult(data=dict(date=date, fetched_at=now.isoformat(), rows=rows, pages=pages), source=source)
+        except Exception as exc:
+            return DataResult(data=None, source=source, error=f"概念目录核验失败:{type(exc).__name__}")
 
     def get_theme_member_snapshot(self, date: str, theme_codes: list[str]) -> DataResult:
         """独立于旧概念缓存，逐题材分页至空页；失败不伪装成空成员。"""
@@ -1222,24 +1333,54 @@ class TushareProvider(DataProvider):
                 error=f"index_member_all_failed: {e}",
             )
 
-    def get_sector_rankings(self, date: str, sector_type: str = "industry") -> DataResult:
+    def get_sector_rankings(self, date: str, sector_type: str = "industry", *, require_dated=False) -> DataResult:
         """板块涨跌幅排名（涨幅前30 + 跌幅前5）"""
         try:
             d = self._date_fmt(date)
             if sector_type == "industry":
-                return self._sector_rankings_sw(d)
+                return self._sector_rankings_sw(d, require_dated)
             else:
-                return self._sector_rankings_ths(d)
+                return self._sector_rankings_ths(d, require_dated)
         except Exception as e:
             return DataResult(data=None, source=self.name, error=str(e))
 
-    def _sector_rankings_sw(self, d: str) -> DataResult:
+    @staticmethod
+    def _dated_ranking_universe(df, day, universe):
+        required = {"ts_code", "trade_date", "pct_change"}
+        if not universe or not required.issubset(df.columns):
+            raise ValueError("排名缺少板块范围、交易日或涨跌幅")
+        frame = df.loc[df["ts_code"].isin(universe)].copy()
+        if frame["ts_code"].duplicated().any() or set(frame["ts_code"]) != set(universe) or len(frame) < 35:
+            raise ValueError("板块日线未完整覆盖目录或不足以生成涨前30及跌前5")
+        if not frame["trade_date"].map(lambda value: str(value).replace("-", "") == day).all():
+            raise ValueError("排名交易日错位")
+        frame["pct_change"] = frame["pct_change"].map(float)
+        if not frame["pct_change"].map(math.isfinite).all():
+            raise ValueError("排名包含无效涨跌幅")
+        return frame
+
+    def _sector_rankings_sw(self, d: str, require_dated=False) -> DataResult:
         """申万二级行业排名（~134个细分行业）"""
-        l2_codes = self._ensure_sw_l2_codes()
+        if require_dated:
+            from zoneinfo import ZoneInfo
+            from utils.sw_catalog import (
+                SW2021_L2_CATALOG_COUNT_FLOOR, SW2021_L2_PUBLISHED_COUNT_FLOOR, l2_publication_flags,
+            )
+            if datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y%m%d") != d:
+                raise ValueError("补采申万行业榜只能使用上海当日发布状态")
+            rows = self.pro.index_classify(level="L2", src="SW2021")
+            flags = l2_publication_flags(self._df_to_records(rows))
+            l2_codes = {code for code, published in flags.items() if published}
+            if len(flags) < SW2021_L2_CATALOG_COUNT_FLOOR or len(l2_codes) < SW2021_L2_PUBLISHED_COUNT_FLOOR:
+                raise ValueError("申万二级分类目录或已发布行业数不足")
+        else:
+            l2_codes = self._ensure_sw_l2_codes()
         df = self.pro.sw_daily(trade_date=d)
         if df is None or df.empty:
             return DataResult(data=None, source=self.name, error="无申万行业日线数据")
 
+        if require_dated:
+            df = self._dated_ranking_universe(df, d, l2_codes)
         if l2_codes:
             df = df[df["ts_code"].isin(l2_codes)]
         if df.empty:
@@ -1250,6 +1391,7 @@ class TushareProvider(DataProvider):
         def _row(r):
             amt = float(r.get("amount", 0) or 0)
             return {
+                **({"trade_date": str(r["trade_date"]), "ts_code": r["ts_code"]} if require_dated else {}),
                 "name": r.get("name", ""),
                 "change_pct": round(float(r.get("pct_change", 0) or 0), 2),
                 "volume_billion": round(amt / 10000, 2),  # 万元 → 亿
@@ -1260,15 +1402,26 @@ class TushareProvider(DataProvider):
         bottom_df = df.tail(5).sort_values("pct_change")
         bottom = [_row(row) for _, row in bottom_df.iterrows()]
 
-        return DataResult(data={"top": top, "bottom": bottom}, source="tushare:sw_daily")
+        rankings = {"top": top, "bottom": bottom}
+        if require_dated:
+            rankings["universe_count"] = len(l2_codes)
+        return DataResult(data=rankings, source="tushare:sw_daily")
 
-    def _sector_rankings_ths(self, d: str) -> DataResult:
+    def _sector_rankings_ths(self, d: str, require_dated=False) -> DataResult:
         """同花顺概念指数排名"""
-        concept_map = self._ensure_ths_concept_map()
+        if require_dated:
+            catalog = self.get_concept_catalog_snapshot(f"{d[:4]}-{d[4:6]}-{d[6:]}")
+            if not catalog.success:
+                return catalog
+            concept_map = {r["ts_code"]: r["name"] for r in catalog.data["rows"]}
+        else:
+            concept_map = self._ensure_ths_concept_map()
         df = self.pro.ths_daily(trade_date=d)
         if df is None or df.empty:
             return DataResult(data=None, source=self.name, error="无同花顺指数日线数据")
 
+        if require_dated:
+            df = self._dated_ranking_universe(df, d, concept_map)
         if concept_map:
             df = df[df["ts_code"].isin(concept_map)]
         if df.empty:
@@ -1279,6 +1432,7 @@ class TushareProvider(DataProvider):
         def _row(r):
             code = r.get("ts_code", "")
             return {
+                **({"trade_date": str(r["trade_date"]), "ts_code": r["ts_code"]} if require_dated else {}),
                 "name": concept_map.get(code, code),
                 "change_pct": round(float(r.get("pct_change", 0) or 0), 2),
                 "volume_billion": 0,
@@ -1289,7 +1443,10 @@ class TushareProvider(DataProvider):
         bottom_df = df.tail(5).sort_values("pct_change")
         bottom = [_row(row) for _, row in bottom_df.iterrows()]
 
-        return DataResult(data={"top": top, "bottom": bottom}, source="tushare:ths_daily")
+        rankings = {"top": top, "bottom": bottom}
+        if require_dated:
+            rankings["universe_count"] = len(concept_map)
+        return DataResult(data=rankings, source="tushare:ths_daily")
 
     # ---- 北向资金 ----
 
@@ -2468,9 +2625,9 @@ class TushareProvider(DataProvider):
         """
         try:
             ts_code = self._normalize_stock_code(stock_code)
-            sd = self._date_fmt(start_date)
-            ed = self._date_fmt(end_date)
-            records = self._query_records("daily", ts_code=ts_code, start_date=sd, end_date=ed)
+            if not ts_code:
+                raise ValueError("stock_code 为空")
+            records = self._stock_range_records("daily", ts_code, start_date, end_date)
 
             # 说明：pandas NaN 已由 _df_to_records → _clean_scalar 清成 None（见 _clean_scalar），
             # 故此处只需 float 容错，下游 detectors 的 `is None` 守卫兜底，无需再判 NaN。
@@ -2482,14 +2639,9 @@ class TushareProvider(DataProvider):
 
             out = []
             for item in records:
-                td = item.get("trade_date")
-                if td is None:
-                    continue
-                s = str(td).replace("-", "")[:8]
-                norm = f"{s[:4]}-{s[4:6]}-{s[6:8]}" if len(s) == 8 else str(td)
                 out.append({
-                    "trade_date": norm,
-                    "ts_code": ts_code,
+                    "trade_date": item["trade_date"],
+                    "ts_code": item["ts_code"],
                     "open": _f(item.get("open")),
                     "high": _f(item.get("high")),
                     "low": _f(item.get("low")),
@@ -2499,9 +2651,6 @@ class TushareProvider(DataProvider):
                     "amount": _f(item.get("amount")),
                     "pct_chg": _f(item.get("pct_chg")),
                 })
-            # Tushare daily 通常按 trade_date 倒序返回；统一归一为升序，
-            # 满足下游趋势主升 detector「bars 升序、最后一根=今日」契约。
-            out.sort(key=lambda r: r["trade_date"])
             return DataResult(data=out, source="tushare:daily")
         except Exception as e:
             return DataResult(data=None, source=self.name, error=str(e))
@@ -2521,6 +2670,9 @@ class TushareProvider(DataProvider):
             df = self.pro.index_daily(ts_code=code, start_date=sd, end_date=ed)
             if df is None or df.empty:
                 return DataResult(data=[], source="tushare:index_daily")
+
+            if code == "000001.SH":
+                _verify_shanghai_index_rows(df, sd, ed)
 
             def _f(row, key):
                 v = row.get(key)

@@ -15,12 +15,15 @@
 from __future__ import annotations
 
 import logging
+import math
 import statistics
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-import yaml
+from analyzers.strong_stock_feedback import _code, _row_code
+from services.post_feedback import publish_feedback
+from utils.post_archive import read_archive
 
 from utils import is_st_stock
 
@@ -38,7 +41,36 @@ def _to_price(value) -> Optional[float]:
         parsed = float(value)
     except (TypeError, ValueError):
         return None
-    return parsed if parsed > 0 else None
+    return parsed if math.isfinite(parsed) and parsed > 0 else None
+
+
+def _quote_on(result, code, day):
+    """日期键控接口的旧返回可无日期；显式日期或证券身份发生冲突时拒用。"""
+    data = result.data if result.success else None
+    if not isinstance(data, dict):
+        return {}
+    if any(str(data[key]).replace("-", "") != day.replace("-", "")
+           for key in ("date", "trade_date") if key in data):
+        return {}
+    if "code" in data or "ts_code" in data:
+        try:
+            if _row_code(data) != _code(code):
+                return {}
+        except ValueError:
+            return {}
+    return data
+
+
+def _coverage(source, expected, observed, *, source_available=True):
+    expected, observed = set(expected), set(observed)
+    if not source_available or (expected and not observed):
+        status = "source_failed"
+    elif observed != expected:
+        status = "partial"
+    else:
+        status = "complete"
+    return {"source": source, "status": status, "expected_codes": sorted(expected),
+            "observed_codes": sorted(observed)}
 
 
 class PremiumCollector:
@@ -66,8 +98,7 @@ class PremiumCollector:
             logger.warning(f"T-1 盘后文件不存在，跳过溢价率回填：{prev_yaml}")
             return None
 
-        with open(prev_yaml, "r", encoding="utf-8") as f:
-            prev_data = yaml.safe_load(f) or {}
+        prev_data = read_archive(prev_yaml)
 
         limit_up_raw = prev_data.get("raw_data", {}).get("limit_up", {})
         stocks = limit_up_raw.get("stocks", [])
@@ -88,12 +119,13 @@ class PremiumCollector:
         }
         st_excluded = 0
         yizi_undetermined = 0
+        expected_quotes, observed_quotes = set(), set()
 
         for stock in stocks:
-            code = stock.get("code")
-            prev_close = stock.get("close", 0)
+            code = stock.get("code") or stock.get("ts_code")
+            prev_close = _to_price(stock.get("close"))
             limit_times = stock.get("limit_times", 1)
-            if not code or not prev_close:
+            if not code:
                 continue
 
             # G 修复：ST/*ST 走 5% 涨跌停制度，不属于 10/20/30cm 审美档位。
@@ -105,15 +137,16 @@ class PremiumCollector:
                 st_excluded += 1
                 continue
 
-            r = self.registry.call("get_stock_daily", code, trade_date)
-            if not r.success:
-                logger.debug(f"  {code} T 日行情获取失败：{r.error}")
+            expected_quotes.add(code)
+            if prev_close is None:
                 continue
-
-            t_open = _to_price(r.data.get("open"))
+            r = self.registry.call("get_stock_daily", code, trade_date)
+            quote = _quote_on(r, code, trade_date)
+            t_open = _to_price(quote.get("open"))
             if t_open is None:
                 continue
 
+            observed_quotes.add(code)
             premium_pct = round((t_open - prev_close) / prev_close * 100, 2)
             pct_chg = abs(stock.get("pct_chg", stock.get("change_pct", 0)))
             first_time = str(stock.get("first_time", ""))
@@ -161,8 +194,8 @@ class PremiumCollector:
             # 避免把不可成交或反向的票混进任一溢价分布。
             # t_opened 字段仅 yizi 两桶的 detail 携带（现有 detail 消费方均不读该字段）。
             if is_yizi and limit_times >= 2:
-                t_high = _to_price(r.data.get("high"))
-                t_low = _to_price(r.data.get("low"))
+                t_high = _to_price(quote.get("high"))
+                t_low = _to_price(quote.get("low"))
                 if t_high is None or t_low is None or t_high < t_low:
                     yizi_undetermined += 1
                     logger.debug(
@@ -188,12 +221,14 @@ class PremiumCollector:
         # 容量票：全市场成交额前 10（T-1 raw_data.top_volume_stocks）→ T 日开盘溢价。
         # B 修复：旧实现仅在「涨停股池」内按成交额取前 10，语义偏窄；
         # 改为全市场大成交额票口径，度量真正的「容量票赚钱效应」。
-        capacity_top10 = self._compute_capacity_entries(prev_data, trade_date, prev_date)
+        capacity_coverage = {}
+        capacity_top10 = self._compute_capacity_entries(prev_data, trade_date, prev_date, capacity_coverage)
+        quote_coverage = _coverage("limit_up + get_stock_daily.open", expected_quotes, observed_quotes)
 
         # 3. 聚合统计
-        def _agg(items: list[dict]) -> dict:
+        def _agg(items: list[dict], coverage=quote_coverage) -> dict:
             if not items:
-                return {"count": 0}
+                return {"count": 0 if coverage["status"] == "complete" else None}
             prems = [x["premium_pct"] for x in items]
             up_count = sum(1 for p in prems if p > 0)
             return {
@@ -224,23 +259,24 @@ class PremiumCollector:
             "yizi_first_open": _agg(groups["yizi_first_open"]),
             "yizi_continued": _agg(groups["yizi_continued"]),
             "yizi_undetermined": yizi_undetermined,
-            "capacity_top10": _agg(capacity_top10),
+            "_coverage": quote_coverage,
+            "capacity_top10": {**_agg(capacity_top10, capacity_coverage), "_coverage": capacity_coverage},
         }
 
         # 4. 人气股次日表现回填（A龙虎榜净买 + B连板股 + C成交额前10）
-        popularity = self._collect_popularity_backfill(prev_data, trade_date, prev_date)
+        popularity_coverage = {}
+        popularity = self._collect_popularity_backfill(prev_data, trade_date, prev_date, popularity_coverage)
+        updates = {"premium_backfill": result}
         if popularity:
-            prev_data["popularity_backfill"] = popularity
+            updates["popularity_backfill"] = popularity
+        updates["popularity_backfill_coverage"] = popularity_coverage
 
         # 4b. 晋级率回填（T-1 首板→T 二板、T-1 二板→T 三板）
         promotion = self._compute_promotion(stocks, trade_date, prev_date)
         if promotion:
-            prev_data["promotion_backfill"] = promotion
+            updates["promotion_backfill"] = promotion
 
-        # 5. 写回 T-1 的 post-market.yaml
-        prev_data["premium_backfill"] = result
-        with open(prev_yaml, "w", encoding="utf-8") as f:
-            yaml.dump(prev_data, f, allow_unicode=True, default_flow_style=False)
+        result = publish_feedback(prev_yaml, prev_data, updates)
 
         logger.info(
             f"溢价率回填完成 → {prev_yaml}｜"
@@ -257,7 +293,7 @@ class PremiumCollector:
         return result
 
     def _compute_capacity_entries(
-        self, prev_data: dict, trade_date: str, prev_date: str
+        self, prev_data: dict, trade_date: str, prev_date: str, coverage: dict | None = None
     ) -> list[dict]:
         """容量票：全市场成交额前 10（T-1）→ T 日开盘溢价 entries。
 
@@ -265,6 +301,7 @@ class PremiumCollector:
         历史 yaml 无该字段时回拉一次 get_top_volume_stocks(prev_date, 10)。
         每只取 item.close 作 T-1 收盘价，registry 拉 T 日开盘价算溢价。
         """
+        coverage = {} if coverage is None else coverage
         raw = prev_data.get("raw_data", {})
         top_volume = raw.get("top_volume_stocks")
         if not (isinstance(top_volume, list) and top_volume):
@@ -274,6 +311,7 @@ class PremiumCollector:
                 top_volume = list(r.data)
             else:
                 logger.debug("容量票全市场成交额排名不可得，capacity_top10 置空")
+                coverage.update(_coverage("top_volume_stocks + get_stock_daily.open", [], [], source_available=False))
                 return []
 
         entries: list[dict] = []
@@ -283,9 +321,7 @@ class PremiumCollector:
             if not code or not prev_close:
                 continue
             r = self.registry.call("get_stock_daily", code, trade_date)
-            if not r.success or not r.data:
-                continue
-            t_open = _to_price(r.data.get("open"))
+            t_open = _to_price(_quote_on(r, code, trade_date).get("open"))
             if t_open is None:
                 continue
             premium_pct = round((t_open - prev_close) / prev_close * 100, 2)
@@ -297,6 +333,9 @@ class PremiumCollector:
                 "premium_pct": premium_pct,
                 "amount_billion": item.get("amount_billion", item.get("amount", 0)),
             })
+        coverage.update(_coverage("top_volume_stocks + get_stock_daily.open",
+                                  [str(row["code"]) for row in top_volume[:10] if row.get("code")],
+                                  [row["code"] for row in entries]))
         return entries
 
     def _compute_promotion(
@@ -316,27 +355,30 @@ class PremiumCollector:
             promotion_backfill 字典；T 日涨停 list 不可得时返回 None
         """
         r = self.registry.call("get_limit_up_list", trade_date)
-        if not r.success or not r.data:
+        if (not r.success or not isinstance(r.data, dict) or not isinstance(r.data.get("stocks"), list)
+                or r.data.get("error") or r.data.get("status") in {"partial", "source_failed"}
+                or any(not isinstance(s, dict) for s in r.data["stocks"])):
             logger.warning(f"T 日涨停列表不可得，跳过晋级率回填：{trade_date}")
             return None
 
-        t_day_codes = {
-            s.get("code")
-            for s in (r.data.get("stocks") or [])
-            if s.get("code")
-        }
+        try:
+            t_day_codes = {_row_code(s) for s in r.data["stocks"]}
+            previous = {_row_code(s): s for s in prev_stocks}
+        except (AttributeError, ValueError):
+            return None
+        count = r.data.get("count")
+        if ((count is not None and count != len(t_day_codes)) or (not t_day_codes and count != 0)
+                or len(t_day_codes) != len(r.data["stocks"]) or len(previous) != len(prev_stocks)):
+            return None
 
         def _tier(times: int) -> dict:
             # limit_times==1 即「新首板」(连板计数当日重置)，不存在「已连板的首板」；
             # 同时过滤 code 为空的脏数据，保证分子(promoted)与分母(base)口径一致。
             # 严格用 `== times`（不写 `or 1`）：limit_times 缺失/None/0 的脏数据不归入任何档位，
             # 否则会把未知连板数的股虚算进首板分母，系统性压低首板→二板晋级率。
-            tier_stocks = [
-                s for s in prev_stocks
-                if s.get("limit_times") == times and s.get("code")
-            ]
-            promoted = [s for s in tier_stocks if s.get("code") in t_day_codes]
-            failed = [s for s in tier_stocks if s.get("code") not in t_day_codes]
+            tier_stocks = {code: stock for code, stock in previous.items() if stock.get("limit_times") == times}
+            promoted = [stock for code, stock in tier_stocks.items() if code in t_day_codes]
+            failed = [stock for code, stock in tier_stocks.items() if code not in t_day_codes]
             base = len(tier_stocks)
             return {
                 "base": base,
@@ -350,12 +392,14 @@ class PremiumCollector:
             "computed_at": datetime.now().isoformat(),
             "trade_date": trade_date,
             "prev_date": prev_date,
+            "_coverage": {"source": "get_limit_up_list.stocks", "status": "complete",
+                          "outcome_list_count": len(t_day_codes)},
             "first_to_second": _tier(1),
             "second_to_third": _tier(2),
         }
 
     def _collect_popularity_backfill(
-        self, prev_data: dict, trade_date: str, prev_date: str | None = None
+        self, prev_data: dict, trade_date: str, prev_date: str | None = None, coverage=None
     ) -> list[dict]:
         """
         收集 T-1 人气股并追踪其 T 日表现。
@@ -380,7 +424,7 @@ class PremiumCollector:
                 parsed = float(value)
             except (TypeError, ValueError):
                 return None
-            if zero_is_none and parsed == 0:
+            if not math.isfinite(parsed) or (zero_is_none and parsed == 0):
                 return None
             return parsed
 
@@ -403,10 +447,14 @@ class PremiumCollector:
 
         # ── 收集三类来源，code → {name, prev_close, sources}
         candidates: dict[str, dict] = {}
+        expected_codes = set()
 
         def _add(code: str, name: str, prev_close: float, source: str) -> None:
             prev_close_val = _to_float(prev_close, zero_is_none=True)
-            if not code or prev_close_val is None:
+            if not code:
+                return
+            expected_codes.add(code)
+            if prev_close_val is None:
                 return
             if code in candidates:
                 if source not in candidates[code]["sources"]:
@@ -453,7 +501,10 @@ class PremiumCollector:
             )
 
         if not candidates:
-            logger.info("人气股来源均为空，跳过 popularity_backfill")
+            if coverage is not None:
+                coverage.update(_coverage("已识别的人气股候选 + get_stock_daily.close", expected_codes, [],
+                                          source_available=bool(expected_codes)))
+            logger.info("人气股无可核验的昨收，跳过 popularity_backfill")
             return []
 
         logger.info(f"人气股候选数量：{len(candidates)}（A/B/C 合并去重后）")
@@ -462,11 +513,9 @@ class PremiumCollector:
         results: list[dict] = []
         for code, info in candidates.items():
             r = self.registry.call("get_stock_daily", code, trade_date)
-            if not r.success or not r.data:
-                logger.debug(f"  {code} T日行情获取失败：{getattr(r, 'error', '')}")
+            d = _quote_on(r, code, trade_date)
+            if not d:
                 continue
-
-            d = r.data
             t_open_raw = d.get("open")
             t_close_raw = d.get("close")
             t_open = _to_float(t_open_raw, zero_is_none=True)
@@ -494,8 +543,8 @@ class PremiumCollector:
             pct_chg = _to_float(pct_chg_raw)
             limit_threshold = 9.8
             # 仅在有有效 pct_chg 时判断涨跌停；价格为0时已在上方跳过
-            t_is_limit_up = pct_chg is not None and pct_chg >= limit_threshold
-            t_is_limit_down = pct_chg is not None and pct_chg <= -limit_threshold
+            t_is_limit_up = None if pct_chg is None else pct_chg >= limit_threshold
+            t_is_limit_down = None if pct_chg is None else pct_chg <= -limit_threshold
 
             results.append({
                 "code": code,
@@ -510,6 +559,9 @@ class PremiumCollector:
                 "t_is_limit_down": t_is_limit_down,
             })
 
+        if coverage is not None:
+            coverage.update(_coverage("已识别的人气股候选 + get_stock_daily.close", expected_codes,
+                                      [row["code"] for row in results]))
         return results
 
     def format_report(self, result: dict) -> str:

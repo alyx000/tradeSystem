@@ -352,8 +352,8 @@ class TestFieldCalculation:
         result = collector._collect_popularity_backfill(prev_data, "2026-04-01")
         assert result == []
 
-    def test_pct_chg_none_limit_flags_false(self):
-        """pct_chg 缺失时，涨跌停标志均应为 False"""
+    def test_pct_chg_none_limit_flags_unknown(self):
+        """pct_chg 缺失时，涨跌停标志均应为 None"""
         code = "000001.SZ"
         # pct_chg=None 的场景：mock 中返回 pct_chg=None
         registry = MagicMock()
@@ -367,5 +367,5 @@ class TestFieldCalculation:
         )
         result = collector._collect_popularity_backfill(prev_data, "2026-04-01")
         assert len(result) == 1
-        assert result[0]["t_is_limit_up"] is False
-        assert result[0]["t_is_limit_down"] is False
+        assert result[0]["t_is_limit_up"] is None
+        assert result[0]["t_is_limit_down"] is None

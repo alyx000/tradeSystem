@@ -3,9 +3,10 @@ from __future__ import annotations
 
 import json
 import logging
+from contextlib import closing, nullcontext
 from pathlib import Path
 
-from .connection import get_db
+from .connection import get_db, get_readonly_connection
 
 logger = logging.getLogger(__name__)
 
@@ -34,24 +35,36 @@ def record_pending(table: str, data: dict, error: str) -> None:
     logger.warning("Recorded pending write for %s: %s", table, error)
 
 
-def retry_pending(db_path: str | Path | None = None) -> tuple[int, int]:
+def retry_pending(db_path: str | Path | None = None, *, daily_dir: Path | None = None) -> tuple[int, int]:
     """重试 pending_writes 中的失败记录。返回 (成功数, 失败数)。"""
+    from services.post_feedback import retry_feedback
+
+    feedback_dir = daily_dir or ((Path(db_path).parent / "daily") if db_path else PROJECT_ROOT / "daily")
+    succeeded, failed = retry_feedback(feedback_dir, db_path)
     items = _load_pending()
     if not items:
-        return 0, 0
+        return succeeded, failed
 
     from . import queries as Q
 
-    succeeded, failed = 0, 0
     remaining = []
 
-    with get_db(db_path) as conn:
-        for item in items:
-            table = item["table"]
-            data = item["data"]
-            try:
+    from utils.post_archive import archive_lock, read_archive
+
+    for item in items:
+        table = item["table"]
+        data = item["data"]
+        try:
+            path = feedback_dir / data["date"] / "post-market.yaml" if table == "daily_market" else None
+            lock = archive_lock(path) if path and path.is_file() else nullcontext()
+            with lock, get_db(db_path) as conn:
                 if table == "daily_market":
-                    Q.upsert_daily_market(conn, data)
+                    if path.is_file():
+                        archive = read_archive(path)
+                        if archive.get("date", data["date"]) != data["date"]:
+                            raise ValueError(f"{data['date']} 重试时发现归档日期错位")
+                        data = _extract_market_row(data["date"], archive)
+                    _upsert_market_row(conn, data)
                 elif table == "teacher_notes":
                     teacher_name = data.get("teacher_name", "unknown")
                     note_data = {k: v for k, v in data.items() if k != "teacher_name"}
@@ -85,35 +98,35 @@ def retry_pending(db_path: str | Path | None = None) -> tuple[int, int]:
                     remaining.append(item)
                     failed += 1
                     continue
-                succeeded += 1
-            except Exception as e:
-                item["error"] = str(e)
-                remaining.append(item)
-                failed += 1
+            succeeded += 1
+        except Exception as e:
+            item["error"] = str(e)
+            remaining.append(item)
+            failed += 1
 
     _save_pending(remaining)
     logger.info("Pending writes retry: %d succeeded, %d failed", succeeded, failed)
     return succeeded, failed
 
 
+def _upsert_market_row(conn, row):
+    from . import queries as Q
+
+    flags = Q.compute_ma5w_flags_from_history(
+        conn, target_date=row["date"], sh_close=row.get("sh_index_close"), sz_close=row.get("sz_index_close"))
+    for key, value in flags.items():
+        if row.get(key) is None and value is not None:
+            row[key] = value
+    Q.upsert_daily_market(conn, row)
+
+
 def sync_daily_market_to_db(date_str: str, yaml_data: dict,
                             db_path: str | Path | None = None) -> bool:
     """将盘后行情 YAML 数据同步写入 DB。返回是否成功。"""
-    from . import queries as Q
-
     row = _extract_market_row(date_str, yaml_data)
     try:
         with get_db(db_path) as conn:
-            ma5w_flags = Q.compute_ma5w_flags_from_history(
-                conn,
-                target_date=date_str,
-                sh_close=row.get("sh_index_close"),
-                sz_close=row.get("sz_index_close"),
-            )
-            for key, value in ma5w_flags.items():
-                if row.get(key) is None and value is not None:
-                    row[key] = value
-            Q.upsert_daily_market(conn, row)
+            _upsert_market_row(conn, row)
         return True
     except Exception as e:
         logger.error("Failed to sync daily_market for %s: %s", date_str, e)
@@ -436,7 +449,8 @@ def _extract_market_row(date_str: str, envelope: dict) -> dict:
 def reconcile_daily_market(db_path: str | Path | None = None,
                            daily_dir: Path | None = None) -> list[dict]:
     """对账：比对 daily/ YAML 和 daily_market 表的关键字段，报告差异。"""
-    import yaml as _yaml
+    from services.post_feedback import FEEDBACK_KEYS, checked_blocks
+    from utils.post_archive import read_archive
     from . import queries as Q
 
     base = daily_dir or PROJECT_ROOT / "daily"
@@ -444,15 +458,14 @@ def reconcile_daily_market(db_path: str | Path | None = None,
         return []
 
     diffs = []
-    with get_db(db_path) as conn:
+    with closing(get_readonly_connection(db_path)) as conn:
         for day_dir in sorted(base.iterdir()):
             if not day_dir.is_dir():
                 continue
             pm_path = day_dir / "post-market.yaml"
             if not pm_path.exists():
                 continue
-            with open(pm_path, "r", encoding="utf-8") as f:
-                yaml_data = _yaml.safe_load(f) or {}
+            yaml_data = read_archive(pm_path)
 
             date_str = day_dir.name
             db_row = Q.get_daily_market(conn, date_str)
@@ -461,6 +474,16 @@ def reconcile_daily_market(db_path: str | Path | None = None,
                 diffs.append({"date": date_str, "issue": "missing_in_db"})
                 continue
 
+            db_envelope = parse_post_market_envelope(db_row.get("raw_data")) or {}
+            yaml_blocks, yaml_outcome = checked_blocks(conn, yaml_data, date_str)
+            db_blocks, db_outcome = checked_blocks(conn, db_envelope, date_str)
+            for key in FEEDBACK_KEYS:
+                if key not in yaml_data and key not in db_envelope:
+                    continue
+                if key not in yaml_blocks or key not in db_blocks or yaml_blocks[key] != db_blocks[key]:
+                    diffs.append({"date": date_str, "field": key, "issue": "feedback_mismatch",
+                                  "yaml_outcome": yaml_outcome if key in yaml_blocks else None,
+                                  "db_outcome": db_outcome if key in db_blocks else None})
             yaml_row = _extract_market_row(date_str, yaml_data)
             for key in ("sh_index_close", "total_amount", "limit_up_count"):
                 yaml_val = yaml_row.get(key)

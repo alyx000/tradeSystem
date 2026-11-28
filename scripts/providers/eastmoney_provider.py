@@ -24,6 +24,24 @@ INTRADAY_INSTRUMENTS = {
 }
 
 
+def _request_failure(exc):
+    """只保留错误类别和 HTTP 状态，异常正文可能含 URL、请求参数或凭据。"""
+    from requests import exceptions as errors
+
+    if isinstance(exc, errors.HTTPError):
+        status = getattr(exc.response, "status_code", None)
+        return f"http_{status}" if type(status) is int and 100 <= status <= 599 else "http_error"
+    if isinstance(exc, errors.SSLError):
+        return "tls_error"
+    if isinstance(exc, (errors.Timeout, TimeoutError)):
+        return "timeout"
+    if isinstance(exc, ValueError):
+        return "json_decode_error"
+    if isinstance(exc, (errors.ConnectionError, OSError)):
+        return "connection_error"
+    return "request_error"
+
+
 def _parse_index_bars(payload: object, code: str, start_date: str, end_date: str, *, period_minutes: int = 15) -> list[dict]:
     if type(period_minutes) is not int or period_minutes not in (5,15):
         raise ValueError("指数K线周期仅支持5/15分钟")
@@ -43,7 +61,10 @@ def _parse_index_bars(payload: object, code: str, start_date: str, end_date: str
         if not isinstance(line, str) or len(line.split(",")) != 7:
             raise ValueError("指数K线行格式非法")
         stamp, *values = line.split(",")
-        dt = datetime.strptime(stamp, "%Y-%m-%d %H:%M")
+        try:
+            dt = datetime.strptime(stamp, "%Y-%m-%d %H:%M")
+        except ValueError:
+            raise ValueError("指数K线时间格式非法") from None
         t = dt.time()
         if (dt.strftime("%Y-%m-%d %H:%M") != stamp or dt.minute % period_minutes
                 or not (time(9,30+period_minutes) <= t <= time(11,30) or time(13,period_minutes) <= t <= time(15))
@@ -139,13 +160,17 @@ class EastmoneyProvider(DataProvider):
         if code not in INTRADAY_INSTRUMENTS:
             return DataResult(None, self.name, error="未注册的盘中宽基指数")
         source = f"eastmoney:index_{period_minutes}min"
+        if type(period_minutes) is not int or period_minutes not in (5,15):
+            return DataResult(None, source, error="指数K线周期仅支持5/15分钟")
         try:
-            if type(period_minutes) is not int or period_minutes not in (5,15):
-                raise ValueError("指数K线周期仅支持5/15分钟")
             sd, ed = date.fromisoformat(start_date), date.fromisoformat(end_date)
-            if sd > ed:
-                raise ValueError("指数K线起止日期倒置")
+        except (TypeError, ValueError):
+            return DataResult(None, source, error="指数K线日期格式非法")
+        if sd > ed:
+            return DataResult(None, source, error="指数K线起止日期倒置")
+        try:
             with self._make_session() as session:
+                failures = []
                 for attempt in range(MAX_ATTEMPTS):
                     try:
                         response = session.get(INDEX_KLINE_URL, params={
@@ -156,14 +181,20 @@ class EastmoneyProvider(DataProvider):
                         response.raise_for_status()
                         payload = response.json()
                         break
-                    except Exception:
+                    except Exception as exc:
+                        failures.append(_request_failure(exc))
                         if attempt == MAX_ATTEMPTS-1:
-                            raise RuntimeError("指数K线两次有界请求失败")
-            rows = _parse_index_bars(payload,code,str(sd),str(ed),period_minutes=period_minutes)
+                            return DataResult(None, source, source_url=INDEX_KLINE_URL,
+                                              error="指数K线请求失败：" + " → ".join(failures))
+            try:
+                rows = _parse_index_bars(payload,code,str(sd),str(ed),period_minutes=period_minutes)
+            except ValueError as exc:
+                return DataResult(None, source, source_url=INDEX_KLINE_URL,
+                                  error=f"payload_invalid：{exc}")
             return DataResult(rows,source,source_url=INDEX_KLINE_URL,timeliness=Timeliness.RECENT)
         except Exception as exc:
             return DataResult(None,source,source_url=INDEX_KLINE_URL,
-                              error=f"{type(exc).__name__}: {exc}")
+                              error=f"指数K线会话失败：{_request_failure(exc)}")
 
     def _make_session(self):
         import requests

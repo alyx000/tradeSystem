@@ -117,7 +117,8 @@ def test_receipt_contains_replayable_evidence_without_new_push_or_state_fields(s
     assert 'opening_environment' not in state and not state['pending_events']
     again = run_index_volume(registry, **kw)
     assert again['opening_environment']['status'] == 'not_recomputed'
-    assert len(registry.calls) == 4 and len(list(kw['report_root'].rglob('*.json'))) == 1
+    assert len(registry.calls) == 4 and len(list((kw['report_root'] / '2026-11-04').glob('*.json'))) == 1
+    assert len(list((kw['report_root'] / 'ohlcv-5m').glob('*.json'))) == 2
 
 
 def test_environment_gap_does_not_block_original_amount_alert_or_retry_it(setup):

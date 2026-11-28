@@ -16,9 +16,9 @@ import json
 import logging
 import re
 
-from db.connection import get_connection
+from db.connection import get_connection, get_readonly_connection
 from services.market_timing import constants as C
-from services.market_timing import formatter, repo, scanner
+from services.market_timing import formatter, limit_down, repo, scanner
 
 logger = logging.getLogger(__name__)
 
@@ -128,12 +128,14 @@ def _run_daily(config: dict, args: argparse.Namespace) -> None:
 
 
 def _run_signals(args: argparse.Namespace) -> None:
-    conn = get_connection()
+    conn = get_readonly_connection()
     try:
         rows = repo.list_signals(conn, date=args.date, index_code=args.index, limit=args.limit)
     finally:
         conn.close()
     if args.json:
+        for row in rows:
+            row["recorded_limit_down"] = limit_down.recorded_row(row, row["trade_date"])
         print(json.dumps(rows, ensure_ascii=False, indent=2))
         return
     print(formatter.render_signals(rows))

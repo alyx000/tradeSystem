@@ -1,4 +1,4 @@
-"""业务 LLM 命令构造：默认 Antigravity，可显式选择 OpenAI Responses。"""
+"""业务 LLM 命令构造：默认 Antigravity，可选择 OpenAI 或本机 LM Studio。"""
 from __future__ import annotations
 
 import os
@@ -48,7 +48,8 @@ def build_prompt_command(
 ) -> list[str]:
     if config.provider != "antigravity":
         # 绝对路径允许评分器在空临时 cwd 运行；密钥只通过环境继承，不进 argv。
-        cmd = [sys.executable, str(Path(__file__).with_name("openai_responses.py")),
+        adapter = "lmstudio.py" if config.provider == "lmstudio" else "openai_responses.py"
+        cmd = [sys.executable, str(Path(__file__).with_name(adapter)),
                "--provider", config.provider, "--model", config.model,
                "--timeout", str(config.timeout_seconds), "--prompt", prompt]
         if add_dirs:

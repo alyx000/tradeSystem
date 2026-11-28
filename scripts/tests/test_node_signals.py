@@ -122,12 +122,26 @@ class TestNodeSignalAnalyzerBasic:
 # MA 突破/跌破信号
 # ──────────────────────────────────────────────────────────────────────────────
 
+def _add_ma20_evidence(today, previous_above):
+    from analyzers.shanghai_ma import SCHEMA
+
+    ma = today["moving_averages"]["shanghai"]
+    ma["daily_ma_evidence"] = {
+        "schema": SCHEMA, "trade_date": "2026-04-01", "previous_date": "2026-03-31",
+        "windows": {"ma20": {"end": "2026-04-01", "value": ma["ma20"],
+                              "above": ma["above_ma20"], "missing_dates": [], "observed": 20, "expected": 20}},
+        "previous_windows": {"ma20": {"end": "2026-03-31", "above": previous_above, "value": 3330, "missing_dates": [],
+                                       "observed": 20, "expected": 20}},
+    }
+
+
 class TestMaCrossSignals:
     def test_ma20_breakout_detected(self, tmp_path):
         for i in range(5):
             _make_day_yaml(tmp_path, f"2026-03-{20 + i:02d}", above_ma20=False)
 
         today = _make_today_result(above_ma20=True, ma20=3350.0)
+        _add_ma20_evidence(today, False)
         analyzer = NodeSignalAnalyzer(tmp_path)
         signals = analyzer.analyze(today, "2026-04-01")
 
@@ -141,6 +155,7 @@ class TestMaCrossSignals:
             _make_day_yaml(tmp_path, f"2026-03-{20 + i:02d}", above_ma20=True)
 
         today = _make_today_result(above_ma20=False, ma20=3350.0)
+        _add_ma20_evidence(today, True)
         analyzer = NodeSignalAnalyzer(tmp_path)
         signals = analyzer.analyze(today, "2026-04-01")
 
@@ -154,6 +169,7 @@ class TestMaCrossSignals:
             _make_day_yaml(tmp_path, f"2026-03-{20 + i:02d}", above_ma20=True)
 
         today = _make_today_result(above_ma20=True)
+        _add_ma20_evidence(today, True)
         analyzer = NodeSignalAnalyzer(tmp_path)
         signals = analyzer.analyze(today, "2026-04-01")
 
@@ -183,8 +199,8 @@ def _make_gap_day_yaml(base_dir: Path, date: str) -> None:
 
 
 class TestMaBaselineFallback:
-    def test_falls_back_when_latest_day_missing_ma(self, tmp_path):
-        """最近一天缺 moving_averages 时，应回退到更早一天的有效 MA 作为基准。"""
+    def test_daily_ma_rejects_older_baseline(self, tmp_path):
+        """旧版日均线和非相邻交易日均不构成穿越基准。"""
         _make_day_yaml(tmp_path, "2026-03-24", above_ma20=False)  # 有效基准
         _make_gap_day_yaml(tmp_path, "2026-03-25")                # 最近一天缺口（history[0]）
 
@@ -193,9 +209,7 @@ class TestMaBaselineFallback:
         signals = analyzer.analyze(today, "2026-04-01")
 
         ma20 = [s for s in signals if s["type"] == "ma_cross" and "MA20" in s["signal"]]
-        assert len(ma20) == 1, "前一天缺口时本应回退到更早有效基准并产出 MA20 信号"
-        assert ma20[0]["direction"] == "positive"
-        assert "突破" in ma20[0]["signal"]
+        assert ma20 == []
 
     def test_per_period_baseline_when_latest_snapshot_partial(self, tmp_path):
         """最近快照只有日线 MA 缺 5 周线时，5 周线信号应回退到更早含 ma5w 的快照。"""

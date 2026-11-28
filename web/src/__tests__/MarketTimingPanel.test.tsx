@@ -35,6 +35,25 @@ const history: MarketTimingHistoryPayload = {
 }
 
 describe('MarketTimingPanel（择时汇总条）', () => {
+  it('同日价格核验的零成立，历史旧零和未核验分别标注', () => {
+    const historical = { ...payload, context: {
+      ...payload.context,
+      limit_down_count: 43,
+      limit_down_fact: { trade_date: payload.date, status: 'verified' as const, count: 43 },
+      recorded_limit_down: { trade_date: payload.date, status: 'legacy' as const, count: 0 },
+    } }
+    const { rerender } = render(<MarketTimingPanel payload={historical} />)
+    expect(screen.getByText('非 ST 收盘跌停 43 家（盘后归档核验）')).toBeInTheDocument()
+    expect(screen.getByText('择时留存 0 家（旧榜，ST 口径未核验）')).toBeInTheDocument()
+    rerender(<MarketTimingPanel payload={{ ...historical, context: { ...historical.context,
+      limit_down_count: 0, limit_down_fact: { ...historical.context.limit_down_fact, count: 0 },
+    } }} />)
+    expect(screen.getByText('非 ST 收盘跌停 0 家（盘后归档核验）')).toBeInTheDocument()
+    rerender(<MarketTimingPanel payload={payload} />)
+    expect(screen.getByText(/非 ST 收盘跌停待核验/)).toBeInTheDocument()
+    expect(screen.queryByText(/非 ST 收盘跌停 12 家/)).not.toBeInTheDocument()
+  })
+
   it('汇总：共振 + 成交额地量分位 + 场外指数变盘窗口（cardCodes 外）', () => {
     // 上证已上顶部卡片(cardCodes)，故只剩中证2000 作为「场外」在汇总条出现
     render(<MarketTimingPanel payload={payload} history={history} cardCodes={['000001.SH']} />)

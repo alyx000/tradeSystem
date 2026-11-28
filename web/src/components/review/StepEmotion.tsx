@@ -48,14 +48,19 @@ export default function StepEmotion({ data, onChange, prefill }: StepProps) {
   const emotionSignals = prefill?.review_signals?.emotion
   const sentimentStocks = (d.sentiment_stocks as SentimentStockItem[] | undefined) || []
 
-  const [historyData, setHistoryData] = useState<MarketChartItem[]>([])
+  const date = prefill?.date
+  const [history, setHistory] = useState<{ date: string; rows: MarketChartItem[] } | null>(null)
   useEffect(() => {
+    if (!date) return
     let cancelled = false
-    api.getMarketHistory(10).then((items) => {
-      if (!cancelled) setHistoryData(items.map(d => ({ ...d, date_short: d.date.slice(5) })))
+    api.getMarketHistory(10, date).then((items) => {
+      if (cancelled) return
+      const rows = [...items].sort((a, b) => a.date.localeCompare(b.date))
+      setHistory({ date, rows: rows.map(d => ({ ...d, date_short: d.date.slice(5) })) })
     }).catch(() => {})
     return () => { cancelled = true }
-  }, [])
+  }, [date])
+  const historyData = history && history.date === date ? history.rows : []
 
   const g = <T = string,>(p: string, fb?: T) => {
     const fallback = (fb ?? '') as T
@@ -77,6 +82,9 @@ export default function StepEmotion({ data, onChange, prefill }: StepProps) {
         cognitions={prefill?.cognitions_by_step?.step3_emotion}
       />
       <Section title="情绪阶段">
+        {ec?.date && ec.date !== date && (
+          <p className="text-xs text-gray-500 mb-2">最近情绪记录来自 {ec.date}</p>
+        )}
         <Row>
           <SelectField label="整体情绪" value={g('phase')} onChange={v => s('phase', v)} options={PHASE} />
           <SelectField label="子周期" value={g('sub_cycle')} onChange={v => s('sub_cycle', v)} options={SUB_CYCLE} />

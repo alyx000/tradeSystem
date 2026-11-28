@@ -59,6 +59,16 @@ make today-close # 跑今天的收盘后主流程
 - `make today-watchlist`
 - `make today-obsidian`
 
+#### 复盘日期与信号覆盖
+
+- 择时页区分当时留存的跌停计数与盘后已核验的非 ST 跌停数。[上证日均线](docs/shanghai-index-ma.md)使用对应 SSE 开放日，按窗口标注缺口。历史持仓使用所选日的名单、收盘和盈亏；板块资金流向按来源顺序展示，按源单位换算为亿元；小于 0.01 亿元的非零金额保留有效位，同单位字段冲突时显示缺口。
+- 盘后港股指数现货按事实日展示点位。如果仅能取得 3033.HK，其收盘以独立 ETF 行和港元展示。旧档能识别代理但缺行情日期证据时标记未核验。
+- 查看个股提醒最后一次成功计算及所用行情时间，可在项目根目录运行 `python3 .worktrees/intraday-monitor-runtime/scripts/main.py intraday-monitor status`。盘中行业前后五按相对涨跌幅排名；断板反包区分上涨家数占全体的百分比和上涨家数相对下跌家数的倍数。开盘啦 ETF 摘要对照同口径披露的连续天数、申赎金额及价格区间变化。
+- 市场概览和复盘情绪图以页面所选日期为趋势终点。行业和概念的跌幅榜读取当日归档的跌幅前五，旧档缺榜时显示缺口。
+- 形态扫描同时给出候选总数、可判定数、未判定原因与命中数。区间复权记录冲突时，只采用同一股票、同一事实日且能与候选值核对的因子。
+- 完整盘后归档可包含后来取得的次日溢价、晋级和人气股反馈。`GET /api/post-market/{date}?as_of=YYYY-MM-DD` 可按观察日截断这三项。返回的 `t1_feedback_dates` 列出原交易日与反馈日。盘后文件和数据库的三项反馈可用 `db reconcile` 对账。
+- 四指数盘中监控按每个五分钟时段的最后一份回执统计实时覆盖。回看日期区间可用 `python3 .worktrees/intraday-monitor-runtime/scripts/tools/index_bar_archive.py --coverage --start-date 2026-11-23 --date 2026-11-27`。当日最票定时任务的补采与发布条件见[每日最票就绪检查](docs/daily-leaders-readiness.md)。
+
 ### 维护者
 
 - `make db-init`
