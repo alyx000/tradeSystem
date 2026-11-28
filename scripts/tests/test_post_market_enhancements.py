@@ -1937,6 +1937,47 @@ class TestPostMarketSlimming:
         assert "节奏7" in md                  # 前 8 行（节奏0~7）保留
         assert "节奏8" not in md              # 第 9 行起被裁
 
+    def test_sector_rhythm_preserves_distinct_returns_and_unknowns(self):
+        from generators.report import _render_sector_rhythm
+        rows = [
+            {"name": "电子化学品Ⅱ", "period_return_5d_pct": 10.14, "top30_sum_5d_pct": 20.84,
+             "top30_days_5d": 3, "ranking_covered_days_5d": 5},
+            {"name": "部分覆盖", "period_return_5d_pct": None, "top30_sum_5d_pct": -1.5,
+             "consecutive_in_top30": 2, "signals": {"consecutive_is_lower_bound": True},
+             "top30_days_5d": 2, "ranking_covered_days_5d": 3,
+             "rhythm_window_evidence": {"5d": {"reason": "缺少收盘"}}},
+            {"name": "旧档", "cumulative_pct_5d": 7.3},
+            {"name": "确无涨跌", "period_return_5d_pct": 0, "top30_sum_5d_pct": 0,
+             "top30_days_5d": 0, "ranking_covered_days_5d": 5},
+        ]
+        lines = []
+        _render_sector_rhythm(lines, {"sector_rhythm_industry": rows}, 2)
+        table = "\n".join(lines)
+        assert "| +10.14% | +20.84% | 3/5 |" in table
+        assert "| 至少2天 | 待核（缺少收盘） | -1.50%（已核部分） | 2/5（榜单覆盖 3/5） |" in table
+        assert "| 待核 | 待核（旧归档窗口上榜日合计 +7.30%） | 待核 |" in table
+        assert "| 0.00% | 0.00% | 0/5 |" in table
+
+    def test_empty_rhythm_rows_preserve_whole_window_coverage_and_current_status(self):
+        from generators.report import _render_sector_rhythm
+        day = "2026-10-30"
+        receipt = {"as_of": day, "expected": 20, "observed": 17, "missing_dates": ["2026-10-13"]}
+        raw = {"date": day, "sector_rhythm_industry": [], "sector_rhythm_concept": [],
+               "sector_rhythm_coverage": {"industry": {**receipt, "today_status": "covered"},
+                                          "concept": {**receipt, "today_status": "unavailable"}}}
+        lines = []
+        _render_sector_rhythm(lines, raw, 2)
+        md = "\n".join(lines)
+        assert "历史榜单覆盖 17/20 个开放日" in md and "缺榜单 2026-10-13" in md
+        assert "当日榜单已核验，未列出节奏对象" in md and "当日榜单待核" in md
+        assert "来源已确认当日空榜" not in md
+        raw["sector_rhythm_coverage"]["industry"]["today_status"] = "empty"
+        raw["sector_rhythm_coverage"]["concept"]["as_of"] = "2026-10-29"
+        lines = []
+        _render_sector_rhythm(lines, raw, 2)
+        md = "\n".join(lines)
+        assert "来源已确认当日空榜" in md and "旧档未记录当日榜单覆盖，无法核验空榜" in md
+
     def test_stock_info_compact_trims_counts_and_answer(self):
         """compact=True：互动易仅 1 条且答案截至 80 字，研报/新闻各最多 2 条。"""
         from generators.report import _render_stock_info_section

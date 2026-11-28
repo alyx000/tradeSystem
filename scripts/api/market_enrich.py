@@ -27,6 +27,7 @@ _ENRICH_KEYS = (
     "style_factors",
     "sector_rhythm_industry",
     "sector_rhythm_concept",
+    "sector_rhythm_coverage",
 )
 
 
@@ -61,6 +62,28 @@ def _enrich_shanghai_daily_ma(row, conn):
         row["node_signals"] = json.dumps(checked, ensure_ascii=False) if isinstance(signals, str) else checked
 
 
+def rhythm_archive_projection(raw: dict, day: str, conn, envelope_date=None) -> dict:
+    keys = ("sector_rhythm_industry", "sector_rhythm_concept")
+    sections = [key for key in keys if isinstance(raw.get(key), list)]
+    projection = {}
+    if "sector_rhythm_coverage" in raw:
+        receipts = raw["sector_rhythm_coverage"]
+        projection["sector_rhythm_coverage"] = {
+            kind: receipt for kind, receipt in receipts.items()
+            if kind in ("industry", "concept") and isinstance(receipt, dict)
+            and day and receipt.get("as_of") == day
+        } if isinstance(receipts, dict) else {}
+    dates = [d for d in (envelope_date, raw.get("date")) if d is not None]
+    if any(d != day for d in dates):
+        if "sector_rhythm_coverage" in projection:
+            projection["sector_rhythm_coverage"] = {}
+        return {**projection, **{key: [] for key in sections}}
+    if not sections or conn is None or not dates:
+        return projection
+    from analyzers.sector_rhythm_metrics import archived_rhythm_view
+    return {**projection, **archived_rhythm_view(raw, day, conn)}
+
+
 def enrich_daily_market_row(row: dict | None, *, conn=None) -> dict | None:
     """解析 daily_market 行中的 raw_data 字符串，把扩展键提升到顶层。
 
@@ -90,6 +113,10 @@ def enrich_daily_market_row(row: dict | None, *, conn=None) -> dict | None:
             row[key] = parsed[key]
         elif key in inner:
             row[key] = inner[key]
+
+    day = row.get("date")
+    for section in (inner, parsed):
+        row.update(rhythm_archive_projection(section, day, conn, parsed.get("date")))
 
     hk = inner.get("hk_indices", parsed.get("hk_indices", row.get("hk_indices")))
     if isinstance(hk, str):

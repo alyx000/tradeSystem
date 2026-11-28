@@ -3,6 +3,10 @@ description: 当修改 CLI 或 API 文件时，提醒同步更新 skills 文档
 globs: "scripts/db/cli.py, scripts/db/migrate.py, scripts/db/schema.py, scripts/main.py, scripts/cli/low_price_effect.py, scripts/analyzers/ipo_effect.py, scripts/analyzers/low_price_effect.py, scripts/cli/emotion_leader.py, scripts/cli/wechat_teacher_feed.py, scripts/cli/review_factors.py, scripts/cli/tail_scan.py, scripts/cli/daily_leaders.py, scripts/cli/value_watch.py, scripts/cli/sector_crowding.py, scripts/cli/monthly_pattern.py, scripts/services/trinity_factor/*.py, scripts/services/tail_scan/*.py, scripts/services/daily_leaders/*.py, scripts/services/value_watch/*.py, scripts/services/sector_crowding/*.py, scripts/services/monthly_pattern/*.py, scripts/services/low_price_effect_history.py, scripts/services/emotion_leader/*.py, scripts/providers/base.py, scripts/providers/tushare_provider.py, scripts/api/routes/*.py, .agents/skills/**/*.md, .cursor/skills/**/*.md"
 ---
 
+2026-11-28 板块节奏按报告事实日对齐开放日，分别展示 5/10 日指数区间收益、上榜日涨幅合计与各自覆盖。模型读取同一口径，旧档合计保留原口径标识。盘后和晚间任务停用 Obsidian 自动导出，手工使用 `obsidian` 或 `make today-obsidian`。
+
+盘中断板复核由现有自动化在北京时间 09:33 唤醒，计时器到 09:40 后交给原 `board-break open-review`。10 点前百亿扫描复用当日核验的沪深北股票名单，每轮独立取实时报价，缺行情时列已核验命中并标明覆盖不足。
+
 2026-11-17 大金重工类量价观察：最近5个SSE开放日逐日重算A，允许第三根阴线在最高/最低价均严格上移时通过价格结构，量能/涨停门与B原规则保留。最终名单统一排除北交所及事实日收盘跌停，缺价单列待核验。手机一股一行，旧名单/详细持续性留完整稿；按股票保留全部出现日期及当前状态，历史缺口不补0；`scripts/tools/volume_buildup_recent.py`只读可信归档，`volume_buildup_prepare.py`以SHA守卫接入既有每日交付，不新增调度或业务写入。见 `docs/volume-buildup.md`。
 
 2026-11-17 断板反包排名：全部候选参加PK，取消加权Top12截断；保留1200秒超时与无效场熔断。按总胜场、同胜场组完整直接交手胜场排序，仍同则并列；加权分仅供参考，不参与准入或破平，未完成PK不生成排名。板块缺口按同日行业核验，保守范围可证明优势时程序执行板块优先；一价占比下限已确定居多时参与比较。详见 `docs/board-break-rebreak.md`；手动重跑不推送。

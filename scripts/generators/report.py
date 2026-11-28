@@ -14,6 +14,7 @@ import yaml
 from services.post_feedback import FEEDBACK_KEYS, source_digest
 from utils.post_archive import archive_lock, atomic_write_archive, read_archive
 from utils import is_st_stock
+from generators.sector_rhythm import rhythm_streak, rhythm_window_cells, signed_pct
 from utils.hk_indices import hk_indices_view
 from utils.sector_fund_flow import fund_flow_rows_view
 from utils.fx_validation import (
@@ -1578,37 +1579,58 @@ def _render_sector_rhythm(lines: list, raw_data: dict, section_idx: int) -> int:
     industry_rhythm = raw_data.get("sector_rhythm_industry", [])
     concept_rhythm = raw_data.get("sector_rhythm_concept", [])
 
-    if not industry_rhythm and not concept_rhythm:
+    coverage = raw_data.get("sector_rhythm_coverage") or {}
+    if not isinstance(coverage, dict):
+        coverage = {}
+    if not coverage and not any(f"sector_rhythm_{kind}" in raw_data for kind in ("industry", "concept")):
         return section_idx
 
     lines.append(f"\n## {_roman(section_idx)}、板块节奏分析 [判断] ★★☆\n")
     section_idx += 1
-    lines.append("> 基于过去 20 个交易日板块涨幅排名时间序列自动推断，置信度仅供参考，请结合盘面实际判断。\n")
 
-    for label, rhythm_list in [("行业板块", industry_rhythm), ("概念板块", concept_rhythm)]:
-        if not rhythm_list:
+    for label, kind, rhythm_list in [("行业板块", "industry", industry_rhythm), ("概念板块", "concept", concept_rhythm)]:
+        if f"sector_rhythm_{kind}" not in raw_data and kind not in coverage:
             continue
         lines.append(f"### {label}\n")
-        # 钉钉单条减负：删除超宽长文本「关键信号」列（8 列→7 列），每类最多 8 行
-        lines.append("| 板块 | 今日排名 | 今日涨幅 | 连续上榜 | 5日累计 | 阶段 | 置信度 |")
-        lines.append("|------|---------|---------|---------|---------|------|-------|")
+        receipt = coverage.get(kind)
+        if not isinstance(receipt, dict) or not receipt.get("as_of") or receipt["as_of"] != raw_data.get("date"):
+            receipt = {}
+        messages = []
+        observed, expected = receipt.get("observed"), receipt.get("expected")
+        if type(observed) is int and type(expected) is int and 0 <= observed <= expected and expected > 0:
+            messages.append(f"历史榜单覆盖 {observed}/{expected} 个开放日")
+        else:
+            messages.append("历史榜单覆盖待核")
+        if receipt.get("calendar_issue"):
+            messages.append(str(receipt["calendar_issue"]))
+        missing_dates = receipt.get("missing_dates")
+        if isinstance(missing_dates, list) and missing_dates and all(isinstance(d, str) for d in missing_dates):
+            messages.append("缺榜单 " + "、".join(missing_dates))
+        if receipt.get("today_status") == "unavailable":
+            messages.append("当日榜单待核")
+        elif receipt.get("today_status") == "empty":
+            messages.append("来源已确认当日空榜")
+        elif not rhythm_list:
+            messages.append("当日榜单已核验，未列出节奏对象" if receipt.get("today_status") == "covered"
+                            else "旧档未记录当日榜单覆盖，无法核验空榜")
+        if messages:
+            lines.append(" · ".join(messages) + "\n")
+        if not rhythm_list:
+            continue
+        lines.append("| 板块 | 今日排名 | 今日涨跌幅 | 连续上榜 | 5日区间收益 | 5日上榜日涨幅合计 | 5日上榜天数 | 阶段 | 置信度 |")
+        lines.append("|---|---|---|---|---|---|---|---|---|")
         for item in rhythm_list[:8]:
             rank = item.get("rank_today")
             rank_str = f"#{rank}" if rank else "-"
-            change = item.get("change_today")
-            if change is not None:
-                change_str = f"+{change}%" if change >= 0 else f"{change}%"
-            else:
-                change_str = "-"
-            consec = item.get("consecutive_in_top30", 0)
-            cumul = item.get("cumulative_pct_5d", 0) or 0
-            cumul_str = f"+{cumul}%" if cumul >= 0 else f"{cumul}%"
+            change_str = signed_pct(item.get("change_today"))
+            consecutive = rhythm_streak(item)
+            period, listed_sum, listed_days = rhythm_window_cells(item)
             phase = item.get("phase", "观察中")
             phase_label = _PHASE_ICON.get(phase, phase)
             conf = item.get("confidence", "-")
             lines.append(
                 f"| {item.get('name', '')} | {rank_str} | {change_str} | "
-                f"{consec}天 | {cumul_str} | {phase_label} | {conf} |"
+                f"{consecutive} | {period} | {listed_sum} | {listed_days} | {phase_label} | {conf} |"
             )
         lines.append("")
 

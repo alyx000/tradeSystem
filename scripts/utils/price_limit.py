@@ -16,8 +16,8 @@ from decimal import Decimal, ROUND_HALF_UP
 # 用 startswith 多字符前缀，"51" 已覆盖 518xxx，无需单列。
 _FUND_PREFIXES = ("15", "16", "18", "50", "51", "56", "58")
 
-# 创业板（300/301）/ 科创板（688/689）= 20cm 板块。单一真源，_board_limit_pct 与 is_dual_board 共用。
-_DUAL_BOARD_PREFIXES = ("300", "301", "688", "689")
+# 创业板（30xxxx，含302）/ 科创板（688/689）= 20cm 板块。单一真源，_board_limit_pct 与 is_dual_board 共用。
+_DUAL_BOARD_PREFIXES = ("30", "688", "689")
 
 
 def is_dual_board(code: str) -> bool:
@@ -33,7 +33,7 @@ def _board_limit_pct(code: str, is_st: bool) -> float:
 
     板块 × ST 矩阵：
     - 北交所（.BJ 后缀或 8x/43x 代码）：30%，ST 不改变。
-    - 创业板（300/301）/ 科创板（688/689）：20%，ST 仍 20%（ST 不收窄到 5%）。
+    - 创业板（30xxxx，含302）/ 科创板（688/689）：20%，ST 仍 20%（ST 不收窄到 5%）。
     - 沪深主板：ST → 5%，否则 10%。
     """
     suffix = code.split(".")[-1].upper() if "." in code else ""

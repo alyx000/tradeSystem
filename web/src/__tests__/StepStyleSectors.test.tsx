@@ -239,10 +239,11 @@ describe('StepSectors', () => {
     expect(screen.queryByText('行业板块排行（申万）')).not.toBeInTheDocument()
   })
 
-  it('sector_rhythm_industry 为空时不渲染节奏区块', () => {
+  it('旧档有空的节奏列表时展示待核原因', () => {
     const p = { ...sectorsPrefill, market: { ...sectorsPrefill.market, sector_rhythm_industry: [] } }
     renderSectors(p)
-    expect(screen.queryByText('行业节奏信号（当日前列）')).not.toBeInTheDocument()
+    expect(screen.getByText('行业节奏信号（当日前列）')).toBeInTheDocument()
+    expect(screen.getByText('旧档未记录当日榜单覆盖，无法核验空榜')).toBeInTheDocument()
   })
 
   it('显示「完整市场数据」链接并指向正确日期', () => {

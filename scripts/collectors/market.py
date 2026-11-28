@@ -932,6 +932,7 @@ class MarketCollector:
                         "data": raw["top"],
                         "bottom": raw.get("bottom", []),
                         "_source": r.source,
+                        **{k: raw[k] for k in ("trade_date", "status", "row_count") if k in raw},
                     }
                 else:
                     result[f"sector_{stype}"] = {"data": raw, "_source": r.source}
@@ -1106,21 +1107,6 @@ class MarketCollector:
         # 11. 指数均线
         self._compute_index_ma(result, date)
 
-        # 12. 板块节奏分析
-        try:
-            extra_names = self._rhythm_analyzer.load_main_theme_names()
-            for stype in ["industry", "concept"]:
-                rhythm = self._rhythm_analyzer.analyze(
-                    today_raw_data=result,
-                    sector_type=stype,
-                    extra_names=extra_names,
-                    today_date=date,
-                )
-                result[f"sector_rhythm_{stype}"] = rhythm
-            logger.info("板块节奏分析完成")
-        except Exception as e:
-            logger.warning(f"板块节奏分析失败，已跳过: {e}")
-
         # 13. 连板股断板后的下一交易日反馈（纯事实统计，不复用 board-break 选股门槛）
         try:
             from analyzers.board_break_feedback import collect_board_break_feedback
@@ -1235,6 +1221,19 @@ class MarketCollector:
             from services.sector_adjustment_risk.collector import failed as sector_risk_failed
             result["sector_adjustment_risk"] = sector_risk_failed(date, "板块风险采集异常，未判断")
             logger.warning("板块风险采集异常，已隔离，不影响盘后主流程")
+
+        # 两榜共享截止事实日的归档，并复用本轮已有的申万行业日线。
+        try:
+            extra_names = self._rhythm_analyzer.load_main_theme_names(as_of=date)
+            window = self._rhythm_analyzer.load_ranking_window(date, result)
+            for stype in ("industry", "concept"):
+                result[f"sector_rhythm_{stype}"] = self._rhythm_analyzer.analyze(
+                    result, stype, extra_names=extra_names, today_date=date, window=window,
+                )
+            result["sector_rhythm_coverage"] = dict(window.coverage)
+            logger.info("板块节奏分析完成")
+        except Exception as exc:
+            logger.warning("板块节奏分析失败，已跳过: %s", exc)
 
         logger.info(f"盘后数据采集完成: {date}")
         return result

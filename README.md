@@ -57,10 +57,11 @@ make today-close # 跑今天的收盘后主流程
 - `make today-open`
 - `make today-close`
 - `make today-watchlist`
-- `make today-obsidian`
+- 需要导出到 Obsidian 时手动运行 `make today-obsidian`。
 
 #### 复盘日期与信号覆盖
 
+- 板块节奏按所选事实日回看。5 日区间收益用同一板块指数在完整交易日窗口的收盘价计算；上榜日涨幅合计与上榜天数另列。缺榜和缺行情分别标明覆盖。
 - 择时页区分当时留存的跌停计数与盘后已核验的非 ST 跌停数。[上证日均线](docs/shanghai-index-ma.md)使用对应 SSE 开放日，按窗口标注缺口。历史持仓使用所选日的名单、收盘和盈亏；板块资金流向按来源顺序展示，按源单位换算为亿元；小于 0.01 亿元的非零金额保留有效位，同单位字段冲突时显示缺口。
 - 盘后港股指数现货按事实日展示点位。如果仅能取得 3033.HK，其收盘以独立 ETF 行和港元展示。旧档能识别代理但缺行情日期证据时标记未核验。
 - 查看个股提醒最后一次成功计算及所用行情时间，可在项目根目录运行 `python3 .worktrees/intraday-monitor-runtime/scripts/main.py intraday-monitor status`。盘中行业前后五按相对涨跌幅排名；断板反包区分上涨家数占全体的百分比和上涨家数相对下跌家数的倍数。开盘啦 ETF 摘要对照同口径披露的连续天数、申赎金额及价格区间变化。

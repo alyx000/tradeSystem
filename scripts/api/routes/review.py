@@ -899,9 +899,14 @@ def _build_sector_projection_candidates(
                 candidate["facts"]["phase_hint"] = phase
             if item.get("change_today") is not None:
                 candidate["facts"]["pct_chg"] = item.get("change_today")
-            for field in ("cumulative_pct_5d", "cumulative_pct_10d"):
-                if item.get(field) is not None:
-                    candidate["facts"][field] = item.get(field)
+            for window in ("5d", "10d"):
+                for field in (f"cumulative_pct_{window}", f"period_return_{window}_pct",
+                              f"top30_sum_{window}_pct", f"top30_days_{window}",
+                              f"ranking_covered_days_{window}"):
+                    if field in item:
+                        candidate["facts"][field] = item[field]
+            if isinstance(item.get("rhythm_window_evidence"), dict):
+                candidate["facts"]["rhythm_window_evidence"] = item["rhythm_window_evidence"]
             add_evidence(
                 candidate,
                 source=section_key,

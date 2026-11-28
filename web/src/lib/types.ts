@@ -1039,15 +1039,55 @@ export interface SectorIndustryPrefill {
   bottom?: SectorSnapshotRow[]
 }
 
-export interface SectorRhythmItem {
+export interface SectorRhythmCoverage {
+  as_of: string
+  expected: number
+  observed: number
+  missing_dates?: string[]
+  calendar_issue?: string | null
+  today_status: 'covered' | 'empty' | 'unavailable'
+}
+
+export interface RhythmWindowEvidence {
+  status?: 'complete' | 'partial'
+  ranking_status?: string
+  ranking_source?: string | null
+  missing_close_dates?: string[]
+  start_close?: number | null
+  end_close?: number | null
+  reason?: string | null
+  source?: string | null
+  ts_code?: string | null
+  start_date?: string | null
+  end_date?: string | null
+  observed_closes?: number
+  expected_closes?: number
+  ranked_dates?: string[]
+  ranking_missing_dates?: string[]
+}
+
+export interface SectorRhythmMetrics {
+  period_return_5d_pct?: number | null
+  period_return_10d_pct?: number | null
+  top30_sum_5d_pct?: number | null
+  top30_sum_10d_pct?: number | null
+  top30_days_5d?: number | null
+  top30_days_10d?: number | null
+  ranking_covered_days_5d?: number | null
+  ranking_covered_days_10d?: number | null
+  rhythm_window_evidence?: Partial<Record<'5d' | '10d', RhythmWindowEvidence>> & { schema?: string }
+  cumulative_pct_5d?: number | null
+  cumulative_pct_10d?: number | null
+}
+
+export interface SectorRhythmItem extends SectorRhythmMetrics {
   name?: string | null
   phase?: string | null
   change_today?: number | null
   rank_today?: number | null
   confidence?: string | null
-  cumulative_pct_5d?: number | null
-  cumulative_pct_10d?: number | null
   consecutive_in_top30?: number | null
+  signals?: { consecutive_is_lower_bound?: boolean }
   top_stock_today?: string | null
 }
 
@@ -1089,6 +1129,7 @@ export interface ReviewPrefillMarket extends Omit<MarketFullData, 'sector_indust
   sector_industry?: SectorIndustryPrefill
   sector_rhythm_industry?: SectorRhythmItem[]
   sector_rhythm_concept?: SectorRhythmItem[]
+  sector_rhythm_coverage?: Partial<Record<'industry' | 'concept', SectorRhythmCoverage>>
 }
 
 export interface ResearchCoverageRow {
@@ -1159,7 +1200,7 @@ export interface ReviewProjectionCandidate {
   data_status?: 'ok' | 'source_ok_empty' | 'missing' | 'source_failed' | 'rule_filtered_empty'
   rank_reason?: string
   source_tags: string[]
-  facts: {
+  facts: SectorRhythmMetrics & {
     phase_hint?: string | null
     duration_days?: number | null
     pct_chg?: number | null
@@ -1168,8 +1209,6 @@ export interface ReviewProjectionCandidate {
     capacity_leader?: string | null
     lead_stock?: string | null
     net_amount_yi?: number | null
-    cumulative_pct_5d?: number | null
-    cumulative_pct_10d?: number | null
     teacher_note_refs?: Array<{
       note_id?: number | null
       teacher_name?: string | null

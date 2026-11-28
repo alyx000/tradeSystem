@@ -4,6 +4,8 @@ Tushare 数据提供者
 """
 from __future__ import annotations
 
+import json
+
 from utils.limit_identity import positive_streak
 
 import os
@@ -2783,12 +2785,12 @@ class TushareProvider(DataProvider):
         except Exception as e:
             return DataResult(data=None, source=self.name, error=str(e))
 
-    def get_stock_universe_as_of(self, date: str) -> DataResult:
+    def get_stock_universe_as_of(self, date: str, *, exact_day: bool = False) -> DataResult:
         """返回目标月份曾上市的 A 股宇宙，历史月份包含后来退市股票。
 
         月线 API 会返回当月内曾交易、随后月中退市的股票，因此退市日只需不早于
         当月首日。L/D/P 三份静态历史在 provider 实例内缓存，48 月扫描不会重复
-        发起 144 次 stock_basic 请求。
+        发起 144 次 stock_basic 请求。盘中 exact_day 请求另外标记事实日，保留原始身份行供调用者对账。
         """
         missing = self._ensure_pro("get_stock_universe_as_of")
         if missing is not None:
@@ -2796,36 +2798,67 @@ class TushareProvider(DataProvider):
         try:
             target = self._normalize_financial_date(date, "date")
             month_start = f"{target[:6]}01"
-            history = getattr(self, "_stock_universe_history_cache", None)
+            pages = {}
+            page_size = 2000
+            history = None if exact_day else getattr(self, "_stock_universe_history_cache", None)
             if history is None:
-                all_rows: dict[str, dict] = {}
+                raw_rows = []
                 fields = (
                     "ts_code,symbol,name,area,industry,market,"
                     "list_date,delist_date,list_status"
                 )
+                seen = set()
                 for list_status in ("L", "D", "P"):
-                    df = self.pro.stock_basic(
-                        exchange="",
-                        list_status=list_status,
-                        fields=fields,
-                    )
-                    if df is None:
-                        raise RuntimeError(
-                            f"stock_basic list_status={list_status} 返回 None"
-                        )
-                    for row in self._df_to_records(df):
+                    params = dict(exchange="", list_status=list_status, fields=fields)
+                    offset = 0
+                    pages[list_status] = []
+                    while True:
+                        if exact_day:
+                            if len(pages[list_status]) >= 16:
+                                raise ValueError(f"stock_basic {list_status} 未在16页内到达末页")
+                            params.update(limit=page_size, offset=offset)
+                        df = self.pro.stock_basic(**params)
+                        if df is None:
+                            raise RuntimeError(f"stock_basic list_status={list_status} 返回 None")
+                        rows = self._df_to_records(df)
+                        raw_rows.extend(rows)
+                        if not exact_day:
+                            break
+                        pages[list_status].append(len(rows))
+                        if not rows:
+                            break
+                        if any(row.get("list_status") != list_status for row in rows):
+                            raise ValueError(f"stock_basic {list_status} 分页上市状态错位")
+                        codes = {_to_clean_str(row.get("ts_code")) for row in rows}
+                        if len(rows) > page_size or "" in codes or len(codes) != len(rows) or seen & codes:
+                            raise ValueError(f"stock_basic {list_status} 分页身份重复、缺失或超限")
+                        seen.update(codes)
+                        offset += len(rows)
+                if exact_day:
+                    history = raw_rows  # 不继承月度清单的去重或缓存，异常明细由扫描器拒收
+                else:
+                    all_rows = {}
+                    for row in raw_rows:
                         code = _to_clean_str(row.get("ts_code"))
                         if code:
                             all_rows.setdefault(code, dict(row))
-                history = list(all_rows.values())
-                self._stock_universe_history_cache = history
+                    history = list(all_rows.values())
+                    self._stock_universe_history_cache = history
 
             selected: list[dict] = []
             for row in history:
                 list_date = _to_clean_str(row.get("list_date")).replace("-", "")
+                if exact_day:
+                    list_date = self._normalize_financial_date(row.get("list_date"), "list_date")
                 if len(list_date) != 8 or not list_date.isdigit():
                     continue
                 delist_date = _to_clean_str(row.get("delist_date")).replace("-", "")
+                if exact_day and delist_date:
+                    delist_date = self._normalize_financial_date(delist_date, "delist_date")
+                    if delist_date < list_date:
+                        raise ValueError("退市日早于上市日")
+                if exact_day and row.get("list_status") == "D" and not delist_date:
+                    raise ValueError("已退市股票缺退市日期")
                 if delist_date and (
                     len(delist_date) != 8 or not delist_date.isdigit()
                 ):
@@ -2834,7 +2867,7 @@ class TushareProvider(DataProvider):
                         f"{row.get('delist_date')!r}"
                     )
                 if list_date <= target and (
-                    not delist_date or delist_date >= month_start
+                    not delist_date or delist_date >= (target if exact_day else month_start)
                 ):
                     item = dict(row)
                     item.setdefault("code", item.get("ts_code"))
@@ -2847,7 +2880,9 @@ class TushareProvider(DataProvider):
                 ),
                 source="tushare:stock_basic:L+D+P:as_of",
                 timeliness=Timeliness.HISTORICAL,
-                note=f"as_of_month={target[:6]}",
+                note=(json.dumps({"trade_date": self._financial_iso_date(target), "pages": pages,
+                                  "page_size": page_size, "selected": len(selected)})
+                      if exact_day else f"as_of_month={target[:6]}"),
             )
         except Exception as e:
             return DataResult(data=None, source=self.name, error=str(e))

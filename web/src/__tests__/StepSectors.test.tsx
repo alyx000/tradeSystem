@@ -198,6 +198,55 @@ describe('StepSectors', () => {
     expect(screen.getByText('领涨股：高标A')).toBeInTheDocument()
   })
 
+  it('separates five-session return, listed-day moves and incomplete archives in the rhythm panel and candidate', () => {
+    const verified = { period_return_5d_pct: 10.14, top30_sum_5d_pct: 20.84, top30_days_5d: 3,
+      ranking_covered_days_5d: 5, cumulative_pct_5d: 20.84,
+      rhythm_window_evidence: { '5d': { source: 'tushare:sw_daily', ts_code: '801086.SI', observed_closes: 6, expected_closes: 6 } } }
+    const historical: ReviewPrefillData = { ...prefill,
+      market: { ...prefill.market!, sector_rhythm_industry: [
+        { name: '电子化学品Ⅱ', change_today: 16.3, ...verified },
+        { name: '旧归档', cumulative_pct_5d: 7.3 },
+        { name: '部分核验', period_return_5d_pct: 0, top30_sum_5d_pct: -1.5, ranking_covered_days_5d: 3, top30_days_5d: 2,
+          consecutive_in_top30: 2, signals: { consecutive_is_lower_bound: true } },
+      ] },
+      review_signals: { ...prefill.review_signals!, sectors: { ...prefill.review_signals!.sectors,
+        projection_candidates: [{ sector_name: '电子化学品Ⅱ', source_tags: ['rhythm'], facts: verified }] } },
+    }
+    renderStep({}, historical)
+    expect(screen.getAllByText('5日区间收益 +10.14%')).toHaveLength(2)
+    expect(screen.getAllByText('5日上榜日涨幅合计 +20.84%')).toHaveLength(2)
+    expect(screen.getAllByText('5日上榜天数 3/5')).toHaveLength(2)
+    expect(screen.getByText('5日区间收益 待核')).toBeInTheDocument()
+    expect(screen.getByText('5日上榜日涨幅合计 待核（旧归档窗口上榜日合计 +7.30%）')).toBeInTheDocument()
+    expect(screen.getByText('5日区间收益 0.00%')).toBeInTheDocument()
+    expect(screen.getByText('5日上榜日涨幅合计 -1.50%（已核部分）')).toBeInTheDocument()
+    expect(screen.getByText('5日上榜天数 2/5（榜单覆盖 3/5）')).toBeInTheDocument()
+    expect(screen.getByText('连榜至少2日')).toBeInTheDocument()
+    expect(screen.queryByText('当日 +0.00%')).not.toBeInTheDocument()
+  })
+
+  it('shows historical window coverage separately from same-day ranking availability even without rhythm rows', () => {
+    const date = prefill.date
+    renderStep({}, { ...prefill, market: { ...prefill.market!, sector_rhythm_industry: [], sector_rhythm_concept: [],
+      sector_rhythm_coverage: {
+        industry: { as_of: date, observed: 17, expected: 20, missing_dates: ['2026-03-26'], today_status: 'covered' },
+        concept: { as_of: date, observed: 0, expected: 20, today_status: 'unavailable' },
+      } } })
+    expect(screen.getByText(/历史榜单覆盖 17\/20 个开放日 · 缺榜单 2026-03-26/)).toBeInTheDocument()
+    expect(screen.getByText('当日榜单已核验，未列出节奏对象')).toBeInTheDocument()
+    expect(screen.getByText('历史榜单覆盖 0/20 个开放日')).toBeInTheDocument()
+    expect(screen.getByText('当日榜单待核')).toBeInTheDocument()
+    expect(screen.queryByText('来源已确认当日空榜')).not.toBeInTheDocument()
+  })
+
+  it('requires a dated receipt to confirm an empty ranking', () => {
+    const receipt = { as_of: prefill.date, observed: 20, expected: 20, today_status: 'empty' as const }
+    renderStep({}, { ...prefill, market: { ...prefill.market!, sector_rhythm_industry: [], sector_rhythm_concept: [],
+      sector_rhythm_coverage: { industry: receipt, concept: { ...receipt, as_of: '2026-03-31' } } } })
+    expect(screen.getByText('来源已确认当日空榜')).toBeInTheDocument()
+    expect(screen.getByText('旧档未记录当日榜单覆盖，无法核验空榜')).toBeInTheDocument()
+  })
+
   it('emits nested payload when user edits main theme name', () => {
     const { onChange } = renderStep({}, prefill)
 
