@@ -79,7 +79,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--provider", default="openai")
     parser.add_argument("--model", required=True)
     parser.add_argument("--timeout", type=int, default=180)
-    parser.add_argument("--prompt", required=True)
+    prompts = parser.add_mutually_exclusive_group(required=True)
+    prompts.add_argument("--prompt")
+    prompts.add_argument("--prompt-stdin", action="store_true")
     parser.add_argument("--unsupported-local-files", action="store_true")
     args = parser.parse_args(argv)
     try:
@@ -87,7 +89,7 @@ def main(argv: list[str] | None = None) -> int:
             raise ResponseFailure("misconfigured: unsupported LLM_PROVIDER")
         if args.unsupported_local_files:
             raise ResponseFailure("source_failed: local files unavailable in text API")
-        print(generate(args.prompt, model=args.model, timeout=args.timeout))
+        print(generate(sys.stdin.read() if args.prompt_stdin else args.prompt, model=args.model, timeout=args.timeout))
     except ResponseFailure as exc:
         print(str(exc), file=sys.stderr)
         return 1

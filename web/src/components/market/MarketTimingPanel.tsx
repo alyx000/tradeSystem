@@ -58,6 +58,9 @@ export default function MarketTimingPanel({
   }
 
   const { context, signals, resonance_count } = payload
+  const down = context.limit_down_fact
+  const recorded = context.recorded_limit_down
+  const downVerified = down?.trade_date === payload.date && down.status === 'verified' && down.count != null
   const lowVolume = context.amount_pctile_20d != null && context.amount_pctile_20d <= 0.2
   // 防前瞻偏差：复盘历史日期时只展示该日及之前的趋势（后端 to_date 已限窗，此处前端兜底）
   const series = (history?.series ?? []).filter((p) => !asOfDate || p.date <= asOfDate)
@@ -86,6 +89,23 @@ export default function MarketTimingPanel({
         <span className={lowVolume ? 'text-amber-600 font-medium' : 'text-gray-700'}>
           {`成交额 ${context.market_amount_yi != null ? `${Math.round(context.market_amount_yi)} 亿` : '—'}（分位 ${fmtPctile(context.amount_pctile_20d)}${lowVolume ? ' 地量' : ''}）`}
         </span>
+        <span className="text-gray-700">
+          {downVerified ? `非 ST 收盘跌停 ${down.count} 家（盘后归档核验）`
+            : `非 ST 收盘跌停待核验（${down?.reason ?? '缺少同日逐股价格证据'}）`}
+        </span>
+        {recorded?.trade_date === payload.date && recorded.count != null && (
+          recorded.status === 'legacy' ||
+          (recorded.status === 'verified' && (!downVerified || recorded.count !== down?.count))
+        ) && (
+          <span className="text-gray-500">
+            {recorded.status === 'legacy'
+              ? `择时留存 ${recorded.count} 家（旧榜，ST 口径未核验）`
+              : `择时留存非 ST 收盘跌停 ${recorded.count} 家（运行时核验）`}
+          </span>
+        )}
+        {recorded?.trade_date === payload.date && recorded.status === 'unknown' && downVerified && (
+          <span className="text-gray-500">择时留存待核验</span>
+        )}
         {offCard.length > 0 && (
           <span className="flex flex-wrap items-baseline gap-x-2">
             <span className="text-gray-500">场外：</span>

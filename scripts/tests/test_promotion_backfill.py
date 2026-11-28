@@ -41,23 +41,24 @@ def _reg_limit_fail():
 class TestComputePromotion:
     def test_first_to_second_and_second_to_third(self):
         prev_stocks = [
-            {"code": "A.SZ", "name": "甲", "limit_times": 1},
-            {"code": "B.SZ", "name": "乙", "limit_times": 1},
-            {"code": "C.SZ", "name": "丙", "limit_times": 1},
-            {"code": "D.SZ", "name": "丁", "limit_times": 2},
+            {"code": "000001.SZ", "name": "甲", "limit_times": 1},
+            {"code": "000002.SZ", "name": "乙", "limit_times": 1},
+            {"code": "000003.SZ", "name": "丙", "limit_times": 1},
+            {"code": "000004.SZ", "name": "丁", "limit_times": 2},
         ]
-        # T 日：甲、乙 晋级二板；丙 炸板（不在涨停列表）；丁 晋级三板
+        # 两日榜单可来自不同提供方，裸码及 ts_code 均应匹配同一只证券。
+        # 甲、乙晋级二板，丙未晋级，丁晋级三板。
         t_day = [
-            {"code": "A.SZ", "name": "甲", "limit_times": 2},
-            {"code": "B.SZ", "name": "乙", "limit_times": 2},
-            {"code": "D.SZ", "name": "丁", "limit_times": 3},
+            {"code": "000001", "name": "甲", "limit_times": 2},
+            {"code": "000002.SZ", "name": "乙", "limit_times": 2},
+            {"ts_code": "000004.SZ", "name": "丁", "limit_times": 3},
         ]
         pc = PremiumCollector(_reg_with_tday_limit(t_day))
-        promo = pc._compute_promotion(prev_stocks, "2026-03-28", "2026-03-27")
+        promo = pc._compute_promotion(prev_stocks, "2026-03-27", "2026-03-26")
 
         assert promo is not None
-        assert promo["trade_date"] == "2026-03-28"
-        assert promo["prev_date"] == "2026-03-27"
+        assert promo["trade_date"] == "2026-03-27"
+        assert promo["prev_date"] == "2026-03-26"
 
         fts = promo["first_to_second"]
         assert fts["base"] == 3
@@ -73,10 +74,10 @@ class TestComputePromotion:
 
     def test_zero_base_rate_none(self):
         """T-1 无首板时，first_to_second.rate 为 None、base 为 0，不除零崩溃"""
-        prev_stocks = [{"code": "D.SZ", "name": "丁", "limit_times": 2}]
-        t_day = [{"code": "D.SZ", "name": "丁", "limit_times": 3}]
+        prev_stocks = [{"code": "000004.SZ", "name": "丁", "limit_times": 2}]
+        t_day = [{"code": "000004.SZ", "name": "丁", "limit_times": 3}]
         pc = PremiumCollector(_reg_with_tday_limit(t_day))
-        promo = pc._compute_promotion(prev_stocks, "2026-03-28", "2026-03-27")
+        promo = pc._compute_promotion(prev_stocks, "2026-03-27", "2026-03-26")
 
         assert promo["first_to_second"]["base"] == 0
         assert promo["first_to_second"]["rate"] is None
@@ -85,39 +86,51 @@ class TestComputePromotion:
     def test_limit_times_missing_not_counted(self):
         """limit_times 缺失/None/0 的脏数据不计入任何档位分母（不虚增首板）"""
         prev_stocks = [
-            {"code": "A.SZ", "name": "甲", "limit_times": 1},   # 正常首板
-            {"code": "B.SZ", "name": "乙"},                      # 缺 limit_times → 不计
-            {"code": "C.SZ", "name": "丙", "limit_times": None}, # None → 不计
-            {"code": "E.SZ", "name": "戊", "limit_times": 0},    # 0 → 不计
+            {"code": "000001.SZ", "name": "甲", "limit_times": 1},   # 正常首板
+            {"code": "000002.SZ", "name": "乙"},                      # 缺 limit_times → 不计
+            {"code": "000003.SZ", "name": "丙", "limit_times": None}, # None → 不计
+            {"code": "000005.SZ", "name": "戊", "limit_times": 0},    # 0 → 不计
         ]
-        t_day = [{"code": "A.SZ", "name": "甲", "limit_times": 2}]
+        t_day = [{"code": "000001.SZ", "name": "甲", "limit_times": 2}]
         pc = PremiumCollector(_reg_with_tday_limit(t_day))
-        promo = pc._compute_promotion(prev_stocks, "2026-03-28", "2026-03-27")
+        promo = pc._compute_promotion(prev_stocks, "2026-03-27", "2026-03-26")
 
-        # 只有 A 是合法首板：base=1，而非把 B/C/E 也算进来变成 4
+        # 只有甲是合法首板：base=1，而非把 B/C/E 也算进来变成 4
         assert promo["first_to_second"]["base"] == 1
         assert promo["first_to_second"]["promoted"] == 1
         assert promo["first_to_second"]["rate"] == 1.0
 
     def test_tday_limit_fail_returns_none(self):
         """T 日涨停 list 获取失败 → 返回 None（无法计算晋级率）"""
-        prev_stocks = [{"code": "A.SZ", "name": "甲", "limit_times": 1}]
+        prev_stocks = [{"code": "000001.SZ", "name": "甲", "limit_times": 1}]
         pc = PremiumCollector(_reg_limit_fail())
-        promo = pc._compute_promotion(prev_stocks, "2026-03-28", "2026-03-27")
+        promo = pc._compute_promotion(prev_stocks, "2026-03-27", "2026-03-26")
         assert promo is None
 
     def test_all_failed_promotion(self):
         """昨日首板今日全炸板：promoted=0, rate=0.0"""
         prev_stocks = [
-            {"code": "A.SZ", "name": "甲", "limit_times": 1},
-            {"code": "B.SZ", "name": "乙", "limit_times": 1},
+            {"code": "000001.SZ", "name": "甲", "limit_times": 1},
+            {"code": "000002.SZ", "name": "乙", "limit_times": 1},
         ]
         t_day = []  # 今日无涨停
         pc = PremiumCollector(_reg_with_tday_limit(t_day))
-        promo = pc._compute_promotion(prev_stocks, "2026-03-28", "2026-03-27")
+        promo = pc._compute_promotion(prev_stocks, "2026-03-27", "2026-03-26")
         assert promo["first_to_second"]["base"] == 2
         assert promo["first_to_second"]["promoted"] == 0
         assert promo["first_to_second"]["rate"] == 0.0
+
+
+    @pytest.mark.parametrize("bad_outcome", [
+        [{"code": "A.SZ"}],
+        [{"code": "000001.SH"}],
+        [{"code": "000001", "ts_code": "000002.SZ"}],
+        [{"code": "000001"}, {"ts_code": "000001.SZ"}],
+    ])
+    def test_malformed_conflicting_or_duplicate_identity_is_not_zero_promotions(self, bad_outcome):
+        pc = PremiumCollector(_reg_with_tday_limit(bad_outcome))
+        source = [{"code": "000001.SZ", "name": "甲", "limit_times": 1}]
+        assert pc._compute_promotion(source, "2026-03-27", "2026-03-26") is None
 
 
 class TestRenderPromotion:

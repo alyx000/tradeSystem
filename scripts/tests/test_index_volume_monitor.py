@@ -302,6 +302,107 @@ def test_all_sources_fail_no_checked_advance_or_push(setup):
     assert json.loads(kw["state_path"].read_text())["checked_event_ids"] == []
 
 
+def _archive_window(registry, kw, captured):
+    from services.index_volume_monitor.bar_archive import archive_fetched
+
+    rows = [{**row, "open": "100", "close": "100", "high": "101",
+             "low": "99", "volume": "50"} for row in bars()]
+    archive_fetched(kw["report_root"]/"ohlcv-5m", {CODE: (rows, None)}, previous="2026-11-03",
+                    end=moment("10:00"), captured_at=captured, input_by="pytest")
+    registry.failures.add(CODE)
+
+
+def test_network_failure_uses_only_verified_archived_window_and_preserves_live_provenance(setup):
+    registry, pusher, kw = setup
+    _archive_window(registry, kw, moment("10:02").isoformat())
+    result = run_index_volume(registry, dry_run=True, **kw)
+    assert result["data_status"] == "complete"
+    local = [e for e in result["evaluations"] if e["code"] == CODE]
+    assert [len(e["data_origin"]["archive_rows"]) for e in local] == [2, 6]
+    assert all(e["data_origin"]["kind"] == "archive_only" and e["source"] == "eastmoney:index_5min"
+               and e["previous_trade_date"] == "2026-11-03" and e["amount_unit"] == "CNY" for e in local)
+    assert not pusher.messages and not kw["state_path"].exists()
+    # A successful primary response with just today's bars can use yesterday's verified baseline.
+    registry.failures.clear()
+    registry.dirty[CODE] = [r for r in bars() if r["trade_time"].startswith("2026-11-04")]
+    result = run_index_volume(registry, dry_run=True, **kw)
+    local = [e for e in result["evaluations"] if e["code"] == CODE]
+    assert [len(e["data_origin"]["archive_rows"]) for e in local] == [1, 3]
+    assert all(e["data_origin"]["kind"] == "live_and_archive" for e in local)
+    registry.dirty[CODE][0]["amount_unit"] = "USD"
+    assert run_index_volume(registry, dry_run=True, **kw)["data_status"] == "partial"
+
+
+@pytest.mark.parametrize("dirty", ["future", "digest", "conflict", "later_conflict"])
+def test_archive_fallback_rejects_posthoc_or_inconsistent_evidence(setup, dirty):
+    from services.index_volume_monitor.bar_archive import archive_fetched
+
+    registry, pusher, kw = setup
+    _archive_window(registry, kw, moment("10:04" if dirty == "future" else "10:02").isoformat())
+    root = kw["report_root"]/"ohlcv-5m"
+    if dirty == "digest":
+        path = root/"2026-11-04.json"
+        path.write_text(path.read_text().replace("eastmoney:index_5min","other"))
+    if dirty in ("conflict", "later_conflict"):
+        row = {**next(r for r in bars() if r["trade_time"] == "2026-11-04 10:00"),
+               "amount": "999", "open": "100", "high": "100", "close": "100", "low": "100", "volume": "50"}
+        archive_fetched(root, {CODE: ([row], None)}, previous=None, end=moment("10:00"),
+                        captured_at=moment("16:00" if dirty == "later_conflict" else "10:02").isoformat(), input_by="pytest")
+    result = run_index_volume(registry, dry_run=True, **kw)
+    if dirty == "later_conflict":
+        assert result["data_status"] == "complete"
+        return
+    assert result["data_status"] == "partial" and not pusher.messages
+    assert all(e["code"] != CODE for e in result["evaluations"])
+
+
+def test_index_request_failures_are_classified_without_exception_body(monkeypatch):
+    from requests import exceptions, Response
+
+    provider = EastmoneyProvider()
+    primary = Response()
+    primary.status_code = 429
+    for exc, category in [
+        (exceptions.HTTPError("SECRET", response=primary), "http_429"),
+        (exceptions.Timeout("SECRET"), "timeout"), (exceptions.ConnectionError("SECRET"), "connection_error"),
+        (exceptions.SSLError("SECRET"), "tls_error"), (ValueError("SECRET"), "json_decode_error"),
+    ]:
+        class Session:
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                pass
+            def get(self, *args, **kwargs):
+                raise exc
+        monkeypatch.setattr(provider, "_make_session", Session)
+        result = provider.get_index_intraday_bars(CODE, "2026-11-03", "2026-11-04", period_minutes=5)
+        assert not result.success and result.error.count(category) == 2 and "SECRET" not in result.error
+
+
+    class BrokenSession:
+        def __enter__(self):
+            raise OSError("SECRET")
+        def __exit__(self, *args):
+            pass
+    monkeypatch.setattr(provider, "_make_session", BrokenSession)
+    result = provider.get_index_intraday_bars(CODE, "2026-11-03", "2026-11-04", period_minutes=5)
+    assert not result.success and "connection_error" in result.error and "SECRET" not in result.error
+
+
+
+def test_last_slot_publishes_readonly_intraday_coverage(setup):
+    registry, pusher, kw = setup
+    with sqlite3.connect(kw["db_path"]) as conn:
+        conn.executemany("INSERT INTO trade_calendar VALUES('SSE',?,1)", [
+            ("2026-11-26",), ("2026-11-27",)])
+    kw["clock"] = lambda: moment("15:03", day="2026-11-27")
+    registry.failures = set(INDEX_NAMES)
+    result = run_index_volume(registry, **kw)
+    counts = result["realtime_coverage"]["counts"]
+    assert counts["source_failed"] == 1 and counts["no_receipt"] == 47
+    assert result["realtime_coverage"]["denominator_slots"] == 48 and not pusher.messages
+
+
 def test_source_cannot_label_fifteen_minute_rows_as_five(setup):
     registry, pusher, kw = setup
     for code in INDEX_NAMES:

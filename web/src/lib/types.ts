@@ -135,6 +135,9 @@ export interface SectorSnapshotRow {
   sector_name?: string | null
   change_pct?: number | null
   pct_change?: number | null
+  /** 当前归档字段，单位为亿元。 */
+  net_inflow_billion?: number | null
+  /** 旧版板块快照的同单位字段，单位为亿元。 */
   net_inflow?: number | null
 }
 
@@ -207,8 +210,8 @@ export interface MarketFullData extends DailyMarket {
   available: boolean
   indices?: Record<string, MarketIndexEntry>
   moving_averages?: Record<string, MarketMaEntry>
-  sector_industry?: MarketSection<SectorSnapshotRow>
-  sector_concept?: MarketSection<SectorSnapshotRow>
+  sector_industry?: SectorIndustryPrefill
+  sector_concept?: SectorIndustryPrefill
   sector_fund_flow?: MarketSection<SectorSnapshotRow>
   sector_moneyflow_ths?: MarketSection<SectorMoneyflowThsRow>
   sector_moneyflow_dc?: MarketSection<SectorMoneyflowDcRow>
@@ -497,11 +500,11 @@ export interface HoldingTechnicalSignals {
 }
 
 export interface HoldingThemeSignals {
-  is_main_theme: boolean
+  is_main_theme: boolean | null
   main_theme_name: string | null
-  is_strongest_sector: boolean
+  is_strongest_sector: boolean | null
   strongest_sector_name: string | null
-  sector_flow_confirmed: boolean
+  sector_flow_confirmed: boolean | null
   sector_flow_source: 'ths' | 'dc' | null
 }
 
@@ -516,7 +519,7 @@ export interface HoldingEventSignals {
     ann_date: string | null
     report_end: string | null
   }>
-  is_st: boolean
+  is_st: boolean | null
   share_float_upcoming: Array<{
     ann_date?: string | null
     float_date?: string | null
@@ -762,6 +765,7 @@ export interface ReviewFactorMetrics {
 }
 
 export interface ReviewEmotionCycle {
+  date?: string
   phase?: string | null
   sub_cycle?: number | null
   strength_trend?: string | null
@@ -843,6 +847,7 @@ export interface CalendarEventCreateInput {
 
 export interface PostMarketPayload {
   available: boolean
+  t1_feedback_dates?: { source_trade_date: string; outcome_trade_date: string }
   [key: string]: unknown
 }
 
@@ -1244,7 +1249,11 @@ export interface ReviewPrefillSignals {
   emotion: ReviewEmotionSignals
 }
 
-export interface ReviewPrefillData extends Omit<PrefillData, 'market' | 'main_themes' | 'emotion_cycle'> {
+export type ReviewHolding = Omit<Holding, 'id' | 'status'> & Partial<Pick<Holding, 'id' | 'status'>>
+
+export interface ReviewPrefillData extends Omit<PrefillData, 'market' | 'main_themes' | 'emotion_cycle' | 'holdings'> {
+  holdings: ReviewHolding[]
+  holdings_source?: 'post_market' | 'quote_snapshot' | 'no_rows' | 'missing'
   market: ReviewPrefillMarket | null
   emotion_cycle?: ReviewEmotionCycle | null
   main_themes: MainThemeItem[]
@@ -1447,6 +1456,17 @@ export interface MarketTimingContext {
   advance: number | null
   decline: number | null
   limit_down_count: number | null
+  limit_down_fact?: TimingLimitDownFact
+  recorded_limit_down?: TimingLimitDownFact
+}
+
+interface TimingLimitDownFact {
+  trade_date: string
+  status: 'verified' | 'unknown' | 'legacy'
+  count: number | null
+  reason?: string
+  source?: string
+  coverage?: { active: number; quoted: number; suspended_without_quote: number }
 }
 
 export interface MarketTimingPayload {

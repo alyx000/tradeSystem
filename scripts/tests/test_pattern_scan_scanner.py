@@ -240,7 +240,8 @@ class TestConceptBranch:
 
     def test_missing_members_preserves_available_sector_scan(self):
         result = _run(_Registry({"600001": _bars()}))
-        assert result["status"] == "ok"
+        assert result["status"] == "partial"
+        assert result["missing_concepts"] == ["CPO"]
         assert [c["code"] for c in result["candidates"]] == ["600001"]
         assert "同花顺概念成分缺失（CPO）" in result["source_errors"]
 
@@ -377,14 +378,20 @@ class TestSourceFailure:
         assert result["status"] == "source_failed"
         assert "sw_map" in result["source_errors"]
 
-    def test_partial_failure_still_ok(self):
-        """部分票取数失败不应升级成整体失败。"""
+    def test_partial_failure_keeps_verified_matches(self):
         registry = _Registry({"600001": _bars()}, factor_fail={"600002"})
         registry.bars_by_code["600002"] = _bars()
         result = _run(registry)
-        assert result["status"] == "ok"
+        assert result["status"] == "partial"
+        assert (result["evaluated_count"], result["unevaluated_count"]) == (1, 1)
         assert [c["code"] for c in result["candidates"]] == ["600001"]
         assert result["rejects"]["qfq_failed"] == 1
+
+    def test_empty_evaluable_sample_with_short_history_is_partial(self):
+        registry = _Registry({"600001": _bars(n=60), "600002": _bars(n=60)})
+        result = _run(registry)
+        assert result["status"] == "partial"
+        assert result["evaluated_count"] == 0 and result["unevaluated_count"] == 2
 
 
 def test_progress_logged_per_stock(caplog):

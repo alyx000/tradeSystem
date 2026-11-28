@@ -447,3 +447,25 @@ def test_check_cli_returns_nonzero_for_partial_monitoring(monkeypatch, capsys):
 
     assert intraday_monitor.handle_command({}, _check_args()) == 1
     assert '"status": "partial"' in capsys.readouterr().out
+
+
+def test_rule_status_command_uses_no_providers_and_displays_both_times(monkeypatch, capsys):
+    from services.intraday_monitor import service
+    import json
+
+    checks = []
+    def read(*, include_inactive):
+        checks.append(include_inactive)
+        return {"status": "ok", "as_of": "2026-11-28T12:00:00+08:00", "rules": [
+            {"name": "安图生物", "code": "603658.SH", "rule_id": "monthly", "last_success_at": None,
+             "last_quote_at": "2026-11-24T15:00:00+08:00", "valid_until": "2026-12-18"}]}
+    monkeypatch.setattr(service, "rule_status", read)
+    monkeypatch.setattr(main, "setup_providers", lambda *_: pytest.fail("只读列表不初始化行情源"))
+    args = main.build_parser().parse_args(["intraday-monitor", "status"])
+    assert intraday_monitor.handle_command({}, args) == 0
+    display = capsys.readouterr().out
+    assert "未核验" in display and "2026-11-24T15:00:00+08:00" in display
+    args = main.build_parser().parse_args(["intraday-monitor", "status", "--all", "--json"])
+    assert intraday_monitor.handle_command({}, args) == 0
+    assert json.loads(capsys.readouterr().out)["rules"][0]["last_success_at"] is None
+    assert checks == [False, True]

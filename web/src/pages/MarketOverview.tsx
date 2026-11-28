@@ -9,6 +9,7 @@ import type {
   MarketTimingSignal,
   SectorTab,
   SortOrder,
+  PostMarketPayload,
 } from '../lib/types'
 import { fibTextCompact, fibTone } from '../components/market/marketTimingFormat'
 import LimitStatsPanel from '../components/market/LimitStatsPanel'
@@ -97,9 +98,15 @@ export default function MarketOverview() {
     enabled: !!date,
   })
 
-  const { data: history } = useQuery({
+  const { data: recentDates } = useQuery({
     queryKey: ['market-history'],
     queryFn: () => api.getMarketHistory(20),
+  })
+
+  const { data: history } = useQuery({
+    queryKey: ['market-history', date],
+    queryFn: () => api.getMarketHistory(20, date),
+    enabled: !!date,
   })
 
   const { data: postEnvelope, isLoading: envelopeLoading } = useQuery({
@@ -109,13 +116,15 @@ export default function MarketOverview() {
   })
 
   const { data: mainThemes } = useQuery({
-    queryKey: ['main-themes'],
-    queryFn: api.getMainThemes,
+    queryKey: ['main-themes', date],
+    queryFn: () => api.getMainThemes(date),
+    enabled: !!date,
   })
 
   const { data: concentration } = useQuery({
-    queryKey: ['concentration-history'],
-    queryFn: () => api.getConcentrationHistory(30),
+    queryKey: ['concentration-history', date],
+    queryFn: () => api.getConcentrationHistory(30, date),
+    enabled: !!date,
   })
 
   const { data: marketTiming } = useQuery({
@@ -173,8 +182,7 @@ export default function MarketOverview() {
   const m: MarketFullData | null = hasSummary ? market : null
   const boards = m ? parseBoardCounts(m.continuous_board_counts) : []
   const maxBoardCount = boards.length > 0 ? Math.max(...boards.map(b => b.count)) : 1
-  const rawSectorData = m ? getSectorData(m, sectorTab) : []
-  const sectorData = sortOrder === 'loss' ? rawSectorData.slice().reverse() : rawSectorData
+  const sectorData = m ? getSectorData(m, sectorTab, sortOrder) : []
   const visibleSectors = showAllSectors ? sectorData : sectorData.slice(0, 10)
   const activeThemes: MainThemeItem[] = (mainThemes || []).filter((t) => t.status === 'active')
   const strongestSectors = m ? getStrongestSectorRows(m) : []
@@ -198,13 +206,16 @@ export default function MarketOverview() {
         <h1 className="text-xl font-bold text-gray-800">市场数据</h1>
         <input type="date" value={date} onChange={e => navigate(`/market/${e.target.value}`)}
           className="border rounded px-2 py-1 text-sm" />
-        {history && history.length > 0 && (
+        {recentDates && recentDates.length > 0 && (
           <select
             value={date}
             onChange={e => navigate(`/market/${e.target.value}`)}
             className="border rounded px-2 py-1 text-sm text-gray-700 max-w-[11rem]"
           >
-            {(history || []).map((h) => (
+            {date && !recentDates.some(h => h.date === date) && (
+              <option value={date}>历史 {date}</option>
+            )}
+            {recentDates.map((h) => (
               <option key={h.date} value={h.date}>历史 {h.date}</option>
             ))}
           </select>
@@ -325,7 +336,7 @@ function PostMarketEnvelopePanel({
 }: {
   date: string
   loading: boolean
-  data: Record<string, unknown> | null | undefined
+  data: PostMarketPayload | null | undefined
 }) {
   if (loading) {
     return <div className="text-center py-12 text-gray-400">加载盘后信封…</div>
@@ -337,13 +348,19 @@ function PostMarketEnvelopePanel({
       </div>
     )
   }
-  const payload = { ...data }
+  const feedbackDates = data.t1_feedback_dates
+  const payload: Record<string, unknown> = { ...data }
   delete payload.available
   const jsonText = JSON.stringify(payload, null, 2)
   const keys = Object.keys(payload)
 
   return (
     <div className="space-y-4">
+      {feedbackDates && (
+        <p className="text-sm text-gray-600">
+          次日反馈使用 {feedbackDates.outcome_trade_date} 的行情，核验 {feedbackDates.source_trade_date} 的观察对象。
+        </p>
+      )}
       <div className="flex flex-wrap gap-2">
         <button
           type="button"

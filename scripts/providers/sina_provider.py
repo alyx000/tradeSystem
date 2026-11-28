@@ -14,9 +14,10 @@
 """
 from __future__ import annotations
 
+import json
 import logging
 import math
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from .base import DataProvider, DataResult, Timeliness
@@ -24,6 +25,8 @@ from .base import DataProvider, DataResult, Timeliness
 logger = logging.getLogger(__name__)
 
 SINA_HQ_URL = "https://hq.sinajs.cn/list="
+SINA_MINUTE_URL = "https://quotes.sina.cn/cn/api/jsonp_v2.php/=/CN_MarketDataService.getKLineData"
+MINUTE_DEPTH = 1970
 BATCH_SIZE = 800
 REQUEST_TIMEOUT = 10
 # 标准行情行至少含字段 0-31（30=行情日期 31=行情时间）
@@ -200,6 +203,65 @@ class SinaProvider(DataProvider):
                 "change_pct": round(change_pct, 4),
             }
         return DataResult(quotes, source, source_url=source_url, fetched_at=fetched_at.isoformat())
+
+    def get_stock_minutes(self, stock_code: str, trade_date: str) -> DataResult:
+        """固定1分钟/未复权/1970根；返回目标日原值，完整截止窗口由消费方核验。
+
+        复用AkShare stock_zh_a_minute的新浪接口，不调用其额外日线复权请求。
+        不填补停牌或零成交缺失分钟；身份绑定单码请求参数，不伪称响应自带代码。
+        """
+        source = 'sina:CN_MarketDataService.getKLineData:1min'
+        try:
+            if date.fromisoformat(trade_date).isoformat() != trade_date:
+                raise ValueError('invalid_date')
+            symbol = _to_sina_symbol(stock_code)
+            if not symbol or not stock_code.endswith(('.SH', '.SZ')):
+                raise ValueError('invalid_stock_code')
+        except (ValueError, TypeError):
+            return DataResult(None, source, error='分钟请求代码或日期非法')
+        try:
+            with self._make_session() as session:
+                resp = session.get(SINA_MINUTE_URL, params=dict(symbol=symbol,scale='1',ma='no',datalen=str(MINUTE_DEPTH)),
+                                   timeout=REQUEST_TIMEOUT, allow_redirects=False)
+                if resp.status_code != 200:
+                    raise ValueError('http_failed')
+                text = resp.text.strip()
+                if text.startswith('/*') and '*/' in text:
+                    text = text.split('*/',1)[1].strip()
+                if not text.startswith('=(') or not text.endswith(');'):
+                    raise ValueError('invalid_wrapper')
+                raw = json.loads(text[2:-2])
+            if not isinstance(raw,list) or not raw or len(raw)>MINUTE_DEPTH:
+                raise ValueError('empty_or_invalid_response')
+            rows, seen = [], set()
+            for bar in raw:
+                stamp = bar['day']
+                t = datetime.strptime(stamp,'%Y-%m-%d %H:%M:%S')
+                if t.strftime('%Y-%m-%d %H:%M:%S')!=stamp or t.second or stamp in seen:
+                    raise ValueError('invalid_timestamp')
+                seen.add(stamp)
+                if t.date().isoformat()!=trade_date:
+                    continue
+                row = dict(ts_code=stock_code,trade_time=stamp)
+                for key,src in [('open','open'),('high','high'),('low','low'),('close','close'),('vol','volume'),('amount','amount')]:
+                    if isinstance(bar[src],bool):
+                        raise ValueError('invalid_number')
+                    value=float(bar[src])
+                    if not math.isfinite(value) or value<0 or (key in ('open','high','low','close') and value==0):
+                        raise ValueError('invalid_number')
+                    row[key]=value
+                if not row['low']<=min(row['open'],row['close'])<=max(row['open'],row['close'])<=row['high']:
+                    raise ValueError('invalid_ohlc')
+                rows.append(row)
+            if not rows:
+                raise ValueError('target_day_unavailable')
+            return DataResult(sorted(rows,key=lambda r:r['trade_time']),source,source_url=SINA_MINUTE_URL,
+                              timeliness=Timeliness.RECENT,
+                              note='未复权；volume股/amount元；身份绑定请求参数'+symbol+
+                                   '；最近1970根，缺分钟不补齐；首根可能含开盘竞价，按新浪分桶，不与其他源逐分钟量额混用')
+        except Exception as exc:
+            # 只输出类型，避免代理异常泄露地址中的账户信息。
+            return DataResult(None,source,error='新浪分钟来源失败或目标日不可用：'+type(exc).__name__)
 
     def get_realtime_quotes(self, codes: list[str]) -> DataResult:
         """批量获取实时行情。

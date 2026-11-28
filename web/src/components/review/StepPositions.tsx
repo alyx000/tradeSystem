@@ -1,7 +1,7 @@
 import { useEffect, useMemo } from 'react'
 import { type StepProps, Row, SelectField, TextField, NumberField, CheckField, PrefillBanner, DynamicList, InvestorQaList } from './widgets'
 import CognitionPanel from './CognitionPanel'
-import type { Holding, HoldingSignalItem } from '../../lib/types'
+import type { ReviewHolding, HoldingSignalItem } from '../../lib/types'
 
 interface PositionItem {
   stock: string
@@ -22,12 +22,12 @@ function normStockCode(code: string): string {
 }
 
 function extractCodeFromStockLabel(stock: string): string {
-  const m = (stock || '').match(/\(([0-9]{6}(?:\.[A-Z]{2})?)\)/i)
+  const m = (stock || '').trim().match(/(?:^|[(（])([0-9]{6}(?:\.[A-Z]{2})?)(?:$|[)）])/i)
   return m ? m[1].toUpperCase() : ''
 }
 
-function buildPrefillHoldingsMap(holdings: Holding[]): Map<string, { cost: unknown; price: unknown; pnl: number | null }> {
-  const m = new Map<string, { cost: unknown; price: unknown; pnl: number | null }>()
+function buildPrefillHoldingsMap(holdings: ReviewHolding[]) {
+  const m = new Map<string, { cost: number | null; price: number | null; pnl: number | null }>()
   for (const h of holdings) {
     const raw = String(h.stock_code || '').trim()
     const k = normStockCode(raw)
@@ -53,8 +53,9 @@ function buildHoldingSignalsMap(items: HoldingSignalItem[] | undefined): Map<str
 
 function pnlHint(cost: unknown, cur: unknown, prefillPnl: unknown): string | null {
   if (typeof prefillPnl === 'number' && Number.isFinite(prefillPnl)) return `${prefillPnl.toFixed(2)}%`
-  const c = Number(cost)
-  const p = Number(cur)
+  if (typeof cost !== 'number' || typeof cur !== 'number') return null
+  const c = cost
+  const p = cur
   if (!Number.isFinite(c) || c === 0 || !Number.isFinite(p)) return null
   return `${(((p - c) / c) * 100).toFixed(2)}%`
 }
@@ -71,12 +72,15 @@ const VOL_VS_AVG = [
 
 export default function StepPositions({ data, onChange, prefill }: StepProps) {
   const d = data || {}
+  const source = prefill?.holdings_source
   const holdings = useMemo(() => prefill?.holdings || [], [prefill?.holdings])
   const holdingSignals = useMemo(() => buildHoldingSignalsMap(prefill?.holding_signals?.items), [prefill?.holding_signals?.items])
 
+  const hasDraft = Array.isArray(d.positions)
+  const archiveByCode = useMemo(() => buildPrefillHoldingsMap(holdings), [holdings])
   const positions: PositionItem[] = (d.positions as PositionItem[] | undefined) || (holdings.length > 0
     ? holdings.map((h) => ({
-        stock: `${h.stock_name}(${h.stock_code})`,
+        stock: `${h.stock_name || ''}(${h.stock_code})`,
         cost: h.entry_price,
         current_price: h.current_price,
         prefill_pnl_pct: h.prefill_pnl_pct ?? null,
@@ -92,16 +96,15 @@ export default function StepPositions({ data, onChange, prefill }: StepProps) {
       }))
     : [])
 
-  // localStorage 草稿里已有 positions 时，仍应用服务端最新现价/成本/盈亏预填（避免跑 post 后草稿不更新）
+  // 用同日归档补齐空字段；保留旧草稿和人工填写的价格。
   useEffect(() => {
     if (!holdings.length) return
     const raw = (data || {}).positions as PositionItem[] | undefined
     if (!raw?.length) return
-    const map = buildPrefillHoldingsMap(holdings)
     let changed = false
     const next = raw.map((item) => {
       const key = normStockCode(extractCodeFromStockLabel(String(item.stock || '')))
-      const p = key ? map.get(key) : undefined
+      const p = key ? archiveByCode.get(key) : undefined
       const signal = key ? holdingSignals.get(key) : undefined
       const np = { ...item }
       if (!p && !signal) return item
@@ -113,7 +116,7 @@ export default function StepPositions({ data, onChange, prefill }: StepProps) {
         np.cost = p.cost
         changed = true
       }
-      if (p && p.pnl != null && item.prefill_pnl_pct == null) {
+      if (p && p.pnl != null && item.prefill_pnl_pct == null && np.current_price === p.price && np.cost === p.cost) {
         np.prefill_pnl_pct = p.pnl
         changed = true
       }
@@ -128,7 +131,7 @@ export default function StepPositions({ data, onChange, prefill }: StepProps) {
       return np
     })
     if (changed) onChange({ ...(data || {}), positions: next })
-  }, [holdings, data?.positions, onChange, data, holdingSignals])
+  }, [holdings, archiveByCode, onChange, data, holdingSignals])
 
   return (
     <div className="space-y-6">
@@ -136,13 +139,11 @@ export default function StepPositions({ data, onChange, prefill }: StepProps) {
         stepKey="step7_positions"
         cognitions={prefill?.cognitions_by_step?.step7_positions}
       />
-      {holdings.length > 0 && !d.positions && (
+      {prefill && (
         <PrefillBanner>
-          <span>
-            已从持仓池自动导入 {holdings.length} 只股票；现价字段在跑过当日{' '}
-            <code className="bg-amber-100 px-1 rounded text-gray-800">post</code> 后由收盘价预填；若当日{' '}
-            <code className="bg-amber-100 px-1 rounded text-gray-800">holdings_data</code> 采集失败则无法填现价
-          </span>
+          {holdings.length > 0
+            ? `${prefill.date} · ${source === 'quote_snapshot' ? '持仓报价快照（名单覆盖待核）' : '盘后持仓归档'}共 ${holdings.length} 只，收盘价覆盖 ${holdings.filter(h => h.current_price != null).length}/${holdings.length}`
+            : `${prefill.date} · 缺少可核验的当日持仓记录`}
         </PrefillBanner>
       )}
 
@@ -155,18 +156,24 @@ export default function StepPositions({ data, onChange, prefill }: StepProps) {
           <div className="space-y-3">
             <Row cols={4}>
               <TextField label="股票" value={item.stock} onChange={v => upd('stock', v)} />
-              <NumberField label="成本" value={item.cost} onChange={v => upd('cost', v)} />
+              <NumberField label={hasDraft ? '草稿成本' : '成本'} value={item.cost} onChange={v => upd('cost', v)} />
               <div className="space-y-1">
-                <NumberField label="现价" value={item.current_price} onChange={v => upd('current_price', v)} />
+                <NumberField label={hasDraft ? '草稿价' : '归档收盘'} value={item.current_price} onChange={v => upd('current_price', v)} />
                 {(() => {
-                  const hint = pnlHint(item.cost, item.current_price, item.prefill_pnl_pct)
+                  const hint = pnlHint(item.cost, item.current_price, hasDraft ? null : item.prefill_pnl_pct)
                   return hint
-                    ? <div className="text-xs text-gray-500">浮动盈亏（参考） {hint}</div>
+                    ? <div className="text-xs text-gray-500">{hasDraft ? '草稿成本与价格计算' : '浮动盈亏（参考）'} {hint}</div>
                     : null
                 })()}
               </div>
               <NumberField label="仓位" value={item.position_pct} onChange={v => upd('position_pct', v)} suffix="%" />
             </Row>
+            {hasDraft && prefill && (() => {
+              const archived = archiveByCode.get(normStockCode(extractCodeFromStockLabel(item.stock)))
+              if (!archived) return <div className="text-xs text-gray-500">草稿持仓 · 当日归档未核验此票</div>
+              const archivePnl = pnlHint(archived.cost, archived.price, archived.pnl)
+              return <div className="text-xs text-gray-500">当日归档收盘 {archived.price ?? '待核'} · 归档成本 {archived.cost ?? '待核'} · 归档盈亏 {archivePnl ?? '待核'}</div>
+            })()}
             <Row cols={4}>
               <div className="flex items-end pb-1">
                 <CheckField label="在热点板块" checked={item.in_hot_sector} onChange={v => upd('in_hot_sector', v)} />
@@ -185,7 +192,9 @@ export default function StepPositions({ data, onChange, prefill }: StepProps) {
                 ? `主线：${signal.theme_signals.main_theme_name || '是'}`
                 : signal.theme_signals.is_strongest_sector
                   ? `最强板块：${signal.theme_signals.strongest_sector_name || '是'}`
-                  : '非主线'
+                  : signal.theme_signals.is_main_theme === false && signal.theme_signals.is_strongest_sector === false
+                    ? '非主线'
+                    : '当日归属待核'
               const boardStrength = signal.technical_signals.sector_change_pct != null
                 ? `板块涨跌幅 ${signal.technical_signals.sector_change_pct >= 0 ? '+' : ''}${signal.technical_signals.sector_change_pct.toFixed(2)}%`
                 : '板块强弱：-'

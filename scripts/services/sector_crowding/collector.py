@@ -12,6 +12,10 @@ from services.volume_concentration.collector import (
     MARKET_TOTAL_FLOOR_BILLION,
 )
 
+from utils.sw_catalog import (
+    SW2021_L2_CATALOG_COUNT_FLOOR, SW2021_L2_PUBLISHED_COUNT_FLOOR, binary_flag, l2_publication_flags,
+)
+
 from . import repo
 
 logger = logging.getLogger(__name__)
@@ -21,10 +25,6 @@ logger = logging.getLogger(__name__)
 # 的 amount/10000 口径一致。
 AMOUNT_TO_BILLION = 10000.0
 ACTIVITY_PROBE_START = "1990-01-01"
-# 2026-07-24 真机核对：SW2021 L2 分类表共 134 码，其中 is_pub=1 为 124。
-# 总码表保留退役历史码，正常只增不应缩；低于已验证基线一律视作稳定部分返回。
-SW2021_L2_CATALOG_COUNT_FLOOR = 134
-SW2021_L2_PUBLISHED_COUNT_FLOOR = 120
 _L2_CATALOG_CACHE_KEY = "_sector_crowding_l2_catalog"
 _L2_NAME_CACHE_KEY = "_sector_crowding_l2_names"
 
@@ -42,15 +42,6 @@ def _amount_billion(amount) -> float | None:
 def _clean_close(close) -> float | None:
     """close 非有限值置 None:NaN 经 json.dumps 会落成非标 token,严格 JSON 消费端直接炸。"""
     return close if _finite_num(close) else None
-
-
-def _published_flag(value) -> bool | None:
-    """index_classify.is_pub → bool；未知值不猜测。"""
-    if value == 1 or value == "1":
-        return True
-    if value == 0 or value == "0":
-        return False
-    return None
 
 
 def _l2_catalog(provider) -> dict[str, bool]:
@@ -82,16 +73,7 @@ def _l2_catalog(provider) -> dict[str, bool]:
         if df is not None and not getattr(df, "empty", True) and {
             "index_code", "is_pub"
         } <= columns:
-            catalog: dict[str, bool] = {}
-            for row in df.to_dict("records"):
-                code = row.get("index_code")
-                published = _published_flag(row.get("is_pub"))
-                if not isinstance(code, str) or not code.strip() or published is None:
-                    raise ValueError("index_classify L2 含非法 index_code/is_pub")
-                code = code.strip()
-                if code in catalog and catalog[code] is not published:
-                    raise ValueError(f"index_classify L2 重复码状态冲突:{code}")
-                catalog[code] = published
+            catalog = l2_publication_flags(df.to_dict("records"))
             if catalog:
                 if set(catalog) != fallback_codes:
                     logger.warning(
@@ -539,7 +521,7 @@ def _open_trade_dates(provider, start: str, end: str) -> list[str]:
                             f"trade_cal 含非法 cal_date:{row.get('cal_date')!r}"
                         )
                     d = f"{compact[:4]}-{compact[4:6]}-{compact[6:]}"
-                    flag = _published_flag(row.get("is_open"))
+                    flag = binary_flag(row.get("is_open"))
                     if d not in expected_natural_dates or flag is None:
                         raise RuntimeError(
                             f"trade_cal 含区间外日期或非法 is_open:{d}/{row.get('is_open')!r}"

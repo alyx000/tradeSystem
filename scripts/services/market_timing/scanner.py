@@ -13,8 +13,8 @@ from datetime import datetime, timedelta
 from . import constants as C
 from . import detectors as D
 from . import repo
-from . import index_repair
 from .fetch import fetch_index_daily
+from . import index_repair, limit_down
 
 
 def _date_minus_days(date: str, days: int) -> str:
@@ -107,7 +107,7 @@ def _advance_decline(registry, date: str) -> tuple[int | None, int | None]:
     """
     res = registry.call("get_market_daily_changes", date)
     # 空数据返 (None, None)=「未知」而非 (0, 0)——涨跌家数需要成对语义，
-    # 伪造 0/0 会谎称「全场平盘」；与 _limit_down_count 的空 list→0 不同（那里 0 家跌停是真值）。
+    # 伪造 0/0 会谎称「全场平盘」。
     if not res.success or not res.data:
         return None, None
     data = res.data
@@ -126,26 +126,6 @@ def _advance_decline(registry, date: str) -> tuple[int | None, int | None]:
                 decline += 1
         return advance, decline
     return None, None
-
-
-def _limit_down_count(registry, date: str) -> int | None:
-    """跌停家数。provider 契约是 dict{count,stocks}（tushare/akshare 一致，同
-    collectors/market.py 的消费口径）；兼容 list 兜底取 len。
-    历史教训：旧实现只认 list，与 dict 契约错配 → 此列恒 None。
-    """
-    res = registry.call("get_limit_down_list", date)
-    if not res.success:
-        return None
-    data = res.data
-    if isinstance(data, dict):
-        count = data.get("count")
-        if isinstance(count, (int, float)) and not isinstance(count, bool):
-            return int(count)
-        stocks = data.get("stocks")
-        return len(stocks) if isinstance(stocks, list) else None
-    if isinstance(data, list):
-        return len(data)
-    return None
 
 
 def run_daily(conn: sqlite3.Connection, registry, date: str, *, dry_run: bool = False,
@@ -194,7 +174,7 @@ def run_daily(conn: sqlite3.Connection, registry, date: str, *, dry_run: bool = 
             bars_by_code[code], _ = _bars_through(registry, code, date)
     amount_yi, amount_pctile = _market_amount(bars_by_code, date)
     advance, decline = _advance_decline(registry, date)
-    limit_down = _limit_down_count(registry, date)
+    down_fact = limit_down.archive_fact(conn, date)
 
     written: list[dict] = []
     for item in per_index:
@@ -205,6 +185,7 @@ def run_daily(conn: sqlite3.Connection, registry, date: str, *, dry_run: bool = 
                             if fr["status"] != "none" else {})
         # Keep the legacy JSON-string type and fractal fields; presence is not a fractal signal.
         fractal_evidence[index_repair.KEY] = item[index_repair.KEY]
+        fractal_evidence[limit_down.SNAPSHOT_KEY] = down_fact
         fractal_json = json.dumps(fractal_evidence, ensure_ascii=False)
         row = {
             "trade_date": date, "index_code": item["code"], "index_name": item["name"],
@@ -217,14 +198,23 @@ def run_daily(conn: sqlite3.Connection, registry, date: str, *, dry_run: bool = 
             "fractal_low_price": fr["low_price"], "fractal_confirm_date": fr["confirm_date"],
             "fractal_json": fractal_json,
             "resonance_count": resonance, "market_amount_yi": amount_yi, "amount_pctile_20d": amount_pctile,
-            "limit_down_count": limit_down, "advance": advance, "decline": decline,
+            "limit_down_count": down_fact["count"], "advance": advance, "decline": decline,
             "data_source": item["source"],
         }
-        if not dry_run:
-            repo.upsert_signal(conn, row)
         written.append(row)
-    if not dry_run:
-        conn.commit()
+    if written and not dry_run:
+        # 与同日重跑串行读取最早可追溯的市场快照；网络采集和计算均已结束。
+        with conn:
+            if not conn.in_transaction:
+                conn.execute("BEGIN IMMEDIATE")
+            existing = repo.list_signals(conn, date=date)
+            original = limit_down.recorded_fact(existing, date) if existing else None
+            for row in written:
+                if original is not None and original != down_fact:
+                    evidence = json.loads(row["fractal_json"])
+                    evidence[limit_down.ORIGINAL_KEY] = original
+                    row["fractal_json"] = json.dumps(evidence, ensure_ascii=False)
+                repo.upsert_signal(conn, row)
 
     return {
         "date": date,
@@ -232,5 +222,6 @@ def run_daily(conn: sqlite3.Connection, registry, date: str, *, dry_run: bool = 
         "skipped": [i for i in per_index if i.get("skipped")],
         "resonance_count": resonance,
         "context": {"market_amount_yi": amount_yi, "amount_pctile_20d": amount_pctile,
-                    "advance": advance, "decline": decline, "limit_down_count": limit_down},
+                    "advance": advance, "decline": decline, "limit_down_count": down_fact["count"],
+                    "limit_down_fact": down_fact},
     }

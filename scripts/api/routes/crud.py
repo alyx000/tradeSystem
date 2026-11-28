@@ -23,6 +23,8 @@ from services.sector_crowding import service as sc_service
 from services.trend_leader import pool as tl_pool
 from services.trend_leader.signals import signal_hits as tl_signal_hits
 from services.volume_concentration import service as vc_service
+from utils.hk_indices import hk_indices_view
+from utils.sector_fund_flow import fund_flow_rows_view
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -639,6 +641,7 @@ def get_research_coverage(
     days: int = 5,
     limit: int = 20,
     conn: sqlite3.Connection = Depends(get_db_conn),
+    to_date: Optional[_date] = None,
 ):
     """区间研报覆盖排行：聚合最近 N 个交易日的研报覆盖 top，返回合并排行 + 按申万一级行业汇总。"""
     from collections import Counter
@@ -649,8 +652,8 @@ def get_research_coverage(
     limit = max(1, min(limit, 50))
 
     rows = conn.execute(
-        "SELECT raw_data FROM daily_market ORDER BY date DESC LIMIT ?",
-        (days,),
+        "SELECT raw_data FROM daily_market WHERE date <= ? ORDER BY date DESC LIMIT ?",
+        ((to_date or _date.max).isoformat(), days),
     ).fetchall()
 
     stock_counts: Counter[str] = Counter()
@@ -698,16 +701,19 @@ def get_research_coverage(
 
 @router.get("/market/history")
 def get_market_history(days: int = 20,
-                       conn: sqlite3.Connection = Depends(get_db_conn)):
-    return Q.get_daily_market_history(conn, days=min(days, 120))
+                       conn: sqlite3.Connection = Depends(get_db_conn),
+                       to_date: Optional[_date] = None):
+    return Q.get_daily_market_history(conn, days=max(1, min(days, 120)),
+                                      to_date=to_date.isoformat() if to_date else None)
 
 
 @router.get("/market/concentration/history")
 def get_concentration_history(days: int = 30,
-                              conn: sqlite3.Connection = Depends(get_db_conn)):
-    """成交额 Top20 板块集中度趋势(供盘面概览图表):库内最新 N 日的 CR3 / 头部成交额 /
-    占两市 / 板块占比序列 + 最新日连续在榜/异动快照。无数据返空壳。"""
-    payload = vc_service.build_trend_payload(conn, days=max(1, min(days, 120)))  # 钳非负:防 days<=0 致 LIMIT 负数返全表
+                              conn: sqlite3.Connection = Depends(get_db_conn),
+                              to_date: Optional[_date] = None):
+    """成交额 Top20 集中度序列以及窗口末日的连续在榜、异动快照。"""
+    payload = vc_service.build_trend_payload(conn, days=max(1, min(days, 120)),
+                                             end_date=to_date.isoformat() if to_date else None)
     return _sanitize_non_finite(payload)  # 脏数据 change_pct=NaN/Inf 透传会致 JSON 序列化 500(与其它 market 端点一致)
 
 
@@ -761,55 +767,55 @@ def get_market_timing_history(days: int = 30, to_date: Optional[str] = None,
 
 @router.get("/market/timing/{date}")
 def get_market_timing(date: str,
-                      conn: sqlite3.Connection = Depends(get_db_conn)):
-    """大盘择时观察(某交易日 6 指数斐波那契变盘点 + 底分型 + 市场上下文)。
+                      conn: sqlite3.Connection = Depends(get_readonly_db_conn)):
+    """大盘择时观察(某交易日 6 指数斐波那契变盘点 + 日线底分型 + 市场上下文)。
     全 [判断] 派生信号,前端渲染须守红线(不出方向/价位/买卖建议)。无数据返 available=False。"""
     from services.market_timing import web_payload
     return _sanitize_non_finite(web_payload.build_daily_payload(conn, date))
 
 
 @router.get("/post-market/{date}")
-def get_post_market_envelope(date: str, conn: sqlite3.Connection = Depends(get_db_conn)):
+def get_post_market_envelope(date: str, conn: sqlite3.Connection = Depends(get_readonly_db_conn),
+                             as_of: Optional[_date] = None):
     """返回与 post-market.yaml 一致的整包信封（优先 DB raw_data，否则读 daily 文件）。"""
-    row = Q.get_daily_market(conn, date)
-    envelope: dict[str, Any] | None = None
-    raw = row.get("raw_data") if row else None
-    if raw:
-        if isinstance(raw, str):
-            try:
-                envelope = json.loads(raw)
-            except (json.JSONDecodeError, TypeError):
-                envelope = None
-        elif isinstance(raw, dict):
-            envelope = dict(raw)
-    if envelope is None:
-        ypath = _REPO_ROOT / "daily" / date / "post-market.yaml"
-        if ypath.is_file():
-            try:
-                with open(ypath, encoding="utf-8") as f:
-                    loaded = yaml.safe_load(f)
-                if isinstance(loaded, dict):
-                    envelope = loaded
-            except (OSError, yaml.YAMLError):
-                pass
-    if not envelope:
+    from db.dual_write import parse_post_market_envelope
+    from services.post_feedback import feedback_view
+    from utils.post_archive import read_archive
+
+    if as_of is not None and as_of.isoformat() < date:
         return {"date": date, "available": False}
-    out = dict(envelope)
+    row = Q.get_daily_market(conn, date)
+    envelope = parse_post_market_envelope(row.get("raw_data")) if row else None
+    ypath = _REPO_ROOT / "daily" / date / "post-market.yaml"
+    fallback = envelope is None
+    if fallback and ypath.is_file():
+        try:
+            envelope = read_archive(ypath)
+        except (OSError, ValueError, yaml.YAMLError):
+            pass
+    if not envelope or (envelope.get("date") is not None and envelope["date"] != date):
+        return {"date": date, "available": False}
+    out = feedback_view(conn, date, envelope, None if fallback else ypath, as_of=as_of.isoformat() if as_of else None)
     # 北向净额下线（口径存疑）：剔除历史信封里的 northbound 块，避免旧库存假净额/活跃股
     # 经信封面板（整包 JSON 展示+复制）外泄。仅服务时 scrub，不改库内归档。
-    out.pop("northbound", None)
-    inner = out.get("raw_data")
-    if isinstance(inner, dict) and "northbound" in inner:
-        inner = dict(inner)
-        inner.pop("northbound", None)
-        out["raw_data"] = inner
+    if isinstance(out.get("raw_data"), dict):
+        out["raw_data"] = dict(out["raw_data"])
+    for section in (out, out.get("raw_data")):
+        if isinstance(section, dict):
+            section.pop("northbound", None)
+            if "sector_fund_flow" in section:
+                section["sector_fund_flow"] = fund_flow_rows_view(section["sector_fund_flow"])
+            if isinstance(section.get("hk_indices"), dict):
+                section["hk_indices"] = hk_indices_view(section["hk_indices"])
     out["available"] = True
     out.setdefault("date", date)
     return _sanitize_non_finite(out)
 
 
 @router.get("/main-themes")
-def list_main_themes(conn: sqlite3.Connection = Depends(get_db_conn)):
+def list_main_themes(conn: sqlite3.Connection = Depends(get_db_conn), to_date: Optional[_date] = None):
+    if to_date is not None:
+        return Q.get_active_themes_as_of(conn, to_date.isoformat())
     return Q.get_active_themes(conn)
 
 
@@ -819,6 +825,6 @@ def get_market(date: str, conn: sqlite3.Connection = Depends(get_db_conn)):
     if not row:
         return {"date": date, "available": False}
     _apply_market_ma5w_fallback(conn, row)
-    enrich_daily_market_row(row)
+    enrich_daily_market_row(row, conn=conn)
     row["available"] = True
     return _sanitize_non_finite(row)

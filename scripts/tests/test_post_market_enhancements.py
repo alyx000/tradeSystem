@@ -337,42 +337,6 @@ class TestSectorEnhancements:
 # =====================================================================
 
 class TestIndexMA:
-    def test_compute_ma(self):
-        """正确计算 MA5/10/20 和 above_ma* 标记"""
-        with tempfile.TemporaryDirectory() as tmp:
-            tmp_path = Path(tmp)
-            dates = [f"2026-03-{str(i).zfill(2)}" for i in range(1, 26)]
-            closes = [3000.0 + i * 5 for i in range(25)]
-            _write_history(tmp_path, dates, [10000.0] * 25, closes)
-
-            reg = _mock_registry()
-            today_close = 3200.0
-
-            def mock_call(method, *args, **kwargs):
-                if method == "get_index_daily" and args and args[0] == "shanghai":
-                    return DataResult(data={"close": today_close, "change_pct": 0.5}, source="test")
-                if method == "get_limit_up_list":
-                    return DataResult(data={"count": 0, "stocks": []}, source="test")
-                if method == "get_limit_down_list":
-                    return DataResult(data={"count": 0, "stocks": []}, source="test")
-                return DataResult(data=None, source="test", error="skip")
-
-            reg.call = mock_call
-
-            with patch("collectors.market.BASE_DIR", tmp_path):
-                collector = MarketCollector(reg)
-                collector._rhythm_analyzer = MagicMock()
-                collector._rhythm_analyzer.load_main_theme_names = MagicMock(return_value=[])
-                collector._rhythm_analyzer.analyze = MagicMock(return_value=[])
-
-                result = collector.collect_post_market("2026-03-28")
-
-        ma = result.get("moving_averages", {}).get("shanghai", {})
-        assert "ma5" in ma
-        assert "ma10" in ma
-        assert "ma20" in ma
-        assert isinstance(ma.get("above_ma5"), bool)
-
     def test_insufficient_history(self):
         """历史不足时不生成均线"""
         with tempfile.TemporaryDirectory() as tmp:
@@ -400,7 +364,8 @@ class TestIndexMA:
 
                 result = collector.collect_post_market("2026-03-28")
 
-        assert "moving_averages" not in result
+        ma = result["moving_averages"]["shanghai"]
+        assert "ma5" not in ma and ma["daily_ma_evidence"]["windows"]["ma5"]["observed"] == 0
 
 
 # =====================================================================
@@ -441,7 +406,9 @@ class TestPremiumSplit:
             with open(prev_dir / "post-market.yaml", "w", encoding="utf-8") as f:
                 yaml.dump(prev_data, f, allow_unicode=True)
 
-            with patch("collectors.premium.DAILY_DIR", tmp_path / "daily"):
+            with patch("collectors.premium.DAILY_DIR", tmp_path / "daily"), patch(
+                "collectors.premium.publish_feedback", side_effect=lambda path, old, blocks: blocks["premium_backfill"]
+            ):
                 collector = PremiumCollector(reg)
                 result = collector.collect("2026-03-28", "2026-03-27")
 
@@ -484,7 +451,9 @@ class TestPremiumSplit:
             with open(prev_dir / "post-market.yaml", "w", encoding="utf-8") as f:
                 yaml.dump(prev_data, f, allow_unicode=True)
 
-            with patch("collectors.premium.DAILY_DIR", tmp_path / "daily"):
+            with patch("collectors.premium.DAILY_DIR", tmp_path / "daily"), patch(
+                "collectors.premium.publish_feedback", side_effect=lambda path, old, blocks: blocks["premium_backfill"]
+            ):
                 collector = PremiumCollector(reg)
                 result = collector.collect("2026-03-28", "2026-03-27")
 
@@ -628,7 +597,11 @@ class TestPostMarketReport:
                 },
                 "sector_concept": {"data": [], "bottom": []},
                 "sector_fund_flow": {
-                    "data": [{"name": "AI", "net_inflow_billion": 50.0, "change_pct": 3.0}],
+                    "data": [{"name": "微流入", "net_inflow_billion": 0.0049, "change_pct": 3.0},
+                             {"name": "旧微流出", "net_inflow": -0.0049},
+                             {"name": "缺证据", "net_inflow_billion": None, "change_pct": None},
+                             {"name": "旧档", "net_inflow": -2.5, "change_pct": 0},
+                             {"name": "冲突", "net_inflow_billion": 0, "net_inflow": 10}],
                 },
                 "northbound": {
                     "net_buy_billion": 80.0,
@@ -651,7 +624,12 @@ class TestPostMarketReport:
         assert "涨跌家数" in md
         assert "均线" in md or "MA" in md
         assert "跌幅前5" in md
-        assert "资金净流入" in md
+        assert "板块资金流向（来源顺序，最多5条）" in md
+        assert "| 微流入 | 0.0049 |" in md
+        assert "| 旧微流出 | -0.0049 |" in md
+        assert "| 冲突 | 待核 |" in md
+        assert "| 缺证据 | 待核 | 待核 |" in md
+        assert "| 旧档 | -2.50 | 0% |" in md
         assert "融资" in md
         assert "数据摘要" in md
 
@@ -1194,8 +1172,8 @@ class TestIndexMAEarlyReturn:
 
                 result = collector.collect_post_market("2026-03-28")
 
-        assert "moving_averages" not in result, \
-            "today_close 缺失时不应生成 moving_averages"
+        ma = result["moving_averages"]["shanghai"]
+        assert "above_ma5" not in ma and "ma5w" not in ma
 
 
 # =====================================================================
@@ -1212,6 +1190,7 @@ class TestUnitConversions:
 
         import pandas as pd
         mock_df = pd.DataFrame([{
+            "ts_code": "000001.SH",
             "trade_date": "20260327",
             "open": 3900.0, "high": 3920.0, "low": 3880.0,
             "close": 3910.0, "pct_chg": 0.5,

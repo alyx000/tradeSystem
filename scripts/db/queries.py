@@ -317,15 +317,15 @@ def get_latest_raw_interface_rows(
     interface_name: str,
     biz_date: str,
     inclusive: bool = True,
+    exact_date: bool = False,
 ) -> list[dict]:
     """读取某接口最近一次成功落库的 rows。
 
+    :param exact_date: 仅返回给定事实日的记录，优先于 inclusive。
     :param inclusive: True（默认）取 biz_date <= 给定日期；False 取严格早于（< 给定日期），
         用于需要「前一交易日」语义的场景（如以前收为基准算涨跌停价）。
     """
-    # cmp_op 仅来自布尔三元，取值只可能是两个硬编码字面量 "<=" / "<"，无用户输入，
-    # 不构成 SQL 注入面；biz_date 等值仍走参数化占位符。
-    cmp_op = "<=" if inclusive else "<"
+    cmp_op = "=" if exact_date else ("<=" if inclusive else "<")
     row = conn.execute(
         f"""
         SELECT payload_json
@@ -640,12 +640,14 @@ def upsert_holding_quote_snapshot(
 def get_latest_holding_quote_snapshots(
     conn: sqlite3.Connection,
     trade_date: str,
+    *, exact_date: bool = False,
 ) -> dict[str, dict]:
+    comparison = "=" if exact_date else "<="
     rows = conn.execute(
-        """
+        f"""
         SELECT *
         FROM holding_quote_snapshots
-        WHERE trade_date <= ?
+        WHERE trade_date {comparison} ?
         ORDER BY trade_date DESC, updated_at DESC, id DESC
         """,
         (trade_date,),
@@ -1040,7 +1042,8 @@ def get_avg_amount(conn: sqlite3.Connection, target_date: str, days: int = 5) ->
     return row[0] if row else None
 
 
-def get_daily_market_history(conn: sqlite3.Connection, days: int = 20) -> list[dict]:
+def get_daily_market_history(conn: sqlite3.Connection, days: int = 20,
+                             to_date: str | None = None) -> list[dict]:
     """获取近 N 日 daily_market（不含 raw_data），供大盘概览趋势图使用。
 
     注（codex review #4b defer）：本接口是「大盘概览」契约，故意不含 premium_capacity /
@@ -1057,8 +1060,8 @@ def get_daily_market_history(conn: sqlite3.Connection, days: int = 20) -> list[d
         "seal_rate, broken_rate, highest_board, "
         "premium_10cm, premium_20cm, premium_30cm, premium_second_board "
         # 北向净额已下线（口径存疑），不再随大盘概览历史返回。
-        "FROM daily_market ORDER BY date DESC LIMIT ?",
-        (days,),
+        "FROM daily_market WHERE date <= ? ORDER BY date DESC LIMIT ?",
+        (to_date or date.max.isoformat(), days),
     ).fetchall()
     return _rows_to_list(rows)
 
@@ -1228,9 +1231,12 @@ def upsert_emotion_cycle(conn: sqlite3.Connection, data: dict) -> None:
     conn.execute(sql, vals)
 
 
-def get_latest_emotion(conn: sqlite3.Connection) -> dict | None:
+def get_latest_emotion(conn: sqlite3.Connection, to_date: str | None = None) -> dict | None:
     return _row_to_dict(
-        conn.execute("SELECT * FROM emotion_cycle ORDER BY date DESC LIMIT 1").fetchone()
+        conn.execute(
+            "SELECT * FROM emotion_cycle WHERE date <= ? ORDER BY date DESC LIMIT 1",
+            (to_date or date.max.isoformat(),),
+        ).fetchone()
     )
 
 

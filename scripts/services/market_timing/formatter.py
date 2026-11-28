@@ -59,9 +59,11 @@ def render_daily(result: dict) -> str:
     adv, dec = ctx.get("advance"), ctx.get("decline")
     if adv is not None and dec is not None:
         lines.append(f"- 涨跌家数：涨 {adv} / 跌 {dec}")
-    ld = ctx.get("limit_down_count")
-    if ld is not None:
-        lines.append(f"- 跌停家数：{ld}")
+    fact = ctx.get("limit_down_fact") or {}
+    if fact.get("status") == "verified":
+        lines.append(f"- 非 ST 收盘跌停：{fact['count']} 家（同日盘后归档逐股价格核验）")
+    else:
+        lines.append(f"- 非 ST 收盘跌停：待核验（{fact.get('reason') or '缺少逐股价格与上市覆盖证据'}）")
     res = result.get("resonance_count", 0)
     lines.append(f"- 共振变盘点：**{res}** 个指数同日命中（共振越多，变盘信号越强 [判断]）")
     lines.append("")

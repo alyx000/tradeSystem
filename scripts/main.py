@@ -1111,11 +1111,14 @@ def cmd_post(config: dict, target_date: str):
 
         from db.dual_write import sync_daily_market_to_db, sync_holdings_quotes_from_post_market
 
+        from utils.post_archive import archive_lock, read_archive
+
         pm = Path(yaml_path)
         if pm.is_file():
-            with pm.open(encoding="utf-8") as f:
-                envelope = yaml.safe_load(f) or {}
-            if sync_daily_market_to_db(target_date, envelope):
+            with archive_lock(pm):
+                envelope = read_archive(pm)
+                db_synced = sync_daily_market_to_db(target_date, envelope)
+            if db_synced:
                 logger.info("daily_market 已同步到 SQLite: %s", target_date)
             else:
                 logger.warning("daily_market 同步失败（已记入 pending_writes）: %s", target_date)

@@ -150,22 +150,22 @@ def render_report(payload: dict, previous_report: dict | None = None) -> str:
         sectors = interval.get("sectors") or {}
         lines.extend(["", "#### 申万二级扩散", ""])
         if sectors:
-            lines.extend(["> 标签只比较相邻两期同方向前五榜单，不代表连续上涨/下跌、固定成员表现或板块带动关系。", ""])
+            lines.extend(["> 按行业成分股半小时涨跌幅中位数排名，比较相邻两期的前五和后五；上榜不代表连续上涨/下跌。", ""])
             if not comparable:
                 lines.extend(["- 板块持续性未计算：相邻两期完整报告不足。", ""])
-            lines.append("**走强居前（按成分股半小时涨幅中位数）**")
+            lines.append("**涨跌幅排名前五（按成分股半小时涨跌幅中位数）**")
             lines.append("")
             previous_sectors = (previous_report['interval'].get('sectors') or {}) if comparable else {}
             for key in ("strongest", "weakest"):
                 if key == "weakest":
-                    lines.extend(["", "**走弱居前（同口径）**", ""])
+                    lines.extend(["", "**涨跌幅排名后五（同口径）**", ""])
                 previous_items = previous_sectors.get(key)
                 names = {item['name'] for item in previous_items} if previous_items else None
                 current_items = sectors.get(key) or []
                 lines.extend(_sector_line(item, names) for item in current_items)
                 if names is not None:
                     exited = [item['name'] for item in previous_items if item['name'] not in {row['name'] for row in current_items}]
-                    lines.append(f"\n退出本方向前五：{'、'.join(exited) if exited else '无'}。退出不代表转强或转弱。")
+                    lines.append(f"\n退出本榜：{'、'.join(exited) if exited else '无'}。退出不代表转强或转弱。")
         else:
             lines.append(f"- 未计算：{interval.get('error') or '行业映射不可用'}")
         if interval.get("amount_error"):

@@ -21,6 +21,16 @@ class DataNotReady(RuntimeError):
     """Only this failure is eligible for a scheduled readiness retry."""
 
 
+class SourceNotReady(DataNotReady):
+    """盘后单块校验失败；附带当时读到的版本，供定时补采核对。"""
+
+    def __init__(self, message, key, block, generated_at):
+        super().__init__(message)
+        self.key = key
+        self.block = block
+        self.generated_at = generated_at
+
+
 def now_shanghai():
     return dt.datetime.now(SHANGHAI)
 
@@ -79,36 +89,43 @@ def check_post_market(conn, date, prefill):
             # Feed the explicitly verified empty source into this attempt only.
             market[key] = {'data': [], '_source': 'verified_empty_receipt'}
             continue
-        if (not isinstance(block, dict) or block.get('error') or not block.get('_source')
-                or block.get('status', 'success') not in ('success', 'complete', 'ok')):
-            raise DataNotReady(f'{key} 来源缺失或失败')
-        rows = block.get('data')
-        if not isinstance(rows, list) or (not rows and key not in EMPTY_ALLOWED):
-            raise DataNotReady(f'{key} 数据未就绪')
-        if not rows and not _verified_empty(conn, key, date):
-            raise DataNotReady(f'{key} 空榜缺少成功空回执')
-        if any(not isinstance(r, dict) for r in rows):
-            raise DataNotReady(f'{key} 数据结构异常')
-        if key in DATED_BLOCKS and any(_day(r.get('trade_date')) != _day(date) for r in rows):
-            raise DataNotReady(f'{key} 数据日期缺失或不是当日')
-        if key == 'limit_step':
-            codes = [canonical_stock_code(r.get('ts_code') or r.get('code')) for r in rows]
-            if (any(not c for c in codes) or len(set(codes)) != len(codes)
-                    or any(not _finite(r.get('nums'), positive=True)
-                           or not float(r['nums']).is_integer() for r in rows)):
-                raise DataNotReady('连板梯队股票身份或板数无效')
-        elif key in DATED_BLOCKS:
-            required = ('pct_chg', 'up_nums') if key == 'limit_cpt_list' else ('pct_change', 'net_amount')
-            if any(not str(r.get('name') or '').strip()
-                   or any(not _finite(r.get(field)) for field in required) for r in rows):
-                raise DataNotReady(f'{key} 关键字段无效')
-        else:
-            if any(not str(r.get('name') or '').strip()
-                   or not _finite(r.get('change_pct')) for r in rows):
-                raise DataNotReady(f'{key} 板块名称或涨跌幅无效')
+        try:
+            validate_source_block(conn, date, key, block)
+        except DataNotReady as exc:
+            raise SourceNotReady(str(exc), key, block, env['generated_at']) from exc
         if market.get(key) != block:
             raise DataNotReady(f'{key} 盘后快照正在更新，须重新读取')
     return {'status': 'ready', 'trade_date': date, 'post_generated_at': env['generated_at']}
+
+
+def validate_source_block(conn, date, key, block):
+    if (not isinstance(block, dict) or block.get('error') or not block.get('_source')
+            or block.get('status', 'success') not in ('success', 'complete', 'ok')):
+        raise DataNotReady(f'{key} 来源缺失或失败')
+    rows = block.get('data')
+    if not isinstance(rows, list) or (not rows and key not in EMPTY_ALLOWED):
+        raise DataNotReady(f'{key} 数据未就绪')
+    if not rows and (conn is None or not _verified_empty(conn, key, date)):
+        raise DataNotReady(f'{key} 空榜缺少成功空回执')
+    if any(not isinstance(r, dict) for r in rows):
+        raise DataNotReady(f'{key} 数据结构异常')
+    if key in DATED_BLOCKS and any(_day(r.get('trade_date')) != _day(date) for r in rows):
+        raise DataNotReady(f'{key} 数据日期缺失或不是当日')
+    if key == 'limit_step':
+        codes = [canonical_stock_code(r.get('ts_code') or r.get('code')) for r in rows]
+        if (any(not c for c in codes) or len(set(codes)) != len(codes)
+                or any(not _finite(r.get('nums'), positive=True)
+                       or not float(r['nums']).is_integer() for r in rows)):
+            raise DataNotReady('连板梯队股票身份或板数无效')
+    elif key in DATED_BLOCKS:
+        required = ('pct_chg', 'up_nums') if key == 'limit_cpt_list' else ('pct_change', 'net_amount')
+        if any(not str(r.get('name') or '').strip()
+               or any(not _finite(r.get(field)) for field in required) for r in rows):
+            raise DataNotReady(f'{key} 关键字段无效')
+    else:
+        if any(not str(r.get('name') or '').strip()
+               or not _finite(r.get('change_pct')) for r in rows):
+            raise DataNotReady(f'{key} 板块名称或涨跌幅无效')
 
 
 def _finite(value, *, positive=False):

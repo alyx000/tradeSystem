@@ -11,7 +11,11 @@ from pathlib import Path
 
 import yaml
 
+from services.post_feedback import FEEDBACK_KEYS, source_digest
+from utils.post_archive import archive_lock, atomic_write_archive, read_archive
 from utils import is_st_stock
+from utils.hk_indices import hk_indices_view
+from utils.sector_fund_flow import fund_flow_rows_view
 from utils.fx_validation import (
     CHINAMONEY_C_SWAP_SOURCES,
     CHINAMONEY_C_SWAP_URL,
@@ -210,6 +214,31 @@ def _render_forex_and_swaps(
             f"- [事实] {info.get('name', key)}: "
             f"{info.get('swap_point_pips', 'N/A')} Pips{detail} [★★★]"
         )
+
+
+def _retain_recovered_sources(existing, live, day):
+    """重跑盘后时保留当日晚间已修好的来源，以同一份数据渲染和发布。"""
+    from services.daily_leaders.readiness import DATED_BLOCKS
+    from services.daily_leaders.recovery import RANKING_SOURCES, verified_recovery_block
+
+    from contextlib import closing, ExitStack
+    from db.connection import get_readonly_connection
+
+    retained = {}
+    with ExitStack() as stack:
+        conn = None
+        for key in (*DATED_BLOCKS, *RANKING_SOURCES):
+            block = existing.get(key)
+            receipt = block.get("_recovery") if isinstance(block, dict) else None
+            if not (isinstance(receipt, dict) and receipt.get("fact_date") == day
+                    and receipt.get("input_by") == "launchd"):
+                continue
+            candidate = live.get(key)
+            if conn is None and (block.get("data") == [] or isinstance(candidate, dict) and candidate.get("data") == []):
+                conn = stack.enter_context(closing(get_readonly_connection()))
+            if verified_recovery_block(conn, day, key, block) and not verified_recovery_block(conn, day, key, candidate):
+                retained[key] = block
+    return retained
 
 
 class ReportGenerator:
@@ -549,6 +578,13 @@ class ReportGenerator:
         生成盘后数据报告。
         返回: (markdown报告文本, yaml存档路径)
         """
+        out_dir = self._ensure_dir(date)
+        yaml_path = out_dir / "post-market.yaml"
+        if yaml_path.is_file():
+            existing = read_archive(yaml_path)
+            if existing.get("date") == date and isinstance(existing.get("raw_data"), dict):
+                raw_data = {**raw_data, **_retain_recovered_sources(existing["raw_data"], raw_data, date)}
+
         lines = [f"# 盘后数据报告 {date}\n", f"生成时间: {datetime.now().strftime('%H:%M')}\n"]
 
         section_idx = 1
@@ -574,6 +610,21 @@ class ReportGenerator:
                     f"| {label} | {close if close is not None else '-'} | {pct_str} | "
                     f"{amount if amount is not None else '-'} |"
                 )
+
+        hk = hk_indices_view(raw_data.get("hk_indices") or {})
+        for key, name in (("hsi", "恒生指数"), ("hstech", "恒生科技指数"), ("hstech_etf_proxy", "恒生科技 ETF 代理")):
+            item = hk.get(key) or {}
+            if key == "hstech_etf_proxy" and not item:
+                continue
+            close = _finite_float(item.get("close"))
+            if close is None:
+                lines.append(f"- {name}：当日行情缺失")
+                continue
+            pct = _finite_float(item.get("change_pct"))
+            change = f"{pct:+.2f}%" if pct is not None else "涨跌幅未核验"
+            unit = "港元" if key == "hstech_etf_proxy" else "点"
+            lines.append(f"- {name}（{item['code']}）：{close:.2f} {unit}，{change}，"
+                         f"{item.get('trade_date') or '行情日未核验'}")
 
         # 成交额 + 对比
         vol = raw_data.get("total_volume", {})
@@ -646,6 +697,10 @@ class ReportGenerator:
                 if k in ma:
                     above = "上" if ma.get(f"above_{k}") else "下"
                     ma_items.append(f"MA{p}={ma[k]}({above})")
+            evidence = ma.get("daily_ma_evidence") or {}
+            for name, window in evidence.get("windows", {}).items():
+                if "value" not in window:
+                    ma_items.append(f"{name.upper()} 待核（{window['observed']}/{window['expected']}）")
             if "ma5w" in ma:
                 above_w = "上" if ma.get("above_ma5w") else "下"
                 ma_items.append(f"5周线={ma['ma5w']}({above_w})")
@@ -752,16 +807,20 @@ class ReportGenerator:
                 lines.append(f"| {s.get('name', '')} | {s.get('change_pct', 0)}% | {s.get('top_stock', '')} |")
 
         # 板块资金净流入
-        fund_flow = raw_data.get("sector_fund_flow", {}).get("data", [])
-        if fund_flow:
-            lines.append("\n### 资金净流入前5\n")
+        fund_section = fund_flow_rows_view(raw_data.get("sector_fund_flow"))
+        fund_flow = fund_section.get("data") if isinstance(fund_section, dict) else fund_section
+        if isinstance(fund_flow, list) and fund_flow:
+            lines.append("\n### 板块资金流向（来源顺序，最多5条）\n")
             lines.append("| 板块 | 净流入(亿) | 涨跌幅 |")
             lines.append("|------|-----------|--------|")
             for s in fund_flow[:5]:
-                lines.append(
-                    f"| {s.get('name', '')} | {s.get('net_inflow_billion', 0):.2f} | "
-                    f"{s.get('change_pct', 0)}% |"
-                )
+                net = s.get("net_inflow_billion")
+                change = _finite_float(s.get("change_pct"))
+                net_text = "待核"
+                if net is not None:
+                    net_text = f"{net:.8g}" if 0 < abs(net) < 0.01 else f"{net:.2f}"
+                change_text = f"{change:g}%" if change is not None else "待核"
+                lines.append(f"| {s.get('name', '')} | {net_text} | {change_text} |")
 
         # 北向资金 section 已下线:沪深交易所 2024-08-16 起停更北向每日净额,
         # tushare north_money 口径存疑(个股净额全 0 / 聚合非 0);仍在披露的北向成交额暂未接入,故整段移除。
@@ -937,8 +996,6 @@ class ReportGenerator:
         md_text = "\n".join(lines)
 
         # 保存
-        out_dir = self._ensure_dir(date)
-        yaml_path = out_dir / "post-market.yaml"
         yaml_data = {
             "date": date,
             "generated_at": datetime.now().isoformat(),
@@ -949,8 +1006,18 @@ class ReportGenerator:
             "watchlist_data": watchlist_data or {},
             "holdings_info": holdings_info or {},
         }
-        with open(yaml_path, "w", encoding="utf-8") as f:
-            yaml.dump(yaml_data, f, allow_unicode=True, default_flow_style=False)
+        with archive_lock(yaml_path):
+            if yaml_path.is_file():
+                existing = read_archive(yaml_path)
+                if existing.get("date") not in (None, date):
+                    raise ValueError(f"{date} 盘后归档日期不一致")
+                if _retain_recovered_sources(existing.get("raw_data") or {}, raw_data, date):
+                    raise ValueError(f"{date} 生成报告期间来源已补齐，请使用最新归档重试")
+                feedback = {key: existing[key] for key in FEEDBACK_KEYS if key in existing}
+                if feedback and (existing.get("date") != date or source_digest(existing) != source_digest(yaml_data)):
+                    raise ValueError(f"{date} 的次日反馈已归档，重跑的来源行情不同")
+                yaml_data = {**existing, **yaml_data}
+            atomic_write_archive(yaml_path, yaml_data)
 
         # 同时生成空白的 review.yaml 供手动填写
         review_path = out_dir / "review.yaml"

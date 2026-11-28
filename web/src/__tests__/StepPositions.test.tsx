@@ -101,7 +101,7 @@ describe('StepPositions', () => {
   it('renders holdings prefill and pnl hint', () => {
     renderStep({}, holdingsPrefill)
 
-    expect(screen.getByText(/已从持仓池自动导入 1 只股票/)).toBeInTheDocument()
+    expect(screen.getByText(/盘后持仓归档共 1 只，收盘价覆盖 1\/1/)).toBeInTheDocument()
     expect(screen.getByDisplayValue('宁德时代(300750.SZ)')).toBeInTheDocument()
     expect(screen.getByDisplayValue('180')).toBeInTheDocument()
     expect(screen.getByDisplayValue('192')).toBeInTheDocument()
@@ -165,6 +165,32 @@ describe('StepPositions', () => {
         ],
       })
     })
+  })
+
+  it('does not derive a loss from a missing close or use the live holdings endpoint', () => {
+    renderStep({}, { ...holdingsPrefill, holdings_source: 'quote_snapshot', holdings: [
+      { ...holdingsPrefill.holdings[0], current_price: null, prefill_pnl_pct: null },
+    ] })
+    expect(screen.queryByText(/浮动盈亏/)).not.toBeInTheDocument()
+    expect(screen.getByText(/收盘价覆盖 0\/1/)).toBeInTheDocument()
+  })
+
+  it('labels a saved draft price and recomputes its gain separately from the dated close', () => {
+    const { onChange } = renderStep({ positions: [{
+      stock: '宁德时代（300750）', cost: 180, current_price: 198, prefill_pnl_pct: 6.67,
+      volume_vs_avg: '以上', in_hot_sector: true, action_plan: '保持原计划',
+    }] }, holdingsPrefill)
+    expect(screen.getByLabelText('草稿价')).toHaveValue(198)
+    expect(screen.getByText('草稿成本与价格计算 10.00%')).toBeInTheDocument()
+    expect(screen.getByText('当日归档收盘 192 · 归档成本 180 · 归档盈亏 6.67%')).toBeInTheDocument()
+    expect(onChange).not.toHaveBeenCalled()
+  })
+
+  it('keeps an unmatched old draft visibly separate from the archived roster', () => {
+    renderStep({ positions: [{ stock: '000002', cost: null, current_price: 10 }] }, holdingsPrefill)
+    expect(screen.getByLabelText('草稿价')).toHaveValue(10)
+    expect(screen.getByText('草稿持仓 · 当日归档未核验此票')).toBeInTheDocument()
+    expect(screen.queryByText(/归档盈亏/)).not.toBeInTheDocument()
   })
 
   it('emits positions payload when user edits action plan', () => {

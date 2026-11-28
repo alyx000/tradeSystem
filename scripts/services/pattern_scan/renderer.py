@@ -58,9 +58,9 @@ def render_daily(result: dict) -> str:
     win = "/".join(str(n) for n in MA_ALIGNMENT_WINDOWS)
     vwin = "/".join(str(n) for n in VOLUME_MA_WINDOWS)
 
-    lines = [f"# 形态篇选股观察清单 · {date}  [判断]", "", _REDLINE, "", _SOURCE, ""]
-    lines += [
-        "## 扫描口径",
+    lines = [f"# 形态篇选股观察清单 · {date}  [判断]", "", "## 今日结果"]
+    methodology = [
+        "## 扫描口径", _REDLINE, "", _SOURCE, "",
         "- 板块优先：复用同日串阳首阴的主线板块与概念裁决，个股按以下四条行情规则筛选",
         f"- 条件① 均线多头排列：MA{win} 严格递减",
         "- 条件② MACD：零轴上方金叉或零上运行（DIF 与 DEA 同时 > 0 且 DIF >= DEA）",
@@ -70,7 +70,6 @@ def render_daily(result: dict) -> str:
         f"- 价格口径：**前复权**（{C.RANGE_LOOKBACK_DAYS} 自然日窗口，含 open，因子取不到即整票剔除不硬算）",
         "- 排序：今日成交额降序（[事实]），非形态强弱排名",
         "",
-        "## 今日结果",
     ]
     if mainline:
         lines += [
@@ -82,8 +81,22 @@ def render_daily(result: dict) -> str:
             lines.append("- 扫描范围按手动指定上限从归档裁决中截取")
         if concepts:
             lines.append("- 概念成员按扫描时可取的同花顺成分核对")
-    if "universe_count" in result:
+    if result.get("status") == "source_failed" and not result.get("universe_count"):
+        lines.append("- 候选范围未核验")
+    elif "universe_count" in result:
         lines.append(f"- 候选宇宙：{result['universe_count']} 只")
+    if "evaluated_count" in result:
+        total, evaluated = result["universe_count"], result["evaluated_count"]
+        lines.append(f"- 已判定 {evaluated}/{total} 只（{evaluated/total:.1%}），"
+                     f"未判定 {result['unevaluated_count']} 只")
+        reasons = (("bar_missing", "缺日线"), ("qfq_failed", "前复权失败"),
+                   ("stale_last_bar", "末根行情过期"), ("insufficient_history", "历史样本不足"))
+        gaps = [f"{label} {result['rejects'][key]} 只" for key, label in reasons
+                if result["rejects"].get(key)]
+        if gaps:
+            lines.append("- 未判定原因：" + "、".join(gaps))
+        if result.get("missing_concepts"):
+            lines.append("- 候选分母仅含已取得成员的范围；缺少概念：" + "、".join(result["missing_concepts"]))
     if result.get("status") == "source_failed":
         lines += ["- 扫描状态：数据源失败，未完成扫描", ""]
         lines += [
@@ -92,13 +105,23 @@ def render_daily(result: dict) -> str:
             f"- 失败源：{'、'.join(result.get('source_errors') or [])}",
             "",
         ]
-        return "\n".join(lines).rstrip() + "\n"
+        return "\n".join(lines + methodology).rstrip() + "\n"
 
-    lines += [f"- 命中数量：{len(candidates)}", ""]
+    partial = result.get("status") == "partial"
+    if partial and not result["evaluated_count"]:
+        lines += ["- 部分覆盖，命中数待核", ""]
+    elif partial:
+        lines += [f"- 部分覆盖，已判定样本中命中 {len(candidates)} 只", ""]
+    else:
+        lines += [f"- 命中数量：{len(candidates)}", ""]
 
     lines += ["## 四条件共振池 [判断]"]
     if not candidates:
-        lines += ["今日无命中。", ""]
+        if partial:
+            lines.append("没有可判定样本。" if not result["evaluated_count"] else "已判定样本中无命中。")
+        else:
+            lines.append("今日无命中。")
+        lines.append("")
     else:
         lines += [
             "| 代码 | 名称 | 主线归属 | 今日涨跌 | 今日成交额 | 均线（前复权） | MACD DIF/DEA | 量能节奏 |",
@@ -140,7 +163,7 @@ def render_daily(result: dict) -> str:
             lines.append(f"- 主线来源提示：{'、'.join(source_errors)}")
         lines.append("")
 
-    return "\n".join(lines).rstrip() + "\n"
+    return "\n".join(lines + methodology).rstrip() + "\n"
 
 
 def write_report(markdown: str, date: str, *, root: Path | None = None) -> Path:

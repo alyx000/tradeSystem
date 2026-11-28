@@ -38,17 +38,12 @@ def test_get_global_index_hsi_uses_yfinance(mock_ticker, ak: AkshareProvider):
 
 
 @patch("yfinance.Ticker")
-def test_get_global_index_hstech_second_ticker_if_first_empty(mock_ticker, ak: AkshareProvider):
-    t1 = MagicMock()
-    t1.history.return_value = pd.DataFrame()
-    t2 = MagicMock()
-    t2.history.return_value = _hist_df([4600.0, 4700.0])
-    mock_ticker.side_effect = [t1, t2]
-
-    r = ak.get_global_index("hstech")
-    assert r.success
-    assert r.data["close"] == 4700.0
-    assert mock_ticker.call_count == 2
+def test_global_index_never_returns_etf_as_spot(mock_ticker, ak: AkshareProvider):
+    mock_ticker.return_value.history.return_value = pd.DataFrame()
+    ak.ak.index_global_spot_em.return_value = pd.DataFrame({"名称": [], "最新价": []})
+    result = ak.get_global_index("hstech")
+    assert not result.success
+    mock_ticker.assert_called_once_with("HSTECH.HK")
 
 
 @patch("yfinance.Ticker")

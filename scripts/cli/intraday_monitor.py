@@ -181,6 +181,9 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
     check.add_argument("--dry-run", action="store_true", help="只预览，不写状态、不推送")
     check.add_argument("--json", action="store_true", help="输出 JSON 结果")
     check.add_argument("--input-by", default="USER", help="检查请求者（自动任务显式传launchd）")
+    status = commands.add_parser("status", help="只读查看阈值提醒及每条规则的最近成功计算时间")
+    status.add_argument("--all", action="store_true", help="包括当前配置内尚未生效和已过期的规则")
+    status.add_argument("--json", action="store_true", help="输出 JSON 结果")
     e2e = commands.add_parser(
         "e2e-test",
         help="对指定生产规则做真实链路测试",
@@ -206,10 +209,24 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
 
 def handle_command(config: dict, args: argparse.Namespace) -> int:
     command = getattr(args, "intraday_monitor_command", None)
+    if command == "status":
+        from services.intraday_monitor.service import rule_status
+        result = rule_status(include_inactive=args.all)
+        if args.json:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+        elif result["status"] != "ok":
+            print(result["error"])
+        else:
+            print("名称 / 代码｜规则｜最近成功计算（上海时间）｜最近有效行情｜有效至")
+            for row in result["rules"]:
+                print(f"{row['name']} / {row['code']}｜{row['rule_id']}｜"
+                      f"{row['last_success_at'] or '未核验'}｜{row['last_quote_at'] or '未核验'}｜"
+                      f"{row['valid_until'] or '长期'}")
+        return 0 if result["status"] == "ok" else 1
     if command not in {"check", "e2e-test"}:
         logger.error(
             "用法: python3 scripts/main.py intraday-monitor "
-            "check [--dry-run] [--json] | e2e-test [--rule-id RULE_ID] --input-by USER "
+            "status [--all] [--json] | check [--dry-run] [--json] | e2e-test [--rule-id RULE_ID] --input-by USER "
             "--confirm-real-push [--json]"
         )
         return 2

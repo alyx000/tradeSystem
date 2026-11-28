@@ -119,6 +119,8 @@ def render_alert(events: list[dict]) -> str:
         lines.extend([f"- [事实] **{e['name']}（{e['code']}） {e['period_minutes']}分钟** {e['start_time']}～{e['end_time']}",
                       f"  - {e['trade_date']}：{current/Decimal('1e8'):.4f}亿元；上一交易日 {e['previous_trade_date']} 同窗：{previous/Decimal('1e8'):.4f}亿元",
                       f"  - 增加 **{Decimal(e['growth_pct']):+.2f}%**（触发条件≥{e['threshold_pct']}%）"])
+        if e.get("data_origin"):
+            lines.append("  - 同窗比较复用了本次检查前已取得的东财5分钟日档，逐根来源见本地回执。")
     lines.extend(["","来源：东方财富指数5分钟K线成交额（元）；15分钟为相邻三根合计。不同指数口径可重叠，不相加冒充全市场成交额。",
                   "仅在完整收盘窗口后比较，不含未完成K线；仅为条件提醒，不构成买卖建议。"])
     return "\n".join(lines)

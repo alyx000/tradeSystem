@@ -135,7 +135,7 @@ def test_readonly_loader_old_corrupt_calendar_and_closed_day(tmp_path):
 
 def test_scanner_reuses_requests_persists_evidence_and_dry_run_is_readonly():
     from db.schema import init_schema
-    from services.market_timing import scanner, repo, web_payload
+    from services.market_timing import scanner, repo, web_payload, limit_down
     from scripts.tests.test_market_timing_service import FakeRegistry
     with sqlite3.connect(':memory:') as conn:
         init_schema(conn)
@@ -153,6 +153,10 @@ def test_scanner_reuses_requests_persists_evidence_and_dry_run_is_readonly():
         original=evaluate_fractal_status(bars)
         raw=json.loads(result['signals'][0]['fractal_json'])
         expected={k:original[k] for k in ('low_date','low_price','left_high','right_high','right_date')} if original['status']!='none' else {}
+        # 两个明确命名的证据块与日线底分型原始字段同存；此测试库没有同日盘后跌停名单。
+        down = raw.pop(limit_down.SNAPSHOT_KEY)
+        assert down == result['context']['limit_down_fact']
+        assert (down['trade_date'], down['status'], down['count']) == (DAY, 'unknown', None)
         assert {k:v for k,v in raw.items() if k!=r.KEY}==expected
         assert result['signals'][0]['fractal_status']==original['status']
         assert json.loads(result['signals'][0]['fractal_json'])[r.KEY]['status']=='complete'

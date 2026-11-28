@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import StepEmotion from '../components/review/StepEmotion'
+import { api } from '../lib/api'
 import type { ReviewPrefillData, ReviewStepValue } from '../lib/types'
 
 vi.mock('../lib/api', () => ({
@@ -79,6 +80,7 @@ describe('StepEmotion', () => {
   it('renders emotion prefill and derived defaults', () => {
     renderStep({}, prefill)
 
+    expect(api.getMarketHistory).toHaveBeenCalledWith(10, prefill.date)
     expect(screen.getByLabelText('整体情绪')).toHaveValue('发酵')
     expect(screen.getByLabelText('子周期')).toHaveValue('2')
     expect(screen.getByText(/趋势方向:/)).toBeInTheDocument()

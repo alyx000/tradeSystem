@@ -8,7 +8,7 @@ import sys
 from db.connection import get_connection
 from services.daily_leaders import renderer, service
 from services.daily_leaders.models import MAX_CONFIRMATION_CANDIDATES
-from services.daily_leaders.readiness import DataNotReady, is_open_day, now_shanghai
+from services.daily_leaders.readiness import DataNotReady, SourceNotReady, is_open_day, now_shanghai
 from services.daily_leaders.retry import check_window, run_when_ready
 
 
@@ -84,12 +84,26 @@ def _handle_propose(args: argparse.Namespace) -> None:
             if args.push and not is_open_day(conn, date):
                 print(f"[daily-leaders] {date}非开放日，跳过生成与推送")
                 return None
-            prefill = get_prefill(date, conn=conn)
-            return service.propose(
-                conn, date, prefill, no_llm=args.no_llm,
-                registry=get_provider_registry(), max_candidates=args.max_candidates,
-                require_ready=args.push, input_by=getattr(args, "input_by", "USER"),
-            )
+            registry = get_provider_registry()
+            input_by = getattr(args, "input_by", "USER")
+            repaired = set()
+            while True:
+                prefill = get_prefill(date, conn=conn)
+                try:
+                    return service.propose(
+                        conn, date, prefill, no_llm=args.no_llm,
+                        registry=registry, max_candidates=args.max_candidates,
+                        require_ready=args.push, input_by=input_by,
+                    )
+                except SourceNotReady as exc:
+                    if not wait or input_by != "launchd" or exc.key in repaired:
+                        raise
+                    from services.daily_leaders.recovery import recover_source
+
+                    if not recover_source(conn, date, exc, registry, input_by=input_by):
+                        raise
+                    repaired.add(exc.key)
+                    check_window(date)
         finally:
             conn.close()
 

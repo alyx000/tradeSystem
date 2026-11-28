@@ -8,11 +8,15 @@ A50 与商品仅在盘后显式传入目标日期时优先使用日期化历史�
 """
 from __future__ import annotations
 
+from utils.hk_indices import hk_identity, hk_indices_view
+
 from utils.limit_identity import positive_streak
+from utils.sector_fund_flow import consistent_amount
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from decimal import Decimal, InvalidOperation
 import logging
+import math
 import multiprocessing
 import queue as queue_module
 import re
@@ -585,15 +589,6 @@ def _most_recent_grade_date(df):
     return max(dates) if dates else None
 
 
-def _normalize_amount_to_billion(val: Any) -> float:
-    parsed = _to_float_or_none(val)
-    if parsed is None:
-        return 0.0
-    if abs(parsed) >= 1_000_000:
-        return round(parsed / 1e8, 2)
-    return round(parsed, 2)
-
-
 def _first_text(row: pd.Series, *columns: str) -> str:
     for col in columns:
         if col not in row.index:
@@ -609,7 +604,7 @@ def _first_float(row: pd.Series, *columns: str) -> float | None:
         if col not in row.index:
             continue
         parsed = _to_float_or_none(row.get(col))
-        if parsed is not None:
+        if parsed is not None and math.isfinite(parsed):
             return parsed
     return None
 
@@ -1098,6 +1093,8 @@ class AkshareProvider(DataProvider):
                     if prev_val
                     else 0.0
                 )
+                if yahoo_symbol in ("^HSI", "HSTECH.HK") and len(hist) < 2:
+                    change_pct = None
                 as_of = hist.index[-1].strftime("%Y-%m-%d")
             return DataResult(
                 data={
@@ -1112,70 +1109,68 @@ class AkshareProvider(DataProvider):
             logger.warning(f"yfinance 指数 {yahoo_symbol} 获取失败: {e}")
             return None
 
+    @staticmethod
+    def _hk_daily_quote(frame, code: str, day: str, source: str) -> dict | None:
+        """只返回目标日的唯一行情；日涨跌额不能用作涨跌幅。"""
+        if frame is None or frame.empty:
+            return None
+        date_col = next((c for c in ("日期", "date", "Date") if c in frame), None)
+        if date_col is None:
+            return None
+        dates = pd.to_datetime(frame[date_col], errors="coerce")
+        if dates.dt.tz is not None:
+            dates = dates.dt.tz_convert("Asia/Hong_Kong")
+        days = dates.dt.strftime("%Y-%m-%d")
+        current = frame.loc[days == day]
+        if len(current) != 1:
+            return None
+
+        def value(row, *cols):
+            for col in cols:
+                number = _to_float_or_none(row.get(col))
+                if number is not None and math.isfinite(number):
+                    return number
+            return None
+
+        row = current.iloc[0]
+        close_columns = ("收盘", "close", "Close", "latest", "最新价")
+        close = value(row, *close_columns)
+        if close is None:
+            return None
+        change = value(row, "涨跌幅", "change_pct")
+        if change is None:
+            previous_days = days[days < day]
+            if not previous_days.empty:
+                previous = frame.loc[days == previous_days.max()]
+                if len(previous) == 1:
+                    base = value(previous.iloc[0], *close_columns)
+                    if base is not None and base > 0:
+                        change = (close / base - 1) * 100
+        prices = {"close": close, "change_pct": change, "open": value(row, "开盘", "open", "Open"),
+                  "high": value(row, "最高", "high", "High"), "low": value(row, "最低", "low", "Low")}
+        return {**hk_identity(code), "trade_date": day, "_source": source,
+                **{k: round(v, 2) if v is not None else None for k, v in prices.items()}}
+
     def _hk_index_from_yfinance(self, symbol: str, date: str) -> dict | None:
-        """港股指数回退：优先指数现货，必要时退到对应 ETF。"""
+        """先核验目标日的指数现货。只有恒科无现货时才查询独立的 ETF 行。"""
         try:
             import yfinance as yf
         except ImportError:
             return None
-
-        plans: dict[str, list[tuple[str, str]]] = {
-            "HSI": [("^HSI", "恒生指数")],
-            # HSTECH.HK 历史数据有时只有 1 行，保留 3033.HK 作为更稳的回退
-            "HSTECH": [("HSTECH.HK", "恒生科技指数"), ("3033.HK", "恒生科技指数")],
-        }
-
-        best_entry: dict | None = None
-        best_score = -1
-        target_date = str(date)
-
-        for yahoo_symbol, display_name in plans.get(symbol, []):
+        target = datetime.strptime(date, "%Y-%m-%d").date()
+        tickers = (("^HSI", "HSI"),) if symbol == "HSI" else (("HSTECH.HK", "HSTECH"), ("3033.HK", "3033.HK"))
+        for ticker, code in tickers:
             try:
-                hist = yf.Ticker(yahoo_symbol).history(period="1mo")
-            except Exception as e:
-                logger.warning(f"港股指数 yfinance 回退失败 {symbol}/{yahoo_symbol}: {e}")
-                continue
-            if hist is None or hist.empty or "Close" not in hist.columns:
-                continue
-
-            hist = hist.reset_index()
-            date_col = hist.columns[0]
-            hist["__date"] = pd.to_datetime(hist[date_col], errors="coerce").dt.strftime("%Y-%m-%d")
-            matched = hist.index[hist["__date"] == target_date].tolist()
-            row_idx = int(matched[-1]) if matched else int(hist.index[-1])
-            row = hist.iloc[row_idx]
-
-            close = _to_float_or_none(row.get("Close"))
-            if close is None:
-                continue
-            prev_close = _to_float_or_none(hist.iloc[row_idx - 1].get("Close")) if row_idx > 0 else None
-            change_pct = (
-                round((close - prev_close) / prev_close * 100, 2)
-                if prev_close not in (None, 0)
-                else None
-            )
-            entry = {
-                "code": symbol,
-                "name": display_name,
-                "close": round(close, 2),
-                "open": _to_float_or_none(row.get("Open")),
-                "high": _to_float_or_none(row.get("High")),
-                "low": _to_float_or_none(row.get("Low")),
-                "change_pct": change_pct,
-                "_source": f"yfinance:{yahoo_symbol}",
-            }
-            for field in ("open", "high", "low"):
-                if entry[field] is not None:
-                    entry[field] = round(float(entry[field]), 2)
-
-            score = (2 if matched else 0) + (1 if change_pct is not None else 0)
-            if score > best_score:
-                best_entry = entry
-                best_score = score
-            if score >= 3:
-                break
-
-        return best_entry
+                frame = yf.Ticker(ticker).history(start=str(target - timedelta(days=20)),
+                                                  end=str(target + timedelta(days=1)), auto_adjust=False)
+                if frame is not None and not frame.empty:
+                    frame = frame.rename_axis("Date").reset_index()
+                    quote = self._hk_daily_quote(frame, code, date, f"yfinance:{ticker}")
+                    if quote is not None:
+                        return quote
+            except Exception as exc:
+                logger.warning("港股日行情回退失败 %s/%s: %s", symbol, ticker, exc)
+        return None
 
     def _parse_sector_fund_flow_rows(
         self,
@@ -1183,6 +1178,7 @@ class AkshareProvider(DataProvider):
         *,
         name_columns: tuple[str, ...],
         net_columns: tuple[str, ...],
+        units_per_yi: int,
         change_columns: tuple[str, ...],
         limit: int = 20,
     ) -> list[dict]:
@@ -1194,12 +1190,12 @@ class AkshareProvider(DataProvider):
             name = _first_text(row, *name_columns)
             if not name:
                 continue
-            net_raw = _first_float(row, *net_columns)
+            net_raw = consistent_amount(row, net_columns)
             change_raw = _first_float(row, *change_columns)
             records.append({
                 "name": name,
-                "net_inflow_billion": _normalize_amount_to_billion(net_raw),
-                "change_pct": round(change_raw, 2) if change_raw is not None else 0.0,
+                "net_inflow_billion": net_raw / units_per_yi if net_raw is not None else None,
+                "change_pct": round(change_raw, 2) if change_raw is not None else None,
             })
         return records
 
@@ -1351,6 +1347,12 @@ class AkshareProvider(DataProvider):
         zh_name = name_map.get(index_name, index_name)
 
         try:
+            if index_name in ("hsi", "hstech") and as_of_date is not None:
+                daily = self.get_hk_indices(as_of_date)
+                quote = (daily.data or {}).get(index_name)
+                if quote and quote.get("close") is not None:
+                    return DataResult(data={**quote, "as_of": quote["trade_date"]}, source=quote["_source"])
+                return DataResult(data=None, source=self.name, error=f"{as_of_date} 缺少 {index_name} 指数现货")
             if index_name == "a50":
                 if as_of_date is not None:
                     dated = self._global_future_from_hist_em(
@@ -1457,16 +1459,32 @@ class AkshareProvider(DataProvider):
             apac_yf: dict[str, list[tuple[str, str]]] = {
                 "hsi": [("^HSI", "恒生指数")],
                 # ^HSTECH 在 Yahoo 常 404；HSTECH.HK 为恒生科技指数现货报价
-                "hstech": [("HSTECH.HK", "恒生科技"), ("3033.HK", "恒生科技(ETF)")],
+                "hstech": [("HSTECH.HK", "恒生科技指数")],
                 "nikkei": [("^N225", "日经225")],
                 "kospi": [("^KS11", "韩国综指")],
             }
             if index_name in apac_yf:
+                hk_code = index_name.upper() if index_name in ("hsi", "hstech") else None
                 for ysym, label in apac_yf[index_name]:
                     yf_r = self._index_from_yfinance(ysym, label)
                     if yf_r is not None:
+                        if hk_code:
+                            yf_r.data.update(hk_identity(hk_code), trade_date=yf_r.data.get("as_of"))
                         return yf_r
                 try:
+                    if hk_code:
+                        spot = self._global_spot_em()
+                        matches = spot.loc[spot["代码"] == hk_code] if "代码" in spot else spot.iloc[:0]
+                        if len(matches) == 1:
+                            row = matches.iloc[0]
+                            stamp = pd.to_datetime(row.get("最新行情时间"), errors="coerce")
+                            price = _to_float_or_none(row.get("最新价"))
+                            if pd.notna(stamp) and price is not None and math.isfinite(price):
+                                day = stamp.date().isoformat()
+                                data = {**hk_identity(hk_code), "trade_date": day, "as_of": day, "close": price,
+                                        "change_pct": _to_float_or_none(row.get("涨跌幅"))}
+                                return DataResult(data=data, source="akshare:index_global_spot_em")
+                        raise ValueError(f"{hk_code} 缺少唯一带时间的指数报价")
                     row = self._row_global_spot_by_name(zh_name)
                     if row is not None and pd.notna(row.get("最新价")):
                         data = {
@@ -1751,7 +1769,8 @@ class AkshareProvider(DataProvider):
             records = self._parse_sector_fund_flow_rows(
                 df,
                 name_columns=("名称", "板块名称", "行业"),
-                net_columns=("今日主力净流入-净额", "主力净流入-净额", "净额"),
+                net_columns=("今日主力净流入-净额", "主力净流入-净额"),
+                units_per_yi=100_000_000,
                 change_columns=("今日涨跌幅", "涨跌幅", "行业-涨跌幅"),
             )
             if records:
@@ -1765,7 +1784,8 @@ class AkshareProvider(DataProvider):
             records = self._parse_sector_fund_flow_rows(
                 df,
                 name_columns=("行业", "名称"),
-                net_columns=("净额", "主力净流入-净额"),
+                net_columns=("净额",),
+                units_per_yi=1,
                 change_columns=("行业-涨跌幅", "涨跌幅"),
             )
             if records:
@@ -1861,7 +1881,7 @@ class AkshareProvider(DataProvider):
             df = df.sort_values("__dt").reset_index(drop=True)  # 防御乱序：prev_close 必须是真前一交易日
             df["__d"] = df["__dt"].dt.strftime("%Y-%m-%d")
             matches = df.index[df["__d"] == date].tolist()
-            if not matches:
+            if not matches or (symbol == "sh000001" and len(matches) != 1):
                 return None
             i = matches[-1]
             row = df.iloc[i]
@@ -1875,6 +1895,7 @@ class AkshareProvider(DataProvider):
             volume = round(float(vol_raw) / 100, 0) if pd.notna(vol_raw) else None
             data = {
                 "code": symbol,
+                "trade_date": row["__d"],
                 "open": round(float(row["open"]), 2) if pd.notna(row.get("open")) else None,
                 "high": round(float(row["high"]), 2) if pd.notna(row.get("high")) else None,
                 "low": round(float(row["low"]), 2) if pd.notna(row.get("low")) else None,
@@ -1911,7 +1932,7 @@ class AkshareProvider(DataProvider):
                 return DataResult(data=None, source=self.name, error=f"无数据: {symbol} {date}")
             # 必须精确匹配目标交易日，不得回退到邻近日期当作当日事实（事实层污染防护）
             matched = df[df["日期"].astype(str).str.replace("-", "", regex=False) == d]
-            if matched.empty:
+            if matched.empty or (symbol == "000001" and len(matched) != 1):
                 return DataResult(data=None, source=self.name, error=f"无目标日期数据: {symbol} {date}")
             row = matched.iloc[0]
             # close 是 MA / 节点信号的核心比较量，NaN 不得穿透成 success
@@ -1927,6 +1948,7 @@ class AkshareProvider(DataProvider):
             amount = _num("成交额")
             data = {
                 "code": symbol,
+                "trade_date": datetime.strptime(str(row["日期"]).replace("-", ""), "%Y%m%d").date().isoformat(),
                 "open": _num("开盘", 0.0),
                 "high": _num("最高", 0.0),
                 "low": _num("最低", 0.0),
@@ -3290,70 +3312,13 @@ class AkshareProvider(DataProvider):
         result: dict[str, dict] = {}
         errors: list[str] = []
 
-        for symbol, (zh_name, key) in self._HK_INDEX_MAP.items():
+        for symbol, (_, key) in self._HK_INDEX_MAP.items():
             try:
-                df = self.ak.stock_hk_index_daily_em(symbol=zh_name)
-                if df is None or df.empty:
-                    raise ValueError("无数据")
-
-                date_col = None
-                for col in ["日期", "date", "Date"]:
-                    if col in df.columns:
-                        date_col = col
-                        break
-                if date_col is None:
-                    raise ValueError("无日期列")
-
-                df[date_col] = pd.to_datetime(df[date_col]).dt.strftime("%Y-%m-%d")
-                row = df[df[date_col] == date]
-
-                if row.empty:
-                    df_sorted = df.sort_values(date_col)
-                    if df_sorted.empty:
-                        raise ValueError("无历史数据")
-                    row = df_sorted.tail(1)
-
-                r = row.iloc[0]
-
-                def _col(*names: str) -> float | None:
-                    """命中列且可解析则返回数值；列不存在或解析失败返回 None（与真实 0.0 区分）。"""
-                    for n in names:
-                        if n in r.index:
-                            try:
-                                return round(float(r[n]), 2)
-                            except (TypeError, ValueError):
-                                pass
-                    return None
-
-                close = _col("收盘", "close", "Close", "最新价")
-                open_ = _col("开盘", "open", "Open")
-                high = _col("最高", "high", "High")
-                low = _col("最低", "low", "Low")
-
-                if close is None:
-                    raise ValueError("无有效收盘价")
-
-                change_pct: float | None = None
-                for pct_col in ["涨跌幅", "change_pct", "涨跌额"]:
-                    if pct_col in r.index:
-                        try:
-                            v = float(r[pct_col])
-                            if abs(v) < 100:
-                                change_pct = round(v, 2)
-                                break
-                        except (TypeError, ValueError):
-                            pass
-
-                result[key] = {
-                    "code": symbol,
-                    "name": zh_name,
-                    "close": close,
-                    "open": open_,
-                    "high": high,
-                    "low": low,
-                    "change_pct": change_pct,
-                    "_source": "akshare:stock_hk_index_daily_em",
-                }
+                df = self.ak.stock_hk_index_daily_em(symbol=symbol)
+                quote = self._hk_daily_quote(df, symbol, date, "akshare:stock_hk_index_daily_em")
+                if quote is None:
+                    raise ValueError(f"{date} 缺少唯一有效的 {symbol} 日线")
+                result[key] = quote
             except Exception as e:
                 fallback = self._hk_index_from_yfinance(symbol, date)
                 if fallback is not None:
@@ -3381,7 +3346,7 @@ class AkshareProvider(DataProvider):
             source = "mixed:" + ",".join(sorted(source_set))
 
         return DataResult(
-            data=result,
+            data=hk_indices_view(result),
             source=source,
             note="; ".join(errors) if errors else "",
         )

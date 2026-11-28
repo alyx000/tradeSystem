@@ -31,9 +31,15 @@ def register_subparser(subparsers: argparse._SubParsersAction) -> None:
     daily.add_argument("--no-push", action="store_true", help="落盘但不推送")
     daily.add_argument("--no-llm", action="store_true", help="跳过 LLM 两两 PK")
     daily.add_argument("--input-by", default="launchd", help="请求者；Agent手动运行须显式USER")
+    from cli.board_break_intraday import register
+    register(sub)
 
 
 def handle_command(config: dict, args: argparse.Namespace) -> None:
+    if getattr(args, "board_break_command", None) in {"tail", "open-review", "minute-check"}:
+        from cli.board_break_intraday import handle
+        handle(args)
+        return
     if getattr(args, "board_break_command", None) == "daily":
         _run_daily(config, args)
     else:

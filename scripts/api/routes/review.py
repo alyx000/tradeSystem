@@ -14,8 +14,6 @@ from api.deps import get_db_conn
 from api.market_enrich import enrich_daily_market_row
 from db import queries as Q
 from db.dual_write import (
-    _normalize_stock_code_for_match,
-    holdings_quote_details_from_envelope,
     parse_post_market_envelope,
 )
 from services.holding_signals import build_holding_signals
@@ -221,29 +219,6 @@ def _extract_holding_tasks_from_step7(step7_positions: Any) -> list[dict[str, st
             "status": "open",
         })
     return tasks
-
-
-def _enrich_holdings_prefill_from_post_envelope(
-    holdings: list[dict],
-    quote_map: dict[str, dict[str, float | None]],
-) -> list[dict]:
-    """当日 DB 尚无 current_price 时，用 daily_market.raw_data 信封内 holdings_data 补收盘价与盈亏%。
-    enrich_daily_market_row 会移除 raw_data，须在 enrich 之前解析 quote_map。
-    """
-    out: list[dict] = []
-    for h in holdings:
-        d = dict(h)
-        k = _normalize_stock_code_for_match(d.get("stock_code"))
-        q = quote_map.get(k) if k else None
-        if q:
-            close = q.get("close")
-            if close is not None and d.get("current_price") is None:
-                d["current_price"] = close
-            pnl = q.get("pnl_pct")
-            if pnl is not None:
-                d["prefill_pnl_pct"] = pnl
-        out.append(d)
-    return out
 
 
 def _section_rows(section: Any) -> list[dict[str, Any]]:
@@ -1276,22 +1251,17 @@ def build_review_prefill(conn: sqlite3.Connection, date: str) -> dict[str, Any]:
     market = Q.get_daily_market(conn, date)
     market_for_signals = dict(market) if market else None
     env = parse_post_market_envelope(market.get("raw_data") if market else None)
-    holdings_quote_map = holdings_quote_details_from_envelope(env)
     market = _apply_market_ma5w_fallback(conn, market)
-    enrich_daily_market_row(market)  # 展开 raw_data 中的扩展字段（style_factors/sector_*/rhythm_* 等）
+    enrich_daily_market_row(market, conn=conn)  # 展开 raw_data 中的扩展字段（style_factors/sector_*/rhythm_* 等）
     prev_market = Q.get_prev_daily_market(conn, date)
     prev_market = _apply_market_ma5w_fallback(conn, prev_market)
     # 与当日 market 一致地展开并移除 raw_data，避免前一日历史信封里的旧 northbound 块
     # （口径存疑，北向净额已下线）经 prefill 的 prev_market.raw_data 原样外泄。
-    enrich_daily_market_row(prev_market)
+    enrich_daily_market_row(prev_market, conn=conn)
     avg_5d = Q.get_avg_amount(conn, date, 5)
     avg_20d = Q.get_avg_amount(conn, date, 20)
-    emotion = Q.get_latest_emotion(conn)
+    emotion = Q.get_latest_emotion(conn, to_date=date)
     themes = Q.get_active_themes_as_of(conn, date)
-    holdings = _enrich_holdings_prefill_from_post_envelope(
-        Q.get_holdings(conn, status="active"),
-        holdings_quote_map,
-    )
     calendar = Q.get_calendar_range(conn, date, date)
 
     next_td = Q.get_next_trade_date(conn, date)
@@ -1330,7 +1300,9 @@ def build_review_prefill(conn: sqlite3.Connection, date: str) -> dict[str, Any]:
         industry_info=industry_info,
         sector_signals=review_signals.get("sectors"),
     )
-    holding_signals = build_holding_signals(conn, date, market_row=market_for_signals)
+    holding_signals = build_holding_signals(conn, date, market_row=market_for_signals, review_snapshot=True)
+    holdings = holding_signals.pop("holdings", [])
+    holdings_source = holding_signals.pop("holdings_source", "missing")
 
     from utils.trade_date import is_trade_day as _is_trade_day
     is_trading_day_calendar = _is_trade_day(date, conn=conn)
@@ -1382,6 +1354,7 @@ def build_review_prefill(conn: sqlite3.Connection, date: str) -> dict[str, Any]:
         "emotion_cycle": emotion,
         "main_themes": themes,
         "holdings": holdings,
+        "holdings_source": holdings_source,
         "calendar_events": calendar,
         "prev_review": prev_review,
         "industry_info": industry_info,

@@ -8,6 +8,10 @@
 
 # Skills 依赖索引
 
+2026-11-28 择时非 ST 跌停分归档与择时留存；上证日均线用严格开放日；历史持仓及信号使用所选日归档，`holdings_source` 说明预填来源；港股现货与 ETF 代理及其行情日期分开；运行目录 `intraday-monitor status [--all] [--json]` 可查看每条规则最后成功计算时间。盘中行业榜是相对排名，反包广度区分百分比与倍数，ETF 摘要展示可比披露的前后变化。见[使用说明](../../README.md#复盘日期与信号覆盖)。
+
+2026-11-28 行情、成交集中度、研报覆盖和 `/api/main-themes` 支持可选 `to_date`。复盘预填按事实日取情绪阶段。形态扫描报告列出实际可判定数和未判定原因，指数盘中回执可按五分钟时段核对覆盖。每日最票只在原定时发布窗口补采已识别的缺项。见[使用说明](../../README.md#复盘日期与信号覆盖)。
+
 2026-11-25 新增工商银行A股（601398.SH）`icbc-below-8-88-20261125-1201`：11月25日至12月1日（含，5个SSE开放日），12月2日起停用。沿用每3分钟检查新浪新鲜实时价及钉钉；严格低于8.88元提醒，等于不触发。每日首次已跌破提醒，持续命中去重、恢复至8.88元或以上后再次跌破可重推；其他监控和调度不变。
 
 2026-11-25 新增通达信平均股价（880003.TDX）`avg-price-below-20-40-20261125-26`：仅11月25、26日（2个SSE开放日），11月27日起停用。沿用每3分钟检查新鲜1分钟K线最新收盘价，严格低于20.40元才发钉钉，等于不触发；每日首次已跌破提醒、持续在阈值下去重、恢复至20.40元或以上后再次跌破可重推。提示保留分钟价三位精度；旧26元±1%规则仍独立运行到11月27日，其他规则及调度不变。
@@ -458,16 +462,16 @@ Raindrop 的 `instrument-agent` / `setup-agent-replay` 是官方 `raindrop-ai/wo
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET | `/api/market/history` | 近 N 日行情摘要（`?days=`，不含 raw_data） |
-| GET | `/api/market/concentration/history` | 成交额 Top20 板块集中度趋势（`?days=`，库内最新 N 日 CR3/头部成交额/占两市/板块占比序列 + 最新日连续在榜/异动快照，供盘面概览图表） |
+| GET | `/api/market/history` | 截至 `to_date` 的最近 N 日行情摘要（`days`，默认最新，省略 raw_data） |
+| GET | `/api/market/concentration/history` | 成交额 Top20 板块集中度趋势（`days`、可选 `to_date`，截至所选日的最近 N 日 CR3/头部成交额/占两市/板块占比序列 + 最新日连续在榜/异动快照，供盘面概览图表） |
 | GET | `/api/market/sector-gain-ranking/{date}` | 成交额前50 区间涨幅排名（读 `daily_volume_concentration.gain_universe` → `rankings`=申万二级板块榜 + `concept_rankings`=同花顺概念题材榜[多标签]，5/10/20 日三档，组按组内涨幅最大个股降序/平手比次大，全客观区间涨幅守红线不出价位目标；无记录/旧记录返三档空列表；供八步复盘「2.板块」步骤双维度展示） |
 | GET | `/api/market/sector-labels/{date}` | 申万二级每日趋势标签（读取 `sector_crowding_daily` 现算、不落派生值）：半年线/年线上=`close>MA144/MA233` `[事实]`；近期价量共振=最近10个交易快照日内 close 与 amount 同日严格突破此前20个交易快照日高点 `[判断]`，返回最近事件证据与 `true/false/null` 三态；可信目标日 as-of 宇宙优先，遗留或元数据不可信时继承最近可信宇宙、全程无可信时按窗口内历史观察并集保守兜底；部分缺 L2 为 `status=partial`，全缺为 `status=missing_l2`，均保留缺失项并置 `null`；SQLite `mode=ro` 且请求期不迁移，供八步复盘「2.板块」五档筛选展示 |
 | GET | `/api/market/timing/{date}` | 大盘择时观察某交易日（读 `market_timing_signal`：6 指数斐波那契变盘点 + 底分型状态 + 市场上下文[共振数/成交额地量分位/涨跌家数/跌停]，全 [判断]；无数据 `available:false`，供盘面概览 MarketTimingPanel） |
 | GET | `/api/market/margin-index-correlation/{date}` | 两融余额与指数联动性某交易日（读 `margin_index_correlation_daily` 经 `web_payload.build_daily_payload`：背离预警/余额水位+趋势/领先滞后/同步相关四维，全 [判断] 守红线；无记录 `available:false`，供八步复盘「1.大盘」MarginIndexCorrelation 组件渲染） |
 | GET | `/api/market/timing/history` | 大盘择时市场级序列（`?days=&to_date=`，按日去重的共振指数数 + 成交额近20日地量分位升序序列，供盘面概览趋势图；`to_date` 给定时只取该日及之前，复盘历史日期不带出未来数据[前瞻偏差]） |
-| GET | `/api/market/research-coverage` | 区间研报覆盖排行（`?days=&limit=`，合并最近 N 日篇数排行 `items`（仅 `stock_code/stock_name/report_count`，**per-stock 不含行业**）+ 按申万一级行业汇总 `industry`：`[{industry, stock_count, report_count}]`，缺成分降级未分类；行业统计只看 `industry` 字段） |
+| GET | `/api/market/research-coverage` | 区间研报覆盖排行（`days`、`limit`、可选 `to_date`，合并截至所选日最近 N 日篇数排行 `items`（仅 `stock_code/stock_name/report_count`，**per-stock 不含行业**）+ 按申万一级行业汇总 `industry`：`[{industry, stock_count, report_count}]`，缺成分降级未分类；行业统计只看 `industry` 字段） |
 | GET | `/api/market/{date}` | 读取指定日期全市场行情摘要（扁平列 + 部分从 raw_data 展开） |
-| GET | `/api/post-market/{date}` | 整包盘后信封（与 post-market.yaml / DB raw_data 一致） |
+| GET | `/api/post-market/{date}` | 盘后信封，保留 T+1 来源日与观察日。可选 `as_of` 截断三项次日反馈；旧库缺块时只读核对同版归档 |
 
 ### 计划与资料（`routes/planning.py`）
 

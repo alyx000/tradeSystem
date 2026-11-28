@@ -12,7 +12,9 @@ import yaml
 
 from analyzers.strong_stock_feedback import _row_code
 
-SOURCES = {'tushare:limit_list_d', 'akshare:stock_zt_pool_dtgc_em'}
+from analyzers.verified_limit_down import SOURCE
+
+SOURCES = {SOURCE, 'tushare:limit_list_d', 'akshare:stock_zt_pool_dtgc_em'}
 SCOPE = '跌停名单来源覆盖范围（非全市场）；ST及北交所完整性未核验'
 
 
@@ -22,7 +24,7 @@ def missing(day, reason, status='source_failed'):
                 rows=[], unknown_rows=[], single_day_rows=[], gaps=[reason], scope=SCOPE)
 
 
-def _index(section, day):
+def index_limit_down_list(section, day):
     if (not isinstance(section, dict) or section.get('error')
             or not isinstance(section.get('_source'), str)
             or section.get('_source') not in SOURCES
@@ -44,6 +46,22 @@ def _index(section, day):
                 or str(row.get('trade_date', day)).replace('-', '') != day.replace('-', '')):
             raise ValueError(f'{day}跌停名单身份重复、缺失或日期错位')
         rows[code] = row
+    if section['_source'] == SOURCE:
+        coverage = section.get('coverage')
+        if (section.get('status') != 'complete' or section.get('trade_date') != day
+                or not isinstance(coverage, dict)
+                or any(type(coverage.get(k)) is not int or coverage[k] < 0
+                       for k in ('active', 'quoted', 'suspended_without_quote'))
+                or not 0 < coverage['quoted'] <= coverage['active']
+                or coverage['quoted'] + coverage['suspended_without_quote'] != coverage['active']
+                or len(rows) > coverage['quoted']
+                or type(section.get('count_ex_st')) is not int
+                or any(type(r.get('is_st')) is not bool
+                       or type(r.get('close')) not in (int, float)
+                       or not (0 < r['close'] < float('inf'))
+                       or r.get('down_limit') != r['close'] for r in rows.values())
+                or section['count_ex_st'] != sum(not r['is_st'] for r in rows.values())):
+            raise ValueError(f'{day}逐股价格或上市覆盖证据不完整')
     return rows
 
 
@@ -51,7 +69,7 @@ def calculate(day, days, sections):
     """days 为日历核验的连续开放日（升序）；缺日必须保留空槽。"""
     result = missing(day, SCOPE, 'partial')
     try:
-        today = _index(sections.get(day), day)
+        today = index_limit_down_list(sections.get(day), day)
         if not days or days[-1] != day or days != sorted(set(days)):
             raise ValueError('连续开放日窗口非法')
     except (ValueError, TypeError, AttributeError, KeyError) as exc:
@@ -59,7 +77,7 @@ def calculate(day, days, sections):
     indexed, errors = {day: today}, {}
     for previous in reversed(days[:-1]):
         try:
-            indexed[previous] = _index(sections.get(previous), previous)
+            indexed[previous] = index_limit_down_list(sections.get(previous), previous)
         except (ValueError, TypeError, AttributeError, KeyError) as exc:
             errors[previous] = str(exc)
     rows, unknown, single_day = [], [], []
@@ -85,7 +103,7 @@ def calculate(day, days, sections):
                 break
             evidence.append(dict(trade_date=previous, source=source, stock=deepcopy(historical)))
         streak = len(evidence)
-        row = dict(code=code, name=name, is_st='ST' in name.upper(), days=streak,
+        row = dict(code=code, name=name, is_st=stock.get('is_st', 'ST' in name.upper()), days=streak,
                    days_exact=exact, start_date=evidence[-1]['trade_date'] if exact else None,
                    verified_from=evidence[-1]['trade_date'], verified_to=day,
                    pct_chg=stock.get('pct_chg', stock.get('change_pct')),
@@ -105,10 +123,16 @@ def calculate(day, days, sections):
                   evidence=deepcopy(sections), count_scope='当日来源名单内非ST、剔退市/B股',
                   definition='截至事实日连续至少2个市场开放日收盘跌停；停牌不跨日拼接')
     result['gaps'] += sorted({r['gap'] for r in rows + unknown if r['gap']})
+    if sections[day]['_source'] == SOURCE:
+        result['scope'] = '沪深北当日上市A股，剔除退市整理股和B股，ST另计'
+        result['count_scope'] = '沪深北非ST收盘连续跌停'
+        result['gaps'] = sorted({r['gap'] for r in rows + unknown if r['gap']})
+        result['market_count'] = result['count']
+        result['status'] = 'partial' if result['gaps'] else 'complete'
     return result
 
 
-def collect(day, *, limit_down, daily_dir, db_path=None, now=None):
+def collect(day, *, limit_down, daily_dir, db_path=None, now=None, history_loader=None):
     """复用当日名单，历史只读；随既有 post 信封双写，无独立调度/推送。"""
     try:
         from db.connection import get_readonly_connection
@@ -131,7 +155,7 @@ def collect(day, *, limit_down, daily_dir, db_path=None, now=None):
             raise ValueError('近61自然日SSE交易日历不完整')
         days = sorted(d for d, flag in calendar.items() if flag == 1)
         sections = {day: deepcopy(limit_down)}
-        active = set(_index(limit_down, day))
+        active = set(index_limit_down_list(limit_down, day))
         for previous in reversed(days[:-1]):
             if not active:
                 break
@@ -140,10 +164,15 @@ def collect(day, *, limit_down, daily_dir, db_path=None, now=None):
                 if not isinstance(payload, dict) or str(payload.get('date')) != previous:
                     raise ValueError('盘后归档日期错位')
                 section = payload.get('raw_data', {}).get('limit_down')
-                sections[previous] = section
-                active &= set(_index(section, previous))
-            except (OSError, ValueError, AttributeError, yaml.YAMLError):
-                sections[previous] = None
+                index_limit_down_list(section, previous)
+            except (OSError, ValueError, TypeError, KeyError, AttributeError, yaml.YAMLError):
+                section = None
+            if history_loader is not None and (section or {}).get('_source') != SOURCE:
+                section = history_loader(previous)
+            sections[previous] = section
+            try:
+                active &= set(index_limit_down_list(section, previous))
+            except (ValueError, TypeError, AttributeError):
                 break
         return calculate(day, days, sections)
     except (ValueError, TypeError, sqlite3.Error, OSError) as exc:
@@ -158,6 +187,9 @@ def render(block):
     st_text = '未核验' if st_count is None else f'{st_count}只'
     lines = [f"- [事实] **连续跌停个股数（非ST，≥2日）：{amount}**；来源范围内，状态：{block['status']}",
              f"- ST连续跌停已核验：{st_text}（完整总数待核）"]
+    if block.get('status') == 'complete':
+        lines[0] = f"- [事实] **连续跌停个股数（非ST，≥2日）：{amount}**"
+        lines[1] = f"- ST连续跌停：{st_text}"
     if block.get('gaps'):
         lines.append('- 连续跌停覆盖缺口：' + '；'.join(block['gaps']))
     if block.get('rows') or block.get('unknown_rows'):

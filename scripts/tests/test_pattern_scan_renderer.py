@@ -143,6 +143,16 @@ class TestBranches:
         assert "不代表已完成筛选后的空池" in md
         assert "今日无命中" not in md
 
+    def test_partial_sample_is_qualified_at_top(self):
+        md = renderer.render_daily(_result(
+            status="partial", candidates=[], universe_count=580, evaluated_count=106,
+            unevaluated_count=474, rejects=dict(bar_missing=11, qfq_failed=450,
+                                                insufficient_history=13)))
+        assert "已判定 106/580 只（18.3%），未判定 474 只" in md
+        assert "前复权失败 450 只" in md
+        assert "已判定样本中无命中" in md
+        assert "今日无命中" not in md
+
     def test_degraded_mainline_labelled(self):
         md = renderer.render_daily(_result(main_sector_degraded=True))
         assert "已回退最近一日" in md

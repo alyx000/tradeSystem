@@ -18,6 +18,14 @@ function pctColor(v: number | null | undefined) {
   return v >= 0 ? 'text-red-600' : 'text-green-600'
 }
 
+function NetInflowCell({ row }: { row: SectorSnapshotRow }) {
+  const values = [row.net_inflow_billion, row.net_inflow].filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
+  const value = new Set(values).size === 1 ? values[0] : null
+  if (value == null) return <td className="py-1.5 pr-4 text-right text-gray-500">-</td>
+  const text = value !== 0 && Math.abs(value) < 0.01 ? String(Number(value.toPrecision(8))) : value.toFixed(2)
+  return <td className={`py-1.5 pr-4 text-right ${value === 0 ? 'text-gray-500' : pctColor(value)}`}>{text}</td>
+}
+
 export default function SectorRankingPanel({
   sectorTab,
   sortOrder,
@@ -60,7 +68,7 @@ export default function SectorRankingPanel({
             </button>
           ))}
         </div>
-        <div className="flex gap-1 ml-auto">
+        {sectorTab !== 'fund_flow' && <div className="flex gap-1 ml-auto">
           <button
             onClick={() => onSortOrderChange('gain')}
             className={`px-3 py-1 text-xs rounded-full transition-colors ${
@@ -77,7 +85,7 @@ export default function SectorRankingPanel({
           >
             跌幅↓
           </button>
-        </div>
+        </div>}
       </div>
 
       {strongestSectors.length > 0 && (
@@ -186,7 +194,7 @@ export default function SectorRankingPanel({
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b text-left text-gray-500">
-                  <th className="py-2 pr-4">排名</th>
+                  <th className="py-2 pr-4">{sectorTab === 'fund_flow' ? '来源顺序' : '排名'}</th>
                   <th className="py-2 pr-4">板块名称</th>
                   <th className="py-2 pr-4 text-right">涨跌幅</th>
                   {sectorTab === 'fund_flow' && <th className="py-2 pr-4 text-right">净流入(亿)</th>}
@@ -201,9 +209,7 @@ export default function SectorRankingPanel({
                       {fmtPct(s.pct_change ?? s.change_pct)}
                     </td>
                     {sectorTab === 'fund_flow' && (
-                      <td className={`py-1.5 pr-4 text-right ${(s.net_inflow ?? 0) >= 0 ? 'text-red-600' : 'text-green-600'}`}>
-                        {s.net_inflow != null ? s.net_inflow.toFixed(2) : '-'}
-                      </td>
+                      <NetInflowCell row={s} />
                     )}
                   </tr>
                 ))}
@@ -220,7 +226,9 @@ export default function SectorRankingPanel({
           )}
         </>
       ) : (
-        <div className="text-sm text-gray-400 text-center py-6">暂无板块数据</div>
+        <div className="text-sm text-gray-400 text-center py-6">
+          {sortOrder === 'loss' && sectorTab !== 'fund_flow' ? '当日归档缺少板块跌幅榜' : '暂无板块数据'}
+        </div>
       )}
     </div>
   )

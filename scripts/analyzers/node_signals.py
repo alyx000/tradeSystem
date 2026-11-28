@@ -45,7 +45,7 @@ class NodeSignalAnalyzer:
         history = self._load_history(date)
         signals: list[dict] = []
 
-        signals += self._check_ma_cross(today_result, history)
+        signals += self._check_ma_cross(today_result, history, date)
         signals += self._check_volume_extreme(today_result, history)
         signals += self._check_limit_extreme(today_result, history)
         signals += self._check_breadth_extreme(today_result, history)
@@ -106,51 +106,20 @@ class NodeSignalAnalyzer:
                 return v
         return None
 
-    def _check_ma_cross(self, today: dict, history: list[dict]) -> list[dict]:
+    def _check_ma_cross(self, today: dict, history: list[dict], date: str) -> list[dict]:
         signals: list[dict] = []
         ma_today = today.get("moving_averages", {}).get("shanghai", {})
-        if not ma_today or not history:
+        if not ma_today:
             return signals
+        if history and not any(snap.get("ma") for snap in history):
+            logger.warning("节点信号：历史 MA 基准缺失，5周线穿越信号跳过")
+        from analyzers.shanghai_ma import cross_signal, daily_cross_signals
 
-        # 全部历史快照都缺 MA → 数据缺口，显式告警（区分"市场平静"与"数据缺失"），
-        # 否则前一天恰好缺采集（如 tushare 限流/缺口）会把信号静默吞掉。
-        if not any(snap.get("ma") for snap in history):
-            logger.warning(
-                "节点信号：最近 %d 天历史快照均缺失 MA 基准（moving_averages），"
-                "本轮 MA 突破/跌破信号跳过（非市场平静，而是数据缺口）",
-                len(history),
-            )
-            return signals
-
-        for period, label in [(5, "MA5"), (10, "MA10"), (20, "MA20"),
-                               (60, "MA60"), ("5w", "5周均线")]:
-            key = f"above_ma{period}"
-            today_above = ma_today.get(key)
-            # 逐周期回退：取最近一个含该周期基准的历史快照，跳过 partial-MA 缺口
-            # （如某日有日线 MA 却缺 5 周线），避免单周期信号被静默吞掉。
-            prev_above = self._latest_prev_above(history, key)
-            ma_val = ma_today.get(f"ma{period}")
-
-            if today_above is None or prev_above is None:
-                continue
-
-            if today_above and not prev_above:
-                signals.append({
-                    "type": "ma_cross",
-                    "signal": f"突破{label}",
-                    "direction": "positive",
-                    "value": ma_val,
-                    "description": f"上证指数收盘价上穿{label}（{ma_val}）",
-                })
-            elif not today_above and prev_above:
-                signals.append({
-                    "type": "ma_cross",
-                    "signal": f"跌破{label}",
-                    "direction": "negative",
-                    "value": ma_val,
-                    "description": f"上证指数收盘价下穿{label}（{ma_val}）",
-                })
-
+        signals.extend(daily_cross_signals(ma_today, date))
+        weekly = cross_signal("5周均线", ma_today.get("ma5w"), ma_today.get("above_ma5w"),
+                              self._latest_prev_above(history, "above_ma5w"))
+        if weekly:
+            signals.append(weekly)
         return signals
 
     # ------------------------------------------------------------------

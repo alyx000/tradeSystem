@@ -81,6 +81,10 @@ def _run_daily(config: dict, args: argparse.Namespace) -> None:
     md = renderer.render_daily(result)
     print(md)
     source_failed = result.get("status") == "source_failed"
+    partial = result.get("status") == "partial"
+    if partial:
+        logger.warning("[pattern-scan daily] 部分覆盖，已判定 %s/%s，只报告可核验样本",
+                       result["evaluated_count"], result["universe_count"])
     if args.dry_run:
         logger.info("[pattern-scan daily] dry-run 完成，未落报告/未推送")
         if source_failed:
@@ -105,7 +109,8 @@ def _run_daily(config: dict, args: argparse.Namespace) -> None:
     if args.no_push:
         logger.info("[pattern-scan daily] --no-push：已落报告，未推送")
         return
-    ok = _push_to_dingtalk(f"形态篇选股观察清单 · {date}", md)
+    title = "形态篇扫描部分覆盖" if partial else "形态篇选股观察清单"
+    ok = _push_to_dingtalk(f"{title} · {date}", md)
     if not ok:
         logger.error("[pattern-scan daily] %s 推送失败", date)
         raise SystemExit(1)

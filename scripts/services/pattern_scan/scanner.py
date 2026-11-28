@@ -152,13 +152,14 @@ def run_daily(
     main_sectors = set(sectors)
     main_concepts = set(concepts)
     concept_map: dict[str, set[str]] = {}
+    missing_concepts = []
     source_errors = list(judgment.source_errors)
     if concepts:
         concept_map, member_count, _ = build_stock_concept_map(
             registry, date, concept_names=concepts)
-        missing = sorted(main_concepts - member_count.keys())
-        if missing:
-            source_errors.append(f"同花顺概念成分缺失（{'、'.join(missing)}）")
+        missing_concepts = sorted(main_concepts - member_count.keys())
+        if missing_concepts:
+            source_errors.append(f"同花顺概念成分缺失（{'、'.join(missing_concepts)}）")
 
     payload = judgment.public_payload()
     payload.update(main_sectors=sectors, main_concepts=concepts)
@@ -262,12 +263,13 @@ def run_daily(
     # `stale_last_bar` 必须计入：Tushare 滞后时每只票都会返回「成功但末根是上一交易日」
     # 的区间，只查 bar_missing/qfq_failed 会让整批陈旧数据以 ok + 今日无命中 推出去（门2 high）。
     invalid = rejects["bar_missing"] + rejects["qfq_failed"] + rejects["stale_last_bar"]
-    if invalid == len(universe):
-        return {**base, "status": "source_failed", "candidates": [], "rejects": rejects,
-                "data_errors": data_errors, "universe_count": total,
-                "alignment_breaks": alignment_breaks,
-                "source_errors": source_errors + ["stock_daily_range_or_adj_factor_or_stale"]}
-
-    return {**base, "status": "ok", "candidates": candidates, "rejects": rejects,
+    unevaluated = invalid + rejects["insufficient_history"]
+    status = "partial" if unevaluated or missing_concepts else "ok"
+    if invalid == total:
+        status = "source_failed"
+        source_errors.append("stock_daily_range_or_adj_factor_or_stale")
+    return {**base, "status": status, "candidates": candidates, "rejects": rejects,
             "data_errors": data_errors, "universe_count": total,
+            "evaluated_count": total - unevaluated, "unevaluated_count": unevaluated,
+            "missing_concepts": missing_concepts,
             "alignment_breaks": alignment_breaks, "source_errors": source_errors}

@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import argparse
+import json
+import sqlite3
 
 import pytest
 
@@ -14,6 +16,20 @@ def _args(**kw):
     for k, v in kw.items():
         setattr(ns, k, v)
     return ns
+
+
+def test_signals_json_distinguishes_original_legacy_count(monkeypatch, capsys):
+    from db.schema import init_schema
+    conn = sqlite3.connect(":memory:")
+    init_schema(conn)
+    day = "2026-11-18"
+    mt.repo.upsert_signal(conn, dict(trade_date=day, index_code="000001.SH", index_name="上证",
+                                     fractal_status="none", limit_down_count=0))
+    conn.execute("PRAGMA query_only=ON")
+    monkeypatch.setattr(mt, "get_readonly_connection", lambda: conn)
+    mt._run_signals(_args(date=day, index=None, limit=10, json=True))
+    row = json.loads(capsys.readouterr().out)[0]
+    assert row["recorded_limit_down"] == {"trade_date": day, "count": 0, "status": "legacy"}
 
 
 def test_pivot_overrides_pair():

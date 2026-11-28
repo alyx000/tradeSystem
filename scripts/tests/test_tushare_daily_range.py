@@ -6,18 +6,22 @@ Stage 0（趋势主升 scanner）：原方法只回 {trade_date, pct_chg}，缺 
 """
 from __future__ import annotations
 
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from unittest.mock import MagicMock
 
 import pandas as pd
 import pytest
+from requests import HTTPError, Response
 
+from providers.base import DataResult
 from providers.tushare_provider import TushareProvider
 
 
 @pytest.fixture
 def provider():
     """绕过 initialize，仅注入 mock pro（同 test_tushare_margin 模式）。"""
-    ts = object.__new__(TushareProvider)
+    ts = TushareProvider({})
     ts.name = "tushare"
     ts.config = {}
     ts.pro = MagicMock()
@@ -74,3 +78,118 @@ def test_get_stock_daily_range_sorted_ascending(provider):
     dates = [b["trade_date"] for b in r.data]
     assert dates == sorted(dates)          # 升序
     assert dates[-1] == "2026-06-09"       # 最后一根=最新（今日）
+
+
+@pytest.mark.parametrize("method,api,value", [
+    ("get_stock_daily_range", "daily", "close"),
+    ("get_stock_adj_factor_range", "adj_factor", "adj_factor"),
+])
+@pytest.mark.parametrize("damage", [None, "conflict", "wrong_stock", "future", "before_start"])
+def test_single_stock_ranges_only_fold_identical_rows(provider, method, api, value, damage, monkeypatch):
+    provider._initialized = True
+    row = dict(ts_code="600552.SH", trade_date="20260609", **{value: 12.5})
+    duplicate = row.copy()
+    if damage == "conflict":
+        duplicate[value] = 13.5
+    elif damage == "wrong_stock":
+        duplicate["ts_code"] = "600552.SZ"
+    elif damage in {"future", "before_start"}:
+        duplicate["trade_date"] = "20260610" if damage == "future" else "20260607"
+    earlier = {**row, "trade_date": "20260608"}
+    provider.pro.query.return_value = pd.DataFrame([row, duplicate, earlier])
+    monkeypatch.setattr("providers.adj_factor_evidence.archived_factors", lambda *_: {})
+    monkeypatch.setattr(provider, "get_adj_factor", lambda _: DataResult(None, "tushare", error="缺页"))
+
+    result = getattr(provider, method)("600552", "2026-06-08", "2026-06-09")
+    provider.pro.query.assert_called_once_with(
+        api, ts_code="600552.SH", start_date="20260608", end_date="20260609")
+    if damage:
+        assert not result.success and result.data is None
+    else:
+        assert result.success
+        assert [r["trade_date"] for r in result.data] == ["2026-06-08", "2026-06-09"]
+
+
+@pytest.mark.parametrize("status,count", [(502, 2), (403, 1)])
+def test_single_stock_factor_retries_gateway_errors_once(provider, status, count):
+    provider._initialized = True
+    response = Response()
+    response.status_code = status
+    error = HTTPError("request failed", response=response)
+    result_data = pd.DataFrame([dict(ts_code="600552.SH", trade_date="20260609", adj_factor=12.5)])
+    provider.pro.query.side_effect = [error, result_data]
+    result = provider.get_stock_adj_factor_range("600552", "2026-06-08", "2026-06-09")
+    assert provider.pro.query.call_count == count
+    assert result.success == (status == 502)
+
+
+@pytest.mark.parametrize("verified,expected", [(2.5, True), (4.0, False), (None, False)])
+def test_factor_conflict_requires_matching_independent_batch(provider, monkeypatch, verified, expected):
+    provider._initialized = True
+    monkeypatch.setattr("providers.adj_factor_evidence.archived_factors", lambda *_: {})
+    row = dict(ts_code="600552.SH", trade_date="20260609", adj_factor=2.5)
+    provider.pro.query.return_value = pd.DataFrame([row, {**row, "adj_factor": 3.0}])
+    batch = MagicMock(return_value=DataResult(
+        [{**row, "adj_factor": verified}] if verified is not None else [], "tushare:adj_factor"))
+    monkeypatch.setattr(provider, "get_adj_factor", batch)
+    today = datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat()
+    for _ in range(2):
+        result = provider.get_stock_adj_factor_range("600552", "2026-06-08", today)
+        assert result.success is expected
+        if expected:
+            assert result.data == [dict(trade_date="2026-06-09", adj_factor=2.5)]
+            assert "trade_date" in result.note and "2.5" in result.note and "3.0" in result.note
+        else:
+            assert "同日记录冲突" in result.error
+    batch.assert_called_once_with("2026-06-09")
+
+
+@pytest.mark.parametrize("code,expected", [("000001.SZ", True), ("000001.SH", False)])
+def test_factor_conflict_uses_certified_snapshot_only_for_matching_identity(provider, monkeypatch, code, expected):
+    provider._initialized = True
+    monkeypatch.setattr("providers.adj_factor_evidence.archived_factors", lambda *_: {"000001": 2.5})
+    row = dict(ts_code=code, trade_date="20260630", adj_factor=2.5)
+    provider.pro.query.return_value = pd.DataFrame([row, {**row, "adj_factor": 3.0}])
+    monkeypatch.setattr(provider, "get_adj_factor", lambda *_: pytest.fail("已有归档或身份冲突时不再请求"))
+    result = provider.get_stock_adj_factor_range(code, "2026-06-01", "2026-07-10")
+    assert result.success is expected
+    if expected:
+        assert "certified" in result.note
+        assert result.data == [dict(trade_date="2026-06-30", adj_factor=2.5)]
+
+
+def test_certified_factors_check_same_snapshot_source_and_shanghai_visibility(tmp_path):
+    import sqlite3
+    from db.schema import init_schema
+    from providers.adj_factor_evidence import archived_factors
+    from services.monthly_pattern import repository
+
+    path = tmp_path / "market.db"
+    day = "2026-09-30"
+    conn = sqlite3.connect(path)
+    conn.row_factory = sqlite3.Row
+    try:
+        init_schema(conn)
+        repository.save_month_bars(conn, [dict(month_end=day, stock_code="000001",
+            open=1, high=1, low=1, close=1, volume=1, amount=1, adj_factor=2.5,
+            source="tushare:monthly+adj_factor")])
+        manifest = dict(month_end=day, status="certified", universe_source="tushare:stock_basic",
+                        universe_count=1, quote_count=1, factor_count=1, joined_count=1,
+                        quote_coverage=1.0, factor_coverage=1.0, source_meta=dict(
+                            factor_source="tushare:adj_factor", code_alias_evidence_schema_version=2,
+                            raw_joined_code_count=1, normalized_joined_code_count=1,
+                            factor_coverage_denominator=1, code_alias_normalizations=[]))
+        repository.save_month_bar_manifest(conn, manifest)
+        for table in ("monthly_pattern_bars", "monthly_pattern_bar_manifests"):
+            conn.execute(f"UPDATE {table} SET fetched_at='2026-10-01 17:00:00'")
+        conn.commit()
+        assert archived_factors(day, "2026-10-01", path) == {}
+        assert archived_factors(day, "2026-10-02", path) == {"000001": 2.5}
+        conn.execute("UPDATE monthly_pattern_bars SET fetched_at='2026-10-01 17:00:01'")
+        conn.commit()
+        assert archived_factors(day, "2026-10-02", path) == {}
+        conn.execute("UPDATE monthly_pattern_bars SET fetched_at='2026-10-01 17:00:00', source='other'")
+        conn.commit()
+        assert archived_factors(day, "2026-10-02", path) == {}
+    finally:
+        conn.close()

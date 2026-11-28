@@ -63,6 +63,7 @@ def _open_board_stock(code, name, close, limit_times):
 @pytest.fixture
 def daily_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(premium_mod, "DAILY_DIR", tmp_path)
+    monkeypatch.setattr(premium_mod, "publish_feedback", lambda path, old, blocks: blocks["premium_backfill"])
     return tmp_path
 
 

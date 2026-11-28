@@ -46,18 +46,19 @@ def render_compact_preview(payload: dict, previous: dict | None, evidence: str) 
     sectors = current.get("sectors") or {}
     old_sectors = (old.get("sectors") or {}) if old else {}
     comparisons = {}
-    for key, label in (("strongest", "走强"), ("weakest", "走弱")):
+    ranks = (("strongest", "涨跌幅排名前五"), ("weakest", "涨跌幅排名后五"))
+    for key, label in ranks:
         items = sectors.get(key) or []
         previous_items = old_sectors.get(key) or []
         names = {item["name"] for item in previous_items} if previous_items else None
         comparisons[key] = names
         if names is None or not items:
-            lines.append(f"- {label}榜持续性：未计算。")
+            lines.append(f"- {label}持续性：未计算。")
         else:
             continued = [item["name"] for item in items if item["name"] in names]
-            lines.append(f"- **连续两期在{label}前五：{'、'.join(continued) if continued else '无'}。**")
-    lines += ["", "仅指相邻两期同方向上榜，不代表连续涨跌。", ""]
-    for key, label in (("strongest", "走强前五"), ("weakest", "走弱前五")):
+            lines.append(f"- **连续两期位列{label}：{'、'.join(continued) if continued else '无'}。**")
+    lines += ["", "按行业成分股半小时涨跌幅中位数排名。", ""]
+    for key, label in ranks:
         lines += [f"**{label}**", "", "| 行业 | 区间中位 | 上涨占比 | 榜单变化 |", "| --- | ---: | ---: | --- |"]
         for item in sectors.get(key) or []:
             names = comparisons[key]
@@ -66,12 +67,12 @@ def render_compact_preview(payload: dict, previous: dict | None, evidence: str) 
         lines.append("")
 
     exits = []
-    for key, label in (("strongest", "走强榜"), ("weakest", "走弱榜")):
+    for key, label in ranks:
         current_names = {item["name"] for item in sectors.get(key) or []}
         names = comparisons[key]
         exited = [item["name"] for item in old_sectors.get(key, []) if item["name"] not in current_names]
-        exits.append(f"- {label}退出前五：" + (("、".join(exited) or "无") if names is not None else "未计算") + "。")
-    lines.append(_fold("退出前五名单", "\n".join(exits) + "\n\n退出不代表转强或转弱。"))
+        exits.append(f"- 退出{label}：" + (("、".join(exited) or "无") if names is not None else "未计算") + "。")
+    lines.append(_fold("本期退出榜单", "\n".join(exits) + "\n\n退出不代表转强或转弱。"))
 
     # 完整事实段保留一次，支持现有归档解析器，首页不重复堆放指标。
     facts = full.split("#### 本期市场事实", 1)[1].split("#### 申万二级扩散", 1)[0]

@@ -1,13 +1,16 @@
 """持仓跟踪信号聚合。"""
 from __future__ import annotations
 
-from datetime import date as _date, timedelta
+import math
+from datetime import date as _date, datetime, time, timedelta
+from zoneinfo import ZoneInfo
 from typing import Any
 
 from api.market_enrich import enrich_daily_market_row
 from db import queries as Q
 from db.dual_write import _normalize_stock_code_for_match, parse_post_market_envelope
 from utils.price_limit import compute_limit_prices
+from utils.trade_date import verified_previous_session
 
 
 def _date_digits(date_text: str) -> str:
@@ -30,7 +33,8 @@ def _to_float(value: Any) -> float | None:
     if value in (None, ""):
         return None
     try:
-        return float(value)
+        number = float(value)
+        return number if math.isfinite(number) else None
     except (TypeError, ValueError):
         return None
 
@@ -65,7 +69,19 @@ def _normalized_holdings(holdings: list[dict]) -> list[dict]:
     return out
 
 
-def _extract_holdings_detail_map(envelope: dict | None) -> dict[str, dict[str, Any]]:
+def _quote_on_date(row: dict, date_str: str) -> bool:
+    return "error" not in row and all(
+        not row.get(key) or _date_digits(row[key]) == _date_digits(date_str)
+        for key in ("date", "trade_date")
+    )
+
+
+def _positive_number(value: Any) -> float | None:
+    number = _to_float(value)
+    return number if number is not None and number > 0 else None
+
+
+def _extract_holdings_detail_map(envelope: dict | None, date_str: str) -> dict[str, dict[str, Any]]:
     if not envelope or not isinstance(envelope, dict):
         return {}
     rows = envelope.get("holdings_data")
@@ -73,9 +89,9 @@ def _extract_holdings_detail_map(envelope: dict | None) -> dict[str, dict[str, A
         return {}
     out: dict[str, dict[str, Any]] = {}
     for row in rows:
-        if not isinstance(row, dict) or "error" in row:
+        if not isinstance(row, dict) or not _quote_on_date(row, date_str):
             continue
-        norm = _normalize_stock_code_for_match(row.get("code"))
+        norm = _normalize_stock_code_for_match(row.get("code") or row.get("stock_code"))
         if norm:
             out[norm] = row
     return out
@@ -133,7 +149,7 @@ def _merge_snapshot_fallback(
             continue
         merged = dict(out[norm])
         for key in merge_keys:
-            if merged.get(key) in (None, ""):
+            if merged.get(key) in (None, "") or (key in ("close", "ma5", "ma10", "ma20") and not _positive_number(merged[key])):
                 merged[key] = snapshot_detail.get(key)
         out[norm] = merged
     return out
@@ -141,26 +157,30 @@ def _merge_snapshot_fallback(
 
 def _get_market_basis(conn, date_str: str, market_row: dict | None = None) -> tuple[dict | None, dict | None]:
     raw_market = dict(market_row) if market_row else Q.get_daily_market(conn, date_str)
-    if raw_market is None:
-        raw_market = Q.get_prev_daily_market(conn, date_str)
-    if raw_market is None:
+    if not raw_market or raw_market.get("date") != date_str:
         return None, None
     envelope = parse_post_market_envelope(raw_market.get("raw_data"))
+    if envelope and envelope.get("date", date_str) != date_str:
+        return None, None
     enriched = dict(raw_market)
     enrich_daily_market_row(enriched)
     return enriched, envelope
 
 
-def _load_prev_close_map(conn, date_str: str) -> dict[str, float | None]:
+def _load_prev_close_map(conn, date_str: str, *, strict: bool = False) -> dict[str, float | None]:
     """前一交易日收盘价映射，作为当日涨跌停价的计算基准。
 
     取 daily_basic 中 biz_date 严格早于 date_str（inclusive=False）的最近一次落库：
     当日涨跌停价以「前一交易日收盘」为基准；用 < 而非 <= 是为了在 date_str 当日 daily_basic
     已落库（盘后 / 复盘 / 历史回看）时仍取前一交易日，而非误用当日收盘。
     """
-    rows = Q.get_latest_raw_interface_rows(
-        conn, interface_name="daily_basic", biz_date=date_str, inclusive=False,
-    )
+    if strict:
+        previous = verified_previous_session(conn, date_str)
+        if previous is None:
+            return {}
+        rows = Q.get_latest_raw_interface_rows(conn, interface_name="daily_basic", biz_date=previous, exact_date=True)
+    else:
+        rows = Q.get_latest_raw_interface_rows(conn, interface_name="daily_basic", biz_date=date_str, inclusive=False)
     out: dict[str, float | None] = {}
     for row in rows:
         norm = _normalize_stock_code_for_match(row.get("ts_code") or row.get("code"))
@@ -171,7 +191,7 @@ def _load_prev_close_map(conn, date_str: str) -> dict[str, float | None]:
 
 
 def _load_st_set(conn, date_str: str) -> set[str]:
-    rows = Q.get_latest_raw_interface_rows(conn, interface_name="stock_st", biz_date=date_str)
+    rows = Q.get_latest_raw_interface_rows(conn, interface_name="stock_st", biz_date=date_str, exact_date=True)
     out: set[str] = set()
     for row in rows:
         norm = _normalize_stock_code_for_match(row.get("ts_code") or row.get("code"))
@@ -181,7 +201,7 @@ def _load_st_set(conn, date_str: str) -> set[str]:
 
 
 def _load_share_float_map(conn, date_str: str) -> dict[str, list[dict[str, Any]]]:
-    rows = Q.get_latest_raw_interface_rows(conn, interface_name="share_float", biz_date=date_str)
+    rows = Q.get_latest_raw_interface_rows(conn, interface_name="share_float", biz_date=date_str, exact_date=True)
     today_digits = _date_digits(date_str)
     future_cutoff = (_date.fromisoformat(date_str) + timedelta(days=30)).strftime("%Y%m%d")
     out: dict[str, list[dict[str, Any]]] = {}
@@ -236,7 +256,7 @@ def _load_announcement_maps(conn, date_str: str, holdings: list[dict]) -> tuple[
     disclosure_rows = Q.get_latest_raw_interface_rows(
         conn,
         interface_name="disclosure_date",
-        biz_date=date_str,
+        biz_date=date_str, exact_date=True,
     )
     disclosure_dates: dict[str, list[dict[str, Any]]] = {}
     for row in disclosure_rows:
@@ -261,11 +281,11 @@ def _find_theme_signal(sector: str | None, themes: list[dict[str, Any]], stronge
     matched_ths = next((row for row in ths_rows if _match_sector(sector, row.get("name") or row.get("industry"))), None)
     matched_dc = next((row for row in dc_rows if _match_sector(sector, row.get("name"))), None)
     return {
-        "is_main_theme": matched_theme is not None,
+        "is_main_theme": matched_theme is not None if sector and themes else None,
         "main_theme_name": matched_theme.get("theme_name") if matched_theme else None,
-        "is_strongest_sector": matched_strongest is not None,
+        "is_strongest_sector": matched_strongest is not None if sector and strongest_rows else None,
         "strongest_sector_name": matched_strongest.get("name") if matched_strongest else None,
-        "sector_flow_confirmed": matched_ths is not None or matched_dc is not None,
+        "sector_flow_confirmed": (matched_ths is not None or matched_dc is not None) if sector and (ths_rows or dc_rows) else None,
         "sector_flow_source": "ths" if matched_ths is not None else ("dc" if matched_dc is not None else None),
     }
 
@@ -341,7 +361,7 @@ def _build_risk_flags(
                 "reason": f"现价 {current_price:.2f} 接近止盈 {target_price:.2f}",
             })
 
-    if not theme_signals.get("is_main_theme") and (technical_signals.get("sector_change_pct") or 0) < 0:
+    if theme_signals.get("is_main_theme") is False and (technical_signals.get("sector_change_pct") or 0) < 0:
         flags.append({
             "level": "medium",
             "label": "非主线承压",
@@ -379,27 +399,78 @@ def _build_risk_flags(
     return flags
 
 
+def _archive_holdings(envelope, snapshots, date_str):
+    """盘后归档记录成员（包括单只取行情失败）；缺名单时，同日快照只能证实部分成员。"""
+    rows = (envelope or {}).get("holdings_data")
+    if isinstance(rows, list):
+        roster = rows
+        source = "post_market" if rows else "no_rows"
+    else:
+        roster = snapshots.values()
+        source = "quote_snapshot" if snapshots else "missing"
+    holdings = []
+    for row in roster:
+        if not isinstance(row, dict):
+            continue
+        code = row.get("code") or row.get("stock_code")
+        normalized = _normalize_stock_code_for_match(code)
+        if not normalized:
+            continue
+        snapshot = snapshots.get(normalized, {})
+        quote = row if _quote_on_date(row, date_str) else {}
+        close = _positive_number(quote.get("close"))
+        pnl = _to_float(quote.get("pnl_pct"))
+        holdings.append({
+            "stock_code": code, "stock_name": row.get("name") or row.get("stock_name") or snapshot.get("stock_name") or "",
+            "sector": quote.get("sector"), "shares": quote.get("shares") or None,
+            "entry_price": _positive_number(quote.get("cost")),
+            "current_price": close if close is not None else _positive_number(snapshot.get("close")),
+            "prefill_pnl_pct": pnl if pnl is not None else _to_float(snapshot.get("pnl_pct")),
+            "stop_loss": _positive_number(quote.get("stop_loss")), "target_price": _positive_number(quote.get("target_price")),
+        })
+    return holdings, source
+
+
+def _shanghai_now():
+    return datetime.now(ZoneInfo("Asia/Shanghai"))
+
+
 def build_holding_signals(
     conn,
     date_str: str,
     *,
     holdings: list[dict] | None = None,
     market_row: dict | None = None,
+    review_snapshot: bool = False,
 ) -> dict[str, Any]:
-    normalized_holdings = _normalized_holdings(holdings or Q.get_holdings(conn, status="active"))
-    market, envelope = _get_market_basis(conn, date_str, market_row=market_row)
-    holdings_detail_map = _merge_snapshot_fallback(
-        _extract_holdings_detail_map(envelope),
-        Q.get_latest_holding_quote_snapshots(conn, date_str),
-    )
-    prev_close_map = _load_prev_close_map(conn, date_str)
+    now = _shanghai_now()
+    today = now.date().isoformat()
+    supplied_holdings = holdings is not None
+    historical = not supplied_holdings and (review_snapshot or date_str != today)
+    # 日线收盘事实在上海收盘前尚未形成，包含意外提前入档的记录。
+    before_close = date_str > today or (date_str == today and now.time() < time(15))
+    market, envelope = (None, None) if before_close else _get_market_basis(conn, date_str, market_row=market_row)
+    snapshots = {} if before_close else Q.get_latest_holding_quote_snapshots(conn, date_str, exact_date=True)
+    source = "active"
+    if historical:
+        holdings, source = _archive_holdings(envelope, snapshots, date_str)
+    elif holdings is None:
+        holdings = Q.get_holdings(conn, status="active")
+    normalized_holdings = _normalized_holdings(holdings)
+    result = {"date": date_str, "items": []}
+    if review_snapshot:
+        result.update(holdings=holdings, holdings_source=source)
+    if not normalized_holdings:
+        return result
+    holdings_detail_map = _merge_snapshot_fallback(_extract_holdings_detail_map(envelope, date_str), snapshots)
+    prev_close_map = _load_prev_close_map(conn, date_str, strict=not supplied_holdings)
     announcements, disclosure_dates = _load_announcement_maps(conn, date_str, normalized_holdings)
     st_set = _load_st_set(conn, date_str)
     share_float_map = _load_share_float_map(conn, date_str)
     holdings_info_map = _extract_holdings_info_map(envelope)
     task_map = Q.get_latest_open_holding_tasks(conn, date_str)
 
-    themes = Q.get_active_themes(conn)
+    themes = Q.get_active_themes_as_of(conn, date_str)
     strongest_rows = _section_rows((market or {}).get("limit_cpt_list"))
     strongest_rows = sorted(strongest_rows, key=lambda item: (_to_float(item.get("rank")) or 9999, -(_to_float(item.get("up_nums")) or 0)))
     ths_rows = sorted(_section_rows((market or {}).get("sector_moneyflow_ths")), key=lambda item: -(_to_float(item.get("net_amount")) or 0))
@@ -410,16 +481,18 @@ def build_holding_signals(
         code = holding["stock_code"]
         norm = _normalize_stock_code_for_match(code)
         detail = holdings_detail_map.get(norm, {})
-        current_price = _to_float(detail.get("close")) or _to_float(holding.get("current_price"))
+        current_price = _positive_number(detail.get("close"))
+        if current_price is None and (historical or supplied_holdings):
+            current_price = _positive_number(holding.get("current_price"))
         entry_price = _to_float(holding.get("entry_price"))
         pnl_pct = _to_float(detail.get("pnl_pct"))
         if pnl_pct is None and current_price is not None and entry_price not in (None, 0):
             pnl_pct = round((current_price - entry_price) / entry_price * 100, 2)
 
         technical_signals = {
-            "ma5": _to_float(detail.get("ma5")),
-            "ma10": _to_float(detail.get("ma10")),
-            "ma20": _to_float(detail.get("ma20")),
+            "ma5": _positive_number(detail.get("ma5")),
+            "ma10": _positive_number(detail.get("ma10")),
+            "ma20": _positive_number(detail.get("ma20")),
             "above_ma5": None,
             "above_ma10": None,
             "above_ma20": None,
@@ -447,15 +520,12 @@ def build_holding_signals(
             "recent_announcements": (announcements.get(norm) or [])[:3],
             "has_disclosure_plan": bool(disclosure_dates.get(norm)),
             "disclosure_dates": (disclosure_dates.get(norm) or [])[:5],
-            "is_st": norm in st_set,
+            "is_st": norm in st_set if st_set else None,
             "share_float_upcoming": (share_float_map.get(norm) or [])[:3],
         }
-        # 涨跌停价基于「前一交易日收盘价 × 板块比例」实时算出，不再读 stk_limit 陈旧快照。
-        # 基准优先取 daily_basic 收盘；缺失时退回 current_price——盘前 07:00 时 current_price
-        # 即上一交易日收盘，作为基准是 best-effort 安全兜底（daily_basic 每日落库，回退极少触发）。
-        # 两者皆缺失时 prev_close=None，compute_limit_prices 会安全返回 {up/down: None}（已测）。
+        # 历史页的限价基准取严格前一开放日；手工传入持仓的调用保留既有兜底。
         prev_close = prev_close_map.get(norm)
-        if prev_close is None:
+        if prev_close is None and supplied_holdings:
             prev_close = current_price
         # is_st 优先用 stock_st 权威名单：有数据时按是否命中传 True/False（主板 ST 限价 5%）；
         # st_set 为空（stock_st 未落库 / 失败）时传 None，回退 compute 内的名称启发式，
@@ -503,7 +573,5 @@ def build_holding_signals(
             "risk_flags": risk_flags,
         })
 
-    return {
-        "date": date_str,
-        "items": items,
-    }
+    result["items"] = items
+    return result

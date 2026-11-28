@@ -12,7 +12,10 @@
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
+import re
 import math
 from datetime import date, datetime, time
 from time import monotonic
@@ -47,6 +50,7 @@ _KLINE_WEEKLY = 5           # pytdx K 线周期：5=周线
 _KLINE_DAILY = 9            # pytdx K 线周期：9=日线（实测 880003 日线可取）
 _WEEKLY_COUNT = 20          # 取最近 20 根周线，够算 5 周均线 + 窗口冗余
 _DAILY_COUNT = 800          # 单次协议上限；覆盖当前740自然日及20月均线，非无限历史接口
+_MINUTE_ZERO_SENTINEL = 2.0 ** -127  # pytdx.helper.get_volume(0)，协议零不是实际正成交。
 _KLINE_MINUTE = 8
 _MINUTE_COUNT = 2
 _INTRADAY_BUDGET_SECONDS = 5.0
@@ -148,6 +152,98 @@ class TdxProvider(DataProvider):
 
     def get_capabilities(self) -> list[str]:
         return ["get_index_weekly", "get_index_daily_range", "get_realtime_quotes"]
+
+    def get_stock_minutes(self, stock_code: str, trade_date: str, *, validate=None, can_request=None) -> DataResult:
+        """沪深个股最近800根未复权1分钟（category=8），不与指数身份混用。
+
+        成交量股、成交额元；源自协议原值，包括源返回的零成交分钟，消费方不得补行。
+        调用方可提供窗口校验。当前节点校验失败时尝试下一节点。
+        """
+        source = 'tdx:get_security_bars:1min'
+        try:
+            if (not re.fullmatch(r'\d{6}\.(SH|SZ)',stock_code)
+                    or date.fromisoformat(trade_date).isoformat()!=trade_date):
+                raise ValueError()
+        except (ValueError,TypeError):
+            return DataResult(None,source,error='分钟请求代码或日期非法')
+        try:
+            from pytdx.hq import TdxHq_API
+        except ImportError:
+            return DataResult(None,source,error='pytdx不可用')
+        preferred = getattr(self,'_minute_server',None)
+        servers = ([preferred] if preferred else [])+[s for s in self._servers if s!=preferred]
+        rejected = []
+        for host,port in servers:
+            if can_request is not None and not can_request():
+                rejected.append('实时采集窗口已结束')
+                break
+            api = TdxHq_API()
+            try:
+                if not api.connect(host,port,time_out=self._timeout):
+                    rejected.append(f'{host}:{port} 连接失败')
+                    continue
+                if can_request is not None and not can_request():
+                    rejected.append('实时采集窗口已结束')
+                    break
+                raw = api.get_security_bars(8,1 if stock_code.endswith('.SH') else 0,stock_code[:6],0,800)
+                if not isinstance(raw,list) or not raw or len(raw)>800:
+                    rejected.append(f'{host}:{port} K线响应空或非法')
+                    continue
+                rows,seen=[],set()
+                for bar in raw:
+                    stamp = bar['datetime']
+                    t = datetime.strptime(stamp,'%Y-%m-%d %H:%M')
+                    if t.strftime('%Y-%m-%d %H:%M')!=stamp or stamp in seen:
+                        raise ValueError('invalid_timestamp')
+                    seen.add(stamp)
+                    if t.date().isoformat()!=trade_date:
+                        continue
+                    row=dict(ts_code=stock_code,trade_time=stamp+':00')
+                    for key in ('open','high','low','close','vol','amount'):
+                        value=bar[key]
+                        if isinstance(value,bool):raise ValueError('invalid_number')
+                        value=float(value)
+                        if not math.isfinite(value) or value<0 or (key in ('open','high','low','close') and value==0):
+                            raise ValueError('invalid_number')
+                        if key in ('vol','amount') and value == _MINUTE_ZERO_SENTINEL:
+                            row['raw_'+key]=value
+                            value=0.0
+                        if key=='vol' and 0<value<1:
+                            raise ValueError('invalid_sub_share_volume')
+                        row[key]=value
+                    if not row['low']<=min(row['open'],row['close'])<=max(row['open'],row['close'])<=row['high']:
+                        raise ValueError('invalid_ohlc')
+                    rows.append(row)
+                if rows:
+                    if validate is not None:
+                        try:
+                            validate(rows)
+                        except ValueError as exc:
+                            try:
+                                encoded = json.dumps(raw, sort_keys=True, allow_nan=False, separators=(',', ':'))
+                                checksum = hashlib.sha256(encoded.encode()).hexdigest()
+                            except (TypeError, ValueError):
+                                checksum = '不可用'
+                            rejected.append(f'{host}:{port} {exc}；节点原始K线SHA256={checksum}')
+                            continue
+                    self._minute_server=(host,port)
+                    note = (f'未复权；vol股/amount元；请求绑定{stock_code}；节点{host}:{port}'
+                            '；最近800根，未补行；首根可能含开盘竞价，按通达信分桶，不跨源逐分钟混用')
+                    if rejected:
+                        note += '；已拒绝节点：' + '；'.join(rejected)
+                    return DataResult(sorted(rows,key=lambda r:r['trade_time']),source,timeliness=Timeliness.RECENT,
+                                      note=note)
+                rejected.append(f'{host}:{port} 无目标日分钟')
+            except Exception as exc:
+                # 错误不透出网络环境/凭据；节点失败有限回退，数据仍只取单节点原值。
+                rejected.append(f'{host}:{port} 请求或分钟解析异常 {type(exc).__name__}')
+            finally:
+                try:api.disconnect()
+                except Exception:pass
+        error = '通达信分钟节点失败、数据非法或目标日超出近期窗口'
+        if rejected:
+            error += '；' + '；'.join(rejected)
+        return DataResult(None,source,error=error)
 
     def get_realtime_quotes(self, codes: list[str], *, now: datetime | None = None) -> DataResult:
         """白名单指数最新分钟价；不以抓取时间填行情日期，不伪造昨收。"""
